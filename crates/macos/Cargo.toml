@@ -1,0 +1,19 @@
+[package]
+name = "ferrocast-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+plist = "1"
+dirs.workspace = true
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+core-graphics = "0.25"
+core-foundation = "0.10"
+accessibility-sys = "0.2"
+foreign-types-shared = "0.3"
+objc2-core-graphics = "0.3"
