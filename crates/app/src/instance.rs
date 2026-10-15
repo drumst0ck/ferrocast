@@ -56,7 +56,16 @@ mod tests {
         let first = acquire(&d).expect("first instance locks");
         assert!(acquire(&d).is_none(), "second instance must be refused");
         drop(first);
-        assert!(acquire(&d).is_some(), "lock is released when the first instance exits");
+        // Other tests fork child processes; until their `exec` the child briefly holds a copy of the
+        // descriptor (and so the lock). Wait for release instead of asserting an instant.
+        let released = (0..100).any(|_| {
+            let ok = acquire(&d).is_some();
+            if !ok {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            ok
+        });
+        assert!(released, "lock is released when the first instance exits");
         let _ = std::fs::remove_dir_all(d);
     }
 
