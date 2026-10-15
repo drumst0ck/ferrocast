@@ -1,5 +1,6 @@
 //! Launcher application: state, views, keyboard handling, actions, drawing.
 
+use crate::instance;
 use crate::items::*;
 use crate::services::{self, now_secs, Bus, Hotkeys, Msg, Shared};
 use crate::ui::{self, palette, IconCache, Palette};
@@ -55,6 +56,9 @@ pub enum View {
     Alias { id: String, name: String, value: String },
     Hotkey { id: String, name: String, err: String },
     CreateScript { title: String, mode: usize },
+    Welcome,
+    Shortcuts,
+    About,
     Ai { prompt: String, asked: String, answer: String, history: Vec<(String, String)>, busy: bool, run: u64 },
 }
 
@@ -103,6 +107,9 @@ impl View {
             View::Hotkey { .. } => "Set Hotkey",
             View::CreateScript { .. } => "Create Script Command",
             View::Ai { .. } => "Ask AI",
+            View::Welcome => "Welcome to Ferrocast",
+            View::Shortcuts => "Keyboard Shortcuts",
+            View::About => "About Ferrocast",
         }
     }
     fn placeholder(&self) -> &'static str {
@@ -290,6 +297,11 @@ impl App {
             rates: store_rates,
         };
         app.shared.visible.store(app.visible, Ordering::Relaxed);
+        if !app.settings.onboarded && !hidden {
+            app.settings.onboarded = true;
+            let _ = app.store.save("settings.json", &app.settings);
+            app.stack.push(View::Welcome);
+        }
         app.reload_scripts();
         app.set_theme();
         app.rebuild();
@@ -579,6 +591,30 @@ impl App {
                                 }
                             }
                         }
+                    }
+                }
+                Msg::ImportFile(path) => {
+                    let outcome = std::fs::read_to_string(&path)
+                        .map_err(|e| format!("Could not read the file: {e}"))
+                        .and_then(|t| ferrocast_core::import::parse_snippets(&t));
+                    let text = match outcome {
+                        Ok(incoming) => {
+                            let (added, conflicts) = ferrocast_core::import::merge_snippets(&mut self.snippets, incoming);
+                            self.save_snippets();
+                            format!(
+                                "Imported {added} snippet(s){}",
+                                if conflicts > 0 { format!(", {conflicts} keyword(s) already in use were cleared") } else { String::new() }
+                            )
+                        }
+                        Err(e) => {
+                            instance::log(&self.store.root, &format!("snippet import failed: {e}"));
+                            e
+                        }
+                    };
+                    if self.visible {
+                        self.toast(text)
+                    } else {
+                        services::notify("Ferrocast", &text)
                     }
                 }
                 Msg::Rates(r) => {
@@ -1343,6 +1379,40 @@ impl App {
                 busy: false,
                 run: 0,
             }),
+            Builtin::Welcome => self.push(View::Welcome),
+            Builtin::KeyboardShortcuts => self.push(View::Shortcuts),
+            Builtin::About => self.push(View::About),
+            Builtin::ExportData => {
+                let dest = dirs::download_dir().or_else(dirs::home_dir).unwrap_or_default();
+                let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+                match services::export_backup(&self.store.root, &dest, &stamp) {
+                    Ok(p) => {
+                        let _ = apps::reveal(&p);
+                        self.toast("Backup saved to Downloads (clipboard history excluded)");
+                    }
+                    Err(e) => {
+                        instance::log(&self.store.root, &format!("export failed: {e}"));
+                        self.toast(format!("Backup failed: {e}"));
+                    }
+                }
+            }
+            Builtin::ImportSnippets => {
+                let bus = self.bus.clone();
+                self.hide();
+                std::thread::spawn(move || {
+                    if let Some(p) = services::choose_json_file() {
+                        bus.send(Msg::ImportFile(p));
+                    }
+                });
+            }
+            Builtin::RevealLog => {
+                let p = instance::log_path(&self.store.root);
+                if !p.exists() {
+                    let _ = std::fs::write(&p, "");
+                }
+                let _ = apps::reveal(&p);
+                self.hide();
+            }
             Builtin::ClipboardHistory => self.push(View::Clipboard),
             Builtin::SearchSnippets => self.push(View::Snippets),
             Builtin::CreateSnippet => self.new_snippet(String::new()),

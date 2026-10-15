@@ -209,6 +209,7 @@ pub struct Settings {
     pub ai_base_url: String,
     pub ai_model: String,
     pub launch_at_login: bool,
+    pub onboarded: bool,
 }
 
 impl Default for Settings {
@@ -239,6 +240,7 @@ impl Default for Settings {
             ai_base_url: crate::ai::DEFAULT_BASE_URL.into(),
             ai_model: crate::ai::DEFAULT_MODEL.into(),
             launch_at_login: false,
+            onboarded: false,
         }
     }
 }

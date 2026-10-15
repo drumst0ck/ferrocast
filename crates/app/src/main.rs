@@ -1,10 +1,18 @@
 mod app;
 mod clipboard_policy;
+mod instance;
 mod items;
 mod services;
 mod ui;
 
 fn main() -> eframe::Result {
+    let data_dir = ferrocast_core::storage::Store::default_location().root;
+    // Two copies would fight over the global hotkey and the clipboard history.
+    let Some(_instance_lock) = instance::acquire(&data_dir) else {
+        eprintln!("Ferrocast is already running.");
+        return Ok(());
+    };
+    instance::install_panic_hook(data_dir);
     let hidden = std::env::args().any(|a| a == "--hidden");
     let viewport = egui::ViewportBuilder::default()
         .with_title("Ferrocast")

@@ -21,6 +21,12 @@ pub enum Icon {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Builtin {
     AskAi,
+    Welcome,
+    KeyboardShortcuts,
+    About,
+    ExportData,
+    ImportSnippets,
+    RevealLog,
     ClipboardHistory,
     SearchSnippets,
     CreateSnippet,
@@ -41,6 +47,12 @@ pub enum Builtin {
 impl Builtin {
     pub const ALL: &'static [Builtin] = &[
         Builtin::AskAi,
+        Builtin::Welcome,
+        Builtin::KeyboardShortcuts,
+        Builtin::ExportData,
+        Builtin::ImportSnippets,
+        Builtin::RevealLog,
+        Builtin::About,
         Builtin::ClipboardHistory,
         Builtin::SearchSnippets,
         Builtin::CreateSnippet,
@@ -61,6 +73,12 @@ impl Builtin {
     pub fn title(&self) -> &'static str {
         match self {
             Builtin::AskAi => "Ask AI",
+            Builtin::Welcome => "Welcome & Permissions",
+            Builtin::KeyboardShortcuts => "Keyboard Shortcuts",
+            Builtin::About => "About Ferrocast",
+            Builtin::ExportData => "Export Backup",
+            Builtin::ImportSnippets => "Import Snippets",
+            Builtin::RevealLog => "Reveal Log File",
             Builtin::ClipboardHistory => "Clipboard History",
             Builtin::SearchSnippets => "Search Snippets",
             Builtin::CreateSnippet => "Create Snippet",
@@ -82,6 +100,8 @@ impl Builtin {
     pub fn extension(&self) -> &'static str {
         match self {
             Builtin::AskAi => "AI",
+            Builtin::Welcome | Builtin::KeyboardShortcuts | Builtin::About | Builtin::RevealLog => "Ferrocast",
+            Builtin::ExportData | Builtin::ImportSnippets => "Data",
             Builtin::ClipboardHistory => "Clipboard History",
             Builtin::SearchSnippets | Builtin::CreateSnippet => "Snippets",
             Builtin::SearchQuicklinks | Builtin::CreateQuicklink => "Quicklinks",
@@ -97,6 +117,11 @@ impl Builtin {
     pub fn glyph(&self) -> (&'static str, [u8; 3]) {
         match self {
             Builtin::AskAi => ("✦", [168, 110, 255]),
+            Builtin::Welcome => ("✓", [89, 212, 153]),
+            Builtin::KeyboardShortcuts => ("⌘", [90, 90, 105]),
+            Builtin::About => ("ⓘ", [86, 194, 255]),
+            Builtin::ExportData | Builtin::ImportSnippets => ("⇅", [255, 167, 38]),
+            Builtin::RevealLog => ("▤", [120, 120, 130]),
             Builtin::ClipboardHistory => ("⎘", [255, 99, 99]),
             Builtin::SearchSnippets | Builtin::CreateSnippet => ("✂", [255, 167, 38]),
             Builtin::SearchQuicklinks | Builtin::CreateQuicklink => ("↗", [86, 194, 255]),
@@ -113,6 +138,12 @@ impl Builtin {
     pub fn keywords(&self) -> Vec<String> {
         let k: &[&str] = match self {
             Builtin::AskAi => &["chatgpt", "llm", "ollama", "assistant", "question"],
+            Builtin::Welcome => &["permissions", "accessibility", "setup", "onboarding", "help"],
+            Builtin::KeyboardShortcuts => &["help", "keys", "cheat sheet"],
+            Builtin::About => &["version", "license"],
+            Builtin::ExportData => &["backup", "save"],
+            Builtin::ImportSnippets => &["raycast", "restore"],
+            Builtin::RevealLog => &["debug", "errors", "support"],
             Builtin::ClipboardHistory => &["paste", "copy", "history"],
             Builtin::SearchEmoji => &["emoji", "symbols", "unicode"],
             Builtin::SearchFiles => &["finder", "find"],

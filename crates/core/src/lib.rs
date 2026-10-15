@@ -6,6 +6,7 @@ pub mod calc;
 pub mod color;
 pub mod currency;
 pub mod fuzzy;
+pub mod import;
 pub mod launch;
 pub mod models;
 pub mod placeholders;

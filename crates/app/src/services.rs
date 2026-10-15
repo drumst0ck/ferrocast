@@ -22,6 +22,7 @@ pub enum Msg {
     Script { run: u64, text: String, code: i32 },
     Toast(String),
     Rates(ferrocast_core::currency::Rates),
+    ImportFile(PathBuf),
     AiChunk { run: u64, text: String },
     AiDone { run: u64, error: Option<String> },
     Wake,
@@ -595,6 +596,54 @@ pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
     let dir = dirs::home_dir().ok_or("no home directory")?.join("Library/LaunchAgents");
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     ferrocast_core::launch::set_enabled(&dir, &exe.to_string_lossy(), enabled).map_err(|e| e.to_string())
+}
+
+/// Archive user data into `dest_dir` as a timestamped `.tar.gz`. Clipboard history, the lock and the
+/// log are excluded on purpose: backups are meant to be shared and must not leak copied secrets.
+pub fn export_backup(data_root: &std::path::Path, dest_dir: &std::path::Path, stamp: &str) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
+    let out = dest_dir.join(format!("Ferrocast-backup-{stamp}.tar.gz"));
+    let parent = data_root.parent().ok_or("invalid data directory")?;
+    let name = data_root.file_name().ok_or("invalid data directory")?;
+    let st = std::process::Command::new("/usr/bin/tar")
+        .arg("-czf")
+        .arg(&out)
+        .args(["--exclude", "clipboard.json", "--exclude", "clipboard-images", "--exclude", "ferrocast.lock", "--exclude", "ferrocast.log"])
+        .arg("-C")
+        .arg(parent)
+        .arg(name)
+        .status()
+        .map_err(|e| e.to_string())?;
+    st.success().then_some(out).ok_or_else(|| "tar failed".to_string())
+}
+
+/// Ask the user for a JSON file with a native dialog (blocks; call from a thread).
+pub fn choose_json_file() -> Option<PathBuf> {
+    let out = ferrocast_macos::system::osascript(
+        "POSIX path of (choose file of type {\"public.json\"} with prompt \"Choose a snippets JSON file\")",
+    )
+    .ok()?;
+    (!out.is_empty()).then(|| PathBuf::from(out))
+}
+
+#[cfg(test)]
+mod backup_tests {
+    use super::*;
+
+    #[test]
+    fn backup_excludes_clipboard_history_and_includes_user_data() {
+        let base = std::env::temp_dir().join(format!("ferrocast-bk-{}", uuid::Uuid::new_v4()));
+        let root = base.join("Ferrocast");
+        std::fs::create_dir_all(root.join("clipboard-images")).unwrap();
+        for f in ["snippets.json", "settings.json", "clipboard.json", "ferrocast.log", "clipboard-images/a.png"] {
+            std::fs::write(root.join(f), "x").unwrap();
+        }
+        let out = export_backup(&root, &base.join("out"), "T1").unwrap();
+        let list = String::from_utf8(std::process::Command::new("/usr/bin/tar").arg("-tzf").arg(&out).output().unwrap().stdout).unwrap();
+        assert!(list.contains("snippets.json") && list.contains("settings.json"), "{list}");
+        assert!(!list.contains("clipboard.json") && !list.contains("clipboard-images") && !list.contains("ferrocast.log"), "{list}");
+        let _ = std::fs::remove_dir_all(base);
+    }
 }
 
 #[cfg(test)]

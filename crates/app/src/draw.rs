@@ -89,6 +89,9 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("welcome") => app.push(View::Welcome),
+            Ok("shortcuts") => app.push(View::Shortcuts),
+            Ok("about") => app.push(View::About),
             Ok("ai") => {
                 app.run_builtin(Builtin::AskAi);
                 if std::env::var("FERROCAST_AI_DEMO").is_ok() {
@@ -262,6 +265,10 @@ impl App {
             return true;
         }
         match self.view().clone() {
+            View::Welcome if k.enter => {
+                windows::accessibility_trusted(true);
+                true
+            }
             View::Ai { .. } if k.enter => {
                 self.send_ai();
                 true
@@ -619,6 +626,7 @@ impl App {
                 View::Output { .. } => Some("Copy Output".into()),
                 View::Confirm { .. } => Some("Confirm".into()),
                 View::Ai { .. } => Some("Ask".into()),
+                View::Welcome => Some("Grant Accessibility".into()),
                 View::SnippetForm { .. } | View::QuicklinkForm { .. } => Some("Save".into()),
                 View::Alias { .. } | View::CreateScript { .. } => Some("Save".into()),
                 _ => None,
@@ -934,6 +942,10 @@ impl App {
                 });
             }
             _ => {
+                let trusted = windows::accessibility_trusted(false);
+                let launcher_hotkey = services::hotkey_label(&self.settings.launcher_hotkey);
+                let data_dir = self.store.root.display().to_string();
+                let (mut grant, mut open_privacy) = (false, false);
                 let mut clear_hotkey = false;
                 let mut set_hotkey = false;
                 let mut mode_changed = None;
@@ -1028,6 +1040,79 @@ impl App {
                                 }
                             });
                         }
+                        View::Welcome => {
+                            ui.label(RichText::new("Welcome to Ferrocast").size(20.0).strong().color(pal.text));
+                            ui.label(
+                                RichText::new(format!(
+                                    "Open it anywhere with {launcher_hotkey}. Type to search apps, commands and files, or calculate."
+                                ))
+                                .color(pal.sub),
+                            );
+                            ui.add_space(6.0);
+                            ui.label(RichText::new("Permissions").size(13.0).strong().color(pal.accent));
+                            let (mark, txt) = if trusted {
+                                ("✓", "Accessibility granted — window management, pasting and snippet expansion work.")
+                            } else {
+                                ("✗", "Accessibility not granted — needed for window management, pasting and snippet expansion.")
+                            };
+                            ui.label(RichText::new(format!("{mark}  {txt}")).color(if trusted { pal.text } else { pal.danger }));
+                            if !trusted {
+                                ui.horizontal(|ui| {
+                                    if ui.button("Grant Accessibility…").clicked() {
+                                        grant = true;
+                                    }
+                                    if ui.button("Open System Settings").clicked() {
+                                        open_privacy = true;
+                                    }
+                                });
+                                lbl(ui, "macOS asks you to add Ferrocast in Privacy & Security → Accessibility, then restart Ferrocast.");
+                            }
+                            ui.add_space(6.0);
+                            ui.label(RichText::new("Tips").size(13.0).strong().color(pal.accent));
+                            for t in [
+                                "⌘K opens the actions of the selected item",
+                                "Set aliases and hotkeys per command from ⌘K",
+                                "Create snippets with keywords that expand while you type",
+                                "Search “Ask AI” after configuring a server in Settings",
+                                "Everything is stored locally; clipboard history never leaves this Mac",
+                            ] {
+                                ui.label(RichText::new(format!("•  {t}")).color(pal.text));
+                            }
+                            lbl(ui, "↵ grants Accessibility · esc closes · reopen from “Welcome & Permissions”");
+                        }
+                        View::Shortcuts => {
+                            let rows = [
+                                ("⌥ Space", "Open / close Ferrocast (configurable)"),
+                                ("↑ ↓", "Move selection"),
+                                ("↵", "Run the primary action"),
+                                ("⌘ ↵", "Run the secondary action"),
+                                ("⌘ K", "Open the action panel"),
+                                ("⌘ ,", "Open settings"),
+                                ("⌘ N", "New snippet / quicklink / note in those lists"),
+                                ("⇧ ⌘ F", "Add or remove favorite"),
+                                ("⇧ ⌘ ,", "Set hotkey for a command"),
+                                ("esc", "Clear search, go back, or close"),
+                                ("⌫ (empty search)", "Go back"),
+                                ("⌃ X", "Delete the selected entry"),
+                            ];
+                            egui::Grid::new("shortcuts").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
+                                for (k, d) in rows {
+                                    ui.label(RichText::new(k).strong().color(pal.accent));
+                                    ui.label(RichText::new(d).color(pal.text));
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                        View::About => {
+                            ui.label(RichText::new("Ferrocast").size(22.0).strong().color(pal.text));
+                            ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(pal.sub));
+                            ui.add_space(6.0);
+                            ui.label(RichText::new("A fast keyboard launcher for macOS, written in Rust.").color(pal.text));
+                            ui.label(RichText::new("Not affiliated with Raycast. MIT licensed.").color(pal.sub));
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(format!("Data folder: {data_dir}")).size(12.0).color(pal.sub));
+                            ui.label(RichText::new("Currency rates: European Central Bank via frankfurter.dev").size(12.0).color(pal.sub));
+                        }
                         View::Confirm { msg, .. } => {
                             ui.add_space(50.0);
                             ui.vertical_centered(|ui| {
@@ -1084,6 +1169,14 @@ impl App {
                     }
                 });
                 let _ = (set_hotkey, mode_changed);
+                if grant {
+                    windows::accessibility_trusted(true);
+                }
+                if open_privacy {
+                    let _ = std::process::Command::new("/usr/bin/open")
+                        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                        .status();
+                }
                 if clear_hotkey {
                     if let View::Hotkey { id, .. } = self.view().clone() {
                         self.settings.command_mut(&id).hotkey = None;

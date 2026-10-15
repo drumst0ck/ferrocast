@@ -6,8 +6,9 @@ ni usa marca o assets de Raycast. Investigación de funciones: [`docs/RESEARCH.m
 ## Uso rápido
 
 ```bash
-scripts/bundle.sh          # compila y crea dist/Ferrocast.app (firma ad-hoc, solo local)
-open dist/Ferrocast.app    # atajo por defecto: ⌥ Space
+scripts/bundle.sh          # compila y crea dist/Ferrocast.app con icono (firma ad-hoc, solo local)
+scripts/dmg.sh             # dist/Ferrocast-<versión>.dmg
+open dist/Ferrocast.app    # atajo por defecto: ⌥ Space; la primera vez muestra Welcome & Permissions
 cargo test --workspace     # ~70 tests
 scripts/shot.sh out.png FERROCAST_QUERY="100 usd in eur"   # render the UI to a PNG (no screen permission needed)
 ```
@@ -34,7 +35,16 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Emoji en color (renderizados con AppKit) | Implementado |
 | Ask AI con streaming y conversación (servidor compatible con OpenAI: Ollama por defecto, LM Studio, OpenAI…; clave en el Keychain) | Implementado; probado contra un servidor simulado, no contra un modelo real |
 | Arranque al iniciar sesión (LaunchAgent) | Implementado; se aplica en el siguiente inicio de sesión |
+| Bienvenida y permisos, atajos, Acerca de | Implementado |
+| Exportar copia de seguridad (sin historial del portapapeles), importar snippets (JSON de Raycast) | Implementado |
+| Instancia única, log de errores (`Reveal Log File`) | Implementado |
+| Icono, entitlements, DMG, script de notarización | Implementado; la notarización no se ha ejecutado (requiere cuenta de desarrollador) |
 | Extensiones React, sync, Search Menu Bar Items, contexto de IA (selección/pantalla) | No incluido |
+
+## Distribución
+
+La firma por defecto es ad-hoc (solo uso local). Para repartirlo: identidad *Developer ID*, `FERROCAST_SIGN_IDENTITY`
+y `scripts/notarize.sh` (ver `CONTRIBUTING.md`). Sin notarizar, Gatekeeper avisará en otros Macs.
 
 ## Qué está verificado y qué no
 
