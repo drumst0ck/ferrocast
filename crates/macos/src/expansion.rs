@@ -123,20 +123,29 @@ pub fn start(
 
 /// Replace the just-typed keyword with `text`: delete it, paste through the
 /// clipboard (restoring the previous content), then move the cursor.
-pub fn inject(keyword_len: usize, text: &str, cursor_from_end: Option<usize>) {
+pub fn inject(keyword_len: usize, text: &str, cursor_from_end: Option<usize>, on_write: impl Fn(isize)) {
     use crate::{clipboard, keyboard};
-    let saved = clipboard::read();
+    if clipboard::is_concealed() { return; }
+    let saved = clipboard::snapshot();
+    let target = crate::running::frontmost().map(|a| a.pid);
+    // The worker may run after the user switches apps; don't type into a new app.
+    if target.is_none() { return; }
     keyboard::tap_key(keyboard::keycode::DELETE, keyword_len);
     std::thread::sleep(std::time::Duration::from_millis(30));
     clipboard::write_text(text);
+    let injected_count = clipboard::change_count();
+    on_write(injected_count);
     std::thread::sleep(std::time::Duration::from_millis(30));
     keyboard::paste();
     std::thread::sleep(std::time::Duration::from_millis(150));
     if let Some(n) = cursor_from_end {
         keyboard::tap_key(keyboard::keycode::LEFT, n);
     }
-    if let Some(s) = saved {
-        clipboard::write(&s);
+    // Preserve all original pasteboard formats and markers, but never overwrite
+    // content copied by the user while the synthetic paste was in flight.
+    if clipboard::change_count() == injected_count {
+        clipboard::restore(&saved);
+        on_write(clipboard::change_count());
     }
 }
 

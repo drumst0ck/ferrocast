@@ -4,7 +4,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{
     NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG,
-    NSPasteboardTypeString, NSPasteboardTypeTIFF, NSPasteboardWriting,
+    NSPasteboardItem, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSPasteboardWriting,
 };
 use objc2_foundation::{NSArray, NSData, NSDictionary, NSString, NSURL};
 use std::path::PathBuf;
@@ -161,6 +161,45 @@ pub fn write(content: &ClipContent) {
 /// Plain text currently on the pasteboard.
 pub fn read_text() -> Option<String> {
     unsafe { pb().stringForType(NSPasteboardTypeString).map(|s| s.to_string()) }
+}
+
+/// Full copy of the pasteboard (every item and type, including privacy markers).
+pub struct Snapshot(Vec<Vec<(String, Vec<u8>)>>);
+
+pub fn snapshot() -> Snapshot {
+    let mut items = vec![];
+    if let Some(list) = pb().pasteboardItems() {
+        for it in list.iter() {
+            let mut formats = vec![];
+            for t in it.types().iter() {
+                if let Some(d) = it.dataForType(&t) {
+                    formats.push((t.to_string(), d.to_vec()));
+                }
+            }
+            items.push(formats);
+        }
+    }
+    Snapshot(items)
+}
+
+/// Restore a snapshot exactly, keeping concealed/transient type markers.
+pub fn restore(s: &Snapshot) {
+    let pb = pb();
+    pb.clearContents();
+    let items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = s
+        .0
+        .iter()
+        .map(|formats| {
+            let item = NSPasteboardItem::new();
+            for (ty, bytes) in formats {
+                item.setData_forType(&NSData::with_bytes(bytes), &NSString::from_str(ty));
+            }
+            ProtocolObject::from_retained(item)
+        })
+        .collect();
+    if !items.is_empty() {
+        pb.writeObjects(&NSArray::from_retained_slice(&items));
+    }
 }
 
 #[cfg(test)]

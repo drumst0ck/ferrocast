@@ -1,0 +1,29 @@
+[package]
+name = "ferrocast"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ferrocast"
+path = "src/main.rs"
+
+[dependencies]
+ferrocast-core.workspace = true
+ferrocast-macos.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+dirs.workspace = true
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.36"
+global-hotkey = "0.8"
+tray-icon = "0.26"
+image = { version = "0.25", default-features = false, features = ["png"] }
+emojis = "0.9"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+winit = "0.30"
