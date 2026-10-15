@@ -549,6 +549,13 @@ pub fn ask_ai(settings: &Settings, prompt: String, run: u64, bus: Bus) {
     });
 }
 
+/// Enable/disable launching at login (per-user LaunchAgent; takes effect at next login).
+pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
+    let dir = dirs::home_dir().ok_or("no home directory")?.join("Library/LaunchAgents");
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    ferrocast_core::launch::set_enabled(&dir, &exe.to_string_lossy(), enabled).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod ai_tests {
     use super::*;

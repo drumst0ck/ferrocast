@@ -208,6 +208,7 @@ pub struct Settings {
     pub quit_all_excluded: Vec<String>,
     pub ai_base_url: String,
     pub ai_model: String,
+    pub launch_at_login: bool,
 }
 
 impl Default for Settings {
@@ -237,6 +238,7 @@ impl Default for Settings {
             quit_all_excluded: vec!["Finder".into()],
             ai_base_url: crate::ai::DEFAULT_BASE_URL.into(),
             ai_model: crate::ai::DEFAULT_MODEL.into(),
+            launch_at_login: false,
         }
     }
 }

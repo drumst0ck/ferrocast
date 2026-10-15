@@ -1120,6 +1120,7 @@ impl App {
             });
             ui.checkbox(&mut s.file_search_in_root, "Include files in Root Search");
             ui.checkbox(&mut s.show_menu_bar_icon, "Show menu bar icon (restart required)");
+            ui.checkbox(&mut s.launch_at_login, "Launch Ferrocast at login");
             h(ui, "Clipboard History");
             ui.checkbox(&mut s.clipboard_enabled, "Record clipboard history");
             egui::ComboBox::from_label("Keep history for").selected_text(s.clipboard_retention.label()).show_ui(ui, |ui| {
@@ -1220,6 +1221,15 @@ impl App {
             return;
         }
         if s != self.settings {
+            if s.launch_at_login != self.settings.launch_at_login {
+                match services::set_launch_at_login(s.launch_at_login) {
+                    Ok(()) => self.toast(if s.launch_at_login { "Will launch at login" } else { "Login item removed" }),
+                    Err(e) => {
+                        s.launch_at_login = self.settings.launch_at_login;
+                        self.toast(format!("Could not change login item: {e}"));
+                    }
+                }
+            }
             let theme_changed = s.theme != self.settings.theme;
             let dirs_changed = s.script_directories != self.settings.script_directories;
             self.settings = s;
