@@ -73,6 +73,7 @@ impl IconCache {
         let key = match icon {
             Icon::App(p) => format!("app:{p}"),
             Icon::ClipImage(n) => format!("clip:{n}"),
+            Icon::Emoji(e) => format!("emoji:{e}"),
             _ => return None,
         };
         if let Some(t) = self.map.get(&key) {
@@ -86,6 +87,7 @@ impl IconCache {
         let bytes = match icon {
             Icon::App(p) => ferrocast_macos::files::icon_png(p, 64.0),
             Icon::ClipImage(n) => std::fs::read(self.images_dir.join(n)).ok(),
+            Icon::Emoji(e) => ferrocast_macos::files::emoji_png(e, 96.0),
             _ => None,
         };
         let tex = bytes.and_then(|b| crate::services::decode_png(&b)).map(|img| ctx.load_texture(&key, img, TextureOptions::LINEAR));
@@ -97,7 +99,7 @@ impl IconCache {
 pub fn paint_icon(cache: &mut IconCache, ui: &Ui, rect: Rect, icon: &Icon, pal: &Palette) {
     let p = ui.painter();
     match icon {
-        Icon::App(_) | Icon::ClipImage(_) => match cache.texture(ui.ctx(), icon) {
+        Icon::App(_) | Icon::ClipImage(_) | Icon::Emoji(_) => match cache.texture(ui.ctx(), icon) {
             Some(t) => {
                 let r = if matches!(icon, Icon::ClipImage(_)) { fit(rect, t.size_vec2()) } else { rect };
                 p.image(t.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);

@@ -82,9 +82,6 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
     let Ok(path) = std::env::var("FERROCAST_SCREENSHOT") else { return };
     let n = FRAME.fetch_add(1, Ordering::Relaxed);
     if n == 2 {
-        if let Ok(q) = std::env::var("FERROCAST_QUERY") {
-            app.query = q;
-        }
         match std::env::var("FERROCAST_VIEW").as_deref() {
             Ok("clipboard") => app.push(View::Clipboard),
             Ok("snippets") => app.push(View::Snippets),
@@ -93,6 +90,16 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
             _ => {}
+        }
+        if let Ok(q) = std::env::var("FERROCAST_QUERY") {
+            app.query = q;
+        }
+    }
+    if n == 8 && std::env::var("FERROCAST_PANEL").is_ok() {
+        let sections = app.sections();
+        if let Some(item) = sections.iter().flat_map(|s| s.items.iter()).next().cloned() {
+            let actions = app.actions_for(&item);
+            app.panel = Some(ActionPanel { actions, query: String::new(), sel: 0, item });
         }
     }
     if n == 40 {

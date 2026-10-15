@@ -57,3 +57,23 @@ pub fn icon_png(path: &str, size: f64) -> Option<Vec<u8>> {
     let png = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) }?;
     Some(png.to_vec())
 }
+
+/// Render text (typically one emoji) with the system's colour emoji font to a
+/// square PNG of `px` pixels. egui cannot draw colour glyphs itself.
+pub fn emoji_png(text: &str, px: f64) -> Option<Vec<u8>> {
+    use objc2::runtime::AnyObject;
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSFont, NSFontAttributeName, NSImage, NSStringDrawing};
+    use objc2_foundation::{NSDictionary, NSPoint, NSSize, NSString};
+    let img = NSImage::initWithSize(NSImage::alloc(), NSSize::new(px, px));
+    let font = NSFont::systemFontOfSize(px * 0.8);
+    let key = unsafe { NSFontAttributeName };
+    let attrs: objc2::rc::Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(&[key], &[&*font as &AnyObject]);
+    img.lockFocus();
+    unsafe { NSString::from_str(text).drawAtPoint_withAttributes(NSPoint::new(px * 0.04, px * 0.0), Some(&attrs)) };
+    img.unlockFocus();
+    let tiff = img.TIFFRepresentation()?;
+    let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
+    let png = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }?;
+    Some(png.to_vec())
+}

@@ -407,7 +407,10 @@ impl App {
                 id: s.id(),
                 title: s.title.clone(),
                 subtitle: sub,
-                icon: Icon::Text(s.icon.clone().filter(|i| i.chars().count() <= 2).unwrap_or_else(|| "›_".into())),
+                icon: match s.icon.clone().filter(|i| i.chars().count() <= 2 && !i.is_ascii()) {
+                    Some(e) => Icon::Emoji(e),
+                    None => Icon::Glyph("›_", [60, 60, 70]),
+                },
                 accessory: "Script Command".into(),
                 keywords: s.description.iter().cloned().collect(),
                 kind: Kind::Script(i),
@@ -873,8 +876,8 @@ impl App {
                                 id: format!("emoji:{}", e.as_str()),
                                 title: e.name().to_string(),
                                 subtitle: e.shortcode().map(|s| format!(":{s}:")).unwrap_or_default(),
-                                icon: Icon::Text(e.as_str().to_string()),
-                                accessory: format!("{:?}", e.group()),
+                                icon: Icon::Emoji(e.as_str().to_string()),
+                                accessory: humanize_group(&format!("{:?}", e.group())),
                                 keywords: vec![],
                                 kind: Kind::Emoji(e.as_str()),
                             },
@@ -1657,6 +1660,18 @@ fn file_item(p: &std::path::Path) -> Item {
         keywords: vec![],
         kind: Kind::File(p.to_path_buf()),
     }
+}
+
+/// `SmileysAndEmotion` -> `Smileys & Emotion`.
+fn humanize_group(s: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out.replace(" And ", " & ")
 }
 
 fn looks_like_url(q: &str) -> Option<String> {

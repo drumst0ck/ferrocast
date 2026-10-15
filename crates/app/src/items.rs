@@ -13,6 +13,8 @@ pub enum Icon {
     Glyph(&'static str, [u8; 3]),
     /// Text (emoji from script metadata etc.).
     Text(String),
+    /// Colour emoji rendered by AppKit.
+    Emoji(String),
     Color(Rgba),
     /// Clipboard image file name.
     ClipImage(String),
