@@ -112,9 +112,6 @@ pub fn paint_icon(cache: &mut IconCache, ui: &Ui, rect: Rect, icon: &Icon, pal: 
             p.rect_filled(rect, 7.0, Color32::from_rgb(c[0], c[1], c[2]));
             p.text(rect.center(), Align2::CENTER_CENTER, *g, FontId::proportional(rect.height() * 0.55), Color32::WHITE);
         }
-        Icon::Text(s) => {
-            p.text(rect.center(), Align2::CENTER_CENTER, s, FontId::proportional(rect.height() * 0.72), pal.text);
-        }
         Icon::Color(c) => {
             p.rect_filled(rect, 7.0, Color32::from_rgba_unmultiplied(c.r, c.g, c.b, (c.a * 255.0) as u8));
         }

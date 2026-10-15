@@ -60,6 +60,9 @@ pub fn icon_png(path: &str, size: f64) -> Option<Vec<u8>> {
 
 /// Render text (typically one emoji) with the system's colour emoji font to a
 /// square PNG of `px` pixels. egui cannot draw colour glyphs itself.
+// lockFocus is deprecated (not resolution independent) but is the simplest way to rasterise a
+// glyph with the colour emoji font; output is a fixed-size PNG so that limitation does not matter.
+#[allow(deprecated)]
 pub fn emoji_png(text: &str, px: f64) -> Option<Vec<u8>> {
     use objc2::runtime::AnyObject;
     use objc2::AllocAnyThread;

@@ -11,8 +11,6 @@ pub enum Icon {
     App(String),
     /// A symbol glyph on a colored rounded square.
     Glyph(&'static str, [u8; 3]),
-    /// Text (emoji from script metadata etc.).
-    Text(String),
     /// Colour emoji rendered by AppKit.
     Emoji(String),
     Color(Rgba),
