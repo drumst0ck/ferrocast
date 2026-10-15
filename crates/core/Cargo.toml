@@ -11,3 +11,4 @@ chrono.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
+chrono-tz = "0.10"

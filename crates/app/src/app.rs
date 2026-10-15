@@ -186,6 +186,7 @@ pub struct App {
     started: bool,
     act_item: Option<Item>,
     scratch: String,
+    rates: ferrocast_core::currency::Rates,
 }
 
 fn load_fonts(ctx: &Context) {
@@ -235,6 +236,10 @@ impl App {
         let tray = if data.settings.show_menu_bar_icon { services::make_tray(bus.clone()) } else { None };
         let b2 = bus.clone();
         std::thread::spawn(move || b2.send(Msg::Apps(apps::list_apps())));
+        let store_rates: ferrocast_core::currency::Rates = store.load("rates.json");
+        if store_rates.is_stale(now_secs()) {
+            services::refresh_rates(bus.clone());
+        }
         let mut app = App {
             icons: IconCache::new(store.images_dir()),
             ctx,
@@ -278,6 +283,7 @@ impl App {
             started: false,
             act_item: None,
             scratch: String::new(),
+            rates: store_rates,
         };
         app.shared.visible.store(app.visible, Ordering::Relaxed);
         app.reload_scripts();
@@ -527,6 +533,10 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::Rates(r) => {
+                    let _ = self.store.save("rates.json", &r);
+                    self.rates = r;
+                }
                 Msg::Tray(id) => match id.as_str() {
                     "open" => self.show(),
                     "clipboard" => {
@@ -662,7 +672,19 @@ impl App {
         }
         // calculator / color / url
         let mut top = vec![];
-        if let Some(r) = calc::evaluate(q, self.settings.rem_px) {
+        if let Some((question, answer)) = ferrocast_core::timezones::evaluate(q, chrono::Utc::now()) {
+            let r = calc::CalcResult { question, value: 0.0, unit: None, display: answer.clone(), raw: answer };
+            top.push(Item {
+                id: "time".into(),
+                title: r.display.clone(),
+                subtitle: r.question.clone(),
+                icon: Icon::Glyph("◷", [255, 99, 99]),
+                accessory: "Time".into(),
+                keywords: vec![],
+                kind: Kind::Calc(r),
+            });
+        }
+        if let Some(r) = calc::evaluate_with_rates(q, self.settings.rem_px, Some(&self.rates)) {
             top.push(Item {
                 id: "calc".into(),
                 title: r.display.clone(),

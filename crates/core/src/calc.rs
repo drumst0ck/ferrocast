@@ -440,11 +440,48 @@ fn try_conversion(s: &str, rem_px: f64) -> Option<CalcResult> {
     })
 }
 
+/// `100 usd in eur`, `10k gbp to jpy`.
+fn try_currency(s: &str, rates: &crate::currency::Rates) -> Option<CalcResult> {
+    let lower = s.to_lowercase();
+    let (lhs, rhs) = [" in ", " to ", " as ", " → ", " -> "]
+        .iter()
+        .find_map(|sep| lower.rfind(sep).map(|i| (lower[..i].trim().to_string(), lower[i + sep.len()..].trim().to_string())))?;
+    let to = rhs.to_uppercase();
+    if to.len() != 3 || !to.chars().all(|c| c.is_ascii_alphabetic()) || !rates.knows(&to) {
+        return None;
+    }
+    let split = lhs.len().checked_sub(3)?;
+    if !lhs.is_char_boundary(split) {
+        return None;
+    }
+    let (num, from) = (lhs[..split].trim(), lhs[split..].to_uppercase());
+    if !rates.knows(&from) || !num.chars().last().is_none_or(|c| c.is_ascii_digit() || c == ')' || c == '.' || c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let value = if num.is_empty() { 1.0 } else { eval_math(num)? };
+    let out = rates.convert(value, &from, &to)?;
+    Some(CalcResult {
+        question: format!("{} {from} → {to}", format_number(value, true)),
+        value: out,
+        unit: Some(to.clone()),
+        display: format!("{} {to}", format_number((out * 100.0).round() / 100.0, true)),
+        raw: format_number((out * 100.0).round() / 100.0, false),
+    })
+}
+
 /// Evaluate a Root Search query. Returns `None` if it isn't a calculation.
 pub fn evaluate(input: &str, rem_px: f64) -> Option<CalcResult> {
+    evaluate_with_rates(input, rem_px, None)
+}
+
+/// Like [`evaluate`], additionally understanding currency conversions when rates are available.
+pub fn evaluate_with_rates(input: &str, rem_px: f64, rates: Option<&crate::currency::Rates>) -> Option<CalcResult> {
     let s = input.trim().trim_end_matches('=').trim();
     if s.is_empty() || s.len() > 200 {
         return None;
+    }
+    if let Some(r) = rates.and_then(|r| try_currency(s, r)) {
+        return Some(r);
     }
     if let Some(r) = try_conversion(s, rem_px) {
         return Some(r);
@@ -506,6 +543,20 @@ mod tests {
         assert!(close(ev("2rem in px"), 32.0));
         assert!(close(ev("1 gb in mb"), 1000.0));
         assert!(close(ev("5 km to miles"), 3.106855961811784));
+    }
+
+    #[test]
+    fn currency() {
+        let rates = crate::currency::Rates::parse(r#"{"base":"EUR","date":"d","rates":{"USD":1.25,"GBP":0.8}}"#, 0).unwrap();
+        let r = evaluate_with_rates("100 usd in eur", 16.0, Some(&rates)).unwrap();
+        assert!((r.value - 80.0).abs() < 1e-9);
+        assert_eq!(r.display, "80 EUR");
+        let r = evaluate_with_rates("2k gbp to usd", 16.0, Some(&rates)).unwrap();
+        assert_eq!(r.raw, "3125");
+        assert!(evaluate_with_rates("100 usd in xyz", 16.0, Some(&rates)).is_none());
+        assert!(evaluate_with_rates("100 usd in eur", 16.0, None).is_none());
+        // unit conversions keep working alongside currencies
+        assert!(evaluate_with_rates("10ft in m", 16.0, Some(&rates)).is_some());
     }
 
     #[test]

@@ -21,6 +21,7 @@ pub enum Msg {
     Files(String, Vec<PathBuf>),
     Script { run: u64, text: String, code: i32 },
     Toast(String),
+    Rates(ferrocast_core::currency::Rates),
     Wake,
 }
 
@@ -475,4 +476,16 @@ pub fn decode_png(bytes: &[u8]) -> Option<egui::ColorImage> {
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     let size = [img.width() as usize, img.height() as usize];
     Some(egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()))
+}
+
+/// Refresh exchange rates in the background (ECB data via frankfurter.dev, no API key).
+pub fn refresh_rates(bus: Bus) {
+    std::thread::spawn(move || {
+        let out = std::process::Command::new("/usr/bin/curl").args(["-sf", "-m", "15", ferrocast_core::currency::RATES_URL]).output();
+        if let Ok(o) = out {
+            if let Some(r) = ferrocast_core::currency::Rates::parse(&String::from_utf8_lossy(&o.stdout), now_secs()) {
+                bus.send(Msg::Rates(r));
+            }
+        }
+    });
 }

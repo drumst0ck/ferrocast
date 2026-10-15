@@ -58,6 +58,7 @@ fn fixture() -> App {
         started: true,
         act_item: None,
         scratch: String::new(),
+        rates: Default::default(),
     };
     app.rebuild();
     app
@@ -145,4 +146,13 @@ fn duplicate_snippet_clears_keyword() {
     assert_eq!(app.snippets.len(), 2);
     assert!(app.snippets[1].keyword.is_empty());
     let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn currency_query_uses_cached_rates() {
+    let mut app = fixture();
+    app.rates = ferrocast_core::currency::Rates::parse(r#"{"base":"EUR","date":"d","rates":{"USD":1.25}}"#, 0).unwrap();
+    app.query = "100 usd in eur".into();
+    let results = app.root_sections();
+    assert_eq!(results[0].items[0].title, "80 EUR");
 }
