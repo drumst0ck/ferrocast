@@ -1,9 +1,8 @@
 class Ferrocast < Formula
   desc "Fast keyboard launcher for macOS, written in Rust"
   homepage "https://github.com/drumst0ck/ferrocast"
-  # Private repo for now: brew clones with your git credentials (a tarball URL would 404).
-  # When the repo goes public, switch to the archive url + sha256 with scripts/update_formula.sh.
-  url "https://github.com/drumst0ck/ferrocast.git", tag: "v0.1.0", revision: "9b34ff63ae0a37e824cf693a817d6e39bc849298"
+  url "https://github.com/drumst0ck/ferrocast/archive/refs/tags/v0.1.0.tar.gz"
+  sha256 "60aa323c79340601f777ad596e27e64e46dd8d01bcc6bd059e6bc75f981c8026"
   license "MIT"
   head "https://github.com/drumst0ck/ferrocast.git", branch: "master"
 
