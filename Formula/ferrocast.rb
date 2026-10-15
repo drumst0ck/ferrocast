@@ -6,8 +6,8 @@ class Ferrocast < Formula
   license "MIT"
   head "https://github.com/OWNER/REPO.git", branch: "main"
 
-  depends_on :macos
   depends_on "rust" => :build
+  depends_on :macos
 
   def install
     # Built on the user's machine, so the app never carries a download quarantine flag and
