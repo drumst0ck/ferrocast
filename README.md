@@ -19,6 +19,11 @@ desde el código fuente en tu propia máquina, la app **no lleva marca de cuaren
 interviene: no hace falta cuenta de pago ni saltarse ninguna protección. A cambio, la primera
 instalación tarda unos minutos (compila) y la firma es ad-hoc, de uso local.
 
+**Verificado.** La instalación desde el tap público (`brew tap` con URL + `brew install ferrocast`) se probó de extremo a extremo:
+compila en ~2,5 min, la app no lleva cuarentena, `codesign --verify --strict` pasa y arranca vía LaunchServices.
+Usa siempre el `brew tap` con la URL: la forma corta `brew install drumst0ck/ferrocast/ferrocast` intenta clonar
+`homebrew-ferrocast`, que no existe, y falla.
+
 **Permisos al actualizar.** La firma ad-hoc se ancla al identificador `dev.ferrocast.launcher` en lugar
 de al hash del binario, de modo que macOS debería conservar el permiso de Accesibilidad entre versiones.
 Esto no está verificado en una sesión real; si tras `brew upgrade` te lo vuelve a pedir, concédelo de nuevo.

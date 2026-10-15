@@ -33,7 +33,7 @@ welcome, shortcuts, about), `FERROCAST_QUERY`, `FERROCAST_PANEL=1`. Use a throwa
 
 1. Bump `version` in the root `Cargo.toml`, update `CHANGELOG.md`, make sure CI is green.
 2. `git tag vX.Y.Z && git push --tags`.
-3. `scripts/update_formula.sh OWNER/REPO` rewrites `Formula/ferrocast.rb` (url + sha256) from the pushed tag; commit and push it.
+3. `scripts/update_formula.sh drumst0ck/ferrocast` rewrites `Formula/ferrocast.rb` (url + sha256) from the pushed tag; commit and push it.
 4. Users run `brew upgrade ferrocast`.
 
 The formula compiles from source on the user's machine, so the app has no quarantine flag and needs no
