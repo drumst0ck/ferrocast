@@ -1,6 +1,7 @@
 //! Ferrocast core: platform-independent logic (search, ranking, calculator,
 //! placeholders, script commands, persisted models).
 
+pub mod ai;
 pub mod calc;
 pub mod color;
 pub mod currency;

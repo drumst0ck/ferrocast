@@ -22,6 +22,7 @@ pub enum Msg {
     Script { run: u64, text: String, code: i32 },
     Toast(String),
     Rates(ferrocast_core::currency::Rates),
+    Ai { run: u64, result: Result<String, String> },
     Wake,
 }
 
@@ -488,4 +489,122 @@ pub fn refresh_rates(bus: Bus) {
             }
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// AI (OpenAI-compatible endpoint; API key lives in the macOS Keychain)
+
+const KEYCHAIN_SERVICE: &str = "ferrocast-ai";
+
+pub fn ai_key() -> Option<String> {
+    let out =
+        std::process::Command::new("/usr/bin/security").args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"]).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|k| !k.is_empty())
+}
+
+/// Store (or with an empty key, delete) the API key. The key is briefly visible in `security`'s argv.
+pub fn set_ai_key(key: &str) -> bool {
+    let key = key.trim();
+    let mut cmd = std::process::Command::new("/usr/bin/security");
+    if key.is_empty() {
+        cmd.args(["delete-generic-password", "-s", KEYCHAIN_SERVICE]);
+    } else {
+        cmd.args(["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", "ferrocast", "-w", key]);
+    }
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// Blocking chat completion. The request (including the key) goes to curl via stdin.
+pub fn ai_request(base_url: &str, model: &str, api_key: Option<&str>, prompt: &str) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let url = ferrocast_core::ai::endpoint(base_url);
+    let cfg = ferrocast_core::ai::curl_config(&url, api_key, &ferrocast_core::ai::build_request(model, prompt));
+    let mut child = Command::new("/usr/bin/curl")
+        .args(["-sS", "-m", "120", "-K", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Could not start curl: {e}"))?;
+    child.stdin.take().ok_or("no stdin")?.write_all(cfg.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !out.status.success() && out.stdout.is_empty() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(if err.contains("Failed to connect") || err.contains("Connection refused") {
+            format!("Cannot reach {base_url}. Is your AI server (e.g. Ollama) running? Change it in Settings.")
+        } else {
+            err.trim().to_string()
+        });
+    }
+    ferrocast_core::ai::parse_response(&String::from_utf8_lossy(&out.stdout))
+}
+
+pub fn ask_ai(settings: &Settings, prompt: String, run: u64, bus: Bus) {
+    let (base, model) = (settings.ai_base_url.clone(), settings.ai_model.clone());
+    std::thread::spawn(move || {
+        let key = ai_key();
+        let result = ai_request(&base, &model, key.as_deref(), &prompt);
+        bus.send(Msg::Ai { run, result });
+    });
+}
+
+#[cfg(test)]
+mod ai_tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// One-shot HTTP server returning `body`; yields the raw request it received.
+    fn serve(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1", l.local_addr().unwrap());
+        let h = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = vec![0u8; 16384];
+            let mut n = 0;
+            // read until the JSON body (ends with '}') has arrived
+            while n < buf.len() {
+                let k = s.read(&mut buf[n..]).unwrap();
+                if k == 0 {
+                    break;
+                }
+                n += k;
+                if buf[..n].ends_with(b"}") {
+                    break;
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            s.write_all(resp.as_bytes()).unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+        (url, h)
+    }
+
+    #[test]
+    fn round_trip_sends_key_as_header_and_parses_answer() {
+        let (url, h) = serve(r#"{"choices":[{"message":{"content":"hello from mock"}}]}"#);
+        let answer = ai_request(&url, "test-model", Some("sk-test-123"), "say \"hi\"\nnow").unwrap();
+        assert_eq!(answer, "hello from mock");
+        let req = h.join().unwrap();
+        assert!(req.starts_with("POST /v1/chat/completions"), "{req}");
+        assert!(req.to_lowercase().contains("authorization: bearer sk-test-123"));
+        assert!(req.contains("\"model\":\"test-model\""));
+        assert!(req.contains("say \\\"hi\\\"\\nnow"), "prompt must arrive JSON-escaped: {req}");
+    }
+
+    #[test]
+    fn provider_error_is_readable() {
+        let (url, h) = serve(r#"{"error":{"message":"model 'x' not found"}}"#);
+        assert_eq!(ai_request(&url, "x", None, "hi").unwrap_err(), "model 'x' not found");
+        let _ = h.join();
+    }
+
+    #[test]
+    fn unreachable_server_explains_what_to_do() {
+        let err = ai_request("http://127.0.0.1:1/v1", "m", None, "hi").unwrap_err();
+        assert!(err.contains("Cannot reach"), "{err}");
+    }
 }

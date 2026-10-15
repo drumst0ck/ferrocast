@@ -20,6 +20,7 @@ pub enum Icon {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Builtin {
+    AskAi,
     ClipboardHistory,
     SearchSnippets,
     CreateSnippet,
@@ -39,6 +40,7 @@ pub enum Builtin {
 
 impl Builtin {
     pub const ALL: &'static [Builtin] = &[
+        Builtin::AskAi,
         Builtin::ClipboardHistory,
         Builtin::SearchSnippets,
         Builtin::CreateSnippet,
@@ -58,6 +60,7 @@ impl Builtin {
 
     pub fn title(&self) -> &'static str {
         match self {
+            Builtin::AskAi => "Ask AI",
             Builtin::ClipboardHistory => "Clipboard History",
             Builtin::SearchSnippets => "Search Snippets",
             Builtin::CreateSnippet => "Create Snippet",
@@ -78,6 +81,7 @@ impl Builtin {
 
     pub fn extension(&self) -> &'static str {
         match self {
+            Builtin::AskAi => "AI",
             Builtin::ClipboardHistory => "Clipboard History",
             Builtin::SearchSnippets | Builtin::CreateSnippet => "Snippets",
             Builtin::SearchQuicklinks | Builtin::CreateQuicklink => "Quicklinks",
@@ -92,6 +96,7 @@ impl Builtin {
 
     pub fn glyph(&self) -> (&'static str, [u8; 3]) {
         match self {
+            Builtin::AskAi => ("✦", [168, 110, 255]),
             Builtin::ClipboardHistory => ("⎘", [255, 99, 99]),
             Builtin::SearchSnippets | Builtin::CreateSnippet => ("✂", [255, 167, 38]),
             Builtin::SearchQuicklinks | Builtin::CreateQuicklink => ("↗", [86, 194, 255]),
@@ -107,6 +112,7 @@ impl Builtin {
 
     pub fn keywords(&self) -> Vec<String> {
         let k: &[&str] = match self {
+            Builtin::AskAi => &["chatgpt", "llm", "ollama", "assistant", "question"],
             Builtin::ClipboardHistory => &["paste", "copy", "history"],
             Builtin::SearchEmoji => &["emoji", "symbols", "unicode"],
             Builtin::SearchFiles => &["finder", "find"],

@@ -58,6 +58,7 @@ fn fixture() -> App {
         started: true,
         act_item: None,
         scratch: String::new(),
+        key_scratch: String::new(),
         rates: Default::default(),
     };
     app.rebuild();
@@ -171,4 +172,36 @@ fn destructive_system_commands_confirm_on_every_entry_path() {
     // run_item is the single path used by Enter, the action panel and global hotkeys.
     app.run_item(&item);
     assert!(matches!(app.view(), View::Confirm { act: Act::RunSystem(_), .. }));
+}
+
+#[test]
+fn ai_flow_shows_busy_then_readable_error() {
+    let mut app = fixture();
+    app.settings.ai_base_url = "http://127.0.0.1:1/v1".into(); // closed port: deterministic failure
+    app.run_builtin(Builtin::AskAi);
+    if let View::Ai { prompt, .. } = app.stack.last_mut().unwrap() {
+        *prompt = "hello".into();
+    }
+    app.send_ai();
+    assert!(matches!(app.view(), View::Ai { busy: true, .. }));
+    // a second Enter while busy must not start another request
+    let started = app.next_run;
+    app.send_ai();
+    // send_ai consumes a run id even when ignored, but must leave the in-flight run untouched
+    assert!(matches!(app.view(), View::Ai { busy: true, run, .. } if *run == started - 1));
+    let msg = app.rx.recv_timeout(Duration::from_secs(20)).expect("ai result");
+    let _ = app.bus.tx.send(msg);
+    app.drain();
+    match app.view() {
+        View::Ai { busy: false, answer, .. } => assert!(answer.starts_with("⚠ Cannot reach"), "{answer}"),
+        _ => panic!("expected AI view"),
+    }
+}
+
+#[test]
+fn empty_prompt_is_not_sent() {
+    let mut app = fixture();
+    app.run_builtin(Builtin::AskAi);
+    app.send_ai();
+    assert!(matches!(app.view(), View::Ai { busy: false, .. }));
 }

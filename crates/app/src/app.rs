@@ -55,6 +55,7 @@ pub enum View {
     Alias { id: String, name: String, value: String },
     Hotkey { id: String, name: String, err: String },
     CreateScript { title: String, mode: usize },
+    Ai { prompt: String, answer: String, busy: bool, run: u64 },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -101,6 +102,7 @@ impl View {
             View::Alias { .. } => "Set Alias",
             View::Hotkey { .. } => "Set Hotkey",
             View::CreateScript { .. } => "Create Script Command",
+            View::Ai { .. } => "Ask AI",
         }
     }
     fn placeholder(&self) -> &'static str {
@@ -186,6 +188,7 @@ pub struct App {
     started: bool,
     act_item: Option<Item>,
     scratch: String,
+    key_scratch: String,
     rates: ferrocast_core::currency::Rates,
 }
 
@@ -283,6 +286,7 @@ impl App {
             started: false,
             act_item: None,
             scratch: String::new(),
+            key_scratch: String::new(),
             rates: store_rates,
         };
         app.shared.visible.store(app.visible, Ordering::Relaxed);
@@ -334,6 +338,21 @@ impl App {
         let _ = self.store.save("quicklinks.json", &self.quicklinks);
         self.rebuild();
     }
+    fn send_ai(&mut self) {
+        let run = self.next_run;
+        self.next_run += 1;
+        let prompt = match self.stack.last_mut() {
+            Some(View::Ai { prompt, answer, busy, run: r }) if !prompt.trim().is_empty() && !*busy => {
+                *busy = true;
+                *r = run;
+                answer.clear();
+                prompt.clone()
+            }
+            _ => return,
+        };
+        services::ask_ai(&self.settings, prompt, run, self.bus.clone());
+    }
+
     fn save_notes(&mut self) {
         let _ = self.store.save("notes.json", &self.notes);
     }
@@ -533,6 +552,16 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::Ai { run, result } => {
+                    for v in self.stack.iter_mut() {
+                        if let View::Ai { answer, busy, run: r, .. } = v {
+                            if *r == run {
+                                *busy = false;
+                                *answer = result.clone().unwrap_or_else(|e| format!("⚠ {e}"));
+                            }
+                        }
+                    }
+                }
                 Msg::Rates(r) => {
                     let _ = self.store.save("rates.json", &r);
                     self.rates = r;
@@ -771,6 +800,15 @@ impl App {
             accessory: "Fallback".into(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchEmoji, q.to_string()),
+        });
+        fb.push(Item {
+            id: "fallback:ai".into(),
+            title: format!("Ask AI: “{q}”"),
+            subtitle: String::new(),
+            icon: Icon::Glyph("✦", [168, 110, 255]),
+            accessory: "Fallback".into(),
+            keywords: vec![],
+            kind: Kind::Prefilled(Builtin::AskAi, q.to_string()),
         });
         out.push(Section { title: "Use with…".into(), items: fb });
         out
@@ -1178,7 +1216,11 @@ impl App {
             Kind::Builtin(b) => self.run_builtin(*b),
             Kind::Prefilled(b, q) => {
                 self.run_builtin(*b);
-                self.query = q.clone();
+                if let View::Ai { prompt, .. } = self.stack.last_mut().unwrap() {
+                    *prompt = q.clone();
+                } else {
+                    self.query = q.clone();
+                }
             }
             Kind::Quicklink { id, arg } => {
                 let Some(ql) = self.quicklinks.iter().find(|q| &q.id == id).cloned() else { return };
@@ -1274,6 +1316,7 @@ impl App {
 
     fn run_builtin(&mut self, b: Builtin) {
         match b {
+            Builtin::AskAi => self.push(View::Ai { prompt: String::new(), answer: String::new(), busy: false, run: 0 }),
             Builtin::ClipboardHistory => self.push(View::Clipboard),
             Builtin::SearchSnippets => self.push(View::Snippets),
             Builtin::CreateSnippet => self.new_snippet(String::new()),

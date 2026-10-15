@@ -89,6 +89,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("ai") => app.run_builtin(Builtin::AskAi),
             _ => {}
         }
         if let Ok(q) = std::env::var("FERROCAST_QUERY") {
@@ -117,6 +118,26 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
         std::process::exit(0);
     }
     ctx.request_repaint();
+}
+
+/// Shorten `text` with an ellipsis so it fits `max_w` points.
+fn elide(p: &egui::Painter, text: &str, font: FontId, max_w: f32) -> String {
+    let width = |t: &str| p.layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE).size().x;
+    if width(text) <= max_w {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let cand: String = chars[..mid].iter().collect::<String>() + "…";
+        if width(&cand) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    chars[..lo].iter().collect::<String>().trim_end().to_string() + "…"
 }
 
 fn panel_filter(p: &ActionPanel) -> Vec<usize> {
@@ -232,6 +253,14 @@ impl App {
             return true;
         }
         match self.view().clone() {
+            View::Ai { .. } if k.enter => {
+                self.send_ai();
+                true
+            }
+            View::Ai { answer, busy: false, .. } if k.cmd_enter && !answer.is_empty() => {
+                self.copy_text(&answer);
+                true
+            }
             View::Args { .. } if k.enter || k.cmd_enter => {
                 self.submit_args();
                 true
@@ -580,6 +609,7 @@ impl App {
                 View::Args { .. } => Some("Run".into()),
                 View::Output { .. } => Some("Copy Output".into()),
                 View::Confirm { .. } => Some("Confirm".into()),
+                View::Ai { .. } => Some("Ask".into()),
                 View::SnippetForm { .. } | View::QuicklinkForm { .. } => Some("Save".into()),
                 View::Alias { .. } | View::CreateScript { .. } => Some("Save".into()),
                 _ => None,
@@ -742,7 +772,8 @@ impl App {
                         let tx = r.min.x + 54.0;
                         let clip = Rect::from_min_max(Pos2::new(tx, r.min.y), Pos2::new((right - aw - 10.0).max(tx + 20.0), r.max.y));
                         let p = painter.with_clip_rect(clip);
-                        let tg = p.layout_no_wrap(item.title.clone(), FontId::proportional(14.5), pal.text);
+                        let title = elide(&p, &item.title, FontId::proportional(14.5), clip.width());
+                        let tg = p.layout_no_wrap(title, FontId::proportional(14.5), pal.text);
                         let tw = tg.size().x;
                         p.galley(Pos2::new(tx, r.center().y - tg.size().y / 2.0), tg, pal.text);
                         if !item.subtitle.is_empty() {
@@ -964,6 +995,23 @@ impl App {
                                 );
                             });
                         }
+                        View::Ai { prompt, answer, busy, .. } => {
+                            let r = ui.add(
+                                TextEdit::singleline(prompt)
+                                    .hint_text("Ask anything… (↵ to send)")
+                                    .font(FontId::proportional(16.0))
+                                    .desired_width(f32::INFINITY),
+                            );
+                            if ff {
+                                r.request_focus();
+                            }
+                            if *busy {
+                                lbl(ui, "Thinking…");
+                            }
+                            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                                ui.add(egui::Label::new(RichText::new(answer.as_str()).size(14.0).color(pal.text)).selectable(true));
+                            });
+                        }
                         View::Confirm { msg, .. } => {
                             ui.add_space(50.0);
                             ui.vertical_centered(|ui| {
@@ -1043,6 +1091,8 @@ impl App {
         let mut add_dir = false;
         let mut enable = None;
         let mut scratch = std::mem::take(&mut self.scratch);
+        let mut key_scratch = std::mem::take(&mut self.key_scratch);
+        let mut save_key = false;
         egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 9.0;
             let h = |ui: &mut Ui, t: &str| {
@@ -1079,6 +1129,16 @@ impl App {
             });
             h(ui, "Snippets");
             ui.checkbox(&mut s.snippet_expansion, "Expand snippet keywords automatically while typing");
+            h(ui, "AI (OpenAI-compatible server)");
+            ui.label(RichText::new("Default: local Ollama. Works with LM Studio, OpenAI, OpenRouter…").size(12.0).color(pal.sub));
+            ui.add(TextEdit::singleline(&mut s.ai_base_url).desired_width(f32::INFINITY).hint_text("http://localhost:11434/v1"));
+            ui.add(TextEdit::singleline(&mut s.ai_model).desired_width(300.0).hint_text("model, e.g. llama3.2"));
+            ui.horizontal(|ui| {
+                ui.add(TextEdit::singleline(&mut key_scratch).password(true).desired_width(300.0).hint_text("API key (saved to Keychain)"));
+                if ui.button("Save key").clicked() {
+                    save_key = true;
+                }
+            });
             h(ui, "Calculator & Windows");
             ui.horizontal(|ui| {
                 ui.label("1 rem/em =");
@@ -1137,6 +1197,12 @@ impl App {
             scratch.clear();
         }
         self.scratch = scratch;
+        if save_key {
+            let ok = services::set_ai_key(&key_scratch);
+            key_scratch.clear();
+            self.toast(if ok { "AI key saved to Keychain" } else { "Could not update Keychain" });
+        }
+        self.key_scratch = key_scratch;
         if let Some(i) = remove_dir {
             s.script_directories.remove(i);
         }

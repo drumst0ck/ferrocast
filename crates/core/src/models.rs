@@ -206,6 +206,8 @@ pub struct Settings {
     pub commands: HashMap<String, CommandConfig>,
     pub show_menu_bar_icon: bool,
     pub quit_all_excluded: Vec<String>,
+    pub ai_base_url: String,
+    pub ai_model: String,
 }
 
 impl Default for Settings {
@@ -233,6 +235,8 @@ impl Default for Settings {
             commands: HashMap::new(),
             show_menu_bar_icon: true,
             quit_all_excluded: vec!["Finder".into()],
+            ai_base_url: crate::ai::DEFAULT_BASE_URL.into(),
+            ai_model: crate::ai::DEFAULT_MODEL.into(),
         }
     }
 }
