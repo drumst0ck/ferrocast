@@ -44,3 +44,5 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 - Permisos (Accesibilidad / Input Monitoring) los concede el usuario. Al recompilar con firma
   ad-hoc macOS puede pedirlos de nuevo. Para distribuir hace falta firma Developer ID y notarización.
 - Los scripts con `needsConfirmation` piden confirmación antes de ejecutarse.
+- Los argumentos de Script Commands (incluidos los de tipo `password`) se pasan por línea de comandos,
+  como en Raycast, y pueden verse con `ps` mientras el script corre. No pongas secretos críticos ahí.

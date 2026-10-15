@@ -156,3 +156,19 @@ fn currency_query_uses_cached_rates() {
     let results = app.root_sections();
     assert_eq!(results[0].items[0].title, "80 EUR");
 }
+
+#[test]
+fn force_quit_asks_for_confirmation() {
+    let mut app = fixture();
+    app.perform(Act::ForceQuitApp(1), false);
+    assert!(matches!(app.view(), View::Confirm { act: Act::ForceQuitApp(1), .. }), "must not kill the process before confirming");
+}
+
+#[test]
+fn destructive_system_commands_confirm_on_every_entry_path() {
+    let mut app = fixture();
+    let item = app.base.iter().find(|i| matches!(i.kind, Kind::System(ferrocast_macos::system::SystemCommand::ShutDown))).cloned().unwrap();
+    // run_item is the single path used by Enter, the action panel and global hotkeys.
+    app.run_item(&item);
+    assert!(matches!(app.view(), View::Confirm { act: Act::RunSystem(_), .. }));
+}
