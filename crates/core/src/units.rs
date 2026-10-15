@@ -100,7 +100,14 @@ pub static UNITS: &[Unit] = &[
     u!("degree", "°", Angle, std::f64::consts::PI / 180.0, ["deg", "degree", "degrees", "°"]),
     // Temperature (base: kelvin) — factor/offset: K = v*factor + offset
     Unit { name: "celsius", symbol: "°C", dim: Dim::Temperature, factor: 1.0, offset: 273.15, aliases: &["c", "°c", "celsius", "degc"] },
-    Unit { name: "fahrenheit", symbol: "°F", dim: Dim::Temperature, factor: 5.0 / 9.0, offset: 459.67 * 5.0 / 9.0, aliases: &["f", "°f", "fahrenheit", "degf"] },
+    Unit {
+        name: "fahrenheit",
+        symbol: "°F",
+        dim: Dim::Temperature,
+        factor: 5.0 / 9.0,
+        offset: 459.67 * 5.0 / 9.0,
+        aliases: &["f", "°f", "fahrenheit", "degf"],
+    },
     Unit { name: "kelvin", symbol: "K", dim: Dim::Temperature, factor: 1.0, offset: 0.0, aliases: &["k", "kelvin"] },
 ];
 
@@ -116,7 +123,7 @@ pub fn find(alias: &str) -> Option<&'static Unit> {
 /// All aliases sorted longest-first (for suffix matching).
 pub fn aliases_longest_first() -> Vec<(&'static str, &'static Unit)> {
     let mut v: Vec<_> = UNITS.iter().flat_map(|u| u.aliases.iter().map(move |a| (*a, u))).collect();
-    v.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    v.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
     v
 }
 

@@ -92,9 +92,9 @@ impl Builtin {
 
     pub fn glyph(&self) -> (&'static str, [u8; 3]) {
         match self {
-            Builtin::ClipboardHistory => ("📋", [255, 99, 99]),
+            Builtin::ClipboardHistory => ("⎘", [255, 99, 99]),
             Builtin::SearchSnippets | Builtin::CreateSnippet => ("✂", [255, 167, 38]),
-            Builtin::SearchQuicklinks | Builtin::CreateQuicklink => ("🔗", [86, 194, 255]),
+            Builtin::SearchQuicklinks | Builtin::CreateQuicklink => ("↗", [86, 194, 255]),
             Builtin::SearchEmoji => ("☺", [255, 197, 49]),
             Builtin::SearchFiles => ("🔍", [120, 120, 130]),
             Builtin::SwitchWindows => ("⊞", [89, 212, 153]),
@@ -124,13 +124,18 @@ impl Builtin {
 
 #[derive(Clone, Debug)]
 pub enum Kind {
-    App { path: String, bundle_id: Option<String> },
+    App {
+        path: String,
+    },
     System(SystemCommand),
     Window(WindowCommand),
     Builtin(Builtin),
     /// A builtin opened with a prefilled query.
     Prefilled(Builtin, String),
-    Quicklink { id: String, arg: Option<String> },
+    Quicklink {
+        id: String,
+        arg: Option<String>,
+    },
     Snippet(String),
     Script(usize),
     Calc(CalcResult),
@@ -160,7 +165,10 @@ pub struct Item {
 impl Item {
     /// Can this item be configured (favorite, alias, hotkey) in Root Search?
     pub fn is_command(&self) -> bool {
-        matches!(self.kind, Kind::App { .. } | Kind::System(_) | Kind::Window(_) | Kind::Builtin(_) | Kind::Quicklink { .. } | Kind::Script(_))
+        matches!(
+            self.kind,
+            Kind::App { .. } | Kind::System(_) | Kind::Window(_) | Kind::Builtin(_) | Kind::Quicklink { .. } | Kind::Script(_)
+        )
     }
 }
 
@@ -174,7 +182,6 @@ pub enum Act {
     Run,
     CopyText(String),
     PasteText(String),
-    Open(String),
     Reveal(PathBuf),
     QuitApp(i32),
     ForceQuitApp(i32),

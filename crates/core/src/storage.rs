@@ -83,7 +83,10 @@ pub fn default_quicklinks() -> Vec<Quicklink> {
         Quicklink::new("Search YouTube", "https://www.youtube.com/results?search_query={argument name=\"query\"}"),
         Quicklink::new("Search crates.io", "https://crates.io/search?q={argument name=\"crate\"}"),
         Quicklink::new("Rust Docs", "https://docs.rs/{argument name=\"crate\"}"),
-        Quicklink::new("Translate", "https://translate.google.com/?sl=auto&tl={argument name=\"to\" default=\"en\"}&text={argument name=\"text\"}"),
+        Quicklink::new(
+            "Translate",
+            "https://translate.google.com/?sl=auto&tl={argument name=\"to\" default=\"en\"}&text={argument name=\"text\"}",
+        ),
     ]
 }
 

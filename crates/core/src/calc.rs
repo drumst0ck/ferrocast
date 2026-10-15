@@ -299,9 +299,8 @@ fn is_const(w: &str) -> bool {
 }
 
 const FUNCS: &[&str] = &[
-    "sqrt", "cbrt", "abs", "floor", "ceil", "round", "trunc", "exp", "ln", "log", "log2", "log10", "sin", "cos", "tan",
-    "cot", "sec", "csc", "asin", "acos", "atan", "acot", "sinh", "cosh", "tanh", "coth", "asinh", "acosh", "atanh",
-    "min", "max", "pow", "fact", "root",
+    "sqrt", "cbrt", "abs", "floor", "ceil", "round", "trunc", "exp", "ln", "log", "log2", "log10", "sin", "cos", "tan", "cot", "sec",
+    "csc", "asin", "acos", "atan", "acot", "sinh", "cosh", "tanh", "coth", "asinh", "acosh", "atanh", "min", "max", "pow", "fact", "root",
 ];
 fn is_func(w: &str) -> bool {
     FUNCS.contains(&w)
@@ -409,8 +408,8 @@ fn looks_like_math(s: &str) -> bool {
     let has_op = s.chars().any(|c| "+-*/^%!×÷()".contains(c));
     let lower = s.to_lowercase();
     let words = [
-        "sqrt", "root", "sin", "cos", "tan", "log", "ln", "pi", " of ", " off ", "power", "squared", "cubed", "abs", "mod",
-        "min", "max", "plus", "minus", "times", "fact", "floor", "ceil", "round", "exp",
+        "sqrt", "root", "sin", "cos", "tan", "log", "ln", "pi", " of ", " off ", "power", "squared", "cubed", "abs", "mod", "min", "max",
+        "plus", "minus", "times", "fact", "floor", "ceil", "round", "exp",
     ];
     (has_digit || lower.contains("pi")) && (has_op || words.iter().any(|w| lower.contains(w)))
 }
@@ -418,9 +417,9 @@ fn looks_like_math(s: &str) -> bool {
 /// Try to split `"<expr> <unit> in|to|as <unit>"`.
 fn try_conversion(s: &str, rem_px: f64) -> Option<CalcResult> {
     let lower = s.to_lowercase();
-    let (lhs, rhs) = [" in ", " to ", " as ", " → ", " -> "].iter().find_map(|sep| {
-        lower.rfind(sep).map(|i| (lower[..i].trim().to_string(), lower[i + sep.len()..].trim().to_string()))
-    })?;
+    let (lhs, rhs) = [" in ", " to ", " as ", " → ", " -> "]
+        .iter()
+        .find_map(|sep| lower.rfind(sep).map(|i| (lower[..i].trim().to_string(), lower[i + sep.len()..].trim().to_string())))?;
     let to = units::find(&rhs)?;
     // Find the longest unit alias at the end of lhs.
     let (num_part, from) = units::aliases_longest_first().into_iter().find_map(|(alias, unit)| {
@@ -454,13 +453,7 @@ pub fn evaluate(input: &str, rem_px: f64) -> Option<CalcResult> {
         return None;
     }
     let v = eval_math(s)?;
-    Some(CalcResult {
-        question: s.to_string(),
-        value: v,
-        unit: None,
-        display: format_number(v, true),
-        raw: format_number(v, false),
-    })
+    Some(CalcResult { question: s.to_string(), value: v, unit: None, display: format_number(v, true), raw: format_number(v, false) })
 }
 
 #[cfg(test)]

@@ -130,7 +130,11 @@ impl SystemCommand {
     pub fn is_destructive(&self) -> bool {
         matches!(
             self,
-            SystemCommand::Restart | SystemCommand::ShutDown | SystemCommand::LogOut | SystemCommand::EmptyTrash | SystemCommand::QuitAllApps
+            SystemCommand::Restart
+                | SystemCommand::ShutDown
+                | SystemCommand::LogOut
+                | SystemCommand::EmptyTrash
+                | SystemCommand::QuitAllApps
         )
     }
 

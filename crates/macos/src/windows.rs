@@ -381,9 +381,7 @@ fn screen_index_for(win: Rect, screens: &[Rect]) -> usize {
 static PREVIOUS: Mutex<Option<HashMap<(i32, String), Rect>>> = Mutex::new(None);
 
 fn window_key(pid: i32, el: AXUIElementRef) -> (i32, String) {
-    let title = copy_attr(el, "AXTitle")
-        .map(|v| unsafe { CFString::wrap_under_create_rule(v as _) }.to_string())
-        .unwrap_or_default();
+    let title = copy_attr(el, "AXTitle").map(|v| unsafe { CFString::wrap_under_create_rule(v as _) }.to_string()).unwrap_or_default();
     (pid, title)
 }
 

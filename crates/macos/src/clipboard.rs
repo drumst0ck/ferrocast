@@ -3,8 +3,8 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{
-    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG,
-    NSPasteboardItem, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSPasteboardWriting,
+    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypePNG,
+    NSPasteboardTypeString, NSPasteboardTypeTIFF, NSPasteboardWriting,
 };
 use objc2_foundation::{NSArray, NSData, NSDictionary, NSString, NSURL};
 use std::path::PathBuf;
@@ -15,7 +15,11 @@ pub enum ClipContent {
     Text(String),
     Files(Vec<PathBuf>),
     /// PNG bytes + size.
-    Image { png: Vec<u8>, width: u32, height: u32 },
+    Image {
+        png: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
 }
 
 fn pb() -> Retained<NSPasteboard> {
@@ -186,17 +190,16 @@ pub fn snapshot() -> Snapshot {
 pub fn restore(s: &Snapshot) {
     let pb = pb();
     pb.clearContents();
-    let items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = s
-        .0
-        .iter()
-        .map(|formats| {
-            let item = NSPasteboardItem::new();
-            for (ty, bytes) in formats {
-                item.setData_forType(&NSData::with_bytes(bytes), &NSString::from_str(ty));
-            }
-            ProtocolObject::from_retained(item)
-        })
-        .collect();
+    let items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> =
+        s.0.iter()
+            .map(|formats| {
+                let item = NSPasteboardItem::new();
+                for (ty, bytes) in formats {
+                    item.setData_forType(&NSData::with_bytes(bytes), &NSString::from_str(ty));
+                }
+                ProtocolObject::from_retained(item)
+            })
+            .collect();
     if !items.is_empty() {
         pb.writeObjects(&NSArray::from_retained_slice(&items));
     }

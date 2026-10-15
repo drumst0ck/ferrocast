@@ -117,7 +117,11 @@ impl ClipEntry {
                 let first = self.content.lines().next().unwrap_or("");
                 let name = std::path::Path::new(first).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
                 let n = self.content.lines().count();
-                if n > 1 { format!("{name} and {} more", n - 1) } else { name }
+                if n > 1 {
+                    format!("{name} and {} more", n - 1)
+                } else {
+                    name
+                }
             }
             _ => self.content.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect(),
         }
@@ -213,7 +217,11 @@ impl Default for Settings {
             sensitivity: Sensitivity::Medium,
             clipboard_enabled: true,
             clipboard_retention: Retention::Month,
-            clipboard_ignored_apps: vec!["com.agilebits.onepassword7".into(), "com.1password.1password".into(), "com.apple.keychainaccess".into()],
+            clipboard_ignored_apps: vec![
+                "com.agilebits.onepassword7".into(),
+                "com.1password.1password".into(),
+                "com.apple.keychainaccess".into(),
+            ],
             snippet_expansion: true,
             snippet_disabled_apps: vec!["com.1password.1password".into(), "com.apple.keychainaccess".into()],
             script_directories: vec![],

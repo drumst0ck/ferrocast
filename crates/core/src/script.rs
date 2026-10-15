@@ -74,11 +74,7 @@ fn parse_json_arg(v: &str) -> Option<ScriptArgument> {
     let options = j
         .get("data")
         .and_then(|d| d.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|o| Some((o.get("title")?.as_str()?.to_string(), o.get("value")?.as_str()?.to_string())))
-                .collect()
-        })
+        .map(|a| a.iter().filter_map(|o| Some((o.get("title")?.as_str()?.to_string(), o.get("value")?.as_str()?.to_string()))).collect())
         .unwrap_or_default();
     Some(ScriptArgument {
         kind: j.get("type").and_then(|t| t.as_str()).unwrap_or("text").to_string(),

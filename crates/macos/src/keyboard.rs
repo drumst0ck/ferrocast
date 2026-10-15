@@ -5,7 +5,7 @@ use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
 /// Marker placed in EVENT_SOURCE_USER_DATA so our own event tap ignores
 /// events we synthesize.
-pub const SYNTHETIC_MARKER: i64 = 0x0F3C_A57;
+pub const SYNTHETIC_MARKER: i64 = 0x00F3_CA57;
 
 pub mod keycode {
     pub const V: u16 = 9;

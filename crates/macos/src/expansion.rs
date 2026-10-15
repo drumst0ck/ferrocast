@@ -6,8 +6,7 @@
 
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
-    CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType, CallbackResult,
-    EventField,
+    CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType, CallbackResult, EventField,
 };
 use foreign_types_shared::ForeignType;
 use std::sync::{Arc, Mutex, RwLock};
@@ -115,7 +114,12 @@ pub fn start(
             let src = tap.mach_port().create_runloop_source(0).expect("runloop source");
             CFRunLoop::get_current().add_source(&src, kCFRunLoopCommonModes);
             tap.enable();
-            CFRunLoop::run_current();
+            // macOS disables taps that stall (TapDisabledByTimeout) or on user input;
+            // re-enable periodically so snippet expansion never stops silently.
+            loop {
+                CFRunLoop::run_in_mode(core_foundation::runloop::kCFRunLoopDefaultMode, std::time::Duration::from_secs(2), false);
+                tap.enable();
+            }
         }
     })?;
     Ok(())
@@ -125,11 +129,15 @@ pub fn start(
 /// clipboard (restoring the previous content), then move the cursor.
 pub fn inject(keyword_len: usize, text: &str, cursor_from_end: Option<usize>, on_write: impl Fn(isize)) {
     use crate::{clipboard, keyboard};
-    if clipboard::is_concealed() { return; }
+    if clipboard::is_concealed() {
+        return;
+    }
     let saved = clipboard::snapshot();
     let target = crate::running::frontmost().map(|a| a.pid);
     // The worker may run after the user switches apps; don't type into a new app.
-    if target.is_none() { return; }
+    if target.is_none() {
+        return;
+    }
     keyboard::tap_key(keyboard::keycode::DELETE, keyword_len);
     std::thread::sleep(std::time::Duration::from_millis(30));
     clipboard::write_text(text);

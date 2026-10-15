@@ -11,14 +11,8 @@ pub fn search(query: &str, limit: usize) -> Vec<PathBuf> {
         return vec![];
     }
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-    let Ok(mut child) = Command::new("/usr/bin/mdfind")
-        .arg("-onlyin")
-        .arg(&home)
-        .arg("-name")
-        .arg(q)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+    let Ok(mut child) =
+        Command::new("/usr/bin/mdfind").arg("-onlyin").arg(&home).arg("-name").arg(q).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
     else {
         return vec![];
     };
@@ -53,7 +47,9 @@ pub fn icon_png(path: &str, size: f64) -> Option<Vec<u8>> {
     use objc2::AllocAnyThread;
     use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSWorkspace};
     use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
-    let img = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(path));
+    // Resolve symlinks (e.g. /Applications/Safari.app -> cryptex) so Finder does not draw the alias badge.
+    let real = std::fs::canonicalize(path).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| path.to_string());
+    let img = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(&real));
     let mut rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(size, size));
     let cg = unsafe { img.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
     let rep = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &cg);

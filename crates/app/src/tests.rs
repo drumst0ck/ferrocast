@@ -7,21 +7,57 @@ fn fixture() -> App {
     let bus = Bus { tx, ctx: ctx.clone() };
     let settings = Settings::default();
     let shared = Arc::new(Shared {
-        store: store.clone(), clipboard: Mutex::new(vec![]), snippets: RwLock::new(vec![]),
-        settings: RwLock::new(settings.clone()), ignored_clipboard_count: Default::default(),
-        visible: Default::default(), keywords: Default::default(),
+        store: store.clone(),
+        clipboard: Mutex::new(vec![]),
+        snippets: RwLock::new(vec![]),
+        settings: RwLock::new(settings.clone()),
+        ignored_clipboard_count: Default::default(),
+        visible: Default::default(),
+        keywords: Default::default(),
     });
     let mut app = App {
-        ctx, shared, bus, rx, store: store.clone(), settings,
-        snippets: vec![], quicklinks: vec![], notes: vec![], frecency: Frecency::default(),
-        apps: vec![], apps_at: Instant::now(), scripts: vec![], base: vec![], hotkeys: None,
-        _tray: None, icons: IconCache::new(store.images_dir()), stack: vec![View::Root],
-        query: String::new(), prev_query: String::new(), selected: 0, scroll_to_sel: false,
-        panel: None, toast: None, prev_pid: None, visible: true, had_focus: false,
-        shown_at: Instant::now(), hidden_at: Instant::now(), cur_height: ui::HEIGHT,
-        files: (String::new(), vec![]), files_req: String::new(), query_changed_at: Instant::now(),
-        win_cache: vec![], runs: HashMap::new(), next_run: 1, inline: HashMap::new(),
-        focus_first: false, dark: true, started: true, act_item: None, scratch: String::new(),
+        ctx,
+        shared,
+        bus,
+        rx,
+        store: store.clone(),
+        settings,
+        snippets: vec![],
+        quicklinks: vec![],
+        notes: vec![],
+        frecency: Frecency::default(),
+        apps: vec![],
+        apps_at: Instant::now(),
+        scripts: vec![],
+        base: vec![],
+        hotkeys: None,
+        _tray: None,
+        icons: IconCache::new(store.images_dir()),
+        stack: vec![View::Root],
+        query: String::new(),
+        prev_query: String::new(),
+        selected: 0,
+        scroll_to_sel: false,
+        panel: None,
+        toast: None,
+        prev_pid: None,
+        visible: true,
+        had_focus: false,
+        shown_at: Instant::now(),
+        hidden_at: Instant::now(),
+        cur_height: ui::HEIGHT,
+        files: (String::new(), vec![]),
+        files_req: String::new(),
+        query_changed_at: Instant::now(),
+        win_cache: vec![],
+        runs: HashMap::new(),
+        next_run: 1,
+        inline: HashMap::new(),
+        focus_first: false,
+        dark: true,
+        started: true,
+        act_item: None,
+        scratch: String::new(),
     };
     app.rebuild();
     app
@@ -41,8 +77,16 @@ fn render(app: &mut App, events: Vec<Event>) {
 #[test]
 fn list_forms_and_settings_render_without_native_services() {
     let mut app = fixture();
-    for view in [View::Root, View::Clipboard, View::Snippets, View::Quicklinks, View::Emoji,
-        View::Files, View::Windows, View::Notes, View::Settings,
+    for view in [
+        View::Root,
+        View::Clipboard,
+        View::Snippets,
+        View::Quicklinks,
+        View::Emoji,
+        View::Files,
+        View::Windows,
+        View::Notes,
+        View::Settings,
         View::SnippetForm { id: None, name: String::new(), text: String::new(), keyword: String::new() },
         View::QuicklinkForm { id: None, name: String::new(), link: String::new(), open_with: String::new() },
     ] {
@@ -65,9 +109,7 @@ fn script_with_confirmation_does_not_start_before_approval() {
 fn empty_snippet_library_can_create_with_keyboard() {
     let mut app = fixture();
     app.stack.push(View::Snippets);
-    render(&mut app, vec![Event::Key {
-        key: Key::N, physical_key: None, pressed: true, repeat: false, modifiers: CMD,
-    }]);
+    render(&mut app, vec![Event::Key { key: Key::N, physical_key: None, pressed: true, repeat: false, modifiers: CMD }]);
     assert!(matches!(app.view(), View::SnippetForm { id: None, .. }));
 }
 

@@ -67,7 +67,15 @@ enum Shape {
 impl View {
     fn shape(&self) -> Shape {
         match self {
-            View::Root | View::Clipboard | View::Snippets | View::Quicklinks | View::Emoji | View::Files | View::Windows | View::Notes | View::Colors(_) => Shape::List,
+            View::Root
+            | View::Clipboard
+            | View::Snippets
+            | View::Quicklinks
+            | View::Emoji
+            | View::Files
+            | View::Windows
+            | View::Notes
+            | View::Colors(_) => Shape::List,
             View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::Settings => Shape::Form,
             _ => Shape::Single,
         }
@@ -345,7 +353,7 @@ impl App {
                 icon: Icon::App(a.path.to_string_lossy().to_string()),
                 accessory: "Application".into(),
                 keywords: a.keywords.clone(),
-                kind: Kind::App { path: a.path.to_string_lossy().to_string(), bundle_id: a.bundle_id.clone() },
+                kind: Kind::App { path: a.path.to_string_lossy().to_string() },
             });
         }
         for b in Builtin::ALL {
@@ -353,7 +361,7 @@ impl App {
             v.push(Item {
                 id: b.id(),
                 title: b.title().into(),
-                subtitle: b.extension().into(),
+                subtitle: if b.extension() == b.title() { String::new() } else { b.extension().into() },
                 icon: Icon::Glyph(g, c),
                 accessory: "Command".into(),
                 keywords: b.keywords(),
@@ -387,7 +395,7 @@ impl App {
                 id: format!("quicklink:{}", q.id),
                 title: q.name.clone(),
                 subtitle: q.link.clone(),
-                icon: Icon::Glyph("🔗", [86, 194, 255]),
+                icon: Icon::Glyph("↗", [86, 194, 255]),
                 accessory: "Quicklink".into(),
                 keywords: vec![],
                 kind: Kind::Quicklink { id: q.id.clone(), arg: None },
@@ -622,14 +630,31 @@ impl App {
             if !favs.is_empty() {
                 out.push(Section { title: "Favorites".into(), items: favs });
             }
-            let mut recent: Vec<&Item> = self.base.iter().filter(|i| !self.settings.is_favorite(&i.id) && self.frecency.last_used(&i.id).is_some()).collect();
+            let mut recent: Vec<&Item> =
+                self.base.iter().filter(|i| !self.settings.is_favorite(&i.id) && self.frecency.last_used(&i.id).is_some()).collect();
             recent.sort_by(|a, b| self.frecency.score(&b.id, now).partial_cmp(&self.frecency.score(&a.id, now)).unwrap());
             recent.truncate(8);
             if !recent.is_empty() {
                 out.push(Section { title: "Suggestions".into(), items: recent.into_iter().cloned().collect() });
             }
-            let cmds: Vec<Item> = self.base.iter().filter(|i| matches!(i.kind, Kind::Builtin(_)) && !self.settings.is_favorite(&i.id)).take(10).cloned().collect();
+            let cmds: Vec<Item> = self
+                .base
+                .iter()
+                .filter(|i| matches!(i.kind, Kind::Builtin(_)) && !self.settings.is_favorite(&i.id))
+                .take(10)
+                .cloned()
+                .collect();
             out.push(Section { title: "Commands".into(), items: cmds });
+            let apps: Vec<Item> = self
+                .base
+                .iter()
+                .filter(|i| matches!(i.kind, Kind::App { .. }) && !self.settings.is_favorite(&i.id))
+                .take(30)
+                .cloned()
+                .collect();
+            if !apps.is_empty() {
+                out.push(Section { title: "Applications".into(), items: apps });
+            }
             return out;
         }
         // calculator / color / url
@@ -672,7 +697,9 @@ impl App {
         }
         // alias + argument: "g rust"
         if let Some((first, rest)) = q.split_once(' ') {
-            if let Some(it) = self.base.iter().find(|i| self.settings.alias(&i.id).is_some_and(|a| a.eq_ignore_ascii_case(first)) && matches!(i.kind, Kind::Quicklink { .. })) {
+            if let Some(it) = self.base.iter().find(|i| {
+                self.settings.alias(&i.id).is_some_and(|a| a.eq_ignore_ascii_case(first)) && matches!(i.kind, Kind::Quicklink { .. })
+            }) {
                 let mut it = it.clone();
                 if let Kind::Quicklink { id, .. } = &it.kind {
                     it.kind = Kind::Quicklink { id: id.clone(), arg: Some(rest.trim().to_string()) };
@@ -680,15 +707,18 @@ impl App {
                 out.push(Section { title: "Quicklink".into(), items: vec![it] });
             }
         }
-        let mut scored: Vec<(f64, &Item)> =
-            self.base.iter().filter_map(|i| ranking::score(&self.rankable(i), q, &self.frecency, now, self.settings.sensitivity).map(|s| (s, i))).collect();
+        let mut scored: Vec<(f64, &Item)> = self
+            .base
+            .iter()
+            .filter_map(|i| ranking::score(&self.rankable(i), q, &self.frecency, now, self.settings.sensitivity).map(|s| (s, i)))
+            .collect();
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
         scored.truncate(40);
         if !scored.is_empty() {
             out.push(Section { title: "Results".into(), items: scored.into_iter().map(|(_, i)| i.clone()).collect() });
         }
         if self.settings.file_search_in_root && self.files.0 == q && !self.files.1.is_empty() {
-            out.push(Section { title: "Files".into(), items: self.files.1.iter().take(8).map(file_item).collect() });
+            out.push(Section { title: "Files".into(), items: self.files.1.iter().take(8).map(|p| file_item(p)).collect() });
         }
         let mut fb = vec![Item {
             id: "fallback:web".into(),
@@ -733,7 +763,7 @@ impl App {
     fn sorted(&self, v: Vec<(i64, Item)>, title: &str) -> Vec<Section> {
         let mut v = v;
         if !self.query.trim().is_empty() {
-            v.sort_by(|a, b| b.0.cmp(&a.0));
+            v.sort_by_key(|a| std::cmp::Reverse(a.0));
         }
         vec![Section { title: title.into(), items: v.into_iter().map(|(_, i)| i).collect() }]
     }
@@ -753,8 +783,8 @@ impl App {
                     }
                     let icon = match e.kind {
                         ClipKind::Image => Icon::ClipImage(e.content.clone()),
-                        ClipKind::Color => Rgba::parse(&e.content).map(Icon::Color).unwrap_or(Icon::Glyph("📋", [255, 99, 99])),
-                        ClipKind::Link => Icon::Glyph("🔗", [86, 194, 255]),
+                        ClipKind::Color => Rgba::parse(&e.content).map(Icon::Color).unwrap_or(Icon::Glyph("⎘", [255, 99, 99])),
+                        ClipKind::Link => Icon::Glyph("↗", [86, 194, 255]),
                         ClipKind::File => Icon::Glyph("📄", [120, 120, 130]),
                         ClipKind::Text => Icon::Glyph("T", [90, 90, 105]),
                     };
@@ -820,7 +850,7 @@ impl App {
                                     id: format!("quicklink:{}", l.id),
                                     title: l.name.clone(),
                                     subtitle: l.link.chars().take(70).collect(),
-                                    icon: Icon::Glyph("🔗", [86, 194, 255]),
+                                    icon: Icon::Glyph("↗", [86, 194, 255]),
                                     accessory: String::new(),
                                     keywords: vec![],
                                     kind: Kind::Quicklink { id: l.id.clone(), arg: None },
@@ -855,7 +885,7 @@ impl App {
             }
             View::Files => {
                 if self.files.0 == q && !self.files.1.is_empty() {
-                    vec![Section { title: "Files".into(), items: self.files.1.iter().map(file_item).collect() }]
+                    vec![Section { title: "Files".into(), items: self.files.1.iter().map(|p| file_item(p)).collect() }]
                 } else {
                     vec![]
                 }
@@ -885,7 +915,8 @@ impl App {
                 self.sorted(v, "Windows")
             }
             View::Notes => {
-                let mut notes: Vec<&Note> = self.notes.iter().filter(|n| q.is_empty() || n.text.to_lowercase().contains(&q.to_lowercase())).collect();
+                let mut notes: Vec<&Note> =
+                    self.notes.iter().filter(|n| q.is_empty() || n.text.to_lowercase().contains(&q.to_lowercase())).collect();
                 notes.sort_by_key(|n| std::cmp::Reverse(n.modified));
                 vec![Section {
                     title: "Notes".into(),
@@ -932,7 +963,10 @@ impl App {
                 a.push(Action::new("Open Application", Act::Run));
                 a.push(Action::new("Show in Finder", Act::Reveal(PathBuf::from(path))).key(CMD, Key::Enter));
                 a.push(Action::new("Copy Path", Act::CopyText(path.clone())).key(CMD_SHIFT, Key::C));
-                if let Some(r) = running::running_apps().into_iter().find(|r| r.path.as_deref().is_some_and(|p| p.trim_end_matches('/') == path.trim_end_matches('/'))) {
+                if let Some(r) = running::running_apps()
+                    .into_iter()
+                    .find(|r| r.path.as_deref().is_some_and(|p| p.trim_end_matches('/') == path.trim_end_matches('/')))
+                {
                     a.push(Action::new("Quit Application", Act::QuitApp(r.pid)).key(CMD_SHIFT, Key::Q));
                     a.push(Action::new("Hide Application", Act::HideApp(r.pid)).key(CMD_SHIFT, Key::H));
                     a.push(Action::new("Force Quit Application", Act::ForceQuitApp(r.pid)).danger());
@@ -976,7 +1010,10 @@ impl App {
             Kind::Calc(r) => {
                 a.push(Action::new("Copy Answer", Act::CopyText(r.raw.clone())));
                 a.push(Action::new("Paste Answer to Active App", Act::PasteText(r.raw.clone())).key(CMD, Key::Enter));
-                a.push(Action::new("Copy Question and Answer", Act::CopyText(format!("{} = {}", r.question, r.display))).key(Modifiers { alt: true, ..CMD_SHIFT }, Key::C));
+                a.push(
+                    Action::new("Copy Question and Answer", Act::CopyText(format!("{} = {}", r.question, r.display)))
+                        .key(Modifiers { alt: true, ..CMD_SHIFT }, Key::C),
+                );
             }
             Kind::Note(id) => {
                 a.push(Action::new("Open Note", Act::Run));
@@ -1050,10 +1087,6 @@ impl App {
             _ => "Run Command",
         }
         .to_string()
-    }
-
-    fn selected_item(&self, sections: &[Section]) -> Option<Item> {
-        sections.iter().flat_map(|s| s.items.iter()).nth(self.selected).cloned()
     }
 
     // ------------------------------------------------------------ execution
@@ -1159,7 +1192,12 @@ impl App {
                             password: a.kind == "password",
                         })
                         .collect();
-                    self.push(View::Args { target: ArgTarget::Script(*i), title: s.title.clone(), defs, values: vec![String::new(); s.arguments.len()] });
+                    self.push(View::Args {
+                        target: ArgTarget::Script(*i),
+                        title: s.title.clone(),
+                        defs,
+                        values: vec![String::new(); s.arguments.len()],
+                    });
                     if let View::Args { values, defs, .. } = self.stack.last_mut().unwrap() {
                         for (v, d) in values.iter_mut().zip(defs.iter()) {
                             if let Some((_, val)) = d.options.first() {
@@ -1181,7 +1219,7 @@ impl App {
                 self.copy_text(&v)
             }
             Kind::Url(u) => self.open_target(&u.clone(), None),
-            Kind::File(p) => self.open_target(&p.to_string_lossy().to_string(), None),
+            Kind::File(p) => self.open_target(p.to_string_lossy().as_ref(), None),
             Kind::WebSearch(q) => {
                 let url = self.settings.fallback_search_url.clone();
                 let mut ctx = placeholders::Context::default();
@@ -1215,7 +1253,9 @@ impl App {
             Builtin::SearchSnippets => self.push(View::Snippets),
             Builtin::CreateSnippet => self.new_snippet(String::new()),
             Builtin::SearchQuicklinks => self.push(View::Quicklinks),
-            Builtin::CreateQuicklink => self.push(View::QuicklinkForm { id: None, name: String::new(), link: String::new(), open_with: String::new() }),
+            Builtin::CreateQuicklink => {
+                self.push(View::QuicklinkForm { id: None, name: String::new(), link: String::new(), open_with: String::new() })
+            }
             Builtin::SearchEmoji => self.push(View::Emoji),
             Builtin::SearchFiles => self.push(View::Files),
             Builtin::SwitchWindows => self.push(View::Windows),
@@ -1255,7 +1295,15 @@ impl App {
         let bus = self.bus.clone();
         std::thread::spawn(move || match c.run(&excl) {
             Ok(msg) => {
-                if matches!(c, system::SystemCommand::ToggleMute | system::SystemCommand::VolumeUp | system::SystemCommand::VolumeDown | system::SystemCommand::Volume(_) | system::SystemCommand::EmptyTrash | system::SystemCommand::ToggleHiddenFiles) {
+                if matches!(
+                    c,
+                    system::SystemCommand::ToggleMute
+                        | system::SystemCommand::VolumeUp
+                        | system::SystemCommand::VolumeDown
+                        | system::SystemCommand::Volume(_)
+                        | system::SystemCommand::EmptyTrash
+                        | system::SystemCommand::ToggleHiddenFiles
+                ) {
                     services::notify("Ferrocast", &msg);
                 }
             }
@@ -1266,7 +1314,12 @@ impl App {
     fn push_args(&mut self, target: ArgTarget, title: String, defs: Vec<placeholders::ArgumentDef>, first: Option<String>) {
         let ad: Vec<ArgDef> = defs
             .iter()
-            .map(|d| ArgDef { name: d.name.clone(), options: d.options.iter().map(|o| (o.clone(), o.clone())).collect(), optional: d.default.is_some(), password: false })
+            .map(|d| ArgDef {
+                name: d.name.clone(),
+                options: d.options.iter().map(|o| (o.clone(), o.clone())).collect(),
+                optional: d.default.is_some(),
+                password: false,
+            })
             .collect();
         let mut values: Vec<String> = defs.iter().map(|d| d.default.clone().unwrap_or_default()).collect();
         for (v, d) in values.iter_mut().zip(ad.iter()) {
@@ -1338,9 +1391,8 @@ impl App {
 
     fn execute_script_cmd(&mut self, idx: usize, args: Vec<String>) {
         let Some(s) = self.scripts.get(idx).cloned() else { return };
-        let args = s.arguments.iter().zip(args).map(|(d, a)| {
-            if d.percent_encoded { placeholders::percent_encode(&a) } else { a }
-        }).collect();
+        let args =
+            s.arguments.iter().zip(args).map(|(d, a)| if d.percent_encoded { placeholders::percent_encode(&a) } else { a }).collect();
         let run = self.next_run;
         self.next_run += 1;
         match s.mode {
@@ -1390,7 +1442,16 @@ impl App {
     }
 
     fn perform(&mut self, act: Act, confirmed: bool) {
-        let destructive = matches!(act, Act::ClipDeleteAll | Act::Trash(_) | Act::DeleteSnippet(_) | Act::DeleteQuicklink(_) | Act::NoteDelete(_) | Act::DisableCommand | Act::ForceQuitApp(_));
+        let destructive = matches!(
+            act,
+            Act::ClipDeleteAll
+                | Act::Trash(_)
+                | Act::DeleteSnippet(_)
+                | Act::DeleteQuicklink(_)
+                | Act::NoteDelete(_)
+                | Act::DisableCommand
+                | Act::ForceQuitApp(_)
+        );
         if destructive && !confirmed {
             let msg = match &act {
                 Act::ClipDeleteAll => "Delete all clipboard history?",
@@ -1410,7 +1471,6 @@ impl App {
             Act::Run => {}
             Act::CopyText(t) => self.copy_text(&t),
             Act::PasteText(t) => self.paste_text(&t),
-            Act::Open(t) => self.open_target(&t, None),
             Act::Reveal(p) => {
                 let _ = apps::reveal(&p);
                 self.hide();
@@ -1487,7 +1547,12 @@ impl App {
             Act::CreateSnippet => self.new_snippet(String::new()),
             Act::EditQuicklink(id) => {
                 if let Some(q) = self.quicklinks.iter().find(|q| q.id == id).cloned() {
-                    self.push(View::QuicklinkForm { id: Some(q.id), name: q.name, link: q.link, open_with: q.open_with.unwrap_or_default() });
+                    self.push(View::QuicklinkForm {
+                        id: Some(q.id),
+                        name: q.name,
+                        link: q.link,
+                        open_with: q.open_with.unwrap_or_default(),
+                    });
                 }
             }
             Act::DuplicateQuicklink(id) => {
@@ -1503,12 +1568,14 @@ impl App {
                 self.save_quicklinks();
                 self.pop_if_confirm();
             }
-            Act::CreateQuicklink => self.push(View::QuicklinkForm { id: None, name: String::new(), link: String::new(), open_with: String::new() }),
+            Act::CreateQuicklink => {
+                self.push(View::QuicklinkForm { id: None, name: String::new(), link: String::new(), open_with: String::new() })
+            }
             Act::ClipCopy(ref id) | Act::ClipPaste(ref id) => {
                 let paste = matches!(act, Act::ClipPaste(_));
                 let entry = self.shared.clipboard.lock().unwrap().iter().find(|e| &e.id == id).cloned();
                 if let Some(e) = entry {
-                                match e.kind {
+                    match e.kind {
                         ClipKind::Image => {
                             if let Ok(b) = std::fs::read(self.store.images_dir().join(&e.content)) {
                                 clipboard::write_png(&b);
@@ -1577,15 +1644,18 @@ impl App {
     }
 }
 
-fn file_item(p: &PathBuf) -> Item {
+fn file_item(p: &std::path::Path) -> Item {
     Item {
         id: format!("file:{}", p.display()),
         title: p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-        subtitle: p.parent().map(|d| d.to_string_lossy().replace(&dirs::home_dir().unwrap_or_default().to_string_lossy().to_string(), "~")).unwrap_or_default(),
+        subtitle: p
+            .parent()
+            .map(|d| d.to_string_lossy().replace(&dirs::home_dir().unwrap_or_default().to_string_lossy().to_string(), "~"))
+            .unwrap_or_default(),
         icon: Icon::App(p.to_string_lossy().to_string()),
         accessory: "File".into(),
         keywords: vec![],
-        kind: Kind::File(p.clone()),
+        kind: Kind::File(p.to_path_buf()),
     }
 }
 

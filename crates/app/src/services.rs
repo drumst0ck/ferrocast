@@ -78,7 +78,7 @@ impl Shared {
 
 fn record(shared: &Shared, content: clipboard::ClipContent, source: Option<String>) {
     let now = now_secs();
-    let (settings_retention, ) = (shared.settings.read().unwrap().clipboard_retention,);
+    let (settings_retention,) = (shared.settings.read().unwrap().clipboard_retention,);
     let mut list = shared.clipboard.lock().unwrap();
     let mut entry = match content {
         clipboard::ClipContent::Text(t) => {
@@ -168,11 +168,12 @@ pub fn start_clipboard(shared: Arc<Shared>, bus: Bus) {
                 std::thread::sleep(Duration::from_millis(400));
                 objc2::rc::autoreleasepool(|_| {
                     let c = clipboard::change_count();
-                    let record_change = crate::clipboard_policy::should_record(
-                        c, last, shared.ignored_clipboard_count.load(Ordering::SeqCst) as isize,
-                    );
+                    let record_change =
+                        crate::clipboard_policy::should_record(c, last, shared.ignored_clipboard_count.load(Ordering::SeqCst) as isize);
                     last = c;
-                    if !record_change { return; }
+                    if !record_change {
+                        return;
+                    }
                     let (enabled, ignored) = {
                         let s = shared.settings.read().unwrap();
                         (s.clipboard_enabled, s.clipboard_ignored_apps.clone())
@@ -202,9 +203,13 @@ pub fn start_clipboard(shared: Arc<Shared>, bus: Bus) {
 pub fn clipboard_texts(shared: &Shared) -> Vec<String> {
     let mut v = vec![];
     if !clipboard::is_concealed() {
-        if let Some(t) = clipboard::read_text() { v.push(t); }
+        if let Some(t) = clipboard::read_text() {
+            v.push(t);
+        }
     }
-    for e in shared.clipboard.lock().unwrap().iter().filter(|e| matches!(e.kind, ClipKind::Text | ClipKind::Link | ClipKind::Color)).take(10) {
+    for e in
+        shared.clipboard.lock().unwrap().iter().filter(|e| matches!(e.kind, ClipKind::Text | ClipKind::Link | ClipKind::Color)).take(10)
+    {
         if v.first() != Some(&e.content) {
             v.push(e.content.clone());
         }
@@ -228,7 +233,9 @@ pub fn start_expansion(shared: Arc<Shared>) {
     let s2 = shared.clone();
     let on_match: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |kw: String| {
         // Never replace or read a password-manager/transient clipboard.
-        if clipboard::is_concealed() { return; }
+        if clipboard::is_concealed() {
+            return;
+        }
         let Some(sn) = s2.snippets.read().unwrap().iter().find(|s| s.keyword == kw).cloned() else { return };
         let ctx = placeholders::Context { clipboard: clipboard_texts(&s2), ..Default::default() };
         let ex = placeholders::expand(&sn.text, Target::Snippet, &ctx);
@@ -363,7 +370,7 @@ pub fn make_tray(bus: Bus) -> Option<tray_icon::TrayIcon> {
         }
     }
     let icon = tray_icon::Icon::from_rgba(rgba, n as u32, n as u32).ok()?;
-    tray_icon::TrayIconBuilder::new().with_menu(Box::new(menu)).with_icon(icon).with_icon_as_template(true).with_tooltip("Ferrocast").build().ok()
+    tray_icon::TrayIconBuilder::new().with_menu(Box::new(menu)).with_icon_templated(icon).with_tooltip("Ferrocast").build().ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +399,7 @@ pub fn load_scripts(dirs: &[PathBuf]) -> Vec<ScriptCommand> {
     for d in dirs {
         walk(d, 2, &mut out);
     }
-    out.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    out.sort_by_key(|a| a.title.to_lowercase());
     out
 }
 

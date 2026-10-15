@@ -12,6 +12,9 @@ pub enum Target {
     Quicklink,
 }
 
+/// Resolves `{snippet name="…"}` references.
+pub type SnippetLookup<'a> = &'a dyn Fn(&str) -> Option<String>;
+
 /// Inputs available while expanding.
 #[derive(Default)]
 pub struct Context<'a> {
@@ -21,7 +24,7 @@ pub struct Context<'a> {
     /// Argument values by name (unnamed arguments use "argument", "argument2"…).
     pub arguments: HashMap<String, String>,
     /// Snippet lookup by name, for `{snippet name="…"}`.
-    pub snippets: Option<&'a dyn Fn(&str) -> Option<String>>,
+    pub snippets: Option<SnippetLookup<'a>>,
     /// Fixed "now" for tests.
     pub now: Option<DateTime<Local>>,
 }
@@ -288,7 +291,14 @@ pub fn format_unicode(t: &DateTime<Local>, pattern: &str) -> String {
         i += n;
         let month = t.month0() as usize;
         let wd = t.weekday().num_days_from_monday() as usize;
-        let h12 = { let h = t.hour() % 12; if h == 0 { 12 } else { h } };
+        let h12 = {
+            let h = t.hour() % 12;
+            if h == 0 {
+                12
+            } else {
+                h
+            }
+        };
         let s = match (c, n) {
             ('y', 2) => format!("{:02}", t.year() % 100),
             ('y', 1) => t.year().to_string(),
@@ -328,7 +338,7 @@ pub fn format_unicode(t: &DateTime<Local>, pattern: &str) -> String {
             ('Z', 1..=3) => t.format("%z").to_string(),
             ('Z', 4) => format!("GMT{}", t.format("%:z")),
             ('Z', _) => t.format("%:z").to_string(),
-            _ => std::iter::repeat(c).take(n).collect(),
+            _ => std::iter::repeat_n(c, n).collect(),
         };
         out.push_str(&s);
     }
@@ -391,7 +401,12 @@ pub fn expand(template: &str, target: Target, ctx: &Context) -> Expanded {
             "snippet" => p.attr("name").and_then(|n| ctx.snippets.and_then(|f| f(n))).unwrap_or_default(),
             "argument" => {
                 let key = arg_key(&p, &mut unnamed);
-                ctx.arguments.get(&key).filter(|v| !v.is_empty()).cloned().or_else(|| p.attr("default").map(String::from)).unwrap_or_default()
+                ctx.arguments
+                    .get(&key)
+                    .filter(|v| !v.is_empty())
+                    .cloned()
+                    .or_else(|| p.attr("default").map(String::from))
+                    .unwrap_or_default()
             }
             "date" => match p.attr("format") {
                 Some(f) => format_unicode(&time, f),

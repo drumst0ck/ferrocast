@@ -18,8 +18,11 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &Context, _f: &mut eframe::Frame) {
         if !self.started {
             self.started = true;
-            if self.visible { self.show(); }
+            if self.visible {
+                self.show();
+            }
         }
+        dev_screenshot(ctx, self);
         self.drain();
         self.tick_inline();
         if self.toast.as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_millis(2500)) {
@@ -69,6 +72,44 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _f: &mut eframe::Frame) {
         self.draw(ui);
     }
+}
+
+/// Dev aid: `FERROCAST_SCREENSHOT=/tmp/x.png` saves the window contents after a few frames
+/// and exits. `FERROCAST_QUERY` / `FERROCAST_VIEW` preselect what is drawn. Needs no TCC permission.
+fn dev_screenshot(ctx: &Context, app: &mut App) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static FRAME: AtomicU32 = AtomicU32::new(0);
+    let Ok(path) = std::env::var("FERROCAST_SCREENSHOT") else { return };
+    let n = FRAME.fetch_add(1, Ordering::Relaxed);
+    if n == 2 {
+        if let Ok(q) = std::env::var("FERROCAST_QUERY") {
+            app.query = q;
+        }
+        match std::env::var("FERROCAST_VIEW").as_deref() {
+            Ok("clipboard") => app.push(View::Clipboard),
+            Ok("snippets") => app.push(View::Snippets),
+            Ok("quicklinks") => app.push(View::Quicklinks),
+            Ok("emoji") => app.push(View::Emoji),
+            Ok("settings") => app.push(View::Settings),
+            Ok("notes") => app.push(View::Notes),
+            _ => {}
+        }
+    }
+    if n == 40 {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+    }
+    let shot = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            Event::Screenshot { image, .. } => Some(image.clone()),
+            _ => None,
+        })
+    });
+    if let Some(img) = shot {
+        let raw: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
+        let _ = image::save_buffer(&path, &raw, img.width() as u32, img.height() as u32, image::ColorType::Rgba8);
+        std::process::exit(0);
+    }
+    ctx.request_repaint();
 }
 
 fn panel_filter(p: &ActionPanel) -> Vec<usize> {
@@ -277,7 +318,7 @@ impl App {
         }
         let Some(code) = services::key_code_name(key) else { return false };
         let is_f = code.starts_with('F') && code.len() <= 3 && code[1..].chars().all(|c| c.is_ascii_digit());
-        if !(m.ctrl || m.alt || m.mac_cmd || m.shift) && !is_f {
+        if !(m.ctrl || m.alt || m.mac_cmd || m.shift || is_f) {
             return false;
         }
         let mut parts = vec![];
@@ -404,7 +445,9 @@ impl App {
                 let kw = if s.keyword.is_empty() { "No keyword".to_string() } else { format!("Keyword {}", s.keyword) };
                 Some(Detail::Text(s.text.clone(), kw))
             }
-            Kind::Note(id) => self.notes.iter().find(|n| &n.id == id).map(|n| Detail::Text(n.text.chars().take(6000).collect(), String::new())),
+            Kind::Note(id) => {
+                self.notes.iter().find(|n| &n.id == id).map(|n| Detail::Text(n.text.chars().take(6000).collect(), String::new()))
+            }
             Kind::Quicklink { id, .. } => self.quicklinks.iter().find(|q| &q.id == id).map(|q| Detail::Text(q.link.clone(), "Link".into())),
             _ => None,
         }
@@ -450,7 +493,7 @@ impl App {
         let placeholder = self.view().placeholder();
         let nested = self.stack.len() > 1;
         let mut back = false;
-        ui.scope_builder(UiBuilder::new().max_rect(search_rect.shrink2(Vec2::new(18.0, 0.0))), |ui| {
+        ui.scope_builder(UiBuilder::new().max_rect(search_rect.shrink2(Vec2::new(18.0, 0.0)).translate(Vec2::new(0.0, 3.0))), |ui| {
             ui.horizontal_centered(|ui| {
                 if nested && ui.add(egui::Label::new(RichText::new("←").size(18.0).color(pal.sub)).sense(Sense::click())).clicked() {
                     back = true;
@@ -491,8 +534,16 @@ impl App {
         let mut double = None;
         match shape {
             Shape::List => {
-                let detail = if matches!(self.view(), View::Clipboard | View::Snippets | View::Notes | View::Quicklinks) { cur.as_ref().and_then(|i| self.detail_for(i)) } else { None };
-                let list_rect = if detail.is_some() { Rect::from_min_max(content.min, Pos2::new(content.min.x + content.width() * 0.42, content.max.y)) } else { content };
+                let detail = if matches!(self.view(), View::Clipboard | View::Snippets | View::Notes | View::Quicklinks) {
+                    cur.as_ref().and_then(|i| self.detail_for(i))
+                } else {
+                    None
+                };
+                let list_rect = if detail.is_some() {
+                    Rect::from_min_max(content.min, Pos2::new(content.min.x + content.width() * 0.42, content.max.y))
+                } else {
+                    content
+                };
                 (clicked, double) = self.draw_list(ui, list_rect, &sections, &pal);
                 if let Some(d) = detail {
                     let r = Rect::from_min_max(Pos2::new(list_rect.max.x, content.min.y), content.max);
@@ -500,7 +551,13 @@ impl App {
                     self.draw_detail(ui, r.shrink(14.0), d, &pal);
                 }
                 if sections.is_empty() && matches!(self.view(), View::Files) && self.query.trim().chars().count() < 2 {
-                    ui.painter().text(content.center(), Align2::CENTER_CENTER, "Type at least 2 characters", FontId::proportional(14.0), pal.sub);
+                    ui.painter().text(
+                        content.center(),
+                        Align2::CENTER_CENTER,
+                        "Type at least 2 characters",
+                        FontId::proportional(14.0),
+                        pal.sub,
+                    );
                 } else if sections.is_empty() {
                     ui.painter().text(content.center(), Align2::CENTER_CENTER, "No results", FontId::proportional(14.0), pal.sub);
                 }
@@ -589,9 +646,17 @@ impl App {
                 let mut idx = 0;
                 for sec in sections {
                     let (hr, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), Sense::hover());
-                    ui.painter().text(Pos2::new(hr.min.x + 18.0, hr.center().y + 2.0), Align2::LEFT_CENTER, &sec.title, FontId::proportional(12.0), pal.sub);
+                    ui.painter().text(
+                        Pos2::new(hr.min.x + 18.0, hr.center().y + 2.0),
+                        Align2::LEFT_CENTER,
+                        &sec.title,
+                        FontId::proportional(12.0),
+                        pal.sub,
+                    );
                     for item in &sec.items {
-                        let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ui::ROW_H), Sense::click());
+                        let is_calc = matches!(item.kind, Kind::Calc(_));
+                        let row_h = if is_calc { 86.0 } else { ui::ROW_H };
+                        let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), Sense::click());
                         let selected = idx == sel;
                         let painter = ui.painter().clone();
                         if selected {
@@ -608,6 +673,42 @@ impl App {
                         }
                         if resp.double_clicked() {
                             double = Some(idx);
+                        }
+                        if is_calc {
+                            // Calculator card: question on the left, big answer on the right.
+                            let mid = r.center().y;
+                            let half = r.width() / 2.0;
+                            painter.text(
+                                Pos2::new(r.min.x + half / 2.0, mid - 8.0),
+                                Align2::CENTER_CENTER,
+                                &item.subtitle,
+                                FontId::proportional(20.0),
+                                pal.text,
+                            );
+                            painter.text(
+                                Pos2::new(r.min.x + half / 2.0, mid + 20.0),
+                                Align2::CENTER_CENTER,
+                                "Calculator",
+                                FontId::proportional(11.5),
+                                pal.sub,
+                            );
+                            painter.text(Pos2::new(r.center().x, mid), Align2::CENTER_CENTER, "→", FontId::proportional(20.0), pal.sub);
+                            painter.text(
+                                Pos2::new(r.min.x + half * 1.5, mid - 8.0),
+                                Align2::CENTER_CENTER,
+                                &item.title,
+                                FontId::proportional(34.0),
+                                pal.text,
+                            );
+                            painter.text(
+                                Pos2::new(r.min.x + half * 1.5, mid + 24.0),
+                                Align2::CENTER_CENTER,
+                                "Answer",
+                                FontId::proportional(11.5),
+                                pal.sub,
+                            );
+                            idx += 1;
+                            continue;
                         }
                         let icon_rect = Rect::from_center_size(Pos2::new(r.min.x + 32.0, r.center().y), Vec2::splat(28.0));
                         ui::paint_icon(&mut self.icons, ui, icon_rect, &item.icon, pal);
@@ -638,7 +739,13 @@ impl App {
                         let tw = tg.size().x;
                         p.galley(Pos2::new(tx, r.center().y - tg.size().y / 2.0), tg, pal.text);
                         if !item.subtitle.is_empty() {
-                            p.text(Pos2::new(tx + tw + 8.0, r.center().y), Align2::LEFT_CENTER, &item.subtitle, FontId::proportional(12.5), pal.sub);
+                            p.text(
+                                Pos2::new(tx + tw + 8.0, r.center().y),
+                                Align2::LEFT_CENTER,
+                                &item.subtitle,
+                                FontId::proportional(12.5),
+                                pal.sub,
+                            );
                         }
                         idx += 1;
                     }
@@ -680,7 +787,10 @@ impl App {
         let Some(p) = self.panel.as_mut() else { return };
         let idx = panel_filter(p);
         let h = (idx.len() as f32 * 34.0 + 56.0).min(320.0);
-        let rect = Rect::from_min_max(Pos2::new(content.max.x - 340.0, content.max.y - h - 6.0), Pos2::new(content.max.x - 12.0, content.max.y - 6.0));
+        let rect = Rect::from_min_max(
+            Pos2::new(content.max.x - 340.0, content.max.y - h - 6.0),
+            Pos2::new(content.max.x - 12.0, content.max.y - 6.0),
+        );
         let painter = ui.painter().clone();
         painter.rect_filled(rect.expand(1.0), 10.0, Color32::from_black_alpha(90));
         painter.rect_filled(rect, 10.0, if self.dark { Color32::from_rgb(34, 34, 38) } else { Color32::from_rgb(246, 246, 248) });
@@ -704,7 +814,13 @@ impl App {
                     let col = if a.destructive { pal.danger } else { pal.text };
                     painter.text(Pos2::new(r.min.x + 16.0, r.center().y), Align2::LEFT_CENTER, &a.title, FontId::proportional(13.5), col);
                     if let Some((m, k)) = a.shortcut {
-                        painter.text(Pos2::new(r.max.x - 14.0, r.center().y), Align2::RIGHT_CENTER, shortcut_label(m, k), FontId::proportional(12.0), pal.sub);
+                        painter.text(
+                            Pos2::new(r.max.x - 14.0, r.center().y),
+                            Align2::RIGHT_CENTER,
+                            shortcut_label(m, k),
+                            FontId::proportional(12.0),
+                            pal.sub,
+                        );
                     }
                 }
             });
@@ -787,7 +903,9 @@ impl App {
                                 r.request_focus();
                             }
                             lbl(ui, "Snippet");
-                            ui.add(TextEdit::multiline(text).desired_width(f32::INFINITY).desired_rows(7).hint_text("Text to expand. Supports {clipboard}, {date}, {time}, {cursor}, {uuid}, {argument name=\"x\"}"));
+                            ui.add(TextEdit::multiline(text).desired_width(f32::INFINITY).desired_rows(7).hint_text(
+                                "Text to expand. Supports {clipboard}, {date}, {time}, {cursor}, {uuid}, {argument name=\"x\"}",
+                            ));
                             lbl(ui, "Keyword (type it anywhere to expand)");
                             ui.add(TextEdit::singleline(keyword).desired_width(300.0).hint_text("e.g. !sig"));
                             lbl(ui, "Save with ⌘↵ · esc to cancel");
@@ -799,7 +917,11 @@ impl App {
                                 r.request_focus();
                             }
                             lbl(ui, "Link (URL, file path or deeplink)");
-                            ui.add(TextEdit::singleline(link).desired_width(f32::INFINITY).hint_text("https://github.com/search?q={argument name=\"query\"}"));
+                            ui.add(
+                                TextEdit::singleline(link)
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text("https://github.com/search?q={argument name=\"query\"}"),
+                            );
                             lbl(ui, "Open with (optional app name)");
                             ui.add(TextEdit::singleline(open_with).desired_width(300.0).hint_text("e.g. Safari"));
                             lbl(ui, "Save with ⌘↵ · esc to cancel");
@@ -825,9 +947,14 @@ impl App {
                             lbl(ui, "Run with ↵ · Tab moves between fields");
                         }
                         View::Output { text, done, title, .. } => {
-                            ui.label(RichText::new(if *done { title.clone() } else { format!("{title} — running…") }).strong().color(pal.text));
+                            ui.label(
+                                RichText::new(if *done { title.clone() } else { format!("{title} — running…") }).strong().color(pal.text),
+                            );
                             egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| {
-                                ui.add(egui::Label::new(RichText::new(script::strip_ansi(text)).monospace().size(12.5).color(pal.text)).selectable(true));
+                                ui.add(
+                                    egui::Label::new(RichText::new(script::strip_ansi(text)).monospace().size(12.5).color(pal.text))
+                                        .selectable(true),
+                                );
                             });
                         }
                         View::Confirm { msg, .. } => {
@@ -972,7 +1099,11 @@ impl App {
             });
             h(ui, "Permissions");
             ui.horizontal(|ui| {
-                ui.label(if trusted { "Accessibility: granted ✓" } else { "Accessibility: not granted (needed for window management, pasting and snippet expansion)" });
+                ui.label(if trusted {
+                    "Accessibility: granted ✓"
+                } else {
+                    "Accessibility: not granted (needed for window management, pasting and snippet expansion)"
+                });
                 if !trusted && ui.button("Request").clicked() {
                     req_acc = true;
                 }
