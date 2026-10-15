@@ -55,7 +55,7 @@ pub enum View {
     Alias { id: String, name: String, value: String },
     Hotkey { id: String, name: String, err: String },
     CreateScript { title: String, mode: usize },
-    Ai { prompt: String, answer: String, busy: bool, run: u64 },
+    Ai { prompt: String, asked: String, answer: String, history: Vec<(String, String)>, busy: bool, run: u64 },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -341,16 +341,21 @@ impl App {
     fn send_ai(&mut self) {
         let run = self.next_run;
         self.next_run += 1;
-        let prompt = match self.stack.last_mut() {
-            Some(View::Ai { prompt, answer, busy, run: r }) if !prompt.trim().is_empty() && !*busy => {
+        let (history, question) = match self.stack.last_mut() {
+            Some(View::Ai { prompt, asked, answer, history, busy, run: r }) if !prompt.trim().is_empty() && !*busy => {
+                // The previous turn becomes context unless it failed.
+                if !asked.is_empty() && !answer.is_empty() && !answer.contains("⚠ ") {
+                    history.push((std::mem::take(asked), std::mem::take(answer)));
+                }
                 *busy = true;
                 *r = run;
+                *asked = std::mem::take(prompt);
                 answer.clear();
-                prompt.clone()
+                (history.clone(), asked.clone())
             }
             _ => return,
         };
-        services::ask_ai(&self.settings, prompt, run, self.bus.clone());
+        services::ask_ai(&self.settings, history, question, run, self.bus.clone());
     }
 
     fn save_notes(&mut self) {
@@ -552,12 +557,26 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
-                Msg::Ai { run, result } => {
+                Msg::AiChunk { run, text } => {
+                    for v in self.stack.iter_mut() {
+                        if let View::Ai { answer, run: r, .. } = v {
+                            if *r == run {
+                                answer.push_str(&text);
+                            }
+                        }
+                    }
+                }
+                Msg::AiDone { run, error } => {
                     for v in self.stack.iter_mut() {
                         if let View::Ai { answer, busy, run: r, .. } = v {
                             if *r == run {
                                 *busy = false;
-                                *answer = result.clone().unwrap_or_else(|e| format!("⚠ {e}"));
+                                if let Some(e) = &error {
+                                    if !answer.is_empty() {
+                                        answer.push('\n');
+                                    }
+                                    answer.push_str(&format!("⚠ {e}"));
+                                }
                             }
                         }
                     }
@@ -1316,7 +1335,14 @@ impl App {
 
     fn run_builtin(&mut self, b: Builtin) {
         match b {
-            Builtin::AskAi => self.push(View::Ai { prompt: String::new(), answer: String::new(), busy: false, run: 0 }),
+            Builtin::AskAi => self.push(View::Ai {
+                prompt: String::new(),
+                asked: String::new(),
+                answer: String::new(),
+                history: vec![],
+                busy: false,
+                run: 0,
+            }),
             Builtin::ClipboardHistory => self.push(View::Clipboard),
             Builtin::SearchSnippets => self.push(View::Snippets),
             Builtin::CreateSnippet => self.new_snippet(String::new()),

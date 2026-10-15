@@ -89,7 +89,16 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
-            Ok("ai") => app.run_builtin(Builtin::AskAi),
+            Ok("ai") => {
+                app.run_builtin(Builtin::AskAi);
+                if std::env::var("FERROCAST_AI_DEMO").is_ok() {
+                    if let Some(View::Ai { history, asked, answer, .. }) = app.stack.last_mut() {
+                        history.push(("What is a frecency score?".into(), "Frecency blends how often and how recently you used an item, so frequently and recently used results rank higher.".into()));
+                        *asked = "And how is it stored?".into();
+                        *answer = "As a small list of recent timestamps per item plus a counter, persisted in frecency.json.".into();
+                    }
+                }
+            }
             _ => {}
         }
         if let Ok(q) = std::env::var("FERROCAST_QUERY") {
@@ -995,21 +1004,28 @@ impl App {
                                 );
                             });
                         }
-                        View::Ai { prompt, answer, busy, .. } => {
+                        View::Ai { prompt, asked, answer, history, busy, .. } => {
                             let r = ui.add(
                                 TextEdit::singleline(prompt)
-                                    .hint_text("Ask anything… (↵ to send)")
+                                    .hint_text("Ask anything… (↵ to send, ⌘↵ copies the answer)")
                                     .font(FontId::proportional(16.0))
                                     .desired_width(f32::INFINITY),
                             );
                             if ff {
                                 r.request_focus();
                             }
-                            if *busy {
-                                lbl(ui, "Thinking…");
-                            }
-                            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                                ui.add(egui::Label::new(RichText::new(answer.as_str()).size(14.0).color(pal.text)).selectable(true));
+                            egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false; 2]).show(ui, |ui| {
+                                let turn = |ui: &mut Ui, q: &str, a: &str| {
+                                    ui.label(RichText::new(q).size(12.5).strong().color(pal.accent));
+                                    ui.add(egui::Label::new(RichText::new(a).size(14.0).color(pal.text)).selectable(true));
+                                    ui.add_space(8.0);
+                                };
+                                for (q, a) in history.iter() {
+                                    turn(ui, q, a);
+                                }
+                                if !asked.is_empty() {
+                                    turn(ui, asked, if answer.is_empty() && *busy { "Thinking…" } else { answer });
+                                }
                             });
                         }
                         View::Confirm { msg, .. } => {

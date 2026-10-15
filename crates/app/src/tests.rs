@@ -193,7 +193,7 @@ fn ai_flow_shows_busy_then_readable_error() {
     let _ = app.bus.tx.send(msg);
     app.drain();
     match app.view() {
-        View::Ai { busy: false, answer, .. } => assert!(answer.starts_with("⚠ Cannot reach"), "{answer}"),
+        View::Ai { busy: false, answer, .. } => assert!(answer.contains("⚠ Cannot reach"), "{answer}"),
         _ => panic!("expected AI view"),
     }
 }
@@ -204,4 +204,51 @@ fn empty_prompt_is_not_sent() {
     app.run_builtin(Builtin::AskAi);
     app.send_ai();
     assert!(matches!(app.view(), View::Ai { busy: false, .. }));
+}
+
+#[test]
+fn ai_turns_accumulate_as_history_and_failed_turns_do_not() {
+    let mut app = fixture();
+    app.run_builtin(Builtin::AskAi);
+    let set_prompt = |app: &mut App, t: &str| {
+        if let View::Ai { prompt, .. } = app.stack.last_mut().unwrap() {
+            *prompt = t.into();
+        }
+    };
+    // Simulate turn 1 streaming in, bypassing the network.
+    if let View::Ai { asked, answer, busy, run, .. } = app.stack.last_mut().unwrap() {
+        *asked = "q1".into();
+        *answer = "a1".into();
+        *busy = false;
+        *run = 7;
+    }
+    let _ = app.bus.tx.send(Msg::AiChunk { run: 7, text: " more".into() });
+    let _ = app.bus.tx.send(Msg::AiDone { run: 7, error: None });
+    app.drain();
+    assert!(matches!(app.view(), View::Ai { answer, busy: false, .. } if answer == "a1 more"));
+    // Turn 2 starts: turn 1 moves into history.
+    app.settings.ai_base_url = "http://127.0.0.1:1/v1".into();
+    set_prompt(&mut app, "q2");
+    app.send_ai();
+    match app.view() {
+        View::Ai { history, asked, prompt, busy: true, .. } => {
+            assert_eq!(history, &[("q1".to_string(), "a1 more".to_string())]);
+            assert_eq!((asked.as_str(), prompt.as_str()), ("q2", ""));
+        }
+        _ => panic!("expected busy AI view"),
+    }
+    // Chunks for a stale run id are ignored.
+    let _ = app.bus.tx.send(Msg::AiChunk { run: 7, text: "STALE".into() });
+    app.drain();
+    assert!(matches!(app.view(), View::Ai { answer, .. } if !answer.contains("STALE")));
+    // The unreachable server fails turn 2; a later turn must not carry the failed one as context.
+    let done = app.rx.recv_timeout(Duration::from_secs(20)).expect("chunk or done");
+    let _ = app.bus.tx.send(done);
+    while !matches!(app.view(), View::Ai { busy: false, .. }) {
+        app.drain();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    set_prompt(&mut app, "q3");
+    app.send_ai();
+    assert!(matches!(app.view(), View::Ai { history, .. } if history.len() == 1), "failed turn must not become context");
 }

@@ -20,6 +20,48 @@ pub fn build_request(model: &str, prompt: &str) -> String {
     .to_string()
 }
 
+/// Streaming request carrying earlier `(question, answer)` turns plus the new question.
+pub fn build_chat_request(model: &str, history: &[(String, String)], question: &str) -> String {
+    let mut messages = vec![serde_json::json!({"role": "system", "content": SYSTEM_PROMPT})];
+    for (q, a) in history {
+        messages.push(serde_json::json!({"role": "user", "content": q}));
+        messages.push(serde_json::json!({"role": "assistant", "content": a}));
+    }
+    messages.push(serde_json::json!({"role": "user", "content": question}));
+    serde_json::json!({"model": model, "stream": true, "messages": messages}).to_string()
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Sse {
+    Delta(String),
+    Done,
+    Error(String),
+    /// Keep-alives, role-only chunks, blank lines…
+    Ignore,
+}
+
+/// Interpret one line of a `text/event-stream` chat completion.
+pub fn parse_sse_line(line: &str) -> Sse {
+    let line = line.trim();
+    let Some(data) = line.strip_prefix("data:") else {
+        return Sse::Ignore;
+    };
+    let data = data.trim();
+    if data == "[DONE]" {
+        return Sse::Done;
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
+        return Sse::Ignore;
+    };
+    if let Some(err) = v.get("error") {
+        return Sse::Error(err.get("message").and_then(|m| m.as_str()).or_else(|| err.as_str()).unwrap_or("unknown error").to_string());
+    }
+    match v.pointer("/choices/0/delta/content").and_then(|c| c.as_str()) {
+        Some(t) if !t.is_empty() => Sse::Delta(t.to_string()),
+        _ => Sse::Ignore,
+    }
+}
+
 /// Extract the assistant text, or a readable provider error.
 pub fn parse_response(body: &str) -> Result<String, String> {
     let v: serde_json::Value = serde_json::from_str(body).map_err(|_| {
@@ -88,6 +130,26 @@ mod tests {
         assert_eq!(parse_response(r#"{"error":{"message":"model not found"}}"#).unwrap_err(), "model not found");
         assert!(parse_response("<html>502</html>").unwrap_err().contains("Unexpected response"));
         assert!(parse_response(r#"{"choices":[]}"#).is_err());
+    }
+
+    #[test]
+    fn chat_request_keeps_history_in_order() {
+        let h = vec![("q1".to_string(), "a1".to_string())];
+        let v: serde_json::Value = serde_json::from_str(&build_chat_request("m", &h, "q2")).unwrap();
+        let roles: Vec<_> = v["messages"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap().to_string()).collect();
+        assert_eq!(roles, ["system", "user", "assistant", "user"]);
+        assert_eq!(v["messages"][3]["content"], "q2");
+        assert_eq!(v["stream"], true);
+    }
+
+    #[test]
+    fn sse_lines() {
+        assert_eq!(parse_sse_line(r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#), Sse::Delta("Hel".into()));
+        assert_eq!(parse_sse_line(r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#), Sse::Ignore);
+        assert_eq!(parse_sse_line("data: [DONE]"), Sse::Done);
+        assert_eq!(parse_sse_line(": keep-alive"), Sse::Ignore);
+        assert_eq!(parse_sse_line(""), Sse::Ignore);
+        assert_eq!(parse_sse_line(r#"data: {"error":{"message":"rate limited"}}"#), Sse::Error("rate limited".into()));
     }
 
     #[test]

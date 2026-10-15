@@ -32,8 +32,9 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Comandos de sistema, emoji, archivos (Spotlight), cambiar ventana, notas | Implementado |
 | Icono en barra de menú, ajustes, hotkeys por comando | Implementado |
 | Emoji en color (renderizados con AppKit) | Implementado |
-| Ask AI (servidor compatible con OpenAI: Ollama por defecto, LM Studio, OpenAI…; clave en el Keychain) | Implementado; probado contra un servidor simulado, no contra un modelo real |
-| Extensiones React, sync, Search Menu Bar Items | No incluido |
+| Ask AI con streaming y conversación (servidor compatible con OpenAI: Ollama por defecto, LM Studio, OpenAI…; clave en el Keychain) | Implementado; probado contra un servidor simulado, no contra un modelo real |
+| Arranque al iniciar sesión (LaunchAgent) | Implementado; se aplica en el siguiente inicio de sesión |
+| Extensiones React, sync, Search Menu Bar Items, contexto de IA (selección/pantalla) | No incluido |
 
 ## Qué está verificado y qué no
 
