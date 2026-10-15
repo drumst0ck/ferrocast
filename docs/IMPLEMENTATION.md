@@ -9,7 +9,7 @@ propia. No es una réplica completa ni ejecuta las extensiones React de Raycast.
 - UI y servicios existentes retomados sin rehacerlos: `crates/app/src`.
 - Bloqueo de compilación: egui 0.36 exige Rust 1.95. Se instala y se fija
   solo para este repo con `rust-toolchain.toml`, sin cambiar el toolchain global.
-- Próximo punto verificable: compilar la UI, corregir regresiones con pruebas,
+- Estado final y límites: ver README.
   arrancar visible y oculto, empaquetar `.app` y documentar límites reales.
 
 ## Decisiones
