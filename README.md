@@ -6,7 +6,7 @@ ni usa marca o assets de Raycast. Investigación de funciones: [`docs/RESEARCH.m
 ## Instalar con Homebrew (sin cuenta de desarrollador)
 
 ```bash
-brew tap OWNER/ferrocast https://github.com/OWNER/REPO
+brew tap drumst0ck/ferrocast https://github.com/drumst0ck/ferrocast
 brew install ferrocast                      # compila en tu Mac (necesita Rust, lo instala brew)
 ln -sfn "$(brew --prefix)/opt/ferrocast/Ferrocast.app" /Applications/Ferrocast.app
 open /Applications/Ferrocast.app            # concede Accesibilidad cuando lo pida
