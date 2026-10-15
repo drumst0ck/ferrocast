@@ -29,7 +29,12 @@ welcome, shortcuts, about), `FERROCAST_QUERY`, `FERROCAST_PANEL=1`. Use a throwa
 - Hotkeys, pasting, focus and snippet expansion need Accessibility and cannot run in CI: describe
   how you checked them by hand in the pull request.
 
-## Releasing
+## Releasing (Homebrew, no paid Apple account)
 
-`scripts/bundle.sh` → `scripts/dmg.sh`. For distribution use a Developer ID identity and
-`scripts/notarize.sh` (credentials come from your environment; never commit them).
+1. Bump `version` in the root `Cargo.toml`, update `CHANGELOG.md`, make sure CI is green.
+2. `git tag vX.Y.Z && git push --tags`.
+3. `scripts/update_formula.sh OWNER/REPO` rewrites `Formula/ferrocast.rb` (url + sha256) from the pushed tag; commit and push it.
+4. Users run `brew upgrade ferrocast`.
+
+The formula compiles from source on the user's machine, so the app has no quarantine flag and needs no
+Developer ID. `scripts/notarize.sh` exists only for anyone who has a paid account and wants a signed DMG.

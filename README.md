@@ -3,7 +3,27 @@
 Launcher para macOS escrito en Rust, inspirado en Raycast. No es una réplica completa
 ni usa marca o assets de Raycast. Investigación de funciones: [`docs/RESEARCH.md`](docs/RESEARCH.md).
 
-## Uso rápido
+## Instalar con Homebrew (sin cuenta de desarrollador)
+
+```bash
+brew tap OWNER/ferrocast https://github.com/OWNER/REPO
+brew install ferrocast                      # compila en tu Mac (necesita Rust, lo instala brew)
+ln -sfn "$(brew --prefix)/opt/ferrocast/Ferrocast.app" /Applications/Ferrocast.app
+open /Applications/Ferrocast.app            # concede Accesibilidad cuando lo pida
+brew upgrade ferrocast                      # para actualizar
+```
+
+**Por qué una fórmula y no un cask.** El cask oficial de Homebrew exige apps firmadas y notarizadas
+(Apple Developer, de pago) y desactiva las que no pasan Gatekeeper desde septiembre de 2026. Al compilar
+desde el código fuente en tu propia máquina, la app **no lleva marca de cuarentena** y Gatekeeper no
+interviene: no hace falta cuenta de pago ni saltarse ninguna protección. A cambio, la primera
+instalación tarda unos minutos (compila) y la firma es ad-hoc, de uso local.
+
+**Permisos al actualizar.** La firma ad-hoc se ancla al identificador `dev.ferrocast.launcher` en lugar
+de al hash del binario, de modo que macOS debería conservar el permiso de Accesibilidad entre versiones.
+Esto no está verificado en una sesión real; si tras `brew upgrade` te lo vuelve a pedir, concédelo de nuevo.
+
+## Uso rápido (desde el código)
 
 ```bash
 scripts/bundle.sh          # compila y crea dist/Ferrocast.app con icono (firma ad-hoc, solo local)
@@ -38,13 +58,14 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Bienvenida y permisos, atajos, Acerca de | Implementado |
 | Exportar copia de seguridad (sin historial del portapapeles), importar snippets (JSON de Raycast) | Implementado |
 | Instancia única, log de errores (`Reveal Log File`) | Implementado |
-| Icono, entitlements, DMG, script de notarización | Implementado; la notarización no se ha ejecutado (requiere cuenta de desarrollador) |
+| Icono, entitlements, DMG, fórmula de Homebrew | Implementado; el script de notarización es opcional y no se ha ejecutado |
 | Extensiones React, sync, Search Menu Bar Items, contexto de IA (selección/pantalla) | No incluido |
 
 ## Distribución
 
-La firma por defecto es ad-hoc (solo uso local). Para repartirlo: identidad *Developer ID*, `FERROCAST_SIGN_IDENTITY`
-y `scripts/notarize.sh` (ver `CONTRIBUTING.md`). Sin notarizar, Gatekeeper avisará en otros Macs.
+La vía soportada es Homebrew compilando desde fuente (arriba). El DMG de `scripts/dmg.sh` **sin notarizar**
+lo bloqueará Gatekeeper en otros Macs que lo descarguen; solo sirve para uso propio. La notarización
+(`scripts/notarize.sh`) es opcional y requiere cuenta de desarrollador de pago.
 
 ## Qué está verificado y qué no
 
