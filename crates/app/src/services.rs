@@ -595,7 +595,8 @@ pub fn ask_ai(settings: &Settings, history: Vec<(String, String)>, question: Str
 pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
     let dir = dirs::home_dir().ok_or("no home directory")?.join("Library/LaunchAgents");
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    ferrocast_core::launch::set_enabled(&dir, &exe.to_string_lossy(), enabled).map_err(|e| e.to_string())
+    ferrocast_core::launch::set_enabled(&dir, &ferrocast_core::launch::stable_exe_path(&exe.to_string_lossy()), enabled)
+        .map_err(|e| e.to_string())
 }
 
 /// Archive user data into `dest_dir` as a timestamped `.tar.gz`. Clipboard history, the lock and the

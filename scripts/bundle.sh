@@ -35,8 +35,15 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 plutil -lint "$app/Contents/Info.plist"
-flags=(--force --sign "$identity" --entitlements resources/Ferrocast.entitlements)
-[ "$identity" != "-" ] && flags+=(--options runtime --timestamp)
+flags=(--force --sign "$identity" -i dev.ferrocast.launcher --entitlements resources/Ferrocast.entitlements)
+if [ "$identity" != "-" ]; then
+  flags+=(--options runtime --timestamp)
+else
+  # An ad-hoc signature's default requirement is the binary hash, which changes on every build and
+  # makes macOS forget Accessibility permission after each upgrade. Pin it to the bundle identifier
+  # instead so builds of this app share one requirement.
+  flags+=(--requirements '=designated => identifier "dev.ferrocast.launcher"')
+fi
 codesign "${flags[@]}" "$app"
 codesign --verify --strict --verbose=1 "$app"
 if [ "$identity" = "-" ]; then

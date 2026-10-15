@@ -6,6 +6,18 @@ fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
+/// Homebrew installs into a versioned `…/Cellar/<name>/<version>/` directory that disappears on
+/// upgrade; map it to the stable `…/opt/<name>/` symlink so login items survive `brew upgrade`.
+pub fn stable_exe_path(exe: &str) -> String {
+    let Some(i) = exe.find("/Cellar/") else { return exe.to_string() };
+    let rest = &exe[i + "/Cellar/".len()..];
+    let mut parts = rest.splitn(3, '/');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(name), Some(_version), Some(tail)) if !name.is_empty() => format!("{}/opt/{name}/{tail}", &exe[..i]),
+        _ => exe.to_string(),
+    }
+}
+
 /// LaunchAgent plist that starts `exe --hidden` at login (no keep-alive: quitting stays quit).
 pub fn plist(exe: &str) -> String {
     format!(
@@ -39,6 +51,20 @@ pub fn set_enabled(agents_dir: &std::path::Path, exe: &str, enabled: bool) -> st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn homebrew_cellar_path_becomes_stable_opt_path() {
+        assert_eq!(
+            stable_exe_path("/opt/homebrew/Cellar/ferrocast/0.1.0/Ferrocast.app/Contents/MacOS/ferrocast"),
+            "/opt/homebrew/opt/ferrocast/Ferrocast.app/Contents/MacOS/ferrocast"
+        );
+        assert_eq!(stable_exe_path("/usr/local/Cellar/ferrocast/1.2.3_1/bin/ferrocast"), "/usr/local/opt/ferrocast/bin/ferrocast");
+        assert_eq!(
+            stable_exe_path("/Applications/Ferrocast.app/Contents/MacOS/ferrocast"),
+            "/Applications/Ferrocast.app/Contents/MacOS/ferrocast"
+        );
+        assert_eq!(stable_exe_path("/opt/homebrew/Cellar/ferrocast"), "/opt/homebrew/Cellar/ferrocast", "malformed paths are left alone");
+    }
 
     #[test]
     fn plist_escapes_paths() {
