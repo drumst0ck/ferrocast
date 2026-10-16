@@ -61,6 +61,8 @@ fn fixture() -> App {
         key_scratch: String::new(),
         rates: Default::default(),
         rates_checked_at: Instant::now(),
+        sec_cache: None,
+        sec_dirty: true,
     };
     app.rebuild();
     app

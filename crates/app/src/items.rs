@@ -209,6 +209,7 @@ impl Item {
     }
 }
 
+#[derive(Clone)]
 pub struct Section {
     pub title: String,
     pub items: Vec<Item>,

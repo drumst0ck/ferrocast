@@ -198,6 +198,9 @@ pub struct App {
     key_scratch: String,
     rates: ferrocast_core::currency::Rates,
     rates_checked_at: Instant,
+    /// Result list for the current query/view, reused across frames until something changes.
+    sec_cache: Option<(String, Vec<Section>)>,
+    sec_dirty: bool,
 }
 
 fn load_fonts(ctx: &Context) {
@@ -308,6 +311,8 @@ impl App {
             key_scratch: String::new(),
             rates: store_rates,
             rates_checked_at: Instant::now(),
+            sec_cache: None,
+            sec_dirty: true,
         };
         app.shared.visible.store(app.visible, Ordering::Relaxed);
         if !app.settings.onboarded && !hidden {
@@ -405,6 +410,7 @@ impl App {
 
     /// Rebuild the cached list of root-searchable items.
     fn rebuild(&mut self) {
+        self.sec_dirty = true;
         let mut v = vec![];
         for a in &self.apps {
             v.push(Item {
@@ -484,6 +490,7 @@ impl App {
     // ------------------------------------------------------------- show/hide
 
     fn show(&mut self) {
+        self.sec_dirty = true;
         if self.hidden_at.elapsed() > Duration::from_secs(90) {
             self.stack = vec![View::Root];
             self.query.clear();
@@ -554,6 +561,7 @@ impl App {
     }
 
     fn push(&mut self, v: View) {
+        self.sec_dirty = true;
         if matches!(v, View::Windows) {
             self.win_cache = running::list_windows();
         }
@@ -567,6 +575,7 @@ impl App {
     }
 
     fn pop(&mut self) {
+        self.sec_dirty = true;
         if self.stack.len() > 1 {
             self.stack.pop();
             self.query.clear();
@@ -580,6 +589,7 @@ impl App {
     }
 
     fn reset_to_root(&mut self) {
+        self.sec_dirty = true;
         self.stack = vec![View::Root];
         self.query.clear();
         self.selected = 0;
@@ -591,6 +601,7 @@ impl App {
 
     fn drain(&mut self) {
         while let Ok(m) = self.rx.try_recv() {
+            self.sec_dirty = true;
             match m {
                 Msg::Wake => {}
                 Msg::Toast(t) => self.toast(t),
@@ -914,6 +925,28 @@ impl App {
             v.sort_by_key(|a| std::cmp::Reverse(a.0));
         }
         vec![Section { title: title.into(), items: v.into_iter().map(|(_, i)| i).collect() }]
+    }
+
+    /// Anything that can change the result list calls this; the next frame recomputes.
+    pub(crate) fn invalidate_sections(&mut self) {
+        self.sec_dirty = true;
+    }
+
+    /// `sections()` with a one-entry cache keyed on query and view. Building the list runs the
+    /// fuzzy matcher, the calculator and clipboard filtering, so it must not repeat every frame.
+    pub(crate) fn sections_cached(&mut self) -> Vec<Section> {
+        let key = format!("{}\u{0}{}\u{0}{}", self.query, self.stack.len(), self.view().title());
+        if !self.sec_dirty {
+            if let Some((k, v)) = &self.sec_cache {
+                if *k == key {
+                    return v.clone();
+                }
+            }
+        }
+        let v = self.sections();
+        self.sec_cache = Some((key, v.clone()));
+        self.sec_dirty = false;
+        v
     }
 
     fn sections(&self) -> Vec<Section> {

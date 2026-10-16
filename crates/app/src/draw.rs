@@ -355,6 +355,7 @@ impl App {
     }
 
     fn do_action(&mut self, item: Item, act: Act) {
+        self.invalidate_sections();
         self.act_item = Some(item.clone());
         match act {
             Act::Run => {
@@ -556,13 +557,14 @@ impl App {
         }
         let keys = self.read_keys(&ctx);
         let shape = self.view().shape();
-        let sections = if shape == Shape::List { self.sections() } else { vec![] };
+        let sections = if shape == Shape::List { self.sections_cached() } else { vec![] };
         let total: usize = sections.iter().map(|s| s.items.len()).sum();
         if self.selected >= total {
             self.selected = total.saturating_sub(1);
         }
         let cur = sections.iter().flat_map(|s| s.items.iter()).nth(self.selected).cloned();
         if self.handle_keys(&ctx, &keys, total, cur.clone()) {
+            self.invalidate_sections();
             ctx.request_repaint();
             return;
         }
