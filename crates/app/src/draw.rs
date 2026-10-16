@@ -545,6 +545,9 @@ impl App {
                 st.visuals.selection.stroke.color = accent;
             });
         }
+        // Fade the launcher in when it appears (opacity only; one multiply per shape).
+        let appear = ctx.animate_bool_with_time(Id::new("appear"), self.visible && self.shown_at.elapsed() > Duration::ZERO, 0.14);
+        ui.set_opacity(appear);
         let full = ui.max_rect();
         ui.painter().rect_filled(full, ui::RADIUS, pal.bg);
         ui.painter().rect_stroke(full, ui::RADIUS, Stroke::new(1.0, pal.border), StrokeKind::Inside);
@@ -557,6 +560,7 @@ impl App {
         }
         let keys = self.read_keys(&ctx);
         let shape = self.view().shape();
+        ctx.data_mut(|d| d.insert_temp(Id::new("sel_salt"), self.stack.len()));
         let sections = if shape == Shape::List { self.sections_cached() } else { vec![] };
         let total: usize = sections.iter().map(|s| s.items.len()).sum();
         if self.selected >= total {
@@ -667,6 +671,8 @@ impl App {
             },
         };
         self.draw_footer(ui, footer_rect, &pal, primary, shape == Shape::List);
+        // Keep the pop-in animation primed at 0 while the panel is closed.
+        ctx.animate_bool_with_time(Id::new("panel_pop"), self.panel.is_some(), 0.12);
         if self.panel.is_some() {
             self.draw_panel(ui, content, &pal);
         }
@@ -754,7 +760,13 @@ impl App {
                         let selected = idx == sel;
                         let painter = ui.painter().clone();
                         if selected {
-                            painter.rect_filled(r.shrink2(Vec2::new(6.0, 1.0)), 8.0, pal.sel);
+                            // The highlight glides from its previous row to this one (y and height
+                            // are animated; the row itself is painted at its real position).
+                            let salt = ctx.data(|d| d.get_temp::<usize>(Id::new("sel_salt"))).unwrap_or(0);
+                            let ay = ctx.animate_value_with_time(Id::new(("sel_y", salt)), r.min.y, 0.11);
+                            let ah = ctx.animate_value_with_time(Id::new(("sel_h", salt)), r.height(), 0.11);
+                            let hr = Rect::from_min_size(Pos2::new(r.min.x, ay), Vec2::new(r.width(), ah));
+                            painter.rect_filled(hr.shrink2(Vec2::new(6.0, 1.0)), 8.0, pal.sel);
                             if scroll_sel {
                                 ui.scroll_to_rect(r, None);
                             }
@@ -886,6 +898,11 @@ impl App {
             Pos2::new(content.max.x - 340.0, content.max.y - h - 6.0),
             Pos2::new(content.max.x - 12.0, content.max.y - 6.0),
         );
+        // Pop in from the bottom-right corner: scale 0.96 → 1 and fade, 120 ms.
+        let t = ui.ctx().animate_bool_with_time(Id::new("panel_pop"), true, 0.12);
+        let rect = Rect::from_min_size(rect.max - rect.size() * (0.96 + 0.04 * t), rect.size() * (0.96 + 0.04 * t))
+            .translate(Vec2::new(0.0, (1.0 - t) * 8.0));
+        ui.set_opacity(t);
         let painter = ui.painter().clone();
         painter.rect_filled(rect.expand(1.0), 10.0, Color32::from_black_alpha(90));
         painter.rect_filled(rect, 10.0, if self.dark { Color32::from_rgb(34, 34, 38) } else { Color32::from_rgb(246, 246, 248) });
