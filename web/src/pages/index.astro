@@ -21,6 +21,20 @@ const extras = [
   ['Notes and emoji', 'Jot a thought without leaving the launcher, and paste any emoji by name.'],
   ['Backup', 'Export your data and import snippets as JSON. Your setup travels with you.'],
 ];
+const keys = [
+  [['⌥', 'Space'], 'Open or close Ferrocast. You can change it in Settings.'],
+  [['↑', '↓'], 'Move the selection.'],
+  [['↵'], 'Run the primary action.'],
+  [['⌘', '↵'], 'Run the secondary action.'],
+  [['⌘', 'K'], 'Open the action panel for the selected item.'],
+  [['⌘', ','], 'Open Settings.'],
+  [['⌘', 'N'], 'New snippet, quicklink or note in those lists.'],
+  [['⇧', '⌘', 'F'], 'Add or remove a favorite.'],
+  [['⇧', '⌘', ','], 'Set a hotkey for a command.'],
+  [['esc'], 'Clear the search, go back, or close.'],
+  [['⌃', 'X'], 'Delete the selected entry.'],
+  [['⌫'], 'Go back when the search is empty.'],
+];
 const scText = ['#!/bin/bash', '# @raycast.mode compact', 'date +%H:%M'].join('\n');
 const faq = [
   ['How do I open it?', 'Press ⌥ Space from any app. You can change the shortcut in Settings.'],
@@ -48,7 +62,7 @@ open dist/Ferrocast.app`;
   <div class="cursor-light" aria-hidden="true"></div>
   <header class="top">
     <a class="mark" href="#"><img src={`${base}/icon.png`} alt="" width="30" height="30" />Ferrocast</a>
-    <nav class="nav" aria-label="Main"><a href="#features">Features</a><a href="#tour">Tour</a><a href="#install">Install</a><a href="#faq">FAQ</a><a href={repo}>GitHub</a></nav>
+    <nav class="nav" aria-label="Main"><a href="#features">Features</a><a href="#tour">Tour</a><a href="#shortcuts">Shortcuts</a><a href="#install">Install</a><a href="#faq">FAQ</a><a href={repo}>GitHub</a></nav>
     <a class="btn" href="#install">Install</a>
   </header>
 
@@ -120,7 +134,7 @@ open dist/Ferrocast.app`;
         </div>
         <div class="story-vis">
           <div class="story-card" id="scard">
-            {views.map(([n, f], i) => <img class:list={['sv', { on: i === 0 }]} data-i={i} src={img(f)} alt={`Real Ferrocast screenshot: ${n}`} width="1300" height="823" loading="eager" />)}
+            {views.map(([n, f], i) => <img class:list={['sv', { on: i === 0 }]} data-i={i} src={img(f)} alt={`Real Ferrocast screenshot: ${n}`} width="1300" height="823" loading={i === 0 ? 'eager' : 'lazy'} />)}
           </div>
         </div>
       </div>
@@ -147,6 +161,16 @@ open dist/Ferrocast.app`;
       </ul>
     </section>
 
+    <section class="keys wrap" id="shortcuts" aria-labelledby="h-keys">
+      <div class="keys-head" data-reveal>
+        <h2 id="h-keys">Everything is a keystroke away</h2>
+        <p>The shortcuts you will use every day. Press ⌘ K on any item to see the rest.</p>
+      </div>
+      <ul class="keylist">
+        {keys.map(([combo, what], i) => <li data-reveal style={`transition-delay:${(i % 3) * 60}ms`}><span class="combo">{combo.map((k) => <kbd>{k}</kbd>)}</span><span>{what}</span></li>)}
+      </ul>
+    </section>
+
     <section class="how" id="install" aria-labelledby="h-how">
       <h2 id="h-how" data-reveal>Up and running in minutes</h2>
       <div class="ex" data-reveal>
@@ -157,12 +181,12 @@ open dist/Ferrocast.app`;
       <div class="ex" data-reveal>
         <h3>Then open it and allow Accessibility.</h3>
         <div class="call"><span class="typed">⌥ Space</span></div>
-        <div class="resp crop"><img src={img('home')} alt="Ferrocast just opened, showing the command list" width="1300" height="823" loading="eager" /></div>
+        <div class="resp crop"><img src={img('home')} alt="Ferrocast just opened, showing the command list" width="1300" height="823" loading="lazy" /></div>
       </div>
       <div class="ex wide" data-reveal>
         <h3>Now ask for anything.</h3>
         <div class="call"><span class="typed">5pm ldn in sf</span></div>
-        <div class="resp"><img src={img('tz')} alt="Ferrocast answers that 5 PM in London is 9:00 AM in San Francisco" width="1300" height="823" loading="eager" /></div>
+        <div class="resp"><img src={img('tz')} alt="Ferrocast answers that 5 PM in London is 9:00 AM in San Francisco" width="1300" height="823" loading="lazy" /></div>
       </div>
     </section>
 
@@ -252,6 +276,15 @@ open dist/Ferrocast.app`;
       /* video plays only while visible */
       var vp = $('#vplay');
       if (vp && !reduce) new IntersectionObserver(function (en) { if (en[0].isIntersecting) { vp.preload = 'auto'; var pr = vp.play(); if (pr && pr.catch) pr.catch(function () {}); } else vp.pause(); }, { threshold: 0.25 }).observe(vp);
+
+      /* nav: highlight the section in view */
+      var navLinks = $$('.nav a[href^="#"]');
+      if (navLinks.length && 'IntersectionObserver' in window) {
+        var navIo = new IntersectionObserver(function (en) {
+          en.forEach(function (e) { if (e.isIntersecting) navLinks.forEach(function (a) { a.classList.toggle('on', a.getAttribute('href') === '#' + e.target.id); }); });
+        }, { rootMargin: '-40% 0px -55% 0px' });
+        navLinks.forEach(function (a) { var sec = document.querySelector(a.getAttribute('href')); if (sec) navIo.observe(sec); });
+      }
 
       /* global cursor light */
       var cl = $('.cursor-light');
