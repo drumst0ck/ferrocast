@@ -241,7 +241,9 @@ pub fn start_expansion(shared: Arc<Shared>) {
             return;
         }
         let Some(sn) = s2.snippets.read().unwrap().iter().find(|s| s.keyword == kw).cloned() else { return };
-        let ctx = placeholders::Context { clipboard: clipboard_texts(&s2), ..Default::default() };
+        let snaps = s2.snippets.read().unwrap().clone();
+        let lookup = |n: &str| snaps.iter().find(|s| s.name == n).map(|s| s.text.clone());
+        let ctx = placeholders::Context { clipboard: clipboard_texts(&s2), snippets: Some(&lookup), ..Default::default() };
         let ex = placeholders::expand(&sn.text, Target::Snippet, &ctx);
         let back = ex.cursor.map(|c| ex.text.chars().count().saturating_sub(c));
         expansion::inject(kw.chars().count(), &ex.text, back, |count| s2.ignore_clipboard_count(count));

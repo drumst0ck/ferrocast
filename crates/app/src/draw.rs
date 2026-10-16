@@ -25,6 +25,12 @@ impl eframe::App for App {
         dev_screenshot(ctx, self);
         self.drain();
         self.tick_inline();
+        if self.rates_checked_at.elapsed() > Duration::from_secs(15 * 60) {
+            self.rates_checked_at = Instant::now();
+            if self.rates.is_stale(services::now_secs()) {
+                services::refresh_rates(self.bus.clone());
+            }
+        }
         if self.toast.as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_millis(2500)) {
             self.toast = None;
         }
@@ -179,7 +185,11 @@ impl App {
                 k.enter = i.consume_key(Modifiers::NONE, Key::Enter);
             }
             k.esc = i.consume_key(Modifiers::NONE, Key::Escape);
-            k.backspace = shape == Shape::List && !panel && query_empty && i.key_pressed(Key::Backspace) && !i.modifiers.any();
+            k.backspace = shape == Shape::List
+                && !panel
+                && query_empty
+                && !i.modifiers.any()
+                && i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Backspace, pressed: true, repeat: false, .. }));
             k
         })
     }
@@ -438,6 +448,15 @@ impl App {
                 if !kw.is_empty() && self.snippets.iter().any(|s| s.keyword == kw && Some(&s.id) != id.as_ref()) {
                     self.toast("Keyword already used by another snippet");
                     return;
+                }
+                if !kw.is_empty() {
+                    if let Some(o) = self.snippets.iter().find(|s| {
+                        Some(&s.id) != id.as_ref() && !s.keyword.is_empty() && (s.keyword.starts_with(&kw) || kw.starts_with(&s.keyword))
+                    }) {
+                        let msg = format!("Keyword conflicts with “{}”", o.keyword);
+                        self.toast(&msg);
+                        return;
+                    }
                 }
                 match id.and_then(|i| self.snippets.iter_mut().find(|s| s.id == i)) {
                     Some(s) => {

@@ -197,6 +197,7 @@ pub struct App {
     scratch: String,
     key_scratch: String,
     rates: ferrocast_core::currency::Rates,
+    rates_checked_at: Instant,
 }
 
 fn load_fonts(ctx: &Context) {
@@ -306,6 +307,7 @@ impl App {
             scratch: String::new(),
             key_scratch: String::new(),
             rates: store_rates,
+            rates_checked_at: Instant::now(),
         };
         app.shared.visible.store(app.visible, Ordering::Relaxed);
         if !app.settings.onboarded && !hidden {
@@ -545,6 +547,7 @@ impl App {
         self.query.clear();
         self.prev_query.clear();
         self.selected = 0;
+        self.scroll_to_sel = true;
         self.panel = None;
         self.focus_first = true;
     }
@@ -555,6 +558,7 @@ impl App {
             self.query.clear();
             self.prev_query.clear();
             self.selected = 0;
+            self.scroll_to_sel = true;
             self.panel = None;
         } else {
             self.hide();
@@ -565,6 +569,7 @@ impl App {
         self.stack = vec![View::Root];
         self.query.clear();
         self.selected = 0;
+        self.scroll_to_sel = true;
         self.panel = None;
     }
 
@@ -1522,7 +1527,14 @@ impl App {
     }
 
     fn open_quicklink(&mut self, q: &Quicklink, args: HashMap<String, String>) {
-        let ctx = placeholders::Context { clipboard: services::clipboard_texts(&self.shared), arguments: args, ..Default::default() };
+        let snaps = self.snippets.clone();
+        let lookup = |n: &str| snaps.iter().find(|s| s.name == n).map(|s| s.text.clone());
+        let ctx = placeholders::Context {
+            clipboard: services::clipboard_texts(&self.shared),
+            arguments: args,
+            snippets: Some(&lookup),
+            ..Default::default()
+        };
         let is_path = q.link.starts_with('/') || q.link.starts_with('~');
         let target = placeholders::expand(&q.link, if is_path { Target::Snippet } else { Target::Quicklink }, &ctx).text;
         let with = q.open_with.clone();
@@ -1530,7 +1542,14 @@ impl App {
     }
 
     fn paste_snippet(&mut self, s: &Snippet, args: HashMap<String, String>) {
-        let ctx = placeholders::Context { clipboard: services::clipboard_texts(&self.shared), arguments: args, ..Default::default() };
+        let snaps = self.snippets.clone();
+        let lookup = |n: &str| snaps.iter().find(|s| s.name == n).map(|s| s.text.clone());
+        let ctx = placeholders::Context {
+            clipboard: services::clipboard_texts(&self.shared),
+            arguments: args,
+            snippets: Some(&lookup),
+            ..Default::default()
+        };
         let ex = placeholders::expand(&s.text, Target::Snippet, &ctx);
         clipboard::write_text(&ex.text);
         self.shared.mark_clipboard_write();
@@ -1564,6 +1583,11 @@ impl App {
         self.execute_script_cmd(idx, args);
     }
 
+    fn prune_clip_images(&self) {
+        let list = self.shared.clipboard.lock().unwrap().clone();
+        ferrocast_core::storage::prune_images(&self.store.images_dir(), &list);
+    }
+
     fn execute_script_cmd(&mut self, idx: usize, args: Vec<String>) {
         let Some(s) = self.scripts.get(idx).cloned() else { return };
         let args =
@@ -1573,8 +1597,8 @@ impl App {
         match s.mode {
             Mode::FullOutput | Mode::Inline => {
                 self.runs.insert(run, RunKind::Output);
-                // replace an Args view if present
-                if matches!(self.view(), View::Args { .. }) {
+                // drop any Confirm/Args views so Esc on the output doesn't return to them
+                while matches!(self.view(), View::Confirm { .. } | View::Args { .. }) {
                     self.stack.pop();
                 }
                 self.push(View::Output { run, title: s.title.clone(), text: String::new(), done: false });
@@ -1778,10 +1802,12 @@ impl App {
             Act::ClipDelete(id) => {
                 self.shared.clipboard.lock().unwrap().retain(|e| e.id != id);
                 self.shared.save_clipboard();
+                self.prune_clip_images();
             }
             Act::ClipDeleteAll => {
                 self.shared.clipboard.lock().unwrap().retain(|e| e.pinned);
                 self.shared.save_clipboard();
+                self.prune_clip_images();
                 self.toast("Clipboard history cleared");
             }
             Act::ClipSaveSnippet(id) => {
