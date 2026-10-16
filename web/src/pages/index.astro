@@ -33,6 +33,7 @@ const keys = [
   [['⇧', '⌘', ','], 'Set a hotkey for a command.'],
   [['esc'], 'Clear the search, go back, or close.'],
   [['⌃', 'X'], 'Delete the selected entry.'],
+  [['⌘', 'Y'], 'Quick Look the selected file.'],
   [['⌫'], 'Go back when the search is empty.'],
 ];
 const scText = ['#!/bin/bash', '# @raycast.mode compact', 'date +%H:%M'].join('\n');
@@ -59,6 +60,7 @@ scripts/bundle.sh
 open dist/Ferrocast.app`;
 ---
 <Base title="Ferrocast: a fast launcher for your Mac" description="Ferrocast is a fast, native launcher for macOS. Search apps, do math, convert currencies, paste from your clipboard history, manage windows and ask AI, all from the keyboard.">
+  <a class="skip" href="#main">Skip to content</a>
   <div class="cursor-light" aria-hidden="true"></div>
   <header class="top">
     <a class="mark" href="#"><img src={`${base}/icon.png`} alt="" width="30" height="30" />Ferrocast</a>
@@ -66,7 +68,7 @@ open dist/Ferrocast.app`;
     <a class="btn" href="#install">Install</a>
   </header>
 
-  <main>
+  <main id="main">
     <section class="hero" aria-label="Introduction">
       <div class="hero-bg" aria-hidden="true"><i></i><i></i></div>
       <div class="copy">

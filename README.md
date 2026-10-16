@@ -59,6 +59,7 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Kill Process (procesos por CPU y memoria, SIGTERM o SIGKILL con ⌘↵) | Implementado |
 | Temporizadores (`timer 10m`, `pomodoro`; aviso y sonido al terminar; vista Timers con cancelación) | Implementado |
 | Toggle Wi-Fi y Toggle Keep Awake (caffeinate) como comandos de sistema | Implementado; no probados en sesión real |
+| Quick Look de archivos (⌘Y) y «Check for Updates» vía Homebrew | Implementado; no probados en sesión real |
 | Icono en barra de menú, ajustes, hotkeys por comando | Implementado |
 | Emoji en color (renderizados con AppKit) | Implementado |
 | Ask AI con streaming y conversación (servidor compatible con OpenAI: Ollama por defecto, LM Studio, OpenAI…; clave en el Keychain) | Implementado; probado contra un servidor simulado, no contra un modelo real |

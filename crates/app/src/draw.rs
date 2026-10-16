@@ -1172,6 +1172,7 @@ impl App {
                                 ("esc", "Clear search, go back, or close"),
                                 ("⌫ (empty search)", "Go back"),
                                 ("⌃ X", "Delete the selected entry"),
+                                ("⌘ Y", "Quick Look the selected file"),
                             ];
                             egui::Grid::new("shortcuts").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
                                 for (k, d) in rows {

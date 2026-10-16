@@ -8,6 +8,7 @@ First public build.
 - Kill Process: processes busiest first with app icon, CPU and memory; ↵ terminates, ⌘↵ force-kills.
 - Timers: `timer 10m`, `pomodoro`, `set a timer for 1h 30m`; notification and sound when done; Timers view with cancel.
 - System commands: Toggle Wi-Fi and Toggle Keep Awake (caffeinate).
+- Quick Look for files (⌘Y) and Check for Updates through Homebrew.
 - Design: San Francisco as the UI font, brand accent, sliding selection, action-panel pop-in, launcher fade-in.
 - Speed: the result list is cached across frames; release builds use fat LTO.
 

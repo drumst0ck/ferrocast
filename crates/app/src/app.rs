@@ -1287,6 +1287,7 @@ impl App {
             Kind::File(p) => {
                 a.push(Action::new("Open", Act::Run));
                 a.push(Action::new("Show in Finder", Act::Reveal(p.clone())).key(CMD, Key::Enter));
+                a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Move to Trash", Act::Trash(p.clone())).key(CTRL, Key::X).danger());
             }
@@ -1557,6 +1558,45 @@ impl App {
         }
     }
 
+    /// Ask Homebrew whether a newer formula is available; the answer arrives as a toast.
+    fn check_updates(&mut self) {
+        self.toast("Checking Homebrew…");
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].iter().find(|p| std::path::Path::new(p).exists());
+            let Some(brew) = brew else {
+                bus.send(Msg::Toast("Homebrew not found; update from the repository".into()));
+                return;
+            };
+            let installed = std::process::Command::new(brew)
+                .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+                .args(["list", "--versions", "ferrocast"])
+                .output()
+                .map(|o| o.status.success() && !o.stdout.is_empty())
+                .unwrap_or(false);
+            if !installed {
+                bus.send(Msg::Toast("Not installed with Homebrew; update from the repository".into()));
+                return;
+            }
+            let msg = match std::process::Command::new(brew)
+                .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+                .args(["outdated", "--verbose", "ferrocast"])
+                .output()
+            {
+                Ok(o) if o.status.success() => {
+                    let out = String::from_utf8_lossy(&o.stdout);
+                    match out.lines().find(|l| l.starts_with("ferrocast")) {
+                        Some(l) => format!("Update available: {} · run brew upgrade ferrocast", l.trim_start_matches("ferrocast").trim()),
+                        None => format!("Ferrocast {} is up to date", env!("CARGO_PKG_VERSION")),
+                    }
+                }
+                Ok(o) => format!("brew: {}", String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("unknown error")),
+                Err(e) => format!("Could not run brew: {e}"),
+            };
+            bus.send(Msg::Toast(msg));
+        });
+    }
+
     /// Start a countdown; a thread sleeps and then notifies, unless the timer was cancelled.
     fn start_timer(&mut self, secs: u64, label: String) {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -1666,6 +1706,7 @@ impl App {
             Builtin::SwitchWindows => self.push(View::Windows),
             Builtin::KillProcess => self.push(View::Processes),
             Builtin::Timers => self.push(View::Timers),
+            Builtin::CheckUpdates => self.check_updates(),
             Builtin::SearchNotes => self.push(View::Notes),
             Builtin::CreateNote => self.new_note(),
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
@@ -1914,6 +1955,16 @@ impl App {
             }
             Act::KillProcess(pid, force) => self.kill_process(pid, force),
             Act::CancelTimer(i) => self.cancel_timer(i),
+            Act::QuickLook(p) => {
+                // qlmanage shows the system Quick Look panel; it exits when the panel closes.
+                let _ = std::process::Command::new("/usr/bin/qlmanage")
+                    .arg("-p")
+                    .arg(&p)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                self.hide();
+            }
             Act::HideApp(pid) => {
                 running::hide(pid);
                 self.toast("Hidden");
