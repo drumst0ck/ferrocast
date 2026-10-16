@@ -321,3 +321,33 @@ html:not(.js) .vwrap { transform: none; }
 .nav a.on { color: var(--ink); }
 @media (max-width: 62em) { .keylist { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 47.9em) { .keylist { grid-template-columns: 1fr; } }
+
+/* ===== light scheme: page tokens change, product fragments (launcher, dialog, screenshots) stay dark ===== */
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f6f6f8; --surface: #ebebef; --stage: #e2e2e7; --ink: #111114; --muted: #5a5961; --accent: #e8364b; --accent-ink: #fff5f6; }
+  .top { background: rgba(246,246,248,.7); }
+  .hero-bg { background-image: radial-gradient(rgba(0,0,0,.14) 1px, transparent 1.2px); }
+  .hero-bg i { opacity: .38; }
+  .hero h1, .step h3, .stats dt { background: linear-gradient(180deg, #111114 30%, #5a5961 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero .sub, .credo p { color: #2c2b31; }
+  .btn.big { box-shadow: 0 10px 40px rgba(232,54,75,.3), inset 0 1px 0 rgba(255,255,255,.35); }
+  .btn.alt { background: var(--surface); }
+  .stage { background: var(--stage); }
+  .stage::before, .vstage::before { opacity: .55; }
+  .lzwrap .lz[data-ui] { box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 50px 140px rgba(232,54,75,calc(var(--glow, .3) * .22)), 0 30px 80px rgba(0,0,0,.25); }
+  .bento li, .keylist li { box-shadow: inset 0 0 0 1px rgba(0,0,0,.06); }
+  .bento .b0 { background: linear-gradient(135deg, #ebebef 0%, #f6dfe2 100%); }
+  .combo kbd { background: #ffffff; color: var(--ink); box-shadow: inset 0 -2px 0 rgba(0,0,0,.12), inset 0 0 0 1px rgba(0,0,0,.08); }
+  .fl button::before { background: #c4c3ca; }
+  .dots button::before { background: #c4c3ca; }
+  .call { background: var(--surface); }
+  .call .cp { background: #ffffff; }
+  .story-card { filter: drop-shadow(0 50px 100px rgba(232,54,75,.18)); }
+  .sv { box-shadow: 0 0 0 1px rgba(0,0,0,.08); }
+  .vwrap { box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 60px 160px rgba(232,54,75,calc(var(--glow, .3) * .25)), 0 30px 80px rgba(0,0,0,.25); }
+  .cursor-light { mix-blend-mode: multiply; background: radial-gradient(circle, rgba(232,54,75,.10) 0%, rgba(232,54,75,0) 65%); }
+  .cta { background: radial-gradient(ellipse 70% 90% at 80% 20%, #ff6b76 0%, #ef4a5a 55%, #d63a4a 100%); color: #1a0709; }
+  .cta .l p { color: #1a0709; }
+  .foot nav a { color: var(--ink); }
+  .prose code { background: var(--surface); }
+}
