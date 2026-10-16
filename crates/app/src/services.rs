@@ -300,7 +300,8 @@ impl Hotkeys {
 
 /// Human readable hotkey: `Alt+Shift+KeyL` → `⌥⇧L`.
 pub fn hotkey_label(spec: &str) -> String {
-    spec.split('+')
+    let parts: Vec<String> = spec
+        .split('+')
         .map(|t| match t.to_uppercase().as_str() {
             "ALT" | "OPTION" => "⌥".to_string(),
             "SHIFT" => "⇧".to_string(),
@@ -309,7 +310,16 @@ pub fn hotkey_label(spec: &str) -> String {
             "SPACE" => "Space".to_string(),
             _ => t.trim_start_matches("Key").trim_start_matches("Digit").to_string(),
         })
-        .collect()
+        .collect();
+    // Modifiers run together (⇧⌘K); a named key such as Space or F3 gets a space before it.
+    let mut out = String::new();
+    for p in &parts {
+        if !out.is_empty() && p.chars().count() > 1 {
+            out.push(' ');
+        }
+        out.push_str(p);
+    }
+    out
 }
 
 /// egui key → global-hotkey key name.
@@ -625,6 +635,18 @@ pub fn choose_json_file() -> Option<PathBuf> {
     )
     .ok()?;
     (!out.is_empty()).then(|| PathBuf::from(out))
+}
+
+#[cfg(test)]
+mod hotkey_tests {
+    use super::*;
+
+    #[test]
+    fn hotkey_label_spacing() {
+        assert_eq!(hotkey_label("Alt+Space"), "⌥ Space");
+        assert_eq!(hotkey_label("Shift+Super+KeyK"), "⇧⌘K");
+        assert_eq!(hotkey_label("Control+F3"), "⌃ F3");
+    }
 }
 
 #[cfg(test)]

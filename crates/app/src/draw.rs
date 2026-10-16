@@ -512,6 +512,15 @@ impl App {
         self.icons.new_frame();
         self.dark = ctx.theme() == egui::Theme::Dark;
         let pal = palette(self.dark);
+        // Brand-coloured caret and text selection instead of egui's default blue.
+        if ui.visuals().text_cursor.stroke.color != pal.accent {
+            let accent = pal.accent;
+            ctx.all_styles_mut(|st| {
+                st.visuals.text_cursor.stroke.color = accent;
+                st.visuals.selection.bg_fill = accent.gamma_multiply(0.35);
+                st.visuals.selection.stroke.color = accent;
+            });
+        }
         let full = ui.max_rect();
         ui.painter().rect_filled(full, ui::RADIUS, pal.bg);
         ui.painter().rect_stroke(full, ui::RADIUS, Stroke::new(1.0, pal.border), StrokeKind::Inside);
@@ -662,15 +671,21 @@ impl App {
             }
         }
         let mut x = rect.max.x - 16.0;
+        let mut first = true;
         let mut hint = |label: &str, key: &str| {
-            let kg = p.layout_no_wrap(key.to_string(), FontId::proportional(12.0), pal.text);
+            if !first {
+                // thin separator between hint groups, as in the original launcher footers
+                p.vline(x + 9.0, (cy - 9.0)..=(cy + 9.0), Stroke::new(1.0, pal.sep));
+            }
+            first = false;
+            let kg = p.layout_no_wrap(key.to_string(), FontId::proportional(11.5), pal.text);
             let lg = p.layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.sub);
-            let kw = kg.size().x + 12.0;
+            let kw = (kg.size().x + 12.0).max(22.0);
             let kr = Rect::from_min_size(Pos2::new(x - kw, cy - 10.0), Vec2::new(kw, 20.0));
             p.rect_filled(kr, 5.0, pal.field);
-            p.galley(Pos2::new(kr.min.x + 6.0, cy - kg.size().y / 2.0), kg, pal.text);
+            p.galley(Pos2::new(kr.center().x - kg.size().x / 2.0, cy - kg.size().y / 2.0), kg, pal.text);
             let lx = kr.min.x - 8.0 - lg.size().x;
-            p.galley(Pos2::new(lx, cy - lg.size().y / 2.0), lg, pal.sub);
+            p.galley(Pos2::new(lx, cy - lg.size().y / 2.0), lg, pal.text);
             x = lx - 18.0;
         };
         if list {
@@ -764,7 +779,7 @@ impl App {
                             idx += 1;
                             continue;
                         }
-                        let icon_rect = Rect::from_center_size(Pos2::new(r.min.x + 32.0, r.center().y), Vec2::splat(28.0));
+                        let icon_rect = Rect::from_center_size(Pos2::new(r.min.x + 31.0, r.center().y), Vec2::splat(26.0));
                         ui::paint_icon(&mut self.icons, ui, icon_rect, &item.icon, pal);
                         let mut acc: Vec<String> = vec![];
                         if is_root {
@@ -786,11 +801,11 @@ impl App {
                         let ag = painter.layout_no_wrap(acc, FontId::proportional(12.0), pal.sub);
                         let aw = ag.size().x;
                         painter.galley(Pos2::new(right - aw, r.center().y - ag.size().y / 2.0), ag, pal.sub);
-                        let tx = r.min.x + 54.0;
+                        let tx = r.min.x + 52.0;
                         let clip = Rect::from_min_max(Pos2::new(tx, r.min.y), Pos2::new((right - aw - 10.0).max(tx + 20.0), r.max.y));
                         let p = painter.with_clip_rect(clip);
-                        let title = elide(&p, &item.title, FontId::proportional(14.5), clip.width());
-                        let tg = p.layout_no_wrap(title, FontId::proportional(14.5), pal.text);
+                        let title = elide(&p, &item.title, FontId::proportional(14.0), clip.width());
+                        let tg = p.layout_no_wrap(title, FontId::proportional(14.0), pal.text);
                         let tw = tg.size().x;
                         p.galley(Pos2::new(tx, r.center().y - tg.size().y / 2.0), tg, pal.text);
                         if !item.subtitle.is_empty() {

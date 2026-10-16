@@ -10,7 +10,7 @@ pub const HEIGHT: f32 = 475.0;
 pub const COMPACT_HEIGHT: f32 = 58.0;
 pub const SEARCH_H: f32 = 58.0;
 pub const FOOTER_H: f32 = 38.0;
-pub const ROW_H: f32 = 46.0;
+pub const ROW_H: f32 = 42.0;
 pub const RADIUS: f32 = 14.0;
 
 #[derive(Clone, Copy)]
@@ -34,10 +34,10 @@ pub fn palette(dark: bool) -> Palette {
             text: Color32::from_gray(238),
             sub: Color32::from_gray(140),
             sel: Color32::from_white_alpha(24),
-            accent: Color32::from_rgb(255, 99, 99),
+            accent: Color32::from_rgb(240, 83, 95),
             field: Color32::from_white_alpha(14),
             sep: Color32::from_white_alpha(20),
-            danger: Color32::from_rgb(255, 99, 99),
+            danger: Color32::from_rgb(240, 83, 95),
         }
     } else {
         Palette {
@@ -46,7 +46,7 @@ pub fn palette(dark: bool) -> Palette {
             text: Color32::from_gray(30),
             sub: Color32::from_gray(120),
             sel: Color32::from_black_alpha(18),
-            accent: Color32::from_rgb(255, 99, 99),
+            accent: Color32::from_rgb(232, 54, 75),
             field: Color32::from_black_alpha(10),
             sep: Color32::from_black_alpha(22),
             danger: Color32::from_rgb(200, 40, 40),

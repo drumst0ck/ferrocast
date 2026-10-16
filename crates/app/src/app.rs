@@ -201,6 +201,17 @@ pub struct App {
 
 fn load_fonts(ctx: &Context) {
     let mut fonts = egui::FontDefinitions::default();
+    // San Francisco, the system face, as the primary UI font so the launcher matches macOS and
+    // the website. The variable font renders at its default (Regular) instance; egui's bundled
+    // face stays as the fallback when the file is missing or unreadable.
+    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNS.ttf") {
+        fonts.font_data.insert("sf-pro".into(), Arc::new(egui::FontData::from_owned(bytes)));
+        fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "sf-pro".into());
+    }
+    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNSMono.ttf") {
+        fonts.font_data.insert("sf-mono".into(), Arc::new(egui::FontData::from_owned(bytes)));
+        fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "sf-mono".into());
+    }
     for (name, path) in [
         ("apple-symbols", "/System/Library/Fonts/Apple Symbols.ttf"),
         ("arial-unicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
@@ -729,7 +740,7 @@ impl App {
             }
             let mut recent: Vec<&Item> =
                 self.base.iter().filter(|i| !self.settings.is_favorite(&i.id) && self.frecency.last_used(&i.id).is_some()).collect();
-            recent.sort_by(|a, b| self.frecency.score(&b.id, now).partial_cmp(&self.frecency.score(&a.id, now)).unwrap());
+            recent.sort_by(|a, b| self.frecency.score(&b.id, now).total_cmp(&self.frecency.score(&a.id, now)));
             recent.truncate(8);
             if !recent.is_empty() {
                 out.push(Section { title: "Suggestions".into(), items: recent.into_iter().cloned().collect() });
@@ -821,7 +832,7 @@ impl App {
             .iter()
             .filter_map(|i| ranking::score(&self.rankable(i), q, &self.frecency, now, self.settings.sensitivity).map(|s| (s, i)))
             .collect();
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
         scored.truncate(40);
         if !scored.is_empty() {
             out.push(Section { title: "Results".into(), items: scored.into_iter().map(|(_, i)| i.clone()).collect() });
