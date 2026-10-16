@@ -50,6 +50,7 @@ fn fixture() -> App {
         files_req: String::new(),
         query_changed_at: Instant::now(),
         win_cache: vec![],
+        proc_cache: vec![],
         runs: HashMap::new(),
         next_run: 1,
         inline: HashMap::new(),

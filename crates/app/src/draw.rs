@@ -98,6 +98,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("welcome") => app.push(View::Welcome),
             Ok("shortcuts") => app.push(View::Shortcuts),
             Ok("about") => app.push(View::About),
+            Ok("processes") => app.push(View::Processes),
             Ok("ai") => {
                 app.run_builtin(Builtin::AskAi);
                 if std::env::var("FERROCAST_AI_DEMO").is_ok() {

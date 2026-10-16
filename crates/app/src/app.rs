@@ -44,6 +44,7 @@ pub enum View {
     Emoji,
     Files,
     Windows,
+    Processes,
     Notes,
     Colors(Rgba),
     SnippetForm { id: Option<String>, name: String, text: String, keyword: String },
@@ -79,6 +80,7 @@ impl View {
             | View::Emoji
             | View::Files
             | View::Windows
+            | View::Processes
             | View::Notes
             | View::Colors(_) => Shape::List,
             View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::Settings => Shape::Form,
@@ -94,6 +96,7 @@ impl View {
             View::Emoji => "Search Emoji & Symbols",
             View::Files => "Search Files",
             View::Windows => "Switch Windows",
+            View::Processes => "Kill Process",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
             View::SnippetForm { .. } => "Snippet",
@@ -121,6 +124,7 @@ impl View {
             View::Emoji => "Search emoji by name…",
             View::Files => "Search files by name…",
             View::Windows => "Search open windows…",
+            View::Processes => "Search processes…",
             View::Notes => "Search notes…",
             _ => "Filter…",
         }
@@ -187,6 +191,7 @@ pub struct App {
     files_req: String,
     query_changed_at: Instant,
     win_cache: Vec<running::WindowInfo>,
+    proc_cache: Vec<ferrocast_macos::process::ProcInfo>,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
     inline: HashMap<PathBuf, (String, Instant)>,
@@ -300,6 +305,7 @@ impl App {
             files_req: String::new(),
             query_changed_at: Instant::now(),
             win_cache: vec![],
+            proc_cache: vec![],
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -564,6 +570,9 @@ impl App {
         self.sec_dirty = true;
         if matches!(v, View::Windows) {
             self.win_cache = running::list_windows();
+        }
+        if matches!(v, View::Processes) {
+            self.proc_cache = ferrocast_macos::process::list();
         }
         self.stack.push(v);
         self.query.clear();
@@ -1100,6 +1109,29 @@ impl App {
                     .collect();
                 self.sorted(v, "Windows")
             }
+            View::Processes => {
+                let v = self
+                    .proc_cache
+                    .iter()
+                    .filter_map(|pr| {
+                        self.matches(&q, &pr.name, &pr.path).map(|sc| {
+                            (
+                                sc,
+                                Item {
+                                    id: format!("proc:{}", pr.pid),
+                                    title: pr.name.clone(),
+                                    subtitle: format!("PID {}", pr.pid),
+                                    icon: pr.bundle().map(Icon::App).unwrap_or(Icon::Glyph("›", [108, 108, 120])),
+                                    accessory: format!("{:.0}% CPU · {:.0} MB", pr.cpu, pr.mem_mb),
+                                    keywords: vec![],
+                                    kind: Kind::Process(pr.clone()),
+                                },
+                            )
+                        })
+                    })
+                    .collect();
+                self.sorted(v, "Processes")
+            }
             View::Notes => {
                 let mut notes: Vec<&Note> =
                     self.notes.iter().filter(|n| q.is_empty() || n.text.to_lowercase().contains(&q.to_lowercase())).collect();
@@ -1232,6 +1264,12 @@ impl App {
             Kind::Window(_) => a.push(Action::new("Apply to Focused Window", Act::Run)),
             Kind::Url(_) => a.push(Action::new("Open in Browser", Act::Run)),
             Kind::OpenWindow(_) => a.push(Action::new("Switch to Window", Act::Run)),
+            Kind::Process(pr) => {
+                a.push(Action::new("Kill Process", Act::Run));
+                a.push(Action::new("Force Kill Process", Act::KillProcess(pr.pid, true)).key(CMD, Key::Enter).danger());
+                a.push(Action::new("Copy PID", Act::CopyText(pr.pid.to_string())).key(CMD_SHIFT, Key::C));
+                a.push(Action::new("Copy Path", Act::CopyText(pr.path.clone())).key(CMD, Key::P));
+            }
             _ => a.push(Action::new("Open", Act::Run)),
         }
         if matches!(self.view(), View::Root) && item.is_command() {
@@ -1268,6 +1306,7 @@ impl App {
             Kind::Script(_) => "Run Script Command",
             Kind::Url(_) => "Open in Browser",
             Kind::OpenWindow(_) => "Switch to Window",
+            Kind::Process(_) => "Kill Process",
             Kind::WebSearch(_) => "Search",
             Kind::Window(_) => "Apply to Window",
             _ => "Run Command",
@@ -1434,7 +1473,23 @@ impl App {
                 running::activate(w.pid);
                 windows::raise_window(w.pid, &w.title);
             }
+            Kind::Process(pr) => {
+                let pid = pr.pid;
+                self.kill_process(pid, false);
+            }
         }
+    }
+
+    /// End a process from the Kill Process list and refresh it in place.
+    fn kill_process(&mut self, pid: i32, force: bool) {
+        let name = self.proc_cache.iter().find(|p| p.pid == pid).map(|p| p.name.clone()).unwrap_or_else(|| pid.to_string());
+        if ferrocast_macos::process::kill(pid, force) {
+            self.toast(format!("{} {name}", if force { "Force killed" } else { "Killed" }));
+        } else {
+            self.toast(format!("Could not kill {name}"));
+        }
+        self.proc_cache.retain(|p| p.pid != pid);
+        self.sec_dirty = true;
     }
 
     fn run_builtin(&mut self, b: Builtin) {
@@ -1491,6 +1546,7 @@ impl App {
             Builtin::SearchEmoji => self.push(View::Emoji),
             Builtin::SearchFiles => self.push(View::Files),
             Builtin::SwitchWindows => self.push(View::Windows),
+            Builtin::KillProcess => self.push(View::Processes),
             Builtin::SearchNotes => self.push(View::Notes),
             Builtin::CreateNote => self.new_note(),
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
@@ -1735,6 +1791,7 @@ impl App {
                 running::force_quit(pid);
                 self.toast("Force quit");
             }
+            Act::KillProcess(pid, force) => self.kill_process(pid, force),
             Act::HideApp(pid) => {
                 running::hide(pid);
                 self.toast("Hidden");

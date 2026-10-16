@@ -35,6 +35,7 @@ pub enum Builtin {
     SearchEmoji,
     SearchFiles,
     SwitchWindows,
+    KillProcess,
     SearchNotes,
     CreateNote,
     CreateScript,
@@ -61,6 +62,7 @@ impl Builtin {
         Builtin::SearchEmoji,
         Builtin::SearchFiles,
         Builtin::SwitchWindows,
+        Builtin::KillProcess,
         Builtin::SearchNotes,
         Builtin::CreateNote,
         Builtin::CreateScript,
@@ -87,6 +89,7 @@ impl Builtin {
             Builtin::SearchEmoji => "Search Emoji & Symbols",
             Builtin::SearchFiles => "Search Files",
             Builtin::SwitchWindows => "Switch Windows",
+            Builtin::KillProcess => "Kill Process",
             Builtin::SearchNotes => "Search Notes",
             Builtin::CreateNote => "Create Note",
             Builtin::CreateScript => "Create Script Command",
@@ -108,6 +111,7 @@ impl Builtin {
             Builtin::SearchEmoji => "Emoji & Symbols",
             Builtin::SearchFiles => "File Search",
             Builtin::SwitchWindows => "Navigation",
+            Builtin::KillProcess => "System",
             Builtin::SearchNotes | Builtin::CreateNote => "Notes",
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
             Builtin::Settings | Builtin::Quit => "Ferrocast",
@@ -128,6 +132,7 @@ impl Builtin {
             Builtin::SearchEmoji => ("☺", [255, 197, 49]),
             Builtin::SearchFiles => ("🔍", [120, 120, 130]),
             Builtin::SwitchWindows => ("⊞", [89, 212, 153]),
+            Builtin::KillProcess => ("✕", [240, 83, 95]),
             Builtin::SearchNotes | Builtin::CreateNote => ("✎", [255, 197, 49]),
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => ("›_", [60, 60, 70]),
             Builtin::Settings => ("⚙", [120, 120, 130]),
@@ -148,6 +153,7 @@ impl Builtin {
             Builtin::SearchEmoji => &["emoji", "symbols", "unicode"],
             Builtin::SearchFiles => &["finder", "find"],
             Builtin::SwitchWindows => &["windows", "switch"],
+            Builtin::KillProcess => &["kill", "process", "force quit", "task", "cpu", "memory"],
             Builtin::Settings => &["preferences", "config"],
             _ => &[],
         };
@@ -185,6 +191,7 @@ pub enum Kind {
     Emoji(&'static str),
     Note(String),
     OpenWindow(WindowInfo),
+    Process(ferrocast_macos::process::ProcInfo),
 }
 
 #[derive(Clone, Debug)]
@@ -223,6 +230,8 @@ pub enum Act {
     Reveal(PathBuf),
     QuitApp(i32),
     ForceQuitApp(i32),
+    /// Send SIGTERM (false) or SIGKILL (true) to a process.
+    KillProcess(i32, bool),
     HideApp(i32),
     ToggleFavorite,
     MoveFavorite(isize),
@@ -249,7 +258,10 @@ pub enum Act {
     Trash(PathBuf),
     EditScript(PathBuf),
     RunSystem(SystemCommand),
-    RunScript { index: usize, args: Vec<String> },
+    RunScript {
+        index: usize,
+        args: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug)]

@@ -56,6 +56,7 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Script Commands compatibles con Raycast | Implementado (full, compact, silent, inline) |
 | Gestión de ventanas (~40 comandos) | Implementado; necesita Accesibilidad |
 | Comandos de sistema, emoji, archivos (Spotlight), cambiar ventana, notas | Implementado |
+| Kill Process (procesos por CPU y memoria, SIGTERM o SIGKILL con ⌘↵) | Implementado |
 | Icono en barra de menú, ajustes, hotkeys por comando | Implementado |
 | Emoji en color (renderizados con AppKit) | Implementado |
 | Ask AI con streaming y conversación (servidor compatible con OpenAI: Ollama por defecto, LM Studio, OpenAI…; clave en el Keychain) | Implementado; probado contra un servidor simulado, no contra un modelo real |
