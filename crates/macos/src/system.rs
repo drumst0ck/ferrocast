@@ -1,6 +1,6 @@
 //! System commands (lock, sleep, volume, appearance, trash…).
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Run AppleScript, returning trimmed stdout.
 pub fn osascript(script: &str) -> anyhow::Result<String> {
@@ -43,6 +43,9 @@ pub enum SystemCommand {
     UnhideAll,
     QuitAllApps,
     DismissNotifications,
+    ToggleWifi,
+    /// Keep the Mac awake (caffeinate) until toggled again.
+    KeepAwake,
 }
 
 impl SystemCommand {
@@ -75,6 +78,8 @@ impl SystemCommand {
         SystemCommand::UnhideAll,
         SystemCommand::QuitAllApps,
         SystemCommand::DismissNotifications,
+        SystemCommand::ToggleWifi,
+        SystemCommand::KeepAwake,
     ];
 
     pub fn id(&self) -> String {
@@ -110,6 +115,8 @@ impl SystemCommand {
             SystemCommand::UnhideAll => "Unhide All Hidden Apps".into(),
             SystemCommand::QuitAllApps => "Quit All Apps".into(),
             SystemCommand::DismissNotifications => "Dismiss Notifications".into(),
+            SystemCommand::ToggleWifi => "Toggle Wi-Fi".into(),
+            SystemCommand::KeepAwake => "Toggle Keep Awake".into(),
         }
     }
 
@@ -122,6 +129,8 @@ impl SystemCommand {
             SystemCommand::ShutDown => &["power off", "turn off"],
             SystemCommand::Restart => &["reboot"],
             SystemCommand::EjectAll => &["unmount"],
+            SystemCommand::ToggleWifi => &["wifi", "wireless", "network", "airport"],
+            SystemCommand::KeepAwake => &["caffeinate", "coffee", "awake", "sleep", "insomnia"],
             _ => &[],
         }
     }
@@ -219,6 +228,27 @@ impl SystemCommand {
                 osascript(&script)?;
                 return Ok("Quit all apps".into());
             }
+            ToggleWifi => {
+                let dev = wifi_device().ok_or_else(|| anyhow::anyhow!("no Wi-Fi interface"))?;
+                let st = Command::new("/usr/sbin/networksetup").args(["-getairportpower", &dev]).output()?;
+                let on = String::from_utf8_lossy(&st.stdout).trim_end().ends_with("On");
+                sh("/usr/sbin/networksetup", &["-setairportpower", &dev, if on { "off" } else { "on" }])?;
+                return Ok(if on { "Wi-Fi off".into() } else { "Wi-Fi on".into() });
+            }
+            KeepAwake => {
+                if let Some(pid) = awake_pid() {
+                    sh("/bin/kill", &[&pid.to_string()])?;
+                    return Ok("Sleep allowed again".into());
+                }
+                // -d keeps the display awake, -i the system; detached so it outlives this call.
+                Command::new("/usr/bin/caffeinate")
+                    .args(["-di"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()?;
+                return Ok("Keeping the Mac awake".into());
+            }
             DismissNotifications => {
                 osascript(
                     "tell application \"System Events\" to tell process \"NotificationCenter\"\ntry\nrepeat with w in windows\nrepeat with g in (groups of UI element 1 of scroll area 1 of group 1 of w)\ntry\nperform (first action of g whose description is \"Close\")\nend try\nend repeat\nend repeat\nend try\nend tell",
@@ -229,9 +259,38 @@ impl SystemCommand {
     }
 }
 
+/// The hardware port named Wi-Fi (`en0` on most Macs, but not all).
+fn wifi_device() -> Option<String> {
+    let out = Command::new("/usr/sbin/networksetup").arg("-listallhardwareports").output().ok()?;
+    parse_wifi_device(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_wifi_device(listing: &str) -> Option<String> {
+    let mut lines = listing.lines();
+    while let Some(l) = lines.next() {
+        if l.starts_with("Hardware Port:") && (l.contains("Wi-Fi") || l.contains("AirPort")) {
+            return lines.next()?.strip_prefix("Device:").map(|d| d.trim().to_string());
+        }
+    }
+    None
+}
+
+/// PID of a `caffeinate` we (or the user) started, if one is running.
+fn awake_pid() -> Option<i32> {
+    let out = Command::new("/usr/bin/pgrep").args(["-x", "caffeinate"]).output().ok()?;
+    String::from_utf8_lossy(&out.stdout).lines().next()?.trim().parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finds_the_wifi_device() {
+        let l = "\nHardware Port: Ethernet Adapter (en4)\nDevice: en4\nEthernet Address: a\n\nHardware Port: Wi-Fi\nDevice: en0\nEthernet Address: b\n";
+        assert_eq!(parse_wifi_device(l).as_deref(), Some("en0"));
+        assert_eq!(parse_wifi_device("Hardware Port: Ethernet\nDevice: en1\n"), None);
+    }
+
     #[test]
     fn ids_unique() {
         let mut ids: Vec<String> = SystemCommand::ALL.iter().map(|c| c.id()).collect();

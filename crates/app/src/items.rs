@@ -36,6 +36,7 @@ pub enum Builtin {
     SearchFiles,
     SwitchWindows,
     KillProcess,
+    Timers,
     SearchNotes,
     CreateNote,
     CreateScript,
@@ -63,6 +64,7 @@ impl Builtin {
         Builtin::SearchFiles,
         Builtin::SwitchWindows,
         Builtin::KillProcess,
+        Builtin::Timers,
         Builtin::SearchNotes,
         Builtin::CreateNote,
         Builtin::CreateScript,
@@ -90,6 +92,7 @@ impl Builtin {
             Builtin::SearchFiles => "Search Files",
             Builtin::SwitchWindows => "Switch Windows",
             Builtin::KillProcess => "Kill Process",
+            Builtin::Timers => "Timers",
             Builtin::SearchNotes => "Search Notes",
             Builtin::CreateNote => "Create Note",
             Builtin::CreateScript => "Create Script Command",
@@ -112,6 +115,7 @@ impl Builtin {
             Builtin::SearchFiles => "File Search",
             Builtin::SwitchWindows => "Navigation",
             Builtin::KillProcess => "System",
+            Builtin::Timers => "Productivity",
             Builtin::SearchNotes | Builtin::CreateNote => "Notes",
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
             Builtin::Settings | Builtin::Quit => "Ferrocast",
@@ -133,6 +137,7 @@ impl Builtin {
             Builtin::SearchFiles => ("🔍", [120, 120, 130]),
             Builtin::SwitchWindows => ("⊞", [89, 212, 153]),
             Builtin::KillProcess => ("✕", [240, 83, 95]),
+            Builtin::Timers => ("◷", [245, 165, 36]),
             Builtin::SearchNotes | Builtin::CreateNote => ("✎", [255, 197, 49]),
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => ("›_", [60, 60, 70]),
             Builtin::Settings => ("⚙", [120, 120, 130]),
@@ -154,6 +159,7 @@ impl Builtin {
             Builtin::SearchFiles => &["finder", "find"],
             Builtin::SwitchWindows => &["windows", "switch"],
             Builtin::KillProcess => &["kill", "process", "force quit", "task", "cpu", "memory"],
+            Builtin::Timers => &["timer", "countdown", "pomodoro", "alarm"],
             Builtin::Settings => &["preferences", "config"],
             _ => &[],
         };
@@ -192,6 +198,10 @@ pub enum Kind {
     Note(String),
     OpenWindow(WindowInfo),
     Process(ferrocast_macos::process::ProcInfo),
+    /// Start a countdown of this many seconds with an optional label.
+    Timer(u64, String),
+    /// A running timer, by its index in `App::timers`.
+    RunningTimer(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -232,6 +242,7 @@ pub enum Act {
     ForceQuitApp(i32),
     /// Send SIGTERM (false) or SIGKILL (true) to a process.
     KillProcess(i32, bool),
+    CancelTimer(usize),
     HideApp(i32),
     ToggleFavorite,
     MoveFavorite(isize),

@@ -13,5 +13,6 @@ pub mod placeholders;
 pub mod ranking;
 pub mod script;
 pub mod storage;
+pub mod timer;
 pub mod timezones;
 pub mod units;

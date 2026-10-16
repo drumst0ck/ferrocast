@@ -35,6 +35,14 @@ pub enum ArgTarget {
     Script(usize),
 }
 
+/// A countdown started from Root Search.
+pub struct RunningTimer {
+    pub ends_at: Instant,
+    pub secs: u64,
+    pub label: String,
+    pub cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
 #[derive(Clone)]
 pub enum View {
     Root,
@@ -45,6 +53,7 @@ pub enum View {
     Files,
     Windows,
     Processes,
+    Timers,
     Notes,
     Colors(Rgba),
     SnippetForm { id: Option<String>, name: String, text: String, keyword: String },
@@ -81,6 +90,7 @@ impl View {
             | View::Files
             | View::Windows
             | View::Processes
+            | View::Timers
             | View::Notes
             | View::Colors(_) => Shape::List,
             View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::Settings => Shape::Form,
@@ -97,6 +107,7 @@ impl View {
             View::Files => "Search Files",
             View::Windows => "Switch Windows",
             View::Processes => "Kill Process",
+            View::Timers => "Timers",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
             View::SnippetForm { .. } => "Snippet",
@@ -125,6 +136,7 @@ impl View {
             View::Files => "Search files by name…",
             View::Windows => "Search open windows…",
             View::Processes => "Search processes…",
+            View::Timers => "Search timers…",
             View::Notes => "Search notes…",
             _ => "Filter…",
         }
@@ -192,6 +204,8 @@ pub struct App {
     query_changed_at: Instant,
     win_cache: Vec<running::WindowInfo>,
     proc_cache: Vec<ferrocast_macos::process::ProcInfo>,
+    /// Running countdowns: when they end, their length, label, and a cancel flag.
+    timers: Vec<RunningTimer>,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
     inline: HashMap<PathBuf, (String, Instant)>,
@@ -306,6 +320,7 @@ impl App {
             query_changed_at: Instant::now(),
             win_cache: vec![],
             proc_cache: vec![],
+            timers: vec![],
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -851,6 +866,22 @@ impl App {
                 kind: Kind::Url(u),
             });
         }
+        if let Some(t) = ferrocast_core::timer::parse(q) {
+            let what = if t.label.is_empty() {
+                ferrocast_core::timer::describe(t.secs)
+            } else {
+                format!("{} ({})", t.label, ferrocast_core::timer::describe(t.secs))
+            };
+            top.push(Item {
+                id: "timer".into(),
+                title: format!("Start {what} timer"),
+                subtitle: String::new(),
+                icon: Icon::Glyph("◷", [245, 165, 36]),
+                accessory: "Timer".into(),
+                keywords: vec![],
+                kind: Kind::Timer(t.secs, t.label),
+            });
+        }
         if !top.is_empty() {
             out.push(Section { title: "Result".into(), items: top });
         }
@@ -1132,6 +1163,40 @@ impl App {
                     .collect();
                 self.sorted(v, "Processes")
             }
+            View::Timers => {
+                let now = Instant::now();
+                let v: Vec<(i64, Item)> = self
+                    .timers
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, t)| {
+                        let title =
+                            if t.label.is_empty() { format!("{} timer", ferrocast_core::timer::describe(t.secs)) } else { t.label.clone() };
+                        self.matches(&q, &title, "").map(|sc| {
+                            let left = t.ends_at.saturating_duration_since(now).as_secs();
+                            (
+                                sc,
+                                Item {
+                                    id: format!("timer:{i}"),
+                                    title,
+                                    subtitle: format!(
+                                        "ends at {}",
+                                        chrono::Local::now()
+                                            .checked_add_signed(chrono::Duration::seconds(left as i64))
+                                            .map(|d| d.format("%H:%M").to_string())
+                                            .unwrap_or_default()
+                                    ),
+                                    icon: Icon::Glyph("◷", [245, 165, 36]),
+                                    accessory: ferrocast_core::timer::clock(left),
+                                    keywords: vec![],
+                                    kind: Kind::RunningTimer(i),
+                                },
+                            )
+                        })
+                    })
+                    .collect();
+                self.sorted(v, "Running")
+            }
             View::Notes => {
                 let mut notes: Vec<&Note> =
                     self.notes.iter().filter(|n| q.is_empty() || n.text.to_lowercase().contains(&q.to_lowercase())).collect();
@@ -1264,6 +1329,8 @@ impl App {
             Kind::Window(_) => a.push(Action::new("Apply to Focused Window", Act::Run)),
             Kind::Url(_) => a.push(Action::new("Open in Browser", Act::Run)),
             Kind::OpenWindow(_) => a.push(Action::new("Switch to Window", Act::Run)),
+            Kind::Timer(..) => a.push(Action::new("Start Timer", Act::Run)),
+            Kind::RunningTimer(i) => a.push(Action::new("Cancel Timer", Act::CancelTimer(*i)).danger()),
             Kind::Process(pr) => {
                 a.push(Action::new("Kill Process", Act::Run));
                 a.push(Action::new("Force Kill Process", Act::KillProcess(pr.pid, true)).key(CMD, Key::Enter).danger());
@@ -1307,6 +1374,8 @@ impl App {
             Kind::Url(_) => "Open in Browser",
             Kind::OpenWindow(_) => "Switch to Window",
             Kind::Process(_) => "Kill Process",
+            Kind::Timer(..) => "Start Timer",
+            Kind::RunningTimer(_) => "Cancel Timer",
             Kind::WebSearch(_) => "Search",
             Kind::Window(_) => "Apply to Window",
             _ => "Run Command",
@@ -1477,6 +1546,55 @@ impl App {
                 let pid = pr.pid;
                 self.kill_process(pid, false);
             }
+            Kind::Timer(secs, label) => {
+                let (secs, label) = (*secs, label.clone());
+                self.start_timer(secs, label);
+            }
+            Kind::RunningTimer(i) => {
+                let i = *i;
+                self.cancel_timer(i);
+            }
+        }
+    }
+
+    /// Start a countdown; a thread sleeps and then notifies, unless the timer was cancelled.
+    fn start_timer(&mut self, secs: u64, label: String) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let what = if label.is_empty() { format!("{} timer", ferrocast_core::timer::describe(secs)) } else { label.clone() };
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(secs));
+            if flag.load(Ordering::Relaxed) {
+                return;
+            }
+            services::notify("Timer done", &what);
+            let _ = std::process::Command::new("/usr/bin/afplay").arg("/System/Library/Sounds/Glass.aiff").spawn();
+            bus.send(Msg::Wake);
+        });
+        self.timers.push(RunningTimer { ends_at: Instant::now() + Duration::from_secs(secs), secs, label, cancelled });
+        self.toast(format!("Timer started · {}", ferrocast_core::timer::clock(secs)));
+        self.hide();
+        self.reset_to_root();
+    }
+
+    fn cancel_timer(&mut self, i: usize) {
+        if i < self.timers.len() {
+            self.timers[i].cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.timers.remove(i);
+            self.toast("Timer cancelled");
+        }
+        self.sec_dirty = true;
+    }
+
+    /// Drop timers that already fired.
+    fn sweep_timers(&mut self) {
+        let now = Instant::now();
+        let before = self.timers.len();
+        self.timers.retain(|t| t.ends_at > now);
+        if self.timers.len() != before {
+            self.sec_dirty = true;
         }
     }
 
@@ -1547,6 +1665,7 @@ impl App {
             Builtin::SearchFiles => self.push(View::Files),
             Builtin::SwitchWindows => self.push(View::Windows),
             Builtin::KillProcess => self.push(View::Processes),
+            Builtin::Timers => self.push(View::Timers),
             Builtin::SearchNotes => self.push(View::Notes),
             Builtin::CreateNote => self.new_note(),
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
@@ -1591,6 +1710,8 @@ impl App {
                         | system::SystemCommand::Volume(_)
                         | system::SystemCommand::EmptyTrash
                         | system::SystemCommand::ToggleHiddenFiles
+                        | system::SystemCommand::ToggleWifi
+                        | system::SystemCommand::KeepAwake
                 ) {
                     services::notify("Ferrocast", &msg);
                 }
@@ -1792,6 +1913,7 @@ impl App {
                 self.toast("Force quit");
             }
             Act::KillProcess(pid, force) => self.kill_process(pid, force),
+            Act::CancelTimer(i) => self.cancel_timer(i),
             Act::HideApp(pid) => {
                 running::hide(pid);
                 self.toast("Hidden");

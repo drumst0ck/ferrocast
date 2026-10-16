@@ -25,6 +25,11 @@ impl eframe::App for App {
         dev_screenshot(ctx, self);
         self.drain();
         self.tick_inline();
+        self.sweep_timers();
+        if matches!(self.view(), View::Timers) && !self.timers.is_empty() {
+            self.invalidate_sections();
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
         if self.rates_checked_at.elapsed() > Duration::from_secs(15 * 60) {
             self.rates_checked_at = Instant::now();
             if self.rates.is_stale(services::now_secs()) {
@@ -99,6 +104,21 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("shortcuts") => app.push(View::Shortcuts),
             Ok("about") => app.push(View::About),
             Ok("processes") => app.push(View::Processes),
+            Ok("timers") => {
+                app.timers.push(crate::app::RunningTimer {
+                    ends_at: Instant::now() + Duration::from_secs(1500),
+                    secs: 1500,
+                    label: "Pomodoro".into(),
+                    cancelled: Default::default(),
+                });
+                app.timers.push(crate::app::RunningTimer {
+                    ends_at: Instant::now() + Duration::from_secs(600),
+                    secs: 600,
+                    label: String::new(),
+                    cancelled: Default::default(),
+                });
+                app.push(View::Timers);
+            }
             Ok("ai") => {
                 app.run_builtin(Builtin::AskAi);
                 if std::env::var("FERROCAST_AI_DEMO").is_ok() {

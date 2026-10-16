@@ -51,6 +51,7 @@ fn fixture() -> App {
         query_changed_at: Instant::now(),
         win_cache: vec![],
         proc_cache: vec![],
+        timers: vec![],
         runs: HashMap::new(),
         next_run: 1,
         inline: HashMap::new(),
