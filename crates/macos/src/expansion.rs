@@ -145,7 +145,9 @@ pub fn inject(keyword_len: usize, text: &str, cursor_from_end: Option<usize>, on
     on_write(injected_count);
     std::thread::sleep(std::time::Duration::from_millis(30));
     keyboard::paste();
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    // Give slow targets (Electron apps, remote desktops) time to read the pasteboard before
+    // the previous contents are restored; 150 ms was not always enough.
+    std::thread::sleep(std::time::Duration::from_millis(350));
     if let Some(n) = cursor_from_end {
         keyboard::tap_key(keyboard::keycode::LEFT, n);
     }

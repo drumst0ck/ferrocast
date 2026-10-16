@@ -350,17 +350,20 @@ impl App {
     }
 
     fn save_settings(&mut self) {
-        let _ = self.store.save("settings.json", &self.settings);
+        let v = self.settings.clone();
+        self.persist("settings.json", &v);
         *self.shared.settings.write().unwrap() = self.settings.clone();
         self.rebuild();
     }
     fn save_snippets(&mut self) {
-        let _ = self.store.save("snippets.json", &self.snippets);
+        let v = self.snippets.clone();
+        self.persist("snippets.json", &v);
         *self.shared.snippets.write().unwrap() = self.snippets.clone();
         self.shared.refresh_keywords();
     }
     fn save_quicklinks(&mut self) {
-        let _ = self.store.save("quicklinks.json", &self.quicklinks);
+        let v = self.quicklinks.clone();
+        self.persist("quicklinks.json", &v);
         self.rebuild();
     }
     fn send_ai(&mut self) {
@@ -384,10 +387,13 @@ impl App {
     }
 
     fn save_notes(&mut self) {
-        let _ = self.store.save("notes.json", &self.notes);
+        let v = self.notes.clone();
+        self.persist("notes.json", &v);
     }
     fn save_frecency(&self) {
-        let _ = self.store.save("frecency.json", &self.frecency);
+        if let Err(e) = self.store.save("frecency.json", &self.frecency) {
+            instance::log(&self.store.root, &format!("saving frecency.json failed: {e:#}"));
+        }
     }
     fn apply_hotkeys(&mut self) {
         if let Some(h) = self.hotkeys.as_mut() {
@@ -525,6 +531,14 @@ impl App {
             self.hide();
         } else {
             self.show();
+        }
+    }
+
+    /// Persist a data file; a failed write is surfaced instead of dropped on the floor.
+    fn persist<T: serde::Serialize>(&mut self, name: &str, value: &T) {
+        if let Err(e) = self.store.save(name, value) {
+            instance::log(&self.store.root, &format!("saving {name} failed: {e:#}"));
+            self.toast(format!("Could not save {name}: {e}"));
         }
     }
 
@@ -997,9 +1011,14 @@ impl App {
             }
             View::Emoji => {
                 let ql = q.to_lowercase();
-                let v: Vec<(i64, Item)> = emojis::iter()
-                    .filter(|e| ql.is_empty() || e.name().contains(&ql) || e.shortcodes().any(|s| s.contains(&ql)))
-                    .take(300)
+                // Rank before truncating so a name that starts with the query is never cut off
+                // by weaker matches that happen to come first in the catalogue.
+                let mut hits: Vec<_> =
+                    emojis::iter().filter(|e| ql.is_empty() || e.name().contains(&ql) || e.shortcodes().any(|s| s.contains(&ql))).collect();
+                hits.sort_by_key(|e| !e.name().starts_with(&ql));
+                hits.truncate(300);
+                let v: Vec<(i64, Item)> = hits
+                    .into_iter()
                     .map(|e| {
                         (
                             if e.name().starts_with(&ql) { 1 } else { 0 },

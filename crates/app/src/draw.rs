@@ -247,7 +247,11 @@ impl App {
             }
             if k.enter || k.cmd_enter {
                 let acts = self.actions_for(&item);
-                if let Some(a) = acts.get(if k.enter { 0 } else { 1 }) {
+                // ⌘↵ runs the action that declares that shortcut; when an item has none, it
+                // behaves like ↵ rather than firing whatever happens to be listed second.
+                let pick =
+                    if k.enter { acts.first() } else { acts.iter().find(|a| a.shortcut == Some((CMD, Key::Enter))).or(acts.first()) };
+                if let Some(a) = pick {
                     self.do_action(item, a.kind.clone());
                     return true;
                 }
