@@ -324,3 +324,14 @@ mod tests {
         assert_eq!(n.title(), "Groceries");
     }
 }
+
+/// One line of the calculator history.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CalcEntry {
+    pub question: String,
+    pub display: String,
+    pub raw: String,
+    pub value: f64,
+    pub unit: Option<String>,
+    pub at: i64,
+}

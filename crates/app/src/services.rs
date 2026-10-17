@@ -52,6 +52,16 @@ pub struct Shared {
     pub keywords: expansion::Keywords,
 }
 
+/// `just now`, `5 min ago`, `3 h ago`, `2 d ago`.
+pub fn ago(secs: i64) -> String {
+    match secs {
+        s if s < 60 => "just now".into(),
+        s if s < 3600 => format!("{} min ago", s / 60),
+        s if s < 86400 => format!("{} h ago", s / 3600),
+        s => format!("{} d ago", s / 86400),
+    }
+}
+
 pub fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }

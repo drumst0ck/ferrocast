@@ -1,6 +1,7 @@
 //! eframe::App implementation: event loop, keyboard handling and drawing.
 
 use super::*;
+use egui::TextureOptions;
 use egui::{Event, Frame as EFrame, RichText, TextEdit};
 use global_hotkey::hotkey::HotKey;
 use std::str::FromStr;
@@ -104,6 +105,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("shortcuts") => app.push(View::Shortcuts),
             Ok("about") => app.push(View::About),
             Ok("processes") => app.push(View::Processes),
+            Ok("calchistory") => app.push(View::CalcHistory),
             Ok("timers") => {
                 app.timers.push(crate::app::RunningTimer {
                     ends_at: Instant::now() + Duration::from_secs(1500),
@@ -711,15 +713,48 @@ impl App {
         }
     }
 
-    fn draw_footer(&self, ui: &Ui, rect: Rect, pal: &Palette, primary: Option<String>, list: bool) {
+    fn draw_footer(&mut self, ui: &Ui, rect: Rect, pal: &Palette, primary: Option<String>, list: bool) {
         let p = ui.painter();
         let cy = rect.center().y;
+        // App icon at the far left, as the original launcher does.
+        let icon = self.app_icon.get_or_insert_with(|| {
+            let img = services::decode_png(include_bytes!("../../../resources/icon-1024.png"))
+                .unwrap_or_else(|| egui::ColorImage::filled([1, 1], Color32::TRANSPARENT));
+            ui.ctx().load_texture("app-icon", img, TextureOptions::LINEAR)
+        });
+        let ir = Rect::from_center_size(Pos2::new(rect.min.x + 26.0, cy), Vec2::splat(18.0));
+        p.image(icon.id(), ir, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        let tx = rect.min.x + 42.0;
+        let q = self.query.trim();
+        let searching = list
+            && q.chars().count() >= 2
+            && self.files.0 != q
+            && match self.view() {
+                View::Root => self.settings.file_search_in_root,
+                View::Files => true,
+                _ => false,
+            };
         match &self.toast {
             Some((t, _)) => {
-                p.text(Pos2::new(rect.min.x + 18.0, cy), Align2::LEFT_CENTER, t, FontId::proportional(12.5), pal.accent);
+                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, t, FontId::proportional(12.5), pal.accent);
+            }
+            None if searching => {
+                // Three dots that pulse while Spotlight answers; cheap, and it stops on its own.
+                let t = ui.ctx().input(|i| i.time);
+                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, "Searching files", FontId::proportional(12.5), pal.sub);
+                let w = p.layout_no_wrap("Searching files".into(), FontId::proportional(12.5), pal.sub).size().x;
+                for k in 0..3 {
+                    let a = (((t * 3.0 - k as f64 * 0.6).sin() * 0.5 + 0.5) * 255.0) as u8;
+                    p.circle_filled(
+                        Pos2::new(tx + w + 6.0 + k as f32 * 7.0, cy + 3.0),
+                        1.8,
+                        Color32::from_rgba_unmultiplied(pal.sub.r(), pal.sub.g(), pal.sub.b(), a),
+                    );
+                }
+                ui.ctx().request_repaint_after(Duration::from_millis(60));
             }
             None => {
-                p.text(Pos2::new(rect.min.x + 18.0, cy), Align2::LEFT_CENTER, self.view().title(), FontId::proportional(12.5), pal.sub);
+                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, self.view().title(), FontId::proportional(12.5), pal.sub);
             }
         }
         let mut x = rect.max.x - 16.0;
@@ -815,7 +850,7 @@ impl App {
                             painter.text(
                                 Pos2::new(r.min.x + half / 2.0, mid + 20.0),
                                 Align2::CENTER_CENTER,
-                                "Calculator",
+                                if item.accessory.is_empty() { "Calculator" } else { item.accessory.as_str() },
                                 FontId::proportional(11.5),
                                 pal.sub,
                             );

@@ -54,6 +54,7 @@ pub enum View {
     Windows,
     Processes,
     Timers,
+    CalcHistory,
     Notes,
     Colors(Rgba),
     SnippetForm { id: Option<String>, name: String, text: String, keyword: String },
@@ -91,6 +92,7 @@ impl View {
             | View::Windows
             | View::Processes
             | View::Timers
+            | View::CalcHistory
             | View::Notes
             | View::Colors(_) => Shape::List,
             View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::Settings => Shape::Form,
@@ -108,6 +110,7 @@ impl View {
             View::Windows => "Switch Windows",
             View::Processes => "Kill Process",
             View::Timers => "Timers",
+            View::CalcHistory => "Calculator History",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
             View::SnippetForm { .. } => "Snippet",
@@ -137,6 +140,7 @@ impl View {
             View::Windows => "Search open windows…",
             View::Processes => "Search processes…",
             View::Timers => "Search timers…",
+            View::CalcHistory => "Search past calculations…",
             View::Notes => "Search notes…",
             _ => "Filter…",
         }
@@ -206,6 +210,10 @@ pub struct App {
     proc_cache: Vec<ferrocast_macos::process::ProcInfo>,
     /// Running countdowns: when they end, their length, label, and a cancel flag.
     timers: Vec<RunningTimer>,
+    calc_history: Vec<ferrocast_core::models::CalcEntry>,
+    recent_emoji: Vec<String>,
+    /// The app icon, decoded once for the footer.
+    app_icon: Option<egui::TextureHandle>,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
     inline: HashMap<PathBuf, (String, Instant)>,
@@ -254,6 +262,8 @@ impl App {
         let ctx = cc.egui_ctx.clone();
         load_fonts(&ctx);
         let store = Store::default_location();
+        let calc_history = store.load("calc-history.json");
+        let recent_emoji = store.load("recent-emoji.json");
         let data = store.load_all();
         let (tx, rx) = std::sync::mpsc::channel();
         let bus = Bus { tx, ctx: ctx.clone() };
@@ -321,6 +331,9 @@ impl App {
             win_cache: vec![],
             proc_cache: vec![],
             timers: vec![],
+            calc_history,
+            recent_emoji,
+            app_icon: None,
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -937,6 +950,17 @@ impl App {
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchEmoji, q.to_string()),
         });
+        if q.split_whitespace().count() <= 3 && q.chars().all(|c| c.is_alphabetic() || c == ' ' || c == '-' || c == '\'') {
+            fb.push(Item {
+                id: "fallback:dict".into(),
+                title: format!("Look up “{q}” in Dictionary"),
+                subtitle: String::new(),
+                icon: Icon::Glyph("Aa", [120, 120, 130]),
+                accessory: "Fallback".into(),
+                keywords: vec![],
+                kind: Kind::Url(format!("dict://{}", q.replace(' ', "%20"))),
+            });
+        }
         fb.push(Item {
             id: "fallback:ai".into(),
             title: format!("Ask AI: “{q}”"),
@@ -1090,6 +1114,23 @@ impl App {
                     emojis::iter().filter(|e| ql.is_empty() || e.name().contains(&ql) || e.shortcodes().any(|s| s.contains(&ql))).collect();
                 hits.sort_by_key(|e| !e.name().starts_with(&ql));
                 hits.truncate(300);
+                let recent: Vec<Item> = if ql.is_empty() {
+                    self.recent_emoji
+                        .iter()
+                        .filter_map(|r| emojis::get(r))
+                        .map(|e| Item {
+                            id: format!("emoji:{}", e.as_str()),
+                            title: e.name().to_string(),
+                            subtitle: e.shortcode().map(|s| format!(":{s}:")).unwrap_or_default(),
+                            icon: Icon::Emoji(e.as_str().to_string()),
+                            accessory: "Recent".into(),
+                            keywords: vec![],
+                            kind: Kind::Emoji(e.as_str()),
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                };
                 let v: Vec<(i64, Item)> = hits
                     .into_iter()
                     .map(|e| {
@@ -1107,7 +1148,11 @@ impl App {
                         )
                     })
                     .collect();
-                self.sorted(v, "Emoji")
+                let mut out = self.sorted(v, "Emoji");
+                if !recent.is_empty() {
+                    out.insert(0, Section { title: "Recently used".into(), items: recent });
+                }
+                out
             }
             View::Files => {
                 if self.files.0 == q && !self.files.1.is_empty() {
@@ -1162,6 +1207,37 @@ impl App {
                     })
                     .collect();
                 self.sorted(v, "Processes")
+            }
+            View::CalcHistory => {
+                let now = now_secs();
+                let v: Vec<(i64, Item)> = self
+                    .calc_history
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, e)| {
+                        self.matches(&q, &e.question, &e.display).map(|sc| {
+                            (
+                                sc,
+                                Item {
+                                    id: format!("calc:{i}"),
+                                    title: e.display.clone(),
+                                    subtitle: e.question.clone(),
+                                    icon: Icon::Glyph("=", [120, 120, 130]),
+                                    accessory: services::ago(now - e.at),
+                                    keywords: vec![],
+                                    kind: Kind::Calc(ferrocast_core::calc::CalcResult {
+                                        question: e.question.clone(),
+                                        value: e.value,
+                                        unit: e.unit.clone(),
+                                        display: e.display.clone(),
+                                        raw: e.raw.clone(),
+                                    }),
+                                },
+                            )
+                        })
+                    })
+                    .collect();
+                self.sorted(v, "History")
             }
             View::Timers => {
                 let now = Instant::now();
@@ -1293,6 +1369,12 @@ impl App {
             }
             Kind::Calc(r) => {
                 a.push(Action::new("Copy Answer", Act::CopyText(r.raw.clone())));
+                if matches!(self.view(), View::CalcHistory) {
+                    if let Some(i) = item.id.strip_prefix("calc:").and_then(|n| n.parse().ok()) {
+                        a.push(Action::new("Delete Entry", Act::DeleteCalcEntry(i)).key(CTRL, Key::X).danger());
+                    }
+                    a.push(Action::new("Clear History", Act::ClearCalcHistory).danger());
+                }
                 a.push(Action::new("Paste Answer to Active App", Act::PasteText(r.raw.clone())).key(CMD, Key::Enter));
                 a.push(
                     Action::new("Copy Question and Answer", Act::CopyText(format!("{} = {}", r.question, r.display)))
@@ -1507,8 +1589,9 @@ impl App {
                 }
             }
             Kind::Calc(r) => {
-                let t = r.raw.clone();
-                self.copy_text(&t)
+                let r = r.clone();
+                self.remember_calc(&r);
+                self.copy_text(&r.raw)
             }
             Kind::Color(c) => {
                 self.push(View::Colors(*c));
@@ -1531,6 +1614,7 @@ impl App {
             Kind::Clip(id) => self.perform(Act::ClipPaste(id.clone()), true),
             Kind::Emoji(e) => {
                 let e = e.to_string();
+                self.remember_emoji(&e);
                 self.paste_text(&e)
             }
             Kind::Note(id) => {
@@ -1556,6 +1640,37 @@ impl App {
                 self.cancel_timer(i);
             }
         }
+    }
+
+    /// Keep the last 100 distinct calculations, newest first.
+    fn remember_calc(&mut self, r: &ferrocast_core::calc::CalcResult) {
+        if matches!(self.view(), View::CalcHistory) {
+            return;
+        }
+        self.calc_history.retain(|e| e.question != r.question);
+        self.calc_history.insert(
+            0,
+            ferrocast_core::models::CalcEntry {
+                question: r.question.clone(),
+                display: r.display.clone(),
+                raw: r.raw.clone(),
+                value: r.value,
+                unit: r.unit.clone(),
+                at: now_secs(),
+            },
+        );
+        self.calc_history.truncate(100);
+        let v = self.calc_history.clone();
+        self.persist("calc-history.json", &v);
+    }
+
+    /// Up to 16 recently used emoji, newest first.
+    fn remember_emoji(&mut self, e: &str) {
+        self.recent_emoji.retain(|x| x != e);
+        self.recent_emoji.insert(0, e.to_string());
+        self.recent_emoji.truncate(16);
+        let v = self.recent_emoji.clone();
+        self.persist("recent-emoji.json", &v);
     }
 
     /// Ask Homebrew whether a newer formula is available; the answer arrives as a toast.
@@ -1707,6 +1822,7 @@ impl App {
             Builtin::KillProcess => self.push(View::Processes),
             Builtin::Timers => self.push(View::Timers),
             Builtin::CheckUpdates => self.check_updates(),
+            Builtin::CalcHistory => self.push(View::CalcHistory),
             Builtin::SearchNotes => self.push(View::Notes),
             Builtin::CreateNote => self.new_note(),
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
@@ -1955,6 +2071,19 @@ impl App {
             }
             Act::KillProcess(pid, force) => self.kill_process(pid, force),
             Act::CancelTimer(i) => self.cancel_timer(i),
+            Act::ClearCalcHistory => {
+                self.calc_history.clear();
+                let v = self.calc_history.clone();
+                self.persist("calc-history.json", &v);
+                self.toast("History cleared");
+            }
+            Act::DeleteCalcEntry(i) => {
+                if i < self.calc_history.len() {
+                    self.calc_history.remove(i);
+                    let v = self.calc_history.clone();
+                    self.persist("calc-history.json", &v);
+                }
+            }
             Act::QuickLook(p) => {
                 // qlmanage shows the system Quick Look panel; it exits when the panel closes.
                 let _ = std::process::Command::new("/usr/bin/qlmanage")

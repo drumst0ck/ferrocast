@@ -9,6 +9,8 @@ First public build.
 - Timers: `timer 10m`, `pomodoro`, `set a timer for 1h 30m`; notification and sound when done; Timers view with cancel.
 - System commands: Toggle Wi-Fi and Toggle Keep Awake (caffeinate).
 - Quick Look for files (⌘Y) and Check for Updates through Homebrew.
+- Calculator History (last 100 results, delete one or clear), recently used emoji, and a “Look up in Dictionary” fallback.
+- Footer shows the app icon and a pulsing “Searching files” indicator while Spotlight answers.
 - Design: San Francisco as the UI font, brand accent, sliding selection, action-panel pop-in, launcher fade-in.
 - Speed: the result list is cached across frames; release builds use fat LTO.
 
