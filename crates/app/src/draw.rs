@@ -93,6 +93,11 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
     static FRAME: AtomicU32 = AtomicU32::new(0);
     let Ok(path) = std::env::var("FERROCAST_SCREENSHOT") else { return };
     let n = FRAME.fetch_add(1, Ordering::Relaxed);
+    if n == 0 && std::env::var_os("FERROCAST_PROFILE").is_some() {
+        if let Some(t0) = crate::STARTED.get() {
+            eprintln!("first frame after {:?}", t0.elapsed());
+        }
+    }
     if n == 2 {
         match std::env::var("FERROCAST_VIEW").as_deref() {
             Ok("clipboard") => app.push(View::Clipboard),
@@ -583,6 +588,8 @@ impl App {
         }
         let keys = self.read_keys(&ctx);
         let shape = self.view().shape();
+        let q_now = self.query.clone();
+        self.ensure_wide_font(&q_now);
         ctx.data_mut(|d| d.insert_temp(Id::new("sel_salt"), self.stack.len()));
         let sections = if shape == Shape::List { self.sections_cached() } else { vec![] };
         let total: usize = sections.iter().map(|s| s.items.len()).sum();

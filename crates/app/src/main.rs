@@ -5,7 +5,11 @@ mod items;
 mod services;
 mod ui;
 
+/// Process start, for the FERROCAST_PROFILE first-frame measurement.
+pub static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 fn main() -> eframe::Result {
+    let _ = STARTED.set(std::time::Instant::now());
     let data_dir = ferrocast_core::storage::Store::default_location().root;
     // Two copies would fight over the global hotkey and the clipboard history.
     let Some(_instance_lock) = instance::acquire(&data_dir) else {

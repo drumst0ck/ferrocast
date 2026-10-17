@@ -55,6 +55,7 @@ fn fixture() -> App {
         calc_history: vec![],
         recent_emoji: vec![],
         app_icon: None,
+        wide_font: false,
         runs: HashMap::new(),
         next_run: 1,
         inline: HashMap::new(),

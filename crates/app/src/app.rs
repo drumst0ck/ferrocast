@@ -214,6 +214,8 @@ pub struct App {
     recent_emoji: Vec<String>,
     /// The app icon, decoded once for the footer.
     app_icon: Option<egui::TextureHandle>,
+    /// Whether the 22 MB Unicode fallback font has been loaded.
+    wide_font: bool,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
     inline: HashMap<PathBuf, (String, Instant)>,
@@ -230,11 +232,11 @@ pub struct App {
     sec_dirty: bool,
 }
 
-fn load_fonts(ctx: &Context) {
+/// San Francisco (the system face) first, Apple Symbols for ⌘⌥⇧ glyphs. Arial Unicode, the
+/// 22 MB fallback for scripts San Francisco lacks (CJK, Arabic, Hebrew, Thai…), costs about
+/// 40 MB of memory, so it is only added once such text actually shows up (see `App::ensure_wide_font`).
+fn load_fonts(ctx: &Context, wide: bool) {
     let mut fonts = egui::FontDefinitions::default();
-    // San Francisco, the system face, as the primary UI font so the launcher matches macOS and
-    // the website. The variable font renders at its default (Regular) instance; egui's bundled
-    // face stays as the fallback when the file is missing or unreadable.
     if let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNS.ttf") {
         fonts.font_data.insert("sf-pro".into(), Arc::new(egui::FontData::from_owned(bytes)));
         fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "sf-pro".into());
@@ -243,10 +245,11 @@ fn load_fonts(ctx: &Context) {
         fonts.font_data.insert("sf-mono".into(), Arc::new(egui::FontData::from_owned(bytes)));
         fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "sf-mono".into());
     }
-    for (name, path) in [
-        ("apple-symbols", "/System/Library/Fonts/Apple Symbols.ttf"),
-        ("arial-unicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
-    ] {
+    let mut extra = vec![("apple-symbols", "/System/Library/Fonts/Apple Symbols.ttf")];
+    if wide {
+        extra.push(("arial-unicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"));
+    }
+    for (name, path) in extra {
         if let Ok(bytes) = std::fs::read(path) {
             fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
             for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
@@ -257,10 +260,18 @@ fn load_fonts(ctx: &Context) {
     ctx.set_fonts(fonts);
 }
 
+/// Scripts outside what San Francisco and Apple Symbols cover.
+pub(crate) fn needs_wide_font(text: &str) -> bool {
+    text.chars().any(|c| {
+        let u = c as u32;
+        (0x0590..0x2000).contains(&u) || (0x2E80..0x1F000).contains(&u)
+    })
+}
+
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, hidden: bool) -> App {
         let ctx = cc.egui_ctx.clone();
-        load_fonts(&ctx);
+        load_fonts(&ctx, false);
         let store = Store::default_location();
         let calc_history = store.load("calc-history.json");
         let recent_emoji = store.load("recent-emoji.json");
@@ -334,6 +345,7 @@ impl App {
             calc_history,
             recent_emoji,
             app_icon: None,
+            wide_font: false,
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -443,6 +455,14 @@ impl App {
     }
 
     /// Rebuild the cached list of root-searchable items.
+    /// Load the Unicode fallback font the first time non-Latin text needs it.
+    pub(crate) fn ensure_wide_font(&mut self, text: &str) {
+        if !self.wide_font && needs_wide_font(text) {
+            self.wide_font = true;
+            load_fonts(&self.ctx, true);
+        }
+    }
+
     fn rebuild(&mut self) {
         self.sec_dirty = true;
         let mut v = vec![];
@@ -1008,6 +1028,10 @@ impl App {
             }
         }
         let v = self.sections();
+        if !self.wide_font && v.iter().flat_map(|s| s.items.iter()).any(|i| needs_wide_font(&i.title) || needs_wide_font(&i.subtitle)) {
+            self.wide_font = true;
+            load_fonts(&self.ctx, true);
+        }
         self.sec_cache = Some((key, v.clone()));
         self.sec_dirty = false;
         v
