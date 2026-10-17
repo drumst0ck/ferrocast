@@ -12,7 +12,7 @@ First public build.
 - Calculator History (last 100 results, delete one or clear), recently used emoji, and a “Look up in Dictionary” fallback.
 - Footer shows the app icon and a pulsing “Searching files” indicator while Spotlight answers.
 - Design: San Francisco as the UI font, brand accent, sliding selection, action-panel pop-in, launcher fade-in.
-- Speed: the result list is cached across frames; release builds use fat LTO; the 22 MB Unicode fallback font loads only when non-Latin text appears (about 40 MB less memory at idle, 146 MB in one process on an M3).
+- Speed: icon decoding on the main thread is capped at 4 ms per frame (an emoji takes 5–30 ms to render), app icons are fetched on a background thread before the list asks for them, and rows scrolled out of view are no longer painted or fetched (the emoji list went from 80 icon loads to 7). Hotkey to drawn frame measures about 2 ms, a keystroke to new results 0.1–0.3 ms. The result list is cached across frames; release builds use fat LTO; the 22 MB Unicode fallback font loads only when non-Latin text appears (about 40 MB less memory at idle, 146 MB in one process on an M3).
 
 ### Fixed
 - Calculator: `200 * 10%`, `pi/2`, `2 x 3`, `1,000 * 2`, small currency amounts (`1 jpy in usd`).

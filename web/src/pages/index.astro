@@ -6,7 +6,7 @@ const repo = 'https://github.com/drumst0ck/ferrocast';
 // Measured on the maintainer's Mac; see the method note in the Measured section. Update together.
 const bench = {
   date: '2026-10-17', mac: 'MacBook with Apple M3, macOS 27', raycastVersion: '2.8.1',
-  ferro: { disk: '8.5 MB', mem: '146 MB', procs: '1', start: 'about 160 ms' },
+  ferro: { disk: '8.5 MB', mem: '145 MB', procs: '1', start: 'about 150 ms' },
   ray: { disk: '242 MB', mem: '154 MB', procs: '4', start: 'not measured' },
 };
 const compare = [
@@ -147,16 +147,18 @@ open dist/Ferrocast.app`;
     <section class="bench wrap" id="speed" aria-labelledby="h-bench">
       <div class="why-head" data-reveal>
         <h2 id="h-bench">Measured, not promised</h2>
-        <p>We measured both apps on the same Mac, in the same minute, with the same commands. The honest summary: on disk Ferrocast is a rounding error next to Raycast, in memory they are about the same, and Ferrocast draws its first frame in under a fifth of a second. Raycast does far more than we do, and its extension runtime is part of what you see below, so read this as what you pay for what you get, not as a scoreboard.</p>
+        <p>We measured both apps on the same Mac, in the same minute, with the same commands. The honest summary: on disk Ferrocast is a rounding error next to Raycast, in memory they are about the same, Ferrocast draws its first frame in under a fifth of a second, and once it is running the launcher answers a hotkey in about two milliseconds. Raycast does far more than we do, and its extension runtime is part of what you see below, so read this as what you pay for what you get, not as a scoreboard.</p>
       </div>
       <div class="cmp" role="table" aria-label="Footprint measured on the same Mac">
         <div class="cmp-row cmp-head" role="row"><span role="columnheader"></span><span role="columnheader">Ferrocast</span><span role="columnheader">Raycast {bench.raycastVersion}</span></div>
         <div class="cmp-row" role="row" data-reveal><span role="rowheader">App on disk</span><span role="cell"><b>{bench.ferro.disk}</b></span><span role="cell" class="muted">{bench.ray.disk}</span></div>
         <div class="cmp-row" role="row" data-reveal style="transition-delay:40ms"><span role="rowheader">Memory at idle</span><span role="cell"><b>{bench.ferro.mem}</b></span><span role="cell" class="muted">{bench.ray.mem}</span></div>
         <div class="cmp-row" role="row" data-reveal style="transition-delay:80ms"><span role="rowheader">Processes</span><span role="cell"><b>{bench.ferro.procs}</b></span><span role="cell" class="muted">{bench.ray.procs}</span></div>
-        <div class="cmp-row" role="row" data-reveal style="transition-delay:120ms"><span role="rowheader">Cold start to first frame</span><span role="cell"><b>{bench.ferro.start}</b></span><span role="cell" class="muted">{bench.ray.start}</span></div>
+        <div class="cmp-row" role="row" data-reveal style="transition-delay:120ms"><span role="rowheader">Hotkey to drawn frame</span><span role="cell"><b>about 2 ms</b></span><span role="cell" class="muted">not measured</span></div>
+        <div class="cmp-row" role="row" data-reveal style="transition-delay:160ms"><span role="rowheader">Keystroke to new results</span><span role="cell"><b>0.1 to 0.3 ms</b></span><span role="cell" class="muted">not measured</span></div>
+        <div class="cmp-row" role="row" data-reveal style="transition-delay:200ms"><span role="rowheader">Cold start to first frame</span><span role="cell"><b>{bench.ferro.start}</b></span><span role="cell" class="muted">{bench.ray.start}</span></div>
       </div>
-      <p class="fine" data-reveal>Method: {bench.mac}, {bench.date}. Disk is <code>du -sh</code> of the app bundle. Memory is resident size from <code>ps -axo rss</code>, summed over every process the app runs, with both apps idle and their windows shown. Cold start is the time from process launch to the first rendered frame, measured inside Ferrocast over five launches (139 to 195 ms); we had no fair way to measure it for Raycast from the outside, so we left it blank rather than guess. Your numbers will differ.</p>
+      <p class="fine" data-reveal>Method: {bench.mac}, {bench.date}. Disk is <code>du -sh</code> of the app bundle. Memory is resident size from <code>ps -axo rss</code>, summed over every process the app runs, with both apps idle and their windows shown. Hotkey to frame is the time from the show call to the next frame the app draws (1.6 to 2.6 ms; the display adds its own refresh on top). Keystroke to results is how long the list takes to recompute for queries like “100 usd in eur”. Cold start is process launch to first rendered frame over five launches (136 to 167 ms), almost all of it macOS creating the window. None of these could be measured for Raycast fairly from the outside, so those cells stay blank rather than guessed. Your numbers will differ.</p>
     </section>
 
     <section class="feat wrap" id="features" aria-labelledby="h-feat">

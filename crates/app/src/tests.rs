@@ -56,6 +56,7 @@ fn fixture() -> App {
         recent_emoji: vec![],
         app_icon: None,
         wide_font: false,
+        show_t: None,
         runs: HashMap::new(),
         next_run: 1,
         inline: HashMap::new(),

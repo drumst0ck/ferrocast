@@ -82,6 +82,11 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut Ui, _f: &mut eframe::Frame) {
+        if let Some(t) = self.show_t.take() {
+            if std::env::var_os("FERROCAST_PROFILE").is_some() {
+                eprintln!("show -> frame {:?}", t.elapsed());
+            }
+        }
         self.draw(ui);
     }
 }
@@ -842,6 +847,12 @@ impl App {
                         }
                         if resp.double_clicked() {
                             double = Some(idx);
+                        }
+                        // Rows scrolled out of view still take part in layout and selection, but
+                        // painting them (and fetching their icons) would be wasted work.
+                        if !ui.is_rect_visible(r) {
+                            idx += 1;
+                            continue;
                         }
                         if is_calc {
                             // Calculator card: question on the left, big answer on the right.

@@ -216,6 +216,8 @@ pub struct App {
     app_icon: Option<egui::TextureHandle>,
     /// Whether the 22 MB Unicode fallback font has been loaded.
     wide_font: bool,
+    /// Set by show(); cleared by the first frame drawn afterwards (FERROCAST_PROFILE).
+    pub(crate) show_t: Option<Instant>,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
     inline: HashMap<PathBuf, (String, Instant)>,
@@ -271,11 +273,21 @@ pub(crate) fn needs_wide_font(text: &str) -> bool {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, hidden: bool) -> App {
         let ctx = cc.egui_ctx.clone();
+        let prof = std::env::var_os("FERROCAST_PROFILE").is_some();
+        let t = Instant::now();
         load_fonts(&ctx, false);
+        if prof {
+            eprintln!("fonts {:?}", t.elapsed());
+        }
+        let t = Instant::now();
         let store = Store::default_location();
         let calc_history = store.load("calc-history.json");
         let recent_emoji = store.load("recent-emoji.json");
         let data = store.load_all();
+        if prof {
+            eprintln!("data {:?}", t.elapsed());
+        }
+        let t = Instant::now();
         let (tx, rx) = std::sync::mpsc::channel();
         let bus = Bus { tx, ctx: ctx.clone() };
         services::ensure_scripts_dir(&store);
@@ -290,6 +302,10 @@ impl App {
         });
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_expansion(shared.clone());
+        if prof {
+            eprintln!("services {:?}", t.elapsed());
+        }
+        let t = Instant::now();
         let mut hotkeys = Hotkeys::new(bus.clone());
         let mut toast = None;
         if let Some(h) = hotkeys.as_mut() {
@@ -300,7 +316,17 @@ impl App {
         }
         let tray = if data.settings.show_menu_bar_icon { services::make_tray(bus.clone()) } else { None };
         let b2 = bus.clone();
-        std::thread::spawn(move || b2.send(Msg::Apps(apps::list_apps())));
+        if prof {
+            eprintln!("hotkeys {:?}", t.elapsed());
+        }
+        std::thread::spawn(move || {
+            let t = Instant::now();
+            let a = apps::list_apps();
+            if std::env::var_os("FERROCAST_PROFILE").is_some() {
+                eprintln!("apps scan {:?} ({} apps)", t.elapsed(), a.len());
+            }
+            b2.send(Msg::Apps(a))
+        });
         let store_rates: ferrocast_core::currency::Rates = store.load("rates.json");
         if store_rates.is_stale(now_secs()) {
             services::refresh_rates(bus.clone());
@@ -346,6 +372,7 @@ impl App {
             recent_emoji,
             app_icon: None,
             wide_font: false,
+            show_t: None,
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -553,6 +580,7 @@ impl App {
         self.visible = true;
         self.had_focus = false;
         self.shown_at = Instant::now();
+        self.show_t = Some(Instant::now());
         self.panel = None;
         self.shared.visible.store(true, Ordering::Relaxed);
         if let Some(p) = launcher_origin() {
@@ -667,6 +695,11 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::IconBytes(k, b) => {
+                    if !self.icons.map.contains_key(&k) {
+                        self.icons.prefetched.insert(k, b);
+                    }
+                }
                 Msg::AiChunk { run, text } => {
                     for v in self.stack.iter_mut() {
                         if let View::Ai { answer, run: r, .. } = v {
@@ -1027,10 +1060,31 @@ impl App {
                 }
             }
         }
+        let t0 = Instant::now();
         let v = self.sections();
+        if std::env::var_os("FERROCAST_PROFILE").is_some() {
+            eprintln!("sections {:?} q={:?}", t0.elapsed(), self.query);
+        }
         if !self.wide_font && v.iter().flat_map(|s| s.items.iter()).any(|i| needs_wide_font(&i.title) || needs_wide_font(&i.subtitle)) {
             self.wide_font = true;
             load_fonts(&self.ctx, true);
+        }
+        // Fetch the icons this list will show before the painter asks for them.
+        let want: Vec<String> = v
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .filter_map(|i| match &i.icon {
+                Icon::App(p) => {
+                    let k = format!("app:{p}");
+                    (!self.icons.map.contains_key(&k) && !self.icons.prefetched.contains_key(&k) && self.icons.inflight.insert(k))
+                        .then(|| p.clone())
+                }
+                _ => None,
+            })
+            .take(40)
+            .collect();
+        if !want.is_empty() {
+            services::prefetch_app_icons(want, self.bus.clone());
         }
         self.sec_cache = Some((key, v.clone()));
         self.sec_dirty = false;

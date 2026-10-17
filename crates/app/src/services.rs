@@ -19,12 +19,24 @@ pub enum Msg {
     Tray(String),
     Apps(Vec<AppInfo>),
     Files(String, Vec<PathBuf>),
-    Script { run: u64, text: String, code: i32 },
+    Script {
+        run: u64,
+        text: String,
+        code: i32,
+    },
     Toast(String),
     Rates(ferrocast_core::currency::Rates),
     ImportFile(PathBuf),
-    AiChunk { run: u64, text: String },
-    AiDone { run: u64, error: Option<String> },
+    AiChunk {
+        run: u64,
+        text: String,
+    },
+    AiDone {
+        run: u64,
+        error: Option<String>,
+    },
+    /// Icon PNG bytes fetched in the background for the first screen.
+    IconBytes(String, Vec<u8>),
     Wake,
 }
 
@@ -60,6 +72,21 @@ pub fn ago(secs: i64) -> String {
         s if s < 86400 => format!("{} h ago", s / 3600),
         s => format!("{} d ago", s / 86400),
     }
+}
+
+/// Fetch icon PNGs for app paths off the main thread so the first screen paints complete.
+pub fn prefetch_app_icons(paths: Vec<String>, bus: Bus) {
+    if std::env::var_os("FERROCAST_NO_PREFETCH").is_some() {
+        return;
+    }
+    std::thread::spawn(move || {
+        for p in paths {
+            if let Some(b) = ferrocast_macos::files::icon_png(&p, 64.0) {
+                bus.tx.send(Msg::IconBytes(format!("app:{p}"), b)).ok();
+            }
+        }
+        bus.ctx.request_repaint();
+    });
 }
 
 pub fn now_secs() -> i64 {
