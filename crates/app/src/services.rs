@@ -801,6 +801,105 @@ pub fn chatgpt_sign_in(bus: Bus) {
     });
 }
 
+/// A long-lived `claude -p --input-format stream-json` process. Starting the CLI costs several
+/// seconds; keeping it alive turns every later question into model latency only, and the CLI
+/// keeps the conversation context itself.
+pub struct ClaudeSession {
+    stdin: Mutex<Option<std::process::ChildStdin>>,
+    child: Mutex<std::process::Child>,
+    /// Run id of the question being answered, read by the output thread.
+    current: Arc<Mutex<Option<u64>>>,
+}
+
+impl ClaudeSession {
+    /// Spawn the CLI and the thread that forwards its stream to the bus. Returns quickly; the
+    /// process boots in the background.
+    pub fn start(settings: &Settings, bus: Bus) -> Result<Arc<ClaudeSession>, String> {
+        use ferrocast_core::ai::{self, Sse};
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+        let exe =
+            claude_code_path().ok_or("Claude Code is not installed. Install it from claude.ai/code and run `claude` once to sign in.")?;
+        let mut cmd = Command::new(exe);
+        cmd.args([
+            "-p",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "--verbose",
+            "--no-session-persistence",
+            "--strict-mcp-config",
+            "--system-prompt",
+            ai::SYSTEM_PROMPT,
+            "--tools",
+            "",
+        ]);
+        if !settings.anthropic_model.trim().is_empty() {
+            cmd.args(["--model", settings.anthropic_model.trim()]);
+        }
+        let mut child = cmd
+            .current_dir(std::env::temp_dir())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Could not start Claude Code: {e}"))?;
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().ok_or("no stdout")?;
+        let current: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+        let cur = current.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                let run = *cur.lock().unwrap();
+                match ai::parse_claude_code_line(&line) {
+                    Sse::Delta(t) => {
+                        if let Some(run) = run {
+                            bus.send(Msg::AiChunk { run, text: t });
+                        }
+                    }
+                    Sse::Done => {
+                        if let Some(run) = cur.lock().unwrap().take() {
+                            bus.send(Msg::AiDone { run, error: None });
+                        }
+                    }
+                    Sse::Error(e) => {
+                        if let Some(run) = cur.lock().unwrap().take() {
+                            bus.send(Msg::AiDone { run, error: Some(e) });
+                        }
+                    }
+                    Sse::Ignore => {}
+                }
+            }
+            // The process ended: fail whatever was in flight so the UI does not spin forever.
+            if let Some(run) = cur.lock().unwrap().take() {
+                bus.send(Msg::AiDone { run, error: Some("Claude Code exited. Ask again to start a new session.".into()) });
+            }
+        });
+        Ok(Arc::new(ClaudeSession { stdin: Mutex::new(stdin), child: Mutex::new(child), current }))
+    }
+
+    /// Send one user turn; the answer streams back through the bus under `run`.
+    pub fn ask(&self, run: u64, question: &str) -> Result<(), String> {
+        use std::io::Write;
+        *self.current.lock().unwrap() = Some(run);
+        let msg = serde_json::json!({"type": "user", "message": {"role": "user", "content": question}}).to_string() + "\n";
+        let mut g = self.stdin.lock().unwrap();
+        let w = g.as_mut().ok_or("Claude Code session is closed")?;
+        w.write_all(msg.as_bytes()).and_then(|_| w.flush()).map_err(|e| format!("Could not talk to Claude Code: {e}"))
+    }
+
+    pub fn is_alive(&self) -> bool {
+        matches!(self.child.lock().unwrap().try_wait(), Ok(None))
+    }
+
+    pub fn kill(&self) {
+        *self.stdin.lock().unwrap() = None; // closing stdin lets the CLI exit cleanly
+        let _ = self.child.lock().unwrap().kill();
+    }
+}
+
 /// Path of the Claude Code CLI, if installed.
 pub fn claude_code_path() -> Option<PathBuf> {
     let home = dirs::home_dir().unwrap_or_default();
@@ -1115,6 +1214,40 @@ mod backup_tests {
 #[cfg(test)]
 mod ai_tests {
     use super::*;
+
+    /// Warm session: two questions through one process. cargo test -p ferrocast claude_session_live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn claude_session_live() {
+        let ctx = egui::Context::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let bus = Bus { tx, ctx };
+        let settings = Settings { ai_provider: AiProvider::ClaudeCode, ..Default::default() };
+        let s = ClaudeSession::start(&settings, bus).unwrap();
+        let answer = |run: u64, q: &str| {
+            let t = std::time::Instant::now();
+            s.ask(run, q).unwrap();
+            let mut text = String::new();
+            loop {
+                match rx.recv_timeout(Duration::from_secs(60)).expect("answer in time") {
+                    Msg::AiChunk { run: r, text: t2 } if r == run => text.push_str(&t2),
+                    Msg::AiDone { run: r, error } if r == run => {
+                        assert!(error.is_none(), "{error:?}");
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            println!("run {run}: {:?} in {:?}", text, t.elapsed());
+            (text, t.elapsed())
+        };
+        let (a, t1) = answer(1, "Reply with exactly the word: ping");
+        let (b, t2) = answer(2, "Now reply with exactly the word you said before, in uppercase.");
+        assert!(a.to_lowercase().contains("ping"));
+        assert!(b.contains("PING"), "{b}");
+        assert!(t2 < t1, "second turn should skip the CLI boot: {t1:?} vs {t2:?}");
+        s.kill();
+    }
 
     /// Talks to the real Claude Code CLI; run by hand: cargo test -p ferrocast claude_code_live -- --ignored --nocapture
     #[test]

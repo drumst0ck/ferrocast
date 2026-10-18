@@ -218,6 +218,8 @@ pub struct App {
     wide_font: bool,
     /// Set by show(); cleared by the first frame drawn afterwards (FERROCAST_PROFILE).
     pub(crate) show_t: Option<Instant>,
+    /// Warm Claude Code process while Ask AI is open (ClaudeCode provider only).
+    claude: Option<std::sync::Arc<services::ClaudeSession>>,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
     inline: HashMap<PathBuf, (String, Instant)>,
@@ -404,6 +406,7 @@ impl App {
             app_icon: None,
             wide_font: false,
             show_t: None,
+            claude: None,
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -492,7 +495,42 @@ impl App {
             }
             _ => return,
         };
+        if self.settings.ai_provider == ferrocast_core::models::AiProvider::ClaudeCode {
+            // The warm session already holds the conversation; send only the new turn.
+            if self.claude.as_ref().is_none_or(|c| !c.is_alive()) {
+                match services::ClaudeSession::start(&self.settings, self.bus.clone()) {
+                    Ok(c) => self.claude = Some(c),
+                    Err(e) => {
+                        self.bus.send(Msg::AiDone { run, error: Some(e) });
+                        return;
+                    }
+                }
+            }
+            if let Err(e) = self.claude.as_ref().unwrap().ask(run, &question) {
+                self.bus.send(Msg::AiDone { run, error: Some(e) });
+            }
+            return;
+        }
         services::ask_ai(&self.settings, history, question, run, self.bus.clone());
+    }
+
+    /// Start Claude Code in the background so the first answer does not pay its boot time.
+    fn warm_claude(&mut self) {
+        if self.settings.ai_provider == ferrocast_core::models::AiProvider::ClaudeCode && self.claude.as_ref().is_none_or(|c| !c.is_alive())
+        {
+            if let Ok(c) = services::ClaudeSession::start(&self.settings, self.bus.clone()) {
+                self.claude = Some(c);
+            }
+        }
+    }
+
+    /// Drop the warm session once Ask AI is no longer on the stack.
+    fn cool_claude(&mut self) {
+        if !self.stack.iter().any(|v| matches!(v, View::Ai { .. })) {
+            if let Some(c) = self.claude.take() {
+                c.kill();
+            }
+        }
     }
 
     fn save_notes(&mut self) {
@@ -681,6 +719,9 @@ impl App {
         if matches!(v, View::Processes) {
             self.proc_cache = ferrocast_macos::process::list();
         }
+        if matches!(v, View::Ai { .. }) {
+            self.warm_claude();
+        }
         self.stack.push(v);
         self.query.clear();
         self.prev_query.clear();
@@ -699,6 +740,7 @@ impl App {
             self.selected = 0;
             self.scroll_to_sel = true;
             self.panel = None;
+            self.cool_claude();
         } else {
             self.hide();
         }
@@ -711,6 +753,7 @@ impl App {
         self.selected = 0;
         self.scroll_to_sel = true;
         self.panel = None;
+        self.cool_claude();
     }
 
     // ------------------------------------------------------------- messages

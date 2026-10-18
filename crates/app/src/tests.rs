@@ -57,6 +57,7 @@ fn fixture() -> App {
         app_icon: None,
         wide_font: false,
         show_t: None,
+        claude: None,
         runs: HashMap::new(),
         next_run: 1,
         inline: HashMap::new(),
