@@ -1177,6 +1177,48 @@ impl App {
                         P::ClaudeCode => "Claude Code".to_string(),
                     }
                 };
+                // Providers the chat can switch to right now: configured, signed in or installed.
+                // The Keychain checks cost a few ms each, so they are refreshed every 10 s at most.
+                let active: Vec<(ferrocast_core::models::AiProvider, &'static str)> = {
+                    use ferrocast_core::models::AiProvider as P;
+                    let id = Id::new("ai_active");
+                    let now = ui.ctx().input(|i| i.time);
+                    let cached: Option<(f64, Vec<u8>)> = ui.ctx().data(|d| d.get_temp(id));
+                    let flags: Vec<u8> = match cached {
+                        Some((t, f)) if now - t < 10.0 => f,
+                        _ => {
+                            let f = vec![
+                                1u8,
+                                services::chatgpt_credentials().is_some() as u8,
+                                services::ai_key_for(P::Anthropic).is_some() as u8,
+                                services::claude_code_path().is_some() as u8,
+                            ];
+                            ui.ctx().data_mut(|d| d.insert_temp(id, (now, f.clone())));
+                            f
+                        }
+                    };
+                    [
+                        (P::OpenAiCompatible, "OpenAI-compatible"),
+                        (P::ChatGpt, "ChatGPT"),
+                        (P::Anthropic, "Anthropic"),
+                        (P::ClaudeCode, "Claude Code"),
+                    ]
+                    .into_iter()
+                    .zip(flags)
+                    .filter_map(|(p, on)| (on == 1).then_some(p))
+                    .collect()
+                };
+                let models_key = services::models_key(&self.settings);
+                let models_state = self.ai_models.get(&models_key).cloned();
+                let cur_provider = self.settings.ai_provider;
+                let cur_model = match cur_provider {
+                    ferrocast_core::models::AiProvider::OpenAiCompatible => self.settings.ai_model.clone(),
+                    ferrocast_core::models::AiProvider::ChatGpt => self.settings.chatgpt_model.clone(),
+                    _ => self.settings.anthropic_model.clone(),
+                };
+                let mut pick_provider: Option<ferrocast_core::models::AiProvider> = None;
+                let mut pick_model: Option<String> = None;
+                let mut want_models = false;
                 let mut open_url: Option<String> = None;
                 // The match below borrows the view stack mutably; take the icon cache out so these
                 // screens can still draw cached symbols.
@@ -1264,12 +1306,52 @@ impl App {
                                     }
                                 });
                                 ui.add_space(8.0);
-                                let (r, _) = ui.allocate_exact_size(Vec2::new(chip_w, 34.0), Sense::hover());
+                                let (r, resp) = ui.allocate_exact_size(Vec2::new(chip_w, 34.0), Sense::click());
                                 let p = ui.painter();
-                                p.rect_filled(r, 10.0, pal.field);
+                                p.rect_filled(r, 10.0, if resp.hovered() { pal.sel } else { pal.field });
                                 let g = p.layout_no_wrap(provider_label.clone(), FontId::proportional(11.5), pal.sub);
-                                let shown = if g.size().x > chip_w - 20.0 { elide(p, &provider_label, FontId::proportional(11.5), chip_w - 20.0) } else { provider_label.clone() };
-                                p.text(r.center(), Align2::CENTER_CENTER, shown, FontId::proportional(11.5), pal.sub);
+                                let shown = if g.size().x > chip_w - 34.0 { elide(p, &provider_label, FontId::proportional(11.5), chip_w - 34.0) } else { provider_label.clone() };
+                                p.text(Pos2::new(r.min.x + 12.0, r.center().y), Align2::LEFT_CENTER, shown, FontId::proportional(11.5), pal.text);
+                                p.text(Pos2::new(r.max.x - 12.0, r.center().y), Align2::RIGHT_CENTER, "⌄", FontId::proportional(12.0), pal.sub);
+                                let mut menu = egui::Popup::menu(&resp);
+                                if std::env::var_os("FERROCAST_AI_MENU").is_some() {
+                                    menu = menu.open(true); // dev aid for screenshots
+                                }
+                                menu.show(|ui| {
+                                    ui.set_min_width(260.0);
+                                    ui.label(RichText::new("Provider").size(11.5).color(pal.sub));
+                                    for (prov, name) in &active {
+                                        if ui.selectable_label(*prov == cur_provider, *name).clicked() {
+                                            pick_provider = Some(*prov);
+                                            ui.close();
+                                        }
+                                    }
+                                    ui.separator();
+                                    ui.label(RichText::new("Model").size(11.5).color(pal.sub));
+                                    if ui.selectable_label(cur_model.is_empty(), "Default").clicked() {
+                                        pick_model = Some(String::new());
+                                        ui.close();
+                                    }
+                                    match &models_state {
+                                        Some(Some(Ok(list))) => {
+                                            for m in list {
+                                                if ui.selectable_label(cur_model == *m, m).clicked() {
+                                                    pick_model = Some(m.clone());
+                                                    ui.close();
+                                                }
+                                            }
+                                        }
+                                        Some(Some(Err(e))) => {
+                                            ui.label(RichText::new(format!("List unavailable: {e}")).size(11.5).color(pal.sub));
+                                        }
+                                        _ => {
+                                            ui.label(RichText::new("Loading…").size(11.5).color(pal.sub));
+                                            want_models = true;
+                                        }
+                                    }
+                                    ui.separator();
+                                    ui.label(RichText::new("More in Settings → AI (⌘ ,)").size(11.0).color(pal.sub));
+                                });
                             });
                             ui.add_space(6.0);
                             if history.is_empty() && asked.is_empty() {
@@ -1507,6 +1589,39 @@ impl App {
                 });
                 let _ = (set_hotkey, mode_changed);
                 self.icons = icons;
+                if want_models && !self.ai_models.contains_key(&models_key) {
+                    self.ai_models.insert(models_key.clone(), None);
+                    services::fetch_models(&self.settings, self.bus.clone());
+                }
+                if let Some(p) = pick_provider.filter(|p| *p != self.settings.ai_provider) {
+                    self.settings.ai_provider = p;
+                    self.save_settings();
+                    // a different brain: drop the warm Claude session, start one if Claude Code was chosen
+                    if let Some(c) = self.claude.take() {
+                        c.kill();
+                    }
+                    self.warm_claude();
+                    let k = services::models_key(&self.settings);
+                    if let std::collections::hash_map::Entry::Vacant(e) = self.ai_models.entry(k) {
+                        e.insert(None);
+                        services::fetch_models(&self.settings, self.bus.clone());
+                    }
+                }
+                if let Some(m) = pick_model {
+                    use ferrocast_core::models::AiProvider as P;
+                    match self.settings.ai_provider {
+                        P::OpenAiCompatible => self.settings.ai_model = m,
+                        P::ChatGpt => self.settings.chatgpt_model = m,
+                        _ => self.settings.anthropic_model = m,
+                    }
+                    self.save_settings();
+                    if self.settings.ai_provider == P::ClaudeCode {
+                        if let Some(c) = self.claude.take() {
+                            c.kill();
+                        }
+                        self.warm_claude();
+                    }
+                }
                 if let Some(u) = open_url {
                     let _ = std::process::Command::new("/usr/bin/open").arg(&u).status();
                 }
