@@ -1366,7 +1366,7 @@ mod convert_tests {
         let src = d.join("photo.png");
         std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png"), &src).unwrap();
         let t = targets(&src, &Tools::default()).into_iter().find(|t| t.ext == "jpg").unwrap();
-        let (out, err) = run_conversion(&[src.clone()], &t, &Tools::default());
+        let (out, err) = run_conversion(std::slice::from_ref(&src), &t, &Tools::default());
         assert!(err.is_empty(), "{err:?}");
         assert_eq!(out, vec![d.join("photo.jpg")]);
         assert_eq!(&std::fs::read(&out[0]).unwrap()[..3], &[0xFF, 0xD8, 0xFF], "JPEG magic");
