@@ -6,9 +6,10 @@ use egui::{Event, Frame as EFrame, RichText, TextEdit};
 use global_hotkey::hotkey::HotKey;
 use std::str::FromStr;
 
+/// Right-hand pane content: the thing itself plus `(label, value)` facts about it.
 enum Detail {
-    Text(String, String),
-    Image(String, String),
+    Text(String, Vec<(String, String)>),
+    Image(String, Vec<(String, String)>),
 }
 
 impl eframe::App for App {
@@ -546,26 +547,58 @@ impl App {
         match &item.kind {
             Kind::Clip(id) => {
                 let e = self.shared.clipboard.lock().unwrap().iter().find(|e| &e.id == id).cloned()?;
-                let meta = format!(
-                    "{}Copied {} time{}",
-                    e.source_app.as_ref().map(|a| format!("{a} · ")).unwrap_or_default(),
-                    e.times_copied,
-                    if e.times_copied == 1 { "" } else { "s" }
-                );
+                let mut meta = vec![];
+                if let Some(a) = &e.source_app {
+                    meta.push(("Source".to_string(), a.clone()));
+                }
+                meta.push(("Copied".to_string(), services::ago(services::now_secs() - e.copied_at)));
+                meta.push(("Times".to_string(), e.times_copied.to_string()));
                 match e.kind {
-                    ClipKind::Image => Some(Detail::Image(e.content, format!("{meta} · {}×{}", e.width, e.height))),
-                    _ => Some(Detail::Text(e.content.chars().take(6000).collect(), meta)),
+                    ClipKind::Image => {
+                        meta.push(("Size".to_string(), format!("{} × {} px", e.width, e.height)));
+                        Some(Detail::Image(e.content, meta))
+                    }
+                    _ => {
+                        let kind = match e.kind {
+                            ClipKind::Link => "Link",
+                            ClipKind::Color => "Color",
+                            ClipKind::File => "File",
+                            _ => "Text",
+                        };
+                        meta.insert(0, ("Type".to_string(), kind.to_string()));
+                        let chars = e.content.chars().count();
+                        meta.push(("Length".to_string(), format!("{chars} character{}", if chars == 1 { "" } else { "s" })));
+                        if e.pinned {
+                            meta.push(("Pinned".to_string(), "Yes".to_string()));
+                        }
+                        Some(Detail::Text(e.content.chars().take(6000).collect(), meta))
+                    }
                 }
             }
             Kind::Snippet(id) => {
                 let s = self.snippets.iter().find(|s| &s.id == id)?;
-                let kw = if s.keyword.is_empty() { "No keyword".to_string() } else { format!("Keyword {}", s.keyword) };
-                Some(Detail::Text(s.text.clone(), kw))
+                let mut meta = vec![("Keyword".to_string(), if s.keyword.is_empty() { "None".to_string() } else { s.keyword.clone() })];
+                meta.push(("Length".to_string(), format!("{} characters", s.text.chars().count())));
+                if s.text.contains('{') {
+                    meta.push(("Placeholders".to_string(), "Yes".to_string()));
+                }
+                Some(Detail::Text(s.text.clone(), meta))
             }
-            Kind::Note(id) => {
-                self.notes.iter().find(|n| &n.id == id).map(|n| Detail::Text(n.text.chars().take(6000).collect(), String::new()))
-            }
-            Kind::Quicklink { id, .. } => self.quicklinks.iter().find(|q| &q.id == id).map(|q| Detail::Text(q.link.clone(), "Link".into())),
+            Kind::Note(id) => self.notes.iter().find(|n| &n.id == id).map(|n| {
+                Detail::Text(
+                    n.text.chars().take(6000).collect(),
+                    vec![("Length".to_string(), format!("{} characters", n.text.chars().count()))],
+                )
+            }),
+            Kind::Quicklink { id, .. } => self.quicklinks.iter().find(|q| &q.id == id).map(|q| {
+                Detail::Text(
+                    q.link.clone(),
+                    vec![
+                        ("Type".to_string(), "Quicklink".to_string()),
+                        ("Arguments".to_string(), if q.link.contains('{') { "Yes".into() } else { "No".into() }),
+                    ],
+                )
+            }),
             _ => None,
         }
     }
@@ -948,27 +981,47 @@ impl App {
         (clicked, double)
     }
 
+    /// Preview on top (in a tone-stepped card), facts underneath as label/value rows.
     fn draw_detail(&mut self, ui: &mut Ui, rect: Rect, d: Detail, pal: &Palette) {
         let ctx = ui.ctx().clone();
+        let (meta, is_image) = match &d {
+            Detail::Text(_, m) => (m.clone(), false),
+            Detail::Image(_, m) => (m.clone(), true),
+        };
+        let meta_h = 26.0 * meta.len() as f32 + 30.0;
+        let card = Rect::from_min_max(rect.min, Pos2::new(rect.max.x, rect.max.y - meta_h));
+        let p = ui.painter().clone();
+        p.rect_filled(card, 10.0, pal.field);
         match d {
-            Detail::Text(t, meta) => {
-                let body = Rect::from_min_max(rect.min, Pos2::new(rect.max.x, rect.max.y - 22.0));
-                ui.scope_builder(UiBuilder::new().max_rect(body), |ui| {
+            Detail::Text(t, _) => {
+                let inner = card.shrink(12.0);
+                ui.scope_builder(UiBuilder::new().max_rect(inner), |ui| {
                     egui::ScrollArea::vertical().id_salt("detail").auto_shrink([false; 2]).show(ui, |ui| {
-                        ui.add(egui::Label::new(RichText::new(t).size(13.0).color(pal.text)).wrap());
+                        ui.add(egui::Label::new(RichText::new(t).size(13.5).color(pal.text)).wrap().selectable(true));
                     });
                 });
-                ui.painter().text(Pos2::new(rect.min.x, rect.max.y - 8.0), Align2::LEFT_CENTER, meta, FontId::proportional(11.5), pal.sub);
             }
-            Detail::Image(name, meta) => {
-                let area = Rect::from_min_max(rect.min, Pos2::new(rect.max.x, rect.max.y - 22.0));
+            Detail::Image(name, _) => {
                 let icon = Icon::ClipImage(name);
                 if let Some(t) = self.icons.texture(&ctx, &icon) {
-                    let r = ui::fit(area, t.size_vec2());
-                    ui.painter().image(t.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                    let r = ui::fit(card.shrink(12.0), t.size_vec2());
+                    p.image(t.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
                 }
-                ui.painter().text(Pos2::new(rect.min.x, rect.max.y - 8.0), Align2::LEFT_CENTER, meta, FontId::proportional(11.5), pal.sub);
             }
+        }
+        let _ = is_image;
+        // facts
+        let mut y = card.max.y + 14.0;
+        p.text(Pos2::new(rect.min.x + 2.0, y), Align2::LEFT_CENTER, "Information", FontId::proportional(11.5), pal.sub);
+        y += 18.0;
+        for (k, v) in &meta {
+            p.text(Pos2::new(rect.min.x + 2.0, y), Align2::LEFT_CENTER, k, FontId::proportional(12.5), pal.sub);
+            let vg = p.layout_no_wrap(v.clone(), FontId::proportional(12.5), pal.text);
+            let max_w = rect.width() - 110.0;
+            let shown = if vg.size().x > max_w { elide(&p, v, FontId::proportional(12.5), max_w) } else { v.clone() };
+            p.text(Pos2::new(rect.max.x - 2.0, y), Align2::RIGHT_CENTER, shown, FontId::proportional(12.5), pal.text);
+            p.hline((rect.min.x + 2.0)..=(rect.max.x - 2.0), y + 13.0, Stroke::new(1.0, pal.sep));
+            y += 26.0;
         }
     }
 
@@ -1085,6 +1138,49 @@ impl App {
                 let launcher_hotkey = services::hotkey_label(&self.settings.launcher_hotkey);
                 let data_dir = self.store.root.display().to_string();
                 let (mut grant, mut open_privacy) = (false, false);
+                let app_icon = self.app_icon.clone();
+                let provider_label = {
+                    use ferrocast_core::models::AiProvider as P;
+                    match self.settings.ai_provider {
+                        P::OpenAiCompatible => {
+                            let host = self
+                                .settings
+                                .ai_base_url
+                                .trim_start_matches("http://")
+                                .trim_start_matches("https://")
+                                .split('/')
+                                .next()
+                                .unwrap_or("")
+                                .to_string();
+                            format!(
+                                "{} · {}",
+                                if host.starts_with("localhost") || host.starts_with("127.") { "Local".to_string() } else { host },
+                                self.settings.ai_model
+                            )
+                        }
+                        P::ChatGpt => format!(
+                            "ChatGPT · {}",
+                            if self.settings.chatgpt_model.is_empty() {
+                                ferrocast_core::chatgpt::DEFAULT_MODEL
+                            } else {
+                                &self.settings.chatgpt_model
+                            }
+                        ),
+                        P::Anthropic => format!(
+                            "Anthropic · {}",
+                            if self.settings.anthropic_model.is_empty() {
+                                ferrocast_core::ai::DEFAULT_ANTHROPIC_MODEL
+                            } else {
+                                &self.settings.anthropic_model
+                            }
+                        ),
+                        P::ClaudeCode => "Claude Code".to_string(),
+                    }
+                };
+                let mut open_url: Option<String> = None;
+                // The match below borrows the view stack mutably; take the icon cache out so these
+                // screens can still draw cached symbols.
+                let mut icons = std::mem::replace(&mut self.icons, IconCache::new(self.store.images_dir()));
                 let mut clear_hotkey = false;
                 let mut set_hotkey = false;
                 let mut mode_changed = None;
@@ -1156,102 +1252,203 @@ impl App {
                             });
                         }
                         View::Ai { prompt, asked, answer, history, busy, .. } => {
-                            let r = ui.add(
-                                TextEdit::singleline(prompt)
-                                    .hint_text("Ask anything… (↵ to send, ⌘↵ copies the answer)")
-                                    .font(FontId::proportional(16.0))
-                                    .desired_width(f32::INFINITY),
-                            );
-                            if ff {
-                                r.request_focus();
-                            }
-                            egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false; 2]).show(ui, |ui| {
-                                let turn = |ui: &mut Ui, q: &str, a: &str| {
-                                    ui.label(RichText::new(q).size(12.5).strong().color(pal.accent));
-                                    ui.add(egui::Label::new(RichText::new(a).size(14.0).color(pal.text)).selectable(true));
-                                    ui.add_space(8.0);
-                                };
-                                for (q, a) in history.iter() {
-                                    turn(ui, q, a);
-                                }
-                                if !asked.is_empty() {
-                                    turn(ui, asked, if answer.is_empty() && *busy { "Thinking…" } else { answer });
-                                }
-                            });
-                        }
-                        View::Welcome => {
-                            ui.label(RichText::new("Welcome to Ferrocast").size(20.0).strong().color(pal.text));
-                            ui.label(
-                                RichText::new(format!(
-                                    "Open it anywhere with {launcher_hotkey}. Type to search apps, commands and files, or calculate."
-                                ))
-                                .color(pal.sub),
-                            );
-                            ui.add_space(6.0);
-                            ui.label(RichText::new("Permissions").size(13.0).strong().color(pal.accent));
-                            let (mark, txt) = if trusted {
-                                ("✓", "Accessibility granted — window management, pasting and snippet expansion work.")
-                            } else {
-                                ("✗", "Accessibility not granted — needed for window management, pasting and snippet expansion.")
-                            };
-                            ui.label(RichText::new(format!("{mark}  {txt}")).color(if trusted { pal.text } else { pal.danger }));
-                            if !trusted {
-                                ui.horizontal(|ui| {
-                                    if ui.button("Grant Accessibility…").clicked() {
-                                        grant = true;
-                                    }
-                                    if ui.button("Open System Settings").clicked() {
-                                        open_privacy = true;
+                            // input row: field in a card, provider chip on the right
+                            let w = ui.available_width();
+                            ui.horizontal(|ui| {
+                                let chip_w = 150.0;
+                                egui::Frame::new().fill(pal.field).corner_radius(10.0).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+                                    ui.set_width(w - chip_w - 36.0);
+                                    let r = ui.add(TextEdit::singleline(prompt).hint_text("Ask anything…").font(FontId::proportional(15.0)).frame(EFrame::NONE).desired_width(f32::INFINITY));
+                                    if ff {
+                                        r.request_focus();
                                     }
                                 });
-                                lbl(ui, "macOS asks you to add Ferrocast in Privacy & Security → Accessibility, then restart Ferrocast.");
-                            }
+                                ui.add_space(8.0);
+                                let (r, _) = ui.allocate_exact_size(Vec2::new(chip_w, 34.0), Sense::hover());
+                                let p = ui.painter();
+                                p.rect_filled(r, 10.0, pal.field);
+                                let g = p.layout_no_wrap(provider_label.clone(), FontId::proportional(11.5), pal.sub);
+                                let shown = if g.size().x > chip_w - 20.0 { elide(p, &provider_label, FontId::proportional(11.5), chip_w - 20.0) } else { provider_label.clone() };
+                                p.text(r.center(), Align2::CENTER_CENTER, shown, FontId::proportional(11.5), pal.sub);
+                            });
                             ui.add_space(6.0);
-                            ui.label(RichText::new("Tips").size(13.0).strong().color(pal.accent));
-                            for t in [
-                                "⌘K opens the actions of the selected item",
-                                "Set aliases and hotkeys per command from ⌘K",
-                                "Create snippets with keywords that expand while you type",
-                                "Search “Ask AI” after configuring a server in Settings",
-                                "Everything is stored locally; clipboard history never leaves this Mac",
-                            ] {
-                                ui.label(RichText::new(format!("•  {t}")).color(pal.text));
+                            if history.is_empty() && asked.is_empty() {
+                                // empty state: what this is, and a few prompts to try
+                                ui.add_space(26.0);
+                                ui.vertical_centered(|ui| {
+                                    let (r, _) = ui.allocate_exact_size(Vec2::splat(56.0), Sense::hover());
+                                    ui.painter().rect_filled(r, 16.0, Color32::from_rgb(168, 110, 255));
+                                    ui::paint_icon(&mut icons, ui, r, &Icon::Glyph("sf:sparkles", [168, 110, 255]), pal);
+                                    ui.add_space(12.0);
+                                    ui.label(RichText::new("Ask anything").size(20.0).color(pal.text));
+                                    ui.label(RichText::new("Short answers, in a conversation that lasts while this window is open.").size(12.5).color(pal.sub));
+                                    ui.add_space(16.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                                        for ex in ["Explain this regex: ^\\d{3}-\\d{4}$", "Write a git commit message for a bug fix", "What is 18% of 240, step by step?", "Translate “see you tomorrow” to Spanish"] {
+                                            if pill(ui, pal, ex, false) {
+                                                *prompt = ex.to_string();
+                                            }
+                                        }
+                                    });
+                                });
+                            } else {
+                                egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false; 2]).show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing.y = 10.0;
+                                    let t = ui.ctx().input(|i| i.time);
+                                    let mut turn = |ui: &mut Ui, q: &str, a: &str, thinking: bool| {
+                                        // question: right-aligned card
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                                            egui::Frame::new().fill(pal.field).corner_radius(12.0).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+                                                ui.set_max_width(ui.available_width() * 0.72);
+                                                ui.add(egui::Label::new(RichText::new(q).size(13.5).color(pal.text)).wrap());
+                                            });
+                                        });
+                                        // answer: sparkles tile + text
+                                        ui.horizontal_top(|ui| {
+                                            let (r, _) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::hover());
+                                            ui.painter().rect_filled(r, 6.0, Color32::from_rgb(168, 110, 255));
+                                            ui::paint_icon(&mut icons, ui, r, &Icon::Glyph("sf:sparkles", [168, 110, 255]), pal);
+                                            ui.add_space(4.0);
+                                            ui.vertical(|ui| {
+                                                ui.set_max_width(ui.available_width() - 8.0);
+                                                if thinking && a.is_empty() {
+                                                    let (r, _) = ui.allocate_exact_size(Vec2::new(40.0, 18.0), Sense::hover());
+                                                    for k in 0..3 {
+                                                        let al = (((t * 3.0 - k as f64 * 0.6).sin() * 0.5 + 0.5) * 255.0) as u8;
+                                                        ui.painter().circle_filled(Pos2::new(r.min.x + 6.0 + k as f32 * 10.0, r.center().y), 3.0, Color32::from_rgba_unmultiplied(pal.sub.r(), pal.sub.g(), pal.sub.b(), al));
+                                                    }
+                                                    ui.ctx().request_repaint_after(Duration::from_millis(60));
+                                                } else {
+                                                    ui.add(egui::Label::new(RichText::new(a).size(14.0).color(pal.text)).wrap().selectable(true));
+                                                }
+                                            });
+                                        });
+                                        ui.add_space(6.0);
+                                    };
+                                    for (q, a) in history.iter() {
+                                        turn(ui, q, a, false);
+                                    }
+                                    if !asked.is_empty() {
+                                        turn(ui, asked, answer, *busy);
+                                    }
+                                });
                             }
-                            lbl(ui, "↵ grants Accessibility · esc closes · reopen from “Welcome & Permissions”");
+                        }
+                        View::Welcome => {
+                            egui::ScrollArea::vertical().id_salt("welcome").auto_shrink([false; 2]).show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 6.0;
+                            ui.vertical_centered(|ui| {
+                                if let Some(t) = &app_icon {
+                                    let (r, _) = ui.allocate_exact_size(Vec2::splat(56.0), Sense::hover());
+                                    ui.painter().image(t.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                                }
+                                ui.add_space(6.0);
+                                ui.label(RichText::new("Welcome to Ferrocast").size(22.0).color(pal.text));
+                                ui.label(RichText::new(format!("Press {launcher_hotkey} anywhere. Type to launch, calculate, paste or ask.")).size(13.0).color(pal.sub));
+                            });
+                            ui.add_space(14.0);
+                            group(ui, pal, |ui| {
+                                row(ui, pal, "Accessibility", if trusted { "Granted. Window management, pasting and snippet expansion are ready." } else { "Needed to move windows, paste for you and expand snippets. Search, the calculator and AI work without it." }, |ui| {
+                                    if trusted {
+                                        ui.label(RichText::new("Granted ✓").size(13.0).color(Color32::from_rgb(89, 212, 153)));
+                                    } else {
+                                        if small_btn(ui, pal, "System Settings") {
+                                            open_privacy = true;
+                                        }
+                                        if accent_btn(ui, pal, "Grant…") {
+                                            grant = true;
+                                        }
+                                    }
+                                });
+                            });
+                            ui.add_space(14.0);
+                            section(ui, pal, "Three things to try");
+                            let tips: [(&str, &str, &str); 3] = [
+                                ("sf:command", "Press ⌘ K on anything", "Every item has more actions: copy, reveal, set an alias or a hotkey."),
+                                ("sf:equal", "Type a sum or a conversion", "100 usd in eur · 5pm ldn in sf · 18% of 240 · timer 10m"),
+                                ("sf:doc.on.clipboard", "Open Clipboard History", "Everything you copy, searchable, with pins. Password managers are skipped."),
+                            ];
+                            group(ui, pal, |ui| {
+                                for (sym, title, desc) in tips {
+                                    row(ui, pal, title, desc, |ui| {
+                                        let (r, _) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::hover());
+                                        ui::paint_icon(&mut icons, ui, r, &Icon::Glyph(sym, [90, 90, 105]), pal);
+                                    });
+                                }
+                            });
+                            ui.add_space(8.0);
+                            lbl(ui, "esc closes this screen · it is always one search away as “Welcome & Permissions”");
+                            });
                         }
                         View::Shortcuts => {
-                            let rows = [
-                                ("⌥ Space", "Open / close Ferrocast (configurable)"),
-                                ("↑ ↓", "Move selection"),
-                                ("↵", "Run the primary action"),
-                                ("⌘ ↵", "Run the secondary action"),
-                                ("⌘ K", "Open the action panel"),
-                                ("⌘ ,", "Open settings"),
-                                ("⌘ N", "New snippet / quicklink / note in those lists"),
-                                ("⇧ ⌘ F", "Add or remove favorite"),
-                                ("⇧ ⌘ ,", "Set hotkey for a command"),
-                                ("esc", "Clear search, go back, or close"),
-                                ("⌫ (empty search)", "Go back"),
-                                ("⌃ X", "Delete the selected entry"),
-                                ("⌘ Y", "Quick Look the selected file"),
+                            let groups: [(&str, &[(&str, &str)]); 3] = [
+                                ("Navigate", &[("⌥ Space", "Open or close Ferrocast"), ("↑ ↓", "Move the selection"), ("esc", "Clear the search, go back, or close"), ("⌫", "Go back when the search is empty")]),
+                                ("Act", &[("↵", "Run the primary action"), ("⌘ ↵", "Run the secondary action"), ("⌘ K", "Open the action panel"), ("⌘ Y", "Quick Look the selected file")]),
+                                ("Manage", &[("⌘ ,", "Open Settings"), ("⌘ N", "New snippet, quicklink or note"), ("⌘ E", "Edit the selected snippet or quicklink"), ("⇧ ⌘ F", "Add or remove a favorite"), ("⇧ ⌘ ,", "Set a hotkey for a command"), ("⌘ .", "Pin or unpin a clipboard entry"), ("⌃ X", "Delete the selected entry")]),
                             ];
-                            egui::Grid::new("shortcuts").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
-                                for (k, d) in rows {
-                                    ui.label(RichText::new(k).strong().color(pal.accent));
-                                    ui.label(RichText::new(d).color(pal.text));
-                                    ui.end_row();
+                            egui::ScrollArea::vertical().id_salt("shortcuts").auto_shrink([false; 2]).show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                for (name, rows) in groups {
+                                    section(ui, pal, name);
+                                    group(ui, pal, |ui| {
+                                        for (keys, what) in rows.iter() {
+                                            let w = ui.available_width();
+                                            egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 9)).show(ui, |ui| {
+                                                ui.set_width(w - 28.0);
+                                                ui.horizontal(|ui| {
+                                                    ui.label(RichText::new(*what).size(13.5).color(pal.text));
+                                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                        ui.spacing_mut().item_spacing.x = 4.0;
+                                                        for k in keys.split(' ').rev() {
+                                                            keycap(ui, pal, k);
+                                                        }
+                                                    });
+                                                });
+                                            });
+                                        }
+                                    });
+                                    ui.add_space(14.0);
                                 }
                             });
                         }
                         View::About => {
-                            ui.label(RichText::new("Ferrocast").size(22.0).strong().color(pal.text));
-                            ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(pal.sub));
-                            ui.add_space(6.0);
-                            ui.label(RichText::new("A fast keyboard launcher for macOS, written in Rust.").color(pal.text));
-                            ui.label(RichText::new("Not affiliated with Raycast. MIT licensed.").color(pal.sub));
-                            ui.add_space(6.0);
-                            ui.label(RichText::new(format!("Data folder: {data_dir}")).size(12.0).color(pal.sub));
-                            ui.label(RichText::new("Currency rates: European Central Bank via frankfurter.dev").size(12.0).color(pal.sub));
+                            egui::ScrollArea::vertical().id_salt("about").auto_shrink([false; 2]).show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 6.0;
+                            ui.add_space(4.0);
+                            ui.vertical_centered(|ui| {
+                                if let Some(t) = &app_icon {
+                                    let (r, _) = ui.allocate_exact_size(Vec2::splat(72.0), Sense::hover());
+                                    ui.painter().image(t.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                                }
+                                ui.add_space(8.0);
+                                ui.label(RichText::new("Ferrocast").size(26.0).color(pal.text));
+                                ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(13.0).color(pal.sub));
+                                ui.add_space(10.0);
+                                ui.label(RichText::new("A small, fast launcher for the Mac. Open source, no account, your data in files you can read.").size(13.5).color(pal.text));
+                                ui.add_space(12.0);
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    let total = 3.0 * 96.0;
+                                    ui.add_space((ui.available_width() - total).max(0.0) / 2.0);
+                                    if small_btn(ui, pal, "GitHub") {
+                                        open_url = Some("https://github.com/drumst0ck/ferrocast".into());
+                                    }
+                                    if small_btn(ui, pal, "Changelog") {
+                                        open_url = Some("https://github.com/drumst0ck/ferrocast/blob/main/CHANGELOG.md".into());
+                                    }
+                                    if small_btn(ui, pal, "Data folder") {
+                                        open_url = Some(data_dir.clone());
+                                    }
+                                });
+                            });
+                            ui.add_space(18.0);
+                            group(ui, pal, |ui| {
+                                row(ui, pal, "Licence", "MIT. Fork it, fix it, ship it.", |ui| keycap(ui, pal, "MIT"));
+                                row(ui, pal, "Currency rates", "European Central Bank, through frankfurter.dev, cached for 12 hours.", |_ui| {});
+                                row(ui, pal, "Trademarks", "Raycast is a trademark of its owner. Ferrocast is an independent project.", |_ui| {});
+                            });
+                            });
                         }
                         View::Confirm { msg, .. } => {
                             ui.add_space(50.0);
@@ -1309,6 +1506,10 @@ impl App {
                     }
                 });
                 let _ = (set_hotkey, mode_changed);
+                self.icons = icons;
+                if let Some(u) = open_url {
+                    let _ = std::process::Command::new("/usr/bin/open").arg(&u).status();
+                }
                 if grant {
                     windows::accessibility_trusted(true);
                 }

@@ -62,7 +62,6 @@ pub fn icon_png(path: &str, size: f64) -> Option<Vec<u8>> {
 /// square PNG of `px` pixels. egui cannot draw colour glyphs itself.
 // lockFocus is deprecated (not resolution independent) but is the simplest way to rasterise a
 // glyph with the colour emoji font; output is a fixed-size PNG so that limitation does not matter.
-#[allow(deprecated)]
 /// An SF Symbol (by name) drawn in white at `px`, transparent background. `None` when the name
 /// does not exist on this macOS.
 #[allow(deprecated)]
@@ -79,19 +78,9 @@ pub fn symbol_png(name: &str, px: f64) -> Option<Vec<u8>> {
     let canvas = NSImage::initWithSize(NSImage::alloc(), NSSize::new(px, px));
     canvas.lockFocus();
     let origin = NSPoint::new((px - size.width) / 2.0, (px - size.height) / 2.0);
-    unsafe {
-        sym.drawAtPoint_fromRect_operation_fraction(
-            origin,
-            NSRect::new(NSPoint::new(0.0, 0.0), size),
-            NSCompositingOperation::SourceOver,
-            1.0,
-        );
-        NSColor::whiteColor().set();
-        objc2_app_kit::NSRectFillUsingOperation(
-            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(px, px)),
-            NSCompositingOperation::SourceAtop,
-        );
-    }
+    sym.drawAtPoint_fromRect_operation_fraction(origin, NSRect::new(NSPoint::new(0.0, 0.0), size), NSCompositingOperation::SourceOver, 1.0);
+    NSColor::whiteColor().set();
+    objc2_app_kit::NSRectFillUsingOperation(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(px, px)), NSCompositingOperation::SourceAtop);
     canvas.unlockFocus();
     let tiff = canvas.TIFFRepresentation()?;
     let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
@@ -112,7 +101,7 @@ pub fn glyph_png(text: &str, px: f64) -> Option<Vec<u8>> {
     use objc2_foundation::{NSDictionary, NSPoint, NSSize, NSString};
     let img = NSImage::initWithSize(NSImage::alloc(), NSSize::new(px, px));
     let font = unsafe { NSFont::systemFontOfSize_weight(px * 0.56, NSFontWeightMedium) };
-    let white = unsafe { NSColor::whiteColor() };
+    let white = NSColor::whiteColor();
     let (k1, k2) = unsafe { (NSFontAttributeName, NSForegroundColorAttributeName) };
     let attrs: objc2::rc::Retained<NSDictionary<NSString, AnyObject>> =
         NSDictionary::from_slices(&[k1, k2], &[&*font as &AnyObject, &*white as &AnyObject]);
@@ -127,6 +116,7 @@ pub fn glyph_png(text: &str, px: f64) -> Option<Vec<u8>> {
     Some(png.to_vec())
 }
 
+#[allow(deprecated)]
 pub fn emoji_png(text: &str, px: f64) -> Option<Vec<u8>> {
     use objc2::runtime::AnyObject;
     use objc2::AllocAnyThread;
