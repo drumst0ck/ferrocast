@@ -65,6 +65,7 @@ pub fn icon_png(path: &str, size: f64) -> Option<Vec<u8>> {
 #[allow(deprecated)]
 /// An SF Symbol (by name) drawn in white at `px`, transparent background. `None` when the name
 /// does not exist on this macOS.
+#[allow(deprecated)]
 pub fn symbol_png(name: &str, px: f64) -> Option<Vec<u8>> {
     use objc2::AllocAnyThread;
     use objc2_app_kit::{
@@ -100,6 +101,7 @@ pub fn symbol_png(name: &str, px: f64) -> Option<Vec<u8>> {
 
 /// A symbol drawn in white, centred, with the system font and AppKit's full font fallback, so
 /// icon glyphs render even when the UI font lacks them. Transparent background.
+#[allow(deprecated)]
 pub fn glyph_png(text: &str, px: f64) -> Option<Vec<u8>> {
     use objc2::runtime::AnyObject;
     use objc2::AllocAnyThread;
