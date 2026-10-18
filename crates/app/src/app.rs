@@ -220,6 +220,8 @@ pub struct App {
     pub(crate) show_t: Option<Instant>,
     /// Warm Claude Code process while Ask AI is open (ClaudeCode provider only).
     claude: Option<std::sync::Arc<services::ClaudeSession>>,
+    /// Model lists for the Settings picker, by `services::models_key`; `None` while loading.
+    pub(crate) ai_models: std::collections::HashMap<String, Option<Result<Vec<String>, String>>>,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
     inline: HashMap<PathBuf, (String, Instant)>,
@@ -407,6 +409,7 @@ impl App {
             wide_font: false,
             show_t: None,
             claude: None,
+            ai_models: Default::default(),
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -773,6 +776,9 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::AiModels(k, r) => {
+                    self.ai_models.insert(k, Some(r));
+                }
                 Msg::ChatGptDeviceCode(code) => {
                     self.show();
                     self.push(View::Output {

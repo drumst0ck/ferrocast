@@ -1541,6 +1541,9 @@ impl App {
         let trusted = windows::accessibility_trusted(false);
         let (mut rec, mut req_acc, mut open_data, mut add_dir, mut save_key, mut test_ai) = (false, false, false, false, false, false);
         let (mut chatgpt_in, mut chatgpt_out, mut chatgpt_device) = (false, false, false);
+        let mut fetch_models = false;
+        let models_key = services::models_key(&self.settings);
+        let models_state = self.ai_models.get(&models_key).cloned();
         let mut remove_dir = None;
         let mut enable = None;
         let mut scratch = std::mem::take(&mut self.scratch);
@@ -1677,8 +1680,10 @@ impl App {
                                     row(ui, pal, "Server", "Base URL ending in /v1.", |ui| {
                                         ui.add(TextEdit::singleline(&mut s.ai_base_url).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("http://localhost:11434/v1"));
                                     });
-                                    row(ui, pal, "Model", "The name the server expects, e.g. llama3.2 or gpt-4o-mini.", |ui| {
-                                        ui.add(TextEdit::singleline(&mut s.ai_model).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("llama3.2"));
+                                    row(ui, pal, "Model", "Listed by the server. Pick one, or Custom… to type a name.", |ui| {
+                                        if model_picker(ui, pal, "openai", &mut s.ai_model, ferrocast_core::ai::DEFAULT_MODEL, models_state.as_ref()) {
+                                            fetch_models = true;
+                                        }
                                     });
                                     row(ui, pal, "API key", if has_key { "A key is stored in the Keychain. Enter a new one to replace it, or save empty to remove it." } else { "Only needed for hosted providers. Stored in the macOS Keychain, never in a file." }, |ui| {
                                         if small_btn(ui, pal, "Save") {
@@ -1691,8 +1696,10 @@ impl App {
                             P::Anthropic => {
                                 section(ui, pal, "Anthropic API");
                                 group(ui, pal, |ui| {
-                                    row(ui, pal, "Model", "An Anthropic model id. Empty uses the default shown.", |ui| {
-                                        ui.add(TextEdit::singleline(&mut s.anthropic_model).desired_width(280.0).font(FontId::proportional(12.5)).hint_text(ferrocast_core::ai::DEFAULT_ANTHROPIC_MODEL));
+                                    row(ui, pal, "Model", "Listed by Anthropic once a key is saved. Pick one, or Custom… to type an id.", |ui| {
+                                        if model_picker(ui, pal, "anthropic", &mut s.anthropic_model, ferrocast_core::ai::DEFAULT_ANTHROPIC_MODEL, models_state.as_ref()) {
+                                            fetch_models = true;
+                                        }
                                     });
                                     row(ui, pal, "API key", if has_key { "A key is stored in the Keychain. Enter a new one to replace it, or save empty to remove it." } else { "From console.anthropic.com. Stored in the macOS Keychain, never in a file." }, |ui| {
                                         if small_btn(ui, pal, "Save") {
@@ -1729,8 +1736,10 @@ impl App {
                                             }
                                         }
                                     });
-                                    row(ui, pal, "Model", "Optional. Empty uses the default shown. Only models your plan includes will answer.", |ui| {
-                                        ui.add(TextEdit::singleline(&mut s.chatgpt_model).desired_width(280.0).font(FontId::proportional(12.5)).hint_text(ferrocast_core::chatgpt::DEFAULT_MODEL));
+                                    row(ui, pal, "Model", "Models the ChatGPT backend serves. Only the ones your plan includes will answer.", |ui| {
+                                        if model_picker(ui, pal, "chatgpt", &mut s.chatgpt_model, ferrocast_core::chatgpt::DEFAULT_MODEL, models_state.as_ref()) {
+                                            fetch_models = true;
+                                        }
                                     });
                                 });
                                 ui.add_space(10.0);
@@ -1743,8 +1752,10 @@ impl App {
                                     row(ui, pal, "Command-line tool", &path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Not found. Install from claude.ai/code, then run `claude` once in Terminal to sign in.".into()), |ui| {
                                         ui.label(RichText::new(if path.is_some() { "Installed ✓" } else { "Missing" }).size(13.0).color(if path.is_some() { Color32::from_rgb(89, 212, 153) } else { pal.accent }));
                                     });
-                                    row(ui, pal, "Model", "Optional. Leave empty for Claude Code's default, or an alias such as sonnet or opus.", |ui| {
-                                        ui.add(TextEdit::singleline(&mut s.anthropic_model).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("default"));
+                                    row(ui, pal, "Model", "Claude Code's default, one of its aliases, or Custom… for a full model id.", |ui| {
+                                        if model_picker(ui, pal, "claudecode", &mut s.anthropic_model, "Claude Code default", models_state.as_ref()) {
+                                            fetch_models = true;
+                                        }
                                     });
                                 });
                                 ui.add_space(10.0);
@@ -1854,6 +1865,11 @@ impl App {
             });
         }
         self.key_scratch = key_scratch;
+        let need_models = tab == 3 && !self.ai_models.contains_key(&models_key);
+        if fetch_models || need_models {
+            self.ai_models.insert(models_key.clone(), None);
+            services::fetch_models(&s, self.bus.clone());
+        }
         if chatgpt_in {
             ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));
             services::chatgpt_sign_in(self.bus.clone());
@@ -1956,6 +1972,71 @@ fn row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce
     // hairline between rows, inset like the original launcher's settings
     let r = inner.response.rect;
     ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
+}
+
+/// Model dropdown: Default, every model the provider lists, and Custom… (a free text field).
+/// Returns true when the list should be (re)fetched.
+fn model_picker(
+    ui: &mut Ui,
+    pal: &Palette,
+    id: &str,
+    value: &mut String,
+    default_label: &str,
+    state: Option<&Option<Result<Vec<String>, String>>>,
+) -> bool {
+    let custom_id = Id::new(("model_custom", id));
+    let mut custom: bool = ui.ctx().data(|d| d.get_temp(custom_id)).unwrap_or(false);
+    let models: &[String] = match state {
+        Some(Some(Ok(m))) => m,
+        _ => &[],
+    };
+    // a saved value the server does not list is shown through the custom field
+    if !custom && !value.is_empty() && !models.is_empty() && !models.iter().any(|m| m == value) {
+        custom = true;
+    }
+    let mut refresh = false;
+    if small_btn(ui, pal, "↻") {
+        refresh = true;
+    }
+    if custom {
+        ui.add(TextEdit::singleline(value).desired_width(170.0).font(FontId::proportional(12.5)).hint_text(default_label));
+    }
+    let shown = match state {
+        None | Some(None) => "Loading…".to_string(),
+        _ => {
+            if custom {
+                "Custom".to_string()
+            } else if value.is_empty() {
+                format!("Default ({default_label})")
+            } else {
+                value.clone()
+            }
+        }
+    };
+    egui::ComboBox::from_id_salt(("model_combo", id))
+        .selected_text(RichText::new(shown).size(12.5))
+        .width(if custom { 110.0 } else { 220.0 })
+        .show_ui(ui, |ui| {
+            ui.set_min_width(240.0);
+            if ui.selectable_label(!custom && value.is_empty(), format!("Default ({default_label})")).clicked() {
+                value.clear();
+                custom = false;
+            }
+            for m in models {
+                if ui.selectable_label(!custom && value == m, m).clicked() {
+                    *value = m.clone();
+                    custom = false;
+                }
+            }
+            if let Some(Some(Err(e))) = state {
+                ui.label(RichText::new(format!("List unavailable: {e}")).size(11.5).color(pal.sub));
+            }
+            if ui.selectable_label(custom, "Custom…").clicked() {
+                custom = true;
+            }
+        });
+    ui.ctx().data_mut(|d| d.insert_temp(custom_id, custom));
+    refresh
 }
 
 /// Like `row`, but the control sits on its own line under the text, for wide controls.

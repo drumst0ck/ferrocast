@@ -39,6 +39,8 @@ pub enum Msg {
     IconBytes(String, Vec<u8>),
     /// Device-code sign-in: show this code to the user while we poll.
     ChatGptDeviceCode(String),
+    /// Model list for the Settings picker, keyed by `models_key`.
+    AiModels(String, Result<Vec<String>, String>),
     Wake,
 }
 
@@ -911,6 +913,91 @@ pub fn claude_code_path() -> Option<PathBuf> {
     ]
     .into_iter()
     .find(|p| p.exists())
+}
+
+/// Cache key for a provider's model list (the server address matters for OpenAI-compatible).
+pub fn models_key(settings: &Settings) -> String {
+    match settings.ai_provider {
+        AiProvider::OpenAiCompatible => format!("openai|{}", settings.ai_base_url.trim().trim_end_matches('/')),
+        p => format!("{p:?}"),
+    }
+}
+
+/// Models the ChatGPT (Codex) backend serves; the same catalogue Pi ships for this provider.
+pub const CHATGPT_MODELS: &[&str] = &[
+    "gpt-5.3-codex-spark",
+    "gpt-5.5",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-6.1-sol",
+];
+/// Claude Code model aliases.
+pub const CLAUDE_CODE_MODELS: &[&str] = &["sonnet", "opus", "haiku"];
+
+/// Fetch the model list for the configured provider and post it to the bus.
+pub fn fetch_models(settings: &Settings, bus: Bus) {
+    use ferrocast_core::ai;
+    use std::process::{Command, Stdio};
+    let key = models_key(settings);
+    let provider = settings.ai_provider;
+    let base = settings.ai_base_url.trim().trim_end_matches('/').to_string();
+    std::thread::spawn(move || {
+        let result: Result<Vec<String>, String> = match provider {
+            AiProvider::ChatGpt => Ok(CHATGPT_MODELS.iter().map(|s| s.to_string()).collect()),
+            AiProvider::ClaudeCode => Ok(CLAUDE_CODE_MODELS.iter().map(|s| s.to_string()).collect()),
+            _ => {
+                let (url, key_header) = match provider {
+                    AiProvider::Anthropic => {
+                        (ai::ANTHROPIC_MODELS_URL.to_string(), ai_key_for(AiProvider::Anthropic).map(|k| format!("x-api-key: {k}")))
+                    }
+                    _ => (format!("{base}/models"), ai_key().map(|k| format!("Authorization: Bearer {k}"))),
+                };
+                let mut cfg = format!("url = {}\n", ai::curl_config_quote(&url));
+                if provider == AiProvider::Anthropic {
+                    cfg.push_str("header = \"anthropic-version: 2023-06-01\"\n");
+                }
+                if let Some(h) = key_header {
+                    cfg.push_str(&format!("header = {}\n", ai::curl_config_quote(&h)));
+                }
+                let out = Command::new("/usr/bin/curl")
+                    .args(["-sS", "-m", "8", "-K", "-"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .and_then(|mut c| {
+                        use std::io::Write;
+                        if let Some(mut i) = c.stdin.take() {
+                            let _ = i.write_all(cfg.as_bytes());
+                        }
+                        c.wait_with_output()
+                    });
+                match out {
+                    Ok(o) if o.status.success() => match serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                        Ok(v) if v.get("error").is_some() => {
+                            Err(v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("server error").to_string())
+                        }
+                        Ok(v) => {
+                            let mut m: Vec<String> = v["data"]
+                                .as_array()
+                                .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
+                                .unwrap_or_default();
+                            m.sort();
+                            Ok(m)
+                        }
+                        Err(_) => Err("not a model list".into()),
+                    },
+                    Ok(o) => Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("could not connect").trim().to_string()),
+                    Err(e) => Err(e.to_string()),
+                }
+            }
+        };
+        bus.send(Msg::AiModels(key, result));
+    });
 }
 
 /// Check the configured provider: list models (OpenAI-style or Anthropic) or run `claude --version`.
