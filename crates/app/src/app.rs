@@ -55,6 +55,7 @@ pub enum View {
     Processes,
     Timers,
     CalcHistory,
+    Convert(Vec<PathBuf>),
     Notes,
     Colors(Rgba),
     SnippetForm { id: Option<String>, name: String, text: String, keyword: String },
@@ -93,6 +94,7 @@ impl View {
             | View::Processes
             | View::Timers
             | View::CalcHistory
+            | View::Convert(_)
             | View::Notes
             | View::Colors(_) => Shape::List,
             View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::Settings => Shape::Form,
@@ -111,6 +113,7 @@ impl View {
             View::Processes => "Kill Process",
             View::Timers => "Timers",
             View::CalcHistory => "Calculator History",
+            View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
             View::SnippetForm { .. } => "Snippet",
@@ -141,6 +144,7 @@ impl View {
             View::Processes => "Search processes…",
             View::Timers => "Search timers…",
             View::CalcHistory => "Search past calculations…",
+            View::Convert(_) => "Convert to…",
             View::Notes => "Search notes…",
             _ => "Filter…",
         }
@@ -223,6 +227,8 @@ pub struct App {
     /// Warm Claude Code process while Ask AI is open (ClaudeCode provider only).
     claude: Option<std::sync::Arc<services::ClaudeSession>>,
     /// Model lists for the Settings picker, by `services::models_key`; `None` while loading.
+    /// Optional conversion tools found on this Mac (probed once).
+    tools: ferrocast_core::convert::Tools,
     pub(crate) ai_models: std::collections::HashMap<String, Option<Result<Vec<String>, String>>>,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
@@ -413,6 +419,7 @@ impl App {
             nav_at: Instant::now(),
             claude: None,
             ai_models: Default::default(),
+            tools: ferrocast_core::convert::Tools::detect(),
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -782,6 +789,11 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::ConvertFiles(files) => {
+                    self.show();
+                    self.reset_to_root();
+                    self.push(View::Convert(files));
+                }
                 Msg::AiModels(k, r) => {
                     self.ai_models.insert(k, Some(r));
                 }
@@ -1390,6 +1402,46 @@ impl App {
                     .collect();
                 self.sorted(v, "Processes")
             }
+            View::Convert(files) => {
+                let files = files.clone();
+                let Some(first) = files.first() else { return vec![] };
+                let names: Vec<String> = files.iter().filter_map(|f| f.file_name().map(|n| n.to_string_lossy().to_string())).collect();
+                let sub = if files.len() == 1 { names[0].clone() } else { format!("{} files · {}", files.len(), names.join(", ")) };
+                let v: Vec<(i64, Item)> = ferrocast_core::convert::targets(first, &self.tools)
+                    .into_iter()
+                    .filter_map(|t| {
+                        self.matches(&q, t.label, t.ext).map(|sc| {
+                            (
+                                sc,
+                                Item {
+                                    id: format!("convert:{}", t.ext),
+                                    title: t.label.to_string(),
+                                    subtitle: sub.clone(),
+                                    icon: Icon::Glyph(
+                                        match ferrocast_core::convert::family_of(first) {
+                                            ferrocast_core::convert::Family::Image | ferrocast_core::convert::Family::Pdf => "sf:photo",
+                                            ferrocast_core::convert::Family::Audio => "sf:waveform",
+                                            ferrocast_core::convert::Family::Video => "sf:film",
+                                            ferrocast_core::convert::Family::Archive | ferrocast_core::convert::Family::Folder => {
+                                                "sf:archivebox"
+                                            }
+                                            _ => "sf:doc.text",
+                                        },
+                                        [255, 140, 60],
+                                    ),
+                                    accessory: match t.needs {
+                                        Some(n) => format!("Needs {}", n.split(' ').next().unwrap_or(n)),
+                                        None => format!(".{} · {}", t.ext, t.engine.label()),
+                                    },
+                                    keywords: vec![],
+                                    kind: Kind::ConvertTo(files.clone(), t),
+                                },
+                            )
+                        })
+                    })
+                    .collect();
+                self.sorted(v, "Convert to")
+            }
             View::CalcHistory => {
                 let now = now_secs();
                 let v: Vec<(i64, Item)> = self
@@ -1546,6 +1598,7 @@ impl App {
                 a.push(Action::new("Open", Act::Run));
                 a.push(Action::new("Show in Finder", Act::Reveal(p.clone())).key(CMD, Key::Enter));
                 a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
+                a.push(Action::new("Convert…", Act::Convert(vec![p.clone()])).key(CMD, Key::T));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Move to Trash", Act::Trash(p.clone())).key(CTRL, Key::X).danger());
             }
@@ -1595,6 +1648,16 @@ impl App {
             Kind::Url(_) => a.push(Action::new("Open in Browser", Act::Run)),
             Kind::OpenWindow(_) => a.push(Action::new("Switch to Window", Act::Run)),
             Kind::Timer(..) => a.push(Action::new("Start Timer", Act::Run)),
+            Kind::ConvertTo(files, t) => {
+                a.push(Action::new(
+                    match t.needs {
+                        Some(_) => "Copy install command",
+                        None => "Convert",
+                    },
+                    Act::Run,
+                ));
+                a.push(Action::new("Reveal original in Finder", Act::Reveal(files[0].clone())).key(CMD, Key::Enter));
+            }
             Kind::RunningTimer(i) => a.push(Action::new("Cancel Timer", Act::CancelTimer(*i)).danger()),
             Kind::Process(pr) => {
                 a.push(Action::new("Kill Process", Act::Run));
@@ -1639,6 +1702,7 @@ impl App {
             Kind::Url(_) => "Open in Browser",
             Kind::OpenWindow(_) => "Switch to Window",
             Kind::Process(_) => "Kill Process",
+            Kind::ConvertTo(..) => "Convert",
             Kind::Timer(..) => "Start Timer",
             Kind::RunningTimer(_) => "Cancel Timer",
             Kind::WebSearch(_) => "Search",
@@ -1816,6 +1880,28 @@ impl App {
             Kind::Timer(secs, label) => {
                 let (secs, label) = (*secs, label.clone());
                 self.start_timer(secs, label);
+            }
+            Kind::ConvertTo(files, t) => {
+                if let Some(n) = t.needs {
+                    // "ffmpeg (brew install ffmpeg)" → copy the command in parentheses
+                    let cmd = n.split_once('(').map(|(_, c)| c.trim_end_matches(')').to_string()).unwrap_or_else(|| n.to_string());
+                    self.copy_text(&cmd);
+                    self.toast(format!("Install command copied: {cmd}"));
+                    return;
+                }
+                let (files, t) = (files.clone(), t.clone());
+                self.toast(format!(
+                    "Converting {} to {}…",
+                    if files.len() == 1 {
+                        files[0].file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                    } else {
+                        format!("{} files", files.len())
+                    },
+                    t.label
+                ));
+                services::convert_files(files, t, self.tools, self.bus.clone());
+                self.hide();
+                self.reset_to_root();
             }
             Kind::RunningTimer(i) => {
                 let i = *i;
@@ -2005,6 +2091,16 @@ impl App {
             Builtin::Timers => self.push(View::Timers),
             Builtin::CheckUpdates => self.check_updates(),
             Builtin::CalcHistory => self.push(View::CalcHistory),
+            Builtin::ConvertFiles => {
+                let bus = self.bus.clone();
+                self.hide();
+                std::thread::spawn(move || {
+                    let files = services::choose_files();
+                    if !files.is_empty() {
+                        bus.send(Msg::ConvertFiles(files));
+                    }
+                });
+            }
             Builtin::SearchNotes => self.push(View::Notes),
             Builtin::CreateNote => self.new_note(),
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
@@ -2265,6 +2361,10 @@ impl App {
                     let v = self.calc_history.clone();
                     self.persist("calc-history.json", &v);
                 }
+            }
+            Act::Convert(files) => {
+                self.show();
+                self.push(View::Convert(files));
             }
             Act::QuickLook(p) => {
                 // qlmanage shows the system Quick Look panel; it exits when the panel closes.

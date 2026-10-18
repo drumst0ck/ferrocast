@@ -25,7 +25,8 @@ pub fn family_of(path: &Path) -> Family {
         return Family::Folder;
     }
     match ext(path).as_str() {
-        "jpg" | "jpeg" | "png" | "webp" | "heic" | "heif" | "tif" | "tiff" | "avif" | "bmp" | "gif" | "jxl" | "jp2" | "psd" | "dng" | "cr2" | "cr3" | "nef" | "arw" | "raf" | "orf" | "rw2" | "icns" | "ico" => Family::Image,
+        "jpg" | "jpeg" | "png" | "webp" | "heic" | "heif" | "tif" | "tiff" | "avif" | "bmp" | "gif" | "jxl" | "jp2" | "psd" | "dng"
+        | "cr2" | "cr3" | "nef" | "arw" | "raf" | "orf" | "rw2" | "icns" | "ico" => Family::Image,
         "mp3" | "m4a" | "wav" | "flac" | "ogg" | "opus" | "aiff" | "aif" | "wma" | "caf" | "aac" | "m4b" => Family::Audio,
         "mp4" | "mov" | "mkv" | "webm" | "avi" | "wmv" | "m4v" | "mpg" | "mpeg" | "ts" | "3gp" => Family::Video,
         "docx" | "doc" | "pages" | "md" | "markdown" | "txt" | "rtf" | "rtfd" | "odt" | "html" | "htm" | "epub" => Family::Document,
@@ -142,8 +143,17 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
             t("avi", "AVI", Engine::Ffmpeg, tools),
         ],
         Family::Document => match e.as_str() {
-            "md" | "markdown" | "txt" => vec![t("pdf", "PDF", Engine::Soffice, tools), t("docx", "Word (DOCX)", Engine::Textutil, tools), t("html", "HTML", Engine::Textutil, tools), t("rtf", "RTF", Engine::Textutil, tools)],
-            "epub" | "pages" => vec![t("pdf", "PDF", Engine::Soffice, tools), t("docx", "Word (DOCX)", Engine::Soffice, tools), t("txt", "Plain text", Engine::Soffice, tools)],
+            "md" | "markdown" | "txt" => vec![
+                t("pdf", "PDF", Engine::Soffice, tools),
+                t("docx", "Word (DOCX)", Engine::Textutil, tools),
+                t("html", "HTML", Engine::Textutil, tools),
+                t("rtf", "RTF", Engine::Textutil, tools),
+            ],
+            "epub" | "pages" => vec![
+                t("pdf", "PDF", Engine::Soffice, tools),
+                t("docx", "Word (DOCX)", Engine::Soffice, tools),
+                t("txt", "Plain text", Engine::Soffice, tools),
+            ],
             _ => vec![
                 t("pdf", "PDF", Engine::Soffice, tools),
                 t("docx", "Word (DOCX)", Engine::Textutil, tools),
@@ -154,7 +164,12 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
                 t("md", "Markdown", Engine::Soffice, tools),
             ],
         },
-        Family::Spreadsheet => vec![t("pdf", "PDF", Engine::Soffice, tools), t("xlsx", "Excel (XLSX)", Engine::Soffice, tools), t("csv", "CSV", Engine::Soffice, tools), t("ods", "OpenDocument", Engine::Soffice, tools)],
+        Family::Spreadsheet => vec![
+            t("pdf", "PDF", Engine::Soffice, tools),
+            t("xlsx", "Excel (XLSX)", Engine::Soffice, tools),
+            t("csv", "CSV", Engine::Soffice, tools),
+            t("ods", "OpenDocument", Engine::Soffice, tools),
+        ],
         Family::Slides => vec![t("pdf", "PDF", Engine::Soffice, tools), t("pptx", "PowerPoint (PPTX)", Engine::Soffice, tools)],
         Family::Pdf => vec![
             t("png", "PNG (first page)", Engine::Sips, tools),
@@ -213,10 +228,21 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
                 "m4a" => "PresetAppleM4A",
                 _ => return Err(format!("avconvert cannot write {ext}")),
             };
-            vec!["/usr/bin/avconvert".into(), "--source".into(), i, "--output".into(), o, "--preset".into(), preset.into(), "--replace".into()]
+            vec![
+                "/usr/bin/avconvert".into(),
+                "--source".into(),
+                i,
+                "--output".into(),
+                o,
+                "--preset".into(),
+                preset.into(),
+                "--replace".into(),
+            ]
         }
         (Engine::Textutil, ext) => vec!["/usr/bin/textutil".into(), "-convert".into(), ext.into(), i, "-output".into(), o],
-        (Engine::Archive, "zip") => vec!["/usr/bin/ditto".into(), "-c".into(), "-k".into(), "--sequesterRsrc".into(), "--keepParent".into(), i, o],
+        (Engine::Archive, "zip") => {
+            vec!["/usr/bin/ditto".into(), "-c".into(), "-k".into(), "--sequesterRsrc".into(), "--keepParent".into(), i, o]
+        }
         (Engine::Archive, "tar.gz") => {
             let parent = input.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| ".".into());
             let name = input.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -294,7 +320,10 @@ mod tests {
     fn plans_use_the_right_tool() {
         let tools = Tools { ffmpeg: Some("/ff"), soffice: Some("/so") };
         let png = targets(Path::new("/d/p.jpg"), &tools).into_iter().find(|t| t.ext == "png").unwrap();
-        assert_eq!(plan(Path::new("/d/p.jpg"), &png, Path::new("/d/p.png"), &tools).unwrap()[..4], ["/usr/bin/sips", "-s", "format", "png"]);
+        assert_eq!(
+            plan(Path::new("/d/p.jpg"), &png, Path::new("/d/p.png"), &tools).unwrap()[..4],
+            ["/usr/bin/sips", "-s", "format", "png"]
+        );
         let mp3 = targets(Path::new("/d/s.wav"), &tools).into_iter().find(|t| t.ext == "mp3").unwrap();
         let c = plan(Path::new("/d/s.wav"), &mp3, Path::new("/d/s.mp3"), &tools).unwrap();
         assert_eq!(c[0], "/ff");

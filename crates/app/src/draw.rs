@@ -117,6 +117,14 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("about") => app.push(View::About),
             Ok("processes") => app.push(View::Processes),
             Ok("calchistory") => app.push(View::CalcHistory),
+            Ok("convert") => app.push(View::Convert(
+                std::env::var("FERROCAST_FILES")
+                    .unwrap_or_default()
+                    .split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect(),
+            )),
             Ok("settings-ai") => {
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 3usize));
                 app.push(View::Settings);
@@ -631,6 +639,15 @@ impl App {
             self.selected = 0;
             self.scroll_to_sel = true;
             self.query_changed_at = Instant::now();
+        }
+        // Files dropped on the launcher open the converter.
+        let dropped: Vec<std::path::PathBuf> =
+            ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
+        if !dropped.is_empty() {
+            self.reset_to_root();
+            self.push(View::Convert(dropped));
+            ctx.request_repaint();
+            return;
         }
         let keys = self.read_keys(&ctx);
         let shape = self.view().shape();

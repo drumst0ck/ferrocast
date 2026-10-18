@@ -60,6 +60,7 @@ fn fixture() -> App {
         nav_at: Instant::now(),
         claude: None,
         ai_models: Default::default(),
+        tools: Default::default(),
         runs: HashMap::new(),
         next_run: 1,
         inline: HashMap::new(),

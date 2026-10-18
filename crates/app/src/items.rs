@@ -39,6 +39,7 @@ pub enum Builtin {
     Timers,
     CheckUpdates,
     CalcHistory,
+    ConvertFiles,
     SearchNotes,
     CreateNote,
     CreateScript,
@@ -69,6 +70,7 @@ impl Builtin {
         Builtin::Timers,
         Builtin::CheckUpdates,
         Builtin::CalcHistory,
+        Builtin::ConvertFiles,
         Builtin::SearchNotes,
         Builtin::CreateNote,
         Builtin::CreateScript,
@@ -99,6 +101,7 @@ impl Builtin {
             Builtin::Timers => "Timers",
             Builtin::CheckUpdates => "Check for Updates",
             Builtin::CalcHistory => "Calculator History",
+            Builtin::ConvertFiles => "Convert Files",
             Builtin::SearchNotes => "Search Notes",
             Builtin::CreateNote => "Create Note",
             Builtin::CreateScript => "Create Script Command",
@@ -124,6 +127,7 @@ impl Builtin {
             Builtin::Timers => "Productivity",
             Builtin::CheckUpdates => "Ferrocast",
             Builtin::CalcHistory => "Calculator",
+            Builtin::ConvertFiles => "Files",
             Builtin::SearchNotes | Builtin::CreateNote => "Notes",
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
             Builtin::Settings | Builtin::Quit => "Ferrocast",
@@ -148,6 +152,7 @@ impl Builtin {
             Builtin::Timers => ("sf:timer", [245, 165, 36]),
             Builtin::CheckUpdates => ("sf:arrow.triangle.2.circlepath", [86, 194, 255]),
             Builtin::CalcHistory => ("sf:equal", [120, 120, 130]),
+            Builtin::ConvertFiles => ("sf:arrow.triangle.2.circlepath.doc.on.clipboard", [255, 140, 60]),
             Builtin::SearchNotes | Builtin::CreateNote => ("sf:pencil", [255, 197, 49]),
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => ("sf:terminal", [60, 60, 70]),
             Builtin::Settings => ("sf:gearshape", [120, 120, 130]),
@@ -172,6 +177,7 @@ impl Builtin {
             Builtin::Timers => &["timer", "countdown", "pomodoro", "alarm"],
             Builtin::CheckUpdates => &["update", "upgrade", "brew", "version", "new version"],
             Builtin::CalcHistory => &["calc", "history", "math", "results", "previous"],
+            Builtin::ConvertFiles => &["convert", "converter", "format", "png", "jpg", "mp4", "mp3", "pdf", "compress", "zip"],
             Builtin::Settings => &["preferences", "config"],
             _ => &[],
         };
@@ -214,6 +220,8 @@ pub enum Kind {
     Timer(u64, String),
     /// A running timer, by its index in `App::timers`.
     RunningTimer(usize),
+    /// Convert the files to this target.
+    ConvertTo(Vec<PathBuf>, ferrocast_core::convert::Target),
 }
 
 #[derive(Clone, Debug)]
@@ -257,6 +265,8 @@ pub enum Act {
     CancelTimer(usize),
     QuickLook(PathBuf),
     ClearCalcHistory,
+    /// Open the Convert view for these files.
+    Convert(Vec<PathBuf>),
     DeleteCalcEntry(usize),
     HideApp(i32),
     ToggleFavorite,

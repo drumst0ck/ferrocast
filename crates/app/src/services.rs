@@ -39,6 +39,8 @@ pub enum Msg {
     IconBytes(String, Vec<u8>),
     /// Device-code sign-in: show this code to the user while we poll.
     ChatGptDeviceCode(String),
+    /// Files picked for conversion.
+    ConvertFiles(Vec<PathBuf>),
     /// Model list for the Settings picker, keyed by `models_key`.
     AiModels(String, Result<Vec<String>, String>),
     Wake,
@@ -1257,6 +1259,86 @@ pub fn export_backup(data_root: &std::path::Path, dest_dir: &std::path::Path, st
     st.success().then_some(out).ok_or_else(|| "tar failed".to_string())
 }
 
+/// Convert every file to `target` in a background thread; one toast at the end, first output
+/// revealed in Finder. Failures are reported with the tool's last stderr line.
+pub fn convert_files(files: Vec<PathBuf>, target: ferrocast_core::convert::Target, tools: ferrocast_core::convert::Tools, bus: Bus) {
+    std::thread::spawn(move || {
+        let (outputs, errors) = run_conversion(&files, &target, &tools);
+        let msg = match (outputs.len(), errors.len()) {
+            (0, _) => format!("Conversion failed: {}", errors.first().cloned().unwrap_or_default()),
+            (n, 0) => format!("Converted {n} file{} to {}", if n == 1 { "" } else { "s" }, target.label),
+            (n, e) => format!("Converted {n}, {e} failed: {}", errors[0]),
+        };
+        if let Some(first) = outputs.first() {
+            let _ = ferrocast_macos::apps::reveal(first);
+        }
+        notify("Ferrocast", &msg);
+        bus.send(Msg::Toast(msg));
+    });
+}
+
+/// Run the planned conversion for each file, synchronously. Returns the files written and
+/// one message per failure. No UI side effects, so it can be tested.
+pub fn run_conversion(
+    files: &[PathBuf],
+    target: &ferrocast_core::convert::Target,
+    tools: &ferrocast_core::convert::Tools,
+) -> (Vec<PathBuf>, Vec<String>) {
+    use ferrocast_core::convert::{output_path, plan, soffice_written_path, Engine};
+    {
+        let mut outputs: Vec<PathBuf> = vec![];
+        let mut errors: Vec<String> = vec![];
+        for f in files {
+            let out = output_path(f, target.ext, |p| p.exists());
+            let cmd = match plan(f, target, &out, tools) {
+                Ok(c) => c,
+                Err(e) => {
+                    errors.push(e);
+                    continue;
+                }
+            };
+            let res = std::process::Command::new(&cmd[0]).args(&cmd[1..]).output();
+            match res {
+                Ok(o) if o.status.success() => {
+                    if target.engine == Engine::Soffice {
+                        let written = soffice_written_path(f, &out, target.ext);
+                        if written != out && written.exists() {
+                            let _ = std::fs::rename(&written, &out);
+                        }
+                    }
+                    if out.exists() {
+                        outputs.push(out);
+                    } else {
+                        errors.push(format!(
+                            "{}: no output produced",
+                            f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                        ));
+                    }
+                }
+                Ok(o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    errors.push(format!(
+                        "{}: {}",
+                        f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                        err.lines().last().unwrap_or("conversion failed").trim()
+                    ));
+                }
+                Err(e) => errors.push(format!("could not run {}: {e}", cmd[0])),
+            }
+        }
+        (outputs, errors)
+    }
+}
+
+/// Native multi-file chooser (blocks; call from a thread).
+pub fn choose_files() -> Vec<PathBuf> {
+    let out = ferrocast_macos::system::osascript(
+        "set fs to choose file with prompt \"Choose files to convert\" with multiple selections allowed\nset outp to \"\"\nrepeat with f in fs\nset outp to outp & POSIX path of f & linefeed\nend repeat\nreturn outp",
+    )
+    .unwrap_or_default();
+    out.lines().filter(|l| !l.trim().is_empty()).map(|l| PathBuf::from(l.trim())).collect()
+}
+
 /// Ask the user for a JSON file with a native dialog (blocks; call from a thread).
 pub fn choose_json_file() -> Option<PathBuf> {
     let out = ferrocast_macos::system::osascript(
@@ -1264,6 +1346,63 @@ pub fn choose_json_file() -> Option<PathBuf> {
     )
     .ok()?;
     (!out.is_empty()).then(|| PathBuf::from(out))
+}
+
+#[cfg(test)]
+mod convert_tests {
+    use super::*;
+    use ferrocast_core::convert::{targets, Tools};
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("fc-conv-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn png_to_jpeg_with_sips_and_no_overwrite() {
+        let d = tmp("img");
+        let src = d.join("photo.png");
+        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png"), &src).unwrap();
+        let t = targets(&src, &Tools::default()).into_iter().find(|t| t.ext == "jpg").unwrap();
+        let (out, err) = run_conversion(&[src.clone()], &t, &Tools::default());
+        assert!(err.is_empty(), "{err:?}");
+        assert_eq!(out, vec![d.join("photo.jpg")]);
+        assert_eq!(&std::fs::read(&out[0]).unwrap()[..3], &[0xFF, 0xD8, 0xFF], "JPEG magic");
+        // second run must not overwrite
+        let (out2, _) = run_conversion(&[src], &t, &Tools::default());
+        assert_eq!(out2, vec![d.join("photo 2.jpg")]);
+    }
+
+    #[test]
+    fn text_to_docx_and_folder_to_zip() {
+        let d = tmp("doc");
+        let txt = d.join("notes.txt");
+        std::fs::write(&txt, "hello").unwrap();
+        let t = targets(&txt, &Tools::default()).into_iter().find(|t| t.ext == "docx").unwrap();
+        let (out, err) = run_conversion(&[txt], &t, &Tools::default());
+        assert!(err.is_empty(), "{err:?}");
+        assert_eq!(&std::fs::read(&out[0]).unwrap()[..2], b"PK", "docx is a zip");
+        let folder = d.join("folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("a.txt"), "a").unwrap();
+        let z = targets(&folder, &Tools::default()).into_iter().find(|t| t.ext == "zip").unwrap();
+        let (out, err) = run_conversion(&[folder], &z, &Tools::default());
+        assert!(err.is_empty(), "{err:?}");
+        assert_eq!(out, vec![d.join("folder.zip")]);
+    }
+
+    #[test]
+    fn missing_tool_reports_instead_of_running() {
+        let d = tmp("missing");
+        let src = d.join("p.png");
+        std::fs::write(&src, b"x").unwrap();
+        let t = targets(&src, &Tools::default()).into_iter().find(|t| t.ext == "webp").unwrap();
+        let (out, err) = run_conversion(&[src], &t, &Tools::default());
+        assert!(out.is_empty());
+        assert!(err[0].contains("ffmpeg"));
+    }
 }
 
 #[cfg(test)]
