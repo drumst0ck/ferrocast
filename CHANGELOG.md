@@ -25,6 +25,7 @@ First public build.
 - Calculator: `200 * 10%`, `pi/2`, `2 x 3`, `1,000 * 2`, small currency amounts (`1 jpy in usd`).
 - Time zones: `est`/`pst`/`cet` are fixed offsets; clocks inside a DST gap still resolve.
 - `{date offset=…}` no longer panics on absurd values; `{snippet name=…}` resolves in pastes and quicklinks.
+- A single click runs a list row (hover already selects); clicks in the 350 ms after a view change are ignored so a habitual double click cannot fire the first row of the new screen.
 - Snippet keywords that prefix another keyword are rejected; held Backspace no longer closes the launcher.
 - Confirm view no longer stays under a script's output; ⌘↵ never fires "Add to Favorites" by position.
 - Deleted clipboard images are removed from disk; currency rates refresh when stale; failed saves are reported.

@@ -57,6 +57,7 @@ fn fixture() -> App {
         app_icon: None,
         wide_font: false,
         show_t: None,
+        nav_at: Instant::now(),
         claude: None,
         ai_models: Default::default(),
         runs: HashMap::new(),

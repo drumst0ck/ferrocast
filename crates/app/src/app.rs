@@ -218,6 +218,8 @@ pub struct App {
     wide_font: bool,
     /// Set by show(); cleared by the first frame drawn afterwards (FERROCAST_PROFILE).
     pub(crate) show_t: Option<Instant>,
+    /// Last push/pop/reset, to debounce clicks across view changes.
+    pub(crate) nav_at: Instant,
     /// Warm Claude Code process while Ask AI is open (ClaudeCode provider only).
     claude: Option<std::sync::Arc<services::ClaudeSession>>,
     /// Model lists for the Settings picker, by `services::models_key`; `None` while loading.
@@ -408,6 +410,7 @@ impl App {
             app_icon: None,
             wide_font: false,
             show_t: None,
+            nav_at: Instant::now(),
             claude: None,
             ai_models: Default::default(),
             runs: HashMap::new(),
@@ -716,6 +719,7 @@ impl App {
 
     fn push(&mut self, v: View) {
         self.sec_dirty = true;
+        self.nav_at = Instant::now();
         if matches!(v, View::Windows) {
             self.win_cache = running::list_windows();
         }
@@ -736,6 +740,7 @@ impl App {
 
     fn pop(&mut self) {
         self.sec_dirty = true;
+        self.nav_at = Instant::now();
         if self.stack.len() > 1 {
             self.stack.pop();
             self.query.clear();
@@ -751,6 +756,7 @@ impl App {
 
     fn reset_to_root(&mut self) {
         self.sec_dirty = true;
+        self.nav_at = Instant::now();
         self.stack = vec![View::Root];
         self.query.clear();
         self.selected = 0;

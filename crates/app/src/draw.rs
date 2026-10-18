@@ -753,10 +753,11 @@ impl App {
             self.draw_panel(ui, content, &pal);
         }
 
-        if let Some(i) = clicked.or(double) {
-            self.selected = i;
-        }
-        if let Some(i) = double {
+        // Hovering already selects, so a single click runs the row, as in the original launcher.
+        // Clicks right after a view change are ignored: the second half of a habitual double
+        // click must not fire the first row of the screen that just opened.
+        let _ = double;
+        if let Some(i) = clicked.filter(|_| self.nav_at.elapsed() > Duration::from_millis(350)) {
             self.selected = i;
             if let Some(item) = sections.iter().flat_map(|s| s.items.iter()).nth(i).cloned() {
                 if let Some(a) = self.actions_for(&item).first() {
