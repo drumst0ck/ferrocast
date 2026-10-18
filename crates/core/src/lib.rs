@@ -5,6 +5,7 @@ pub mod ai;
 pub mod calc;
 pub mod chatgpt;
 pub mod color;
+pub mod convert;
 pub mod currency;
 pub mod fuzzy;
 pub mod import;
