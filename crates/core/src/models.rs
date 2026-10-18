@@ -185,6 +185,18 @@ pub struct CommandConfig {
     pub disabled: bool,
 }
 
+/// Where Ask AI sends its questions.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum AiProvider {
+    /// Any server speaking the OpenAI chat-completions API: Ollama, LM Studio, OpenAI, OpenRouter…
+    #[default]
+    OpenAiCompatible,
+    /// Anthropic's Messages API with an API key.
+    Anthropic,
+    /// The Claude Code command-line tool, signed in with the user's own Claude subscription.
+    ClaudeCode,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
@@ -206,8 +218,11 @@ pub struct Settings {
     pub commands: HashMap<String, CommandConfig>,
     pub show_menu_bar_icon: bool,
     pub quit_all_excluded: Vec<String>,
+    pub ai_provider: AiProvider,
     pub ai_base_url: String,
     pub ai_model: String,
+    /// Model for the Anthropic API (the OpenAI-compatible model name lives in `ai_model`).
+    pub anthropic_model: String,
     pub launch_at_login: bool,
     pub onboarded: bool,
 }
@@ -237,8 +252,10 @@ impl Default for Settings {
             commands: HashMap::new(),
             show_menu_bar_icon: true,
             quit_all_excluded: vec!["Finder".into()],
+            ai_provider: AiProvider::default(),
             ai_base_url: crate::ai::DEFAULT_BASE_URL.into(),
             ai_model: crate::ai::DEFAULT_MODEL.into(),
+            anthropic_model: String::new(),
             launch_at_login: false,
             onboarded: false,
         }

@@ -10,6 +10,7 @@ First public build.
 - System commands: Toggle Wi-Fi and Toggle Keep Awake (caffeinate).
 - Quick Look for files (⌘Y) and Check for Updates through Homebrew.
 - Calculator History (last 100 results, delete one or clear), recently used emoji, and a “Look up in Dictionary” fallback.
+- Ask AI providers: besides any OpenAI-compatible server, Anthropic's Messages API (own key in the Keychain) and Claude Code, the official CLI signed in with your Claude subscription (tools off, prompt on stdin, own system prompt). Test connection checks each. ChatGPT and Claude subscriptions do not include API access, so they are not offered directly.
 - Settings redesigned: a sidebar with General, Clipboard, Snippets, AI, Scripts and Advanced; each setting is a row with a title, a plain-language description and its control (animated switches, segmented pickers, key caps). The AI tab gains provider presets (Ollama, LM Studio, OpenAI), Keychain status for the key and a Test connection button that asks the server for its model list.
 - Footer shows the app icon and a pulsing “Searching files” indicator while Spotlight answers.
 - Design: San Francisco as the UI font, brand accent, sliding selection, action-panel pop-in, launcher fade-in.

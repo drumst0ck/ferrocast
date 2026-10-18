@@ -13,7 +13,7 @@ const compare = [
   ['Price', 'Free. MIT licence.', 'Free tier; Pro subscription for AI and cloud sync.'],
   ['Account', 'None.', 'Optional; needed for Pro features.'],
   ['Your data', 'JSON files on your disk. Open them in any editor.', 'Local, with optional cloud sync on Pro.'],
-  ['AI', 'Your own model: Ollama on your Mac by default, or any OpenAI-compatible server.', 'Raycast AI with hosted models, on Pro.'],
+  ['AI', 'Your own model: Ollama on your Mac by default, any OpenAI-compatible server, the Anthropic API, or Claude Code with your Claude plan.', 'Raycast AI with hosted models, on Pro.'],
   ['Source code', 'Open. Read it, fork it, fix it.', 'Closed.'],
   ['Extensions', 'Script Commands (Raycast-compatible). No store.', 'Thousands in the Store. This is where Raycast shines.'],
   ['Install', 'Homebrew builds it from source on your Mac.', 'Signed, notarized download.'],
@@ -24,7 +24,7 @@ const views = [
   ['Actions', 'panel', 'Press ⌘K for actions: aliases, a hotkey for any command, favorites and more.'],
   ['Clipboard', 'clipboard', 'Text, links, colors, files and images. Pin what matters; password managers are ignored.'],
   ['Snippets', 'snippets', 'Type a keyword and it expands as you write, with placeholders like {date}, {clipboard} and {cursor}.'],
-  ['Ask AI', 'ai', 'Chat with Ollama, LM Studio or OpenAI. Answers stream in, and your key stays in the Keychain.'],
+  ['Ask AI', 'ai', 'Chat with Ollama, LM Studio, OpenAI, the Anthropic API or Claude Code. Answers stream in; keys stay in the Keychain.'],
   ['Settings', 'settings', 'Six tabs, plain-language descriptions, and an AI tab that tests the connection to your model server.'],
 ];
 const extras = [
@@ -62,7 +62,8 @@ const faq = [
   ['Do I need to be a developer to install it?', 'No, but you do need to open Terminal once and paste four lines. Homebrew does the rest. Grab a coffee while it builds.'],
   ['Why does it ask for Accessibility access?', 'Because moving windows, pasting for you and expanding snippets all need it. Search, the calculator and AI work without it. A welcome screen walks you through it.'],
   ['Is my clipboard history private?', 'It never leaves your Mac. It sits in a JSON file in Application Support, and anything copied from a password manager like 1Password is skipped on purpose.'],
-  ['Does Ask AI send my text to the cloud?', 'Only if you tell it to. Out of the box it talks to Ollama on your own Mac. Point it at LM Studio or OpenAI if you prefer; the key goes in the Keychain.'],
+  ['Does Ask AI send my text to the cloud?', 'Only if you tell it to. Out of the box it talks to Ollama on your own Mac. Point it at LM Studio, OpenAI or the Anthropic API if you prefer; keys go in the Keychain.'],
+  ['Can I use my ChatGPT or Claude subscription?', 'Not directly: those subscriptions do not include API access, and their sign-in tokens are not for third-party apps. If you have Claude Code installed and signed in, Ferrocast can use it as a provider, since it is Anthropic’s own tool running on your Mac.'],
   ['Coming from Raycast. Will my stuff work?', 'Your Script Commands run as they are, and snippets import from a JSON export. Quicklinks you recreate in a minute.'],
   ['What is missing today?', 'Honestly: an extension store and sync between Macs. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.'],
 ];

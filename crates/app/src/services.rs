@@ -546,76 +546,136 @@ pub fn refresh_rates(bus: Bus) {
 // AI (OpenAI-compatible endpoint; API key lives in the macOS Keychain)
 
 const KEYCHAIN_SERVICE: &str = "ferrocast-ai";
+const KEYCHAIN_SERVICE_ANTHROPIC: &str = "ferrocast-anthropic";
+
+fn keychain_service(p: AiProvider) -> &'static str {
+    match p {
+        AiProvider::Anthropic => KEYCHAIN_SERVICE_ANTHROPIC,
+        _ => KEYCHAIN_SERVICE,
+    }
+}
 
 pub fn ai_key() -> Option<String> {
+    ai_key_for(AiProvider::OpenAiCompatible)
+}
+
+pub fn ai_key_for(p: AiProvider) -> Option<String> {
     let out =
-        std::process::Command::new("/usr/bin/security").args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"]).output().ok()?;
+        std::process::Command::new("/usr/bin/security").args(["find-generic-password", "-s", keychain_service(p), "-w"]).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|k| !k.is_empty())
 }
 
-/// Store (or with an empty key, delete) the API key. The key is briefly visible in `security`'s argv.
-pub fn set_ai_key(key: &str) -> bool {
+pub fn set_ai_key_for(p: AiProvider, key: &str) -> bool {
     let key = key.trim();
     let mut cmd = std::process::Command::new("/usr/bin/security");
     if key.is_empty() {
-        cmd.args(["delete-generic-password", "-s", KEYCHAIN_SERVICE]);
+        cmd.args(["delete-generic-password", "-s", keychain_service(p)]);
     } else {
-        cmd.args(["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", "ferrocast", "-w", key]);
+        cmd.args(["add-generic-password", "-U", "-s", keychain_service(p), "-a", "ferrocast", "-w", key]);
     }
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
-/// Probe `<base>/models` and report how many models the server lists, as a toast.
-pub fn test_ai_connection(base_url: String, bus: Bus) {
+/// Path of the Claude Code CLI, if installed.
+pub fn claude_code_path() -> Option<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_default();
+    [
+        home.join(".local/bin/claude"),
+        PathBuf::from("/opt/homebrew/bin/claude"),
+        PathBuf::from("/usr/local/bin/claude"),
+        home.join(".claude/local/claude"),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+}
+
+/// Check the configured provider: list models (OpenAI-style or Anthropic) or run `claude --version`.
+pub fn test_ai_connection(settings: &Settings, bus: Bus) {
     use ferrocast_core::ai;
     use std::process::{Command, Stdio};
+    let provider = settings.ai_provider;
+    let base = settings.ai_base_url.trim().trim_end_matches('/').to_string();
     std::thread::spawn(move || {
-        let base = base_url.trim().trim_end_matches('/').to_string();
-        let mut cfg = format!("url = {}\n", ai::curl_config_quote(&format!("{base}/models")));
-        if let Some(k) = ai_key().filter(|k| !k.is_empty()) {
-            cfg.push_str(&format!("header = {}\n", ai::curl_config_quote(&format!("Authorization: Bearer {k}"))));
-        }
-        let out = Command::new("/usr/bin/curl")
-            .args(["-sS", "-m", "8", "-K", "-"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .and_then(|mut c| {
-                use std::io::Write;
-                if let Some(mut i) = c.stdin.take() {
-                    let _ = i.write_all(cfg.as_bytes());
-                }
-                c.wait_with_output()
-            });
-        let msg = match out {
-            Ok(o) if o.status.success() => match serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                Ok(v) => {
-                    let models: Vec<String> = v["data"]
-                        .as_array()
-                        .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
-                        .unwrap_or_default();
-                    match models.len() {
-                        0 => "Connected, but the server lists no models".to_string(),
-                        1 => format!("Connected · 1 model: {}", models[0]),
-                        n => format!("Connected · {n} models, e.g. {}", models[0]),
-                    }
-                }
-                Err(_) => format!("Server answered, but not with an OpenAI-style model list ({} bytes)", o.stdout.len()),
+        let msg = match provider {
+            AiProvider::ClaudeCode => match claude_code_path() {
+                None => "Claude Code not found. Install it from claude.ai/code and run `claude` once to sign in.".to_string(),
+                Some(p) => match Command::new(&p).arg("--version").output() {
+                    Ok(o) if o.status.success() => format!("Claude Code ready · {}", String::from_utf8_lossy(&o.stdout).trim()),
+                    Ok(o) => format!("Claude Code failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
+                    Err(e) => format!("Could not run Claude Code: {e}"),
+                },
             },
-            Ok(o) => format!("Could not connect: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("unknown error").trim()),
-            Err(e) => format!("Could not start curl: {e}"),
+            _ => {
+                let (url, key_header) = match provider {
+                    AiProvider::Anthropic => {
+                        (ai::ANTHROPIC_MODELS_URL.to_string(), ai_key_for(AiProvider::Anthropic).map(|k| format!("x-api-key: {k}")))
+                    }
+                    _ => (format!("{base}/models"), ai_key().map(|k| format!("Authorization: Bearer {k}"))),
+                };
+                let mut cfg = format!("url = {}\n", ai::curl_config_quote(&url));
+                if provider == AiProvider::Anthropic {
+                    cfg.push_str("header = \"anthropic-version: 2023-06-01\"\n");
+                }
+                if let Some(h) = key_header {
+                    cfg.push_str(&format!("header = {}\n", ai::curl_config_quote(&h)));
+                }
+                let out = Command::new("/usr/bin/curl")
+                    .args(["-sS", "-m", "8", "-K", "-"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .and_then(|mut c| {
+                        use std::io::Write;
+                        if let Some(mut i) = c.stdin.take() {
+                            let _ = i.write_all(cfg.as_bytes());
+                        }
+                        c.wait_with_output()
+                    });
+                match out {
+                    Ok(o) if o.status.success() => match serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                        Ok(v) if v.get("error").is_some() => {
+                            format!("Server error: {}", v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("unknown"))
+                        }
+                        Ok(v) => {
+                            let models: Vec<String> = v["data"]
+                                .as_array()
+                                .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
+                                .unwrap_or_default();
+                            match models.len() {
+                                0 => "Connected, but the server lists no models".to_string(),
+                                1 => format!("Connected · 1 model: {}", models[0]),
+                                n => format!("Connected · {n} models, e.g. {}", models[0]),
+                            }
+                        }
+                        Err(_) => format!("Server answered, but not with a model list ({} bytes)", o.stdout.len()),
+                    },
+                    Ok(o) => format!(
+                        "Could not connect: {}",
+                        String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("unknown error").trim()
+                    ),
+                    Err(e) => format!("Could not start curl: {e}"),
+                }
+            }
         };
         bus.send(Msg::Toast(msg));
     });
 }
 
-/// Streaming chat completion; `on_delta` receives text as it arrives. The request
-/// (including the key) goes to curl via stdin, never argv.
-pub fn ai_stream(
-    base_url: &str,
-    model: &str,
-    api_key: Option<&str>,
+/// Streaming answer from the configured provider; `on_delta` receives text as it arrives.
+/// Requests (including keys) go to curl or Claude Code via stdin, never argv.
+pub fn ai_stream(settings: &Settings, history: &[(String, String)], question: &str, on_delta: impl FnMut(&str)) -> Result<(), String> {
+    let key = match settings.ai_provider {
+        AiProvider::ClaudeCode => None,
+        p => ai_key_for(p),
+    };
+    ai_stream_with_key(settings, key, history, question, on_delta)
+}
+
+/// `ai_stream` with the API key supplied by the caller (tests use a mock server and a fixed key).
+pub fn ai_stream_with_key(
+    settings: &Settings,
+    key: Option<String>,
     history: &[(String, String)],
     question: &str,
     mut on_delta: impl FnMut(&str),
@@ -623,20 +683,69 @@ pub fn ai_stream(
     use ferrocast_core::ai::{self, Sse};
     use std::io::{BufRead, BufReader, Read, Write};
     use std::process::{Command, Stdio};
-    let url = ai::endpoint(base_url);
-    let cfg = ai::curl_config(&url, api_key, &ai::build_chat_request(model, history, question));
-    let mut child = Command::new("/usr/bin/curl")
-        .args(["-sS", "-N", "-m", "300", "-K", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Could not start curl: {e}"))?;
-    child.stdin.take().ok_or("no stdin")?.write_all(cfg.as_bytes()).map_err(|e| e.to_string())?;
+    let provider = settings.ai_provider;
+    let (mut child, stdin_payload, parse): (std::process::Child, String, fn(&str) -> Sse) = match provider {
+        AiProvider::ClaudeCode => {
+            let exe = claude_code_path()
+                .ok_or("Claude Code is not installed. Install it from claude.ai/code and run `claude` once to sign in.")?;
+            let mut cmd = Command::new(exe);
+            cmd.args([
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--include-partial-messages",
+                "--verbose",
+                "--no-session-persistence",
+                "--strict-mcp-config",
+                "--system-prompt",
+                ai::SYSTEM_PROMPT,
+                "--tools",
+                "",
+            ]);
+            if !settings.anthropic_model.trim().is_empty() {
+                cmd.args(["--model", settings.anthropic_model.trim()]);
+            }
+            let child = cmd
+                .current_dir(std::env::temp_dir())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Could not start Claude Code: {e}"))?;
+            (child, ai::transcript_prompt(history, question), ai::parse_claude_code_line)
+        }
+        AiProvider::Anthropic => {
+            let key = key.clone().ok_or("No Anthropic API key yet. Add one in Settings → AI.")?;
+            let model =
+                if settings.anthropic_model.trim().is_empty() { ai::DEFAULT_ANTHROPIC_MODEL } else { settings.anthropic_model.trim() };
+            let cfg = ai::anthropic_curl_config(&key, &ai::build_anthropic_request(model, history, question));
+            let child = Command::new("/usr/bin/curl")
+                .args(["-sS", "-N", "-m", "300", "-K", "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Could not start curl: {e}"))?;
+            (child, cfg, ai::parse_anthropic_sse_line)
+        }
+        AiProvider::OpenAiCompatible => {
+            let url = ai::endpoint(&settings.ai_base_url);
+            let cfg = ai::curl_config(&url, key.as_deref(), &ai::build_chat_request(&settings.ai_model, history, question));
+            let child = Command::new("/usr/bin/curl")
+                .args(["-sS", "-N", "-m", "300", "-K", "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Could not start curl: {e}"))?;
+            (child, cfg, ai::parse_sse_line)
+        }
+    };
+    child.stdin.take().ok_or("no stdin")?.write_all(stdin_payload.as_bytes()).map_err(|e| e.to_string())?;
     let mut got = false;
     let mut raw = String::new();
     for line in BufReader::new(child.stdout.take().ok_or("no stdout")?).lines().map_while(Result::ok) {
-        match ai::parse_sse_line(&line) {
+        match parse(&line) {
             Sse::Delta(t) => {
                 got = true;
                 on_delta(&t);
@@ -647,7 +756,8 @@ pub fn ai_stream(
                 return Err(e);
             }
             Sse::Ignore => {
-                if !line.starts_with("data:") && !line.starts_with(':') {
+                if provider != AiProvider::ClaudeCode && !line.starts_with("data:") && !line.starts_with(':') && !line.starts_with("event:")
+                {
                     raw.push_str(&line);
                     raw.push('\n');
                 }
@@ -658,29 +768,35 @@ pub fn ai_stream(
     if got {
         return Ok(());
     }
-    // No SSE deltas: a plain JSON answer or error body, or a connection failure.
-    if !raw.trim().is_empty() {
+    // No stream deltas: a plain JSON answer or error body, or a connection failure.
+    if provider == AiProvider::OpenAiCompatible && !raw.trim().is_empty() {
         return ai::parse_response(&raw).map(|t| on_delta(&t));
+    }
+    if provider == AiProvider::Anthropic && !raw.trim().is_empty() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(m) = v.pointer("/error/message").and_then(|m| m.as_str()) {
+                return Err(m.to_string());
+            }
+        }
     }
     let mut err = String::new();
     if let Some(mut e) = child.stderr.take() {
         let _ = e.read_to_string(&mut err);
     }
     Err(if err.contains("Failed to connect") || err.contains("Connection refused") {
-        format!("Cannot reach {base_url}. Is your AI server (e.g. Ollama) running? Change it in Settings.")
+        format!("Cannot reach {}. Is your AI server (e.g. Ollama) running? Change it in Settings.", settings.ai_base_url)
     } else if err.trim().is_empty() {
         "The AI server returned an empty answer".to_string()
     } else {
-        err.trim().to_string()
+        err.trim().lines().last().unwrap_or("").to_string()
     })
 }
 
 pub fn ask_ai(settings: &Settings, history: Vec<(String, String)>, question: String, run: u64, bus: Bus) {
-    let (base, model) = (settings.ai_base_url.clone(), settings.ai_model.clone());
+    let settings = settings.clone();
     std::thread::spawn(move || {
-        let key = ai_key();
         let b = bus.clone();
-        let result = ai_stream(&base, &model, key.as_deref(), &history, &question, |t| b.send(Msg::AiChunk { run, text: t.to_string() }));
+        let result = ai_stream(&settings, &history, &question, |t| b.send(Msg::AiChunk { run, text: t.to_string() }));
         bus.send(Msg::AiDone { run, error: result.err() });
     });
 }
@@ -756,6 +872,18 @@ mod backup_tests {
 #[cfg(test)]
 mod ai_tests {
     use super::*;
+
+    /// Talks to the real Claude Code CLI; run by hand: cargo test -p ferrocast claude_code_live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn claude_code_live() {
+        let settings = Settings { ai_provider: AiProvider::ClaudeCode, ..Default::default() };
+        let mut out = String::new();
+        let r = ai_stream_with_key(&settings, None, &[], "Reply with exactly the word: pong", |t| out.push_str(t));
+        println!("result={r:?} text={out:?}");
+        assert!(r.is_ok(), "{r:?}");
+        assert!(out.to_lowercase().contains("pong"), "{out}");
+    }
     use std::io::{Read, Write};
 
     /// One-shot HTTP server returning `body`; yields the raw request it received.
@@ -785,7 +913,8 @@ mod ai_tests {
 
     fn collect(url: &str, key: Option<&str>, history: &[(String, String)], q: &str) -> (Vec<String>, Result<(), String>) {
         let mut parts = vec![];
-        let r = ai_stream(url, "test-model", key, history, q, |t| parts.push(t.to_string()));
+        let settings = Settings { ai_base_url: url.to_string(), ai_model: "test-model".into(), ..Default::default() };
+        let r = ai_stream_with_key(&settings, key.map(str::to_string), history, q, |t| parts.push(t.to_string()));
         (parts, r)
     }
 

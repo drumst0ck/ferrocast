@@ -1347,7 +1347,7 @@ impl App {
         let has_key = match has_key {
             Some(v) => v,
             None => {
-                let v = services::ai_key().is_some_and(|k| !k.is_empty());
+                let v = services::ai_key_for(self.settings.ai_provider).is_some();
                 ctx.data_mut(|d| d.insert_temp(Id::new("ai_has_key"), v));
                 v
             }
@@ -1446,40 +1446,84 @@ impl App {
                         note(ui, pal, if trusted { "Expansion is ready: Accessibility is granted." } else { "Expansion needs Accessibility. Grant it under Advanced." });
                     }
                     3 => {
-                        section(ui, pal, "Provider");
+                        use ferrocast_core::models::AiProvider as P;
+                        let prov = s.ai_provider;
                         group(ui, pal, |ui| {
-                            row(ui, pal, "Preset", "Fills the server address below. Any OpenAI-compatible server works.", |ui| {
-                                let presets = [("Ollama", "http://localhost:11434/v1"), ("LM Studio", "http://localhost:1234/v1"), ("OpenAI", "https://api.openai.com/v1")];
-                                for &(name, url) in presets.iter().rev() {
-                                    let on = s.ai_base_url.trim().trim_end_matches('/') == url;
-                                    if pill(ui, pal, name, on) {
-                                        s.ai_base_url = url.to_string();
-                                    }
-                                }
-                            });
-                            row(ui, pal, "Server", "Base URL ending in /v1.", |ui| {
-                                ui.add(TextEdit::singleline(&mut s.ai_base_url).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("http://localhost:11434/v1"));
-                            });
-                            row(ui, pal, "Model", "The name the server expects, e.g. llama3.2 or gpt-4o-mini.", |ui| {
-                                ui.add(TextEdit::singleline(&mut s.ai_model).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("llama3.2"));
-                            });
-                            row(ui, pal, "API key", if has_key { "A key is stored in the Keychain. Enter a new one to replace it, or leave empty and save to remove it." } else { "Only needed for hosted providers. Stored in the macOS Keychain, never in a file." }, |ui| {
-                                if small_btn(ui, pal, "Save") {
-                                    save_key = true;
-                                }
-                                ui.add(TextEdit::singleline(&mut key_scratch).password(true).desired_width(180.0).font(FontId::proportional(12.5)).hint_text(if has_key { "••••••••" } else { "sk-…" }));
+                            row(ui, pal, "Provider", match prov {
+                                P::OpenAiCompatible => "Any server speaking the OpenAI API: Ollama on this Mac, LM Studio, OpenAI, OpenRouter…",
+                                P::Anthropic => "Claude through Anthropic's API, billed to your API key. A ChatGPT or Claude subscription does not include API access.",
+                                P::ClaudeCode => "Runs the official Claude Code command-line tool, signed in with your own Claude subscription. Slower to start (a few seconds) but no API key.",
+                            }, |ui| {
+                                segmented(ui, pal, &mut s.ai_provider, &[(P::OpenAiCompatible, "OpenAI API"), (P::Anthropic, "Anthropic"), (P::ClaudeCode, "Claude Code")]);
                             });
                         });
+                        ui.add_space(14.0);
+                        match prov {
+                            P::OpenAiCompatible => {
+                                section(ui, pal, "Server");
+                                group(ui, pal, |ui| {
+                                    row(ui, pal, "Preset", "Fills the server address below.", |ui| {
+                                        let presets = [("Ollama", "http://localhost:11434/v1"), ("LM Studio", "http://localhost:1234/v1"), ("OpenAI", "https://api.openai.com/v1")];
+                                        for &(name, url) in presets.iter().rev() {
+                                            let on = s.ai_base_url.trim().trim_end_matches('/') == url;
+                                            if pill(ui, pal, name, on) {
+                                                s.ai_base_url = url.to_string();
+                                            }
+                                        }
+                                    });
+                                    row(ui, pal, "Server", "Base URL ending in /v1.", |ui| {
+                                        ui.add(TextEdit::singleline(&mut s.ai_base_url).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("http://localhost:11434/v1"));
+                                    });
+                                    row(ui, pal, "Model", "The name the server expects, e.g. llama3.2 or gpt-4o-mini.", |ui| {
+                                        ui.add(TextEdit::singleline(&mut s.ai_model).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("llama3.2"));
+                                    });
+                                    row(ui, pal, "API key", if has_key { "A key is stored in the Keychain. Enter a new one to replace it, or save empty to remove it." } else { "Only needed for hosted providers. Stored in the macOS Keychain, never in a file." }, |ui| {
+                                        if small_btn(ui, pal, "Save") {
+                                            save_key = true;
+                                        }
+                                        ui.add(TextEdit::singleline(&mut key_scratch).password(true).desired_width(180.0).font(FontId::proportional(12.5)).hint_text(if has_key { "••••••••" } else { "sk-…" }));
+                                    });
+                                });
+                            }
+                            P::Anthropic => {
+                                section(ui, pal, "Anthropic API");
+                                group(ui, pal, |ui| {
+                                    row(ui, pal, "Model", "An Anthropic model id. Empty uses the default shown.", |ui| {
+                                        ui.add(TextEdit::singleline(&mut s.anthropic_model).desired_width(280.0).font(FontId::proportional(12.5)).hint_text(ferrocast_core::ai::DEFAULT_ANTHROPIC_MODEL));
+                                    });
+                                    row(ui, pal, "API key", if has_key { "A key is stored in the Keychain. Enter a new one to replace it, or save empty to remove it." } else { "From console.anthropic.com. Stored in the macOS Keychain, never in a file." }, |ui| {
+                                        if small_btn(ui, pal, "Save") {
+                                            save_key = true;
+                                        }
+                                        ui.add(TextEdit::singleline(&mut key_scratch).password(true).desired_width(180.0).font(FontId::proportional(12.5)).hint_text(if has_key { "••••••••" } else { "sk-ant-…" }));
+                                    });
+                                });
+                            }
+                            P::ClaudeCode => {
+                                section(ui, pal, "Claude Code");
+                                let path = services::claude_code_path();
+                                group(ui, pal, |ui| {
+                                    row(ui, pal, "Command-line tool", &path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Not found. Install from claude.ai/code, then run `claude` once in Terminal to sign in.".into()), |ui| {
+                                        ui.label(RichText::new(if path.is_some() { "Installed ✓" } else { "Missing" }).size(13.0).color(if path.is_some() { Color32::from_rgb(89, 212, 153) } else { pal.accent }));
+                                    });
+                                    row(ui, pal, "Model", "Optional. Leave empty for Claude Code's default, or an alias such as sonnet or opus.", |ui| {
+                                        ui.add(TextEdit::singleline(&mut s.anthropic_model).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("default"));
+                                    });
+                                });
+                                ui.add_space(10.0);
+                                note(ui, pal, "Ferrocast runs `claude -p` with its tools switched off and your question on stdin, exactly as you would in Terminal. Whether that use fits your Claude plan is between you and Anthropic.");
+                            }
+                        }
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             if accent_btn(ui, pal, "Test connection") {
                                 test_ai = true;
                             }
                             ui.add_space(10.0);
-                            ui.label(RichText::new("Asks the server for its model list.").size(12.0).color(pal.sub));
+                            ui.label(RichText::new(match prov { P::ClaudeCode => "Checks that the tool runs.", _ => "Asks the server for its model list." }).size(12.0).color(pal.sub));
                         });
                         ui.add_space(10.0);
-                        note(ui, pal, "Ask AI streams answers and keeps the conversation while the window is open. With Ollama everything stays on this Mac.");
+                        note(ui, pal, "Ask AI streams answers and keeps the conversation while the window is open. With Ollama or Claude Code nothing goes through Ferrocast's servers: there are none.");
                     }
                     4 => {
                         group(ui, pal, |ui| {
@@ -1560,7 +1604,7 @@ impl App {
         }
         self.scratch = scratch;
         if save_key {
-            let ok = services::set_ai_key(&key_scratch);
+            let ok = services::set_ai_key_for(s.ai_provider, &key_scratch);
             let now_has = !key_scratch.trim().is_empty();
             key_scratch.clear();
             ctx.data_mut(|d| d.insert_temp(Id::new("ai_has_key"), now_has));
@@ -1575,7 +1619,7 @@ impl App {
         self.key_scratch = key_scratch;
         if test_ai {
             self.toast("Testing connection…");
-            services::test_ai_connection(s.ai_base_url.clone(), self.bus.clone());
+            services::test_ai_connection(&s, self.bus.clone());
         }
         if let Some(i) = remove_dir {
             s.script_directories.remove(i);
@@ -1592,6 +1636,9 @@ impl App {
         if rec {
             self.push(View::Hotkey { id: "__launcher".into(), name: "Ferrocast launcher".into(), err: String::new() });
             return;
+        }
+        if s.ai_provider != self.settings.ai_provider {
+            ctx.data_mut(|d| d.remove::<bool>(Id::new("ai_has_key")));
         }
         if s != self.settings {
             if s.launch_at_login != self.settings.launch_at_login {
