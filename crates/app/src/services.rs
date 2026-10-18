@@ -37,6 +37,8 @@ pub enum Msg {
     },
     /// Icon PNG bytes fetched in the background for the first screen.
     IconBytes(String, Vec<u8>),
+    /// Device-code sign-in: show this code to the user while we poll.
+    ChatGptDeviceCode(String),
     Wake,
 }
 
@@ -632,6 +634,84 @@ fn token_post(body: &str) -> Result<String, String> {
         return Err(String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("curl failed").to_string());
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// POST a JSON body through curl; returns (HTTP status, body).
+fn json_post(url: &str, body: &str) -> Result<(u16, String), String> {
+    use ferrocast_core::ai::curl_config_quote as q;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let cfg = format!("url = {}\nrequest = \"POST\"\nheader = \"Content-Type: application/json\"\ndata = {}\n", q(url), q(body));
+    let mut child = Command::new("/usr/bin/curl")
+        .args(["-sS", "-m", "30", "-w", "\n%{http_code}", "-K", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    child.stdin.take().ok_or("no stdin")?.write_all(cfg.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("curl failed").to_string());
+    }
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let (body, code) = text.rsplit_once('\n').unwrap_or(("", "0"));
+    Ok((code.trim().parse().unwrap_or(0), body.to_string()))
+}
+
+/// Device-code sign-in: no local port. Shows a code, opens the verification page, polls until
+/// the user approves, then exchanges and stores the credentials.
+pub fn chatgpt_sign_in_device(bus: Bus) {
+    use ferrocast_core::chatgpt::{self, DevicePoll};
+    std::thread::spawn(move || {
+        let start = match json_post(chatgpt::DEVICE_USER_CODE_URL, &chatgpt::device_start_body()) {
+            Ok((404, _)) => {
+                Err("OpenAI's device-code sign-in is not enabled right now; free port 1455 and use the browser flow.".to_string())
+            }
+            Ok((s, b)) if (200..300).contains(&s) => chatgpt::parse_device_start(&b),
+            Ok((s, b)) => Err(format!("device-code request failed ({s}): {}", b.chars().take(160).collect::<String>())),
+            Err(e) => Err(e),
+        };
+        let d = match start {
+            Ok(d) => d,
+            Err(e) => {
+                bus.send(Msg::Toast(format!("ChatGPT sign-in: {e}")));
+                return;
+            }
+        };
+        clipboard::write_text(&d.user_code);
+        bus.send(Msg::ChatGptDeviceCode(d.user_code.clone()));
+        let _ = std::process::Command::new("/usr/bin/open").arg(chatgpt::DEVICE_VERIFICATION_URL).status();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15 * 60);
+        let mut wait = Duration::from_secs(d.interval_secs);
+        let ready = loop {
+            std::thread::sleep(wait);
+            if std::time::Instant::now() > deadline {
+                break Err("the code expired before it was approved".to_string());
+            }
+            match json_post(chatgpt::DEVICE_TOKEN_URL, &chatgpt::device_poll_body(&d)).map(|(s, b)| chatgpt::parse_device_poll(s, &b)) {
+                Ok(DevicePoll::Pending) => {}
+                Ok(DevicePoll::SlowDown) => wait += Duration::from_secs(5),
+                Ok(DevicePoll::Ready { code, verifier }) => break Ok((code, verifier)),
+                Ok(DevicePoll::Failed(e)) => break Err(e),
+                Err(e) => break Err(e),
+            }
+        };
+        let msg = match ready
+            .and_then(|(code, ver)| token_post(&chatgpt::device_exchange_body(&code, &ver)))
+            .and_then(|b| chatgpt::parse_token_response(&b, now_secs()))
+        {
+            Ok(c) => {
+                if save_chatgpt_credentials(Some(&c)) {
+                    "Signed in with ChatGPT".to_string()
+                } else {
+                    "Signed in, but the Keychain refused to store the session".to_string()
+                }
+            }
+            Err(e) => format!("ChatGPT sign-in failed: {e}"),
+        };
+        bus.send(Msg::Toast(msg));
+    });
 }
 
 /// Credentials with a valid access token, refreshing and re-saving when expired.

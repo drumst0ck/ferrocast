@@ -16,6 +16,10 @@ pub const CALLBACK_PORT: u16 = 1455;
 pub const SCOPE: &str = "openid profile email offline_access";
 pub const RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 pub const DEFAULT_MODEL: &str = "gpt-5.5";
+pub const DEVICE_USER_CODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
+pub const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
+pub const DEVICE_VERIFICATION_URL: &str = "https://auth.openai.com/codex/device";
+pub const DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
 const JWT_CLAIM: &str = "https://api.openai.com/auth";
 
 fn b64url(bytes: &[u8]) -> String {
@@ -99,6 +103,84 @@ pub fn exchange_body(code: &str, verifier: &str) -> String {
 /// Form body for refreshing.
 pub fn refresh_body(refresh_token: &str) -> String {
     format!("grant_type=refresh_token&client_id={}&refresh_token={}", url_encode(CLIENT_ID), url_encode(refresh_token))
+}
+
+/// Device-code flow, step 1 response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceStart {
+    pub device_auth_id: String,
+    pub user_code: String,
+    pub interval_secs: u64,
+}
+
+pub fn device_start_body() -> String {
+    serde_json::json!({"client_id": CLIENT_ID}).to_string()
+}
+
+pub fn parse_device_start(body: &str) -> Result<DeviceStart, String> {
+    let v: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| format!("Unexpected device-code response: {}", body.chars().take(160).collect::<String>()))?;
+    let interval = match &v["interval"] {
+        serde_json::Value::String(s) => s.trim().parse::<u64>().ok(),
+        other => other.as_u64(),
+    }
+    .unwrap_or(5);
+    Ok(DeviceStart {
+        device_auth_id: v["device_auth_id"].as_str().ok_or("device-code response missing device_auth_id")?.to_string(),
+        user_code: v["user_code"].as_str().ok_or("device-code response missing user_code")?.to_string(),
+        interval_secs: interval.max(1),
+    })
+}
+
+pub fn device_poll_body(d: &DeviceStart) -> String {
+    serde_json::json!({"device_auth_id": d.device_auth_id, "user_code": d.user_code}).to_string()
+}
+
+/// Outcome of one device-code poll.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DevicePoll {
+    Pending,
+    SlowDown,
+    /// Authorization code plus the PKCE verifier the server generated; exchange with `DEVICE_REDIRECT_URI`.
+    Ready {
+        code: String,
+        verifier: String,
+    },
+    Failed(String),
+}
+
+/// `status` is the HTTP status; 403/404 mean "not yet".
+pub fn parse_device_poll(status: u16, body: &str) -> DevicePoll {
+    if status == 403 || status == 404 {
+        return DevicePoll::Pending;
+    }
+    let v: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return DevicePoll::Failed(format!("device auth failed with status {status}")),
+    };
+    if (200..300).contains(&status) {
+        return match (v["authorization_code"].as_str(), v["code_verifier"].as_str()) {
+            (Some(c), Some(ver)) => DevicePoll::Ready { code: c.to_string(), verifier: ver.to_string() },
+            _ => DevicePoll::Failed("device auth response missing authorization_code".into()),
+        };
+    }
+    let code = v["error"]["code"].as_str().or_else(|| v["error"].as_str()).unwrap_or("");
+    match code {
+        "deviceauth_authorization_pending" => DevicePoll::Pending,
+        "slow_down" => DevicePoll::SlowDown,
+        _ => DevicePoll::Failed(format!("device auth failed with status {status}: {}", body.chars().take(160).collect::<String>())),
+    }
+}
+
+/// Form body for exchanging a device-flow code (its own redirect URI).
+pub fn device_exchange_body(code: &str, verifier: &str) -> String {
+    format!(
+        "grant_type=authorization_code&client_id={}&code={}&code_verifier={}&redirect_uri={}",
+        url_encode(CLIENT_ID),
+        url_encode(code),
+        url_encode(verifier),
+        url_encode(DEVICE_REDIRECT_URI)
+    )
 }
 
 /// Stored credentials.
@@ -225,6 +307,21 @@ mod tests {
         assert!(!c.is_expired(1000));
         assert!(c.is_expired(4600));
         assert!(parse_token_response(r#"{"error":"invalid_grant","error_description":"expired"}"#, 0).unwrap_err().contains("expired"));
+    }
+
+    #[test]
+    fn device_code_flow_parsing() {
+        let d = parse_device_start(r#"{"device_auth_id":"d1","user_code":"ABCD-1234","interval":"5"}"#).unwrap();
+        assert_eq!((d.user_code.as_str(), d.interval_secs), ("ABCD-1234", 5));
+        assert_eq!(parse_device_poll(403, ""), DevicePoll::Pending);
+        assert_eq!(parse_device_poll(400, r#"{"error":{"code":"deviceauth_authorization_pending"}}"#), DevicePoll::Pending);
+        assert_eq!(parse_device_poll(400, r#"{"error":{"code":"slow_down"}}"#), DevicePoll::SlowDown);
+        assert_eq!(
+            parse_device_poll(200, r#"{"authorization_code":"c","code_verifier":"v"}"#),
+            DevicePoll::Ready { code: "c".into(), verifier: "v".into() }
+        );
+        assert!(matches!(parse_device_poll(500, "boom"), DevicePoll::Failed(_)));
+        assert!(device_exchange_body("c", "v").contains("deviceauth%2Fcallback"));
     }
 
     #[test]

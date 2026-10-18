@@ -699,6 +699,18 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::ChatGptDeviceCode(code) => {
+                    self.show();
+                    self.push(View::Output {
+                        run: 0,
+                        title: "Sign in with ChatGPT".into(),
+                        text: format!(
+                            "Your code:\n\n    {code}\n\nIt is already on your clipboard. A browser tab with {} should be open; paste the code there and approve. This screen can be closed; Ferrocast keeps waiting in the background and will tell you when it is done.",
+                            ferrocast_core::chatgpt::DEVICE_VERIFICATION_URL
+                        ),
+                        done: true,
+                    });
+                }
                 Msg::IconBytes(k, b) => {
                     if !self.icons.map.contains_key(&k) {
                         self.icons.prefetched.insert(k, b);

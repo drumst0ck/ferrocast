@@ -1339,7 +1339,7 @@ impl App {
         let mut s = self.settings.clone();
         let trusted = windows::accessibility_trusted(false);
         let (mut rec, mut req_acc, mut open_data, mut add_dir, mut save_key, mut test_ai) = (false, false, false, false, false, false);
-        let (mut chatgpt_in, mut chatgpt_out) = (false, false);
+        let (mut chatgpt_in, mut chatgpt_out, mut chatgpt_device) = (false, false, false);
         let mut remove_dir = None;
         let mut enable = None;
         let mut scratch = std::mem::take(&mut self.scratch);
@@ -1513,14 +1513,19 @@ impl App {
                                     }
                                 };
                                 group(ui, pal, |ui| {
-                                    row(ui, pal, "Account", if signed { "Signed in. The session is stored in the macOS Keychain and refreshed automatically." } else { "Opens chatgpt.com in your browser to sign in. Nothing is stored until you finish." }, |ui| {
+                                    row(ui, pal, "Account", if signed { "Signed in. The session is stored in the macOS Keychain and refreshed automatically." } else { "Sign in opens your browser and listens on port 1455 for the redirect. If that port is taken (Codex, Pi), it switches to a one-time code you type on openai.com." }, |ui| {
                                         if signed {
                                             if small_btn(ui, pal, "Sign out") {
                                                 chatgpt_out = true;
                                             }
                                             ui.label(RichText::new("Signed in ✓").size(13.0).color(Color32::from_rgb(89, 212, 153)));
-                                        } else if accent_btn(ui, pal, "Sign in with ChatGPT…") {
-                                            chatgpt_in = true;
+                                        } else {
+                                            if small_btn(ui, pal, "Use a code instead") {
+                                                chatgpt_device = true;
+                                            }
+                                            if accent_btn(ui, pal, "Sign in with ChatGPT…") {
+                                                chatgpt_in = true;
+                                            }
                                         }
                                     });
                                     row(ui, pal, "Model", "Optional. Empty uses the default shown. Only models your plan includes will answer.", |ui| {
@@ -1651,6 +1656,10 @@ impl App {
         if chatgpt_in {
             ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));
             services::chatgpt_sign_in(self.bus.clone());
+        }
+        if chatgpt_device {
+            ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));
+            services::chatgpt_sign_in_device(self.bus.clone());
         }
         if chatgpt_out {
             let ok = services::chatgpt_sign_out();
