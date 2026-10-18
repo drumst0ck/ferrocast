@@ -3,6 +3,7 @@
 
 pub mod ai;
 pub mod calc;
+pub mod chatgpt;
 pub mod color;
 pub mod currency;
 pub mod fuzzy;

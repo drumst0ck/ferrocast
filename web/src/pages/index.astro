@@ -63,7 +63,7 @@ const faq = [
   ['Why does it ask for Accessibility access?', 'Because moving windows, pasting for you and expanding snippets all need it. Search, the calculator and AI work without it. A welcome screen walks you through it.'],
   ['Is my clipboard history private?', 'It never leaves your Mac. It sits in a JSON file in Application Support, and anything copied from a password manager like 1Password is skipped on purpose.'],
   ['Does Ask AI send my text to the cloud?', 'Only if you tell it to. Out of the box it talks to Ollama on your own Mac. Point it at LM Studio, OpenAI or the Anthropic API if you prefer; keys go in the Keychain.'],
-  ['Can I use my ChatGPT or Claude subscription?', 'Not directly: those subscriptions do not include API access, and their sign-in tokens are not for third-party apps. If you have Claude Code installed and signed in, Ferrocast can use it as a provider, since it is Anthropic’s own tool running on your Mac.'],
+  ['Can I use my ChatGPT or Claude subscription?', 'Yes, with caveats we spell out in the app. Claude: if Claude Code is installed and signed in, Ferrocast uses it as a provider, since it is Anthropic’s own tool. ChatGPT: Ferrocast can sign in with your account the way OpenAI’s Codex CLI does; it works, but OpenAI has not blessed third-party apps doing that, so the API with a key is the by-the-book route.'],
   ['Coming from Raycast. Will my stuff work?', 'Your Script Commands run as they are, and snippets import from a JSON export. Quicklinks you recreate in a minute.'],
   ['What is missing today?', 'Honestly: an extension store and sync between Macs. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.'],
 ];

@@ -689,7 +689,11 @@ impl App {
             self.sec_dirty = true;
             match m {
                 Msg::Wake => {}
-                Msg::Toast(t) => self.toast(t),
+                Msg::Toast(t) => {
+                    // A sign-in or sign-out may just have finished; let Settings re-read the Keychain.
+                    self.ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));
+                    self.toast(t)
+                }
                 Msg::Apps(a) => {
                     self.apps = a;
                     self.rebuild();

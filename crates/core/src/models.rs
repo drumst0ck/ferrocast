@@ -195,6 +195,8 @@ pub enum AiProvider {
     Anthropic,
     /// The Claude Code command-line tool, signed in with the user's own Claude subscription.
     ClaudeCode,
+    /// Sign in with ChatGPT: the OAuth flow and backend the Codex CLI uses, with the user's ChatGPT plan.
+    ChatGpt,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -223,6 +225,8 @@ pub struct Settings {
     pub ai_model: String,
     /// Model for the Anthropic API (the OpenAI-compatible model name lives in `ai_model`).
     pub anthropic_model: String,
+    /// Model for Sign in with ChatGPT; empty means the default.
+    pub chatgpt_model: String,
     pub launch_at_login: bool,
     pub onboarded: bool,
 }
@@ -256,6 +260,7 @@ impl Default for Settings {
             ai_base_url: crate::ai::DEFAULT_BASE_URL.into(),
             ai_model: crate::ai::DEFAULT_MODEL.into(),
             anthropic_model: String::new(),
+            chatgpt_model: String::new(),
             launch_at_login: false,
             onboarded: false,
         }

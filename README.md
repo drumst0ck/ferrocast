@@ -63,7 +63,7 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Calculator History (últimos 100 cálculos, borrar entrada o todo), emoji recientes, «Look up in Dictionary» como fallback | Implementado |
 | Icono en barra de menú, ajustes, hotkeys por comando | Implementado |
 | Emoji en color (renderizados con AppKit) | Implementado |
-| Ask AI con streaming y conversación. Tres proveedores: servidor compatible con OpenAI (Ollama por defecto, LM Studio, OpenAI…), API de Anthropic (clave propia) y **Claude Code** (la CLI oficial, con tu suscripción a Claude). Claves en el Keychain | Implementado; OpenAI probado contra un servidor simulado, Claude Code probado en real (`cargo test claude_code_live -- --ignored`), Anthropic API sin probar en real |
+| Ask AI con streaming y conversación. Cuatro proveedores: servidor compatible con OpenAI (Ollama por defecto, LM Studio, OpenAI…), **Sign in with ChatGPT** (mismo flujo OAuth y backend que Codex CLI; usa tu plan de ChatGPT; zona gris de términos, avisado en la app), API de Anthropic (clave propia) y **Claude Code** (la CLI oficial, con tu suscripción a Claude). Claves en el Keychain | Implementado; OpenAI probado contra un servidor simulado, Claude Code probado en real (`cargo test claude_code_live -- --ignored`), Anthropic API sin probar en real |
 | Arranque al iniciar sesión (LaunchAgent) | Implementado; se aplica en el siguiente inicio de sesión |
 | Bienvenida y permisos, atajos, Acerca de | Implementado |
 | Exportar copia de seguridad (sin historial del portapapeles), importar snippets (JSON de Raycast) | Implementado |

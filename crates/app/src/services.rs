@@ -547,6 +547,7 @@ pub fn refresh_rates(bus: Bus) {
 
 const KEYCHAIN_SERVICE: &str = "ferrocast-ai";
 const KEYCHAIN_SERVICE_ANTHROPIC: &str = "ferrocast-anthropic";
+const KEYCHAIN_SERVICE_CHATGPT: &str = "ferrocast-chatgpt";
 
 fn keychain_service(p: AiProvider) -> &'static str {
     match p {
@@ -576,6 +577,150 @@ pub fn set_ai_key_for(p: AiProvider, key: &str) -> bool {
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
+// ---- Sign in with ChatGPT
+
+pub fn chatgpt_credentials() -> Option<ferrocast_core::chatgpt::Credentials> {
+    let out = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", KEYCHAIN_SERVICE_CHATGPT, "-w"])
+        .output()
+        .ok()?;
+    out.status.success().then(|| serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).ok()).flatten()
+}
+
+fn save_chatgpt_credentials(c: Option<&ferrocast_core::chatgpt::Credentials>) -> bool {
+    let mut cmd = std::process::Command::new("/usr/bin/security");
+    match c {
+        None => cmd.args(["delete-generic-password", "-s", KEYCHAIN_SERVICE_CHATGPT]),
+        Some(c) => cmd.args([
+            "add-generic-password",
+            "-U",
+            "-s",
+            KEYCHAIN_SERVICE_CHATGPT,
+            "-a",
+            "ferrocast",
+            "-w",
+            &serde_json::to_string(c).unwrap_or_default(),
+        ]),
+    };
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+pub fn chatgpt_sign_out() -> bool {
+    save_chatgpt_credentials(None)
+}
+
+/// POST a form body to the token endpoint through curl (body via stdin, never argv).
+fn token_post(body: &str) -> Result<String, String> {
+    use ferrocast_core::ai::curl_config_quote as q;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let cfg = format!(
+        "url = {}\nrequest = \"POST\"\nheader = \"Content-Type: application/x-www-form-urlencoded\"\ndata = {}\n",
+        q(ferrocast_core::chatgpt::TOKEN_URL),
+        q(body)
+    );
+    let mut child = Command::new("/usr/bin/curl")
+        .args(["-sS", "-m", "30", "-K", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    child.stdin.take().ok_or("no stdin")?.write_all(cfg.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("curl failed").to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// Credentials with a valid access token, refreshing and re-saving when expired.
+pub fn chatgpt_fresh_credentials() -> Result<ferrocast_core::chatgpt::Credentials, String> {
+    use ferrocast_core::chatgpt;
+    let c = chatgpt_credentials().ok_or("Not signed in with ChatGPT. Open Settings → AI → ChatGPT and sign in.")?;
+    if !c.is_expired(now_secs()) {
+        return Ok(c);
+    }
+    let body = token_post(&chatgpt::refresh_body(&c.refresh))?;
+    let fresh = chatgpt::parse_token_response(&body, now_secs())
+        .map_err(|e| format!("ChatGPT session expired and could not be refreshed ({e}). Sign in again in Settings → AI."))?;
+    save_chatgpt_credentials(Some(&fresh));
+    Ok(fresh)
+}
+
+/// Browser sign-in: open the authorization page, catch the redirect on 127.0.0.1:1455, exchange
+/// the code, store the credentials. Reports progress and the outcome as toasts.
+pub fn chatgpt_sign_in(bus: Bus) {
+    use ferrocast_core::chatgpt;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    std::thread::spawn(move || {
+        let (verifier, challenge) = chatgpt::pkce();
+        let state = chatgpt::random_state();
+        let listener = match TcpListener::bind(("127.0.0.1", chatgpt::CALLBACK_PORT)) {
+            Ok(l) => l,
+            Err(e) => {
+                bus.send(Msg::Toast(format!(
+                    "Port {} is busy ({e}). Quit Codex CLI or Pi if they are signing in, then retry.",
+                    chatgpt::CALLBACK_PORT
+                )));
+                return;
+            }
+        };
+        let _ = listener.set_nonblocking(true);
+        let url = chatgpt::authorize_url(&challenge, &state);
+        let _ = std::process::Command::new("/usr/bin/open").arg(&url).status();
+        bus.send(Msg::Toast("Finish signing in to ChatGPT in your browser…".into()));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5 * 60);
+        let code = loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buf = [0u8; 4096];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let first = req.lines().next().unwrap_or("").to_string();
+                    match chatgpt::parse_callback(&first) {
+                        Some((code, st)) if st.as_deref() == Some(state.as_str()) => {
+                            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<!doctype html><meta charset=utf-8><title>Ferrocast</title><body style=\"font-family:-apple-system,system-ui;background:#0f0f11;color:#f4f4f6;display:grid;place-items:center;height:100vh;margin:0\"><div style=\"text-align:center\"><h1 style=\"font-weight:300\">Signed in to ChatGPT</h1><p>You can close this tab and go back to Ferrocast.</p></div></body>");
+                            break Some(code);
+                        }
+                        Some(_) => {
+                            let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nState mismatch");
+                            break None;
+                        }
+                        None => {
+                            // favicon and friends
+                            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+                        }
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() > deadline {
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+                Err(_) => break None,
+            }
+        };
+        let Some(code) = code else {
+            bus.send(Msg::Toast("ChatGPT sign-in was not completed.".into()));
+            return;
+        };
+        let msg = match token_post(&chatgpt::exchange_body(&code, &verifier)).and_then(|b| chatgpt::parse_token_response(&b, now_secs())) {
+            Ok(c) => {
+                if save_chatgpt_credentials(Some(&c)) {
+                    "Signed in with ChatGPT".to_string()
+                } else {
+                    "Signed in, but the Keychain refused to store the session".to_string()
+                }
+            }
+            Err(e) => format!("ChatGPT sign-in failed: {e}"),
+        };
+        bus.send(Msg::Toast(msg));
+    });
+}
+
 /// Path of the Claude Code CLI, if installed.
 pub fn claude_code_path() -> Option<PathBuf> {
     let home = dirs::home_dir().unwrap_or_default();
@@ -597,6 +742,10 @@ pub fn test_ai_connection(settings: &Settings, bus: Bus) {
     let base = settings.ai_base_url.trim().trim_end_matches('/').to_string();
     std::thread::spawn(move || {
         let msg = match provider {
+            AiProvider::ChatGpt => match chatgpt_fresh_credentials() {
+                Ok(c) => format!("Signed in with ChatGPT · token valid for {} min", ((c.expires - now_secs()) / 60).max(0)),
+                Err(e) => e,
+            },
             AiProvider::ClaudeCode => match claude_code_path() {
                 None => "Claude Code not found. Install it from claude.ai/code and run `claude` once to sign in.".to_string(),
                 Some(p) => match Command::new(&p).arg("--version").output() {
@@ -666,7 +815,7 @@ pub fn test_ai_connection(settings: &Settings, bus: Bus) {
 /// Requests (including keys) go to curl or Claude Code via stdin, never argv.
 pub fn ai_stream(settings: &Settings, history: &[(String, String)], question: &str, on_delta: impl FnMut(&str)) -> Result<(), String> {
     let key = match settings.ai_provider {
-        AiProvider::ClaudeCode => None,
+        AiProvider::ClaudeCode | AiProvider::ChatGpt => None,
         p => ai_key_for(p),
     };
     ai_stream_with_key(settings, key, history, question, on_delta)
@@ -713,6 +862,20 @@ pub fn ai_stream_with_key(
                 .spawn()
                 .map_err(|e| format!("Could not start Claude Code: {e}"))?;
             (child, ai::transcript_prompt(history, question), ai::parse_claude_code_line)
+        }
+        AiProvider::ChatGpt => {
+            use ferrocast_core::chatgpt;
+            let creds = chatgpt_fresh_credentials()?;
+            let model = if settings.chatgpt_model.trim().is_empty() { chatgpt::DEFAULT_MODEL } else { settings.chatgpt_model.trim() };
+            let cfg = chatgpt::curl_config(&creds, &chatgpt::build_request(model, history, question));
+            let child = Command::new("/usr/bin/curl")
+                .args(["-sS", "-N", "-m", "300", "-K", "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Could not start curl: {e}"))?;
+            (child, cfg, chatgpt::parse_sse_line)
         }
         AiProvider::Anthropic => {
             let key = key.clone().ok_or("No Anthropic API key yet. Add one in Settings → AI.")?;
@@ -772,9 +935,9 @@ pub fn ai_stream_with_key(
     if provider == AiProvider::OpenAiCompatible && !raw.trim().is_empty() {
         return ai::parse_response(&raw).map(|t| on_delta(&t));
     }
-    if provider == AiProvider::Anthropic && !raw.trim().is_empty() {
+    if matches!(provider, AiProvider::Anthropic | AiProvider::ChatGpt) && !raw.trim().is_empty() {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(m) = v.pointer("/error/message").and_then(|m| m.as_str()) {
+            if let Some(m) = v.pointer("/error/message").or_else(|| v.get("detail")).and_then(|m| m.as_str()) {
                 return Err(m.to_string());
             }
         }

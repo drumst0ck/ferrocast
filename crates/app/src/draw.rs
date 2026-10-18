@@ -1339,6 +1339,7 @@ impl App {
         let mut s = self.settings.clone();
         let trusted = windows::accessibility_trusted(false);
         let (mut rec, mut req_acc, mut open_data, mut add_dir, mut save_key, mut test_ai) = (false, false, false, false, false, false);
+        let (mut chatgpt_in, mut chatgpt_out) = (false, false);
         let mut remove_dir = None;
         let mut enable = None;
         let mut scratch = std::mem::take(&mut self.scratch);
@@ -1449,12 +1450,13 @@ impl App {
                         use ferrocast_core::models::AiProvider as P;
                         let prov = s.ai_provider;
                         group(ui, pal, |ui| {
-                            row(ui, pal, "Provider", match prov {
+                            row_stacked(ui, pal, "Provider", match prov {
                                 P::OpenAiCompatible => "Any server speaking the OpenAI API: Ollama on this Mac, LM Studio, OpenAI, OpenRouter…",
                                 P::Anthropic => "Claude through Anthropic's API, billed to your API key. A ChatGPT or Claude subscription does not include API access.",
                                 P::ClaudeCode => "Runs the official Claude Code command-line tool, signed in with your own Claude subscription. Slower to start (a few seconds) but no API key.",
+                                P::ChatGpt => "Signs in with your ChatGPT account the way OpenAI's Codex CLI does and uses your ChatGPT plan. No API key.",
                             }, |ui| {
-                                segmented(ui, pal, &mut s.ai_provider, &[(P::OpenAiCompatible, "OpenAI API"), (P::Anthropic, "Anthropic"), (P::ClaudeCode, "Claude Code")]);
+                                segmented(ui, pal, &mut s.ai_provider, &[(P::OpenAiCompatible, "OpenAI API"), (P::ChatGpt, "ChatGPT"), (P::Anthropic, "Anthropic"), (P::ClaudeCode, "Claude Code")]);
                             });
                         });
                         ui.add_space(14.0);
@@ -1499,6 +1501,35 @@ impl App {
                                     });
                                 });
                             }
+                            P::ChatGpt => {
+                                section(ui, pal, "ChatGPT account");
+                                let signed = ctx.data(|d| d.get_temp::<bool>(Id::new("chatgpt_signed")));
+                                let signed = match signed {
+                                    Some(v) => v,
+                                    None => {
+                                        let v = services::chatgpt_credentials().is_some();
+                                        ctx.data_mut(|d| d.insert_temp(Id::new("chatgpt_signed"), v));
+                                        v
+                                    }
+                                };
+                                group(ui, pal, |ui| {
+                                    row(ui, pal, "Account", if signed { "Signed in. The session is stored in the macOS Keychain and refreshed automatically." } else { "Opens chatgpt.com in your browser to sign in. Nothing is stored until you finish." }, |ui| {
+                                        if signed {
+                                            if small_btn(ui, pal, "Sign out") {
+                                                chatgpt_out = true;
+                                            }
+                                            ui.label(RichText::new("Signed in ✓").size(13.0).color(Color32::from_rgb(89, 212, 153)));
+                                        } else if accent_btn(ui, pal, "Sign in with ChatGPT…") {
+                                            chatgpt_in = true;
+                                        }
+                                    });
+                                    row(ui, pal, "Model", "Optional. Empty uses the default shown. Only models your plan includes will answer.", |ui| {
+                                        ui.add(TextEdit::singleline(&mut s.chatgpt_model).desired_width(280.0).font(FontId::proportional(12.5)).hint_text(ferrocast_core::chatgpt::DEFAULT_MODEL));
+                                    });
+                                });
+                                ui.add_space(10.0);
+                                note(ui, pal, "Plain talk: this uses the same sign-in and backend as OpenAI's Codex tool, presenting itself as that client. OpenAI has not blessed third-party apps doing so. If that is a problem for you, use the OpenAI API with a key instead.");
+                            }
                             P::ClaudeCode => {
                                 section(ui, pal, "Claude Code");
                                 let path = services::claude_code_path();
@@ -1520,7 +1551,7 @@ impl App {
                                 test_ai = true;
                             }
                             ui.add_space(10.0);
-                            ui.label(RichText::new(match prov { P::ClaudeCode => "Checks that the tool runs.", _ => "Asks the server for its model list." }).size(12.0).color(pal.sub));
+                            ui.label(RichText::new(match prov { P::ClaudeCode => "Checks that the tool runs.", P::ChatGpt => "Checks the session and refreshes it if needed.", _ => "Asks the server for its model list." }).size(12.0).color(pal.sub));
                         });
                         ui.add_space(10.0);
                         note(ui, pal, "Ask AI streams answers and keeps the conversation while the window is open. With Ollama or Claude Code nothing goes through Ferrocast's servers: there are none.");
@@ -1617,6 +1648,15 @@ impl App {
             });
         }
         self.key_scratch = key_scratch;
+        if chatgpt_in {
+            ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));
+            services::chatgpt_sign_in(self.bus.clone());
+        }
+        if chatgpt_out {
+            let ok = services::chatgpt_sign_out();
+            ctx.data_mut(|d| d.insert_temp(Id::new("chatgpt_signed"), false));
+            self.toast(if ok { "Signed out of ChatGPT" } else { "Could not remove the session from the Keychain" });
+        }
         if test_ai {
             self.toast("Testing connection…");
             services::test_ai_connection(&s, self.bus.clone());
@@ -1686,12 +1726,13 @@ fn group(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) {
 
 fn row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
     let w = ui.available_width();
-    let text_w = (w * 0.5).min(w - 300.0).max(160.0);
+    let text_w = (w * 0.46).min(w - 340.0).max(150.0);
     let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 11)).show(ui, |ui| {
         ui.set_width(w - 28.0);
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.set_width(text_w);
+                ui.set_min_width(text_w);
+                ui.set_max_width(text_w);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.label(RichText::new(title).size(13.5).color(pal.text));
                 ui.label(RichText::new(desc).size(11.5).color(pal.sub));
@@ -1703,6 +1744,24 @@ fn row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce
         });
     });
     // hairline between rows, inset like the original launcher's settings
+    let r = inner.response.rect;
+    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
+}
+
+/// Like `row`, but the control sits on its own line under the text, for wide controls.
+fn row_stacked(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
+    let w = ui.available_width();
+    let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 11)).show(ui, |ui| {
+        ui.set_width(w - 28.0);
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.label(RichText::new(title).size(13.5).color(pal.text));
+        ui.label(RichText::new(desc).size(11.5).color(pal.sub));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            control(ui);
+        });
+    });
     let r = inner.response.rect;
     ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
 }
@@ -1766,7 +1825,10 @@ fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
 
 /// Segmented control: one filled segment slides under the chosen option.
 fn segmented<T: PartialEq + Clone>(ui: &mut Ui, pal: &Palette, value: &mut T, options: &[(T, &str)]) {
-    let seg_w = 72.0;
+    let seg_w = options
+        .iter()
+        .map(|(_, l)| ui.painter().layout_no_wrap(l.to_string(), FontId::proportional(12.0), pal.text).size().x + 22.0)
+        .fold(56.0f32, f32::max);
     let (r, base) = ui.allocate_exact_size(Vec2::new(seg_w * options.len() as f32 + 4.0, 26.0), Sense::hover());
     let id = base.id;
     let p = ui.painter().clone();
