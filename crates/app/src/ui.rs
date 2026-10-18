@@ -89,6 +89,7 @@ impl IconCache {
             Icon::App(p) => format!("app:{p}"),
             Icon::ClipImage(n) => format!("clip:{n}"),
             Icon::Emoji(e) => format!("emoji:{e}"),
+            Icon::Glyph(g, _) => format!("glyph:{g}"),
             _ => return None,
         };
         if let Some(t) = self.map.get(&key) {
@@ -109,6 +110,11 @@ impl IconCache {
             Icon::App(p) => ferrocast_macos::files::icon_png(p, 64.0),
             Icon::ClipImage(n) => std::fs::read(self.images_dir.join(n)).ok(),
             Icon::Emoji(e) => ferrocast_macos::files::emoji_png(e, 96.0),
+            // "sf:name" asks for an SF Symbol; anything else is drawn as text with system fallback.
+            Icon::Glyph(g, _) => match g.strip_prefix("sf:") {
+                Some(name) => ferrocast_macos::files::symbol_png(name, 64.0).or_else(|| ferrocast_macos::files::glyph_png("•", 64.0)),
+                None => ferrocast_macos::files::glyph_png(g, 64.0),
+            },
             _ => None,
         };
         let tex = bytes.and_then(|b| crate::services::decode_png(&b)).map(|img| ctx.load_texture(&key, img, TextureOptions::LINEAR));
@@ -133,8 +139,16 @@ pub fn paint_icon(cache: &mut IconCache, ui: &Ui, rect: Rect, icon: &Icon, pal: 
             }
         },
         Icon::Glyph(g, c) => {
+            // Coloured tile with the symbol rendered by AppKit (full system font fallback), so
+            // no glyph ever shows as an empty box; plain ASCII falls back to the UI font.
             p.rect_filled(rect, 7.0, Color32::from_rgb(c[0], c[1], c[2]));
-            p.text(rect.center(), Align2::CENTER_CENTER, *g, FontId::proportional(rect.height() * 0.55), Color32::WHITE);
+            if g.is_ascii() && !g.starts_with("sf:") {
+                p.text(rect.center(), Align2::CENTER_CENTER, *g, FontId::proportional(rect.height() * 0.5), Color32::WHITE);
+            } else {
+                if let Some(t) = cache.texture(ui.ctx(), icon) {
+                    p.image(t.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                }
+            }
         }
         Icon::Color(c) => {
             p.rect_filled(rect, 7.0, Color32::from_rgba_unmultiplied(c.r, c.g, c.b, (c.a * 255.0) as u8));

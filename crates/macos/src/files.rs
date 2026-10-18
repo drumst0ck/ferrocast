@@ -63,6 +63,68 @@ pub fn icon_png(path: &str, size: f64) -> Option<Vec<u8>> {
 // lockFocus is deprecated (not resolution independent) but is the simplest way to rasterise a
 // glyph with the colour emoji font; output is a fixed-size PNG so that limitation does not matter.
 #[allow(deprecated)]
+/// An SF Symbol (by name) drawn in white at `px`, transparent background. `None` when the name
+/// does not exist on this macOS.
+pub fn symbol_png(name: &str, px: f64) -> Option<Vec<u8>> {
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::{
+        NSBitmapImageFileType, NSBitmapImageRep, NSColor, NSCompositingOperation, NSFontWeightMedium, NSImage, NSImageSymbolConfiguration,
+    };
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
+    let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)?;
+    let cfg = unsafe { NSImageSymbolConfiguration::configurationWithPointSize_weight(px * 0.52, NSFontWeightMedium) };
+    let sym = base.imageWithSymbolConfiguration(&cfg)?;
+    let size = sym.size();
+    let canvas = NSImage::initWithSize(NSImage::alloc(), NSSize::new(px, px));
+    canvas.lockFocus();
+    let origin = NSPoint::new((px - size.width) / 2.0, (px - size.height) / 2.0);
+    unsafe {
+        sym.drawAtPoint_fromRect_operation_fraction(
+            origin,
+            NSRect::new(NSPoint::new(0.0, 0.0), size),
+            NSCompositingOperation::SourceOver,
+            1.0,
+        );
+        NSColor::whiteColor().set();
+        objc2_app_kit::NSRectFillUsingOperation(
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(px, px)),
+            NSCompositingOperation::SourceAtop,
+        );
+    }
+    canvas.unlockFocus();
+    let tiff = canvas.TIFFRepresentation()?;
+    let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
+    let png = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }?;
+    Some(png.to_vec())
+}
+
+/// A symbol drawn in white, centred, with the system font and AppKit's full font fallback, so
+/// icon glyphs render even when the UI font lacks them. Transparent background.
+pub fn glyph_png(text: &str, px: f64) -> Option<Vec<u8>> {
+    use objc2::runtime::AnyObject;
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::{
+        NSBitmapImageFileType, NSBitmapImageRep, NSColor, NSFont, NSFontAttributeName, NSFontWeightMedium, NSForegroundColorAttributeName,
+        NSImage, NSStringDrawing,
+    };
+    use objc2_foundation::{NSDictionary, NSPoint, NSSize, NSString};
+    let img = NSImage::initWithSize(NSImage::alloc(), NSSize::new(px, px));
+    let font = unsafe { NSFont::systemFontOfSize_weight(px * 0.56, NSFontWeightMedium) };
+    let white = unsafe { NSColor::whiteColor() };
+    let (k1, k2) = unsafe { (NSFontAttributeName, NSForegroundColorAttributeName) };
+    let attrs: objc2::rc::Retained<NSDictionary<NSString, AnyObject>> =
+        NSDictionary::from_slices(&[k1, k2], &[&*font as &AnyObject, &*white as &AnyObject]);
+    let ns = NSString::from_str(text);
+    let size = unsafe { ns.sizeWithAttributes(Some(&attrs)) };
+    img.lockFocus();
+    unsafe { ns.drawAtPoint_withAttributes(NSPoint::new((px - size.width) / 2.0, (px - size.height) / 2.0), Some(&attrs)) };
+    img.unlockFocus();
+    let tiff = img.TIFFRepresentation()?;
+    let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
+    let png = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }?;
+    Some(png.to_vec())
+}
+
 pub fn emoji_png(text: &str, px: f64) -> Option<Vec<u8>> {
     use objc2::runtime::AnyObject;
     use objc2::AllocAnyThread;

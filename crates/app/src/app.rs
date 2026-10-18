@@ -270,6 +270,37 @@ pub(crate) fn needs_wide_font(text: &str) -> bool {
     })
 }
 
+/// SF Symbol for each system command (white on the grey tile).
+fn system_symbol(c: &system::SystemCommand) -> &'static str {
+    use system::SystemCommand::*;
+    match c {
+        LockScreen => "sf:lock",
+        Sleep => "sf:moon.zzz",
+        SleepDisplays => "sf:display",
+        Restart => "sf:arrow.counterclockwise",
+        ShutDown => "sf:power",
+        LogOut => "sf:rectangle.portrait.and.arrow.right",
+        ScreenSaver => "sf:sparkles.tv",
+        PlayPause => "sf:playpause",
+        NextTrack => "sf:forward",
+        PreviousTrack => "sf:backward",
+        ToggleMute => "sf:speaker.slash",
+        VolumeUp => "sf:speaker.wave.3",
+        VolumeDown => "sf:speaker.wave.1",
+        Volume(_) => "sf:speaker.wave.2",
+        ShowDesktop => "sf:menubar.dock.rectangle",
+        ToggleAppearance => "sf:circle.lefthalf.filled",
+        OpenTrash | EmptyTrash => "sf:trash",
+        EjectAll => "sf:eject",
+        ToggleHiddenFiles | UnhideAll => "sf:eye",
+        HideAllExceptFrontmost => "sf:eye.slash",
+        QuitAllApps => "sf:xmark.circle",
+        DismissNotifications => "sf:bell.slash",
+        ToggleWifi => "sf:wifi",
+        KeepAwake => "sf:cup.and.saucer",
+    }
+}
+
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, hidden: bool) -> App {
         let ctx = cc.egui_ctx.clone();
@@ -521,7 +552,7 @@ impl App {
                 id: c.id(),
                 title: c.title().into(),
                 subtitle: "Window Management".into(),
-                icon: Icon::Glyph("▣", [89, 212, 153]),
+                icon: Icon::Glyph("sf:rectangle.lefthalf.filled", [89, 212, 153]),
                 accessory: "Command".into(),
                 keywords: vec!["window".into(), "resize".into(), "move".into()],
                 kind: Kind::Window(*c),
@@ -532,7 +563,7 @@ impl App {
                 id: c.id(),
                 title: c.title(),
                 subtitle: "System".into(),
-                icon: Icon::Glyph("⌘", [90, 90, 105]),
+                icon: Icon::Glyph(system_symbol(c), [90, 90, 105]),
                 accessory: "Command".into(),
                 keywords: c.keywords().iter().map(|s| s.to_string()).collect(),
                 kind: Kind::System(*c),
@@ -543,7 +574,7 @@ impl App {
                 id: format!("quicklink:{}", q.id),
                 title: q.name.clone(),
                 subtitle: q.link.clone(),
-                icon: Icon::Glyph("↗", [86, 194, 255]),
+                icon: Icon::Glyph("sf:link", [86, 194, 255]),
                 accessory: "Quicklink".into(),
                 keywords: vec![],
                 kind: Kind::Quicklink { id: q.id.clone(), arg: None },
@@ -557,7 +588,7 @@ impl App {
                 subtitle: sub,
                 icon: match s.icon.clone().filter(|i| i.chars().count() <= 2 && !i.is_ascii()) {
                     Some(e) => Icon::Emoji(e),
-                    None => Icon::Glyph("›_", [60, 60, 70]),
+                    None => Icon::Glyph("sf:terminal", [60, 60, 70]),
                 },
                 accessory: "Script Command".into(),
                 keywords: s.description.iter().cloned().collect(),
@@ -909,7 +940,7 @@ impl App {
                 id: "time".into(),
                 title: r.display.clone(),
                 subtitle: r.question.clone(),
-                icon: Icon::Glyph("◷", [255, 99, 99]),
+                icon: Icon::Glyph("sf:timer", [255, 99, 99]),
                 accessory: "Time".into(),
                 keywords: vec![],
                 kind: Kind::Calc(r),
@@ -920,7 +951,7 @@ impl App {
                 id: "calc".into(),
                 title: r.display.clone(),
                 subtitle: r.question.clone(),
-                icon: Icon::Glyph("=", [255, 99, 99]),
+                icon: Icon::Glyph("sf:equal", [255, 99, 99]),
                 accessory: "Calculator".into(),
                 keywords: vec![],
                 kind: Kind::Calc(r),
@@ -942,7 +973,7 @@ impl App {
                 id: "url".into(),
                 title: format!("Open {u}"),
                 subtitle: String::new(),
-                icon: Icon::Glyph("🌐", [86, 194, 255]),
+                icon: Icon::Glyph("sf:globe", [86, 194, 255]),
                 accessory: "URL".into(),
                 keywords: vec![],
                 kind: Kind::Url(u),
@@ -958,7 +989,7 @@ impl App {
                 id: "timer".into(),
                 title: format!("Start {what} timer"),
                 subtitle: String::new(),
-                icon: Icon::Glyph("◷", [245, 165, 36]),
+                icon: Icon::Glyph("sf:timer", [245, 165, 36]),
                 accessory: "Timer".into(),
                 keywords: vec![],
                 kind: Kind::Timer(t.secs, t.label),
@@ -996,7 +1027,7 @@ impl App {
             id: "fallback:web".into(),
             title: format!("Search the web for “{q}”"),
             subtitle: String::new(),
-            icon: Icon::Glyph("🔍", [120, 120, 130]),
+            icon: Icon::Glyph("sf:magnifyingglass", [120, 120, 130]),
             accessory: "Fallback".into(),
             keywords: vec![],
             kind: Kind::WebSearch(q.to_string()),
@@ -1005,7 +1036,7 @@ impl App {
             id: "fallback:files".into(),
             title: format!("Search files for “{q}”"),
             subtitle: String::new(),
-            icon: Icon::Glyph("🔍", [120, 120, 130]),
+            icon: Icon::Glyph("sf:magnifyingglass", [120, 120, 130]),
             accessory: "Fallback".into(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchFiles, q.to_string()),
@@ -1014,7 +1045,7 @@ impl App {
             id: "fallback:emoji".into(),
             title: format!("Search emoji for “{q}”"),
             subtitle: String::new(),
-            icon: Icon::Glyph("☺", [255, 197, 49]),
+            icon: Icon::Glyph("sf:face.smiling", [255, 197, 49]),
             accessory: "Fallback".into(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchEmoji, q.to_string()),
@@ -1024,7 +1055,7 @@ impl App {
                 id: "fallback:dict".into(),
                 title: format!("Look up “{q}” in Dictionary"),
                 subtitle: String::new(),
-                icon: Icon::Glyph("Aa", [120, 120, 130]),
+                icon: Icon::Glyph("sf:character.book.closed", [120, 120, 130]),
                 accessory: "Fallback".into(),
                 keywords: vec![],
                 kind: Kind::Url(format!("dict://{}", q.replace(' ', "%20"))),
@@ -1034,7 +1065,7 @@ impl App {
             id: "fallback:ai".into(),
             title: format!("Ask AI: “{q}”"),
             subtitle: String::new(),
-            icon: Icon::Glyph("✦", [168, 110, 255]),
+            icon: Icon::Glyph("sf:sparkles", [168, 110, 255]),
             accessory: "Fallback".into(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::AskAi, q.to_string()),
@@ -1122,10 +1153,12 @@ impl App {
                     }
                     let icon = match e.kind {
                         ClipKind::Image => Icon::ClipImage(e.content.clone()),
-                        ClipKind::Color => Rgba::parse(&e.content).map(Icon::Color).unwrap_or(Icon::Glyph("⎘", [255, 99, 99])),
-                        ClipKind::Link => Icon::Glyph("↗", [86, 194, 255]),
-                        ClipKind::File => Icon::Glyph("📄", [120, 120, 130]),
-                        ClipKind::Text => Icon::Glyph("T", [90, 90, 105]),
+                        ClipKind::Color => {
+                            Rgba::parse(&e.content).map(Icon::Color).unwrap_or(Icon::Glyph("sf:doc.on.clipboard", [255, 99, 99]))
+                        }
+                        ClipKind::Link => Icon::Glyph("sf:link", [86, 194, 255]),
+                        ClipKind::File => Icon::Glyph("sf:doc", [120, 120, 130]),
+                        ClipKind::Text => Icon::Glyph("sf:text.alignleft", [90, 90, 105]),
                     };
                     let age = now - e.copied_at;
                     let pinned_flag = e.pinned;
@@ -1166,7 +1199,7 @@ impl App {
                                     id: format!("snippet:{}", s.id),
                                     title: s.name.clone(),
                                     subtitle: s.text.lines().next().unwrap_or("").chars().take(60).collect(),
-                                    icon: Icon::Glyph("✂", [255, 167, 38]),
+                                    icon: Icon::Glyph("sf:scissors", [255, 167, 38]),
                                     accessory: s.keyword.clone(),
                                     keywords: vec![],
                                     kind: Kind::Snippet(s.id.clone()),
@@ -1189,7 +1222,7 @@ impl App {
                                     id: format!("quicklink:{}", l.id),
                                     title: l.name.clone(),
                                     subtitle: l.link.chars().take(70).collect(),
-                                    icon: Icon::Glyph("↗", [86, 194, 255]),
+                                    icon: Icon::Glyph("sf:link", [86, 194, 255]),
                                     accessory: String::new(),
                                     keywords: vec![],
                                     kind: Kind::Quicklink { id: l.id.clone(), arg: None },
@@ -1268,7 +1301,7 @@ impl App {
                                     id: format!("win:{}", w.id),
                                     title: t,
                                     subtitle: w.app.clone(),
-                                    icon: Icon::Glyph("⊞", [89, 212, 153]),
+                                    icon: Icon::Glyph("sf:macwindow.on.rectangle", [89, 212, 153]),
                                     accessory: String::new(),
                                     keywords: vec![],
                                     kind: Kind::OpenWindow(w.clone()),
@@ -1291,7 +1324,7 @@ impl App {
                                     id: format!("proc:{}", pr.pid),
                                     title: pr.name.clone(),
                                     subtitle: format!("PID {}", pr.pid),
-                                    icon: pr.bundle().map(Icon::App).unwrap_or(Icon::Glyph("›", [108, 108, 120])),
+                                    icon: pr.bundle().map(Icon::App).unwrap_or(Icon::Glyph("sf:chevron.right", [108, 108, 120])),
                                     accessory: format!("{:.0}% CPU · {:.0} MB", pr.cpu, pr.mem_mb),
                                     keywords: vec![],
                                     kind: Kind::Process(pr.clone()),
@@ -1316,7 +1349,7 @@ impl App {
                                     id: format!("calc:{i}"),
                                     title: e.display.clone(),
                                     subtitle: e.question.clone(),
-                                    icon: Icon::Glyph("=", [120, 120, 130]),
+                                    icon: Icon::Glyph("sf:equal", [120, 120, 130]),
                                     accessory: services::ago(now - e.at),
                                     keywords: vec![],
                                     kind: Kind::Calc(ferrocast_core::calc::CalcResult {
@@ -1356,7 +1389,7 @@ impl App {
                                             .map(|d| d.format("%H:%M").to_string())
                                             .unwrap_or_default()
                                     ),
-                                    icon: Icon::Glyph("◷", [245, 165, 36]),
+                                    icon: Icon::Glyph("sf:timer", [245, 165, 36]),
                                     accessory: ferrocast_core::timer::clock(left),
                                     keywords: vec![],
                                     kind: Kind::RunningTimer(i),
@@ -1379,7 +1412,7 @@ impl App {
                             id: format!("note:{}", n.id),
                             title: n.title(),
                             subtitle: String::new(),
-                            icon: Icon::Glyph("✎", [255, 197, 49]),
+                            icon: Icon::Glyph("sf:pencil", [255, 197, 49]),
                             accessory: String::new(),
                             keywords: vec![],
                             kind: Kind::Note(n.id.clone()),
