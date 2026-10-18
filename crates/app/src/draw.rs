@@ -116,6 +116,14 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("about") => app.push(View::About),
             Ok("processes") => app.push(View::Processes),
             Ok("calchistory") => app.push(View::CalcHistory),
+            Ok("settings-ai") => {
+                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 3usize));
+                app.push(View::Settings);
+            }
+            Ok("settings-advanced") => {
+                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 5usize));
+                app.push(View::Settings);
+            }
             Ok("timers") => {
                 app.timers.push(crate::app::RunningTimer {
                     ends_at: Instant::now() + Duration::from_secs(1500),
@@ -1323,117 +1331,229 @@ impl App {
     }
 
     fn draw_settings(&mut self, ui: &mut Ui, pal: &Palette) {
+        const TABS: [(&str, &str); 6] =
+            [("General", "⌘"), ("Clipboard", "⎘"), ("Snippets", "{ }"), ("AI", "AI"), ("Scripts", "›_"), ("Advanced", "···")];
+        let ctx = ui.ctx().clone();
+        let tab_id = Id::new("settings_tab");
+        let mut tab: usize = ctx.data(|d| d.get_temp(tab_id)).unwrap_or(0);
         let mut s = self.settings.clone();
         let trusted = windows::accessibility_trusted(false);
-        let mut rec = false;
-        let mut req_acc = false;
-        let mut open_data = false;
+        let (mut rec, mut req_acc, mut open_data, mut add_dir, mut save_key, mut test_ai) = (false, false, false, false, false, false);
         let mut remove_dir = None;
-        let mut add_dir = false;
         let mut enable = None;
         let mut scratch = std::mem::take(&mut self.scratch);
         let mut key_scratch = std::mem::take(&mut self.key_scratch);
-        let mut save_key = false;
-        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 9.0;
-            let h = |ui: &mut Ui, t: &str| {
-                ui.add_space(6.0);
-                ui.label(RichText::new(t).size(13.0).strong().color(pal.accent));
-            };
-            h(ui, "General");
-            ui.horizontal(|ui| {
-                ui.label("Launcher hotkey");
-                ui.label(RichText::new(services::hotkey_label(&s.launcher_hotkey)).strong());
-                if ui.button("Record…").clicked() {
-                    rec = true;
-                }
-            });
-            egui::ComboBox::from_label("Theme").selected_text(format!("{:?}", s.theme)).show_ui(ui, |ui| {
-                ui.selectable_value(&mut s.theme, Theme::System, "System");
-                ui.selectable_value(&mut s.theme, Theme::Dark, "Dark");
-                ui.selectable_value(&mut s.theme, Theme::Light, "Light");
-            });
-            ui.checkbox(&mut s.compact_mode, "Compact mode (show only the search bar when empty)");
-            egui::ComboBox::from_label("Root search sensitivity").selected_text(format!("{:?}", s.sensitivity)).show_ui(ui, |ui| {
-                ui.selectable_value(&mut s.sensitivity, ferrocast_core::fuzzy::Sensitivity::Low, "Low");
-                ui.selectable_value(&mut s.sensitivity, ferrocast_core::fuzzy::Sensitivity::Medium, "Medium");
-                ui.selectable_value(&mut s.sensitivity, ferrocast_core::fuzzy::Sensitivity::High, "High");
-            });
-            ui.checkbox(&mut s.file_search_in_root, "Include files in Root Search");
-            ui.checkbox(&mut s.show_menu_bar_icon, "Show menu bar icon (restart required)");
-            ui.checkbox(&mut s.launch_at_login, "Launch Ferrocast at login");
-            h(ui, "Clipboard History");
-            ui.checkbox(&mut s.clipboard_enabled, "Record clipboard history");
-            egui::ComboBox::from_label("Keep history for").selected_text(s.clipboard_retention.label()).show_ui(ui, |ui| {
-                for r in Retention::ALL {
-                    ui.selectable_value(&mut s.clipboard_retention, r, r.label());
-                }
-            });
-            h(ui, "Snippets");
-            ui.checkbox(&mut s.snippet_expansion, "Expand snippet keywords automatically while typing");
-            h(ui, "AI (OpenAI-compatible server)");
-            ui.label(RichText::new("Default: local Ollama. Works with LM Studio, OpenAI, OpenRouter…").size(12.0).color(pal.sub));
-            ui.add(TextEdit::singleline(&mut s.ai_base_url).desired_width(f32::INFINITY).hint_text("http://localhost:11434/v1"));
-            ui.add(TextEdit::singleline(&mut s.ai_model).desired_width(300.0).hint_text("model, e.g. llama3.2"));
-            ui.horizontal(|ui| {
-                ui.add(TextEdit::singleline(&mut key_scratch).password(true).desired_width(300.0).hint_text("API key (saved to Keychain)"));
-                if ui.button("Save key").clicked() {
-                    save_key = true;
-                }
-            });
-            h(ui, "Calculator & Windows");
-            ui.horizontal(|ui| {
-                ui.label("1 rem/em =");
-                ui.add(egui::DragValue::new(&mut s.rem_px).range(8.0..=64.0).suffix(" px"));
-                ui.label("   Window gap");
-                ui.add(egui::DragValue::new(&mut s.window_gap).range(0.0..=64.0).suffix(" pt"));
-            });
-            ui.label(RichText::new("Web search fallback URL").size(12.0).color(pal.sub));
-            ui.add(TextEdit::singleline(&mut s.fallback_search_url).desired_width(f32::INFINITY));
-            h(ui, "Script Command directories");
-            ui.label(RichText::new(format!("Default: {}", self.store.scripts_dir().display())).size(12.0).color(pal.sub));
-            for (i, d) in s.script_directories.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(d);
-                    if ui.small_button("Remove").clicked() {
-                        remove_dir = Some(i);
-                    }
-                });
+        let has_key = ctx.data(|d| d.get_temp::<bool>(Id::new("ai_has_key")));
+        let has_key = match has_key {
+            Some(v) => v,
+            None => {
+                let v = services::ai_key().is_some_and(|k| !k.is_empty());
+                ctx.data_mut(|d| d.insert_temp(Id::new("ai_has_key"), v));
+                v
             }
-            ui.horizontal(|ui| {
-                ui.add(TextEdit::singleline(&mut scratch).desired_width(380.0).hint_text("~/scripts"));
-                if ui.button("Add directory").clicked() {
-                    add_dir = true;
+        };
+
+        let full = ui.max_rect();
+        let side = Rect::from_min_max(full.min, Pos2::new(full.min.x + 168.0, full.max.y));
+        let pane = Rect::from_min_max(Pos2::new(side.max.x + 18.0, full.min.y), full.max);
+
+        // ---- sidebar
+        ui.scope_builder(UiBuilder::new().max_rect(side), |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for (i, (name, glyph)) in TABS.iter().enumerate() {
+                let (r, resp) = ui.allocate_exact_size(Vec2::new(side.width(), 34.0), Sense::click());
+                let on = i == tab;
+                let p = ui.painter();
+                if on {
+                    p.rect_filled(r, 8.0, pal.sel);
+                } else if resp.hovered() {
+                    p.rect_filled(r, 8.0, pal.field);
                 }
-            });
-            h(ui, "Permissions");
-            ui.horizontal(|ui| {
-                ui.label(if trusted {
-                    "Accessibility: granted ✓"
-                } else {
-                    "Accessibility: not granted (needed for window management, pasting and snippet expansion)"
-                });
-                if !trusted && ui.button("Request").clicked() {
-                    req_acc = true;
-                }
-            });
-            if ui.button("Open data folder").clicked() {
-                open_data = true;
-            }
-            let disabled: Vec<String> = s.commands.iter().filter(|(_, c)| c.disabled).map(|(k, _)| k.clone()).collect();
-            if !disabled.is_empty() {
-                h(ui, "Disabled commands");
-                for d in disabled {
-                    ui.horizontal(|ui| {
-                        ui.label(&d);
-                        if ui.small_button("Enable").clicked() {
-                            enable = Some(d.clone());
-                        }
-                    });
+                let gr = Rect::from_center_size(Pos2::new(r.min.x + 20.0, r.center().y), Vec2::splat(20.0));
+                p.rect_filled(gr, 5.0, if on { pal.accent } else { pal.field });
+                p.text(gr.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(10.5), if on { Color32::WHITE } else { pal.sub });
+                p.text(
+                    Pos2::new(r.min.x + 38.0, r.center().y),
+                    Align2::LEFT_CENTER,
+                    name,
+                    FontId::proportional(13.5),
+                    if on { pal.text } else { pal.sub },
+                );
+                if resp.clicked() {
+                    tab = i;
                 }
             }
-            ui.add_space(10.0);
         });
+        ctx.data_mut(|d| d.insert_temp(tab_id, tab));
+        ui.painter().vline(side.max.x + 9.0, pane.y_range(), Stroke::new(1.0, pal.sep));
+
+        // ---- pane
+        let acc = pal.accent;
+        ui.scope_builder(UiBuilder::new().max_rect(pane), |ui| {
+            egui::ScrollArea::vertical().id_salt("settings_pane").auto_shrink([false; 2]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.add_space(2.0);
+                ui.label(RichText::new(TABS[tab].0).size(20.0).strong().color(pal.text));
+                ui.add_space(14.0);
+                match tab {
+                    0 => {
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Launcher hotkey", "Press it from any app to open or close Ferrocast.", |ui| {
+                                if small_btn(ui, pal, "Record…") {
+                                    rec = true;
+                                }
+                                keycap(ui, pal, &services::hotkey_label(&s.launcher_hotkey));
+                            });
+                            row(ui, pal, "Appearance", "Follow the system, or force dark or light.", |ui| {
+                                segmented(ui, pal, &mut s.theme, &[(Theme::System, "System"), (Theme::Dark, "Dark"), (Theme::Light, "Light")]);
+                            });
+                            row(ui, pal, "Compact mode", "Show only the search bar until you type.", |ui| toggle(ui, pal, &mut s.compact_mode));
+                            row(ui, pal, "Launch at login", "Start Ferrocast when you sign in to your Mac.", |ui| toggle(ui, pal, &mut s.launch_at_login));
+                            row(ui, pal, "Menu bar icon", "A small icon to open Ferrocast with the mouse. Needs a restart.", |ui| toggle(ui, pal, &mut s.show_menu_bar_icon));
+                        });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Root Search");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Sensitivity", "Low matches loosely; High needs every letter to start a word.", |ui| {
+                                use ferrocast_core::fuzzy::Sensitivity as S;
+                                segmented(ui, pal, &mut s.sensitivity, &[(S::Low, "Low"), (S::Medium, "Medium"), (S::High, "High")]);
+                            });
+                            row(ui, pal, "Include files", "Show Spotlight file results after apps and commands.", |ui| toggle(ui, pal, &mut s.file_search_in_root));
+                            row(ui, pal, "Web search fallback", "Used by “Search the web for …”. {query} is replaced.", |ui| {
+                                ui.add(TextEdit::singleline(&mut s.fallback_search_url).desired_width(280.0).font(FontId::proportional(12.5)));
+                            });
+                        });
+                    }
+                    1 => {
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Record history", "Keep what you copy so you can paste it later. Password managers are skipped.", |ui| toggle(ui, pal, &mut s.clipboard_enabled));
+                            row(ui, pal, "Keep history for", "Older entries are removed automatically. Pinned entries stay.", |ui| {
+                                egui::ComboBox::from_id_salt("retention").selected_text(s.clipboard_retention.label()).width(120.0).show_ui(ui, |ui| {
+                                    for r in Retention::ALL {
+                                        ui.selectable_value(&mut s.clipboard_retention, r, r.label());
+                                    }
+                                });
+                            });
+                        });
+                        ui.add_space(10.0);
+                        note(ui, pal, "History lives in clipboard.json inside the data folder and never leaves this Mac. Backups exclude it.");
+                    }
+                    2 => {
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Expand while typing", "Type a keyword such as !sig anywhere and it turns into the snippet.", |ui| toggle(ui, pal, &mut s.snippet_expansion));
+                        });
+                        ui.add_space(10.0);
+                        note(ui, pal, if trusted { "Expansion is ready: Accessibility is granted." } else { "Expansion needs Accessibility. Grant it under Advanced." });
+                    }
+                    3 => {
+                        section(ui, pal, "Provider");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Preset", "Fills the server address below. Any OpenAI-compatible server works.", |ui| {
+                                let presets = [("Ollama", "http://localhost:11434/v1"), ("LM Studio", "http://localhost:1234/v1"), ("OpenAI", "https://api.openai.com/v1")];
+                                for &(name, url) in presets.iter().rev() {
+                                    let on = s.ai_base_url.trim().trim_end_matches('/') == url;
+                                    if pill(ui, pal, name, on) {
+                                        s.ai_base_url = url.to_string();
+                                    }
+                                }
+                            });
+                            row(ui, pal, "Server", "Base URL ending in /v1.", |ui| {
+                                ui.add(TextEdit::singleline(&mut s.ai_base_url).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("http://localhost:11434/v1"));
+                            });
+                            row(ui, pal, "Model", "The name the server expects, e.g. llama3.2 or gpt-4o-mini.", |ui| {
+                                ui.add(TextEdit::singleline(&mut s.ai_model).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("llama3.2"));
+                            });
+                            row(ui, pal, "API key", if has_key { "A key is stored in the Keychain. Enter a new one to replace it, or leave empty and save to remove it." } else { "Only needed for hosted providers. Stored in the macOS Keychain, never in a file." }, |ui| {
+                                if small_btn(ui, pal, "Save") {
+                                    save_key = true;
+                                }
+                                ui.add(TextEdit::singleline(&mut key_scratch).password(true).desired_width(180.0).font(FontId::proportional(12.5)).hint_text(if has_key { "••••••••" } else { "sk-…" }));
+                            });
+                        });
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if accent_btn(ui, pal, "Test connection") {
+                                test_ai = true;
+                            }
+                            ui.add_space(10.0);
+                            ui.label(RichText::new("Asks the server for its model list.").size(12.0).color(pal.sub));
+                        });
+                        ui.add_space(10.0);
+                        note(ui, pal, "Ask AI streams answers and keeps the conversation while the window is open. With Ollama everything stays on this Mac.");
+                    }
+                    4 => {
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Default folder", "Scripts with Raycast metadata here become commands.", |ui| {
+                                ui.label(RichText::new(self.store.scripts_dir().display().to_string()).size(12.0).color(pal.sub));
+                            });
+                            for (i, d) in s.script_directories.clone().iter().enumerate() {
+                                row(ui, pal, d, "Extra directory.", |ui| {
+                                    if small_btn(ui, pal, "Remove") {
+                                        remove_dir = Some(i);
+                                    }
+                                });
+                            }
+                            row(ui, pal, "Add directory", "Use ~ for your home folder.", |ui| {
+                                if small_btn(ui, pal, "Add") {
+                                    add_dir = true;
+                                }
+                                ui.add(TextEdit::singleline(&mut scratch).desired_width(220.0).font(FontId::proportional(12.5)).hint_text("~/scripts"));
+                            });
+                        });
+                        ui.add_space(10.0);
+                        note(ui, pal, "Supported modes: fullOutput, compact, silent and inline. Scripts marked needsConfirmation ask before running.");
+                    }
+                    _ => {
+                        section(ui, pal, "Permissions");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Accessibility", if trusted { "Granted. Window management, pasting and snippet expansion work." } else { "Needed for window management, pasting and snippet expansion." }, |ui| {
+                                if trusted {
+                                    ui.label(RichText::new("Granted ✓").size(13.0).color(Color32::from_rgb(89, 212, 153)));
+                                } else if accent_btn(ui, pal, "Grant…") {
+                                    req_acc = true;
+                                }
+                            });
+                        });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Units");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "1 rem", "Used by the calculator for rem and em conversions.", |ui| {
+                                ui.add(egui::DragValue::new(&mut s.rem_px).range(8.0..=64.0).suffix(" px"));
+                            });
+                            row(ui, pal, "Window gap", "Space left between windows and screen edges by window commands.", |ui| {
+                                ui.add(egui::DragValue::new(&mut s.window_gap).range(0.0..=64.0).suffix(" pt"));
+                            });
+                        });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Data");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Data folder", &self.store.root.display().to_string(), |ui| {
+                                if small_btn(ui, pal, "Open") {
+                                    open_data = true;
+                                }
+                            });
+                        });
+                        let disabled: Vec<String> = s.commands.iter().filter(|(_, c)| c.disabled).map(|(k, _)| k.clone()).collect();
+                        if !disabled.is_empty() {
+                            ui.add_space(14.0);
+                            section(ui, pal, "Disabled commands");
+                            group(ui, pal, |ui| {
+                                for d in disabled {
+                                    row(ui, pal, &d, "Hidden from Root Search.", |ui| {
+                                        if small_btn(ui, pal, "Enable") {
+                                            enable = Some(d.clone());
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    }
+                }
+                ui.add_space(16.0);
+            });
+        });
+        let _ = acc;
+
         if add_dir && !scratch.trim().is_empty() {
             s.script_directories.push(scratch.trim().to_string());
             scratch.clear();
@@ -1441,10 +1561,22 @@ impl App {
         self.scratch = scratch;
         if save_key {
             let ok = services::set_ai_key(&key_scratch);
+            let now_has = !key_scratch.trim().is_empty();
             key_scratch.clear();
-            self.toast(if ok { "AI key saved to Keychain" } else { "Could not update Keychain" });
+            ctx.data_mut(|d| d.insert_temp(Id::new("ai_has_key"), now_has));
+            self.toast(if !ok {
+                "Could not update Keychain"
+            } else if now_has {
+                "AI key saved to Keychain"
+            } else {
+                "AI key removed"
+            });
         }
         self.key_scratch = key_scratch;
+        if test_ai {
+            self.toast("Testing connection…");
+            services::test_ai_connection(s.ai_base_url.clone(), self.bus.clone());
+        }
         if let Some(i) = remove_dir {
             s.script_directories.remove(i);
         }
@@ -1483,6 +1615,135 @@ impl App {
             }
         }
     }
+}
+
+// ---- settings widgets: a tone-stepped card of rows, each with a title, a description and its control.
+
+fn section(ui: &mut Ui, pal: &Palette, title: &str) {
+    ui.label(RichText::new(title).size(12.5).color(pal.sub));
+    ui.add_space(6.0);
+}
+
+fn note(ui: &mut Ui, pal: &Palette, text: &str) {
+    ui.label(RichText::new(text).size(12.0).color(pal.sub));
+}
+
+fn group(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) {
+    let fill = pal.field;
+    egui::Frame::new().fill(fill).corner_radius(10.0).inner_margin(egui::Margin::symmetric(0, 2)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 0.0;
+        add(ui);
+    });
+}
+
+fn row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
+    let w = ui.available_width();
+    let text_w = (w * 0.5).min(w - 300.0).max(160.0);
+    let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 11)).show(ui, |ui| {
+        ui.set_width(w - 28.0);
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(text_w);
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.label(RichText::new(title).size(13.5).color(pal.text));
+                ui.label(RichText::new(desc).size(11.5).color(pal.sub));
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                control(ui);
+            });
+        });
+    });
+    // hairline between rows, inset like the original launcher's settings
+    let r = inner.response.rect;
+    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
+}
+
+/// A pill switch that slides in 120 ms.
+fn toggle(ui: &mut Ui, pal: &Palette, on: &mut bool) {
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(40.0, 24.0), Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+    }
+    let t = ui.ctx().animate_bool_with_time(resp.id, *on, 0.12);
+    let off = if pal.text.r() > 128 { Color32::from_gray(74) } else { Color32::from_gray(200) };
+    let bg = lerp_color(off, pal.accent, t);
+    let p = ui.painter();
+    p.rect_filled(r, 12.0, bg);
+    let kx = r.min.x + 12.0 + (r.width() - 24.0) * t;
+    p.circle_filled(Pos2::new(kx, r.center().y), 9.5, Color32::WHITE);
+}
+
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgba_unmultiplied(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()), l(a.a(), b.a()))
+}
+
+fn small_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.text);
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 20.0, 26.0), Sense::click());
+    let p = ui.painter();
+    p.rect_filled(r, 7.0, if resp.hovered() { pal.sel } else { pal.field.gamma_multiply(1.6) });
+    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.text);
+    resp.clicked()
+}
+
+fn accent_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), Color32::WHITE);
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 24.0, 28.0), Sense::click());
+    let p = ui.painter();
+    p.rect_filled(r, 7.0, if resp.hovered() { pal.accent.gamma_multiply(1.15) } else { pal.accent });
+    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
+    resp.clicked()
+}
+
+fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), pal.text);
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 18.0, 24.0), Sense::click());
+    let p = ui.painter();
+    p.rect_filled(
+        r,
+        12.0,
+        if on {
+            pal.accent
+        } else if resp.hovered() {
+            pal.sel
+        } else {
+            pal.field.gamma_multiply(1.6)
+        },
+    );
+    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, if on { Color32::WHITE } else { pal.text });
+    resp.clicked()
+}
+
+/// Segmented control: one filled segment slides under the chosen option.
+fn segmented<T: PartialEq + Clone>(ui: &mut Ui, pal: &Palette, value: &mut T, options: &[(T, &str)]) {
+    let seg_w = 72.0;
+    let (r, base) = ui.allocate_exact_size(Vec2::new(seg_w * options.len() as f32 + 4.0, 26.0), Sense::hover());
+    let id = base.id;
+    let p = ui.painter().clone();
+    p.rect_filled(r, 8.0, pal.field.gamma_multiply(1.3));
+    let idx = options.iter().position(|(v, _)| v == value).unwrap_or(0);
+    let x = ui.ctx().animate_value_with_time(id.with("seg"), idx as f32, 0.14);
+    let sr = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + x * seg_w, r.min.y + 2.0), Vec2::new(seg_w, 22.0));
+    p.rect_filled(sr, 6.0, pal.sel.gamma_multiply(1.8));
+    for (i, (v, label)) in options.iter().enumerate() {
+        let cell = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + i as f32 * seg_w, r.min.y), Vec2::new(seg_w, 26.0));
+        let resp = ui.interact(cell, id.with(("cell", i)), Sense::click());
+        if resp.clicked() {
+            *value = v.clone();
+        }
+        p.text(cell.center(), Align2::CENTER_CENTER, *label, FontId::proportional(12.0), if i == idx { pal.text } else { pal.sub });
+    }
+}
+
+fn keycap(ui: &mut Ui, pal: &Palette, label: &str) {
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), pal.text);
+    let (r, _) = ui.allocate_exact_size(Vec2::new(g.size().x + 16.0, 24.0), Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(r, 6.0, pal.field.gamma_multiply(1.6));
+    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.text);
 }
 
 #[cfg(test)]

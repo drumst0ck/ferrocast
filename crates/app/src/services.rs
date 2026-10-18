@@ -565,6 +565,51 @@ pub fn set_ai_key(key: &str) -> bool {
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
+/// Probe `<base>/models` and report how many models the server lists, as a toast.
+pub fn test_ai_connection(base_url: String, bus: Bus) {
+    use ferrocast_core::ai;
+    use std::process::{Command, Stdio};
+    std::thread::spawn(move || {
+        let base = base_url.trim().trim_end_matches('/').to_string();
+        let mut cfg = format!("url = {}\n", ai::curl_config_quote(&format!("{base}/models")));
+        if let Some(k) = ai_key().filter(|k| !k.is_empty()) {
+            cfg.push_str(&format!("header = {}\n", ai::curl_config_quote(&format!("Authorization: Bearer {k}"))));
+        }
+        let out = Command::new("/usr/bin/curl")
+            .args(["-sS", "-m", "8", "-K", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .and_then(|mut c| {
+                use std::io::Write;
+                if let Some(mut i) = c.stdin.take() {
+                    let _ = i.write_all(cfg.as_bytes());
+                }
+                c.wait_with_output()
+            });
+        let msg = match out {
+            Ok(o) if o.status.success() => match serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                Ok(v) => {
+                    let models: Vec<String> = v["data"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
+                        .unwrap_or_default();
+                    match models.len() {
+                        0 => "Connected, but the server lists no models".to_string(),
+                        1 => format!("Connected · 1 model: {}", models[0]),
+                        n => format!("Connected · {n} models, e.g. {}", models[0]),
+                    }
+                }
+                Err(_) => format!("Server answered, but not with an OpenAI-style model list ({} bytes)", o.stdout.len()),
+            },
+            Ok(o) => format!("Could not connect: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("unknown error").trim()),
+            Err(e) => format!("Could not start curl: {e}"),
+        };
+        bus.send(Msg::Toast(msg));
+    });
+}
+
 /// Streaming chat completion; `on_delta` receives text as it arrives. The request
 /// (including the key) goes to curl via stdin, never argv.
 pub fn ai_stream(
