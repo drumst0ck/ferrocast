@@ -1431,6 +1431,34 @@ fn redact(f: &std::path::Path, faces: bool) -> Result<PathBuf, String> {
     Ok(out)
 }
 
+/// JPEG at the highest quality that meets a size target (KB, or percent smaller than the source).
+fn compress_to_size(f: &std::path::Path, op: &ferrocast_core::convert::ImageOp) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::{fit_quality, output_with_suffix, ImageOp};
+    let original = std::fs::metadata(f).map_err(|e| e.to_string())?.len();
+    let target = match op {
+        ImageOp::CompressToKb(kb) => *kb as u64 * 1024,
+        ImageOp::CompressByPercent(p) => original * (100 - *p as u64) / 100,
+        _ => return Err("not a size target".into()),
+    };
+    let tmp = std::env::temp_dir().join(format!("ferrocast-fit-{}.jpg", std::process::id()));
+    let encode = |q: u8| -> Option<u64> {
+        sips(&["-s", "format", "jpeg", "-s", "formatOptions", &q.to_string(), &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+            .ok()?;
+        std::fs::metadata(&tmp).ok().map(|m| m.len())
+    };
+    let q = fit_quality(target, encode);
+    let out = output_with_suffix(f, &op.suffix(), "jpg", |p| p.exists());
+    let res = sips(&["-s", "format", "jpeg", "-s", "formatOptions", &q.to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()]);
+    let _ = std::fs::remove_file(&tmp);
+    res?;
+    let size = std::fs::metadata(&out).map_err(|e| e.to_string())?.len();
+    if size > target {
+        // lowest quality still too big: keep the file but say so
+        return Err(format!("smallest result is {} KB, above the target; try resizing too", size / 1024));
+    }
+    Ok(out)
+}
+
 /// Apply a one-step adjustment; writes a PNG next to the original.
 fn adjust(f: &std::path::Path, a: ferrocast_core::convert::Adjust) -> Result<PathBuf, String> {
     use ferrocast_core::convert::{output_with_suffix, Adjust};
@@ -1514,6 +1542,15 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
         }
         return (outs, errs);
     }
+    if matches!(op, ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_)) {
+        for f in files {
+            match compress_to_size(f, op) {
+                Ok(o) => outs.push(o),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
     if let ImageOp::Adjust(a) = op {
         for f in files {
             match adjust(f, *a) {
@@ -1591,6 +1628,13 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
                 sips(&["-s", "format", "png", "-p", &side, &side, "--padColor", c, &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
                 Ok(out)
             }
+            ImageOp::CropExact(w, h) => {
+                let (iw, ih) = image_size(f).ok_or("could not read the image size")?;
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                // never ask sips for more than the image has
+                sips(&["-c", &(*h).min(ih).to_string(), &(*w).min(iw).to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
             ImageOp::Annotate => {
                 // never mark up the original: copy it, then open the copy in Preview
                 let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
@@ -1600,7 +1644,12 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
                 }
                 Ok(out)
             }
-            ImageOp::CombinePdf | ImageOp::Collage | ImageOp::Redact(_) | ImageOp::Adjust(_) => unreachable!(),
+            ImageOp::CombinePdf
+            | ImageOp::Collage
+            | ImageOp::Redact(_)
+            | ImageOp::Adjust(_)
+            | ImageOp::CompressToKb(_)
+            | ImageOp::CompressByPercent(_) => unreachable!(),
         })();
         match res {
             Ok(o) if o.exists() => outs.push(o),
@@ -1805,6 +1854,25 @@ mod convert_tests {
         let (o, e) = run_image_op(one, &ImageOp::Adjust(Adjust::BlackAndWhite));
         assert!(e.is_empty(), "{e:?}");
         assert!(image::open(&o[0]).unwrap().to_rgba8().pixels().all(|px| px.0[0] == px.0[1] && px.0[1] == px.0[2]));
+        // compress to a size target: the JPEG source is ~hundreds of KB, ask for far less
+        let orig = std::fs::metadata(&src).unwrap().len();
+        let (o, e) = run_image_op(one, &ImageOp::CompressByPercent(50));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(std::fs::metadata(&o[0]).unwrap().len() <= orig / 2, "50% smaller");
+        let kb = (orig / 1024 / 2).max(1) as u32;
+        let (o, e) = run_image_op(one, &ImageOp::CompressToKb(kb));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(std::fs::metadata(&o[0]).unwrap().len() <= kb as u64 * 1024, "within {kb} KB");
+        // an impossible target reports instead of pretending
+        let (o, e) = run_image_op(one, &ImageOp::CompressToKb(1));
+        assert!(o.is_empty() && e[0].contains("above the target"), "{e:?}");
+        // exact crop: dimensions are exact, and clamped to the image
+        let (o, e) = run_image_op(one, &ImageOp::CropExact(300, 200));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((300, 200)));
+        let (o, e) = run_image_op(one, &ImageOp::CropExact(5000, 5000));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((1024, 1024)), "never larger than the image");
         // annotate makes a byte-identical copy (Preview is not opened under test)
         std::env::set_var("FERROCAST_NO_OPEN", "1");
         let (o, e) = run_image_op(one, &ImageOp::Annotate);

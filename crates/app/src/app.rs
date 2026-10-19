@@ -1688,8 +1688,11 @@ impl App {
                 // image tools when every file is an image
                 use ferrocast_core::convert::{family_of, Family, ImageOp};
                 if files.iter().all(|f| family_of(f) == Family::Image) {
-                    let tools: Vec<Item> = ImageOp::offered(files.len())
+                    // a typed size or dimensions ("500kb", "40%", "800x600") becomes a tool of its own
+                    let typed = ferrocast_core::convert::parse_image_query(&q);
+                    let tools: Vec<Item> = typed
                         .into_iter()
+                        .chain(ImageOp::offered(files.len()))
                         .filter(|op| {
                             self.matches(
                                 &q,
@@ -1707,6 +1710,8 @@ impl App {
                                     ImageOp::Redact(_) => "redact hide blur privacy face text",
                                     ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
                                     ImageOp::Annotate => "annotate markup draw arrow text preview",
+                                    ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compress size smaller",
+                                    ImageOp::CropExact(..) => "crop exact dimensions pixels",
                                 },
                             )
                             .is_some()
@@ -1729,6 +1734,8 @@ impl App {
                                     ImageOp::Redact(_) => "sf:eye.slash.fill",
                                     ImageOp::Adjust(_) => "sf:slider.horizontal.3",
                                     ImageOp::Annotate => "sf:pencil.tip.crop.circle",
+                                    ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
+                                    ImageOp::CropExact(..) => "sf:crop",
                                 },
                                 [255, 140, 60],
                             ),
@@ -3007,6 +3014,8 @@ pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static
         ImageOp::Redact(_) => "sf:eye.slash.fill",
         ImageOp::Adjust(_) => "sf:slider.horizontal.3",
         ImageOp::Annotate => "sf:pencil.tip.crop.circle",
+        ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
+        ImageOp::CropExact(..) => "sf:crop",
     }
 }
 

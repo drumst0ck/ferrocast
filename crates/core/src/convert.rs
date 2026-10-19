@@ -389,6 +389,12 @@ pub enum ImageOp {
     Adjust(Adjust),
     /// Copy the image and open the copy in Preview for Markup.
     Annotate,
+    /// Re-encode as JPEG, at the highest quality that fits this many KB.
+    CompressToKb(u32),
+    /// Re-encode as JPEG so the file is this percent smaller than the original.
+    CompressByPercent(u8),
+    /// Centre crop to exactly this many pixels (clamped to the image).
+    CropExact(u32, u32),
 }
 
 /// Photo adjustments offered as one-step edits.
@@ -423,6 +429,9 @@ impl ImageOp {
             }
             .into(),
             ImageOp::Annotate => "Annotate in Preview".into(),
+            ImageOp::CompressToKb(kb) => format!("Compress · under {}", format_kb(*kb)),
+            ImageOp::CompressByPercent(p) => format!("Compress · {p}% smaller"),
+            ImageOp::CropExact(w, h) => format!("Crop · exactly {w}×{h} px"),
         }
     }
     /// Short word added to the output file name.
@@ -440,6 +449,8 @@ impl ImageOp {
             ImageOp::Redact(_) => "redacted".into(),
             ImageOp::Adjust(_) => "edited".into(),
             ImageOp::Annotate => "annotated".into(),
+            ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compressed".into(),
+            ImageOp::CropExact(w, h) => format!("{w}x{h}"),
         }
     }
     /// Tools for `n` selected images.
@@ -494,6 +505,55 @@ pub fn output_with_suffix(input: &Path, suffix: &str, ext: &str, exists: impl Fn
     }
 }
 
+fn format_kb(kb: u32) -> String {
+    if kb >= 1024 && kb % 1024 == 0 {
+        format!("{} MB", kb / 1024)
+    } else {
+        format!("{kb} KB")
+    }
+}
+
+/// Image tool typed in the search box: `500kb`, `1.5mb`, `40%` (smaller) or `800x600`.
+pub fn parse_image_query(q: &str) -> Option<ImageOp> {
+    let q = q.trim().to_lowercase().replace(' ', "");
+    if let Some(n) = q.strip_suffix('%') {
+        let p: u8 = n.parse().ok()?;
+        return (1..=95).contains(&p).then_some(ImageOp::CompressByPercent(p));
+    }
+    for (suffix, mult) in [("kb", 1.0), ("mb", 1024.0)] {
+        if let Some(n) = q.strip_suffix(suffix) {
+            let v: f64 = n.parse().ok()?;
+            let kb = (v * mult).round();
+            return (kb >= 1.0 && kb <= 1_000_000.0).then_some(ImageOp::CompressToKb(kb as u32));
+        }
+    }
+    let (w, h) = q.split_once('x').or_else(|| q.split_once('×'))?;
+    let (w, h): (u32, u32) = (w.parse().ok()?, h.parse().ok()?);
+    ((1..=20_000).contains(&w) && (1..=20_000).contains(&h)).then_some(ImageOp::CropExact(w, h))
+}
+
+/// Highest JPEG quality (5..=95) whose encoded size is within `target` bytes. `encode(q)` returns
+/// the size at quality `q`. Falls back to 5 when even that is too big.
+pub fn fit_quality(target: u64, mut encode: impl FnMut(u8) -> Option<u64>) -> u8 {
+    let (mut lo, mut hi, mut best) = (5u8, 95u8, 5u8);
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        match encode(mid) {
+            Some(sz) if sz <= target => {
+                best = mid;
+                lo = mid + 1;
+            }
+            _ => {
+                if mid == 0 {
+                    break;
+                }
+                hi = mid - 1;
+            }
+        }
+    }
+    best
+}
+
 /// Grid for a collage of `n` pictures: (columns, rows), as square as possible.
 pub fn collage_grid(n: usize) -> (usize, usize) {
     if n == 0 {
@@ -533,6 +593,32 @@ pub fn crop_size(w: u32, h: u32, rw: u32, rh: u32) -> (u32, u32) {
 #[cfg(test)]
 mod image_tool_tests {
     use super::*;
+
+    #[test]
+    fn image_queries() {
+        assert_eq!(parse_image_query("500kb"), Some(ImageOp::CompressToKb(500)));
+        assert_eq!(parse_image_query("1.5 MB"), Some(ImageOp::CompressToKb(1536)));
+        assert_eq!(parse_image_query("40%"), Some(ImageOp::CompressByPercent(40)));
+        assert_eq!(parse_image_query("800x600"), Some(ImageOp::CropExact(800, 600)));
+        assert_eq!(parse_image_query("800×600"), Some(ImageOp::CropExact(800, 600)));
+        for bad in ["", "kb", "0%", "100%", "0x5", "abc", "10", "5mbx"] {
+            assert_eq!(parse_image_query(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn quality_search_finds_the_highest_fit() {
+        // size grows linearly with quality: 1000 bytes per point
+        let mut calls = 0;
+        let q = fit_quality(50_500, |q| {
+            calls += 1;
+            Some(q as u64 * 1000)
+        });
+        assert_eq!(q, 50);
+        assert!(calls <= 8, "binary search, not a scan: {calls}");
+        assert_eq!(fit_quality(10, |q| Some(q as u64 * 1000)), 5, "floor when nothing fits");
+        assert_eq!(fit_quality(u64::MAX, |q| Some(q as u64)), 95);
+    }
 
     #[test]
     fn redact_rects() {

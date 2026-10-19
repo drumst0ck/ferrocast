@@ -25,7 +25,7 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 - T9 DONE (CHANGELOG, README status table, web bento card). Docs: README, CHANGELOG, website section. Route: inline with each task.
 
 - T10 (S8) Third wheel: Command → file tools; wheel switches with Shift/Command/Control while open; arrow keys choose, Enter applies, Escape cancels; Enter on a selected Finder file opens the format menu. Route: inline. PARTIAL (53c6e5f): Command opens the tools wheel (8 image tools, or Open tools… for other files); Shift/Command/Control switch an open wheel; arrows choose, Enter applies, Escape cancels; tools key in Settings. Tested (core::wheel). NOT done: Enter in Finder (would need a global Return hotkey stealing Finder's rename).
-- T11 (S4) Compress to a target size / percentage reduction / preset with resize; crop to exact dimensions. Route: inline.
+- T11 (S4) Compress to a target size / percentage reduction / preset with resize; crop to exact dimensions. Route: inline. DONE: type `500kb`, `1.5mb`, `40%` or `800x600` in the Convert view for a size target, percent reduction or exact crop; presets stay. Binary search over JPEG quality; real-file tested incl. impossible target and clamped crop.
 - T12 (S4) Edit metadata: camera (make/model) and location (GPS) tags, or remove. Route: inline.
 - T13 (S9) Trim, split and merge: audio/video trim, PDF split per page, merge PDFs/audio/video. Route: inline.
 - T14 (S3, S9) Missing formats: WMA, WMV, AIFF/Opus everywhere, video→MP3, PDF→JPG/PNG (300 DPI, all pages)/PPTX/XLSX/EPUB/TXT/MD/PAGES, docs→EPUB/HTML/MD/PAGES, slides PPT/PPTX→PDF/JPG/PNG, sheets ODS/TSV/PDF + XLS input, SRT/VTT→TXT, TAR/GZIP + RAR input, SVG input. Route: inline.
