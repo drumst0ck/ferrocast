@@ -125,6 +125,10 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     doc.add(Shape::Arrow((cw * 0.1, ch * 0.9), (cw * 0.4, ch * 0.5)), st);
                     doc.add(Shape::Rect((cw * 0.5, ch * 0.2), (cw * 0.85, ch * 0.5)), Style { color: COLORS[4], ..st });
                     doc.add(Shape::Number((cw * 0.5, ch * 0.2), 1), st);
+                    doc.add(
+                        Shape::Callout { at: (cw * 0.55, ch * 0.62), tip: (cw * 0.72, ch * 0.75), text: "Zoom here".into() },
+                        Style { color: COLORS[4], width: 6.0, fill: false },
+                    );
                     doc.add(Shape::Text((cw * 0.08, ch * 0.08), "Check this".into()), Style { color: COLORS[2], width: 10.0, fill: false });
                     doc.add(
                         Shape::Magnifier { center: (cw * 0.7, ch * 0.75), radius: cw * 0.1, zoom: 2.5 },
@@ -1364,6 +1368,7 @@ impl App {
                     (Tool::Number, "Number"),
                     (Tool::Magnifier, "Magnifier"),
                     (Tool::Text, "Text"),
+                    (Tool::Callout, "Callout"),
                 ] {
                     if ui.selectable_label(tool == t, l).clicked() {
                         tool = t;
@@ -1415,7 +1420,14 @@ impl App {
             }
         }
         if resp.drag_stopped() {
-            if tool != Tool::Select {
+            if tool == Tool::Callout {
+                if let (Some(a), Some(b)) = (pts.first().copied(), pts.last().copied()) {
+                    if an::text_available() && pending.is_none() && (b.0 - a.0).hypot(b.1 - a.1) >= 3.0 {
+                        ctx.data_mut(|d| d.insert_temp(Id::new("annot-tip"), a));
+                        pending = Some((b, String::new()));
+                    }
+                }
+            } else if tool != Tool::Select {
                 if let Some(shape) = an::build(tool, &pts, doc.next_number()) {
                     doc.add(shape, style);
                 }
@@ -1486,11 +1498,16 @@ impl App {
             let enter = r.lost_focus() && ctx.input(|i| i.key_pressed(Key::Enter));
             let esc = ctx.input(|i| i.key_pressed(Key::Escape));
             if esc {
-                // dropped
+                ctx.data_mut(|d| d.remove::<(f32, f32)>(Id::new("annot-tip")));
             } else if enter {
                 if !text.trim().is_empty() {
-                    doc.add(an::Shape::Text(at, text.trim().to_string()), style);
+                    let tip: Option<(f32, f32)> = ctx.data(|d| d.get_temp(Id::new("annot-tip")));
+                    match (tool, tip) {
+                        (Tool::Callout, Some(tip)) => doc.add(an::Shape::Callout { at, tip, text: text.trim().to_string() }, style),
+                        _ => doc.add(an::Shape::Text(at, text.trim().to_string()), style),
+                    }
                 }
+                ctx.data_mut(|d| d.remove::<(f32, f32)>(Id::new("annot-tip")));
             } else {
                 pending = Some((at, text));
             }

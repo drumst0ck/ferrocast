@@ -2533,6 +2533,15 @@ mod convert_tests {
                 .filter(|&(x, y)| ti.get_pixel(x, y).0[2] > ti.get_pixel(x, y).0[0].saturating_add(60))
                 .count();
             assert!(blue > 30, "text ink at full size: {blue}");
+            let mut cd = ferrocast_core::annotate::Doc::default();
+            cd.add(
+                ferrocast_core::annotate::Shape::Callout { at: (600.0, 100.0), tip: (300.0, 400.0), text: "Note".into() },
+                ferrocast_core::annotate::Style { color: [0, 0, 0], width: 8.0, fill: false },
+            );
+            let c1 = annotate_save(&wide[0], &cd).unwrap();
+            let ci = image::open(&c1).unwrap().to_rgba8();
+            assert_eq!(ci.get_pixel(604, 104).0[..3], [0, 0, 0], "callout box at full size");
+            assert_eq!(ci.get_pixel(300, 400).0[..3], [0, 0, 0], "pointer reaches the tip");
         }
         let abase = d.join("annot-base.png");
         sips(&["-s", "format", "png", &wide[0].to_string_lossy(), "--out", &abase.to_string_lossy()]).unwrap();

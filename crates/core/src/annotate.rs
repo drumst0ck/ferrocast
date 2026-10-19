@@ -37,6 +37,12 @@ pub enum Shape {
     },
     /// Free text with its top-left corner at the point; the size follows the stroke width.
     Text(P, String),
+    /// Filled text box at `at` with a pointer line to `tip`.
+    Callout {
+        at: P,
+        tip: P,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,6 +70,8 @@ pub enum Tool {
     Magnifier,
     /// Click to place; the canvas asks for the words.
     Text,
+    /// Drag from the target to where the box goes; the canvas asks for the words.
+    Callout,
 }
 
 /// Palette offered by the canvas.
@@ -75,7 +83,7 @@ pub fn build(tool: Tool, pts: &[P], next_number: u32) -> Option<Shape> {
     let (a, b) = (*pts.first()?, *pts.last()?);
     let far = seg_dist(b, a, a) >= 3.0;
     match tool {
-        Tool::Select | Tool::Text => None,
+        Tool::Select | Tool::Text | Tool::Callout => None,
         Tool::Number => Some(Shape::Number(a, next_number)),
         Tool::Arrow => far.then_some(Shape::Arrow(a, b)),
         Tool::Line => far.then_some(Shape::Line(a, b)),
@@ -205,6 +213,10 @@ impl Doc {
             }
             Shape::Freehand(pts) => pts.iter_mut().for_each(mv),
             Shape::Number(c, _) | Shape::Magnifier { center: c, .. } | Shape::Text(c, _) => mv(c),
+            Shape::Callout { at, tip, .. } => {
+                mv(at);
+                mv(tip);
+            }
         }
     }
 
@@ -225,6 +237,7 @@ impl Doc {
                     Shape::Freehand(pts) => Shape::Freehand(pts.iter().map(|p| sp(*p)).collect()),
                     Shape::Number(c, n) => Shape::Number(sp(*c), *n),
                     Shape::Text(c, t) => Shape::Text(sp(*c), t.clone()),
+                    Shape::Callout { at, tip, text } => Shape::Callout { at: sp(*at), tip: sp(*tip), text: text.clone() },
                     Shape::Magnifier { center, radius, zoom } => Shape::Magnifier { center: sp(*center), radius: radius * k, zoom: *zoom },
                 };
                 Item { shape, style: Style { width: it.style.width * k, ..it.style } }
@@ -259,6 +272,11 @@ impl Shape {
             Shape::Text(at, t) => {
                 let (tw, th) = text_extent(t, text_size(width));
                 (at.0, at.1, at.0 + tw, at.1 + th)
+            }
+            Shape::Callout { at, tip, text } => {
+                let (tw, th) = text_extent(text, text_size(width));
+                let pad = text_size(width) * 0.5;
+                (at.0.min(tip.0), at.1.min(tip.1), (at.0 + tw + 2.0 * pad).max(tip.0), (at.1 + th + 2.0 * pad).max(tip.1))
             }
             Shape::Magnifier { center, radius, .. } => (center.0 - radius, center.1 - radius, center.0 + radius, center.1 + radius),
         }
@@ -299,6 +317,16 @@ impl Item {
             Shape::Text(at, t) => {
                 let (tw, th) = text_extent(t, text_size(self.style.width));
                 p.0 >= at.0 - tol && p.0 <= at.0 + tw + tol && p.1 >= at.1 - tol && p.1 <= at.1 + th + tol
+            }
+            Shape::Callout { at, tip, text } => {
+                let (x0, y0, x1, y1) = self.shape.bounds_with(self.style.width);
+                let _ = (at, text);
+                (p.0 >= x0 - tol && p.0 <= x1 + tol && p.1 >= y0 - tol && p.1 <= y1 + tol)
+                    && (seg_dist(p, *tip, *tip) <= tol || {
+                        let size = text_size(self.style.width);
+                        let (tw, th) = text_extent(text, size);
+                        p.0 >= at.0 - tol && p.0 <= at.0 + tw + size + tol && p.1 >= at.1 - tol && p.1 <= at.1 + th + size + tol
+                    })
             }
             Shape::Magnifier { center, radius, .. } => seg_dist(p, *center, *center) <= radius + tol,
         }
@@ -356,6 +384,18 @@ impl Item {
                 digits(buf, w, h, *center, *n, r);
             }
             Shape::Text(at, t) => draw_text(buf, w, h, *at, t, text_size(self.style.width), c),
+            Shape::Callout { at, tip, text } => {
+                let size = text_size(self.style.width);
+                let (tw, th) = text_extent(text, size);
+                let pad = size * 0.5;
+                let (x0, y0, x1, y1) = (at.0, at.1, at.0 + tw + 2.0 * pad, at.1 + th + 2.0 * pad);
+                // pointer from the box centre to the tip, drawn under the box so it starts at its edge
+                segment(buf, w, h, ((x0 + x1) / 2.0, (y0 + y1) / 2.0), *tip, wd.min(size / 3.0).max(2.0), c, 1.0);
+                fill_rect(buf, w, h, (x0, y0, x1, y1), c, 1.0);
+                let lum = 0.299 * c[0] as f32 + 0.587 * c[1] as f32 + 0.114 * c[2] as f32;
+                let ink = if lum > 150.0 { [20, 20, 20] } else { [255, 255, 255] };
+                draw_text(buf, w, h, (x0 + pad, y0 + pad), text, size, ink);
+            }
             Shape::Magnifier { center, radius, zoom } => {
                 let src = buf.to_vec();
                 let z = zoom.max(1.0);
@@ -663,6 +703,48 @@ mod tests {
         e.add(Shape::Text((-50.0, 500.0), String::new()), style);
         e.add(Shape::Text((-5.0, -5.0), "clipped é ñ 日本".into()), style);
         e.render(&mut canvas(30, 30), 30, 30);
+    }
+
+    #[test]
+    fn callout_has_a_box_with_text_and_a_pointer() {
+        if !text_available() {
+            return;
+        }
+        let style = Style { color: [0, 0, 0], width: 6.0, fill: false };
+        let mut d = Doc::default();
+        d.add(Shape::Callout { at: (80.0, 10.0), tip: (20.0, 90.0), text: "Look".into() }, style);
+        let mut b = canvas(200, 120);
+        d.render(&mut b, 200, 120);
+        let size = text_size(6.0);
+        let (tw, th) = text_extent("Look", size);
+        // the box is filled with the colour and the text is drawn in the contrasting ink
+        assert_eq!(px(&b, 200, 82, 12)[..3], [0, 0, 0], "box corner");
+        let white = (80..80 + (tw + size) as usize)
+            .flat_map(|x| (10..10 + (th + size) as usize).map(move |y| (x, y)))
+            .filter(|&(x, y)| px(&b, 200, x, y)[0] > 200)
+            .count();
+        assert!(white > 30, "light text on the dark box: {white}");
+        // the pointer reaches the tip
+        assert_eq!(px(&b, 200, 20, 90)[..3], [0, 0, 0], "tip");
+        assert_eq!(px(&b, 200, 150, 100), [255, 255, 255, 255], "far away untouched");
+        assert_eq!(d.hit((20.0, 90.0), 3.0), Some(0));
+        assert_eq!(d.hit((85.0, 15.0), 2.0), Some(0));
+        assert_eq!(d.hit((190.0, 110.0), 2.0), None);
+        d.move_item(0, 10.0, 0.0);
+        assert!(matches!(&d.items[0].shape, Shape::Callout { at, tip, .. } if *at == (90.0, 10.0) && *tip == (30.0, 90.0)));
+        assert_eq!(d.scaled(0.5).items[0].style.width, 3.0);
+        // a light colour gets dark text
+        let mut l = Doc::default();
+        l.add(
+            Shape::Callout { at: (10.0, 10.0), tip: (10.0, 10.0), text: "Hi".into() },
+            Style { color: [255, 214, 10], width: 6.0, fill: false },
+        );
+        let mut b = canvas(100, 60);
+        l.render(&mut b, 100, 60);
+        let darkest = (10..60).flat_map(|x| (10..50).map(move |y| (x, y))).map(|(x, y)| px(&b, 100, x, y)[2]).min().unwrap();
+        assert!(darkest < 60, "dark ink on a light box");
+        l.add(Shape::Callout { at: (-40.0, 500.0), tip: (-9.0, -9.0), text: String::new() }, style);
+        l.render(&mut canvas(30, 30), 30, 30);
     }
 
     #[test]
