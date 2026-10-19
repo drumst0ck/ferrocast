@@ -1750,6 +1750,37 @@ impl App {
                         out.push(Section { title: "Image tools".into(), items: tools });
                     }
                 }
+                // trim, split and merge for audio, video and PDF
+                let fam = family_of(first);
+                if files.iter().all(|f| family_of(f) == fam) && matches!(fam, Family::Audio | Family::Video | Family::Pdf) {
+                    use ferrocast_core::convert::FileTool;
+                    let typed = ferrocast_core::convert::parse_tool_query(&q);
+                    let items: Vec<Item> = typed
+                        .iter()
+                        .cloned()
+                        .chain(FileTool::offered(fam, files.len()))
+                        .filter(|t| typed.as_ref() == Some(t) || self.matches(&q, &t.label(), "trim split merge cut join").is_some())
+                        .map(|t| Item {
+                            id: format!("filetool:{}", t.label()),
+                            title: t.label(),
+                            subtitle: sub.clone(),
+                            icon: Icon::Glyph(
+                                match t {
+                                    FileTool::Trim(..) => "sf:scissors",
+                                    FileTool::SplitEvery(_) | FileTool::SplitPages => "sf:square.split.2x1",
+                                    FileTool::Merge => "sf:rectangle.stack",
+                                },
+                                [255, 140, 60],
+                            ),
+                            accessory: "File tool".into(),
+                            keywords: vec![],
+                            kind: Kind::FileTool(files.clone(), t),
+                        })
+                        .collect();
+                    if !items.is_empty() {
+                        out.push(Section { title: "File tools".into(), items });
+                    }
+                }
                 out.retain(|sec| !sec.items.is_empty());
                 out
             }
@@ -2042,7 +2073,7 @@ impl App {
             Kind::OpenWindow(_) => "Switch to Window",
             Kind::Process(_) => "Kill Process",
             Kind::ConvertTo(..) => "Convert",
-            Kind::ImageTool(..) => "Apply",
+            Kind::ImageTool(..) | Kind::FileTool(..) => "Apply",
             Kind::Timer(..) => "Start Timer",
             Kind::RunningTimer(_) => "Cancel Timer",
             Kind::WebSearch(_) => "Search",
@@ -2220,6 +2251,13 @@ impl App {
             Kind::Timer(secs, label) => {
                 let (secs, label) = (*secs, label.clone());
                 self.start_timer(secs, label);
+            }
+            Kind::FileTool(files, tool) => {
+                let (files, tool) = (files.clone(), tool.clone());
+                self.toast(format!("{}…", tool.label()));
+                services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
+                self.hide();
+                self.reset_to_root();
             }
             Kind::ImageTool(files, op) => {
                 let (files, op) = (files.clone(), op.clone());

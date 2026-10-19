@@ -740,6 +740,90 @@ pub fn strip_jpeg(b: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+// ------------------------------------------------------ trim, split, merge
+
+/// Tools for audio, video and PDF files.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileTool {
+    /// Keep from `start` to `end` seconds.
+    Trim(f64, f64),
+    /// Cut into pieces of this many seconds.
+    SplitEvery(u32),
+    /// Join the selected files, in order, into one.
+    Merge,
+    /// One PDF per page.
+    SplitPages,
+}
+
+pub fn format_secs(s: f64) -> String {
+    let t = s.round() as u64;
+    if t >= 3600 {
+        format!("{}:{:02}:{:02}", t / 3600, t / 60 % 60, t % 60)
+    } else {
+        format!("{}:{:02}", t / 60, t % 60)
+    }
+}
+
+impl FileTool {
+    pub fn label(&self) -> String {
+        match self {
+            FileTool::Trim(a, b) => format!("Trim · {} to {}", format_secs(*a), format_secs(*b)),
+            FileTool::SplitEvery(n) if n % 60 == 0 => format!("Split · every {} min", n / 60),
+            FileTool::SplitEvery(n) => format!("Split · every {n} s"),
+            FileTool::Merge => "Merge into one file".into(),
+            FileTool::SplitPages => "Split into one PDF per page".into(),
+        }
+    }
+    pub fn suffix(&self) -> String {
+        match self {
+            FileTool::Trim(..) => "trimmed".into(),
+            FileTool::SplitEvery(_) | FileTool::SplitPages => "part".into(),
+            FileTool::Merge => "merged".into(),
+        }
+    }
+    /// Tools offered for `n` selected files of one family.
+    pub fn offered(family: Family, n: usize) -> Vec<FileTool> {
+        match family {
+            Family::Audio | Family::Video | Family::Pdf if n > 1 => vec![FileTool::Merge],
+            Family::Pdf => vec![FileTool::SplitPages],
+            Family::Audio | Family::Video => vec![FileTool::SplitEvery(60), FileTool::SplitEvery(300)],
+            _ => vec![],
+        }
+    }
+}
+
+/// `90`, `1:30`, `1:02:03` → seconds.
+pub fn parse_time(s: &str) -> Option<f64> {
+    let parts: Vec<&str> = s.trim().split(':').collect();
+    if parts.is_empty() || parts.len() > 3 {
+        return None;
+    }
+    let mut total = 0.0;
+    for p in &parts {
+        let v: f64 = p.trim().parse().ok().filter(|v: &f64| *v >= 0.0)?;
+        total = total * 60.0 + v;
+    }
+    Some(total)
+}
+
+/// Typed tool: `trim 0:10-0:30`, `split 30s`, `split 2m`.
+pub fn parse_tool_query(q: &str) -> Option<FileTool> {
+    let q = q.trim().to_lowercase();
+    if let Some(rest) = q.strip_prefix("trim ") {
+        let (a, b) = rest.split_once('-')?;
+        let (a, b) = (parse_time(a)?, parse_time(b)?);
+        return (b > a).then_some(FileTool::Trim(a, b));
+    }
+    let rest = q.strip_prefix("split ")?.replace(' ', "");
+    let (n, mult) = match rest.chars().last()? {
+        's' => (&rest[..rest.len() - 1], 1),
+        'm' => (&rest[..rest.len() - 1], 60),
+        _ => (rest.as_str(), 1),
+    };
+    let v: u32 = n.parse().ok()?;
+    (1..=86_400).contains(&v).then_some(FileTool::SplitEvery(v * mult))
+}
+
 struct ExifEntry {
     tag: u16,
     typ: u16,
@@ -886,6 +970,24 @@ mod strip_tests {
         assert!(s.windows(4).any(|w| w == b"JFIF"));
         assert!(s.ends_with(&[0xFF, 0xDA, 0x00, 0x02, 9, 9, 9, 0xFF, 0xD9]));
         assert_eq!(strip_jpeg(b"not a jpeg"), None);
+    }
+
+    #[test]
+    fn file_tool_queries() {
+        assert_eq!(parse_time("90"), Some(90.0));
+        assert_eq!(parse_time("1:30"), Some(90.0));
+        assert_eq!(parse_time("1:02:03"), Some(3723.0));
+        assert_eq!(parse_time("a"), None);
+        assert_eq!(parse_tool_query("trim 0:10-0:30"), Some(FileTool::Trim(10.0, 30.0)));
+        assert_eq!(parse_tool_query("trim 30-10"), None, "end before start");
+        assert_eq!(parse_tool_query("split 30s"), Some(FileTool::SplitEvery(30)));
+        assert_eq!(parse_tool_query("split 2m"), Some(FileTool::SplitEvery(120)));
+        assert_eq!(parse_tool_query("split 0"), None);
+        assert_eq!(parse_tool_query("trim"), None);
+        assert_eq!(FileTool::offered(Family::Pdf, 1), vec![FileTool::SplitPages]);
+        assert_eq!(FileTool::offered(Family::Audio, 2), vec![FileTool::Merge]);
+        assert!(FileTool::offered(Family::Image, 2).is_empty());
+        assert_eq!(format_secs(3723.0), "1:02:03");
     }
 
     #[test]

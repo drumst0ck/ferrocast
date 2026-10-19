@@ -1431,6 +1431,141 @@ fn redact(f: &std::path::Path, faces: bool) -> Result<PathBuf, String> {
     Ok(out)
 }
 
+/// Trim, split or merge audio, video or PDF files. Outputs go next to the first input.
+pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool, ffmpeg: Option<&str>) -> (Vec<PathBuf>, Vec<String>) {
+    use ferrocast_core::convert::{ext, output_with_suffix, FileTool};
+    let mut outs = vec![];
+    let mut errs = vec![];
+    let Some(first) = files.first() else { return (outs, errs) };
+    let e0 = ext(first);
+    let is_pdf = e0 == "pdf";
+    let tmp = std::env::temp_dir().join(format!("ferrocast-ft-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+    let need_ff = |errs: &mut Vec<String>| {
+        if ffmpeg.is_none() {
+            errs.push("ffmpeg is not installed (brew install ffmpeg)".into());
+        }
+        ffmpeg
+    };
+    match tool {
+        FileTool::Merge if is_pdf => {
+            let out = output_with_suffix(first, &tool.suffix(), "pdf", |p| p.exists());
+            let join = "/System/Library/Automator/Combine PDF Pages.action/Contents/MacOS/join";
+            let ok = std::process::Command::new(join).arg("-o").arg(&out).args(files).status().map(|s| s.success()).unwrap_or(false);
+            if ok && out.exists() {
+                outs.push(out);
+            } else {
+                errs.push("could not merge the PDFs".into());
+            }
+        }
+        FileTool::SplitPages => {
+            let js = "function run(a){ObjC.import('PDFKit');var d=$.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(a[0]));if(!d.js&&!d){return '0'}var n=d.pageCount;for(var i=0;i<n;i++){var o=$.PDFDocument.alloc.init;o.insertPageAtIndex(d.pageAtIndex(i),0);o.writeToFile(a[1]+'/'+(i+1)+'.pdf')}return ''+n}";
+            let res = std::process::Command::new("/usr/bin/osascript").args(["-l", "JavaScript", "-e", js]).arg(first).arg(&tmp).output();
+            let n: usize = res.ok().and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok()).unwrap_or(0);
+            if n == 0 {
+                errs.push("could not read the PDF pages".into());
+            }
+            for i in 1..=n {
+                let out = output_with_suffix(first, &format!("page {i}"), "pdf", |p| p.exists());
+                if std::fs::copy(tmp.join(format!("{i}.pdf")), &out).is_ok() {
+                    outs.push(out);
+                }
+            }
+        }
+        FileTool::Merge => {
+            if let Some(ff) = need_ff(&mut errs) {
+                let list: String = files.iter().map(|f| format!("file '{}'\n", f.to_string_lossy().replace('\'', "'\\''"))).collect();
+                let lf = tmp.join("list.txt");
+                let _ = std::fs::write(&lf, list);
+                let out = output_with_suffix(first, &tool.suffix(), &e0, |p| p.exists());
+                let r = std::process::Command::new(ff)
+                    .args(["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i"])
+                    .arg(&lf)
+                    .args(["-c", "copy"])
+                    .arg(&out)
+                    .output();
+                match r {
+                    Ok(o) if o.status.success() && out.exists() => outs.push(out),
+                    Ok(o) => errs.push(format!(
+                        "merge failed (files need the same format): {}",
+                        String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("")
+                    )),
+                    Err(e) => errs.push(e.to_string()),
+                }
+            }
+        }
+        FileTool::Trim(a, b) => {
+            if let Some(ff) = need_ff(&mut errs) {
+                for f in files {
+                    let out = output_with_suffix(f, &tool.suffix(), &ext(f), |p| p.exists());
+                    let r = std::process::Command::new(ff)
+                        .args(["-y", "-loglevel", "error", "-ss", &a.to_string(), "-to", &b.to_string(), "-i"])
+                        .arg(f)
+                        .args(["-c", "copy"])
+                        .arg(&out)
+                        .output();
+                    match r {
+                        Ok(o) if o.status.success() && out.exists() => outs.push(out),
+                        Ok(o) => errs.push(format!("{}: {}", f.display(), String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or(""))),
+                        Err(e) => errs.push(e.to_string()),
+                    }
+                }
+            }
+        }
+        FileTool::SplitEvery(n) => {
+            if let Some(ff) = need_ff(&mut errs) {
+                for f in files {
+                    let pattern = tmp.join(format!("seg%03d.{}", ext(f)));
+                    let r = std::process::Command::new(ff)
+                        .args(["-y", "-loglevel", "error", "-i"])
+                        .arg(f)
+                        .args(["-f", "segment", "-segment_time", &n.to_string(), "-c", "copy", "-reset_timestamps", "1"])
+                        .arg(&pattern)
+                        .output();
+                    if !matches!(&r, Ok(o) if o.status.success()) {
+                        errs.push(format!("{}: could not split", f.display()));
+                        continue;
+                    }
+                    let mut parts: Vec<_> = std::fs::read_dir(&tmp)
+                        .map(|d| {
+                            d.flatten()
+                                .map(|e| e.path())
+                                .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("seg")))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    parts.sort();
+                    for (i, p) in parts.iter().enumerate() {
+                        let out = output_with_suffix(f, &format!("part {}", i + 1), &ext(f), |p| p.exists());
+                        if std::fs::copy(p, &out).is_ok() {
+                            outs.push(out);
+                        }
+                        let _ = std::fs::remove_file(p);
+                    }
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    (outs, errs)
+}
+
+pub fn file_tool_files(files: Vec<PathBuf>, tool: ferrocast_core::convert::FileTool, ffmpeg: Option<&'static str>, bus: Bus) {
+    std::thread::spawn(move || {
+        let (outs, errs) = run_file_tool(&files, &tool, ffmpeg);
+        let msg = match (outs.len(), errs.len()) {
+            (0, _) => format!("{} failed: {}", tool.label(), errs.first().cloned().unwrap_or_default()),
+            (n, 0) => format!("{} · {n} file{} written", tool.label(), if n == 1 { "" } else { "s" }),
+            (n, e) => format!("{} · {n} written, {e} failed: {}", tool.label(), errs[0]),
+        };
+        if let Some(f) = outs.first() {
+            let _ = ferrocast_macos::apps::reveal(f);
+        }
+        notify("Ferrocast", &msg);
+        bus.send(Msg::Toast(msg));
+    });
+}
+
 /// JPEG at the highest quality that meets a size target (KB, or percent smaller than the source).
 fn compress_to_size(f: &std::path::Path, op: &ferrocast_core::convert::ImageOp) -> Result<PathBuf, String> {
     use ferrocast_core::convert::{fit_quality, output_with_suffix, ImageOp};
@@ -2010,6 +2145,58 @@ mod convert_tests {
             assert!(e.is_empty(), "{e:?}");
             assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"));
         }
+    }
+
+    /// Trim, split and merge on real audio and PDF files (ffmpeg part skipped when not installed).
+    #[test]
+    fn file_tools_on_real_files() {
+        use ferrocast_core::convert::FileTool;
+        let tools = Tools::detect();
+        let d = tmp("filetools");
+        let dur = |p: &std::path::Path, ff: &str| -> f64 {
+            let probe = std::path::Path::new(ff).with_file_name("ffprobe");
+            let o = std::process::Command::new(probe)
+                .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
+                .arg(p)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&o.stdout).trim().parse().unwrap()
+        };
+        if let Some(ff) = tools.ffmpeg {
+            let mp3 = d.join("a.mp3");
+            assert!(std::process::Command::new(ff)
+                .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=10"])
+                .arg(&mp3)
+                .status()
+                .unwrap()
+                .success());
+            let (o, e) = run_file_tool(std::slice::from_ref(&mp3), &FileTool::Trim(2.0, 5.0), Some(ff));
+            assert!(e.is_empty(), "{e:?}");
+            assert!((dur(&o[0], ff) - 3.0).abs() < 0.2, "trimmed to ~3 s");
+            let (o, e) = run_file_tool(std::slice::from_ref(&mp3), &FileTool::SplitEvery(4), Some(ff));
+            assert!(e.is_empty(), "{e:?}");
+            assert_eq!(o.len(), 3, "10 s in 4 s pieces: {o:?}");
+            assert!(o[0].to_string_lossy().contains("part 1"));
+            let (m, e) = run_file_tool(&[mp3.clone(), mp3.clone()], &FileTool::Merge, Some(ff));
+            assert!(e.is_empty(), "{e:?}");
+            assert!((dur(&m[0], ff) - 20.0).abs() < 0.5, "merged ~20 s");
+            assert!(mp3.exists(), "original untouched");
+        }
+        // PDF: two one-page PDFs → merge → split back into two pages
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
+        let (p1, p2) = (d.join("one.pdf"), d.join("two.pdf"));
+        for p in [&p1, &p2] {
+            sips(&["-s", "format", "pdf", icon, "--out", &p.to_string_lossy()]).unwrap();
+        }
+        let (m, e) = run_file_tool(&[p1.clone(), p2.clone()], &FileTool::Merge, tools.ffmpeg);
+        assert!(e.is_empty(), "{e:?}");
+        let (pages, e) = run_file_tool(std::slice::from_ref(&m[0]), &FileTool::SplitPages, tools.ffmpeg);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(pages.len(), 2, "{pages:?}");
+        assert!(pages.iter().all(|p| std::fs::read(p).unwrap().starts_with(b"%PDF")));
+        // without ffmpeg an audio tool says how to get it instead of failing silently
+        let (o, e) = run_file_tool(&[d.join("a.mp3")], &FileTool::Trim(0.0, 1.0), None);
+        assert!(o.is_empty() && e[0].contains("brew install ffmpeg"), "{e:?}");
     }
 
     #[test]
