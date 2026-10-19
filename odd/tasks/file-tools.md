@@ -83,3 +83,5 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 - L20 P6b: release bundle built (job-35 exit 0, ad-hoc signature valid) and relaunched (pid 83331). Only process presence was checked; the new features were not exercised through the running app. Next unit: image file as `frame` background.
 
 - L21 `frame image /path/bg.jpg pad 40` uses another picture as the background (cover-scaled); real-file test checks the padding colour and a missing image error. Committed after workspace exit 0 and clippy exit 0. Remaining S11 gaps: normalize compare view, live-preview editors, annotation canvas, visual PDF organizer.
+
+- L22 P3c-7: normalize toast reports measured loudness before -> after (ebur128, 60 s deadline, drained stderr). Parser unit test and real-file check (result within 2 LU of -16) passed; committed after workspace exit 0 and clippy exit 0. Not independently verified.

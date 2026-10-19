@@ -70,6 +70,14 @@ fn media_tools_real_files() {
                 .unwrap();
         }
     }
+    // normalize report: the measured loudness moves to the target
+    let (norm, e) = run_file_tool(std::slice::from_ref(&audio), &FileTool::Normalize(-16.0, 11.0, -1.5), Some(ff));
+    assert!(e.is_empty(), "{e:?}");
+    let before = crate::media_tools::loudness(ff, &audio).expect("loudness of the source");
+    let after = crate::media_tools::loudness(ff, &norm[0]).expect("loudness of the result");
+    assert!((after - -16.0).abs() < 2.0, "normalized to about -16 LUFS, got {after} (was {before})");
+    let rep = crate::media_tools::normalize_report(ff, &audio, &norm[0]).expect("report");
+    assert!(rep.contains("LUFS") && rep.contains('→'), "{rep}");
     let (joined, errors) = run_file_tool(&[video.clone(), video.clone()], &FileTool::Join, Some(ff));
     assert!(errors.is_empty(), "join: {errors:?}");
     assert_eq!(joined.len(), 1);

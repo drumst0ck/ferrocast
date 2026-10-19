@@ -49,6 +49,52 @@ fn streams(info: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value>
     info["streams"].as_array().into_iter().flatten()
 }
 
+/// Parse the integrated loudness (LUFS) from the summary ffmpeg's `ebur128` filter prints last.
+pub(crate) fn parse_integrated(stderr: &str) -> Option<f64> {
+    let summary = stderr.rsplit("Integrated loudness:").next().filter(|_| stderr.contains("Integrated loudness:"))?;
+    let line = summary.lines().find(|l| l.trim_start().starts_with("I:"))?;
+    line.trim_start().strip_prefix("I:")?.split_whitespace().next()?.parse().ok()
+}
+
+/// Integrated loudness of a file in LUFS, measured with a hard deadline.
+pub(crate) fn loudness(ff: &str, file: &Path) -> Option<f64> {
+    let mut child = Command::new(ff)
+        .args(["-nostdin", "-hide_banner", "-i"])
+        .arg(file)
+        .args(["-af", "ebur128", "-f", "null", "-"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let mut err = child.stderr.take()?;
+    let reader = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut text = String::new();
+        let mut buf = Vec::new();
+        let _ = (&mut err).take(8 << 20).read_to_end(&mut buf);
+        text.push_str(&String::from_utf8_lossy(&buf));
+        text
+    });
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+        }
+    }
+    parse_integrated(&reader.join().ok()?)
+}
+
+/// "-31.0 → -16.0 LUFS" for a normalize result, when both measurements work.
+pub(crate) fn normalize_report(ff: &str, before: &Path, after: &Path) -> Option<String> {
+    Some(format!("{:.1} → {:.1} LUFS", loudness(ff, before)?, loudness(ff, after)?))
+}
+
 pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (Vec<PathBuf>, Vec<String>) {
     let Some(ff) = ffmpeg else {
         return (vec![], vec!["ffmpeg is not installed (brew install ffmpeg)".into()]);
@@ -183,4 +229,19 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
         }
     }
     (made, errors)
+}
+
+#[cfg(test)]
+mod loudness_tests {
+    use super::parse_integrated;
+
+    #[test]
+    fn reads_the_summary_not_the_running_values() {
+        let log = "[Parsed_ebur128_0 @ 0x1] t: 0.4 M: -20.1 S: -120.7 I: -20.1 LUFS LRA: 0.0 LU\n\
+            [Parsed_ebur128_0 @ 0x1] Summary:\n\n  Integrated loudness:\n    I:         -31.4 LUFS\n    Threshold: -41.4 LUFS\n\n  Loudness range:\n    LRA:         0.0 LU\n";
+        let log = log.replace("\\n", "\n");
+        assert_eq!(parse_integrated(&log), Some(-31.4));
+        assert_eq!(parse_integrated("no summary here"), None);
+        assert_eq!(parse_integrated("Integrated loudness:\n    I:  abc LUFS"), None);
+    }
 }

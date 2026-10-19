@@ -1843,9 +1843,20 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
 pub fn file_tool_files(files: Vec<PathBuf>, tool: ferrocast_core::convert::FileTool, ffmpeg: Option<&'static str>, bus: Bus) {
     std::thread::spawn(move || {
         let (outs, errs) = run_file_tool(&files, &tool, ffmpeg);
+        let report = match (&tool, ffmpeg, files.first(), outs.first()) {
+            (ferrocast_core::convert::FileTool::Normalize(..), Some(ff), Some(b), Some(a)) => {
+                crate::media_tools::normalize_report(ff, b, a)
+            }
+            _ => None,
+        };
         let msg = match (outs.len(), errs.len()) {
             (0, _) => format!("{} failed: {}", tool.label(), errs.first().cloned().unwrap_or_default()),
-            (n, 0) => format!("{} · {n} file{} written", tool.label(), if n == 1 { "" } else { "s" }),
+            (n, 0) => format!(
+                "{} · {n} file{} written{}",
+                tool.label(),
+                if n == 1 { "" } else { "s" },
+                report.as_ref().map(|r| format!(" · {r}")).unwrap_or_default()
+            ),
             (n, e) => format!("{} · {n} written, {e} failed: {}", tool.label(), errs[0]),
         };
         if let Some(f) = outs.first() {
