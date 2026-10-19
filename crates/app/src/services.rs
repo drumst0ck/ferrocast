@@ -2675,7 +2675,6 @@ mod ai_tests {
 
 #[cfg(test)]
 mod coverage_tests {
-    use super::*;
     use ferrocast_core::{convert::targets, matrix};
 
     /// Which of Tangerine's 275 (input → output) pairs does `targets()` offer today?
