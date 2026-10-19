@@ -1624,6 +1624,7 @@ impl App {
                                     ImageOp::Collage => "collage grid",
                                     ImageOp::Redact(_) => "redact hide blur privacy face text",
                                     ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
+                                    ImageOp::Annotate => "annotate markup draw arrow text preview",
                                 },
                             )
                             .is_some()
@@ -1645,6 +1646,7 @@ impl App {
                                     ImageOp::Collage => "sf:square.grid.2x2",
                                     ImageOp::Redact(_) => "sf:eye.slash.fill",
                                     ImageOp::Adjust(_) => "sf:slider.horizontal.3",
+                                    ImageOp::Annotate => "sf:pencil.tip.crop.circle",
                                 },
                                 [255, 140, 60],
                             ),

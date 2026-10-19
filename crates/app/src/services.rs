@@ -1584,6 +1584,15 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
                 sips(&["-s", "format", "png", "-p", &side, &side, "--padColor", c, &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
                 Ok(out)
             }
+            ImageOp::Annotate => {
+                // never mark up the original: copy it, then open the copy in Preview
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                std::fs::copy(f, &out).map_err(|e| e.to_string())?;
+                if std::env::var_os("FERROCAST_NO_OPEN").is_none() {
+                    let _ = std::process::Command::new("/usr/bin/open").args(["-a", "Preview"]).arg(&out).status();
+                }
+                Ok(out)
+            }
             ImageOp::CombinePdf | ImageOp::Collage | ImageOp::Redact(_) | ImageOp::Adjust(_) => unreachable!(),
         })();
         match res {
@@ -1603,7 +1612,8 @@ pub fn image_op_files(files: Vec<PathBuf>, op: ferrocast_core::convert::ImageOp,
             (n, 0) => format!("{} · {n} file{} written", op.label(), if n == 1 { "" } else { "s" }),
             (n, e) => format!("{} · {n} written, {e} failed: {}", op.label(), errs[0]),
         };
-        if let Some(f) = outs.first() {
+        // Annotate already opened Preview; revealing would pull Finder in front of it
+        if let Some(f) = outs.first().filter(|_| op != ferrocast_core::convert::ImageOp::Annotate) {
             let _ = ferrocast_macos::apps::reveal(f);
         }
         notify("Ferrocast", &msg);
@@ -1788,6 +1798,12 @@ mod convert_tests {
         let (o, e) = run_image_op(one, &ImageOp::Adjust(Adjust::BlackAndWhite));
         assert!(e.is_empty(), "{e:?}");
         assert!(image::open(&o[0]).unwrap().to_rgba8().pixels().all(|px| px.0[0] == px.0[1] && px.0[1] == px.0[2]));
+        // annotate makes a byte-identical copy (Preview is not opened under test)
+        std::env::set_var("FERROCAST_NO_OPEN", "1");
+        let (o, e) = run_image_op(one, &ImageOp::Annotate);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(std::fs::read(&o[0]).unwrap(), std::fs::read(&src).unwrap());
+        assert!(o[0].to_string_lossy().contains("annotated"));
         // no faces in a text picture → a clear error, no file
         let (o, e) = run_image_op(std::slice::from_ref(&txt), &ImageOp::Redact(true));
         assert!(o.is_empty() && e[0].contains("no faces found"), "{e:?}");

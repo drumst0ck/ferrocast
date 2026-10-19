@@ -387,6 +387,8 @@ pub enum ImageOp {
     Redact(bool),
     /// One-step photo adjustment.
     Adjust(Adjust),
+    /// Copy the image and open the copy in Preview for Markup.
+    Annotate,
 }
 
 /// Photo adjustments offered as one-step edits.
@@ -420,6 +422,7 @@ impl ImageOp {
                 Adjust::MoreContrast => "Edit · More contrast",
             }
             .into(),
+            ImageOp::Annotate => "Annotate in Preview".into(),
         }
     }
     /// Short word added to the output file name.
@@ -436,6 +439,7 @@ impl ImageOp {
             ImageOp::Collage => "collage".into(),
             ImageOp::Redact(_) => "redacted".into(),
             ImageOp::Adjust(_) => "edited".into(),
+            ImageOp::Annotate => "annotated".into(),
         }
     }
     /// Tools for `n` selected images.
@@ -465,6 +469,7 @@ impl ImageOp {
             ImageOp::Adjust(Adjust::Brighter),
             ImageOp::Adjust(Adjust::Darker),
             ImageOp::Adjust(Adjust::MoreContrast),
+            ImageOp::Annotate,
         ];
         if n > 1 {
             v.insert(0, ImageOp::Collage);
