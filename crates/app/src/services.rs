@@ -1591,10 +1591,10 @@ mod convert_tests {
             assert!(e.is_empty(), "{e:?}");
             assert_eq!(&std::fs::read(&o[0]).unwrap()[8..12], b"WEBP");
         }
-        if tools.ffmpeg.is_some() {
+        if let Some(ff) = tools.ffmpeg {
             // one second of silence → WAV (afconvert) → MP3 (ffmpeg)
             let wav = d.join("s.wav");
-            assert!(std::process::Command::new(tools.ffmpeg.unwrap())
+            assert!(std::process::Command::new(ff)
                 .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1"])
                 .arg(&wav)
                 .status()
@@ -1612,7 +1612,7 @@ mod convert_tests {
             assert!(std::fs::read(&o[0]).unwrap().starts_with(b"OggS"));
             // a 1 s test clip → MOV is the source for video targets
             let mov = d.join("clip.mov");
-            assert!(std::process::Command::new(tools.ffmpeg.unwrap())
+            assert!(std::process::Command::new(ff)
                 .args([
                     "-y",
                     "-loglevel",
