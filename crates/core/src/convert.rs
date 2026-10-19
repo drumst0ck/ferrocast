@@ -385,6 +385,17 @@ pub enum ImageOp {
     Collage,
     /// Cover detected faces (true) or text (false) with solid boxes.
     Redact(bool),
+    /// One-step photo adjustment.
+    Adjust(Adjust),
+}
+
+/// Photo adjustments offered as one-step edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Adjust {
+    BlackAndWhite,
+    Brighter,
+    Darker,
+    MoreContrast,
 }
 
 impl ImageOp {
@@ -402,6 +413,13 @@ impl ImageOp {
             ImageOp::Collage => "Make a collage".into(),
             ImageOp::Redact(true) => "Redact faces".into(),
             ImageOp::Redact(false) => "Redact text".into(),
+            ImageOp::Adjust(a) => match a {
+                Adjust::BlackAndWhite => "Edit · Black & white",
+                Adjust::Brighter => "Edit · Brighter",
+                Adjust::Darker => "Edit · Darker",
+                Adjust::MoreContrast => "Edit · More contrast",
+            }
+            .into(),
         }
     }
     /// Short word added to the output file name.
@@ -417,6 +435,7 @@ impl ImageOp {
             ImageOp::Background(_) => "square".into(),
             ImageOp::Collage => "collage".into(),
             ImageOp::Redact(_) => "redacted".into(),
+            ImageOp::Adjust(_) => "edited".into(),
         }
     }
     /// Tools for `n` selected images.
@@ -442,6 +461,10 @@ impl ImageOp {
             ImageOp::Background("000000"),
             ImageOp::Redact(true),
             ImageOp::Redact(false),
+            ImageOp::Adjust(Adjust::BlackAndWhite),
+            ImageOp::Adjust(Adjust::Brighter),
+            ImageOp::Adjust(Adjust::Darker),
+            ImageOp::Adjust(Adjust::MoreContrast),
         ];
         if n > 1 {
             v.insert(0, ImageOp::Collage);

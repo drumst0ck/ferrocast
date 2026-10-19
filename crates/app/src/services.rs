@@ -1424,6 +1424,24 @@ fn redact(f: &std::path::Path, faces: bool) -> Result<PathBuf, String> {
     Ok(out)
 }
 
+/// Apply a one-step adjustment; writes a PNG next to the original.
+fn adjust(f: &std::path::Path, a: ferrocast_core::convert::Adjust) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::{output_with_suffix, Adjust};
+    let tmp = std::env::temp_dir().join(format!("ferrocast-adjust-{}.png", std::process::id()));
+    sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])?;
+    let img = image::open(&tmp).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&tmp);
+    let img = match a {
+        Adjust::BlackAndWhite => image::DynamicImage::ImageLumaA8(img.to_luma_alpha8()),
+        Adjust::Brighter => img.brighten(30),
+        Adjust::Darker => img.brighten(-30),
+        Adjust::MoreContrast => img.adjust_contrast(20.0),
+    };
+    let out = output_with_suffix(f, "edited", "png", |p| p.exists());
+    img.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// Lay the images out in a grid of 600 px cells on white, as one PNG next to the first.
 fn collage(files: &[PathBuf]) -> Result<PathBuf, String> {
     use ferrocast_core::convert::{collage_grid, output_with_suffix};
@@ -1483,6 +1501,15 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
     if let ImageOp::Redact(faces) = op {
         for f in files {
             match redact(f, *faces) {
+                Ok(o) => outs.push(o),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
+    if let ImageOp::Adjust(a) = op {
+        for f in files {
+            match adjust(f, *a) {
                 Ok(o) => outs.push(o),
                 Err(e) => errs.push(format!("{}: {e}", name(f))),
             }
@@ -1557,7 +1584,7 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
                 sips(&["-s", "format", "png", "-p", &side, &side, "--padColor", c, &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
                 Ok(out)
             }
-            ImageOp::CombinePdf | ImageOp::Collage | ImageOp::Redact(_) => unreachable!(),
+            ImageOp::CombinePdf | ImageOp::Collage | ImageOp::Redact(_) | ImageOp::Adjust(_) => unreachable!(),
         })();
         match res {
             Ok(o) if o.exists() => outs.push(o),
@@ -1742,6 +1769,25 @@ mod convert_tests {
         assert!(dark(&o[0]) > before * 3, "text boxes filled: {} vs {before}", dark(&o[0]));
         let red = image::open(&o[0]).unwrap().to_rgba8();
         assert_eq!(red.get_pixel(red.width() - 1, red.height() - 1).0[..3], [255, 255, 255], "untouched corner");
+        // adjustments: brighter raises the mean, black & white makes R == G == B
+        use ferrocast_core::convert::Adjust;
+        let mean = |p: &std::path::Path| {
+            let i = image::open(p).unwrap().to_rgba8();
+            i.pixels().map(|px| px.0[0] as u64 + px.0[1] as u64 + px.0[2] as u64).sum::<u64>() / (i.width() * i.height()) as u64
+        };
+        // the image crate here decodes PNG only: measure the JPEG source through a PNG copy
+        let base_png = d.join("base.png");
+        sips(&["-s", "format", "png", &src.to_string_lossy(), "--out", &base_png.to_string_lossy()]).unwrap();
+        let base = mean(&base_png);
+        let (o, e) = run_image_op(one, &ImageOp::Adjust(Adjust::Brighter));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(mean(&o[0]) > base);
+        let (o, e) = run_image_op(one, &ImageOp::Adjust(Adjust::Darker));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(mean(&o[0]) < base);
+        let (o, e) = run_image_op(one, &ImageOp::Adjust(Adjust::BlackAndWhite));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(image::open(&o[0]).unwrap().to_rgba8().pixels().all(|px| px.0[0] == px.0[1] && px.0[1] == px.0[2]));
         // no faces in a text picture → a clear error, no file
         let (o, e) = run_image_op(std::slice::from_ref(&txt), &ImageOp::Redact(true));
         assert!(o.is_empty() && e[0].contains("no faces found"), "{e:?}");
