@@ -943,6 +943,30 @@ pub enum FileTool {
     Merge,
     /// One PDF per page.
     SplitPages,
+    /// Drop the audio track.
+    Mute,
+    /// Play at this factor (0.25–4), pitch preserved.
+    Speed(f64),
+    /// One full-resolution PNG at this second.
+    Snapshot(f64),
+    /// Crop video to w×h at x,y.
+    CropVideo(u32, u32, u32, u32),
+    /// Cover a region (x,y,w,h) from..to seconds; blur instead of a box.
+    RedactVideo(u32, u32, u32, u32, f64, f64, bool),
+    /// EBU R128 loudness normalisation (I, LRA, TP).
+    Normalize(f64, f64, f64),
+    /// Audio → MP4 with a waveform (landscape/portrait/square).
+    Visualize(crate::media::Canvas),
+    /// Strip silence from both ends of a recording.
+    TrimSilence,
+    /// Mono (false) or stereo (true) with per-channel gain.
+    Channels(bool, f64, f64),
+    /// Replace from..to seconds with a 1 kHz bleep.
+    Bleep(f64, f64),
+    /// Join mixed MP4/MOV/MKV clips into one MP4 (first clip is the canvas).
+    Join,
+    /// New PDF from these pages in order: (0-based source page, quarter turns clockwise).
+    OrganizePdf(Vec<(usize, i32)>),
 }
 
 pub fn format_secs(s: f64) -> String {
@@ -962,6 +986,28 @@ impl FileTool {
             FileTool::SplitEvery(n) => format!("Split · every {n} s"),
             FileTool::Merge => "Merge into one file".into(),
             FileTool::SplitPages => "Split into one PDF per page".into(),
+            FileTool::Mute => "Remove audio".into(),
+            FileTool::Speed(f) => format!("Speed · {f}×"),
+            FileTool::Snapshot(t) => format!("Save frame at {}", format_secs(*t)),
+            FileTool::CropVideo(_, _, w, h) => format!("Crop video · {w}×{h}"),
+            FileTool::RedactVideo(_, _, _, _, a, b, blur) => {
+                format!("Redact video · {} to {}{}", format_secs(*a), format_secs(*b), if *blur { " (blur)" } else { "" })
+            }
+            FileTool::Normalize(i, ..) => format!("Normalize volume · {i} LUFS"),
+            FileTool::Visualize(c) => format!(
+                "Audio visualizer · {}",
+                match c {
+                    crate::media::Canvas::Landscape => "landscape",
+                    crate::media::Canvas::Portrait => "portrait",
+                    crate::media::Canvas::Square => "square",
+                }
+            ),
+            FileTool::TrimSilence => "Trim silence at both ends".into(),
+            FileTool::Channels(true, ..) => "Convert to stereo".into(),
+            FileTool::Channels(false, ..) => "Convert to mono".into(),
+            FileTool::Bleep(a, b) => format!("Bleep · {} to {}", format_secs(*a), format_secs(*b)),
+            FileTool::Join => "Join videos into one MP4".into(),
+            FileTool::OrganizePdf(p) => format!("Organize PDF · {} page{}", p.len(), if p.len() == 1 { "" } else { "s" }),
         }
     }
     pub fn suffix(&self) -> String {
@@ -969,14 +1015,45 @@ impl FileTool {
             FileTool::Trim(..) => "trimmed".into(),
             FileTool::SplitEvery(_) | FileTool::SplitPages => "part".into(),
             FileTool::Merge => "merged".into(),
+            FileTool::Mute => "muted".into(),
+            FileTool::Speed(f) => format!("speed {f}x"),
+            FileTool::Snapshot(_) => "frame".into(),
+            FileTool::CropVideo(..) => "cropped".into(),
+            FileTool::RedactVideo(..) => "redacted".into(),
+            FileTool::Normalize(..) => "normalized".into(),
+            FileTool::Visualize(_) => "visualizer".into(),
+            FileTool::TrimSilence => "trimmed".into(),
+            FileTool::Channels(true, ..) => "stereo".into(),
+            FileTool::Channels(false, ..) => "mono".into(),
+            FileTool::Bleep(..) => "bleeped".into(),
+            FileTool::Join => "joined".into(),
+            FileTool::OrganizePdf(_) => "organized".into(),
         }
     }
     /// Tools offered for `n` selected files of one family.
     pub fn offered(family: Family, n: usize) -> Vec<FileTool> {
         match family {
-            Family::Audio | Family::Video | Family::Pdf if n > 1 => vec![FileTool::Merge],
+            Family::Video if n > 1 => vec![FileTool::Join, FileTool::Merge],
+            Family::Audio | Family::Pdf if n > 1 => vec![FileTool::Merge],
             Family::Pdf => vec![FileTool::SplitPages],
-            Family::Audio | Family::Video => vec![FileTool::SplitEvery(60), FileTool::SplitEvery(300)],
+            Family::Video => vec![
+                FileTool::Mute,
+                FileTool::Speed(2.0),
+                FileTool::Speed(0.5),
+                FileTool::Snapshot(0.0),
+                FileTool::SplitEvery(60),
+                FileTool::SplitEvery(300),
+            ],
+            Family::Audio => vec![
+                FileTool::Normalize(-16.0, 11.0, -1.5),
+                FileTool::TrimSilence,
+                FileTool::Channels(false, 1.0, 1.0),
+                FileTool::Channels(true, 1.0, 1.0),
+                FileTool::Visualize(crate::media::Canvas::Landscape),
+                FileTool::Visualize(crate::media::Canvas::Square),
+                FileTool::SplitEvery(60),
+                FileTool::SplitEvery(300),
+            ],
             _ => vec![],
         }
     }
@@ -996,13 +1073,90 @@ pub fn parse_time(s: &str) -> Option<f64> {
     Some(total)
 }
 
-/// Typed tool: `trim 0:10-0:30`, `split 30s`, `split 2m`.
+/// Typed tool: `trim 0:10-0:30`, `split 30s`, `speed 1.5x`, `frame 1:23`, `crop 640x360`,
+/// `crop 640x360 at 100,50`, `redact 10,10 200x100 0:05-0:09`, `redact … blur`, `bleep 0:05-0:07`,
+/// `normalize -14`, `mono`, `stereo`, `mute`, `visualizer portrait`.
 pub fn parse_tool_query(q: &str) -> Option<FileTool> {
     let q = q.trim().to_lowercase();
-    if let Some(rest) = q.strip_prefix("trim ") {
-        let (a, b) = rest.split_once('-')?;
+    let range = |s: &str| -> Option<(f64, f64)> {
+        let (a, b) = s.split_once('-')?;
         let (a, b) = (parse_time(a)?, parse_time(b)?);
-        return (b > a).then_some(FileTool::Trim(a, b));
+        (b > a).then_some((a, b))
+    };
+    if let Some(rest) = q.strip_prefix("trim ") {
+        let (a, b) = range(rest)?;
+        return Some(FileTool::Trim(a, b));
+    }
+    if let Some(rest) = q.strip_prefix("pages ") {
+        // "3,1,2r,1": 1-based pages in the wanted order; r = 90° right, l = 90° left, rr = 180°
+        let mut sel = vec![];
+        for part in rest.split(',') {
+            let part = part.trim();
+            let digits = part.trim_end_matches(['r', 'l']);
+            let turns = part[digits.len()..].chars().fold(0i32, |t, c| if c == 'r' { t + 1 } else { t - 1 });
+            let n: usize = digits.parse().ok().filter(|n| *n >= 1)?;
+            sel.push((n - 1, turns.rem_euclid(4)));
+        }
+        return (!sel.is_empty()).then_some(FileTool::OrganizePdf(sel));
+    }
+    if q == "mute" || q == "remove audio" {
+        return Some(FileTool::Mute);
+    }
+    if q == "mono" {
+        return Some(FileTool::Channels(false, 1.0, 1.0));
+    }
+    if q == "stereo" {
+        return Some(FileTool::Channels(true, 1.0, 1.0));
+    }
+    if q == "silence" || q == "trim silence" {
+        return Some(FileTool::TrimSilence);
+    }
+    if let Some(rest) = q.strip_prefix("speed ") {
+        let f: f64 = rest.trim().trim_end_matches('x').trim().parse().ok()?;
+        return (0.25..=4.0).contains(&f).then_some(FileTool::Speed(f));
+    }
+    if let Some(rest) = q.strip_prefix("frame ").or_else(|| q.strip_prefix("snapshot ")) {
+        return Some(FileTool::Snapshot(parse_time(rest)?));
+    }
+    if let Some(rest) = q.strip_prefix("bleep ") {
+        let (a, b) = range(rest)?;
+        return Some(FileTool::Bleep(a, b));
+    }
+    if let Some(rest) = q.strip_prefix("normalize") {
+        let i: f64 = rest.trim().parse().unwrap_or(-16.0);
+        return (-40.0..=0.0).contains(&i).then_some(FileTool::Normalize(i, 11.0, -1.5));
+    }
+    if let Some(rest) = q.strip_prefix("visualizer") {
+        let c = match rest.trim() {
+            "portrait" => crate::media::Canvas::Portrait,
+            "square" => crate::media::Canvas::Square,
+            _ => crate::media::Canvas::Landscape,
+        };
+        return Some(FileTool::Visualize(c));
+    }
+    if let Some(rest) = q.strip_prefix("crop ") {
+        // "640x360" or "640x360 at 100,50"
+        let (size, at) = rest.split_once(" at ").map(|(s, a)| (s, Some(a))).unwrap_or((rest, None));
+        let (w, h) = size.trim().split_once('x')?;
+        let (w, h): (u32, u32) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+        let (x, y) = match at {
+            Some(a) => {
+                let (x, y) = a.split_once(',')?;
+                (x.trim().parse().ok()?, y.trim().parse().ok()?)
+            }
+            None => (0, 0),
+        };
+        return (w > 0 && h > 0).then_some(FileTool::CropVideo(x, y, w, h));
+    }
+    if let Some(rest) = q.strip_prefix("redact ") {
+        // "x,y wxh a-b [blur]"
+        let blur = rest.ends_with(" blur");
+        let rest = rest.trim_end_matches(" blur");
+        let mut it = rest.split_whitespace();
+        let (x, y) = it.next()?.split_once(',')?;
+        let (w, h) = it.next()?.split_once('x')?;
+        let (a, b) = range(it.next()?)?;
+        return Some(FileTool::RedactVideo(x.parse().ok()?, y.parse().ok()?, w.parse().ok()?, h.parse().ok()?, a, b, blur));
     }
     let rest = q.strip_prefix("split ")?.replace(' ', "");
     let (n, mult) = match rest.chars().last()? {
@@ -1173,6 +1327,21 @@ mod strip_tests {
         assert_eq!(parse_tool_query("split 30s"), Some(FileTool::SplitEvery(30)));
         assert_eq!(parse_tool_query("split 2m"), Some(FileTool::SplitEvery(120)));
         assert_eq!(parse_tool_query("split 0"), None);
+        assert_eq!(parse_tool_query("speed 2x"), Some(FileTool::Speed(2.0)));
+        assert_eq!(parse_tool_query("speed 9"), None);
+        assert_eq!(parse_tool_query("mute"), Some(FileTool::Mute));
+        assert_eq!(parse_tool_query("pages 3,1,2r,1ll"), Some(FileTool::OrganizePdf(vec![(2, 0), (0, 0), (1, 1), (0, 2)])));
+        assert_eq!(parse_tool_query("pages 0"), None);
+        assert_eq!(parse_tool_query("pages 1,x"), None);
+        assert_eq!(parse_tool_query("frame 1:30"), Some(FileTool::Snapshot(90.0)));
+        assert_eq!(parse_tool_query("crop 640x360 at 10,20"), Some(FileTool::CropVideo(10, 20, 640, 360)));
+        assert_eq!(parse_tool_query("redact 10,10 200x100 0:05-0:09 blur"), Some(FileTool::RedactVideo(10, 10, 200, 100, 5.0, 9.0, true)));
+        assert_eq!(parse_tool_query("bleep 0:05-0:07"), Some(FileTool::Bleep(5.0, 7.0)));
+        assert_eq!(parse_tool_query("normalize -14"), Some(FileTool::Normalize(-14.0, 11.0, -1.5)));
+        assert_eq!(parse_tool_query("visualizer portrait"), Some(FileTool::Visualize(crate::media::Canvas::Portrait)));
+        assert_eq!(parse_tool_query("mono"), Some(FileTool::Channels(false, 1.0, 1.0)));
+        assert!(FileTool::offered(Family::Video, 1).contains(&FileTool::Mute));
+        assert_eq!(FileTool::offered(Family::Video, 2)[0], FileTool::Join);
         assert_eq!(parse_tool_query("trim"), None);
         assert_eq!(FileTool::offered(Family::Pdf, 1), vec![FileTool::SplitPages]);
         assert_eq!(FileTool::offered(Family::Audio, 2), vec![FileTool::Merge]);

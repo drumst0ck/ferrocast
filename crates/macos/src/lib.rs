@@ -7,6 +7,7 @@ pub mod drag;
 pub mod expansion;
 pub mod files;
 pub mod keyboard;
+pub mod pdf;
 pub mod process;
 pub mod running;
 pub mod shelf;

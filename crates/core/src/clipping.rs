@@ -91,6 +91,33 @@ pub fn read_text_clipping(path: &Path) -> Result<String, String> {
     }
 }
 
+/// A resource fork holding `text` as a `utxt` resource, for building `.textClipping` fixtures.
+pub fn clipping_fixture_rsrc(text: &str) -> Vec<u8> {
+    let utf16: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+    let mut data = (utf16.len() as u32).to_be_bytes().to_vec();
+    data.extend(&utf16);
+    let mut map = vec![0u8; 24];
+    map.extend(28u16.to_be_bytes());
+    map.extend(0u16.to_be_bytes());
+    map.extend(0u16.to_be_bytes()); // one type
+    map.extend(b"utxt");
+    map.extend(0u16.to_be_bytes());
+    map.extend(10u16.to_be_bytes());
+    map.extend(128u16.to_be_bytes());
+    map.extend(0xFFFFu16.to_be_bytes());
+    map.extend(0u32.to_be_bytes());
+    map.extend(0u32.to_be_bytes());
+    let mut out = Vec::new();
+    out.extend(256u32.to_be_bytes());
+    out.extend((256 + data.len() as u32).to_be_bytes());
+    out.extend((data.len() as u32).to_be_bytes());
+    out.extend((map.len() as u32).to_be_bytes());
+    out.resize(256, 0);
+    out.extend(data);
+    out.extend(map);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +167,11 @@ mod tests {
         }
         v.extend(s.encode_utf16());
         v.iter().flat_map(|u| u.to_be_bytes()).collect()
+    }
+
+    #[test]
+    fn fixture_helper_round_trips() {
+        assert_eq!(parse_rsrc(&clipping_fixture_rsrc("héllo 日本")).as_deref(), Some("héllo 日本"));
     }
 
     #[test]

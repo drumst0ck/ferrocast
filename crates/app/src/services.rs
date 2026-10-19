@@ -1347,6 +1347,29 @@ pub fn run_conversion(
         let mut errors: Vec<String> = vec![];
         for f in files {
             let out = output_path(f, target.ext, |p| p.exists());
+            // cwebp reads png/jpeg/tiff/webp only: other images go through a sips PNG
+            let mut pivot_png: Option<PathBuf> = None;
+            let f: &std::path::PathBuf = if target.engine == Engine::Cwebp
+                && !matches!(ferrocast_core::convert::ext(f).as_str(), "png" | "jpg" | "jpeg" | "tif" | "tiff" | "webp")
+            {
+                let tmp = std::env::temp_dir().join(format!(
+                    "ferrocast-cw-{}-{}.png",
+                    std::process::id(),
+                    out.file_name().map(|n| n.to_string_lossy().len()).unwrap_or(0)
+                ));
+                match sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()]) {
+                    Ok(()) => {
+                        pivot_png = Some(tmp);
+                        pivot_png.as_ref().unwrap_or(f)
+                    }
+                    Err(e) => {
+                        errors.push(format!("{}: {e}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+                        continue;
+                    }
+                }
+            } else {
+                f
+            };
             if target.engine == Engine::Route {
                 match crate::route::route_convert(f, target, tools) {
                     Ok(mut o) => outputs.append(&mut o),
@@ -1411,16 +1434,25 @@ pub fn run_conversion(
                 }
                 Ok(o) => {
                     let err = String::from_utf8_lossy(&o.stderr);
-                    errors.push(format!(
-                        "{}: {}",
-                        f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-                        err.lines().last().unwrap_or("conversion failed").trim()
-                    ));
+                    let last = err.lines().last().unwrap_or("conversion failed").trim();
+                    // ffmpeg's "-vn" on a silent video leaves no stream to write
+                    let msg = if target.engine == Engine::Ffmpeg
+                        && matches!(target.ext, "mp3" | "m4a" | "wav" | "aiff" | "ogg" | "opus" | "wma" | "flac")
+                        && last.contains("Invalid argument")
+                    {
+                        "this video has no audio track".to_string()
+                    } else {
+                        last.to_string()
+                    };
+                    errors.push(format!("{}: {msg}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
                 }
                 Err(e) => errors.push(format!("could not run {}: {e}", cmd[0])),
             }
             if let Some(d) = scratch {
                 let _ = std::fs::remove_dir_all(d);
+            }
+            if let Some(p) = pivot_png {
+                let _ = std::fs::remove_file(p);
             }
         }
         (outputs, errors)
@@ -1626,6 +1658,32 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         ffmpeg
     };
     match tool {
+        FileTool::Mute
+        | FileTool::Speed(_)
+        | FileTool::Snapshot(_)
+        | FileTool::CropVideo(..)
+        | FileTool::RedactVideo(..)
+        | FileTool::Normalize(..)
+        | FileTool::Visualize(_)
+        | FileTool::TrimSilence
+        | FileTool::Channels(..)
+        | FileTool::Bleep(..)
+        | FileTool::Join => {
+            return crate::media_tools::run(files, tool, ffmpeg);
+        }
+        FileTool::OrganizePdf(sel) => {
+            let pages: Vec<_> = sel.iter().map(|&(index, quarter_turns)| ferrocast_macos::pdf::PageSel { index, quarter_turns }).collect();
+            for f in files.iter().filter(|f| ext(f) == "pdf") {
+                let out = output_with_suffix(f, &tool.suffix(), "pdf", |p| p.exists());
+                match ferrocast_macos::pdf::organize(f, &pages, &out) {
+                    Ok(()) => outs.push(out),
+                    Err(e) => errs.push(format!("{}: {e}", f.display())),
+                }
+            }
+            if files.iter().all(|f| ext(f) != "pdf") {
+                errs.push("this tool requires PDF files".into());
+            }
+        }
         FileTool::Merge if is_pdf => {
             let out = output_with_suffix(first, &tool.suffix(), "pdf", |p| p.exists());
             let join = "/System/Library/Automator/Combine PDF Pages.action/Contents/MacOS/join";

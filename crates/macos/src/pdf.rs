@@ -1,0 +1,257 @@
+//! PDF page organization backed by macOS PDFKit, driven through
+//! `/usr/bin/osascript` (JXA). Standard library only.
+
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const OSASCRIPT: &str = "/usr/bin/osascript";
+const DEADLINE: Duration = Duration::from_secs(60);
+
+/// One output page: which source page to take and how far to rotate it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageSel {
+    /// 0-based index into the source document.
+    pub index: usize,
+    /// Rotation in 90 degree steps; any integer, normalized modulo 4.
+    pub quarter_turns: i32,
+}
+
+const COUNT_JS: &str = r#"
+ObjC.import('Quartz');
+function run(argv) {
+  var doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
+  if (doc.isNil()) { throw new Error('cannot open PDF'); }
+  if (doc.isLocked) { throw new Error('PDF is locked'); }
+  return String(doc.pageCount);
+}
+"#;
+
+const ORGANIZE_JS: &str = r#"
+ObjC.import('Quartz');
+function run(argv) {
+  var src = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
+  if (src.isNil()) { throw new Error('cannot open PDF'); }
+  if (src.isLocked) { throw new Error('PDF is locked'); }
+  var sel = JSON.parse(argv[2]);
+  var out = $.PDFDocument.alloc.init;
+  for (var i = 0; i < sel.length; i++) {
+    var page = src.pageAtIndex(sel[i][0]).copy;
+    var turns = ((sel[i][1] % 4) + 4) % 4;
+    page.rotation = (((page.rotation + turns * 90) % 360) + 360) % 360;
+    out.insertPageAtIndex(page, i);
+  }
+  if (!out.writeToFile(argv[1])) { throw new Error('PDFKit failed to write output'); }
+  return 'ok';
+}
+"#;
+
+/// Runs a JXA script with a hard deadline; stderr and stdout drained concurrently.
+fn run_jxa(script: &str, args: &[&str]) -> Result<String, String> {
+    let mut child = Command::new(OSASCRIPT)
+        .args(["-l", "JavaScript", "-e", script])
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cannot start osascript: {e}"))?;
+    fn drain<R: Read + Send + 'static>(r: Option<R>) -> thread::JoinHandle<String> {
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut r) = r {
+                let _ = r.read_to_end(&mut buf);
+            }
+            String::from_utf8_lossy(&buf).into_owned()
+        })
+    }
+    let out = drain(child.stdout.take());
+    let err = drain(child.stderr.take());
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if start.elapsed() >= DEADLINE => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = out.join();
+                let _ = err.join();
+                return Err("osascript timed out".into());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(e) => return Err(format!("osascript wait failed: {e}")),
+        }
+    };
+    let stdout = out.join().unwrap_or_default();
+    let stderr = err.join().unwrap_or_default();
+    if status.success() {
+        Ok(stdout.trim().to_string())
+    } else {
+        Err(format!("osascript failed: {}", stderr.trim()))
+    }
+}
+
+fn path_str(p: &Path) -> Result<&str, String> {
+    p.to_str().ok_or_else(|| "path is not valid UTF-8".to_string())
+}
+
+/// Number of pages in the PDF at `src`.
+pub fn page_count(src: &Path) -> Result<usize, String> {
+    let s = path_str(src)?;
+    run_jxa(COUNT_JS, &[s])?.parse::<usize>().map_err(|e| format!("unexpected page count: {e}"))
+}
+
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Builds `dest` from the selected pages of `src`. Never overwrites `dest`.
+pub fn organize(src: &Path, pages: &[PageSel], dest: &Path) -> Result<(), String> {
+    if pages.is_empty() {
+        return Err("no pages selected".into());
+    }
+    let src_s = path_str(src)?;
+    path_str(dest)?;
+    if dest.symlink_metadata().is_ok() {
+        return Err(format!("destination already exists: {}", dest.display()));
+    }
+    if let (Ok(a), Ok(b)) = (src.canonicalize(), dest.canonicalize()) {
+        if a == b {
+            return Err("destination equals source".into());
+        }
+    }
+    if src == dest {
+        return Err("destination equals source".into());
+    }
+    let count = page_count(src)?;
+    if let Some(p) = pages.iter().find(|p| p.index >= count) {
+        return Err(format!("page index {} out of range (0..{count})", p.index));
+    }
+    let json =
+        format!("[{}]", pages.iter().map(|p| format!("[{},{}]", p.index, p.quarter_turns.rem_euclid(4))).collect::<Vec<_>>().join(","));
+
+    let scratch_dir: PathBuf =
+        std::env::temp_dir().join(format!("pdf-organize-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&scratch_dir).map_err(|e| format!("cannot create scratch dir: {e}"))?;
+    let result = publish(src_s, &json, &scratch_dir, dest);
+    let _ = std::fs::remove_dir_all(&scratch_dir);
+    result
+}
+
+fn publish(src: &str, json: &str, scratch_dir: &Path, dest: &Path) -> Result<(), String> {
+    let scratch = scratch_dir.join("out.pdf");
+    run_jxa(ORGANIZE_JS, &[src, path_str(&scratch)?, json])?;
+    let bytes = std::fs::read(&scratch).map_err(|e| format!("cannot read scratch output: {e}"))?;
+    if bytes.is_empty() {
+        return Err("PDFKit produced an empty file".into());
+    }
+    let mut f =
+        std::fs::OpenOptions::new().write(true).create_new(true).open(dest).map_err(|e| format!("cannot create destination: {e}"))?;
+    if let Err(e) = f.write_all(&bytes).and_then(|_| f.sync_all()) {
+        drop(f);
+        let _ = std::fs::remove_file(dest);
+        return Err(format!("cannot write destination: {e}"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MAKE_JS: &str = r#"
+ObjC.import('AppKit'); ObjC.import('Quartz');
+function run(argv) {
+  var doc = $.PDFDocument.alloc.init;
+  var names = ['alpha', 'bravo', 'charlie'];
+  for (var i = 0; i < names.length; i++) {
+    var tv = $.NSTextView.alloc.initWithFrame($.NSMakeRect(0, 0, 400, 400));
+    tv.string = 'page-' + names[i];
+    var data = tv.dataWithPDFInsideRect(tv.bounds);
+    var one = $.PDFDocument.alloc.initWithData(data);
+    doc.insertPageAtIndex(one.pageAtIndex(0).copy, i);
+  }
+  if (!doc.writeToFile(argv[0])) { throw new Error('write failed'); }
+  return 'ok';
+}
+"#;
+
+    const INSPECT_JS: &str = r#"
+ObjC.import('Quartz');
+function run(argv) {
+  var doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
+  var r = [];
+  for (var i = 0; i < doc.pageCount; i++) {
+    var p = doc.pageAtIndex(i);
+    r.push(ObjC.unwrap(p.string).trim() + '@' + p.rotation);
+  }
+  return r.join(',');
+}
+"#;
+
+    fn tmp() -> PathBuf {
+        let d = std::env::temp_dir().join(format!("pdf-test-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn fixture(dir: &Path) -> PathBuf {
+        let p = dir.join("src.pdf");
+        run_jxa(MAKE_JS, &[p.to_str().unwrap()]).unwrap();
+        p
+    }
+
+    fn inspect(p: &Path) -> String {
+        run_jxa(INSPECT_JS, &[p.to_str().unwrap()]).unwrap()
+    }
+
+    fn sel(index: usize, quarter_turns: i32) -> PageSel {
+        PageSel { index, quarter_turns }
+    }
+
+    #[test]
+    fn counts_pages() {
+        let d = tmp();
+        let s = fixture(&d);
+        assert_eq!(page_count(&s).unwrap(), 3);
+        assert_eq!(inspect(&s), "page-alpha@0,page-bravo@0,page-charlie@0");
+        assert!(page_count(&d.join("missing.pdf")).is_err());
+    }
+
+    #[test]
+    fn reorder_duplicate_rotate_remove() {
+        let d = tmp();
+        let s = fixture(&d);
+        let out = d.join("out.pdf");
+        // reorder + duplicate + rotate; bravo (index 1) removed
+        organize(&s, &[sel(2, 0), sel(0, 1), sel(0, -1), sel(2, 5)], &out).unwrap();
+        assert_eq!(page_count(&out).unwrap(), 4);
+        assert_eq!(inspect(&out), "page-charlie@0,page-alpha@90,page-alpha@270,page-charlie@90");
+        // source untouched
+        assert_eq!(inspect(&s), "page-alpha@0,page-bravo@0,page-charlie@0");
+    }
+
+    #[test]
+    fn rejects_invalid_without_touching_files() {
+        let d = tmp();
+        let s = fixture(&d);
+        let before = std::fs::read(&s).unwrap();
+        let out = d.join("out.pdf");
+        assert!(organize(&s, &[], &out).is_err());
+        assert!(organize(&s, &[sel(3, 0)], &out).is_err());
+        assert!(!out.exists());
+        assert!(organize(&s, &[sel(0, 0)], &s).is_err());
+        assert!(organize(&d.join("nope.pdf"), &[sel(0, 0)], &out).is_err());
+        assert!(!out.exists());
+        std::fs::write(&out, b"keep").unwrap();
+        assert!(organize(&s, &[sel(0, 0)], &out).is_err());
+        assert_eq!(std::fs::read(&out).unwrap(), b"keep");
+        assert_eq!(std::fs::read(&s).unwrap(), before);
+        // unreadable (not a PDF) source
+        let bad = d.join("bad.pdf");
+        std::fs::write(&bad, b"not a pdf").unwrap();
+        assert!(organize(&bad, &[sel(0, 0)], &d.join("o2.pdf")).is_err());
+        assert!(!d.join("o2.pdf").exists());
+    }
+}
