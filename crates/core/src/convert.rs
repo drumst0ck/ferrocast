@@ -375,6 +375,14 @@ pub enum ImageOp {
     StripMetadata,
     /// Every selected image as one page of a single PDF.
     CombinePdf,
+    /// Rotate clockwise by 90, 180 or 270 degrees.
+    Rotate(u16),
+    /// Mirror horizontally (true) or vertically (false).
+    Flip(bool),
+    /// Pad to a square on a solid background (RGB hex, e.g. "FFFFFF").
+    Background(&'static str),
+    /// Every selected image in one grid picture.
+    Collage,
 }
 
 impl ImageOp {
@@ -385,6 +393,11 @@ impl ImageOp {
             ImageOp::Crop(w, h) => format!("Crop · {w}:{h}"),
             ImageOp::StripMetadata => "Remove metadata".into(),
             ImageOp::CombinePdf => "Combine into one PDF".into(),
+            ImageOp::Rotate(d) => format!("Rotate · {d}°"),
+            ImageOp::Flip(true) => "Flip horizontally".into(),
+            ImageOp::Flip(false) => "Flip vertically".into(),
+            ImageOp::Background(c) => format!("Square on {} background", if *c == "FFFFFF" { "white" } else { "black" }),
+            ImageOp::Collage => "Make a collage".into(),
         }
     }
     /// Short word added to the output file name.
@@ -395,6 +408,10 @@ impl ImageOp {
             ImageOp::Crop(w, h) => format!("{w}x{h}"),
             ImageOp::StripMetadata => "clean".into(),
             ImageOp::CombinePdf => "combined".into(),
+            ImageOp::Rotate(d) => format!("rotated {d}"),
+            ImageOp::Flip(_) => "flipped".into(),
+            ImageOp::Background(_) => "square".into(),
+            ImageOp::Collage => "collage".into(),
         }
     }
     /// Tools for `n` selected images.
@@ -411,8 +428,16 @@ impl ImageOp {
             ImageOp::Crop(4, 3),
             ImageOp::Crop(9, 16),
             ImageOp::StripMetadata,
+            ImageOp::Rotate(90),
+            ImageOp::Rotate(180),
+            ImageOp::Rotate(270),
+            ImageOp::Flip(true),
+            ImageOp::Flip(false),
+            ImageOp::Background("FFFFFF"),
+            ImageOp::Background("000000"),
         ];
         if n > 1 {
+            v.insert(0, ImageOp::Collage);
             v.insert(0, ImageOp::CombinePdf);
         }
         v
@@ -432,6 +457,15 @@ pub fn output_with_suffix(input: &Path, suffix: &str, ext: &str, exists: impl Fn
         }
         n += 1;
     }
+}
+
+/// Grid for a collage of `n` pictures: (columns, rows), as square as possible.
+pub fn collage_grid(n: usize) -> (usize, usize) {
+    if n == 0 {
+        return (0, 0);
+    }
+    let cols = (n as f64).sqrt().ceil() as usize;
+    (cols, n.div_ceil(cols))
 }
 
 /// Largest centred `rw:rh` rectangle inside `w × h`.
@@ -466,6 +500,12 @@ mod image_tool_tests {
         assert_eq!(p, PathBuf::from("/d/photo compressed 2.jpg"));
         assert!(!ImageOp::offered(1).contains(&ImageOp::CombinePdf));
         assert_eq!(ImageOp::offered(3)[0], ImageOp::CombinePdf);
+        assert!(ImageOp::offered(3).contains(&ImageOp::Collage));
+        assert!(!ImageOp::offered(1).contains(&ImageOp::Collage));
+        assert_eq!(
+            (collage_grid(1), collage_grid(2), collage_grid(4), collage_grid(5), collage_grid(7)),
+            ((1, 1), (2, 1), (2, 2), (3, 2), (3, 3))
+        );
     }
 }
 

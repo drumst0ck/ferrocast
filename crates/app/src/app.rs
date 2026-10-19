@@ -1608,7 +1608,24 @@ impl App {
                 if files.iter().all(|f| family_of(f) == Family::Image) {
                     let tools: Vec<Item> = ImageOp::offered(files.len())
                         .into_iter()
-                        .filter(|op| self.matches(&q, &op.label(), "image tool compress resize crop metadata pdf").is_some())
+                        .filter(|op| {
+                            self.matches(
+                                &q,
+                                &op.label(),
+                                match op {
+                                    ImageOp::Compress(_) => "compress smaller jpeg",
+                                    ImageOp::Resize(_) => "resize scale",
+                                    ImageOp::Crop(..) => "crop aspect",
+                                    ImageOp::StripMetadata => "metadata exif gps strip",
+                                    ImageOp::CombinePdf => "pdf combine merge",
+                                    ImageOp::Rotate(_) => "rotate turn",
+                                    ImageOp::Flip(_) => "flip mirror",
+                                    ImageOp::Background(_) => "background pad square",
+                                    ImageOp::Collage => "collage grid",
+                                },
+                            )
+                            .is_some()
+                        })
                         .map(|op| Item {
                             id: format!("imgtool:{}", op.suffix()),
                             title: op.label(),
@@ -1620,6 +1637,10 @@ impl App {
                                     ImageOp::Crop(..) => "sf:crop",
                                     ImageOp::StripMetadata => "sf:eye.slash",
                                     ImageOp::CombinePdf => "sf:doc.richtext",
+                                    ImageOp::Rotate(_) => "sf:rotate.right",
+                                    ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
+                                    ImageOp::Background(_) => "sf:square.dashed",
+                                    ImageOp::Collage => "sf:square.grid.2x2",
                                 },
                                 [255, 140, 60],
                             ),
@@ -1632,6 +1653,7 @@ impl App {
                         out.push(Section { title: "Image tools".into(), items: tools });
                     }
                 }
+                out.retain(|sec| !sec.items.is_empty());
                 out
             }
             View::CalcHistory => {

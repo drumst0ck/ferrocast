@@ -1398,6 +1398,33 @@ fn sips(args: &[&str]) -> Result<(), String> {
 }
 
 /// Run one image tool on each file (or once for Combine). Returns outputs and failures.
+/// Lay the images out in a grid of 600 px cells on white, as one PNG next to the first.
+fn collage(files: &[PathBuf]) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::{collage_grid, output_with_suffix};
+    const CELL: u32 = 600;
+    const GAP: u32 = 12;
+    let first = files.first().ok_or("no images")?;
+    let (cols, rows) = collage_grid(files.len());
+    let (cw, ch) = (cols as u32 * (CELL + GAP) + GAP, rows as u32 * (CELL + GAP) + GAP);
+    let mut canvas = image::RgbaImage::from_pixel(cw, ch, image::Rgba([255, 255, 255, 255]));
+    let tmp = std::env::temp_dir().join(format!("ferrocast-collage-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+    for (i, f) in files.iter().enumerate() {
+        // sips reads every format and scales; the image crate only needs PNG
+        let cell = tmp.join(format!("{i}.png"));
+        sips(&["-s", "format", "png", "-Z", &CELL.to_string(), &f.to_string_lossy(), "--out", &cell.to_string_lossy()])?;
+        let img = image::open(&cell).map_err(|e| e.to_string())?.to_rgba8();
+        let (c, r) = ((i % cols) as u32, (i / cols) as u32);
+        let x = GAP + c * (CELL + GAP) + (CELL - img.width().min(CELL)) / 2;
+        let y = GAP + r * (CELL + GAP) + (CELL - img.height().min(CELL)) / 2;
+        image::imageops::overlay(&mut canvas, &img, x as i64, y as i64);
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    let out = output_with_suffix(first, "collage", "png", |p| p.exists());
+    canvas.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) -> (Vec<PathBuf>, Vec<String>) {
     use ferrocast_core::convert::{crop_size, ext, output_with_suffix, strip_jpeg, strip_png, ImageOp};
     let name = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -1424,6 +1451,13 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
             outs.push(out);
         } else if errs.is_empty() {
             errs.push("could not combine the pages into a PDF".into());
+        }
+        return (outs, errs);
+    }
+    if *op == ImageOp::Collage {
+        match collage(files) {
+            Ok(o) => outs.push(o),
+            Err(e) => errs.push(e),
         }
         return (outs, errs);
     }
@@ -1470,7 +1504,25 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
                 std::fs::write(&out, clean).map_err(|e| e.to_string())?;
                 Ok(out)
             }
-            ImageOp::CombinePdf => unreachable!(),
+            ImageOp::Rotate(d) => {
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                sips(&["-r", &d.to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::Flip(h) => {
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                sips(&["-f", if *h { "horizontal" } else { "vertical" }, &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::Background(c) => {
+                let (w, h) = image_size(f).ok_or("could not read the image size")?;
+                let side = w.max(h).to_string();
+                // JPEG has no alpha, so a padded PNG keeps the background exact
+                let out = output_with_suffix(f, &op.suffix(), "png", |p| p.exists());
+                sips(&["-s", "format", "png", "-p", &side, &side, "--padColor", c, &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::CombinePdf | ImageOp::Collage => unreachable!(),
         })();
         match res {
             Ok(o) if o.exists() => outs.push(o),
@@ -1623,6 +1675,27 @@ mod convert_tests {
             }
         }
         assert_eq!(pages, 2, "one page per image");
+
+        // a 16:9 picture makes rotation and padding observable
+        let (wide, e) = run_image_op(one, &ImageOp::Crop(16, 9));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&wide[0]), Some((1024, 576)));
+        let (o, e) = run_image_op(&wide, &ImageOp::Rotate(90));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((576, 1024)));
+        let (o, e) = run_image_op(&wide, &ImageOp::Flip(true));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((1024, 576)));
+        let (o, e) = run_image_op(&wide, &ImageOp::Background("FFFFFF"));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((1024, 1024)));
+        let img = image::open(&o[0]).unwrap().to_rgba8();
+        assert_eq!(img.get_pixel(0, 0).0[..3], [255, 255, 255], "padding is white");
+        let (o, e) = run_image_op(&[src.clone(), wide[0].clone(), src.clone()], &ImageOp::Collage);
+        assert!(e.is_empty(), "{e:?}");
+        // 3 images → 2×2 grid of 600 px cells with 12 px gaps
+        assert_eq!(image_size(&o[0]), Some((1236, 1236)));
+        assert!(src.exists() && wide[0].exists(), "originals untouched");
     }
 
     /// Uses ffmpeg and LibreOffice when installed; skips each case otherwise.
