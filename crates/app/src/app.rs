@@ -419,6 +419,11 @@ impl App {
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_expansion(shared.clone());
         services::start_wheel(shared.clone(), bus.clone());
+        {
+            // the floating panel reports its edits; the app persists them
+            let b = bus.clone();
+            ferrocast_macos::shelf::set_on_change(Box::new(move |v| b.send(Msg::ShelfChanged(v))));
+        }
         if prof {
             eprintln!("services {:?}", t.elapsed());
         }
@@ -764,7 +769,8 @@ impl App {
         self.hidden_at = Instant::now();
         self.shared.visible.store(false, Ordering::Relaxed);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        if let Some(mtm) = objc2::MainThreadMarker::new() {
+        // hiding the whole app would also hide the floating shelf panel
+        if let Some(mtm) = objc2::MainThreadMarker::new().filter(|_| !ferrocast_macos::shelf::is_visible()) {
             objc2_app_kit::NSApplication::sharedApplication(mtm).hide(None);
         }
         if let Some(pid) = self.prev_pid {
@@ -1022,6 +1028,11 @@ impl App {
                 Msg::WheelOpen(kind, files) => self.show_wheel(kind, files),
                 Msg::WheelRelease => self.release_wheel(),
                 Msg::WheelSwitch(k) => self.switch_wheel(k),
+                Msg::ShelfChanged(v) => {
+                    self.shelf = v;
+                    let v = self.shelf.clone();
+                    self.persist("shelf.json", &v);
+                }
                 Msg::ConvertFiles(files) => {
                     self.show();
                     self.reset_to_root();
@@ -2418,7 +2429,12 @@ impl App {
             Builtin::Timers => self.push(View::Timers),
             Builtin::CheckUpdates => self.check_updates(),
             Builtin::CalcHistory => self.push(View::CalcHistory),
-            Builtin::Shelf => self.push(View::Shelf),
+            Builtin::Shelf => {
+                let v = self.shelf.clone();
+                ferrocast_macos::shelf::show(&v);
+                self.hide();
+                self.reset_to_root();
+            }
             Builtin::ConvertFiles => {
                 let bus = self.bus.clone();
                 self.hide();
@@ -2686,15 +2702,19 @@ impl App {
                 }
                 let v = self.shelf.clone();
                 self.persist("shelf.json", &v);
+                // Float: the always-on-top panel pinned to the screen edge
+                ferrocast_macos::shelf::show(&v);
                 self.toast(format!("{n} item{} on the shelf", if n == 1 { "" } else { "s" }));
             }
             Act::RemoveFromShelf(p) => {
+                ferrocast_macos::shelf::remove(&p);
                 self.shelf.retain(|f| *f != p);
                 let v = self.shelf.clone();
                 self.persist("shelf.json", &v);
                 self.invalidate_sections();
             }
             Act::ClearShelf => {
+                ferrocast_macos::shelf::clear();
                 self.shelf.clear();
                 self.persist("shelf.json", &Vec::<PathBuf>::new());
                 self.invalidate_sections();

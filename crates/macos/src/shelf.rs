@@ -496,7 +496,12 @@ fn refresh(mtm: MainThreadMarker) {
 /// screen under the mouse. Main thread only; silently returns otherwise.
 pub fn show(paths: &[PathBuf]) {
     let Some(mtm) = MainThreadMarker::new() else { return };
-    let _ = NSApplication::sharedApplication(mtm);
+    // a launcher hide() just before this call hides the whole app; bring the panel back
+    // without activating (the panel must not steal focus)
+    let app = NSApplication::sharedApplication(mtm);
+    if app.isHidden() {
+        app.unhideWithoutActivation();
+    }
     UI.with(|ui| {
         let mut ui = ui.borrow_mut();
         if ui.is_none() {

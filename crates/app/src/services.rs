@@ -45,6 +45,8 @@ pub enum Msg {
     Moved(Vec<(PathBuf, PathBuf)>),
     /// A key was tapped while dragging these files: show the wheel.
     WheelOpen(ferrocast_core::wheel::WheelKind, Vec<PathBuf>),
+    /// The floating shelf panel's items changed (drop in, remove, clear).
+    ShelfChanged(Vec<PathBuf>),
     /// Another wheel key was tapped while the wheel was open.
     WheelSwitch(ferrocast_core::wheel::WheelKind),
     /// The mouse was released while the wheel was open.
