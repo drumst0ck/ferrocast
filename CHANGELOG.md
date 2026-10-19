@@ -5,6 +5,11 @@
 First public build.
 
 ### Added in the latest iteration
+- File tools: drop files on the launcher, press ⌘T on a file result or run Convert Files to convert images, audio, video, documents, spreadsheets, subtitles and folders. Built-in macOS tools come first (sips, afconvert, avconvert, textutil, ditto); ffmpeg, LibreOffice and cwebp are optional, and a missing one shows its install command. Output goes next to the original and never overwrites it.
+- Image tools: compress, resize, crop to an aspect ratio, remove metadata (lossless for JPEG and PNG), combine into one PDF, rotate, flip, square on a white or black background, collage, one-step edits (black & white, brighter, darker, more contrast), redact faces or text on-device with Vision, and annotate a copy in Preview.
+- File actions on file results: Copy File (paste it in Finder), Copy Path, Move to… (never overwrites), Open in iTerm or Terminal, AirDrop, Float on Shelf.
+- Drop wheel: while dragging files, tap Shift for a ring of conversions or Control for file actions; release over a segment to run it. Keys and on/off in Settings → General. No Accessibility permission needed.
+- File Shelf: keep files at hand in a persisted list with every file action; drop files on the open shelf to add them.
 - Kill Process: processes busiest first with app icon, CPU and memory; ↵ terminates, ⌘↵ force-kills.
 - Timers: `timer 10m`, `pomodoro`, `set a timer for 1h 30m`; notification and sound when done; Timers view with cancel.
 - System commands: Toggle Wi-Fi and Toggle Keep Awake (caffeinate).

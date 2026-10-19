@@ -20,7 +20,7 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 - T6 (S3, S6) Breadth: audio/video/docs/sheets/subtitles/archives matrix incl. optional ffmpeg/soffice; tool hints. Route: inline. DONE: verified on real files PNG→WebP (cwebp), WAV→MP3/M4A/OGG, MOV→WebM/MKV/GIF/MP4, SRT→VTT, TXT→DOCX→PDF, CSV→XLSX→CSV, PDF→DOCX.
 - T7 (S4) Image editors: Annotate, Add a background, Collage, Edit photos, Redact (Vision). Route: later; needs its own UI. PARTIAL: Rotate 90/180/270, Flip H/V, Square on white/black background, Make a collage (grid, 600 px cells), Redact faces/text (Vision, on-device, black boxes) — real-file tested. Edit photos as one-step adjustments (Black & white, Brighter, Darker, More contrast). Annotate opens a copy in Preview's Markup (original never touched). DONE.
 - T8 (S5) Float shelf window. Route: later. PARTIAL: "File Shelf" command — a persisted list (shelf.json) inside the launcher; Float on Shelf (⇧⌘F) on file results and in the actions wheel; drop files on the open shelf to add; every file action works on shelf items; Remove/Clear never touch files. Tested. NOT done: a separate always-on-top window pinned to a screen edge, and dragging files out of the shelf.
-- T9 Docs: README, CHANGELOG, website section. Route: inline with each task.
+- T9 DONE (CHANGELOG, README status table, web bento card). Docs: README, CHANGELOG, website section. Route: inline with each task.
 
 ## Log
 - L1 2026-10-18 User: "vamos a incluir en nuestra app las funcionalidades de este programa https://tangerineformac.com/ todas, y de la misma manera, basicamente la copiaremos para incluirla y hacer nuestro ferrocat mas potente".
