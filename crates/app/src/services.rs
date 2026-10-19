@@ -1352,10 +1352,11 @@ pub fn run_conversion(
             let f: &std::path::PathBuf = if target.engine == Engine::Cwebp
                 && !matches!(ferrocast_core::convert::ext(f).as_str(), "png" | "jpg" | "jpeg" | "tif" | "tiff" | "webp")
             {
+                static PIVOT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                 let tmp = std::env::temp_dir().join(format!(
                     "ferrocast-cw-{}-{}.png",
                     std::process::id(),
-                    out.file_name().map(|n| n.to_string_lossy().len()).unwrap_or(0)
+                    PIVOT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 ));
                 match sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()]) {
                     Ok(()) => {
@@ -1395,6 +1396,9 @@ pub fn run_conversion(
                 Ok(c) => c,
                 Err(e) => {
                     errors.push(e);
+                    if let Some(p) = &pivot_png {
+                        let _ = std::fs::remove_file(p);
+                    }
                     continue;
                 }
             };

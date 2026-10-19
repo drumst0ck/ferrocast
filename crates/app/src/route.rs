@@ -14,20 +14,31 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn run_limited(cmd: &mut Command, secs: u64) -> Result<(), String> {
     cmd.stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    // drained concurrently (capped): a chatty tool must not fill the pipe and stall until the deadline
+    let stderr = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        if let Some(r) = stderr {
+            let _ = r.take(1 << 20).read_to_end(&mut buf);
+        }
+        buf
+    });
     let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
         match child.try_wait() {
             Ok(Some(st)) => {
-                let out = child.wait_with_output().map_err(|e| e.to_string())?;
+                let err = reader.join().unwrap_or_default();
                 return if st.success() {
                     Ok(())
                 } else {
-                    Err(String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("command failed").trim().to_string())
+                    Err(String::from_utf8_lossy(&err).lines().last().unwrap_or("command failed").trim().to_string())
                 };
             }
             Ok(None) if Instant::now() > deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = reader.join();
                 return Err(format!("timed out after {secs} s"));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(40)),

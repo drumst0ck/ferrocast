@@ -141,7 +141,7 @@ pub fn redact_video(input: &str, region: (u32, u32, u32, u32), range: (f64, f64)
 
 /// EBU R128 loudness normalisation: target integrated loudness, loudness range and true peak.
 pub fn normalize(input: &str, lufs: f64, lra: f64, tp: f64, out: &str) -> Vec<String> {
-    s(&["-i", input, "-af", &format!("loudnorm=I={lufs}:LRA={lra}:TP={tp}"), out])
+    s(&["-i", input, "-af", &format!("loudnorm=I={lufs}:LRA={lra}:TP={tp}"), "-ar", "48000", out])
 }
 
 /// Audio → MP4 with an animated waveform, or a still image when `image` is given.
@@ -303,6 +303,10 @@ mod tests {
         assert_eq!(snapshot("a", 3.25, "f.png"), s(&["-ss", "3.25", "-i", "a", "-frames:v", "1", "f.png"]));
         assert!(trim_audio("a", None, "o").iter().any(|a| a.contains("silenceremove")));
         assert_eq!(normalize("a", -16.0, 11.0, -1.5, "o")[3], "loudnorm=I=-16:LRA=11:TP=-1.5");
+        assert!(
+            normalize("a", -16.0, 11.0, -1.5, "o").windows(2).any(|w| w == ["-ar", "48000"]),
+            "loudnorm upsamples to 192 kHz otherwise"
+        );
     }
 
     // ---- real ffmpeg tests (cargo test -p ferrocast-core media -- --ignored) ----
