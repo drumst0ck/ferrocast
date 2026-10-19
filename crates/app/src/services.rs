@@ -2665,3 +2665,28 @@ mod ai_tests {
         assert!(err.contains("Cannot reach"), "{err}");
     }
 }
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+    use ferrocast_core::{convert::targets, matrix};
+
+    /// Which of Tangerine's 275 (input → output) pairs does `targets()` offer today?
+    #[test]
+    fn report_matrix_coverage() {
+        let tools = ferrocast_core::convert::Tools::detect();
+        let (mut have, mut missing) = (0, vec![]);
+        for i in matrix::inputs() {
+            let probe = std::path::PathBuf::from(format!("/nonexistent/x.{i}"));
+            let offered: Vec<String> = targets(&probe, &tools).iter().map(|t| t.ext.replace("tar.gz", "gz")).collect();
+            for o in matrix::outputs_for(i) {
+                if offered.iter().any(|x| x == o) {
+                    have += 1;
+                } else {
+                    missing.push(format!("{i}→{o}"));
+                }
+            }
+        }
+        eprintln!("COVERAGE {have}/275; missing {}: {}", missing.len(), missing.join(" "));
+    }
+}
