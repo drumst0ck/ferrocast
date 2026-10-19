@@ -1330,6 +1330,123 @@ pub fn run_conversion(
     }
 }
 
+/// Pixel size of an image via sips.
+fn image_size(p: &std::path::Path) -> Option<(u32, u32)> {
+    let o = std::process::Command::new("/usr/bin/sips").args(["-g", "pixelWidth", "-g", "pixelHeight"]).arg(p).output().ok()?;
+    let t = String::from_utf8_lossy(&o.stdout);
+    let get = |k: &str| t.lines().find_map(|l| l.trim().strip_prefix(k).map(|v| v.trim().parse::<u32>().ok())).flatten();
+    Some((get("pixelWidth:")?, get("pixelHeight:")?))
+}
+
+fn sips(args: &[&str]) -> Result<(), String> {
+    let o = std::process::Command::new("/usr/bin/sips").args(args).output().map_err(|e| e.to_string())?;
+    if o.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("sips failed").trim().to_string())
+    }
+}
+
+/// Run one image tool on each file (or once for Combine). Returns outputs and failures.
+pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) -> (Vec<PathBuf>, Vec<String>) {
+    use ferrocast_core::convert::{crop_size, ext, output_with_suffix, strip_jpeg, strip_png, ImageOp};
+    let name = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let mut outs = vec![];
+    let mut errs = vec![];
+    if *op == ImageOp::CombinePdf {
+        let Some(first) = files.first() else { return (outs, errs) };
+        let out = output_with_suffix(first, &op.suffix(), "pdf", |p| p.exists());
+        let tmp = std::env::temp_dir().join(format!("ferrocast-pdf-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let mut pages = vec![];
+        for (i, f) in files.iter().enumerate() {
+            let pg = tmp.join(format!("{i:04}.pdf"));
+            match sips(&["-s", "format", "pdf", &f.to_string_lossy(), "--out", &pg.to_string_lossy()]) {
+                Ok(()) => pages.push(pg),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        let join = "/System/Library/Automator/Combine PDF Pages.action/Contents/MacOS/join";
+        let ok = !pages.is_empty()
+            && std::process::Command::new(join).arg("-o").arg(&out).args(&pages).status().map(|s| s.success()).unwrap_or(false);
+        let _ = std::fs::remove_dir_all(&tmp);
+        if ok && out.exists() {
+            outs.push(out);
+        } else if errs.is_empty() {
+            errs.push("could not combine the pages into a PDF".into());
+        }
+        return (outs, errs);
+    }
+    for f in files {
+        let e = ext(f);
+        let res: Result<PathBuf, String> = (|| match op {
+            ImageOp::Compress(q) => {
+                let out = output_with_suffix(f, &op.suffix(), "jpg", |p| p.exists());
+                sips(&[
+                    "-s",
+                    "format",
+                    "jpeg",
+                    "-s",
+                    "formatOptions",
+                    &q.to_string(),
+                    &f.to_string_lossy(),
+                    "--out",
+                    &out.to_string_lossy(),
+                ])?;
+                Ok(out)
+            }
+            ImageOp::Resize(px) => {
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                sips(&["-Z", &px.to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::Crop(rw, rh) => {
+                let (w, h) = image_size(f).ok_or("could not read the image size")?;
+                let (cw, ch) = crop_size(w, h, *rw, *rh);
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                // sips crops around the centre
+                sips(&["-c", &ch.to_string(), &cw.to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::StripMetadata => {
+                let bytes = std::fs::read(f).map_err(|e| e.to_string())?;
+                let clean = match e.as_str() {
+                    "jpg" | "jpeg" => strip_jpeg(&bytes),
+                    "png" => strip_png(&bytes),
+                    _ => None,
+                }
+                .ok_or("metadata removal supports JPEG and PNG; convert to one of those first")?;
+                let out = output_with_suffix(f, &op.suffix(), &e, |p| p.exists());
+                std::fs::write(&out, clean).map_err(|e| e.to_string())?;
+                Ok(out)
+            }
+            ImageOp::CombinePdf => unreachable!(),
+        })();
+        match res {
+            Ok(o) if o.exists() => outs.push(o),
+            Ok(_) => errs.push(format!("{}: no output produced", name(f))),
+            Err(e) => errs.push(format!("{}: {e}", name(f))),
+        }
+    }
+    (outs, errs)
+}
+
+pub fn image_op_files(files: Vec<PathBuf>, op: ferrocast_core::convert::ImageOp, bus: Bus) {
+    std::thread::spawn(move || {
+        let (outs, errs) = run_image_op(&files, &op);
+        let msg = match (outs.len(), errs.len()) {
+            (0, _) => format!("{} failed: {}", op.label(), errs.first().cloned().unwrap_or_default()),
+            (n, 0) => format!("{} · {n} file{} written", op.label(), if n == 1 { "" } else { "s" }),
+            (n, e) => format!("{} · {n} written, {e} failed: {}", op.label(), errs[0]),
+        };
+        if let Some(f) = outs.first() {
+            let _ = ferrocast_macos::apps::reveal(f);
+        }
+        notify("Ferrocast", &msg);
+        bus.send(Msg::Toast(msg));
+    });
+}
+
 /// Native multi-file chooser (blocks; call from a thread).
 pub fn choose_files() -> Vec<PathBuf> {
     let out = ferrocast_macos::system::osascript(
@@ -1391,6 +1508,71 @@ mod convert_tests {
         let (out, err) = run_conversion(&[folder], &z, &Tools::default());
         assert!(err.is_empty(), "{err:?}");
         assert_eq!(out, vec![d.join("folder.zip")]);
+    }
+
+    #[test]
+    fn image_tools_on_real_files() {
+        use ferrocast_core::convert::ImageOp;
+        let d = tmp("tools");
+        let src = d.join("pic.jpg");
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
+        assert!(std::process::Command::new("/usr/bin/sips")
+            .args(["-s", "format", "jpeg", icon, "--out"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("/usr/bin/sips")
+            .args(["-s", "make", "TestCam", "-s", "artist", "Me"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success());
+        let one = std::slice::from_ref(&src);
+
+        let (o, e) = run_image_op(one, &ImageOp::Resize(640));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((640, 640)));
+
+        let (o, e) = run_image_op(one, &ImageOp::Crop(16, 9));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((1024, 576)));
+
+        let (o, e) = run_image_op(one, &ImageOp::Compress(40));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(std::fs::metadata(&o[0]).unwrap().len() < std::fs::metadata(&src).unwrap().len());
+
+        let tags = |p: &std::path::Path| {
+            String::from_utf8_lossy(
+                &std::process::Command::new("/usr/bin/sips").args(["-g", "make", "-g", "artist"]).arg(p).output().unwrap().stdout,
+            )
+            .to_string()
+        };
+        assert!(tags(&src).contains("TestCam"));
+        let (o, e) = run_image_op(one, &ImageOp::StripMetadata);
+        assert!(e.is_empty(), "{e:?}");
+        assert!(!tags(&o[0]).contains("TestCam") && !tags(&o[0]).contains("Me"), "{}", tags(&o[0]));
+        assert_eq!(image_size(&o[0]), Some((1024, 1024)), "image data intact");
+
+        let second = d.join("pic2.png");
+        std::fs::copy(icon, &second).unwrap();
+        let (o, e) = run_image_op(&[src.clone(), second], &ImageOp::CombinePdf);
+        assert!(e.is_empty(), "{e:?}");
+        let pdf = std::fs::read(&o[0]).unwrap();
+        // count "/Type" [spaces] "/Page" not followed by "s" (that would be /Pages)
+        let mut pages = 0;
+        for i in 0..pdf.len().saturating_sub(12) {
+            if &pdf[i..i + 5] == b"/Type" {
+                let mut j = i + 5;
+                while pdf[j] == b' ' {
+                    j += 1;
+                }
+                if pdf[j..].starts_with(b"/Page") && pdf.get(j + 5) != Some(&b's') {
+                    pages += 1;
+                }
+            }
+        }
+        assert_eq!(pages, 2, "one page per image");
     }
 
     #[test]

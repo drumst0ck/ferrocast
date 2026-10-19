@@ -222,6 +222,8 @@ pub enum Kind {
     RunningTimer(usize),
     /// Convert the files to this target.
     ConvertTo(Vec<PathBuf>, ferrocast_core::convert::Target),
+    /// Run an image tool on the files.
+    ImageTool(Vec<PathBuf>, ferrocast_core::convert::ImageOp),
 }
 
 #[derive(Clone, Debug)]

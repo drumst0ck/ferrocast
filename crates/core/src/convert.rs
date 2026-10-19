@@ -339,3 +339,209 @@ mod tests {
         assert!(plan(Path::new("/d/p.jpg"), &webp, Path::new("/d/p.webp"), &missing).is_err());
     }
 }
+
+// ---------------------------------------------------------------- image tools
+
+/// One-shot image tools offered next to conversions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImageOp {
+    /// Re-encode as JPEG at this quality (1–100).
+    Compress(u8),
+    /// Fit inside a square of this many pixels, keeping the aspect ratio and format.
+    Resize(u32),
+    /// Centre crop to this aspect ratio (width, height).
+    Crop(u32, u32),
+    /// Re-encode without EXIF, GPS or other metadata.
+    StripMetadata,
+    /// Every selected image as one page of a single PDF.
+    CombinePdf,
+}
+
+impl ImageOp {
+    pub fn label(&self) -> String {
+        match self {
+            ImageOp::Compress(q) => format!("Compress · JPEG {q}%"),
+            ImageOp::Resize(px) => format!("Resize · fit {px} px"),
+            ImageOp::Crop(w, h) => format!("Crop · {w}:{h}"),
+            ImageOp::StripMetadata => "Remove metadata".into(),
+            ImageOp::CombinePdf => "Combine into one PDF".into(),
+        }
+    }
+    /// Short word added to the output file name.
+    pub fn suffix(&self) -> String {
+        match self {
+            ImageOp::Compress(_) => "compressed".into(),
+            ImageOp::Resize(px) => format!("{px}px"),
+            ImageOp::Crop(w, h) => format!("{w}x{h}"),
+            ImageOp::StripMetadata => "clean".into(),
+            ImageOp::CombinePdf => "combined".into(),
+        }
+    }
+    /// Tools for `n` selected images.
+    pub fn offered(n: usize) -> Vec<ImageOp> {
+        let mut v = vec![
+            ImageOp::Compress(80),
+            ImageOp::Compress(60),
+            ImageOp::Compress(40),
+            ImageOp::Resize(2048),
+            ImageOp::Resize(1280),
+            ImageOp::Resize(640),
+            ImageOp::Crop(1, 1),
+            ImageOp::Crop(16, 9),
+            ImageOp::Crop(4, 3),
+            ImageOp::Crop(9, 16),
+            ImageOp::StripMetadata,
+        ];
+        if n > 1 {
+            v.insert(0, ImageOp::CombinePdf);
+        }
+        v
+    }
+}
+
+/// `photo compressed.jpg`, `photo compressed 2.jpg`… next to the input.
+pub fn output_with_suffix(input: &Path, suffix: &str, ext: &str, exists: impl Fn(&Path) -> bool) -> PathBuf {
+    let dir = input.parent().map(Path::to_path_buf).unwrap_or_default();
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+    let mut n = 1;
+    loop {
+        let name = if n == 1 { format!("{stem} {suffix}.{ext}") } else { format!("{stem} {suffix} {n}.{ext}") };
+        let p = dir.join(name);
+        if !exists(&p) {
+            return p;
+        }
+        n += 1;
+    }
+}
+
+/// Largest centred `rw:rh` rectangle inside `w × h`.
+pub fn crop_size(w: u32, h: u32, rw: u32, rh: u32) -> (u32, u32) {
+    if rw == 0 || rh == 0 || w == 0 || h == 0 {
+        return (w, h);
+    }
+    // width-limited or height-limited
+    let by_w = (w, (w as u64 * rh as u64 / rw as u64) as u32);
+    if by_w.1 <= h {
+        by_w
+    } else {
+        ((h as u64 * rw as u64 / rh as u64) as u32, h)
+    }
+}
+
+#[cfg(test)]
+mod image_tool_tests {
+    use super::*;
+
+    #[test]
+    fn crop_sizes() {
+        assert_eq!(crop_size(4000, 3000, 1, 1), (3000, 3000));
+        assert_eq!(crop_size(4000, 3000, 16, 9), (4000, 2250));
+        assert_eq!(crop_size(3000, 4000, 16, 9), (3000, 1687));
+        assert_eq!(crop_size(1000, 1000, 9, 16), (562, 1000));
+    }
+
+    #[test]
+    fn names_and_offers() {
+        let p = output_with_suffix(Path::new("/d/photo.png"), "compressed", "jpg", |p| p == Path::new("/d/photo compressed.jpg"));
+        assert_eq!(p, PathBuf::from("/d/photo compressed 2.jpg"));
+        assert!(!ImageOp::offered(1).contains(&ImageOp::CombinePdf));
+        assert_eq!(ImageOp::offered(3)[0], ImageOp::CombinePdf);
+    }
+}
+
+/// JPEG without metadata, losslessly: drops APP1–APP15 (EXIF, XMP, IPTC, ICC…) and comments,
+/// keeps APP0 (JFIF) and the image data untouched. `None` if the bytes are not a JPEG.
+pub fn strip_jpeg(b: &[u8]) -> Option<Vec<u8>> {
+    if b.len() < 4 || b[0] != 0xFF || b[1] != 0xD8 {
+        return None;
+    }
+    let mut out = vec![0xFF, 0xD8];
+    let mut i = 2;
+    while i + 4 <= b.len() {
+        if b[i] != 0xFF {
+            return None;
+        }
+        let m = b[i + 1];
+        if m == 0xDA {
+            // start of scan: the rest is image data, copy as is
+            out.extend_from_slice(&b[i..]);
+            return Some(out);
+        }
+        let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
+        let end = i + 2 + len;
+        if end > b.len() {
+            return None;
+        }
+        let drop = (0xE1..=0xEF).contains(&m) || m == 0xFE;
+        if !drop {
+            out.extend_from_slice(&b[i..end]);
+        }
+        i = end;
+    }
+    None
+}
+
+/// PNG without text or EXIF chunks (eXIf, tEXt, iTXt, zTXt, tIME). `None` if not a PNG.
+pub fn strip_png(b: &[u8]) -> Option<Vec<u8>> {
+    const SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    if b.len() < 8 || b[..8] != SIG {
+        return None;
+    }
+    let mut out = SIG.to_vec();
+    let mut i = 8;
+    while i + 12 <= b.len() {
+        let len = u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]) as usize;
+        let end = i + 12 + len;
+        if end > b.len() {
+            return None;
+        }
+        let kind = &b[i + 4..i + 8];
+        if !matches!(kind, b"eXIf" | b"tEXt" | b"iTXt" | b"zTXt" | b"tIME") {
+            out.extend_from_slice(&b[i..end]);
+        }
+        i = end;
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod strip_tests {
+    use super::*;
+
+    #[test]
+    fn jpeg_drops_app1_and_comments_keeps_rest() {
+        // SOI, APP0 JFIF, APP1 "Exif", COM, DQT, SOS + data, EOI
+        let mut j = vec![0xFF, 0xD8];
+        j.extend([0xFF, 0xE0, 0x00, 0x06, b'J', b'F', b'I', b'F']);
+        j.extend([0xFF, 0xE1, 0x00, 0x08, b'E', b'x', b'i', b'f', 0, 0]);
+        j.extend([0xFF, 0xFE, 0x00, 0x05, b'h', b'i', b'!']);
+        j.extend([0xFF, 0xDB, 0x00, 0x04, 1, 2]);
+        j.extend([0xFF, 0xDA, 0x00, 0x02, 9, 9, 9, 0xFF, 0xD9]);
+        let s = strip_jpeg(&j).unwrap();
+        assert!(!s.windows(4).any(|w| w == b"Exif"));
+        assert!(!s.windows(3).any(|w| w == b"hi!"));
+        assert!(s.windows(4).any(|w| w == b"JFIF"));
+        assert!(s.ends_with(&[0xFF, 0xDA, 0x00, 0x02, 9, 9, 9, 0xFF, 0xD9]));
+        assert_eq!(strip_jpeg(b"not a jpeg"), None);
+    }
+
+    #[test]
+    fn png_drops_text_chunks() {
+        fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+            let mut c = (data.len() as u32).to_be_bytes().to_vec();
+            c.extend_from_slice(kind);
+            c.extend_from_slice(data);
+            c.extend([0, 0, 0, 0]); // CRC not checked here
+            c
+        }
+        let mut p = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        p.extend(chunk(b"IHDR", &[0; 13]));
+        p.extend(chunk(b"tEXt", b"Author\0me"));
+        p.extend(chunk(b"eXIf", b"MM\0*"));
+        p.extend(chunk(b"IDAT", b"pixels"));
+        p.extend(chunk(b"IEND", b""));
+        let s = strip_png(&p).unwrap();
+        assert!(!s.windows(4).any(|w| w == b"tEXt" || w == b"eXIf"));
+        assert!(s.windows(4).any(|w| w == b"IDAT"));
+    }
+}

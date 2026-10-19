@@ -13,8 +13,8 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 
 ## Tasks
 - T1 (S3, S6, S7) Converter engine in core: format catalogue, target list per input, tool planning, output naming. Unit-tested. Route: inline.
-- T2 (S3, S7) Launcher UI: drop files on the window or pick a file result → "Convert to…" view → run async → toast + reveal. Route: inline.
-- T3 (S4) Image tools v1: Compress (quality/size presets, resize), Crop (aspect or exact), Strip metadata, Images → PDF. Route: inline.
+- T2 (S3, S7) Launcher UI: drop files on the window or pick a file result → "Convert to…" view → run async → toast + reveal. Route: inline. DONE 805de5b (run_conversion tested on real files: PNG→JPEG, TXT→DOCX, folder→ZIP, missing ffmpeg).
+- T3 (S4) Image tools v1: Compress (quality/size presets, resize), Crop (aspect or exact), Strip metadata, Images → PDF. Route: inline. DONE (see commit): Compress 80/60/40, Resize 2048/1280/640, Crop 1:1 16:9 4:3 9:16, lossless metadata removal for JPEG/PNG, Combine into one PDF; all checked on real files.
 - T4 (S5) File actions on any file/folder item: Copy, Move to…, Copy Path(s), Open in Terminal/iTerm2, AirDrop. Route: inline.
 - T5 (S2) Drag + Shift wheel: global drag detection, drag pasteboard inspection, drop overlay viewport with radial menu; Control → actions wheel; keys in Settings. Route: inline, after T1–T4.
 - T6 (S3, S6) Breadth: audio/video/docs/sheets/subtitles/archives matrix incl. optional ffmpeg/soffice; tool hints. Route: inline.
@@ -25,3 +25,5 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 ## Log
 - L1 2026-10-18 User: "vamos a incluir en nuestra app las funcionalidades de este programa https://tangerineformac.com/ todas, y de la misma manera, basicamente la copiaremos para incluirla y hacer nuestro ferrocat mas potente".
 - L2 Tool survey on this Mac: sips writes pdf gif bmp avif heic jpeg jp2 png tiff (reads webp, heif, jxl); avconvert presets incl. PresetHighestQuality, Preset1280x720/1920x1080/3840x2160, HEVC*, AppleM4A, AppleM4V*; afconvert formats m4af/AIFF/WAVE/caff/adts…; textutil converts txt rtf rtfd html doc docx odt webarchive. ffmpeg at /opt/homebrew/bin/ffmpeg and soffice at /opt/homebrew/bin/soffice are present here but not on every Mac (S6).
+- L3 sips re-encode keeps EXIF (make/model survive JPEG→JPEG), so "remove metadata" needs another path. Automator's Combine PDF Pages `join` merges PDFs (2-page test OK) for Images → PDF.
+- L4 Metadata removal is done by rewriting JPEG/PNG containers in Rust (drop APP1–APP15 + COM; drop eXIf/tEXt/iTXt/zTXt/tIME): lossless and verified with sips (make/artist gone, pixels intact). Exact-dimension crop deferred to the T7 editor UI.

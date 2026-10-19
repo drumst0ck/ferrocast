@@ -1440,7 +1440,37 @@ impl App {
                         })
                     })
                     .collect();
-                self.sorted(v, "Convert to")
+                let mut out = self.sorted(v, "Convert to");
+                // image tools when every file is an image
+                use ferrocast_core::convert::{family_of, Family, ImageOp};
+                if files.iter().all(|f| family_of(f) == Family::Image) {
+                    let tools: Vec<Item> = ImageOp::offered(files.len())
+                        .into_iter()
+                        .filter(|op| self.matches(&q, &op.label(), "image tool compress resize crop metadata pdf").is_some())
+                        .map(|op| Item {
+                            id: format!("imgtool:{}", op.suffix()),
+                            title: op.label(),
+                            subtitle: sub.clone(),
+                            icon: Icon::Glyph(
+                                match op {
+                                    ImageOp::Compress(_) => "sf:arrow.down.right.and.arrow.up.left",
+                                    ImageOp::Resize(_) => "sf:arrow.up.left.and.down.right.magnifyingglass",
+                                    ImageOp::Crop(..) => "sf:crop",
+                                    ImageOp::StripMetadata => "sf:eye.slash",
+                                    ImageOp::CombinePdf => "sf:doc.richtext",
+                                },
+                                [255, 140, 60],
+                            ),
+                            accessory: "Image tool".into(),
+                            keywords: vec![],
+                            kind: Kind::ImageTool(files.clone(), op),
+                        })
+                        .collect();
+                    if !tools.is_empty() {
+                        out.push(Section { title: "Image tools".into(), items: tools });
+                    }
+                }
+                out
             }
             View::CalcHistory => {
                 let now = now_secs();
@@ -1703,6 +1733,7 @@ impl App {
             Kind::OpenWindow(_) => "Switch to Window",
             Kind::Process(_) => "Kill Process",
             Kind::ConvertTo(..) => "Convert",
+            Kind::ImageTool(..) => "Apply",
             Kind::Timer(..) => "Start Timer",
             Kind::RunningTimer(_) => "Cancel Timer",
             Kind::WebSearch(_) => "Search",
@@ -1880,6 +1911,13 @@ impl App {
             Kind::Timer(secs, label) => {
                 let (secs, label) = (*secs, label.clone());
                 self.start_timer(secs, label);
+            }
+            Kind::ImageTool(files, op) => {
+                let (files, op) = (files.clone(), op.clone());
+                self.toast(format!("{}…", op.label()));
+                services::image_op_files(files, op, self.bus.clone());
+                self.hide();
+                self.reset_to_root();
             }
             Kind::ConvertTo(files, t) => {
                 if let Some(n) = t.needs {
