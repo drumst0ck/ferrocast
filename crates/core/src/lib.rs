@@ -10,6 +10,7 @@ pub mod currency;
 pub mod fuzzy;
 pub mod import;
 pub mod launch;
+pub mod matrix;
 pub mod models;
 pub mod placeholders;
 pub mod ranking;
