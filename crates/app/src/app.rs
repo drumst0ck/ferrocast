@@ -789,6 +789,17 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::Moved(pairs) => {
+                    // keep the file results pointing at the new places
+                    for (old, new) in &pairs {
+                        for f in self.files.1.iter_mut() {
+                            if f == old {
+                                *f = new.clone();
+                            }
+                        }
+                    }
+                    self.toast(format!("Moved {} item{}", pairs.len(), if pairs.len() == 1 { "" } else { "s" }));
+                }
                 Msg::ConvertFiles(files) => {
                     self.show();
                     self.reset_to_root();
@@ -1629,7 +1640,17 @@ impl App {
                 a.push(Action::new("Show in Finder", Act::Reveal(p.clone())).key(CMD, Key::Enter));
                 a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
                 a.push(Action::new("Convert…", Act::Convert(vec![p.clone()])).key(CMD, Key::T));
+                a.push(Action::new("Copy File", Act::CopyFiles(vec![p.clone()])).key(CMD_SHIFT, Key::Period));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
+                a.push(Action::new("Move to…", Act::MoveFiles(vec![p.clone()])).key(CMD_SHIFT, Key::M));
+                a.push(
+                    Action::new(
+                        if std::path::Path::new("/Applications/iTerm.app").exists() { "Open in iTerm" } else { "Open in Terminal" },
+                        Act::OpenInTerminal(p.clone()),
+                    )
+                    .key(CMD_SHIFT, Key::T),
+                );
+                a.push(Action::new("AirDrop", Act::AirDrop(vec![p.clone()])));
                 a.push(Action::new("Move to Trash", Act::Trash(p.clone())).key(CTRL, Key::X).danger());
             }
             Kind::Calc(r) => {
@@ -2398,6 +2419,44 @@ impl App {
                     self.calc_history.remove(i);
                     let v = self.calc_history.clone();
                     self.persist("calc-history.json", &v);
+                }
+            }
+            Act::CopyFiles(files) => {
+                ferrocast_macos::clipboard::write_files(&files);
+                self.shared.mark_clipboard_write();
+                self.toast(if files.len() == 1 {
+                    "File copied, paste it in Finder".to_string()
+                } else {
+                    format!("{} files copied", files.len())
+                });
+            }
+            Act::MoveFiles(files) => {
+                let bus = self.bus.clone();
+                self.hide();
+                std::thread::spawn(move || {
+                    let Some(dest) = apps::choose_folder("Move to") else { return };
+                    match apps::move_into(&files, &dest) {
+                        Ok(new) => {
+                            let pairs = files.into_iter().zip(new.iter().cloned()).collect();
+                            bus.send(Msg::Moved(pairs));
+                            let _ = apps::reveal(&new[0]);
+                        }
+                        Err(e) => bus.send(Msg::Toast(format!("Move failed: {e}"))),
+                    }
+                });
+            }
+            Act::OpenInTerminal(p) => match apps::open_in_terminal(&p) {
+                Ok(_) => {
+                    self.hide();
+                    self.reset_to_root();
+                }
+                Err(e) => self.toast(format!("Could not open a terminal: {e}")),
+            },
+            Act::AirDrop(files) => {
+                // the picker attaches to the frontmost app; hide first so it is not hidden with us
+                self.hide();
+                if let Err(e) = apps::airdrop(&files) {
+                    self.toast(format!("AirDrop: {e}"));
                 }
             }
             Act::Convert(files) => {

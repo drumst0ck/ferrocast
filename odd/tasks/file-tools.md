@@ -15,7 +15,7 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 - T1 (S3, S6, S7) Converter engine in core: format catalogue, target list per input, tool planning, output naming. Unit-tested. Route: inline.
 - T2 (S3, S7) Launcher UI: drop files on the window or pick a file result → "Convert to…" view → run async → toast + reveal. Route: inline. DONE 805de5b (run_conversion tested on real files: PNG→JPEG, TXT→DOCX, folder→ZIP, missing ffmpeg).
 - T3 (S4) Image tools v1: Compress (quality/size presets, resize), Crop (aspect or exact), Strip metadata, Images → PDF. Route: inline. DONE (see commit): Compress 80/60/40, Resize 2048/1280/640, Crop 1:1 16:9 4:3 9:16, lossless metadata removal for JPEG/PNG, Combine into one PDF; all checked on real files.
-- T4 (S5) File actions on any file/folder item: Copy, Move to…, Copy Path(s), Open in Terminal/iTerm2, AirDrop. Route: inline.
+- T4 (S5) File actions on any file/folder item: Copy, Move to…, Copy Path(s), Open in Terminal/iTerm2, AirDrop. Route: inline. DONE: Copy File (⇧⌘.), Copy Path, Move to… (folder chooser, never overwrites; tested), Open in iTerm/Terminal, AirDrop (NSSharingService). AirDrop picker and Terminal opening need a real session to confirm.
 - T5 (S2) Drag + Shift wheel: global drag detection, drag pasteboard inspection, drop overlay viewport with radial menu; Control → actions wheel; keys in Settings. Route: inline, after T1–T4.
 - T6 (S3, S6) Breadth: audio/video/docs/sheets/subtitles/archives matrix incl. optional ffmpeg/soffice; tool hints. Route: inline.
 - T7 (S4) Image editors: Annotate, Add a background, Collage, Edit photos, Redact (Vision). Route: later; needs its own UI.

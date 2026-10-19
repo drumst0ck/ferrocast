@@ -269,6 +269,14 @@ pub enum Act {
     ClearCalcHistory,
     /// Open the Convert view for these files.
     Convert(Vec<PathBuf>),
+    /// Put the files on the clipboard, ready to paste in Finder.
+    CopyFiles(Vec<PathBuf>),
+    /// Ask for a folder and move the files there.
+    MoveFiles(Vec<PathBuf>),
+    /// Open the folder (or the file's folder) in iTerm2 or Terminal.
+    OpenInTerminal(PathBuf),
+    /// Share through AirDrop.
+    AirDrop(Vec<PathBuf>),
     DeleteCalcEntry(usize),
     HideApp(i32),
     ToggleFavorite,

@@ -41,6 +41,8 @@ pub enum Msg {
     ChatGptDeviceCode(String),
     /// Files picked for conversion.
     ConvertFiles(Vec<PathBuf>),
+    /// Files moved by Move to…: (old, new) paths.
+    Moved(Vec<(PathBuf, PathBuf)>),
     /// Model list for the Settings picker, keyed by `models_key`.
     AiModels(String, Result<Vec<String>, String>),
     Wake,
