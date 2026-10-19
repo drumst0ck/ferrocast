@@ -1843,10 +1843,9 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
 pub fn file_tool_files(files: Vec<PathBuf>, tool: ferrocast_core::convert::FileTool, ffmpeg: Option<&'static str>, bus: Bus) {
     std::thread::spawn(move || {
         let (outs, errs) = run_file_tool(&files, &tool, ffmpeg);
-        let report = match (&tool, ffmpeg, files.first(), outs.first()) {
-            (ferrocast_core::convert::FileTool::Normalize(..), Some(ff), Some(b), Some(a)) => {
-                crate::media_tools::normalize_report(ff, b, a)
-            }
+        // only when one file produced one result, so the pair is certain
+        let report = match (&tool, ffmpeg, files.as_slice(), outs.as_slice()) {
+            (ferrocast_core::convert::FileTool::Normalize(..), Some(ff), [b], [a]) => crate::media_tools::normalize_report(ff, b, a),
             _ => None,
         };
         let msg = match (outs.len(), errs.len()) {
@@ -2008,10 +2007,13 @@ fn frame_image(f: &std::path::Path, o: &ferrocast_core::frame::FrameOpts) -> Res
     }
     let mut canvas = match &o.backdrop {
         Backdrop::Image(path) => {
-            let p = std::path::Path::new(path);
-            if !p.is_file() {
+            // canonical absolute path: a name starting with `-` can never be read as a sips option
+            let canon = std::path::Path::new(path).canonicalize().ok().filter(|p| p.is_file());
+            let Some(canon) = canon else {
                 return Err(format!("{path} is not a readable image"));
-            }
+            };
+            let path = canon.to_string_lossy().to_string();
+            let path = path.as_str();
             let bg_tmp = std::env::temp_dir().join(format!(
                 "ferrocast-framebg-{}-{}.png",
                 std::process::id(),

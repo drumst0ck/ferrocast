@@ -41,10 +41,11 @@ pub fn shadow_offset(o: &FrameOpts) -> (i32, i32) {
 pub fn parse(q: &str) -> Option<FrameOpts> {
     // `frame image /Users/Me/bg.jpg pad 40`: the path keeps its case; it ends at the next keyword
     let raw = q.trim();
-    if raw.to_lowercase().starts_with("frame") {
-        if let Some(pos) = raw.to_lowercase().find(" image ") {
+    // ASCII-only lowercasing keeps byte offsets identical to `raw` (Unicode lowercasing can change them)
+    if raw.to_ascii_lowercase().starts_with("frame") {
+        if let Some(pos) = raw.to_ascii_lowercase().find(" image ") {
             let after = &raw[pos + " image ".len()..];
-            let low = after.to_lowercase();
+            let low = after.to_ascii_lowercase();
             let end = [" pad ", " radius ", " shadow "].iter().filter_map(|k| low.find(k)).min().unwrap_or(after.len());
             let path = after[..end].trim();
             if path.is_empty() {
@@ -117,5 +118,10 @@ mod tests {
         assert_eq!(parse("frame image /a.png").unwrap().backdrop, Backdrop::Image("/a.png".into()));
         assert_eq!(parse("frame image "), None);
         assert_eq!(parse("frame image /a.png radius x"), None);
+        // non-ASCII input must not panic, whatever its lowercase length
+        for q in ["frameİİ image x", "frame image /İİ/a.png pad 5", "İİİİİİ frame image x", "frame image \u{212a}\u{212a}"] {
+            let _ = parse(q);
+        }
+        assert_eq!(parse("frame image /İ/a.png pad 5").unwrap().backdrop, Backdrop::Image("/İ/a.png".into()));
     }
 }

@@ -632,9 +632,11 @@ impl ImageOp {
             ImageOp::EditWith(_) => "Edit photo".into(),
             ImageOp::RedactWith(_) => "Redact photo".into(),
             ImageOp::FrameWith(_) => "Add a background".into(),
-            ImageOp::CollageWith(o) => {
-                format!("Collage · {:?}{}", o.layout, o.width.map(|w| format!(" · {w} px")).unwrap_or_default()).to_lowercase()
-            }
+            ImageOp::CollageWith(o) => format!(
+                "Collage · {}{}",
+                format!("{:?}", o.layout).to_lowercase(),
+                o.width.map(|w| format!(" · {w} px")).unwrap_or_default()
+            ),
             ImageOp::Redact(true) => "Redact faces".into(),
             ImageOp::Redact(false) => "Redact text".into(),
             ImageOp::Adjust(a) => match a {
@@ -762,7 +764,8 @@ pub fn parse_image_query(q: &str) -> Option<ImageOp> {
     }
     // `make Canon`, `model EOS R5`, `gps 40.4168,-3.7038`: keep the original case and spaces
     let raw = q.trim();
-    let lower = raw.to_lowercase();
+    // ASCII lowercasing keeps `raw[key.len()..]` on a character boundary (the Kelvin sign lowercases to `k`)
+    let lower = raw.to_ascii_lowercase();
     for key in ["make", "model", "gps"] {
         if let Some(rest) = lower.strip_prefix(key).filter(|r| r.starts_with(' ')) {
             let value = raw[key.len()..].trim();
@@ -1115,8 +1118,8 @@ pub fn parse_time(s: &str) -> Option<f64> {
 /// `normalize -14`, `mono`, `stereo`, `mute`, `visualizer portrait`.
 pub fn parse_tool_query(q: &str) -> Option<FileTool> {
     // `visualizer square image /Users/me/cover.jpg`: the path keeps its case and spaces
-    if let Some(pos) = q.to_lowercase().find(" image ").filter(|_| q.trim().to_lowercase().starts_with("visualizer")) {
-        let canvas = match q.to_lowercase()[..pos].trim().strip_prefix("visualizer").unwrap_or("").trim() {
+    if let Some(pos) = q.to_ascii_lowercase().find(" image ").filter(|_| q.trim().to_ascii_lowercase().starts_with("visualizer")) {
+        let canvas = match q.to_ascii_lowercase()[..pos].trim().strip_prefix("visualizer").unwrap_or("").trim() {
             "portrait" => crate::media::Canvas::Portrait,
             "square" => crate::media::Canvas::Square,
             "" | "landscape" => crate::media::Canvas::Landscape,

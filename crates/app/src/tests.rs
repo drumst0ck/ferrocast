@@ -325,3 +325,23 @@ fn shelf_adds_once_lists_and_removes() {
     assert!(f.exists(), "removing from the shelf never touches the file");
     let _ = std::fs::remove_file(&f);
 }
+
+#[test]
+fn typed_image_commands_with_parameters_are_listed_in_convert() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-typed-{}.png", std::process::id()));
+    std::fs::write(&f, "x").unwrap();
+    for (query, title) in [
+        ("frame pad 80 radius 24 shadow 30 bg 222222", "Add a background"),
+        ("edit brightness 20 grain 30", "Edit photo"),
+        ("redact 10,10 200x100", "Redact photo"),
+        ("collage row 1600 gap 16 radius 12 bg 000000", "Collage"),
+    ] {
+        app.stack = vec![View::Root, View::Convert(vec![f.clone()])];
+        app.query = query.to_string();
+        app.invalidate_sections();
+        let titles: Vec<String> = app.sections_cached().into_iter().flat_map(|s| s.items).map(|i| i.title).collect();
+        assert!(titles.iter().any(|t| t.starts_with(title)), "{query:?} should offer {title:?}, got {titles:?}");
+    }
+    let _ = std::fs::remove_file(&f);
+}

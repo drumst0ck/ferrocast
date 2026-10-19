@@ -1690,37 +1690,41 @@ impl App {
                 if files.iter().all(|f| family_of(f) == Family::Image) {
                     // a typed size or dimensions ("500kb", "40%", "800x600") becomes a tool of its own
                     let typed = ferrocast_core::convert::parse_image_query(&q);
+                    let typed_op = typed.clone();
                     let tools: Vec<Item> = typed
                         .into_iter()
                         .chain(ImageOp::offered(files.len()))
+                        // a query that parsed as a tool is shown as typed; fuzzy matching would hide any with parameters
                         .filter(|op| {
-                            self.matches(
-                                &q,
-                                &op.label(),
-                                match op {
-                                    ImageOp::Compress(_) => "compress smaller jpeg",
-                                    ImageOp::Resize(_) => "resize scale",
-                                    ImageOp::Crop(..) => "crop aspect",
-                                    ImageOp::StripMetadata => "metadata exif gps strip",
-                                    ImageOp::CombinePdf => "pdf combine merge",
-                                    ImageOp::Rotate(_) => "rotate turn",
-                                    ImageOp::Flip(_) => "flip mirror",
-                                    ImageOp::Background(_) => "background pad square",
-                                    ImageOp::Collage | ImageOp::CollageWith(_) => "collage grid row column featured",
-                                    ImageOp::FrameWith(_) => "frame background blur shadow padding",
-                                    ImageOp::RedactWith(_) => "redact hide blur privacy area",
-                                    ImageOp::EditWith(_) => {
-                                        "edit photo brightness contrast saturation warmth clarity sharpen grain denoise dehaze"
-                                    }
-                                    ImageOp::Redact(_) => "redact hide blur privacy face text",
-                                    ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
-                                    ImageOp::Annotate => "annotate markup draw arrow text preview",
-                                    ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compress size smaller",
-                                    ImageOp::CropExact(..) => "crop exact dimensions pixels",
-                                    ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
-                                },
-                            )
-                            .is_some()
+                            typed_op.as_ref() == Some(op)
+                                || self
+                                    .matches(
+                                        &q,
+                                        &op.label(),
+                                        match op {
+                                            ImageOp::Compress(_) => "compress smaller jpeg",
+                                            ImageOp::Resize(_) => "resize scale",
+                                            ImageOp::Crop(..) => "crop aspect",
+                                            ImageOp::StripMetadata => "metadata exif gps strip",
+                                            ImageOp::CombinePdf => "pdf combine merge",
+                                            ImageOp::Rotate(_) => "rotate turn",
+                                            ImageOp::Flip(_) => "flip mirror",
+                                            ImageOp::Background(_) => "background pad square",
+                                            ImageOp::Collage | ImageOp::CollageWith(_) => "collage grid row column featured",
+                                            ImageOp::FrameWith(_) => "frame background blur shadow padding",
+                                            ImageOp::RedactWith(_) => "redact hide blur privacy area",
+                                            ImageOp::EditWith(_) => {
+                                                "edit photo brightness contrast saturation warmth clarity sharpen grain denoise dehaze"
+                                            }
+                                            ImageOp::Redact(_) => "redact hide blur privacy face text",
+                                            ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
+                                            ImageOp::Annotate => "annotate markup draw arrow text preview",
+                                            ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compress size smaller",
+                                            ImageOp::CropExact(..) => "crop exact dimensions pixels",
+                                            ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
+                                        },
+                                    )
+                                    .is_some()
                         })
                         .map(|op| Item {
                             id: format!("imgtool:{}", op.suffix()),
