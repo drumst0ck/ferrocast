@@ -79,3 +79,5 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 - L18 P3c split into bounded units (collage, background, image redaction, audio extras, photo editor). Collage layout lives in core as pure geometry so it is testable without pixels.
 
 - L19 P6a docs: README status table, CHANGELOG and web copy updated with measured results and limits (typed commands only, no live preview or canvas, layout fidelity unchecked, RAR synthetic, Pages.app unproven, key handling untested in a real session). Web copy checked by text only; the site was not rebuilt or published.
+
+- L20 P6b: release bundle built (job-35 exit 0, ad-hoc signature valid) and relaunched (pid 83331). Only process presence was checked; the new features were not exercised through the running app. Next unit: image file as `frame` background.
