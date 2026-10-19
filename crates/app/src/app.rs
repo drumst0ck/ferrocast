@@ -55,6 +55,7 @@ pub enum View {
     Processes,
     Timers,
     CalcHistory,
+    Shelf,
     Convert(Vec<PathBuf>),
     Notes,
     Colors(Rgba),
@@ -155,6 +156,7 @@ impl View {
             | View::Processes
             | View::Timers
             | View::CalcHistory
+            | View::Shelf
             | View::Convert(_)
             | View::Notes
             | View::Colors(_) => Shape::List,
@@ -174,6 +176,7 @@ impl View {
             View::Processes => "Kill Process",
             View::Timers => "Timers",
             View::CalcHistory => "Calculator History",
+            View::Shelf => "File Shelf",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -206,6 +209,7 @@ impl View {
             View::Processes => "Search processes…",
             View::Timers => "Search timers…",
             View::CalcHistory => "Search past calculations…",
+            View::Shelf => "Search the shelf…",
             View::Convert(_) => "Convert to…",
             View::Notes => "Search notes…",
             _ => "Filter…",
@@ -278,6 +282,8 @@ pub struct App {
     timers: Vec<RunningTimer>,
     calc_history: Vec<ferrocast_core::models::CalcEntry>,
     recent_emoji: Vec<String>,
+    /// Files kept on the File Shelf (persisted in shelf.json).
+    shelf: Vec<PathBuf>,
     /// The app icon, decoded once for the footer.
     app_icon: Option<egui::TextureHandle>,
     /// Whether the 22 MB Unicode fallback font has been loaded.
@@ -388,6 +394,7 @@ impl App {
         let store = Store::default_location();
         let calc_history = store.load("calc-history.json");
         let recent_emoji = store.load("recent-emoji.json");
+        let shelf: Vec<PathBuf> = store.load("shelf.json");
         let data = store.load_all();
         if prof {
             eprintln!("data {:?}", t.elapsed());
@@ -476,6 +483,7 @@ impl App {
             timers: vec![],
             calc_history,
             recent_emoji,
+            shelf,
             app_icon: None,
             wide_font: false,
             show_t: None,
@@ -855,7 +863,7 @@ impl App {
                     seg("Terminal", "sf:terminal", Act::OpenInTerminal(f[0].clone())),
                     seg("AirDrop", "sf:dot.radiowaves.left.and.right", Act::AirDrop(f.clone())),
                     seg("Quick Look", "sf:eye", Act::QuickLook(f[0].clone())),
-                    seg("Show in Finder", "sf:magnifyingglass", Act::Reveal(f[0].clone())),
+                    seg("Float", "sf:tray.full", Act::AddToShelf(f.clone())),
                     seg("Convert…", "sf:arrow.triangle.2.circlepath", Act::Convert(f)),
                 ]
             }
@@ -1662,6 +1670,18 @@ impl App {
                 out.retain(|sec| !sec.items.is_empty());
                 out
             }
+            View::Shelf => {
+                let v: Vec<(i64, Item)> = self
+                    .shelf
+                    .iter()
+                    .filter(|p| p.exists())
+                    .filter_map(|p| {
+                        let it = file_item(p);
+                        self.matches(&q, &it.title, &it.subtitle).map(|sc| (sc, it))
+                    })
+                    .collect();
+                self.sorted(v, "On the shelf")
+            }
             View::CalcHistory => {
                 let now = now_secs();
                 let v: Vec<(i64, Item)> = self
@@ -1830,6 +1850,12 @@ impl App {
                     .key(CMD_SHIFT, Key::T),
                 );
                 a.push(Action::new("AirDrop", Act::AirDrop(vec![p.clone()])));
+                if matches!(self.view(), View::Shelf) {
+                    a.push(Action::new("Remove from Shelf", Act::RemoveFromShelf(p.clone())).key(CMD, Key::Backspace));
+                    a.push(Action::new("Clear Shelf", Act::ClearShelf).danger());
+                } else {
+                    a.push(Action::new("Float on Shelf", Act::AddToShelf(vec![p.clone()])).key(CMD_SHIFT, Key::F));
+                }
                 a.push(Action::new("Move to Trash", Act::Trash(p.clone())).key(CTRL, Key::X).danger());
             }
             Kind::Calc(r) => {
@@ -2329,6 +2355,7 @@ impl App {
             Builtin::Timers => self.push(View::Timers),
             Builtin::CheckUpdates => self.check_updates(),
             Builtin::CalcHistory => self.push(View::CalcHistory),
+            Builtin::Shelf => self.push(View::Shelf),
             Builtin::ConvertFiles => {
                 let bus = self.bus.clone();
                 self.hide();
@@ -2587,6 +2614,29 @@ impl App {
             }
             Act::KillProcess(pid, force) => self.kill_process(pid, force),
             Act::CancelTimer(i) => self.cancel_timer(i),
+            Act::AddToShelf(files) => {
+                let n = files.len();
+                for f in files {
+                    if !self.shelf.contains(&f) {
+                        self.shelf.insert(0, f);
+                    }
+                }
+                let v = self.shelf.clone();
+                self.persist("shelf.json", &v);
+                self.toast(format!("{n} item{} on the shelf", if n == 1 { "" } else { "s" }));
+            }
+            Act::RemoveFromShelf(p) => {
+                self.shelf.retain(|f| *f != p);
+                let v = self.shelf.clone();
+                self.persist("shelf.json", &v);
+                self.invalidate_sections();
+            }
+            Act::ClearShelf => {
+                self.shelf.clear();
+                self.persist("shelf.json", &Vec::<PathBuf>::new());
+                self.invalidate_sections();
+                self.toast("Shelf cleared");
+            }
             Act::ClearCalcHistory => {
                 self.calc_history.clear();
                 let v = self.calc_history.clone();

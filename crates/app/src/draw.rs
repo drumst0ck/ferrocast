@@ -117,6 +117,15 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("about") => app.push(View::About),
             Ok("processes") => app.push(View::Processes),
             Ok("calchistory") => app.push(View::CalcHistory),
+            Ok("shelf") => {
+                app.shelf = std::env::var("FERROCAST_FILES")
+                    .unwrap_or_default()
+                    .split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                app.push(View::Shelf);
+            }
             Ok("convert") => app.push(View::Convert(
                 std::env::var("FERROCAST_FILES")
                     .unwrap_or_default()
@@ -663,6 +672,13 @@ impl App {
         let dropped: Vec<std::path::PathBuf> =
             ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
         // a drop that ends a wheel gesture arrives after the wheel hid the window: ignore it
+        if !dropped.is_empty() && self.visible && matches!(self.view(), View::Shelf) {
+            // files dropped on an open shelf stay on the shelf
+            self.perform(Act::AddToShelf(dropped), false);
+            self.invalidate_sections();
+            ctx.request_repaint();
+            return;
+        }
         if !dropped.is_empty() && self.visible {
             self.reset_to_root();
             self.push(View::Convert(dropped));
