@@ -153,6 +153,10 @@ fn decode_hex(s: &str) -> Vec<u8> {
 }
 
 fn magic_ok(path: &Path, ext: &str) -> Result<(), String> {
+    magic_only(path, ext)
+}
+
+fn magic_only(path: &Path, ext: &str) -> Result<(), String> {
     let b = std::fs::read(path).map_err(|e| e.to_string())?;
     if b.is_empty() {
         return Err("empty file".into());
@@ -188,6 +192,58 @@ fn magic_ok(path: &Path, ext: &str) -> Result<(), String> {
     }
 }
 
+fn captured(cmd: &mut Command) -> String {
+    cmd.output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default()
+}
+
+/// Reads the output back: text inside documents/sheets, pixel size of images, duration of media.
+fn content_ok(input: &str, path: &Path, ext: &str, tools: &Tools) -> Result<(), String> {
+    let marker = match input {
+        "pptx" | "ppt" => "Slide",
+        "csv" | "tsv" | "xlsx" | "xls" | "ods" => "2",
+        "svg" => "",
+        _ => "Hello",
+    };
+    let text = match ext {
+        "txt" | "md" | "html" | "csv" | "tsv" | "srt" | "vtt" => Some(std::fs::read_to_string(path).unwrap_or_default()),
+        "docx" => Some(captured(Command::new("/usr/bin/unzip").args(["-p"]).arg(path).arg("word/document.xml"))),
+        "xlsx" => Some(captured(Command::new("/usr/bin/unzip").args(["-p"]).arg(path).arg("xl/worksheets/sheet1.xml"))),
+        "ods" => Some(captured(Command::new("/usr/bin/unzip").args(["-p"]).arg(path).arg("content.xml"))),
+        "epub" => Some(captured(Command::new("/usr/bin/unzip").args(["-p"]).arg(path).arg("*.xhtml"))),
+        "pages" => Some(captured(Command::new("/usr/bin/unzip").args(["-p"]).arg(path).arg("index.xml"))),
+        _ => None,
+    };
+    let pdf_in = matches!(input, "pdf" | "pptx" | "ppt");
+    if let Some(t) = text {
+        let skip = marker.is_empty() || (pdf_in && ext == "docx");
+        if !skip && !t.contains(marker) {
+            return Err(format!(".{ext} does not contain {marker:?}"));
+        }
+    }
+    match ext {
+        "png" | "jpg" | "webp" | "heic" | "tiff" | "avif" | "bmp" => {
+            let out = captured(Command::new("/usr/bin/sips").args(["-g", "pixelWidth"]).arg(path));
+            let w: u32 = out.lines().find_map(|l| l.trim().strip_prefix("pixelWidth:")).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+            if w == 0 && ext != "webp" {
+                return Err("image has no readable width".into());
+            }
+        }
+        "mp3" | "m4a" | "wav" | "flac" | "ogg" | "opus" | "aiff" | "wma" | "mp4" | "mov" | "mkv" | "webm" | "avi" | "wmv" | "gif" => {
+            let probe = tools.ffmpeg.map(|f| std::path::Path::new(f).with_file_name("ffprobe"));
+            if let Some(pr) = probe {
+                let d = captured(
+                    Command::new(pr).args(["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"]).arg(path),
+                );
+                if d.trim().parse::<f64>().map(|d| d <= 0.0).unwrap_or(true) {
+                    return Err(format!(".{ext} has no readable duration"));
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[test]
 #[ignore = "slow: runs 275 real conversions; cargo test -p ferrocast -- --ignored real_matrix --nocapture"]
 fn real_matrix_all_275_pairs() {
@@ -216,7 +272,7 @@ fn real_matrix_all_275_pairs() {
             let (made, errs) = run_conversion(std::slice::from_ref(&f), t, &tools);
             match made.first() {
                 None => failures.push(format!("{i}→{o}: {}", errs.first().cloned().unwrap_or_else(|| "no output".into()))),
-                Some(p) => match magic_ok(p, o) {
+                Some(p) => match magic_ok(p, o).and_then(|_| content_ok(i, p, o, &tools)) {
                     Ok(()) => ok += 1,
                     Err(e) => failures.push(format!("{i}→{o}: {e}")),
                 },
@@ -229,4 +285,21 @@ fn real_matrix_all_275_pairs() {
     }
     let _ = std::fs::remove_dir_all(&root);
     assert!(failures.is_empty(), "{} of 275 pairs failed", failures.len());
+}
+
+#[test]
+#[ignore = "debug probe: FC_PROBE_PDF=/path/x.pdf cargo test -p ferrocast -- --ignored probe_pdf_epub --nocapture"]
+fn probe_pdf_epub() {
+    let Ok(p) = std::env::var("FC_PROBE_PDF") else { return };
+    let tools = Tools::detect();
+    let f = PathBuf::from(p);
+    let t = targets(&f, &tools).into_iter().find(|t| t.ext == "epub").expect("epub offered");
+    let (made, errs) = run_conversion(std::slice::from_ref(&f), &t, &tools);
+    eprintln!("PROBE made={made:?} errs={errs:?}");
+    if let Some(m) = made.first() {
+        let l = captured(Command::new("/usr/bin/unzip").arg("-l").arg(m));
+        eprintln!("PROBE list:\n{l}");
+        let x = captured(Command::new("/usr/bin/unzip").arg("-p").arg(m).arg("*.xhtml"));
+        eprintln!("PROBE xhtml:\n{x}");
+    }
 }

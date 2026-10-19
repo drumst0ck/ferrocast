@@ -270,7 +270,8 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
             .map(|o| {
                 let want = if o == "gz" { "tar.gz" } else { o };
                 match v.iter().find(|x| x.ext == want) {
-                    Some(x) if !always_route => adjust_engine(key, x.clone(), tools),
+                    // LibreOffice opens a PDF as a drawing and writes an empty EPUB: use the text route
+                    Some(x) if !(always_route || key == "pdf" && o == "epub") => adjust_engine(key, x.clone(), tools),
                     _ => Target { ext: o, label: label_for(o), engine: Engine::Route, needs: route_needs(key, o, tools) },
                 }
             })
