@@ -1347,20 +1347,36 @@ pub fn run_conversion(
         let mut errors: Vec<String> = vec![];
         for f in files {
             let out = output_path(f, target.ext, |p| p.exists());
-            let cmd = match plan(f, target, &out, tools) {
+            let mut cmd = match plan(f, target, &out, tools) {
                 Ok(c) => c,
                 Err(e) => {
                     errors.push(e);
                     continue;
                 }
             };
+            // soffice names its own output <stem>.<ext> in --outdir; next to the original that
+            // could overwrite a different file. Work in a scratch folder, then move to `out`.
+            let scratch = (target.engine == Engine::Soffice).then(|| {
+                let d = std::env::temp_dir().join(format!(
+                    "ferrocast-so-{}-{}",
+                    std::process::id(),
+                    out.file_name().map(|n| n.to_string_lossy().len()).unwrap_or(0)
+                ));
+                let _ = std::fs::remove_dir_all(&d);
+                let _ = std::fs::create_dir_all(&d);
+                if let Some(i) = cmd.iter().position(|a| a == "--outdir") {
+                    cmd[i + 1] = d.to_string_lossy().to_string();
+                }
+                d
+            });
             let res = std::process::Command::new(&cmd[0]).args(&cmd[1..]).output();
             match res {
                 Ok(o) if o.status.success() => {
-                    if target.engine == Engine::Soffice {
-                        let written = soffice_written_path(f, &out, target.ext);
-                        if written != out && written.exists() {
-                            let _ = std::fs::rename(&written, &out);
+                    if let Some(d) = &scratch {
+                        let written = soffice_written_path(f, &d.join("x"), target.ext);
+                        if written.exists() && std::fs::rename(&written, &out).is_err() {
+                            // another volume: copy, then drop the scratch copy
+                            let _ = std::fs::copy(&written, &out);
                         }
                     }
                     if out.exists() {
@@ -1381,6 +1397,9 @@ pub fn run_conversion(
                     ));
                 }
                 Err(e) => errors.push(format!("could not run {}: {e}", cmd[0])),
+            }
+            if let Some(d) = scratch {
+                let _ = std::fs::remove_dir_all(d);
             }
         }
         (outputs, errors)
@@ -2144,6 +2163,76 @@ mod convert_tests {
             let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "docx"), &tools);
             assert!(e.is_empty(), "{e:?}");
             assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"));
+            // new targets: EPUB, PPTX from a PDF, ODS, TSV (tabs, not commas)
+            let (o, e) = run_conversion(std::slice::from_ref(&txt), &pick(&txt, "epub"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"), "epub is a zip");
+            let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "pptx"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"), "pptx is a zip");
+            let (o, e) = run_conversion(std::slice::from_ref(&csv), &pick(&csv, "ods"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"));
+            let (o, e) = run_conversion(std::slice::from_ref(&csv), &pick(&csv, "tsv"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert_eq!(o[0].extension().unwrap(), "tsv");
+            assert!(std::fs::read_to_string(&o[0]).unwrap().contains("1\t2"), "tab separated");
+            // soffice writes into a scratch folder: an existing <stem>.<ext> is never overwritten
+            let keep = d.join("t.pdf");
+            std::fs::write(&keep, "precious").unwrap();
+            let (o, e) = run_conversion(std::slice::from_ref(&csv), &pick(&csv, "pdf"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert_eq!(std::fs::read_to_string(&keep).unwrap(), "precious");
+            assert!(o[0].to_string_lossy().ends_with("t 2.pdf"), "{o:?}");
+        }
+        // TAR, and SVG input through sips
+        let tarred = run_conversion(std::slice::from_ref(&d), &pick(&d, "tar"), &tools);
+        assert!(tarred.1.is_empty(), "{:?}", tarred.1);
+        assert!(std::fs::metadata(&tarred.0[0]).unwrap().len() > 0);
+        let svg = d.join("a.svg");
+        std::fs::write(
+            &svg,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"><rect width="100" height="60" fill="red"/></svg>"#,
+        )
+        .unwrap();
+        let (o, e) = run_conversion(std::slice::from_ref(&svg), &pick(&svg, "png"), &tools);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((100, 60)));
+        if let Some(ff) = tools.ffmpeg {
+            let wav = d.join("w.wav");
+            assert!(std::process::Command::new(ff)
+                .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=1"])
+                .arg(&wav)
+                .status()
+                .unwrap()
+                .success());
+            let (o, e) = run_conversion(std::slice::from_ref(&wav), &pick(&wav, "wma"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(&[0x30, 0x26, 0xB2, 0x75]), "ASF header");
+            let mov = d.join("v.mov");
+            assert!(std::process::Command::new(ff)
+                .args([
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=size=160x120:rate=10",
+                    "-t",
+                    "1",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p"
+                ])
+                .arg(&mov)
+                .status()
+                .unwrap()
+                .success());
+            let (o, e) = run_conversion(std::slice::from_ref(&mov), &pick(&mov, "wmv"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(&[0x30, 0x26, 0xB2, 0x75]), "ASF header");
         }
     }
 

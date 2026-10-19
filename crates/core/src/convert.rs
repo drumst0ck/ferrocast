@@ -25,8 +25,8 @@ pub fn family_of(path: &Path) -> Family {
         return Family::Folder;
     }
     match ext(path).as_str() {
-        "jpg" | "jpeg" | "png" | "webp" | "heic" | "heif" | "tif" | "tiff" | "avif" | "bmp" | "gif" | "jxl" | "jp2" | "psd" | "dng"
-        | "cr2" | "cr3" | "nef" | "arw" | "raf" | "orf" | "rw2" | "icns" | "ico" => Family::Image,
+        "jpg" | "jpeg" | "png" | "svg" | "webp" | "heic" | "heif" | "tif" | "tiff" | "avif" | "bmp" | "gif" | "jxl" | "jp2" | "psd"
+        | "dng" | "cr2" | "cr3" | "nef" | "arw" | "raf" | "orf" | "rw2" | "icns" | "ico" => Family::Image,
         "mp3" | "m4a" | "wav" | "flac" | "ogg" | "opus" | "aiff" | "aif" | "wma" | "caf" | "aac" | "m4b" => Family::Audio,
         "mp4" | "mov" | "mkv" | "webm" | "avi" | "wmv" | "m4v" | "mpg" | "mpeg" | "ts" | "3gp" => Family::Video,
         "docx" | "doc" | "pages" | "md" | "markdown" | "txt" | "rtf" | "rtfd" | "odt" | "html" | "htm" | "epub" => Family::Document,
@@ -137,6 +137,7 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
             t("flac", "FLAC", Engine::Ffmpeg, tools),
             t("ogg", "OGG Vorbis", Engine::Ffmpeg, tools),
             t("opus", "Opus", Engine::Ffmpeg, tools),
+            t("wma", "WMA", Engine::Ffmpeg, tools),
         ],
         Family::Video => vec![
             t("mp4", "MP4 (H.264)", Engine::Avconvert, tools),
@@ -147,6 +148,7 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
             t("gif", "GIF", Engine::Ffmpeg, tools),
             t("mp3", "MP3 (audio only)", Engine::Ffmpeg, tools),
             t("avi", "AVI", Engine::Ffmpeg, tools),
+            t("wmv", "WMV", Engine::Ffmpeg, tools),
         ],
         Family::Document => match e.as_str() {
             "md" | "markdown" | "txt" => vec![
@@ -154,6 +156,7 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
                 t("docx", "Word (DOCX)", Engine::Textutil, tools),
                 t("html", "HTML", Engine::Textutil, tools),
                 t("rtf", "RTF", Engine::Textutil, tools),
+                t("epub", "EPUB", Engine::Soffice, tools),
             ],
             "epub" | "pages" => vec![
                 t("pdf", "PDF", Engine::Soffice, tools),
@@ -167,6 +170,7 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
                 t("html", "HTML", Engine::Textutil, tools),
                 t("rtf", "RTF", Engine::Textutil, tools),
                 t("odt", "OpenDocument", Engine::Textutil, tools),
+                t("epub", "EPUB", Engine::Soffice, tools),
             ],
         },
         Family::Spreadsheet => vec![
@@ -174,15 +178,22 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
             t("xlsx", "Excel (XLSX)", Engine::Soffice, tools),
             t("csv", "CSV", Engine::Soffice, tools),
             t("ods", "OpenDocument", Engine::Soffice, tools),
+            t("tsv", "TSV", Engine::Soffice, tools),
         ],
         Family::Slides => vec![t("pdf", "PDF", Engine::Soffice, tools), t("pptx", "PowerPoint (PPTX)", Engine::Soffice, tools)],
         Family::Pdf => vec![
             t("png", "PNG (first page)", Engine::Sips, tools),
             t("jpg", "JPEG (first page)", Engine::Sips, tools),
             t("docx", "Word (DOCX)", Engine::Soffice, tools),
+            t("epub", "EPUB", Engine::Soffice, tools),
+            t("pptx", "PowerPoint (PPTX)", Engine::Soffice, tools),
         ],
         Family::Subtitle => vec![t("vtt", "WebVTT", Engine::Ffmpeg, tools), t("srt", "SubRip (SRT)", Engine::Ffmpeg, tools)],
-        Family::Archive | Family::Folder => vec![t("zip", "ZIP", Engine::Archive, tools), t("tar.gz", "tar.gz", Engine::Archive, tools)],
+        Family::Archive | Family::Folder => vec![
+            t("zip", "ZIP", Engine::Archive, tools),
+            t("tar", "TAR", Engine::Archive, tools),
+            t("tar.gz", "tar.gz", Engine::Archive, tools),
+        ],
         Family::Other => vec![t("zip", "ZIP", Engine::Archive, tools)],
     };
     v.retain(|x| x.ext != e && !(e == "jpeg" && x.ext == "jpg") && !(e == "tif" && x.ext == "tiff"));
@@ -252,6 +263,11 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
             let name = input.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             vec!["/usr/bin/tar".into(), "-czf".into(), o, "-C".into(), parent, name]
         }
+        (Engine::Archive, "tar") => {
+            let parent = input.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| ".".into());
+            let name = input.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            vec!["/usr/bin/tar".into(), "-cf".into(), o, "-C".into(), parent, name]
+        }
         (Engine::Archive, ext) => return Err(format!("no archive format {ext}")),
         (Engine::Cwebp, _) => {
             let cw = tools.cwebp.ok_or("cwebp is not installed")?.to_string();
@@ -269,6 +285,8 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
                 "webm" => &["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "33", "-c:a", "libopus"],
                 "mkv" => &["-c:v", "libx264", "-crf", "20", "-c:a", "aac"],
                 "avi" => &["-c:v", "mpeg4", "-q:v", "4", "-c:a", "libmp3lame"],
+                "wmv" => &["-c:v", "wmv2", "-c:a", "wmav2"],
+                "wma" => &["-vn", "-c:a", "wmav2"],
                 _ => &[],
             };
             v.extend(args.iter().map(|a| a.to_string()));
@@ -280,12 +298,15 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
             let outdir = out.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| ".".into());
             let filter = match ext {
                 "txt" => "txt:Text (encoded):UTF8",
+                // tab-separated, UTF-8; soffice names the file .csv (see soffice_written_path)
+                "tsv" => "csv:Text - txt - csv (StarCalc):9,34,76,1",
                 other => other,
             };
             let mut v = vec![so, "--headless".into()];
             // PDFs open in Draw by default, which cannot export to text documents
             if self::ext(input) == "pdf" {
-                v.push("--infilter=writer_pdf_import".into());
+                // PPTX comes from the slide importer, text documents from the Writer one
+                v.push(if ext == "pptx" { "--infilter=impress_pdf_import" } else { "--infilter=writer_pdf_import" }.into());
             }
             // soffice names the file itself (<stem>.<ext>); the caller renames to `out` afterwards.
             v.extend(["--convert-to".into(), filter.into(), "--outdir".into(), outdir, i]);
@@ -298,7 +319,8 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
 /// soffice writes `<stem>.<ext>` into outdir regardless of the name we wanted.
 pub fn soffice_written_path(input: &Path, out: &Path, ext: &str) -> PathBuf {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("converted");
-    out.parent().map(Path::to_path_buf).unwrap_or_default().join(format!("{stem}.{}", ext.split(':').next().unwrap_or(ext)))
+    let written = if ext == "tsv" { "csv" } else { ext.split(':').next().unwrap_or(ext) };
+    out.parent().map(Path::to_path_buf).unwrap_or_default().join(format!("{stem}.{written}"))
 }
 
 #[cfg(test)]
