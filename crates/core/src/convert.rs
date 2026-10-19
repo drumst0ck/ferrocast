@@ -78,6 +78,8 @@ pub enum Engine {
     Ffmpeg,
     Soffice,
     Cwebp,
+    /// PDFKit through osascript: page images at 300 DPI and the text layer.
+    Pdfkit,
 }
 
 impl Engine {
@@ -87,6 +89,7 @@ impl Engine {
             Engine::Ffmpeg => "ffmpeg",
             Engine::Soffice => "LibreOffice",
             Engine::Cwebp => "cwebp",
+            Engine::Pdfkit => "built in",
         }
     }
 }
@@ -182,8 +185,10 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
         ],
         Family::Slides => vec![t("pdf", "PDF", Engine::Soffice, tools), t("pptx", "PowerPoint (PPTX)", Engine::Soffice, tools)],
         Family::Pdf => vec![
-            t("png", "PNG (first page)", Engine::Sips, tools),
-            t("jpg", "JPEG (first page)", Engine::Sips, tools),
+            t("png", "PNG (all pages, 300 DPI)", Engine::Pdfkit, tools),
+            t("jpg", "JPEG (all pages, 300 DPI)", Engine::Pdfkit, tools),
+            t("txt", "Plain text", Engine::Pdfkit, tools),
+            t("md", "Markdown (text)", Engine::Pdfkit, tools),
             t("docx", "Word (DOCX)", Engine::Soffice, tools),
             t("epub", "EPUB", Engine::Soffice, tools),
             t("pptx", "PowerPoint (PPTX)", Engine::Soffice, tools),
@@ -220,6 +225,7 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
     let i = input.to_string_lossy().to_string();
     let o = out.to_string_lossy().to_string();
     let cmd = match (&target.engine, target.ext) {
+        (Engine::Pdfkit, _) => return Err("PDF pages and text are handled natively".into()),
         (Engine::Sips, ext) => {
             let fmt = match ext {
                 "jpg" => "jpeg",

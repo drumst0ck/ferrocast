@@ -1347,6 +1347,13 @@ pub fn run_conversion(
         let mut errors: Vec<String> = vec![];
         for f in files {
             let out = output_path(f, target.ext, |p| p.exists());
+            if target.engine == Engine::Pdfkit {
+                match pdfkit_convert(f, target.ext) {
+                    Ok(mut o) => outputs.append(&mut o),
+                    Err(e) => errors.push(format!("{}: {e}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())),
+                }
+                continue;
+            }
             let mut cmd = match plan(f, target, &out, tools) {
                 Ok(c) => c,
                 Err(e) => {
@@ -1404,6 +1411,52 @@ pub fn run_conversion(
         }
         (outputs, errors)
     }
+}
+
+/// PDF → page images (300 DPI, every page) or its text layer, through PDFKit/AppKit.
+fn pdfkit_convert(f: &std::path::Path, ext: &str) -> Result<Vec<PathBuf>, String> {
+    use ferrocast_core::convert::{output_path, output_with_suffix};
+    let tmp = std::env::temp_dir().join(format!("ferrocast-pdfkit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let run = |script: &str, args: &[&str]| {
+        std::process::Command::new("/usr/bin/osascript")
+            .args(["-l", "JavaScript", "-e", script])
+            .args(args)
+            .output()
+            .map_err(|e| e.to_string())
+    };
+    let result = (|| -> Result<Vec<PathBuf>, String> {
+        if ext == "txt" || ext == "md" {
+            let o = run(
+                "function run(a){ObjC.import('PDFKit');var d=$.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(a[0]));return d?ObjC.unwrap(d.string)||'':''}",
+                &[&f.to_string_lossy()],
+            )?;
+            let text = String::from_utf8_lossy(&o.stdout).trim_end().to_string();
+            if text.trim().is_empty() {
+                return Err("no text layer in this PDF (it may be a scan)".into());
+            }
+            let out = output_path(f, ext, |p| p.exists());
+            std::fs::write(&out, text + "\n").map_err(|e| e.to_string())?;
+            return Ok(vec![out]);
+        }
+        const PAGES: &str = "function run(a){ObjC.import('AppKit');ObjC.import('Foundation');var rep=$.NSPDFImageRep.imageRepWithData($.NSData.dataWithContentsOfFile(a[0]));if(!rep){return '0'}var n=rep.pageCount;var s=300/72;for(var i=0;i<n;i++){rep.currentPage=i;var b=rep.bounds;var w=Math.round(b.size.width*s),h=Math.round(b.size.height*s);var bmp=$.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel($(),w,h,8,4,true,false,$('NSCalibratedRGBColorSpace'),0,0);var ctx=$.NSGraphicsContext.graphicsContextWithBitmapImageRep(bmp);$.NSGraphicsContext.saveGraphicsState;$.NSGraphicsContext.currentContext=ctx;$.NSColor.whiteColor.set;$.NSBezierPath.fillRect($.NSMakeRect(0,0,w,h));rep.drawInRect($.NSMakeRect(0,0,w,h));$.NSGraphicsContext.restoreGraphicsState;var t=a[2]=='jpg'?$.NSBitmapImageFileTypeJPEG:$.NSBitmapImageFileTypePNG;bmp.representationUsingTypeProperties(t,$()).writeToFileAtomically(a[1]+'/'+(i+1)+'.'+a[2],true)}return ''+n}";
+        let o = run(PAGES, &[&f.to_string_lossy(), &tmp.to_string_lossy(), ext])?;
+        let n: usize = String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(0);
+        if n == 0 {
+            return Err("could not read the PDF pages".into());
+        }
+        let mut outs = vec![];
+        for i in 1..=n {
+            let out =
+                if n == 1 { output_path(f, ext, |p| p.exists()) } else { output_with_suffix(f, &format!("page {i}"), ext, |p| p.exists()) };
+            std::fs::copy(tmp.join(format!("{i}.{ext}")), &out).map_err(|e| e.to_string())?;
+            outs.push(out);
+        }
+        Ok(outs)
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
 }
 
 /// Pixel size of an image via sips.
@@ -2160,6 +2213,13 @@ mod convert_tests {
             // PDF → DOCX needs the Writer PDF import filter
             let pdf = d.join("doc.pdf");
             assert!(pdf.exists());
+            // PDF text layer → TXT and Markdown
+            let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "txt"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read_to_string(&o[0]).unwrap().contains("Hello from Ferrocast"));
+            let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "md"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read_to_string(&o[0]).unwrap().contains("Hello from Ferrocast"));
             let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "docx"), &tools);
             assert!(e.is_empty(), "{e:?}");
             assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"));
@@ -2185,6 +2245,27 @@ mod convert_tests {
             assert_eq!(std::fs::read_to_string(&keep).unwrap(), "precious");
             assert!(o[0].to_string_lossy().ends_with("t 2.pdf"), "{o:?}");
         }
+        // PDF pages: every page, 300 DPI (a 1024 pt page is 4267 px), JPEG too
+        let (p1, p2) = (d.join("one.pdf"), d.join("two.pdf"));
+        for p in [&p1, &p2] {
+            sips(&["-s", "format", "pdf", icon, "--out", &p.to_string_lossy()]).unwrap();
+        }
+        let two = d.join("both.pdf");
+        let (mm, e) = run_file_tool(&[p1.clone(), p2.clone()], &ferrocast_core::convert::FileTool::Merge, None);
+        assert!(e.is_empty(), "{e:?}");
+        std::fs::rename(&mm[0], &two).unwrap();
+        let (o, e) = run_conversion(std::slice::from_ref(&two), &pick(&two, "png"), &tools);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(o.len(), 2, "one image per page: {o:?}");
+        assert_eq!(image_size(&o[0]), Some((4267, 4267)));
+        assert!(o[1].to_string_lossy().contains("page 2"));
+        let (o, e) = run_conversion(std::slice::from_ref(&p1), &pick(&p1, "jpg"), &tools);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].extension().unwrap(), "jpg", "single page keeps the plain name");
+        // an image-only PDF has no text layer: say so instead of writing an empty file
+        let (o, e) = run_conversion(std::slice::from_ref(&p1), &pick(&p1, "txt"), &tools);
+        assert!(o.is_empty() && e[0].contains("no text layer"), "{e:?}");
         // TAR, and SVG input through sips
         let tarred = run_conversion(std::slice::from_ref(&d), &pick(&d, "tar"), &tools);
         assert!(tarred.1.is_empty(), "{:?}", tarred.1);
