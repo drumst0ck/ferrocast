@@ -1853,27 +1853,57 @@ fn adjust(f: &std::path::Path, a: ferrocast_core::convert::Adjust) -> Result<Pat
 }
 
 /// Lay the images out in a grid of 600 px cells on white, as one PNG next to the first.
-fn collage(files: &[PathBuf]) -> Result<PathBuf, String> {
-    use ferrocast_core::convert::{collage_grid, output_with_suffix};
-    const CELL: u32 = 600;
-    const GAP: u32 = 12;
+static COLLAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn collage(files: &[PathBuf], o: &ferrocast_core::collage::CollageOpts) -> Result<PathBuf, String> {
+    use ferrocast_core::collage::{corner_alpha, layout};
+    use ferrocast_core::convert::output_with_suffix;
     let first = files.first().ok_or("no images")?;
-    let (cols, rows) = collage_grid(files.len());
-    let (cw, ch) = (cols as u32 * (CELL + GAP) + GAP, rows as u32 * (CELL + GAP) + GAP);
-    let mut canvas = image::RgbaImage::from_pixel(cw, ch, image::Rgba([255, 255, 255, 255]));
-    let tmp = std::env::temp_dir().join(format!("ferrocast-collage-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&tmp);
-    for (i, f) in files.iter().enumerate() {
-        // sips reads every format and scales; the image crate only needs PNG
-        let cell = tmp.join(format!("{i}.png"));
-        sips(&["-s", "format", "png", "-Z", &CELL.to_string(), &f.to_string_lossy(), "--out", &cell.to_string_lossy()])?;
-        let img = image::open(&cell).map_err(|e| e.to_string())?.to_rgba8();
-        let (c, r) = ((i % cols) as u32, (i / cols) as u32);
-        let x = GAP + c * (CELL + GAP) + (CELL - img.width().min(CELL)) / 2;
-        let y = GAP + r * (CELL + GAP) + (CELL - img.height().min(CELL)) / 2;
-        image::imageops::overlay(&mut canvas, &img, x as i64, y as i64);
+    let ((cw, ch), cells) = layout(files.len(), o);
+    if u64::from(cw) * u64::from(ch) > 120_000_000 {
+        return Err("the collage would be too large; use a smaller width".into());
     }
+    let bg = o.bg.map(|c| image::Rgba([c[0], c[1], c[2], 255])).unwrap_or(image::Rgba([0, 0, 0, 0]));
+    let mut canvas = image::RgbaImage::from_pixel(cw, ch, bg);
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-collage-{}-{}",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let result: Result<(), String> = (|| {
+        for (f, cell) in files.iter().zip(&cells) {
+            // sips reads every format and scales; the image crate only needs PNG
+            let png = tmp.join(format!("{}.png", cell.x * 31 + cell.y));
+            sips(&["-s", "format", "png", "-Z", &cell.w.max(cell.h).to_string(), &f.to_string_lossy(), "--out", &png.to_string_lossy()])?;
+            let img = image::open(&png).map_err(|e| e.to_string())?.to_rgba8();
+            // fill the cell (cover), centred
+            let scale = (cell.w as f32 / img.width() as f32).max(cell.h as f32 / img.height() as f32);
+            let (nw, nh) =
+                (((img.width() as f32 * scale).ceil() as u32).max(cell.w), ((img.height() as f32 * scale).ceil() as u32).max(cell.h));
+            let scaled = image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle);
+            let (ox, oy) = ((nw - cell.w) / 2, (nh - cell.h) / 2);
+            for y in 0..cell.h {
+                for x in 0..cell.w {
+                    let a = corner_alpha(x, y, cell.w, cell.h, o.radius);
+                    if a <= 0.0 {
+                        continue;
+                    }
+                    let mut px = *scaled.get_pixel(x + ox, y + oy);
+                    px.0[3] = (px.0[3] as f32 * a) as u8;
+                    let dst = canvas.get_pixel_mut(cell.x + x, cell.y + y);
+                    let sa = px.0[3] as f32 / 255.0;
+                    for c in 0..3 {
+                        dst.0[c] = (px.0[c] as f32 * sa + dst.0[c] as f32 * (1.0 - sa)) as u8;
+                    }
+                    dst.0[3] = (px.0[3] as f32 + dst.0[3] as f32 * (1.0 - sa)).min(255.0) as u8;
+                }
+            }
+        }
+        Ok(())
+    })();
     let _ = std::fs::remove_dir_all(&tmp);
+    result?;
     let out = output_with_suffix(first, "collage", "png", |p| p.exists());
     canvas.save(&out).map_err(|e| e.to_string())?;
     Ok(out)
@@ -1935,8 +1965,9 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
         }
         return (outs, errs);
     }
-    if *op == ImageOp::Collage {
-        match collage(files) {
+    if let ImageOp::Collage | ImageOp::CollageWith(_) = op {
+        let opts = if let ImageOp::CollageWith(o) = op { *o } else { Default::default() };
+        match collage(files, &opts) {
             Ok(o) => outs.push(o),
             Err(e) => errs.push(e),
         }
@@ -2029,6 +2060,7 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
             }
             ImageOp::CombinePdf
             | ImageOp::Collage
+            | ImageOp::CollageWith(_)
             | ImageOp::Redact(_)
             | ImageOp::Adjust(_)
             | ImageOp::CompressToKb(_)
@@ -2207,6 +2239,23 @@ mod convert_tests {
         // 3 images → 2×2 grid of 600 px cells with 12 px gaps
         assert_eq!(image_size(&o[0]), Some((1236, 1236)));
         assert!(src.exists() && wide[0].exists(), "originals untouched");
+
+        // collage options: a row at an exact width, square corners cut to the background, no overwrite
+        let opts = ferrocast_core::collage::parse("collage row 1200 gap 20 radius 40 bg ff0000").unwrap();
+        let (o, e) = run_image_op(&[src.clone(), wide[0].clone(), src.clone()], &ImageOp::CollageWith(opts));
+        assert!(e.is_empty(), "{e:?}");
+        let (w, h) = image_size(&o[0]).unwrap();
+        assert!((1192..=1200).contains(&w), "width {w}");
+        assert!(h < w / 2, "a row of three is wide and short: {w}x{h}");
+        let img = image::open(&o[0]).unwrap().to_rgba8();
+        assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255], "edge is the red background");
+        assert_eq!(img.get_pixel(20, 20).0, [255, 0, 0, 255], "rounded corner shows the background");
+        assert_ne!(img.get_pixel(w / 6, h / 2).0, [255, 0, 0, 255], "picture centre is not background");
+        let (o2, e) =
+            run_image_op(&[src.clone(), src.clone()], &ferrocast_core::convert::parse_image_query("collage featured bg none").unwrap());
+        assert!(e.is_empty(), "{e:?}");
+        assert_ne!(o[0], o2[0], "never overwrites");
+        assert_eq!(image::open(&o2[0]).unwrap().to_rgba8().get_pixel(0, 0).0[3], 0, "bg none is transparent");
 
         // Redact text: the rendered line is covered with black, the margins stay white
         let txt = d.join("text.png");
