@@ -991,6 +991,9 @@ impl App {
         self.reset_to_root();
         let Some(i) = picked.filter(|i| *i < segs.len()) else { return };
         match segs[i].pick.clone() {
+            WheelPick::Image(ferrocast_core::convert::ImageOp::Annotate) if files.len() == 1 => {
+                self.perform(Act::AnnotateCanvas(files[0].clone()), false);
+            }
             WheelPick::Image(op) => {
                 self.toast(format!("{}…", op.label()));
                 services::image_op_files(files, op, self.bus.clone());
@@ -2329,6 +2332,10 @@ impl App {
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
                 self.hide();
                 self.reset_to_root();
+            }
+            Kind::ImageTool(files, ferrocast_core::convert::ImageOp::Annotate) if files.len() == 1 => {
+                let f = files[0].clone();
+                self.perform(Act::AnnotateCanvas(f), false);
             }
             Kind::ImageTool(files, op) => {
                 let (files, op) = (files.clone(), op.clone());
