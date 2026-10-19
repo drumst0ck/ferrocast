@@ -57,6 +57,15 @@ pub enum View {
     CalcHistory,
     Shelf,
     Convert(Vec<PathBuf>),
+    /// Annotation canvas: original file, its pixel size, the drawing and the pen state.
+    Annotate {
+        file: PathBuf,
+        size: (u32, u32),
+        doc: ferrocast_core::annotate::Doc,
+        tool: ferrocast_core::annotate::Tool,
+        color: usize,
+        sel: Option<usize>,
+    },
     /// Visual page organizer for one PDF: `n` source pages, the edited plan.
     PdfOrganize {
         file: PathBuf,
@@ -188,6 +197,7 @@ impl View {
             View::CalcHistory => "Calculator History",
             View::Shelf => "File Shelf",
             View::PdfOrganize { .. } => "Organize PDF",
+            View::Annotate { .. } => "Annotate Image",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -1021,6 +1031,23 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::AnnotateLoaded(file, png) => {
+                    if matches!(self.view(), View::Annotate { file: f, .. } if *f == file) {
+                        match png.as_deref().and_then(|b| image::load_from_memory(b).ok()).map(|i| i.to_rgba8()) {
+                            Some(rgba) => {
+                                let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                                let ci = egui::ColorImage::from_rgba_unmultiplied([w, h], rgba.as_raw());
+                                let tex = self.ctx.load_texture("annot-view", ci, egui::TextureOptions::LINEAR);
+                                self.ctx.data_mut(|d| {
+                                    d.insert_temp(Id::new("annot-base"), std::sync::Arc::new((rgba.into_raw(), w, h)));
+                                    d.insert_temp(Id::new("annot-tex"), tex);
+                                    d.remove::<ferrocast_core::annotate::Doc>(Id::new("annot-last"));
+                                });
+                            }
+                            None => self.toast("Annotate: could not read the image"),
+                        }
+                    }
+                }
                 Msg::PdfThumb(file, i, png) => {
                     // only for the organizer that asked for it
                     if matches!(self.view(), View::PdfOrganize { file: f, .. } if *f == file) {
@@ -1991,6 +2018,9 @@ impl App {
                 a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
                 a.push(Action::new("Convert…", Act::Convert(vec![p.clone()])).key(CMD, Key::T));
                 a.push(Action::new("Format Wheel", Act::OpenWheel(vec![p.clone()])).key(Modifiers::ALT, Key::Enter));
+                if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Image {
+                    a.push(Action::new("Annotate…", Act::AnnotateCanvas(p.clone())).key(CMD_SHIFT, Key::A));
+                }
                 if ferrocast_core::convert::ext(p) == "pdf" {
                     a.push(Action::new("Organize Pages…", Act::OrganizePdf(p.clone())).key(CMD_SHIFT, Key::O));
                 }
@@ -2863,6 +2893,27 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::AnnotateCanvas(file) => match services::image_size(&file) {
+                Some(size) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("annot-tex"));
+                        d.remove::<std::sync::Arc<(Vec<u8>, usize, usize)>>(Id::new("annot-base"));
+                        d.remove::<ferrocast_core::annotate::Doc>(Id::new("annot-last"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::AnnotateLoaded(f.clone(), services::display_png(&f, 1600))));
+                    self.show();
+                    self.push(View::Annotate {
+                        file,
+                        size,
+                        doc: Default::default(),
+                        tool: ferrocast_core::annotate::Tool::Arrow,
+                        color: 0,
+                        sel: None,
+                    });
+                }
+                None => self.toast("Annotate: could not read the image"),
+            },
             Act::OrganizePdf(file) => match ferrocast_macos::pdf::page_count(&file) {
                 Ok(n) if n > 0 => {
                     for i in 0..n {

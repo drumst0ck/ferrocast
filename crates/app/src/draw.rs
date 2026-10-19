@@ -112,6 +112,26 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("annotate") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let (Some(size), Some(png)) = (services::image_size(&file), services::display_png(&file, 1600)) {
+                    let rgba = image::load_from_memory(&png).unwrap().to_rgba8();
+                    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                    ctx.data_mut(|d| d.insert_temp(Id::new("annot-base"), std::sync::Arc::new((rgba.into_raw(), w, h))));
+                    use ferrocast_core::annotate::{Doc, Shape, Style, Tool, COLORS};
+                    let mut doc = Doc::default();
+                    let st = Style { color: COLORS[0], width: 8.0, fill: false };
+                    let (cw, ch) = (size.0 as f32, size.1 as f32);
+                    doc.add(Shape::Arrow((cw * 0.1, ch * 0.9), (cw * 0.4, ch * 0.5)), st);
+                    doc.add(Shape::Rect((cw * 0.5, ch * 0.2), (cw * 0.85, ch * 0.5)), Style { color: COLORS[4], ..st });
+                    doc.add(Shape::Number((cw * 0.5, ch * 0.2), 1), st);
+                    doc.add(
+                        Shape::Magnifier { center: (cw * 0.7, ch * 0.75), radius: cw * 0.1, zoom: 2.5 },
+                        Style { color: COLORS[3], ..st },
+                    );
+                    app.push(View::Annotate { file, size, doc, tool: Tool::Arrow, color: 0, sel: Some(1) });
+                }
+            }
             Ok("organize") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Ok(n) = ferrocast_macos::pdf::page_count(&file) {
@@ -384,6 +404,29 @@ impl App {
                         None,
                         self.bus.clone(),
                     );
+                    self.pop();
+                }
+                true
+            }
+            View::Annotate { file, doc, .. } if k.enter => {
+                if doc.items.is_empty() {
+                    self.toast("Nothing drawn yet");
+                } else {
+                    self.toast("Saving annotated copy…");
+                    let bus = self.bus.clone();
+                    std::thread::spawn(move || {
+                        let msg = match services::annotate_save(&file, &doc) {
+                            Ok(o) => {
+                                let _ = ferrocast_macos::apps::reveal(&o);
+                                format!(
+                                    "Annotated copy saved: {}",
+                                    o.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                                )
+                            }
+                            Err(e) => format!("Annotate failed: {e}"),
+                        };
+                        bus.send(Msg::Toast(msg));
+                    });
                     self.pop();
                 }
                 true
@@ -1270,6 +1313,173 @@ impl App {
         p.text(c, Align2::CENTER_CENTER, hint, FontId::proportional(12.0), pal.text);
     }
 
+    /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_annotate(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        pal: &Palette,
+        size: (u32, u32),
+        doc: ferrocast_core::annotate::Doc,
+        tool: ferrocast_core::annotate::Tool,
+        color: usize,
+        sel: Option<usize>,
+    ) {
+        use ferrocast_core::annotate::{self as an, Doc, Style, Tool};
+        let ctx = ui.ctx().clone();
+        let before = (doc.clone(), tool, color, sel);
+        let (mut doc, mut tool, mut color, mut sel) = (doc, tool, color, sel);
+        ctx.input_mut(|i| {
+            if i.consume_key(CMD, Key::Z) {
+                doc.undo();
+                sel = None;
+            }
+            if i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace) {
+                if let Some(s) = sel.take() {
+                    doc.remove(s);
+                }
+            }
+        });
+        let strip = Rect::from_min_size(rect.min + Vec2::new(12.0, 8.0), Vec2::new(rect.width() - 24.0, 30.0));
+        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+            ui.horizontal(|ui| {
+                for (t, l) in [
+                    (Tool::Select, "Select"),
+                    (Tool::Arrow, "Arrow"),
+                    (Tool::Line, "Line"),
+                    (Tool::Box, "Box"),
+                    (Tool::Ellipse, "Ellipse"),
+                    (Tool::Highlight, "Highlight"),
+                    (Tool::Pen, "Pen"),
+                    (Tool::Number, "Number"),
+                    (Tool::Magnifier, "Magnifier"),
+                ] {
+                    if ui.selectable_label(tool == t, l).clicked() {
+                        tool = t;
+                        sel = None;
+                    }
+                }
+                ui.add_space(8.0);
+                for (i, c) in an::COLORS.iter().enumerate() {
+                    let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+                    ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
+                    if i == color {
+                        ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
+                    }
+                    if resp.clicked() {
+                        color = i;
+                    }
+                }
+            });
+        });
+        let area = Rect::from_min_max(rect.min + Vec2::new(12.0, 46.0), rect.max - Vec2::new(12.0, 30.0));
+        let scale = (area.width() / size.0 as f32).min(area.height() / size.1 as f32).max(0.01);
+        let img_rect = Rect::from_center_size(area.center(), Vec2::new(size.0 as f32 * scale, size.1 as f32 * scale));
+        let to_img = |p: Pos2| ((p.x - img_rect.min.x) / scale, (p.y - img_rect.min.y) / scale);
+        let width = (size.0.max(size.1) as f32 / 300.0).clamp(3.0, 24.0);
+        let style = Style { color: an::COLORS[color.min(an::COLORS.len() - 1)], width, fill: false };
+        let resp = ui.interact(img_rect, Id::new("annot-canvas"), egui::Sense::click_and_drag());
+        let mut pts: Vec<(f32, f32)> = ctx.data(|d| d.get_temp(Id::new("annot-drag"))).unwrap_or_default();
+        if resp.drag_started() {
+            pts.clear();
+            if let Some(p) = resp.interact_pointer_pos() {
+                let q = to_img(p);
+                if tool == Tool::Select {
+                    sel = doc.hit(q, 8.0 / scale);
+                }
+                pts.push(q);
+            }
+        }
+        if resp.dragged() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let q = to_img(p);
+                if tool == Tool::Select {
+                    if let (Some(s), Some(last)) = (sel, pts.last().copied()) {
+                        doc.move_item(s, q.0 - last.0, q.1 - last.1);
+                    }
+                    pts = vec![q];
+                } else if pts.len() < 4000 {
+                    pts.push(q);
+                }
+            }
+        }
+        if resp.drag_stopped() {
+            if tool != Tool::Select {
+                if let Some(shape) = an::build(tool, &pts, doc.next_number()) {
+                    doc.add(shape, style);
+                }
+            }
+            pts.clear();
+        }
+        if resp.clicked() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let q = to_img(p);
+                match tool {
+                    Tool::Number => {
+                        let n = doc.next_number();
+                        doc.add(an::Shape::Number(q, n), style);
+                    }
+                    Tool::Select => sel = doc.hit(q, 8.0 / scale),
+                    _ => {}
+                }
+            }
+        }
+        let mut shown = doc.clone();
+        if resp.dragged() && tool != Tool::Select {
+            if let Some(shape) = an::build(tool, &pts, doc.next_number()) {
+                shown.add(shape, style);
+            }
+        }
+        ctx.data_mut(|d| d.insert_temp(Id::new("annot-drag"), pts));
+        let base: Option<std::sync::Arc<(Vec<u8>, usize, usize)>> = ctx.data(|d| d.get_temp(Id::new("annot-base")));
+        if let Some(b) = base {
+            let last: Option<Doc> = ctx.data(|d| d.get_temp(Id::new("annot-last")));
+            if last.as_ref() != Some(&shown) {
+                let mut buf = b.0.clone();
+                shown.scaled(b.1 as f32 / size.0 as f32).render(&mut buf, b.1, b.2);
+                let ci = egui::ColorImage::from_rgba_unmultiplied([b.1, b.2], &buf);
+                let tex = ctx.load_texture("annot-view", ci, egui::TextureOptions::LINEAR);
+                ctx.data_mut(|d| {
+                    d.insert_temp(Id::new("annot-tex"), tex);
+                    d.insert_temp(Id::new("annot-last"), shown.clone());
+                });
+            }
+        }
+        match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("annot-tex"))) {
+            Some(tex) => {
+                egui::Image::new(&tex).paint_at(ui, img_rect);
+            }
+            None => {
+                ui.painter().text(img_rect.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
+            }
+        }
+        if let Some(it) = sel.and_then(|s| doc.items.get(s)) {
+            let (x0, y0, x1, y1) = it.shape.bounds();
+            let pad = it.style.width / 2.0
+                + 6.0 / scale
+                + if matches!(it.shape, an::Shape::Number(..)) { an::label_radius(it.style.width) } else { 0.0 };
+            let r = Rect::from_min_max(
+                Pos2::new(img_rect.min.x + (x0 - pad) * scale, img_rect.min.y + (y0 - pad) * scale),
+                Pos2::new(img_rect.min.x + (x1 + pad) * scale, img_rect.min.y + (y1 + pad) * scale),
+            );
+            ui.painter().rect_stroke(r, 2.0, Stroke::new(1.5, pal.accent), StrokeKind::Outside);
+        }
+        ui.painter().text(
+            Pos2::new(rect.center().x, rect.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "drag to draw · click a Number to place · Select: click and drag to move · ⌘Z undo · ⌫ delete · ↵ save a copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+        if (doc.clone(), tool, color, sel) != before {
+            if let Some(View::Annotate { doc: d, tool: t, color: c, sel: s, .. }) = self.stack.last_mut() {
+                (*d, *t, *c, *s) = (doc, tool, color, sel);
+            }
+            ctx.request_repaint();
+        }
+    }
+
     /// Strip of page thumbnails with keyboard editing; the plan lives in the view on the stack.
     fn draw_pdf_organizer(
         &mut self,
@@ -1411,6 +1621,9 @@ impl App {
                         self.save_notes();
                     }
                 });
+            }
+            View::Annotate { size, doc, tool, color, sel, .. } => {
+                self.draw_annotate(ui, rect, pal, size, doc, tool, color, sel);
             }
             View::PdfOrganize { file, n, plan } => {
                 self.draw_pdf_organizer(ui, rect, pal, &file, n, plan);

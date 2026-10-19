@@ -48,6 +48,41 @@ pub struct Doc {
     pub items: Vec<Item>,
 }
 
+/// Tool chosen in the canvas strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    Select,
+    Arrow,
+    Line,
+    Box,
+    Ellipse,
+    Highlight,
+    Pen,
+    Number,
+    Magnifier,
+}
+
+/// Palette offered by the canvas.
+pub const COLORS: [[u8; 3]; 6] = [[255, 59, 48], [255, 149, 0], [255, 214, 10], [52, 199, 89], [10, 132, 255], [20, 20, 20]];
+
+/// The shape a drag through `pts` (image pixels) makes with `tool`, or `None` when it is too small
+/// to mean anything (a stray click) or the tool draws nothing (`Select`).
+pub fn build(tool: Tool, pts: &[P], next_number: u32) -> Option<Shape> {
+    let (a, b) = (*pts.first()?, *pts.last()?);
+    let far = seg_dist(b, a, a) >= 3.0;
+    match tool {
+        Tool::Select => None,
+        Tool::Number => Some(Shape::Number(a, next_number)),
+        Tool::Arrow => far.then_some(Shape::Arrow(a, b)),
+        Tool::Line => far.then_some(Shape::Line(a, b)),
+        Tool::Box => far.then_some(Shape::Rect(a, b)),
+        Tool::Ellipse => far.then_some(Shape::Ellipse(a, b)),
+        Tool::Highlight => far.then_some(Shape::Highlight(a, b)),
+        Tool::Pen => (pts.len() >= 2 && far || pts.len() >= 8).then(|| Shape::Freehand(pts.to_vec())),
+        Tool::Magnifier => far.then(|| Shape::Magnifier { center: a, radius: seg_dist(b, a, a).max(8.0), zoom: 2.5 }),
+    }
+}
+
 fn seg_dist(p: P, a: P, b: P) -> f32 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len2 = dx * dx + dy * dy;
@@ -108,6 +143,30 @@ impl Doc {
         }
     }
 
+    /// The same drawing scaled by `k` (points, line widths, magnifier radius): used to preview on a
+    /// downscaled copy of the picture.
+    pub fn scaled(&self, k: f32) -> Doc {
+        let sp = |p: P| (p.0 * k, p.1 * k);
+        let items = self
+            .items
+            .iter()
+            .map(|it| {
+                let shape = match &it.shape {
+                    Shape::Line(a, b) => Shape::Line(sp(*a), sp(*b)),
+                    Shape::Arrow(a, b) => Shape::Arrow(sp(*a), sp(*b)),
+                    Shape::Rect(a, b) => Shape::Rect(sp(*a), sp(*b)),
+                    Shape::Ellipse(a, b) => Shape::Ellipse(sp(*a), sp(*b)),
+                    Shape::Highlight(a, b) => Shape::Highlight(sp(*a), sp(*b)),
+                    Shape::Freehand(pts) => Shape::Freehand(pts.iter().map(|p| sp(*p)).collect()),
+                    Shape::Number(c, n) => Shape::Number(sp(*c), *n),
+                    Shape::Magnifier { center, radius, zoom } => Shape::Magnifier { center: sp(*center), radius: radius * k, zoom: *zoom },
+                };
+                Item { shape, style: Style { width: it.style.width * k, ..it.style } }
+            })
+            .collect();
+        Doc { items }
+    }
+
     /// Draw every item, in order, onto `buf` (RGBA8, `w × h`).
     pub fn render(&self, buf: &mut [u8], w: usize, h: usize) {
         assert_eq!(buf.len(), w * h * 4, "buffer does not match the size");
@@ -115,6 +174,25 @@ impl Doc {
             it.render(buf, w, h);
         }
     }
+}
+
+impl Shape {
+    /// Bounding box (x0, y0, x1, y1) of the shape, without stroke width.
+    pub fn bounds(&self) -> (f32, f32, f32, f32) {
+        match self {
+            Shape::Line(a, b) | Shape::Arrow(a, b) | Shape::Rect(a, b) | Shape::Ellipse(a, b) | Shape::Highlight(a, b) => bbox(*a, *b),
+            Shape::Freehand(pts) => {
+                pts.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |m, p| (m.0.min(p.0), m.1.min(p.1), m.2.max(p.0), m.3.max(p.1)))
+            }
+            Shape::Number(c, _) => (c.0, c.1, c.0, c.1),
+            Shape::Magnifier { center, radius, .. } => (center.0 - radius, center.1 - radius, center.0 + radius, center.1 + radius),
+        }
+    }
+}
+
+/// Radius of a numbered label drawn with this stroke width.
+pub fn label_radius(width: f32) -> f32 {
+    number_radius(width)
 }
 
 impl Item {
@@ -455,6 +533,45 @@ mod tests {
         d.add(Shape::Ellipse((f32::MAX / 4.0, 0.0), (0.0, 10.0)), RED);
         let mut b = canvas(30, 30);
         d.render(&mut b, 30, 30);
+    }
+
+    #[test]
+    fn drags_become_shapes_and_strays_do_not() {
+        let drag = [(10.0, 10.0), (60.0, 40.0)];
+        assert_eq!(build(Tool::Arrow, &drag, 1), Some(Shape::Arrow((10.0, 10.0), (60.0, 40.0))));
+        assert_eq!(build(Tool::Box, &drag, 1), Some(Shape::Rect((10.0, 10.0), (60.0, 40.0))));
+        assert_eq!(build(Tool::Number, &[(5.0, 5.0)], 3), Some(Shape::Number((5.0, 5.0), 3)), "a click places a number");
+        assert_eq!(build(Tool::Arrow, &[(5.0, 5.0), (6.0, 5.0)], 1), None, "a 1 px drag is a click");
+        assert_eq!(build(Tool::Select, &drag, 1), None);
+        assert_eq!(build(Tool::Pen, &[(1.0, 1.0)], 1), None);
+        assert_eq!(build(Tool::Pen, &[(1.0, 1.0), (30.0, 30.0)], 1), Some(Shape::Freehand(vec![(1.0, 1.0), (30.0, 30.0)])));
+        assert_eq!(build(Tool::Arrow, &[], 1), None);
+        match build(Tool::Magnifier, &[(50.0, 50.0), (80.0, 50.0)], 1) {
+            Some(Shape::Magnifier { center, radius, zoom }) => assert_eq!((center, radius, zoom), ((50.0, 50.0), 30.0, 2.5)),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn bounds_cover_each_shape() {
+        assert_eq!(Shape::Rect((50.0, 10.0), (10.0, 40.0)).bounds(), (10.0, 10.0, 50.0, 40.0));
+        assert_eq!(Shape::Freehand(vec![(5.0, 9.0), (1.0, 20.0), (7.0, 2.0)]).bounds(), (1.0, 2.0, 7.0, 20.0));
+        assert_eq!(Shape::Magnifier { center: (20.0, 20.0), radius: 5.0, zoom: 2.0 }.bounds(), (15.0, 15.0, 25.0, 25.0));
+        assert_eq!(Shape::Number((3.0, 4.0), 1).bounds(), (3.0, 4.0, 3.0, 4.0));
+        assert_eq!(label_radius(1.0), 11.0);
+        assert_eq!(label_radius(5.0), 20.0);
+    }
+
+    #[test]
+    fn scaling_keeps_the_picture_in_proportion() {
+        let mut d = Doc::default();
+        d.add(Shape::Rect((100.0, 100.0), (300.0, 200.0)), Style { width: 8.0, ..RED });
+        d.add(Shape::Magnifier { center: (200.0, 200.0), radius: 40.0, zoom: 2.0 }, RED);
+        let s = d.scaled(0.5);
+        assert_eq!(s.items[0].shape, Shape::Rect((50.0, 50.0), (150.0, 100.0)));
+        assert_eq!(s.items[0].style.width, 4.0);
+        assert_eq!(s.items[1].shape, Shape::Magnifier { center: (100.0, 100.0), radius: 20.0, zoom: 2.0 });
+        assert_eq!(d.scaled(1.0), d);
     }
 
     #[test]

@@ -21,6 +21,8 @@ pub enum Msg {
     Files(String, Vec<PathBuf>),
     /// PNG thumbnail of page `index` of the PDF being organized (None: could not render).
     PdfThumb(PathBuf, usize, Option<Vec<u8>>),
+    /// PNG of the image being annotated, scaled for display (None: unreadable).
+    AnnotateLoaded(PathBuf, Option<Vec<u8>>),
     Script {
         run: u64,
         text: String,
@@ -1604,7 +1606,7 @@ pub(crate) fn pdfkit_convert(f: &std::path::Path, ext: &str) -> Result<Vec<PathB
 }
 
 /// Pixel size of an image via sips.
-fn image_size(p: &std::path::Path) -> Option<(u32, u32)> {
+pub(crate) fn image_size(p: &std::path::Path) -> Option<(u32, u32)> {
     let o = std::process::Command::new("/usr/bin/sips").args(["-g", "pixelWidth", "-g", "pixelHeight"]).arg(p).output().ok()?;
     let t = String::from_utf8_lossy(&o.stdout);
     let get = |k: &str| t.lines().find_map(|l| l.trim().strip_prefix(k).map(|v| v.trim().parse::<u32>().ok())).flatten();
@@ -1620,6 +1622,41 @@ fn sips(args: &[&str]) -> Result<(), String> {
             e
         }
     })
+}
+
+/// PNG bytes of `f` scaled so the longest side is at most `max_px`, for showing on screen.
+pub(crate) fn display_png(f: &std::path::Path, max_px: u32) -> Option<Vec<u8>> {
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-disp-{}-{}.png",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let ok = sips(&["-Z", &max_px.to_string(), "-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()]).is_ok();
+    let bytes = ok.then(|| std::fs::read(&tmp).ok()).flatten();
+    let _ = std::fs::remove_file(&tmp);
+    bytes
+}
+
+/// Draw `doc` on a full-size copy of the picture and save it as a PNG next to the original.
+pub(crate) fn annotate_save(f: &std::path::Path, doc: &ferrocast_core::annotate::Doc) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::output_with_suffix;
+    check_source_size(f)?;
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-annot-{}-{}.png",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let loaded = sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+        .and_then(|_| image::open(&tmp).map_err(|e| e.to_string()));
+    let _ = std::fs::remove_file(&tmp);
+    let img = loaded?.to_rgba8();
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let mut buf = img.into_raw();
+    doc.render(&mut buf, w, h);
+    let out_img = image::RgbaImage::from_raw(w as u32, h as u32, buf).ok_or("could not build the image")?;
+    let out = output_with_suffix(f, "annotated", "png", |p| p.exists());
+    out_img.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 /// Refuse sources that would need more than ~120 million pixels (480 MB as RGBA) to edit.
@@ -2467,6 +2504,23 @@ mod convert_tests {
         assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255], "edge is the red background");
         assert_eq!(img.get_pixel(20, 20).0, [255, 0, 0, 255], "rounded corner shows the background");
         assert_ne!(img.get_pixel(w / 6, h / 2).0, [255, 0, 0, 255], "picture centre is not background");
+        // annotated copy: drawing lands at full size, the source is untouched, nothing is overwritten
+        let mut ad = ferrocast_core::annotate::Doc::default();
+        ad.add(
+            ferrocast_core::annotate::Shape::Rect((100.0, 100.0), (400.0, 300.0)),
+            ferrocast_core::annotate::Style { color: [0, 255, 0], width: 6.0, fill: true },
+        );
+        let src_bytes = std::fs::read(&wide[0]).unwrap();
+        let a1 = annotate_save(&wide[0], &ad).unwrap();
+        let a2 = annotate_save(&wide[0], &ad).unwrap();
+        assert!(a1 != a2 && a1.exists() && a2.exists(), "never overwrites");
+        assert_eq!(std::fs::read(&wide[0]).unwrap(), src_bytes, "source untouched");
+        assert_eq!(image_size(&a1), Some((1024, 576)), "full size");
+        let ai = image::open(&a1).unwrap().to_rgba8();
+        assert_eq!(ai.get_pixel(250, 200).0, [0, 255, 0, 255], "drawn area");
+        let abase = d.join("annot-base.png");
+        sips(&["-s", "format", "png", &wide[0].to_string_lossy(), "--out", &abase.to_string_lossy()]).unwrap();
+        assert_eq!(ai.get_pixel(900, 500), image::open(&abase).unwrap().to_rgba8().get_pixel(900, 500), "outside the drawing untouched");
         // edit photo: brightness lifts pixels, grayscale-saturation equalises channels, 0 is a copy
         let ed = ferrocast_core::photo::parse("edit brightness 20").unwrap();
         let (ep, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::EditWith(ed));
