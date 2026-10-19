@@ -1718,6 +1718,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::RedactVideo(..)
         | FileTool::Normalize(..)
         | FileTool::Visualize(_)
+        | FileTool::VisualizeImage(..)
         | FileTool::TrimSilence
         | FileTool::Channels(..)
         | FileTool::Bleep(..)

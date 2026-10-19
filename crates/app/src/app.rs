@@ -1779,7 +1779,7 @@ impl App {
                                     FileTool::CropVideo(..) => "sf:crop",
                                     FileTool::RedactVideo(..) | FileTool::Bleep(..) => "sf:eye.slash",
                                     FileTool::Normalize(..) | FileTool::Channels(..) => "sf:speaker.wave.2",
-                                    FileTool::Visualize(_) => "sf:waveform",
+                                    FileTool::Visualize(_) | FileTool::VisualizeImage(..) => "sf:waveform",
                                     FileTool::TrimSilence => "sf:scissors",
                                     FileTool::OrganizePdf(_) => "sf:doc.on.doc",
                                 },

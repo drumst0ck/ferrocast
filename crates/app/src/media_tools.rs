@@ -80,7 +80,7 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
             let (width, height) = (v.and_then(|s| s["width"].as_u64()).unwrap_or(0), v.and_then(|s| s["height"].as_u64()).unwrap_or(0));
             let output_ext = if matches!(tool, FileTool::Snapshot(_)) {
                 "png"
-            } else if video || matches!(tool, FileTool::Visualize(_)) {
+            } else if video || matches!(tool, FileTool::Visualize(_) | FileTool::VisualizeImage(..)) {
                 "mp4"
             } else {
                 "wav"
@@ -122,6 +122,15 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
                         media::normalize(input, i, lra, tp, out)
                     }
                     FileTool::Visualize(canvas) => media::visualizer(input, None, canvas, out),
+                    FileTool::VisualizeImage(canvas, ref img) => {
+                        let p = Path::new(img.as_str());
+                        if !p.is_file()
+                            || !matches!(ferrocast_core::convert::ext(p).as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tiff" | "tif")
+                        {
+                            return Err(format!("{img} is not a readable image (png, jpg, webp, bmp or tiff)"));
+                        }
+                        media::visualizer(input, Some(img.as_str()), canvas, out)
+                    }
                     FileTool::TrimSilence => media::trim_audio(input, None, out),
                     FileTool::Channels(stereo, l, r)
                         if l.is_finite() && r.is_finite() && (0.0..=4.0).contains(&l) && (0.0..=4.0).contains(&r) =>
