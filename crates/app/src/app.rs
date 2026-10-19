@@ -58,20 +58,81 @@ pub enum View {
     Convert(Vec<PathBuf>),
     Notes,
     Colors(Rgba),
-    SnippetForm { id: Option<String>, name: String, text: String, keyword: String },
-    QuicklinkForm { id: Option<String>, name: String, link: String, open_with: String },
+    SnippetForm {
+        id: Option<String>,
+        name: String,
+        text: String,
+        keyword: String,
+    },
+    QuicklinkForm {
+        id: Option<String>,
+        name: String,
+        link: String,
+        open_with: String,
+    },
     NoteEdit(String),
-    Args { target: ArgTarget, title: String, defs: Vec<ArgDef>, values: Vec<String> },
-    Output { run: u64, title: String, text: String, done: bool },
-    Confirm { msg: String, act: Act },
+    Args {
+        target: ArgTarget,
+        title: String,
+        defs: Vec<ArgDef>,
+        values: Vec<String>,
+    },
+    Output {
+        run: u64,
+        title: String,
+        text: String,
+        done: bool,
+    },
+    Confirm {
+        msg: String,
+        act: Act,
+    },
     Settings,
-    Alias { id: String, name: String, value: String },
-    Hotkey { id: String, name: String, err: String },
-    CreateScript { title: String, mode: usize },
+    Alias {
+        id: String,
+        name: String,
+        value: String,
+    },
+    Hotkey {
+        id: String,
+        name: String,
+        err: String,
+    },
+    CreateScript {
+        title: String,
+        mode: usize,
+    },
     Welcome,
     Shortcuts,
     About,
-    Ai { prompt: String, asked: String, answer: String, history: Vec<(String, String)>, busy: bool, run: u64 },
+    Ai {
+        prompt: String,
+        asked: String,
+        answer: String,
+        history: Vec<(String, String)>,
+        busy: bool,
+        run: u64,
+    },
+    /// Radial menu shown under the pointer during a file drag; `center` is in screen points.
+    Wheel {
+        files: Vec<PathBuf>,
+        center: Pos2,
+        segs: Vec<WheelSeg>,
+    },
+}
+
+/// One wheel segment: label, SF symbol, and what releasing on it does.
+#[derive(Clone)]
+pub struct WheelSeg {
+    pub label: String,
+    pub symbol: &'static str,
+    pub pick: WheelPick,
+}
+
+#[derive(Clone)]
+pub enum WheelPick {
+    Convert(ferrocast_core::convert::Target),
+    Act(Act),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -130,6 +191,7 @@ impl View {
             View::Welcome => "Welcome to Ferrocast",
             View::Shortcuts => "Keyboard Shortcuts",
             View::About => "About Ferrocast",
+            View::Wheel { .. } => "Wheel",
         }
     }
     fn placeholder(&self) -> &'static str {
@@ -345,6 +407,7 @@ impl App {
         });
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_expansion(shared.clone());
+        services::start_wheel(shared.clone(), bus.clone());
         if prof {
             eprintln!("services {:?}", t.elapsed());
         }
@@ -761,6 +824,92 @@ impl App {
         }
     }
 
+    /// Segments for a wheel over these files.
+    pub(crate) fn wheel_segments(&self, kind: ferrocast_core::wheel::WheelKind, files: &[PathBuf]) -> Vec<WheelSeg> {
+        use ferrocast_core::convert::{family_of, targets, Family};
+        let Some(first) = files.first() else { return vec![] };
+        match kind {
+            ferrocast_core::wheel::WheelKind::Convert => {
+                let symbol = match family_of(first) {
+                    Family::Image | Family::Pdf => "sf:photo",
+                    Family::Audio => "sf:waveform",
+                    Family::Video => "sf:film",
+                    Family::Archive | Family::Folder => "sf:archivebox",
+                    _ => "sf:doc.text",
+                };
+                targets(first, &self.tools)
+                    .into_iter()
+                    .filter(|t| t.needs.is_none())
+                    .take(8)
+                    .map(|t| WheelSeg { label: t.label.to_string(), symbol, pick: WheelPick::Convert(t) })
+                    .collect()
+            }
+            ferrocast_core::wheel::WheelKind::Actions => {
+                let f = files.to_vec();
+                let paths = f.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\n");
+                let seg = |label: &str, symbol: &'static str, act: Act| WheelSeg { label: label.into(), symbol, pick: WheelPick::Act(act) };
+                vec![
+                    seg("Copy", "sf:doc.on.doc", Act::CopyFiles(f.clone())),
+                    seg("Copy Path", "sf:link", Act::CopyText(paths)),
+                    seg("Move to…", "sf:folder", Act::MoveFiles(f.clone())),
+                    seg("Terminal", "sf:terminal", Act::OpenInTerminal(f[0].clone())),
+                    seg("AirDrop", "sf:dot.radiowaves.left.and.right", Act::AirDrop(f.clone())),
+                    seg("Quick Look", "sf:eye", Act::QuickLook(f[0].clone())),
+                    seg("Show in Finder", "sf:magnifyingglass", Act::Reveal(f[0].clone())),
+                    seg("Convert…", "sf:arrow.triangle.2.circlepath", Act::Convert(f)),
+                ]
+            }
+        }
+    }
+
+    /// Show the wheel centred under the pointer, without moving the drag's focus elsewhere.
+    fn show_wheel(&mut self, kind: ferrocast_core::wheel::WheelKind, files: Vec<PathBuf>) {
+        let segs = self.wheel_segments(kind, &files);
+        if segs.is_empty() {
+            return;
+        }
+        let size = Vec2::new(ui::WIDTH, ui::HEIGHT);
+        let center = match mouse_top_left() {
+            Some((m, screen)) => {
+                let min = Pos2::new(
+                    (m.x - size.x / 2.0).clamp(screen.min.x, (screen.max.x - size.x).max(screen.min.x)),
+                    (m.y - size.y / 2.0).clamp(screen.min.y, (screen.max.y - size.y).max(screen.min.y)),
+                );
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(min));
+                min + size / 2.0
+            }
+            None => Pos2::ZERO,
+        };
+        self.prev_pid = running::frontmost().map(|f| f.pid).filter(|p| *p != std::process::id() as i32);
+        self.stack = vec![View::Root, View::Wheel { files, center, segs }];
+        self.panel = None;
+        self.visible = true;
+        self.had_focus = false;
+        self.shown_at = Instant::now();
+        self.shared.visible.store(true, Ordering::Relaxed);
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            objc2_app_kit::NSApplication::sharedApplication(mtm).unhide(None);
+        }
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        self.ctx.request_repaint();
+    }
+
+    /// Mouse released: run the segment under the pointer, if any, and close the wheel.
+    fn release_wheel(&mut self) {
+        let Some(View::Wheel { files, center, segs }) = self.stack.last().cloned() else { return };
+        let picked = mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, segs.len()));
+        self.hide();
+        self.reset_to_root();
+        let Some(i) = picked else { return };
+        match segs[i].pick.clone() {
+            WheelPick::Convert(t) => {
+                self.toast(format!("Converting to {}…", t.label));
+                services::convert_files(files, t, self.tools, self.bus.clone());
+            }
+            WheelPick::Act(a) => self.perform(a, false),
+        }
+    }
+
     fn reset_to_root(&mut self) {
         self.sec_dirty = true;
         self.nav_at = Instant::now();
@@ -800,6 +949,8 @@ impl App {
                     }
                     self.toast(format!("Moved {} item{}", pairs.len(), if pairs.len() == 1 { "" } else { "s" }));
                 }
+                Msg::WheelOpen(kind, files) => self.show_wheel(kind, files),
+                Msg::WheelRelease => self.release_wheel(),
                 Msg::ConvertFiles(files) => {
                     self.show();
                     self.reset_to_root();
@@ -2679,6 +2830,32 @@ fn looks_like_url(q: &str) -> Option<String> {
 }
 
 /// Top-left origin (points) to center the launcher on the screen under the cursor.
+/// Wheel geometry, in points from its centre.
+pub(crate) const WHEEL_INNER: f32 = 58.0;
+pub(crate) const WHEEL_OUTER: f32 = 178.0;
+
+/// Segment under an offset from the wheel centre.
+pub(crate) fn wheel_hit(d: Vec2, n: usize) -> Option<usize> {
+    ferrocast_core::wheel::segment_at(d.x, d.y, WHEEL_INNER, WHEEL_OUTER, n)
+}
+
+/// Pointer position and its screen's visible frame, in top-left screen points.
+pub(crate) fn mouse_top_left() -> Option<(Pos2, Rect)> {
+    use objc2_app_kit::{NSEvent, NSScreen};
+    let mtm = objc2::MainThreadMarker::new()?;
+    let screens = NSScreen::screens(mtm);
+    let primary_h = screens.iter().next()?.frame().size.height;
+    let m = NSEvent::mouseLocation();
+    let scr = screens.iter().find(|s| {
+        let f = s.frame();
+        m.x >= f.origin.x && m.x < f.origin.x + f.size.width && m.y >= f.origin.y && m.y < f.origin.y + f.size.height
+    })?;
+    let v = scr.visibleFrame();
+    let top = primary_h - (v.origin.y + v.size.height);
+    let r = Rect::from_min_size(Pos2::new(v.origin.x as f32, top as f32), Vec2::new(v.size.width as f32, v.size.height as f32));
+    Some((Pos2::new(m.x as f32, (primary_h - m.y) as f32), r))
+}
+
 fn launcher_origin() -> Option<Pos2> {
     use objc2_app_kit::{NSEvent, NSScreen};
     let mtm = objc2::MainThreadMarker::new()?;

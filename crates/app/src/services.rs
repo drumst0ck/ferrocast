@@ -43,6 +43,10 @@ pub enum Msg {
     ConvertFiles(Vec<PathBuf>),
     /// Files moved by Move to…: (old, new) paths.
     Moved(Vec<(PathBuf, PathBuf)>),
+    /// A key was tapped while dragging these files: show the wheel.
+    WheelOpen(ferrocast_core::wheel::WheelKind, Vec<PathBuf>),
+    /// The mouse was released while the wheel was open.
+    WheelRelease,
     /// Model list for the Settings picker, keyed by `models_key`.
     AiModels(String, Result<Vec<String>, String>),
     Wake,
@@ -206,6 +210,50 @@ fn record(shared: &Shared, content: clipboard::ClipContent, source: Option<Strin
     });
     storage::prune_images(&shared.store.images_dir(), &list);
     let _ = shared.store.save("clipboard.json", &*list);
+}
+
+/// Samples mouse, modifiers and the drag pasteboard every 25 ms (no permission needed)
+/// and reports wheel open/release events.
+pub fn start_wheel(shared: Arc<Shared>, bus: Bus) {
+    use ferrocast_core::wheel::{key_mask, Sample, Tracker, WheelEvent};
+    use ferrocast_macos::drag;
+    std::thread::Builder::new()
+        .name("drop-wheel".into())
+        .spawn(move || {
+            let mut tracker = Tracker::default();
+            loop {
+                let (on, ck, ak) = {
+                    let s = shared.settings.read().unwrap();
+                    (s.drop_wheel, key_mask(&s.wheel_convert_key), key_mask(&s.wheel_actions_key))
+                };
+                if !on {
+                    tracker = Tracker::default();
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+                objc2::rc::autoreleasepool(|_| {
+                    let left = drag::left_down();
+                    let bits = drag::modifier_bits();
+                    let (convert_key, actions_key) = (ck != 0 && bits & ck != 0, ak != 0 && bits & ak != 0);
+                    // reading the pasteboard items only matters at the moment a key is tapped
+                    let files = if left && (convert_key || actions_key) { drag::drag_files() } else { vec![] };
+                    let sample = Sample {
+                        left_down: left,
+                        drag_count: if left { drag::drag_count() } else { 0 },
+                        has_files: !files.is_empty(),
+                        convert_key,
+                        actions_key,
+                    };
+                    match tracker.step(sample) {
+                        Some(WheelEvent::Open(k)) => bus.send(Msg::WheelOpen(k, files)),
+                        Some(WheelEvent::Release) => bus.send(Msg::WheelRelease),
+                        None => {}
+                    }
+                });
+            }
+        })
+        .expect("spawn wheel thread");
 }
 
 pub fn start_clipboard(shared: Arc<Shared>, bus: Bus) {

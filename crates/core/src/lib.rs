@@ -18,3 +18,4 @@ pub mod storage;
 pub mod timer;
 pub mod timezones;
 pub mod units;
+pub mod wheel;

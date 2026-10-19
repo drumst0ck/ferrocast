@@ -3,6 +3,7 @@
 
 pub mod apps;
 pub mod clipboard;
+pub mod drag;
 pub mod expansion;
 pub mod files;
 pub mod keyboard;
