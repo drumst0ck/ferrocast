@@ -77,3 +77,5 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 - L17 Matrix hardened: outputs are now read back (text inside txt/md/html/csv/tsv/docx/xlsx/ods/epub/pages, pixel width of images, duration of audio/video). The first run found a real defect: pdf→epub went through LibreOffice, which opens a PDF as a drawing and wrote an empty EPUB. It now uses the text route. job-27: matrix 275/275 and workspace tests exit 0; clippy needed a boolean simplification, rechecked exit 0. Still not proven: PDF page counts, 300 DPI size, layout fidelity, real RAR extraction on this arm64 Mac (hand-built fixture only), Pages.app opening our .pages.
 
 - L18 P3c split into bounded units (collage, background, image redaction, audio extras, photo editor). Collage layout lives in core as pure geometry so it is testable without pixels.
+
+- L19 P6a docs: README status table, CHANGELOG and web copy updated with measured results and limits (typed commands only, no live preview or canvas, layout fidelity unchecked, RAR synthetic, Pages.app unproven, key handling untested in a real session). Web copy checked by text only; the site was not rebuilt or published.
