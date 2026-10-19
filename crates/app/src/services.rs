@@ -1347,6 +1347,13 @@ pub fn run_conversion(
         let mut errors: Vec<String> = vec![];
         for f in files {
             let out = output_path(f, target.ext, |p| p.exists());
+            if target.engine == Engine::Route {
+                match crate::route::route_convert(f, target, tools) {
+                    Ok(mut o) => outputs.append(&mut o),
+                    Err(e) => errors.push(format!("{}: {e}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())),
+                }
+                continue;
+            }
             if matches!(target.engine, Engine::SubtitleText | Engine::SlideImages | Engine::Unrar) {
                 match special_convert(f, target, tools) {
                     Ok(mut o) => outputs.append(&mut o),
@@ -1513,7 +1520,7 @@ fn special_convert(
 }
 
 /// PDF → page images (300 DPI, every page) or its text layer, through PDFKit/AppKit.
-fn pdfkit_convert(f: &std::path::Path, ext: &str) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn pdfkit_convert(f: &std::path::Path, ext: &str) -> Result<Vec<PathBuf>, String> {
     use ferrocast_core::convert::{output_path, output_with_suffix};
     let tmp = std::env::temp_dir().join(format!("ferrocast-pdfkit-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);

@@ -2,6 +2,7 @@ mod app;
 mod clipboard_policy;
 mod instance;
 mod items;
+mod route;
 mod services;
 mod ui;
 

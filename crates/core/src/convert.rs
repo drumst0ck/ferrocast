@@ -29,7 +29,9 @@ pub fn family_of(path: &Path) -> Family {
         | "dng" | "cr2" | "cr3" | "nef" | "arw" | "raf" | "orf" | "rw2" | "icns" | "ico" => Family::Image,
         "mp3" | "m4a" | "wav" | "flac" | "ogg" | "opus" | "aiff" | "aif" | "wma" | "caf" | "aac" | "m4b" => Family::Audio,
         "mp4" | "mov" | "mkv" | "webm" | "avi" | "wmv" | "m4v" | "mpg" | "mpeg" | "ts" | "3gp" => Family::Video,
-        "docx" | "doc" | "pages" | "md" | "markdown" | "txt" | "rtf" | "rtfd" | "odt" | "html" | "htm" | "epub" => Family::Document,
+        "docx" | "doc" | "pages" | "textclipping" | "md" | "markdown" | "txt" | "rtf" | "rtfd" | "odt" | "html" | "htm" | "epub" => {
+            Family::Document
+        }
         "xlsx" | "xls" | "ods" | "csv" | "tsv" | "numbers" => Family::Spreadsheet,
         "ppt" | "pptx" | "key" | "odp" => Family::Slides,
         "pdf" => Family::Pdf,
@@ -115,6 +117,8 @@ pub enum Engine {
     SlideImages,
     /// RAR → extract → ZIP.
     Unrar,
+    /// Multi-step routes (text pivot, archive repack, GIF → video, PDF → sheet or Pages).
+    Route,
 }
 
 impl Engine {
@@ -127,6 +131,7 @@ impl Engine {
             Engine::Pdfkit | Engine::SubtitleText => "built in",
             Engine::SlideImages => "LibreOffice",
             Engine::Unrar => "unrar",
+            Engine::Route => "built in",
         }
     }
 }
@@ -251,7 +256,99 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
         Family::Other => vec![t("zip", "ZIP", Engine::Archive, tools)],
     };
     v.retain(|x| x.ext != e && !(e == "jpeg" && x.ext == "jpg") && !(e == "tif" && x.ext == "tiff"));
+    // Formats Tangerine knows: exactly its outputs, in its order. A target the single-command
+    // engines already do is reused; everything else goes through a multi-step route.
+    let key = match e.as_str() {
+        "jpeg" => "jpg",
+        "tif" => "tiff",
+        other => other,
+    };
+    if crate::matrix::inputs().iter().any(|i| i.eq_ignore_ascii_case(key)) {
+        let always_route = matches!(key, "md" | "epub" | "textclipping" | "zip" | "tar" | "gz" | "rar" | "pages");
+        return crate::matrix::outputs_for(key)
+            .into_iter()
+            .map(|o| {
+                let want = if o == "gz" { "tar.gz" } else { o };
+                match v.iter().find(|x| x.ext == want) {
+                    Some(x) if !always_route => adjust_engine(key, x.clone(), tools),
+                    _ => Target { ext: o, label: label_for(o), engine: Engine::Route, needs: route_needs(key, o, tools) },
+                }
+            })
+            .collect();
+    }
     v
+}
+
+/// Some inputs cannot be read by the engine that normally writes the output: `afconvert` does not
+/// read ogg/opus/wma and `avconvert` does not read mkv/webm/avi/wmv, so ffmpeg takes over there.
+fn adjust_engine(input: &str, mut x: Target, tools: &Tools) -> Target {
+    let ffmpeg_only_audio = matches!(input, "ogg" | "opus" | "wma");
+    let ffmpeg_only_video = matches!(input, "mkv" | "webm" | "avi" | "wmv" | "gif");
+    if (ffmpeg_only_audio && x.engine == Engine::Afconvert) || (ffmpeg_only_video && x.engine == Engine::Avconvert) {
+        x.engine = Engine::Ffmpeg;
+        x.needs = if tools.ffmpeg.is_none() { Some("ffmpeg (brew install ffmpeg)") } else { None };
+    }
+    x
+}
+
+/// Menu label for an output extension.
+pub fn label_for(ext: &str) -> &'static str {
+    match ext {
+        "jpg" => "JPEG",
+        "png" => "PNG",
+        "webp" => "WebP",
+        "heic" => "HEIC",
+        "tiff" => "TIFF",
+        "avif" => "AVIF",
+        "bmp" => "BMP",
+        "gif" => "GIF",
+        "pdf" => "PDF",
+        "mp3" => "MP3",
+        "m4a" => "M4A",
+        "wav" => "WAV",
+        "flac" => "FLAC",
+        "ogg" => "OGG",
+        "opus" => "Opus",
+        "aiff" => "AIFF",
+        "wma" => "WMA",
+        "mp4" => "MP4",
+        "mov" => "MOV",
+        "mkv" => "MKV",
+        "webm" => "WebM",
+        "avi" => "AVI",
+        "wmv" => "WMV",
+        "docx" => "Word (DOCX)",
+        "pages" => "Pages",
+        "md" => "Markdown",
+        "txt" => "Plain text",
+        "html" => "HTML",
+        "epub" => "EPUB",
+        "pptx" => "PowerPoint (PPTX)",
+        "xlsx" => "Excel (XLSX)",
+        "ods" => "OpenDocument",
+        "csv" => "CSV",
+        "tsv" => "TSV",
+        "srt" => "SubRip (SRT)",
+        "vtt" => "WebVTT",
+        "zip" => "ZIP",
+        "tar" => "TAR",
+        "gz" => "GZIP",
+        _ => "Other",
+    }
+}
+
+/// What a routed pair needs beyond the built-in tools, if it is missing.
+pub fn route_needs(input: &str, out: &str, tools: &Tools) -> Option<&'static str> {
+    let video = matches!(out, "mp4" | "mov" | "mkv" | "webm" | "avi" | "wmv");
+    if input == "gif" && video && tools.ffmpeg.is_none() {
+        return Some("ffmpeg (brew install ffmpeg)");
+    }
+    let doc_in = matches!(input, "docx" | "pages" | "md" | "rtf" | "rtfd" | "textclipping" | "txt" | "epub" | "html");
+    let office = (doc_in && matches!(out, "pdf" | "png" | "jpg")) || (input == "pages" && !matches!(out, "pages"));
+    if office && tools.soffice.is_none() {
+        return Some("LibreOffice (brew install --cask libreoffice)");
+    }
+    None
 }
 
 /// `photo.png` beside `photo.jpg`; `photo 2.png` if that exists, and so on.
@@ -274,7 +371,9 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
     let i = input.to_string_lossy().to_string();
     let o = out.to_string_lossy().to_string();
     let cmd = match (&target.engine, target.ext) {
-        (Engine::Pdfkit | Engine::SubtitleText | Engine::SlideImages | Engine::Unrar, _) => return Err("handled natively".into()),
+        (Engine::Pdfkit | Engine::SubtitleText | Engine::SlideImages | Engine::Unrar | Engine::Route, _) => {
+            return Err("handled natively".into())
+        }
         (Engine::Sips, ext) => {
             let fmt = match ext {
                 "jpg" => "jpeg",
@@ -341,6 +440,10 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
                 "mkv" => &["-c:v", "libx264", "-crf", "20", "-c:a", "aac"],
                 "avi" => &["-c:v", "mpeg4", "-q:v", "4", "-c:a", "libmp3lame"],
                 "wmv" => &["-c:v", "wmv2", "-c:a", "wmav2"],
+                "mp4" | "mov" => &["-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:a", "aac"],
+                "m4a" => &["-vn", "-c:a", "aac", "-b:a", "192k"],
+                "wav" => &["-vn", "-c:a", "pcm_s16le"],
+                "aiff" => &["-vn", "-c:a", "pcm_s16be"],
                 "wma" => &["-vn", "-c:a", "wmav2"],
                 _ => &[],
             };
@@ -353,6 +456,8 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
             let outdir = out.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| ".".into());
             let filter = match ext {
                 "txt" => "txt:Text (encoded):UTF8",
+                // comma separated, UTF-8, quote all text cells: independent of the last-used settings
+                "csv" => "csv:Text - txt - csv (StarCalc):44,34,76,1",
                 // tab-separated, UTF-8; soffice names the file .csv (see soffice_written_path)
                 "tsv" => "csv:Text - txt - csv (StarCalc):9,34,76,1",
                 other => other,
