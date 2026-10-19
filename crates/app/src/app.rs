@@ -1970,6 +1970,7 @@ impl App {
                 a.push(Action::new("Show in Finder", Act::Reveal(p.clone())).key(CMD, Key::Enter));
                 a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
                 a.push(Action::new("Convert…", Act::Convert(vec![p.clone()])).key(CMD, Key::T));
+                a.push(Action::new("Format Wheel", Act::OpenWheel(vec![p.clone()])).key(Modifiers::ALT, Key::Enter));
                 a.push(Action::new("Copy File", Act::CopyFiles(vec![p.clone()])).key(CMD_SHIFT, Key::Period));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Move to…", Act::MoveFiles(vec![p.clone()])).key(CMD_SHIFT, Key::M));
@@ -2838,6 +2839,17 @@ impl App {
             Act::Convert(files) => {
                 self.show();
                 self.push(View::Convert(files));
+            }
+            Act::OpenWheel(files) => {
+                let kind = ferrocast_core::wheel::WheelKind::Convert;
+                let segs = self.wheel_segments(kind, &files);
+                if segs.is_empty() {
+                    self.toast("No format options for this file");
+                } else {
+                    self.show();
+                    // no pointer involved: the centre is off screen, arrows and Enter choose
+                    self.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel: Some(0) });
+                }
             }
             Act::QuickLook(p) => {
                 // qlmanage shows the system Quick Look panel; it exits when the panel closes.

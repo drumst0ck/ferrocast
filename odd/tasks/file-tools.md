@@ -47,7 +47,8 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 - P3c-5 (S11 editImage) PARTIAL, committed: photo.rs with brightness, contrast, saturation, warmth, clarity, sharpen, grain, denoise, dehaze as pure per-pixel math (6 tests) and typed `edit brightness 20 grain 30 dehaze 50`; real-file test checks size kept, brighter result, full desaturation and no overwrite. NOT done: live preview, native annotation canvas (Preview handoff remains).
 - P3c-6 PENDING (S11): image redaction with blur and several areas, visualizer with still image and compare-levels, photo adjustments and native annotation.
 - P3c (S4, S11) PENDING (umbrella): remaining image editors, collage layouts, visual PDF organization and archive extraction interface. Route: inline; commit pending.
-- P4 (S8, S11) PENDING: Enter-on-file format menu and editor interaction parity. Route: inline; commit pending.
+- P4a (S8) PARTIAL, committed: "Format Wheel" (⌥Enter) on a file result opens the Convert wheel with keyboard selection (arrows, Enter, Esc); tapping Shift/Command/Control on an open wheel switches wheels. No automated test of the key handling and no real-session proof. Plain Enter still runs Open. P4b (Enter on a Finder selection) NOT done.
+- P4 (S8, S11) PENDING (umbrella): Enter-on-file format menu and editor interaction parity. Route: inline; commit pending.
 - P5 (S2, S5, S8, S11) PENDING: actual session interaction proof; earlier shelf verifier unavailable, not approved.
 - P6 (S1–S11) PENDING: reconcile documentation with verified behavior, bundle and relaunch. No publishing.
 

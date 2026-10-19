@@ -664,6 +664,19 @@ impl App {
                     i.consume_key(Modifiers::NONE, Key::Escape),
                 )
             });
+            // Shift, Command or Control tapped while the wheel is open switches wheels
+            let mods = ctx.input(|i| i.modifiers);
+            let was: (bool, bool, bool) = ctx.data(|d| d.get_temp(Id::new("wheel_mods"))).unwrap_or((true, true, true));
+            ctx.data_mut(|d| d.insert_temp(Id::new("wheel_mods"), (mods.shift, mods.command, mods.ctrl)));
+            use ferrocast_core::wheel::WheelKind;
+            let pressed = |now: bool, before: bool| now && !before;
+            if pressed(mods.shift, was.0) {
+                self.switch_wheel(WheelKind::Convert);
+            } else if pressed(mods.command, was.1) && !mods.ctrl {
+                self.switch_wheel(WheelKind::Tools);
+            } else if pressed(mods.ctrl, was.2) && !mods.command {
+                self.switch_wheel(WheelKind::Actions);
+            }
             if esc {
                 self.apply_wheel(None);
                 return;
