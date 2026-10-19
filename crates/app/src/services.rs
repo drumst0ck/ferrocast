@@ -1909,6 +1909,76 @@ fn collage(files: &[PathBuf], o: &ferrocast_core::collage::CollageOpts) -> Resul
     Ok(out)
 }
 
+fn frame_image(f: &std::path::Path, o: &ferrocast_core::frame::FrameOpts) -> Result<PathBuf, String> {
+    use ferrocast_core::collage::corner_alpha;
+    use ferrocast_core::convert::output_with_suffix;
+    use ferrocast_core::frame::{canvas_size, shadow_offset, Backdrop};
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-frame-{}-{}.png",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let loaded = sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+        .and_then(|_| image::open(&tmp).map_err(|e| e.to_string()));
+    let _ = std::fs::remove_file(&tmp);
+    let img = loaded?.to_rgba8();
+    let (w, h) = (img.width(), img.height());
+    let (cw, ch) = canvas_size(w, h, o);
+    if u64::from(cw) * u64::from(ch) > 120_000_000 {
+        return Err("the result would be too large; use less padding".into());
+    }
+    let mut canvas = match o.backdrop {
+        Backdrop::Color(c) => image::RgbaImage::from_pixel(cw, ch, image::Rgba([c[0], c[1], c[2], 255])),
+        Backdrop::Blur(r) => {
+            // cover the canvas with the picture, then blur it
+            let scale = (cw as f32 / w as f32).max(ch as f32 / h as f32);
+            let (nw, nh) = (((w as f32 * scale).ceil() as u32).max(cw), ((h as f32 * scale).ceil() as u32).max(ch));
+            // blur at a quarter of the size: same look, far less work
+            let small = image::imageops::resize(&img, (nw / 4).max(1), (nh / 4).max(1), image::imageops::FilterType::Triangle);
+            let blurred = image::imageops::blur(&small, (r / 4.0).max(0.5));
+            let big = image::imageops::resize(&blurred, nw, nh, image::imageops::FilterType::Triangle);
+            image::imageops::crop_imm(&big, (nw - cw) / 2, (nh - ch) / 2, cw, ch).to_image()
+        }
+    };
+    let rect_alpha = |x: u32, y: u32| corner_alpha(x, y, w, h, o.radius);
+    if o.shadow > 0 {
+        let (dx, dy) = shadow_offset(o);
+        let mut mask = image::GrayImage::new(cw, ch);
+        for y in 0..h {
+            for x in 0..w {
+                let (mx, my) = (o.pad as i32 + x as i32 + dx, o.pad as i32 + y as i32 + dy);
+                if mx >= 0 && my >= 0 && (mx as u32) < cw && (my as u32) < ch {
+                    mask.put_pixel(mx as u32, my as u32, image::Luma([(rect_alpha(x, y) * 255.0) as u8]));
+                }
+            }
+        }
+        let soft = image::imageops::blur(&mask, o.shadow as f32 / 2.0);
+        for (x, y, m) in soft.enumerate_pixels() {
+            let a = m.0[0] as f32 / 255.0 * 0.55;
+            let dst = canvas.get_pixel_mut(x, y);
+            for c in 0..3 {
+                dst.0[c] = (dst.0[c] as f32 * (1.0 - a)) as u8;
+            }
+        }
+    }
+    for y in 0..h {
+        for x in 0..w {
+            let src = img.get_pixel(x, y).0;
+            let a = rect_alpha(x, y) * (src[3] as f32 / 255.0);
+            if a <= 0.0 {
+                continue;
+            }
+            let dst = canvas.get_pixel_mut(o.pad + x, o.pad + y);
+            for (d, s) in dst.0.iter_mut().zip(src).take(3) {
+                *d = (s as f32 * a + *d as f32 * (1.0 - a)) as u8;
+            }
+        }
+    }
+    let out = output_with_suffix(f, "framed", "png", |p| p.exists());
+    canvas.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) -> (Vec<PathBuf>, Vec<String>) {
     use ferrocast_core::convert::{crop_size, ext, output_with_suffix, strip_jpeg, strip_png, ImageOp};
     let name = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -1951,6 +2021,15 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
         for f in files {
             match compress_to_size(f, op) {
                 Ok(o) => outs.push(o),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
+    if let ImageOp::FrameWith(o) = op {
+        for f in files {
+            match frame_image(f, o) {
+                Ok(p) => outs.push(p),
                 Err(e) => errs.push(format!("{}: {e}", name(f))),
             }
         }
@@ -2061,6 +2140,7 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
             ImageOp::CombinePdf
             | ImageOp::Collage
             | ImageOp::CollageWith(_)
+            | ImageOp::FrameWith(_)
             | ImageOp::Redact(_)
             | ImageOp::Adjust(_)
             | ImageOp::CompressToKb(_)
@@ -2251,6 +2331,27 @@ mod convert_tests {
         assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255], "edge is the red background");
         assert_eq!(img.get_pixel(20, 20).0, [255, 0, 0, 255], "rounded corner shows the background");
         assert_ne!(img.get_pixel(w / 6, h / 2).0, [255, 0, 0, 255], "picture centre is not background");
+        // add a background: padded canvas, colour at the edge, rounded corner shows it, shadow darkens
+        let fo = ferrocast_core::frame::parse("frame pad 50 radius 60 bg 0000ff").unwrap();
+        let (fr, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(fo));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&fr[0]), Some((1024 + 100, 576 + 100)));
+        let fi = image::open(&fr[0]).unwrap().to_rgba8();
+        assert_eq!(fi.get_pixel(0, 0).0, [0, 0, 255, 255], "padding is the colour");
+        assert_eq!(fi.get_pixel(50, 50).0, [0, 0, 255, 255], "rounded corner shows the colour");
+        assert_ne!(fi.get_pixel(562, 338).0, [0, 0, 255, 255], "picture centre is the picture");
+        let sh = ferrocast_core::frame::parse("frame pad 80 shadow 40 bg ffffff").unwrap();
+        let (fs, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(sh));
+        assert!(e.is_empty(), "{e:?}");
+        let si = image::open(&fs[0]).unwrap().to_rgba8();
+        let below = si.get_pixel(80 + 512, 80 + 576 + 10).0;
+        assert!(below[0] < 250, "shadow darkens the area under the picture: {below:?}");
+        assert_eq!(si.get_pixel(2, 2).0, [255, 255, 255, 255], "far corner stays clean");
+        let bl = ferrocast_core::frame::parse("frame blur 40").unwrap();
+        let (fb, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(bl));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&fb[0]), Some((1024 + 128, 576 + 128)));
+        assert!(fr[0] != fs[0] && fs[0] != fb[0], "never overwrites");
         let (o2, e) =
             run_image_op(&[src.clone(), src.clone()], &ferrocast_core::convert::parse_image_query("collage featured bg none").unwrap());
         assert!(e.is_empty(), "{e:?}");
