@@ -1620,6 +1620,14 @@ fn sips(args: &[&str]) -> Result<(), String> {
     })
 }
 
+/// Refuse sources that would need more than ~120 million pixels (480 MB as RGBA) to edit.
+fn check_source_size(f: &std::path::Path) -> Result<(), String> {
+    match image_size(f) {
+        Some((w, h)) if u64::from(w) * u64::from(h) > 120_000_000 => Err(format!("the image is too large to edit here ({w}×{h} px)")),
+        _ => Ok(()),
+    }
+}
+
 /// Run one image tool on each file (or once for Combine). Returns outputs and failures.
 /// Detect faces or text with Vision (on-device) and cover them with black boxes.
 /// Writes a PNG next to the original; errors when nothing was found.
@@ -1630,6 +1638,7 @@ fn redact(f: &std::path::Path, faces: bool) -> Result<PathBuf, String> {
 }
 
 fn redact_with(f: &std::path::Path, spec: &ferrocast_core::redact::RedactSpec) -> Result<PathBuf, String> {
+    check_source_size(f)?;
     use ferrocast_core::convert::{output_with_suffix, redact_rect};
     use ferrocast_core::redact::{clamp_area, Area, Source, Style};
     let tmp = std::env::temp_dir().join(format!(
@@ -1915,6 +1924,7 @@ fn adjust(f: &std::path::Path, a: ferrocast_core::convert::Adjust) -> Result<Pat
 }
 
 fn edit_photo(f: &std::path::Path, o: &ferrocast_core::photo::PhotoOpts) -> Result<PathBuf, String> {
+    check_source_size(f)?;
     use ferrocast_core::convert::output_with_suffix;
     let tmp = std::env::temp_dir().join(format!(
         "ferrocast-edit-{}-{}.png",
@@ -1990,6 +2000,7 @@ fn collage(files: &[PathBuf], o: &ferrocast_core::collage::CollageOpts) -> Resul
 }
 
 fn frame_image(f: &std::path::Path, o: &ferrocast_core::frame::FrameOpts) -> Result<PathBuf, String> {
+    check_source_size(f)?;
     use ferrocast_core::collage::corner_alpha;
     use ferrocast_core::convert::output_with_suffix;
     use ferrocast_core::frame::{canvas_size, shadow_offset, Backdrop};
