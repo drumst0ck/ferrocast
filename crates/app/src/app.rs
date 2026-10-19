@@ -66,6 +66,12 @@ pub enum View {
         color: usize,
         sel: Option<usize>,
     },
+    /// Live-preview photo editor: original file, its pixel size and the control values.
+    EditPhoto {
+        file: PathBuf,
+        size: (u32, u32),
+        opts: ferrocast_core::photo::PhotoOpts,
+    },
     /// Visual page organizer for one PDF: `n` source pages, the edited plan.
     PdfOrganize {
         file: PathBuf,
@@ -198,6 +204,7 @@ impl View {
             View::Shelf => "File Shelf",
             View::PdfOrganize { .. } => "Organize PDF",
             View::Annotate { .. } => "Annotate Image",
+            View::EditPhoto { .. } => "Edit Photo",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -1048,6 +1055,20 @@ impl App {
                                 });
                             }
                             None => self.toast("Annotate: could not read the image"),
+                        }
+                    }
+                }
+                Msg::EditLoaded(file, png) => {
+                    if matches!(self.view(), View::EditPhoto { file: f, .. } if *f == file) {
+                        match png.as_deref().and_then(|b| image::load_from_memory(b).ok()).map(|i| i.to_rgba8()) {
+                            Some(rgba) => {
+                                let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                                self.ctx.data_mut(|d| {
+                                    d.insert_temp(Id::new("edit-base"), std::sync::Arc::new((rgba.into_raw(), w, h)));
+                                    d.remove::<ferrocast_core::photo::PhotoOpts>(Id::new("edit-last"));
+                                });
+                            }
+                            None => self.toast("Edit Photo: could not read the image"),
                         }
                     }
                 }
@@ -2038,6 +2059,7 @@ impl App {
                 a.push(Action::new("Format Wheel", Act::OpenWheel(vec![p.clone()])).key(Modifiers::ALT, Key::Enter));
                 if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Image {
                     a.push(Action::new("Annotate…", Act::AnnotateCanvas(p.clone())).key(CMD_SHIFT, Key::A));
+                    a.push(Action::new("Edit Photo…", Act::EditPhoto(p.clone())).key(CMD_SHIFT, Key::E));
                 }
                 if ferrocast_core::convert::ext(p) == "pdf" {
                     a.push(Action::new("Organize Pages…", Act::OrganizePdf(p.clone())).key(CMD_SHIFT, Key::O));
@@ -2915,6 +2937,20 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::EditPhoto(file) => match services::image_size(&file) {
+                Some(size) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("edit-tex"));
+                        d.remove::<std::sync::Arc<(Vec<u8>, usize, usize)>>(Id::new("edit-base"));
+                        d.remove::<ferrocast_core::photo::PhotoOpts>(Id::new("edit-last"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::EditLoaded(f.clone(), services::display_png(&f, 800))));
+                    self.show();
+                    self.push(View::EditPhoto { file, size, opts: Default::default() });
+                }
+                None => self.toast("Edit Photo: could not read the image"),
+            },
             Act::AnnotateCanvas(file) => match services::image_size(&file) {
                 Some(size) => {
                     self.ctx.data_mut(|d| {

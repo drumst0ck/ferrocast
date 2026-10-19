@@ -23,6 +23,8 @@ pub enum Msg {
     PdfThumb(PathBuf, usize, Option<Vec<u8>>),
     /// PNG of the image being annotated, scaled for display (None: unreadable).
     AnnotateLoaded(PathBuf, Option<Vec<u8>>),
+    /// PNG of the image being edited, scaled for the live preview (None: unreadable).
+    EditLoaded(PathBuf, Option<Vec<u8>>),
     /// A picture chosen to stamp onto the image being annotated: where, and its RGBA pixels.
     StampChosen(PathBuf, (f32, f32), Option<(usize, usize, Vec<u8>)>),
     Script {

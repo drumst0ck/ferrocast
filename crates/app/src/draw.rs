@@ -112,6 +112,23 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("edit") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let (Some(size), Some(png)) = (services::image_size(&file), services::display_png(&file, 800)) {
+                    let rgba = image::load_from_memory(&png).unwrap().to_rgba8();
+                    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                    ctx.data_mut(|d| d.insert_temp(Id::new("edit-base"), std::sync::Arc::new((rgba.into_raw(), w, h))));
+                    let opts = ferrocast_core::photo::PhotoOpts {
+                        brightness: 15,
+                        contrast: 20,
+                        saturation: -35,
+                        warmth: 25,
+                        grain: 20,
+                        ..Default::default()
+                    };
+                    app.push(View::EditPhoto { file, size, opts });
+                }
+            }
             Ok("annotate") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let (Some(size), Some(png)) = (services::image_size(&file), services::display_png(&file, 1600)) {
@@ -413,6 +430,16 @@ impl App {
                         None,
                         self.bus.clone(),
                     );
+                    self.pop();
+                }
+                true
+            }
+            View::EditPhoto { file, opts, .. } if k.enter => {
+                if opts.is_identity() {
+                    self.toast("Nothing changed: move a slider first");
+                } else {
+                    self.toast("Saving edited copy…");
+                    services::image_op_files(vec![file], ferrocast_core::convert::ImageOp::EditWith(opts), self.bus.clone());
                     self.pop();
                 }
                 true
@@ -1322,6 +1349,76 @@ impl App {
         p.text(c, Align2::CENTER_CENTER, hint, FontId::proportional(12.0), pal.text);
     }
 
+    /// Photo editor: the picture on the left (recomputed on a downscaled copy while a slider moves)
+    /// and one slider per control on the right. The full-size copy is written on Enter.
+    fn draw_edit_photo(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, size: (u32, u32), opts: ferrocast_core::photo::PhotoOpts) {
+        let ctx = ui.ctx().clone();
+        let mut o = opts;
+        let panel = Rect::from_min_max(Pos2::new(rect.max.x - 300.0, rect.min.y + 12.0), rect.max - Vec2::new(16.0, 34.0));
+        ui.scope_builder(UiBuilder::new().max_rect(panel), |ui| {
+            ui.spacing_mut().slider_width = 170.0;
+            ui.spacing_mut().item_spacing.y = 8.0;
+            for (label, v, signed) in [
+                ("Brightness", &mut o.brightness, true),
+                ("Contrast", &mut o.contrast, true),
+                ("Saturation", &mut o.saturation, true),
+                ("Warmth", &mut o.warmth, true),
+                ("Clarity", &mut o.clarity, false),
+                ("Sharpen", &mut o.sharpen, false),
+                ("Grain", &mut o.grain, false),
+                ("Denoise", &mut o.denoise, false),
+                ("Dehaze", &mut o.dehaze, false),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.add_sized([78.0, 18.0], egui::Label::new(RichText::new(label).size(12.5).color(pal.sub)));
+                    ui.add(egui::Slider::new(v, if signed { -100..=100 } else { 0..=100 }).show_value(true));
+                });
+            }
+            ui.add_space(6.0);
+            if ui.button("Reset").clicked() {
+                o = Default::default();
+            }
+        });
+        if o != opts {
+            if let Some(View::EditPhoto { opts: p, .. }) = self.stack.last_mut() {
+                *p = o;
+            }
+            ctx.request_repaint();
+        }
+        let area = Rect::from_min_max(rect.min + Vec2::new(16.0, 14.0), Pos2::new(rect.max.x - 316.0, rect.max.y - 34.0));
+        let scale = (area.width() / size.0 as f32).min(area.height() / size.1 as f32).max(0.01);
+        let img_rect = Rect::from_center_size(area.center(), Vec2::new(size.0 as f32 * scale, size.1 as f32 * scale));
+        let base: Option<std::sync::Arc<(Vec<u8>, usize, usize)>> = ctx.data(|d| d.get_temp(Id::new("edit-base")));
+        if let Some(b) = base {
+            let last: Option<ferrocast_core::photo::PhotoOpts> = ctx.data(|d| d.get_temp(Id::new("edit-last")));
+            if last != Some(o) {
+                let mut buf = b.0.clone();
+                ferrocast_core::photo::apply(&mut buf, b.1, b.2, &o);
+                let tex =
+                    ctx.load_texture("edit-view", egui::ColorImage::from_rgba_unmultiplied([b.1, b.2], &buf), egui::TextureOptions::LINEAR);
+                ctx.data_mut(|d| {
+                    d.insert_temp(Id::new("edit-tex"), tex);
+                    d.insert_temp(Id::new("edit-last"), o);
+                });
+            }
+        }
+        match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("edit-tex"))) {
+            Some(tex) => {
+                egui::Image::new(&tex).paint_at(ui, img_rect);
+            }
+            None => {
+                ui.painter().text(img_rect.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
+            }
+        }
+        ui.painter().text(
+            Pos2::new(rect.center().x, rect.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "drag a slider · the preview is a reduced copy · ↵ save a full-size copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
     /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.
     #[allow(clippy::too_many_arguments)]
     fn draw_annotate(
@@ -1689,6 +1786,9 @@ impl App {
                         self.save_notes();
                     }
                 });
+            }
+            View::EditPhoto { size, opts, .. } => {
+                self.draw_edit_photo(ui, rect, pal, size, opts);
             }
             View::Annotate { file, size, doc, tool, color, sel } => {
                 self.draw_annotate(ui, rect, pal, &file, size, doc, tool, color, sel);

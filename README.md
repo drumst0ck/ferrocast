@@ -79,7 +79,8 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Rueda de formatos desde un archivo con el teclado (⌥↵ en un resultado; Shift/Command/Control cambian de rueda) | Implementado; sin prueba de teclas en sesión real. Intro sobre un archivo sigue abriéndolo; Intro sobre la selección de Finder, no incluido |
 | Organizador visual de PDF (⇧⌘O sobre un PDF: miniaturas, girar, duplicar, quitar y reordenar páginas, guarda una copia) | Implementado; dibujo verificado por captura, teclas sin probar en sesión real; sin arrastrar para reordenar |
 | Lienzo de anotación propio (⇧⌘A sobre una imagen: flecha, línea, caja, elipse, resaltado, lápiz, etiquetas numeradas y lupa; guarda una copia PNG a tamaño completo) | Implementado; dibujo verificado por captura y guardado con archivo real; ratón y teclas sin probar en sesión real; con texto libre (fuente Arial del sistema); con bocadillos con puntero e imágenes superpuestas (selector de archivos, sin probar en sesión real); «Anotar» del menú de herramientas abre el lienzo con una imagen y Vista Previa con varias |
-| Editores con vista previa en vivo (ajustes de foto, recorte, redacción, fondo, collage, recorte de vídeo) | No incluido: solo órdenes escritas |
+| Editor de fotos con vista previa en vivo (⇧⌘E: nueve deslizadores, copia a tamaño completo con ↵) | Implementado; dibujo verificado por captura, deslizadores sin probar en sesión real; la vista previa usa una copia reducida |
+| Editores con vista previa en vivo de recorte, redacción, fondo, collage y vídeo | No incluido: solo órdenes escritas |
 | Extensiones React, sync, Search Menu Bar Items, contexto de IA (selección/pantalla) | No incluido |
 
 ## Distribución
