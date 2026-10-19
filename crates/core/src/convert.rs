@@ -39,6 +39,32 @@ pub fn family_of(path: &Path) -> Family {
     }
 }
 
+/// SRT/VTT cues as plain text: no numbering, timings, header or markup. One line per cue line.
+pub fn subtitle_text(src: &str) -> String {
+    let mut out: Vec<String> = vec![];
+    for raw in src.replace("\r\n", "\n").lines() {
+        let l = raw.trim().trim_start_matches('\u{feff}');
+        if l.is_empty() || l == "WEBVTT" || l.starts_with("NOTE") || l.contains("-->") || l.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        // drop <i>…</i>, <c.color>, {\an8} style markup
+        let (mut clean, mut depth) = (String::new(), 0);
+        for c in l.chars() {
+            match c {
+                '<' | '{' => depth += 1,
+                '>' | '}' if depth > 0 => depth -= 1,
+                _ if depth == 0 => clean.push(c),
+                _ => {}
+            }
+        }
+        let clean = clean.trim();
+        if !clean.is_empty() {
+            out.push(clean.to_string());
+        }
+    }
+    out.join("\n")
+}
+
 pub fn ext(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default()
 }
@@ -51,6 +77,8 @@ pub struct Tools {
     pub soffice: Option<&'static str>,
     /// Google's WebP encoder; many ffmpeg builds lack libwebp.
     pub cwebp: Option<&'static str>,
+    /// RAR extractor (RAR is input only).
+    pub unrar: Option<&'static str>,
 }
 
 impl Tools {
@@ -63,6 +91,7 @@ impl Tools {
             ffmpeg: first(&["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]),
             soffice: first(&["/opt/homebrew/bin/soffice", "/Applications/LibreOffice.app/Contents/MacOS/soffice"]),
             cwebp: first(&["/opt/homebrew/bin/cwebp", "/usr/local/bin/cwebp"]),
+            unrar: first(&["/opt/homebrew/bin/unrar", "/usr/local/bin/unrar", "/Applications/rar/unrar"]),
         }
     }
 }
@@ -80,6 +109,12 @@ pub enum Engine {
     Cwebp,
     /// PDFKit through osascript: page images at 300 DPI and the text layer.
     Pdfkit,
+    /// Subtitle text without timings.
+    SubtitleText,
+    /// Slides → PDF (LibreOffice) → page images.
+    SlideImages,
+    /// RAR → extract → ZIP.
+    Unrar,
 }
 
 impl Engine {
@@ -89,7 +124,9 @@ impl Engine {
             Engine::Ffmpeg => "ffmpeg",
             Engine::Soffice => "LibreOffice",
             Engine::Cwebp => "cwebp",
-            Engine::Pdfkit => "built in",
+            Engine::Pdfkit | Engine::SubtitleText => "built in",
+            Engine::SlideImages => "LibreOffice",
+            Engine::Unrar => "unrar",
         }
     }
 }
@@ -110,6 +147,8 @@ fn t(ext: &'static str, label: &'static str, engine: Engine, tools: &Tools) -> T
         Engine::Ffmpeg if tools.ffmpeg.is_none() => Some("ffmpeg (brew install ffmpeg)"),
         Engine::Soffice if tools.soffice.is_none() => Some("LibreOffice (brew install --cask libreoffice)"),
         Engine::Cwebp if tools.cwebp.is_none() => Some("webp (brew install webp)"),
+        Engine::SlideImages if tools.soffice.is_none() => Some("LibreOffice (brew install --cask libreoffice)"),
+        Engine::Unrar if tools.unrar.is_none() => Some("unrar (brew install --cask rar)"),
         _ => None,
     };
     Target { ext, label, engine, needs }
@@ -183,7 +222,12 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
             t("ods", "OpenDocument", Engine::Soffice, tools),
             t("tsv", "TSV", Engine::Soffice, tools),
         ],
-        Family::Slides => vec![t("pdf", "PDF", Engine::Soffice, tools), t("pptx", "PowerPoint (PPTX)", Engine::Soffice, tools)],
+        Family::Slides => vec![
+            t("pdf", "PDF", Engine::Soffice, tools),
+            t("pptx", "PowerPoint (PPTX)", Engine::Soffice, tools),
+            t("png", "PNG (every slide)", Engine::SlideImages, tools),
+            t("jpg", "JPEG (every slide)", Engine::SlideImages, tools),
+        ],
         Family::Pdf => vec![
             t("png", "PNG (all pages, 300 DPI)", Engine::Pdfkit, tools),
             t("jpg", "JPEG (all pages, 300 DPI)", Engine::Pdfkit, tools),
@@ -193,7 +237,12 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
             t("epub", "EPUB", Engine::Soffice, tools),
             t("pptx", "PowerPoint (PPTX)", Engine::Soffice, tools),
         ],
-        Family::Subtitle => vec![t("vtt", "WebVTT", Engine::Ffmpeg, tools), t("srt", "SubRip (SRT)", Engine::Ffmpeg, tools)],
+        Family::Subtitle => vec![
+            t("vtt", "WebVTT", Engine::Ffmpeg, tools),
+            t("srt", "SubRip (SRT)", Engine::Ffmpeg, tools),
+            t("txt", "Plain text", Engine::SubtitleText, tools),
+        ],
+        Family::Archive if e == "rar" => vec![t("zip", "ZIP", Engine::Unrar, tools)],
         Family::Archive | Family::Folder => vec![
             t("zip", "ZIP", Engine::Archive, tools),
             t("tar", "TAR", Engine::Archive, tools),
@@ -225,7 +274,7 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
     let i = input.to_string_lossy().to_string();
     let o = out.to_string_lossy().to_string();
     let cmd = match (&target.engine, target.ext) {
-        (Engine::Pdfkit, _) => return Err("PDF pages and text are handled natively".into()),
+        (Engine::Pdfkit | Engine::SubtitleText | Engine::SlideImages | Engine::Unrar, _) => return Err("handled natively".into()),
         (Engine::Sips, ext) => {
             let fmt = match ext {
                 "jpg" => "jpeg",
@@ -338,6 +387,14 @@ mod tests {
     }
 
     #[test]
+    fn subtitle_text_drops_timings_numbers_and_markup() {
+        let srt = "1\r\n00:00:01,000 --> 00:00:02,000\r\nHello <i>there</i>\r\n\r\n2\r\n00:00:03,000 --> 00:00:04,500\r\n{\\an8}Second line\r\n1984\r\n";
+        assert_eq!(subtitle_text(srt), "Hello there\nSecond line\n1984".replace("\n1984", ""));
+        let vtt = "WEBVTT\n\nNOTE hidden\n\n00:01.000 --> 00:02.000\n<c.yellow>Hi</c>\n";
+        assert_eq!(subtitle_text(vtt), "Hi");
+    }
+
+    #[test]
     fn families_from_extensions() {
         assert_eq!(family_of(Path::new("a.HEIC")), Family::Image);
         assert_eq!(family_of(Path::new("a.mkv")), Family::Video);
@@ -352,7 +409,7 @@ mod tests {
         let webp = v.iter().find(|t| t.ext == "webp").unwrap();
         assert!(webp.needs.unwrap().contains("webp"));
         assert!(v.iter().find(|t| t.ext == "png").unwrap().needs.is_none());
-        let with = Tools { ffmpeg: None, soffice: None, cwebp: Some("/opt/homebrew/bin/cwebp") };
+        let with = Tools { ffmpeg: None, soffice: None, cwebp: Some("/opt/homebrew/bin/cwebp"), ..Default::default() };
         assert!(targets(Path::new("photo.jpg"), &with).iter().find(|t| t.ext == "webp").unwrap().needs.is_none());
     }
 
@@ -366,7 +423,7 @@ mod tests {
 
     #[test]
     fn plans_use_the_right_tool() {
-        let tools = Tools { ffmpeg: Some("/ff"), soffice: Some("/so"), cwebp: Some("/cw") };
+        let tools = Tools { ffmpeg: Some("/ff"), soffice: Some("/so"), cwebp: Some("/cw"), ..Default::default() };
         let png = targets(Path::new("/d/p.jpg"), &tools).into_iter().find(|t| t.ext == "png").unwrap();
         assert_eq!(
             plan(Path::new("/d/p.jpg"), &png, Path::new("/d/p.png"), &tools).unwrap()[..4],

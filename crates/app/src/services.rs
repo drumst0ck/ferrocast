@@ -1347,6 +1347,13 @@ pub fn run_conversion(
         let mut errors: Vec<String> = vec![];
         for f in files {
             let out = output_path(f, target.ext, |p| p.exists());
+            if matches!(target.engine, Engine::SubtitleText | Engine::SlideImages | Engine::Unrar) {
+                match special_convert(f, target, tools) {
+                    Ok(mut o) => outputs.append(&mut o),
+                    Err(e) => errors.push(format!("{}: {e}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())),
+                }
+                continue;
+            }
             if target.engine == Engine::Pdfkit {
                 match pdfkit_convert(f, target.ext) {
                     Ok(mut o) => outputs.append(&mut o),
@@ -1411,6 +1418,98 @@ pub fn run_conversion(
         }
         (outputs, errors)
     }
+}
+
+/// Conversions that are not one command: subtitle text, slides → page images, RAR → ZIP.
+fn special_convert(
+    f: &std::path::Path,
+    target: &ferrocast_core::convert::Target,
+    tools: &ferrocast_core::convert::Tools,
+) -> Result<Vec<PathBuf>, String> {
+    use ferrocast_core::convert::{output_path, subtitle_text, Engine};
+    let scratch = std::env::temp_dir().join(format!(
+        "ferrocast-sp-{}-{}",
+        std::process::id(),
+        f.file_name().map(|n| n.to_string_lossy().len()).unwrap_or(0)
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
+    let res = (|| -> Result<Vec<PathBuf>, String> {
+        match target.engine {
+            Engine::SubtitleText => {
+                let text = subtitle_text(&std::fs::read_to_string(f).map_err(|e| e.to_string())?);
+                let out = output_path(f, "txt", |p| p.exists());
+                std::fs::write(&out, text + "\n").map_err(|e| e.to_string())?;
+                Ok(vec![out])
+            }
+            Engine::SlideImages => {
+                let so = tools.soffice.ok_or("LibreOffice is not installed")?;
+                let o = std::process::Command::new(so)
+                    .args(["--headless", "--convert-to", "pdf", "--outdir"])
+                    .arg(&scratch)
+                    .arg(f)
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                let pdf = scratch.join(format!("{}.pdf", f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()));
+                if !o.status.success() || !pdf.exists() {
+                    return Err("LibreOffice could not render the slides".into());
+                }
+                // name the pages after the original deck, not the scratch PDF
+                let named = scratch.join(f.file_name().ok_or("bad path")?).with_extension("pdf");
+                if named != pdf {
+                    std::fs::rename(&pdf, &named).map_err(|e| e.to_string())?;
+                }
+                let pages = pdfkit_convert(&named, target.ext)?;
+                // pdfkit wrote next to the scratch PDF: move beside the original
+                let mut outs = vec![];
+                for p in pages {
+                    let dest = f.parent().unwrap_or(std::path::Path::new(".")).join(p.file_name().ok_or("bad path")?);
+                    let dest = if dest.exists() {
+                        ferrocast_core::convert::output_with_suffix(&dest, "", target.ext, |q| q.exists())
+                    } else {
+                        dest
+                    };
+                    std::fs::rename(&p, &dest).or_else(|_| std::fs::copy(&p, &dest).map(|_| ())).map_err(|e| e.to_string())?;
+                    outs.push(dest);
+                }
+                Ok(outs)
+            }
+            Engine::Unrar => {
+                let un = tools.unrar.ok_or("unrar is not installed")?;
+                let ex = scratch.join("x");
+                std::fs::create_dir_all(&ex).map_err(|e| e.to_string())?;
+                let o = std::process::Command::new(un)
+                    .args(["x", "-y", "-idq"])
+                    .arg(f)
+                    .arg(format!("{}/", ex.display()))
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if !o.status.success() {
+                    return Err(String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .last()
+                        .unwrap_or("could not extract the RAR")
+                        .trim()
+                        .to_string());
+                }
+                let out = output_path(f, "zip", |p| p.exists());
+                let st = std::process::Command::new("/usr/bin/ditto")
+                    .args(["-c", "-k", "--sequesterRsrc"])
+                    .arg(&ex)
+                    .arg(&out)
+                    .status()
+                    .map_err(|e| e.to_string())?;
+                if st.success() && out.exists() {
+                    Ok(vec![out])
+                } else {
+                    Err("could not write the ZIP".into())
+                }
+            }
+            _ => Err("not a special conversion".into()),
+        }
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    res
 }
 
 /// PDF → page images (300 DPI, every page) or its text layer, through PDFKit/AppKit.
@@ -2266,6 +2365,39 @@ mod convert_tests {
         // an image-only PDF has no text layer: say so instead of writing an empty file
         let (o, e) = run_conversion(std::slice::from_ref(&p1), &pick(&p1, "txt"), &tools);
         assert!(o.is_empty() && e[0].contains("no text layer"), "{e:?}");
+        // subtitles → plain text (no timings, numbers or markup)
+        let srt = d.join("cues.srt");
+        std::fs::write(&srt, "1\n00:00:01,000 --> 00:00:02,000\nHello <i>there</i>\n\n2\n00:00:03,000 --> 00:00:04,500\nSecond line\n")
+            .unwrap();
+        let (o, e) = run_conversion(std::slice::from_ref(&srt), &pick(&srt, "txt"), &tools);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(std::fs::read_to_string(&o[0]).unwrap(), "Hello there\nSecond line\n");
+        // RAR → ZIP (needs unrar; the rar binary builds the fixture)
+        if let (Some(_), true) = (tools.unrar, std::path::Path::new("/Applications/rar/rar").exists()) {
+            let src = d.join("rarsrc");
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::write(src.join("in.txt"), "inside").unwrap();
+            let rar = d.join("pack.rar");
+            // the bundled rar/unrar can be x86-only ("Bad CPU type" without Rosetta): then skip
+            let built =
+                std::process::Command::new("/Applications/rar/rar").args(["a", "-idq", "-ep"]).arg(&rar).arg(src.join("in.txt")).status();
+            if matches!(built, Ok(st) if st.success()) {
+                let (o, e) = run_conversion(std::slice::from_ref(&rar), &pick(&rar, "zip"), &tools);
+                assert!(e.is_empty(), "{e:?}");
+                let listing = std::process::Command::new("/usr/bin/unzip").arg("-l").arg(&o[0]).output().unwrap();
+                assert!(String::from_utf8_lossy(&listing.stdout).contains("in.txt"), "{}", String::from_utf8_lossy(&listing.stdout));
+            }
+        }
+        // slides → one image per slide (LibreOffice renders the deck to PDF first)
+        if tools.soffice.is_some() {
+            let odp_src = d.join("deck.txt");
+            std::fs::write(&odp_src, "Slide text").unwrap();
+            let deck = run_conversion(std::slice::from_ref(&odp_src), &pick(&odp_src, "pdf"), &tools).0.remove(0);
+            let pptx = run_conversion(std::slice::from_ref(&deck), &pick(&deck, "pptx"), &tools).0.remove(0);
+            let (o, e) = run_conversion(std::slice::from_ref(&pptx), &pick(&pptx, "png"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(!o.is_empty() && o.iter().all(|p| p.parent() == pptx.parent() && std::fs::metadata(p).unwrap().len() > 1000), "{o:?}");
+        }
         // TAR, and SVG input through sips
         let tarred = run_conversion(std::slice::from_ref(&d), &pick(&d, "tar"), &tools);
         assert!(tarred.1.is_empty(), "{:?}", tarred.1);
