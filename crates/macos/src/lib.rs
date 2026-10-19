@@ -10,4 +10,5 @@ pub mod keyboard;
 pub mod process;
 pub mod running;
 pub mod system;
+pub mod vision;
 pub mod windows;

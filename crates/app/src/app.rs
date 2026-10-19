@@ -1622,6 +1622,7 @@ impl App {
                                     ImageOp::Flip(_) => "flip mirror",
                                     ImageOp::Background(_) => "background pad square",
                                     ImageOp::Collage => "collage grid",
+                                    ImageOp::Redact(_) => "redact hide blur privacy face text",
                                 },
                             )
                             .is_some()
@@ -1641,6 +1642,7 @@ impl App {
                                     ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
                                     ImageOp::Background(_) => "sf:square.dashed",
                                     ImageOp::Collage => "sf:square.grid.2x2",
+                                    ImageOp::Redact(_) => "sf:eye.slash.fill",
                                 },
                                 [255, 140, 60],
                             ),

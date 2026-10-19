@@ -383,6 +383,8 @@ pub enum ImageOp {
     Background(&'static str),
     /// Every selected image in one grid picture.
     Collage,
+    /// Cover detected faces (true) or text (false) with solid boxes.
+    Redact(bool),
 }
 
 impl ImageOp {
@@ -398,6 +400,8 @@ impl ImageOp {
             ImageOp::Flip(false) => "Flip vertically".into(),
             ImageOp::Background(c) => format!("Square on {} background", if *c == "FFFFFF" { "white" } else { "black" }),
             ImageOp::Collage => "Make a collage".into(),
+            ImageOp::Redact(true) => "Redact faces".into(),
+            ImageOp::Redact(false) => "Redact text".into(),
         }
     }
     /// Short word added to the output file name.
@@ -412,6 +416,7 @@ impl ImageOp {
             ImageOp::Flip(_) => "flipped".into(),
             ImageOp::Background(_) => "square".into(),
             ImageOp::Collage => "collage".into(),
+            ImageOp::Redact(_) => "redacted".into(),
         }
     }
     /// Tools for `n` selected images.
@@ -435,6 +440,8 @@ impl ImageOp {
             ImageOp::Flip(false),
             ImageOp::Background("FFFFFF"),
             ImageOp::Background("000000"),
+            ImageOp::Redact(true),
+            ImageOp::Redact(false),
         ];
         if n > 1 {
             v.insert(0, ImageOp::Collage);
@@ -468,6 +475,19 @@ pub fn collage_grid(n: usize) -> (usize, usize) {
     (cols, n.div_ceil(cols))
 }
 
+/// Pixel rectangle (x, y, w, h) for a normalised top-left box, grown by `pad` of its size
+/// on each side and clamped to the image.
+pub fn redact_rect(x: f64, y: f64, w: f64, h: f64, iw: u32, ih: u32, pad: f64) -> (u32, u32, u32, u32) {
+    let (fw, fh) = (iw as f64, ih as f64);
+    // the epsilon keeps float noise (0.55 * 100 = 55.000000000000007) from adding a pixel
+    const E: f64 = 1e-9;
+    let x0 = ((x - w * pad) * fw + E).floor().clamp(0.0, fw);
+    let y0 = ((y - h * pad) * fh + E).floor().clamp(0.0, fh);
+    let x1 = ((x + w * (1.0 + pad)) * fw - E).ceil().clamp(0.0, fw);
+    let y1 = ((y + h * (1.0 + pad)) * fh - E).ceil().clamp(0.0, fh);
+    (x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32)
+}
+
 /// Largest centred `rw:rh` rectangle inside `w × h`.
 pub fn crop_size(w: u32, h: u32, rw: u32, rh: u32) -> (u32, u32) {
     if rw == 0 || rh == 0 || w == 0 || h == 0 {
@@ -485,6 +505,14 @@ pub fn crop_size(w: u32, h: u32, rw: u32, rh: u32) -> (u32, u32) {
 #[cfg(test)]
 mod image_tool_tests {
     use super::*;
+
+    #[test]
+    fn redact_rects() {
+        assert_eq!(redact_rect(0.25, 0.5, 0.5, 0.25, 100, 100, 0.0), (25, 50, 50, 25));
+        // padding grows the box and clamps at the edges
+        assert_eq!(redact_rect(0.0, 0.0, 0.5, 0.5, 100, 100, 0.1), (0, 0, 55, 55));
+        assert_eq!(redact_rect(0.9, 0.9, 0.2, 0.2, 100, 100, 0.0), (90, 90, 10, 10));
+    }
 
     #[test]
     fn crop_sizes() {

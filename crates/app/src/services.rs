@@ -1398,6 +1398,32 @@ fn sips(args: &[&str]) -> Result<(), String> {
 }
 
 /// Run one image tool on each file (or once for Combine). Returns outputs and failures.
+/// Detect faces or text with Vision (on-device) and cover them with black boxes.
+/// Writes a PNG next to the original; errors when nothing was found.
+fn redact(f: &std::path::Path, faces: bool) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::{output_with_suffix, redact_rect};
+    let regions = ferrocast_macos::vision::detect(f, faces, !faces).map_err(|e| e.to_string())?;
+    if regions.is_empty() {
+        return Err(if faces { "no faces found".into() } else { "no text found".into() });
+    }
+    let tmp = std::env::temp_dir().join(format!("ferrocast-redact-{}.png", std::process::id()));
+    sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])?;
+    let mut img = image::open(&tmp).map_err(|e| e.to_string())?.to_rgba8();
+    let _ = std::fs::remove_file(&tmp);
+    let (iw, ih) = img.dimensions();
+    for r in regions {
+        let (x, y, w, h) = redact_rect(r.x, r.y, r.w, r.h, iw, ih, if faces { 0.15 } else { 0.05 });
+        for py in y..(y + h).min(ih) {
+            for px in x..(x + w).min(iw) {
+                img.put_pixel(px, py, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+    }
+    let out = output_with_suffix(f, "redacted", "png", |p| p.exists());
+    img.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// Lay the images out in a grid of 600 px cells on white, as one PNG next to the first.
 fn collage(files: &[PathBuf]) -> Result<PathBuf, String> {
     use ferrocast_core::convert::{collage_grid, output_with_suffix};
@@ -1451,6 +1477,15 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
             outs.push(out);
         } else if errs.is_empty() {
             errs.push("could not combine the pages into a PDF".into());
+        }
+        return (outs, errs);
+    }
+    if let ImageOp::Redact(faces) = op {
+        for f in files {
+            match redact(f, *faces) {
+                Ok(o) => outs.push(o),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
         }
         return (outs, errs);
     }
@@ -1522,7 +1557,7 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
                 sips(&["-s", "format", "png", "-p", &side, &side, "--padColor", c, &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
                 Ok(out)
             }
-            ImageOp::CombinePdf | ImageOp::Collage => unreachable!(),
+            ImageOp::CombinePdf | ImageOp::Collage | ImageOp::Redact(_) => unreachable!(),
         })();
         match res {
             Ok(o) if o.exists() => outs.push(o),
@@ -1696,6 +1731,20 @@ mod convert_tests {
         // 3 images → 2×2 grid of 600 px cells with 12 px gaps
         assert_eq!(image_size(&o[0]), Some((1236, 1236)));
         assert!(src.exists() && wide[0].exists(), "originals untouched");
+
+        // Redact text: the rendered line is covered with black, the margins stay white
+        let txt = d.join("text.png");
+        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../macos/fixtures/text.png"), &txt).unwrap();
+        let dark = |p: &std::path::Path| image::open(p).unwrap().to_rgba8().pixels().filter(|px| px.0[0] < 20).count();
+        let before = dark(&txt);
+        let (o, e) = run_image_op(std::slice::from_ref(&txt), &ImageOp::Redact(false));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(dark(&o[0]) > before * 3, "text boxes filled: {} vs {before}", dark(&o[0]));
+        let red = image::open(&o[0]).unwrap().to_rgba8();
+        assert_eq!(red.get_pixel(red.width() - 1, red.height() - 1).0[..3], [255, 255, 255], "untouched corner");
+        // no faces in a text picture → a clear error, no file
+        let (o, e) = run_image_op(std::slice::from_ref(&txt), &ImageOp::Redact(true));
+        assert!(o.is_empty() && e[0].contains("no faces found"), "{e:?}");
     }
 
     /// Uses ffmpeg and LibreOffice when installed; skips each case otherwise.
