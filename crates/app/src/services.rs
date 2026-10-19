@@ -1995,9 +1995,29 @@ fn frame_image(f: &std::path::Path, o: &ferrocast_core::frame::FrameOpts) -> Res
     if u64::from(cw) * u64::from(ch) > 120_000_000 {
         return Err("the result would be too large; use less padding".into());
     }
-    let mut canvas = match o.backdrop {
+    let mut canvas = match &o.backdrop {
+        Backdrop::Image(path) => {
+            let p = std::path::Path::new(path);
+            if !p.is_file() {
+                return Err(format!("{path} is not a readable image"));
+            }
+            let bg_tmp = std::env::temp_dir().join(format!(
+                "ferrocast-framebg-{}-{}.png",
+                std::process::id(),
+                COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            let loaded = sips(&["-s", "format", "png", path, "--out", &bg_tmp.to_string_lossy()])
+                .and_then(|_| image::open(&bg_tmp).map_err(|e| e.to_string()));
+            let _ = std::fs::remove_file(&bg_tmp);
+            let bg = loaded.map_err(|e| format!("background image: {e}"))?.to_rgba8();
+            let scale = (cw as f32 / bg.width() as f32).max(ch as f32 / bg.height() as f32);
+            let (nw, nh) = (((bg.width() as f32 * scale).ceil() as u32).max(cw), ((bg.height() as f32 * scale).ceil() as u32).max(ch));
+            let big = image::imageops::resize(&bg, nw, nh, image::imageops::FilterType::Triangle);
+            image::imageops::crop_imm(&big, (nw - cw) / 2, (nh - ch) / 2, cw, ch).to_image()
+        }
         Backdrop::Color(c) => image::RgbaImage::from_pixel(cw, ch, image::Rgba([c[0], c[1], c[2], 255])),
         Backdrop::Blur(r) => {
+            let r = *r;
             // cover the canvas with the picture, then blur it
             let scale = (cw as f32 / w as f32).max(ch as f32 / h as f32);
             let (nw, nh) = (((w as f32 * scale).ceil() as u32).max(cw), ((h as f32 * scale).ceil() as u32).max(ch));
@@ -2479,6 +2499,16 @@ mod convert_tests {
         let below = si.get_pixel(80 + 512, 80 + 576 + 10).0;
         assert!(below[0] < 250, "shadow darkens the area under the picture: {below:?}");
         assert_eq!(si.get_pixel(2, 2).0, [255, 255, 255, 255], "far corner stays clean");
+        // another image as the background: its colour shows in the padding
+        let red_bg = d.join("red-bg.png");
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([255, 0, 0, 255])).save(&red_bg).unwrap();
+        let im = ferrocast_core::frame::parse(&format!("frame image {} pad 30", red_bg.display())).unwrap();
+        let (fm, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(im));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image::open(&fm[0]).unwrap().to_rgba8().get_pixel(2, 2).0, [255, 0, 0, 255], "padding shows the background image");
+        let bad = ferrocast_core::frame::parse("frame image /nonexistent/bg.png").unwrap();
+        let (none, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(bad));
+        assert!(none.is_empty() && e[0].contains("not a readable image"), "{e:?}");
         let bl = ferrocast_core::frame::parse("frame blur 40").unwrap();
         let (fb, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(bl));
         assert!(e.is_empty(), "{e:?}");

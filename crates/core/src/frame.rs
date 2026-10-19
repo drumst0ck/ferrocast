@@ -1,14 +1,16 @@
 //! "Add a background" (Tangerine frameImage): put a picture on a colour or on a blurred copy of
 //! itself, with padding, rounded corners and a drop shadow. Pure options and geometry.
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Backdrop {
     Color([u8; 3]),
+    /// Another picture, scaled to cover the canvas (path as typed).
+    Image(String),
     /// The picture itself, scaled to cover the canvas and blurred with this radius.
     Blur(f32),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FrameOpts {
     /// Space around the picture, in pixels.
     pub pad: u32,
@@ -37,6 +39,23 @@ pub fn shadow_offset(o: &FrameOpts) -> (i32, i32) {
 /// `frame pad 80 radius 24 shadow 30 bg 222222` or `frame blur` / `frame blur 40`.
 /// Words may come in any order; `frame` alone uses the defaults.
 pub fn parse(q: &str) -> Option<FrameOpts> {
+    // `frame image /Users/Me/bg.jpg pad 40`: the path keeps its case; it ends at the next keyword
+    let raw = q.trim();
+    if raw.to_lowercase().starts_with("frame") {
+        if let Some(pos) = raw.to_lowercase().find(" image ") {
+            let after = &raw[pos + " image ".len()..];
+            let low = after.to_lowercase();
+            let end = [" pad ", " radius ", " shadow "].iter().filter_map(|k| low.find(k)).min().unwrap_or(after.len());
+            let path = after[..end].trim();
+            if path.is_empty() {
+                return None;
+            }
+            let rest = format!("{}{}", &raw[..pos], &after[end..]);
+            let mut o = parse(&rest)?;
+            o.backdrop = Backdrop::Image(path.to_string());
+            return Some(o);
+        }
+    }
     let q = q.trim().to_lowercase();
     let rest = q.strip_prefix("frame")?;
     if !(rest.is_empty() || rest.starts_with(' ')) {
@@ -93,5 +112,10 @@ mod tests {
         assert_eq!(parse("frame bg nothex"), None);
         assert_eq!(parse("frame wat"), None);
         assert_eq!(parse("framed"), None);
+        let o = parse("Frame image /Users/Me/My BG.JPG pad 40 shadow 10").unwrap();
+        assert_eq!((o.pad, o.shadow, o.backdrop), (40, 10, Backdrop::Image("/Users/Me/My BG.JPG".into())));
+        assert_eq!(parse("frame image /a.png").unwrap().backdrop, Backdrop::Image("/a.png".into()));
+        assert_eq!(parse("frame image "), None);
+        assert_eq!(parse("frame image /a.png radius x"), None);
     }
 }

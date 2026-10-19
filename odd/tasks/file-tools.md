@@ -81,3 +81,5 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 - L19 P6a docs: README status table, CHANGELOG and web copy updated with measured results and limits (typed commands only, no live preview or canvas, layout fidelity unchecked, RAR synthetic, Pages.app unproven, key handling untested in a real session). Web copy checked by text only; the site was not rebuilt or published.
 
 - L20 P6b: release bundle built (job-35 exit 0, ad-hoc signature valid) and relaunched (pid 83331). Only process presence was checked; the new features were not exercised through the running app. Next unit: image file as `frame` background.
+
+- L21 `frame image /path/bg.jpg pad 40` uses another picture as the background (cover-scaled); real-file test checks the padding colour and a missing image error. Committed after workspace exit 0 and clippy exit 0. Remaining S11 gaps: normalize compare view, live-preview editors, annotation canvas, visual PDF organizer.
