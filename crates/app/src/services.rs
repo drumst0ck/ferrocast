@@ -2518,6 +2518,22 @@ mod convert_tests {
         assert_eq!(image_size(&a1), Some((1024, 576)), "full size");
         let ai = image::open(&a1).unwrap().to_rgba8();
         assert_eq!(ai.get_pixel(250, 200).0, [0, 255, 0, 255], "drawn area");
+        // text lands at full size: dark ink appears inside its box on a white-ish area (skipped without the font)
+        if ferrocast_core::annotate::text_available() {
+            let mut td = ferrocast_core::annotate::Doc::default();
+            td.add(
+                ferrocast_core::annotate::Shape::Text((600.0, 400.0), "Hello".into()),
+                ferrocast_core::annotate::Style { color: [0, 0, 255], width: 8.0, fill: false },
+            );
+            let t1 = annotate_save(&wide[0], &td).unwrap();
+            let (tw, th) = ferrocast_core::annotate::text_extent("Hello", ferrocast_core::annotate::text_size(8.0));
+            let ti = image::open(&t1).unwrap().to_rgba8();
+            let blue = (600..600 + tw as u32)
+                .flat_map(|x| (400..400 + th as u32).map(move |y| (x, y)))
+                .filter(|&(x, y)| ti.get_pixel(x, y).0[2] > ti.get_pixel(x, y).0[0].saturating_add(60))
+                .count();
+            assert!(blue > 30, "text ink at full size: {blue}");
+        }
         let abase = d.join("annot-base.png");
         sips(&["-s", "format", "png", &wide[0].to_string_lossy(), "--out", &abase.to_string_lossy()]).unwrap();
         assert_eq!(ai.get_pixel(900, 500), image::open(&abase).unwrap().to_rgba8().get_pixel(900, 500), "outside the drawing untouched");

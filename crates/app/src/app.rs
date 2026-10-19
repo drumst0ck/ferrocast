@@ -2906,6 +2906,8 @@ impl App {
                         d.remove::<egui::TextureHandle>(Id::new("annot-tex"));
                         d.remove::<std::sync::Arc<(Vec<u8>, usize, usize)>>(Id::new("annot-base"));
                         d.remove::<ferrocast_core::annotate::Doc>(Id::new("annot-last"));
+                        d.remove::<Option<((f32, f32), String)>>(Id::new("annot-text"));
+                        d.remove::<bool>(Id::new("annot-typing"));
                     });
                     let (bus, f) = (self.bus.clone(), file.clone());
                     std::thread::spawn(move || bus.send(Msg::AnnotateLoaded(f.clone(), services::display_png(&f, 1600))));

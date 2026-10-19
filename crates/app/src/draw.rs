@@ -125,6 +125,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     doc.add(Shape::Arrow((cw * 0.1, ch * 0.9), (cw * 0.4, ch * 0.5)), st);
                     doc.add(Shape::Rect((cw * 0.5, ch * 0.2), (cw * 0.85, ch * 0.5)), Style { color: COLORS[4], ..st });
                     doc.add(Shape::Number((cw * 0.5, ch * 0.2), 1), st);
+                    doc.add(Shape::Text((cw * 0.08, ch * 0.08), "Check this".into()), Style { color: COLORS[2], width: 10.0, fill: false });
                     doc.add(
                         Shape::Magnifier { center: (cw * 0.7, ch * 0.75), radius: cw * 0.1, zoom: 2.5 },
                         Style { color: COLORS[3], ..st },
@@ -284,6 +285,8 @@ impl App {
         let hotkey = matches!(view, View::Hotkey { .. });
         let query_empty = self.query.is_empty();
         let panel = self.panel.is_some();
+        // typing a label on the annotation canvas: the text field owns Enter and Escape
+        let typing = matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -295,10 +298,12 @@ impl App {
                 k.down = i.consume_key(Modifiers::NONE, Key::ArrowDown);
             }
             k.cmd_enter = i.consume_key(CMD, Key::Enter);
-            if shape != Shape::Form || panel {
+            if (shape != Shape::Form || panel) && !typing {
                 k.enter = i.consume_key(Modifiers::NONE, Key::Enter);
             }
-            k.esc = i.consume_key(Modifiers::NONE, Key::Escape);
+            if !typing {
+                k.esc = i.consume_key(Modifiers::NONE, Key::Escape);
+            }
             k.backspace = shape == Shape::List
                 && !panel
                 && query_empty
@@ -1330,7 +1335,11 @@ impl App {
         let ctx = ui.ctx().clone();
         let before = (doc.clone(), tool, color, sel);
         let (mut doc, mut tool, mut color, mut sel) = (doc, tool, color, sel);
+        let mut pending: Option<((f32, f32), String)> = ctx.data(|d| d.get_temp(Id::new("annot-text")));
         ctx.input_mut(|i| {
+            if pending.is_some() {
+                return;
+            }
             if i.consume_key(CMD, Key::Z) {
                 doc.undo();
                 sel = None;
@@ -1354,6 +1363,7 @@ impl App {
                     (Tool::Pen, "Pen"),
                     (Tool::Number, "Number"),
                     (Tool::Magnifier, "Magnifier"),
+                    (Tool::Text, "Text"),
                 ] {
                     if ui.selectable_label(tool == t, l).clicked() {
                         tool = t;
@@ -1420,6 +1430,8 @@ impl App {
                         let n = doc.next_number();
                         doc.add(an::Shape::Number(q, n), style);
                     }
+                    Tool::Text if an::text_available() && pending.is_none() => pending = Some((q, String::new())),
+                    Tool::Text if !an::text_available() => self.toast("Text needs the system font Arial, which was not found"),
                     Tool::Select => sel = doc.hit(q, 8.0 / scale),
                     _ => {}
                 }
@@ -1454,8 +1466,41 @@ impl App {
                 ui.painter().text(img_rect.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
             }
         }
+        // inline text field at the clicked point; Enter adds the text, Escape drops it
+        if let Some((at, mut text)) = pending.take() {
+            let pos = Pos2::new(img_rect.min.x + at.0 * scale, img_rect.min.y + at.1 * scale);
+            let col = an::COLORS[color.min(an::COLORS.len() - 1)];
+            let field = egui::Area::new(Id::new("annot-text-area")).order(egui::Order::Foreground).fixed_pos(pos).show(&ctx, |ui| {
+                ui.add(
+                    TextEdit::singleline(&mut text)
+                        .id(Id::new("annot-text-field"))
+                        .desired_width(220.0)
+                        .text_color(egui::Color32::from_rgb(col[0], col[1], col[2]))
+                        .hint_text("Type, then Enter"),
+                )
+            });
+            let r = field.inner;
+            if !r.has_focus() && !r.lost_focus() {
+                r.request_focus();
+            }
+            let enter = r.lost_focus() && ctx.input(|i| i.key_pressed(Key::Enter));
+            let esc = ctx.input(|i| i.key_pressed(Key::Escape));
+            if esc {
+                // dropped
+            } else if enter {
+                if !text.trim().is_empty() {
+                    doc.add(an::Shape::Text(at, text.trim().to_string()), style);
+                }
+            } else {
+                pending = Some((at, text));
+            }
+        }
+        ctx.data_mut(|d| {
+            d.insert_temp(Id::new("annot-text"), pending.clone());
+            d.insert_temp(Id::new("annot-typing"), pending.is_some());
+        });
         if let Some(it) = sel.and_then(|s| doc.items.get(s)) {
-            let (x0, y0, x1, y1) = it.shape.bounds();
+            let (x0, y0, x1, y1) = it.shape.bounds_with(it.style.width);
             let pad = it.style.width / 2.0
                 + 6.0 / scale
                 + if matches!(it.shape, an::Shape::Number(..)) { an::label_radius(it.style.width) } else { 0.0 };

@@ -35,6 +35,8 @@ pub enum Shape {
         radius: f32,
         zoom: f32,
     },
+    /// Free text with its top-left corner at the point; the size follows the stroke width.
+    Text(P, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +62,8 @@ pub enum Tool {
     Pen,
     Number,
     Magnifier,
+    /// Click to place; the canvas asks for the words.
+    Text,
 }
 
 /// Palette offered by the canvas.
@@ -71,7 +75,7 @@ pub fn build(tool: Tool, pts: &[P], next_number: u32) -> Option<Shape> {
     let (a, b) = (*pts.first()?, *pts.last()?);
     let far = seg_dist(b, a, a) >= 3.0;
     match tool {
-        Tool::Select => None,
+        Tool::Select | Tool::Text => None,
         Tool::Number => Some(Shape::Number(a, next_number)),
         Tool::Arrow => far.then_some(Shape::Arrow(a, b)),
         Tool::Line => far.then_some(Shape::Line(a, b)),
@@ -80,6 +84,67 @@ pub fn build(tool: Tool, pts: &[P], next_number: u32) -> Option<Shape> {
         Tool::Highlight => far.then_some(Shape::Highlight(a, b)),
         Tool::Pen => (pts.len() >= 2 && far || pts.len() >= 8).then(|| Shape::Freehand(pts.to_vec())),
         Tool::Magnifier => far.then(|| Shape::Magnifier { center: a, radius: seg_dist(b, a, a).max(8.0), zoom: 2.5 }),
+    }
+}
+
+/// Pixel height of text drawn with this stroke width.
+pub fn text_size(width: f32) -> f32 {
+    (width * 5.0).max(12.0)
+}
+
+fn font() -> Option<&'static ab_glyph::FontVec> {
+    static FONT: std::sync::OnceLock<Option<ab_glyph::FontVec>> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        ["/System/Library/Fonts/Supplemental/Arial.ttf", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"]
+            .iter()
+            .find_map(|p| std::fs::read(p).ok())
+            .and_then(|b| ab_glyph::FontVec::try_from_vec(b).ok())
+    })
+    .as_ref()
+}
+
+/// True when text can be drawn on this Mac (the system font loaded).
+pub fn text_available() -> bool {
+    font().is_some()
+}
+
+/// Width and height in pixels of `text` at `size`, line by line.
+pub fn text_extent(text: &str, size: f32) -> (f32, f32) {
+    use ab_glyph::{Font, ScaleFont};
+    let lines: Vec<&str> = text.split('\n').collect();
+    let line_h = size * 1.2;
+    let width = match font() {
+        Some(f) => {
+            let sf = f.as_scaled(ab_glyph::PxScale::from(size));
+            lines.iter().map(|l| l.chars().map(|c| sf.h_advance(sf.glyph_id(c))).sum::<f32>()).fold(0.0, f32::max)
+        }
+        None => lines.iter().map(|l| l.chars().count() as f32 * size * 0.55).fold(0.0, f32::max),
+    };
+    (width, line_h * lines.len() as f32)
+}
+
+fn draw_text(buf: &mut [u8], w: usize, h: usize, at: P, text: &str, size: f32, c: [u8; 3]) {
+    use ab_glyph::{Font, ScaleFont};
+    let Some(f) = font() else { return };
+    let scale = ab_glyph::PxScale::from(size);
+    let sf = f.as_scaled(scale);
+    for (li, line) in text.split('\n').enumerate() {
+        let mut x = at.0;
+        let base = at.1 + li as f32 * size * 1.2 + sf.ascent();
+        for ch in line.chars() {
+            let id = sf.glyph_id(ch);
+            let glyph = id.with_scale_and_position(scale, ab_glyph::point(x, base));
+            if let Some(o) = f.outline_glyph(glyph) {
+                let b = o.px_bounds();
+                o.draw(|gx, gy, cov| {
+                    let (px, py) = (b.min.x as i64 + gx as i64, b.min.y as i64 + gy as i64);
+                    if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
+                        blend(buf, w, px as usize, py as usize, c, cov);
+                    }
+                });
+            }
+            x += sf.h_advance(id);
+        }
     }
 }
 
@@ -139,7 +204,7 @@ impl Doc {
                 mv(b);
             }
             Shape::Freehand(pts) => pts.iter_mut().for_each(mv),
-            Shape::Number(c, _) | Shape::Magnifier { center: c, .. } => mv(c),
+            Shape::Number(c, _) | Shape::Magnifier { center: c, .. } | Shape::Text(c, _) => mv(c),
         }
     }
 
@@ -159,6 +224,7 @@ impl Doc {
                     Shape::Highlight(a, b) => Shape::Highlight(sp(*a), sp(*b)),
                     Shape::Freehand(pts) => Shape::Freehand(pts.iter().map(|p| sp(*p)).collect()),
                     Shape::Number(c, n) => Shape::Number(sp(*c), *n),
+                    Shape::Text(c, t) => Shape::Text(sp(*c), t.clone()),
                     Shape::Magnifier { center, radius, zoom } => Shape::Magnifier { center: sp(*center), radius: radius * k, zoom: *zoom },
                 };
                 Item { shape, style: Style { width: it.style.width * k, ..it.style } }
@@ -179,12 +245,21 @@ impl Doc {
 impl Shape {
     /// Bounding box (x0, y0, x1, y1) of the shape, without stroke width.
     pub fn bounds(&self) -> (f32, f32, f32, f32) {
+        self.bounds_with(Style::default().width)
+    }
+
+    /// Bounding box, using `width` (the stroke width) to size text.
+    pub fn bounds_with(&self, width: f32) -> (f32, f32, f32, f32) {
         match self {
             Shape::Line(a, b) | Shape::Arrow(a, b) | Shape::Rect(a, b) | Shape::Ellipse(a, b) | Shape::Highlight(a, b) => bbox(*a, *b),
             Shape::Freehand(pts) => {
                 pts.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |m, p| (m.0.min(p.0), m.1.min(p.1), m.2.max(p.0), m.3.max(p.1)))
             }
             Shape::Number(c, _) => (c.0, c.1, c.0, c.1),
+            Shape::Text(at, t) => {
+                let (tw, th) = text_extent(t, text_size(width));
+                (at.0, at.1, at.0 + tw, at.1 + th)
+            }
             Shape::Magnifier { center, radius, .. } => (center.0 - radius, center.1 - radius, center.0 + radius, center.1 + radius),
         }
     }
@@ -221,6 +296,10 @@ impl Item {
                 pts.windows(2).any(|s| seg_dist(p, s[0], s[1]) <= t) || pts.len() == 1 && seg_dist(p, pts[0], pts[0]) <= t
             }
             Shape::Number(c, _) => seg_dist(p, *c, *c) <= number_radius(self.style.width) + tol,
+            Shape::Text(at, t) => {
+                let (tw, th) = text_extent(t, text_size(self.style.width));
+                p.0 >= at.0 - tol && p.0 <= at.0 + tw + tol && p.1 >= at.1 - tol && p.1 <= at.1 + th + tol
+            }
             Shape::Magnifier { center, radius, .. } => seg_dist(p, *center, *center) <= radius + tol,
         }
     }
@@ -276,6 +355,7 @@ impl Item {
                 .for_each(|(x, y, cov)| blend(buf, w, x, y, c, cov));
                 digits(buf, w, h, *center, *n, r);
             }
+            Shape::Text(at, t) => draw_text(buf, w, h, *at, t, text_size(self.style.width), c),
             Shape::Magnifier { center, radius, zoom } => {
                 let src = buf.to_vec();
                 let z = zoom.max(1.0);
@@ -550,6 +630,39 @@ mod tests {
             Some(Shape::Magnifier { center, radius, zoom }) => assert_eq!((center, radius, zoom), ((50.0, 50.0), 30.0, 2.5)),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn text_draws_dark_pixels_inside_its_extent_only() {
+        if !text_available() {
+            eprintln!("skipped: no system font");
+            return;
+        }
+        let style = Style { color: [0, 0, 0], width: 6.0, fill: false };
+        let mut d = Doc::default();
+        d.add(Shape::Text((10.0, 10.0), "Hello\nWorld".into()), style);
+        let mut b = canvas(200, 120);
+        d.render(&mut b, 200, 120);
+        let size = text_size(6.0);
+        let (tw, th) = text_extent("Hello\nWorld", size);
+        assert!(tw > size * 2.0 && th > size * 2.0, "two lines are taller than one: {tw}x{th}");
+        let dark = |x0: usize, y0: usize, x1: usize, y1: usize| {
+            (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| px(&b, 200, x, y)[0] < 128).count()
+        };
+        assert!(dark(10, 10, 10 + tw as usize + 2, 10 + th as usize + 2) > 60, "ink inside the extent");
+        assert_eq!(dark(0, 0, 200, 8), 0, "nothing above the text");
+        assert_eq!(dark(10 + tw as usize + 6, 0, 200, 120), 0, "nothing to the right");
+        assert!(dark(10, 10 + (th / 2.0) as usize, 10 + tw as usize + 2, 10 + th as usize + 2) > 20, "second line");
+        assert_eq!(d.hit((12.0, 12.0), 2.0), Some(0), "inside the box is a hit");
+        assert_eq!(d.hit((190.0, 110.0), 2.0), None);
+        assert_eq!(d.items[0].shape.bounds_with(6.0), (10.0, 10.0, 10.0 + tw, 10.0 + th));
+        d.move_item(0, 5.0, 5.0);
+        assert_eq!(d.items[0].shape, Shape::Text((15.0, 15.0), "Hello\nWorld".into()));
+        assert_eq!(d.scaled(0.5).items[0].style.width, 3.0, "text size follows the scale");
+        let mut e = Doc::default();
+        e.add(Shape::Text((-50.0, 500.0), String::new()), style);
+        e.add(Shape::Text((-5.0, -5.0), "clipped é ñ 日本".into()), style);
+        e.render(&mut canvas(30, 30), 30, 30);
     }
 
     #[test]
