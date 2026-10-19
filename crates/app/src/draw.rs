@@ -1329,6 +1329,7 @@ impl App {
         ui: &mut Ui,
         rect: Rect,
         pal: &Palette,
+        file: &std::path::Path,
         size: (u32, u32),
         doc: ferrocast_core::annotate::Doc,
         tool: ferrocast_core::annotate::Tool,
@@ -1369,6 +1370,7 @@ impl App {
                     (Tool::Magnifier, "Magnifier"),
                     (Tool::Text, "Text"),
                     (Tool::Callout, "Callout"),
+                    (Tool::Stamp, "Image"),
                 ] {
                     if ui.selectable_label(tool == t, l).clicked() {
                         tool = t;
@@ -1441,6 +1443,10 @@ impl App {
                     Tool::Number => {
                         let n = doc.next_number();
                         doc.add(an::Shape::Number(q, n), style);
+                    }
+                    Tool::Stamp => {
+                        let (bus, f) = (self.bus.clone(), file.to_path_buf());
+                        std::thread::spawn(move || bus.send(Msg::StampChosen(f, q, services::choose_stamp_image())));
                     }
                     Tool::Text if an::text_available() && pending.is_none() => pending = Some((q, String::new())),
                     Tool::Text if !an::text_available() => self.toast("Text needs the system font Arial, which was not found"),
@@ -1684,8 +1690,8 @@ impl App {
                     }
                 });
             }
-            View::Annotate { size, doc, tool, color, sel, .. } => {
-                self.draw_annotate(ui, rect, pal, size, doc, tool, color, sel);
+            View::Annotate { file, size, doc, tool, color, sel } => {
+                self.draw_annotate(ui, rect, pal, &file, size, doc, tool, color, sel);
             }
             View::PdfOrganize { file, n, plan } => {
                 self.draw_pdf_organizer(ui, rect, pal, &file, n, plan);

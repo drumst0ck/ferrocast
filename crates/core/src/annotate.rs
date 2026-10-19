@@ -4,6 +4,36 @@
 
 pub type P = (f32, f32);
 
+/// A picture to stamp onto the image: straight RGBA8, shared cheaply between clones.
+/// Equality is identity (the same loaded picture), so comparing drawings stays cheap.
+#[derive(Clone)]
+pub struct Img(pub std::sync::Arc<ImgData>);
+
+pub struct ImgData {
+    pub w: usize,
+    pub h: usize,
+    pub rgba: Vec<u8>,
+}
+
+impl PartialEq for Img {
+    fn eq(&self, o: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &o.0)
+    }
+}
+
+impl std::fmt::Debug for Img {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Img({}x{})", self.0.w, self.0.h)
+    }
+}
+
+impl Img {
+    /// `None` when the buffer does not match the size or the picture is empty.
+    pub fn new(w: usize, h: usize, rgba: Vec<u8>) -> Option<Img> {
+        (w > 0 && h > 0 && rgba.len() == w * h * 4).then(|| Img(std::sync::Arc::new(ImgData { w, h, rgba })))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Style {
     pub color: [u8; 3],
@@ -43,6 +73,12 @@ pub enum Shape {
         tip: P,
         text: String,
     },
+    /// Another picture placed with its top-left corner at `at`, drawn `size` pixels wide and tall.
+    Stamp {
+        at: P,
+        size: P,
+        img: Img,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +108,8 @@ pub enum Tool {
     Text,
     /// Drag from the target to where the box goes; the canvas asks for the words.
     Callout,
+    /// Click to place; the canvas asks for the picture.
+    Stamp,
 }
 
 /// Palette offered by the canvas.
@@ -83,7 +121,7 @@ pub fn build(tool: Tool, pts: &[P], next_number: u32) -> Option<Shape> {
     let (a, b) = (*pts.first()?, *pts.last()?);
     let far = seg_dist(b, a, a) >= 3.0;
     match tool {
-        Tool::Select | Tool::Text | Tool::Callout => None,
+        Tool::Select | Tool::Text | Tool::Callout | Tool::Stamp => None,
         Tool::Number => Some(Shape::Number(a, next_number)),
         Tool::Arrow => far.then_some(Shape::Arrow(a, b)),
         Tool::Line => far.then_some(Shape::Line(a, b)),
@@ -217,6 +255,7 @@ impl Doc {
                 mv(at);
                 mv(tip);
             }
+            Shape::Stamp { at, .. } => mv(at),
         }
     }
 
@@ -238,6 +277,7 @@ impl Doc {
                     Shape::Number(c, n) => Shape::Number(sp(*c), *n),
                     Shape::Text(c, t) => Shape::Text(sp(*c), t.clone()),
                     Shape::Callout { at, tip, text } => Shape::Callout { at: sp(*at), tip: sp(*tip), text: text.clone() },
+                    Shape::Stamp { at, size, img } => Shape::Stamp { at: sp(*at), size: sp(*size), img: img.clone() },
                     Shape::Magnifier { center, radius, zoom } => Shape::Magnifier { center: sp(*center), radius: radius * k, zoom: *zoom },
                 };
                 Item { shape, style: Style { width: it.style.width * k, ..it.style } }
@@ -273,6 +313,7 @@ impl Shape {
                 let (tw, th) = text_extent(t, text_size(width));
                 (at.0, at.1, at.0 + tw, at.1 + th)
             }
+            Shape::Stamp { at, size, .. } => (at.0, at.1, at.0 + size.0, at.1 + size.1),
             Shape::Callout { at, tip, text } => {
                 let (tw, th) = text_extent(text, text_size(width));
                 let pad = text_size(width) * 0.5;
@@ -317,6 +358,9 @@ impl Item {
             Shape::Text(at, t) => {
                 let (tw, th) = text_extent(t, text_size(self.style.width));
                 p.0 >= at.0 - tol && p.0 <= at.0 + tw + tol && p.1 >= at.1 - tol && p.1 <= at.1 + th + tol
+            }
+            Shape::Stamp { at, size, .. } => {
+                p.0 >= at.0 - tol && p.0 <= at.0 + size.0 + tol && p.1 >= at.1 - tol && p.1 <= at.1 + size.1 + tol
             }
             Shape::Callout { at, tip, text } => {
                 let (x0, y0, x1, y1) = self.shape.bounds_with(self.style.width);
@@ -384,6 +428,7 @@ impl Item {
                 digits(buf, w, h, *center, *n, r);
             }
             Shape::Text(at, t) => draw_text(buf, w, h, *at, t, text_size(self.style.width), c),
+            Shape::Stamp { at, size, img } => stamp(buf, w, h, *at, *size, img),
             Shape::Callout { at, tip, text } => {
                 let size = text_size(self.style.width);
                 let (tw, th) = text_extent(text, size);
@@ -441,6 +486,24 @@ fn for_pixels<T>(w: usize, h: usize, rect: (f32, f32, f32, f32), mut f: impl FnM
         }
     }
     out
+}
+
+/// Scaled blit with alpha: each destination pixel samples the nearest source pixel.
+fn stamp(buf: &mut [u8], w: usize, h: usize, at: P, size: P, img: &Img) {
+    let d = &img.0;
+    if !(size.0 >= 1.0 && size.1 >= 1.0 && size.0.is_finite() && size.1.is_finite() && at.0.is_finite() && at.1.is_finite()) {
+        return;
+    }
+    for (x, y, (sx, sy)) in for_pixels(w, h, (at.0, at.1, at.0 + size.0, at.1 + size.1), |px, py| {
+        let (u, v) = ((px - at.0) / size.0, (py - at.1) / size.1);
+        ((0.0..1.0).contains(&u) && (0.0..1.0).contains(&v)).then_some(((u * d.w as f32) as usize, (v * d.h as f32) as usize))
+    }) {
+        let i = (sy.min(d.h - 1) * d.w + sx.min(d.w - 1)) * 4;
+        let a = d.rgba[i + 3] as f32 / 255.0;
+        if a > 0.0 {
+            blend(buf, w, x, y, [d.rgba[i], d.rgba[i + 1], d.rgba[i + 2]], a);
+        }
+    }
 }
 
 fn blend(buf: &mut [u8], w: usize, x: usize, y: usize, c: [u8; 3], a: f32) {
@@ -745,6 +808,39 @@ mod tests {
         assert!(darkest < 60, "dark ink on a light box");
         l.add(Shape::Callout { at: (-40.0, 500.0), tip: (-9.0, -9.0), text: String::new() }, style);
         l.render(&mut canvas(30, 30), 30, 30);
+    }
+
+    #[test]
+    fn stamp_scales_blends_and_stays_inside() {
+        // 2x2 source: red, green / blue, transparent
+        let src = Img::new(2, 2, vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 9, 9, 9, 0]).unwrap();
+        let mut d = Doc::default();
+        d.add(Shape::Stamp { at: (10.0, 10.0), size: (20.0, 20.0), img: src.clone() }, Style::default());
+        let mut b = canvas(40, 40);
+        d.render(&mut b, 40, 40);
+        assert_eq!(px(&b, 40, 12, 12)[..3], [255, 0, 0], "top-left quadrant");
+        assert_eq!(px(&b, 40, 27, 12)[..3], [0, 255, 0], "top-right quadrant");
+        assert_eq!(px(&b, 40, 12, 27)[..3], [0, 0, 255], "bottom-left quadrant");
+        assert_eq!(px(&b, 40, 27, 27), [255, 255, 255, 255], "transparent source pixel leaves the picture");
+        assert_eq!(px(&b, 40, 5, 5), [255, 255, 255, 255], "outside untouched");
+        let half = Img::new(1, 1, vec![0, 0, 0, 128]).unwrap();
+        let mut e = Doc::default();
+        e.add(Shape::Stamp { at: (0.0, 0.0), size: (5.0, 5.0), img: half }, Style::default());
+        let mut b = canvas(10, 10);
+        e.render(&mut b, 10, 10);
+        assert!((120..136).contains(&px(&b, 10, 2, 2)[0]), "50% black over white: {:?}", px(&b, 10, 2, 2));
+        assert_eq!(d.hit((15.0, 15.0), 1.0), Some(0));
+        assert_eq!(d.hit((35.0, 35.0), 1.0), None);
+        assert_eq!(d.items[0].shape.bounds(), (10.0, 10.0, 30.0, 30.0));
+        d.move_item(0, 5.0, 0.0);
+        assert!(matches!(&d.items[0].shape, Shape::Stamp { at, .. } if *at == (15.0, 10.0)));
+        let s = d.scaled(0.5);
+        assert!(matches!(&s.items[0].shape, Shape::Stamp { at, size, img } if *at == (7.5, 5.0) && *size == (10.0, 10.0) && *img == src));
+        let mut f = Doc::default();
+        f.add(Shape::Stamp { at: (-30.0, -30.0), size: (60.0, 60.0), img: src.clone() }, Style::default());
+        f.add(Shape::Stamp { at: (5.0, 5.0), size: (0.0, f32::NAN), img: src }, Style::default());
+        f.render(&mut canvas(20, 20), 20, 20);
+        assert!(Img::new(2, 2, vec![0; 3]).is_none() && Img::new(0, 1, vec![]).is_none());
     }
 
     #[test]

@@ -23,6 +23,8 @@ pub enum Msg {
     PdfThumb(PathBuf, usize, Option<Vec<u8>>),
     /// PNG of the image being annotated, scaled for display (None: unreadable).
     AnnotateLoaded(PathBuf, Option<Vec<u8>>),
+    /// A picture chosen to stamp onto the image being annotated: where, and its RGBA pixels.
+    StampChosen(PathBuf, (f32, f32), Option<(usize, usize, Vec<u8>)>),
     Script {
         run: u64,
         text: String,
@@ -2354,6 +2356,19 @@ pub fn choose_files() -> Vec<PathBuf> {
     out.lines().filter(|l| !l.trim().is_empty()).map(|l| PathBuf::from(l.trim())).collect()
 }
 
+/// Ask for one image with the native dialog and return it decoded (max 1200 px), or None when
+/// cancelled or unreadable (blocks; call from a thread).
+pub fn choose_stamp_image() -> Option<(usize, usize, Vec<u8>)> {
+    let out = ferrocast_macos::system::osascript(
+        "POSIX path of (choose file of type {\"public.image\"} with prompt \"Choose an image to place\")",
+    )
+    .ok()?;
+    let path = PathBuf::from(out.trim());
+    let png = display_png(&path, 1200)?;
+    let img = image::load_from_memory(&png).ok()?.to_rgba8();
+    Some((img.width() as usize, img.height() as usize, img.into_raw()))
+}
+
 /// Ask the user for a JSON file with a native dialog (blocks; call from a thread).
 pub fn choose_json_file() -> Option<PathBuf> {
     let out = ferrocast_macos::system::osascript(
@@ -2542,6 +2557,17 @@ mod convert_tests {
             let ci = image::open(&c1).unwrap().to_rgba8();
             assert_eq!(ci.get_pixel(604, 104).0[..3], [0, 0, 0], "callout box at full size");
             assert_eq!(ci.get_pixel(300, 400).0[..3], [0, 0, 0], "pointer reaches the tip");
+            // an image stamp lands at full size with its own pixels
+            let red = ferrocast_core::annotate::Img::new(2, 2, [255u8, 0, 0, 255].repeat(4)).unwrap();
+            let mut sd = ferrocast_core::annotate::Doc::default();
+            sd.add(
+                ferrocast_core::annotate::Shape::Stamp { at: (700.0, 300.0), size: (100.0, 80.0), img: red },
+                ferrocast_core::annotate::Style::default(),
+            );
+            let s1 = annotate_save(&wide[0], &sd).unwrap();
+            let si = image::open(&s1).unwrap().to_rgba8();
+            assert_eq!(si.get_pixel(750, 340).0, [255, 0, 0, 255], "stamp at full size");
+            assert_eq!(si.get_pixel(699, 340), ai.get_pixel(699, 340), "outside the stamp untouched");
         }
         let abase = d.join("annot-base.png");
         sips(&["-s", "format", "png", &wide[0].to_string_lossy(), "--out", &abase.to_string_lossy()]).unwrap();

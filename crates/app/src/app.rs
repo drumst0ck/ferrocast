@@ -1051,6 +1051,21 @@ impl App {
                         }
                     }
                 }
+                Msg::StampChosen(file, at, picked) => {
+                    let Some((pw, ph, rgba)) = picked else { continue };
+                    let Some(img) = ferrocast_core::annotate::Img::new(pw, ph, rgba) else { continue };
+                    if let Some(View::Annotate { file: f, size, doc, color, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            // a quarter of the picture's width, keeping the stamp's own proportions
+                            let w = size.0 as f32 * 0.25;
+                            let style = ferrocast_core::annotate::Style {
+                                color: ferrocast_core::annotate::COLORS[(*color).min(5)],
+                                ..Default::default()
+                            };
+                            doc.add(ferrocast_core::annotate::Shape::Stamp { at, size: (w, w * ph as f32 / pw as f32), img }, style);
+                        }
+                    }
+                }
                 Msg::PdfThumb(file, i, png) => {
                     // only for the organizer that asked for it
                     if matches!(self.view(), View::PdfOrganize { file: f, .. } if *f == file) {
