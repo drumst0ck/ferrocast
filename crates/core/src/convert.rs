@@ -363,7 +363,7 @@ mod tests {
 // ---------------------------------------------------------------- image tools
 
 /// One-shot image tools offered next to conversions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ImageOp {
     /// Re-encode as JPEG at this quality (1–100).
     Compress(u8),
@@ -395,6 +395,17 @@ pub enum ImageOp {
     CompressByPercent(u8),
     /// Centre crop to exactly this many pixels (clamped to the image).
     CropExact(u32, u32),
+    /// Write camera and/or location tags into a JPEG's EXIF.
+    SetMeta(MetaEdit),
+}
+
+/// Camera and location tags to write. Empty fields are left out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetaEdit {
+    pub make: String,
+    pub model: String,
+    /// Latitude, longitude in decimal degrees.
+    pub gps: Option<(f64, f64)>,
 }
 
 /// Photo adjustments offered as one-step edits.
@@ -432,6 +443,19 @@ impl ImageOp {
             ImageOp::CompressToKb(kb) => format!("Compress · under {}", format_kb(*kb)),
             ImageOp::CompressByPercent(p) => format!("Compress · {p}% smaller"),
             ImageOp::CropExact(w, h) => format!("Crop · exactly {w}×{h} px"),
+            ImageOp::SetMeta(m) => {
+                let mut parts = vec![];
+                if !m.make.is_empty() {
+                    parts.push(format!("make {}", m.make));
+                }
+                if !m.model.is_empty() {
+                    parts.push(format!("model {}", m.model));
+                }
+                if let Some((la, lo)) = m.gps {
+                    parts.push(format!("GPS {la:.4}, {lo:.4}"));
+                }
+                format!("Set metadata · {}", parts.join(", "))
+            }
         }
     }
     /// Short word added to the output file name.
@@ -451,6 +475,7 @@ impl ImageOp {
             ImageOp::Annotate => "annotated".into(),
             ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compressed".into(),
             ImageOp::CropExact(w, h) => format!("{w}x{h}"),
+            ImageOp::SetMeta(_) => "tagged".into(),
         }
     }
     /// Tools for `n` selected images.
@@ -506,7 +531,7 @@ pub fn output_with_suffix(input: &Path, suffix: &str, ext: &str, exists: impl Fn
 }
 
 fn format_kb(kb: u32) -> String {
-    if kb >= 1024 && kb % 1024 == 0 {
+    if kb >= 1024 && kb.is_multiple_of(1024) {
         format!("{} MB", kb / 1024)
     } else {
         format!("{kb} KB")
@@ -515,7 +540,28 @@ fn format_kb(kb: u32) -> String {
 
 /// Image tool typed in the search box: `500kb`, `1.5mb`, `40%` (smaller) or `800x600`.
 pub fn parse_image_query(q: &str) -> Option<ImageOp> {
-    let q = q.trim().to_lowercase().replace(' ', "");
+    // `make Canon`, `model EOS R5`, `gps 40.4168,-3.7038`: keep the original case and spaces
+    let raw = q.trim();
+    let lower = raw.to_lowercase();
+    for key in ["make", "model", "gps"] {
+        if let Some(rest) = lower.strip_prefix(key).filter(|r| r.starts_with(' ')) {
+            let value = raw[key.len()..].trim();
+            if rest.trim().is_empty() {
+                return None;
+            }
+            return match key {
+                "make" => Some(ImageOp::SetMeta(MetaEdit { make: value.into(), model: String::new(), gps: None })),
+                "model" => Some(ImageOp::SetMeta(MetaEdit { make: String::new(), model: value.into(), gps: None })),
+                _ => {
+                    let (la, lo) = value.split_once(',')?;
+                    let (la, lo): (f64, f64) = (la.trim().parse().ok()?, lo.trim().parse().ok()?);
+                    ((-90.0..=90.0).contains(&la) && (-180.0..=180.0).contains(&lo))
+                        .then(|| ImageOp::SetMeta(MetaEdit { make: String::new(), model: String::new(), gps: Some((la, lo)) }))
+                }
+            };
+        }
+    }
+    let q = lower.replace(' ', "");
     if let Some(n) = q.strip_suffix('%') {
         let p: u8 = n.parse().ok()?;
         return (1..=95).contains(&p).then_some(ImageOp::CompressByPercent(p));
@@ -524,7 +570,7 @@ pub fn parse_image_query(q: &str) -> Option<ImageOp> {
         if let Some(n) = q.strip_suffix(suffix) {
             let v: f64 = n.parse().ok()?;
             let kb = (v * mult).round();
-            return (kb >= 1.0 && kb <= 1_000_000.0).then_some(ImageOp::CompressToKb(kb as u32));
+            return (1.0..=1_000_000.0).contains(&kb).then_some(ImageOp::CompressToKb(kb as u32));
         }
     }
     let (w, h) = q.split_once('x').or_else(|| q.split_once('×'))?;
@@ -593,6 +639,17 @@ pub fn crop_size(w: u32, h: u32, rw: u32, rh: u32) -> (u32, u32) {
 #[cfg(test)]
 mod image_tool_tests {
     use super::*;
+
+    #[test]
+    fn metadata_queries() {
+        let m = |make: &str, model: &str, gps| Some(ImageOp::SetMeta(MetaEdit { make: make.into(), model: model.into(), gps }));
+        assert_eq!(parse_image_query("make Canon"), m("Canon", "", None));
+        assert_eq!(parse_image_query("model EOS R5"), m("", "EOS R5", None));
+        assert_eq!(parse_image_query("gps 40.4168, -3.7038"), m("", "", Some((40.4168, -3.7038))));
+        for bad in ["make", "make ", "gps 91,0", "gps 1", "gps a,b", "makeup"] {
+            assert_eq!(parse_image_query(bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn image_queries() {
@@ -683,6 +740,110 @@ pub fn strip_jpeg(b: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+struct ExifEntry {
+    tag: u16,
+    typ: u16,
+    count: u32,
+    data: Vec<u8>,
+}
+
+fn ascii(tag: u16, s: &str) -> ExifEntry {
+    let mut data = s.as_bytes().to_vec();
+    data.push(0);
+    ExifEntry { tag, typ: 2, count: data.len() as u32, data }
+}
+
+fn rationals(tag: u16, vals: &[(u32, u32)]) -> ExifEntry {
+    let data = vals.iter().flat_map(|(n, d)| n.to_le_bytes().into_iter().chain(d.to_le_bytes())).collect();
+    ExifEntry { tag, typ: 5, count: vals.len() as u32, data }
+}
+
+/// Bytes an IFD with these entries takes, including its out-of-line data.
+fn ifd_size(entries: &[ExifEntry]) -> usize {
+    2 + entries.len() * 12 + 4 + entries.iter().filter(|e| e.data.len() > 4).map(|e| e.data.len() + e.data.len() % 2).sum::<usize>()
+}
+
+/// Little-endian IFD starting at TIFF offset `base`.
+fn write_ifd(mut entries: Vec<ExifEntry>, base: u32) -> Vec<u8> {
+    entries.sort_by_key(|e| e.tag);
+    let mut out = (entries.len() as u16).to_le_bytes().to_vec();
+    let mut extra = vec![];
+    let data_start = base + 2 + entries.len() as u32 * 12 + 4;
+    for e in &entries {
+        out.extend(e.tag.to_le_bytes());
+        out.extend(e.typ.to_le_bytes());
+        out.extend(e.count.to_le_bytes());
+        if e.data.len() <= 4 {
+            let mut v = e.data.clone();
+            v.resize(4, 0);
+            out.extend(v);
+        } else {
+            out.extend((data_start + extra.len() as u32).to_le_bytes());
+            extra.extend(&e.data);
+            if e.data.len() % 2 == 1 {
+                extra.push(0);
+            }
+        }
+    }
+    out.extend(0u32.to_le_bytes());
+    out.extend(extra);
+    out
+}
+
+/// Degrees, minutes, seconds as EXIF rationals (seconds in 1/10000).
+fn dms(v: f64) -> [(u32, u32); 3] {
+    let v = v.abs();
+    let d = v.floor();
+    let m = ((v - d) * 60.0).floor();
+    let s = ((v - d) * 60.0 - m) * 60.0;
+    [(d as u32, 1), (m as u32, 1), ((s * 10000.0).round() as u32, 10000)]
+}
+
+/// An APP1 EXIF segment (with marker) holding the requested tags.
+pub fn build_exif_segment(m: &MetaEdit) -> Vec<u8> {
+    let mut ifd0 = vec![];
+    if !m.make.is_empty() {
+        ifd0.push(ascii(0x010F, &m.make));
+    }
+    if !m.model.is_empty() {
+        ifd0.push(ascii(0x0110, &m.model));
+    }
+    let mut gps = vec![];
+    if let Some((la, lo)) = m.gps {
+        gps.push(ExifEntry { tag: 0, typ: 1, count: 4, data: vec![2, 3, 0, 0] });
+        gps.push(ascii(1, if la >= 0.0 { "N" } else { "S" }));
+        gps.push(rationals(2, &dms(la)));
+        gps.push(ascii(3, if lo >= 0.0 { "E" } else { "W" }));
+        gps.push(rationals(4, &dms(lo)));
+        ifd0.push(ExifEntry { tag: 0x8825, typ: 4, count: 1, data: vec![0; 4] });
+    }
+    let gps_base = (8 + ifd_size(&ifd0)) as u32;
+    if let Some(p) = ifd0.iter_mut().find(|e| e.tag == 0x8825) {
+        p.data = gps_base.to_le_bytes().to_vec();
+    }
+    let mut tiff = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
+    tiff.extend(write_ifd(ifd0, 8));
+    if !gps.is_empty() {
+        tiff.extend(write_ifd(gps, gps_base));
+    }
+    let mut seg = vec![0xFF, 0xE1];
+    seg.extend(((tiff.len() + 8) as u16).to_be_bytes());
+    seg.extend(b"Exif\0\0");
+    seg.extend(tiff);
+    seg
+}
+
+/// JPEG with its EXIF replaced by `m`'s tags (other metadata segments are dropped).
+/// `None` if the bytes are not a JPEG.
+pub fn set_jpeg_meta(b: &[u8], m: &MetaEdit) -> Option<Vec<u8>> {
+    let clean = strip_jpeg(b)?;
+    let mut out = clean[..2].to_vec();
+    // EXIF goes right after SOI; a JFIF APP0 may follow it
+    out.extend(build_exif_segment(m));
+    out.extend(&clean[2..]);
+    Some(out)
+}
+
 /// PNG without text or EXIF chunks (eXIf, tEXt, iTXt, zTXt, tIME). `None` if not a PNG.
 pub fn strip_png(b: &[u8]) -> Option<Vec<u8>> {
     const SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -725,6 +886,21 @@ mod strip_tests {
         assert!(s.windows(4).any(|w| w == b"JFIF"));
         assert!(s.ends_with(&[0xFF, 0xDA, 0x00, 0x02, 9, 9, 9, 0xFF, 0xD9]));
         assert_eq!(strip_jpeg(b"not a jpeg"), None);
+    }
+
+    #[test]
+    fn exif_segment_has_the_tags() {
+        let seg = build_exif_segment(&MetaEdit { make: "Canon".into(), model: "EOS R5".into(), gps: Some((40.4168, -3.7038)) });
+        assert_eq!(&seg[..2], &[0xFF, 0xE1]);
+        assert_eq!(u16::from_be_bytes([seg[2], seg[3]]) as usize, seg.len() - 2, "segment length");
+        assert_eq!(&seg[4..10], b"Exif\0\0");
+        for needle in [&b"Canon\0"[..], b"EOS R5\0", b"N\0", b"W\0"] {
+            assert!(seg.windows(needle.len()).any(|w| w == needle), "{needle:?}");
+        }
+        // 40° 25' 0.48" → 40/1, 25/1, 4800/10000
+        assert_eq!(dms(40.4168), [(40, 1), (25, 1), (4800, 10000)]);
+        let empty = build_exif_segment(&MetaEdit { make: String::new(), model: String::new(), gps: None });
+        assert_eq!(u16::from_be_bytes([empty[2], empty[3]]) as usize, empty.len() - 2);
     }
 
     #[test]

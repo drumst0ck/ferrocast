@@ -1635,6 +1635,14 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
                 sips(&["-c", &(*h).min(ih).to_string(), &(*w).min(iw).to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
                 Ok(out)
             }
+            ImageOp::SetMeta(m) => {
+                let bytes = std::fs::read(f).map_err(|e| e.to_string())?;
+                let tagged =
+                    ferrocast_core::convert::set_jpeg_meta(&bytes, m).ok_or("writing tags supports JPEG; convert to JPEG first")?;
+                let out = output_with_suffix(f, &op.suffix(), &e, |p| p.exists());
+                std::fs::write(&out, tagged).map_err(|e| e.to_string())?;
+                Ok(out)
+            }
             ImageOp::Annotate => {
                 // never mark up the original: copy it, then open the copy in Preview
                 let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
@@ -1873,6 +1881,35 @@ mod convert_tests {
         let (o, e) = run_image_op(one, &ImageOp::CropExact(5000, 5000));
         assert!(e.is_empty(), "{e:?}");
         assert_eq!(image_size(&o[0]), Some((1024, 1024)), "never larger than the image");
+        // camera and GPS tags written into EXIF, read back by sips; pixels untouched
+        let meta = ferrocast_core::convert::MetaEdit { make: "Ferro".into(), model: "Cast 1".into(), gps: Some((40.4168, -3.7038)) };
+        let (o, e) = run_image_op(one, &ImageOp::SetMeta(meta));
+        assert!(e.is_empty(), "{e:?}");
+        let tagged = tags(&o[0]);
+        assert!(tagged.contains("Ferro"), "{tagged}");
+        let model =
+            String::from_utf8_lossy(&std::process::Command::new("/usr/bin/sips").args(["-g", "model"]).arg(&o[0]).output().unwrap().stdout)
+                .to_string();
+        assert!(model.contains("Cast 1"), "{model}");
+        // GPS read back by ImageIO (independent of our writer); it reports magnitudes plus a ref
+        let js = format!(
+            "ObjC.import('ImageIO');ObjC.import('Foundation');var s=$.CGImageSourceCreateWithURL($.NSURL.fileURLWithPath('{}'),$());JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGImageSourceCopyPropertiesAtIndex(s,0,$())))['{{GPS}}'])",
+            o[0].display()
+        );
+        let gps = String::from_utf8_lossy(
+            &std::process::Command::new("/usr/bin/osascript").args(["-l", "JavaScript", "-e", &js]).output().unwrap().stdout,
+        )
+        .to_string();
+        assert!(gps.contains("\"LatitudeRef\":\"N\"") && gps.contains("\"LongitudeRef\":\"W\""), "{gps}");
+        assert!(gps.contains("40.416") && gps.contains("3.703"), "{gps}");
+        assert_eq!(image_size(&o[0]), Some((1024, 1024)), "image data intact");
+        assert!(!tags(&o[0]).contains("TestCam"), "old camera replaced");
+        // PNG cannot carry these tags: a clear error, no file
+        let (o, e) = run_image_op(
+            std::slice::from_ref(&wide[0]),
+            &ImageOp::SetMeta(ferrocast_core::convert::MetaEdit { make: "X".into(), model: String::new(), gps: None }),
+        );
+        assert!(e.is_empty() || o.is_empty());
         // annotate makes a byte-identical copy (Preview is not opened under test)
         std::env::set_var("FERROCAST_NO_OPEN", "1");
         let (o, e) = run_image_op(one, &ImageOp::Annotate);

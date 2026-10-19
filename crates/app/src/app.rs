@@ -1712,6 +1712,7 @@ impl App {
                                     ImageOp::Annotate => "annotate markup draw arrow text preview",
                                     ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compress size smaller",
                                     ImageOp::CropExact(..) => "crop exact dimensions pixels",
+                                    ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
                                 },
                             )
                             .is_some()
@@ -1736,6 +1737,7 @@ impl App {
                                     ImageOp::Annotate => "sf:pencil.tip.crop.circle",
                                     ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
                                     ImageOp::CropExact(..) => "sf:crop",
+                                    ImageOp::SetMeta(_) => "sf:tag",
                                 },
                                 [255, 140, 60],
                             ),
@@ -3016,6 +3018,7 @@ pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static
         ImageOp::Annotate => "sf:pencil.tip.crop.circle",
         ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
         ImageOp::CropExact(..) => "sf:crop",
+        ImageOp::SetMeta(_) => "sf:tag",
     }
 }
 
