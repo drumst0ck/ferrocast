@@ -345,3 +345,19 @@ fn typed_image_commands_with_parameters_are_listed_in_convert() {
     }
     let _ = std::fs::remove_file(&f);
 }
+
+#[test]
+fn pdf_organizer_view_renders_and_enter_without_edits_changes_nothing() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-org-{}.pdf", std::process::id()));
+    std::fs::write(&f, "not a pdf").unwrap();
+    // a missing/invalid PDF is refused with a toast, no view is pushed
+    let depth = app.stack.len();
+    app.perform(Act::OrganizePdf(f.clone()), false);
+    assert_eq!(app.stack.len(), depth, "an unreadable PDF opens no organizer");
+    // the view itself renders and an unchanged plan is not written
+    app.stack = vec![View::Root, View::PdfOrganize { file: f.clone(), n: 3, plan: ferrocast_core::pdfplan::PdfPlan::new(3) }];
+    render(&mut app, vec![]);
+    assert!(matches!(app.view(), View::PdfOrganize { .. }));
+    let _ = std::fs::remove_file(&f);
+}

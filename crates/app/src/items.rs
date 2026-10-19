@@ -277,6 +277,8 @@ pub enum Act {
     ClearCalcHistory,
     /// Open the Convert view for these files.
     Convert(Vec<PathBuf>),
+    /// Open the visual page organizer for this PDF.
+    OrganizePdf(PathBuf),
     /// Open the format wheel for these files, driven by the keyboard.
     OpenWheel(Vec<PathBuf>),
     /// Put the files on the clipboard, ready to paste in Finder.

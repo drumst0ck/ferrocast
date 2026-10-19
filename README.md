@@ -77,7 +77,8 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Rueda de herramientas (Command), compresión por tamaño, recorte exacto, metadatos EXIF/GPS, recortar/dividir/unir | Implementado; probado con archivos reales |
 | Herramientas de audio y vídeo (ffmpeg): silenciar, velocidad, fotograma, recortar encuadre, tapar con caja o desenfoque, unir clips (silencio generado en los mudos), normalizar volumen, visualizador (onda o imagen fija), quitar silencios de los extremos, mono/estéreo, pitido; organizar páginas de PDF (`pages 3,1,2r`) | Implementado como órdenes escritas; probado con archivos reales y revisado por un verificador independiente sin bloqueantes. Normalizar es de una pasada y el aviso muestra la sonoridad medida antes y después (LUFS), sin forma de onda; WMV falla en silenciar/recortar encuadre; sin editor visual ni forma de onda |
 | Rueda de formatos desde un archivo con el teclado (⌥↵ en un resultado; Shift/Command/Control cambian de rueda) | Implementado; sin prueba de teclas en sesión real. Intro sobre un archivo sigue abriéndolo; Intro sobre la selección de Finder, no incluido |
-| Editores visuales de Tangerine (vista previa en vivo, anotación propia, organizador visual de PDF) | No incluido |
+| Organizador visual de PDF (⇧⌘O sobre un PDF: miniaturas, girar, duplicar, quitar y reordenar páginas, guarda una copia) | Implementado; dibujo verificado por captura, teclas sin probar en sesión real; sin arrastrar para reordenar |
+| Editores visuales de Tangerine (vista previa en vivo, lienzo de anotación propio) | No incluido |
 | Extensiones React, sync, Search Menu Bar Items, contexto de IA (selección/pantalla) | No incluido |
 
 ## Distribución

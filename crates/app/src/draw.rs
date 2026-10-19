@@ -112,6 +112,24 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("organize") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Ok(n) = ferrocast_macos::pdf::page_count(&file) {
+                    let mut plan = ferrocast_core::pdfplan::PdfPlan::new(n);
+                    plan.move_cursor(1);
+                    plan.rotate(1);
+                    plan.duplicate();
+                    for i in 0..n {
+                        if let Ok(png) = ferrocast_macos::pdf::thumbnail(&file, i, 240) {
+                            if let Some(img) = services::decode_png(&png) {
+                                let tex = ctx.load_texture(format!("pdfthumb-{i}"), img, egui::TextureOptions::LINEAR);
+                                ctx.data_mut(|d| d.insert_temp(Id::new(("pdfthumb", i)), tex));
+                            }
+                        }
+                    }
+                    app.push(View::PdfOrganize { file, n, plan });
+                }
+            }
             Ok("welcome") => app.push(View::Welcome),
             Ok("shortcuts") => app.push(View::Shortcuts),
             Ok("about") => app.push(View::About),
@@ -355,6 +373,21 @@ impl App {
             return true;
         }
         match self.view().clone() {
+            View::PdfOrganize { file, n, plan } if k.enter => {
+                if plan.is_identity(n) {
+                    self.toast("Nothing changed: reorder, rotate, duplicate or remove a page first");
+                } else {
+                    self.toast("Organizing PDF…");
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::OrganizePdf(plan.selection()),
+                        None,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
             View::Welcome if k.enter => {
                 windows::accessibility_trusted(true);
                 true
@@ -1237,6 +1270,114 @@ impl App {
         p.text(c, Align2::CENTER_CENTER, hint, FontId::proportional(12.0), pal.text);
     }
 
+    /// Strip of page thumbnails with keyboard editing; the plan lives in the view on the stack.
+    fn draw_pdf_organizer(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        pal: &Palette,
+        file: &std::path::Path,
+        n: usize,
+        plan: ferrocast_core::pdfplan::PdfPlan,
+    ) {
+        use ferrocast_core::pdfplan::PdfPlan;
+        let ctx = ui.ctx().clone();
+        let (mut plan, before) = (plan.clone(), plan);
+        ctx.input_mut(|i| {
+            let none = Modifiers::NONE;
+            if i.consume_key(CMD, Key::ArrowLeft) {
+                plan.shift(-1);
+            } else if i.consume_key(CMD, Key::ArrowRight) {
+                plan.shift(1);
+            }
+            if i.consume_key(none, Key::ArrowLeft) {
+                plan.move_cursor(-1);
+            }
+            if i.consume_key(none, Key::ArrowRight) {
+                plan.move_cursor(1);
+            }
+            if i.consume_key(none, Key::R) {
+                plan.rotate(1);
+            }
+            if i.consume_key(Modifiers::SHIFT, Key::R) {
+                plan.rotate(-1);
+            }
+            if i.consume_key(none, Key::D) {
+                plan.duplicate();
+            }
+            if i.consume_key(none, Key::Backspace) || i.consume_key(none, Key::Delete) {
+                plan.remove();
+            }
+        });
+        if plan != before {
+            if let Some(View::PdfOrganize { plan: p, .. }) = self.stack.last_mut() {
+                *p = plan.clone();
+            }
+            ctx.request_repaint();
+        }
+        ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(Vec2::new(16.0, 12.0))), |ui| {
+            ui.label(
+                RichText::new(file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()).size(14.0).color(pal.text),
+            );
+            let changed = !plan.is_identity(n);
+            ui.label(
+                RichText::new(format!("{} of {n} pages{}", plan.pages.len(), if changed { " · edited" } else { "" }))
+                    .size(12.0)
+                    .color(pal.sub),
+            );
+            ui.add_space(8.0);
+            egui::ScrollArea::horizontal().id_salt("pdf-strip").auto_shrink([false, true]).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (pos, page) in plan.pages.iter().enumerate() {
+                        let (r, resp) = ui.allocate_exact_size(Vec2::new(116.0, 168.0), egui::Sense::click());
+                        if resp.clicked() {
+                            if let Some(View::PdfOrganize { plan: p, .. }) = self.stack.last_mut() {
+                                p.cursor = pos;
+                            }
+                        }
+                        let on = pos == plan.cursor;
+                        ui.painter().rect_filled(r, 8.0, if on { pal.sel } else { pal.field });
+                        if on {
+                            ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+                            ui.scroll_to_rect(r, None);
+                        }
+                        let boxr = Rect::from_min_size(r.min + Vec2::new(8.0, 8.0), Vec2::new(100.0, 128.0));
+                        match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new(("pdfthumb", page.src)))) {
+                            Some(tex) => {
+                                let odd = page.turns % 2 == 1;
+                                let t = tex.size_vec2();
+                                // the page as shown: swapped sides when turned a quarter
+                                let shown = if odd { Vec2::new(t.y, t.x) } else { t };
+                                let k = (boxr.width() / shown.x).min(boxr.height() / shown.y);
+                                let size = t * k;
+                                let img = egui::Image::new(&tex)
+                                    .fit_to_exact_size(size)
+                                    .rotate(page.turns as f32 * std::f32::consts::FRAC_PI_2, Vec2::splat(0.5));
+                                img.paint_at(ui, Rect::from_center_size(boxr.center(), size));
+                            }
+                            None => {
+                                ui.painter().text(boxr.center(), egui::Align2::CENTER_CENTER, "…", FontId::proportional(18.0), pal.sub);
+                            }
+                        }
+                        ui.painter().text(
+                            Pos2::new(r.center().x, r.max.y - 14.0),
+                            egui::Align2::CENTER_CENTER,
+                            PdfPlan::label(page),
+                            FontId::proportional(12.0),
+                            if on { pal.text } else { pal.sub },
+                        );
+                    }
+                });
+            });
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("←/→ choose · R rotate (⇧R back) · D duplicate · ⌫ remove · ⌘←/→ move · ↵ save a copy · esc cancel")
+                    .size(11.5)
+                    .color(pal.sub),
+            );
+        });
+    }
+
     fn draw_single(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette) {
         let ff = std::mem::take(&mut self.focus_first);
         let view = self.view().clone();
@@ -1270,6 +1411,9 @@ impl App {
                         self.save_notes();
                     }
                 });
+            }
+            View::PdfOrganize { file, n, plan } => {
+                self.draw_pdf_organizer(ui, rect, pal, &file, n, plan);
             }
             _ => {
                 let trusted = windows::accessibility_trusted(false);

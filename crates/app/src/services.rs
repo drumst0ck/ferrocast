@@ -19,6 +19,8 @@ pub enum Msg {
     Tray(String),
     Apps(Vec<AppInfo>),
     Files(String, Vec<PathBuf>),
+    /// PNG thumbnail of page `index` of the PDF being organized (None: could not render).
+    PdfThumb(PathBuf, usize, Option<Vec<u8>>),
     Script {
         run: u64,
         text: String,

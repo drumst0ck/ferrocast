@@ -57,6 +57,12 @@ pub enum View {
     CalcHistory,
     Shelf,
     Convert(Vec<PathBuf>),
+    /// Visual page organizer for one PDF: `n` source pages, the edited plan.
+    PdfOrganize {
+        file: PathBuf,
+        n: usize,
+        plan: ferrocast_core::pdfplan::PdfPlan,
+    },
     Notes,
     Colors(Rgba),
     SnippetForm {
@@ -181,6 +187,7 @@ impl View {
             View::Timers => "Timers",
             View::CalcHistory => "Calculator History",
             View::Shelf => "File Shelf",
+            View::PdfOrganize { .. } => "Organize PDF",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -1014,6 +1021,15 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::PdfThumb(file, i, png) => {
+                    // only for the organizer that asked for it
+                    if matches!(self.view(), View::PdfOrganize { file: f, .. } if *f == file) {
+                        if let Some(img) = png.as_deref().and_then(services::decode_png) {
+                            let tex = self.ctx.load_texture(format!("pdfthumb-{i}"), img, egui::TextureOptions::LINEAR);
+                            self.ctx.data_mut(|d| d.insert_temp(Id::new(("pdfthumb", i)), tex));
+                        }
+                    }
+                }
                 Msg::Moved(pairs) => {
                     // keep the file results pointing at the new places
                     for (old, new) in &pairs {
@@ -1975,6 +1991,9 @@ impl App {
                 a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
                 a.push(Action::new("Convert…", Act::Convert(vec![p.clone()])).key(CMD, Key::T));
                 a.push(Action::new("Format Wheel", Act::OpenWheel(vec![p.clone()])).key(Modifiers::ALT, Key::Enter));
+                if ferrocast_core::convert::ext(p) == "pdf" {
+                    a.push(Action::new("Organize Pages…", Act::OrganizePdf(p.clone())).key(CMD_SHIFT, Key::O));
+                }
                 a.push(Action::new("Copy File", Act::CopyFiles(vec![p.clone()])).key(CMD_SHIFT, Key::Period));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Move to…", Act::MoveFiles(vec![p.clone()])).key(CMD_SHIFT, Key::M));
@@ -2844,6 +2863,24 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::OrganizePdf(file) => match ferrocast_macos::pdf::page_count(&file) {
+                Ok(n) if n > 0 => {
+                    for i in 0..n {
+                        self.ctx.data_mut(|d| d.remove::<egui::TextureHandle>(Id::new(("pdfthumb", i))));
+                    }
+                    let bus = self.bus.clone();
+                    let f = file.clone();
+                    std::thread::spawn(move || {
+                        for i in 0..n {
+                            bus.send(Msg::PdfThumb(f.clone(), i, ferrocast_macos::pdf::thumbnail(&f, i, 240).ok()));
+                        }
+                    });
+                    self.show();
+                    self.push(View::PdfOrganize { file, n, plan: ferrocast_core::pdfplan::PdfPlan::new(n) });
+                }
+                Ok(_) => self.toast("This PDF has no pages"),
+                Err(e) => self.toast(format!("Organize PDF: {e}")),
+            },
             Act::OpenWheel(files) => {
                 let kind = ferrocast_core::wheel::WheelKind::Convert;
                 let segs = self.wheel_segments(kind, &files);
