@@ -1577,6 +1577,97 @@ mod convert_tests {
         assert_eq!(pages, 2, "one page per image");
     }
 
+    /// Uses ffmpeg and LibreOffice when installed; skips each case otherwise.
+    #[test]
+    fn optional_tools_on_real_files() {
+        let tools = Tools::detect();
+        let d = tmp("optional");
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
+        let pick = |p: &std::path::Path, ext: &str| targets(p, &tools).into_iter().find(|t| t.ext == ext).unwrap();
+        if tools.cwebp.is_some() {
+            let png = d.join("i.png");
+            std::fs::copy(icon, &png).unwrap();
+            let (o, e) = run_conversion(std::slice::from_ref(&png), &pick(&png, "webp"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert_eq!(&std::fs::read(&o[0]).unwrap()[8..12], b"WEBP");
+        }
+        if tools.ffmpeg.is_some() {
+            // one second of silence → WAV (afconvert) → MP3 (ffmpeg)
+            let wav = d.join("s.wav");
+            assert!(std::process::Command::new(tools.ffmpeg.unwrap())
+                .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1"])
+                .arg(&wav)
+                .status()
+                .unwrap()
+                .success());
+            let (o, e) = run_conversion(std::slice::from_ref(&wav), &pick(&wav, "mp3"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            let b = std::fs::read(&o[0]).unwrap();
+            assert!(b.starts_with(b"ID3") || (b[0] == 0xFF && b[1] & 0xE0 == 0xE0), "mp3 header");
+            let (o, e) = run_conversion(std::slice::from_ref(&wav), &pick(&wav, "m4a"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert_eq!(&std::fs::read(&o[0]).unwrap()[4..8], b"ftyp");
+            let (o, e) = run_conversion(std::slice::from_ref(&wav), &pick(&wav, "ogg"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"OggS"));
+            // a 1 s test clip → MOV is the source for video targets
+            let mov = d.join("clip.mov");
+            assert!(std::process::Command::new(tools.ffmpeg.unwrap())
+                .args([
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=size=160x120:rate=10",
+                    "-t",
+                    "1",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p"
+                ])
+                .arg(&mov)
+                .status()
+                .unwrap()
+                .success());
+            let srt = d.join("s.srt");
+            std::fs::write(&srt, "1\n00:00:01,000 --> 00:00:02,000\nHello\n").unwrap();
+            let (o, e) = run_conversion(std::slice::from_ref(&srt), &pick(&srt, "vtt"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read_to_string(&o[0]).unwrap().starts_with("WEBVTT"));
+            for ext in ["webm", "mkv", "gif", "mp4"] {
+                let (o, e) = run_conversion(std::slice::from_ref(&mov), &pick(&mov, ext), &tools);
+                assert!(e.is_empty(), "{ext}: {e:?}");
+                assert!(std::fs::metadata(&o[0]).unwrap().len() > 100, "{ext} has content");
+            }
+        }
+        if tools.soffice.is_some() {
+            let txt = d.join("doc.txt");
+            std::fs::write(&txt, "Hello from Ferrocast").unwrap();
+            let docx = run_conversion(std::slice::from_ref(&txt), &pick(&txt, "docx"), &tools).0.remove(0);
+            let (o, e) = run_conversion(std::slice::from_ref(&docx), &pick(&docx, "pdf"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"%PDF"));
+            let csv = d.join("t.csv");
+            std::fs::write(&csv, "a,b\n1,2\n").unwrap();
+            let (o, e) = run_conversion(std::slice::from_ref(&csv), &pick(&csv, "xlsx"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"));
+            let xlsx = o[0].clone();
+            let (o, e) = run_conversion(std::slice::from_ref(&xlsx), &pick(&xlsx, "csv"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read_to_string(&o[0]).unwrap().contains("1,2"));
+            // PDF → DOCX needs the Writer PDF import filter
+            let pdf = d.join("doc.pdf");
+            assert!(pdf.exists());
+            let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "docx"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"));
+        }
+    }
+
     #[test]
     fn missing_tool_reports_instead_of_running() {
         let d = tmp("missing");
@@ -1585,7 +1676,7 @@ mod convert_tests {
         let t = targets(&src, &Tools::default()).into_iter().find(|t| t.ext == "webp").unwrap();
         let (out, err) = run_conversion(&[src], &t, &Tools::default());
         assert!(out.is_empty());
-        assert!(err[0].contains("ffmpeg"));
+        assert!(err[0].contains("cwebp"));
     }
 }
 

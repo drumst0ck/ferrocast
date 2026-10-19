@@ -49,6 +49,8 @@ pub fn ext(path: &Path) -> String {
 pub struct Tools {
     pub ffmpeg: Option<&'static str>,
     pub soffice: Option<&'static str>,
+    /// Google's WebP encoder; many ffmpeg builds lack libwebp.
+    pub cwebp: Option<&'static str>,
 }
 
 impl Tools {
@@ -60,6 +62,7 @@ impl Tools {
         Tools {
             ffmpeg: first(&["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]),
             soffice: first(&["/opt/homebrew/bin/soffice", "/Applications/LibreOffice.app/Contents/MacOS/soffice"]),
+            cwebp: first(&["/opt/homebrew/bin/cwebp", "/usr/local/bin/cwebp"]),
         }
     }
 }
@@ -74,6 +77,7 @@ pub enum Engine {
     Archive,
     Ffmpeg,
     Soffice,
+    Cwebp,
 }
 
 impl Engine {
@@ -82,6 +86,7 @@ impl Engine {
             Engine::Sips | Engine::Afconvert | Engine::Avconvert | Engine::Textutil | Engine::Archive => "built in",
             Engine::Ffmpeg => "ffmpeg",
             Engine::Soffice => "LibreOffice",
+            Engine::Cwebp => "cwebp",
         }
     }
 }
@@ -101,6 +106,7 @@ fn t(ext: &'static str, label: &'static str, engine: Engine, tools: &Tools) -> T
     let needs = match engine {
         Engine::Ffmpeg if tools.ffmpeg.is_none() => Some("ffmpeg (brew install ffmpeg)"),
         Engine::Soffice if tools.soffice.is_none() => Some("LibreOffice (brew install --cask libreoffice)"),
+        Engine::Cwebp if tools.cwebp.is_none() => Some("webp (brew install webp)"),
         _ => None,
     };
     Target { ext, label, engine, needs }
@@ -114,7 +120,7 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
         Family::Image => vec![
             t("png", "PNG", Engine::Sips, tools),
             t("jpg", "JPEG", Engine::Sips, tools),
-            t("webp", "WebP", Engine::Ffmpeg, tools),
+            t("webp", "WebP", Engine::Cwebp, tools),
             t("heic", "HEIC", Engine::Sips, tools),
             t("tiff", "TIFF", Engine::Sips, tools),
             t("avif", "AVIF", Engine::Sips, tools),
@@ -161,7 +167,6 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
                 t("html", "HTML", Engine::Textutil, tools),
                 t("rtf", "RTF", Engine::Textutil, tools),
                 t("odt", "OpenDocument", Engine::Textutil, tools),
-                t("md", "Markdown", Engine::Soffice, tools),
             ],
         },
         Family::Spreadsheet => vec![
@@ -175,7 +180,6 @@ pub fn targets(path: &Path, tools: &Tools) -> Vec<Target> {
             t("png", "PNG (first page)", Engine::Sips, tools),
             t("jpg", "JPEG (first page)", Engine::Sips, tools),
             t("docx", "Word (DOCX)", Engine::Soffice, tools),
-            t("txt", "Plain text", Engine::Soffice, tools),
         ],
         Family::Subtitle => vec![t("vtt", "WebVTT", Engine::Ffmpeg, tools), t("srt", "SubRip (SRT)", Engine::Ffmpeg, tools)],
         Family::Archive | Family::Folder => vec![t("zip", "ZIP", Engine::Archive, tools), t("tar.gz", "tar.gz", Engine::Archive, tools)],
@@ -249,15 +253,25 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
             vec!["/usr/bin/tar".into(), "-czf".into(), o, "-C".into(), parent, name]
         }
         (Engine::Archive, ext) => return Err(format!("no archive format {ext}")),
+        (Engine::Cwebp, _) => {
+            let cw = tools.cwebp.ok_or("cwebp is not installed")?.to_string();
+            vec![cw, "-quiet".into(), "-q".into(), "85".into(), i, "-o".into(), o]
+        }
         (Engine::Ffmpeg, ext) => {
             let ff = tools.ffmpeg.ok_or("ffmpeg is not installed")?.to_string();
             let mut v = vec![ff, "-y".into(), "-loglevel".into(), "error".into(), "-i".into(), i];
-            match ext {
-                "gif" => v.extend(["-vf".into(), "fps=12,scale=640:-1:flags=lanczos".into()]),
-                "mp3" => v.extend(["-vn".into(), "-codec:a".into(), "libmp3lame".into(), "-q:a".into(), "2".into()]),
-                "webp" => v.extend(["-quality".into(), "85".into()]),
-                _ => {}
-            }
+            // Explicit encoders: Homebrew's ffmpeg has no libvorbis or libwebp, so defaults fail.
+            let args: &[&str] = match ext {
+                "gif" => &["-vf", "fps=12,scale=640:-1:flags=lanczos"],
+                "mp3" => &["-vn", "-c:a", "libmp3lame", "-q:a", "2"],
+                "ogg" | "opus" => &["-vn", "-c:a", "libopus", "-b:a", "128k"],
+                "flac" => &["-vn", "-c:a", "flac"],
+                "webm" => &["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "33", "-c:a", "libopus"],
+                "mkv" => &["-c:v", "libx264", "-crf", "20", "-c:a", "aac"],
+                "avi" => &["-c:v", "mpeg4", "-q:v", "4", "-c:a", "libmp3lame"],
+                _ => &[],
+            };
+            v.extend(args.iter().map(|a| a.to_string()));
             v.push(o);
             v
         }
@@ -265,11 +279,17 @@ pub fn plan(input: &Path, target: &Target, out: &Path, tools: &Tools) -> Result<
             let so = tools.soffice.ok_or("LibreOffice is not installed")?.to_string();
             let outdir = out.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| ".".into());
             let filter = match ext {
-                "md" => "md:Markdown",
+                "txt" => "txt:Text (encoded):UTF8",
                 other => other,
             };
+            let mut v = vec![so, "--headless".into()];
+            // PDFs open in Draw by default, which cannot export to text documents
+            if self::ext(input) == "pdf" {
+                v.push("--infilter=writer_pdf_import".into());
+            }
             // soffice names the file itself (<stem>.<ext>); the caller renames to `out` afterwards.
-            vec![so, "--headless".into(), "--convert-to".into(), filter.into(), "--outdir".into(), outdir, i]
+            v.extend(["--convert-to".into(), filter.into(), "--outdir".into(), outdir, i]);
+            v
         }
     };
     Ok(cmd)
@@ -302,9 +322,9 @@ mod tests {
         let v = targets(Path::new("photo.jpeg"), &none());
         assert!(v.iter().all(|t| t.ext != "jpg"));
         let webp = v.iter().find(|t| t.ext == "webp").unwrap();
-        assert!(webp.needs.unwrap().contains("ffmpeg"));
+        assert!(webp.needs.unwrap().contains("webp"));
         assert!(v.iter().find(|t| t.ext == "png").unwrap().needs.is_none());
-        let with = Tools { ffmpeg: Some("/opt/homebrew/bin/ffmpeg"), soffice: None };
+        let with = Tools { ffmpeg: None, soffice: None, cwebp: Some("/opt/homebrew/bin/cwebp") };
         assert!(targets(Path::new("photo.jpg"), &with).iter().find(|t| t.ext == "webp").unwrap().needs.is_none());
     }
 
@@ -318,7 +338,7 @@ mod tests {
 
     #[test]
     fn plans_use_the_right_tool() {
-        let tools = Tools { ffmpeg: Some("/ff"), soffice: Some("/so") };
+        let tools = Tools { ffmpeg: Some("/ff"), soffice: Some("/so"), cwebp: Some("/cw") };
         let png = targets(Path::new("/d/p.jpg"), &tools).into_iter().find(|t| t.ext == "png").unwrap();
         assert_eq!(
             plan(Path::new("/d/p.jpg"), &png, Path::new("/d/p.png"), &tools).unwrap()[..4],
