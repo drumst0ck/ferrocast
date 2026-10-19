@@ -1902,6 +1902,24 @@ fn adjust(f: &std::path::Path, a: ferrocast_core::convert::Adjust) -> Result<Pat
     Ok(out)
 }
 
+fn edit_photo(f: &std::path::Path, o: &ferrocast_core::photo::PhotoOpts) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::output_with_suffix;
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-edit-{}-{}.png",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let loaded = sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+        .and_then(|_| image::open(&tmp).map_err(|e| e.to_string()));
+    let _ = std::fs::remove_file(&tmp);
+    let mut img = loaded?.to_rgba8();
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    ferrocast_core::photo::apply(&mut img, w, h, o);
+    let out = output_with_suffix(f, "edited", "png", |p| p.exists());
+    img.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// Lay the images out in a grid of 600 px cells on white, as one PNG next to the first.
 static COLLAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -2076,6 +2094,15 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
         }
         return (outs, errs);
     }
+    if let ImageOp::EditWith(o) = op {
+        for f in files {
+            match edit_photo(f, o) {
+                Ok(p) => outs.push(p),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
     if let ImageOp::RedactWith(spec) = op {
         for f in files {
             match redact_with(f, spec) {
@@ -2201,6 +2228,7 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
             | ImageOp::CollageWith(_)
             | ImageOp::FrameWith(_)
             | ImageOp::RedactWith(_)
+            | ImageOp::EditWith(_)
             | ImageOp::Redact(_)
             | ImageOp::Adjust(_)
             | ImageOp::CompressToKb(_)
@@ -2391,6 +2419,25 @@ mod convert_tests {
         assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255], "edge is the red background");
         assert_eq!(img.get_pixel(20, 20).0, [255, 0, 0, 255], "rounded corner shows the background");
         assert_ne!(img.get_pixel(w / 6, h / 2).0, [255, 0, 0, 255], "picture centre is not background");
+        // edit photo: brightness lifts pixels, grayscale-saturation equalises channels, 0 is a copy
+        let ed = ferrocast_core::photo::parse("edit brightness 20").unwrap();
+        let (ep, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::EditWith(ed));
+        assert!(e.is_empty(), "{e:?}");
+        let (pw, ph) = image_size(&ep[0]).unwrap();
+        assert_eq!((pw, ph), (1024, 576), "size is kept");
+        let edit_base = d.join("edit-base.png");
+        sips(&["-s", "format", "png", &wide[0].to_string_lossy(), "--out", &edit_base.to_string_lossy()]).unwrap();
+        let (before, after) = (image::open(&edit_base).unwrap().to_rgba8(), image::open(&ep[0]).unwrap().to_rgba8());
+        let mean = |i: &image::RgbaImage| {
+            i.pixels().map(|p| p.0[0] as u64 + p.0[1] as u64 + p.0[2] as u64).sum::<u64>() / (i.width() as u64 * i.height() as u64)
+        };
+        assert!(mean(&after) > mean(&before) + 20, "brighter: {} → {}", mean(&before), mean(&after));
+        let gs = ferrocast_core::photo::parse("edit saturation -100").unwrap();
+        let (gp, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::EditWith(gs));
+        assert!(e.is_empty(), "{e:?}");
+        let gi = image::open(&gp[0]).unwrap().to_rgba8();
+        assert!(gi.pixels().all(|p| p.0[0] == p.0[1] && p.0[1] == p.0[2]), "fully desaturated");
+        assert!(ep[0] != gp[0], "never overwrites");
         // redact typed areas: solid colour, then blur; outside the area the pixels are untouched
         // the image crate only reads PNG: compare against a PNG copy of the same pixels
         let base_png = d.join("redact-base.png");

@@ -21,6 +21,7 @@ pub mod matrix;
 pub mod media;
 pub mod models;
 pub mod pages;
+pub mod photo;
 pub mod placeholders;
 pub mod ranking;
 pub mod redact;

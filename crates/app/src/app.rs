@@ -1709,6 +1709,9 @@ impl App {
                                     ImageOp::Collage | ImageOp::CollageWith(_) => "collage grid row column featured",
                                     ImageOp::FrameWith(_) => "frame background blur shadow padding",
                                     ImageOp::RedactWith(_) => "redact hide blur privacy area",
+                                    ImageOp::EditWith(_) => {
+                                        "edit photo brightness contrast saturation warmth clarity sharpen grain denoise dehaze"
+                                    }
                                     ImageOp::Redact(_) => "redact hide blur privacy face text",
                                     ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
                                     ImageOp::Annotate => "annotate markup draw arrow text preview",
@@ -1736,6 +1739,7 @@ impl App {
                                     ImageOp::Collage | ImageOp::CollageWith(_) => "sf:square.grid.2x2",
                                     ImageOp::FrameWith(_) => "sf:square.dashed",
                                     ImageOp::RedactWith(_) => "sf:eye.slash.fill",
+                                    ImageOp::EditWith(_) => "sf:slider.horizontal.3",
                                     ImageOp::Redact(_) => "sf:eye.slash.fill",
                                     ImageOp::Adjust(_) => "sf:slider.horizontal.3",
                                     ImageOp::Annotate => "sf:pencil.tip.crop.circle",
@@ -3066,6 +3070,7 @@ pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static
         ImageOp::Collage | ImageOp::CollageWith(_) => "sf:square.grid.2x2",
         ImageOp::FrameWith(_) => "sf:square.dashed",
         ImageOp::RedactWith(_) => "sf:eye.slash.fill",
+        ImageOp::EditWith(_) => "sf:slider.horizontal.3",
         ImageOp::Redact(_) => "sf:eye.slash.fill",
         ImageOp::Adjust(_) => "sf:slider.horizontal.3",
         ImageOp::Annotate => "sf:pencil.tip.crop.circle",
