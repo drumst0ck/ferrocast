@@ -23,6 +23,7 @@ pub mod models;
 pub mod pages;
 pub mod placeholders;
 pub mod ranking;
+pub mod redact;
 pub mod script;
 pub mod storage;
 pub mod subs;

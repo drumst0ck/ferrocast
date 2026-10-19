@@ -574,6 +574,8 @@ pub enum ImageOp {
     Background(&'static str),
     /// Every selected image in one grid picture.
     Collage,
+    /// Redact faces, text or typed areas with a solid colour or a blur.
+    RedactWith(crate::redact::RedactSpec),
     /// Put the picture on a colour or a blurred copy of itself, with padding, corners and shadow.
     FrameWith(crate::frame::FrameOpts),
     /// Collage with a chosen layout, final width, spacing, corner radius and background.
@@ -625,6 +627,7 @@ impl ImageOp {
             ImageOp::Flip(false) => "Flip vertically".into(),
             ImageOp::Background(c) => format!("Square on {} background", if *c == "FFFFFF" { "white" } else { "black" }),
             ImageOp::Collage => "Make a collage".into(),
+            ImageOp::RedactWith(_) => "Redact photo".into(),
             ImageOp::FrameWith(_) => "Add a background".into(),
             ImageOp::CollageWith(o) => {
                 format!("Collage · {:?}{}", o.layout, o.width.map(|w| format!(" · {w} px")).unwrap_or_default()).to_lowercase()
@@ -670,6 +673,7 @@ impl ImageOp {
             ImageOp::Background(_) => "square".into(),
             ImageOp::Collage | ImageOp::CollageWith(_) => "collage".into(),
             ImageOp::FrameWith(_) => "framed".into(),
+            ImageOp::RedactWith(_) => "redacted".into(),
             ImageOp::Redact(_) => "redacted".into(),
             ImageOp::Adjust(_) => "edited".into(),
             ImageOp::Annotate => "annotated".into(),
@@ -740,6 +744,9 @@ fn format_kb(kb: u32) -> String {
 
 /// Image tool typed in the search box: `500kb`, `1.5mb`, `40%` (smaller) or `800x600`.
 pub fn parse_image_query(q: &str) -> Option<ImageOp> {
+    if let Some(s) = crate::redact::parse(q) {
+        return Some(ImageOp::RedactWith(s));
+    }
     if let Some(o) = crate::frame::parse(q) {
         return Some(ImageOp::FrameWith(o));
     }

@@ -1622,21 +1622,70 @@ fn sips(args: &[&str]) -> Result<(), String> {
 /// Detect faces or text with Vision (on-device) and cover them with black boxes.
 /// Writes a PNG next to the original; errors when nothing was found.
 fn redact(f: &std::path::Path, faces: bool) -> Result<PathBuf, String> {
+    use ferrocast_core::redact::{RedactSpec, Source, Style};
+    let source = if faces { Source::Faces } else { Source::Text };
+    redact_with(f, &RedactSpec { source, style: Style::Solid([0, 0, 0]) })
+}
+
+fn redact_with(f: &std::path::Path, spec: &ferrocast_core::redact::RedactSpec) -> Result<PathBuf, String> {
     use ferrocast_core::convert::{output_with_suffix, redact_rect};
-    let regions = ferrocast_macos::vision::detect(f, faces, !faces).map_err(|e| e.to_string())?;
-    if regions.is_empty() {
-        return Err(if faces { "no faces found".into() } else { "no text found".into() });
-    }
-    let tmp = std::env::temp_dir().join(format!("ferrocast-redact-{}.png", std::process::id()));
-    sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])?;
-    let mut img = image::open(&tmp).map_err(|e| e.to_string())?.to_rgba8();
+    use ferrocast_core::redact::{clamp_area, Area, Source, Style};
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-redact-{}-{}.png",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let loaded = sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+        .and_then(|_| image::open(&tmp).map_err(|e| e.to_string()));
     let _ = std::fs::remove_file(&tmp);
+    let mut img = loaded?.to_rgba8();
     let (iw, ih) = img.dimensions();
-    for r in regions {
-        let (x, y, w, h) = redact_rect(r.x, r.y, r.w, r.h, iw, ih, if faces { 0.15 } else { 0.05 });
-        for py in y..(y + h).min(ih) {
-            for px in x..(x + w).min(iw) {
-                img.put_pixel(px, py, image::Rgba([0, 0, 0, 255]));
+    let areas: Vec<Area> = match &spec.source {
+        Source::Areas(a) => {
+            let inside: Vec<Area> = a.iter().filter_map(|a| clamp_area(*a, iw, ih)).collect();
+            if inside.is_empty() {
+                return Err(format!("the areas lie outside the image ({iw}×{ih} px)"));
+            }
+            inside
+        }
+        src => {
+            let faces = *src == Source::Faces;
+            let regions = ferrocast_macos::vision::detect(f, faces, !faces).map_err(|e| e.to_string())?;
+            if regions.is_empty() {
+                return Err(if faces { "no faces found".into() } else { "no text found".into() });
+            }
+            regions
+                .iter()
+                .map(|r| {
+                    let (x, y, w, h) = redact_rect(r.x, r.y, r.w, r.h, iw, ih, if faces { 0.15 } else { 0.05 });
+                    Area { x, y, w, h }
+                })
+                .collect()
+        }
+    };
+    let original = img.clone();
+    for a in areas {
+        let (x1, y1) = ((a.x + a.w).min(iw), (a.y + a.h).min(ih));
+        match spec.style {
+            Style::Solid(c) => {
+                for py in a.y..y1 {
+                    for px in a.x..x1 {
+                        img.put_pixel(px, py, image::Rgba([c[0], c[1], c[2], 255]));
+                    }
+                }
+            }
+            Style::Blur(r) => {
+                // blur the area itself plus a margin, so the edge does not fade to black
+                let m = (r * 2.0) as u32;
+                let (bx, by) = (a.x.saturating_sub(m), a.y.saturating_sub(m));
+                let (bx1, by1) = ((x1 + m).min(iw), (y1 + m).min(ih));
+                let crop = image::imageops::crop_imm(&original, bx, by, bx1 - bx, by1 - by).to_image();
+                let blurred = image::imageops::blur(&crop, r);
+                for py in a.y..y1 {
+                    for px in a.x..x1 {
+                        img.put_pixel(px, py, *blurred.get_pixel(px - bx, py - by));
+                    }
+                }
             }
         }
     }
@@ -2026,6 +2075,15 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
         }
         return (outs, errs);
     }
+    if let ImageOp::RedactWith(spec) = op {
+        for f in files {
+            match redact_with(f, spec) {
+                Ok(p) => outs.push(p),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
     if let ImageOp::FrameWith(o) = op {
         for f in files {
             match frame_image(f, o) {
@@ -2141,6 +2199,7 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
             | ImageOp::Collage
             | ImageOp::CollageWith(_)
             | ImageOp::FrameWith(_)
+            | ImageOp::RedactWith(_)
             | ImageOp::Redact(_)
             | ImageOp::Adjust(_)
             | ImageOp::CompressToKb(_)
@@ -2331,6 +2390,31 @@ mod convert_tests {
         assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255], "edge is the red background");
         assert_eq!(img.get_pixel(20, 20).0, [255, 0, 0, 255], "rounded corner shows the background");
         assert_ne!(img.get_pixel(w / 6, h / 2).0, [255, 0, 0, 255], "picture centre is not background");
+        // redact typed areas: solid colour, then blur; outside the area the pixels are untouched
+        // the image crate only reads PNG: compare against a PNG copy of the same pixels
+        let base_png = d.join("redact-base.png");
+        sips(&["-s", "format", "png", &wide[0].to_string_lossy(), "--out", &base_png.to_string_lossy()]).unwrap();
+        let base = image::open(&base_png).unwrap().to_rgba8();
+        let spec = ferrocast_core::redact::parse("redact 100,100 200x100 500,300 50x50 color ff0000").unwrap();
+        let (rd, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::RedactWith(spec));
+        assert!(e.is_empty(), "{e:?}");
+        let ri = image::open(&rd[0]).unwrap().to_rgba8();
+        assert_eq!(ri.get_pixel(150, 150).0, [255, 0, 0, 255], "first area is solid");
+        assert_eq!(ri.get_pixel(520, 320).0, [255, 0, 0, 255], "second area is solid");
+        assert_eq!(ri.get_pixel(299, 199).0, [255, 0, 0, 255], "last pixel of the area");
+        assert_eq!(ri.get_pixel(300, 200), base.get_pixel(300, 200), "just outside is untouched");
+        assert_eq!(ri.get_pixel(99, 99), base.get_pixel(99, 99), "just outside is untouched");
+        let spec = ferrocast_core::redact::parse("redact 100,100 200x100 blur 15").unwrap();
+        let (rb, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::RedactWith(spec));
+        assert!(e.is_empty(), "{e:?}");
+        let bi = image::open(&rb[0]).unwrap().to_rgba8();
+        let diff = (0..100).filter(|i| bi.get_pixel(110 + i, 150) != base.get_pixel(110 + i, 150)).count();
+        assert!(diff > 20, "blur changes the area ({diff} of 100 pixels)");
+        assert_eq!(bi.get_pixel(300, 200), base.get_pixel(300, 200), "outside the blur is untouched");
+        assert!(rd[0] != rb[0], "never overwrites");
+        let spec = ferrocast_core::redact::parse("redact 5000,5000 10x10").unwrap();
+        let (none, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::RedactWith(spec));
+        assert!(none.is_empty() && e.len() == 1 && e[0].contains("outside the image"), "{e:?}");
         // add a background: padded canvas, colour at the edge, rounded corner shows it, shadow darkens
         let fo = ferrocast_core::frame::parse("frame pad 50 radius 60 bg 0000ff").unwrap();
         let (fr, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(fo));
