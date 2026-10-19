@@ -2,6 +2,7 @@
 //! placeholders, script commands, persisted models).
 
 pub mod ai;
+pub mod annotate;
 pub mod calc;
 pub mod chatgpt;
 pub mod clipping;

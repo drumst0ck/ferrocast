@@ -101,3 +101,5 @@ Goal: bring Tangerine for Mac's capabilities into Ferrocast, local-only, same in
 - L29 Bundle rebuilt from 8100c17 (exit 0) and relaunched; process presence only. Open: annotation canvas, live-preview editors, Enter on Finder selection, real-session proof. Exact Tangerine parity NOT reached.
 
 - L30 S11-c annotation canvas started: split into (1) pure annotation model + rasterizer in core with tests, (2) canvas view with mouse tools in the launcher, (3) save a copy as PNG. Text, callouts, magnifiers and image stamps depend on a text/raster path still to be chosen; they are not promised until implemented. Annotate keeps opening Preview until the canvas is committed and working.
+
+- L31 S11-c1 annotation model and rasterizer committed (core/annotate.rs, 9 pure tests: line, arrow, rect, ellipse, highlight, freehand, numbered label with built-in digits, magnifier, clipping outside the image, hit-test/move/undo/remove). No UI yet; Annotate still opens Preview. Workspace exit 0, clippy exit 0.
