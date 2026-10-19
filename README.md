@@ -73,7 +73,9 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Herramientas de imagen: comprimir, redimensionar, recortar, quitar metadatos, PDF combinado, rotar, voltear, fondo, collage, ajustes, redactar caras/texto (Vision), anotar en Vista Previa | Implementado; probado con archivos reales (anotar y caras: sin prueba con foto real de una cara) |
 | Acciones de archivo (copiar, copiar ruta, mover a…, Terminal/iTerm, AirDrop) y File Shelf | Implementado; AirDrop y Terminal no probados en sesión real |
 | Rueda al arrastrar archivos (Shift: conversiones, Control: acciones) | Implementado; dibujo verificado por captura, el gesto real sin probar |
-| Estantería flotante en ventana aparte anclada a un borde | No incluido |
+| Estantería flotante (panel nativo siempre encima, anclado a un borde, arrastrar dentro y fuera) | Implementado; no probado en sesión real |
+| Rueda de herramientas (Command), compresión por tamaño, recorte exacto, metadatos EXIF/GPS, recortar/dividir/unir, más formatos (WMA, WMV, EPUB, PDF→imágenes 300 DPI…) | Implementado; probado con archivos reales salvo RAR→ZIP |
+| PDF→XLSX/PAGES, documentos→PAGES, entrada XLS | No incluido |
 | Extensiones React, sync, Search Menu Bar Items, contexto de IA (selección/pantalla) | No incluido |
 
 ## Distribución
