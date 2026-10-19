@@ -234,6 +234,7 @@ pub struct Settings {
     /// "Shift", "Control", "Option" or "Command".
     pub wheel_convert_key: String,
     pub wheel_actions_key: String,
+    pub wheel_tools_key: String,
 }
 
 impl Default for Settings {
@@ -271,6 +272,7 @@ impl Default for Settings {
             drop_wheel: true,
             wheel_convert_key: "Shift".into(),
             wheel_actions_key: "Control".into(),
+            wheel_tools_key: "Command".into(),
         }
     }
 }

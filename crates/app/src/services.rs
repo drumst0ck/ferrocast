@@ -45,6 +45,8 @@ pub enum Msg {
     Moved(Vec<(PathBuf, PathBuf)>),
     /// A key was tapped while dragging these files: show the wheel.
     WheelOpen(ferrocast_core::wheel::WheelKind, Vec<PathBuf>),
+    /// Another wheel key was tapped while the wheel was open.
+    WheelSwitch(ferrocast_core::wheel::WheelKind),
     /// The mouse was released while the wheel was open.
     WheelRelease,
     /// Model list for the Settings picker, keyed by `models_key`.
@@ -222,9 +224,9 @@ pub fn start_wheel(shared: Arc<Shared>, bus: Bus) {
         .spawn(move || {
             let mut tracker = Tracker::default();
             loop {
-                let (on, ck, ak) = {
+                let (on, ck, ak, tk) = {
                     let s = shared.settings.read().unwrap();
-                    (s.drop_wheel, key_mask(&s.wheel_convert_key), key_mask(&s.wheel_actions_key))
+                    (s.drop_wheel, key_mask(&s.wheel_convert_key), key_mask(&s.wheel_actions_key), key_mask(&s.wheel_tools_key))
                 };
                 if !on {
                     tracker = Tracker::default();
@@ -235,18 +237,21 @@ pub fn start_wheel(shared: Arc<Shared>, bus: Bus) {
                 objc2::rc::autoreleasepool(|_| {
                     let left = drag::left_down();
                     let bits = drag::modifier_bits();
-                    let (convert_key, actions_key) = (ck != 0 && bits & ck != 0, ak != 0 && bits & ak != 0);
+                    let (convert_key, actions_key, tools_key) =
+                        (ck != 0 && bits & ck != 0, ak != 0 && bits & ak != 0, tk != 0 && bits & tk != 0);
                     // reading the pasteboard items only matters at the moment a key is tapped
-                    let files = if left && (convert_key || actions_key) { drag::drag_files() } else { vec![] };
+                    let files = if left && (convert_key || actions_key || tools_key) { drag::drag_files() } else { vec![] };
                     let sample = Sample {
                         left_down: left,
                         drag_count: if left { drag::drag_count() } else { 0 },
                         has_files: !files.is_empty(),
                         convert_key,
                         actions_key,
+                        tools_key,
                     };
                     match tracker.step(sample) {
                         Some(WheelEvent::Open(k)) => bus.send(Msg::WheelOpen(k, files)),
+                        Some(WheelEvent::Switch(k)) => bus.send(Msg::WheelSwitch(k)),
                         Some(WheelEvent::Release) => bus.send(Msg::WheelRelease),
                         None => {}
                     }

@@ -8,6 +8,8 @@ pub enum WheelKind {
     Convert,
     /// File actions (copy, move, terminal, AirDrop…).
     Actions,
+    /// File tools (compress, crop, trim, split, merge…).
+    Tools,
 }
 
 /// One sample of the world, taken every few milliseconds.
@@ -20,12 +22,15 @@ pub struct Sample {
     pub has_files: bool,
     pub convert_key: bool,
     pub actions_key: bool,
+    pub tools_key: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WheelEvent {
     /// A key was tapped during a file drag: open this wheel.
     Open(WheelKind),
+    /// Another wheel key was tapped while a wheel was open.
+    Switch(WheelKind),
     /// The mouse was released while a wheel was open.
     Release,
 }
@@ -36,6 +41,7 @@ pub struct Tracker {
     down_count: Option<i64>,
     convert_was: bool,
     actions_was: bool,
+    tools_was: bool,
     open: bool,
 }
 
@@ -47,13 +53,20 @@ impl Tracker {
             // the drag pasteboard changes when a drag starts after the press
             let base = *self.down_count.get_or_insert(s.drag_count);
             let dragging_files = s.drag_count != base && s.has_files;
-            if dragging_files && !self.open {
-                if s.convert_key && !self.convert_was {
-                    ev = Some(WheelEvent::Open(WheelKind::Convert));
-                } else if s.actions_key && !self.actions_was {
-                    ev = Some(WheelEvent::Open(WheelKind::Actions));
-                }
-                if ev.is_some() {
+            let tapped = if s.convert_key && !self.convert_was {
+                Some(WheelKind::Convert)
+            } else if s.tools_key && !self.tools_was {
+                Some(WheelKind::Tools)
+            } else if s.actions_key && !self.actions_was {
+                Some(WheelKind::Actions)
+            } else {
+                None
+            };
+            if let Some(k) = tapped {
+                if self.open {
+                    ev = Some(WheelEvent::Switch(k));
+                } else if dragging_files {
+                    ev = Some(WheelEvent::Open(k));
                     self.open = true;
                 }
             }
@@ -66,7 +79,17 @@ impl Tracker {
         }
         self.convert_was = s.convert_key;
         self.actions_was = s.actions_key;
+        self.tools_was = s.tools_key;
         ev
+    }
+}
+
+/// Arrow-key step around a ring of `n` segments; starts at 0 when nothing is chosen.
+pub fn step_sel(sel: Option<usize>, n: usize, forward: bool) -> usize {
+    match (sel, forward) {
+        (None, _) => 0,
+        (Some(i), true) => (i + 1) % n,
+        (Some(i), false) => (i + n - 1) % n,
     }
 }
 
@@ -103,7 +126,22 @@ mod tests {
     use super::*;
 
     fn s(left: bool, count: i64, files: bool, ck: bool, ak: bool) -> Sample {
-        Sample { left_down: left, drag_count: count, has_files: files, convert_key: ck, actions_key: ak }
+        Sample { left_down: left, drag_count: count, has_files: files, convert_key: ck, actions_key: ak, tools_key: false }
+    }
+
+    #[test]
+    fn command_opens_tools_and_keys_switch_an_open_wheel() {
+        let mut t = Tracker::default();
+        let tools = |left, count, on| Sample { left_down: left, drag_count: count, has_files: true, tools_key: on, ..Default::default() };
+        t.step(tools(true, 1, false));
+        t.step(tools(true, 2, false));
+        assert_eq!(t.step(tools(true, 2, true)), Some(WheelEvent::Open(WheelKind::Tools)));
+        t.step(tools(true, 2, false));
+        // tap Control, then Shift while it stays open: switches, never re-opens
+        assert_eq!(t.step(s(true, 2, true, false, true)), Some(WheelEvent::Switch(WheelKind::Actions)));
+        t.step(s(true, 2, true, false, false));
+        assert_eq!(t.step(s(true, 2, true, true, false)), Some(WheelEvent::Switch(WheelKind::Convert)));
+        assert_eq!(t.step(s(false, 2, true, false, false)), Some(WheelEvent::Release));
     }
 
     #[test]
@@ -133,6 +171,13 @@ mod tests {
         let mut u = Tracker::default();
         u.step(s(true, 1, true, false, false));
         assert_eq!(u.step(s(false, 2, true, false, false)), None);
+    }
+
+    #[test]
+    fn arrow_steps_wrap() {
+        assert_eq!(step_sel(None, 8, true), 0);
+        assert_eq!(step_sel(Some(7), 8, true), 0);
+        assert_eq!(step_sel(Some(0), 8, false), 7);
     }
 
     #[test]

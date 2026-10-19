@@ -119,6 +119,9 @@ pub enum View {
         files: Vec<PathBuf>,
         center: Pos2,
         segs: Vec<WheelSeg>,
+        kind: ferrocast_core::wheel::WheelKind,
+        /// Segment chosen with the arrow keys.
+        sel: Option<usize>,
     },
 }
 
@@ -133,6 +136,7 @@ pub struct WheelSeg {
 #[derive(Clone)]
 pub enum WheelPick {
     Convert(ferrocast_core::convert::Target),
+    Image(ferrocast_core::convert::ImageOp),
     Act(Act),
 }
 
@@ -867,6 +871,39 @@ impl App {
                     seg("Convert…", "sf:arrow.triangle.2.circlepath", Act::Convert(f)),
                 ]
             }
+            ferrocast_core::wheel::WheelKind::Tools => {
+                use ferrocast_core::convert::ImageOp;
+                if files.iter().all(|f| family_of(f) == Family::Image) {
+                    // the most used tool of each kind, so eight fit on the ring
+                    let ops = [
+                        ImageOp::Compress(60),
+                        ImageOp::Resize(1280),
+                        ImageOp::Crop(1, 1),
+                        ImageOp::StripMetadata,
+                        ImageOp::Rotate(90),
+                        ImageOp::Redact(true),
+                        ImageOp::Annotate,
+                        if files.len() > 1 { ImageOp::CombinePdf } else { ImageOp::Background("FFFFFF") },
+                    ];
+                    ops.into_iter()
+                        .map(|op| WheelSeg {
+                            label: match op {
+                                ImageOp::Background(_) => "Background".into(),
+                                ImageOp::Annotate => "Annotate".into(),
+                                _ => op.label().split(" · ").next().unwrap_or_default().to_string(),
+                            },
+                            symbol: image_op_symbol(&op),
+                            pick: WheelPick::Image(op),
+                        })
+                        .collect()
+                } else {
+                    vec![WheelSeg {
+                        label: "Open tools…".into(),
+                        symbol: "sf:wrench.and.screwdriver",
+                        pick: WheelPick::Act(Act::Convert(files.to_vec())),
+                    }]
+                }
+            }
         }
     }
 
@@ -889,7 +926,7 @@ impl App {
             None => Pos2::ZERO,
         };
         self.prev_pid = running::frontmost().map(|f| f.pid).filter(|p| *p != std::process::id() as i32);
-        self.stack = vec![View::Root, View::Wheel { files, center, segs }];
+        self.stack = vec![View::Root, View::Wheel { files, center, segs, kind, sel: None }];
         self.panel = None;
         self.visible = true;
         self.had_focus = false;
@@ -904,12 +941,37 @@ impl App {
 
     /// Mouse released: run the segment under the pointer, if any, and close the wheel.
     fn release_wheel(&mut self) {
-        let Some(View::Wheel { files, center, segs }) = self.stack.last().cloned() else { return };
-        let picked = mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, segs.len()));
+        let Some(View::Wheel { center, segs, sel, .. }) = self.stack.last().cloned() else { return };
+        let picked = mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, segs.len())).or(sel);
+        self.apply_wheel(picked);
+    }
+
+    /// Switch an open wheel to another kind, keeping its position.
+    pub(crate) fn switch_wheel(&mut self, kind: ferrocast_core::wheel::WheelKind) {
+        let Some(View::Wheel { files, .. }) = self.stack.last().cloned() else { return };
+        let segs = self.wheel_segments(kind, &files);
+        if segs.is_empty() {
+            return;
+        }
+        if let Some(View::Wheel { segs: s, kind: k, sel, .. }) = self.stack.last_mut() {
+            *s = segs;
+            *k = kind;
+            *sel = None;
+        }
+        self.ctx.request_repaint();
+    }
+
+    /// Close the wheel and run segment `picked` (None cancels).
+    pub(crate) fn apply_wheel(&mut self, picked: Option<usize>) {
+        let Some(View::Wheel { files, segs, .. }) = self.stack.last().cloned() else { return };
         self.hide();
         self.reset_to_root();
-        let Some(i) = picked else { return };
+        let Some(i) = picked.filter(|i| *i < segs.len()) else { return };
         match segs[i].pick.clone() {
+            WheelPick::Image(op) => {
+                self.toast(format!("{}…", op.label()));
+                services::image_op_files(files, op, self.bus.clone());
+            }
             WheelPick::Convert(t) => {
                 self.toast(format!("Converting to {}…", t.label));
                 services::convert_files(files, t, self.tools, self.bus.clone());
@@ -959,6 +1021,7 @@ impl App {
                 }
                 Msg::WheelOpen(kind, files) => self.show_wheel(kind, files),
                 Msg::WheelRelease => self.release_wheel(),
+                Msg::WheelSwitch(k) => self.switch_wheel(k),
                 Msg::ConvertFiles(files) => {
                     self.show();
                     self.reset_to_root();
@@ -2908,6 +2971,25 @@ fn looks_like_url(q: &str) -> Option<String> {
 }
 
 /// Top-left origin (points) to center the launcher on the screen under the cursor.
+/// SF symbol for an image tool.
+pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static str {
+    use ferrocast_core::convert::ImageOp;
+    match op {
+        ImageOp::Compress(_) => "sf:arrow.down.right.and.arrow.up.left",
+        ImageOp::Resize(_) => "sf:arrow.up.left.and.down.right.magnifyingglass",
+        ImageOp::Crop(..) => "sf:crop",
+        ImageOp::StripMetadata => "sf:eye.slash",
+        ImageOp::CombinePdf => "sf:doc.richtext",
+        ImageOp::Rotate(_) => "sf:rotate.right",
+        ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
+        ImageOp::Background(_) => "sf:square.dashed",
+        ImageOp::Collage => "sf:square.grid.2x2",
+        ImageOp::Redact(_) => "sf:eye.slash.fill",
+        ImageOp::Adjust(_) => "sf:slider.horizontal.3",
+        ImageOp::Annotate => "sf:pencil.tip.crop.circle",
+    }
+}
+
 /// Wheel geometry, in points from its centre.
 pub(crate) const WHEEL_INNER: f32 = 58.0;
 pub(crate) const WHEEL_OUTER: f32 = 178.0;
