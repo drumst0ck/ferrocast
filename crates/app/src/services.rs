@@ -1609,13 +1609,15 @@ fn image_size(p: &std::path::Path) -> Option<(u32, u32)> {
     Some((get("pixelWidth:")?, get("pixelHeight:")?))
 }
 
+/// sips under a hard deadline, with stderr drained so a chatty run cannot stall.
 fn sips(args: &[&str]) -> Result<(), String> {
-    let o = std::process::Command::new("/usr/bin/sips").args(args).output().map_err(|e| e.to_string())?;
-    if o.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("sips failed").trim().to_string())
-    }
+    crate::route::run_limited(std::process::Command::new("/usr/bin/sips").args(args), 120).map_err(|e| {
+        if e.is_empty() {
+            "sips failed".into()
+        } else {
+            e
+        }
+    })
 }
 
 /// Run one image tool on each file (or once for Combine). Returns outputs and failures.
