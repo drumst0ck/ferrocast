@@ -834,7 +834,7 @@ fn frame_view_renders_and_refuses_unreadable_images() {
     let depth = app.stack.len();
     app.perform(Act::FrameImage(f.clone()), false);
     assert_eq!(app.stack.len(), depth, "an unreadable image opens no editor");
-    app.stack = vec![View::Root, View::FrameImage { file: f.clone(), size: (100, 80), opts: Default::default(), color: 4 }];
+    app.stack = vec![View::Root, View::FrameImage { file: f.clone(), size: (100, 80), opts: Default::default(), color: 4, picking: false }];
     render(&mut app, vec![]);
     assert!(matches!(app.view(), View::FrameImage { .. }));
     let _ = std::fs::remove_file(&f);
@@ -849,8 +849,10 @@ fn redact_view_renders_and_refuses_unreadable_images() {
     app.perform(Act::RedactImage(f.clone()), false);
     assert_eq!(app.stack.len(), depth, "an unreadable image opens no editor");
     let r = ferrocast_core::croprect::Rect { x: 5, y: 5, w: 20, h: 20 };
-    app.stack =
-        vec![View::Root, View::RedactImage { file: f.clone(), size: (100, 80), areas: vec![r], sel: Some(0), blur: true, color: 5 }];
+    app.stack = vec![
+        View::Root,
+        View::RedactImage { file: f.clone(), size: (100, 80), areas: vec![r], sel: Some(0), blur: true, radius: 24, color: 5 },
+    ];
     render(&mut app, vec![]);
     assert!(matches!(app.view(), View::RedactImage { .. }));
     let _ = std::fs::remove_file(&f);
@@ -3169,4 +3171,389 @@ fn visualizer_without_ffmpeg_shows_the_hint_and_opens_no_view() {
     app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
     app.perform(Act::VisualizeAudio(avis_file()), false);
     assert!(matches!(app.view(), View::VisualizeAudio { picking: false, image: None, .. }));
+}
+
+// ---- A13: image backdrop in the background window, blur radius and deselect in the redaction window
+
+fn a13_dir(name: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("fc-a13-{}-{}", std::process::id(), name));
+    let _ = std::fs::create_dir_all(&d);
+    d
+}
+
+fn frame_app(backdrop: ferrocast_core::frame::Backdrop) -> App {
+    let mut app = fixture();
+    let opts = ferrocast_core::frame::FrameOpts { pad: 10, radius: 4, shadow: 6, backdrop };
+    app.ctx.data_mut(|d| {
+        d.insert_temp(Id::new("frame-base"), std::sync::Arc::new(image::RgbaImage::from_pixel(60, 40, image::Rgba([10, 200, 30, 255]))))
+    });
+    app.stack = vec![
+        View::Root,
+        View::FrameImage { file: std::path::PathBuf::from("/nonexistent/a.png"), size: (60, 40), opts, color: 4, picking: false },
+    ];
+    app
+}
+
+fn frame_state(app: &App) -> (ferrocast_core::frame::Backdrop, bool) {
+    match app.view() {
+        View::FrameImage { opts, picking, .. } => (opts.backdrop.clone(), *picking),
+        other => panic!("background window closed unexpectedly: {}", other.title()),
+    }
+}
+
+#[test]
+fn frame_preview_with_an_image_backdrop_renders_in_both_themes_without_panicking() {
+    use ferrocast_core::frame::Backdrop;
+    let d = a13_dir("render");
+    let garbage = d.join("garbage.png");
+    std::fs::write(&garbage, "not an image").unwrap();
+    let real = d.join("real.png");
+    image::RgbaImage::from_pixel(32, 32, image::Rgba([250, 0, 0, 255])).save(&real).unwrap();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        for path in
+            [String::new(), "/nonexistent/bg.png".to_string(), garbage.to_string_lossy().to_string(), real.to_string_lossy().to_string()]
+        {
+            let mut app = frame_app(Backdrop::Image(path.clone()));
+            app.ctx.set_theme(theme);
+            if path.ends_with("real.png") {
+                let bg = image::RgbaImage::from_pixel(32, 32, image::Rgba([250, 0, 0, 255]));
+                app.ctx.data_mut(|d| d.insert_temp(Id::new("frame-bg"), std::sync::Arc::new((path.clone(), bg))));
+            }
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert!(matches!(app.view(), View::FrameImage { .. }));
+            assert!(app.ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("frame-tex"))).is_some(), "a preview is drawn for {path:?}");
+        }
+    }
+}
+
+#[test]
+fn frame_preview_cover_scales_the_chosen_picture_under_the_photo() {
+    use ferrocast_core::frame::{Backdrop, FrameOpts};
+    let photo = image::RgbaImage::from_pixel(60, 40, image::Rgba([10, 200, 30, 255]));
+    let bg = image::RgbaImage::from_pixel(20, 50, image::Rgba([250, 0, 0, 255]));
+    let o = FrameOpts { pad: 10, radius: 0, shadow: 0, backdrop: Backdrop::Image("x".into()) };
+    let out = services::frame_compose(&photo, Some(&bg), &o);
+    assert_eq!((out.width(), out.height()), (80, 60));
+    assert_eq!(out.get_pixel(0, 0).0, [250, 0, 0, 255], "the picture covers the whole canvas");
+    assert_eq!(out.get_pixel(79, 59).0, [250, 0, 0, 255]);
+    assert_eq!(out.get_pixel(40, 30).0, [10, 200, 30, 255], "the photo sits on top");
+    let none = services::frame_compose(&photo, None, &o);
+    assert_eq!(none.get_pixel(0, 0).0, [255, 255, 255, 255], "no picture yet: white, no panic");
+}
+
+#[test]
+fn chosen_backdrop_picture_reaches_the_frame_window_and_another_file_is_ignored() {
+    use ferrocast_core::frame::Backdrop;
+    let mut app = frame_app(Backdrop::Color([1, 2, 3]));
+    if let Some(View::FrameImage { picking, .. }) = app.stack.last_mut() {
+        *picking = true;
+    }
+    render(&mut app, vec![]);
+    let pic = std::path::PathBuf::from("/nonexistent/other-bg.png");
+    app.bus.send(Msg::FramePicked(std::path::PathBuf::from("/nonexistent/other.png"), Some(pic.clone())));
+    app.drain();
+    assert_eq!(frame_state(&app), (Backdrop::Color([1, 2, 3]), true), "a reply for another file is ignored");
+    app.bus.send(Msg::FramePicked(std::path::PathBuf::from("/nonexistent/a.png"), Some(pic.clone())));
+    app.drain();
+    assert_eq!(frame_state(&app), (Backdrop::Image(pic.to_string_lossy().to_string()), false));
+    // a cancelled dialog keeps the earlier choice and ends the picking
+    if let Some(View::FrameImage { picking, .. }) = app.stack.last_mut() {
+        *picking = true;
+    }
+    app.bus.send(Msg::FramePicked(std::path::PathBuf::from("/nonexistent/a.png"), None));
+    app.drain();
+    assert_eq!(frame_state(&app), (Backdrop::Image(pic.to_string_lossy().to_string()), false));
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn unreadable_backdrop_reply_clears_the_choice_with_a_toast() {
+    use ferrocast_core::frame::Backdrop;
+    let mut app = frame_app(Backdrop::Image("/nonexistent/bg.png".into()));
+    app.toast = None;
+    app.bus.send(Msg::FrameBgLoaded(std::path::PathBuf::from("/nonexistent/a.png"), "/nonexistent/bg.png".into(), None));
+    app.drain();
+    assert_eq!(frame_state(&app).0, Backdrop::Image(String::new()));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("could not read")), "{:?}", app.toast);
+    // a late reply for a picture that is no longer the backdrop changes nothing
+    app.toast = None;
+    app.bus.send(Msg::FrameBgLoaded(std::path::PathBuf::from("/nonexistent/a.png"), "/nonexistent/old.png".into(), None));
+    app.drain();
+    assert!(app.toast.is_none());
+}
+
+#[test]
+fn enter_with_an_image_backdrop_and_no_readable_picture_refuses_and_starts_nothing() {
+    use ferrocast_core::frame::Backdrop;
+    let d = a13_dir("enter");
+    let garbage = d.join("garbage.png");
+    std::fs::write(&garbage, "not an image").unwrap();
+    for path in [String::new(), "/nonexistent/bg.png".to_string(), garbage.to_string_lossy().to_string()] {
+        let mut app = frame_app(Backdrop::Image(path.clone()));
+        render(&mut app, vec![]);
+        app.toast = None;
+        render(&mut app, vec![key_event(Key::Enter)]);
+        assert!(matches!(app.view(), View::FrameImage { .. }), "the window stays open for {path:?}");
+        assert!(app.toast.is_some(), "a toast names the problem for {path:?}");
+        assert!(app.rx.try_recv().is_err(), "no job starts for {path:?}");
+    }
+}
+
+#[test]
+fn frame_job_builds_the_op_for_every_backdrop_or_names_the_problem() {
+    use ferrocast_core::convert::ImageOp;
+    use ferrocast_core::frame::{Backdrop, FrameOpts};
+    let d = a13_dir("job");
+    let real = d.join("bg.png");
+    image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 255, 255])).save(&real).unwrap();
+    let with = |b| FrameOpts { backdrop: b, ..Default::default() };
+    for b in [Backdrop::Color([1, 2, 3]), Backdrop::Blur(30.0), Backdrop::Image(real.to_string_lossy().to_string())] {
+        match frame_job(&with(b.clone())) {
+            Ok(ImageOp::FrameWith(o)) => assert_eq!(o.backdrop, b),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(frame_job(&with(Backdrop::Image(String::new()))).unwrap_err().contains("choose a picture"));
+    assert!(frame_job(&with(Backdrop::Image("/nonexistent/x.png".into()))).unwrap_err().contains("not found"));
+}
+
+#[test]
+fn frame_job_with_an_image_backdrop_runs_through_the_executor() {
+    use ferrocast_core::frame::{Backdrop, FrameOpts};
+    let d = a13_dir("exec");
+    let (src, bg) = (d.join("photo.png"), d.join("bg.png"));
+    image::RgbaImage::from_pixel(64, 48, image::Rgba([0, 255, 0, 255])).save(&src).unwrap();
+    image::RgbaImage::from_pixel(40, 40, image::Rgba([255, 0, 0, 255])).save(&bg).unwrap();
+    let opts = FrameOpts { pad: 20, radius: 0, shadow: 0, backdrop: Backdrop::Image(bg.to_string_lossy().to_string()) };
+    let op = frame_job(&opts).unwrap();
+    let (outs, errs) = services::run_image_op(std::slice::from_ref(&src), &op);
+    assert!(errs.is_empty(), "{errs:?}");
+    let img = image::open(&outs[0]).unwrap().to_rgba8();
+    assert_eq!((img.width(), img.height()), (104, 88));
+    assert_eq!(img.get_pixel(2, 2).0, [255, 0, 0, 255], "the chosen picture is the backdrop");
+    assert_eq!(img.get_pixel(52, 44).0, [0, 255, 0, 255], "the photo is on top");
+}
+
+#[test]
+fn frame_window_keeps_colour_and_blur_options() {
+    use ferrocast_core::frame::Backdrop;
+    for b in [Backdrop::Color([255, 255, 255]), Backdrop::Blur(30.0)] {
+        let mut app = frame_app(b.clone());
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        assert_eq!(frame_state(&app), (b, false));
+    }
+}
+
+// ---- redaction window
+
+fn redact_img_app(blur: bool, radius: u32, areas: Vec<ferrocast_core::croprect::Rect>, sel: Option<usize>) -> App {
+    let mut app = fixture();
+    app.stack = vec![
+        View::Root,
+        View::RedactImage { file: std::path::PathBuf::from("/nonexistent/r.png"), size: (1000, 600), areas, sel, blur, radius, color: 5 },
+    ];
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    app
+}
+
+fn redact_img_state(app: &App) -> (Vec<ferrocast_core::croprect::Rect>, Option<usize>, bool, u32) {
+    match app.view() {
+        View::RedactImage { areas, sel, blur, radius, .. } => (areas.clone(), *sel, *blur, *radius),
+        other => panic!("redact window closed unexpectedly: {}", other.title()),
+    }
+}
+
+/// Screen position of an image pixel in the redaction window (rect recorded by the drawing code).
+fn redact_pos(app: &App, size: (u32, u32), x: f32, y: f32) -> Pos2 {
+    let r: Rect = app.ctx.data(|d| d.get_temp(Id::new("redact-img-rect"))).expect("the redact canvas was drawn");
+    Pos2::new(r.min.x + x / size.0 as f32 * r.width(), r.min.y + y / size.1 as f32 * r.height())
+}
+
+fn two_redact_areas() -> Vec<ferrocast_core::croprect::Rect> {
+    vec![
+        ferrocast_core::croprect::Rect { x: 100, y: 100, w: 200, h: 150 },
+        ferrocast_core::croprect::Rect { x: 600, y: 300, w: 200, h: 150 },
+    ]
+}
+
+#[test]
+fn redact_job_image_carries_the_blur_radius_into_the_spec() {
+    use ferrocast_core::convert::ImageOp;
+    use ferrocast_core::redact::{Source, Style};
+    let areas = two_redact_areas();
+    for (radius, want) in [(2, 2.0), (24, 24.0), (80, 80.0), (500, 80.0), (0, 2.0)] {
+        match redact_job_image(&areas, true, radius, 5).unwrap() {
+            ImageOp::RedactWith(spec) => {
+                assert_eq!(spec.style, Style::Blur(want), "radius {radius}");
+                assert!(matches!(spec.source, Source::Areas(ref a) if a.len() == 2 && a[0].x == 100 && a[1].w == 200));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    // solid mode ignores the radius
+    match redact_job_image(&areas, false, 77, 0).unwrap() {
+        ImageOp::RedactWith(spec) => assert!(matches!(spec.style, Style::Solid(_))),
+        other => panic!("{other:?}"),
+    }
+    assert!(redact_job_image(&[], true, 24, 5).unwrap_err().contains("Nothing to redact"));
+    // what the typed query `redact ... blur 15` produces is what the slider produces
+    let typed = ferrocast_core::redact::parse("redact 100,100 200x150 blur 15").unwrap();
+    match redact_job_image(&areas[..1], true, 15, 5).unwrap() {
+        ImageOp::RedactWith(spec) => assert_eq!(spec, typed),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_larger_blur_radius_blurs_more_in_a_real_file() {
+    let d = a13_dir("blur");
+    let src = d.join("edge.png");
+    // left half black, right half white: a hard vertical edge at x = 100
+    let img =
+        image::RgbaImage::from_fn(200, 100, |x, _| if x < 100 { image::Rgba([0, 0, 0, 255]) } else { image::Rgba([255, 255, 255, 255]) });
+    img.save(&src).unwrap();
+    let area = [ferrocast_core::croprect::Rect { x: 60, y: 20, w: 80, h: 60 }];
+    // brightness step between two pixels that straddle the edge, at the area's middle row
+    let step = |radius: u32| {
+        let op = redact_job_image(&area, true, radius, 5).unwrap();
+        let (outs, errs) = services::run_image_op(std::slice::from_ref(&src), &op);
+        assert!(errs.is_empty(), "{errs:?}");
+        let out = image::open(&outs[0]).unwrap().to_rgba8();
+        let _ = std::fs::remove_file(&outs[0]);
+        let (a, b) = (out.get_pixel(90, 50).0[0] as i32, out.get_pixel(110, 50).0[0] as i32);
+        b - a
+    };
+    let (small, large) = (step(2), step(30));
+    assert!(small > 150, "a small radius keeps the edge sharp ({small})");
+    assert!(large < small - 60, "a larger radius flattens the edge more ({large} vs {small})");
+}
+
+#[test]
+fn redact_view_with_the_blur_slider_renders_in_both_themes() {
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        for (blur, radius) in [(true, 24), (true, 2), (true, 80), (false, 24)] {
+            let mut app = fixture();
+            app.ctx.set_theme(theme);
+            app.stack = vec![
+                View::Root,
+                View::RedactImage {
+                    file: "/nonexistent/r.png".into(),
+                    size: (1000, 600),
+                    areas: two_redact_areas(),
+                    sel: Some(0),
+                    blur,
+                    radius,
+                    color: 5,
+                },
+            ];
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert_eq!(redact_img_state(&app).2, blur);
+        }
+    }
+}
+
+#[test]
+fn clicking_empty_space_deselects_and_clicking_an_area_selects_it() {
+    let size = (1000, 600);
+    let mut app = redact_img_app(false, 24, two_redact_areas(), Some(0));
+    // inside the second area (far from its edges)
+    let inside = redact_pos(&app, size, 700.0, 375.0);
+    click_at(&mut app, inside);
+    assert_eq!(redact_img_state(&app).1, Some(1), "a click on an area selects it");
+    // empty picture space
+    let empty = redact_pos(&app, size, 450.0, 520.0);
+    click_at(&mut app, empty);
+    let (areas, sel, ..) = redact_img_state(&app);
+    assert_eq!(sel, None, "a click on empty space clears the selection");
+    assert_eq!(areas, two_redact_areas(), "and changes no area");
+    let again = redact_pos(&app, size, 200.0, 175.0);
+    click_at(&mut app, again);
+    assert_eq!(redact_img_state(&app).1, Some(0));
+}
+
+#[test]
+fn dragging_on_empty_space_still_creates_an_area() {
+    let size = (1000, 600);
+    let mut app = redact_img_app(false, 24, two_redact_areas(), Some(0));
+    let (from, to) = (redact_pos(&app, size, 400.0, 480.0), redact_pos(&app, size, 500.0, 560.0));
+    drag(&mut app, from, to);
+    let (areas, sel, ..) = redact_img_state(&app);
+    assert_eq!(areas.len(), 3, "a new area was added");
+    assert_eq!(sel, Some(2), "and selected");
+    assert!(areas[2].w > 40 && areas[2].h > 30, "{:?}", areas[2]);
+}
+
+#[test]
+fn deleting_an_area_during_a_drag_does_not_move_another_one() {
+    let size = (1000, 600);
+    let mut app = redact_img_app(false, 24, two_redact_areas(), None);
+    let first = two_redact_areas()[0];
+    // start dragging the first area, then delete it while the pointer is still down
+    let from = redact_pos(&app, size, 200.0, 175.0);
+    let btn = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(&mut app, vec![Event::PointerMoved(from)]);
+    render(&mut app, vec![btn(from, true)]);
+    let mid = from + Vec2::new(10.0, 6.0);
+    render(&mut app, vec![Event::PointerMoved(mid)]);
+    assert_eq!(redact_img_state(&app).1, Some(0), "the drag grabbed the first area");
+    render(&mut app, vec![key_event(Key::Delete)]);
+    let (areas, ..) = redact_img_state(&app);
+    assert_eq!(areas, vec![two_redact_areas()[1]], "the first area is gone");
+    let far = from + Vec2::new(80.0, 50.0);
+    render(&mut app, vec![Event::PointerMoved(far)]);
+    render(&mut app, vec![btn(far, false)]);
+    render(&mut app, vec![]);
+    let (areas, ..) = redact_img_state(&app);
+    assert_eq!(areas, vec![two_redact_areas()[1]], "the surviving area was not dragged ({first:?} was deleted)");
+}
+
+/// Click the blur slider's value box by scanning the strip from the right (guarded by an assertion).
+fn click_redact_blur_box(app: &mut App) {
+    for x in (200..600).rev().step_by(6) {
+        click_at(app, Pos2::new(x as f32, 81.0));
+        if app.ctx.egui_wants_keyboard_input() {
+            return;
+        }
+    }
+    panic!("the blur value box was not found (layout moved?)");
+}
+
+// L74-style: Escape while the blur box is edited ends the edit but keeps the window.
+#[test]
+fn redact_blur_box_keeps_enter_and_escape_while_editing() {
+    let areas = two_redact_areas();
+    let mut app = redact_img_app(true, 24, areas.clone(), Some(0));
+    click_redact_blur_box(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::RedactImage { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes the window");
+    let mut app = redact_img_app(true, 24, areas.clone(), Some(0));
+    click_redact_blur_box(&mut app);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::RedactImage { .. }), "Enter confirms the number, it must not save");
+    assert!(app.rx.try_recv().is_err(), "no job starts while editing");
+    // Backspace in the box must not delete the selected area
+    let mut app = redact_img_app(true, 24, areas.clone(), Some(0));
+    click_redact_blur_box(&mut app);
+    render(&mut app, vec![key_event(Key::Backspace)]);
+    assert_eq!(redact_img_state(&app).0, areas, "Backspace edits the number, not the areas");
+}
+
+#[test]
+fn redact_enter_without_areas_refuses_and_with_areas_saves() {
+    let mut app = redact_img_app(true, 40, vec![], None);
+    app.toast = None;
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::RedactImage { .. }));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Nothing to redact")));
+    let mut app = redact_img_app(true, 40, two_redact_areas(), Some(0));
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root), "Enter with areas saves and leaves");
 }

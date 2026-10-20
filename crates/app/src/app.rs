@@ -95,6 +95,49 @@ pub fn redact_job(areas: &[Area], duration: f64, size: (u32, u32)) -> Result<fer
     Ok(ferrocast_core::convert::FileTool::RedactVideoMany(list))
 }
 
+/// Blur radius range of the redaction window's slider, in pixels.
+pub const REDACT_BLUR_RANGE: std::ops::RangeInclusive<u32> = 2..=80;
+/// Radius the slider starts at (the old fixed value).
+pub const REDACT_BLUR_DEFAULT: u32 = 24;
+
+/// The job for the image redaction window, or the message that names what is wrong.
+pub fn redact_job_image(
+    areas: &[ferrocast_core::croprect::Rect],
+    blur: bool,
+    radius: u32,
+    color: usize,
+) -> Result<ferrocast_core::convert::ImageOp, String> {
+    use ferrocast_core::redact::{Area, RedactSpec, Source, Style};
+    if areas.is_empty() {
+        return Err("Nothing to redact: drag a rectangle on the picture first".into());
+    }
+    let list = areas.iter().map(|r| Area { x: r.x, y: r.y, w: r.w, h: r.h }).collect();
+    let style = if blur {
+        Style::Blur(radius.clamp(*REDACT_BLUR_RANGE.start(), *REDACT_BLUR_RANGE.end()) as f32)
+    } else {
+        Style::Solid(ferrocast_core::annotate::COLORS[color.min(5)])
+    };
+    Ok(ferrocast_core::convert::ImageOp::RedactWith(RedactSpec { source: Source::Areas(list), style }))
+}
+
+/// The job for the background window, or the message that names what is wrong (the window stays
+/// open). An image backdrop must be a readable picture.
+pub fn frame_job(opts: &ferrocast_core::frame::FrameOpts) -> Result<ferrocast_core::convert::ImageOp, String> {
+    if let ferrocast_core::frame::Backdrop::Image(path) = &opts.backdrop {
+        if path.is_empty() {
+            return Err("Background: choose a picture first".into());
+        }
+        let p = std::path::Path::new(path);
+        if !p.is_file() {
+            return Err(format!("Background: {path} was not found"));
+        }
+        if services::image_size(p).is_none() {
+            return Err("Background: could not read that picture".into());
+        }
+    }
+    Ok(ferrocast_core::convert::ImageOp::FrameWith(opts.clone()))
+}
+
 /// `m:ss` for a time in seconds (whole seconds, rounded down; 0:00 for unusable numbers).
 pub fn clock(secs: f64) -> String {
     let s = if secs.is_finite() && secs > 0.0 { secs as u64 } else { 0 };
@@ -330,14 +373,18 @@ pub enum View {
         size: (u32, u32),
         opts: ferrocast_core::frame::FrameOpts,
         color: usize,
+        /// The native picture chooser is open (one dialog at a time).
+        picking: bool,
     },
-    /// Redaction editor: file, pixel size, the areas, the selected one and the style.
+    /// Redaction editor: file, pixel size, the areas, the selected one and the style
+    /// (`radius` is the blur radius in pixels, used when `blur` is on).
     RedactImage {
         file: PathBuf,
         size: (u32, u32),
         areas: Vec<ferrocast_core::croprect::Rect>,
         sel: Option<usize>,
         blur: bool,
+        radius: u32,
         color: usize,
     },
     /// Crop editor: file, pixel size, the rectangle and an optional locked aspect.
@@ -1610,6 +1657,42 @@ impl App {
                                 d.remove::<(ferrocast_core::frame::FrameOpts, usize)>(Id::new("frame-last"));
                             }),
                             None => self.toast("Background: could not read the image"),
+                        }
+                    }
+                }
+                Msg::FramePicked(file, picked) => {
+                    let mut load = None;
+                    if let Some(View::FrameImage { file: f, opts, picking, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            *picking = false;
+                            if let Some(p) = picked {
+                                let path = p.to_string_lossy().to_string();
+                                opts.backdrop = ferrocast_core::frame::Backdrop::Image(path.clone());
+                                load = Some((p, path));
+                            }
+                        }
+                    }
+                    if let Some((p, path)) = load {
+                        let bus = self.bus.clone();
+                        std::thread::spawn(move || bus.send(Msg::FrameBgLoaded(file, path, services::display_png(&p, 600))));
+                    }
+                }
+                Msg::FrameBgLoaded(file, path, png) => {
+                    use ferrocast_core::frame::Backdrop;
+                    let current = matches!(self.view(), View::FrameImage { file: f, opts, .. }
+                        if *f == file && opts.backdrop == Backdrop::Image(path.clone()));
+                    if current {
+                        match png.as_deref().and_then(|b| image::load_from_memory(b).ok()).map(|i| i.to_rgba8()) {
+                            Some(rgba) => self.ctx.data_mut(|d| {
+                                d.insert_temp(Id::new("frame-bg"), std::sync::Arc::new((path, rgba)));
+                                d.remove::<(ferrocast_core::frame::FrameOpts, usize)>(Id::new("frame-last"));
+                            }),
+                            None => {
+                                if let Some(View::FrameImage { opts, .. }) = self.stack.last_mut() {
+                                    opts.backdrop = Backdrop::Image(String::new());
+                                }
+                                self.toast("Background: could not read that picture");
+                            }
                         }
                     }
                 }
@@ -3892,6 +3975,7 @@ impl App {
                     self.ctx.data_mut(|d| {
                         d.remove::<egui::TextureHandle>(Id::new("frame-tex"));
                         d.remove::<std::sync::Arc<image::RgbaImage>>(Id::new("frame-base"));
+                        d.remove::<std::sync::Arc<(String, image::RgbaImage)>>(Id::new("frame-bg"));
                         d.remove::<(ferrocast_core::frame::FrameOpts, usize)>(Id::new("frame-last"));
                     });
                     let (bus, f) = (self.bus.clone(), file.clone());
@@ -3903,6 +3987,7 @@ impl App {
                         size,
                         opts: ferrocast_core::frame::FrameOpts { pad, radius: pad / 2, shadow: pad / 3, ..Default::default() },
                         color: 4,
+                        picking: false,
                     });
                 }
                 None => self.toast("Background: could not read the image"),
@@ -3916,7 +4001,15 @@ impl App {
                     let (bus, f) = (self.bus.clone(), file.clone());
                     std::thread::spawn(move || bus.send(Msg::RedactLoaded(f.clone(), services::display_png(&f, 1000))));
                     self.show();
-                    self.push(View::RedactImage { file, size, areas: vec![], sel: None, blur: false, color: 5 });
+                    self.push(View::RedactImage {
+                        file,
+                        size,
+                        areas: vec![],
+                        sel: None,
+                        blur: false,
+                        radius: REDACT_BLUR_DEFAULT,
+                        color: 5,
+                    });
                 }
                 None => self.toast("Redact: could not read the image"),
             },

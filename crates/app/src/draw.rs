@@ -342,7 +342,17 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                         shadow: 40,
                         backdrop: ferrocast_core::frame::Backdrop::Color(ferrocast_core::annotate::COLORS[4]),
                     };
-                    app.push(View::FrameImage { file, size, opts, color: 4 });
+                    let mut opts = opts;
+                    // FERROCAST_FRAME_IMAGE=/path/pic.png preselects the picture backdrop
+                    if let Ok(bg) = std::env::var("FERROCAST_FRAME_IMAGE") {
+                        if let Some(rgba) =
+                            services::display_png(std::path::Path::new(&bg), 600).and_then(|p| image::load_from_memory(&p).ok())
+                        {
+                            ctx.data_mut(|d| d.insert_temp(Id::new("frame-bg"), std::sync::Arc::new((bg.clone(), rgba.to_rgba8()))));
+                            opts.backdrop = ferrocast_core::frame::Backdrop::Image(bg);
+                        }
+                    }
+                    app.push(View::FrameImage { file, size, opts, color: 4, picking: false });
                 }
             }
             Ok("redact") => {
@@ -356,7 +366,8 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                         ferrocast_core::croprect::Rect { x: size.0 / 8, y: size.1 / 5, w: size.0 / 3, h: size.1 / 5 },
                         ferrocast_core::croprect::Rect { x: size.0 / 2, y: size.1 / 2, w: size.0 / 4, h: size.1 / 4 },
                     ];
-                    app.push(View::RedactImage { file, size, areas, sel: Some(1), blur: false, color: 5 });
+                    let blur = std::env::var("FERROCAST_REDACT_BLUR").is_ok();
+                    app.push(View::RedactImage { file, size, areas, sel: Some(1), blur, radius: 24, color: 5 });
                 }
             }
             Ok("crop") => {
@@ -603,7 +614,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. } | View::NormalizeAudio { .. } | View::ChannelsAudio { .. }) && kbd_edit);
+            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::RedactImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. } | View::NormalizeAudio { .. } | View::ChannelsAudio { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -927,23 +938,24 @@ impl App {
                 true
             }
             View::FrameImage { file, opts, .. } if k.enter => {
-                self.toast("Saving framed copy…");
-                services::image_op_files(vec![file], ferrocast_core::convert::ImageOp::FrameWith(opts), self.bus.clone());
-                self.pop();
+                match crate::app::frame_job(&opts) {
+                    Ok(op) => {
+                        self.toast("Saving framed copy…");
+                        services::image_op_files(vec![file], op, self.bus.clone());
+                        self.pop();
+                    }
+                    Err(m) => self.toast(&m),
+                }
                 true
             }
-            View::RedactImage { file, areas, blur, color, .. } if k.enter => {
-                if areas.is_empty() {
-                    self.toast("Nothing to redact: drag a rectangle on the picture first");
-                } else {
-                    use ferrocast_core::redact::{Area, RedactSpec, Source, Style};
-                    let list = areas.iter().map(|r| Area { x: r.x, y: r.y, w: r.w, h: r.h }).collect();
-                    let c = ferrocast_core::annotate::COLORS[color.min(5)];
-                    let style = if blur { Style::Blur(24.0) } else { Style::Solid(c) };
-                    self.toast("Saving redacted copy…");
-                    let op = ferrocast_core::convert::ImageOp::RedactWith(RedactSpec { source: Source::Areas(list), style });
-                    services::image_op_files(vec![file], op, self.bus.clone());
-                    self.pop();
+            View::RedactImage { file, areas, blur, radius, color, .. } if k.enter => {
+                match crate::app::redact_job_image(&areas, blur, radius, color) {
+                    Ok(op) => {
+                        self.toast("Saving redacted copy…");
+                        services::image_op_files(vec![file], op, self.bus.clone());
+                        self.pop();
+                    }
+                    Err(m) => self.toast(&m),
                 }
                 true
             }
@@ -2886,19 +2898,24 @@ impl App {
 
     /// Background editor: sliders for padding, corners and shadow, a colour or blurred backdrop;
     /// the preview is composed on a 600 px copy with the sizes scaled down.
+    #[allow(clippy::too_many_arguments)]
     fn draw_frame(
         &mut self,
         ui: &mut Ui,
         area_in: Rect,
         pal: &Palette,
+        file: &std::path::Path,
         size: (u32, u32),
         opts: ferrocast_core::frame::FrameOpts,
         color: usize,
+        picking: bool,
     ) {
         use ferrocast_core::frame::Backdrop;
         let ctx = ui.ctx().clone();
         let (mut o, mut color) = (opts.clone(), color);
+        let mut choose = false;
         let blur_on = matches!(o.backdrop, Backdrop::Blur(_));
+        let image_on = matches!(o.backdrop, Backdrop::Image(_));
         let panel = Rect::from_min_max(Pos2::new(area_in.max.x - 300.0, area_in.min.y + 12.0), area_in.max - Vec2::new(16.0, 34.0));
         ui.scope_builder(UiBuilder::new().max_rect(panel), |ui| {
             ui.spacing_mut().slider_width = 170.0;
@@ -2913,13 +2930,18 @@ impl App {
                 });
             }
             ui.horizontal(|ui| {
-                if ui.selectable_label(!blur_on, "Colour").clicked() {
-                    if let Backdrop::Blur(_) = o.backdrop {
-                        o.backdrop = Backdrop::Color(ferrocast_core::annotate::COLORS[color.min(5)]);
-                    }
+                if ui.selectable_label(matches!(o.backdrop, Backdrop::Color(_)), "Colour").clicked()
+                    && !matches!(o.backdrop, Backdrop::Color(_))
+                {
+                    o.backdrop = Backdrop::Color(ferrocast_core::annotate::COLORS[color.min(5)]);
                 }
                 if ui.selectable_label(blur_on, "Blur").clicked() && !blur_on {
                     o.backdrop = Backdrop::Blur(30.0);
+                }
+                if ui.selectable_label(image_on, "Image").clicked() && !image_on {
+                    // reuse the picture already loaded for the preview, if there is one
+                    let kept: Option<std::sync::Arc<(String, image::RgbaImage)>> = ctx.data(|d| d.get_temp(Id::new("frame-bg")));
+                    o.backdrop = Backdrop::Image(kept.map(|k| k.0.clone()).unwrap_or_default());
                 }
             });
             match &mut o.backdrop {
@@ -2954,12 +2976,34 @@ impl App {
                         }
                     });
                 }
-                Backdrop::Image(_) => {}
+                Backdrop::Image(path) => {
+                    let name = std::path::Path::new(path.as_str()).file_name().map(|n| n.to_string_lossy().to_string());
+                    let text = match name {
+                        Some(n) => n,
+                        None if picking => "choosing…".to_string(),
+                        None => "no picture chosen yet".to_string(),
+                    };
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(!picking, egui::Button::new("Choose image…")).clicked() {
+                            choose = true;
+                        }
+                        ui.label(RichText::new(text).size(12.5).color(pal.sub));
+                    });
+                }
             }
         });
-        if o != opts {
-            if let Some(View::FrameImage { opts: p, color: c, .. }) = self.stack.last_mut() {
+        if choose && !picking {
+            let (bus, f) = (self.bus.clone(), file.to_path_buf());
+            std::thread::spawn(move || {
+                bus.send(Msg::FramePicked(f, services::choose_picture_with_prompt("Choose a picture for the background")))
+            });
+        }
+        if o != opts || (choose && !picking) {
+            if let Some(View::FrameImage { opts: p, color: c, picking: pk, .. }) = self.stack.last_mut() {
                 (*p, *c) = (o.clone(), color);
+                if choose {
+                    *pk = true;
+                }
             }
             ctx.request_repaint();
         }
@@ -2980,7 +3024,14 @@ impl App {
                         other => other.clone(),
                     },
                 };
-                let out = services::frame_compose(&b, None, &small);
+                // the chosen backdrop picture, once it is loaded (a white backdrop until then)
+                let bg: Option<std::sync::Arc<(String, image::RgbaImage)>> = match &o.backdrop {
+                    Backdrop::Image(p) => {
+                        ctx.data(|d| d.get_temp::<std::sync::Arc<(String, image::RgbaImage)>>(Id::new("frame-bg"))).filter(|b| b.0 == *p)
+                    }
+                    _ => None,
+                };
+                let out = services::frame_compose(&b, bg.as_deref().map(|b| &b.1), &small);
                 let (w, h) = (out.width() as usize, out.height() as usize);
                 let tex = ctx.load_texture(
                     "frame-view",
@@ -3024,20 +3075,28 @@ impl App {
         size: (u32, u32),
         areas: Vec<ferrocast_core::croprect::Rect>,
         sel: Option<usize>,
-        blur: bool,
+        style: (bool, u32),
         color: usize,
     ) {
         use ferrocast_core::croprect as cr;
         let ctx = ui.ctx().clone();
-        let before = (areas.clone(), sel, blur, color);
-        let (mut areas, mut sel, mut blur, mut color) = (areas, sel, blur, color);
+        let before = (areas.clone(), sel, style, color);
+        let (mut areas, mut sel, (mut blur, mut radius), mut color) = (areas, sel, style, color);
+        let mut deleted = false;
+        let editing = ctx.egui_wants_keyboard_input();
         ctx.input_mut(|i| {
-            if i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace) {
+            // Backspace belongs to the blur box while it is being typed in
+            if !editing && (i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)) {
                 if let Some(s) = sel.take().filter(|s| *s < areas.len()) {
                     areas.remove(s);
+                    deleted = true;
                 }
             }
         });
+        if deleted {
+            // a drag in progress holds an area index that no longer means the same area
+            ctx.data_mut(|d| d.remove::<(cr::Handle, cr::Rect, Pos2, usize)>(Id::new("redact-drag")));
+        }
         let strip = Rect::from_min_size(area_in.min + Vec2::new(12.0, 8.0), Vec2::new(area_in.width() - 24.0, 30.0));
         ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
             ui.horizontal(|ui| {
@@ -3047,7 +3106,12 @@ impl App {
                 if ui.selectable_label(blur, "Blur").clicked() {
                     blur = true;
                 }
-                if !blur {
+                if blur {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Blur").size(12.0).color(pal.sub));
+                    ui.spacing_mut().slider_width = 120.0;
+                    ui.add(egui::Slider::new(&mut radius, crate::app::REDACT_BLUR_RANGE).suffix(" px"));
+                } else {
                     ui.add_space(8.0);
                     for (i, c) in ferrocast_core::annotate::COLORS.iter().enumerate() {
                         let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
@@ -3070,8 +3134,16 @@ impl App {
         let scale = (area.width() / size.0 as f32).min(area.height() / size.1 as f32).max(0.01);
         let img_rect = Rect::from_center_size(area.center(), Vec2::new(size.0 as f32 * scale, size.1 as f32 * scale));
         let resp = ui.interact(img_rect.expand(8.0), Id::new("redact-canvas"), egui::Sense::click_and_drag());
+        ctx.data_mut(|d| d.insert_temp(Id::new("redact-img-rect"), img_rect));
         let to_img = |p: Pos2| ((p.x - img_rect.min.x) / scale, (p.y - img_rect.min.y) / scale);
         type Drag = (cr::Handle, cr::Rect, Pos2, usize);
+        if resp.clicked() {
+            // a plain click selects the topmost area under it, or clears the selection on empty space
+            if let Some(p) = resp.interact_pointer_pos() {
+                let q = to_img(p);
+                sel = areas.iter().enumerate().rev().find(|(_, r)| cr::hit(**r, q.0, q.1, scale, 10.0).is_some()).map(|(i, _)| i);
+            }
+        }
         if resp.drag_started() {
             if let Some(p) = resp.interact_pointer_pos() {
                 let q = to_img(p);
@@ -3134,13 +3206,13 @@ impl App {
         ui.painter().text(
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
             egui::Align2::CENTER_CENTER,
-            "drag on the picture to add an area · drag an area to move, corners to resize · ⌫ remove · the cover is applied on save · ↵ save a copy · esc cancel",
+            "drag to add an area · drag an area to move, corners to resize · ⌫ remove · the preview only marks areas; the cover is applied on save · ↵ save · esc cancel",
             FontId::proportional(11.5),
             pal.sub,
         );
-        if (areas.clone(), sel, blur, color) != before {
-            if let Some(View::RedactImage { areas: a, sel: s, blur: b, color: c, .. }) = self.stack.last_mut() {
-                (*a, *s, *b, *c) = (areas, sel, blur, color);
+        if (areas.clone(), sel, (blur, radius), color) != before {
+            if let Some(View::RedactImage { areas: a, sel: s, blur: b, radius: r, color: c, .. }) = self.stack.last_mut() {
+                (*a, *s, *b, *r, *c) = (areas, sel, blur, radius, color);
             }
             ctx.request_repaint();
         }
@@ -4030,11 +4102,11 @@ impl App {
             View::CollageImage { files, opts, color } => {
                 self.draw_collage(ui, rect, pal, files.len(), opts, color);
             }
-            View::FrameImage { size, opts, color, .. } => {
-                self.draw_frame(ui, rect, pal, size, opts, color);
+            View::FrameImage { file, size, opts, color, picking } => {
+                self.draw_frame(ui, rect, pal, &file, size, opts, color, picking);
             }
-            View::RedactImage { size, areas, sel, blur, color, .. } => {
-                self.draw_redact(ui, rect, pal, size, areas, sel, blur, color);
+            View::RedactImage { size, areas, sel, blur, radius, color, .. } => {
+                self.draw_redact(ui, rect, pal, size, areas, sel, (blur, radius), color);
             }
             View::CropImage { size, rect: crop, aspect, .. } => {
                 self.draw_crop(ui, rect, pal, size, crop, aspect);

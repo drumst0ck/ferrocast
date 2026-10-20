@@ -63,6 +63,10 @@ pub enum Msg {
     StampChosen(PathBuf, (f32, f32), Option<(usize, usize, Vec<u8>)>),
     /// A picture chosen for the audio to video window of this file (None: cancelled).
     VisualPicked(PathBuf, Option<PathBuf>),
+    /// A picture chosen as the backdrop of the background window of this file (None: cancelled).
+    FramePicked(PathBuf, Option<PathBuf>),
+    /// The reduced backdrop picture read off the UI thread: file, path as chosen, PNG (None: unreadable).
+    FrameBgLoaded(PathBuf, String, Option<Vec<u8>>),
     Script {
         run: u64,
         text: String,
@@ -2613,10 +2617,14 @@ pub fn choose_stamp_image() -> Option<(usize, usize, Vec<u8>)> {
 /// Ask for one picture with the native dialog and return its path, or None when cancelled
 /// (blocks; call from a thread).
 pub fn choose_picture_file() -> Option<PathBuf> {
-    let out = ferrocast_macos::system::osascript(
-        "POSIX path of (choose file of type {\"public.image\"} with prompt \"Choose a picture for the video\")",
-    )
-    .ok()?;
+    choose_picture_with_prompt("Choose a picture for the video")
+}
+
+/// Same dialog with another prompt (the prompt is a fixed string, never user text).
+pub fn choose_picture_with_prompt(prompt: &str) -> Option<PathBuf> {
+    let out =
+        ferrocast_macos::system::osascript(&format!("POSIX path of (choose file of type {{\"public.image\"}} with prompt \"{prompt}\")"))
+            .ok()?;
     let out = out.trim();
     (!out.is_empty()).then(|| PathBuf::from(out))
 }
