@@ -363,6 +363,22 @@ fn pdf_organizer_view_renders_and_enter_without_edits_changes_nothing() {
 }
 
 #[test]
+fn redact_view_renders_and_refuses_unreadable_images() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-redview-{}.png", std::process::id()));
+    std::fs::write(&f, "not an image").unwrap();
+    let depth = app.stack.len();
+    app.perform(Act::RedactImage(f.clone()), false);
+    assert_eq!(app.stack.len(), depth, "an unreadable image opens no editor");
+    let r = ferrocast_core::croprect::Rect { x: 5, y: 5, w: 20, h: 20 };
+    app.stack =
+        vec![View::Root, View::RedactImage { file: f.clone(), size: (100, 80), areas: vec![r], sel: Some(0), blur: true, color: 5 }];
+    render(&mut app, vec![]);
+    assert!(matches!(app.view(), View::RedactImage { .. }));
+    let _ = std::fs::remove_file(&f);
+}
+
+#[test]
 fn photo_editor_view_renders_and_refuses_unreadable_images() {
     let mut app = fixture();
     let f = std::env::temp_dir().join(format!("fc-editview-{}.png", std::process::id()));

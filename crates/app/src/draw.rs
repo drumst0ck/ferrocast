@@ -112,6 +112,20 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("redact") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let (Some(size), Some(png)) = (services::image_size(&file), services::display_png(&file, 1000)) {
+                    if let Some(img) = services::decode_png(&png) {
+                        let tex = ctx.load_texture("redact-view", img, egui::TextureOptions::LINEAR);
+                        ctx.data_mut(|d| d.insert_temp(Id::new("redact-tex"), tex));
+                    }
+                    let areas = vec![
+                        ferrocast_core::croprect::Rect { x: size.0 / 8, y: size.1 / 5, w: size.0 / 3, h: size.1 / 5 },
+                        ferrocast_core::croprect::Rect { x: size.0 / 2, y: size.1 / 2, w: size.0 / 4, h: size.1 / 4 },
+                    ];
+                    app.push(View::RedactImage { file, size, areas, sel: Some(1), blur: false, color: 5 });
+                }
+            }
             Ok("crop") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let (Some(size), Some(png)) = (services::image_size(&file), services::display_png(&file, 1000)) {
@@ -443,6 +457,21 @@ impl App {
                         None,
                         self.bus.clone(),
                     );
+                    self.pop();
+                }
+                true
+            }
+            View::RedactImage { file, areas, blur, color, .. } if k.enter => {
+                if areas.is_empty() {
+                    self.toast("Nothing to redact: drag a rectangle on the picture first");
+                } else {
+                    use ferrocast_core::redact::{Area, RedactSpec, Source, Style};
+                    let list = areas.iter().map(|r| Area { x: r.x, y: r.y, w: r.w, h: r.h }).collect();
+                    let c = ferrocast_core::annotate::COLORS[color.min(5)];
+                    let style = if blur { Style::Blur(24.0) } else { Style::Solid(c) };
+                    self.toast("Saving redacted copy…");
+                    let op = ferrocast_core::convert::ImageOp::RedactWith(RedactSpec { source: Source::Areas(list), style });
+                    services::image_op_files(vec![file], op, self.bus.clone());
                     self.pop();
                 }
                 true
@@ -1373,6 +1402,140 @@ impl App {
         p.text(c, Align2::CENTER_CENTER, hint, FontId::proportional(12.0), pal.text);
     }
 
+    /// Redaction editor: drag on the picture to add an area, drag an area to move or resize it,
+    /// Delete removes the selected one. The preview shows where the areas are; the covering itself
+    /// (solid or blur) is applied to the full-size copy on Enter.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_redact(
+        &mut self,
+        ui: &mut Ui,
+        area_in: Rect,
+        pal: &Palette,
+        size: (u32, u32),
+        areas: Vec<ferrocast_core::croprect::Rect>,
+        sel: Option<usize>,
+        blur: bool,
+        color: usize,
+    ) {
+        use ferrocast_core::croprect as cr;
+        let ctx = ui.ctx().clone();
+        let before = (areas.clone(), sel, blur, color);
+        let (mut areas, mut sel, mut blur, mut color) = (areas, sel, blur, color);
+        ctx.input_mut(|i| {
+            if i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace) {
+                if let Some(s) = sel.take().filter(|s| *s < areas.len()) {
+                    areas.remove(s);
+                }
+            }
+        });
+        let strip = Rect::from_min_size(area_in.min + Vec2::new(12.0, 8.0), Vec2::new(area_in.width() - 24.0, 30.0));
+        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+            ui.horizontal(|ui| {
+                if ui.selectable_label(!blur, "Solid").clicked() {
+                    blur = false;
+                }
+                if ui.selectable_label(blur, "Blur").clicked() {
+                    blur = true;
+                }
+                if !blur {
+                    ui.add_space(8.0);
+                    for (i, c) in ferrocast_core::annotate::COLORS.iter().enumerate() {
+                        let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+                        ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
+                        if i == color {
+                            ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
+                        }
+                        if resp.clicked() {
+                            color = i;
+                        }
+                    }
+                }
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new(format!("{} area{}", areas.len(), if areas.len() == 1 { "" } else { "s" })).size(12.0).color(pal.sub),
+                );
+            });
+        });
+        let area = Rect::from_min_max(area_in.min + Vec2::new(16.0, 46.0), area_in.max - Vec2::new(16.0, 34.0));
+        let scale = (area.width() / size.0 as f32).min(area.height() / size.1 as f32).max(0.01);
+        let img_rect = Rect::from_center_size(area.center(), Vec2::new(size.0 as f32 * scale, size.1 as f32 * scale));
+        let resp = ui.interact(img_rect.expand(8.0), Id::new("redact-canvas"), egui::Sense::click_and_drag());
+        let to_img = |p: Pos2| ((p.x - img_rect.min.x) / scale, (p.y - img_rect.min.y) / scale);
+        type Drag = (cr::Handle, cr::Rect, Pos2, usize);
+        if resp.drag_started() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let q = to_img(p);
+                // topmost area under the pointer first, else start a new one at this corner
+                let hit = areas.iter().enumerate().rev().find_map(|(i, r)| cr::hit(*r, q.0, q.1, scale, 10.0).map(|h| (i, h)));
+                let state: Option<Drag> = match hit {
+                    Some((i, h)) => {
+                        sel = Some(i);
+                        Some((h, areas[i], p, i))
+                    }
+                    None if areas.len() < 64 && q.0 >= 0.0 && q.1 >= 0.0 && q.0 < size.0 as f32 && q.1 < size.1 as f32 => {
+                        let start = cr::clamp(cr::Rect { x: q.0 as u32, y: q.1 as u32, w: cr::MIN, h: cr::MIN }, size.0, size.1);
+                        areas.push(start);
+                        sel = Some(areas.len() - 1);
+                        Some((cr::Handle::SE, start, p, areas.len() - 1))
+                    }
+                    None => None,
+                };
+                ctx.data_mut(|d| {
+                    d.remove::<Drag>(Id::new("redact-drag"));
+                    if let Some(s) = state {
+                        d.insert_temp(Id::new("redact-drag"), s);
+                    }
+                });
+            }
+        }
+        if resp.dragged() {
+            let state: Option<Drag> = ctx.data(|d| d.get_temp(Id::new("redact-drag")));
+            if let (Some((h, start, origin, i)), Some(p)) = (state, resp.interact_pointer_pos()) {
+                if let Some(slot) = areas.get_mut(i) {
+                    let (dx, dy) = ((p.x - origin.x) / scale, (p.y - origin.y) / scale);
+                    *slot = cr::drag(start, h, dx.round() as i64, dy.round() as i64, size.0, size.1, None);
+                }
+            }
+        }
+        if resp.drag_stopped() {
+            ctx.data_mut(|d| d.remove::<Drag>(Id::new("redact-drag")));
+        }
+        if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("redact-tex"))) {
+            egui::Image::new(&tex).paint_at(ui, img_rect);
+        } else {
+            ui.painter().text(img_rect.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
+        }
+        let c = ferrocast_core::annotate::COLORS[color.min(5)];
+        for (i, r) in areas.iter().enumerate() {
+            let sr = Rect::from_min_size(
+                Pos2::new(img_rect.min.x + r.x as f32 * scale, img_rect.min.y + r.y as f32 * scale),
+                Vec2::new(r.w as f32 * scale, r.h as f32 * scale),
+            );
+            let fill =
+                if blur { egui::Color32::from_white_alpha(70) } else { egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 190) };
+            ui.painter().rect_filled(sr, 0.0, fill);
+            ui.painter().rect_stroke(sr, 0.0, Stroke::new(if sel == Some(i) { 2.0 } else { 1.0 }, pal.accent), StrokeKind::Outside);
+            if sel == Some(i) {
+                for p in [sr.left_top(), sr.right_top(), sr.left_bottom(), sr.right_bottom()] {
+                    ui.painter().rect_filled(Rect::from_center_size(p, Vec2::splat(8.0)), 1.0, pal.accent);
+                }
+            }
+        }
+        ui.painter().text(
+            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "drag on the picture to add an area · drag an area to move, corners to resize · ⌫ remove · the cover is applied on save · ↵ save a copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+        if (areas.clone(), sel, blur, color) != before {
+            if let Some(View::RedactImage { areas: a, sel: s, blur: b, color: c, .. }) = self.stack.last_mut() {
+                (*a, *s, *b, *c) = (areas, sel, blur, color);
+            }
+            ctx.request_repaint();
+        }
+    }
+
     /// Crop editor: the picture with a draggable rectangle, aspect presets and exact size boxes.
     fn draw_crop(
         &mut self,
@@ -1931,6 +2094,9 @@ impl App {
                         self.save_notes();
                     }
                 });
+            }
+            View::RedactImage { size, areas, sel, blur, color, .. } => {
+                self.draw_redact(ui, rect, pal, size, areas, sel, blur, color);
             }
             View::CropImage { size, rect: crop, aspect, .. } => {
                 self.draw_crop(ui, rect, pal, size, crop, aspect);

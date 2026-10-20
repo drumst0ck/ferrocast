@@ -66,6 +66,15 @@ pub enum View {
         color: usize,
         sel: Option<usize>,
     },
+    /// Redaction editor: file, pixel size, the areas, the selected one and the style.
+    RedactImage {
+        file: PathBuf,
+        size: (u32, u32),
+        areas: Vec<ferrocast_core::croprect::Rect>,
+        sel: Option<usize>,
+        blur: bool,
+        color: usize,
+    },
     /// Crop editor: file, pixel size, the rectangle and an optional locked aspect.
     CropImage {
         file: PathBuf,
@@ -213,6 +222,7 @@ impl View {
             View::Annotate { .. } => "Annotate Image",
             View::EditPhoto { .. } => "Edit Photo",
             View::CropImage { .. } => "Crop Image",
+            View::RedactImage { .. } => "Redact Image",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -1063,6 +1073,17 @@ impl App {
                                 });
                             }
                             None => self.toast("Annotate: could not read the image"),
+                        }
+                    }
+                }
+                Msg::RedactLoaded(file, png) => {
+                    if matches!(self.view(), View::RedactImage { file: f, .. } if *f == file) {
+                        match png.as_deref().and_then(services::decode_png) {
+                            Some(img) => {
+                                let tex = self.ctx.load_texture("redact-view", img, egui::TextureOptions::LINEAR);
+                                self.ctx.data_mut(|d| d.insert_temp(Id::new("redact-tex"), tex));
+                            }
+                            None => self.toast("Redact: could not read the image"),
                         }
                     }
                 }
@@ -2080,6 +2101,7 @@ impl App {
                     a.push(Action::new("Annotate…", Act::AnnotateCanvas(p.clone())).key(CMD_SHIFT, Key::A));
                     a.push(Action::new("Edit Photo…", Act::EditPhoto(p.clone())).key(CMD_SHIFT, Key::E));
                     a.push(Action::new("Crop…", Act::CropImage(p.clone())).key(CMD_SHIFT, Key::K));
+                    a.push(Action::new("Redact Areas…", Act::RedactImage(p.clone())).key(CMD_SHIFT, Key::R));
                 }
                 if ferrocast_core::convert::ext(p) == "pdf" {
                     a.push(Action::new("Organize Pages…", Act::OrganizePdf(p.clone())).key(CMD_SHIFT, Key::O));
@@ -2957,6 +2979,19 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::RedactImage(file) => match services::image_size(&file) {
+                Some(size) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("redact-tex"));
+                        d.remove::<(ferrocast_core::croprect::Handle, ferrocast_core::croprect::Rect, Pos2, usize)>(Id::new("redact-drag"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::RedactLoaded(f.clone(), services::display_png(&f, 1000))));
+                    self.show();
+                    self.push(View::RedactImage { file, size, areas: vec![], sel: None, blur: false, color: 5 });
+                }
+                None => self.toast("Redact: could not read the image"),
+            },
             Act::CropImage(file) => match services::image_size(&file) {
                 Some(size) => {
                     self.ctx.data_mut(|d| {

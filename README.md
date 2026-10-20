@@ -81,7 +81,8 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Lienzo de anotación propio (⇧⌘A sobre una imagen: flecha, línea, caja, elipse, resaltado, lápiz, etiquetas numeradas y lupa; guarda una copia PNG a tamaño completo) | Implementado; dibujo verificado por captura y guardado con archivo real; ratón y teclas sin probar en sesión real; con texto libre (fuente Arial del sistema); con bocadillos con puntero e imágenes superpuestas (selector de archivos, sin probar en sesión real); «Anotar» del menú de herramientas abre el lienzo con una imagen y Vista Previa con varias |
 | Editor de fotos con vista previa en vivo (⇧⌘E: nueve deslizadores, copia a tamaño completo con ↵) | Implementado; dibujo verificado por captura, deslizadores sin probar en sesión real; la vista previa usa una copia reducida |
 | Editor de recorte (⇧⌘K: rectángulo arrastrable con asas, proporciones fijas, ancho y alto exactos; copia con ↵) | Implementado; dibujo verificado por captura y recorte con archivo real; arrastre sin probar en sesión real |
-| Editores con vista previa en vivo de redacción, fondo, collage y vídeo | No incluido: solo órdenes escritas |
+| Editor de redacción (⇧⌘R: arrastrar para añadir áreas, moverlas y cambiar su tamaño, color sólido o desenfoque; copia con ↵) | Implementado; dibujo verificado por captura, arrastre sin probar en sesión real; la vista previa solo marca las áreas |
+| Editores con vista previa en vivo de fondo, collage y vídeo | No incluido: solo órdenes escritas |
 | Extensiones React, sync, Search Menu Bar Items, contexto de IA (selección/pantalla) | No incluido |
 
 ## Distribución
