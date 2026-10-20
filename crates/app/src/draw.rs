@@ -329,7 +329,13 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     ferrocast_core::wheel::WheelKind::Convert
                 };
                 let segs = app.wheel_segments(kind, &files);
-                app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel: None });
+                let sel = std::env::var("FERROCAST_WHEEL_SEL").ok().and_then(|v| v.parse::<usize>().ok()).filter(|i| *i < segs.len());
+                match std::env::var("FERROCAST_THEME").as_deref() {
+                    Ok("light") => ctx.set_theme(egui::ThemePreference::Light),
+                    Ok("dark") => ctx.set_theme(egui::ThemePreference::Dark),
+                    _ => {}
+                }
+                app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel });
             }
             Ok("settings-ai") => {
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 3usize));
@@ -999,7 +1005,7 @@ impl App {
                 st.visuals.selection.stroke.color = accent;
             });
         }
-        if let View::Wheel { center, segs, files, sel, .. } = self.view().clone() {
+        if let View::Wheel { center, segs, files, sel, kind } = self.view().clone() {
             // keyboard: arrows choose, Enter applies, Escape cancels
             let n = segs.len();
             let (next, prev, enter, esc) = ctx.input_mut(|i| {
@@ -1038,7 +1044,7 @@ impl App {
                 }
             }
             let sel = if let Some(View::Wheel { sel, .. }) = self.stack.last() { *sel } else { None };
-            self.draw_wheel(ui, &pal, center, &segs, files.len(), sel);
+            self.draw_wheel(ui, &pal, center, &segs, &files, kind, sel);
             return;
         }
         // Fade the launcher in when it appears (opacity only; one multiply per shape).
@@ -1541,48 +1547,136 @@ impl App {
 
     /// The drop wheel: a ring of segments around the window centre; the one under the
     /// pointer (sampled globally, since a drag owns the mouse) is highlighted.
-    fn draw_wheel(&mut self, ui: &mut Ui, pal: &Palette, center: Pos2, segs: &[WheelSeg], nfiles: usize, sel: Option<usize>) {
+    #[allow(clippy::too_many_arguments)]
+    fn draw_wheel(
+        &mut self,
+        ui: &mut Ui,
+        pal: &Palette,
+        center: Pos2,
+        segs: &[WheelSeg],
+        files: &[std::path::PathBuf],
+        kind: ferrocast_core::wheel::WheelKind,
+        sel: Option<usize>,
+    ) {
+        use ferrocast_core::wheel::{hub_text, labels_fit, sector_points, segment_center, Geometry, WheelKind};
         let ctx = ui.ctx().clone();
         ctx.request_repaint_after(Duration::from_millis(16));
+        let g = Geometry::DEFAULT;
         let c = ui.max_rect().center();
-        let hover = mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, segs.len())).or(sel);
-        let p = ui.painter();
         let n = segs.len();
-        let step = std::f32::consts::TAU / n as f32;
-        // backdrop ring
-        p.circle_filled(c, WHEEL_OUTER + 6.0, pal.bg);
-        p.circle_stroke(c, WHEEL_OUTER + 6.0, Stroke::new(1.0, pal.border));
-        let accent = Color32::from_rgb(255, 140, 60);
-        for (i, seg) in segs.iter().enumerate() {
-            // segment i is centred on i*step, measured clockwise from 12 o'clock
-            let a0 = i as f32 * step - step / 2.0;
-            let pt = |a: f32, r: f32| c + Vec2::new(a.sin(), -a.cos()) * r;
-            if hover == Some(i) {
-                let k = 24;
-                let mut pts: Vec<Pos2> = (0..=k).map(|j| pt(a0 + step * j as f32 / k as f32, WHEEL_OUTER)).collect();
-                pts.extend((0..=k).rev().map(|j| pt(a0 + step * j as f32 / k as f32, WHEEL_INNER)));
-                // egui fills convex shapes only: draw the sector as quads
-                for j in 0..k {
-                    let q = vec![pts[j], pts[j + 1], pts[pts.len() - 2 - j], pts[pts.len() - 1 - j]];
-                    p.add(egui::Shape::convex_polygon(q, accent.gamma_multiply(0.35), Stroke::NONE));
-                }
-            }
-            p.line_segment([pt(a0, WHEEL_INNER), pt(a0, WHEEL_OUTER)], Stroke::new(1.0, pal.sep));
-            let mid = pt(a0 + step / 2.0, (WHEEL_INNER + WHEEL_OUTER) / 2.0);
-            let ir = Rect::from_center_size(mid - Vec2::new(0.0, 10.0), Vec2::splat(22.0));
-            ui::paint_icon(&mut self.icons, ui, ir, &Icon::Glyph(seg.symbol, [255, 140, 60]), pal);
-            let col = if hover == Some(i) { pal.text } else { pal.sub };
-            ui.painter().text(mid + Vec2::new(0.0, 14.0), Align2::CENTER_CENTER, &seg.label, FontId::proportional(11.5), col);
-        }
-        let p = ui.painter();
-        p.circle_filled(c, WHEEL_INNER - 4.0, pal.field);
-        let hint = match hover {
-            Some(i) => segs[i].label.clone(),
-            None => format!("{nfiles} file{}", if nfiles == 1 { "" } else { "s" }),
+        let hover = if n == 0 { None } else { mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, n)).or(sel) };
+        let dark = self.dark;
+        let (name, rgb) = match kind {
+            WheelKind::Convert => ("CONVERT", [255u8, 140, 60]),
+            WheelKind::Tools => ("TOOLS", [86, 194, 255]),
+            WheelKind::Actions => ("ACTIONS", [89, 212, 153]),
         };
-        p.text(c, Align2::CENTER_CENTER, hint, FontId::proportional(12.0), pal.text);
+        let accent = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+        let outer = g.r_out + 10.0;
+        let (white, black) = (Color32::from_white_alpha, Color32::from_black_alpha);
+        let p = ui.painter().clone();
+        // soft shadow, then the translucent disc and its rim
+        for (k, a) in if dark { [(16.0, 10u8), (10.0, 14), (5.0, 20)] } else { [(16.0, 6), (10.0, 9), (5.0, 12)] } {
+            p.circle_filled(c + Vec2::new(0.0, 6.0), outer + k, black(a));
+        }
+        p.circle_filled(
+            c,
+            outer,
+            if dark { Color32::from_rgba_unmultiplied(24, 24, 27, 222) } else { Color32::from_rgba_unmultiplied(250, 250, 251, 226) },
+        );
+        p.circle_stroke(c, outer - 0.5, Stroke::new(1.0, if dark { white(34) } else { black(40) }));
+        let top: Vec<Pos2> = (0..=24)
+            .map(|j| {
+                let a = (-60.0f32 + 120.0 * j as f32 / 24.0).to_radians();
+                c + Vec2::new(a.sin(), -a.cos()) * (outer - 1.5)
+            })
+            .collect();
+        p.add(egui::Shape::line(top, Stroke::new(1.0, if dark { white(46) } else { white(120) })));
+        // ring track
+        p.circle_stroke(c, (g.r_in + g.r_out) / 2.0, Stroke::new(g.r_out - g.r_in, if dark { white(8) } else { black(6) }));
+        let at = |q: [f32; 2]| c + Vec2::new(q[0], q[1]);
+        for (i, seg) in segs.iter().enumerate() {
+            let on = hover == Some(i);
+            if on {
+                let pts = sector_points(i, n, &g, 16);
+                let k = pts.len() / 2 - 1;
+                let mut mesh = egui::Mesh::default();
+                for j in 0..=k {
+                    mesh.colored_vertex(at(pts[j]), accent.gamma_multiply(0.34));
+                    mesh.colored_vertex(at(pts[pts.len() - 1 - j]), accent.gamma_multiply(0.10));
+                }
+                for j in 0..k as u32 {
+                    let b = j * 2;
+                    mesh.add_triangle(b, b + 1, b + 2);
+                    mesh.add_triangle(b + 1, b + 3, b + 2);
+                }
+                p.add(egui::Shape::mesh(mesh));
+                p.add(egui::Shape::closed_line(pts.iter().map(|q| at(*q)).collect(), Stroke::new(1.5, accent)));
+                // glow along the outer edge
+                let edge: Vec<Pos2> = pts[..=k].iter().map(|q| at(*q)).collect();
+                for (w, a) in [(10.0, 18u8), (6.0, 32), (3.0, 70)] {
+                    p.add(egui::Shape::line(edge.clone(), Stroke::new(w, Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], a))));
+                }
+            } else if n > 1 {
+                let a = (i as f32 - 0.5) * std::f32::consts::TAU / n as f32;
+                let d = Vec2::new(a.sin(), -a.cos());
+                p.line_segment(
+                    [c + d * (g.r_in + 2.0), c + d * (g.r_out - 2.0)],
+                    Stroke::new(1.0, if dark { white(16) } else { black(14) }),
+                );
+            }
+            let r_mid = (g.r_in + g.r_out) / 2.0;
+            let mid = at(segment_center(i, n, r_mid));
+            let fits = labels_fit(n, r_mid);
+            let tile = (if n > 8 { 24.0 } else { 28.0 }) * if on { 1.12 } else { 1.0 };
+            let ir = Rect::from_center_size(if fits { mid - Vec2::new(0.0, 8.0) } else { mid }, Vec2::splat(tile));
+            ui.painter().rect_filled(
+                ir.expand(4.0),
+                9.0,
+                Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], if on { 46 } else { 22 }),
+            );
+            ui::paint_icon(&mut self.icons, ui, ir, &Icon::Glyph(seg.symbol, rgb), pal);
+            if fits {
+                let col = if on { pal.text } else { pal.sub };
+                let label = if seg.label.chars().count() > 17 {
+                    format!("{}…", seg.label.chars().take(16).collect::<String>())
+                } else {
+                    seg.label.clone()
+                };
+                ui.painter().text(mid + Vec2::new(0.0, 22.0), Align2::CENTER_CENTER, label, FontId::proportional(11.0), col);
+            }
+        }
+        // hub: wheel name, hovered label or file summary, kind line
+        let p = ui.painter();
+        p.circle_filled(c, g.r_in - 6.0, if dark { white(10) } else { black(6) });
+        p.circle_stroke(c, g.r_in - 6.0, Stroke::new(1.0, pal.border));
+        let (count, kind_line) = hub_text(files);
+        p.text(c - Vec2::new(0.0, 30.0), Align2::CENTER_CENTER, name, FontId::proportional(9.5), accent);
+        match hover.and_then(|i| segs.get(i)) {
+            Some(sg) => {
+                let l = if sg.label.chars().count() > 16 {
+                    format!("{}…", sg.label.chars().take(15).collect::<String>())
+                } else {
+                    sg.label.clone()
+                };
+                p.text(c, Align2::CENTER_CENTER, l, FontId::proportional(13.0), pal.text);
+            }
+            None => {
+                p.text(c, Align2::CENTER_CENTER, count, FontId::proportional(13.0), pal.text);
+            }
+        }
+        p.text(c + Vec2::new(0.0, 18.0), Align2::CENTER_CENTER, kind_line, FontId::proportional(10.5), pal.sub);
+        for (j, (sym, k)) in [("⇧", WheelKind::Convert), ("⌘", WheelKind::Tools), ("⌃", WheelKind::Actions)].into_iter().enumerate() {
+            let x = c.x + (j as f32 - 1.0) * 16.0;
+            p.text(
+                Pos2::new(x, c.y + 38.0),
+                Align2::CENTER_CENTER,
+                sym,
+                FontId::proportional(10.0),
+                if k == kind { accent } else { pal.sub },
+            );
+        }
     }
-
     /// Speed window: presets, a logarithmic slider and the resulting length. Pitch is preserved.
     fn draw_video_speed(&mut self, ui: &mut Ui, area_in: Rect, pal: &Palette, duration: Option<f64>, factor: f64) {
         use ferrocast_core::videoplan::{sped_duration, SPEED_MAX, SPEED_MIN};

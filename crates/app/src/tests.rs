@@ -384,6 +384,29 @@ fn convert_view_offers_the_editors_for_one_video_pdf_and_image() {
 }
 
 #[test]
+fn wheel_renders_for_any_segment_count_in_both_themes() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    let files = vec![std::path::PathBuf::from("/nonexistent/a.png")];
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for kind in [WheelKind::Convert, WheelKind::Tools, WheelKind::Actions] {
+            for n in [0usize, 1, 8, 9, 12] {
+                let segs: Vec<WheelSeg> =
+                    (0..n).map(|i| WheelSeg { label: format!("Option {i}"), symbol: "sf:photo", pick: WheelPick::Act(Act::Run) }).collect();
+                for sel in [None, n.checked_sub(1)] {
+                    app.stack = vec![
+                        View::Root,
+                        View::Wheel { files: files.clone(), center: Pos2::new(-9999.0, -9999.0), segs: segs.clone(), kind, sel },
+                    ];
+                    render(&mut app, vec![]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
     let f = std::env::temp_dir().join(format!("fc-vspeed-{}.mp4", std::process::id()));
