@@ -442,6 +442,7 @@ impl App {
             }
             k.cmd_enter = i.consume_key(CMD, Key::Enter);
             if (shape != Shape::Form || panel) && !typing {
+                k.repeat = i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, repeat: true, .. }));
                 k.enter = i.consume_key(Modifiers::NONE, Key::Enter);
             }
             if !typing {
@@ -603,6 +604,7 @@ impl App {
                 }
                 true
             }
+            View::VideoSnapshot { trim: Some(_), .. } if k.enter && k.repeat => true,
             View::VideoSnapshot { file, trim: Some(t) } if k.enter => {
                 self.toast("Saving full-resolution frame…");
                 services::file_tool_files(

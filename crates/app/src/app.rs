@@ -335,6 +335,8 @@ struct Keys {
     up: bool,
     down: bool,
     enter: bool,
+    /// The Enter press is an auto-repeat of a held key.
+    repeat: bool,
     cmd_enter: bool,
     esc: bool,
     backspace: bool,
@@ -1200,7 +1202,9 @@ impl App {
                     }
                 }
                 Msg::VideoFrame(file, t, png) => {
-                    self.ctx.data_mut(|d| d.insert_temp(Id::new("vt-busy"), false));
+                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } if *f == file) {
+                        self.ctx.data_mut(|d| d.insert_temp(Id::new("vt-busy"), false));
+                    }
                     if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } if *f == file) {
                         if let Some(img) = png.as_deref().and_then(services::decode_png) {
                             let tex = self.ctx.load_texture("vt-view", img, egui::TextureOptions::LINEAR);

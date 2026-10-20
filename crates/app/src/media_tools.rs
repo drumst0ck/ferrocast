@@ -58,12 +58,27 @@ pub(crate) fn video_info(ff: &str, file: &Path) -> Option<(f64, f64)> {
     Some((duration, rate))
 }
 
-/// Pixel size of the first video stream.
+/// Size of a video stream as it is displayed: width and height swap when the stream carries a
+/// quarter-turn rotation (side data or the legacy `rotate` tag), because ffmpeg autorotates.
+fn display_dims(v: &serde_json::Value) -> Option<(u32, u32)> {
+    let (w, h) = (v["width"].as_u64()?, v["height"].as_u64()?);
+    let rot = v["side_data_list"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find_map(|d| d["rotation"].as_f64())
+        .or_else(|| v["tags"]["rotate"].as_str().and_then(|r| r.parse::<f64>().ok()))
+        .unwrap_or(0.0);
+    let quarter = (rot.rem_euclid(180.0) - 90.0).abs() < 1.0;
+    let (w, h) = if quarter { (h, w) } else { (w, h) };
+    (w >= 2 && h >= 2 && w <= 16384 && h <= 16384).then_some((w as u32, h as u32))
+}
+
+/// Displayed pixel size of the first video stream.
 pub(crate) fn video_dims(ff: &str, file: &Path) -> Option<(u32, u32)> {
     let info = probe(ff, file).ok()?;
-    let v = streams(&info).find(|s| s["codec_type"] == "video")?;
-    let (w, h) = (v["width"].as_u64()?, v["height"].as_u64()?);
-    (w >= 2 && h >= 2 && w <= 16384 && h <= 16384).then_some((w as u32, h as u32))
+    let dims = display_dims(streams(&info).find(|s| s["codec_type"] == "video")?);
+    dims
 }
 
 /// PNG of the frame at `t` seconds, at most 800 px wide, or None (bounded to 20 s).
@@ -162,7 +177,7 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
             let has_audio = streams(&info).any(|s| s["codec_type"] == "audio");
             let in_channels = streams(&info).find(|s| s["codec_type"] == "audio").and_then(|s| s["channels"].as_u64()).unwrap_or(2) as u32;
             let v = streams(&info).find(|s| s["codec_type"] == "video");
-            let (width, height) = (v.and_then(|s| s["width"].as_u64()).unwrap_or(0), v.and_then(|s| s["height"].as_u64()).unwrap_or(0));
+            let (width, height) = v.and_then(display_dims).map_or((0, 0), |(w, h)| (u64::from(w), u64::from(h)));
             let output_ext = if matches!(tool, FileTool::Snapshot(_)) {
                 "png"
             } else if video || matches!(tool, FileTool::Visualize(_) | FileTool::VisualizeImage(..)) {
@@ -273,7 +288,18 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
 
 #[cfg(test)]
 mod loudness_tests {
-    use super::parse_integrated;
+    #[test]
+    fn rotated_streams_swap_their_dimensions() {
+        let v = |j: &str| serde_json::from_str::<serde_json::Value>(j).unwrap();
+        assert_eq!(display_dims(&v(r#"{"width":320,"height":180}"#)), Some((320, 180)));
+        assert_eq!(display_dims(&v(r#"{"width":320,"height":180,"side_data_list":[{"rotation":-90}]}"#)), Some((180, 320)));
+        assert_eq!(display_dims(&v(r#"{"width":320,"height":180,"side_data_list":[{"rotation":90}]}"#)), Some((180, 320)));
+        assert_eq!(display_dims(&v(r#"{"width":320,"height":180,"tags":{"rotate":"270"}}"#)), Some((180, 320)));
+        assert_eq!(display_dims(&v(r#"{"width":320,"height":180,"side_data_list":[{"rotation":180}]}"#)), Some((320, 180)));
+        assert_eq!(display_dims(&v(r#"{"width":1}"#)), None);
+    }
+
+    use super::{display_dims, parse_integrated};
 
     #[test]
     fn reads_the_summary_not_the_running_values() {
