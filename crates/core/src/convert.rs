@@ -486,6 +486,12 @@ pub fn soffice_written_path(input: &Path, out: &Path, ext: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn split_points_label_and_suffix() {
+        let t = FileTool::SplitPoints(vec![(0.0, 3.0), (3.0, 7.0), (7.0, 10.0)], true);
+        assert_eq!(t.label(), "Split · 3 parts");
+        assert_eq!(t.suffix(), "part");
+    }
     use super::*;
 
     fn none() -> Tools {
@@ -978,6 +984,9 @@ pub enum FileTool {
     TrimExact(f64, f64),
     /// Cut into pieces of this many seconds.
     SplitEvery(u32),
+    /// Cut into the given contiguous `(start, end)` ranges, all written to one new folder;
+    /// `true` re-encodes so each cut lands on the exact frame, `false` copies streams.
+    SplitPoints(Vec<(f64, f64)>, bool),
     /// Join the selected files, in order, into one.
     Merge,
     /// One PDF per page.
@@ -1028,6 +1037,7 @@ impl FileTool {
             FileTool::TrimExact(a, b) => format!("Trim (exact frames) · {} to {}", format_secs(*a), format_secs(*b)),
             FileTool::SplitEvery(n) if n % 60 == 0 => format!("Split · every {} min", n / 60),
             FileTool::SplitEvery(n) => format!("Split · every {n} s"),
+            FileTool::SplitPoints(r, _) => format!("Split · {} parts", r.len()),
             FileTool::Merge => "Merge into one file".into(),
             FileTool::SplitPages => "Split into one PDF per page".into(),
             FileTool::Mute => "Remove audio".into(),
@@ -1063,7 +1073,7 @@ impl FileTool {
     pub fn suffix(&self) -> String {
         match self {
             FileTool::Trim(..) | FileTool::TrimExact(..) => "trimmed".into(),
-            FileTool::SplitEvery(_) | FileTool::SplitPages => "part".into(),
+            FileTool::SplitEvery(_) | FileTool::SplitPoints(..) | FileTool::SplitPages => "part".into(),
             FileTool::Merge => "merged".into(),
             FileTool::Mute => "muted".into(),
             FileTool::Speed(f) => format!("speed {f}x"),

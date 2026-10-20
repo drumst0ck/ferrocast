@@ -116,3 +116,101 @@ fn media_tools_real_files() {
     assert_eq!(std::fs::read(&audio).unwrap(), original_audio);
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+fn duration_of(ff: &str, file: &Path) -> f64 {
+    let out = Command::new(Path::new(ff).with_file_name("ffprobe"))
+        .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"])
+        .arg(file)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+}
+
+fn names(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    v.sort();
+    v
+}
+
+#[test]
+#[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+fn split_points_real_video() {
+    let tools = Tools::detect();
+    let ff = tools.ffmpeg.expect("ffmpeg is required for this explicit check");
+    let root = std::env::temp_dir().join(format!("fc-split-video-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let video = root.join("movie.mp4");
+    command(
+        ff,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=160x120:rate=10",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=10",
+            "-t",
+            "10",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+        ],
+        &video,
+    );
+    let original = std::fs::read(&video).unwrap();
+    let tool = FileTool::SplitPoints(vec![(0.0, 3.0), (3.0, 7.0), (7.0, 10.0)], true);
+    let (made, errors) = run_file_tool(std::slice::from_ref(&video), &tool, Some(ff));
+    assert!(errors.is_empty(), "{errors:?}");
+    let folder = root.join("movie split");
+    assert_eq!(names(&folder), ["movie 1.mp4", "movie 2.mp4", "movie 3.mp4"]);
+    assert_eq!(made, vec![folder.clone()]);
+    for (i, want) in [3.0, 4.0, 3.0].iter().enumerate() {
+        let d = duration_of(ff, &folder.join(format!("movie {}.mp4", i + 1)));
+        assert!((d - want).abs() < 0.2, "clip {} lasts {d}, wanted {want}", i + 1);
+    }
+    let first_run = names(&folder);
+    let (made, errors) = run_file_tool(std::slice::from_ref(&video), &tool, Some(ff));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(made, [root.join("movie split 2")]);
+    assert_eq!(names(&root.join("movie split 2")).len(), 3);
+    assert_eq!(names(&folder), first_run, "the first folder is untouched");
+    // an invalid range creates nothing
+    let before = names(&root);
+    let bad = FileTool::SplitPoints(vec![(0.0, 3.0), (3.0, 99.0)], true);
+    let (made, errors) = run_file_tool(std::slice::from_ref(&video), &bad, Some(ff));
+    assert!(made.is_empty() && errors.len() == 1, "{errors:?}");
+    assert_eq!(names(&root), before, "no folder left behind");
+    assert_eq!(std::fs::read(&video).unwrap(), original);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+#[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+fn split_points_real_audio() {
+    let tools = Tools::detect();
+    let ff = tools.ffmpeg.expect("ffmpeg is required for this explicit check");
+    let root = std::env::temp_dir().join(format!("fc-split-audio-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let audio = root.join("song.mp3");
+    command(ff, &["-f", "lavfi", "-i", "sine=frequency=440:duration=10", "-c:a", "libmp3lame"], &audio);
+    let original = std::fs::read(&audio).unwrap();
+    let (made, errors) = run_file_tool(
+        std::slice::from_ref(&audio),
+        &FileTool::SplitPoints(ferrocast_core::videoplan::equal_parts(10.0, 2), false),
+        Some(ff),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(made, [root.join("song split")]);
+    assert_eq!(names(&root.join("song split")), ["song 1.mp3", "song 2.mp3"]);
+    for i in 1..=2 {
+        let d = duration_of(ff, &root.join("song split").join(format!("song {i}.mp3")));
+        assert!((d - 5.0).abs() < 0.5, "part {i} lasts {d}");
+    }
+    assert_eq!(std::fs::read(&audio).unwrap(), original);
+    std::fs::remove_dir_all(&root).unwrap();
+}

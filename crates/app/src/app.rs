@@ -2121,7 +2121,7 @@ impl App {
                             icon: Icon::Glyph(
                                 match t {
                                     FileTool::Trim(..) | FileTool::TrimExact(..) => "sf:scissors",
-                                    FileTool::SplitEvery(_) | FileTool::SplitPages => "sf:square.split.2x1",
+                                    FileTool::SplitEvery(_) | FileTool::SplitPoints(..) | FileTool::SplitPages => "sf:square.split.2x1",
                                     FileTool::Merge | FileTool::Join => "sf:rectangle.stack",
                                     FileTool::Mute => "sf:speaker.slash",
                                     FileTool::Speed(_) => "sf:speedometer",

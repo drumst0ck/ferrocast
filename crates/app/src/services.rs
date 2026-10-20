@@ -1794,6 +1794,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::VisualizeImage(..)
         | FileTool::TrimSilence
         | FileTool::TrimExact(..)
+        | FileTool::SplitPoints(..)
         | FileTool::Channels(..)
         | FileTool::Bleep(..)
         | FileTool::Join => {

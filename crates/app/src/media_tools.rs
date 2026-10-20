@@ -1,6 +1,7 @@
 //! Multimedia tool execution. Work is staged privately and published without replacing files.
 use ferrocast_core::convert::{family_of, output_with_suffix, Family, FileTool};
 use ferrocast_core::media;
+use ferrocast_core::videoplan::MIN_PIECE;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -148,6 +149,84 @@ pub(crate) fn normalize_report(ff: &str, before: &Path, after: &Path) -> Option<
     Some(format!("{:.1} → {:.1} LUFS", loudness(ff, before)?, loudness(ff, after)?))
 }
 
+/// Checks a split before anything is written: at least two ranges, each finite, starting at or
+/// after 0, at least [`MIN_PIECE`] long and ending no later than `duration` (plus 0.05 s slack).
+pub(crate) fn validate_split(ranges: &[(f64, f64)], duration: f64) -> Result<(), String> {
+    if !duration.is_finite() || duration <= 0.0 {
+        return Err("could not read the media duration".into());
+    }
+    if ranges.len() < 2 {
+        return Err("a split needs at least two ranges (one range is just a trim)".into());
+    }
+    for (i, &(a, b)) in ranges.iter().enumerate() {
+        let n = i + 1;
+        if !a.is_finite() || !b.is_finite() || a < 0.0 || b <= a {
+            return Err(format!("range {n} is not valid (start must be at least 0 and before the end)"));
+        }
+        if b - a < MIN_PIECE {
+            return Err(format!("range {n} is shorter than {MIN_PIECE} s"));
+        }
+        if b > duration + 0.05 {
+            return Err(format!("range {n} ends after the end of the media ({duration:.2} s)"));
+        }
+    }
+    Ok(())
+}
+
+/// "<stem> split", then "<stem> split 2", "<stem> split 3"... next to the source.
+pub(crate) fn split_folder(source: &Path, exists: impl Fn(&Path) -> bool) -> PathBuf {
+    let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();
+    let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("media");
+    (1u32..)
+        .map(|n| dir.join(if n == 1 { format!("{stem} split") } else { format!("{stem} split {n}") }))
+        .find(|p| !exists(p))
+        .expect("an unused name exists")
+}
+
+/// Cuts one audio or video file into the ranges, all inside one new folder. The folder is made
+/// with `create_dir`, so an existing one is never reused; on any failure it is removed again.
+fn split_one(ff: &str, file: &Path, ranges: &[(f64, f64)], exact: bool) -> Result<PathBuf, String> {
+    let family = family_of(file);
+    if !matches!(family, Family::Audio | Family::Video) {
+        return Err("this tool requires audio or video files".into());
+    }
+    let info = probe(ff, file)?;
+    let duration = info["format"]["duration"].as_str().and_then(|d| d.parse::<f64>().ok()).ok_or("could not read the media duration")?;
+    validate_split(ranges, duration)?;
+    let input = file.to_str().ok_or("input path is not UTF-8")?;
+    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("media").to_string();
+    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mp4").to_string();
+    // Re-encoding with x264/aac is for video; audio files are stream-copied (their cuts are not frame-bound).
+    let exact = exact && family == Family::Video;
+    let folder = loop {
+        let candidate = split_folder(file, |p| p.exists());
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => break candidate,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    let result = (|| {
+        for (i, &(a, b)) in ranges.iter().enumerate() {
+            let clip = folder.join(format!("{stem} {}.{ext}", i + 1));
+            let out = clip.to_str().ok_or("output path is not UTF-8")?;
+            let args = media::trim(input, a, b, exact, out);
+            crate::route::run_limited(Command::new(ff).args(["-nostdin", "-n", "-loglevel", "error"]).args(args), 180)?;
+            if std::fs::metadata(&clip).map_err(|e| e.to_string())?.len() == 0 {
+                return Err(format!("clip {} came out empty", i + 1));
+            }
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(folder),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&folder);
+            Err(e)
+        }
+    }
+}
+
 pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (Vec<PathBuf>, Vec<String>) {
     let Some(ff) = ffmpeg else {
         return (vec![], vec!["ffmpeg is not installed (brew install ffmpeg)".into()]);
@@ -157,6 +236,13 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
     for (index, file) in files.iter().enumerate() {
         if matches!(tool, FileTool::Join) && index > 0 {
             break;
+        }
+        if let FileTool::SplitPoints(ranges, exact) = tool {
+            match split_one(ff, file, ranges, *exact) {
+                Ok(p) => made.push(p),
+                Err(e) => errors.push(format!("{}: {e}", file.display())),
+            }
+            continue;
         }
         let result = (|| -> Result<PathBuf, String> {
             let video = matches!(
@@ -309,5 +395,39 @@ mod loudness_tests {
         assert_eq!(parse_integrated(&log), Some(-31.4));
         assert_eq!(parse_integrated("no summary here"), None);
         assert_eq!(parse_integrated("Integrated loudness:\n    I:  abc LUFS"), None);
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::{split_folder, validate_split};
+
+    #[test]
+    fn rejects_bad_ranges() {
+        let ok = vec![(0.0, 3.0), (3.0, 10.0)];
+        assert!(validate_split(&ok, 10.0).is_ok());
+        assert!(validate_split(&[(0.0, 3.0), (2.0, 1.0)], 10.0).unwrap_err().contains("range"));
+        assert!(validate_split(&[(0.0, 3.0), (f64::NAN, 5.0)], 10.0).is_err());
+        assert!(validate_split(&[(0.0, 3.0), (3.0, f64::INFINITY)], 10.0).is_err());
+        assert!(validate_split(&[(-1.0, 3.0), (3.0, 5.0)], 10.0).is_err());
+        assert!(validate_split(&[(0.0, 3.0), (3.0, 3.01)], 10.0).is_err(), "piece under the minimum");
+        assert!(validate_split(&[(0.0, 3.0)], 10.0).unwrap_err().contains("at least two"));
+        assert!(validate_split(&[], 10.0).is_err());
+        assert!(validate_split(&[(0.0, 3.0), (3.0, 10.2)], 10.0).is_err(), "past the duration");
+        assert!(validate_split(&[(0.0, 3.0), (3.0, 10.04)], 10.0).is_ok(), "tolerance of 0.05 s");
+        assert!(validate_split(&ok, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn folder_names_never_collide() {
+        let dir = std::env::temp_dir().join(format!("fc-split-name-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let src = dir.join("clip.mp4");
+        assert_eq!(split_folder(&src, |p| p.exists()), dir.join("clip split"));
+        std::fs::create_dir(dir.join("clip split")).unwrap();
+        assert_eq!(split_folder(&src, |p| p.exists()), dir.join("clip split 2"));
+        std::fs::write(dir.join("clip split 2"), b"a file").unwrap();
+        assert_eq!(split_folder(&src, |p| p.exists()), dir.join("clip split 3"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
