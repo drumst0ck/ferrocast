@@ -328,7 +328,16 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 } else {
                     ferrocast_core::wheel::WheelKind::Convert
                 };
-                let segs = app.wheel_segments(kind, &files);
+                let mut segs = app.wheel_segments(kind, &files);
+                // screenshot aid: show a ring of N segments by repeating the real ones
+                if let Some(want) =
+                    std::env::var("FERROCAST_WHEEL_N").ok().and_then(|v| v.parse::<usize>().ok()).filter(|n| (1..=12).contains(n))
+                {
+                    let base = segs.clone();
+                    if !base.is_empty() {
+                        segs = (0..want).map(|i| base[i % base.len()].clone()).collect();
+                    }
+                }
                 let sel = std::env::var("FERROCAST_WHEEL_SEL").ok().and_then(|v| v.parse::<usize>().ok()).filter(|i| *i < segs.len());
                 match std::env::var("FERROCAST_THEME").as_deref() {
                     Ok("light") => ctx.set_theme(egui::ThemePreference::Light),

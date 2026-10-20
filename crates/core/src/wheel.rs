@@ -173,7 +173,8 @@ pub fn arc_len(n: usize, r: f32) -> f32 {
 
 /// Whether a text label fits inside a segment at radius `r` (otherwise show an icon only).
 pub fn labels_fit(n: usize, r: f32) -> bool {
-    n > 0 && arc_len(n, r) >= 72.0
+    // a ring of nine or more is icon only: long labels such as "Remove metadata" overflow a sector
+    (1..=8).contains(&n) && arc_len(n, r) >= 72.0
 }
 
 /// Ease-out cubic, clamped to 0..=1.
@@ -339,7 +340,7 @@ mod tests {
     #[test]
     fn labels_fit_only_when_the_arc_is_long_enough() {
         assert!(labels_fit(8, 120.0));
-        assert!(labels_fit(9, 120.0));
+        assert!(!labels_fit(9, 120.0), "nine or more segments are icon only");
         assert!(!labels_fit(12, 120.0));
         assert!(!labels_fit(0, 120.0));
         assert!((arc_len(8, 100.0) - 78.539_82).abs() < 1e-3);
