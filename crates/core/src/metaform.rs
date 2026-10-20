@@ -124,6 +124,46 @@ pub fn ffmpeg_args(input: &str, edits: &[MetaEdit], remove_all: bool, out: &str)
     v
 }
 
+/// The changes between the file as read (`original`) and the window's copy (`working`). A changed
+/// non-empty value is set, an emptied one is removed, anything else (and every read-only field)
+/// produces nothing. Rows pair by position when the key and group agree there, otherwise by the
+/// first row with the same group and key; unmatched rows are skipped, so no length can panic.
+pub fn build_edits(original: &[Field], working: &[Field]) -> Vec<MetaEdit> {
+    let mut out = vec![];
+    for (i, o) in original.iter().enumerate() {
+        if !o.editable {
+            continue;
+        }
+        let same = |w: &&Field| w.group == o.group && w.key == o.key;
+        let Some(w) = working.get(i).filter(same).or_else(|| working.iter().find(same)) else { continue };
+        let value = if w.value.trim().is_empty() { None } else { Some(w.value.clone()) };
+        let was_empty = o.value.trim().is_empty();
+        let unchanged = match &value {
+            None => was_empty,
+            Some(v) => *v == o.value,
+        };
+        if !unchanged {
+            out.push(MetaEdit { group: o.group.clone(), key: o.key.clone(), value });
+        }
+    }
+    out
+}
+
+/// PDF attributes as window rows: Title, Author, Subject and Keywords always (so they can be
+/// added), Creator and Producer only when set, read-only because they are not written back.
+pub fn pdf_fields(pairs: &[(String, String)]) -> Vec<Field> {
+    let get = |k: &str| pairs.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+    let mut out = vec![];
+    for (k, editable) in [("Title", true), ("Author", true), ("Subject", true), ("Keywords", true), ("Creator", false), ("Producer", false)]
+    {
+        let v = get(k);
+        if editable || v.is_some() {
+            out.push(Field { group: Group::File, key: k.into(), value: v.unwrap_or_default(), editable });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,5 +316,66 @@ mod tests {
             a,
             ["-i", "in.mp4", "-map", "0", "-c", "copy", "-map_metadata", "-1", "-map_chapters", "-1", "-fflags", "+bitexact", "out.mp4"]
         );
+    }
+
+    fn fld(group: Group, key: &str, value: &str, editable: bool) -> Field {
+        Field { group, key: key.into(), value: value.into(), editable }
+    }
+
+    #[test]
+    fn build_edits_reports_changed_and_cleared_values_only() {
+        let g = Group::Track { index: 1, kind: "audio".into() };
+        let orig = vec![
+            fld(Group::File, "title", "A", true),
+            fld(Group::File, "artist", "B", true),
+            fld(Group::File, "comment", "C", true),
+            fld(g.clone(), "language", "eng", true),
+        ];
+        let mut work = orig.clone();
+        work[0].value = "New ñ".into();
+        work[1].value = String::new();
+        work[3].value = "spa".into();
+        assert_eq!(
+            build_edits(&orig, &work),
+            vec![edit(Group::File, "title", Some("New ñ")), edit(Group::File, "artist", None), edit(g, "language", Some("spa"))]
+        );
+        assert!(build_edits(&orig, &orig).is_empty());
+    }
+
+    #[test]
+    fn build_edits_ignores_read_only_fields_and_empty_to_empty() {
+        let orig = vec![
+            fld(Group::File, "encoder", "Lavf", false),
+            fld(Group::Chapter(0), "title", "Intro", false),
+            fld(Group::File, "genre", "", true),
+        ];
+        let mut work = orig.clone();
+        work[0].value = "hacked".into();
+        work[1].value = String::new();
+        work[2].value = "  ".into();
+        assert!(build_edits(&orig, &work).is_empty());
+    }
+
+    #[test]
+    fn build_edits_survives_mismatched_lengths_and_order() {
+        let orig = vec![fld(Group::File, "title", "A", true), fld(Group::File, "artist", "B", true)];
+        // shorter, reordered
+        let work = vec![fld(Group::File, "artist", "Z", true)];
+        assert_eq!(build_edits(&orig, &work), vec![edit(Group::File, "artist", Some("Z"))]);
+        // longer: extra rows are not edits
+        let mut longer = orig.clone();
+        longer.push(fld(Group::File, "extra", "x", true));
+        assert!(build_edits(&orig, &longer).is_empty());
+        assert!(build_edits(&orig, &[]).is_empty());
+        assert!(build_edits(&[], &longer).is_empty());
+    }
+
+    #[test]
+    fn pdf_fields_always_list_the_four_writable_keys() {
+        let f = pdf_fields(&[("Title".into(), "T".into()), ("Producer".into(), "P".into())]);
+        let keys: Vec<_> = f.iter().map(|x| (x.key.as_str(), x.editable)).collect();
+        assert_eq!(keys, [("Title", true), ("Author", true), ("Subject", true), ("Keywords", true), ("Producer", false)]);
+        assert_eq!(f[0].value, "T");
+        assert!(f.iter().all(|x| x.group == Group::File));
     }
 }

@@ -1962,3 +1962,211 @@ fn pdf_size_report_names_the_outcome() {
     assert_eq!(crate::services::pdf_size_report(1000, 1000), "no smaller: the PDF was already compact");
     assert_eq!(crate::services::pdf_size_report(1000, 1200), "no smaller: the PDF was already compact");
 }
+
+// ---- A7d: Edit metadata window
+fn meta_field(group: ferrocast_core::metaform::Group, key: &str, value: &str, editable: bool) -> ferrocast_core::metaform::Field {
+    ferrocast_core::metaform::Field { group, key: key.into(), value: value.into(), editable }
+}
+
+fn meta_fields() -> Vec<ferrocast_core::metaform::Field> {
+    use ferrocast_core::metaform::Group;
+    vec![
+        meta_field(Group::File, "title", "Hello", true),
+        meta_field(Group::File, "artist", "Me", true),
+        meta_field(Group::File, "major_brand", "isom", false),
+        meta_field(Group::Track { index: 0, kind: "video".into() }, "language", "und", true),
+        meta_field(Group::Track { index: 0, kind: "video".into() }, "handler_name", "VideoHandler", false),
+        meta_field(Group::Track { index: 1, kind: "audio".into() }, "language", "eng", true),
+        meta_field(Group::Chapter(0), "title", "Intro", false),
+    ]
+}
+
+fn meta_view(file: &str, fields: Option<Vec<ferrocast_core::metaform::Field>>, error: Option<&str>) -> View {
+    let kind = if file.ends_with(".pdf") { MetaKind::Pdf } else { MetaKind::Media };
+    View::EditMetadata {
+        file: file.into(),
+        kind,
+        working: fields.clone().unwrap_or_default(),
+        original: fields,
+        remove_all: false,
+        error: error.map(String::from),
+    }
+}
+
+#[test]
+fn edit_metadata_view_renders_every_state_in_both_themes() {
+    let long = "x".repeat(600);
+    let mut many = meta_fields();
+    many[0].value = long;
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        let mut app = fixture();
+        app.ctx.set_theme(theme);
+        for v in [
+            meta_view("/x/a.mp4", None, None),
+            meta_view("/x/a.mp4", Some(meta_fields()), None),
+            meta_view("/x/a.mp4", Some(many.clone()), None),
+            meta_view("/x/a.mp4", None, Some("media inspection timed out or failed")),
+            meta_view("/x/a.gif", Some(meta_fields()), None),
+            meta_view("/x/a.pdf", Some(ferrocast_core::metaform::pdf_fields(&[])), None),
+        ] {
+            app.stack = vec![View::Root, v];
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert!(matches!(app.view(), View::EditMetadata { .. }));
+        }
+    }
+}
+
+#[test]
+fn metadata_loaded_reaches_the_window_and_other_files_are_ignored() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", None, None)];
+    app.bus.send(Msg::MetadataLoaded("/x/other.mp4".into(), Ok(meta_fields())));
+    app.drain();
+    assert!(matches!(app.view(), View::EditMetadata { original: None, error: None, .. }), "a reply for another file is ignored");
+    app.bus.send(Msg::MetadataLoaded("/x/a.mp4".into(), Ok(meta_fields())));
+    app.drain();
+    match app.view() {
+        View::EditMetadata { original: Some(o), working, .. } => assert_eq!((o.len(), working.len()), (7, 7)),
+        _ => panic!("window gone"),
+    }
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", None, None)];
+    app.bus.send(Msg::MetadataLoaded("/x/a.mp4".into(), Err("boom".into())));
+    app.drain();
+    assert!(matches!(app.view(), View::EditMetadata { original: None, error: Some(e), .. } if e == "boom"));
+}
+
+#[test]
+fn edit_metadata_escape_goes_back_without_a_job() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", Some(meta_fields()), None)];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn edit_metadata_enter_without_changes_stays_and_starts_nothing() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", Some(meta_fields()), None)];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::EditMetadata { .. }));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Nothing changed")), "{:?}", app.toast);
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn edit_metadata_enter_with_a_change_saves_and_closes() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", Some(meta_fields()), None)];
+    if let Some(View::EditMetadata { working, .. }) = app.stack.last_mut() {
+        working[0].value = "Changed".into();
+    }
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root), "the save pops the window");
+}
+
+#[test]
+fn edit_metadata_remove_all_counts_as_a_change_for_enter() {
+    let mut app = fixture();
+    let mut v = meta_view("/x/a.mp4", Some(meta_fields()), None);
+    if let View::EditMetadata { remove_all, .. } = &mut v {
+        *remove_all = true;
+    }
+    app.stack = vec![View::Root, v];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root));
+}
+
+fn meta_click_first_box(app: &mut App) {
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", Some(meta_fields()), None)];
+    render(app, vec![]);
+    render(app, vec![]);
+    let r = app.ctx.data(|d| d.get_temp::<Rect>(egui::Id::new("meta-first-edit"))).expect("the window records its first text box");
+    let pos = r.center();
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(app, vec![Event::PointerMoved(pos)]);
+    render(app, vec![btn(true)]);
+    render(app, vec![btn(false)]);
+    render(app, vec![]);
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the first row (layout moved?)");
+}
+
+#[test]
+fn edit_metadata_escape_while_editing_a_box_keeps_the_view() {
+    let mut app = fixture();
+    meta_click_first_box(&mut app);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::EditMetadata { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn edit_metadata_enter_while_editing_a_box_does_not_save() {
+    let mut app = fixture();
+    meta_click_first_box(&mut app);
+    if let Some(View::EditMetadata { working, .. }) = app.stack.last_mut() {
+        working[0].value = "Changed".into();
+    }
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::EditMetadata { .. }), "Enter belongs to the text box");
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn convert_view_offers_edit_metadata_for_one_audio_video_gif_or_pdf() {
+    let mut app = fixture();
+    let dir = tmp_dir("meta");
+    let mut has = |names: &[&str]| {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.invalidate_sections();
+        app.sections_cached()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .any(|i| i.title == "Edit metadata…" && matches!(i.kind, Kind::Editor(Act::EditMetadata(_))))
+    };
+    for one in ["a.mp4", "a.mp3", "a.gif", "a.pdf"] {
+        assert!(has(&[one]), "{one}");
+    }
+    assert!(!has(&["a.mp4", "b.mp4"]));
+    assert!(!has(&["a.pdf", "b.pdf"]));
+    assert!(!has(&["a.png"]));
+    assert!(!has(&["a.txt"]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_remove_metadata_opens_the_window_for_one_non_image_file() {
+    use ferrocast_core::tools::ToolId;
+    let f = |n: &[&str]| n.iter().map(std::path::PathBuf::from).collect::<Vec<_>>();
+    for one in ["/x/a.mp4", "/x/a.mp3", "/x/a.gif", "/x/a.pdf"] {
+        assert!(matches!(tool_reach(ToolId::RemoveMetadata, &f(&[one])), ToolReach::Act(Act::EditMetadata(_))), "{one}");
+    }
+    assert!(matches!(tool_reach(ToolId::RemoveMetadata, &f(&["/x/a.png"])), ToolReach::Image(_)), "images keep StripMetadata");
+    assert!(!matches!(tool_reach(ToolId::RemoveMetadata, &f(&["/x/a.mp4", "/x/b.mp4"])), ToolReach::Act(Act::EditMetadata(_))));
+    assert!(!matches!(tool_reach(ToolId::RemoveMetadata, &f(&["/x/a.txt"])), ToolReach::Act(Act::EditMetadata(_))));
+}
+
+#[test]
+fn edit_metadata_media_without_ffmpeg_toasts_the_hint_and_opens_nothing() {
+    let mut app = fixture();
+    app.tools.ffmpeg = None;
+    app.perform(Act::EditMetadata("/x/a.mp4".into()), false);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
+}

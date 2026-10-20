@@ -190,6 +190,31 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     }
                 }
             }
+            Ok("meta") => {
+                // the tags are read synchronously here (screenshot mode only)
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(kind) = crate::app::meta_kind(&file) {
+                    let fields = match kind {
+                        crate::app::MetaKind::Media => app.tools.ffmpeg.map(|ff| crate::media_tools::inspect_metadata(ff, &file)),
+                        crate::app::MetaKind::Pdf => {
+                            Some(ferrocast_macos::pdf::metadata(&file).map(|p| ferrocast_core::metaform::pdf_fields(&p)))
+                        }
+                    };
+                    let (original, error) = match fields {
+                        Some(Ok(f)) => (Some(f), None),
+                        Some(Err(e)) => (None, Some(e)),
+                        None => (None, Some("ffmpeg is not installed".to_string())),
+                    };
+                    app.push(View::EditMetadata {
+                        file,
+                        kind,
+                        working: original.clone().unwrap_or_default(),
+                        original,
+                        remove_all: false,
+                        error,
+                    });
+                }
+            }
             Ok("vtrim") | Ok("vsnapshot") | Ok("vsplit") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
@@ -518,7 +543,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. }) && kbd_edit);
+            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -681,6 +706,24 @@ impl App {
                         vec![file],
                         ferrocast_core::convert::FileTool::OrganizePdf(plan.selection()),
                         None,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
+            View::EditMetadata { file, original: Some(orig), working, remove_all, .. } if k.enter => {
+                // GIFs cannot store tags: the executor refuses edits, so only "remove all" is offered
+                let gif = ferrocast_core::convert::ext(&file) == "gif";
+                let edits = if gif { vec![] } else { ferrocast_core::metaform::build_edits(&orig, &working) };
+                if edits.is_empty() && !remove_all {
+                    self.toast("Nothing changed");
+                } else {
+                    self.toast(if remove_all { "Removing metadata…" } else { "Saving metadata…" });
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::EditMetadata(edits, remove_all),
+                        self.tools.ffmpeg,
                         self.bus.clone(),
                     );
                     self.pop();
@@ -1940,6 +1983,125 @@ impl App {
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
             egui::Align2::CENTER_CENTER,
             "pick a goal · ↵ save compressed copies · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
+    /// Edit Metadata window: rows grouped by file, track and chapter, a text box per editable row
+    /// with a "clear" button, and a "Remove all metadata" switch that dims the rows.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_edit_metadata(
+        &mut self,
+        ui: &mut Ui,
+        area: Rect,
+        pal: &Palette,
+        file: &std::path::Path,
+        kind: crate::app::MetaKind,
+        original: Option<Vec<ferrocast_core::metaform::Field>>,
+        mut working: Vec<ferrocast_core::metaform::Field>,
+        mut remove_all: bool,
+        error: Option<String>,
+    ) {
+        use ferrocast_core::metaform::{build_edits, Group};
+        let ctx = ui.ctx().clone();
+        let Some(original) = original else {
+            let (msg, col) = match &error {
+                Some(e) => (format!("Could not read the metadata: {e}"), pal.danger),
+                None => ("Reading the metadata…".to_string(), pal.sub),
+            };
+            ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, msg, FontId::proportional(15.0), col);
+            return;
+        };
+        let gif = ferrocast_core::convert::ext(file) == "gif";
+        let edits = if gif { vec![] } else { build_edits(&original, &working) };
+        let (before, before_all) = (working.clone(), remove_all);
+        let inner = area.shrink2(Vec2::new(26.0, 14.0));
+        ui.scope_builder(UiBuilder::new().max_rect(inner), |ui| {
+            ui.set_clip_rect(inner.expand(2.0));
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut remove_all, "Remove all metadata");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let summary = if remove_all {
+                        "all tags and chapters will be removed".to_string()
+                    } else {
+                        match edits.len() {
+                            1 => "1 change".to_string(),
+                            n => format!("{n} changes"),
+                        }
+                    };
+                    ui.label(RichText::new(summary).size(12.5).color(if edits.is_empty() && !remove_all { pal.sub } else { pal.text }));
+                });
+            });
+            if remove_all {
+                ui.label(
+                    RichText::new("Container brands and some muxer tags stay: the format itself writes them.").size(11.5).color(pal.sub),
+                );
+            }
+            if gif {
+                ui.label(RichText::new("GIF files cannot store tags: you can only remove all metadata.").size(11.5).color(pal.sub));
+            }
+            if kind == crate::app::MetaKind::Pdf {
+                ui.label(RichText::new("Creator and Producer are shown but not written back.").size(11.5).color(pal.sub));
+            }
+            ui.add_space(4.0);
+            let list_h = (inner.max.y - ui.cursor().min.y - 22.0).max(40.0);
+            let mut first_edit = true;
+            egui::ScrollArea::vertical().id_salt("meta-rows").max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
+                ui.add_enabled_ui(!remove_all, |ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    let mut last: Option<Group> = None;
+                    if working.is_empty() {
+                        ui.label(RichText::new("This file has no metadata.").size(13.0).color(pal.sub));
+                    }
+                    for f in working.iter_mut() {
+                        if last.as_ref() != Some(&f.group) {
+                            let head = match &f.group {
+                                Group::File => "File".to_string(),
+                                Group::Track { index, kind } => format!("Track {} · {kind}", index + 1),
+                                Group::Chapter(i) => format!("Chapter {}", i + 1),
+                            };
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(head).size(13.0).strong().color(pal.text));
+                            last = Some(f.group.clone());
+                        }
+                        ui.horizontal(|ui| {
+                            let (kr, _) = ui.allocate_exact_size(Vec2::new(130.0, 22.0), egui::Sense::hover());
+                            ui.painter().text(
+                                kr.left_center(),
+                                egui::Align2::LEFT_CENTER,
+                                elide(ui.painter(), &f.key, FontId::proportional(12.5), 124.0),
+                                FontId::proportional(12.5),
+                                pal.sub,
+                            );
+                            if f.editable && !gif {
+                                let r = ui.add(TextEdit::singleline(&mut f.value).desired_width(300.0).font(FontId::proportional(13.0)));
+                                if first_edit {
+                                    first_edit = false;
+                                    ctx.data_mut(|d| d.insert_temp(Id::new("meta-first-edit"), r.rect));
+                                }
+                                if small_btn(ui, pal, "clear") {
+                                    f.value.clear();
+                                }
+                            } else {
+                                let shown = elide(ui.painter(), &f.value, FontId::proportional(13.0), 380.0);
+                                ui.label(RichText::new(shown).size(13.0).color(pal.sub));
+                            }
+                        });
+                    }
+                });
+            });
+        });
+        if working != before || remove_all != before_all {
+            if let Some(View::EditMetadata { working: w, remove_all: r, .. }) = self.stack.last_mut() {
+                (*w, *r) = (working, remove_all);
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area.center().x, area.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "edit a value or clear it · ↵ save a copy · esc cancel",
             FontId::proportional(11.5),
             pal.sub,
         );
@@ -3236,6 +3398,9 @@ impl App {
             }
             View::VideoSpeed { duration, factor, .. } => {
                 self.draw_video_speed(ui, rect, pal, duration, factor);
+            }
+            View::EditMetadata { file, kind, original, working, remove_all, error } => {
+                self.draw_edit_metadata(ui, rect, pal, &file, kind, original, working, remove_all, error);
             }
             View::VideoCrop { size: Some(size), rect: crop, aspect, .. } => {
                 self.draw_crop(ui, rect, pal, size, crop, aspect);

@@ -27,6 +27,8 @@ pub enum Msg {
     EditLoaded(PathBuf, Option<Vec<u8>>),
     /// PNG of the image being cropped, scaled for display (None: unreadable).
     CropLoaded(PathBuf, Option<Vec<u8>>),
+    /// Tags of the file in the Edit Metadata window (Err: message to show).
+    MetadataLoaded(PathBuf, Result<Vec<ferrocast_core::metaform::Field>, String>),
     /// Pixel size of the first image in the Compress window (None: unreadable).
     CompressProbed(PathBuf, Option<(u32, u32)>),
     /// Duration, audio and size of the first file in the media Compress window (None: unreadable).

@@ -150,6 +150,26 @@ pub fn reorder_job(purpose: ReorderPurpose, files: Vec<PathBuf>) -> ReorderJob {
     }
 }
 
+/// How the Edit Metadata window reads and writes a file.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MetaKind {
+    /// Audio, video or GIF through ffmpeg.
+    Media,
+    /// PDF document attributes.
+    Pdf,
+}
+
+/// The window that edits this file's metadata, if it has one: audio, video, GIF or PDF.
+pub(crate) fn meta_kind(p: &std::path::Path) -> Option<MetaKind> {
+    use ferrocast_core::convert::{ext, family_of, Family};
+    match family_of(p) {
+        Family::Audio | Family::Video => Some(MetaKind::Media),
+        Family::Pdf => Some(MetaKind::Pdf),
+        Family::Image if ext(p) == "gif" => Some(MetaKind::Media),
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 pub enum View {
     Root,
@@ -172,6 +192,16 @@ pub enum View {
         tool: ferrocast_core::annotate::Tool,
         color: usize,
         sel: Option<usize>,
+    },
+    /// Edit Metadata window: `original` is None while the tags are read (or when that failed, with
+    /// `error`); `working` is what the rows edit.
+    EditMetadata {
+        file: PathBuf,
+        kind: MetaKind,
+        original: Option<Vec<ferrocast_core::metaform::Field>>,
+        working: Vec<ferrocast_core::metaform::Field>,
+        remove_all: bool,
+        error: Option<String>,
     },
     /// Video speed window: file, duration once probed and the chosen factor.
     VideoSpeed {
@@ -419,6 +449,7 @@ impl View {
             View::VideoCrop { .. } => "Crop Video",
             View::VideoRedact { .. } => "Redact Video",
             View::VideoSpeed { .. } => "Change Video Speed",
+            View::EditMetadata { .. } => "Edit Metadata",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -1320,6 +1351,16 @@ impl App {
                                 }
                             }
                             None => self.toast("Crop: could not read the video"),
+                        }
+                    }
+                }
+                Msg::MetadataLoaded(file, res) => {
+                    if let Some(View::EditMetadata { file: f, original, working, error, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            match res {
+                                Ok(fields) => (*working, *original, *error) = (fields.clone(), Some(fields), None),
+                                Err(e) => *error = Some(e),
+                            }
                         }
                     }
                 }
@@ -2431,6 +2472,9 @@ impl App {
         }
         let [p] = files else { return Self::editor_items(list, self, q, sub) };
         let p = p.clone();
+        if meta_kind(&p).is_some() {
+            list.push(("Edit metadata…", "metadata tags edit remove title artist author exif", Act::EditMetadata(p.clone())));
+        }
         match family_of(&p) {
             Family::Video => list.extend([
                 ("Trim Video…", "trim cut frame timeline", Act::TrimVideo(p.clone())),
@@ -3473,6 +3517,30 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::EditMetadata(file) => {
+                let Some(kind) = meta_kind(&file) else {
+                    self.toast("Edit metadata: this file type has no editable tags");
+                    return;
+                };
+                let (bus, f) = (self.bus.clone(), file.clone());
+                match kind {
+                    MetaKind::Media => {
+                        let Some(ff) = self.tools.ffmpeg else {
+                            self.toast("ffmpeg is not installed (brew install ffmpeg)");
+                            return;
+                        };
+                        std::thread::spawn(move || bus.send(Msg::MetadataLoaded(f.clone(), crate::media_tools::inspect_metadata(ff, &f))));
+                    }
+                    MetaKind::Pdf => {
+                        std::thread::spawn(move || {
+                            let r = ferrocast_macos::pdf::metadata(&f).map(|p| ferrocast_core::metaform::pdf_fields(&p));
+                            bus.send(Msg::MetadataLoaded(f.clone(), r));
+                        });
+                    }
+                }
+                self.show();
+                self.push(View::EditMetadata { file, kind, original: None, working: vec![], remove_all: false, error: None });
+            }
             Act::SpeedVideo(file) => match self.tools.ffmpeg {
                 None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
                 Some(ff) => {
@@ -4009,6 +4077,7 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (Compress, _) if !files.is_empty() && files.iter().all(|f| family_of(f) == Family::Pdf) => {
             ToolReach::File(FileTool::CompressPdf(ferrocast_core::compress::Preset::Balanced))
         }
+        (RemoveMetadata, Some(p)) if meta_kind(&p).is_some() => ToolReach::Act(Act::EditMetadata(p)),
         (RemoveMetadata, _) if images => ToolReach::Image(ImageOp::StripMetadata),
         (CreatePdf, _) if images => ToolReach::Image(ImageOp::CombinePdf),
         (MuteVideo, _) => ToolReach::File(FileTool::Mute),

@@ -56,7 +56,6 @@ fn probe_raw(ffmpeg: &str, file: &Path, show: &[&str]) -> Result<Vec<u8>, String
 
 /// Tags of an audio, video or GIF file grouped by file, track and chapter (one ffprobe under its
 /// own deadline; never call it on the UI thread).
-#[allow(dead_code)] // consumed by the Edit metadata window (A7d)
 pub fn inspect_metadata(ffmpeg: &str, path: &Path) -> Result<Vec<ferrocast_core::metaform::Field>, String> {
     let raw = probe_raw(ffmpeg, path, &["-show_format", "-show_streams", "-show_chapters"])?;
     ferrocast_core::metaform::parse_ffprobe(&String::from_utf8_lossy(&raw))
