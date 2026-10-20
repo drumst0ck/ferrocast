@@ -1017,3 +1017,210 @@ mod a10de {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Timed redaction of several areas (A11b), checked on decoded pixels.
+mod redact_many_real {
+    use super::{duration_of, names};
+    use crate::services::run_file_tool;
+    use ferrocast_core::convert::{FileTool, Tools};
+    use ferrocast_core::redactplan::Redaction;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    fn ffmpeg() -> &'static str {
+        Tools::detect().ffmpeg.expect("ffmpeg is required for this explicit check")
+    }
+
+    fn ff(args: &[&str]) {
+        crate::route::run_limited(Command::new(ffmpeg()).args(["-nostdin", "-y", "-loglevel", "error"]).args(args), 60).unwrap();
+    }
+
+    fn root(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("fc-redmany-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir(&d).unwrap();
+        d
+    }
+
+    fn flat(dir: &Path) -> PathBuf {
+        let p = dir.join("source.mp4");
+        ff(&[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x3070d0:s=320x180:r=25:d=6",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=6",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-shortest",
+            p.to_str().unwrap(),
+        ]);
+        p
+    }
+
+    fn area(x: u32, y: u32, w: u32, h: u32, start: f64, end: f64, blur: bool) -> Redaction {
+        Redaction { x, y, w, h, start, end, blur }
+    }
+
+    /// RGB of the displayed pixel (x, y) of the frame at `t`.
+    fn pixel(file: &Path, t: f64, x: u32, y: u32) -> [u8; 3] {
+        let out = Command::new(ffmpeg())
+            .args(["-nostdin", "-v", "error", "-ss", &t.to_string(), "-i"])
+            .arg(file)
+            .args(["-frames:v", "1", "-vf", &format!("format=rgb24,crop=1:1:{x}:{y}"), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+            .output()
+            .unwrap();
+        assert_eq!(out.stdout.len(), 3, "no frame at {t}: {}", String::from_utf8_lossy(&out.stderr));
+        [out.stdout[0], out.stdout[1], out.stdout[2]]
+    }
+
+    fn black(p: [u8; 3]) -> bool {
+        p.iter().map(|&c| u32::from(c)).sum::<u32>() < 45
+    }
+
+    fn is_blue(p: [u8; 3]) -> bool {
+        let d = |a: u8, b: u8| (i32::from(a) - i32::from(b)).abs();
+        d(p[0], 0x30) < 16 && d(p[1], 0x70) < 16 && d(p[2], 0xd0) < 16
+    }
+
+    fn run(file: &Path, areas: Vec<Redaction>) -> (Vec<PathBuf>, Vec<String>) {
+        run_file_tool(&[file.to_path_buf()], &FileTool::RedactVideoMany(areas), Some(ffmpeg()))
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn two_solid_areas_at_different_times() {
+        let d = root("two");
+        let src = flat(&d);
+        let original = std::fs::read(&src).unwrap();
+        let (made, e) = run(&src, vec![area(10, 10, 60, 40, 1.0, 2.0, false), area(200, 100, 60, 50, 4.0, 5.0, false)]);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(made.len(), 1);
+        assert_eq!(made[0].file_name().unwrap(), "source redacted.mp4");
+        let o = &made[0];
+        assert!((duration_of(ffmpeg(), o) - 6.0).abs() < 0.2);
+        let (a_in, a_out, b_in, b_out) = ((40, 30), (120, 30), (230, 125), (120, 125));
+        assert!(black(pixel(o, 1.5, a_in.0, a_in.1)), "A covered at 1.5");
+        assert!(is_blue(pixel(o, 1.5, a_out.0, a_out.1)), "outside A untouched");
+        assert!(!black(pixel(o, 1.5, b_in.0, b_in.1)), "B not yet active at 1.5");
+        assert!(black(pixel(o, 4.5, b_in.0, b_in.1)), "B covered at 4.5");
+        assert!(is_blue(pixel(o, 4.5, b_out.0, b_out.1)), "outside B untouched");
+        assert!(!black(pixel(o, 4.5, a_in.0, a_in.1)), "A over by 4.5");
+        for t in [0.3, 2.6, 3.0, 5.6] {
+            assert!(is_blue(pixel(o, t, a_in.0, a_in.1)) && is_blue(pixel(o, t, b_in.0, b_in.1)), "nothing covered at {t}");
+        }
+        let probe = Path::new(ffmpeg()).with_file_name("ffprobe");
+        let streams =
+            Command::new(probe).args(["-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0"]).arg(o).output().unwrap();
+        assert!(String::from_utf8_lossy(&streams.stdout).contains("aac"), "audio kept");
+        assert_eq!(std::fs::read(&src).unwrap(), original, "original untouched");
+        // second run: never clobbers, takes " 2"
+        let (again, e) = run(&src, vec![area(10, 10, 60, 40, 1.0, 2.0, false)]);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(again[0].file_name().unwrap(), "source redacted 2.mp4");
+        assert_eq!(names(&d), ["source redacted 2.mp4", "source redacted.mp4", "source.mp4"]);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn overlapping_areas_compose() {
+        let d = root("overlap");
+        let src = flat(&d);
+        let (made, e) = run(&src, vec![area(10, 10, 100, 60, 0.0, 3.0, false), area(60, 40, 100, 60, 2.0, 5.0, false)]);
+        assert!(e.is_empty(), "{e:?}");
+        let o = &made[0];
+        assert!(black(pixel(o, 2.5, 80, 55)), "overlap");
+        assert!(black(pixel(o, 2.5, 20, 20)) && black(pixel(o, 2.5, 150, 90)), "each alone");
+        assert!(!black(pixel(o, 1.0, 150, 90)), "B not yet");
+        assert!(!black(pixel(o, 4.0, 20, 20)), "A over");
+        assert!(black(pixel(o, 4.0, 80, 55)), "B alone covers the overlap");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn blur_area_softens_an_edge_and_leaves_the_rest() {
+        let d = root("blur");
+        let src = d.join("edge.mp4");
+        ff(&[
+            "-filter_complex",
+            "color=c=black:s=160x180:r=25:d=2[l];color=c=white:s=160x180:r=25:d=2[r];[l][r]hstack[v]",
+            "-map",
+            "[v]",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            src.to_str().unwrap(),
+        ]);
+        let luma = |p: [u8; 3]| i32::from(p[0]);
+        let before = luma(pixel(&src, 1.0, 170, 90)) - luma(pixel(&src, 1.0, 150, 90));
+        assert!(before > 220, "sharp source edge: {before}");
+        let (made, e) = run(&src, vec![area(100, 40, 120, 100, 0.0, 2.0, true)]);
+        assert!(e.is_empty(), "{e:?}");
+        let o = &made[0];
+        let after = luma(pixel(o, 1.0, 170, 90)) - luma(pixel(o, 1.0, 150, 90));
+        assert!(after < before - 40, "contrast across the edge drops inside the area: {before} -> {after}");
+        assert_eq!(luma(pixel(o, 1.0, 20, 10)), luma(pixel(&src, 1.0, 20, 10)), "outside untouched");
+        assert!(luma(pixel(o, 1.0, 310, 170)) > 220, "outside untouched (white side)");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn rotated_source_uses_displayed_space() {
+        let d = root("rot");
+        let flat = flat(&d);
+        let src = d.join("phone.mp4");
+        ff(&["-display_rotation", "90", "-i", flat.to_str().unwrap(), "-c", "copy", src.to_str().unwrap()]);
+        let dims = crate::media_tools::video_dims(ffmpeg(), &src).unwrap();
+        assert_eq!(dims, (180, 320), "fixture is displayed portrait");
+        // x+w = 200 > 180: outside the displayed frame, although inside the raw 320x180
+        let (made, e) = run(&src, vec![area(120, 10, 80, 40, 0.0, 1.0, false)]);
+        assert!(made.is_empty() && e.len() == 1 && e[0].contains("area 1"), "{e:?}");
+        // y = 250 + 50 is only inside the displayed frame
+        let (made, e) = run(&src, vec![area(100, 250, 60, 50, 1.0, 2.0, false)]);
+        assert!(e.is_empty(), "{e:?}");
+        let o = &made[0];
+        assert_eq!(crate::media_tools::video_dims(ffmpeg(), o), Some((180, 320)));
+        assert!(black(pixel(o, 1.5, 120, 270)), "covered in displayed space");
+        assert!(!black(pixel(o, 0.5, 120, 270)), "gate respected");
+        assert!(is_blue(pixel(o, 1.5, 20, 20)));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn invalid_areas_create_nothing() {
+        let d = root("bad");
+        let src = flat(&d);
+        let before = names(&d);
+        let scratch = |p: &str| {
+            std::fs::read_dir(std::env::temp_dir()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with(p)).count()
+        };
+        let prefix = format!("ferrocast-media-{}-", std::process::id());
+        let scratch_before = scratch(&prefix);
+        let ok = area(10, 10, 20, 20, 0.0, 1.0, false);
+        for (areas, needle) in [
+            (vec![ok, area(300, 10, 50, 20, 0.0, 1.0, false)], "area 2"),
+            (vec![area(10, 10, 20, 20, 2.0, 1.0, false)], "area 1"),
+            (vec![area(10, 10, 20, 20, 0.0, 9.0, false)], "ends after"),
+            (vec![], "at least one"),
+            (vec![ok; 65], "too many"),
+        ] {
+            let (made, e) = run(&src, areas);
+            assert!(made.is_empty() && e.len() == 1 && e[0].contains(needle), "{needle}: {e:?}");
+        }
+        assert_eq!(names(&d), before, "nothing published");
+        assert_eq!(scratch(&prefix), scratch_before, "no scratch left (run with --test-threads=1)");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+}

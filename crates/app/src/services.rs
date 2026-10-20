@@ -1805,6 +1805,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::Snapshot(_)
         | FileTool::CropVideo(..)
         | FileTool::RedactVideo(..)
+        | FileTool::RedactVideoMany(..)
         | FileTool::Normalize(..)
         | FileTool::Visualize(_)
         | FileTool::VisualizeImage(..)

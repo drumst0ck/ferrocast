@@ -493,6 +493,15 @@ pub fn soffice_written_path(input: &Path, out: &Path, ext: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn redact_many_label_and_suffix() {
+        use crate::redactplan::Redaction;
+        let a = Redaction { x: 0, y: 0, w: 10, h: 10, start: 0.0, end: 1.0, blur: false };
+        let t = FileTool::RedactVideoMany(vec![a, a, a]);
+        assert_eq!((t.label().as_str(), t.suffix().as_str()), ("Redact · 3 areas", "redacted"));
+        assert_eq!(FileTool::RedactVideoMany(vec![a]).label(), "Redact · 1 area");
+    }
+
+    #[test]
     fn compress_pdf_label_suffix_and_gs_detection_field() {
         use crate::compress::Preset;
         assert_eq!(FileTool::CompressPdf(Preset::Light).label(), "Compress PDF · light");
@@ -1050,6 +1059,8 @@ pub enum FileTool {
     CropVideo(u32, u32, u32, u32),
     /// Cover a region (x,y,w,h) from..to seconds; blur instead of a box.
     RedactVideo(u32, u32, u32, u32, f64, f64, bool),
+    /// Several timed areas (displayed pixel space) in one pass; solid or blur per area.
+    RedactVideoMany(Vec<crate::redactplan::Redaction>),
     /// EBU R128 loudness normalisation (I, LRA, TP).
     Normalize(f64, f64, f64),
     /// Audio → MP4 with a waveform (landscape/portrait/square).
@@ -1103,6 +1114,7 @@ impl FileTool {
             FileTool::RedactVideo(_, _, _, _, a, b, blur) => {
                 format!("Redact video · {} to {}{}", format_secs(*a), format_secs(*b), if *blur { " (blur)" } else { "" })
             }
+            FileTool::RedactVideoMany(r) => format!("Redact · {} area{}", r.len(), if r.len() == 1 { "" } else { "s" }),
             FileTool::Normalize(i, ..) => format!("Normalize volume · {i} LUFS"),
             FileTool::Visualize(c) => format!(
                 "Audio visualizer · {}",
@@ -1146,7 +1158,7 @@ impl FileTool {
             FileTool::Speed(f) => format!("speed {f}x"),
             FileTool::Snapshot(_) => "frame".into(),
             FileTool::CropVideo(..) => "cropped".into(),
-            FileTool::RedactVideo(..) => "redacted".into(),
+            FileTool::RedactVideo(..) | FileTool::RedactVideoMany(..) => "redacted".into(),
             FileTool::Normalize(..) => "normalized".into(),
             FileTool::Visualize(_) | FileTool::VisualizeImage(..) => "visualizer".into(),
             FileTool::TrimSilence => "trimmed".into(),

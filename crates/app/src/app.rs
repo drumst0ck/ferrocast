@@ -2365,7 +2365,7 @@ impl App {
                                     FileTool::Speed(_) => "sf:speedometer",
                                     FileTool::Snapshot(_) => "sf:camera",
                                     FileTool::CropVideo(..) => "sf:crop",
-                                    FileTool::RedactVideo(..) | FileTool::Bleep(..) => "sf:eye.slash",
+                                    FileTool::RedactVideo(..) | FileTool::RedactVideoMany(..) | FileTool::Bleep(..) => "sf:eye.slash",
                                     FileTool::Normalize(..) | FileTool::Channels(..) => "sf:speaker.wave.2",
                                     FileTool::Visualize(_) | FileTool::VisualizeImage(..) => "sf:waveform",
                                     FileTool::TrimSilence => "sf:scissors",

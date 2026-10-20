@@ -30,6 +30,7 @@ pub mod photo;
 pub mod placeholders;
 pub mod ranking;
 pub mod redact;
+pub mod redactplan;
 pub mod reorder;
 pub mod script;
 pub mod storage;

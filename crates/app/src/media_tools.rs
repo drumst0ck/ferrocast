@@ -2,6 +2,7 @@
 use ferrocast_core::compress::{self, Goal, Plan, Resize};
 use ferrocast_core::convert::{family_of, output_with_suffix, Family, FileTool};
 use ferrocast_core::media;
+use ferrocast_core::redactplan::{self, Redaction};
 use ferrocast_core::videoplan::MIN_PIECE;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -441,6 +442,49 @@ fn compress_one(ff: &str, file: &Path, goal: Goal, resize: &Resize) -> Result<Pa
     result
 }
 
+/// Covers several timed areas of one video in a single pass. Areas are checked against the
+/// PROBED duration and displayed size (rotation applied) before anything is written; the copy is
+/// staged privately and published with `create_new`, so the original is never touched, nothing is
+/// overwritten and a failure leaves nothing behind.
+fn redact_many_one(ff: &str, file: &Path, areas: &[Redaction]) -> Result<PathBuf, String> {
+    if family_of(file) != Family::Video {
+        return Err("this tool requires video files".into());
+    }
+    let info = probe(ff, file)?;
+    let duration = info["format"]["duration"]
+        .as_str()
+        .and_then(|d| d.parse::<f64>().ok())
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .ok_or("could not read the video duration")?;
+    let (width, height) =
+        streams(&info).find(|s| s["codec_type"] == "video").and_then(display_dims).ok_or("could not read the video size")?;
+    redactplan::validate(areas, duration, width, height)?;
+    let has_audio = streams(&info).any(|s| s["codec_type"] == "audio");
+    let input = file.to_str().ok_or("input path is not UTF-8")?;
+    let scratch = std::env::temp_dir().join(format!("ferrocast-media-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&scratch).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let staged = scratch.join("output.mp4");
+        let out = staged.to_str().ok_or("output path is not UTF-8")?;
+        let args = media::redact_video_many(input, out, areas, width, height, has_audio);
+        crate::route::run_limited(Command::new(ff).args(["-nostdin", "-n", "-loglevel", "error"]).args(args), 900)?;
+        if std::fs::metadata(&staged).map_err(|e| e.to_string())?.len() == 0 {
+            return Err("redaction produced an empty file".to_string());
+        }
+        let dest = output_with_suffix(file, "redacted", "mp4", |p| p.exists());
+        use std::io::Write;
+        let mut src = std::fs::File::open(&staged).map_err(|e| e.to_string())?;
+        let mut dst = std::fs::OpenOptions::new().write(true).create_new(true).open(&dest).map_err(|e| e.to_string())?;
+        if let Err(e) = std::io::copy(&mut src, &mut dst).and_then(|_| dst.flush()) {
+            let _ = std::fs::remove_file(&dest);
+            return Err(e.to_string());
+        }
+        Ok(dest)
+    })();
+    let _ = std::fs::remove_dir_all(scratch);
+    result
+}
+
 pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (Vec<PathBuf>, Vec<String>) {
     let Some(ff) = ffmpeg else {
         return (vec![], vec!["ffmpeg is not installed (brew install ffmpeg)".into()]);
@@ -460,6 +504,13 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
         }
         if let FileTool::EditMetadata(edits, remove_all) = tool {
             match edit_metadata_one(ff, file, edits, *remove_all) {
+                Ok(p) => made.push(p),
+                Err(e) => errors.push(format!("{}: {e}", file.display())),
+            }
+            continue;
+        }
+        if let FileTool::RedactVideoMany(areas) = tool {
+            match redact_many_one(ff, file, areas) {
                 Ok(p) => made.push(p),
                 Err(e) => errors.push(format!("{}: {e}", file.display())),
             }

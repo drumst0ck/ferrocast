@@ -139,6 +139,52 @@ pub fn redact_video(input: &str, region: (u32, u32, u32, u32), range: (f64, f64)
     }
 }
 
+/// Several timed areas in ONE filtergraph. Each area is clipped to the displayed frame, then
+/// covered by a black box or a blurred copy (same plane-bounded radius as [`redact_video`]) only
+/// while `between(t,start,end)`. Areas apply in order, so overlaps compose. Audio is copied.
+pub fn redact_video_many(
+    input: &str,
+    out: &str,
+    regions: &[crate::redactplan::Redaction],
+    width: u32,
+    height: u32,
+    has_audio: bool,
+) -> Vec<String> {
+    let mut graph = String::new();
+    let mut cur = "0:v".to_string();
+    let mut n = 0;
+    for r in regions.iter().filter_map(|r| crate::redactplan::clamp(r, width, height)) {
+        n += 1;
+        let (x, y, w, h) = (r.x, r.y, r.w, r.h);
+        let en = format!("between(t\\,{}\\,{})", r.start, r.end);
+        let next = format!("v{n}");
+        if r.blur {
+            graph.push_str(&format!(
+                "[{cur}]split[base{n}][src{n}];[src{n}]crop={w}:{h}:{x}:{y},boxblur=luma_radius=min(20\\,min(w\\,h)/2):luma_power=5:chroma_radius=min(10\\,min(cw\\,ch)/2)[b{n}];[base{n}][b{n}]overlay={x}:{y}:enable='{en}'[{next}];"
+            ));
+        } else {
+            graph.push_str(&format!("[{cur}]drawbox=x={x}:y={y}:w={w}:h={h}:color=black@1:t=fill:enable='{en}'[{next}];"));
+        }
+        cur = next;
+    }
+    if n == 0 {
+        // nothing to cover: a pass-through keeps the graph valid
+        graph.push_str("[0:v]null[v]");
+    } else {
+        graph.push_str(&format!("[{cur}]null[v]"));
+    }
+    let mut v = s(&["-i", input, "-filter_complex", &graph, "-map", "[v]"]);
+    if has_audio {
+        v.extend(s(&["-map", "0:a"]));
+    }
+    v.extend(s(&["-c:v", "libx264", "-pix_fmt", "yuv420p"]));
+    if has_audio {
+        v.extend(s(&["-c:a", "copy"]));
+    }
+    v.push(out.to_string());
+    v
+}
+
 /// Video rate control for [`compress_video`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoRate {
@@ -338,6 +384,48 @@ mod tests {
         assert_eq!(af(channels("a", 2, true, 0.5, 1.0, "o")), "pan=stereo|c0=0.5*c0|c1=1*c1");
         assert_eq!(af(channels("a", 1, false, 1.0, 0.5, "o")), "pan=mono|c0=0.75*c0");
         assert_eq!(af(channels("a", 2, false, 1.0, 1.0, "o")), "pan=mono|c0=0.5*c0+0.5*c1");
+    }
+
+    fn many_graph(v: &[String]) -> String {
+        v[v.iter().position(|a| a == "-filter_complex").unwrap() + 1].clone()
+    }
+
+    #[test]
+    fn redact_many_builds_one_graph_with_a_gate_per_area() {
+        use crate::redactplan::Redaction;
+        let r = |x, y, w, h, start, end, blur| Redaction { x, y, w, h, start, end, blur };
+        let areas = [r(10, 10, 60, 40, 1.0, 2.0, false), r(200, 100, 60, 50, 4.0, 5.5, true), r(0, 0, 8, 8, 0.0, 6.0, true)];
+        let args = redact_video_many("in.mp4", "out.mp4", &areas, 320, 180, true);
+        assert_eq!(args.iter().filter(|a| *a == "-filter_complex").count(), 1);
+        let g = many_graph(&args);
+        assert_eq!(g.matches("enable='between(t\\,").count(), 3, "{g}");
+        assert!(g.contains("between(t\\,1\\,2)") && g.contains("between(t\\,4\\,5.5)") && g.contains("between(t\\,0\\,6)"));
+        assert_eq!(g.matches("drawbox").count(), 1);
+        assert_eq!(g.matches("boxblur").count(), 2);
+        assert!(g.contains("drawbox=x=10:y=10:w=60:h=40:color=black@1:t=fill"));
+        assert!(g.contains("overlay=200:100:") && g.contains("crop=60:50:200:100"));
+        // radius is bounded by the plane size, never a bare constant
+        assert!(
+            g.matches("luma_radius=min(20\\,min(w\\,h)/2)").count() == 2
+                && g.matches("chroma_radius=min(10\\,min(cw\\,ch)/2)").count() == 2
+        );
+        assert!(g.ends_with("[v]"), "{g}");
+        let pos = |k: &str| args.iter().position(|a| a == k).unwrap();
+        assert_eq!(args[pos("-c:a") + 1], "copy");
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "0:a"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "[v]"));
+        assert_eq!(args.last().unwrap(), "out.mp4");
+        assert!(args.iter().any(|a| a == "libx264") && args.iter().any(|a| a == "yuv420p"));
+        let silent = redact_video_many("in.mp4", "out.mp4", &areas[..1], 320, 180, false);
+        assert!(!silent.iter().any(|a| a == "0:a" || a == "-c:a"));
+    }
+
+    #[test]
+    fn redact_many_clamps_areas_to_the_frame() {
+        use crate::redactplan::Redaction;
+        let a = Redaction { x: 300, y: 170, w: 100, h: 100, start: 0.0, end: 1.0, blur: false };
+        let g = many_graph(&redact_video_many("i", "o", &[a], 320, 180, false));
+        assert!(g.contains("w=20:h=10"), "{g}");
     }
 
     #[test]
