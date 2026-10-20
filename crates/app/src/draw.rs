@@ -284,6 +284,16 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     });
                 }
             }
+            Ok("avis") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                app.push(View::VisualizeAudio {
+                    file,
+                    orient: ferrocast_core::media::Canvas::Portrait,
+                    style: crate::media_tools::VisStyle::Waveform,
+                    image: None,
+                    picking: false,
+                });
+            }
             Ok("atrim") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
@@ -877,6 +887,18 @@ impl App {
                     Err(m) => self.toast(m),
                     Ok(tool) => {
                         self.toast(if stereo { "Converting channels to stereo…" } else { "Converting channels to mono…" });
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
+                }
+                true
+            }
+            View::VisualizeAudio { file, orient, style, image, .. } if k.enter => {
+                match crate::media_tools::visualize_job(orient, style, image.as_deref()) {
+                    Err(m) => self.toast(m),
+                    Ok(_) if self.tools.ffmpeg.is_none() => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                    Ok(tool) => {
+                        self.toast("Making the video…");
                         services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
                         self.pop();
                     }
@@ -2356,6 +2378,77 @@ impl App {
             Pos2::new(area.center().x, area.max.y - 14.0),
             egui::Align2::CENTER_CENTER,
             "pick Mono or Stereo, set the volumes · ↵ save a copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
+    /// Audio to video window: waveform or still picture, and the canvas shape. No number or text
+    /// field, so it needs no entry in the kbd_edit list.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_visualize_audio(
+        &mut self,
+        ui: &mut Ui,
+        area: Rect,
+        pal: &Palette,
+        file: &std::path::Path,
+        orient: ferrocast_core::media::Canvas,
+        style: crate::media_tools::VisStyle,
+        image: Option<std::path::PathBuf>,
+        picking: bool,
+    ) {
+        use crate::media_tools::VisStyle;
+        use ferrocast_core::media::Canvas;
+        let ctx = ui.ctx().clone();
+        let (mut o, mut st) = (orient, style);
+        let mut choose = false;
+        let mut rects = [Rect::NOTHING; 5];
+        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(520.0, 240.0))), |ui| {
+            ui.spacing_mut().item_spacing.y = 14.0;
+            ui.label(
+                RichText::new(file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(13.0).color(pal.sub),
+            );
+            ui.horizontal(|ui| {
+                rects[0] = ui.selectable_value(&mut st, VisStyle::Waveform, "Waveform").rect;
+                rects[1] = ui.selectable_value(&mut st, VisStyle::Still, "Still image").rect;
+            });
+            ui.horizontal(|ui| {
+                rects[2] = ui.selectable_value(&mut o, Canvas::Landscape, "Landscape").rect;
+                rects[3] = ui.selectable_value(&mut o, Canvas::Portrait, "Portrait").rect;
+                rects[4] = ui.selectable_value(&mut o, Canvas::Square, "Square").rect;
+            });
+            if st == VisStyle::Still {
+                ui.horizontal(|ui| {
+                    choose = ui.add_enabled(!picking, egui::Button::new(if picking { "Choosing…" } else { "Choose picture…" })).clicked();
+                    let (text, color) = match &image {
+                        Some(p) if p.is_file() => (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), pal.text),
+                        Some(p) => (format!("{} (not found)", p.display()), pal.sub),
+                        None => ("no picture chosen yet".to_string(), pal.sub),
+                    };
+                    ui.label(RichText::new(text).size(12.5).color(color));
+                });
+            }
+            ui.label(RichText::new(crate::media_tools::visualize_line(o, st)).size(12.5).color(pal.sub));
+            ui.label(RichText::new("The video is saved as a new MP4 next to the audio; nothing is overwritten.").size(12.0).color(pal.sub));
+        });
+        ctx.data_mut(|d| d.insert_temp(Id::new("avis-rects"), rects));
+        if choose && !picking {
+            let (bus, f) = (self.bus.clone(), file.to_path_buf());
+            std::thread::spawn(move || bus.send(Msg::VisualPicked(f, services::choose_picture_file())));
+        }
+        if (o, st) != (orient, style) || (choose && !picking) {
+            if let Some(View::VisualizeAudio { orient, style, picking, .. }) = self.stack.last_mut() {
+                (*orient, *style) = (o, st);
+                if choose {
+                    *picking = true;
+                }
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area.center().x, area.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "pick the picture and the shape · ↵ make the video · esc cancel",
             FontId::proportional(11.5),
             pal.sub,
         );
@@ -3930,6 +4023,9 @@ impl App {
             }
             View::AudioTrim { trim, audio, .. } => {
                 self.draw_audio_trim(ui, rect, pal, trim, audio);
+            }
+            View::VisualizeAudio { file, orient, style, image, picking } => {
+                self.draw_visualize_audio(ui, rect, pal, &file, orient, style, image, picking);
             }
             View::CollageImage { files, opts, color } => {
                 self.draw_collage(ui, rect, pal, files.len(), opts, color);

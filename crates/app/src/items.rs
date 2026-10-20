@@ -299,6 +299,8 @@ pub enum Act {
     NormalizeAudio(PathBuf),
     /// Open the audio channels window for this audio file.
     AudioChannels(PathBuf),
+    /// Open the audio to video window for this audio file.
+    VisualizeAudio(PathBuf),
     /// Open the video split window for this file.
     SplitVideo(PathBuf),
     /// Select a video frame and save a full-resolution PNG.

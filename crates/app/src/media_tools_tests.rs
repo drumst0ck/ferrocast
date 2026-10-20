@@ -1224,3 +1224,115 @@ mod redact_many_real {
         std::fs::remove_dir_all(&d).unwrap();
     }
 }
+
+/// A10g: the pure job builder behind the audio to video window, and real media runs.
+mod a10g {
+    use super::*;
+    use crate::media_tools::{visualize_job, visualize_line, VisStyle};
+    use std::path::PathBuf;
+
+    fn picture(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fc-a10g-pure-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, b"x").unwrap();
+        p
+    }
+
+    const ALL: [Canvas; 3] = [Canvas::Landscape, Canvas::Portrait, Canvas::Square];
+
+    #[test]
+    fn every_orientation_with_the_waveform_builds_a_visualize_job() {
+        for c in ALL {
+            assert_eq!(visualize_job(c, VisStyle::Waveform, None), Ok(FileTool::Visualize(c)));
+            // a leftover picture is ignored for the waveform
+            assert_eq!(visualize_job(c, VisStyle::Waveform, Some(Path::new("/nonexistent/x.png"))), Ok(FileTool::Visualize(c)));
+        }
+        assert!(ALL.contains(&Canvas::Portrait));
+    }
+
+    #[test]
+    fn every_orientation_with_a_picture_builds_a_visualize_image_job() {
+        for name in ["a.png", "b.JPG", "c.jpeg", "d.webp", "e.bmp", "f.tiff", "g.tif"] {
+            let p = picture(name);
+            for c in ALL {
+                assert_eq!(
+                    visualize_job(c, VisStyle::Still, Some(&p)),
+                    Ok(FileTool::VisualizeImage(c, p.to_string_lossy().into_owned())),
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_missing_nonexistent_empty_or_wrong_picture_is_refused() {
+        for c in ALL {
+            assert!(visualize_job(c, VisStyle::Still, None).unwrap_err().to_lowercase().contains("picture"));
+            assert!(visualize_job(c, VisStyle::Still, Some(Path::new("/nonexistent/gone.png"))).is_err());
+            assert!(visualize_job(c, VisStyle::Still, Some(Path::new(""))).is_err());
+            assert!(visualize_job(c, VisStyle::Still, Some(&picture("notes.txt"))).is_err(), "not a picture type");
+            assert!(visualize_job(c, VisStyle::Still, Some(&std::env::temp_dir())).is_err(), "a folder");
+        }
+    }
+
+    #[test]
+    fn the_summary_line_uses_the_builder_sizes() {
+        assert_eq!(visualize_line(Canvas::Landscape, VisStyle::Waveform), "1280×720 MP4 with the waveform");
+        assert_eq!(visualize_line(Canvas::Portrait, VisStyle::Waveform), "720×1280 MP4 with the waveform");
+        assert_eq!(visualize_line(Canvas::Square, VisStyle::Still), "1080×1080 MP4 with your picture");
+        for c in ALL {
+            let (w, h) = c.size();
+            assert!(visualize_line(c, VisStyle::Waveform).starts_with(&format!("{w}×{h}")));
+        }
+    }
+
+    fn video_size(ff: &str, file: &Path) -> (u32, u32) {
+        let out = Command::new(Path::new(ff).with_file_name("ffprobe"))
+            .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0"])
+            .arg(file)
+            .output()
+            .unwrap();
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let (w, h) = s.split_once(',').unwrap_or_else(|| panic!("ffprobe said {s:?}"));
+        (w.parse().unwrap(), h.parse().unwrap())
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn a10g_portrait_waveform_and_still_image_make_videos_of_the_builder_size() {
+        let ff = Tools::detect().ffmpeg.expect("ffmpeg is required for this explicit check");
+        let dir = std::env::temp_dir().join(format!("fc-a10g-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tone = dir.join("tone.mp3");
+        command(ff, &["-f", "lavfi", "-i", "sine=f=440:d=3"], &tone);
+        let before = std::fs::read(&tone).unwrap();
+        // exactly what the window dispatches
+        let job = visualize_job(Canvas::Portrait, VisStyle::Waveform, None).unwrap();
+        let (out, errors) = run_file_tool(std::slice::from_ref(&tone), &job, Some(ff));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].extension().and_then(|e| e.to_str()), Some("mp4"));
+        assert_eq!(out[0].parent(), tone.parent(), "next to the original");
+        assert_eq!(video_size(ff, &out[0]), Canvas::Portrait.size());
+        assert!((duration_of(ff, &out[0]) - 3.0).abs() < 0.3, "{}", duration_of(ff, &out[0]));
+        assert_eq!(std::fs::read(&tone).unwrap(), before, "original untouched");
+        // a second run never overwrites
+        let (out2, errors) = run_file_tool(std::slice::from_ref(&tone), &job, Some(ff));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_ne!(out2[0], out[0]);
+        assert!(out2[0].file_stem().unwrap().to_string_lossy().ends_with(" 2"), "{:?}", out2[0]);
+        assert!(out[0].is_file() && out2[0].is_file());
+        // a still image: a generated 200x200 PNG on a square canvas
+        let png = dir.join("cover.png");
+        command(ff, &["-f", "lavfi", "-i", "testsrc=size=200x200:rate=1", "-frames:v", "1"], &png);
+        let job = visualize_job(Canvas::Square, VisStyle::Still, Some(&png)).unwrap();
+        let (out3, errors) = run_file_tool(std::slice::from_ref(&tone), &job, Some(ff));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(video_size(ff, &out3[0]), Canvas::Square.size());
+        assert!((duration_of(ff, &out3[0]) - 3.0).abs() < 0.3, "{}", duration_of(ff, &out3[0]));
+        assert_eq!(std::fs::read(&tone).unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

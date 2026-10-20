@@ -304,6 +304,15 @@ pub enum View {
         left_db: f64,
         right_db: f64,
     },
+    /// Audio to video window: waveform or a chosen still picture, and the canvas shape. `picking`
+    /// is true while the native chooser is open (one at a time).
+    VisualizeAudio {
+        file: PathBuf,
+        orient: ferrocast_core::media::Canvas,
+        style: crate::media_tools::VisStyle,
+        image: Option<PathBuf>,
+        picking: bool,
+    },
     /// Video trim viewer: the file and its timeline state (None while the video is being probed).
     VideoTrim {
         file: PathBuf,
@@ -512,6 +521,7 @@ impl View {
             View::AudioTrim { .. } => "Trim Audio",
             View::NormalizeAudio { .. } => "Normalize Audio",
             View::ChannelsAudio { .. } => "Audio Channels",
+            View::VisualizeAudio { .. } => "Audio to Video",
             View::VideoSnapshot { .. } => "Video Snapshots",
             View::VideoSplit { .. } => "Split Video",
             View::VideoCrop { .. } => "Crop Video",
@@ -1653,6 +1663,16 @@ impl App {
                         }
                     }
                 }
+                Msg::VisualPicked(file, picked) => {
+                    if let Some(View::VisualizeAudio { file: f, image, picking, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            *picking = false;
+                            if picked.is_some() {
+                                *image = picked;
+                            }
+                        }
+                    }
+                }
                 Msg::StampChosen(file, at, picked) => {
                     let Some((pw, ph, rgba)) = picked else { continue };
                     let Some(img) = ferrocast_core::annotate::Img::new(pw, ph, rgba) else { continue };
@@ -2665,6 +2685,7 @@ impl App {
                 ("Trim Audio…", "trim cut waveform silence start end", Act::TrimAudio(p.clone())),
                 ("Normalize…", "normalize loudness lufs volume level peak", Act::NormalizeAudio(p.clone())),
                 ("Channels…", "channels mono stereo left right volume balance", Act::AudioChannels(p.clone())),
+                ("Audio to Video…", "audio video visualizer waveform picture image mp4", Act::VisualizeAudio(p.clone())),
             ]),
             _ => {}
         }
@@ -3828,6 +3849,19 @@ impl App {
                     self.push(View::ChannelsAudio { file, in_channels: None, stereo: false, left_db: 0.0, right_db: 0.0 });
                 }
             },
+            Act::VisualizeAudio(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(_) => {
+                    self.show();
+                    self.push(View::VisualizeAudio {
+                        file,
+                        orient: ferrocast_core::media::Canvas::Landscape,
+                        style: crate::media_tools::VisStyle::Waveform,
+                        image: None,
+                        picking: false,
+                    });
+                }
+            },
             Act::CollageImages(files) => {
                 if files.len() < 2 {
                     self.toast("A collage needs at least two images");
@@ -4295,6 +4329,7 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (AudioChannels, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::AudioChannels(p)),
         (NormalizeAudio, _) => ToolReach::File(FileTool::Normalize(-16.0, 11.0, -1.5)),
         (AudioChannels, _) => ToolReach::File(FileTool::Channels(false, 1.0, 1.0)),
+        (AudioToVideo, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::VisualizeAudio(p)),
         (AudioToVideo, _) => ToolReach::File(FileTool::Visualize(ferrocast_core::media::Canvas::Landscape)),
         (TrimAudio, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::TrimAudio(p)),
         (TrimAudio, _) => ToolReach::File(FileTool::TrimSilence),

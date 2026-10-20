@@ -2949,3 +2949,224 @@ fn crop_ready_carries_the_duration_and_the_reference_frame_control_renders() {
         render(&mut app, vec![]);
     }
 }
+
+// ---- A10g: audio to video window
+
+fn avis_file() -> std::path::PathBuf {
+    std::env::temp_dir().join("fc-avis-view.mp3")
+}
+
+fn avis_view(app: &mut App, orient: ferrocast_core::media::Canvas, style: crate::media_tools::VisStyle, image: Option<std::path::PathBuf>) {
+    app.stack = vec![View::Root, View::VisualizeAudio { file: avis_file(), orient, style, image, picking: false }];
+}
+
+fn avis_state(app: &App) -> (ferrocast_core::media::Canvas, crate::media_tools::VisStyle, Option<std::path::PathBuf>, bool) {
+    match app.view() {
+        View::VisualizeAudio { orient, style, image, picking, .. } => (*orient, *style, image.clone(), *picking),
+        other => panic!("visualizer closed unexpectedly: {}", other.title()),
+    }
+}
+
+/// A real file with a picture extension (the job only checks that it is a file with that extension).
+fn avis_picture(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("fc-avis-pic-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join(name);
+    std::fs::write(&p, b"not really a picture").unwrap();
+    p
+}
+
+/// Centres of the five segmented buttons, recorded by the window while it draws:
+/// Waveform, Still image, Landscape, Portrait, Square.
+fn avis_buttons(app: &App) -> [Pos2; 5] {
+    let r: [Rect; 5] = app.ctx.data(|d| d.get_temp(Id::new("avis-rects"))).expect("the window records its buttons");
+    r.map(|r| r.center())
+}
+
+#[test]
+fn visualizer_view_renders_in_both_themes_with_and_without_a_picture() {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    let pic = avis_picture("cover.png");
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for (style, image, picking) in [
+            (VisStyle::Waveform, None, false),
+            (VisStyle::Still, None, false),
+            (VisStyle::Still, Some(pic.clone()), false),
+            (VisStyle::Still, Some(std::path::PathBuf::from("/nonexistent/gone.png")), false),
+            (VisStyle::Still, None, true),
+        ] {
+            for c in [Canvas::Landscape, Canvas::Portrait, Canvas::Square] {
+                app.stack = vec![View::Root, View::VisualizeAudio { file: avis_file(), orient: c, style, image: image.clone(), picking }];
+                render(&mut app, vec![]);
+                render(&mut app, vec![]);
+                assert_eq!(app.view().title(), "Audio to Video");
+            }
+        }
+    }
+}
+
+#[test]
+fn chosen_picture_reaches_the_window_and_another_file_is_ignored() {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    let mut app = fixture();
+    avis_view(&mut app, Canvas::Landscape, VisStyle::Still, None);
+    if let Some(View::VisualizeAudio { picking, .. }) = app.stack.last_mut() {
+        *picking = true;
+    }
+    render(&mut app, vec![]);
+    let pic = std::path::PathBuf::from("/nonexistent/other-cover.png");
+    app.bus.send(Msg::VisualPicked(std::path::PathBuf::from("/nonexistent/other.mp3"), Some(pic.clone())));
+    app.drain();
+    assert_eq!(avis_state(&app), (Canvas::Landscape, VisStyle::Still, None, true), "a reply for another file is ignored");
+    app.bus.send(Msg::VisualPicked(avis_file(), Some(pic.clone())));
+    app.drain();
+    assert_eq!(avis_state(&app), (Canvas::Landscape, VisStyle::Still, Some(pic.clone()), false));
+    // a cancelled dialog keeps the earlier choice and ends the picking
+    if let Some(View::VisualizeAudio { picking, .. }) = app.stack.last_mut() {
+        *picking = true;
+    }
+    app.bus.send(Msg::VisualPicked(avis_file(), None));
+    app.drain();
+    assert_eq!(avis_state(&app), (Canvas::Landscape, VisStyle::Still, Some(pic), false));
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn visualizer_escape_goes_back_without_a_job() {
+    use crate::media_tools::VisStyle;
+    let mut app = fixture();
+    avis_view(&mut app, ferrocast_core::media::Canvas::Square, VisStyle::Waveform, None);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err(), "Escape starts no job");
+}
+
+#[test]
+fn visualizer_enter_with_still_image_and_no_picture_refuses_and_starts_nothing() {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
+    avis_view(&mut app, Canvas::Portrait, VisStyle::Still, None);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::VisualizeAudio { .. }), "the window stays");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.to_lowercase().contains("picture")), "{:?}", app.toast);
+    assert!(app.rx.try_recv().is_err(), "nothing started");
+    // a chosen picture that no longer exists refuses too
+    avis_view(&mut app, Canvas::Portrait, VisStyle::Still, Some("/nonexistent/gone.png".into()));
+    app.toast = None;
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::VisualizeAudio { .. }));
+    assert!(app.toast.is_some());
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn visualizer_enter_with_a_valid_job_dispatches_and_goes_back() {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
+    avis_view(&mut app, Canvas::Portrait, VisStyle::Waveform, None);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root), "the window closes once the job is dispatched");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("visualiz") || t.0.contains("video")), "{:?}", app.toast);
+    // Still image with a real picture file
+    let pic = avis_picture("cover2.jpg");
+    avis_view(&mut app, Canvas::Square, VisStyle::Still, Some(pic));
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root));
+    // without ffmpeg the window stays and says why (the hint)
+    app.tools.ffmpeg = None;
+    avis_view(&mut app, Canvas::Landscape, VisStyle::Waveform, None);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::VisualizeAudio { .. }));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
+}
+
+#[test]
+fn visualizer_buttons_change_orientation_and_style() {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    let mut app = fixture();
+    avis_view(&mut app, Canvas::Landscape, VisStyle::Waveform, None);
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    let b = avis_buttons(&app);
+    click_at(&mut app, b[3]);
+    assert_eq!(avis_state(&app).0, Canvas::Portrait, "Portrait button");
+    click_at(&mut app, b[4]);
+    assert_eq!(avis_state(&app).0, Canvas::Square, "Square button");
+    click_at(&mut app, b[2]);
+    assert_eq!(avis_state(&app).0, Canvas::Landscape, "Landscape button");
+    click_at(&mut app, b[1]);
+    assert_eq!(avis_state(&app).1, VisStyle::Still, "Still image button");
+    // the layout may shift when the picture row appears: read the positions again
+    render(&mut app, vec![]);
+    let b = avis_buttons(&app);
+    click_at(&mut app, b[0]);
+    assert_eq!(avis_state(&app).1, VisStyle::Waveform, "Waveform button");
+    assert!(app.rx.try_recv().is_err(), "clicking a segment starts nothing");
+}
+
+#[test]
+fn convert_view_offers_audio_to_video_for_one_audio_file_only() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-avisoffer-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let has = |app: &mut App, names: &[&str]| -> bool {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.sections()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .any(|i| i.title == "Audio to Video…" && matches!(&i.kind, Kind::Editor(Act::VisualizeAudio(_))))
+    };
+    assert!(has(&mut app, &["a.mp3"]));
+    assert!(has(&mut app, &["a.wav"]));
+    assert!(!has(&mut app, &["a.mp3", "b.mp3"]));
+    assert!(!has(&mut app, &["a.mp4"]));
+    assert!(!has(&mut app, &["a.png"]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_audio_to_video_opens_the_window_for_one_audio_file() {
+    use ferrocast_core::convert::FileTool;
+    use ferrocast_core::tools::{implemented, Impl, ToolId};
+    let a = std::path::PathBuf::from("/nonexistent/a.mp3");
+    let b = std::path::PathBuf::from("/nonexistent/b.mp3");
+    assert!(matches!(tool_reach(ToolId::AudioToVideo, std::slice::from_ref(&a)), ToolReach::Act(Act::VisualizeAudio(_))));
+    assert!(matches!(tool_reach(ToolId::AudioToVideo, &[a, b]), ToolReach::File(FileTool::Visualize(_))));
+    assert_eq!(implemented(ToolId::AudioToVideo), Impl::Window);
+}
+
+#[test]
+fn visualizer_without_ffmpeg_shows_the_hint_and_opens_no_view() {
+    let mut app = fixture();
+    app.tools = Default::default();
+    let depth = app.stack.len();
+    app.perform(Act::VisualizeAudio(avis_file()), false);
+    assert_eq!(app.stack.len(), depth);
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
+    app.perform(Act::VisualizeAudio(avis_file()), false);
+    assert!(matches!(app.view(), View::VisualizeAudio { picking: false, image: None, .. }));
+}

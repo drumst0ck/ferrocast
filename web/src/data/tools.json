@@ -214,7 +214,7 @@
     {
       "id": "audioToVideo",
       "name": "Audio to video",
-      "status": "typed",
+      "status": "window",
       "shortcut": null,
       "formats": [
         "mp3",

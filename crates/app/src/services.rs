@@ -61,6 +61,8 @@ pub enum Msg {
     VideoFrame(PathBuf, f64, Option<Vec<u8>>),
     /// A picture chosen to stamp onto the image being annotated: where, and its RGBA pixels.
     StampChosen(PathBuf, (f32, f32), Option<(usize, usize, Vec<u8>)>),
+    /// A picture chosen for the audio to video window of this file (None: cancelled).
+    VisualPicked(PathBuf, Option<PathBuf>),
     Script {
         run: u64,
         text: String,
@@ -2606,6 +2608,17 @@ pub fn choose_stamp_image() -> Option<(usize, usize, Vec<u8>)> {
     let png = display_png(&path, 1200)?;
     let img = image::load_from_memory(&png).ok()?.to_rgba8();
     Some((img.width() as usize, img.height() as usize, img.into_raw()))
+}
+
+/// Ask for one picture with the native dialog and return its path, or None when cancelled
+/// (blocks; call from a thread).
+pub fn choose_picture_file() -> Option<PathBuf> {
+    let out = ferrocast_macos::system::osascript(
+        "POSIX path of (choose file of type {\"public.image\"} with prompt \"Choose a picture for the video\")",
+    )
+    .ok()?;
+    let out = out.trim();
+    (!out.is_empty()).then(|| PathBuf::from(out))
 }
 
 /// Ask the user for a JSON file with a native dialog (blocks; call from a thread).
