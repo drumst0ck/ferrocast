@@ -1206,6 +1206,7 @@ impl App {
     /// Show the wheel centred under the pointer, without moving the drag's focus elsewhere.
     fn show_wheel(&mut self, kind: ferrocast_core::wheel::WheelKind, files: Vec<PathBuf>) {
         let segs = self.wheel_segments(kind, &files);
+        instance::log(&self.store.root, &wheel_log_line("open", kind, &segs, files.len()));
         if segs.is_empty() {
             return;
         }
@@ -1246,6 +1247,7 @@ impl App {
     pub(crate) fn switch_wheel(&mut self, kind: ferrocast_core::wheel::WheelKind) {
         let Some(View::Wheel { files, .. }) = self.stack.last().cloned() else { return };
         let segs = self.wheel_segments(kind, &files);
+        instance::log(&self.store.root, &wheel_log_line("switch", kind, &segs, files.len()));
         if segs.is_empty() {
             return;
         }
@@ -4272,6 +4274,13 @@ pub(crate) fn tool_segment_with(t: ferrocast_core::tools::ToolId, files: &[PathB
         ToolReach::Open => WheelPick::Act(Act::Convert(files.to_vec())),
     };
     WheelSeg { label: tool_label(t).into(), symbol: tool_symbol(t), needs: missing.then_some("Not available yet"), pick }
+}
+
+/// One diagnostic line for the log when a wheel opens or switches: the kind, how many segments and
+/// the first three labels. Never a path.
+pub(crate) fn wheel_log_line(event: &str, kind: ferrocast_core::wheel::WheelKind, segs: &[WheelSeg], files: usize) -> String {
+    let first = segs.iter().take(3).map(|s| s.label.as_str()).collect::<Vec<_>>().join(",");
+    format!("wheel {event} {kind:?} segs={} files={files} first={first}", segs.len())
 }
 
 /// SF Symbol for a conversion output, so a ring of formats is told apart at a glance.

@@ -756,6 +756,17 @@ fn split_equal_parts_box_keeps_escape_while_editing() {
 }
 
 #[test]
+fn wheel_log_line_names_the_kind_and_segments_but_no_paths() {
+    use ferrocast_core::wheel::WheelKind;
+    let seg = |l: &str| WheelSeg { label: l.into(), symbol: "sf:photo", needs: None, pick: WheelPick::Act(Act::Run) };
+    let segs = vec![seg("AirDrop"), seg("Float"), seg("Copy"), seg("Move to…")];
+    let line = wheel_log_line("open", WheelKind::Actions, &segs, 2);
+    assert_eq!(line, "wheel open Actions segs=4 files=2 first=AirDrop,Float,Copy");
+    assert_eq!(wheel_log_line("switch", WheelKind::Convert, &[], 0), "wheel switch Convert segs=0 files=0 first=");
+    assert!(!line.contains('/'), "no paths in the log");
+}
+
+#[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
     let f = std::env::temp_dir().join(format!("fc-vspeed-{}.mp4", std::process::id()));

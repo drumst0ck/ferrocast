@@ -430,12 +430,8 @@ impl Hotkeys {
             Err(e) => errors.push(format!("{spec}: {e}")),
         };
         add(self, &s.launcher_hotkey, "__launcher");
-        let ids: std::collections::BTreeSet<&str> = s
-            .commands
-            .keys()
-            .map(String::as_str)
-            .chain(ferrocast_core::models::DEFAULT_HOTKEYS.iter().map(|(id, _)| *id))
-            .collect();
+        let ids: std::collections::BTreeSet<&str> =
+            s.commands.keys().map(String::as_str).chain(ferrocast_core::models::DEFAULT_HOTKEYS.iter().map(|(id, _)| *id)).collect();
         for id in ids {
             if let Some(h) = s.hotkey(id) {
                 add(self, h, id);
