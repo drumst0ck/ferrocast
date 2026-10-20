@@ -222,6 +222,7 @@ pub struct WheelSeg {
 pub enum WheelPick {
     Convert(ferrocast_core::convert::Target),
     Image(ferrocast_core::convert::ImageOp),
+    File(ferrocast_core::convert::FileTool),
     Act(Act),
 }
 
@@ -943,7 +944,7 @@ impl App {
 
     /// Segments for a wheel over these files.
     pub(crate) fn wheel_segments(&self, kind: ferrocast_core::wheel::WheelKind, files: &[PathBuf]) -> Vec<WheelSeg> {
-        use ferrocast_core::convert::{family_of, targets, Family};
+        use ferrocast_core::convert::targets;
         let Some(first) = files.first() else { return vec![] };
         match kind {
             ferrocast_core::wheel::WheelKind::Convert => {
@@ -984,31 +985,14 @@ impl App {
                     .collect()
             }
             ferrocast_core::wheel::WheelKind::Tools => {
-                use ferrocast_core::convert::ImageOp;
-                if files.iter().all(|f| family_of(f) == Family::Image) {
-                    // the most used tool of each kind, so eight fit on the ring
-                    let ops = [
-                        ImageOp::Compress(60),
-                        ImageOp::Resize(1280),
-                        ImageOp::Crop(1, 1),
-                        ImageOp::StripMetadata,
-                        ImageOp::Rotate(90),
-                        ImageOp::Redact(true),
-                        ImageOp::Annotate,
-                        if files.len() > 1 { ImageOp::CombinePdf } else { ImageOp::Background("FFFFFF") },
-                    ];
-                    ops.into_iter()
-                        .map(|op| WheelSeg {
-                            label: match op {
-                                ImageOp::Background(_) => "Background".into(),
-                                ImageOp::Annotate => "Annotate".into(),
-                                _ => op.label().split(" · ").next().unwrap_or_default().to_string(),
-                            },
-                            symbol: image_op_symbol(&op),
-                            needs: None,
-                            pick: WheelPick::Image(op),
-                        })
-                        .collect()
+                use ferrocast_core::convert::ext;
+                use ferrocast_core::tools::tools_for;
+                // one list per extension family (jpeg/tif aliases handled by tools_for)
+                let multi = files.len() > 1;
+                let list = tools_for(&ext(first), multi);
+                let same = !list.is_empty() && files.iter().all(|f| tools_for(&ext(f), multi) == list);
+                if same {
+                    list.into_iter().take(12).map(|t| tool_segment(t, files)).collect()
                 } else {
                     vec![WheelSeg {
                         label: "Open tools…".into(),
@@ -1082,6 +1066,11 @@ impl App {
         self.reset_to_root();
         let Some(i) = picked.filter(|i| *i < segs.len()) else { return };
         match segs[i].pick.clone() {
+            WheelPick::Act(Act::Convert(_)) if segs[i].needs.is_some() => self.toast(format!("{}: not available yet", segs[i].label)),
+            WheelPick::File(tool) => {
+                self.toast(format!("{}…", tool.label()));
+                services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
+            }
             WheelPick::Image(ferrocast_core::convert::ImageOp::Collage) if files.len() >= 2 => {
                 self.perform(Act::CollageImages(files), false);
             }
@@ -2122,6 +2111,7 @@ impl App {
                     }
                 }
                 out.extend(self.editor_section(&files, &q, &sub));
+                out.extend(self.missing_tools_section(&files, &q, &sub));
                 out.retain(|sec| !sec.items.is_empty());
                 out
             }
@@ -2282,6 +2272,33 @@ impl App {
             })
             .collect();
         (!items.is_empty()).then_some(Section { title: "Editors".into(), items })
+    }
+
+    /// Tools the format table lists but Ferrocast cannot do yet; shown, not hidden (parity plan A2).
+    fn missing_tools_section(&self, files: &[PathBuf], q: &str, sub: &str) -> Option<Section> {
+        use ferrocast_core::convert::ext;
+        use ferrocast_core::tools::{implemented, tools_for, Impl};
+        let first = files.first()?;
+        let multi = files.len() > 1;
+        let list = tools_for(&ext(first), multi);
+        if files.iter().any(|f| tools_for(&ext(f), multi) != list) {
+            return None;
+        }
+        let items: Vec<Item> = list
+            .into_iter()
+            .filter(|t| implemented(*t) == Impl::Missing)
+            .filter(|t| self.matches(q, tool_label(*t), "tool").is_some())
+            .map(|t| Item {
+                id: format!("tool:{}", tool_label(t)),
+                title: tool_label(t).to_string(),
+                subtitle: sub.to_string(),
+                icon: Icon::Glyph(tool_symbol(t), [255, 140, 60]),
+                accessory: "Not available yet".into(),
+                keywords: vec![],
+                kind: Kind::Editor(Act::Convert(files.to_vec())),
+            })
+            .collect();
+        (!items.is_empty()).then_some(Section { title: "Tools".into(), items })
     }
 
     // --------------------------------------------------------------- actions
@@ -2655,6 +2672,7 @@ impl App {
                 let (secs, label) = (*secs, label.clone());
                 self.start_timer(secs, label);
             }
+            Kind::Editor(Act::Convert(_)) => self.toast("Not available yet"),
             Kind::Editor(act) => {
                 let act = act.clone();
                 self.perform(act, false);
@@ -3674,30 +3692,125 @@ fn looks_like_url(q: &str) -> Option<String> {
     None
 }
 
-/// Top-left origin (points) to center the launcher on the screen under the cursor.
-/// SF symbol for an image tool.
-pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static str {
-    use ferrocast_core::convert::ImageOp;
-    match op {
-        ImageOp::Compress(_) => "sf:arrow.down.right.and.arrow.up.left",
-        ImageOp::Resize(_) => "sf:arrow.up.left.and.down.right.magnifyingglass",
-        ImageOp::Crop(..) => "sf:crop",
-        ImageOp::StripMetadata => "sf:eye.slash",
-        ImageOp::CombinePdf => "sf:doc.richtext",
-        ImageOp::Rotate(_) => "sf:rotate.right",
-        ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
-        ImageOp::Background(_) => "sf:square.dashed",
-        ImageOp::Collage | ImageOp::CollageWith(_) => "sf:square.grid.2x2",
-        ImageOp::FrameWith(_) => "sf:square.dashed",
-        ImageOp::RedactWith(_) => "sf:eye.slash.fill",
-        ImageOp::EditWith(_) => "sf:slider.horizontal.3",
-        ImageOp::Redact(_) => "sf:eye.slash.fill",
-        ImageOp::Adjust(_) => "sf:slider.horizontal.3",
-        ImageOp::Annotate => "sf:pencil.tip.crop.circle",
-        ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
-        ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
-        ImageOp::SetMeta(_) => "sf:tag",
+/// How a tool is reached today.
+#[derive(Clone, Debug)]
+pub(crate) enum ToolReach {
+    /// A dedicated window (or editor view).
+    Act(Act),
+    /// A one-step image preset.
+    Image(ferrocast_core::convert::ImageOp),
+    /// A one-step file preset.
+    File(ferrocast_core::convert::FileTool),
+    /// No direct entry: open the Convert view for these files.
+    Open,
+}
+
+/// Pure map from a tool to its existing window or preset for these files.
+pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf]) -> ToolReach {
+    use ferrocast_core::convert::{family_of, Family, FileTool, ImageOp};
+    use ferrocast_core::tools::ToolId::*;
+    let one = (files.len() == 1).then(|| files[0].clone());
+    let images = !files.is_empty() && files.iter().all(|f| family_of(f) == Family::Image);
+    match (tool, one) {
+        (AnnotateImage, Some(p)) => ToolReach::Act(Act::AnnotateCanvas(p)),
+        (EditImage, Some(p)) => ToolReach::Act(Act::EditPhoto(p)),
+        (CropImage, Some(p)) => ToolReach::Act(Act::CropImage(p)),
+        (RedactImage, Some(p)) => ToolReach::Act(Act::RedactImage(p)),
+        (FrameImage, Some(p)) => ToolReach::Act(Act::FrameImage(p)),
+        (TrimVideo, Some(p)) => ToolReach::Act(Act::TrimVideo(p)),
+        (CropVideo, Some(p)) => ToolReach::Act(Act::CropVideo(p)),
+        (ChangeVideoSpeed, Some(p)) => ToolReach::Act(Act::SpeedVideo(p)),
+        (VideoSnapshots, Some(p)) => ToolReach::Act(Act::SnapshotVideo(p)),
+        (RedactVideo, Some(p)) => ToolReach::Act(Act::RedactVideo(p)),
+        (OrganizePdf, Some(p)) => ToolReach::Act(Act::OrganizePdf(p)),
+        (CreateCollage, _) if files.len() >= 2 => ToolReach::Act(Act::CollageImages(files.to_vec())),
+        (CropImage, None) if images => ToolReach::Image(ImageOp::Crop(1, 1)),
+        (Compress, _) if images => ToolReach::Image(ImageOp::Compress(60)),
+        (RemoveMetadata, _) if images => ToolReach::Image(ImageOp::StripMetadata),
+        (CreatePdf, _) if images => ToolReach::Image(ImageOp::CombinePdf),
+        (MuteVideo, _) => ToolReach::File(FileTool::Mute),
+        (JoinVideos, _) => ToolReach::File(FileTool::Join),
+        (MergePdf, _) => ToolReach::File(FileTool::Merge),
+        (SplitPdf, _) => ToolReach::File(FileTool::SplitPages),
+        (SplitVideo, _) => ToolReach::File(FileTool::SplitEvery(60)),
+        (NormalizeAudio, _) => ToolReach::File(FileTool::Normalize(-16.0, 11.0, -1.5)),
+        (AudioChannels, _) => ToolReach::File(FileTool::Channels(false, 1.0, 1.0)),
+        (AudioToVideo, _) => ToolReach::File(FileTool::Visualize(ferrocast_core::media::Canvas::Landscape)),
+        (TrimAudio, _) => ToolReach::File(FileTool::TrimSilence),
+        _ => ToolReach::Open,
     }
+}
+
+/// Short label per tool.
+pub(crate) fn tool_label(t: ferrocast_core::tools::ToolId) -> &'static str {
+    use ferrocast_core::tools::ToolId::*;
+    match t {
+        Compress => "Compress",
+        RemoveMetadata => "Metadata",
+        EditImage => "Edit Photo",
+        AnnotateImage => "Annotate",
+        FrameImage => "Background",
+        CropImage => "Crop",
+        RedactImage => "Redact",
+        CreateCollage => "Collage",
+        TrimVideo => "Trim",
+        CropVideo => "Crop Video",
+        ChangeVideoSpeed => "Speed",
+        JoinVideos => "Join",
+        VideoSnapshots => "Snapshots",
+        SplitVideo => "Split",
+        RedactVideo => "Redact Video",
+        NormalizeAudio => "Normalize",
+        AudioToVideo => "Visualizer",
+        TrimAudio => "Trim Audio",
+        AudioChannels => "Channels",
+        RedactAudio => "Bleep",
+        MergePdf => "Merge PDF",
+        OrganizePdf => "Organize",
+        MuteVideo => "Mute",
+        SplitPdf => "Split PDF",
+        CreatePdf => "Create PDF",
+        ExtractArchive => "Extract",
+    }
+}
+
+/// One SF symbol per tool.
+pub(crate) fn tool_symbol(t: ferrocast_core::tools::ToolId) -> &'static str {
+    use ferrocast_core::tools::ToolId::*;
+    match t {
+        Compress => "sf:arrow.down.right.and.arrow.up.left",
+        RemoveMetadata => "sf:tag",
+        EditImage => "sf:slider.horizontal.3",
+        AnnotateImage => "sf:pencil.tip.crop.circle",
+        FrameImage => "sf:square.dashed",
+        CropImage | CropVideo => "sf:crop",
+        RedactImage | RedactVideo => "sf:eye.slash.fill",
+        CreateCollage => "sf:square.grid.2x2",
+        TrimVideo | TrimAudio => "sf:scissors",
+        ChangeVideoSpeed => "sf:speedometer",
+        JoinVideos | MergePdf => "sf:rectangle.stack",
+        VideoSnapshots => "sf:camera",
+        SplitVideo | SplitPdf => "sf:square.split.2x1",
+        NormalizeAudio | AudioChannels => "sf:speaker.wave.2",
+        AudioToVideo => "sf:waveform",
+        RedactAudio => "sf:speaker.slash.fill",
+        OrganizePdf => "sf:doc.on.doc",
+        MuteVideo => "sf:speaker.slash",
+        CreatePdf => "sf:doc.richtext",
+        ExtractArchive => "sf:archivebox",
+    }
+}
+
+/// Wheel segment for a tool over these files.
+pub(crate) fn tool_segment(t: ferrocast_core::tools::ToolId, files: &[PathBuf]) -> WheelSeg {
+    let missing = ferrocast_core::tools::implemented(t) == ferrocast_core::tools::Impl::Missing;
+    let pick = match tool_reach(t, files) {
+        ToolReach::Act(a) => WheelPick::Act(a),
+        ToolReach::Image(op) => WheelPick::Image(op),
+        ToolReach::File(f) => WheelPick::File(f),
+        ToolReach::Open => WheelPick::Act(Act::Convert(files.to_vec())),
+    };
+    WheelSeg { label: tool_label(t).into(), symbol: tool_symbol(t), needs: missing.then_some("Not available yet"), pick }
 }
 
 /// SF Symbol for a conversion output, so a ring of formats is told apart at a glance.

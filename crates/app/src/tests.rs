@@ -635,3 +635,77 @@ fn video_redact_rejects_reversed_range_without_closing() {
     assert!(matches!(app.view(), View::VideoRedact { .. }));
     assert!(app.rx.try_recv().is_err(), "invalid range must not start work");
 }
+
+fn tools_wheel_titles(app: &App, names: &[&str]) -> Vec<(String, Option<&'static str>)> {
+    let files: Vec<std::path::PathBuf> = names.iter().map(|n| std::path::PathBuf::from(format!("/nonexistent/{n}"))).collect();
+    app.wheel_segments(ferrocast_core::wheel::WheelKind::Tools, &files).into_iter().map(|s| (s.label, s.needs)).collect()
+}
+
+#[test]
+fn tools_wheel_follows_tools_for_per_format() {
+    let app = fixture();
+    let labels = |names: &[&str]| -> Vec<String> { tools_wheel_titles(&app, names).into_iter().map(|(l, _)| l).collect() };
+    assert_eq!(labels(&["a.mp4"]), ["Compress", "Metadata", "Mute", "Trim", "Crop Video", "Speed", "Snapshots", "Split", "Redact Video"]);
+    assert_eq!(labels(&["a.png"]), ["Compress", "Metadata", "Edit Photo", "Annotate", "Background", "Crop", "Redact"]);
+    assert_eq!(labels(&["a.png", "b.jpeg"]), ["Compress", "Metadata", "Crop", "Create PDF", "Collage"]);
+    assert_eq!(labels(&["a.pdf"]), ["Compress", "Metadata", "Split PDF", "Organize"]);
+    assert_eq!(labels(&["a.gif"]), ["Metadata"]);
+    // an archive's only tool is not available yet and says so
+    assert_eq!(tools_wheel_titles(&app, &["a.zip"]), [("Extract".to_string(), Some("Not available yet"))]);
+    // no tools for text: the single fallback segment, not marked missing
+    assert_eq!(tools_wheel_titles(&app, &["a.txt"]), [("Open tools…".to_string(), None)]);
+    // mixed families fall back too
+    assert_eq!(labels(&["a.png", "b.mp4"]), ["Open tools…"]);
+}
+
+#[test]
+fn tool_reach_maps_tools_to_windows_and_presets() {
+    use ferrocast_core::convert::{FileTool, ImageOp};
+    use ferrocast_core::tools::ToolId;
+    let p = std::path::PathBuf::from("/nonexistent/a.png");
+    assert!(matches!(tool_reach(ToolId::AnnotateImage, std::slice::from_ref(&p)), ToolReach::Act(Act::AnnotateCanvas(_))));
+    assert!(matches!(tool_reach(ToolId::EditImage, std::slice::from_ref(&p)), ToolReach::Act(Act::EditPhoto(_))));
+    assert!(matches!(tool_reach(ToolId::Compress, std::slice::from_ref(&p)), ToolReach::Image(ImageOp::Compress(60))));
+    assert!(matches!(tool_reach(ToolId::RemoveMetadata, std::slice::from_ref(&p)), ToolReach::Image(ImageOp::StripMetadata)));
+    let two = vec![p.clone(), std::path::PathBuf::from("/nonexistent/b.png")];
+    assert!(matches!(tool_reach(ToolId::CropImage, &two), ToolReach::Image(ImageOp::Crop(1, 1))));
+    assert!(matches!(tool_reach(ToolId::CreatePdf, &two), ToolReach::Image(ImageOp::CombinePdf)));
+    assert!(matches!(tool_reach(ToolId::CreateCollage, &two), ToolReach::Act(Act::CollageImages(_))));
+    let v = std::path::PathBuf::from("/nonexistent/a.mp4");
+    assert!(matches!(tool_reach(ToolId::RedactAudio, std::slice::from_ref(&v)), ToolReach::Open));
+    assert!(matches!(tool_reach(ToolId::MuteVideo, std::slice::from_ref(&v)), ToolReach::File(FileTool::Mute)));
+    assert!(matches!(tool_reach(ToolId::TrimVideo, std::slice::from_ref(&v)), ToolReach::Act(Act::TrimVideo(_))));
+    assert!(matches!(tool_reach(ToolId::ExtractArchive, &[]), ToolReach::Open));
+}
+
+#[test]
+fn nine_segment_tools_wheel_renders_in_both_themes() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    let files = vec![std::path::PathBuf::from("/nonexistent/a.mp4")];
+    let segs = app.wheel_segments(WheelKind::Tools, &files);
+    assert_eq!(segs.len(), 9);
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for sel in [None, Some(0), Some(8)] {
+            app.stack = vec![
+                View::Root,
+                View::Wheel { files: files.clone(), center: Pos2::new(-9999.0, -9999.0), segs: segs.clone(), kind: WheelKind::Tools, sel },
+            ];
+            render(&mut app, vec![]);
+        }
+    }
+}
+
+#[test]
+fn convert_view_lists_a_missing_tool_instead_of_hiding_it() {
+    let mut app = fixture();
+    let titles = |app: &mut App, f: &str| -> Vec<(String, String)> {
+        app.stack = vec![View::Root, View::Convert(vec![std::path::PathBuf::from(format!("/nonexistent/{f}"))])];
+        app.invalidate_sections();
+        app.sections_cached().into_iter().flat_map(|s| s.items).map(|i| (i.title, i.accessory)).collect()
+    };
+    assert!(titles(&mut app, "a.zip").contains(&("Extract".to_string(), "Not available yet".to_string())));
+    // a format whose tools are all implemented gets no such row
+    assert!(!titles(&mut app, "a.mp4").iter().any(|(_, a)| a == "Not available yet"));
+}
