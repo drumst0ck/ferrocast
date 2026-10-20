@@ -59,6 +59,16 @@ pub enum ReorderJob {
     Image(ferrocast_core::convert::ImageOp, Vec<PathBuf>),
 }
 
+/// Pure mapping from the split window's state to the job that Enter starts; refuses (with the
+/// message to show) when the cuts leave fewer than two clips.
+pub fn split_job(duration: f64, points: &[f64], parts: usize) -> Result<ferrocast_core::convert::FileTool, String> {
+    let ranges = ferrocast_core::videoplan::split_ranges(duration, points, parts);
+    if ranges.len() < 2 {
+        return Err("Nothing to split: add a cut point (M) or set two or more equal parts".into());
+    }
+    Ok(ferrocast_core::convert::FileTool::SplitPoints(ranges, true))
+}
+
 /// Pure mapping from the window's purpose to the job that Enter starts.
 pub fn reorder_job(purpose: ReorderPurpose, files: Vec<PathBuf>) -> ReorderJob {
     use ferrocast_core::convert::{FileTool, ImageOp};
@@ -119,6 +129,14 @@ pub enum View {
     VideoSnapshot {
         file: PathBuf,
         trim: Option<ferrocast_core::videoplan::Trim>,
+    },
+    /// Video split window: the timeline of the trim viewer with cut points (sorted, on the frame
+    /// grid) and an "equal parts" count (2..=50) used only while there are no points.
+    VideoSplit {
+        file: PathBuf,
+        trim: Option<ferrocast_core::videoplan::Trim>,
+        points: Vec<f64>,
+        parts: usize,
     },
     /// Video trim viewer: the file and its timeline state (None while the video is being probed).
     VideoTrim {
@@ -309,6 +327,7 @@ impl View {
             View::CollageImage { .. } => "Make a Collage",
             View::VideoTrim { .. } => "Trim Video",
             View::VideoSnapshot { .. } => "Video Snapshots",
+            View::VideoSplit { .. } => "Split Video",
             View::VideoCrop { .. } => "Crop Video",
             View::VideoRedact { .. } => "Redact Video",
             View::VideoSpeed { .. } => "Change Video Speed",
@@ -1229,10 +1248,14 @@ impl App {
                     }
                 }
                 Msg::VideoInfo(file, info) => {
-                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } if *f == file) {
+                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } | View::VideoSplit { file: f, .. } if *f == file)
+                    {
                         match info.and_then(|(d, r)| ferrocast_core::videoplan::Trim::new(d, r)) {
                             Some(t) => {
-                                if let Some(View::VideoTrim { trim, .. } | View::VideoSnapshot { trim, .. }) = self.stack.last_mut() {
+                                if let Some(
+                                    View::VideoTrim { trim, .. } | View::VideoSnapshot { trim, .. } | View::VideoSplit { trim, .. },
+                                ) = self.stack.last_mut()
+                                {
                                     *trim = Some(t);
                                 }
                             }
@@ -1241,10 +1264,12 @@ impl App {
                     }
                 }
                 Msg::VideoFrame(file, t, png) => {
-                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } if *f == file) {
+                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } | View::VideoSplit { file: f, .. } if *f == file)
+                    {
                         self.ctx.data_mut(|d| d.insert_temp(Id::new("vt-busy"), false));
                     }
-                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } if *f == file) {
+                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } | View::VideoSplit { file: f, .. } if *f == file)
+                    {
                         if let Some(img) = png.as_deref().and_then(services::decode_png) {
                             let tex = self.ctx.load_texture("vt-view", img, egui::TextureOptions::LINEAR);
                             self.ctx.data_mut(|d| {
@@ -2293,6 +2318,7 @@ impl App {
                 ("Trim Video…", "trim cut frame timeline", Act::TrimVideo(p.clone())),
                 ("Crop Video…", "crop video frame size", Act::CropVideo(p.clone())),
                 ("Change Speed…", "speed slow fast pitch", Act::SpeedVideo(p.clone())),
+                ("Split Video…", "split cut parts clips chapters", Act::SplitVideo(p.clone())),
                 ("Video Snapshots…", "snapshot frame screenshot png", Act::SnapshotVideo(p.clone())),
                 ("Redact Video…", "redact hide blur privacy area", Act::RedactVideo(p.clone())),
             ]),
@@ -3387,9 +3413,8 @@ impl App {
                     self.push(View::VideoCrop { file, size: None, rect: ferrocast_core::croprect::full(2, 2), aspect: None });
                 }
             },
-            action @ (Act::TrimVideo(_) | Act::SnapshotVideo(_)) => {
-                let snapshot = matches!(action, Act::SnapshotVideo(_));
-                let (Act::TrimVideo(file) | Act::SnapshotVideo(file)) = action else { unreachable!() };
+            action @ (Act::TrimVideo(_) | Act::SnapshotVideo(_) | Act::SplitVideo(_)) => {
+                let (Act::TrimVideo(file) | Act::SnapshotVideo(file) | Act::SplitVideo(file)) = action.clone() else { unreachable!() };
                 match self.tools.ffmpeg {
                     None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
                     Some(ff) => {
@@ -3402,7 +3427,11 @@ impl App {
                         let (bus, f) = (self.bus.clone(), file.clone());
                         std::thread::spawn(move || bus.send(Msg::VideoInfo(f.clone(), crate::media_tools::video_info(ff, &f))));
                         self.show();
-                        self.push(if snapshot { View::VideoSnapshot { file, trim: None } } else { View::VideoTrim { file, trim: None } });
+                        self.push(match action {
+                            Act::SnapshotVideo(_) => View::VideoSnapshot { file, trim: None },
+                            Act::SplitVideo(_) => View::VideoSplit { file, trim: None, points: vec![], parts: 2 },
+                            _ => View::VideoTrim { file, trim: None },
+                        });
                     }
                 }
             }
@@ -3795,6 +3824,7 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (CropVideo, Some(p)) => ToolReach::Act(Act::CropVideo(p)),
         (ChangeVideoSpeed, Some(p)) => ToolReach::Act(Act::SpeedVideo(p)),
         (VideoSnapshots, Some(p)) => ToolReach::Act(Act::SnapshotVideo(p)),
+        (SplitVideo, Some(p)) => ToolReach::Act(Act::SplitVideo(p)),
         (RedactVideo, Some(p)) => ToolReach::Act(Act::RedactVideo(p)),
         (OrganizePdf, Some(p)) => ToolReach::Act(Act::OrganizePdf(p)),
         (CreateCollage, _) if files.len() >= 2 => ToolReach::Act(Act::CollageImages(files.to_vec())),

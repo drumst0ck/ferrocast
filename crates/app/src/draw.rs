@@ -145,7 +145,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     }
                 }
             }
-            Ok("vtrim") | Ok("vsnapshot") => {
+            Ok("vtrim") | Ok("vsnapshot") | Ok("vsplit") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
                     if let Some((d, r)) = crate::media_tools::video_info(ff, &file) {
@@ -162,10 +162,18 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                                 d.insert_temp(Id::new("vt-asked"), t.cursor);
                             });
                         }
-                        app.push(if std::env::var("FERROCAST_VIEW").as_deref() == Ok("vsnapshot") {
-                            View::VideoSnapshot { file, trim: Some(t) }
-                        } else {
-                            View::VideoTrim { file, trim: Some(t) }
+                        app.push(match std::env::var("FERROCAST_VIEW").as_deref() {
+                            Ok("vsnapshot") => View::VideoSnapshot { file, trim: Some(t) },
+                            Ok("vsplit") => {
+                                let mut points = vec![];
+                                for at in [0.3, 0.7] {
+                                    let mut c = t;
+                                    c.seek(d * at);
+                                    c.add_cut(&mut points);
+                                }
+                                View::VideoSplit { file, trim: Some(t), points, parts: 2 }
+                            }
+                            _ => View::VideoTrim { file, trim: Some(t) },
                         });
                     }
                 }
@@ -465,7 +473,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. }) && kbd_edit);
+            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -662,6 +670,18 @@ impl App {
                     self.tools.ffmpeg,
                     self.bus.clone(),
                 );
+                true
+            }
+            View::VideoSplit { file, trim: Some(t), points, parts } if k.enter => {
+                match split_job(t.duration, &points, parts) {
+                    Err(m) => self.toast(m),
+                    Ok(_) if self.tools.ffmpeg.is_none() => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                    Ok(tool) => {
+                        self.toast("Splitting…");
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
+                }
                 true
             }
             View::VideoTrim { file, trim: Some(t) } if k.enter => {
@@ -1777,9 +1797,27 @@ impl App {
             return;
         };
         let snapshot = matches!(self.view(), View::VideoSnapshot { .. });
+        let (split, points0, parts0) = match self.view() {
+            View::VideoSplit { points, parts, .. } => (true, points.clone(), *parts),
+            _ => (false, vec![], 2),
+        };
+        let (mut points, mut parts) = (points0.clone(), parts0);
         let mut t = before;
+        // a number box being edited keeps the letters, arrows and Backspace
+        let editing = split && ctx.egui_wants_keyboard_input();
         ctx.input_mut(|i| {
             let none = Modifiers::NONE;
+            if editing {
+                return;
+            }
+            if split {
+                if i.consume_key(none, Key::M) {
+                    t.add_cut(&mut points);
+                }
+                if i.consume_key(none, Key::Backspace) {
+                    points.pop();
+                }
+            }
             for (key, frames) in [(Key::ArrowLeft, -1i64), (Key::ArrowRight, 1)] {
                 if i.consume_key(Modifiers::SHIFT, key) {
                     t.step_secs(frames as f64);
@@ -1807,10 +1845,20 @@ impl App {
         }
         let x_of = |s: f64| bar.min.x + (s / t.duration) as f32 * bar.width();
         ui.painter().rect_filled(bar, 6.0, pal.field);
-        let sel = Rect::from_min_max(Pos2::new(x_of(t.start), bar.min.y), Pos2::new(x_of(t.end), bar.max.y));
-        ui.painter().rect_filled(sel, 6.0, pal.accent.gamma_multiply(0.45));
-        for m in [t.start, t.end] {
-            ui.painter().rect_filled(Rect::from_center_size(Pos2::new(x_of(m), bar.center().y), Vec2::new(4.0, 34.0)), 2.0, pal.accent);
+        if split {
+            for p in &points {
+                ui.painter().rect_filled(
+                    Rect::from_center_size(Pos2::new(x_of(*p), bar.center().y), Vec2::new(3.0, 34.0)),
+                    1.5,
+                    pal.accent,
+                );
+            }
+        } else {
+            let sel = Rect::from_min_max(Pos2::new(x_of(t.start), bar.min.y), Pos2::new(x_of(t.end), bar.max.y));
+            ui.painter().rect_filled(sel, 6.0, pal.accent.gamma_multiply(0.45));
+            for m in [t.start, t.end] {
+                ui.painter().rect_filled(Rect::from_center_size(Pos2::new(x_of(m), bar.center().y), Vec2::new(4.0, 34.0)), 2.0, pal.accent);
+            }
         }
         ui.painter().rect_filled(Rect::from_center_size(Pos2::new(x_of(t.cursor), bar.center().y), Vec2::new(2.0, 34.0)), 1.0, pal.text);
         // newest frame wanted: ask for it unless one is still being extracted
@@ -1842,6 +1890,8 @@ impl App {
             egui::Align2::LEFT_CENTER,
             if snapshot {
                 format!("at {} · PNG saves at original resolution", t.label(t.cursor))
+            } else if split {
+                format!("at {}   ·   {} cut{}", t.label(t.cursor), points.len(), if points.len() == 1 { "" } else { "s" })
             } else {
                 format!(
                     "at {}   ·   start {}   ·   end {}   ·   clip {:.2} s",
@@ -1859,15 +1909,41 @@ impl App {
             egui::Align2::CENTER_CENTER,
             if snapshot {
                 "←/→ frame · ⇧←/→ second · click to jump · ↵ save full-resolution PNG · esc cancel"
+            } else if split {
+                "←/→ frame · ⇧←/→ second · click the bar to jump · M cut here · ⌫ remove last · ↵ split · esc cancel"
             } else {
                 "←/→ frame · ⇧←/→ second · click the bar to jump · I start · O end · ↵ save the exact cut · esc cancel"
             },
             FontId::proportional(11.5),
             pal.sub,
         );
-        if t != before {
-            if let Some(View::VideoTrim { trim, .. } | View::VideoSnapshot { trim, .. }) = self.stack.last_mut() {
+        if split {
+            let clips = ferrocast_core::videoplan::split_ranges(t.duration, &points, parts).len();
+            let row = Rect::from_min_size(Pos2::new(bar.min.x, bar.max.y + 8.0), Vec2::new(bar.width(), 24.0));
+            ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{clips} clip{}", if clips == 1 { "" } else { "s" })).size(13.0).color(pal.text));
+                    ui.label(RichText::new("·  Equal parts").size(12.5).color(pal.sub));
+                    ui.add(egui::DragValue::new(&mut parts).range(2..=50));
+                    ui.label(
+                        RichText::new(if points.is_empty() { "(used while there are no cuts)" } else { "(ignored: cuts are set)" })
+                            .size(11.5)
+                            .color(pal.sub),
+                    );
+                    if ui.add_enabled(!points.is_empty(), egui::Button::new("Clear")).clicked() {
+                        points.clear();
+                    }
+                });
+            });
+        }
+        if t != before || points != points0 || parts != parts0 {
+            if let Some(View::VideoTrim { trim, .. } | View::VideoSnapshot { trim, .. } | View::VideoSplit { trim, .. }) =
+                self.stack.last_mut()
+            {
                 *trim = Some(t);
+            }
+            if let Some(View::VideoSplit { points: p, parts: n, .. }) = self.stack.last_mut() {
+                (*p, *n) = (points, parts.clamp(2, 50));
             }
             ctx.request_repaint();
         }
@@ -2963,7 +3039,7 @@ impl App {
             View::VideoCrop { .. } => {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
             }
-            View::VideoTrim { file, trim } | View::VideoSnapshot { file, trim } => {
+            View::VideoTrim { file, trim } | View::VideoSnapshot { file, trim } | View::VideoSplit { file, trim, .. } => {
                 self.draw_video_trim(ui, rect, pal, &file, trim);
             }
             View::CollageImage { files, opts, color } => {

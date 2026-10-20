@@ -1322,3 +1322,150 @@ fn convert_view_offers_choose_order_only_for_two_or_more_files_of_one_family() {
     assert!(purposes(&mut app, &["a.png", "b.mp4"]).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- A9c split window ----
+
+fn split_view(app: &mut App, name: &str, points: Vec<f64>, parts: usize, cursor: f64) {
+    let f = std::env::temp_dir().join(name);
+    let mut t = ferrocast_core::videoplan::Trim::new(10.0, 25.0).unwrap();
+    t.seek(cursor);
+    app.stack = vec![View::Root, View::VideoSplit { file: f, trim: Some(t), points, parts }];
+}
+
+fn split_state(app: &App) -> (Vec<f64>, usize, f64) {
+    match app.view() {
+        View::VideoSplit { points, parts, trim: Some(t), .. } => (points.clone(), *parts, t.cursor),
+        other => panic!("split view closed unexpectedly: {}", other.title()),
+    }
+}
+
+#[test]
+fn split_view_renders_probing_and_ready_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        let f = std::env::temp_dir().join("fc-split-render.mp4");
+        app.stack = vec![View::Root, View::VideoSplit { file: f, trim: None, points: vec![], parts: 2 }];
+        render(&mut app, vec![]);
+        split_view(&mut app, "fc-split-render.mp4", vec![2.0, 6.0], 2, 3.0);
+        render(&mut app, vec![]);
+        assert!(matches!(app.view(), View::VideoSplit { .. }));
+    }
+}
+
+#[test]
+fn split_m_adds_a_point_at_the_cursor_and_dedupes() {
+    let mut app = fixture();
+    split_view(&mut app, "fc-split-m.mp4", vec![], 2, 2.0);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::M)]);
+    assert_eq!(split_state(&app).0, vec![2.0]);
+    render(&mut app, vec![key_event(Key::M)]);
+    assert_eq!(split_state(&app).0, vec![2.0], "a second M on the same frame adds nothing");
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    render(&mut app, vec![key_event(Key::M)]);
+    let (p, _, c) = split_state(&app);
+    assert_eq!(p.len(), 2, "{p:?}");
+    assert!((p[1] - c).abs() < 1e-9 && p[1] > p[0], "{p:?} cursor {c}");
+}
+
+#[test]
+fn split_backspace_removes_the_last_added_point() {
+    let mut app = fixture();
+    split_view(&mut app, "fc-split-bs.mp4", vec![], 2, 2.0);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::M)]);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    render(&mut app, vec![key_event(Key::M)]);
+    render(&mut app, vec![key_event(Key::Backspace)]);
+    assert_eq!(split_state(&app).0, vec![2.0]);
+    render(&mut app, vec![key_event(Key::Backspace)]);
+    render(&mut app, vec![key_event(Key::Backspace)]);
+    assert!(split_state(&app).0.is_empty(), "removing from an empty list is harmless and the view stays");
+}
+
+#[test]
+fn split_escape_goes_back_without_a_job() {
+    let mut app = fixture();
+    split_view(&mut app, "fc-split-esc.mp4", vec![3.0], 2, 2.0);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn split_enter_refuses_fewer_than_two_clips_and_starts_nothing() {
+    let mut app = fixture();
+    // a lone point that would leave a tiny piece leaves one clip (the equal-parts box cannot go
+    // below 2, so a count of 1 is covered by the pure split_job test)
+    split_view(&mut app, "fc-split-enter.mp4", vec![0.01], 2, 2.0);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::VideoSplit { .. }), "one clip is refused and the view stays");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Nothing to split")), "{:?}", app.toast);
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn split_job_builds_the_exact_ranges() {
+    use ferrocast_core::convert::FileTool;
+    match split_job(10.0, &[], 2) {
+        Ok(FileTool::SplitPoints(r, true)) => assert_eq!(r, vec![(0.0, 5.0), (5.0, 10.0)]),
+        other => panic!("{other:?}"),
+    }
+    match split_job(10.0, &[3.0, 7.0], 2) {
+        Ok(FileTool::SplitPoints(r, true)) => assert_eq!(r.len(), 3, "points override parts"),
+        other => panic!("{other:?}"),
+    }
+    assert!(split_job(10.0, &[], 1).is_err());
+    assert!(split_job(f64::NAN, &[], 2).is_err());
+}
+
+#[test]
+fn split_enter_with_ready_ranges_does_not_run_without_ffmpeg() {
+    let mut app = fixture();
+    app.tools = Default::default();
+    split_view(&mut app, "fc-split-noff.mp4", vec![], 2, 2.0);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::VideoSplit { .. }), "without ffmpeg the view stays");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
+}
+
+#[test]
+fn convert_view_offers_split_video_for_one_mp4_and_not_for_two() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-splitoffer-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let has = |app: &mut App, names: &[&str]| -> bool {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.sections()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .any(|i| i.title == "Split Video…" && matches!(i.kind, Kind::Editor(Act::SplitVideo(_))))
+    };
+    assert!(has(&mut app, &["a.mp4"]));
+    assert!(!has(&mut app, &["a.mp4", "b.mp4"]));
+    assert!(!has(&mut app, &["a.png"]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_split_video_opens_the_window_for_one_file_and_keeps_the_preset_for_several() {
+    use ferrocast_core::convert::FileTool;
+    use ferrocast_core::tools::{implemented, Impl, ToolId};
+    let a = std::path::PathBuf::from("/nonexistent/a.mp4");
+    let b = std::path::PathBuf::from("/nonexistent/b.mp4");
+    assert!(matches!(tool_reach(ToolId::SplitVideo, std::slice::from_ref(&a)), ToolReach::Act(Act::SplitVideo(_))));
+    assert!(matches!(tool_reach(ToolId::SplitVideo, &[a, b]), ToolReach::File(FileTool::SplitEvery(60))));
+    assert_eq!(implemented(ToolId::SplitVideo), Impl::Window);
+}

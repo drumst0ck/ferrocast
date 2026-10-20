@@ -291,6 +291,8 @@ pub enum Act {
     RedactVideo(PathBuf),
     /// Open the video trim viewer for this file.
     TrimVideo(PathBuf),
+    /// Open the video split window for this file.
+    SplitVideo(PathBuf),
     /// Select a video frame and save a full-resolution PNG.
     SnapshotVideo(PathBuf),
     /// Open the collage editor for these images.

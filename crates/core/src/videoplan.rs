@@ -143,6 +143,31 @@ pub fn points_to_ranges(duration: f64, points: &[f64]) -> Vec<(f64, f64)> {
     out
 }
 
+/// The ranges a split will produce: the cut points when there are any, otherwise `parts` equal
+/// pieces. Empty when the numbers cannot describe a split; a single range means "nothing to cut".
+pub fn split_ranges(duration: f64, points: &[f64], parts: usize) -> Vec<(f64, f64)> {
+    if points.is_empty() {
+        equal_parts(duration, parts)
+    } else {
+        points_to_ranges(duration, points)
+    }
+}
+
+impl Trim {
+    /// Add a cut point at the cursor, snapped to the frame grid. Returns false (and changes
+    /// nothing) when that frame already has a point or the cursor is at either end of the clip.
+    /// The list stays sorted.
+    pub fn add_cut(&self, points: &mut Vec<f64>) -> bool {
+        let t = self.snapped();
+        if t <= 0.0 || t >= self.duration || points.iter().any(|p| (p - t).abs() < self.frame() / 2.0) {
+            return false;
+        }
+        points.push(t);
+        points.sort_by(|a, b| a.total_cmp(b));
+        true
+    }
+}
+
 /// Frame rate from ffprobe's `r_frame_rate` text such as `30000/1001` or `25`.
 pub fn parse_rate(s: &str) -> Option<f64> {
     let s = s.trim();
@@ -251,6 +276,38 @@ mod tests {
         for bad in ["0/0", "x", "", "-5", "1/0", "99999"] {
             assert_eq!(parse_rate(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn split_ranges_prefers_points_over_parts() {
+        assert_eq!(split_ranges(10.0, &[4.0], 5), vec![(0.0, 4.0), (4.0, 10.0)], "points override parts");
+        assert_eq!(split_ranges(10.0, &[], 4), equal_parts(10.0, 4), "no points equals equal_parts");
+        assert_eq!(split_ranges(10.0, &[], 1).len(), 1);
+        assert!(split_ranges(10.0, &[], 0).is_empty());
+    }
+
+    #[test]
+    fn split_ranges_edge_cases() {
+        assert_eq!(split_ranges(10.0, &[3.0, 3.01], 2).len(), 2, "tiny piece dropped");
+        assert_eq!(split_ranges(10.0, &[0.01], 2), vec![(0.0, 10.0)], "only a tiny piece: nothing to cut");
+        assert!(split_ranges(f64::NAN, &[1.0], 2).is_empty());
+        assert!(split_ranges(f64::NAN, &[], 2).is_empty());
+        assert!(split_ranges(0.1, &[], 10).is_empty());
+    }
+
+    #[test]
+    fn add_cut_snaps_dedupes_and_sorts() {
+        let mut v = t();
+        let mut pts = vec![];
+        v.seek(5.0);
+        assert!(v.add_cut(&mut pts));
+        assert!(!v.add_cut(&mut pts), "same frame twice");
+        v.seek(2.0123);
+        assert!(v.add_cut(&mut pts));
+        assert!((pts[0] - 2.0).abs() < 1e-9 && (pts[1] - 5.0).abs() < 1e-9, "{pts:?}");
+        v.seek(0.0);
+        assert!(!v.add_cut(&mut pts), "no cut at the very start");
+        assert_eq!(pts.len(), 2);
     }
 
     fn contiguous(r: &[(f64, f64)], duration: f64) -> bool {
