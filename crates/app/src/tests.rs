@@ -733,6 +733,28 @@ fn rar_extracts_through_tar_when_unrar_is_not_installed() {
     assert!(!d.join("bad").exists(), "no leftover folder");
 }
 
+// L74-style regression test for the split window: Escape while the Equal parts box is edited.
+#[test]
+fn split_equal_parts_box_keeps_escape_while_editing() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join("fc-splitfocus.mp4");
+    let trim = ferrocast_core::videoplan::Trim::new(10.0, 25.0);
+    app.stack = vec![View::Root, View::VideoSplit { file: f, trim, points: vec![], parts: 2 }];
+    render(&mut app, vec![]);
+    let pos = Pos2::new(181.0, 374.0);
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(&mut app, vec![Event::PointerMoved(pos)]);
+    render(&mut app, vec![btn(true)]);
+    render(&mut app, vec![btn(false)]);
+    render(&mut app, vec![]);
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the Equal parts box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::VideoSplit { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape, with nothing being edited, closes it");
+}
+
 #[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
