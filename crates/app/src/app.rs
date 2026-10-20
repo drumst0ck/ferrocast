@@ -150,6 +150,28 @@ pub fn new_area(size: (u32, u32), duration: f64) -> Area {
     Area { rect, start: 0.0, end: duration.max(0.0), blur: false }
 }
 
+/// Most ranges the bleep window holds (the core's limit).
+pub const MAX_BLEEP_RANGES: usize = ferrocast_core::media::MAX_BLEEPS;
+
+/// Default new bleep range: one second centred in the clip, clamped to short clips.
+pub fn new_bleep_range(duration: f64) -> (f64, f64) {
+    let d = if duration.is_finite() { duration.max(0.0) } else { 0.0 };
+    let len = d.min(1.0);
+    let start = ((d - len) / 2.0 * 100.0).round() / 100.0;
+    (start, (start + len).min(d))
+}
+
+/// The job for the bleep window, or the message that names what is wrong (the window stays open).
+pub fn bleep_job(ranges: &[(f64, f64)], duration: f64) -> Result<ferrocast_core::convert::FileTool, String> {
+    ferrocast_core::media::validate_bleeps(ranges, duration).map(ferrocast_core::convert::FileTool::BleepMany)
+}
+
+/// `0:01.5` style time with tenths, for the range list.
+pub fn clock_tenths(secs: f64) -> String {
+    let t = if secs.is_finite() && secs > 0.0 { (secs * 10.0).round() as u64 } else { 0 };
+    format!("{}:{:02}.{}", t / 600, t / 10 % 60, t % 10)
+}
+
 /// Media mode of the Compress window: audio or video, and the probe result (read off the UI
 /// thread: `loaded` is false until it arrives, `info` None when the file could not be read).
 #[derive(Clone, Debug, PartialEq)]
@@ -329,6 +351,15 @@ pub enum View {
         file: PathBuf,
         trim: Option<ferrocast_core::videoplan::Trim>,
         audio: Option<Arc<crate::media_tools::AudioSamples>>,
+    },
+    /// Bleep window: waveform peaks (None while the audio is read), the clip length and the
+    /// ranges to replace with a tone; `sel` is the selected range.
+    BleepAudio {
+        file: PathBuf,
+        duration: f64,
+        peaks: Option<Arc<Vec<(i16, i16)>>>,
+        ranges: Vec<(f64, f64)>,
+        sel: usize,
     },
     /// Normalize window: the measured integrated loudness (None while measuring, NaN when it could
     /// not be measured) and the target, loudness range and true-peak settings.
@@ -566,6 +597,7 @@ impl View {
             View::CollageImage { .. } => "Make a Collage",
             View::VideoTrim { .. } => "Trim Video",
             View::AudioTrim { .. } => "Trim Audio",
+            View::BleepAudio { .. } => "Bleep Audio",
             View::NormalizeAudio { .. } => "Normalize Audio",
             View::ChannelsAudio { .. } => "Audio Channels",
             View::VisualizeAudio { .. } => "Audio to Video",
@@ -1618,6 +1650,29 @@ impl App {
                     }
                     self.ctx.request_repaint();
                 }
+                Msg::BleepAudioLoaded(file, res) => {
+                    if matches!(self.view(), View::BleepAudio { file: f, .. } if *f == file) {
+                        match res {
+                            Ok(a) => {
+                                let covered = (a.samples.len() as f64 / f64::from(a.rate.max(1)) / a.duration).clamp(0.0, 1.0);
+                                let real = ((800.0 * covered).ceil() as usize).clamp(1, 800);
+                                let mut bars = ferrocast_core::waveform::peaks(&a.samples, real);
+                                bars.resize(800, (0, 0));
+                                if let Some(View::BleepAudio { duration, peaks, ranges, sel, .. }) = self.stack.last_mut() {
+                                    *duration = a.duration;
+                                    *peaks = Some(Arc::new(bars));
+                                    *ranges = vec![new_bleep_range(a.duration)];
+                                    *sel = 0;
+                                }
+                            }
+                            Err(e) => {
+                                self.pop();
+                                self.toast(format!("Bleep Audio: {e}"));
+                            }
+                        }
+                    }
+                    self.ctx.request_repaint();
+                }
                 Msg::VideoFrame(file, t, png) => {
                     if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } | View::VideoSplit { file: f, .. } if *f == file)
                     {
@@ -2571,7 +2626,10 @@ impl App {
                                     FileTool::Speed(_) => "sf:speedometer",
                                     FileTool::Snapshot(_) => "sf:camera",
                                     FileTool::CropVideo(..) => "sf:crop",
-                                    FileTool::RedactVideo(..) | FileTool::RedactVideoMany(..) | FileTool::Bleep(..) => "sf:eye.slash",
+                                    FileTool::RedactVideo(..)
+                                    | FileTool::RedactVideoMany(..)
+                                    | FileTool::Bleep(..)
+                                    | FileTool::BleepMany(..) => "sf:eye.slash",
                                     FileTool::Normalize(..) | FileTool::Channels(..) => "sf:speaker.wave.2",
                                     FileTool::Visualize(_) | FileTool::VisualizeImage(..) => "sf:waveform",
                                     FileTool::TrimSilence => "sf:scissors",
@@ -2766,6 +2824,7 @@ impl App {
             ]),
             Family::Audio => list.extend([
                 ("Trim Audio…", "trim cut waveform silence start end", Act::TrimAudio(p.clone())),
+                ("Bleep…", "bleep censor mute beep swear tone ranges", Act::BleepAudio(p.clone())),
                 ("Normalize…", "normalize loudness lufs volume level peak", Act::NormalizeAudio(p.clone())),
                 ("Channels…", "channels mono stereo left right volume balance", Act::AudioChannels(p.clone())),
                 ("Audio to Video…", "audio video visualizer waveform picture image mp4", Act::VisualizeAudio(p.clone())),
@@ -3914,6 +3973,18 @@ impl App {
                     self.push(View::AudioTrim { file, trim: None, audio: None });
                 }
             },
+            Act::BleepAudio(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || {
+                        let res = crate::media_tools::audio_samples(ff, &f, crate::media_tools::AUDIO_CAP);
+                        bus.send(Msg::BleepAudioLoaded(f, res));
+                    });
+                    self.show();
+                    self.push(View::BleepAudio { file, duration: 0.0, peaks: None, ranges: vec![], sel: 0 });
+                }
+            },
             Act::NormalizeAudio(file) => match self.tools.ffmpeg {
                 None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
                 Some(ff) => {
@@ -4426,6 +4497,7 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (AudioToVideo, _) => ToolReach::File(FileTool::Visualize(ferrocast_core::media::Canvas::Landscape)),
         (TrimAudio, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::TrimAudio(p)),
         (TrimAudio, _) => ToolReach::File(FileTool::TrimSilence),
+        (RedactAudio, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::BleepAudio(p)),
         (ExtractArchive, _) if !files.is_empty() => ToolReach::File(FileTool::Extract),
         _ => ToolReach::Open,
     }

@@ -639,6 +639,11 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
                         media::channels(input, in_channels, stereo, l, r, out)
                     }
                     FileTool::Bleep(a, b) if finite_range(a, b) => media::bleep(input, a, b, out),
+                    FileTool::BleepMany(ref ranges) => {
+                        let duration = info["format"]["duration"].as_str().and_then(|d| d.parse::<f64>().ok()).unwrap_or(f64::NAN);
+                        let ranges = media::validate_bleeps(ranges, duration)?;
+                        media::bleep_many(input, &ranges, out)
+                    }
                     FileTool::Join if files.len() >= 2 && width >= 2 && height >= 2 => {
                         // Silent clips get generated silence of the same length inside the filter graph.
                         let (mut has, mut durs) = (vec![], vec![]);

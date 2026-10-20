@@ -3557,3 +3557,208 @@ fn redact_enter_without_areas_refuses_and_with_areas_saves() {
     render(&mut app, vec![key_event(Key::Enter)]);
     assert!(matches!(app.view(), View::Root), "Enter with areas saves and leaves");
 }
+
+// ---- A10f: bleep window (several ranges)
+
+fn bleep_ranges3() -> Vec<(f64, f64)> {
+    vec![(1.0, 2.0), (3.0, 3.5), (4.5, 5.5)]
+}
+
+fn bleep_peaks() -> Option<Arc<Vec<(i16, i16)>>> {
+    Some(Arc::new((0..400).map(|i| (-(i % 50) as i16 * 300, (i % 50) as i16 * 300)).collect()))
+}
+
+fn bleep_view(ranges: Vec<(f64, f64)>, sel: usize) -> View {
+    View::BleepAudio { file: "/nonexistent/fc-bleep.mp3".into(), duration: 6.0, peaks: bleep_peaks(), ranges, sel }
+}
+
+fn bleep_app(ranges: Vec<(f64, f64)>, sel: usize) -> App {
+    let mut app = fixture();
+    app.stack = vec![View::Root, bleep_view(ranges, sel)];
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    app
+}
+
+fn bleep_state(app: &App) -> (Vec<(f64, f64)>, usize) {
+    match app.view() {
+        View::BleepAudio { ranges, sel, .. } => (ranges.clone(), *sel),
+        other => panic!("bleep window closed unexpectedly: {}", other.title()),
+    }
+}
+
+#[test]
+fn bleep_job_builds_the_job_or_names_the_problem() {
+    use ferrocast_core::convert::FileTool;
+    assert!(matches!(bleep_job(&bleep_ranges3(), 6.0), Ok(FileTool::BleepMany(v)) if v == bleep_ranges3()));
+    assert!(matches!(bleep_job(&[(2.0, 3.0), (1.0, 1.5)], 6.0), Ok(FileTool::BleepMany(v)) if v == vec![(1.0, 1.5), (2.0, 3.0)]));
+    assert!(bleep_job(&[(1.0, 2.0), (4.0, 3.0)], 6.0).unwrap_err().contains("range 2"));
+    assert!(bleep_job(&[(1.0, 7.0)], 6.0).unwrap_err().contains("range 1"));
+    assert!(bleep_job(&[], 6.0).is_err());
+}
+
+#[test]
+fn bleep_view_renders_probing_ready_and_with_a_bad_selection_in_both_themes() {
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        let mut app = fixture();
+        app.ctx.set_theme(theme);
+        app.stack = vec![
+            View::Root,
+            View::BleepAudio { file: "/nonexistent/fc-bleep.mp3".into(), duration: 0.0, peaks: None, ranges: vec![], sel: 0 },
+        ];
+        render(&mut app, vec![]);
+        assert_eq!(app.view().title(), "Bleep Audio");
+        for (ranges, sel) in [(vec![(1.0, 2.0)], 0), (bleep_ranges3(), 1), (bleep_ranges3(), 2), (bleep_ranges3(), 9), (vec![], 3)] {
+            app.stack = vec![View::Root, bleep_view(ranges, sel)];
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert!(matches!(app.view(), View::BleepAudio { .. }));
+        }
+    }
+}
+
+#[test]
+fn bleep_escape_goes_back_and_starts_no_job() {
+    let mut app = bleep_app(bleep_ranges3(), 0);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err(), "Escape starts no job");
+}
+
+#[test]
+fn bleep_enter_with_an_invalid_range_keeps_the_window_and_starts_nothing() {
+    let ranges = vec![(1.0, 2.0), (4.0, 3.0)];
+    let mut app = bleep_app(ranges.clone(), 0);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert_eq!(bleep_state(&app).0, ranges, "nothing edited");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("range 2")), "{:?}", app.toast);
+    assert!(app.rx.try_recv().is_err(), "an invalid range must not start work");
+}
+
+#[test]
+fn bleep_add_range_button_adds_a_one_second_range_at_the_centre() {
+    let mut app = bleep_app(vec![(1.0, 2.0)], 0);
+    click_at(&mut app, Pos2::new(ADD_AREA_POS.0, ADD_AREA_POS.1));
+    let (ranges, sel) = bleep_state(&app);
+    assert_eq!(ranges, vec![(1.0, 2.0), (2.5, 3.5)], "the click must have hit + Add range (layout moved?)");
+    assert_eq!(sel, 1, "the new range is selected");
+}
+
+#[test]
+fn bleep_default_range_is_clamped_to_short_clips() {
+    assert_eq!(new_bleep_range(6.0), (2.5, 3.5));
+    assert_eq!(new_bleep_range(0.6), (0.0, 0.6));
+    assert_eq!(new_bleep_range(1.0), (0.0, 1.0));
+}
+
+#[test]
+fn bleep_add_range_stops_at_32() {
+    let many: Vec<(f64, f64)> = (0..32).map(|i| (i as f64 * 0.1, i as f64 * 0.1 + 0.05)).collect();
+    let mut app = bleep_app(many, 0);
+    click_at(&mut app, Pos2::new(ADD_AREA_POS.0, ADD_AREA_POS.1));
+    assert_eq!(bleep_state(&app).0.len(), 32);
+}
+
+#[test]
+fn bleep_delete_removes_one_but_never_the_last() {
+    let mut app = bleep_app(bleep_ranges3(), 2);
+    click_at(&mut app, delete_pos(0));
+    let (ranges, sel) = bleep_state(&app);
+    assert_eq!(ranges, bleep_ranges3()[1..].to_vec(), "the first range went away (layout moved?)");
+    assert_eq!(sel, 1, "the selection follows its range");
+    click_at(&mut app, delete_pos(0));
+    assert_eq!(bleep_state(&app).0.len(), 1);
+    click_at(&mut app, delete_pos(0));
+    assert_eq!(bleep_state(&app).0.len(), 1, "the last range cannot be deleted");
+}
+
+#[test]
+fn bleep_clicking_a_row_selects_that_range() {
+    let mut app = bleep_app(bleep_ranges3(), 0);
+    click_at(&mut app, row_pos(2));
+    assert_eq!(bleep_state(&app).1, 2, "layout moved?");
+}
+
+// L74-style: Escape while the Start box is being edited ends the edit, not the window.
+#[test]
+fn bleep_start_box_keeps_escape_and_enter_while_editing() {
+    let mut app = bleep_app(bleep_ranges3(), 1);
+    let (mut hit, mut hit_x) = (false, 0.0);
+    for x in (260..560).step_by(4) {
+        click_at(&mut app, Pos2::new(x as f32, 79.0));
+        if app.ctx.egui_wants_keyboard_input() {
+            (hit, hit_x) = (true, x as f32);
+            break;
+        }
+    }
+    assert!(hit, "a click must have started editing a number box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::BleepAudio { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+    let mut app = bleep_app(bleep_ranges3(), 1);
+    click_at(&mut app, Pos2::new(hit_x, 79.0));
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![Event::Text("2.5".into())]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    render(&mut app, vec![]);
+    let (ranges, _) = bleep_state(&app);
+    assert_eq!(ranges[1], (2.5, 3.5), "the first number box is Start of the selected range");
+    assert!(app.rx.try_recv().is_err(), "Enter in the box starts no job");
+}
+
+#[test]
+fn convert_view_offers_bleep_for_one_audio_file_only() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-bleepoffer-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let has = |app: &mut App, names: &[&str]| -> bool {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.sections()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .any(|i| i.title == "Bleep…" && matches!(i.kind, Kind::Editor(Act::BleepAudio(_))))
+    };
+    assert!(has(&mut app, &["a.mp3"]));
+    assert!(!has(&mut app, &["a.mp3", "b.mp3"]));
+    assert!(!has(&mut app, &["a.png"]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_bleep_opens_the_window_for_one_audio_file() {
+    use ferrocast_core::tools::{implemented, Impl, ToolId};
+    let a = std::path::PathBuf::from("/nonexistent/a.mp3");
+    let b = std::path::PathBuf::from("/nonexistent/b.mp3");
+    assert!(matches!(tool_reach(ToolId::RedactAudio, std::slice::from_ref(&a)), ToolReach::Act(Act::BleepAudio(_))));
+    assert!(matches!(tool_reach(ToolId::RedactAudio, &[a, b]), ToolReach::Open));
+    assert_eq!(implemented(ToolId::RedactAudio), Impl::Window);
+}
+
+#[test]
+fn bleep_without_ffmpeg_shows_the_hint_and_opens_no_view() {
+    let mut app = fixture();
+    app.tools = Default::default();
+    let depth = app.stack.len();
+    app.perform(Act::BleepAudio("/nonexistent/fc-bleep.mp3".into()), false);
+    assert_eq!(app.stack.len(), depth);
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
+}
+
+#[test]
+fn bleep_enter_with_valid_ranges_dispatches_and_goes_back() {
+    let mut app = bleep_app(bleep_ranges3(), 0);
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg");
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root), "a valid job closes the window");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Bleeping")), "{:?}", app.toast);
+}

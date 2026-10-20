@@ -294,6 +294,25 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     picking: false,
                 });
             }
+            Ok("bleep") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    match crate::media_tools::audio_samples(ff, &file, crate::media_tools::AUDIO_CAP) {
+                        Ok(a) => {
+                            let bars = ferrocast_core::waveform::peaks(&a.samples, 800);
+                            let ranges = vec![(0.8, 1.6), (2.5, 3.5), (4.4, 5.2)];
+                            app.push(View::BleepAudio {
+                                file,
+                                duration: a.duration,
+                                peaks: Some(std::sync::Arc::new(bars)),
+                                ranges,
+                                sel: 1,
+                            });
+                        }
+                        Err(e) => app.toast(e),
+                    }
+                }
+            }
             Ok("atrim") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
@@ -614,7 +633,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::RedactImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. } | View::NormalizeAudio { .. } | View::ChannelsAudio { .. }) && kbd_edit);
+            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::RedactImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. } | View::BleepAudio { .. } | View::NormalizeAudio { .. } | View::ChannelsAudio { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -844,6 +863,19 @@ impl App {
                 }
                 true
             }
+            View::BleepAudio { file, duration, ranges, peaks: Some(_), .. } if k.enter => {
+                match bleep_job(&ranges, duration) {
+                    Err(m) => self.toast(m),
+                    Ok(_) if self.tools.ffmpeg.is_none() => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                    Ok(tool) => {
+                        self.toast("Bleeping…");
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
+                }
+                true
+            }
+            View::BleepAudio { .. } if k.enter => true,
             View::VideoSnapshot { trim: Some(_), .. } if k.enter && k.repeat => true,
             View::VideoSnapshot { file, trim: Some(t) } if k.enter => {
                 self.toast("Saving full-resolution frame…");
@@ -2781,6 +2813,165 @@ impl App {
         }
     }
 
+    /// Bleep window: the ranges on the left (add, select, delete), the waveform with every range
+    /// shaded (the selected one stronger) and the selected range's Start and End boxes.
+    fn draw_bleep(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette) {
+        let View::BleepAudio { duration, peaks: Some(peaks), ranges, sel, .. } = self.view().clone() else {
+            return;
+        };
+        if ranges.is_empty() {
+            // cannot happen once the audio is read; keep the window usable if it ever does
+            if let Some(View::BleepAudio { ranges, sel, .. }) = self.stack.last_mut() {
+                (*ranges, *sel) = (vec![crate::app::new_bleep_range(duration)], 0);
+            }
+            ui.ctx().request_repaint();
+            return;
+        }
+        let sel_now = sel.min(ranges.len() - 1);
+        let mut ranges_new = ranges.clone();
+        let mut sel_new = sel_now;
+        // left column: "+ Add range" first (fixed place), then one row per range
+        let col = Rect::from_min_size(rect.min + Vec2::new(12.0, 8.0), Vec2::new(206.0, rect.height() - 16.0));
+        let full = ranges.len() >= crate::app::MAX_BLEEP_RANGES;
+        let add = Rect::from_min_size(col.min, Vec2::new(col.width(), 26.0));
+        let add_resp = ui.interact(add, Id::new("bleep-add"), if full { egui::Sense::hover() } else { egui::Sense::click() });
+        ui.painter().rect_filled(add, 6.0, if add_resp.hovered() && !full { pal.sel } else { pal.field });
+        ui.painter().text(
+            add.center(),
+            egui::Align2::CENTER_CENTER,
+            if full { format!("Limit of {} ranges", crate::app::MAX_BLEEP_RANGES) } else { "+ Add range".to_string() },
+            FontId::proportional(13.0),
+            if full { pal.sub } else { pal.text },
+        );
+        if add_resp.clicked() && !full {
+            ranges_new.push(crate::app::new_bleep_range(duration));
+            sel_new = ranges_new.len() - 1;
+        }
+        let mut delete = None;
+        let can_delete = ranges.len() > 1;
+        for (i, (a, b)) in ranges.iter().enumerate() {
+            let row = Rect::from_min_size(col.min + Vec2::new(0.0, 34.0 + 30.0 * i as f32), Vec2::new(col.width(), 26.0));
+            if row.max.y > rect.max.y - 4.0 {
+                break;
+            }
+            let label_rect = Rect::from_min_max(row.min, Pos2::new(row.max.x - 26.0, row.max.y));
+            let del_rect = Rect::from_min_max(Pos2::new(row.max.x - 26.0, row.min.y), row.max);
+            let resp = ui.interact(label_rect, Id::new(("bleep-row", i)), egui::Sense::click());
+            let del =
+                ui.interact(del_rect, Id::new(("bleep-del", i)), if can_delete { egui::Sense::click() } else { egui::Sense::hover() });
+            if i == sel_now {
+                ui.painter().rect_filled(row, 6.0, pal.sel);
+                ui.painter().rect_stroke(row, 6.0, Stroke::new(1.0, pal.accent), StrokeKind::Inside);
+            } else if resp.hovered() || del.hovered() {
+                ui.painter().rect_filled(row, 6.0, pal.field);
+            }
+            ui.painter().text(
+                label_rect.left_center() + Vec2::new(8.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                format!("Range {} · {}–{}", i + 1, crate::app::clock_tenths(*a), crate::app::clock_tenths(*b)),
+                FontId::proportional(12.0),
+                pal.text,
+            );
+            let x_color = if !can_delete {
+                pal.sep
+            } else if del.hovered() {
+                pal.danger
+            } else {
+                pal.sub
+            };
+            let c = del_rect.center();
+            ui.painter().line_segment([c + Vec2::new(-4.0, -4.0), c + Vec2::new(4.0, 4.0)], Stroke::new(1.5, x_color));
+            ui.painter().line_segment([c + Vec2::new(-4.0, 4.0), c + Vec2::new(4.0, -4.0)], Stroke::new(1.5, x_color));
+            if del.clicked() && can_delete {
+                delete = Some(i);
+            } else if resp.clicked() {
+                sel_new = i;
+            }
+        }
+        if let Some(i) = delete {
+            ranges_new.remove(i);
+            sel_new = if sel_new > i || sel_new >= ranges_new.len() { sel_new.saturating_sub(1) } else { sel_new };
+        }
+        // right side: Start and End of the selected range, then the waveform
+        let right = Rect::from_min_max(Pos2::new(rect.min.x + 232.0, rect.min.y), rect.max);
+        if sel_new == sel_now && sel_now < ranges_new.len() {
+            let (mut a, mut b) = ranges_new[sel_now];
+            let strip = Rect::from_min_size(right.min + Vec2::new(12.0, 4.0), Vec2::new(right.width() - 24.0, 30.0));
+            ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Range {}", sel_now + 1));
+                    ui.label("Start s");
+                    ui.add(egui::DragValue::new(&mut a).range(0.0..=duration).speed(0.02).fixed_decimals(2));
+                    ui.label("End s");
+                    ui.add(egui::DragValue::new(&mut b).range(0.0..=duration).speed(0.02).fixed_decimals(2));
+                });
+            });
+            ranges_new[sel_now] = (a, b);
+        }
+        let wave = Rect::from_min_max(right.min + Vec2::new(12.0, 46.0), Pos2::new(right.max.x - 12.0, right.max.y - 56.0));
+        if wave.width() > 8.0 && wave.height() > 8.0 && duration > 0.0 {
+            let x_of = |s: f64| wave.min.x + (s / duration).clamp(0.0, 1.0) as f32 * wave.width();
+            let resp = ui.interact(wave, Id::new("bleep-wave"), egui::Sense::click());
+            if let (true, Some(p)) = (resp.clicked(), resp.interact_pointer_pos()) {
+                // clicking inside a range selects it
+                let t = ((p.x - wave.min.x) / wave.width()).clamp(0.0, 1.0) as f64 * duration;
+                if let Some(i) = ranges_new.iter().position(|(a, b)| (*a..=*b).contains(&t)) {
+                    sel_new = i;
+                }
+            }
+            let painter = ui.painter();
+            painter.rect_filled(wave, 6.0, pal.field);
+            for (i, (a, b)) in ranges_new.iter().enumerate() {
+                let (lo, hi) = (a.min(*b), a.max(*b));
+                let strong = i == sel_new.min(ranges_new.len() - 1);
+                let r = Rect::from_min_max(Pos2::new(x_of(lo), wave.min.y), Pos2::new(x_of(hi).max(x_of(lo) + 1.0), wave.max.y));
+                painter.rect_filled(r, 0.0, pal.accent.gamma_multiply(if strong { 0.45 } else { 0.2 }));
+                if strong {
+                    painter.rect_stroke(r, 0.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+                }
+                painter.text(
+                    r.min + Vec2::new(3.0, 2.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("{}", i + 1),
+                    FontId::proportional(11.0),
+                    pal.text,
+                );
+            }
+            let (mid, half) = (wave.center().y, wave.height() / 2.0 - 4.0);
+            for (i, (lo, hi)) in peaks.iter().enumerate() {
+                let x = wave.min.x + (i as f32 + 0.5) / peaks.len() as f32 * wave.width();
+                let top = (mid - *hi as f32 / 32768.0 * half).min(mid - 0.5);
+                let bottom = (mid - *lo as f32 / 32768.0 * half).max(mid + 0.5);
+                painter.line_segment([Pos2::new(x, top), Pos2::new(x, bottom)], Stroke::new(1.0, pal.text));
+            }
+            painter.text(
+                Pos2::new(wave.min.x, wave.max.y + 14.0),
+                egui::Align2::LEFT_CENTER,
+                format!(
+                    "{} range{} · clip {}",
+                    ranges_new.len(),
+                    if ranges_new.len() == 1 { "" } else { "s" },
+                    crate::app::clock_tenths(duration)
+                ),
+                FontId::proportional(12.5),
+                pal.text,
+            );
+        }
+        ui.painter().text(
+            Pos2::new(right.center().x, rect.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "click a shaded range to select it · overlapping ranges are merged · ↵ save bleeped copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+        if ranges_new != ranges || sel_new != sel {
+            if let Some(View::BleepAudio { ranges, sel, .. }) = self.stack.last_mut() {
+                (*ranges, *sel) = (ranges_new, sel_new);
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+
     /// Collage editor: layout buttons, width/gap/corner sliders and a background; the preview is
     /// laid out on small copies of the pictures with the sizes scaled to match.
     fn draw_collage(
@@ -4095,6 +4286,12 @@ impl App {
             }
             View::AudioTrim { trim, audio, .. } => {
                 self.draw_audio_trim(ui, rect, pal, trim, audio);
+            }
+            View::BleepAudio { peaks: Some(_), .. } => {
+                self.draw_bleep(ui, rect, pal);
+            }
+            View::BleepAudio { .. } => {
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the audio…", FontId::proportional(16.0), pal.sub);
             }
             View::VisualizeAudio { file, orient, style, image, picking } => {
                 self.draw_visualize_audio(ui, rect, pal, &file, orient, style, image, picking);

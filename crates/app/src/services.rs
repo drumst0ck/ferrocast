@@ -56,6 +56,7 @@ pub enum Msg {
     VideoCropReady(PathBuf, Option<((u32, u32), f64, Vec<u8>)>),
     /// A reference frame for the crop and redact windows: file, time asked, PNG.
     RefFrame(PathBuf, f64, Option<Vec<u8>>),
+    BleepAudioLoaded(PathBuf, Result<crate::media_tools::AudioSamples, String>),
     VideoRedactReady(PathBuf, Option<((u32, u32), f64, Vec<u8>)>),
     /// Preview frame of the video being trimmed at this time (None: could not extract).
     VideoFrame(PathBuf, f64, Option<Vec<u8>>),
@@ -1825,6 +1826,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::SplitPoints(..)
         | FileTool::Channels(..)
         | FileTool::Bleep(..)
+        | FileTool::BleepMany(..)
         | FileTool::Compress(..)
         | FileTool::Join => {
             return crate::media_tools::run(files, tool, ffmpeg);

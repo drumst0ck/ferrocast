@@ -295,6 +295,8 @@ pub enum Act {
     TrimVideo(PathBuf),
     /// Open the audio trim window (waveform) for this file.
     TrimAudio(PathBuf),
+    /// Open the bleep window (several ranges) for this audio file.
+    BleepAudio(PathBuf),
     /// Open the normalize window for this audio file.
     NormalizeAudio(PathBuf),
     /// Open the audio channels window for this audio file.

@@ -1336,3 +1336,63 @@ mod a10g {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+mod bleep_many_real {
+    use super::*;
+
+    /// Goertzel power of `freq` in mono s16le samples at 8 kHz, normalised by length.
+    fn goertzel(pcm: &[i16], freq: f64) -> f64 {
+        let w = 2.0 * std::f64::consts::PI * freq / 8000.0;
+        let (mut s1, mut s2) = (0.0f64, 0.0f64);
+        for &x in pcm {
+            let s = f64::from(x) + 2.0 * w.cos() * s1 - s2;
+            (s2, s1) = (s1, s);
+        }
+        (s1 * s1 + s2 * s2 - 2.0 * w.cos() * s1 * s2) / (pcm.len() as f64).powi(2)
+    }
+
+    fn pcm_window(ff: &str, file: &Path, from: f64, to: f64) -> Vec<i16> {
+        let out = Command::new(ff)
+            .args(["-nostdin", "-v", "error", "-ss", &from.to_string(), "-t", &(to - from).to_string(), "-i"])
+            .arg(file)
+            .args(["-ac", "1", "-ar", "8000", "-f", "s16le", "-"])
+            .output()
+            .unwrap();
+        out.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn bleep_many_replaces_only_the_chosen_ranges() {
+        let tools = Tools::detect();
+        let ff = tools.ffmpeg.expect("ffmpeg is required for this explicit check");
+        let dir = std::env::temp_dir().join(format!("fc-bleepmany-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let src = dir.join("tone.wav");
+        command(ff, &["-f", "lavfi", "-i", "sine=frequency=440:duration=6"], &src);
+        let original = std::fs::read(&src).unwrap();
+        let tool = FileTool::BleepMany(vec![(1.0, 2.0), (4.0, 5.0)]);
+        let (made, errors) = run_file_tool(std::slice::from_ref(&src), &tool, Some(ff));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(made.len(), 1);
+        assert_eq!(made[0].file_name().unwrap(), "tone bleeped.wav");
+        let o = &made[0];
+        for (a, b) in [(1.2, 1.8), (4.2, 4.8)] {
+            let w = pcm_window(ff, o, a, b);
+            let (hi, lo) = (goertzel(&w, 1000.0), goertzel(&w, 440.0));
+            assert!(hi > 20.0 * lo, "{a}-{b} should be 1 kHz: 1000={hi} 440={lo}");
+        }
+        for (a, b) in [(0.2, 0.8), (2.5, 3.5), (5.2, 5.8)] {
+            let w = pcm_window(ff, o, a, b);
+            let (hi, lo) = (goertzel(&w, 1000.0), goertzel(&w, 440.0));
+            assert!(lo > 20.0 * hi, "{a}-{b} should stay 440 Hz: 1000={hi} 440={lo}");
+        }
+        let total = pcm_window(ff, o, 0.0, 10.0).len() as f64 / 8000.0;
+        assert!((total - 6.0).abs() < 0.3, "duration {total}");
+        assert_eq!(std::fs::read(&src).unwrap(), original, "original untouched");
+        let (again, e) = run_file_tool(&[src], &tool, Some(ff));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(again[0].file_name().unwrap(), "tone bleeped 2.wav");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

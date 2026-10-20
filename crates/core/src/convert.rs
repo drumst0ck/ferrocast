@@ -502,6 +502,13 @@ mod tests {
     }
 
     #[test]
+    fn bleep_many_label_and_suffix() {
+        let t = FileTool::BleepMany(vec![(1.0, 2.0), (3.0, 4.0)]);
+        assert_eq!((t.label().as_str(), t.suffix().as_str()), ("Bleep · 2 ranges", "bleeped"));
+        assert_eq!(FileTool::BleepMany(vec![(1.0, 2.0)]).label(), "Bleep · 1 range");
+    }
+
+    #[test]
     fn compress_pdf_label_suffix_and_gs_detection_field() {
         use crate::compress::Preset;
         assert_eq!(FileTool::CompressPdf(Preset::Light).label(), "Compress PDF · light");
@@ -1073,6 +1080,8 @@ pub enum FileTool {
     Channels(bool, f64, f64),
     /// Replace from..to seconds with a 1 kHz bleep.
     Bleep(f64, f64),
+    /// Replace several (sorted, disjoint) ranges with a 1 kHz bleep.
+    BleepMany(Vec<(f64, f64)>),
     /// Join mixed MP4/MOV/MKV clips into one MP4 (first clip is the canvas).
     Join,
     /// New PDF from these pages in order: (0-based source page, quarter turns clockwise).
@@ -1133,6 +1142,7 @@ impl FileTool {
             FileTool::Channels(true, ..) => "Convert to stereo".into(),
             FileTool::Channels(false, ..) => "Convert to mono".into(),
             FileTool::Bleep(a, b) => format!("Bleep · {} to {}", format_secs(*a), format_secs(*b)),
+            FileTool::BleepMany(r) => format!("Bleep · {} range{}", r.len(), if r.len() == 1 { "" } else { "s" }),
             FileTool::Join => "Join videos into one MP4".into(),
             FileTool::OrganizePdf(p) => format!("Organize PDF · {} page{}", p.len(), if p.len() == 1 { "" } else { "s" }),
             FileTool::Extract => "Extract".into(),
@@ -1164,7 +1174,7 @@ impl FileTool {
             FileTool::TrimSilence => "trimmed".into(),
             FileTool::Channels(true, ..) => "stereo".into(),
             FileTool::Channels(false, ..) => "mono".into(),
-            FileTool::Bleep(..) => "bleeped".into(),
+            FileTool::Bleep(..) | FileTool::BleepMany(..) => "bleeped".into(),
             FileTool::Join => "joined".into(),
             FileTool::OrganizePdf(_) => "organized".into(),
             FileTool::Compress(..) | FileTool::CompressPdf(_) => "compressed".into(),

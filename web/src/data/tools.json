@@ -250,7 +250,7 @@
     {
       "id": "redactAudio",
       "name": "Bleep audio",
-      "status": "typed",
+      "status": "window",
       "shortcut": null,
       "formats": [
         "mp3",
