@@ -88,7 +88,7 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Ventana de recorte de encuadre de vídeo (⇧⌘J: fotograma real, rectángulo arrastrable, proporciones, ancho y alto exactos; copia con ↵; requiere ffmpeg) | Implementado; dibujo verificado por captura, arrastre sin probar en sesión real; el fotograma de referencia es fijo (10 % de la duración) |
 | Ventana de velocidad de vídeo (⇧⌘L: 0,25–4×, presets y duración resultante; requiere ffmpeg) | Implementado; captura y tests de renderizado verificados; interacción del deslizador sin probar en sesión real; no reproduce el vídeo |
 | Visor de fotogramas de vídeo (⇧⌘S: barra temporal, paso por fotograma o segundo, ↵ guarda PNG a resolución original) | Implementado; tests de eventos y captura verificados; interacción en sesión real y exactitud con vídeo de frecuencia variable sin probar |
-| Ventana de redacción de vídeo | No incluido: solo órdenes escritas |
+| Ventana de redacción de vídeo (acción Redact Video…: una zona movible y redimensionable, inicio y fin en segundos, negro sólido o desenfoque; copia con ↵; requiere ffmpeg) | Implementado; captura y test de eventos del rango inválido verificados; el fotograma de referencia es fijo (10 %), la vista previa solo marca la zona, una sola zona, arrastre sin probar en sesión real |
 | Extensiones React, sync, Search Menu Bar Items, contexto de IA (selección/pantalla) | No incluido |
 
 ## Distribución

@@ -281,6 +281,8 @@ pub enum Act {
     SpeedVideo(PathBuf),
     /// Open the video crop window for this file.
     CropVideo(PathBuf),
+    /// Select a timed video cover or blur area.
+    RedactVideo(PathBuf),
     /// Open the video trim viewer for this file.
     TrimVideo(PathBuf),
     /// Select a video frame and save a full-resolution PNG.

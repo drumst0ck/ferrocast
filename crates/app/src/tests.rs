@@ -523,3 +523,25 @@ fn trim_view_still_steps_and_sets_start_marker() {
         _ => panic!("trim viewer closed unexpectedly"),
     }
 }
+
+#[test]
+fn video_redact_rejects_reversed_range_without_closing() {
+    let mut app = fixture();
+    app.stack = vec![
+        View::Root,
+        View::VideoRedact {
+            file: std::path::PathBuf::from("/nonexistent-redact.mp4"),
+            size: Some((640, 360)),
+            rect: ferrocast_core::croprect::full(640, 360),
+            aspect: None,
+            duration: 8.0,
+            start: 5.0,
+            end: 2.0,
+            blur: false,
+        },
+    ];
+    render(&mut app, vec![]);
+    render(&mut app, vec![Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    assert!(matches!(app.view(), View::VideoRedact { .. }));
+    assert!(app.rx.try_recv().is_err(), "invalid range must not start work");
+}

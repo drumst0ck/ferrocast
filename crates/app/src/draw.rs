@@ -119,7 +119,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     app.push(View::VideoSpeed { file, duration: d, factor: 2.0 });
                 }
             }
-            Ok("vcrop") => {
+            Ok("vcrop") | Ok("vredact") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
                     if let Some(dims) = crate::media_tools::video_dims(ff, &file) {
@@ -128,7 +128,20 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                             ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
                         }
                         let rect = ferrocast_core::croprect::fit_aspect(dims.0, dims.1, 1, 1);
-                        app.push(View::VideoCrop { file, size: Some(dims), rect, aspect: Some((1, 1)) });
+                        app.push(if std::env::var("FERROCAST_VIEW").as_deref() == Ok("vredact") {
+                            View::VideoRedact {
+                                file,
+                                size: Some(dims),
+                                rect,
+                                aspect: None,
+                                duration: 4.0,
+                                start: 1.0,
+                                end: 3.0,
+                                blur: true,
+                            }
+                        } else {
+                            View::VideoCrop { file, size: Some(dims), rect, aspect: Some((1, 1)) }
+                        });
                     }
                 }
             }
@@ -416,7 +429,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. }) && ctx.egui_wants_keyboard_input());
+            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. }) && ctx.egui_wants_keyboard_input());
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -567,6 +580,22 @@ impl App {
                     services::file_tool_files(
                         vec![file],
                         ferrocast_core::convert::FileTool::CropVideo(x, y, w, h),
+                        self.tools.ffmpeg,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
+            View::VideoRedact { file, size: Some(_), rect, duration, start, end, blur, .. } if k.enter => {
+                if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start || end > duration {
+                    self.toast("Redact: use 0 ≤ start < end ≤ video duration");
+                } else {
+                    let (x, y, w, h) = ferrocast_core::croprect::tuple(rect);
+                    self.toast("Redacting video…");
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::RedactVideo(x, y, w, h, start, end, blur),
                         self.tools.ffmpeg,
                         self.bus.clone(),
                     );
@@ -2190,12 +2219,21 @@ impl App {
         ui.painter().text(
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
             egui::Align2::CENTER_CENTER,
-            "drag inside to move · drag an edge or corner to resize · presets lock the ratio · ↵ save a cropped copy · esc cancel",
+            if matches!(self.view(), View::VideoRedact { .. }) {
+                "drag to move/resize · preview marks area only · ↵ save redacted copy · esc cancel"
+            } else {
+                "drag inside to move · drag an edge or corner to resize · presets lock the ratio · ↵ save a cropped copy · esc cancel"
+            },
             FontId::proportional(11.5),
             pal.sub,
         );
         if (rect, aspect) != before {
-            if let Some(View::CropImage { rect: r, aspect: a, .. } | View::VideoCrop { rect: r, aspect: a, .. }) = self.stack.last_mut() {
+            if let Some(
+                View::CropImage { rect: r, aspect: a, .. }
+                | View::VideoCrop { rect: r, aspect: a, .. }
+                | View::VideoRedact { rect: r, aspect: a, .. },
+            ) = self.stack.last_mut()
+            {
                 (*r, *a) = (rect, aspect);
             }
             ctx.request_repaint();
@@ -2639,6 +2677,27 @@ impl App {
                         self.save_notes();
                     }
                 });
+            }
+            View::VideoRedact { size: Some(size), rect: cover, aspect, duration, mut start, mut end, mut blur, .. } => {
+                let strip = Rect::from_min_size(rect.min + Vec2::new(12.0, 4.0), Vec2::new(rect.width() - 24.0, 34.0));
+                ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Start s");
+                        ui.add(egui::DragValue::new(&mut start).range(0.0..=duration).speed(0.04));
+                        ui.label("End s");
+                        ui.add(egui::DragValue::new(&mut end).range(0.0..=duration).speed(0.04));
+                        ui.selectable_value(&mut blur, false, "Solid black");
+                        ui.selectable_value(&mut blur, true, "Blur");
+                    });
+                });
+                if let Some(View::VideoRedact { start: a, end: b, blur: c, .. }) = self.stack.last_mut() {
+                    (*a, *b, *c) = (start, end, blur);
+                }
+                let area = Rect::from_min_max(rect.min + Vec2::new(0.0, 38.0), rect.max);
+                self.draw_crop(ui, area, pal, size, cover, aspect);
+            }
+            View::VideoRedact { .. } => {
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
             }
             View::VideoSpeed { duration, factor, .. } => {
                 self.draw_video_speed(ui, rect, pal, duration, factor);

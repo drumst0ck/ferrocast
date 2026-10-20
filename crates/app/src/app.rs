@@ -72,6 +72,17 @@ pub enum View {
         duration: Option<f64>,
         factor: f64,
     },
+    /// One movable video redaction area with an active time range.
+    VideoRedact {
+        file: PathBuf,
+        size: Option<(u32, u32)>,
+        rect: ferrocast_core::croprect::Rect,
+        aspect: Option<(u32, u32)>,
+        duration: f64,
+        start: f64,
+        end: f64,
+        blur: bool,
+    },
     /// Video crop window: file, pixel size once probed, the rectangle and an optional locked aspect.
     VideoCrop {
         file: PathBuf,
@@ -263,6 +274,7 @@ impl View {
             View::VideoTrim { .. } => "Trim Video",
             View::VideoSnapshot { .. } => "Video Snapshots",
             View::VideoCrop { .. } => "Crop Video",
+            View::VideoRedact { .. } => "Redact Video",
             View::VideoSpeed { .. } => "Change Video Speed",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
@@ -1117,6 +1129,32 @@ impl App {
                                 });
                             }
                             None => self.toast("Annotate: could not read the image"),
+                        }
+                    }
+                }
+                Msg::VideoRedactReady(file, ready) => {
+                    if matches!(self.view(), View::VideoRedact { file: f, .. } if *f == file) {
+                        if let Some((dims, d, png)) = ready {
+                            if let Some(img) = services::decode_png(&png) {
+                                let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                                self.ctx.data_mut(|data| data.insert_temp(Id::new("crop-tex"), tex));
+                                if let Some(View::VideoRedact { size, rect, duration, end, .. }) = self.stack.last_mut() {
+                                    *size = Some(dims);
+                                    *rect = ferrocast_core::croprect::with_size(
+                                        ferrocast_core::croprect::full(dims.0, dims.1),
+                                        dims.0 / 3,
+                                        dims.1 / 3,
+                                        dims.0,
+                                        dims.1,
+                                    );
+                                    *duration = d;
+                                    *end = d;
+                                }
+                            } else {
+                                self.toast("Redact: could not decode the preview");
+                            }
+                        } else {
+                            self.toast("Redact: could not read the video");
                         }
                     }
                 }
@@ -2225,6 +2263,7 @@ impl App {
                     a.push(Action::new("Crop Video…", Act::CropVideo(p.clone())).key(CMD_SHIFT, Key::J));
                     a.push(Action::new("Change Speed…", Act::SpeedVideo(p.clone())).key(CMD_SHIFT, Key::L));
                     a.push(Action::new("Video Snapshots…", Act::SnapshotVideo(p.clone())).key(CMD_SHIFT, Key::S));
+                    a.push(Action::new("Redact Video…", Act::RedactVideo(p.clone())));
                 }
                 if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Image {
                     a.push(Action::new("Annotate…", Act::AnnotateCanvas(p.clone())).key(CMD_SHIFT, Key::A));
@@ -3123,6 +3162,37 @@ impl App {
                     });
                     self.show();
                     self.push(View::VideoSpeed { file, duration: None, factor: 2.0 });
+                }
+            },
+            Act::RedactVideo(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("crop-tex"));
+                        d.remove::<(ferrocast_core::croprect::Handle, ferrocast_core::croprect::Rect, Pos2)>(Id::new("crop-drag"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || {
+                        let ready = crate::media_tools::video_dims(ff, &f).and_then(|dims| {
+                            let (duration, _) = crate::media_tools::video_info(ff, &f)?;
+                            if !duration.is_finite() || duration <= 0.0 {
+                                return None;
+                            }
+                            crate::media_tools::preview_frame(ff, &f, duration * 0.1).map(|png| (dims, duration, png))
+                        });
+                        bus.send(Msg::VideoRedactReady(f, ready));
+                    });
+                    self.show();
+                    self.push(View::VideoRedact {
+                        file,
+                        size: None,
+                        rect: ferrocast_core::croprect::full(2, 2),
+                        aspect: None,
+                        duration: 0.0,
+                        start: 0.0,
+                        end: 0.0,
+                        blur: false,
+                    });
                 }
             },
             Act::CropVideo(file) => match self.tools.ffmpeg {

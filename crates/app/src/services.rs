@@ -39,6 +39,7 @@ pub enum Msg {
     VideoDuration(PathBuf, Option<f64>),
     /// Pixel size and a preview frame of the video being cropped (None: unreadable).
     VideoCropReady(PathBuf, Option<((u32, u32), Vec<u8>)>),
+    VideoRedactReady(PathBuf, Option<((u32, u32), f64, Vec<u8>)>),
     /// Preview frame of the video being trimmed at this time (None: could not extract).
     VideoFrame(PathBuf, f64, Option<Vec<u8>>),
     /// A picture chosen to stamp onto the image being annotated: where, and its RGBA pixels.
