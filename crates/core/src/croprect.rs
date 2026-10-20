@@ -42,6 +42,9 @@ pub fn fit_aspect(iw: u32, ih: u32, rw: u32, rh: u32) -> Rect {
 
 /// Keep `r` inside the picture and at least `MIN` wide and tall.
 pub fn clamp(r: Rect, iw: u32, ih: u32) -> Rect {
+    if iw == 0 || ih == 0 {
+        return Rect { x: 0, y: 0, w: iw, h: ih };
+    }
     let w = r.w.clamp(MIN.min(iw), iw.max(1));
     let h = r.h.clamp(MIN.min(ih), ih.max(1));
     Rect { x: r.x.min(iw - w), y: r.y.min(ih - h), w, h }
@@ -53,9 +56,12 @@ pub fn drag(r: Rect, handle: Handle, dx: i64, dy: i64, iw: u32, ih: u32, aspect:
     let (mut x0, mut y0, mut x1, mut y1) = (r.x as i64, r.y as i64, (r.x + r.w) as i64, (r.y + r.h) as i64);
     let (iw_i, ih_i) = (iw as i64, ih as i64);
     let min = MIN.min(iw).min(ih) as i64;
+    if iw == 0 || ih == 0 {
+        return clamp(r, iw, ih);
+    }
     if handle == Handle::Move {
-        let nx = (x0 + dx).clamp(0, iw_i - r.w as i64);
-        let ny = (y0 + dy).clamp(0, ih_i - r.h as i64);
+        let nx = (x0 + dx).clamp(0, (iw_i - r.w as i64).max(0));
+        let ny = (y0 + dy).clamp(0, (ih_i - r.h as i64).max(0));
         return Rect { x: nx as u32, y: ny as u32, w: r.w, h: r.h };
     }
     let (west, east) = (matches!(handle, Handle::W | Handle::NW | Handle::SW), matches!(handle, Handle::E | Handle::NE | Handle::SE));
@@ -212,6 +218,17 @@ mod tests {
             Rect { x: 500, y: 300, w: 500, h: 500 },
             "pushed back inside"
         );
+    }
+
+    #[test]
+    fn degenerate_pictures_and_rectangles_do_not_panic() {
+        assert_eq!(clamp(R, 0, 0), Rect { x: 0, y: 0, w: 0, h: 0 });
+        assert_eq!(drag(R, Handle::SE, 5, 5, 0, 10, None).w, 0);
+        // a rectangle larger than the picture is pulled back, also when moved
+        let big = Rect { x: 0, y: 0, w: 500, h: 500 };
+        assert_eq!(drag(big, Handle::Move, 10, 10, 100, 100, None), Rect { x: 0, y: 0, ..big });
+        assert!(drag(R, Handle::NW, -9999, 9999, 3, 3, Some((16, 9))).w <= 3);
+        let _ = with_size(R, 5, 5, 0, 0);
     }
 
     #[test]

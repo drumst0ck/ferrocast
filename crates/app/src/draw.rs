@@ -318,7 +318,9 @@ impl App {
         let query_empty = self.query.is_empty();
         let panel = self.panel.is_some();
         // typing a label on the annotation canvas: the text field owns Enter and Escape
-        let typing = matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false);
+        let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
+            // a number box (crop W/H, slider value) being edited owns Enter and Escape too
+            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. }) && ctx.egui_wants_keyboard_input());
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
