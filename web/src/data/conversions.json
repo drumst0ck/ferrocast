@@ -1,0 +1,1711 @@
+{
+  "generatedFrom": "crates/core/src/matrix.rs",
+  "inputs": 46,
+  "conversions": 275,
+  "families": [
+    {
+      "id": "images",
+      "name": "Images",
+      "inputs": [
+        {
+          "ext": "jpg",
+          "label": "JPEG",
+          "outputs": [
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": null
+            },
+            {
+              "ext": "webp",
+              "label": "WebP",
+              "needs": "cwebp"
+            },
+            {
+              "ext": "heic",
+              "label": "HEIC",
+              "needs": null
+            },
+            {
+              "ext": "tiff",
+              "label": "TIFF",
+              "needs": null
+            },
+            {
+              "ext": "avif",
+              "label": "AVIF",
+              "needs": null
+            },
+            {
+              "ext": "bmp",
+              "label": "BMP",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "png",
+          "label": "PNG",
+          "outputs": [
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": null
+            },
+            {
+              "ext": "webp",
+              "label": "WebP",
+              "needs": "cwebp"
+            },
+            {
+              "ext": "heic",
+              "label": "HEIC",
+              "needs": null
+            },
+            {
+              "ext": "tiff",
+              "label": "TIFF",
+              "needs": null
+            },
+            {
+              "ext": "avif",
+              "label": "AVIF",
+              "needs": null
+            },
+            {
+              "ext": "bmp",
+              "label": "BMP",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "webp",
+          "label": "WebP",
+          "outputs": [
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": null
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": null
+            },
+            {
+              "ext": "heic",
+              "label": "HEIC",
+              "needs": null
+            },
+            {
+              "ext": "tiff",
+              "label": "TIFF",
+              "needs": null
+            },
+            {
+              "ext": "avif",
+              "label": "AVIF",
+              "needs": null
+            },
+            {
+              "ext": "bmp",
+              "label": "BMP",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "heic",
+          "label": "HEIC",
+          "outputs": [
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": null
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": null
+            },
+            {
+              "ext": "webp",
+              "label": "WebP",
+              "needs": "cwebp"
+            },
+            {
+              "ext": "tiff",
+              "label": "TIFF",
+              "needs": null
+            },
+            {
+              "ext": "avif",
+              "label": "AVIF",
+              "needs": null
+            },
+            {
+              "ext": "bmp",
+              "label": "BMP",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "tiff",
+          "label": "TIFF",
+          "outputs": [
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": null
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": null
+            },
+            {
+              "ext": "webp",
+              "label": "WebP",
+              "needs": "cwebp"
+            },
+            {
+              "ext": "heic",
+              "label": "HEIC",
+              "needs": null
+            },
+            {
+              "ext": "avif",
+              "label": "AVIF",
+              "needs": null
+            },
+            {
+              "ext": "bmp",
+              "label": "BMP",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "svg",
+          "label": "Other",
+          "outputs": [
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": null
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": null
+            },
+            {
+              "ext": "webp",
+              "label": "WebP",
+              "needs": "cwebp"
+            },
+            {
+              "ext": "heic",
+              "label": "HEIC",
+              "needs": null
+            },
+            {
+              "ext": "tiff",
+              "label": "TIFF",
+              "needs": null
+            },
+            {
+              "ext": "avif",
+              "label": "AVIF",
+              "needs": null
+            },
+            {
+              "ext": "bmp",
+              "label": "BMP",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "avif",
+          "label": "AVIF",
+          "outputs": [
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": null
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": null
+            },
+            {
+              "ext": "webp",
+              "label": "WebP",
+              "needs": "cwebp"
+            },
+            {
+              "ext": "heic",
+              "label": "HEIC",
+              "needs": null
+            },
+            {
+              "ext": "tiff",
+              "label": "TIFF",
+              "needs": null
+            },
+            {
+              "ext": "bmp",
+              "label": "BMP",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "bmp",
+          "label": "BMP",
+          "outputs": [
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": null
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": null
+            },
+            {
+              "ext": "webp",
+              "label": "WebP",
+              "needs": "cwebp"
+            },
+            {
+              "ext": "heic",
+              "label": "HEIC",
+              "needs": null
+            },
+            {
+              "ext": "tiff",
+              "label": "TIFF",
+              "needs": null
+            },
+            {
+              "ext": "avif",
+              "label": "AVIF",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audio",
+      "name": "Audio",
+      "inputs": [
+        {
+          "ext": "mp3",
+          "label": "MP3",
+          "outputs": [
+            {
+              "ext": "m4a",
+              "label": "M4A",
+              "needs": null
+            },
+            {
+              "ext": "wav",
+              "label": "WAV",
+              "needs": null
+            },
+            {
+              "ext": "flac",
+              "label": "FLAC",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "ogg",
+              "label": "OGG",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "opus",
+              "label": "Opus",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "aiff",
+              "label": "AIFF",
+              "needs": null
+            },
+            {
+              "ext": "wma",
+              "label": "WMA",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "m4a",
+          "label": "M4A",
+          "outputs": [
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wav",
+              "label": "WAV",
+              "needs": null
+            },
+            {
+              "ext": "flac",
+              "label": "FLAC",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "ogg",
+              "label": "OGG",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "opus",
+              "label": "Opus",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "aiff",
+              "label": "AIFF",
+              "needs": null
+            },
+            {
+              "ext": "wma",
+              "label": "WMA",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "wav",
+          "label": "WAV",
+          "outputs": [
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "m4a",
+              "label": "M4A",
+              "needs": null
+            },
+            {
+              "ext": "flac",
+              "label": "FLAC",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "ogg",
+              "label": "OGG",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "opus",
+              "label": "Opus",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "aiff",
+              "label": "AIFF",
+              "needs": null
+            },
+            {
+              "ext": "wma",
+              "label": "WMA",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "flac",
+          "label": "FLAC",
+          "outputs": [
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "m4a",
+              "label": "M4A",
+              "needs": null
+            },
+            {
+              "ext": "wav",
+              "label": "WAV",
+              "needs": null
+            },
+            {
+              "ext": "ogg",
+              "label": "OGG",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "opus",
+              "label": "Opus",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "aiff",
+              "label": "AIFF",
+              "needs": null
+            },
+            {
+              "ext": "wma",
+              "label": "WMA",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "ogg",
+          "label": "OGG",
+          "outputs": [
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "m4a",
+              "label": "M4A",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wav",
+              "label": "WAV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "flac",
+              "label": "FLAC",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "opus",
+              "label": "Opus",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "aiff",
+              "label": "AIFF",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wma",
+              "label": "WMA",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "opus",
+          "label": "Opus",
+          "outputs": [
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "m4a",
+              "label": "M4A",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wav",
+              "label": "WAV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "flac",
+              "label": "FLAC",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "ogg",
+              "label": "OGG",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "aiff",
+              "label": "AIFF",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wma",
+              "label": "WMA",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "aiff",
+          "label": "AIFF",
+          "outputs": [
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "m4a",
+              "label": "M4A",
+              "needs": null
+            },
+            {
+              "ext": "wav",
+              "label": "WAV",
+              "needs": null
+            },
+            {
+              "ext": "flac",
+              "label": "FLAC",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "ogg",
+              "label": "OGG",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "opus",
+              "label": "Opus",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wma",
+              "label": "WMA",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "wma",
+          "label": "WMA",
+          "outputs": [
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "m4a",
+              "label": "M4A",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wav",
+              "label": "WAV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "flac",
+              "label": "FLAC",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "ogg",
+              "label": "OGG",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "opus",
+              "label": "Opus",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "aiff",
+              "label": "AIFF",
+              "needs": "ffmpeg"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "video",
+      "name": "Video",
+      "inputs": [
+        {
+          "ext": "mp4",
+          "label": "MP4",
+          "outputs": [
+            {
+              "ext": "mov",
+              "label": "MOV",
+              "needs": null
+            },
+            {
+              "ext": "mkv",
+              "label": "MKV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "webm",
+              "label": "WebM",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "avi",
+              "label": "AVI",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wmv",
+              "label": "WMV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "gif",
+              "label": "GIF",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "mov",
+          "label": "MOV",
+          "outputs": [
+            {
+              "ext": "mp4",
+              "label": "MP4",
+              "needs": null
+            },
+            {
+              "ext": "mkv",
+              "label": "MKV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "webm",
+              "label": "WebM",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "avi",
+              "label": "AVI",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wmv",
+              "label": "WMV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "gif",
+              "label": "GIF",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "mkv",
+          "label": "MKV",
+          "outputs": [
+            {
+              "ext": "mp4",
+              "label": "MP4",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mov",
+              "label": "MOV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "webm",
+              "label": "WebM",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "avi",
+              "label": "AVI",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wmv",
+              "label": "WMV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "gif",
+              "label": "GIF",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "webm",
+          "label": "WebM",
+          "outputs": [
+            {
+              "ext": "mp4",
+              "label": "MP4",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mov",
+              "label": "MOV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mkv",
+              "label": "MKV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "avi",
+              "label": "AVI",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wmv",
+              "label": "WMV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "gif",
+              "label": "GIF",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "avi",
+          "label": "AVI",
+          "outputs": [
+            {
+              "ext": "mp4",
+              "label": "MP4",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mov",
+              "label": "MOV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mkv",
+              "label": "MKV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "webm",
+              "label": "WebM",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wmv",
+              "label": "WMV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "gif",
+              "label": "GIF",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "wmv",
+          "label": "WMV",
+          "outputs": [
+            {
+              "ext": "mp4",
+              "label": "MP4",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mov",
+              "label": "MOV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mkv",
+              "label": "MKV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "webm",
+              "label": "WebM",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "avi",
+              "label": "AVI",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "gif",
+              "label": "GIF",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mp3",
+              "label": "MP3",
+              "needs": "ffmpeg"
+            }
+          ]
+        },
+        {
+          "ext": "gif",
+          "label": "GIF",
+          "outputs": [
+            {
+              "ext": "mp4",
+              "label": "MP4",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mov",
+              "label": "MOV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "mkv",
+              "label": "MKV",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "webm",
+              "label": "WebM",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "avi",
+              "label": "AVI",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "wmv",
+              "label": "WMV",
+              "needs": "ffmpeg"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pdf",
+      "name": "PDF",
+      "inputs": [
+        {
+          "ext": "pdf",
+          "label": "PDF",
+          "outputs": [
+            {
+              "ext": "docx",
+              "label": "Word (DOCX)",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "pages",
+              "label": "Pages",
+              "needs": null
+            },
+            {
+              "ext": "pptx",
+              "label": "PowerPoint (PPTX)",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "xlsx",
+              "label": "Excel (XLSX)",
+              "needs": null
+            },
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": null
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": null
+            },
+            {
+              "ext": "epub",
+              "label": "EPUB",
+              "needs": null
+            },
+            {
+              "ext": "txt",
+              "label": "Plain text",
+              "needs": null
+            },
+            {
+              "ext": "md",
+              "label": "Markdown",
+              "needs": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "documents",
+      "name": "Documents",
+      "inputs": [
+        {
+          "ext": "docx",
+          "label": "Word (DOCX)",
+          "outputs": [
+            {
+              "ext": "pages",
+              "label": "Pages",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "txt",
+              "label": "Plain text",
+              "needs": null
+            },
+            {
+              "ext": "md",
+              "label": "Markdown",
+              "needs": null
+            },
+            {
+              "ext": "html",
+              "label": "HTML",
+              "needs": null
+            },
+            {
+              "ext": "epub",
+              "label": "EPUB",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "pages",
+          "label": "Pages",
+          "outputs": [
+            {
+              "ext": "docx",
+              "label": "Word (DOCX)",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "txt",
+              "label": "Plain text",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "md",
+              "label": "Markdown",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "html",
+              "label": "HTML",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "epub",
+              "label": "EPUB",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "md",
+          "label": "Markdown",
+          "outputs": [
+            {
+              "ext": "docx",
+              "label": "Word (DOCX)",
+              "needs": null
+            },
+            {
+              "ext": "pages",
+              "label": "Pages",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "txt",
+              "label": "Plain text",
+              "needs": null
+            },
+            {
+              "ext": "html",
+              "label": "HTML",
+              "needs": null
+            },
+            {
+              "ext": "epub",
+              "label": "EPUB",
+              "needs": null
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "rtf",
+          "label": "Other",
+          "outputs": [
+            {
+              "ext": "docx",
+              "label": "Word (DOCX)",
+              "needs": null
+            },
+            {
+              "ext": "pages",
+              "label": "Pages",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "txt",
+              "label": "Plain text",
+              "needs": null
+            },
+            {
+              "ext": "md",
+              "label": "Markdown",
+              "needs": null
+            },
+            {
+              "ext": "html",
+              "label": "HTML",
+              "needs": null
+            },
+            {
+              "ext": "epub",
+              "label": "EPUB",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "rtfd",
+          "label": "Other",
+          "outputs": [
+            {
+              "ext": "docx",
+              "label": "Word (DOCX)",
+              "needs": null
+            },
+            {
+              "ext": "pages",
+              "label": "Pages",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "txt",
+              "label": "Plain text",
+              "needs": null
+            },
+            {
+              "ext": "md",
+              "label": "Markdown",
+              "needs": null
+            },
+            {
+              "ext": "html",
+              "label": "HTML",
+              "needs": null
+            },
+            {
+              "ext": "epub",
+              "label": "EPUB",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "textClipping",
+          "label": "Other",
+          "outputs": [
+            {
+              "ext": "docx",
+              "label": "Word (DOCX)",
+              "needs": null
+            },
+            {
+              "ext": "pages",
+              "label": "Pages",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "txt",
+              "label": "Plain text",
+              "needs": null
+            },
+            {
+              "ext": "md",
+              "label": "Markdown",
+              "needs": null
+            },
+            {
+              "ext": "html",
+              "label": "HTML",
+              "needs": null
+            },
+            {
+              "ext": "epub",
+              "label": "EPUB",
+              "needs": null
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "epub",
+          "label": "EPUB",
+          "outputs": [
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "docx",
+              "label": "Word (DOCX)",
+              "needs": null
+            },
+            {
+              "ext": "pages",
+              "label": "Pages",
+              "needs": null
+            },
+            {
+              "ext": "txt",
+              "label": "Plain text",
+              "needs": null
+            },
+            {
+              "ext": "md",
+              "label": "Markdown",
+              "needs": null
+            },
+            {
+              "ext": "html",
+              "label": "HTML",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "txt",
+          "label": "Plain text",
+          "outputs": [
+            {
+              "ext": "docx",
+              "label": "Word (DOCX)",
+              "needs": null
+            },
+            {
+              "ext": "pages",
+              "label": "Pages",
+              "needs": null
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "md",
+              "label": "Markdown",
+              "needs": null
+            },
+            {
+              "ext": "html",
+              "label": "HTML",
+              "needs": null
+            },
+            {
+              "ext": "epub",
+              "label": "EPUB",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "html",
+          "label": "HTML",
+          "outputs": []
+        }
+      ]
+    },
+    {
+      "id": "slides",
+      "name": "Slides",
+      "inputs": [
+        {
+          "ext": "ppt",
+          "label": "Other",
+          "outputs": [
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "pptx",
+          "label": "PowerPoint (PPTX)",
+          "outputs": [
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "jpg",
+              "label": "JPEG",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "png",
+              "label": "PNG",
+              "needs": "LibreOffice"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "spreadsheets",
+      "name": "Spreadsheets",
+      "inputs": [
+        {
+          "ext": "xlsx",
+          "label": "Excel (XLSX)",
+          "outputs": [
+            {
+              "ext": "ods",
+              "label": "OpenDocument",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "csv",
+              "label": "CSV",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "tsv",
+              "label": "TSV",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "xls",
+          "label": "Other",
+          "outputs": [
+            {
+              "ext": "xlsx",
+              "label": "Excel (XLSX)",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "ods",
+              "label": "OpenDocument",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "csv",
+              "label": "CSV",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "tsv",
+              "label": "TSV",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "ods",
+          "label": "OpenDocument",
+          "outputs": [
+            {
+              "ext": "xlsx",
+              "label": "Excel (XLSX)",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "csv",
+              "label": "CSV",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "tsv",
+              "label": "TSV",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "csv",
+          "label": "CSV",
+          "outputs": [
+            {
+              "ext": "xlsx",
+              "label": "Excel (XLSX)",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "ods",
+              "label": "OpenDocument",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "tsv",
+              "label": "TSV",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            }
+          ]
+        },
+        {
+          "ext": "tsv",
+          "label": "TSV",
+          "outputs": [
+            {
+              "ext": "xlsx",
+              "label": "Excel (XLSX)",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "ods",
+              "label": "OpenDocument",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "csv",
+              "label": "CSV",
+              "needs": "LibreOffice"
+            },
+            {
+              "ext": "pdf",
+              "label": "PDF",
+              "needs": "LibreOffice"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "subtitles",
+      "name": "Subtitles",
+      "inputs": [
+        {
+          "ext": "srt",
+          "label": "SubRip (SRT)",
+          "outputs": [
+            {
+              "ext": "vtt",
+              "label": "WebVTT",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "txt",
+              "label": "Plain text",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "vtt",
+          "label": "WebVTT",
+          "outputs": [
+            {
+              "ext": "srt",
+              "label": "SubRip (SRT)",
+              "needs": "ffmpeg"
+            },
+            {
+              "ext": "txt",
+              "label": "Plain text",
+              "needs": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "archives",
+      "name": "Archives",
+      "inputs": [
+        {
+          "ext": "zip",
+          "label": "ZIP",
+          "outputs": [
+            {
+              "ext": "tar",
+              "label": "TAR",
+              "needs": null
+            },
+            {
+              "ext": "gz",
+              "label": "GZIP",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "tar",
+          "label": "TAR",
+          "outputs": [
+            {
+              "ext": "zip",
+              "label": "ZIP",
+              "needs": null
+            },
+            {
+              "ext": "gz",
+              "label": "GZIP",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "gz",
+          "label": "GZIP",
+          "outputs": [
+            {
+              "ext": "zip",
+              "label": "ZIP",
+              "needs": null
+            },
+            {
+              "ext": "tar",
+              "label": "TAR",
+              "needs": null
+            }
+          ]
+        },
+        {
+          "ext": "rar",
+          "label": "Other",
+          "outputs": [
+            {
+              "ext": "zip",
+              "label": "ZIP",
+              "needs": null
+            },
+            {
+              "ext": "tar",
+              "label": "TAR",
+              "needs": null
+            },
+            {
+              "ext": "gz",
+              "label": "GZIP",
+              "needs": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,619 @@
+{
+  "tools": [
+    {
+      "id": "compress",
+      "name": "Compress",
+      "status": "preset",
+      "shortcut": null,
+      "formats": [
+        "jpg",
+        "png",
+        "webp",
+        "heic",
+        "tiff",
+        "mp3",
+        "m4a",
+        "wav",
+        "flac",
+        "mp4",
+        "mov",
+        "mkv",
+        "pdf"
+      ]
+    },
+    {
+      "id": "removeMetadata",
+      "name": "Edit metadata",
+      "status": "preset",
+      "shortcut": null,
+      "formats": [
+        "jpg",
+        "png",
+        "webp",
+        "heic",
+        "tiff",
+        "mp3",
+        "m4a",
+        "wav",
+        "flac",
+        "mp4",
+        "mov",
+        "mkv",
+        "gif",
+        "pdf"
+      ]
+    },
+    {
+      "id": "editImage",
+      "name": "Edit photo",
+      "status": "window",
+      "shortcut": "⇧⌘E",
+      "formats": [
+        "jpg",
+        "png",
+        "webp",
+        "heic",
+        "tiff"
+      ]
+    },
+    {
+      "id": "annotateImage",
+      "name": "Annotate photo",
+      "status": "window",
+      "shortcut": "⇧⌘A",
+      "formats": [
+        "jpg",
+        "png",
+        "webp",
+        "heic",
+        "tiff"
+      ]
+    },
+    {
+      "id": "frameImage",
+      "name": "Add a background",
+      "status": "window",
+      "shortcut": "⇧⌘B",
+      "formats": [
+        "jpg",
+        "png",
+        "webp",
+        "heic",
+        "tiff"
+      ]
+    },
+    {
+      "id": "cropImage",
+      "name": "Crop image",
+      "status": "window",
+      "shortcut": "⇧⌘K",
+      "formats": [
+        "jpg",
+        "png",
+        "webp",
+        "heic",
+        "tiff"
+      ]
+    },
+    {
+      "id": "redactImage",
+      "name": "Redact photo",
+      "status": "window",
+      "shortcut": "⇧⌘R",
+      "formats": [
+        "jpg",
+        "png",
+        "webp",
+        "heic",
+        "tiff"
+      ]
+    },
+    {
+      "id": "createCollage",
+      "name": "Make a collage",
+      "status": "window",
+      "shortcut": null,
+      "formats": [
+        "jpg",
+        "png",
+        "webp",
+        "heic",
+        "tiff",
+        "svg"
+      ]
+    },
+    {
+      "id": "trimVideo",
+      "name": "Trim video",
+      "status": "window",
+      "shortcut": "⇧⌘V",
+      "formats": [
+        "mp4",
+        "mov",
+        "mkv"
+      ]
+    },
+    {
+      "id": "cropVideo",
+      "name": "Crop video",
+      "status": "window",
+      "shortcut": "⇧⌘J",
+      "formats": [
+        "mp4",
+        "mov",
+        "mkv"
+      ]
+    },
+    {
+      "id": "changeVideoSpeed",
+      "name": "Change video speed",
+      "status": "window",
+      "shortcut": "⇧⌘L",
+      "formats": [
+        "mp4",
+        "mov",
+        "mkv"
+      ]
+    },
+    {
+      "id": "joinVideos",
+      "name": "Join videos",
+      "status": "preset",
+      "shortcut": null,
+      "formats": [
+        "mp4",
+        "mov",
+        "mkv"
+      ]
+    },
+    {
+      "id": "videoSnapshots",
+      "name": "Video snapshots",
+      "status": "window",
+      "shortcut": "⇧⌘S",
+      "formats": [
+        "mp4",
+        "mov",
+        "mkv"
+      ]
+    },
+    {
+      "id": "splitVideo",
+      "name": "Split video",
+      "status": "window",
+      "shortcut": null,
+      "formats": [
+        "mp4",
+        "mov",
+        "mkv"
+      ]
+    },
+    {
+      "id": "redactVideo",
+      "name": "Redact video",
+      "status": "window",
+      "shortcut": null,
+      "formats": [
+        "mp4",
+        "mov",
+        "mkv"
+      ]
+    },
+    {
+      "id": "normalizeAudio",
+      "name": "Normalize audio",
+      "status": "window",
+      "shortcut": null,
+      "formats": [
+        "mp3",
+        "m4a",
+        "wav",
+        "flac"
+      ]
+    },
+    {
+      "id": "audioToVideo",
+      "name": "Audio to video",
+      "status": "typed",
+      "shortcut": null,
+      "formats": [
+        "mp3",
+        "m4a",
+        "wav",
+        "flac"
+      ]
+    },
+    {
+      "id": "trimAudio",
+      "name": "Trim audio",
+      "status": "window",
+      "shortcut": null,
+      "formats": [
+        "mp3",
+        "m4a",
+        "wav",
+        "flac"
+      ]
+    },
+    {
+      "id": "audioChannels",
+      "name": "Audio channels",
+      "status": "window",
+      "shortcut": null,
+      "formats": [
+        "mp3",
+        "m4a",
+        "wav",
+        "flac"
+      ]
+    },
+    {
+      "id": "redactAudio",
+      "name": "Bleep audio",
+      "status": "typed",
+      "shortcut": null,
+      "formats": [
+        "mp3",
+        "m4a",
+        "wav",
+        "flac"
+      ]
+    },
+    {
+      "id": "mergePdf",
+      "name": "Merge PDFs",
+      "status": "preset",
+      "shortcut": null,
+      "formats": [
+        "pdf"
+      ]
+    },
+    {
+      "id": "organizePdf",
+      "name": "Organize PDF pages",
+      "status": "window",
+      "shortcut": "⇧⌘O",
+      "formats": [
+        "pdf"
+      ]
+    },
+    {
+      "id": "muteVideo",
+      "name": "Mute video",
+      "status": "preset",
+      "shortcut": null,
+      "formats": [
+        "mp4",
+        "mov",
+        "mkv"
+      ]
+    },
+    {
+      "id": "splitPdf",
+      "name": "Split PDF",
+      "status": "preset",
+      "shortcut": null,
+      "formats": [
+        "pdf"
+      ]
+    },
+    {
+      "id": "createPdf",
+      "name": "Create a PDF",
+      "status": "preset",
+      "shortcut": null,
+      "formats": [
+        "jpg",
+        "png",
+        "webp",
+        "heic",
+        "tiff",
+        "svg"
+      ]
+    },
+    {
+      "id": "extractArchive",
+      "name": "Extract archive",
+      "status": "preset",
+      "shortcut": null,
+      "formats": [
+        "zip",
+        "tar",
+        "gz",
+        "rar"
+      ]
+    }
+  ],
+  "actions": [
+    "airDrop",
+    "float",
+    "copy",
+    "move",
+    "copyPath",
+    "openTerminal"
+  ],
+  "byFormat": [
+    {
+      "ext": "jpg",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "editImage",
+        "annotateImage",
+        "frameImage",
+        "cropImage",
+        "redactImage"
+      ],
+      "multi": [
+        "compress",
+        "removeMetadata",
+        "cropImage",
+        "createPdf",
+        "createCollage"
+      ]
+    },
+    {
+      "ext": "png",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "editImage",
+        "annotateImage",
+        "frameImage",
+        "cropImage",
+        "redactImage"
+      ],
+      "multi": [
+        "compress",
+        "removeMetadata",
+        "cropImage",
+        "createPdf",
+        "createCollage"
+      ]
+    },
+    {
+      "ext": "webp",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "editImage",
+        "annotateImage",
+        "frameImage",
+        "cropImage",
+        "redactImage"
+      ],
+      "multi": [
+        "compress",
+        "removeMetadata",
+        "cropImage",
+        "createPdf",
+        "createCollage"
+      ]
+    },
+    {
+      "ext": "heic",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "editImage",
+        "annotateImage",
+        "frameImage",
+        "cropImage",
+        "redactImage"
+      ],
+      "multi": [
+        "compress",
+        "removeMetadata",
+        "cropImage",
+        "createPdf",
+        "createCollage"
+      ]
+    },
+    {
+      "ext": "tiff",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "editImage",
+        "annotateImage",
+        "frameImage",
+        "cropImage",
+        "redactImage"
+      ],
+      "multi": [
+        "compress",
+        "removeMetadata",
+        "cropImage",
+        "createPdf",
+        "createCollage"
+      ]
+    },
+    {
+      "ext": "svg",
+      "single": [],
+      "multi": [
+        "createPdf",
+        "createCollage"
+      ]
+    },
+    {
+      "ext": "mp3",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "normalizeAudio",
+        "audioToVideo",
+        "trimAudio",
+        "audioChannels",
+        "redactAudio"
+      ],
+      "multi": []
+    },
+    {
+      "ext": "m4a",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "normalizeAudio",
+        "audioToVideo",
+        "trimAudio",
+        "audioChannels",
+        "redactAudio"
+      ],
+      "multi": []
+    },
+    {
+      "ext": "wav",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "normalizeAudio",
+        "audioToVideo",
+        "trimAudio",
+        "audioChannels",
+        "redactAudio"
+      ],
+      "multi": []
+    },
+    {
+      "ext": "flac",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "normalizeAudio",
+        "audioToVideo",
+        "trimAudio",
+        "audioChannels",
+        "redactAudio"
+      ],
+      "multi": []
+    },
+    {
+      "ext": "mp4",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "muteVideo",
+        "trimVideo",
+        "cropVideo",
+        "changeVideoSpeed",
+        "videoSnapshots",
+        "splitVideo",
+        "redactVideo"
+      ],
+      "multi": [
+        "compress",
+        "removeMetadata",
+        "muteVideo",
+        "trimVideo",
+        "cropVideo",
+        "changeVideoSpeed",
+        "joinVideos"
+      ]
+    },
+    {
+      "ext": "mov",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "muteVideo",
+        "trimVideo",
+        "cropVideo",
+        "changeVideoSpeed",
+        "videoSnapshots",
+        "splitVideo",
+        "redactVideo"
+      ],
+      "multi": [
+        "compress",
+        "removeMetadata",
+        "muteVideo",
+        "trimVideo",
+        "cropVideo",
+        "changeVideoSpeed",
+        "joinVideos"
+      ]
+    },
+    {
+      "ext": "mkv",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "muteVideo",
+        "trimVideo",
+        "cropVideo",
+        "changeVideoSpeed",
+        "videoSnapshots",
+        "splitVideo",
+        "redactVideo"
+      ],
+      "multi": [
+        "compress",
+        "removeMetadata",
+        "muteVideo",
+        "trimVideo",
+        "cropVideo",
+        "changeVideoSpeed",
+        "joinVideos"
+      ]
+    },
+    {
+      "ext": "gif",
+      "single": [
+        "removeMetadata"
+      ],
+      "multi": []
+    },
+    {
+      "ext": "pdf",
+      "single": [
+        "compress",
+        "removeMetadata",
+        "splitPdf",
+        "organizePdf"
+      ],
+      "multi": [
+        "compress",
+        "removeMetadata",
+        "splitPdf",
+        "mergePdf"
+      ]
+    },
+    {
+      "ext": "zip",
+      "single": [
+        "extractArchive"
+      ],
+      "multi": [
+        "extractArchive"
+      ]
+    },
+    {
+      "ext": "tar",
+      "single": [
+        "extractArchive"
+      ],
+      "multi": [
+        "extractArchive"
+      ]
+    },
+    {
+      "ext": "gz",
+      "single": [
+        "extractArchive"
+      ],
+      "multi": [
+        "extractArchive"
+      ]
+    },
+    {
+      "ext": "rar",
+      "single": [
+        "extractArchive"
+      ],
+      "multi": [
+        "extractArchive"
+      ]
+    }
+  ]
+}
