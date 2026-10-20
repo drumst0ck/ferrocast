@@ -438,13 +438,20 @@ const EXTRACT_SECS: u64 = 120;
 /// made here is removed. The archive itself is only ever read.
 pub(crate) fn extract_archive(f: &Path, tools: &Tools) -> Result<PathBuf, String> {
     let kind = archive_kind(f)?;
-    let unrar = if kind == Kind::Rar { Some(tools.unrar.ok_or("needs unrar (brew install --cask rar)")?) } else { None };
+    // RAR: libarchive (the system tar) reads RAR5 and most RAR4 on its own; unrar is only the
+    // fallback for what tar cannot open. The listing doubles as the traversal guard's input.
+    let rar_listing = if kind == Kind::Rar { run_listing(Command::new("/usr/bin/tar").arg("-tf").arg(f), EXTRACT_SECS).ok() } else { None };
+    let rar_via_tar = rar_listing.is_some();
+    let unrar = if kind == Kind::Rar && !rar_via_tar { Some(tools.unrar.ok_or("needs unrar (brew install --cask rar)")?) } else { None };
     // 1. guard, before any folder exists
     match kind {
         Kind::Zip => guard_listing(&run_listing(Command::new("/usr/bin/unzip").arg("-Z1").arg(f), EXTRACT_SECS)?)?,
         Kind::Tar => guard_listing(&run_listing(Command::new("/usr/bin/tar").arg("-tf").arg(f), EXTRACT_SECS)?)?,
         Kind::Tgz => guard_listing(&run_listing(Command::new("/usr/bin/tar").arg("-tzf").arg(f), EXTRACT_SECS)?)?,
-        Kind::Rar => guard_listing(&run_listing(Command::new(unrar.unwrap_or_default()).arg("lb").arg(f), EXTRACT_SECS)?)?,
+        Kind::Rar => match &rar_listing {
+            Some(listing) => guard_listing(listing)?,
+            None => guard_listing(&run_listing(Command::new(unrar.unwrap_or_default()).arg("lb").arg(f), EXTRACT_SECS)?)?,
+        },
         Kind::Gz => {}
     }
     // 2. extract into a folder that did not exist
@@ -453,6 +460,7 @@ pub(crate) fn extract_archive(f: &Path, tools: &Tools) -> Result<PathBuf, String
         Kind::Zip => run_limited(Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(f).arg(&dir), EXTRACT_SECS),
         Kind::Tar => run_limited(Command::new("/usr/bin/tar").arg("-xf").arg(f).arg("-C").arg(&dir), EXTRACT_SECS),
         Kind::Tgz => run_limited(Command::new("/usr/bin/tar").arg("-xzf").arg(f).arg("-C").arg(&dir), EXTRACT_SECS),
+        Kind::Rar if rar_via_tar => run_limited(Command::new("/usr/bin/tar").arg("-xf").arg(f).arg("-C").arg(&dir), EXTRACT_SECS),
         Kind::Rar => run_limited(
             Command::new(unrar.unwrap_or_default()).args(["x", "-y", "-idq"]).arg(f).arg(format!("{}/", dir.display())),
             EXTRACT_SECS,

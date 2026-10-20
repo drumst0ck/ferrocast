@@ -708,6 +708,31 @@ fn clicking_the_trim_bar_seeks_proportionally() {
     }
 }
 
+/// A hand-built 58-byte RAR5 holding in.txt ("inside rar"); the same bytes as the matrix test.
+const SYNTHETIC_RAR: [u8; 58] = [
+    0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00, 0xc5, 0x1a, 0x33, 0x32, 0x03, 0x01, 0x00, 0x00, 0xdb, 0x87, 0x37, 0x92, 0x13, 0x02,
+    0x02, 0x0a, 0x04, 0x0a, 0x00, 0x38, 0x6e, 0x35, 0x91, 0x00, 0x00, 0x06, 0x69, 0x6e, 0x2e, 0x74, 0x78, 0x74, 0x69, 0x6e, 0x73, 0x69,
+    0x64, 0x65, 0x20, 0x72, 0x61, 0x72, 0x19, 0xb2, 0x3a, 0x35, 0x03, 0x05, 0x00, 0x00,
+];
+
+#[test]
+fn rar_extracts_through_tar_when_unrar_is_not_installed() {
+    let d = tmp_dir("rar-tar");
+    let rar = d.join("pack.rar");
+    std::fs::write(&rar, SYNTHETIC_RAR).unwrap();
+    let no_unrar = ferrocast_core::convert::Tools::default();
+    let out = crate::route::extract_archive(&rar, &no_unrar).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(out, d.join("pack"));
+    assert_eq!(std::fs::read_to_string(out.join("in.txt")).unwrap(), "inside rar");
+    assert_eq!(std::fs::read(&rar).unwrap(), SYNTHETIC_RAR, "archive untouched");
+    // garbage with a .rar name still fails cleanly: no unrar to fall back on, folder removed
+    let bad = d.join("bad.rar");
+    std::fs::write(&bad, b"not a rar").unwrap();
+    let err = crate::route::extract_archive(&bad, &no_unrar).unwrap_err();
+    assert!(err.contains("unrar"), "{err}");
+    assert!(!d.join("bad").exists(), "no leftover folder");
+}
+
 #[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
