@@ -1320,6 +1320,21 @@ impl App {
                     let v = self.shelf.clone();
                     self.persist("shelf.json", &v);
                 }
+                Msg::FinderSelection(sel) => match sel {
+                    Ok(files) if !files.is_empty() => {
+                        self.show();
+                        self.reset_to_root();
+                        self.perform(Act::OpenWheel(files), true);
+                    }
+                    Ok(_) => {
+                        self.show();
+                        self.toast("Nothing is selected in Finder");
+                    }
+                    Err(e) => {
+                        self.show();
+                        self.toast(format!("Finder selection: {e} (allow Automation for Finder in System Settings)"));
+                    }
+                },
                 Msg::ConvertFiles(files) => {
                     self.show();
                     self.reset_to_root();
@@ -2815,6 +2830,13 @@ impl App {
                 ferrocast_macos::shelf::show(&v);
                 self.hide();
                 self.reset_to_root();
+            }
+            Builtin::ConvertFinderSelection => {
+                let bus = self.bus.clone();
+                self.hide();
+                std::thread::spawn(move || {
+                    bus.send(Msg::FinderSelection(ferrocast_macos::apps::finder_selection().map_err(|e| e.to_string())));
+                });
             }
             Builtin::ConvertFiles => {
                 let bus = self.bus.clone();

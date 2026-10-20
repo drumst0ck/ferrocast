@@ -35,6 +35,8 @@ pub enum Msg {
     CollageLoaded(Vec<PathBuf>, Vec<(usize, usize, Vec<u8>)>),
     /// Duration and frame rate of the video being trimmed (None: unreadable).
     VideoInfo(PathBuf, Option<(f64, f64)>),
+    /// Finder selection read for the format wheel (Err: message to show).
+    FinderSelection(Result<Vec<PathBuf>, String>),
     /// Duration of the video whose speed is being set (None: unreadable).
     VideoDuration(PathBuf, Option<f64>),
     /// Pixel size and a preview frame of the video being cropped (None: unreadable).

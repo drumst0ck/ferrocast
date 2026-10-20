@@ -123,6 +123,26 @@ pub fn reveal(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Existing absolute paths from newline-separated text, in order, without duplicates.
+pub fn parse_finder_selection(out: &str) -> Vec<PathBuf> {
+    let mut seen = Vec::new();
+    for line in out.lines().map(str::trim).filter(|l| l.starts_with('/')) {
+        let p = PathBuf::from(line);
+        if p.exists() && !seen.contains(&p) {
+            seen.push(p);
+        }
+    }
+    seen
+}
+
+/// Files and folders selected in Finder right now (needs Automation permission for Finder).
+pub fn finder_selection() -> anyhow::Result<Vec<PathBuf>> {
+    let out = crate::system::osascript(
+        "tell application \"Finder\"\nset out to \"\"\nrepeat with f in (selection as alias list)\nset out to out & POSIX path of f & linefeed\nend repeat\nreturn out\nend tell",
+    )?;
+    Ok(parse_finder_selection(&out))
+}
+
 /// Move a path to the Trash through Finder (recoverable).
 pub fn trash(path: &Path) -> anyhow::Result<()> {
     let p = path.to_string_lossy().replace('"', "\\\"");
@@ -132,6 +152,20 @@ pub fn trash(path: &Path) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn finder_selection_keeps_existing_absolute_paths_only() {
+        let dir = std::env::temp_dir().join(format!("fc-fsel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a b.png");
+        std::fs::write(&f, b"x").unwrap();
+        let out = format!("{}\n\nrelative/x.png\n/nonexistent-fc-file.png\n{}\n{}\n", f.display(), f.display(), dir.display());
+        let got = super::parse_finder_selection(&out);
+        assert_eq!(got, vec![f.clone(), dir.clone()], "blank, relative, missing and duplicate lines are dropped");
+        assert!(super::parse_finder_selection("").is_empty());
+        let _ = std::fs::remove_file(&f);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
     #[test]
     fn finds_system_apps() {
         let apps = super::list_apps();
