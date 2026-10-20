@@ -22,6 +22,7 @@ pub mod launch;
 pub mod markdown;
 pub mod matrix;
 pub mod media;
+pub mod metaform;
 pub mod models;
 pub mod pages;
 pub mod pdfplan;

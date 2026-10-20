@@ -11,9 +11,16 @@ use std::time::{Duration, Instant};
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn probe(ffmpeg: &str, file: &Path) -> Result<serde_json::Value, String> {
+    serde_json::from_slice(&probe_raw(ffmpeg, file, &["-show_streams", "-show_format"])?).map_err(|e| e.to_string())
+}
+
+/// ffprobe JSON bytes for `file` with the given `-show_*` flags: 10 s deadline, 4 MiB cap.
+fn probe_raw(ffmpeg: &str, file: &Path, show: &[&str]) -> Result<Vec<u8>, String> {
     let ffprobe = Path::new(ffmpeg).with_file_name("ffprobe");
     let mut child = Command::new(ffprobe)
-        .args(["-v", "quiet", "-show_streams", "-show_format", "-of", "json"])
+        .args(["-v", "quiet"])
+        .args(show)
+        .args(["-of", "json"])
         .arg(file)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -34,7 +41,7 @@ fn probe(ffmpeg: &str, file: &Path) -> Result<serde_json::Value, String> {
                 if !status.success() {
                     return Err("could not inspect media".into());
                 }
-                return serde_json::from_slice(&data).map_err(|e| e.to_string());
+                return Ok(data);
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             _ => {
@@ -45,6 +52,70 @@ fn probe(ffmpeg: &str, file: &Path) -> Result<serde_json::Value, String> {
             }
         }
     }
+}
+
+/// Tags of an audio, video or GIF file grouped by file, track and chapter (one ffprobe under its
+/// own deadline; never call it on the UI thread).
+#[allow(dead_code)] // consumed by the Edit metadata window (A7d)
+pub fn inspect_metadata(ffmpeg: &str, path: &Path) -> Result<Vec<ferrocast_core::metaform::Field>, String> {
+    let raw = probe_raw(ffmpeg, path, &["-show_format", "-show_streams", "-show_chapters"])?;
+    ferrocast_core::metaform::parse_ffprobe(&String::from_utf8_lossy(&raw))
+}
+
+/// Edits of a PDF: only file-level fields named like PDFKit's attributes (Title, Author, Subject,
+/// Keywords, Creator, Producer) exist there.
+pub(crate) fn edit_pdf_metadata(file: &Path, edits: &[ferrocast_core::metaform::MetaEdit], remove_all: bool) -> Result<PathBuf, String> {
+    use ferrocast_core::metaform::Group;
+    if let Some(e) = edits.iter().find(|e| e.group != Group::File) {
+        return Err(format!("a PDF has no tracks or chapters to edit ({})", e.key));
+    }
+    let pairs: Vec<_> = edits.iter().map(|e| (e.key.clone(), e.value.clone())).collect();
+    if pairs.is_empty() && !remove_all {
+        return Err("nothing to change".into());
+    }
+    ferrocast_macos::pdf::set_metadata(file, &pairs, remove_all)
+}
+
+/// Rewrites the tags of one audio, video or GIF file with a stream copy, next to the original and
+/// with the same extension ("<name> edited.<ext>", " 2" on a collision). Staged privately and
+/// published with `create_new`, so nothing is overwritten and a failure leaves nothing behind.
+fn edit_metadata_one(ff: &str, file: &Path, edits: &[ferrocast_core::metaform::MetaEdit], remove_all: bool) -> Result<PathBuf, String> {
+    let is_gif = ferrocast_core::convert::ext(file) == "gif";
+    if !is_gif && !matches!(family_of(file), Family::Audio | Family::Video) {
+        return Err("this tool requires audio, video or GIF files".into());
+    }
+    ferrocast_core::metaform::validate(edits)?;
+    if edits.is_empty() && !remove_all {
+        return Err("nothing to change".into());
+    }
+    if is_gif && !remove_all {
+        return Err("GIF files cannot store tags".into());
+    }
+    let ext = file.extension().and_then(|e| e.to_str()).ok_or("the file has no extension")?.to_string();
+    let input = file.to_str().ok_or("input path is not UTF-8")?;
+    let scratch = std::env::temp_dir().join(format!("ferrocast-media-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&scratch).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let staged = scratch.join(format!("output.{ext}"));
+        let out = staged.to_str().ok_or("output path is not UTF-8")?;
+        let args = ferrocast_core::metaform::ffmpeg_args(input, edits, remove_all, out);
+        crate::route::run_limited(Command::new(ff).args(["-nostdin", "-n", "-loglevel", "error"]).args(args), 300)?;
+        if std::fs::metadata(&staged).map_err(|e| e.to_string())?.len() == 0 {
+            return Err("tool produced an empty file".to_string());
+        }
+        let suffix = FileTool::EditMetadata(vec![], remove_all).suffix();
+        let dest = output_with_suffix(file, &suffix, &ext, |p| p.exists());
+        use std::io::Write;
+        let mut src = std::fs::File::open(&staged).map_err(|e| e.to_string())?;
+        let mut dst = std::fs::OpenOptions::new().write(true).create_new(true).open(&dest).map_err(|e| e.to_string())?;
+        if let Err(e) = std::io::copy(&mut src, &mut dst).and_then(|_| dst.flush()) {
+            let _ = std::fs::remove_file(&dest);
+            return Err(e.to_string());
+        }
+        Ok(dest)
+    })();
+    let _ = std::fs::remove_dir_all(scratch);
+    result
 }
 
 fn streams(info: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> {
@@ -291,6 +362,13 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
         }
         if let FileTool::SplitPoints(ranges, exact) = tool {
             match split_one(ff, file, ranges, *exact) {
+                Ok(p) => made.push(p),
+                Err(e) => errors.push(format!("{}: {e}", file.display())),
+            }
+            continue;
+        }
+        if let FileTool::EditMetadata(edits, remove_all) = tool {
+            match edit_metadata_one(ff, file, edits, *remove_all) {
                 Ok(p) => made.push(p),
                 Err(e) => errors.push(format!("{}: {e}", file.display())),
             }

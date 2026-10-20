@@ -493,3 +493,307 @@ mod pdf_compress {
         std::fs::remove_dir_all(&d).unwrap();
     }
 }
+
+mod metadata_real {
+    use crate::media_tools::inspect_metadata;
+    use crate::services::run_file_tool;
+    use ferrocast_core::convert::{FileTool, Tools};
+    use ferrocast_core::metaform::{Field, Group, MetaEdit};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    fn ffmpeg() -> &'static str {
+        Tools::detect().ffmpeg.expect("ffmpeg is required for this explicit check")
+    }
+
+    fn make(args: &[&str], out: &Path) {
+        let o = Command::new(ffmpeg()).args(["-nostdin", "-y", "-loglevel", "error"]).args(args).arg(out).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+
+    fn root(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("fc-meta-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir(&d).unwrap();
+        d
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    }
+
+    fn probe(f: &Path) -> serde_json::Value {
+        let ffprobe = Path::new(ffmpeg()).with_file_name("ffprobe");
+        let o = Command::new(ffprobe)
+            .args(["-v", "quiet", "-show_format", "-show_streams", "-show_chapters", "-of", "json"])
+            .arg(f)
+            .output()
+            .unwrap();
+        serde_json::from_slice(&o.stdout).unwrap()
+    }
+
+    fn file_tag(f: &Path, key: &str) -> Option<String> {
+        probe(f)["format"]["tags"][key].as_str().map(String::from)
+    }
+
+    /// Matroska stores some keys upper-case (ARTIST); look a tag up ignoring case.
+    fn file_tag_ci(f: &Path, key: &str) -> Option<String> {
+        let j = probe(f);
+        j["format"]["tags"].as_object()?.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).and_then(|(_, v)| v.as_str().map(String::from))
+    }
+
+    fn codecs(f: &Path) -> Vec<String> {
+        probe(f)["streams"].as_array().unwrap().iter().map(|s| s["codec_name"].as_str().unwrap().to_string()).collect()
+    }
+
+    fn duration(f: &Path) -> f64 {
+        probe(f)["format"]["duration"].as_str().unwrap().parse().unwrap()
+    }
+
+    fn set(key: &str, v: &str) -> MetaEdit {
+        MetaEdit { group: Group::File, key: key.into(), value: Some(v.into()) }
+    }
+
+    fn unset(key: &str) -> MetaEdit {
+        MetaEdit { group: Group::File, key: key.into(), value: None }
+    }
+
+    fn mp4(d: &Path) -> PathBuf {
+        let p = d.join("clip.mp4");
+        make(
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x120:rate=10",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=duration=2",
+                "-t",
+                "2",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-metadata",
+                "title=Título ñ",
+                "-metadata",
+                "artist=Bob",
+                "-metadata",
+                "comment=hi",
+                "-metadata:s:a:0",
+                "language=spa",
+            ],
+            &p,
+        );
+        p
+    }
+
+    fn run(f: &Path, edits: Vec<MetaEdit>, all: bool) -> (Vec<PathBuf>, Vec<String>) {
+        run_file_tool(std::slice::from_ref(&f.to_path_buf()), &FileTool::EditMetadata(edits, all), Some(ffmpeg()))
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn mp4_edit_keeps_the_rest_and_the_streams() {
+        let d = root("mp4");
+        let src = mp4(&d);
+        let before = std::fs::read(&src).unwrap();
+        let (outs, errs) = run(&src, vec![set("title", "Nuevo = ñ"), unset("artist")], false);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(outs, [d.join("clip edited.mp4")]);
+        let out = &outs[0];
+        assert_eq!(file_tag(out, "title").as_deref(), Some("Nuevo = ñ"));
+        assert_eq!(file_tag(out, "artist"), None);
+        assert_eq!(file_tag(out, "comment").as_deref(), Some("hi"));
+        assert_eq!(codecs(out), codecs(&src));
+        assert!((duration(out) - duration(&src)).abs() < 0.1);
+        assert_eq!(probe(out)["streams"][1]["tags"]["language"], "spa", "track tags survive");
+        assert_eq!(std::fs::read(&src).unwrap(), before, "original untouched");
+        // a second run never overwrites
+        let (again, errs) = run(&src, vec![set("title", "x")], false);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(again, [d.join("clip edited 2.mp4")]);
+        // a track edit goes to that stream only
+        let track = Group::Track { index: 1, kind: "audio".into() };
+        let (t, errs) = run(&src, vec![MetaEdit { group: track, key: "language".into(), value: Some("fra".into()) }], false);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(probe(&t[0])["streams"][1]["tags"]["language"], "fra");
+        assert_eq!(file_tag(&t[0], "artist").as_deref(), Some("Bob"));
+        // the reader shows what the editor changes
+        let fields: Vec<Field> = inspect_metadata(ffmpeg(), out).unwrap();
+        assert!(fields.iter().any(|f| f.group == Group::File && f.key == "title" && f.value == "Nuevo = ñ" && f.editable));
+        assert!(fields.iter().any(|f| matches!(&f.group, Group::Track { index: 1, kind } if kind == "audio") && f.key == "language"));
+        assert!(fields.iter().all(|f| f.key != "artist"));
+        assert!(names(&d).iter().all(|n| !n.contains("ferrocast")));
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn remove_all_leaves_no_user_tags_and_no_chapters() {
+        let d = root("all");
+        // an mkv with chapters made through an ffmetadata file
+        let meta = d.join("m.txt");
+        std::fs::write(
+            &meta,
+            ";FFMETADATA1\ntitle=Movie\nartist=Bob\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=Intro\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=1000\nEND=2000\ntitle=Outro\n",
+        )
+        .unwrap();
+        let mkv = d.join("c.mkv");
+        make(
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=64x64:rate=5",
+                "-i",
+                meta.to_str().unwrap(),
+                "-t",
+                "2",
+                "-map",
+                "0",
+                "-map_metadata",
+                "1",
+                "-map_chapters",
+                "1",
+            ],
+            &mkv,
+        );
+        let fields = inspect_metadata(ffmpeg(), &mkv).unwrap();
+        let chapters: Vec<_> = fields.iter().filter(|f| matches!(f.group, Group::Chapter(_))).collect();
+        assert_eq!(chapters.len(), 2, "{fields:?}");
+        assert_eq!((chapters[0].value.as_str(), chapters[1].value.as_str()), ("Intro", "Outro"));
+        assert!(chapters.iter().all(|f| !f.editable));
+        assert!(fields.iter().any(|f| f.group == Group::File && f.key == "title" && f.value == "Movie"));
+
+        // a title edit keeps the chapters
+        let (e, errs) = run(&mkv, vec![set("title", "Z")], false);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(file_tag(&e[0], "title").as_deref(), Some("Z"));
+        assert_eq!(probe(&e[0])["chapters"].as_array().unwrap().len(), 2);
+        assert_eq!(file_tag_ci(&e[0], "artist").as_deref(), Some("Bob"));
+
+        // remove all: no title/artist/comment, no chapters
+        let (r, errs) = run(&mkv, vec![], true);
+        assert!(errs.is_empty(), "{errs:?}");
+        let j = probe(&r[0]);
+        assert_eq!(j["chapters"].as_array().unwrap().len(), 0);
+        for k in ["title", "artist", "comment"] {
+            assert_eq!(file_tag_ci(&r[0], k), None, "{k}");
+        }
+        assert_eq!(codecs(&r[0]), codecs(&mkv));
+
+        let src = mp4(&d);
+        let (r, errs) = run(&src, vec![set("title", "ignored")], true);
+        assert!(errs.is_empty(), "{errs:?}");
+        let tags = probe(&r[0])["format"]["tags"].clone();
+        let keys: Vec<&str> = tags.as_object().unwrap().keys().map(String::as_str).collect();
+        // only the container's own brand fields remain; the encoder tag is gone with +bitexact
+        assert!(keys.iter().all(|k| ["major_brand", "minor_version", "compatible_brands"].contains(k)), "{keys:?}");
+        let s = probe(&r[0])["streams"].clone();
+        assert!(s.as_array().unwrap().iter().all(|st| st["tags"].get("encoder").is_none()));
+        assert_eq!(s[1]["tags"]["language"], "und", "track language reset");
+        assert_eq!(codecs(&r[0]), codecs(&src));
+        assert_eq!(r[0], d.join("clip edited.mp4"));
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn mp3_id3_edit_and_remove_all() {
+        let d = root("mp3");
+        let src = d.join("a.mp3");
+        make(
+            &["-f", "lavfi", "-i", "sine=duration=2", "-metadata", "title=Canción", "-metadata", "artist=Ann", "-metadata", "comment=c"],
+            &src,
+        );
+        let (o, errs) = run(&src, vec![set("title", "Otra ñ"), unset("artist")], false);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(o, [d.join("a edited.mp3")]);
+        assert_eq!(file_tag(&o[0], "title").as_deref(), Some("Otra ñ"));
+        assert_eq!(file_tag(&o[0], "artist"), None);
+        assert_eq!(file_tag(&o[0], "comment").as_deref(), Some("c"));
+        assert_eq!(codecs(&o[0]), ["mp3"]);
+        let (r, errs) = run(&src, vec![], true);
+        assert!(errs.is_empty(), "{errs:?}");
+        for k in ["title", "artist", "comment", "encoder"] {
+            assert_eq!(file_tag(&r[0], k), None, "{k}");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn gif_cannot_store_tags_but_can_be_stripped() {
+        let d = root("gif");
+        let src = d.join("g.gif");
+        make(&["-f", "lavfi", "-i", "testsrc=size=64x64:rate=5", "-t", "1"], &src);
+        let (o, errs) = run(&src, vec![set("title", "x")], false);
+        assert!(o.is_empty() && errs.len() == 1 && errs[0].contains("GIF"), "{o:?} {errs:?}");
+        assert_eq!(names(&d), ["g.gif"]);
+        let (r, errs) = run(&src, vec![], true);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(r, [d.join("g edited.gif")]);
+        assert_eq!(codecs(&r[0]), ["gif"]);
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn bad_input_fails_cleanly_and_leaves_nothing() {
+        let d = root("bad");
+        let fake = d.join("fake.mp4");
+        std::fs::write(&fake, b"this is not media").unwrap();
+        let txt = d.join("note.txt");
+        std::fs::write(&txt, b"hello").unwrap();
+        let before = names(&d);
+        let (o, errs) = run(&fake, vec![set("title", "x")], false);
+        assert!(o.is_empty() && errs.len() == 1, "{o:?} {errs:?}");
+        let (o, errs) = run(&txt, vec![set("title", "x")], false);
+        assert!(o.is_empty() && errs[0].contains("requires"), "{errs:?}");
+        let src = mp4(&d);
+        let after_src = names(&d);
+        for edits in
+            [vec![], vec![MetaEdit { group: Group::Chapter(0), key: "title".into(), value: Some("x".into()) }], vec![set("a=b", "x")]]
+        {
+            let (o, errs) = run(&src, edits, false);
+            assert!(o.is_empty() && errs.len() == 1, "{o:?} {errs:?}");
+        }
+        assert_eq!(names(&d), after_src);
+        assert_eq!(before.len() + 1, after_src.len());
+        assert!(inspect_metadata(ffmpeg(), &fake).is_err());
+        // without ffmpeg the install hint comes back and nothing is written
+        let (o, errs) = run_file_tool(std::slice::from_ref(&src), &FileTool::EditMetadata(vec![set("title", "x")], false), None);
+        assert!(o.is_empty() && errs[0].contains("brew install ffmpeg"), "{errs:?}");
+        assert_eq!(names(&d), after_src);
+    }
+
+    #[test]
+    #[ignore = "requires PDFKit through osascript; creates isolated real PDFs"]
+    fn pdf_edit_routes_to_pdfkit_without_ffmpeg() {
+        let d = root("pdf");
+        let src = d.join("doc.pdf");
+        let script = r#"ObjC.import('AppKit'); ObjC.import('Quartz');
+function run(argv) { var doc = $.PDFDocument.alloc.init;
+  for (var i = 0; i < 2; i++) { var tv = $.NSTextView.alloc.initWithFrame($.NSMakeRect(0,0,300,300)); tv.string = 'p' + i;
+    doc.insertPageAtIndex($.PDFDocument.alloc.initWithData(tv.dataWithPDFInsideRect(tv.bounds)).pageAtIndex(0).copy, i); }
+  doc.writeToFile(argv[0]); return 'ok'; }"#;
+        assert!(Command::new("/usr/bin/osascript").args(["-l", "JavaScript", "-e", script]).arg(&src).output().unwrap().status.success());
+        let before = std::fs::read(&src).unwrap();
+        let tool = FileTool::EditMetadata(vec![set("Title", "Informe ñ"), set("Author", "Ann")], false);
+        let (o, errs) = run_file_tool(std::slice::from_ref(&src), &tool, None);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(o, [d.join("doc edited.pdf")]);
+        let m = ferrocast_macos::pdf::metadata(&o[0]).unwrap();
+        assert!(m.contains(&("Title".into(), "Informe ñ".into())) && m.contains(&("Author".into(), "Ann".into())), "{m:?}");
+        assert_eq!(ferrocast_macos::pdf::page_count(&o[0]).unwrap(), 2);
+        let (z, errs) = run_file_tool(&[o[0].clone()], &FileTool::EditMetadata(vec![], true), None);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert!(ferrocast_macos::pdf::metadata(&z[0]).unwrap().is_empty());
+        assert_eq!(std::fs::read(&src).unwrap(), before);
+        let (o, errs) = run_file_tool(std::slice::from_ref(&src), &FileTool::EditMetadata(vec![unset("Title")], false), None);
+        assert_eq!(o, [d.join("doc edited 2.pdf")], "{errs:?}");
+    }
+}

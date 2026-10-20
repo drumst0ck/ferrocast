@@ -1805,6 +1805,21 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::Join => {
             return crate::media_tools::run(files, tool, ffmpeg);
         }
+        FileTool::EditMetadata(edits, remove_all) => {
+            for f in files {
+                if ext(f) == "pdf" {
+                    match crate::media_tools::edit_pdf_metadata(f, edits, *remove_all) {
+                        Ok(p) => outs.push(p),
+                        Err(e) => errs.push(format!("{}: {e}", f.display())),
+                    }
+                } else {
+                    // audio, video and GIF need ffmpeg; the executor names the install hint
+                    let (o, e) = crate::media_tools::run(std::slice::from_ref(f), tool, ffmpeg);
+                    outs.extend(o);
+                    errs.extend(e);
+                }
+            }
+        }
         FileTool::CompressPdf(preset) => {
             let (o, e) = crate::route::compress_pdf(ferrocast_core::convert::Tools::detect().gs, files, *preset);
             outs.extend(o);

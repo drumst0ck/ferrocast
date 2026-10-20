@@ -512,6 +512,15 @@ mod tests {
     }
     use super::*;
 
+    #[test]
+    fn edit_metadata_label_and_suffix() {
+        use crate::metaform::{Group, MetaEdit};
+        let e = FileTool::EditMetadata(vec![MetaEdit { group: Group::File, key: "title".into(), value: None }], false);
+        assert_eq!((e.label().as_str(), e.suffix().as_str()), ("Edit metadata", "edited"));
+        let r = FileTool::EditMetadata(vec![], true);
+        assert_eq!((r.label().as_str(), r.suffix().as_str()), ("Remove metadata", "edited"));
+    }
+
     fn none() -> Tools {
         Tools::default()
     }
@@ -1063,6 +1072,9 @@ pub enum FileTool {
     Compress(crate::compress::Goal, crate::compress::Resize),
     /// Smaller PDF through Ghostscript (optional tool), by preset only.
     CompressPdf(crate::compress::Preset),
+    /// Rewrite tags without re-encoding (audio, video, GIF through ffmpeg; PDF through PDFKit); `true`
+    /// drops every tag instead. The copy is named "<name> edited".
+    EditMetadata(Vec<crate::metaform::MetaEdit>, bool),
 }
 
 pub fn format_secs(s: f64) -> String {
@@ -1113,6 +1125,8 @@ impl FileTool {
             FileTool::OrganizePdf(p) => format!("Organize PDF · {} page{}", p.len(), if p.len() == 1 { "" } else { "s" }),
             FileTool::Extract => "Extract".into(),
             FileTool::Compress(goal, r) => compress_label(goal, r),
+            FileTool::EditMetadata(_, true) => "Remove metadata".into(),
+            FileTool::EditMetadata(_, false) => "Edit metadata".into(),
             FileTool::CompressPdf(p) => format!(
                 "Compress PDF · {}",
                 match p {
@@ -1142,6 +1156,7 @@ impl FileTool {
             FileTool::Join => "joined".into(),
             FileTool::OrganizePdf(_) => "organized".into(),
             FileTool::Compress(..) | FileTool::CompressPdf(_) => "compressed".into(),
+            FileTool::EditMetadata(..) => "edited".into(),
             // it makes a folder named after the archive; no suffix is ever applied
             FileTool::Extract => String::new(),
         }

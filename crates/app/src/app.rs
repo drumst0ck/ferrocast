@@ -2264,6 +2264,7 @@ impl App {
                                     FileTool::TrimSilence => "sf:scissors",
                                     FileTool::OrganizePdf(_) => "sf:doc.on.doc",
                                     FileTool::Extract => "sf:archivebox",
+                                    FileTool::EditMetadata(..) => "sf:tag",
                                     FileTool::Compress(..) | FileTool::CompressPdf(_) => "sf:arrow.down.right.and.arrow.up.left",
                                 },
                                 [255, 140, 60],
