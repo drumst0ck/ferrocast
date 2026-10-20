@@ -97,6 +97,52 @@ pub fn sped_duration(duration: f64, factor: f64) -> Option<f64> {
     (duration.is_finite() && duration > 0.0 && factor.is_finite() && (SPEED_MIN..=SPEED_MAX).contains(&factor)).then(|| duration / factor)
 }
 
+/// Shortest piece a split may produce, in seconds.
+pub const MIN_PIECE: f64 = 0.05;
+
+/// `n` pieces of equal length covering `0..duration`, contiguous, the last one ending exactly at
+/// `duration`. Empty when the numbers cannot describe a split (or a piece would be too short).
+pub fn equal_parts(duration: f64, n: usize) -> Vec<(f64, f64)> {
+    if !duration.is_finite() || duration <= 0.0 || n == 0 || duration / (n as f64) < MIN_PIECE {
+        return vec![];
+    }
+    (0..n)
+        .map(|i| {
+            let a = duration * i as f64 / n as f64;
+            let b = if i + 1 == n { duration } else { duration * (i + 1) as f64 / n as f64 };
+            (a, b)
+        })
+        .collect()
+}
+
+/// Contiguous ranges between the given cut points. Points that are not numbers or fall outside
+/// `(0, duration)` are ignored, the rest is sorted and deduplicated, and a point that would leave
+/// a piece shorter than [`MIN_PIECE`] is dropped, so no content is ever lost. Empty when
+/// `duration` is not usable.
+pub fn points_to_ranges(duration: f64, points: &[f64]) -> Vec<(f64, f64)> {
+    if !duration.is_finite() || duration <= 0.0 {
+        return vec![];
+    }
+    let mut pts: Vec<f64> = points.iter().copied().filter(|p| p.is_finite() && *p > 0.0 && *p < duration).collect();
+    pts.sort_by(|a, b| a.total_cmp(b));
+    let mut kept: Vec<f64> = vec![];
+    let mut last = 0.0;
+    for p in pts {
+        if p - last >= MIN_PIECE && duration - p >= MIN_PIECE {
+            kept.push(p);
+            last = p;
+        }
+    }
+    let mut out = Vec::with_capacity(kept.len() + 1);
+    let mut start = 0.0;
+    for p in kept {
+        out.push((start, p));
+        start = p;
+    }
+    out.push((start, duration));
+    out
+}
+
 /// Frame rate from ffprobe's `r_frame_rate` text such as `30000/1001` or `25`.
 pub fn parse_rate(s: &str) -> Option<f64> {
     let s = s.trim();
@@ -205,5 +251,60 @@ mod tests {
         for bad in ["0/0", "x", "", "-5", "1/0", "99999"] {
             assert_eq!(parse_rate(bad), None, "{bad}");
         }
+    }
+
+    fn contiguous(r: &[(f64, f64)], duration: f64) -> bool {
+        !r.is_empty()
+            && r[0].0 == 0.0
+            && r.last().map(|x| x.1) == Some(duration)
+            && r.windows(2).all(|w| w[0].1 == w[1].0)
+            && r.iter().all(|x| x.1 - x.0 >= MIN_PIECE - 1e-9)
+    }
+
+    #[test]
+    fn equal_parts_cover_the_whole_clip_without_drift() {
+        assert_eq!(equal_parts(10.0, 1), vec![(0.0, 10.0)]);
+        let four = equal_parts(10.0, 4);
+        assert_eq!(four.len(), 4);
+        assert!((four[1].0 - 2.5).abs() < 1e-9 && (four[2].1 - 7.5).abs() < 1e-9);
+        assert!(contiguous(&four, 10.0));
+        for n in 1..=50 {
+            let r = equal_parts(7.3, n);
+            assert_eq!(r.len(), n, "{n}");
+            assert!(contiguous(&r, 7.3), "{n}: {r:?}");
+        }
+    }
+
+    #[test]
+    fn equal_parts_refuses_impossible_requests() {
+        assert!(equal_parts(10.0, 0).is_empty());
+        assert!(equal_parts(0.0, 3).is_empty());
+        assert!(equal_parts(f64::NAN, 3).is_empty());
+        assert!(equal_parts(-5.0, 3).is_empty());
+        assert!(equal_parts(f64::INFINITY, 3).is_empty());
+        assert!(equal_parts(0.1, 10).is_empty(), "pieces of 0.01 s are refused");
+    }
+
+    #[test]
+    fn points_become_contiguous_ranges() {
+        assert_eq!(points_to_ranges(10.0, &[3.0, 7.0]), vec![(0.0, 3.0), (3.0, 7.0), (7.0, 10.0)]);
+        assert_eq!(points_to_ranges(10.0, &[7.0, 3.0, 3.0]), vec![(0.0, 3.0), (3.0, 7.0), (7.0, 10.0)], "sorted and deduplicated");
+        assert_eq!(points_to_ranges(10.0, &[]), vec![(0.0, 10.0)], "no points keeps the whole clip");
+    }
+
+    #[test]
+    fn points_outside_the_clip_or_not_numbers_are_ignored() {
+        assert_eq!(points_to_ranges(10.0, &[-1.0, 0.0, 10.0, 11.0, f64::NAN, f64::INFINITY]), vec![(0.0, 10.0)]);
+        assert!(points_to_ranges(0.0, &[1.0]).is_empty());
+        assert!(points_to_ranges(f64::NAN, &[1.0]).is_empty());
+    }
+
+    #[test]
+    fn a_point_that_would_make_a_tiny_piece_is_dropped_so_no_content_is_lost() {
+        assert_eq!(points_to_ranges(10.0, &[3.0, 3.01]), vec![(0.0, 3.0), (3.0, 10.0)]);
+        assert_eq!(points_to_ranges(10.0, &[0.01, 5.0]), vec![(0.0, 5.0), (5.0, 10.0)], "tiny first piece");
+        assert_eq!(points_to_ranges(10.0, &[9.99]), vec![(0.0, 10.0)], "tiny last piece");
+        let r = points_to_ranges(10.0, &[1.0, 1.02, 1.04, 4.0, 4.03, 9.97]);
+        assert!(contiguous(&r, 10.0), "{r:?}");
     }
 }
