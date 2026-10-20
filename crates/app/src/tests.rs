@@ -648,6 +648,66 @@ fn crop_enter_without_a_focused_field_saves_and_leaves() {
     assert!(matches!(app.view(), View::Root), "Enter on the crop view starts the crop and goes back");
 }
 
+fn pointer_events(from: Pos2, to: Pos2) -> Vec<Vec<Event>> {
+    let btn = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let steps = 6;
+    let mut frames = vec![vec![Event::PointerMoved(from)], vec![btn(from, true)]];
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        frames.push(vec![Event::PointerMoved(from + (to - from) * t)]);
+    }
+    frames.push(vec![btn(to, false)]);
+    frames
+}
+
+fn drag(app: &mut App, from: Pos2, to: Pos2) {
+    for f in pointer_events(from, to) {
+        render(app, f);
+    }
+    render(app, vec![]);
+}
+
+fn crop_rect_of(app: &App) -> ferrocast_core::croprect::Rect {
+    match app.view() {
+        View::CropImage { rect, .. } => *rect,
+        other => panic!("crop view closed unexpectedly: {}", other.title()),
+    }
+}
+
+// A-T2: pointer drags through render(); positions follow the layout (header 58 pt, footer 38 pt)
+// and the assertions are relative, so a small layout change does not break them.
+#[test]
+fn dragging_inside_the_crop_rectangle_moves_it_without_resizing() {
+    let mut app = fixture();
+    let rect = ferrocast_core::croprect::Rect { x: 100, y: 100, w: 300, h: 200 };
+    let f = std::env::temp_dir().join("fc-dragmove.png");
+    app.stack = vec![View::Root, View::CropImage { file: f, size: (1000, 600), rect, aspect: None }];
+    render(&mut app, vec![]);
+    drag(&mut app, Pos2::new(250.0, 204.0), Pos2::new(310.0, 234.0));
+    let after = crop_rect_of(&app);
+    assert_eq!((after.w, after.h), (300, 200), "moving keeps the size");
+    assert!(after.x > 100 + 40 && after.y > 100 + 20, "the rectangle followed the pointer: {after:?}");
+}
+
+#[test]
+fn clicking_the_trim_bar_seeks_proportionally() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join("fc-trimbar.mp4");
+    let trim = ferrocast_core::videoplan::Trim::new(10.0, 25.0);
+    app.stack = vec![View::Root, View::VideoTrim { file: f, trim }];
+    render(&mut app, vec![]);
+    let pos = Pos2::new(375.0, 358.0);
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(&mut app, vec![Event::PointerMoved(pos)]);
+    render(&mut app, vec![btn(true)]);
+    render(&mut app, vec![btn(false)]);
+    render(&mut app, vec![]);
+    match app.view() {
+        View::VideoTrim { trim: Some(t), .. } => assert!((t.cursor - 5.0).abs() < 0.8, "cursor {} should be near the middle", t.cursor),
+        _ => panic!("trim view closed"),
+    }
+}
+
 #[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
