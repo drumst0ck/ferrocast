@@ -274,6 +274,21 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     app.push(View::Annotate { file, size, doc, tool: Tool::Arrow, color: 0, sel: Some(1) });
                 }
             }
+            Ok("reorder") => {
+                let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
+                    .unwrap_or_default()
+                    .split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                let purpose = match std::env::var("FERROCAST_REORDER").as_deref() {
+                    Ok("audio") => ReorderPurpose::MergeAudio,
+                    Ok("video") => ReorderPurpose::JoinVideos,
+                    Ok("images") => ReorderPurpose::CreatePdf,
+                    _ => ReorderPurpose::MergePdf,
+                };
+                app.push(View::Reorder { purpose, files, cursor: 0 });
+            }
             Ok("organize") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Ok(n) = ferrocast_macos::pdf::page_count(&file) {
@@ -563,6 +578,19 @@ impl App {
             return true;
         }
         match self.view().clone() {
+            View::Reorder { purpose, files, .. } if k.enter => {
+                if files.len() < 2 {
+                    self.toast("Choose order: at least two files are needed");
+                } else {
+                    self.toast("Working…");
+                    match reorder_job(purpose, files) {
+                        ReorderJob::Tool(tool, files) => services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone()),
+                        ReorderJob::Image(op, files) => services::image_op_files(files, op, self.bus.clone()),
+                    }
+                    self.pop();
+                }
+                true
+            }
             View::PdfOrganize { file, n, plan } if k.enter => {
                 if plan.is_identity(n) {
                     self.toast("Nothing changed: reorder, rotate, duplicate or remove a page first");
@@ -2648,6 +2676,120 @@ impl App {
         }
     }
 
+    /// Ordered list of files: ↑/↓ choose, ⌘↑/⌘↓ (or the row buttons) move, ↵ runs.
+    fn draw_reorder(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, purpose: ReorderPurpose, files: Vec<PathBuf>, cursor: usize) {
+        use ferrocast_core::reorder::{move_down, move_up};
+        let ctx = ui.ctx().clone();
+        let (mut files, mut cursor) = (files, cursor);
+        let before = (files.clone(), cursor);
+        let last = files.len().saturating_sub(1);
+        cursor = cursor.min(last);
+        ctx.input_mut(|i| {
+            // ⌘ variants first: egui matches Modifiers::NONE even when other modifiers are held
+            if i.consume_key(CMD, Key::ArrowUp) {
+                if let Some(n) = move_up(&mut files, cursor) {
+                    cursor = n;
+                }
+            } else if i.consume_key(CMD, Key::ArrowDown) {
+                if let Some(n) = move_down(&mut files, cursor) {
+                    cursor = n;
+                }
+            } else if i.consume_key(Modifiers::NONE, Key::ArrowUp) {
+                cursor = cursor.saturating_sub(1);
+            } else if i.consume_key(Modifiers::NONE, Key::ArrowDown) {
+                cursor = (cursor + 1).min(last);
+            }
+        });
+        let mut click: Option<(usize, i8)> = None; // (row, 0 select / -1 up / 1 down)
+        ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(Vec2::new(16.0, 12.0))), |ui| {
+            ui.label(RichText::new(format!("{} files · first to last", files.len())).size(13.0).color(pal.text));
+            let hint = match purpose {
+                ReorderPurpose::JoinVideos => "First clip sets the canvas · ⌘↑/⌘↓ move · ↵ join",
+                ReorderPurpose::CreatePdf => "One page per picture · ⌘↑/⌘↓ move · ↵ create PDF",
+                _ => "⌘↑/⌘↓ move · ↵ merge",
+            };
+            ui.label(RichText::new(hint).size(12.0).color(pal.sub));
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical().id_salt("reorder-list").auto_shrink([false, false]).show(ui, |ui| {
+                for (pos, f) in files.iter().enumerate() {
+                    let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 44.0), egui::Sense::click());
+                    let on = pos == cursor;
+                    ui.painter().rect_filled(r, 8.0, if on { pal.sel } else { pal.field });
+                    if on {
+                        ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+                        ui.scroll_to_rect(r, None);
+                    }
+                    if resp.clicked() {
+                        click = Some((pos, 0));
+                    }
+                    ui.painter().text(
+                        Pos2::new(r.min.x + 22.0, r.center().y),
+                        egui::Align2::CENTER_CENTER,
+                        (pos + 1).to_string(),
+                        FontId::proportional(14.0),
+                        pal.sub,
+                    );
+                    let text_rect = Rect::from_min_max(Pos2::new(r.min.x + 42.0, r.min.y), Pos2::new(r.max.x - 76.0, r.max.y));
+                    let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.display().to_string());
+                    let kind = f.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
+                    let p = ui.painter().with_clip_rect(text_rect);
+                    p.text(
+                        Pos2::new(text_rect.min.x, r.center().y - 8.0),
+                        egui::Align2::LEFT_CENTER,
+                        name,
+                        FontId::proportional(14.0),
+                        pal.text,
+                    );
+                    p.text(
+                        Pos2::new(text_rect.min.x, r.center().y + 10.0),
+                        egui::Align2::LEFT_CENTER,
+                        kind,
+                        FontId::proportional(11.5),
+                        pal.sub,
+                    );
+                    for (b, (glyph, dir)) in [("↑", -1i8), ("↓", 1i8)].into_iter().enumerate() {
+                        let br = Rect::from_center_size(Pos2::new(r.max.x - 50.0 + b as f32 * 32.0, r.center().y), Vec2::new(28.0, 28.0));
+                        let enabled = if dir < 0 { pos > 0 } else { pos < last };
+                        let bresp = ui.interact(br, Id::new(("reorder-btn", pos, dir)), egui::Sense::click());
+                        let fill = if bresp.hovered() && enabled { pal.sel } else { pal.bg };
+                        ui.painter().rect_filled(br, 6.0, fill);
+                        ui.painter().text(
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            glyph,
+                            FontId::proportional(14.0),
+                            if enabled { pal.text } else { pal.sub.gamma_multiply(0.4) },
+                        );
+                        if bresp.clicked() && enabled {
+                            click = Some((pos, dir));
+                        }
+                    }
+                }
+            });
+        });
+        match click {
+            Some((pos, 0)) => cursor = pos,
+            Some((pos, -1)) => {
+                if let Some(n) = move_up(&mut files, pos) {
+                    cursor = n;
+                }
+            }
+            Some((pos, _)) => {
+                if let Some(n) = move_down(&mut files, pos) {
+                    cursor = n;
+                }
+            }
+            None => {}
+        }
+        if (&files, cursor) != (&before.0, before.1) {
+            if let Some(View::Reorder { files: f, cursor: c, .. }) = self.stack.last_mut() {
+                *f = files;
+                *c = cursor;
+            }
+            ctx.request_repaint();
+        }
+    }
+
     /// Strip of page thumbnails with keyboard editing; the plan lives in the view on the stack.
     fn draw_pdf_organizer(
         &mut self,
@@ -2844,6 +2986,9 @@ impl App {
             }
             View::PdfOrganize { file, n, plan } => {
                 self.draw_pdf_organizer(ui, rect, pal, &file, n, plan);
+            }
+            View::Reorder { purpose, files, cursor } => {
+                self.draw_reorder(ui, rect, pal, purpose, files, cursor);
             }
             _ => {
                 let trusted = windows::accessibility_trusted(false);

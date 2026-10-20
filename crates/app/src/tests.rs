@@ -1188,3 +1188,137 @@ fn extract_tool_runs_through_run_file_tool_for_several_archives() {
     assert!(!d.join("evil").exists());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+// ---- A8b: reorder window
+
+fn reorder_files(n: usize) -> Vec<std::path::PathBuf> {
+    (0..n).map(|i| std::path::PathBuf::from(format!("/nonexistent/clip {i}.mp4"))).collect()
+}
+
+fn reorder_state(app: &App) -> (Vec<std::path::PathBuf>, usize) {
+    match app.view() {
+        View::Reorder { files, cursor, .. } => (files.clone(), *cursor),
+        other => panic!("reorder view closed unexpectedly: {}", other.title()),
+    }
+}
+
+fn open_reorder(app: &mut App, purpose: ReorderPurpose, files: Vec<std::path::PathBuf>) {
+    app.stack = vec![View::Root, View::Reorder { purpose, files, cursor: 0 }];
+}
+
+#[test]
+fn reorder_job_maps_each_purpose_to_its_tool_and_keeps_the_order() {
+    use ferrocast_core::convert::{FileTool, ImageOp};
+    let f = reorder_files(3);
+    let mut rev = f.clone();
+    rev.reverse();
+    assert_eq!(reorder_job(ReorderPurpose::MergePdf, rev.clone()), ReorderJob::Tool(FileTool::Merge, rev.clone()));
+    assert_eq!(reorder_job(ReorderPurpose::MergeAudio, f.clone()), ReorderJob::Tool(FileTool::Merge, f.clone()));
+    assert_eq!(reorder_job(ReorderPurpose::JoinVideos, rev.clone()), ReorderJob::Tool(FileTool::Join, rev.clone()));
+    assert_eq!(reorder_job(ReorderPurpose::CreatePdf, f.clone()), ReorderJob::Image(ImageOp::CombinePdf, f));
+}
+
+#[test]
+fn reorder_view_renders_for_2_3_and_8_files_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for n in [2, 3, 8] {
+            for purpose in [ReorderPurpose::MergePdf, ReorderPurpose::CreatePdf, ReorderPurpose::JoinVideos, ReorderPurpose::MergeAudio] {
+                open_reorder(&mut app, purpose, reorder_files(n));
+                render(&mut app, vec![]);
+                render(&mut app, vec![]);
+            }
+        }
+        let long = (0..3).map(|i| std::path::PathBuf::from(format!("/nonexistent/{}{i}.pdf", "very long file name ".repeat(12)))).collect();
+        open_reorder(&mut app, ReorderPurpose::MergePdf, long);
+        render(&mut app, vec![]);
+    }
+}
+
+#[test]
+fn reorder_arrow_down_moves_only_the_cursor() {
+    let mut app = fixture();
+    open_reorder(&mut app, ReorderPurpose::JoinVideos, reorder_files(3));
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::ArrowDown)]);
+    assert_eq!(reorder_state(&app), (reorder_files(3), 1));
+    render(&mut app, vec![key_event(Key::ArrowUp)]);
+    assert_eq!(reorder_state(&app).1, 0);
+}
+
+#[test]
+fn reorder_cmd_arrows_move_the_row_and_the_cursor_follows() {
+    let mut app = fixture();
+    let f = reorder_files(3);
+    open_reorder(&mut app, ReorderPurpose::MergePdf, f.clone());
+    render(&mut app, vec![]);
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowDown, CMD)], CMD);
+    let (files, cursor) = reorder_state(&app);
+    assert_eq!(files, vec![f[1].clone(), f[0].clone(), f[2].clone()]);
+    assert_eq!(cursor, 1, "the cursor follows the moved row");
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowUp, CMD)], CMD);
+    assert_eq!(reorder_state(&app), (f.clone(), 0));
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowUp, CMD)], CMD);
+    assert_eq!(reorder_state(&app), (f, 0), "Cmd+Up on the first row does nothing");
+}
+
+#[test]
+fn reorder_escape_goes_back_without_starting_a_job() {
+    let mut app = fixture();
+    open_reorder(&mut app, ReorderPurpose::MergePdf, reorder_files(2));
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err(), "Esc must not start a job");
+}
+
+#[test]
+fn reorder_enter_with_one_file_refuses_with_a_toast() {
+    let mut app = fixture();
+    open_reorder(&mut app, ReorderPurpose::MergePdf, reorder_files(1));
+    render(&mut app, vec![]);
+    app.toast = None;
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(app.toast.is_some(), "one file is refused with a toast");
+    assert!(matches!(app.view(), View::Reorder { .. }), "the view stays");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(app.rx.try_recv().is_err(), "no job started");
+}
+
+#[test]
+fn convert_view_offers_choose_order_only_for_two_or_more_files_of_one_family() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-order-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let purposes = |app: &mut App, names: &[&str]| -> Vec<ReorderPurpose> {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.sections()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .filter(|i| i.title == "Choose order…")
+            .map(|i| match &i.kind {
+                Kind::Editor(Act::ReorderFiles(p, files)) => {
+                    assert!(files.len() >= 2);
+                    *p
+                }
+                _ => panic!("wrong kind"),
+            })
+            .collect()
+    };
+    assert_eq!(purposes(&mut app, &["a.pdf", "b.pdf"]), vec![ReorderPurpose::MergePdf]);
+    assert_eq!(purposes(&mut app, &["a.mp4", "b.mp4"]), vec![ReorderPurpose::JoinVideos]);
+    assert_eq!(purposes(&mut app, &["a.mp3", "b.mp3"]), vec![ReorderPurpose::MergeAudio]);
+    assert_eq!(purposes(&mut app, &["a.png", "b.png"]), vec![ReorderPurpose::CreatePdf]);
+    assert!(purposes(&mut app, &["a.pdf"]).is_empty());
+    assert!(purposes(&mut app, &["a.png", "b.mp4"]).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

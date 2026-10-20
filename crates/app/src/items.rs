@@ -305,6 +305,8 @@ pub enum Act {
     EditPhoto(PathBuf),
     /// Open the annotation canvas for this image.
     AnnotateCanvas(PathBuf),
+    /// Open the reorder window for these files (merge / join / combine in the chosen order).
+    ReorderFiles(crate::app::ReorderPurpose, Vec<PathBuf>),
     /// Open the visual page organizer for this PDF.
     OrganizePdf(PathBuf),
     /// Open the format wheel for these files, driven by the keyboard.

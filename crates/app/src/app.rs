@@ -43,6 +43,32 @@ pub struct RunningTimer {
     pub cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// What the reorder window will do with the files once the order is chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReorderPurpose {
+    MergePdf,
+    CreatePdf,
+    JoinVideos,
+    MergeAudio,
+}
+
+/// The existing job a reorder window runs, with the files in the chosen order.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReorderJob {
+    Tool(ferrocast_core::convert::FileTool, Vec<PathBuf>),
+    Image(ferrocast_core::convert::ImageOp, Vec<PathBuf>),
+}
+
+/// Pure mapping from the window's purpose to the job that Enter starts.
+pub fn reorder_job(purpose: ReorderPurpose, files: Vec<PathBuf>) -> ReorderJob {
+    use ferrocast_core::convert::{FileTool, ImageOp};
+    match purpose {
+        ReorderPurpose::MergePdf | ReorderPurpose::MergeAudio => ReorderJob::Tool(FileTool::Merge, files),
+        ReorderPurpose::JoinVideos => ReorderJob::Tool(FileTool::Join, files),
+        ReorderPurpose::CreatePdf => ReorderJob::Image(ImageOp::CombinePdf, files),
+    }
+}
+
 #[derive(Clone)]
 pub enum View {
     Root,
@@ -139,6 +165,12 @@ pub enum View {
         file: PathBuf,
         n: usize,
         plan: ferrocast_core::pdfplan::PdfPlan,
+    },
+    /// Choose the order of several files before merging / joining / combining them.
+    Reorder {
+        purpose: ReorderPurpose,
+        files: Vec<PathBuf>,
+        cursor: usize,
     },
     Notes,
     Colors(Rgba),
@@ -268,6 +300,7 @@ impl View {
             View::CalcHistory => "Calculator History",
             View::Shelf => "File Shelf",
             View::PdfOrganize { .. } => "Organize PDF",
+            View::Reorder { .. } => "Choose Order",
             View::Annotate { .. } => "Annotate Image",
             View::EditPhoto { .. } => "Edit Photo",
             View::CropImage { .. } => "Crop Image",
@@ -2237,9 +2270,24 @@ impl App {
     /// Editor windows offered for a single file in the Convert view (same windows as the file actions).
     fn editor_section(&self, files: &[PathBuf], q: &str, sub: &str) -> Option<Section> {
         use ferrocast_core::convert::{ext, family_of, Family};
-        let [p] = files else { return None };
-        let p = p.clone();
         let mut list: Vec<(&str, &str, Act)> = vec![];
+        if files.len() >= 2 {
+            let family = family_of(&files[0]);
+            if files.iter().all(|f| family_of(f) == family) {
+                let purpose = match family {
+                    Family::Pdf => Some(ReorderPurpose::MergePdf),
+                    Family::Audio => Some(ReorderPurpose::MergeAudio),
+                    Family::Video => Some(ReorderPurpose::JoinVideos),
+                    Family::Image => Some(ReorderPurpose::CreatePdf),
+                    _ => None,
+                };
+                if let Some(pu) = purpose {
+                    list.push(("Choose order…", "order reorder sort merge join combine", Act::ReorderFiles(pu, files.to_vec())));
+                }
+            }
+        }
+        let [p] = files else { return Self::editor_items(list, self, q, sub) };
+        let p = p.clone();
         match family_of(&p) {
             Family::Video => list.extend([
                 ("Trim Video…", "trim cut frame timeline", Act::TrimVideo(p.clone())),
@@ -2260,9 +2308,13 @@ impl App {
         if ext(&p) == "pdf" {
             list.push(("Organize Pages…", "organize pages rotate reorder remove", Act::OrganizePdf(p.clone())));
         }
+        Self::editor_items(list, self, q, sub)
+    }
+
+    fn editor_items(list: Vec<(&str, &str, Act)>, app: &App, q: &str, sub: &str) -> Option<Section> {
         let items: Vec<Item> = list
             .into_iter()
-            .filter(|(title, kw, _)| self.matches(q, title, kw).is_some())
+            .filter(|(title, kw, _)| app.matches(q, title, kw).is_some())
             .map(|(title, _, act)| Item {
                 id: format!("editor:{title}"),
                 title: title.to_string(),
@@ -3462,6 +3514,14 @@ impl App {
                 }
                 None => self.toast("Annotate: could not read the image"),
             },
+            Act::ReorderFiles(purpose, files) => {
+                let files = ferrocast_core::reorder::finder_order(&files);
+                if files.len() < 2 {
+                    self.toast("Choose order: pick at least two files");
+                } else {
+                    self.push(View::Reorder { purpose, files, cursor: 0 });
+                }
+            }
             Act::OrganizePdf(file) => match ferrocast_macos::pdf::page_count(&file) {
                 Ok(n) if n > 0 => {
                     for i in 0..n {
