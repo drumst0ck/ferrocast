@@ -277,6 +277,8 @@ pub enum Act {
     ClearCalcHistory,
     /// Open the Convert view for these files.
     Convert(Vec<PathBuf>),
+    /// Open the video speed window for this file.
+    SpeedVideo(PathBuf),
     /// Open the video crop window for this file.
     CropVideo(PathBuf),
     /// Open the video trim viewer for this file.

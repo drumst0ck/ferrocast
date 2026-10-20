@@ -112,6 +112,13 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("vspeed") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    let d = crate::media_tools::video_info(ff, &file).map(|(d, _)| d);
+                    app.push(View::VideoSpeed { file, duration: d, factor: 2.0 });
+                }
+            }
             Ok("vcrop") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
@@ -405,7 +412,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. }) && ctx.egui_wants_keyboard_input());
+            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. }) && ctx.egui_wants_keyboard_input());
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -526,6 +533,21 @@ impl App {
                         vec![file],
                         ferrocast_core::convert::FileTool::OrganizePdf(plan.selection()),
                         None,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
+            View::VideoSpeed { file, duration: Some(_), factor } if k.enter => {
+                if (factor - 1.0).abs() < 1e-9 {
+                    self.toast("Nothing to change: pick a speed other than 1×");
+                } else {
+                    self.toast("Changing speed…");
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::Speed(factor),
+                        self.tools.ffmpeg,
                         self.bus.clone(),
                     );
                     self.pop();
@@ -1514,6 +1536,46 @@ impl App {
             None => format!("{nfiles} file{}", if nfiles == 1 { "" } else { "s" }),
         };
         p.text(c, Align2::CENTER_CENTER, hint, FontId::proportional(12.0), pal.text);
+    }
+
+    /// Speed window: presets, a logarithmic slider and the resulting length. Pitch is preserved.
+    fn draw_video_speed(&mut self, ui: &mut Ui, area_in: Rect, pal: &Palette, duration: Option<f64>, factor: f64) {
+        use ferrocast_core::videoplan::{sped_duration, SPEED_MAX, SPEED_MIN};
+        let ctx = ui.ctx().clone();
+        let Some(d) = duration else {
+            ui.painter().text(area_in.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
+            return;
+        };
+        let mut f = factor;
+        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area_in.center(), Vec2::new(520.0, 220.0))), |ui| {
+            ui.spacing_mut().item_spacing.y = 14.0;
+            ui.horizontal(|ui| {
+                for p in [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0] {
+                    if ui.selectable_label((f - p).abs() < 1e-9, format!("{p}×")).clicked() {
+                        f = p;
+                    }
+                }
+            });
+            ui.add(egui::Slider::new(&mut f, SPEED_MIN..=SPEED_MAX).logarithmic(true).suffix("×"));
+            let len = sped_duration(d, f.clamp(SPEED_MIN, SPEED_MAX)).unwrap_or(d);
+            ui.label(RichText::new(format!("{d:.1} s  →  {len:.1} s")).size(22.0).color(pal.text));
+            ui.label(
+                RichText::new("The sound keeps its pitch. A video without sound just plays faster or slower.").size(12.0).color(pal.sub),
+            );
+        });
+        if (f - factor).abs() > 1e-12 {
+            if let Some(View::VideoSpeed { factor: x, .. }) = self.stack.last_mut() {
+                *x = f.clamp(SPEED_MIN, SPEED_MAX);
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "pick a preset or drag the slider · ↵ save a copy at this speed · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
     }
 
     /// Video trim viewer: the frame at the cursor, a timeline with start and end markers, and
@@ -2548,6 +2610,9 @@ impl App {
                         self.save_notes();
                     }
                 });
+            }
+            View::VideoSpeed { duration, factor, .. } => {
+                self.draw_video_speed(ui, rect, pal, duration, factor);
             }
             View::VideoCrop { size: Some(size), rect: crop, aspect, .. } => {
                 self.draw_crop(ui, rect, pal, size, crop, aspect);

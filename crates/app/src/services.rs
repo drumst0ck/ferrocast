@@ -35,6 +35,8 @@ pub enum Msg {
     CollageLoaded(Vec<PathBuf>, Vec<(usize, usize, Vec<u8>)>),
     /// Duration and frame rate of the video being trimmed (None: unreadable).
     VideoInfo(PathBuf, Option<(f64, f64)>),
+    /// Duration of the video whose speed is being set (None: unreadable).
+    VideoDuration(PathBuf, Option<f64>),
     /// Pixel size and a preview frame of the video being cropped (None: unreadable).
     VideoCropReady(PathBuf, Option<((u32, u32), Vec<u8>)>),
     /// Preview frame of the video being trimmed at this time (None: could not extract).

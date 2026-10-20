@@ -66,6 +66,12 @@ pub enum View {
         color: usize,
         sel: Option<usize>,
     },
+    /// Video speed window: file, duration once probed and the chosen factor.
+    VideoSpeed {
+        file: PathBuf,
+        duration: Option<f64>,
+        factor: f64,
+    },
     /// Video crop window: file, pixel size once probed, the rectangle and an optional locked aspect.
     VideoCrop {
         file: PathBuf,
@@ -252,6 +258,7 @@ impl View {
             View::CollageImage { .. } => "Make a Collage",
             View::VideoTrim { .. } => "Trim Video",
             View::VideoCrop { .. } => "Crop Video",
+            View::VideoSpeed { .. } => "Change Video Speed",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -1122,6 +1129,18 @@ impl App {
                                 }
                             }
                             None => self.toast("Crop: could not read the video"),
+                        }
+                    }
+                }
+                Msg::VideoDuration(file, d) => {
+                    if matches!(self.view(), View::VideoSpeed { file: f, .. } if *f == file) {
+                        match d.filter(|d| d.is_finite() && *d > 0.0) {
+                            Some(d) => {
+                                if let Some(View::VideoSpeed { duration, .. }) = self.stack.last_mut() {
+                                    *duration = Some(d);
+                                }
+                            }
+                            None => self.toast("Speed: could not read the video"),
                         }
                     }
                 }
@@ -2199,6 +2218,7 @@ impl App {
                 if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Video {
                     a.push(Action::new("Trim Video…", Act::TrimVideo(p.clone())).key(CMD_SHIFT, Key::V));
                     a.push(Action::new("Crop Video…", Act::CropVideo(p.clone())).key(CMD_SHIFT, Key::J));
+                    a.push(Action::new("Change Speed…", Act::SpeedVideo(p.clone())).key(CMD_SHIFT, Key::L));
                 }
                 if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Image {
                     a.push(Action::new("Annotate…", Act::AnnotateCanvas(p.clone())).key(CMD_SHIFT, Key::A));
@@ -3087,6 +3107,18 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::SpeedVideo(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || {
+                        let d = crate::media_tools::video_info(ff, &f).map(|(d, _)| d);
+                        bus.send(Msg::VideoDuration(f, d));
+                    });
+                    self.show();
+                    self.push(View::VideoSpeed { file, duration: None, factor: 2.0 });
+                }
+            },
             Act::CropVideo(file) => match self.tools.ffmpeg {
                 None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
                 Some(ff) => {

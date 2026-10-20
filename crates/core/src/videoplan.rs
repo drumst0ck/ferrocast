@@ -87,6 +87,16 @@ impl Trim {
     }
 }
 
+/// Playback speeds the speed window offers (the tool accepts 0.25..=4).
+pub const SPEED_MIN: f64 = 0.25;
+pub const SPEED_MAX: f64 = 4.0;
+
+/// Length of a clip of `duration` seconds played at `factor`x; `None` for a factor outside the
+/// supported range or a duration that is not a number.
+pub fn sped_duration(duration: f64, factor: f64) -> Option<f64> {
+    (duration.is_finite() && duration > 0.0 && factor.is_finite() && (SPEED_MIN..=SPEED_MAX).contains(&factor)).then(|| duration / factor)
+}
+
 /// Frame rate from ffprobe's `r_frame_rate` text such as `30000/1001` or `25`.
 pub fn parse_rate(s: &str) -> Option<f64> {
     let s = s.trim();
@@ -175,6 +185,16 @@ mod tests {
         assert_eq!(v.label(65.2), "1:05.05");
         assert_eq!(v.label(3.999), "0:04.00", "rounding up to a whole second carries");
         assert_eq!(v.label(-2.0), "0:00.00");
+    }
+
+    #[test]
+    fn speed_changes_the_length() {
+        assert_eq!(sped_duration(10.0, 2.0), Some(5.0));
+        assert_eq!(sped_duration(10.0, 0.5), Some(20.0));
+        assert_eq!(sped_duration(10.0, 1.0), Some(10.0));
+        for (d, f) in [(10.0, 0.1), (10.0, 4.5), (10.0, f64::NAN), (-1.0, 2.0), (f64::INFINITY, 2.0), (0.0, 1.0)] {
+            assert_eq!(sped_duration(d, f), None, "{d} {f}");
+        }
     }
 
     #[test]

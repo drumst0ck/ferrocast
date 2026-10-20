@@ -363,6 +363,17 @@ fn pdf_organizer_view_renders_and_enter_without_edits_changes_nothing() {
 }
 
 #[test]
+fn video_speed_view_renders_while_probing_and_after() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-vspeed-{}.mp4", std::process::id()));
+    app.stack = vec![View::Root, View::VideoSpeed { file: f.clone(), duration: None, factor: 2.0 }];
+    render(&mut app, vec![]);
+    app.stack = vec![View::Root, View::VideoSpeed { file: f, duration: Some(8.0), factor: 0.5 }];
+    render(&mut app, vec![]);
+    assert!(matches!(app.view(), View::VideoSpeed { duration: Some(_), .. }));
+}
+
+#[test]
 fn video_crop_view_renders_while_probing_and_after() {
     let mut app = fixture();
     let f = std::env::temp_dir().join(format!("fc-vcrop-{}.mp4", std::process::id()));
