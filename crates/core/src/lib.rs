@@ -39,5 +39,6 @@ pub mod timezones;
 pub mod tools;
 pub mod units;
 pub mod videoplan;
+pub mod waveform;
 pub mod wheel;
 pub mod xlsx;
