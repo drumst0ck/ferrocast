@@ -49,6 +49,36 @@ fn streams(info: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value>
     info["streams"].as_array().into_iter().flatten()
 }
 
+/// Duration (s) and frame rate of a video, from ffprobe under its own deadline.
+pub(crate) fn video_info(ff: &str, file: &Path) -> Option<(f64, f64)> {
+    let info = probe(ff, file).ok()?;
+    let duration = info["format"]["duration"].as_str().and_then(|d| d.parse::<f64>().ok())?;
+    let rate =
+        streams(&info).find(|s| s["codec_type"] == "video")?["r_frame_rate"].as_str().and_then(ferrocast_core::videoplan::parse_rate)?;
+    Some((duration, rate))
+}
+
+/// PNG of the frame at `t` seconds, at most 800 px wide, or None (bounded to 20 s).
+pub(crate) fn preview_frame(ff: &str, file: &Path, t: f64) -> Option<Vec<u8>> {
+    if !t.is_finite() || t < 0.0 {
+        return None;
+    }
+    let dir = std::env::temp_dir().join(format!("ferrocast-vframe-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&dir).ok()?;
+    let out = dir.join("f.png");
+    let ran = crate::route::run_limited(
+        Command::new(ff)
+            .args(["-nostdin", "-y", "-loglevel", "error", "-ss", &t.to_string(), "-i"])
+            .arg(file)
+            .args(["-frames:v", "1", "-vf", "scale='min(800,iw)':-2"])
+            .arg(&out),
+        20,
+    );
+    let bytes = ran.ok().and_then(|_| std::fs::read(&out).ok()).filter(|b| !b.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+    bytes
+}
+
 /// Parse the integrated loudness (LUFS) from the summary ffmpeg's `ebur128` filter prints last.
 pub(crate) fn parse_integrated(stderr: &str) -> Option<f64> {
     let summary = stderr.rsplit("Integrated loudness:").next().filter(|_| stderr.contains("Integrated loudness:"))?;

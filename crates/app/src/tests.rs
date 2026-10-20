@@ -363,6 +363,19 @@ fn pdf_organizer_view_renders_and_enter_without_edits_changes_nothing() {
 }
 
 #[test]
+fn video_trim_view_renders_while_probing_and_after() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-vtrim-{}.mp4", std::process::id()));
+    app.stack = vec![View::Root, View::VideoTrim { file: f.clone(), trim: None }];
+    render(&mut app, vec![]);
+    let t = ferrocast_core::videoplan::Trim::new(12.0, 25.0);
+    assert!(t.is_some());
+    app.stack = vec![View::Root, View::VideoTrim { file: f, trim: t }];
+    render(&mut app, vec![]);
+    assert!(matches!(app.view(), View::VideoTrim { trim: Some(_), .. }));
+}
+
+#[test]
 fn collage_view_renders_and_needs_two_images() {
     let mut app = fixture();
     let a = std::env::temp_dir().join(format!("fc-collview-a-{}.png", std::process::id()));

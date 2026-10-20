@@ -33,6 +33,10 @@ pub enum Msg {
     FrameLoaded(PathBuf, Option<Vec<u8>>),
     /// Small decoded copies (w, h, RGBA) of the pictures of a collage being edited.
     CollageLoaded(Vec<PathBuf>, Vec<(usize, usize, Vec<u8>)>),
+    /// Duration and frame rate of the video being trimmed (None: unreadable).
+    VideoInfo(PathBuf, Option<(f64, f64)>),
+    /// Preview frame of the video being trimmed at this time (None: could not extract).
+    VideoFrame(PathBuf, f64, Option<Vec<u8>>),
     /// A picture chosen to stamp onto the image being annotated: where, and its RGBA pixels.
     StampChosen(PathBuf, (f32, f32), Option<(usize, usize, Vec<u8>)>),
     Script {
