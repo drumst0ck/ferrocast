@@ -69,6 +69,41 @@ pub fn split_job(duration: f64, points: &[f64], parts: usize) -> Result<ferrocas
     Ok(ferrocast_core::convert::FileTool::SplitPoints(ranges, true))
 }
 
+/// Pure mapping from the Compress window's fields to the goal and resize, or the reason it cannot run.
+/// `mode`: 0 size in KB (10..=100000), 1 percent smaller (1..=95), 2 preset (0 light, 1 balanced, 2 strong).
+pub fn compress_goal(
+    mode: usize,
+    kb: u32,
+    percent: u8,
+    preset: usize,
+    max_edge: Option<u32>,
+    resize: bool,
+) -> Result<(ferrocast_core::compress::Goal, ferrocast_core::compress::Resize), String> {
+    use ferrocast_core::compress::{Goal, Preset, Resize};
+    let goal = match mode {
+        0 if (10..=100_000).contains(&kb) => Goal::TargetBytes(kb as u64 * 1024),
+        0 => return Err("Compress: the target size must be between 10 and 100000 KB".into()),
+        1 if (1..=95).contains(&percent) => Goal::Percent(percent),
+        1 => return Err("Compress: the reduction must be between 1 and 95 %".into()),
+        2 => Goal::Preset(match preset {
+            0 => Preset::Light,
+            1 => Preset::Balanced,
+            2 => Preset::Strong,
+            _ => return Err("Compress: choose a preset".into()),
+        }),
+        _ => return Err("Compress: choose a goal".into()),
+    };
+    let mut r = Resize::default();
+    if resize {
+        let e = max_edge.unwrap_or(1600);
+        if !(64..=16_000).contains(&e) {
+            return Err("Compress: the longest edge must be between 64 and 16000 px".into());
+        }
+        r.max_edge = Some(e);
+    }
+    Ok((goal, r))
+}
+
 /// Pure mapping from the window's purpose to the job that Enter starts.
 pub fn reorder_job(purpose: ReorderPurpose, files: Vec<PathBuf>) -> ReorderJob {
     use ferrocast_core::convert::{FileTool, ImageOp};
@@ -171,6 +206,19 @@ pub enum View {
         size: (u32, u32),
         rect: ferrocast_core::croprect::Rect,
         aspect: Option<(u32, u32)>,
+    },
+    /// Compress window for images: size of the first file in bytes and pixels (probed off the UI
+    /// thread), the goal (mode 0 size in KB, 1 percent smaller, 2 preset) and the optional resize.
+    CompressImage {
+        files: Vec<PathBuf>,
+        orig_bytes: u64,
+        size: Option<(u32, u32)>,
+        mode: usize,
+        kb: u32,
+        percent: u8,
+        preset: usize,
+        max_edge: Option<u32>,
+        resize: bool,
     },
     /// Live-preview photo editor: original file, its pixel size and the control values.
     EditPhoto {
@@ -322,6 +370,7 @@ impl View {
             View::Annotate { .. } => "Annotate Image",
             View::EditPhoto { .. } => "Edit Photo",
             View::CropImage { .. } => "Crop Image",
+            View::CompressImage { .. } => "Compress Images",
             View::RedactImage { .. } => "Redact Image",
             View::FrameImage { .. } => "Add Background",
             View::CollageImage { .. } => "Make a Collage",
@@ -1316,6 +1365,13 @@ impl App {
                         }
                     }
                 }
+                Msg::CompressProbed(file, size) => {
+                    if let Some(View::CompressImage { files, size: s, .. }) = self.stack.last_mut() {
+                        if files.first() == Some(&file) {
+                            *s = size;
+                        }
+                    }
+                }
                 Msg::CropLoaded(file, png) => {
                     if matches!(self.view(), View::CropImage { file: f, .. } if *f == file) {
                         match png.as_deref().and_then(services::decode_png) {
@@ -2085,7 +2141,9 @@ impl App {
                                             ImageOp::Redact(_) => "redact hide blur privacy face text",
                                             ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
                                             ImageOp::Annotate => "annotate markup draw arrow text preview",
-                                            ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compress size smaller",
+                                            ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) | ImageOp::CompressWith(..) => {
+                                                "compress size smaller"
+                                            }
                                             ImageOp::CropExact(..) | ImageOp::CropRect(..) => "crop exact dimensions pixels",
                                             ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
                                         },
@@ -2113,7 +2171,9 @@ impl App {
                                     ImageOp::Redact(_) => "sf:eye.slash.fill",
                                     ImageOp::Adjust(_) => "sf:slider.horizontal.3",
                                     ImageOp::Annotate => "sf:pencil.tip.crop.circle",
-                                    ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
+                                    ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) | ImageOp::CompressWith(..) => {
+                                        "sf:arrow.down.right.and.arrow.up.left"
+                                    }
                                     ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
                                     ImageOp::SetMeta(_) => "sf:tag",
                                 },
@@ -2311,6 +2371,9 @@ impl App {
                 }
             }
         }
+        if files.len() >= 2 && files.iter().all(|f| family_of(f) == Family::Image) {
+            list.push(("Compress…", "compress smaller size resize reduce", Act::CompressImages(files.to_vec())));
+        }
         let [p] = files else { return Self::editor_items(list, self, q, sub) };
         let p = p.clone();
         match family_of(&p) {
@@ -2323,6 +2386,7 @@ impl App {
                 ("Redact Video…", "redact hide blur privacy area", Act::RedactVideo(p.clone())),
             ]),
             Family::Image => list.extend([
+                ("Compress…", "compress smaller size resize reduce", Act::CompressImages(vec![p.clone()])),
                 ("Annotate…", "annotate markup draw arrow text", Act::AnnotateCanvas(p.clone())),
                 ("Edit Photo…", "edit photo brightness contrast", Act::EditPhoto(p.clone())),
                 ("Crop…", "crop aspect exact", Act::CropImage(p.clone())),
@@ -3493,6 +3557,28 @@ impl App {
                 }
                 None => self.toast("Redact: could not read the image"),
             },
+            Act::CompressImages(files) => {
+                if files.is_empty() {
+                    self.toast("Compress: no images selected");
+                } else {
+                    // only std::fs::metadata here; the pixel size is probed on a worker thread
+                    let orig_bytes = std::fs::metadata(&files[0]).map(|m| m.len()).unwrap_or(0);
+                    let (bus, f) = (self.bus.clone(), files[0].clone());
+                    std::thread::spawn(move || bus.send(Msg::CompressProbed(f.clone(), services::image_size(&f))));
+                    self.show();
+                    self.push(View::CompressImage {
+                        files,
+                        orig_bytes,
+                        size: None,
+                        mode: 0,
+                        kb: 500,
+                        percent: 40,
+                        preset: 1,
+                        max_edge: None,
+                        resize: false,
+                    });
+                }
+            }
             Act::CropImage(file) => match services::image_size(&file) {
                 Some(size) => {
                     self.ctx.data_mut(|d| {
@@ -3829,7 +3915,7 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (OrganizePdf, Some(p)) => ToolReach::Act(Act::OrganizePdf(p)),
         (CreateCollage, _) if files.len() >= 2 => ToolReach::Act(Act::CollageImages(files.to_vec())),
         (CropImage, None) if images => ToolReach::Image(ImageOp::Crop(1, 1)),
-        (Compress, _) if images => ToolReach::Image(ImageOp::Compress(60)),
+        (Compress, _) if images => ToolReach::Act(Act::CompressImages(files.to_vec())),
         (RemoveMetadata, _) if images => ToolReach::Image(ImageOp::StripMetadata),
         (CreatePdf, _) if images => ToolReach::Image(ImageOp::CombinePdf),
         (MuteVideo, _) => ToolReach::File(FileTool::Mute),

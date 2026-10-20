@@ -972,7 +972,7 @@ fn tool_reach_maps_tools_to_windows_and_presets() {
     let p = std::path::PathBuf::from("/nonexistent/a.png");
     assert!(matches!(tool_reach(ToolId::AnnotateImage, std::slice::from_ref(&p)), ToolReach::Act(Act::AnnotateCanvas(_))));
     assert!(matches!(tool_reach(ToolId::EditImage, std::slice::from_ref(&p)), ToolReach::Act(Act::EditPhoto(_))));
-    assert!(matches!(tool_reach(ToolId::Compress, std::slice::from_ref(&p)), ToolReach::Image(ImageOp::Compress(60))));
+    assert!(matches!(tool_reach(ToolId::Compress, std::slice::from_ref(&p)), ToolReach::Act(Act::CompressImages(_))));
     assert!(matches!(tool_reach(ToolId::RemoveMetadata, std::slice::from_ref(&p)), ToolReach::Image(ImageOp::StripMetadata)));
     let two = vec![p.clone(), std::path::PathBuf::from("/nonexistent/b.png")];
     assert!(matches!(tool_reach(ToolId::CropImage, &two), ToolReach::Image(ImageOp::Crop(1, 1))));
@@ -1490,4 +1490,187 @@ fn tool_reach_split_video_opens_the_window_for_one_file_and_keeps_the_preset_for
     assert!(matches!(tool_reach(ToolId::SplitVideo, std::slice::from_ref(&a)), ToolReach::Act(Act::SplitVideo(_))));
     assert!(matches!(tool_reach(ToolId::SplitVideo, &[a, b]), ToolReach::File(FileTool::SplitEvery(60))));
     assert_eq!(implemented(ToolId::SplitVideo), Impl::Window);
+}
+
+// ---- A6b: image Compress window
+
+fn compress_view(files: Vec<std::path::PathBuf>, size: Option<(u32, u32)>, mode: usize, kb: u32) -> View {
+    View::CompressImage { files, orig_bytes: 2_000_000, size, mode, kb, percent: 40, preset: 1, max_edge: None, resize: false }
+}
+
+fn compress_app(mode: usize, kb: u32) -> App {
+    let mut app = fixture();
+    let f = std::path::PathBuf::from(format!("/nonexistent/fc-compress-{}.png", uuid::Uuid::new_v4()));
+    app.stack = vec![View::Root, compress_view(vec![f], Some((4000, 3000)), mode, kb)];
+    render(&mut app, vec![]);
+    app
+}
+
+#[test]
+fn compress_view_renders_in_both_themes_with_and_without_size() {
+    let mut app = fixture();
+    let f = vec![std::path::PathBuf::from("/nonexistent/a.png")];
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for size in [None, Some((4000, 3000))] {
+            for mode in 0..3 {
+                app.stack = vec![View::Root, compress_view(f.clone(), size, mode, 500)];
+                render(&mut app, vec![]);
+                render(&mut app, vec![]);
+                assert_eq!(app.view().title(), "Compress Images");
+            }
+        }
+    }
+    // no files at all still draws
+    app.stack = vec![View::Root, compress_view(vec![], None, 0, 500)];
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn compress_escape_goes_back_without_a_job() {
+    let mut app = compress_app(0, 500);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "Escape goes back");
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn compress_enter_with_invalid_input_starts_nothing_and_stays() {
+    // KB 0
+    let mut app = compress_app(0, 0);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }), "an invalid goal keeps the window open");
+    assert!(app.rx.try_recv().is_err(), "no job may start for KB 0");
+    assert!(app.toast.is_some(), "the refusal is explained");
+    // no files
+    let mut app = fixture();
+    app.stack = vec![View::Root, compress_view(vec![], None, 0, 500)];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }));
+    assert!(app.rx.try_recv().is_err());
+    assert!(app.toast.is_some());
+}
+
+#[test]
+fn compress_enter_with_a_valid_goal_starts_the_job_and_goes_back() {
+    let mut app = compress_app(0, 500);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root));
+    // the job runs on a worker and reports through the bus (the file does not exist: a failure toast)
+    let msg = app.rx.recv_timeout(std::time::Duration::from_secs(20)).expect("the job reports");
+    assert!(matches!(msg, Msg::Toast(t) if t.contains("Compress")));
+}
+
+/// Click the KB box of the compress window (position taken from the layout; guarded by an assertion).
+fn click_compress_kb_box(app: &mut App) {
+    let pos = Pos2::new(COMPRESS_KB_BOX.0, COMPRESS_KB_BOX.1);
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(app, vec![Event::PointerMoved(pos)]);
+    render(app, vec![btn(true)]);
+    render(app, vec![btn(false)]);
+    render(app, vec![]);
+}
+
+// centre of the KB box in points (found by probing the layout; breaks if the controls move)
+const COMPRESS_KB_BOX: (f32, f32) = (210.0, 156.0);
+
+// L74 style: Escape while the number box is edited ends the edit but keeps the window.
+#[test]
+fn compress_number_box_keeps_escape_and_enter_while_editing() {
+    let mut app = compress_app(0, 500);
+    click_compress_kb_box(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the KB box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+    let mut app = compress_app(0, 500);
+    click_compress_kb_box(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }), "Enter confirms the number, it must not start the job");
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn convert_view_offers_compress_for_one_or_more_images_only() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-compress-entry-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let rows = |app: &mut App, names: &[&str]| -> Vec<Vec<std::path::PathBuf>> {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.sections()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .filter(|i| i.title == "Compress…")
+            .map(|i| match &i.kind {
+                Kind::Editor(Act::CompressImages(f)) => f.clone(),
+                _ => panic!("wrong kind"),
+            })
+            .collect()
+    };
+    assert_eq!(rows(&mut app, &["a.png"]).len(), 1);
+    assert_eq!(rows(&mut app, &["a.png", "b.png"])[0].len(), 2);
+    assert!(rows(&mut app, &["a.txt"]).is_empty());
+    assert!(rows(&mut app, &["a.mp4"]).is_empty());
+    assert!(rows(&mut app, &["a.png", "b.mp4"]).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_compress_opens_the_window_for_images_and_keeps_other_mappings() {
+    use ferrocast_core::tools::ToolId;
+    let imgs = |n: &[&str]| n.iter().map(std::path::PathBuf::from).collect::<Vec<_>>();
+    match tool_reach(ToolId::Compress, &imgs(&["/x/a.png"])) {
+        ToolReach::Act(Act::CompressImages(f)) => assert_eq!(f.len(), 1),
+        _ => panic!("one image opens the window"),
+    }
+    match tool_reach(ToolId::Compress, &imgs(&["/x/a.png", "/x/b.jpg"])) {
+        ToolReach::Act(Act::CompressImages(f)) => assert_eq!(f.len(), 2),
+        _ => panic!("several images open the window"),
+    }
+    assert!(!matches!(tool_reach(ToolId::Compress, &imgs(&["/x/a.mp4"])), ToolReach::Act(Act::CompressImages(_))));
+    assert!(!matches!(tool_reach(ToolId::Compress, &imgs(&["/x/a.pdf"])), ToolReach::Act(Act::CompressImages(_))));
+}
+
+#[test]
+fn compress_goal_maps_fields_and_rejects_out_of_range() {
+    use ferrocast_core::compress::{Goal, Preset};
+    assert_eq!(compress_goal(0, 500, 40, 1, None, false).unwrap().0, Goal::TargetBytes(500 * 1024));
+    assert_eq!(compress_goal(1, 500, 40, 1, None, false).unwrap().0, Goal::Percent(40));
+    assert_eq!(compress_goal(2, 0, 0, 2, None, false).unwrap().0, Goal::Preset(Preset::Strong));
+    assert_eq!(compress_goal(2, 0, 0, 0, Some(800), true).unwrap().1.max_edge, Some(800));
+    assert_eq!(compress_goal(2, 0, 0, 0, Some(800), false).unwrap().1.max_edge, None);
+    assert_eq!(compress_goal(2, 0, 0, 0, None, true).unwrap().1.max_edge, Some(1600));
+    assert!(compress_goal(0, 0, 40, 1, None, false).is_err());
+    assert!(compress_goal(0, 100_001, 40, 1, None, false).is_err());
+    assert!(compress_goal(1, 500, 0, 1, None, false).is_err());
+    assert!(compress_goal(1, 500, 96, 1, None, false).is_err());
+    assert!(compress_goal(2, 0, 0, 3, None, false).is_err());
+    assert!(compress_goal(2, 0, 0, 0, Some(63), true).is_err());
+    assert!(compress_goal(3, 500, 40, 1, None, false).is_err());
+}
+
+#[test]
+fn compress_with_labels() {
+    use ferrocast_core::compress::{Goal, Preset, Resize};
+    use ferrocast_core::convert::ImageOp;
+    let none = Resize::default();
+    assert_eq!(ImageOp::CompressWith(Goal::TargetBytes(500 * 1024), none).label(), "Compress · 500 KB");
+    assert_eq!(ImageOp::CompressWith(Goal::Percent(40), none).label(), "Compress · 40 % smaller");
+    assert_eq!(
+        ImageOp::CompressWith(Goal::Preset(Preset::Balanced), Resize { max_edge: Some(1600), percent: None }).label(),
+        "Compress · balanced · max 1600 px"
+    );
+    assert_eq!(ImageOp::CompressWith(Goal::Percent(40), none).suffix(), "compressed");
 }

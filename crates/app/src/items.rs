@@ -303,6 +303,8 @@ pub enum Act {
     RedactImage(PathBuf),
     /// Open the crop editor for this image.
     CropImage(PathBuf),
+    /// Open the Compress window for these images.
+    CompressImages(Vec<PathBuf>),
     /// Open the live-preview photo editor for this image.
     EditPhoto(PathBuf),
     /// Open the annotation canvas for this image.

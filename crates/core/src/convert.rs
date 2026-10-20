@@ -598,6 +598,8 @@ pub enum ImageOp {
     CompressToKb(u32),
     /// Re-encode as JPEG so the file is this percent smaller than the original.
     CompressByPercent(u8),
+    /// Compress window: optional resize first, then a size target, percentage or preset (JPEG).
+    CompressWith(crate::compress::Goal, crate::compress::Resize),
     /// Centre crop to exactly this many pixels (clamped to the image).
     CropExact(u32, u32),
     /// Crop to this rectangle: x, y, width, height in pixels.
@@ -657,6 +659,23 @@ impl ImageOp {
             ImageOp::Annotate => "Annotate in Preview".into(),
             ImageOp::CompressToKb(kb) => format!("Compress · under {}", format_kb(*kb)),
             ImageOp::CompressByPercent(p) => format!("Compress · {p}% smaller"),
+            ImageOp::CompressWith(goal, r) => {
+                use crate::compress::{Goal, Preset};
+                let mut l = match goal {
+                    Goal::TargetBytes(b) => format!("Compress · {}", format_kb((*b / 1024).clamp(1, u32::MAX as u64) as u32)),
+                    Goal::Percent(p) => format!("Compress · {} % smaller", crate::compress::clamp_percent(*p)),
+                    Goal::Preset(Preset::Light) => "Compress · light".into(),
+                    Goal::Preset(Preset::Balanced) => "Compress · balanced".into(),
+                    Goal::Preset(Preset::Strong) => "Compress · strong".into(),
+                };
+                if let Some(e) = r.max_edge {
+                    l.push_str(&format!(" · max {e} px"));
+                }
+                if let Some(p) = r.percent {
+                    l.push_str(&format!(" · {p} % size"));
+                }
+                l
+            }
             ImageOp::CropExact(w, h) => format!("Crop · exactly {w}×{h} px"),
             ImageOp::CropRect(_, _, w, h) => format!("Crop · {w}×{h} px"),
             ImageOp::SetMeta(m) => {
@@ -692,7 +711,7 @@ impl ImageOp {
             ImageOp::Redact(_) => "redacted".into(),
             ImageOp::Adjust(_) => "edited".into(),
             ImageOp::Annotate => "annotated".into(),
-            ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compressed".into(),
+            ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) | ImageOp::CompressWith(..) => "compressed".into(),
             ImageOp::CropExact(w, h) => format!("{w}x{h}"),
             ImageOp::CropRect(_, _, w, h) => format!("{w}x{h}"),
             ImageOp::SetMeta(_) => "tagged".into(),

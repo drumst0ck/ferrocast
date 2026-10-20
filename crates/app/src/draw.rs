@@ -112,6 +112,28 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("compress") => {
+                let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
+                    .unwrap_or_default()
+                    .split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .filter(|p| p.exists())
+                    .collect();
+                let orig_bytes = files.first().and_then(|f| std::fs::metadata(f).ok()).map(|m| m.len()).unwrap_or(0);
+                let size = files.first().and_then(|f| services::image_size(f));
+                app.push(View::CompressImage {
+                    files,
+                    orig_bytes,
+                    size,
+                    mode: 0,
+                    kb: 500,
+                    percent: 40,
+                    preset: 1,
+                    max_edge: None,
+                    resize: false,
+                });
+            }
             Ok("vspeed") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
@@ -473,7 +495,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. }) && kbd_edit);
+            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -586,6 +608,19 @@ impl App {
             return true;
         }
         match self.view().clone() {
+            View::CompressImage { files, mode, kb, percent, preset, max_edge, resize, .. } if k.enter => {
+                match compress_goal(mode, kb, percent, preset, max_edge, resize) {
+                    _ if files.is_empty() => self.toast("Compress: no images selected"),
+                    Err(e) => self.toast(e),
+                    Ok((goal, r)) => {
+                        let op = ferrocast_core::convert::ImageOp::CompressWith(goal, r);
+                        self.toast(format!("{}…", op.label()));
+                        services::image_op_files(files, op, self.bus.clone());
+                        self.pop();
+                    }
+                }
+                true
+            }
             View::Reorder { purpose, files, .. } if k.enter => {
                 if files.len() < 2 {
                     self.toast("Choose order: at least two files are needed");
@@ -1741,6 +1776,95 @@ impl App {
             );
         }
     }
+    /// Compress window: goal (size, percent or preset), optional resize and a rough size estimate.
+    /// `state` is (mode, kb, percent, preset, max edge, resize).
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn draw_compress(
+        &mut self,
+        ui: &mut Ui,
+        area_in: Rect,
+        pal: &Palette,
+        files: &[PathBuf],
+        orig_bytes: u64,
+        size: Option<(u32, u32)>,
+        state: (usize, u32, u8, usize, Option<u32>, bool),
+    ) {
+        use ferrocast_core::compress::estimate_bytes;
+        let ctx = ui.ctx().clone();
+        let (mut mode, mut kb, mut percent, mut preset, max_edge, mut resize) = state;
+        let mut edge = max_edge.unwrap_or(1600);
+        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area_in.center(), Vec2::new(520.0, 300.0))), |ui| {
+            ui.spacing_mut().item_spacing.y = 12.0;
+            let first = files.first().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let dims = size.map(|(w, h)| format!(" · {w}×{h} px")).unwrap_or_else(|| " · reading size…".into());
+            let more = if files.len() > 1 { format!(" and {} more", files.len() - 1) } else { String::new() };
+            ui.label(RichText::new(format!("{first}{more}{dims}")).size(12.5).color(pal.sub));
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut mode, 0, "Size");
+                ui.selectable_value(&mut mode, 1, "Percent");
+                ui.selectable_value(&mut mode, 2, "Preset");
+            });
+            ui.horizontal(|ui| match mode {
+                0 => {
+                    ui.label("Target size");
+                    ui.add(egui::DragValue::new(&mut kb).range(10..=100_000).clamp_existing_to_range(false).speed(10.0).suffix(" KB"));
+                }
+                1 => {
+                    ui.label("Make it");
+                    ui.add(egui::DragValue::new(&mut percent).range(1..=95).clamp_existing_to_range(false).speed(0.5).suffix(" % smaller"));
+                }
+                _ => {
+                    for (i, n) in ["Light", "Balanced", "Strong"].into_iter().enumerate() {
+                        ui.selectable_value(&mut preset, i, n);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut resize, "Resize while compressing");
+                ui.add_enabled(
+                    resize,
+                    egui::DragValue::new(&mut edge)
+                        .range(64..=16_000)
+                        .clamp_existing_to_range(false)
+                        .speed(10.0)
+                        .prefix("longest edge ")
+                        .suffix(" px"),
+                );
+            });
+            let line = match compress_goal(mode, kb, percent, preset, Some(edge), resize) {
+                Ok((goal, _)) if orig_bytes > 0 => {
+                    let est = estimate_bytes(orig_bytes, goal);
+                    let kbs = |b: u64| b.div_ceil(1024);
+                    let share = est * 100 / orig_bytes;
+                    let note = if resize { " · resizing may make it smaller" } else { "" };
+                    format!("≈ about {} KB ({share} % of {} KB) · rough estimate, not measured{note}", kbs(est), kbs(orig_bytes))
+                }
+                Ok(_) => "Size of the original unknown".to_string(),
+                Err(_) => "Enter a value in range to see an estimate".to_string(),
+            };
+            ui.label(RichText::new(line).size(18.0).color(pal.text));
+            ui.label(RichText::new("The copy is a JPEG next to the original; the original is never changed.").size(12.0).color(pal.sub));
+        });
+        let edge_changed = edge != max_edge.unwrap_or(1600);
+        if (mode, kb, percent, preset, resize) != (state.0, state.1, state.2, state.3, state.5) || edge_changed {
+            if let Some(View::CompressImage { mode: m, kb: k, percent: p, preset: pr, max_edge: e, resize: r, .. }) = self.stack.last_mut()
+            {
+                (*m, *k, *p, *pr, *r) = (mode, kb, percent, preset, resize);
+                if edge_changed {
+                    *e = Some(edge);
+                }
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "pick a goal · ↵ save compressed copies · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
     /// Speed window: presets, a logarithmic slider and the resulting length. Pitch is preserved.
     fn draw_video_speed(&mut self, ui: &mut Ui, area_in: Rect, pal: &Palette, duration: Option<f64>, factor: f64) {
         use ferrocast_core::videoplan::{sped_duration, SPEED_MAX, SPEED_MIN};
@@ -3053,6 +3177,9 @@ impl App {
             }
             View::CropImage { size, rect: crop, aspect, .. } => {
                 self.draw_crop(ui, rect, pal, size, crop, aspect);
+            }
+            View::CompressImage { files, orig_bytes, size, mode, kb, percent, preset, max_edge, resize } => {
+                self.draw_compress(ui, rect, pal, &files, orig_bytes, size, (mode, kb, percent, preset, max_edge, resize));
             }
             View::EditPhoto { size, opts, .. } => {
                 self.draw_edit_photo(ui, rect, pal, size, opts);
