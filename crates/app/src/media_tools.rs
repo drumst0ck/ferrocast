@@ -109,6 +109,7 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
             let video = matches!(
                 tool,
                 FileTool::Mute
+                    | FileTool::TrimExact(..)
                     | FileTool::Speed(_)
                     | FileTool::Snapshot(_)
                     | FileTool::CropVideo(..)
@@ -141,6 +142,7 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
                 let finite_range = |a: f64, b: f64| a.is_finite() && b.is_finite() && a >= 0.0 && b > a;
                 let args = match *tool {
                     FileTool::Mute => media::mute(input, out),
+                    FileTool::TrimExact(a, b) if finite_range(a, b) => media::trim(input, a, b, true, out),
                     FileTool::Speed(f) if f.is_finite() && (0.25..=4.0).contains(&f) => media::speed(input, f, has_audio, out),
                     FileTool::Snapshot(t) if t.is_finite() && t >= 0.0 => media::snapshot(input, t, out),
                     FileTool::CropVideo(x, y, w, h)

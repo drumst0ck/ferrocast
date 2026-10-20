@@ -47,6 +47,7 @@ fn media_tools_real_files() {
     let original_audio = std::fs::read(&audio).unwrap();
     let cases = [
         (&video, FileTool::Mute),
+        (&video, FileTool::TrimExact(0.5, 1.5)),
         (&video, FileTool::Speed(2.0)),
         (&video, FileTool::Snapshot(0.5)),
         (&video, FileTool::CropVideo(0, 0, 80, 60)),
@@ -78,6 +79,17 @@ fn media_tools_real_files() {
     assert!((after - -16.0).abs() < 2.0, "normalized to about -16 LUFS, got {after} (was {before})");
     let rep = crate::media_tools::normalize_report(ff, &audio, &norm[0]).expect("report");
     assert!(rep.contains("LUFS") && rep.contains('→'), "{rep}");
+    // exact trim: the written clip lasts the requested second (re-encoded, so not keyframe-bound)
+    let (tx, e) = run_file_tool(std::slice::from_ref(&video), &FileTool::TrimExact(0.55, 1.45), Some(ff));
+    assert!(e.is_empty(), "{e:?}");
+    let probe = Path::new(ff).with_file_name("ffprobe");
+    let out = Command::new(probe)
+        .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"])
+        .arg(&tx[0])
+        .output()
+        .unwrap();
+    let dur: f64 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+    assert!((dur - 0.9).abs() < 0.15, "exact trim lasts about 0.9 s, got {dur}");
     let (joined, errors) = run_file_tool(&[video.clone(), video.clone()], &FileTool::Join, Some(ff));
     assert!(errors.is_empty(), "join: {errors:?}");
     assert_eq!(joined.len(), 1);

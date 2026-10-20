@@ -1943,7 +1943,7 @@ impl App {
                             subtitle: sub.clone(),
                             icon: Icon::Glyph(
                                 match t {
-                                    FileTool::Trim(..) => "sf:scissors",
+                                    FileTool::Trim(..) | FileTool::TrimExact(..) => "sf:scissors",
                                     FileTool::SplitEvery(_) | FileTool::SplitPages => "sf:square.split.2x1",
                                     FileTool::Merge | FileTool::Join => "sf:rectangle.stack",
                                     FileTool::Mute => "sf:speaker.slash",
