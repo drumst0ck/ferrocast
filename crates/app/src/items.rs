@@ -236,6 +236,8 @@ pub enum Kind {
     ImageTool(Vec<PathBuf>, ferrocast_core::convert::ImageOp),
     /// Trim, split or merge audio, video or PDF files.
     FileTool(Vec<PathBuf>, ferrocast_core::convert::FileTool),
+    /// Open an editor window (trim, crop, annotate, organize…) for a file.
+    Editor(Act),
 }
 
 #[derive(Clone, Debug)]

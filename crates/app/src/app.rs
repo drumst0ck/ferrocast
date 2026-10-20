@@ -2104,6 +2104,7 @@ impl App {
                         out.push(Section { title: "File tools".into(), items });
                     }
                 }
+                out.extend(self.editor_section(&files, &q, &sub));
                 out.retain(|sec| !sec.items.is_empty());
                 out
             }
@@ -2222,6 +2223,48 @@ impl App {
             }],
             _ => vec![],
         }
+    }
+
+    /// Editor windows offered for a single file in the Convert view (same windows as the file actions).
+    fn editor_section(&self, files: &[PathBuf], q: &str, sub: &str) -> Option<Section> {
+        use ferrocast_core::convert::{ext, family_of, Family};
+        let [p] = files else { return None };
+        let p = p.clone();
+        let mut list: Vec<(&str, &str, Act)> = vec![];
+        match family_of(&p) {
+            Family::Video => list.extend([
+                ("Trim Video…", "trim cut frame timeline", Act::TrimVideo(p.clone())),
+                ("Crop Video…", "crop video frame size", Act::CropVideo(p.clone())),
+                ("Change Speed…", "speed slow fast pitch", Act::SpeedVideo(p.clone())),
+                ("Video Snapshots…", "snapshot frame screenshot png", Act::SnapshotVideo(p.clone())),
+                ("Redact Video…", "redact hide blur privacy area", Act::RedactVideo(p.clone())),
+            ]),
+            Family::Image => list.extend([
+                ("Annotate…", "annotate markup draw arrow text", Act::AnnotateCanvas(p.clone())),
+                ("Edit Photo…", "edit photo brightness contrast", Act::EditPhoto(p.clone())),
+                ("Crop…", "crop aspect exact", Act::CropImage(p.clone())),
+                ("Redact Areas…", "redact hide blur privacy", Act::RedactImage(p.clone())),
+                ("Add Background…", "background frame blur shadow", Act::FrameImage(p.clone())),
+            ]),
+            _ => {}
+        }
+        if ext(&p) == "pdf" {
+            list.push(("Organize Pages…", "organize pages rotate reorder remove", Act::OrganizePdf(p.clone())));
+        }
+        let items: Vec<Item> = list
+            .into_iter()
+            .filter(|(title, kw, _)| self.matches(q, title, kw).is_some())
+            .map(|(title, _, act)| Item {
+                id: format!("editor:{title}"),
+                title: title.to_string(),
+                subtitle: sub.to_string(),
+                icon: Icon::Glyph("sf:slider.horizontal.3", [255, 140, 60]),
+                accessory: "Editor".into(),
+                keywords: vec![],
+                kind: Kind::Editor(act),
+            })
+            .collect();
+        (!items.is_empty()).then_some(Section { title: "Editors".into(), items })
     }
 
     // --------------------------------------------------------------- actions
@@ -2359,6 +2402,7 @@ impl App {
             Kind::Url(_) => a.push(Action::new("Open in Browser", Act::Run)),
             Kind::OpenWindow(_) => a.push(Action::new("Switch to Window", Act::Run)),
             Kind::Timer(..) => a.push(Action::new("Start Timer", Act::Run)),
+            Kind::Editor(_) => a.push(Action::new("Open Editor", Act::Run)),
             Kind::ConvertTo(files, t) => {
                 a.push(Action::new(
                     match t.needs {
@@ -2415,6 +2459,7 @@ impl App {
             Kind::Process(_) => "Kill Process",
             Kind::ConvertTo(..) => "Convert",
             Kind::ImageTool(..) | Kind::FileTool(..) => "Apply",
+            Kind::Editor(_) => "Open Editor",
             Kind::Timer(..) => "Start Timer",
             Kind::RunningTimer(_) => "Cancel Timer",
             Kind::WebSearch(_) => "Search",
@@ -2592,6 +2637,10 @@ impl App {
             Kind::Timer(secs, label) => {
                 let (secs, label) = (*secs, label.clone());
                 self.start_timer(secs, label);
+            }
+            Kind::Editor(act) => {
+                let act = act.clone();
+                self.perform(act, false);
             }
             Kind::FileTool(files, tool) => {
                 let (files, tool) = (files.clone(), tool.clone());
