@@ -392,8 +392,9 @@ fn wheel_renders_for_any_segment_count_in_both_themes() {
         app.ctx.set_theme(theme);
         for kind in [WheelKind::Convert, WheelKind::Tools, WheelKind::Actions] {
             for n in [0usize, 1, 8, 9, 12] {
-                let segs: Vec<WheelSeg> =
-                    (0..n).map(|i| WheelSeg { label: format!("Option {i}"), symbol: "sf:photo", pick: WheelPick::Act(Act::Run) }).collect();
+                let segs: Vec<WheelSeg> = (0..n)
+                    .map(|i| WheelSeg { label: format!("Option {i}"), symbol: "sf:photo", needs: None, pick: WheelPick::Act(Act::Run) })
+                    .collect();
                 for sel in [None, n.checked_sub(1)] {
                     app.stack = vec![
                         View::Root,
@@ -418,6 +419,37 @@ fn actions_wheel_has_exactly_the_six_actions_in_order() {
         assert_eq!(labels, ["AirDrop", "Float", "Copy", "Move to…", "Copy Path", "Terminal"], "{files:?}");
     }
     assert!(app.wheel_segments(WheelKind::Actions, &[]).is_empty());
+}
+
+#[test]
+fn convert_wheel_shows_every_output_and_marks_missing_tools() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    app.tools = Default::default(); // no ffmpeg, LibreOffice, cwebp or unrar
+    let dir = std::env::temp_dir().join(format!("fc-cw-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mk = |name: &str| {
+        let p = dir.join(name);
+        std::fs::write(&p, b"x").unwrap();
+        vec![p]
+    };
+    // a PDF has nine outputs: none may be dropped
+    let pdf = app.wheel_segments(WheelKind::Convert, &mk("a.pdf"));
+    assert_eq!(pdf.len(), 9, "{:?}", pdf.iter().map(|s| s.label.clone()).collect::<Vec<_>>());
+    // without ffmpeg every video output is still on the ring, marked as needing it
+    let mp4 = app.wheel_segments(WheelKind::Convert, &mk("a.mp4"));
+    assert!(mp4.len() >= 7, "{}", mp4.len());
+    // MOV is converted with a built-in macOS tool; every other video output needs ffmpeg
+    assert!(mp4.iter().filter(|s| s.label != "MOV").all(|s| s.needs.is_some_and(|n| n.contains("ffmpeg"))));
+    assert!(mp4.iter().any(|s| s.label == "MOV" && s.needs.is_none()));
+    // an image to PNG needs nothing
+    let png = app.wheel_segments(WheelKind::Convert, &mk("a.jpg"));
+    assert!(png.iter().any(|s| s.label.contains("PNG") && s.needs.is_none()));
+    // symbols follow the output, not the input family
+    let sym = |segs: &[WheelSeg], label: &str| segs.iter().find(|s| s.label.contains(label)).map(|s| s.symbol);
+    assert_ne!(sym(&pdf, "Word"), sym(&pdf, "Markdown"));
+    assert_eq!(sym(&mp4, "GIF"), Some("sf:livephoto"));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

@@ -1644,7 +1644,8 @@ impl App {
                 9.0,
                 Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], if on { 46 } else { 22 }),
             );
-            ui::paint_icon(&mut self.icons, ui, ir, &Icon::Glyph(seg.symbol, rgb), pal);
+            let tone = if seg.needs.is_some() { [rgb[0] / 3 + 60, rgb[1] / 3 + 60, rgb[2] / 3 + 60] } else { rgb };
+            ui::paint_icon(&mut self.icons, ui, ir, &Icon::Glyph(seg.symbol, tone), pal);
             if fits {
                 let col = if on { pal.text } else { pal.sub };
                 let label = if seg.label.chars().count() > 17 {

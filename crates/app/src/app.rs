@@ -214,6 +214,8 @@ pub struct WheelSeg {
     pub label: String,
     pub symbol: &'static str,
     pub pick: WheelPick,
+    /// Optional tool to install before this segment can run (shown dimmed).
+    pub needs: Option<&'static str>,
 }
 
 #[derive(Clone)]
@@ -945,24 +947,26 @@ impl App {
         let Some(first) = files.first() else { return vec![] };
         match kind {
             ferrocast_core::wheel::WheelKind::Convert => {
-                let symbol = match family_of(first) {
-                    Family::Image | Family::Pdf => "sf:photo",
-                    Family::Audio => "sf:waveform",
-                    Family::Video => "sf:film",
-                    Family::Archive | Family::Folder => "sf:archivebox",
-                    _ => "sf:doc.text",
-                };
+                // every output stays on the ring; ones that need an uninstalled tool are dimmed
                 targets(first, &self.tools)
                     .into_iter()
-                    .filter(|t| t.needs.is_none())
-                    .take(8)
-                    .map(|t| WheelSeg { label: t.label.to_string(), symbol, pick: WheelPick::Convert(t) })
+                    .map(|t| WheelSeg {
+                        label: t.label.to_string(),
+                        symbol: target_symbol(t.ext),
+                        needs: t.needs,
+                        pick: WheelPick::Convert(t),
+                    })
                     .collect()
             }
             ferrocast_core::wheel::WheelKind::Actions => {
                 let f = files.to_vec();
                 let paths = f.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\n");
-                let seg = |label: &str, symbol: &'static str, act: Act| WheelSeg { label: label.into(), symbol, pick: WheelPick::Act(act) };
+                let seg = |label: &str, symbol: &'static str, act: Act| WheelSeg {
+                    label: label.into(),
+                    symbol,
+                    needs: None,
+                    pick: WheelPick::Act(act),
+                };
                 // exactly the six file actions, in the order of ferrocast_core::tools::ACTIONS
                 ferrocast_core::tools::ACTIONS
                     .into_iter()
@@ -1001,6 +1005,7 @@ impl App {
                                 _ => op.label().split(" · ").next().unwrap_or_default().to_string(),
                             },
                             symbol: image_op_symbol(&op),
+                            needs: None,
                             pick: WheelPick::Image(op),
                         })
                         .collect()
@@ -1008,6 +1013,7 @@ impl App {
                     vec![WheelSeg {
                         label: "Open tools…".into(),
                         symbol: "sf:wrench.and.screwdriver",
+                        needs: None,
                         pick: WheelPick::Act(Act::Convert(files.to_vec())),
                     }]
                 }
@@ -1085,6 +1091,12 @@ impl App {
             WheelPick::Image(op) => {
                 self.toast(format!("{}…", op.label()));
                 services::image_op_files(files, op, self.bus.clone());
+            }
+            WheelPick::Convert(t) if t.needs.is_some() => {
+                let n = t.needs.unwrap_or_default();
+                let cmd = n.split_once('(').map(|(_, c)| c.trim_end_matches(')').to_string()).unwrap_or_else(|| n.to_string());
+                self.copy_text(&cmd);
+                self.toast(format!("Needs {n}. Install command copied: {cmd}"));
             }
             WheelPick::Convert(t) => {
                 self.toast(format!("Converting to {}…", t.label));
@@ -3685,6 +3697,24 @@ pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static
         ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
         ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
         ImageOp::SetMeta(_) => "sf:tag",
+    }
+}
+
+/// SF Symbol for a conversion output, so a ring of formats is told apart at a glance.
+pub(crate) fn target_symbol(ext: &str) -> &'static str {
+    match ext {
+        "jpg" | "png" | "webp" | "heic" | "tiff" | "avif" | "bmp" => "sf:photo",
+        "gif" => "sf:livephoto",
+        "pdf" => "sf:doc.richtext",
+        "mp3" | "m4a" | "wav" | "flac" | "ogg" | "opus" | "aiff" | "wma" => "sf:waveform",
+        "mp4" | "mov" | "mkv" | "webm" | "avi" | "wmv" => "sf:film",
+        "docx" | "pages" | "epub" => "sf:doc.text",
+        "md" | "txt" | "html" => "sf:text.alignleft",
+        "pptx" => "sf:rectangle.on.rectangle",
+        "xlsx" | "ods" | "csv" | "tsv" => "sf:tablecells",
+        "srt" | "vtt" => "sf:captions.bubble",
+        "zip" | "tar" | "gz" => "sf:archivebox",
+        _ => "sf:doc",
     }
 }
 
