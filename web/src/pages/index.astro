@@ -1,5 +1,9 @@
 ---
 import Base from '../layouts/Base.astro';
+import '../styles/files.css';
+import KeysExplainer from '../components/KeysExplainer.astro';
+import Counters from '../components/Counters.astro';
+import { statusLine } from '../data/status';
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const img = (n: string) => `${base}/img/${n}.jpg`;
 const repo = 'https://github.com/drumst0ck/ferrocast';
@@ -35,7 +39,7 @@ const extras = [
   ['Files, windows and processes', 'Find files with Spotlight, jump between open windows, and kill a runaway process.'],
   ['Hotkeys and aliases', 'Give any app or command its own shortcut or short name, and keep favorites close.'],
   ['Timers, notes and emoji', 'Type timer 10m or pomodoro and get a notification when it ends. Jot a note, paste any emoji by name.'],
-  ['File tools', 'Drop files to convert between 275 format pairs across images, audio, video, documents, sheets and archives. Compress, crop, frame, collage or redact photos, and trim, speed up or join clips with typed commands. Drag a file and tap Shift for a wheel of conversions.'],
+  ['File tools', 'Convert between 275 format pairs and open windows to edit photos, trim video or organize PDF pages, all on your Mac. Built and tested on real files; the interactions are not yet proven in live sessions.'],
   ['Backup', 'Export your data and import snippets as JSON. Your setup travels with you.'],
 ];
 const keys = [
@@ -59,6 +63,7 @@ const scText = ['#!/bin/bash', '# @raycast.mode compact', 'date +%H:%M'].join('\
 const faq = [
   ['How do I open it?', 'Press ⌥ Space from any app. You can change the shortcut in Settings.'],
   ['Is it free?', 'Completely. MIT licence, no account, no Pro tier waiting behind a paywall. If it saves you time, star the repo.'],
+  ['Are conversions really local?', 'Yes. Nothing is uploaded: conversions run on your Mac. macOS tools come first; ffmpeg, LibreOffice and Ghostscript are optional and used only when they are installed. Pairs that need one say so on the Files page.'],
   ['Will it run on my Mac?', 'It runs on Apple Silicon Macs. Intel Macs are not supported.'],
   ['Do I need to be a developer to install it?', 'No, but you do need to open Terminal once and paste four lines. Homebrew does the rest. Grab a coffee while it builds.'],
   ['Why does it ask for Accessibility access?', 'Because moving windows, pasting for you and expanding snippets all need it. Search, the calculator and AI work without it. A welcome screen walks you through it.'],
@@ -66,7 +71,7 @@ const faq = [
   ['Does Ask AI send my text to the cloud?', 'Only if you tell it to. Out of the box it talks to Ollama on your own Mac. Point it at LM Studio, OpenAI or the Anthropic API if you prefer; keys go in the Keychain.'],
   ['Can I use my ChatGPT or Claude subscription?', 'Yes, with caveats we spell out in the app. Claude: if Claude Code is installed and signed in, Ferrocast uses it as a provider, since it is Anthropic’s own tool. ChatGPT: Ferrocast can sign in with your account the way OpenAI’s Codex CLI does; it works, but OpenAI has not blessed third-party apps doing that, so the API with a key is the by-the-book route.'],
   ['Coming from Raycast. Will my stuff work?', 'Your Script Commands run as they are, and snippets import from a JSON export. Quicklinks you recreate in a minute.'],
-  ['What is missing today?', 'Honestly: an extension store and sync between Macs. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.'],
+  ['What is missing today?', 'Honestly: an extension store and sync between Macs. Pressing Enter on a Finder selection is not included yet (there is a command for it), and the drag wheel, file windows, AirDrop, Terminal and the shelf are implemented but not yet proven in live sessions. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.'],
 ];
 const install = `brew tap drumst0ck/ferrocast \\
   ${repo}
@@ -84,7 +89,7 @@ open dist/Ferrocast.app`;
   <div class="cursor-light" aria-hidden="true"></div>
   <header class="top">
     <a class="mark" href="#"><img src={`${base}/icon.png`} alt="" width="30" height="30" />Ferrocast</a>
-    <nav class="nav" aria-label="Main"><a href="#why">Why</a><a href="#features">Features</a><a href="#tour">Tour</a><a href="#shortcuts">Shortcuts</a><a href="#install">Install</a><a href="#faq">FAQ</a><a href={repo}>GitHub</a></nav>
+    <nav class="nav" aria-label="Main"><a href="#why">Why</a><a href="#features">Features</a><a href={`${base}/files/`}>Files</a><a href="#tour">Tour</a><a href="#shortcuts">Shortcuts</a><a href="#install">Install</a><a href="#faq">FAQ</a><a href={repo}>GitHub</a></nav>
     <a class="btn" href="#install">Install</a>
   </header>
 
@@ -172,6 +177,17 @@ open dist/Ferrocast.app`;
       </div>
     </section>
 
+    <section class="fx-home wrap" id="files" aria-labelledby="h-files">
+      <div class="why-head" data-reveal>
+        <h2 id="h-files">Convert &amp; file tools</h2>
+        <p>Hold a file, tap a key, drop it. The wheel stays open until you drop it, and everything runs on your Mac.</p>
+      </div>
+      <KeysExplainer />
+      <Counters />
+      <p class="fine">{statusLine}</p>
+      <div class="fx-cta"><a class="btn big" href={`${base}/files/`}>Explore all conversions</a></div>
+    </section>
+
     <section class="story" id="tour" aria-labelledby="h-story" style={`--n:${views.length}`}>
       <div class="story-in">
         <div class="story-txt">
@@ -208,7 +224,7 @@ open dist/Ferrocast.app`;
     <section class="more-list wrap" aria-labelledby="h-more">
       <h2 id="h-more" data-reveal>The small things you end up using every day</h2>
       <ul class="bento">
-        {extras.map(([t, d], i) => <li class={`b${i}`} data-reveal style={`transition-delay:${(i % 3) * 70}ms`}><b>{t}</b><span>{d}</span>{i === 2 && <div class="snap" aria-hidden="true"><i></i></div>}{i === 0 && <code class="sc" aria-hidden="true">{scText}</code>}{i === 1 && <div class="ql" aria-hidden="true"><i class="k">gh</i><i>drumst0ck/ferrocast</i><em>→</em><i>github.com/drumst0ck/ferrocast</i></div>}{i === 3 && <div class="fx" aria-hidden="true">1 USD<em>→</em>0.92 EUR</div>}</li>)}
+        {extras.map(([t, d], i) => <li class={`b${i}`} data-reveal style={`transition-delay:${(i % 3) * 70}ms`}><b>{t}</b><span>{d}</span>{i === 2 && <div class="snap" aria-hidden="true"><i></i></div>}{i === 0 && <code class="sc" aria-hidden="true">{scText}</code>}{i === 1 && <div class="ql" aria-hidden="true"><i class="k">gh</i><i>drumst0ck/ferrocast</i><em>→</em><i>github.com/drumst0ck/ferrocast</i></div>}{i === 7 && <a class="tl" href={`${base}/files/`} style="position:relative">See every conversion and tool</a>}{i === 3 && <div class="fx" aria-hidden="true">1 USD<em>→</em>0.92 EUR</div>}</li>)}
       </ul>
     </section>
 

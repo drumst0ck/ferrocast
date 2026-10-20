@@ -1,0 +1,60 @@
+---
+import conversions from '../data/conversions.json';
+
+const families = conversions.families;
+const total = families.reduce((n, f) => n + f.inputs.reduce((m, i) => m + i.outputs.length, 0), 0);
+const froms = families.flatMap((f) => f.inputs.map((i) => ({ ext: i.ext, label: i.label })));
+const toMap = new Map<string, string>();
+for (const f of families) for (const i of f.inputs) for (const o of i.outputs) toMap.set(o.ext, o.label);
+const tos = [...toMap].map(([ext, label]) => ({ ext, label })).sort((a, b) => a.label.localeCompare(b.label));
+const needNames = ['ffmpeg', 'LibreOffice', 'cwebp', 'unrar'];
+---
+<div class="mx" data-matrix data-total={total}>
+  <form class="mx-controls" role="search" aria-label="Filter conversions" onsubmit="return false">
+    <div class="mx-field">
+      <label for="mx-q">Search a format</label>
+      <input id="mx-q" class="mx-in" type="search" placeholder="jpg, markdown, spreadsheet…" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="mx-field">
+      <label for="mx-from">From</label>
+      <select id="mx-from" class="mx-in"><option value="">Any</option>{froms.map((f) => <option value={f.ext}>{f.label} (.{f.ext})</option>)}</select>
+    </div>
+    <div class="mx-field">
+      <label for="mx-to">To</label>
+      <select id="mx-to" class="mx-in"><option value="">Any</option>{tos.map((f) => <option value={f.ext}>{f.label} (.{f.ext})</option>)}</select>
+    </div>
+    <label class="mx-check"><input type="checkbox" id="mx-free" /> Needs nothing extra</label>
+    <div class="mx-fams" role="group" aria-label="Family">
+      <button type="button" data-fam="" aria-pressed="true">All</button>
+      {families.map((f) => <button type="button" data-fam={f.id} aria-pressed="false">{f.name}</button>)}
+    </div>
+  </form>
+  <p class="mx-count" id="mx-count" role="status" aria-live="polite" data-total={total}><b class="nums">{total}</b> of {total} conversion pairs shown</p>
+
+  <div class="mx-list">
+    {families.map((f) => {
+      const n = f.inputs.reduce((m, i) => m + i.outputs.length, 0);
+      return (
+        <details open class="mx-fam" data-fam={f.id}>
+          <summary><h3>{f.name}</h3><span class="nums">{n} pairs from {f.inputs.length} {f.inputs.length === 1 ? 'format' : 'formats'}</span></summary>
+          <ul class="mx-rows">
+            {f.inputs.map((i) => (
+              <li class="mx-row" data-from={i.ext} data-text={`${i.ext} ${i.label}`.toLowerCase()}>
+                <span class="mx-from"><b>{i.label}</b><i>.{i.ext}</i></span>
+                <span class="mx-arrow" aria-label="converts to">→</span>
+                <ul class="mx-outs">
+                  {i.outputs.map((o) => (
+                    <li class:list={['mx-chip', { 'mx-needs': !!o.needs }]} data-to={o.ext} data-needs={o.needs ?? ''} data-text={`${o.ext} ${o.label}`.toLowerCase()}>{o.label}{o.needs && <small>needs {o.needs}</small>}</li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </details>
+      );
+    })}
+  </div>
+  <p class="mx-empty" id="mx-empty" hidden>No conversion matches. Clear a filter to see more.</p>
+  <p class="fine">Chips marked “needs” depend on an optional tool ({needNames.join(', ')}); everything else uses tools that ship with macOS.</p>
+</div>
+<script>import '../scripts/matrix-filter.js';</script>
