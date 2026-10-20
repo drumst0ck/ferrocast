@@ -452,6 +452,92 @@ fn convert_wheel_shows_every_output_and_marks_missing_tools() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn render_mods(app: &mut App, mut events: Vec<Event>, modifiers: Modifiers) {
+    // egui 0.36 takes the held modifiers from a ModifiersChanged event, not from RawInput
+    events.insert(0, Event::ModifiersChanged(modifiers));
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))),
+        events,
+        ..Default::default()
+    };
+    let ctx = app.ctx.clone();
+    let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+    output.textures_delta.clear();
+}
+
+fn key_event(key: Key) -> Event {
+    Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }
+}
+
+fn open_wheel(app: &mut App, kind: ferrocast_core::wheel::WheelKind, n_files: usize) {
+    let files: Vec<std::path::PathBuf> = (0..n_files).map(|i| std::path::PathBuf::from(format!("/nonexistent/f{i}.png"))).collect();
+    let segs = app.wheel_segments(kind, &files);
+    app.stack = vec![View::Root, View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel: None }];
+}
+
+fn wheel_state(app: &App) -> Option<(ferrocast_core::wheel::WheelKind, Option<usize>, usize)> {
+    match app.view() {
+        View::Wheel { kind, sel, segs, .. } => Some((*kind, *sel, segs.len())),
+        _ => None,
+    }
+}
+
+// Characterisation tests of the wheel's key handling (the behaviour already existed; no RED).
+#[test]
+fn wheel_arrows_step_and_wrap_around() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    open_wheel(&mut app, WheelKind::Convert, 1);
+    let n = wheel_state(&app).unwrap().2;
+    assert!(n >= 3);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert_eq!(wheel_state(&app).unwrap().1, Some(0));
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert_eq!(wheel_state(&app).unwrap().1, Some(1));
+    render(&mut app, vec![key_event(Key::ArrowLeft)]);
+    render(&mut app, vec![key_event(Key::ArrowLeft)]);
+    assert_eq!(wheel_state(&app).unwrap().1, Some(n - 1), "left from the first segment wraps to the last");
+    render(&mut app, vec![key_event(Key::ArrowDown)]);
+    assert_eq!(wheel_state(&app).unwrap().1, Some(0), "down steps forward like right");
+}
+
+#[test]
+fn wheel_escape_cancels_and_returns_to_the_root() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    open_wheel(&mut app, WheelKind::Tools, 1);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(wheel_state(&app).is_none(), "wheel must be gone");
+    assert!(matches!(app.view(), View::Root));
+}
+
+#[test]
+fn tapping_shift_command_or_control_switches_the_open_wheel() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    open_wheel(&mut app, WheelKind::Convert, 1);
+    // first frame with no key held records the idle state; the very first frame never switches
+    render_mods(&mut app, vec![], Modifiers::NONE);
+    assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Convert);
+    render_mods(&mut app, vec![], Modifiers::COMMAND);
+    assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Tools, "Command opens the tools wheel");
+    render_mods(&mut app, vec![], Modifiers::NONE);
+    render_mods(&mut app, vec![], Modifiers::CTRL);
+    assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Actions, "Control opens the actions wheel");
+    assert_eq!(wheel_state(&app).unwrap().2, 6);
+    render_mods(&mut app, vec![], Modifiers::NONE);
+    render_mods(&mut app, vec![], Modifiers::SHIFT);
+    assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Convert, "Shift goes back to conversions");
+    // holding the key does not switch again, and a selection is cleared only by a real switch
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    let sel = wheel_state(&app).unwrap().1;
+    assert_eq!(sel, Some(0));
+    render_mods(&mut app, vec![], Modifiers::SHIFT);
+    assert_eq!(wheel_state(&app).unwrap().1, sel, "a held Shift keeps the selection");
+}
+
 #[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
