@@ -66,6 +66,13 @@ pub enum View {
         color: usize,
         sel: Option<usize>,
     },
+    /// Background editor: file, pixel size, options and the colour index.
+    FrameImage {
+        file: PathBuf,
+        size: (u32, u32),
+        opts: ferrocast_core::frame::FrameOpts,
+        color: usize,
+    },
     /// Redaction editor: file, pixel size, the areas, the selected one and the style.
     RedactImage {
         file: PathBuf,
@@ -223,6 +230,7 @@ impl View {
             View::EditPhoto { .. } => "Edit Photo",
             View::CropImage { .. } => "Crop Image",
             View::RedactImage { .. } => "Redact Image",
+            View::FrameImage { .. } => "Add Background",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -1073,6 +1081,17 @@ impl App {
                                 });
                             }
                             None => self.toast("Annotate: could not read the image"),
+                        }
+                    }
+                }
+                Msg::FrameLoaded(file, png) => {
+                    if matches!(self.view(), View::FrameImage { file: f, .. } if *f == file) {
+                        match png.as_deref().and_then(|b| image::load_from_memory(b).ok()).map(|i| i.to_rgba8()) {
+                            Some(rgba) => self.ctx.data_mut(|d| {
+                                d.insert_temp(Id::new("frame-base"), std::sync::Arc::new(rgba));
+                                d.remove::<(ferrocast_core::frame::FrameOpts, usize)>(Id::new("frame-last"));
+                            }),
+                            None => self.toast("Background: could not read the image"),
                         }
                     }
                 }
@@ -2102,6 +2121,7 @@ impl App {
                     a.push(Action::new("Edit Photo…", Act::EditPhoto(p.clone())).key(CMD_SHIFT, Key::E));
                     a.push(Action::new("Crop…", Act::CropImage(p.clone())).key(CMD_SHIFT, Key::K));
                     a.push(Action::new("Redact Areas…", Act::RedactImage(p.clone())).key(CMD_SHIFT, Key::R));
+                    a.push(Action::new("Add Background…", Act::FrameImage(p.clone())).key(CMD_SHIFT, Key::B));
                 }
                 if ferrocast_core::convert::ext(p) == "pdf" {
                     a.push(Action::new("Organize Pages…", Act::OrganizePdf(p.clone())).key(CMD_SHIFT, Key::O));
@@ -2979,6 +2999,26 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::FrameImage(file) => match services::image_size(&file) {
+                Some(size) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("frame-tex"));
+                        d.remove::<std::sync::Arc<image::RgbaImage>>(Id::new("frame-base"));
+                        d.remove::<(ferrocast_core::frame::FrameOpts, usize)>(Id::new("frame-last"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::FrameLoaded(f.clone(), services::display_png(&f, 600))));
+                    self.show();
+                    let pad = (size.0.max(size.1) / 12).max(8);
+                    self.push(View::FrameImage {
+                        file,
+                        size,
+                        opts: ferrocast_core::frame::FrameOpts { pad, radius: pad / 2, shadow: pad / 3, ..Default::default() },
+                        color: 4,
+                    });
+                }
+                None => self.toast("Background: could not read the image"),
+            },
             Act::RedactImage(file) => match services::image_size(&file) {
                 Some(size) => {
                     self.ctx.data_mut(|d| {

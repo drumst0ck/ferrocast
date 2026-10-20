@@ -363,6 +363,20 @@ fn pdf_organizer_view_renders_and_enter_without_edits_changes_nothing() {
 }
 
 #[test]
+fn frame_view_renders_and_refuses_unreadable_images() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-frameview-{}.png", std::process::id()));
+    std::fs::write(&f, "not an image").unwrap();
+    let depth = app.stack.len();
+    app.perform(Act::FrameImage(f.clone()), false);
+    assert_eq!(app.stack.len(), depth, "an unreadable image opens no editor");
+    app.stack = vec![View::Root, View::FrameImage { file: f.clone(), size: (100, 80), opts: Default::default(), color: 4 }];
+    render(&mut app, vec![]);
+    assert!(matches!(app.view(), View::FrameImage { .. }));
+    let _ = std::fs::remove_file(&f);
+}
+
+#[test]
 fn redact_view_renders_and_refuses_unreadable_images() {
     let mut app = fixture();
     let f = std::env::temp_dir().join(format!("fc-redview-{}.png", std::process::id()));

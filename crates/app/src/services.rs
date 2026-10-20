@@ -29,6 +29,8 @@ pub enum Msg {
     CropLoaded(PathBuf, Option<Vec<u8>>),
     /// PNG of the image being redacted, scaled for display (None: unreadable).
     RedactLoaded(PathBuf, Option<Vec<u8>>),
+    /// PNG of the image being framed, scaled for the live preview (None: unreadable).
+    FrameLoaded(PathBuf, Option<Vec<u8>>),
     /// A picture chosen to stamp onto the image being annotated: where, and its RGBA pixels.
     StampChosen(PathBuf, (f32, f32), Option<(usize, usize, Vec<u8>)>),
     Script {
@@ -2046,46 +2048,26 @@ fn collage(files: &[PathBuf], o: &ferrocast_core::collage::CollageOpts) -> Resul
     Ok(out)
 }
 
-fn frame_image(f: &std::path::Path, o: &ferrocast_core::frame::FrameOpts) -> Result<PathBuf, String> {
-    check_source_size(f)?;
+/// Put `img` on its backdrop with padding, rounded corners and a shadow. Pure pixel work, so the
+/// editor can run it on a downscaled copy for the live preview. `bg` is the decoded background
+/// picture when the backdrop is an image.
+pub(crate) fn frame_compose(
+    img: &image::RgbaImage,
+    bg: Option<&image::RgbaImage>,
+    o: &ferrocast_core::frame::FrameOpts,
+) -> image::RgbaImage {
     use ferrocast_core::collage::corner_alpha;
-    use ferrocast_core::convert::output_with_suffix;
     use ferrocast_core::frame::{canvas_size, shadow_offset, Backdrop};
-    let tmp = std::env::temp_dir().join(format!(
-        "ferrocast-frame-{}-{}.png",
-        std::process::id(),
-        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let loaded = sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
-        .and_then(|_| image::open(&tmp).map_err(|e| e.to_string()));
-    let _ = std::fs::remove_file(&tmp);
-    let img = loaded?.to_rgba8();
     let (w, h) = (img.width(), img.height());
     let (cw, ch) = canvas_size(w, h, o);
-    if u64::from(cw) * u64::from(ch) > 120_000_000 {
-        return Err("the result would be too large; use less padding".into());
-    }
     let mut canvas = match &o.backdrop {
-        Backdrop::Image(path) => {
-            // canonical absolute path: a name starting with `-` can never be read as a sips option
-            let canon = std::path::Path::new(path).canonicalize().ok().filter(|p| p.is_file());
-            let Some(canon) = canon else {
-                return Err(format!("{path} is not a readable image"));
+        Backdrop::Image(_) => {
+            let Some(bg) = bg else {
+                return image::RgbaImage::from_pixel(cw, ch, image::Rgba([255, 255, 255, 255]));
             };
-            let path = canon.to_string_lossy().to_string();
-            let path = path.as_str();
-            let bg_tmp = std::env::temp_dir().join(format!(
-                "ferrocast-framebg-{}-{}.png",
-                std::process::id(),
-                COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            ));
-            let loaded = sips(&["-s", "format", "png", path, "--out", &bg_tmp.to_string_lossy()])
-                .and_then(|_| image::open(&bg_tmp).map_err(|e| e.to_string()));
-            let _ = std::fs::remove_file(&bg_tmp);
-            let bg = loaded.map_err(|e| format!("background image: {e}"))?.to_rgba8();
             let scale = (cw as f32 / bg.width() as f32).max(ch as f32 / bg.height() as f32);
             let (nw, nh) = (((bg.width() as f32 * scale).ceil() as u32).max(cw), ((bg.height() as f32 * scale).ceil() as u32).max(ch));
-            let big = image::imageops::resize(&bg, nw, nh, image::imageops::FilterType::Triangle);
+            let big = image::imageops::resize(bg, nw, nh, image::imageops::FilterType::Triangle);
             image::imageops::crop_imm(&big, (nw - cw) / 2, (nh - ch) / 2, cw, ch).to_image()
         }
         Backdrop::Color(c) => image::RgbaImage::from_pixel(cw, ch, image::Rgba([c[0], c[1], c[2], 255])),
@@ -2095,7 +2077,7 @@ fn frame_image(f: &std::path::Path, o: &ferrocast_core::frame::FrameOpts) -> Res
             let scale = (cw as f32 / w as f32).max(ch as f32 / h as f32);
             let (nw, nh) = (((w as f32 * scale).ceil() as u32).max(cw), ((h as f32 * scale).ceil() as u32).max(ch));
             // blur at a quarter of the size: same look, far less work
-            let small = image::imageops::resize(&img, (nw / 4).max(1), (nh / 4).max(1), image::imageops::FilterType::Triangle);
+            let small = image::imageops::resize(img, (nw / 4).max(1), (nh / 4).max(1), image::imageops::FilterType::Triangle);
             let blurred = image::imageops::blur(&small, (r / 4.0).max(0.5));
             let big = image::imageops::resize(&blurred, nw, nh, image::imageops::FilterType::Triangle);
             image::imageops::crop_imm(&big, (nw - cw) / 2, (nh - ch) / 2, cw, ch).to_image()
@@ -2135,6 +2117,48 @@ fn frame_image(f: &std::path::Path, o: &ferrocast_core::frame::FrameOpts) -> Res
             }
         }
     }
+    canvas
+}
+
+fn frame_image(f: &std::path::Path, o: &ferrocast_core::frame::FrameOpts) -> Result<PathBuf, String> {
+    check_source_size(f)?;
+    use ferrocast_core::convert::output_with_suffix;
+    use ferrocast_core::frame::canvas_size;
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-frame-{}-{}.png",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let loaded = sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+        .and_then(|_| image::open(&tmp).map_err(|e| e.to_string()));
+    let _ = std::fs::remove_file(&tmp);
+    let img = loaded?.to_rgba8();
+    let (w, h) = (img.width(), img.height());
+    let (cw, ch) = canvas_size(w, h, o);
+    if u64::from(cw) * u64::from(ch) > 120_000_000 {
+        return Err("the result would be too large; use less padding".into());
+    }
+    let bg = match &o.backdrop {
+        ferrocast_core::frame::Backdrop::Image(path) => {
+            // canonical absolute path: a name starting with `-` can never be read as a sips option
+            let canon = std::path::Path::new(path).canonicalize().ok().filter(|p| p.is_file());
+            let Some(canon) = canon else {
+                return Err(format!("{path} is not a readable image"));
+            };
+            let path = canon.to_string_lossy().to_string();
+            let bg_tmp = std::env::temp_dir().join(format!(
+                "ferrocast-framebg-{}-{}.png",
+                std::process::id(),
+                COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            let loaded = sips(&["-s", "format", "png", &path, "--out", &bg_tmp.to_string_lossy()])
+                .and_then(|_| image::open(&bg_tmp).map_err(|e| e.to_string()));
+            let _ = std::fs::remove_file(&bg_tmp);
+            Some(loaded.map_err(|e| format!("background image: {e}"))?.to_rgba8())
+        }
+        _ => None,
+    };
+    let canvas = frame_compose(&img, bg.as_ref(), o);
     let out = output_with_suffix(f, "framed", "png", |p| p.exists());
     canvas.save(&out).map_err(|e| e.to_string())?;
     Ok(out)
