@@ -293,6 +293,8 @@ pub enum Act {
     RedactVideo(PathBuf),
     /// Open the video trim viewer for this file.
     TrimVideo(PathBuf),
+    /// Open the audio trim window (waveform) for this file.
+    TrimAudio(PathBuf),
     /// Open the video split window for this file.
     SplitVideo(PathBuf),
     /// Select a video frame and save a full-resolution PNG.

@@ -248,6 +248,20 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     }
                 }
             }
+            Ok("atrim") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    match crate::media_tools::audio_samples(ff, &file, crate::media_tools::AUDIO_CAP) {
+                        Ok(a) => {
+                            let mut t = ferrocast_core::videoplan::Trim::new(a.duration, 100.0).unwrap();
+                            t.set_range(1.0, 4.0);
+                            t.seek(2.2);
+                            app.push(View::AudioTrim { file, trim: Some(t), audio: Some(std::sync::Arc::new(a)) });
+                        }
+                        Err(e) => app.toast(e),
+                    }
+                }
+            }
             Ok("collage") => {
                 let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
                     .unwrap_or_default()
@@ -543,7 +557,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. }) && kbd_edit);
+            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -797,6 +811,21 @@ impl App {
                         services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
                         self.pop();
                     }
+                }
+                true
+            }
+            View::AudioTrim { file, trim: Some(t), .. } if k.enter => {
+                if t.is_whole() {
+                    self.toast("Nothing to trim: set a start (I) or an end (O) first");
+                } else {
+                    self.toast("Trimming…");
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::Trim(t.start, t.end),
+                        self.tools.ffmpeg,
+                        self.bus.clone(),
+                    );
+                    self.pop();
                 }
                 true
             }
@@ -2315,6 +2344,153 @@ impl App {
         }
     }
 
+    /// Audio trim window: the waveform with the selected range, markers and cursor, exact Start
+    /// and End boxes and a "Trim silence" button. Samples are read off the UI thread.
+    fn draw_audio_trim(
+        &mut self,
+        ui: &mut Ui,
+        area_in: Rect,
+        pal: &Palette,
+        trim: Option<ferrocast_core::videoplan::Trim>,
+        audio: Option<std::sync::Arc<crate::media_tools::AudioSamples>>,
+    ) {
+        let ctx = ui.ctx().clone();
+        let (Some(before), Some(audio)) = (trim, audio) else {
+            ui.painter().text(area_in.center(), egui::Align2::CENTER_CENTER, "Reading the audio…", FontId::proportional(16.0), pal.sub);
+            return;
+        };
+        let mut t = before;
+        // a number box being edited keeps the letters and arrows
+        let editing = ctx.egui_wants_keyboard_input();
+        ctx.input_mut(|i| {
+            let none = Modifiers::NONE;
+            if editing {
+                return;
+            }
+            // Shift first: egui matches Modifiers::NONE even while Shift is held
+            for (key, steps) in [(Key::ArrowLeft, -1i64), (Key::ArrowRight, 1)] {
+                if i.consume_key(Modifiers::SHIFT, key) {
+                    t.step_secs(steps as f64);
+                } else if i.consume_key(none, key) {
+                    t.step_frames(steps);
+                }
+            }
+            if i.consume_key(none, Key::I) {
+                t.mark_start();
+            }
+            if i.consume_key(none, Key::O) {
+                t.mark_end();
+            }
+            if i.consume_key(none, Key::Home) {
+                t.seek(t.start);
+            }
+            if i.consume_key(none, Key::End) {
+                t.seek((t.end - t.frame()).max(0.0));
+            }
+        });
+        let wave = Rect::from_min_max(area_in.min + Vec2::new(24.0, 16.0), Pos2::new(area_in.max.x - 24.0, area_in.max.y - 150.0));
+        let resp = ui.interact(wave, Id::new("at-wave"), egui::Sense::click_and_drag());
+        if let (true, Some(p)) = (resp.clicked() || resp.dragged(), resp.interact_pointer_pos()) {
+            t.seek(((p.x - wave.min.x) / wave.width()).clamp(0.0, 1.0) as f64 * t.duration);
+        }
+        let x_of = |s: f64| wave.min.x + (s / t.duration) as f32 * wave.width();
+        let painter = ui.painter();
+        painter.rect_filled(wave, 6.0, pal.field);
+        painter.rect_filled(
+            Rect::from_min_max(Pos2::new(x_of(t.start), wave.min.y), Pos2::new(x_of(t.end), wave.max.y)),
+            0.0,
+            pal.accent.gamma_multiply(0.22),
+        );
+        // at most 800 buckets, recomputed only when the samples or the width change
+        let buckets = (wave.width() as usize).clamp(1, 800);
+        let key = (std::sync::Arc::as_ptr(&audio) as usize, audio.samples.len(), buckets);
+        let cached: Option<crate::media_tools::PeaksCache> = ctx.data(|d| d.get_temp(Id::new("at-peaks")));
+        let bars = match cached {
+            Some((k, p)) if k == key => p,
+            _ => {
+                let p = std::sync::Arc::new(ferrocast_core::waveform::peaks(&audio.samples, buckets));
+                ctx.data_mut(|d| d.insert_temp(Id::new("at-peaks"), (key, p.clone())));
+                p
+            }
+        };
+        // the samples may cover only the start of a long file
+        let covered = (audio.samples.len() as f64 / audio.rate.max(1) as f64 / t.duration).clamp(0.0, 1.0) as f32;
+        let (mid, half) = (wave.center().y, wave.height() / 2.0 - 4.0);
+        for (i, (lo, hi)) in bars.iter().enumerate() {
+            let frac = (i as f32 + 0.5) / bars.len() as f32;
+            let x = wave.min.x + frac * covered * wave.width();
+            let inside = (x_of(t.start)..=x_of(t.end)).contains(&x);
+            let top = (mid - *hi as f32 / 32768.0 * half).min(mid - 0.5);
+            let bottom = (mid - *lo as f32 / 32768.0 * half).max(mid + 0.5);
+            painter.line_segment([Pos2::new(x, top), Pos2::new(x, bottom)], Stroke::new(1.0, if inside { pal.text } else { pal.sub }));
+        }
+        for m in [t.start, t.end] {
+            painter.rect_filled(
+                Rect::from_center_size(Pos2::new(x_of(m), wave.center().y), Vec2::new(3.0, wave.height())),
+                1.5,
+                pal.accent,
+            );
+        }
+        painter.rect_filled(
+            Rect::from_center_size(Pos2::new(x_of(t.cursor), wave.center().y), Vec2::new(2.0, wave.height())),
+            1.0,
+            pal.text,
+        );
+        let note = if audio.truncated {
+            format!("   ·   waveform covers the first {:.0} min", audio.samples.len() as f64 / audio.rate.max(1) as f64 / 60.0)
+        } else {
+            String::new()
+        };
+        painter.text(
+            Pos2::new(wave.min.x, wave.max.y + 14.0),
+            egui::Align2::LEFT_CENTER,
+            format!(
+                "at {}   ·   start {}   ·   end {}   ·   clip {:.2} s{note}",
+                t.label(t.cursor),
+                t.label(t.start),
+                t.label(t.end),
+                t.clip()
+            ),
+            FontId::proportional(12.5),
+            pal.text,
+        );
+        painter.text(
+            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "←/→ 10 ms · ⇧←/→ second · click the waveform to jump · I start · O end · ↵ save the cut · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+        let (mut start, mut end, mut silence) = (t.start, t.end, false);
+        let row = Rect::from_min_size(Pos2::new(wave.min.x, wave.max.y + 30.0), Vec2::new(wave.width(), 26.0));
+        ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Start s");
+                ui.add(egui::DragValue::new(&mut start).range(0.0..=t.duration).speed(0.01).fixed_decimals(2));
+                ui.label("End s");
+                ui.add(egui::DragValue::new(&mut end).range(0.0..=t.duration).speed(0.01).fixed_decimals(2));
+                silence = ui.button("Trim silence").clicked();
+            });
+        });
+        if (start - t.start).abs() > 1e-9 {
+            t.set_start(start);
+        } else if (end - t.end).abs() > 1e-9 {
+            t.set_end(end);
+        }
+        if silence {
+            match ferrocast_core::waveform::silence_bounds(&audio.samples, audio.rate, -40.0) {
+                Some((a, b)) if t.set_range(a, b) => {}
+                _ => self.toast("No silence to trim"),
+            }
+        }
+        if t != before {
+            if let Some(View::AudioTrim { trim, .. }) = self.stack.last_mut() {
+                *trim = Some(t);
+            }
+            ctx.request_repaint();
+        }
+    }
+
     /// Collage editor: layout buttons, width/gap/corner sliders and a background; the preview is
     /// laid out on small copies of the pictures with the sizes scaled to match.
     fn draw_collage(
@@ -3410,6 +3586,9 @@ impl App {
             }
             View::VideoTrim { file, trim } | View::VideoSnapshot { file, trim } | View::VideoSplit { file, trim, .. } => {
                 self.draw_video_trim(ui, rect, pal, &file, trim);
+            }
+            View::AudioTrim { trim, audio, .. } => {
+                self.draw_audio_trim(ui, rect, pal, trim, audio);
             }
             View::CollageImage { files, opts, color } => {
                 self.draw_collage(ui, rect, pal, files.len(), opts, color);

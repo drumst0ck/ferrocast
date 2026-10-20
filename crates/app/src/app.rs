@@ -239,6 +239,13 @@ pub enum View {
         points: Vec<f64>,
         parts: usize,
     },
+    /// Audio trim window: the file, its timeline state and the waveform samples (both None while
+    /// the audio is being read).
+    AudioTrim {
+        file: PathBuf,
+        trim: Option<ferrocast_core::videoplan::Trim>,
+        audio: Option<Arc<crate::media_tools::AudioSamples>>,
+    },
     /// Video trim viewer: the file and its timeline state (None while the video is being probed).
     VideoTrim {
         file: PathBuf,
@@ -444,6 +451,7 @@ impl View {
             View::FrameImage { .. } => "Add Background",
             View::CollageImage { .. } => "Make a Collage",
             View::VideoTrim { .. } => "Trim Video",
+            View::AudioTrim { .. } => "Trim Audio",
             View::VideoSnapshot { .. } => "Video Snapshots",
             View::VideoSplit { .. } => "Split Video",
             View::VideoCrop { .. } => "Crop Video",
@@ -1391,6 +1399,28 @@ impl App {
                             None => self.toast("Trim: could not read the video"),
                         }
                     }
+                }
+                Msg::AudioLoaded(file, res) => {
+                    // a stale waveform cache must never outlive the samples it was built from
+                    self.ctx.data_mut(|d| d.remove::<crate::media_tools::PeaksCache>(Id::new("at-peaks")));
+                    if matches!(self.view(), View::AudioTrim { file: f, .. } if *f == file) {
+                        match res {
+                            Ok(a) => {
+                                let t = ferrocast_core::videoplan::Trim::new(a.duration, 100.0);
+                                if let (Some(t), Some(View::AudioTrim { trim, audio, .. })) = (t, self.stack.last_mut()) {
+                                    (*trim, *audio) = (Some(t), Some(Arc::new(a)));
+                                } else {
+                                    self.pop();
+                                    self.toast("Trim Audio: this audio is too short");
+                                }
+                            }
+                            Err(e) => {
+                                self.pop();
+                                self.toast(format!("Trim Audio: {e}"));
+                            }
+                        }
+                    }
+                    self.ctx.request_repaint();
                 }
                 Msg::VideoFrame(file, t, png) => {
                     if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } | View::VideoSplit { file: f, .. } if *f == file)
@@ -2492,6 +2522,7 @@ impl App {
                 ("Redact Areas…", "redact hide blur privacy", Act::RedactImage(p.clone())),
                 ("Add Background…", "background frame blur shadow", Act::FrameImage(p.clone())),
             ]),
+            Family::Audio => list.push(("Trim Audio…", "trim cut waveform silence start end", Act::TrimAudio(p.clone()))),
             _ => {}
         }
         if ext(&p) == "pdf" {
@@ -3622,6 +3653,18 @@ impl App {
                     }
                 }
             }
+            Act::TrimAudio(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || {
+                        let res = crate::media_tools::audio_samples(ff, &f, crate::media_tools::AUDIO_CAP);
+                        bus.send(Msg::AudioLoaded(f, res));
+                    });
+                    self.show();
+                    self.push(View::AudioTrim { file, trim: None, audio: None });
+                }
+            },
             Act::CollageImages(files) => {
                 if files.len() < 2 {
                     self.toast("A collage needs at least two images");
@@ -4088,6 +4131,7 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (NormalizeAudio, _) => ToolReach::File(FileTool::Normalize(-16.0, 11.0, -1.5)),
         (AudioChannels, _) => ToolReach::File(FileTool::Channels(false, 1.0, 1.0)),
         (AudioToVideo, _) => ToolReach::File(FileTool::Visualize(ferrocast_core::media::Canvas::Landscape)),
+        (TrimAudio, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::TrimAudio(p)),
         (TrimAudio, _) => ToolReach::File(FileTool::TrimSilence),
         (ExtractArchive, _) if !files.is_empty() => ToolReach::File(FileTool::Extract),
         _ => ToolReach::Open,

@@ -2170,3 +2170,275 @@ fn edit_metadata_media_without_ffmpeg_toasts_the_hint_and_opens_nothing() {
     assert!(matches!(app.view(), View::Root));
     assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
 }
+
+// ---- A10c: audio trim window
+
+fn synth_audio(secs: f64, lead: f64, tone: f64) -> Arc<crate::media_tools::AudioSamples> {
+    let rate = 8000usize;
+    let n = (secs * rate as f64) as usize;
+    let (a, b) = ((lead * rate as f64) as usize, ((lead + tone) * rate as f64) as usize);
+    let samples = (0..n)
+        .map(|i| {
+            if i >= a && i < b {
+                if (i / 9) % 2 == 0 {
+                    16000
+                } else {
+                    -16000
+                }
+            } else {
+                0
+            }
+        })
+        .collect();
+    Arc::new(crate::media_tools::AudioSamples { samples, rate: rate as u32, duration: secs, truncated: false })
+}
+
+fn atrim_file() -> std::path::PathBuf {
+    std::env::temp_dir().join("fc-atrim-view.mp3")
+}
+
+fn atrim_view(app: &mut App, audio: Arc<crate::media_tools::AudioSamples>) {
+    let trim = ferrocast_core::videoplan::Trim::new(audio.duration, 100.0);
+    app.stack = vec![View::Root, View::AudioTrim { file: atrim_file(), trim, audio: Some(audio) }];
+}
+
+fn atrim_state(app: &App) -> ferrocast_core::videoplan::Trim {
+    match app.view() {
+        View::AudioTrim { trim: Some(t), .. } => *t,
+        other => panic!("audio trim view closed or not loaded: {}", other.title()),
+    }
+}
+
+fn click_at(app: &mut App, pos: Pos2) {
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(app, vec![Event::PointerMoved(pos)]);
+    render(app, vec![btn(true)]);
+    render(app, vec![btn(false)]);
+    render(app, vec![]);
+}
+
+const ATRIM_START_BOX: (f32, f32) = (108.0, 312.0);
+const ATRIM_END_BOX: (f32, f32) = (195.0, 312.0);
+const ATRIM_SILENCE_BTN: (f32, f32) = (260.0, 312.0);
+
+#[test]
+fn audio_trim_view_renders_loading_loaded_and_long_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        app.stack = vec![View::Root, View::AudioTrim { file: atrim_file(), trim: None, audio: None }];
+        render(&mut app, vec![]);
+        assert_eq!(app.view().title(), "Trim Audio");
+        atrim_view(&mut app, synth_audio(6.0, 1.0, 3.0));
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        // ten minutes of samples: still drawn in at most 800 buckets, and cached between frames
+        atrim_view(&mut app, synth_audio(600.0, 100.0, 300.0));
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        assert!(matches!(app.view(), View::AudioTrim { trim: Some(_), .. }));
+    }
+}
+
+#[test]
+fn audio_loaded_fills_the_window_and_ignores_another_file() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::AudioTrim { file: atrim_file(), trim: None, audio: None }];
+    render(&mut app, vec![]);
+    app.bus.send(Msg::AudioLoaded(std::path::PathBuf::from("/nonexistent/other.mp3"), Ok((*synth_audio(6.0, 1.0, 3.0)).clone())));
+    app.drain();
+    assert!(matches!(app.view(), View::AudioTrim { trim: None, audio: None, .. }), "a reply for another file is ignored");
+    app.bus.send(Msg::AudioLoaded(atrim_file(), Ok((*synth_audio(6.0, 1.0, 3.0)).clone())));
+    app.drain();
+    let t = atrim_state(&app);
+    assert!(t.is_whole() && (t.duration - 6.0).abs() < 1e-9 && (t.fps - 100.0).abs() < 1e-9);
+    assert!(matches!(app.view(), View::AudioTrim { audio: Some(_), .. }));
+}
+
+#[test]
+fn audio_loaded_error_for_the_window_closes_it_with_a_toast() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::AudioTrim { file: atrim_file(), trim: None, audio: None }];
+    app.bus.send(Msg::AudioLoaded(atrim_file(), Err("no audio in this file".into())));
+    app.drain();
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("no audio")), "{:?}", app.toast);
+}
+
+#[test]
+fn audio_trim_arrows_move_the_cursor_by_ten_ms_and_one_second() {
+    let mut app = fixture();
+    atrim_view(&mut app, synth_audio(6.0, 1.0, 3.0));
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert!((atrim_state(&app).cursor - 0.01).abs() < 1e-9, "{}", atrim_state(&app).cursor);
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowRight, Modifiers::SHIFT)], Modifiers::SHIFT);
+    assert!((atrim_state(&app).cursor - 1.01).abs() < 1e-9, "Shift moves a second, not ten ms: {}", atrim_state(&app).cursor);
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowLeft, Modifiers::SHIFT)], Modifiers::SHIFT);
+    render(&mut app, vec![key_event(Key::ArrowLeft)]);
+    assert!(atrim_state(&app).cursor.abs() < 1e-9, "{}", atrim_state(&app).cursor);
+}
+
+#[test]
+fn audio_trim_i_and_o_set_markers_and_home_end_jump_to_them() {
+    let mut app = fixture();
+    atrim_view(&mut app, synth_audio(6.0, 1.0, 3.0));
+    render(&mut app, vec![]);
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowRight, Modifiers::SHIFT)], Modifiers::SHIFT);
+    render(&mut app, vec![key_event(Key::I)]);
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowRight, Modifiers::SHIFT)], Modifiers::SHIFT);
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowRight, Modifiers::SHIFT)], Modifiers::SHIFT);
+    render(&mut app, vec![key_event(Key::O)]);
+    let t = atrim_state(&app);
+    assert!((t.start - 1.0).abs() < 1e-9 && (t.end - 3.0).abs() < 1e-9, "{t:?}");
+    render(&mut app, vec![key_event(Key::Home)]);
+    assert!((atrim_state(&app).cursor - 1.0).abs() < 1e-9);
+    render(&mut app, vec![key_event(Key::End)]);
+    assert!((atrim_state(&app).cursor - 2.99).abs() < 1e-9, "{}", atrim_state(&app).cursor);
+}
+
+#[test]
+fn audio_trim_clicking_the_waveform_seeks() {
+    let mut app = fixture();
+    atrim_view(&mut app, synth_audio(6.0, 1.0, 3.0));
+    render(&mut app, vec![]);
+    click_at(&mut app, Pos2::new(375.0, 200.0));
+    let c = atrim_state(&app).cursor;
+    assert!((c - 3.0).abs() < 0.6, "cursor {c} should be near the middle");
+}
+
+#[test]
+fn audio_trim_escape_goes_back_and_starts_no_job() {
+    let mut app = fixture();
+    atrim_view(&mut app, synth_audio(6.0, 1.0, 3.0));
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err(), "Escape starts no job");
+}
+
+#[test]
+fn audio_trim_enter_with_the_whole_clip_refuses() {
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
+    atrim_view(&mut app, synth_audio(6.0, 1.0, 3.0));
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::AudioTrim { .. }), "a whole-clip selection stays");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Nothing to trim")), "{:?}", app.toast);
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn audio_trim_enter_with_a_range_dispatches_and_pops() {
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
+    atrim_view(&mut app, synth_audio(6.0, 1.0, 3.0));
+    if let Some(View::AudioTrim { trim: Some(t), .. }) = app.stack.last_mut() {
+        assert!(t.set_range(1.0, 4.0));
+    }
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root), "the window closes once the job is dispatched");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Trimming")), "{:?}", app.toast);
+}
+
+// L74-style: Escape while the Start box is edited ends the edit but keeps the window.
+#[test]
+fn audio_trim_start_box_keeps_escape_while_editing() {
+    let mut app = fixture();
+    atrim_view(&mut app, synth_audio(6.0, 1.0, 3.0));
+    render(&mut app, vec![]);
+    click_at(&mut app, Pos2::new(ATRIM_START_BOX.0, ATRIM_START_BOX.1));
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the Start box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::AudioTrim { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+}
+
+#[test]
+fn audio_trim_enter_while_a_box_is_edited_does_not_dispatch() {
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
+    atrim_view(&mut app, synth_audio(6.0, 1.0, 3.0));
+    if let Some(View::AudioTrim { trim: Some(t), .. }) = app.stack.last_mut() {
+        t.set_range(1.0, 4.0);
+    }
+    render(&mut app, vec![]);
+    click_at(&mut app, Pos2::new(ATRIM_END_BOX.0, ATRIM_END_BOX.1));
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the End box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::AudioTrim { .. }), "Enter confirms the number, it does not start the trim");
+}
+
+#[test]
+fn audio_trim_silence_button_sets_start_and_end_then_reports_no_change() {
+    let mut app = fixture();
+    atrim_view(&mut app, synth_audio(6.0, 1.0, 3.0));
+    render(&mut app, vec![]);
+    click_at(&mut app, Pos2::new(ATRIM_SILENCE_BTN.0, ATRIM_SILENCE_BTN.1));
+    let t = atrim_state(&app);
+    assert!((t.start - 1.0).abs() < 0.05 && (t.end - 4.0).abs() < 0.05, "{t:?}");
+    app.toast = None;
+    click_at(&mut app, Pos2::new(ATRIM_SILENCE_BTN.0, ATRIM_SILENCE_BTN.1));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("No silence to trim")), "{:?}", app.toast);
+}
+
+#[test]
+fn audio_trim_silence_button_on_pure_silence_toasts() {
+    let mut app = fixture();
+    atrim_view(&mut app, synth_audio(6.0, 0.0, 0.0));
+    render(&mut app, vec![]);
+    click_at(&mut app, Pos2::new(ATRIM_SILENCE_BTN.0, ATRIM_SILENCE_BTN.1));
+    assert!(atrim_state(&app).is_whole());
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("No silence to trim")), "{:?}", app.toast);
+}
+
+#[test]
+fn convert_view_offers_trim_audio_for_one_mp3_only() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-atrimoffer-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let has = |app: &mut App, names: &[&str]| -> bool {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.sections()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .any(|i| i.title == "Trim Audio…" && matches!(i.kind, Kind::Editor(Act::TrimAudio(_))))
+    };
+    assert!(has(&mut app, &["a.mp3"]));
+    assert!(!has(&mut app, &["a.mp3", "b.mp3"]));
+    assert!(!has(&mut app, &["a.mp4"]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_trim_audio_opens_the_window_for_one_file_and_keeps_the_preset_for_several() {
+    use ferrocast_core::convert::FileTool;
+    use ferrocast_core::tools::{implemented, Impl, ToolId};
+    let a = std::path::PathBuf::from("/nonexistent/a.mp3");
+    let b = std::path::PathBuf::from("/nonexistent/b.mp3");
+    assert!(matches!(tool_reach(ToolId::TrimAudio, std::slice::from_ref(&a)), ToolReach::Act(Act::TrimAudio(_))));
+    assert!(matches!(tool_reach(ToolId::TrimAudio, &[a, b]), ToolReach::File(FileTool::TrimSilence)));
+    assert_eq!(implemented(ToolId::TrimAudio), Impl::Window);
+}
+
+#[test]
+fn trim_audio_without_ffmpeg_shows_the_hint_and_opens_no_view() {
+    let mut app = fixture();
+    app.tools = Default::default();
+    let depth = app.stack.len();
+    app.perform(Act::TrimAudio(atrim_file()), false);
+    assert_eq!(app.stack.len(), depth);
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
+}

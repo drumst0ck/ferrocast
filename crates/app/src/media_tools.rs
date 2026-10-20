@@ -121,6 +121,50 @@ fn streams(info: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value>
     info["streams"].as_array().into_iter().flatten()
 }
 
+/// Sample rate of the mono PCM the audio trim window works on.
+pub(crate) const AUDIO_RATE: u32 = 8000;
+/// Most PCM bytes read for the waveform: 32 MiB is about 33 minutes at 8 kHz.
+pub(crate) const AUDIO_CAP: u64 = 32 << 20;
+
+/// Mono 8 kHz samples of an audio file for the waveform, and the real duration of the file.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AudioSamples {
+    pub samples: Vec<i16>,
+    pub rate: u32,
+    /// Duration of the whole file (ffprobe), even when the samples were cut at the cap.
+    pub duration: f64,
+    /// The file held more PCM than the cap, so `samples` covers only its start.
+    pub truncated: bool,
+}
+
+/// Cached waveform bars: (samples address, sample count, bucket count) and the peaks drawn.
+pub(crate) type PeaksCache = ((usize, usize, usize), std::sync::Arc<Vec<(i16, i16)>>);
+
+/// Little-endian signed 16-bit PCM bytes to samples; an odd trailing byte is ignored.
+pub(crate) fn pcm_s16le(bytes: &[u8]) -> Vec<i16> {
+    bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+}
+
+/// Decode `path` to mono 8 kHz PCM (at most `cap_bytes` of it) under a 60 s deadline. Never call
+/// it on the UI thread.
+pub(crate) fn audio_samples(ffmpeg: &str, path: &Path, cap_bytes: u64) -> Result<AudioSamples, String> {
+    let info = probe_raw(ffmpeg, path, &["-show_format"])?;
+    let info: serde_json::Value = serde_json::from_slice(&info).map_err(|e| e.to_string())?;
+    let duration = info["format"]["duration"]
+        .as_str()
+        .and_then(|d| d.parse::<f64>().ok())
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .ok_or("could not read the length of this audio")?;
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-nostdin", "-v", "error", "-i"]).arg(path).args(["-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "-"]);
+    let (bytes, truncated) = crate::route::run_capped(&mut cmd, 60, cap_bytes)?;
+    let samples = pcm_s16le(&bytes);
+    if samples.is_empty() {
+        return Err("no audio in this file".into());
+    }
+    Ok(AudioSamples { samples, rate: AUDIO_RATE, duration, truncated })
+}
+
 /// Duration (s) and frame rate of a video, from ffprobe under its own deadline.
 pub(crate) fn video_info(ff: &str, file: &Path) -> Option<(f64, f64)> {
     let info = probe(ff, file).ok()?;

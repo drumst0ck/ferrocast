@@ -68,6 +68,34 @@ impl Trim {
         }
     }
 
+    /// Exact start (typed seconds): kept inside the clip and at least `MIN_CLIP` before the end.
+    pub fn set_start(&mut self, s: f64) {
+        if s.is_finite() {
+            self.start = s.clamp(0.0, (self.end - MIN_CLIP).max(0.0));
+        }
+    }
+
+    /// Exact end (typed seconds): kept inside the clip and at least `MIN_CLIP` after the start.
+    pub fn set_end(&mut self, e: f64) {
+        if e.is_finite() {
+            self.end = e.clamp((self.start + MIN_CLIP).min(self.duration), self.duration);
+        }
+    }
+
+    /// Set both markers at once, clamped to the clip. A range shorter than `MIN_CLIP` is refused.
+    /// True when the markers actually moved.
+    pub fn set_range(&mut self, a: f64, b: f64) -> bool {
+        if !a.is_finite() || !b.is_finite() {
+            return false;
+        }
+        let (a, b) = (a.clamp(0.0, self.duration), b.clamp(0.0, self.duration));
+        if b - a < MIN_CLIP || ((a - self.start).abs() < 1e-6 && (b - self.end).abs() < 1e-6) {
+            return false;
+        }
+        (self.start, self.end) = (a, b);
+        true
+    }
+
     pub fn is_whole(&self) -> bool {
         self.start <= 0.0 && (self.duration - self.end).abs() < 1e-6
     }
@@ -363,5 +391,37 @@ mod tests {
         assert_eq!(points_to_ranges(10.0, &[9.99]), vec![(0.0, 10.0)], "tiny last piece");
         let r = points_to_ranges(10.0, &[1.0, 1.02, 1.04, 4.0, 4.03, 9.97]);
         assert!(contiguous(&r, 10.0), "{r:?}");
+    }
+
+    #[test]
+    fn exact_start_and_end_keep_a_minimum_clip_inside_the_timeline() {
+        let mut v = t();
+        v.set_start(3.0);
+        v.set_end(7.5);
+        assert_eq!((v.start, v.end), (3.0, 7.5));
+        v.set_start(50.0);
+        assert!((v.start - (7.5 - MIN_CLIP)).abs() < 1e-9, "start stops one minimum clip before the end");
+        v.set_end(-4.0);
+        assert!((v.end - (v.start + MIN_CLIP)).abs() < 1e-9, "end stops one minimum clip after the start");
+        v.set_start(-2.0);
+        assert_eq!(v.start, 0.0);
+        v.set_end(99.0);
+        assert_eq!(v.end, 10.0);
+        let before = v;
+        v.set_start(f64::NAN);
+        v.set_end(f64::INFINITY);
+        assert_eq!(v, before, "numbers that are not numbers change nothing");
+    }
+
+    #[test]
+    fn set_range_applies_a_valid_range_and_reports_whether_it_changed_anything() {
+        let mut v = t();
+        assert!(v.set_range(1.0, 4.0));
+        assert_eq!((v.start, v.end), (1.0, 4.0));
+        assert!(!v.set_range(1.0, 4.0), "the same range changes nothing");
+        assert!(!v.set_range(5.0, 5.01), "a range shorter than the minimum clip is refused");
+        assert_eq!((v.start, v.end), (1.0, 4.0));
+        assert!(v.set_range(-1.0, 99.0), "a range past the ends is clamped");
+        assert!(v.is_whole());
     }
 }

@@ -797,3 +797,129 @@ function run(argv) { var doc = $.PDFDocument.alloc.init;
         assert_eq!(o, [d.join("doc edited 2.pdf")], "{errs:?}");
     }
 }
+
+// ---- A10b: audio sample extractor
+
+mod audio_samples_pure {
+    use crate::media_tools::pcm_s16le;
+    use crate::route::read_capped;
+
+    #[test]
+    fn little_endian_bytes_become_i16_and_an_odd_trailing_byte_is_ignored() {
+        assert_eq!(pcm_s16le(&[0x01, 0x00, 0xff, 0xff, 0x00, 0x80, 0xff, 0x7f]), vec![1, -1, i16::MIN, i16::MAX]);
+        assert_eq!(pcm_s16le(&[0x34, 0x12, 0x99]), vec![0x1234], "the lone last byte is dropped");
+        assert!(pcm_s16le(&[0x55]).is_empty());
+        assert!(pcm_s16le(&[]).is_empty());
+    }
+
+    #[test]
+    fn read_capped_stops_at_the_cap_flags_truncation_and_drains_the_rest() {
+        let data: Vec<u8> = (0..100u8).collect();
+        let mut src = std::io::Cursor::new(data.clone());
+        let (got, truncated) = read_capped(&mut src, 40);
+        assert_eq!(got, &data[..40]);
+        assert!(truncated);
+        assert_eq!(src.position(), 100, "the source was drained to the end so a child never blocks");
+    }
+
+    #[test]
+    fn read_capped_is_not_truncated_at_or_below_the_cap() {
+        let data = vec![7u8; 40];
+        assert_eq!(read_capped(std::io::Cursor::new(data.clone()), 40), (data.clone(), false));
+        assert_eq!(read_capped(std::io::Cursor::new(data.clone()), 1000), (data, false));
+        assert_eq!(read_capped(std::io::Cursor::new(Vec::<u8>::new()), 10), (vec![], false));
+    }
+}
+
+mod audio_samples_real {
+    use crate::media_tools::{audio_samples, AUDIO_CAP, AUDIO_RATE};
+    use ferrocast_core::convert::Tools;
+    use ferrocast_core::waveform::{peaks, silence_bounds};
+    use std::process::Command;
+
+    fn ffmpeg(ff: &str, args: &[&str]) {
+        crate::route::run_limited(Command::new(ff).args(["-nostdin", "-y", "-loglevel", "error"]).args(args), 60).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn a_three_second_tone_gives_about_24000_samples_with_a_real_peak() {
+        let ff = Tools::detect().ffmpeg.expect("ffmpeg is required for this explicit check");
+        let dir = std::env::temp_dir().join(format!("fc-a10b-tone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("tone.mp3");
+        ffmpeg(ff, &["-f", "lavfi", "-i", "sine=f=440:d=3", f.to_str().unwrap()]);
+        let a = audio_samples(ff, &f, AUDIO_CAP).unwrap();
+        assert_eq!(a.rate, AUDIO_RATE);
+        assert!(!a.truncated);
+        assert!((a.samples.len() as i64 - 24000).abs() < 1200, "{} samples", a.samples.len());
+        assert!((a.duration - 3.0).abs() < 0.1, "duration {}", a.duration);
+        let top = peaks(&a.samples, 100).iter().map(|p| p.1.max(-p.0)).max().unwrap();
+        // ffmpeg's sine is 1/8 of full scale (about 4096)
+        assert!(top > 2000, "the tone must have a clear peak, got {top}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn silence_tone_silence_clip_has_bounds_near_one_and_four_seconds() {
+        let ff = Tools::detect().ffmpeg.expect("ffmpeg is required for this explicit check");
+        let dir = std::env::temp_dir().join(format!("fc-a10b-bounds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("t.mp3");
+        ffmpeg(
+            ff,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=mono:d=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=440:r=44100:d=3",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=mono:d=2",
+                "-filter_complex",
+                "[0][1][2]concat=n=3:v=0:a=1",
+                f.to_str().unwrap(),
+            ],
+        );
+        let a = audio_samples(ff, &f, AUDIO_CAP).unwrap();
+        assert!((a.duration - 6.0).abs() < 0.2, "duration {}", a.duration);
+        let (s, e) = silence_bounds(&a.samples, a.rate, -40.0).expect("there is sound");
+        assert!((s - 1.0).abs() < 0.1, "start {s}");
+        assert!((e - 4.0).abs() < 0.1, "end {e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn a_missing_or_garbage_file_is_an_error_not_a_panic() {
+        let ff = Tools::detect().ffmpeg.expect("ffmpeg is required for this explicit check");
+        let dir = std::env::temp_dir().join(format!("fc-a10b-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(audio_samples(ff, &dir.join("missing.mp3"), AUDIO_CAP).is_err());
+        let g = dir.join("garbage.mp3");
+        std::fs::write(&g, b"this is not audio at all, just text").unwrap();
+        assert!(audio_samples(ff, &g, AUDIO_CAP).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn a_tiny_cap_truncates_and_still_finishes() {
+        let ff = Tools::detect().ffmpeg.expect("ffmpeg is required for this explicit check");
+        let dir = std::env::temp_dir().join(format!("fc-a10b-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("tone.wav");
+        ffmpeg(ff, &["-f", "lavfi", "-i", "sine=f=440:d=3", f.to_str().unwrap()]);
+        let a = audio_samples(ff, &f, 8000).unwrap();
+        assert!(a.truncated);
+        assert_eq!(a.samples.len(), 4000, "8000 bytes are 4000 samples");
+        assert!((a.duration - 3.0).abs() < 0.1, "the duration is still the whole file's");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
