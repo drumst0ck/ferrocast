@@ -16,7 +16,7 @@ use objc2_app_kit::{
     NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowCollectionBehavior,
     NSWindowStyleMask, NSWorkspace,
 };
-use objc2_foundation::{NSArray, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSURL};
+use objc2_foundation::{NSArray, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
 /// Screen edge the shelf is pinned to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,7 +167,7 @@ define_class!(
             }
             let mut drag_items = Vec::new();
             for (i, p) in paths.iter().enumerate() {
-                let url = NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()));
+                let Some(url) = crate::clipboard::ns_file_url(p) else { continue };
                 let writer: &ProtocolObject<dyn NSPasteboardWriting> =
                     ProtocolObject::from_ref(&*url);
                 let item = NSDraggingItem::initWithPasteboardWriter(

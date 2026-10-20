@@ -179,13 +179,14 @@ pub fn airdrop(paths: &[PathBuf]) -> anyhow::Result<()> {
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2_app_kit::{NSSharingService, NSSharingServiceNameSendViaAirDrop};
-    use objc2_foundation::{NSArray, NSString, NSURL};
+    use objc2_foundation::NSArray;
     let service = NSSharingService::sharingServiceNamed(unsafe { NSSharingServiceNameSendViaAirDrop })
         .ok_or_else(|| anyhow::anyhow!("AirDrop is not available on this Mac"))?;
-    let urls: Vec<Retained<AnyObject>> = paths
-        .iter()
-        .map(|p| Retained::into_super(Retained::into_super(NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy())))))
-        .collect();
+    let urls: Vec<Retained<AnyObject>> =
+        paths.iter().filter_map(|p| crate::clipboard::ns_file_url(p)).map(|u| Retained::into_super(Retained::into_super(u))).collect();
+    if urls.is_empty() {
+        anyhow::bail!("There is nothing to share");
+    }
     let items = NSArray::from_retained_slice(&urls);
     if !unsafe { service.canPerformWithItems(Some(&items)) } {
         anyhow::bail!("AirDrop cannot share these items");
