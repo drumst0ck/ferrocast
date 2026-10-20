@@ -112,6 +112,29 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("collage") => {
+                let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
+                    .unwrap_or_default()
+                    .split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                let imgs: Vec<image::RgbaImage> = files
+                    .iter()
+                    .filter_map(|f| services::display_png(f, 300).and_then(|p| image::load_from_memory(&p).ok()).map(|i| i.to_rgba8()))
+                    .collect();
+                if imgs.len() == files.len() && files.len() >= 2 {
+                    ctx.data_mut(|d| d.insert_temp(Id::new("collage-base"), std::sync::Arc::new(imgs)));
+                    let opts = ferrocast_core::collage::CollageOpts {
+                        layout: ferrocast_core::collage::Layout::Featured,
+                        gap: 24,
+                        radius: 40,
+                        bg: Some(ferrocast_core::annotate::COLORS[4]),
+                        ..Default::default()
+                    };
+                    app.push(View::CollageImage { files, opts, color: 4 });
+                }
+            }
             Ok("frame") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let (Some(size), Some(png)) = (services::image_size(&file), services::display_png(&file, 600)) {
@@ -348,7 +371,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. }) && ctx.egui_wants_keyboard_input());
+            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. }) && ctx.egui_wants_keyboard_input());
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -473,6 +496,12 @@ impl App {
                     );
                     self.pop();
                 }
+                true
+            }
+            View::CollageImage { files, opts, .. } if k.enter => {
+                self.toast("Saving collage…");
+                services::image_op_files(files, ferrocast_core::convert::ImageOp::CollageWith(opts), self.bus.clone());
+                self.pop();
                 true
             }
             View::FrameImage { file, opts, .. } if k.enter => {
@@ -1422,6 +1451,121 @@ impl App {
         p.text(c, Align2::CENTER_CENTER, hint, FontId::proportional(12.0), pal.text);
     }
 
+    /// Collage editor: layout buttons, width/gap/corner sliders and a background; the preview is
+    /// laid out on small copies of the pictures with the sizes scaled to match.
+    fn draw_collage(
+        &mut self,
+        ui: &mut Ui,
+        area_in: Rect,
+        pal: &Palette,
+        n: usize,
+        opts: ferrocast_core::collage::CollageOpts,
+        color: usize,
+    ) {
+        use ferrocast_core::collage::{layout, Layout};
+        let ctx = ui.ctx().clone();
+        let (mut o, mut color) = (opts, color);
+        let panel = Rect::from_min_max(Pos2::new(area_in.max.x - 300.0, area_in.min.y + 12.0), area_in.max - Vec2::new(16.0, 34.0));
+        ui.scope_builder(UiBuilder::new().max_rect(panel), |ui| {
+            ui.spacing_mut().slider_width = 150.0;
+            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.horizontal(|ui| {
+                for (l, t) in [(Layout::Grid, "Grid"), (Layout::Row, "Row"), (Layout::Column, "Column"), (Layout::Featured, "Featured")] {
+                    if ui.selectable_label(o.layout == l, t).clicked() {
+                        o.layout = l;
+                    }
+                }
+            });
+            let mut auto = o.width.is_none();
+            if ui.checkbox(&mut auto, "Automatic width").changed() {
+                o.width = if auto { None } else { Some(1600) };
+            }
+            if let Some(w) = o.width.as_mut() {
+                ui.horizontal(|ui| {
+                    ui.add_sized([70.0, 18.0], egui::Label::new(RichText::new("Width").size(12.5).color(pal.sub)));
+                    ui.add(egui::Slider::new(w, 200..=6000));
+                });
+            }
+            for (label, v, max) in [("Spacing", &mut o.gap, 100u32), ("Corners", &mut o.radius, 300)] {
+                ui.horizontal(|ui| {
+                    ui.add_sized([70.0, 18.0], egui::Label::new(RichText::new(label).size(12.5).color(pal.sub)));
+                    ui.add(egui::Slider::new(v, 0..=max));
+                });
+            }
+            ui.horizontal(|ui| {
+                for (i, k) in ferrocast_core::annotate::COLORS.iter().enumerate() {
+                    let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+                    ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(k[0], k[1], k[2]));
+                    if o.bg == Some(*k) && i == color {
+                        ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
+                    }
+                    if resp.clicked() {
+                        color = i;
+                        o.bg = Some(*k);
+                    }
+                }
+                let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+                ui.painter().circle_filled(r.center(), 8.0, egui::Color32::WHITE);
+                if resp.clicked() {
+                    o.bg = Some([255, 255, 255]);
+                }
+                if ui.selectable_label(o.bg.is_none(), "None").clicked() {
+                    o.bg = None;
+                }
+            });
+        });
+        if o != opts {
+            if let Some(View::CollageImage { opts: p, color: c, .. }) = self.stack.last_mut() {
+                (*p, *c) = (o, color);
+            }
+            ctx.request_repaint();
+        }
+        let area = Rect::from_min_max(area_in.min + Vec2::new(16.0, 14.0), Pos2::new(area_in.max.x - 316.0, area_in.max.y - 34.0));
+        let base: Option<std::sync::Arc<Vec<image::RgbaImage>>> = ctx.data(|d| d.get_temp(Id::new("collage-base")));
+        if let Some(b) = base {
+            let last: Option<ferrocast_core::collage::CollageOpts> = ctx.data(|d| d.get_temp(Id::new("collage-last")));
+            if last != Some(o) && b.len() == n {
+                // final size first, then shrink every length by the same factor for the preview
+                let ((fw, _), _) = layout(n, &o);
+                let k = 480.0 / fw.max(1) as f32;
+                let small = ferrocast_core::collage::CollageOpts {
+                    width: Some(480),
+                    gap: (o.gap as f32 * k).round() as u32,
+                    radius: (o.radius as f32 * k).round() as u32,
+                    ..o
+                };
+                let out = services::collage_compose(&b, &small);
+                let (w, h) = (out.width() as usize, out.height() as usize);
+                let tex = ctx.load_texture(
+                    "collage-view",
+                    egui::ColorImage::from_rgba_unmultiplied([w, h], out.as_raw()),
+                    egui::TextureOptions::LINEAR,
+                );
+                ctx.data_mut(|d| {
+                    d.insert_temp(Id::new("collage-tex"), tex);
+                    d.insert_temp(Id::new("collage-last"), o);
+                });
+            }
+        }
+        match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("collage-tex"))) {
+            Some(tex) => {
+                let t = tex.size_vec2();
+                let k = (area.width() / t.x).min(area.height() / t.y);
+                egui::Image::new(&tex).paint_at(ui, Rect::from_center_size(area.center(), t * k));
+            }
+            None => {
+                ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
+            }
+        }
+        ui.painter().text(
+            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            format!("{n} pictures · the preview is a reduced copy · ↵ save the collage · esc cancel"),
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
     /// Background editor: sliders for padding, corners and shadow, a colour or blurred backdrop;
     /// the preview is composed on a 600 px copy with the sizes scaled down.
     fn draw_frame(
@@ -2234,6 +2378,9 @@ impl App {
                         self.save_notes();
                     }
                 });
+            }
+            View::CollageImage { files, opts, color } => {
+                self.draw_collage(ui, rect, pal, files.len(), opts, color);
             }
             View::FrameImage { size, opts, color, .. } => {
                 self.draw_frame(ui, rect, pal, size, opts, color);

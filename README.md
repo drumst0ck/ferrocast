@@ -83,7 +83,8 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Editor de recorte (⇧⌘K: rectángulo arrastrable con asas, proporciones fijas, ancho y alto exactos; copia con ↵) | Implementado; dibujo verificado por captura y recorte con archivo real; arrastre sin probar en sesión real |
 | Editor de redacción (⇧⌘R: arrastrar para añadir áreas, moverlas y cambiar su tamaño, color sólido o desenfoque; copia con ↵) | Implementado; dibujo verificado por captura, arrastre sin probar en sesión real; la vista previa solo marca las áreas |
 | Editor de fondo (⇧⌘B: margen, esquinas y sombra con deslizadores, fondo de color o copia desenfocada; copia con ↵) | Implementado; dibujo verificado por captura, deslizadores sin probar en sesión real; otra imagen como fondo solo con `frame image` |
-| Editores con vista previa en vivo de collage y vídeo | No incluido: solo órdenes escritas |
+| Editor de collage (con 2 o más imágenes: cuadrícula, fila, columna o destacado; ancho, separación, esquinas y fondo; copia con ↵) | Implementado; dibujo verificado por captura, deslizadores sin probar en sesión real; sin reordenar imágenes arrastrando |
+| Editores con vista previa en vivo de vídeo | No incluido: solo órdenes escritas |
 | Extensiones React, sync, Search Menu Bar Items, contexto de IA (selección/pantalla) | No incluido |
 
 ## Distribución

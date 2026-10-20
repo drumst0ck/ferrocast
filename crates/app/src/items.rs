@@ -277,6 +277,8 @@ pub enum Act {
     ClearCalcHistory,
     /// Open the Convert view for these files.
     Convert(Vec<PathBuf>),
+    /// Open the collage editor for these images.
+    CollageImages(Vec<PathBuf>),
     /// Open the background editor for this image.
     FrameImage(PathBuf),
     /// Open the redaction editor for this image.

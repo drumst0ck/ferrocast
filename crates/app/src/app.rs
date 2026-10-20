@@ -66,6 +66,12 @@ pub enum View {
         color: usize,
         sel: Option<usize>,
     },
+    /// Collage editor: the pictures, the options and the colour index.
+    CollageImage {
+        files: Vec<PathBuf>,
+        opts: ferrocast_core::collage::CollageOpts,
+        color: usize,
+    },
     /// Background editor: file, pixel size, options and the colour index.
     FrameImage {
         file: PathBuf,
@@ -231,6 +237,7 @@ impl View {
             View::CropImage { .. } => "Crop Image",
             View::RedactImage { .. } => "Redact Image",
             View::FrameImage { .. } => "Add Background",
+            View::CollageImage { .. } => "Make a Collage",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -1024,6 +1031,9 @@ impl App {
         self.reset_to_root();
         let Some(i) = picked.filter(|i| *i < segs.len()) else { return };
         match segs[i].pick.clone() {
+            WheelPick::Image(ferrocast_core::convert::ImageOp::Collage) if files.len() >= 2 => {
+                self.perform(Act::CollageImages(files), false);
+            }
             WheelPick::Image(ferrocast_core::convert::ImageOp::Annotate) if files.len() == 1 => {
                 self.perform(Act::AnnotateCanvas(files[0].clone()), false);
             }
@@ -1081,6 +1091,20 @@ impl App {
                                 });
                             }
                             None => self.toast("Annotate: could not read the image"),
+                        }
+                    }
+                }
+                Msg::CollageLoaded(files, thumbs) => {
+                    if matches!(self.view(), View::CollageImage { files: f, .. } if *f == files) {
+                        let imgs: Vec<image::RgbaImage> =
+                            thumbs.into_iter().filter_map(|(w, h, px)| image::RgbaImage::from_raw(w as u32, h as u32, px)).collect();
+                        if imgs.len() == files.len() {
+                            self.ctx.data_mut(|d| {
+                                d.insert_temp(Id::new("collage-base"), std::sync::Arc::new(imgs));
+                                d.remove::<ferrocast_core::collage::CollageOpts>(Id::new("collage-last"));
+                            });
+                        } else {
+                            self.toast("Collage: could not read every image");
                         }
                     }
                 }
@@ -2432,6 +2456,10 @@ impl App {
                 self.hide();
                 self.reset_to_root();
             }
+            Kind::ImageTool(files, ferrocast_core::convert::ImageOp::Collage) if files.len() >= 2 => {
+                let f = files.clone();
+                self.perform(Act::CollageImages(f), false);
+            }
             Kind::ImageTool(files, ferrocast_core::convert::ImageOp::Annotate) if files.len() == 1 => {
                 let f = files[0].clone();
                 self.perform(Act::AnnotateCanvas(f), false);
@@ -2998,6 +3026,31 @@ impl App {
             Act::Convert(files) => {
                 self.show();
                 self.push(View::Convert(files));
+            }
+            Act::CollageImages(files) => {
+                if files.len() < 2 {
+                    self.toast("A collage needs at least two images");
+                } else {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("collage-tex"));
+                        d.remove::<std::sync::Arc<Vec<image::RgbaImage>>>(Id::new("collage-base"));
+                        d.remove::<ferrocast_core::collage::CollageOpts>(Id::new("collage-last"));
+                    });
+                    let (bus, fs) = (self.bus.clone(), files.clone());
+                    std::thread::spawn(move || {
+                        let thumbs: Vec<(usize, usize, Vec<u8>)> = fs
+                            .iter()
+                            .filter_map(|f| {
+                                let png = services::display_png(f, 300)?;
+                                let img = image::load_from_memory(&png).ok()?.to_rgba8();
+                                Some((img.width() as usize, img.height() as usize, img.into_raw()))
+                            })
+                            .collect();
+                        bus.send(Msg::CollageLoaded(fs, thumbs));
+                    });
+                    self.show();
+                    self.push(View::CollageImage { files, opts: Default::default(), color: 0 });
+                }
             }
             Act::FrameImage(file) => match services::image_size(&file) {
                 Some(size) => {

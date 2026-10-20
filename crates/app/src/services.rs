@@ -31,6 +31,8 @@ pub enum Msg {
     RedactLoaded(PathBuf, Option<Vec<u8>>),
     /// PNG of the image being framed, scaled for the live preview (None: unreadable).
     FrameLoaded(PathBuf, Option<Vec<u8>>),
+    /// Small decoded copies (w, h, RGBA) of the pictures of a collage being edited.
+    CollageLoaded(Vec<PathBuf>, Vec<(usize, usize, Vec<u8>)>),
     /// A picture chosen to stamp onto the image being annotated: where, and its RGBA pixels.
     StampChosen(PathBuf, (f32, f32), Option<(usize, usize, Vec<u8>)>),
     Script {
@@ -1994,55 +1996,66 @@ fn edit_photo(f: &std::path::Path, o: &ferrocast_core::photo::PhotoOpts) -> Resu
 /// Lay the images out in a grid of 600 px cells on white, as one PNG next to the first.
 static COLLAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-fn collage(files: &[PathBuf], o: &ferrocast_core::collage::CollageOpts) -> Result<PathBuf, String> {
+/// Lay decoded pictures out per `o` (each fills its cell, centred, with rounded corners). Pure
+/// pixel work so the editor can preview it on small copies.
+pub(crate) fn collage_compose(images: &[image::RgbaImage], o: &ferrocast_core::collage::CollageOpts) -> image::RgbaImage {
     use ferrocast_core::collage::{corner_alpha, layout};
+    let ((cw, ch), cells) = layout(images.len(), o);
+    let bg = o.bg.map(|c| image::Rgba([c[0], c[1], c[2], 255])).unwrap_or(image::Rgba([0, 0, 0, 0]));
+    let mut canvas = image::RgbaImage::from_pixel(cw.max(1), ch.max(1), bg);
+    for (img, cell) in images.iter().zip(&cells) {
+        // fill the cell (cover), centred
+        let scale = (cell.w as f32 / img.width() as f32).max(cell.h as f32 / img.height() as f32);
+        let (nw, nh) =
+            (((img.width() as f32 * scale).ceil() as u32).max(cell.w), ((img.height() as f32 * scale).ceil() as u32).max(cell.h));
+        let scaled = image::imageops::resize(img, nw, nh, image::imageops::FilterType::Triangle);
+        let (ox, oy) = ((nw - cell.w) / 2, (nh - cell.h) / 2);
+        for y in 0..cell.h {
+            for x in 0..cell.w {
+                let a = corner_alpha(x, y, cell.w, cell.h, o.radius);
+                if a <= 0.0 {
+                    continue;
+                }
+                let mut px = *scaled.get_pixel(x + ox, y + oy);
+                px.0[3] = (px.0[3] as f32 * a) as u8;
+                let dst = canvas.get_pixel_mut(cell.x + x, cell.y + y);
+                let sa = px.0[3] as f32 / 255.0;
+                for c in 0..3 {
+                    dst.0[c] = (px.0[c] as f32 * sa + dst.0[c] as f32 * (1.0 - sa)) as u8;
+                }
+                dst.0[3] = (px.0[3] as f32 + dst.0[3] as f32 * (1.0 - sa)).min(255.0) as u8;
+            }
+        }
+    }
+    canvas
+}
+
+fn collage(files: &[PathBuf], o: &ferrocast_core::collage::CollageOpts) -> Result<PathBuf, String> {
+    use ferrocast_core::collage::layout;
     use ferrocast_core::convert::output_with_suffix;
     let first = files.first().ok_or("no images")?;
     let ((cw, ch), cells) = layout(files.len(), o);
     if u64::from(cw) * u64::from(ch) > 120_000_000 {
         return Err("the collage would be too large; use a smaller width".into());
     }
-    let bg = o.bg.map(|c| image::Rgba([c[0], c[1], c[2], 255])).unwrap_or(image::Rgba([0, 0, 0, 0]));
-    let mut canvas = image::RgbaImage::from_pixel(cw, ch, bg);
     let tmp = std::env::temp_dir().join(format!(
         "ferrocast-collage-{}-{}",
         std::process::id(),
         COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let result: Result<(), String> = (|| {
-        for (f, cell) in files.iter().zip(&cells) {
+    let loaded: Result<Vec<image::RgbaImage>, String> = (|| {
+        let mut v = vec![];
+        for (i, (f, cell)) in files.iter().zip(&cells).enumerate() {
             // sips reads every format and scales; the image crate only needs PNG
-            let png = tmp.join(format!("{}.png", cell.x * 31 + cell.y));
+            let png = tmp.join(format!("{i}.png"));
             sips(&["-s", "format", "png", "-Z", &cell.w.max(cell.h).to_string(), &f.to_string_lossy(), "--out", &png.to_string_lossy()])?;
-            let img = image::open(&png).map_err(|e| e.to_string())?.to_rgba8();
-            // fill the cell (cover), centred
-            let scale = (cell.w as f32 / img.width() as f32).max(cell.h as f32 / img.height() as f32);
-            let (nw, nh) =
-                (((img.width() as f32 * scale).ceil() as u32).max(cell.w), ((img.height() as f32 * scale).ceil() as u32).max(cell.h));
-            let scaled = image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle);
-            let (ox, oy) = ((nw - cell.w) / 2, (nh - cell.h) / 2);
-            for y in 0..cell.h {
-                for x in 0..cell.w {
-                    let a = corner_alpha(x, y, cell.w, cell.h, o.radius);
-                    if a <= 0.0 {
-                        continue;
-                    }
-                    let mut px = *scaled.get_pixel(x + ox, y + oy);
-                    px.0[3] = (px.0[3] as f32 * a) as u8;
-                    let dst = canvas.get_pixel_mut(cell.x + x, cell.y + y);
-                    let sa = px.0[3] as f32 / 255.0;
-                    for c in 0..3 {
-                        dst.0[c] = (px.0[c] as f32 * sa + dst.0[c] as f32 * (1.0 - sa)) as u8;
-                    }
-                    dst.0[3] = (px.0[3] as f32 + dst.0[3] as f32 * (1.0 - sa)).min(255.0) as u8;
-                }
-            }
+            v.push(image::open(&png).map_err(|e| e.to_string())?.to_rgba8());
         }
-        Ok(())
+        Ok(v)
     })();
     let _ = std::fs::remove_dir_all(&tmp);
-    result?;
+    let canvas = collage_compose(&loaded?, o);
     let out = output_with_suffix(first, "collage", "png", |p| p.exists());
     canvas.save(&out).map_err(|e| e.to_string())?;
     Ok(out)
