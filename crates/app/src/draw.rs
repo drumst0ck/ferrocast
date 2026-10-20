@@ -4291,7 +4291,7 @@ impl App {
                 }
                 if clear_hotkey {
                     if let View::Hotkey { id, .. } = self.view().clone() {
-                        self.settings.command_mut(&id).hotkey = None;
+                        self.settings.command_mut(&id).hotkey = Some(String::new());
                         self.save_settings();
                         self.apply_hotkeys();
                         self.toast("Hotkey removed");
