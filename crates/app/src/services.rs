@@ -25,6 +25,8 @@ pub enum Msg {
     AnnotateLoaded(PathBuf, Option<Vec<u8>>),
     /// PNG of the image being edited, scaled for the live preview (None: unreadable).
     EditLoaded(PathBuf, Option<Vec<u8>>),
+    /// PNG of the image being cropped, scaled for display (None: unreadable).
+    CropLoaded(PathBuf, Option<Vec<u8>>),
     /// A picture chosen to stamp onto the image being annotated: where, and its RGBA pixels.
     StampChosen(PathBuf, (f32, f32), Option<(usize, usize, Vec<u8>)>),
     Script {
@@ -2295,6 +2297,26 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
                 sips(&["-c", &(*h).min(ih).to_string(), &(*w).min(iw).to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
                 Ok(out)
             }
+            ImageOp::CropRect(x, y, w, h) => {
+                let (iw, ih) = image_size(f).ok_or("could not read the image size")?;
+                if *w == 0 || *h == 0 || u64::from(*x) + u64::from(*w) > u64::from(iw) || u64::from(*y) + u64::from(*h) > u64::from(ih) {
+                    return Err(format!("the crop ({x},{y} {w}×{h}) is outside the image ({iw}×{ih} px)"));
+                }
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                // sips crops height × width at an offset measured from the top-left corner
+                sips(&[
+                    "-c",
+                    &h.to_string(),
+                    &w.to_string(),
+                    "--cropOffset",
+                    &y.to_string(),
+                    &x.to_string(),
+                    &f.to_string_lossy(),
+                    "--out",
+                    &out.to_string_lossy(),
+                ])?;
+                Ok(out)
+            }
             ImageOp::SetMeta(m) => {
                 let bytes = std::fs::read(f).map_err(|e| e.to_string())?;
                 let tagged =
@@ -2521,6 +2543,31 @@ mod convert_tests {
         assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255], "edge is the red background");
         assert_eq!(img.get_pixel(20, 20).0, [255, 0, 0, 255], "rounded corner shows the background");
         assert_ne!(img.get_pixel(w / 6, h / 2).0, [255, 0, 0, 255], "picture centre is not background");
+        // offset crop: the rectangle's own pixels, not the centre; a rectangle outside the image is refused
+        let crop_base = d.join("crop-base.png");
+        sips(&["-s", "format", "png", &wide[0].to_string_lossy(), "--out", &crop_base.to_string_lossy()]).unwrap();
+        // the source is a JPEG, so the copy is re-encoded: compare with a tolerance, and prove the
+        // offset by being closer to the rectangle's own pixels than to the top-left corner's
+        let (cr, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::CropRect(400, 200, 300, 200));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&cr[0]), Some((300, 200)), "exact size");
+        let (crp, crb) = (d.join("crop-out.png"), image::open(&crop_base).unwrap().to_rgba8());
+        sips(&["-s", "format", "png", &cr[0].to_string_lossy(), "--out", &crp.to_string_lossy()]).unwrap();
+        let cri = image::open(&crp).unwrap().to_rgba8();
+        let dist = |a: &image::Rgba<u8>, b: &image::Rgba<u8>| (0..3).map(|c| (a.0[c] as i32 - b.0[c] as i32).abs()).sum::<i32>();
+        let (mut from_offset, mut from_origin) = (0, 0);
+        for y in (0..200).step_by(10) {
+            for x in (0..300).step_by(10) {
+                from_offset += dist(cri.get_pixel(x, y), crb.get_pixel(400 + x, 200 + y));
+                from_origin += dist(cri.get_pixel(x, y), crb.get_pixel(x, y));
+            }
+        }
+        assert!(
+            from_offset * 4 < from_origin,
+            "the copy matches the offset rectangle ({from_offset}) far better than the corner ({from_origin})"
+        );
+        let (none, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::CropRect(900, 500, 300, 200));
+        assert!(none.is_empty() && e[0].contains("outside the image"), "{e:?}");
         // annotated copy: drawing lands at full size, the source is untouched, nothing is overwritten
         let mut ad = ferrocast_core::annotate::Doc::default();
         ad.add(

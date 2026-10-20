@@ -594,6 +594,8 @@ pub enum ImageOp {
     CompressByPercent(u8),
     /// Centre crop to exactly this many pixels (clamped to the image).
     CropExact(u32, u32),
+    /// Crop to this rectangle: x, y, width, height in pixels.
+    CropRect(u32, u32, u32, u32),
     /// Write camera and/or location tags into a JPEG's EXIF.
     SetMeta(MetaEdit),
 }
@@ -650,6 +652,7 @@ impl ImageOp {
             ImageOp::CompressToKb(kb) => format!("Compress · under {}", format_kb(*kb)),
             ImageOp::CompressByPercent(p) => format!("Compress · {p}% smaller"),
             ImageOp::CropExact(w, h) => format!("Crop · exactly {w}×{h} px"),
+            ImageOp::CropRect(_, _, w, h) => format!("Crop · {w}×{h} px"),
             ImageOp::SetMeta(m) => {
                 let mut parts = vec![];
                 if !m.make.is_empty() {
@@ -685,6 +688,7 @@ impl ImageOp {
             ImageOp::Annotate => "annotated".into(),
             ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compressed".into(),
             ImageOp::CropExact(w, h) => format!("{w}x{h}"),
+            ImageOp::CropRect(_, _, w, h) => format!("{w}x{h}"),
             ImageOp::SetMeta(_) => "tagged".into(),
         }
     }

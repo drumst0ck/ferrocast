@@ -112,6 +112,17 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("crop") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let (Some(size), Some(png)) = (services::image_size(&file), services::display_png(&file, 1000)) {
+                    if let Some(img) = services::decode_png(&png) {
+                        let tex = ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                        ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                    }
+                    let rect = ferrocast_core::croprect::fit_aspect(size.0, size.1, 4, 3);
+                    app.push(View::CropImage { file, size, rect, aspect: Some((4, 3)) });
+                }
+            }
             Ok("edit") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let (Some(size), Some(png)) = (services::image_size(&file), services::display_png(&file, 800)) {
@@ -430,6 +441,17 @@ impl App {
                         None,
                         self.bus.clone(),
                     );
+                    self.pop();
+                }
+                true
+            }
+            View::CropImage { file, size, rect, .. } if k.enter => {
+                if rect == ferrocast_core::croprect::full(size.0, size.1) {
+                    self.toast("Nothing to crop: drag the rectangle first");
+                } else {
+                    let (x, y, w, h) = ferrocast_core::croprect::tuple(rect);
+                    self.toast("Saving cropped copy…");
+                    services::image_op_files(vec![file], ferrocast_core::convert::ImageOp::CropRect(x, y, w, h), self.bus.clone());
                     self.pop();
                 }
                 true
@@ -1349,6 +1371,127 @@ impl App {
         p.text(c, Align2::CENTER_CENTER, hint, FontId::proportional(12.0), pal.text);
     }
 
+    /// Crop editor: the picture with a draggable rectangle, aspect presets and exact size boxes.
+    fn draw_crop(
+        &mut self,
+        ui: &mut Ui,
+        area_in: Rect,
+        pal: &Palette,
+        size: (u32, u32),
+        rect: ferrocast_core::croprect::Rect,
+        aspect: Option<(u32, u32)>,
+    ) {
+        use ferrocast_core::croprect as cr;
+        let ctx = ui.ctx().clone();
+        let (mut rect, mut aspect) = (rect, aspect);
+        let before = (rect, aspect);
+        let strip = Rect::from_min_size(area_in.min + Vec2::new(12.0, 8.0), Vec2::new(area_in.width() - 24.0, 30.0));
+        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+            ui.horizontal(|ui| {
+                for (label, a) in [
+                    ("Free", None),
+                    ("1:1", Some((1, 1))),
+                    ("4:3", Some((4, 3))),
+                    ("3:2", Some((3, 2))),
+                    ("16:9", Some((16, 9))),
+                    ("9:16", Some((9, 16))),
+                ] {
+                    if ui.selectable_label(aspect == a, label).clicked() {
+                        aspect = a;
+                        if let Some((w, h)) = a {
+                            rect = cr::fit_aspect(size.0, size.1, w, h);
+                        }
+                    }
+                }
+                ui.add_space(10.0);
+                let (mut w, mut h) = (rect.w, rect.h);
+                ui.label(RichText::new("W").size(12.0).color(pal.sub));
+                ui.add(egui::DragValue::new(&mut w).range(cr::MIN..=size.0).speed(2.0));
+                ui.label(RichText::new("H").size(12.0).color(pal.sub));
+                ui.add(egui::DragValue::new(&mut h).range(cr::MIN..=size.1).speed(2.0));
+                if (w, h) != (rect.w, rect.h) {
+                    // a locked ratio follows whichever box moved
+                    if let Some((rw, rh)) = aspect {
+                        if w != rect.w {
+                            h = ((w as f64) * rh as f64 / rw as f64).round() as u32;
+                        } else {
+                            w = ((h as f64) * rw as f64 / rh as f64).round() as u32;
+                        }
+                    }
+                    rect = cr::with_size(rect, w, h, size.0, size.1);
+                }
+                ui.label(RichText::new(format!("{}×{} of {}×{} px", rect.w, rect.h, size.0, size.1)).size(12.0).color(pal.sub));
+            });
+        });
+        let area = Rect::from_min_max(area_in.min + Vec2::new(16.0, 46.0), area_in.max - Vec2::new(16.0, 34.0));
+        let scale = (area.width() / size.0 as f32).min(area.height() / size.1 as f32).max(0.01);
+        let img_rect = Rect::from_center_size(area.center(), Vec2::new(size.0 as f32 * scale, size.1 as f32 * scale));
+        let resp = ui.interact(img_rect.expand(8.0), Id::new("crop-canvas"), egui::Sense::click_and_drag());
+        let to_img = |p: Pos2| ((p.x - img_rect.min.x) / scale, (p.y - img_rect.min.y) / scale);
+        if resp.drag_started() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let q = to_img(p);
+                if let Some(hd) = cr::hit(rect, q.0, q.1, scale, 10.0) {
+                    ctx.data_mut(|d| d.insert_temp(Id::new("crop-drag"), (hd, rect, p)));
+                }
+            }
+        }
+        if resp.dragged() {
+            let state: Option<(cr::Handle, cr::Rect, Pos2)> = ctx.data(|d| d.get_temp(Id::new("crop-drag")));
+            if let (Some((hd, start, origin)), Some(p)) = (state, resp.interact_pointer_pos()) {
+                let (dx, dy) = ((p.x - origin.x) / scale, (p.y - origin.y) / scale);
+                rect = cr::drag(start, hd, dx.round() as i64, dy.round() as i64, size.0, size.1, aspect);
+            }
+        }
+        if resp.drag_stopped() {
+            ctx.data_mut(|d| d.remove::<(cr::Handle, cr::Rect, Pos2)>(Id::new("crop-drag")));
+        }
+        if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("crop-tex"))) {
+            egui::Image::new(&tex).paint_at(ui, img_rect);
+        } else {
+            ui.painter().text(img_rect.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
+        }
+        let sr = Rect::from_min_size(
+            Pos2::new(img_rect.min.x + rect.x as f32 * scale, img_rect.min.y + rect.y as f32 * scale),
+            Vec2::new(rect.w as f32 * scale, rect.h as f32 * scale),
+        );
+        let shade = egui::Color32::from_black_alpha(150);
+        for r in [
+            Rect::from_min_max(img_rect.min, Pos2::new(img_rect.max.x, sr.min.y)),
+            Rect::from_min_max(Pos2::new(img_rect.min.x, sr.max.y), img_rect.max),
+            Rect::from_min_max(Pos2::new(img_rect.min.x, sr.min.y), Pos2::new(sr.min.x, sr.max.y)),
+            Rect::from_min_max(Pos2::new(sr.max.x, sr.min.y), Pos2::new(img_rect.max.x, sr.max.y)),
+        ] {
+            ui.painter().rect_filled(r, 0.0, shade);
+        }
+        ui.painter().rect_stroke(sr, 0.0, Stroke::new(1.5, pal.accent), StrokeKind::Outside);
+        for p in [
+            sr.left_top(),
+            sr.right_top(),
+            sr.left_bottom(),
+            sr.right_bottom(),
+            sr.center_top(),
+            sr.center_bottom(),
+            sr.left_center(),
+            sr.right_center(),
+        ] {
+            ui.painter().rect_filled(Rect::from_center_size(p, Vec2::splat(8.0)), 1.0, pal.accent);
+        }
+        ui.painter().text(
+            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "drag inside to move · drag an edge or corner to resize · presets lock the ratio · ↵ save a cropped copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+        if (rect, aspect) != before {
+            if let Some(View::CropImage { rect: r, aspect: a, .. }) = self.stack.last_mut() {
+                (*r, *a) = (rect, aspect);
+            }
+            ctx.request_repaint();
+        }
+    }
+
     /// Photo editor: the picture on the left (recomputed on a downscaled copy while a slider moves)
     /// and one slider per control on the right. The full-size copy is written on Enter.
     fn draw_edit_photo(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, size: (u32, u32), opts: ferrocast_core::photo::PhotoOpts) {
@@ -1786,6 +1929,9 @@ impl App {
                         self.save_notes();
                     }
                 });
+            }
+            View::CropImage { size, rect: crop, aspect, .. } => {
+                self.draw_crop(ui, rect, pal, size, crop, aspect);
             }
             View::EditPhoto { size, opts, .. } => {
                 self.draw_edit_photo(ui, rect, pal, size, opts);

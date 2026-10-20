@@ -277,6 +277,8 @@ pub enum Act {
     ClearCalcHistory,
     /// Open the Convert view for these files.
     Convert(Vec<PathBuf>),
+    /// Open the crop editor for this image.
+    CropImage(PathBuf),
     /// Open the live-preview photo editor for this image.
     EditPhoto(PathBuf),
     /// Open the annotation canvas for this image.

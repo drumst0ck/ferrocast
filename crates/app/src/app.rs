@@ -66,6 +66,13 @@ pub enum View {
         color: usize,
         sel: Option<usize>,
     },
+    /// Crop editor: file, pixel size, the rectangle and an optional locked aspect.
+    CropImage {
+        file: PathBuf,
+        size: (u32, u32),
+        rect: ferrocast_core::croprect::Rect,
+        aspect: Option<(u32, u32)>,
+    },
     /// Live-preview photo editor: original file, its pixel size and the control values.
     EditPhoto {
         file: PathBuf,
@@ -205,6 +212,7 @@ impl View {
             View::PdfOrganize { .. } => "Organize PDF",
             View::Annotate { .. } => "Annotate Image",
             View::EditPhoto { .. } => "Edit Photo",
+            View::CropImage { .. } => "Crop Image",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -1058,6 +1066,17 @@ impl App {
                         }
                     }
                 }
+                Msg::CropLoaded(file, png) => {
+                    if matches!(self.view(), View::CropImage { file: f, .. } if *f == file) {
+                        match png.as_deref().and_then(services::decode_png) {
+                            Some(img) => {
+                                let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                                self.ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                            }
+                            None => self.toast("Crop: could not read the image"),
+                        }
+                    }
+                }
                 Msg::EditLoaded(file, png) => {
                     if matches!(self.view(), View::EditPhoto { file: f, .. } if *f == file) {
                         match png.as_deref().and_then(|b| image::load_from_memory(b).ok()).map(|i| i.to_rgba8()) {
@@ -1802,7 +1821,7 @@ impl App {
                                             ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
                                             ImageOp::Annotate => "annotate markup draw arrow text preview",
                                             ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compress size smaller",
-                                            ImageOp::CropExact(..) => "crop exact dimensions pixels",
+                                            ImageOp::CropExact(..) | ImageOp::CropRect(..) => "crop exact dimensions pixels",
                                             ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
                                         },
                                     )
@@ -1830,7 +1849,7 @@ impl App {
                                     ImageOp::Adjust(_) => "sf:slider.horizontal.3",
                                     ImageOp::Annotate => "sf:pencil.tip.crop.circle",
                                     ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
-                                    ImageOp::CropExact(..) => "sf:crop",
+                                    ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
                                     ImageOp::SetMeta(_) => "sf:tag",
                                 },
                                 [255, 140, 60],
@@ -2060,6 +2079,7 @@ impl App {
                 if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Image {
                     a.push(Action::new("Annotate…", Act::AnnotateCanvas(p.clone())).key(CMD_SHIFT, Key::A));
                     a.push(Action::new("Edit Photo…", Act::EditPhoto(p.clone())).key(CMD_SHIFT, Key::E));
+                    a.push(Action::new("Crop…", Act::CropImage(p.clone())).key(CMD_SHIFT, Key::K));
                 }
                 if ferrocast_core::convert::ext(p) == "pdf" {
                     a.push(Action::new("Organize Pages…", Act::OrganizePdf(p.clone())).key(CMD_SHIFT, Key::O));
@@ -2937,6 +2957,19 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::CropImage(file) => match services::image_size(&file) {
+                Some(size) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("crop-tex"));
+                        d.remove::<(ferrocast_core::croprect::Handle, ferrocast_core::croprect::Rect, Pos2)>(Id::new("crop-drag"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::CropLoaded(f.clone(), services::display_png(&f, 1000))));
+                    self.show();
+                    self.push(View::CropImage { file, size, rect: ferrocast_core::croprect::full(size.0, size.1), aspect: None });
+                }
+                None => self.toast("Crop: could not read the image"),
+            },
             Act::EditPhoto(file) => match services::image_size(&file) {
                 Some(size) => {
                     self.ctx.data_mut(|d| {
@@ -3239,7 +3272,7 @@ pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static
         ImageOp::Adjust(_) => "sf:slider.horizontal.3",
         ImageOp::Annotate => "sf:pencil.tip.crop.circle",
         ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
-        ImageOp::CropExact(..) => "sf:crop",
+        ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
         ImageOp::SetMeta(_) => "sf:tag",
     }
 }
