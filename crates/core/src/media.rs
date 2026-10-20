@@ -139,6 +139,55 @@ pub fn redact_video(input: &str, region: (u32, u32, u32, u32), range: (f64, f64)
     }
 }
 
+/// Video rate control for [`compress_video`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoRate {
+    /// Average video bitrate in kbit/s (a size target).
+    Kbps(u32),
+    /// Constant quality (x264 CRF; lower is better).
+    Crf(u8),
+}
+
+/// Audio encoder for a compressed file, chosen from the OUTPUT extension. Only encoders this
+/// crate already uses elsewhere; anything else falls back to aac.
+pub fn compress_audio_encoder(out: &str) -> &'static str {
+    match out.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+        "mp3" => "libmp3lame",
+        "ogg" | "opus" => "libopus",
+        _ => "aac",
+    }
+}
+
+/// Re-encode audio at `kbps` (the encoder follows the output extension). Cover art is dropped.
+pub fn compress_audio(input: &str, out: &str, kbps: u32) -> Vec<String> {
+    s(&["-i", input, "-vn", "-c:a", compress_audio_encoder(out), "-b:a", &format!("{kbps}k"), out])
+}
+
+/// Re-encode a video to H.264 MP4: `rate` (bitrate target or CRF), AAC audio at `audio_kbps` (or
+/// no audio at all for a silent source), an optional even `scale` (w, h) and faststart.
+pub fn compress_video(input: &str, out: &str, rate: VideoRate, audio_kbps: Option<u32>, scale: Option<(u32, u32)>) -> Vec<String> {
+    let mut v = s(&["-i", input, "-map", "0:v:0"]);
+    if audio_kbps.is_some() {
+        v.extend(s(&["-map", "0:a:0"]));
+    }
+    if let Some((w, h)) = scale {
+        v.extend(s(&["-vf", &format!("scale={w}:{h}")]));
+    }
+    v.extend(s(&["-c:v", "libx264", "-pix_fmt", "yuv420p"]));
+    match rate {
+        VideoRate::Kbps(k) => {
+            v.extend(s(&["-b:v", &format!("{k}k"), "-maxrate", &format!("{}k", k * 3 / 2), "-bufsize", &format!("{}k", k * 2)]))
+        }
+        VideoRate::Crf(c) => v.extend(s(&["-crf", &c.to_string()])),
+    }
+    match audio_kbps {
+        Some(a) => v.extend(s(&["-c:a", "aac", "-b:a", &format!("{a}k")])),
+        None => v.push("-an".into()),
+    }
+    v.extend(s(&["-movflags", "+faststart", out]));
+    v
+}
+
 /// EBU R128 loudness normalisation: target integrated loudness, loudness range and true peak.
 pub fn normalize(input: &str, lufs: f64, lra: f64, tp: f64, out: &str) -> Vec<String> {
     s(&["-i", input, "-af", &format!("loudnorm=I={lufs}:LRA={lra}:TP={tp}"), "-ar", "48000", out])
@@ -507,5 +556,76 @@ mod tests {
         // the silent middle clip contributes silence, the sound clips do not
         let whole = rms_db(&out)[0];
         assert!(whole > -60.0, "sound clips should be audible: {whole}");
+    }
+}
+
+#[cfg(test)]
+mod compress_arg_tests {
+    use super::*;
+
+    #[test]
+    fn audio_encoder_follows_the_output_extension() {
+        assert_eq!(compress_audio("a.wav", "o.mp3", 128), s(&["-i", "a.wav", "-vn", "-c:a", "libmp3lame", "-b:a", "128k", "o.mp3"]));
+        assert_eq!(compress_audio("a.wav", "o.m4a", 96), s(&["-i", "a.wav", "-vn", "-c:a", "aac", "-b:a", "96k", "o.m4a"]));
+        assert!(compress_audio("a.wav", "o.mp4", 96).contains(&"aac".to_string()));
+        assert!(compress_audio("a.wav", "o.ogg", 64).contains(&"libopus".to_string()));
+        assert!(compress_audio("a.wav", "o.OPUS", 64).contains(&"libopus".to_string()));
+        // an extension without an encoder of ours falls back to aac, never an unknown encoder
+        assert!(compress_audio("a.wav", "o.wma", 64).contains(&"aac".to_string()));
+    }
+
+    #[test]
+    fn video_with_a_bitrate_target_and_audio() {
+        let v = compress_video("a.mp4", "o.mp4", VideoRate::Kbps(1200), Some(128), None);
+        assert_eq!(
+            v,
+            s(&[
+                "-i",
+                "a.mp4",
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-b:v",
+                "1200k",
+                "-maxrate",
+                "1800k",
+                "-bufsize",
+                "2400k",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+                "o.mp4"
+            ])
+        );
+        assert!(!v.contains(&"-vf".to_string()), "no scale filter without a resize");
+    }
+
+    #[test]
+    fn video_with_crf_presets_and_a_scale() {
+        for crf in [23u8, 28, 32] {
+            let v = compress_video("a.mp4", "o.mp4", VideoRate::Crf(crf), Some(96), Some((320, 180)));
+            let at = v.iter().position(|x| x == "-crf").expect("crf flag");
+            assert_eq!(v[at + 1], crf.to_string());
+            assert!(!v.contains(&"-b:v".to_string()));
+            let vf = v.iter().position(|x| x == "-vf").expect("scale flag");
+            assert_eq!(v[vf + 1], "scale=320:180");
+            assert!(v.contains(&"libx264".to_string()) && v.contains(&"+faststart".to_string()) && v.contains(&"yuv420p".to_string()));
+        }
+    }
+
+    #[test]
+    fn silent_video_has_no_audio_flags() {
+        let v = compress_video("a.mp4", "o.mp4", VideoRate::Crf(28), None, None);
+        assert!(v.contains(&"-an".to_string()));
+        assert!(!v.contains(&"aac".to_string()) && !v.contains(&"-b:a".to_string()) && !v.contains(&"0:a:0".to_string()));
+        assert_eq!(v.last().map(String::as_str), Some("o.mp4"));
     }
 }

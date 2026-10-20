@@ -1495,7 +1495,7 @@ fn tool_reach_split_video_opens_the_window_for_one_file_and_keeps_the_preset_for
 // ---- A6b: image Compress window
 
 fn compress_view(files: Vec<std::path::PathBuf>, size: Option<(u32, u32)>, mode: usize, kb: u32) -> View {
-    View::CompressImage { files, orig_bytes: 2_000_000, size, mode, kb, percent: 40, preset: 1, max_edge: None, resize: false }
+    View::CompressImage { files, orig_bytes: 2_000_000, size, mode, kb, percent: 40, preset: 1, max_edge: None, resize: false, media: None }
 }
 
 fn compress_app(mode: usize, kb: u32) -> App {
@@ -1622,7 +1622,6 @@ fn convert_view_offers_compress_for_one_or_more_images_only() {
     assert_eq!(rows(&mut app, &["a.png"]).len(), 1);
     assert_eq!(rows(&mut app, &["a.png", "b.png"])[0].len(), 2);
     assert!(rows(&mut app, &["a.txt"]).is_empty());
-    assert!(rows(&mut app, &["a.mp4"]).is_empty());
     assert!(rows(&mut app, &["a.png", "b.mp4"]).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1673,4 +1672,232 @@ fn compress_with_labels() {
         "Compress · balanced · max 1600 px"
     );
     assert_eq!(ImageOp::CompressWith(Goal::Percent(40), none).suffix(), "compressed");
+}
+
+// ---- A6c: audio and video Compress (same window, media mode)
+
+fn media_view(
+    files: Vec<std::path::PathBuf>,
+    video: bool,
+    info: Option<Option<ferrocast_core::compress::MediaInfo>>,
+    mode: usize,
+    kb: u32,
+) -> View {
+    let (loaded, info) = match info {
+        Some(i) => (true, i),
+        None => (false, None),
+    };
+    View::CompressImage {
+        files,
+        orig_bytes: 9_000_000,
+        size: None,
+        mode,
+        kb,
+        percent: 40,
+        preset: 1,
+        max_edge: None,
+        resize: false,
+        media: Some(MediaWin { video, loaded, info }),
+    }
+}
+
+fn some_info(video: bool) -> Option<Option<ferrocast_core::compress::MediaInfo>> {
+    Some(Some(ferrocast_core::compress::MediaInfo { duration: 20.0, has_audio: true, dims: video.then_some((1280, 720)) }))
+}
+
+fn media_app(video: bool, mode: usize, kb: u32) -> App {
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg");
+    let f = std::path::PathBuf::from(format!("/nonexistent/fc-compress-{}.{}", uuid::Uuid::new_v4(), if video { "mp4" } else { "mp3" }));
+    app.stack = vec![View::Root, media_view(vec![f], video, some_info(video), mode, kb)];
+    render(&mut app, vec![]);
+    app
+}
+
+#[test]
+fn compress_media_view_renders_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for video in [false, true] {
+            for info in [None, Some(None), some_info(video)] {
+                for mode in 0..3 {
+                    let f = vec![std::path::PathBuf::from(if video { "/nonexistent/a.mp4" } else { "/nonexistent/a.mp3" })];
+                    // 10 KB over 20 s is an impossible target: the line says so instead of panicking
+                    app.stack = vec![View::Root, media_view(f, video, info, mode, 10)];
+                    render(&mut app, vec![]);
+                    render(&mut app, vec![]);
+                    assert_eq!(app.view().title(), "Compress Audio and Video");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn compress_media_job_maps_goals_and_refuses_the_impossible() {
+    use ferrocast_core::compress::{Goal, MediaInfo, Preset};
+    use ferrocast_core::convert::FileTool;
+    let info = MediaInfo { duration: 20.0, has_audio: true, dims: Some((1280, 720)) };
+    let job = |video, i: Option<&MediaInfo>, mode, kb, resize| compress_media_job(video, 9_000_000, i, mode, kb, 40, 1, Some(320), resize);
+    match job(true, Some(&info), 0, 2048, false) {
+        Ok(FileTool::Compress(Goal::TargetBytes(b), r)) => assert_eq!((b, r.max_edge), (2048 * 1024, None)),
+        other => panic!("{other:?}"),
+    }
+    // resize is passed for video only
+    assert_eq!(
+        job(true, Some(&info), 2, 0, true).map(|t| t
+            == FileTool::Compress(Goal::Preset(Preset::Balanced), ferrocast_core::compress::Resize { max_edge: Some(320), percent: None })),
+        Ok(true)
+    );
+    match job(false, Some(&info), 2, 0, true) {
+        Ok(FileTool::Compress(_, r)) => assert_eq!(r.max_edge, None, "audio ignores resize"),
+        other => panic!("{other:?}"),
+    }
+    // media targets may exceed the 100000 KB of the image window
+    assert!(job(true, Some(&info), 0, 500_000, false).is_ok());
+    assert!(job(true, Some(&info), 0, 5_000_000, false).is_err());
+    assert!(job(true, Some(&info), 0, 0, false).is_err());
+    assert!(job(true, Some(&info), 0, 10, false).unwrap_err().contains("too small"));
+    assert!(job(true, None, 0, 2048, false).is_err(), "not probed yet");
+}
+
+#[test]
+fn compress_media_escape_goes_back_without_a_job() {
+    let mut app = media_app(true, 0, 500);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn compress_media_enter_invalid_starts_nothing() {
+    for (mode, kb) in [(0, 0), (0, 10)] {
+        let mut app = media_app(true, mode, kb);
+        render(&mut app, vec![key_event(Key::Enter)]);
+        assert!(matches!(app.view(), View::CompressImage { .. }), "kb {kb}");
+        assert!(app.rx.try_recv().is_err(), "no job may start for kb {kb}");
+        assert!(app.toast.is_some());
+    }
+    // not probed yet
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg");
+    app.stack = vec![View::Root, media_view(vec!["/nonexistent/a.mp4".into()], true, None, 2, 0)];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }));
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn compress_media_enter_valid_starts_the_job_and_goes_back() {
+    let mut app = media_app(true, 2, 0);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root));
+    let msg = app.rx.recv_timeout(std::time::Duration::from_secs(20)).expect("the job reports");
+    assert!(matches!(msg, Msg::Toast(t) if t.contains("Compress")));
+}
+
+#[test]
+fn media_probe_result_reaches_the_window() {
+    let mut app = fixture();
+    let f = std::path::PathBuf::from("/nonexistent/a.mp4");
+    app.stack = vec![View::Root, media_view(vec![f.clone()], true, None, 0, 500)];
+    let info = ferrocast_core::compress::MediaInfo { duration: 5.0, has_audio: false, dims: Some((640, 360)) };
+    app.bus.send(Msg::MediaProbed(f, Some(info)));
+    app.drain();
+    match app.view() {
+        View::CompressImage { media: Some(m), .. } => assert_eq!((m.loaded, m.info), (true, Some(info))),
+        _ => panic!("window gone"),
+    }
+}
+
+const COMPRESS_MEDIA_KB_BOX: (f32, f32) = (210.0, 156.0);
+
+// L74 style: Escape and Enter inside the number box of the media window keep it open.
+#[test]
+fn compress_media_number_box_keeps_escape_and_enter_while_editing() {
+    let click = |app: &mut App| {
+        let pos = Pos2::new(COMPRESS_MEDIA_KB_BOX.0, COMPRESS_MEDIA_KB_BOX.1);
+        let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        render(app, vec![Event::PointerMoved(pos)]);
+        render(app, vec![btn(true)]);
+        render(app, vec![btn(false)]);
+        render(app, vec![]);
+    };
+    let mut app = media_app(true, 0, 500);
+    click(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the KB box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+    let mut app = media_app(true, 0, 500);
+    click(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }), "Enter confirms the number, it must not start the job");
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn convert_view_offers_compress_for_audio_and_video_and_keeps_images() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-compress-media-entry-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // (media files, image files) offered by the "Compress…" rows
+    let rows = |app: &mut App, names: &[&str]| -> (Vec<usize>, Vec<usize>) {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        let (mut media, mut images) = (vec![], vec![]);
+        for i in app.sections().iter().flat_map(|s| s.items.iter()).filter(|i| i.title == "Compress…") {
+            match &i.kind {
+                Kind::Editor(Act::CompressMedia(f)) => media.push(f.len()),
+                Kind::Editor(Act::CompressImages(f)) => images.push(f.len()),
+                _ => panic!("wrong kind"),
+            }
+        }
+        (media, images)
+    };
+    assert_eq!(rows(&mut app, &["a.mp4"]), (vec![1], vec![]));
+    assert_eq!(rows(&mut app, &["a.mp4", "b.mp4"]), (vec![2], vec![]));
+    assert_eq!(rows(&mut app, &["a.mp3"]), (vec![1], vec![]));
+    assert_eq!(rows(&mut app, &["a.mp3", "b.mp3"]), (vec![2], vec![]));
+    assert_eq!(rows(&mut app, &["a.png", "b.png"]), (vec![], vec![2]));
+    assert_eq!(rows(&mut app, &["a.png"]), (vec![], vec![1]));
+    assert_eq!(rows(&mut app, &["a.mp3", "b.mp4"]), (vec![], vec![]), "mixed families get no Compress row");
+    assert_eq!(rows(&mut app, &["a.txt"]), (vec![], vec![]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_compress_opens_the_media_window_for_audio_and_video() {
+    use ferrocast_core::tools::ToolId;
+    let f = |n: &[&str]| n.iter().map(std::path::PathBuf::from).collect::<Vec<_>>();
+    for names in [&["/x/a.mp4"][..], &["/x/a.mp4", "/x/b.mov"], &["/x/a.mp3"], &["/x/a.wav", "/x/b.flac"]] {
+        assert!(
+            matches!(tool_reach(ToolId::Compress, &f(names)), ToolReach::Act(Act::CompressMedia(v)) if v.len() == names.len()),
+            "{names:?}"
+        );
+    }
+    assert!(!matches!(tool_reach(ToolId::Compress, &f(&["/x/a.mp3", "/x/b.mp4"])), ToolReach::Act(Act::CompressMedia(_))));
+    assert!(!matches!(tool_reach(ToolId::Compress, &f(&["/x/a.pdf"])), ToolReach::Act(Act::CompressMedia(_))), "PDF keeps its mapping");
+    assert!(matches!(tool_reach(ToolId::Compress, &f(&["/x/a.png"])), ToolReach::Act(Act::CompressImages(_))));
+}
+
+#[test]
+fn compress_media_without_ffmpeg_toasts_the_hint_and_opens_nothing() {
+    let mut app = fixture();
+    app.stack = vec![View::Root];
+    app.perform(Act::CompressMedia(vec!["/x/a.mp4".into()]), false);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
 }

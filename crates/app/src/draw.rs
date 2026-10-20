@@ -121,18 +121,41 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     .filter(|p| p.exists())
                     .collect();
                 let orig_bytes = files.first().and_then(|f| std::fs::metadata(f).ok()).map(|m| m.len()).unwrap_or(0);
-                let size = files.first().and_then(|f| services::image_size(f));
-                app.push(View::CompressImage {
-                    files,
-                    orig_bytes,
-                    size,
-                    mode: 0,
-                    kb: 500,
-                    percent: 40,
-                    preset: 1,
-                    max_edge: None,
-                    resize: false,
-                });
+                // audio and video files open the media mode (by file type, or FERROCAST_COMPRESS=media)
+                let family = files.first().map(|f| ferrocast_core::convert::family_of(f));
+                let media_mode = std::env::var("FERROCAST_COMPRESS").as_deref() == Ok("media")
+                    || matches!(family, Some(ferrocast_core::convert::Family::Audio | ferrocast_core::convert::Family::Video));
+                if media_mode {
+                    let info = app.tools.ffmpeg.zip(files.first()).and_then(|(ff, f)| crate::media_tools::media_info(ff, f));
+                    let video = family == Some(ferrocast_core::convert::Family::Video);
+                    let kb = std::env::var("FERROCAST_KB").ok().and_then(|v| v.parse().ok()).unwrap_or(2048);
+                    app.push(View::CompressImage {
+                        files,
+                        orig_bytes,
+                        size: None,
+                        mode: std::env::var("FERROCAST_MODE").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+                        kb,
+                        percent: 40,
+                        preset: 1,
+                        max_edge: None,
+                        resize: false,
+                        media: Some(MediaWin { video, loaded: true, info }),
+                    });
+                } else {
+                    let size = files.first().and_then(|f| services::image_size(f));
+                    app.push(View::CompressImage {
+                        files,
+                        orig_bytes,
+                        size,
+                        mode: 0,
+                        kb: 500,
+                        percent: 40,
+                        preset: 1,
+                        max_edge: None,
+                        resize: false,
+                        media: None,
+                    });
+                }
             }
             Ok("vspeed") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
@@ -608,6 +631,21 @@ impl App {
             return true;
         }
         match self.view().clone() {
+            View::CompressImage { files, orig_bytes, mode, kb, percent, preset, max_edge, resize, media: Some(m), .. } if k.enter => {
+                match compress_media_job(m.video, orig_bytes, m.info.as_ref(), mode, kb, percent, preset, max_edge, resize) {
+                    _ if files.is_empty() => self.toast("Compress: no files selected"),
+                    Err(e) => self.toast(e),
+                    Ok(tool) => match self.tools.ffmpeg {
+                        None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                        Some(_) => {
+                            self.toast(format!("{}…", tool.label()));
+                            services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
+                            self.pop();
+                        }
+                    },
+                }
+                true
+            }
             View::CompressImage { files, mode, kb, percent, preset, max_edge, resize, .. } if k.enter => {
                 match compress_goal(mode, kb, percent, preset, max_edge, resize) {
                     _ if files.is_empty() => self.toast("Compress: no images selected"),
@@ -1788,6 +1826,7 @@ impl App {
         orig_bytes: u64,
         size: Option<(u32, u32)>,
         state: (usize, u32, u8, usize, Option<u32>, bool),
+        media: Option<&MediaWin>,
     ) {
         use ferrocast_core::compress::estimate_bytes;
         let ctx = ui.ctx().clone();
@@ -1796,7 +1835,19 @@ impl App {
         ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area_in.center(), Vec2::new(520.0, 300.0))), |ui| {
             ui.spacing_mut().item_spacing.y = 12.0;
             let first = files.first().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            let dims = size.map(|(w, h)| format!(" · {w}×{h} px")).unwrap_or_else(|| " · reading size…".into());
+            let dims = match media {
+                None => size.map(|(w, h)| format!(" · {w}×{h} px")).unwrap_or_else(|| " · reading size…".into()),
+                Some(m) if !m.loaded => " · reading the file…".into(),
+                Some(MediaWin { info: None, .. }) => " · could not read the file".into(),
+                Some(MediaWin { info: Some(i), video, .. }) => {
+                    let px = i.dims.filter(|_| *video).map(|(w, h)| format!(" · {w}×{h} px")).unwrap_or_default();
+                    format!(
+                        " · {}{px}{}",
+                        ferrocast_core::convert::format_secs(i.duration),
+                        if i.has_audio || !*video { "" } else { " · no sound" }
+                    )
+                }
+            };
             let more = if files.len() > 1 { format!(" and {} more", files.len() - 1) } else { String::new() };
             ui.label(RichText::new(format!("{first}{more}{dims}")).size(12.5).color(pal.sub));
             ui.horizontal(|ui| {
@@ -1807,7 +1858,8 @@ impl App {
             ui.horizontal(|ui| match mode {
                 0 => {
                     ui.label("Target size");
-                    ui.add(egui::DragValue::new(&mut kb).range(10..=100_000).clamp_existing_to_range(false).speed(10.0).suffix(" KB"));
+                    let max_kb = if media.is_some() { crate::app::MEDIA_MAX_KB } else { 100_000 };
+                    ui.add(egui::DragValue::new(&mut kb).range(10..=max_kb).clamp_existing_to_range(false).speed(10.0).suffix(" KB"));
                 }
                 1 => {
                     ui.label("Make it");
@@ -1819,31 +1871,59 @@ impl App {
                     }
                 }
             });
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut resize, "Resize while compressing");
-                ui.add_enabled(
-                    resize,
-                    egui::DragValue::new(&mut edge)
-                        .range(64..=16_000)
-                        .clamp_existing_to_range(false)
-                        .speed(10.0)
-                        .prefix("longest edge ")
-                        .suffix(" px"),
-                );
-            });
-            let line = match compress_goal(mode, kb, percent, preset, Some(edge), resize) {
-                Ok((goal, _)) if orig_bytes > 0 => {
-                    let est = estimate_bytes(orig_bytes, goal);
-                    let kbs = |b: u64| b.div_ceil(1024);
-                    let share = est * 100 / orig_bytes;
-                    let note = if resize { " · resizing may make it smaller" } else { "" };
-                    format!("≈ about {} KB ({share} % of {} KB) · rough estimate, not measured{note}", kbs(est), kbs(orig_bytes))
+            // an audio file has nothing to resize
+            if media.is_none_or(|m| m.video) {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut resize, "Resize while compressing");
+                    ui.add_enabled(
+                        resize,
+                        egui::DragValue::new(&mut edge)
+                            .range(64..=16_000)
+                            .clamp_existing_to_range(false)
+                            .speed(10.0)
+                            .prefix("longest edge ")
+                            .suffix(" px"),
+                    );
+                });
+            }
+            let line = if let Some(m) = media {
+                // bitrate arithmetic only (no encoding): what Enter would use, or why it cannot run
+                match (&m.info, compress_media_job(m.video, orig_bytes, m.info.as_ref(), mode, kb, percent, preset, Some(edge), resize)) {
+                    (None, _) => {
+                        if m.loaded {
+                            "The file could not be read".to_string()
+                        } else {
+                            "Reading the file…".to_string()
+                        }
+                    }
+                    (Some(_), Err(e)) => e.trim_start_matches("Compress: ").to_string(),
+                    (Some(i), Ok(ferrocast_core::convert::FileTool::Compress(goal, r))) => {
+                        ferrocast_core::compress::plan(m.video, orig_bytes, i, goal, &r)
+                            .map(|p| ferrocast_core::compress::describe(&p))
+                            .unwrap_or_default()
+                    }
+                    _ => String::new(),
                 }
-                Ok(_) => "Size of the original unknown".to_string(),
-                Err(_) => "Enter a value in range to see an estimate".to_string(),
+            } else {
+                match compress_goal(mode, kb, percent, preset, Some(edge), resize) {
+                    Ok((goal, _)) if orig_bytes > 0 => {
+                        let est = estimate_bytes(orig_bytes, goal);
+                        let kbs = |b: u64| b.div_ceil(1024);
+                        let share = est * 100 / orig_bytes;
+                        let note = if resize { " · resizing may make it smaller" } else { "" };
+                        format!("≈ about {} KB ({share} % of {} KB) · rough estimate, not measured{note}", kbs(est), kbs(orig_bytes))
+                    }
+                    Ok(_) => "Size of the original unknown".to_string(),
+                    Err(_) => "Enter a value in range to see an estimate".to_string(),
+                }
             };
             ui.label(RichText::new(line).size(18.0).color(pal.text));
-            ui.label(RichText::new("The copy is a JPEG next to the original; the original is never changed.").size(12.0).color(pal.sub));
+            let note = match media {
+                None => "The copy is a JPEG next to the original; the original is never changed.",
+                Some(m) if m.video => "The copy is an MP4 next to the original; the original is never changed.",
+                Some(_) => "The copy keeps mp3, m4a, ogg or opus and is an m4a otherwise; the original is never changed.",
+            };
+            ui.label(RichText::new(note).size(12.0).color(pal.sub));
         });
         let edge_changed = edge != max_edge.unwrap_or(1600);
         if (mode, kb, percent, preset, resize) != (state.0, state.1, state.2, state.3, state.5) || edge_changed {
@@ -3178,8 +3258,8 @@ impl App {
             View::CropImage { size, rect: crop, aspect, .. } => {
                 self.draw_crop(ui, rect, pal, size, crop, aspect);
             }
-            View::CompressImage { files, orig_bytes, size, mode, kb, percent, preset, max_edge, resize } => {
-                self.draw_compress(ui, rect, pal, &files, orig_bytes, size, (mode, kb, percent, preset, max_edge, resize));
+            View::CompressImage { files, orig_bytes, size, mode, kb, percent, preset, max_edge, resize, media } => {
+                self.draw_compress(ui, rect, pal, &files, orig_bytes, size, (mode, kb, percent, preset, max_edge, resize), media.as_ref());
             }
             View::EditPhoto { size, opts, .. } => {
                 self.draw_edit_photo(ui, rect, pal, size, opts);

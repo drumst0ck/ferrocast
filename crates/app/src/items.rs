@@ -305,6 +305,8 @@ pub enum Act {
     CropImage(PathBuf),
     /// Open the Compress window for these images.
     CompressImages(Vec<PathBuf>),
+    /// Open the Compress window for these audio or video files.
+    CompressMedia(Vec<PathBuf>),
     /// Open the live-preview photo editor for this image.
     EditPhoto(PathBuf),
     /// Open the annotation canvas for this image.

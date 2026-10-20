@@ -69,6 +69,42 @@ pub fn split_job(duration: f64, points: &[f64], parts: usize) -> Result<ferrocas
     Ok(ferrocast_core::convert::FileTool::SplitPoints(ranges, true))
 }
 
+/// Media mode of the Compress window: audio or video, and the probe result (read off the UI
+/// thread: `loaded` is false until it arrives, `info` None when the file could not be read).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MediaWin {
+    pub video: bool,
+    pub loaded: bool,
+    pub info: Option<ferrocast_core::compress::MediaInfo>,
+}
+
+/// Largest size target the media window accepts, in KB (about 4 GB).
+pub const MEDIA_MAX_KB: u32 = 4_000_000;
+
+/// Pure mapping from the media window's fields to the job Enter starts: same fields as the image
+/// window, a larger size range, resize for video only, and a refusal (with the reason) when the
+/// target leaves too little bitrate or the file has not been read yet.
+#[allow(clippy::too_many_arguments)]
+pub fn compress_media_job(
+    video: bool,
+    orig_bytes: u64,
+    info: Option<&ferrocast_core::compress::MediaInfo>,
+    mode: usize,
+    kb: u32,
+    percent: u8,
+    preset: usize,
+    max_edge: Option<u32>,
+    resize: bool,
+) -> Result<ferrocast_core::convert::FileTool, String> {
+    use ferrocast_core::compress::Goal;
+    let big = mode == 0 && kb > 100_000 && kb <= MEDIA_MAX_KB;
+    let (goal, r) = compress_goal(mode, if big { 100_000 } else { kb }, percent, preset, max_edge, resize && video)?;
+    let goal = if big { Goal::TargetBytes(kb as u64 * 1024) } else { goal };
+    let info = info.ok_or("Compress: still reading the file")?;
+    ferrocast_core::compress::plan(video, orig_bytes, info, goal, &r).map_err(|e| format!("Compress: {e}"))?;
+    Ok(ferrocast_core::convert::FileTool::Compress(goal, r))
+}
+
 /// Pure mapping from the Compress window's fields to the goal and resize, or the reason it cannot run.
 /// `mode`: 0 size in KB (10..=100000), 1 percent smaller (1..=95), 2 preset (0 light, 1 balanced, 2 strong).
 pub fn compress_goal(
@@ -219,6 +255,8 @@ pub enum View {
         preset: usize,
         max_edge: Option<u32>,
         resize: bool,
+        /// Some: the window compresses audio or video instead of images.
+        media: Option<MediaWin>,
     },
     /// Live-preview photo editor: original file, its pixel size and the control values.
     EditPhoto {
@@ -370,6 +408,7 @@ impl View {
             View::Annotate { .. } => "Annotate Image",
             View::EditPhoto { .. } => "Edit Photo",
             View::CropImage { .. } => "Crop Image",
+            View::CompressImage { media: Some(_), .. } => "Compress Audio and Video",
             View::CompressImage { .. } => "Compress Images",
             View::RedactImage { .. } => "Redact Image",
             View::FrameImage { .. } => "Add Background",
@@ -1372,6 +1411,13 @@ impl App {
                         }
                     }
                 }
+                Msg::MediaProbed(file, info) => {
+                    if let Some(View::CompressImage { files, media: Some(m), .. }) = self.stack.last_mut() {
+                        if files.first() == Some(&file) {
+                            (m.loaded, m.info) = (true, info);
+                        }
+                    }
+                }
                 Msg::CropLoaded(file, png) => {
                     if matches!(self.view(), View::CropImage { file: f, .. } if *f == file) {
                         match png.as_deref().and_then(services::decode_png) {
@@ -2218,6 +2264,7 @@ impl App {
                                     FileTool::TrimSilence => "sf:scissors",
                                     FileTool::OrganizePdf(_) => "sf:doc.on.doc",
                                     FileTool::Extract => "sf:archivebox",
+                                    FileTool::Compress(..) => "sf:arrow.down.right.and.arrow.up.left",
                                 },
                                 [255, 140, 60],
                             ),
@@ -2370,6 +2417,9 @@ impl App {
                     list.push(("Choose order…", "order reorder sort merge join combine", Act::ReorderFiles(pu, files.to_vec())));
                 }
             }
+        }
+        if !files.is_empty() && [Family::Audio, Family::Video].iter().any(|fam| files.iter().all(|f| family_of(f) == *fam)) {
+            list.push(("Compress…", "compress smaller size resize reduce bitrate", Act::CompressMedia(files.to_vec())));
         }
         if files.len() >= 2 && files.iter().all(|f| family_of(f) == Family::Image) {
             list.push(("Compress…", "compress smaller size resize reduce", Act::CompressImages(files.to_vec())));
@@ -3576,8 +3626,38 @@ impl App {
                         preset: 1,
                         max_edge: None,
                         resize: false,
+                        media: None,
                     });
                 }
+            }
+            Act::CompressMedia(files) => {
+                use ferrocast_core::convert::{family_of, Family};
+                let Some(first) = files.first().cloned() else {
+                    self.toast("Compress: no files selected");
+                    return;
+                };
+                let Some(ff) = self.tools.ffmpeg else {
+                    self.toast("ffmpeg is not installed (brew install ffmpeg)");
+                    return;
+                };
+                let orig_bytes = std::fs::metadata(&first).map(|m| m.len()).unwrap_or(0);
+                let (bus, f) = (self.bus.clone(), first);
+                // ffprobe runs on a worker; the window says "reading" until it answers
+                std::thread::spawn(move || bus.send(Msg::MediaProbed(f.clone(), crate::media_tools::media_info(ff, &f))));
+                let video = files.iter().all(|f| family_of(f) == Family::Video);
+                self.show();
+                self.push(View::CompressImage {
+                    files,
+                    orig_bytes,
+                    size: None,
+                    mode: 0,
+                    kb: 2048,
+                    percent: 40,
+                    preset: 1,
+                    max_edge: None,
+                    resize: false,
+                    media: Some(MediaWin { video, loaded: false, info: None }),
+                });
             }
             Act::CropImage(file) => match services::image_size(&file) {
                 Some(size) => {
@@ -3916,6 +3996,11 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (CreateCollage, _) if files.len() >= 2 => ToolReach::Act(Act::CollageImages(files.to_vec())),
         (CropImage, None) if images => ToolReach::Image(ImageOp::Crop(1, 1)),
         (Compress, _) if images => ToolReach::Act(Act::CompressImages(files.to_vec())),
+        (Compress, _)
+            if !files.is_empty() && [Family::Audio, Family::Video].iter().any(|fam| files.iter().all(|f| family_of(f) == *fam)) =>
+        {
+            ToolReach::Act(Act::CompressMedia(files.to_vec()))
+        }
         (RemoveMetadata, _) if images => ToolReach::Image(ImageOp::StripMetadata),
         (CreatePdf, _) if images => ToolReach::Image(ImageOp::CombinePdf),
         (MuteVideo, _) => ToolReach::File(FileTool::Mute),

@@ -98,6 +98,110 @@ pub fn resized_dims(w: u32, h: u32, r: &Resize) -> Option<(u32, u32)> {
     Some((even(w as f64 * scale), even(h as f64 * scale)))
 }
 
+/// What probing a media file tells the planner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MediaInfo {
+    pub duration: f64,
+    pub has_audio: bool,
+    /// Displayed size (rotation applied) of the first video stream.
+    pub dims: Option<(u32, u32)>,
+}
+
+/// How a media file will be re-encoded.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Plan {
+    Audio { kbps: u32 },
+    Video { rate: crate::media::VideoRate, audio_kbps: Option<u32>, scale: Option<(u32, u32)> },
+}
+
+fn preset_audio_kbps(p: Preset) -> u32 {
+    match p {
+        Preset::Light => 128,
+        Preset::Balanced => 96,
+        Preset::Strong => 64,
+    }
+}
+
+/// Plans an audio (`video == false`, resize ignored) or video compression. Size and percent goals
+/// become a bitrate; a target that leaves too little for the stream is refused with a clear text.
+pub fn plan(video: bool, orig_bytes: u64, info: &MediaInfo, goal: Goal, resize: &Resize) -> Result<Plan, String> {
+    use crate::media::VideoRate;
+    if !info.duration.is_finite() || info.duration <= 0.0 {
+        return Err("could not read the media duration".into());
+    }
+    let target = match goal {
+        Goal::TargetBytes(t) => Some(t),
+        Goal::Percent(_) => Some(estimate_bytes(orig_bytes, goal)),
+        Goal::Preset(_) => None,
+    };
+    let too_small = |what: &str| format!("target too small for {:.0} s of {what}", info.duration);
+    if !video {
+        let kbps = match (target, goal) {
+            (Some(t), _) => audio_kbps(t, info.duration).ok_or_else(|| too_small("audio"))?,
+            (None, Goal::Preset(p)) => preset_audio_kbps(p),
+            _ => unreachable!("a goal without a target is a preset"),
+        };
+        return Ok(Plan::Audio { kbps });
+    }
+    let (w, h) = info.dims.ok_or("could not read the video size")?;
+    let (rw, rh) = resized_dims(w, h, resize).ok_or("the video size cannot be resized")?;
+    let scale = ((rw, rh) != (w, h)).then_some((rw, rh));
+    let (rate, audio) = match (target, goal) {
+        (Some(t), _) if info.has_audio => {
+            let a = [128, 96, 64, MIN_AUDIO_KBPS].into_iter().find(|&a| video_kbps(t, info.duration, a).is_some());
+            let a = a.ok_or_else(|| too_small("video"))?;
+            (VideoRate::Kbps(video_kbps(t, info.duration, a).unwrap_or(MIN_VIDEO_KBPS)), Some(a))
+        }
+        (Some(t), _) => (VideoRate::Kbps(video_kbps(t, info.duration, 0).ok_or_else(|| too_small("video"))?), None),
+        (None, Goal::Preset(p)) => {
+            let crf = match p {
+                Preset::Light => 23,
+                Preset::Balanced => 28,
+                Preset::Strong => 32,
+            };
+            (VideoRate::Crf(crf), info.has_audio.then(|| preset_audio_kbps(p)))
+        }
+        _ => unreachable!("a goal without a target is a preset"),
+    };
+    Ok(Plan::Video { rate, audio_kbps: audio, scale })
+}
+
+/// Extension of the compressed copy: audio keeps mp3, m4a, ogg and opus and becomes m4a otherwise;
+/// video is always mp4.
+pub fn output_ext(video: bool, source_ext: &str) -> &'static str {
+    if video {
+        return "mp4";
+    }
+    match source_ext.to_ascii_lowercase().as_str() {
+        "mp3" => "mp3",
+        "ogg" => "ogg",
+        "opus" => "opus",
+        _ => "m4a",
+    }
+}
+
+/// One line for the window: the bitrates a plan will use.
+pub fn describe(plan: &Plan) -> String {
+    use crate::media::VideoRate;
+    match plan {
+        Plan::Audio { kbps } => format!("≈ {kbps} kbit/s audio"),
+        Plan::Video { rate, audio_kbps, scale } => {
+            let mut l = match rate {
+                VideoRate::Kbps(k) if *k >= 1000 => format!("≈ {:.1} Mbit/s video", *k as f64 / 1000.0),
+                VideoRate::Kbps(k) => format!("≈ {k} kbit/s video"),
+                VideoRate::Crf(c) => format!("quality-based (CRF {c})"),
+            };
+            if let Some(a) = audio_kbps {
+                l.push_str(&format!(" + {a} kbit/s audio"));
+            }
+            if let Some((w, h)) = scale {
+                l.push_str(&format!(" · {w}×{h} px"));
+            }
+            l
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +272,113 @@ mod tests {
         assert_eq!(resized_dims(1, 100, &r(None, None)), None, "a degenerate picture has no size");
         assert_eq!(resized_dims(0, 0, &r(Some(10), None)), None);
         assert_eq!(resized_dims(4000, 3000, &r(Some(0), None)), None, "a zero edge is refused");
+    }
+}
+
+#[cfg(test)]
+mod media_plan_tests {
+    use super::*;
+    use crate::media::VideoRate;
+
+    fn info(duration: f64, has_audio: bool, dims: Option<(u32, u32)>) -> MediaInfo {
+        MediaInfo { duration, has_audio, dims }
+    }
+    const NONE: Resize = Resize { max_edge: None, percent: None };
+
+    #[test]
+    fn audio_target_uses_the_bitrate_and_refuses_the_impossible() {
+        let i = info(20.0, false, None);
+        assert_eq!(plan(false, 5_000_000, &i, Goal::TargetBytes(320_000), &NONE), Ok(Plan::Audio { kbps: 128 }));
+        let err = plan(false, 5_000_000, &i, Goal::TargetBytes(20_000), &NONE).unwrap_err();
+        assert_eq!(err, "target too small for 20 s of audio");
+        // percent goes through the estimated size
+        assert_eq!(plan(false, 640_000, &i, Goal::Percent(50), &NONE), Ok(Plan::Audio { kbps: 128 }));
+    }
+
+    #[test]
+    fn audio_presets_are_128_96_64() {
+        let i = info(20.0, false, None);
+        let k = |p| match plan(false, 1_000_000, &i, Goal::Preset(p), &NONE) {
+            Ok(Plan::Audio { kbps }) => kbps,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!((k(Preset::Light), k(Preset::Balanced), k(Preset::Strong)), (128, 96, 64));
+    }
+
+    #[test]
+    fn video_target_splits_audio_and_video_and_ignores_resize_for_audio() {
+        // 1.5 MB over 20 s = 600 kbit/s total: 128 audio leaves 472 video
+        let i = info(20.0, true, Some((1280, 720)));
+        match plan(true, 9_000_000, &i, Goal::TargetBytes(1_500_000), &NONE).unwrap() {
+            Plan::Video { rate: VideoRate::Kbps(v), audio_kbps: Some(a), scale: None } => assert_eq!((a, v), (128, 472)),
+            other => panic!("{other:?}"),
+        }
+        // silent: everything goes to video
+        let silent = info(20.0, false, Some((1280, 720)));
+        match plan(true, 9_000_000, &silent, Goal::TargetBytes(1_500_000), &NONE).unwrap() {
+            Plan::Video { rate: VideoRate::Kbps(v), audio_kbps: None, .. } => assert_eq!(v, 600),
+            other => panic!("{other:?}"),
+        }
+        // audio files ignore a resize
+        let r = Resize { max_edge: Some(320), percent: None };
+        assert_eq!(plan(false, 1_000_000, &info(20.0, false, None), Goal::Preset(Preset::Light), &r), Ok(Plan::Audio { kbps: 128 }));
+    }
+
+    #[test]
+    fn video_audio_shrinks_before_the_target_is_refused() {
+        // 300 kbit/s total: 128 audio would leave 172 video, fine; 220 total: 96 audio leaves 124
+        let i = info(10.0, true, Some((640, 360)));
+        match plan(true, 9_000_000, &i, Goal::TargetBytes(275_000), &NONE).unwrap() {
+            Plan::Video { audio_kbps: Some(a), rate: VideoRate::Kbps(v), .. } => assert!(a < 128 && v >= MIN_VIDEO_KBPS, "{a} {v}"),
+            other => panic!("{other:?}"),
+        }
+        let err = plan(true, 9_000_000, &i, Goal::TargetBytes(50_000), &NONE).unwrap_err();
+        assert_eq!(err, "target too small for 10 s of video");
+    }
+
+    #[test]
+    fn video_presets_use_crf_and_the_resize_scale() {
+        let i = info(20.0, true, Some((1280, 720)));
+        let crf = |p| match plan(true, 9_000_000, &i, Goal::Preset(p), &NONE).unwrap() {
+            Plan::Video { rate: VideoRate::Crf(c), audio_kbps: Some(a), .. } => (c, a),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!((crf(Preset::Light), crf(Preset::Balanced), crf(Preset::Strong)), ((23, 128), (28, 96), (32, 64)));
+        let r = Resize { max_edge: Some(320), percent: None };
+        match plan(true, 9_000_000, &i, Goal::Preset(Preset::Light), &r).unwrap() {
+            Plan::Video { scale, .. } => assert_eq!(scale, Some((320, 180))),
+            other => panic!("{other:?}"),
+        }
+        // odd source sizes are made even even without a resize
+        let odd = info(20.0, true, Some((641, 361)));
+        match plan(true, 9_000_000, &odd, Goal::Preset(Preset::Light), &NONE).unwrap() {
+            Plan::Video { scale, .. } => assert_eq!(scale, Some((640, 360))),
+            other => panic!("{other:?}"),
+        }
+        assert!(plan(true, 9_000_000, &info(20.0, true, None), Goal::Preset(Preset::Light), &NONE).is_err());
+        assert!(plan(true, 9_000_000, &info(0.0, true, Some((640, 360))), Goal::Preset(Preset::Light), &NONE).is_err());
+    }
+
+    #[test]
+    fn output_extension_rules() {
+        for e in ["mp3", "m4a", "ogg", "opus"] {
+            assert_eq!(output_ext(false, e), e);
+        }
+        assert_eq!(output_ext(false, "MP3"), "mp3");
+        for e in ["wav", "flac", "aiff", "wma", "aac", ""] {
+            assert_eq!(output_ext(false, e), "m4a", "{e}");
+        }
+        for e in ["mp4", "mov", "mkv", "webm", "avi", "wmv"] {
+            assert_eq!(output_ext(true, e), "mp4");
+        }
+    }
+
+    #[test]
+    fn describe_shows_the_bitrates() {
+        assert_eq!(describe(&Plan::Audio { kbps: 128 }), "≈ 128 kbit/s audio");
+        let v = |rate, a, scale| Plan::Video { rate, audio_kbps: a, scale };
+        assert_eq!(describe(&v(VideoRate::Kbps(1200), Some(128), None)), "≈ 1.2 Mbit/s video + 128 kbit/s audio");
+        assert_eq!(describe(&v(VideoRate::Kbps(472), None, None)), "≈ 472 kbit/s video");
+        assert_eq!(describe(&v(VideoRate::Crf(28), Some(96), Some((640, 360)))), "quality-based (CRF 28) + 96 kbit/s audio · 640×360 px");
     }
 }

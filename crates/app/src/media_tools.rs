@@ -1,4 +1,5 @@
 //! Multimedia tool execution. Work is staged privately and published without replacing files.
+use ferrocast_core::compress::{self, Goal, Plan, Resize};
 use ferrocast_core::convert::{family_of, output_with_suffix, Family, FileTool};
 use ferrocast_core::media;
 use ferrocast_core::videoplan::MIN_PIECE;
@@ -80,6 +81,16 @@ pub(crate) fn video_dims(ff: &str, file: &Path) -> Option<(u32, u32)> {
     let info = probe(ff, file).ok()?;
     let dims = display_dims(streams(&info).find(|s| s["codec_type"] == "video")?);
     dims
+}
+
+/// Duration, audio presence and displayed size of an audio or video file (one ffprobe under its
+/// own deadline; never call it on the UI thread).
+pub(crate) fn media_info(ff: &str, file: &Path) -> Option<ferrocast_core::compress::MediaInfo> {
+    let info = probe(ff, file).ok()?;
+    let duration = info["format"]["duration"].as_str().and_then(|d| d.parse::<f64>().ok()).filter(|d| d.is_finite() && *d > 0.0)?;
+    let has_audio = streams(&info).any(|s| s["codec_type"] == "audio");
+    let dims = streams(&info).find(|s| s["codec_type"] == "video").and_then(display_dims);
+    Some(ferrocast_core::compress::MediaInfo { duration, has_audio, dims })
 }
 
 /// PNG of the frame at `t` seconds, at most 800 px wide, or None (bounded to 20 s).
@@ -227,6 +238,47 @@ fn split_one(ff: &str, file: &Path, ranges: &[(f64, f64)], exact: bool) -> Resul
     }
 }
 
+/// Compresses one audio or video file next to itself. The plan is made (and a hopeless target
+/// refused) before anything is written; the copy is staged privately and published with
+/// `create_new`, so nothing is ever overwritten and a failure leaves nothing behind.
+fn compress_one(ff: &str, file: &Path, goal: Goal, resize: &Resize) -> Result<PathBuf, String> {
+    let video = match family_of(file) {
+        Family::Video => true,
+        Family::Audio => false,
+        _ => return Err("this tool requires audio or video files".into()),
+    };
+    let info = media_info(ff, file).ok_or("could not read the media")?;
+    let orig = std::fs::metadata(file).map_err(|e| e.to_string())?.len();
+    let plan = compress::plan(video, orig, &info, goal, resize)?;
+    let output_ext = compress::output_ext(video, &ferrocast_core::convert::ext(file));
+    let input = file.to_str().ok_or("input path is not UTF-8")?;
+    let scratch = std::env::temp_dir().join(format!("ferrocast-media-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&scratch).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let staged = scratch.join(format!("output.{output_ext}"));
+        let out = staged.to_str().ok_or("output path is not UTF-8")?;
+        let args = match plan {
+            Plan::Audio { kbps } => media::compress_audio(input, out, kbps),
+            Plan::Video { rate, audio_kbps, scale } => media::compress_video(input, out, rate, audio_kbps, scale),
+        };
+        crate::route::run_limited(Command::new(ff).args(["-nostdin", "-n", "-loglevel", "error"]).args(args), 900)?;
+        if std::fs::metadata(&staged).map_err(|e| e.to_string())?.len() == 0 {
+            return Err("compression produced an empty file".to_string());
+        }
+        let dest = output_with_suffix(file, &FileTool::Compress(goal, *resize).suffix(), output_ext, |p| p.exists());
+        use std::io::Write;
+        let mut src = std::fs::File::open(&staged).map_err(|e| e.to_string())?;
+        let mut dst = std::fs::OpenOptions::new().write(true).create_new(true).open(&dest).map_err(|e| e.to_string())?;
+        if let Err(e) = std::io::copy(&mut src, &mut dst).and_then(|_| dst.flush()) {
+            let _ = std::fs::remove_file(&dest);
+            return Err(e.to_string());
+        }
+        Ok(dest)
+    })();
+    let _ = std::fs::remove_dir_all(scratch);
+    result
+}
+
 pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (Vec<PathBuf>, Vec<String>) {
     let Some(ff) = ffmpeg else {
         return (vec![], vec!["ffmpeg is not installed (brew install ffmpeg)".into()]);
@@ -239,6 +291,13 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
         }
         if let FileTool::SplitPoints(ranges, exact) = tool {
             match split_one(ff, file, ranges, *exact) {
+                Ok(p) => made.push(p),
+                Err(e) => errors.push(format!("{}: {e}", file.display())),
+            }
+            continue;
+        }
+        if let FileTool::Compress(goal, resize) = tool {
+            match compress_one(ff, file, *goal, resize) {
                 Ok(p) => made.push(p),
                 Err(e) => errors.push(format!("{}: {e}", file.display())),
             }

@@ -659,23 +659,7 @@ impl ImageOp {
             ImageOp::Annotate => "Annotate in Preview".into(),
             ImageOp::CompressToKb(kb) => format!("Compress · under {}", format_kb(*kb)),
             ImageOp::CompressByPercent(p) => format!("Compress · {p}% smaller"),
-            ImageOp::CompressWith(goal, r) => {
-                use crate::compress::{Goal, Preset};
-                let mut l = match goal {
-                    Goal::TargetBytes(b) => format!("Compress · {}", format_kb((*b / 1024).clamp(1, u32::MAX as u64) as u32)),
-                    Goal::Percent(p) => format!("Compress · {} % smaller", crate::compress::clamp_percent(*p)),
-                    Goal::Preset(Preset::Light) => "Compress · light".into(),
-                    Goal::Preset(Preset::Balanced) => "Compress · balanced".into(),
-                    Goal::Preset(Preset::Strong) => "Compress · strong".into(),
-                };
-                if let Some(e) = r.max_edge {
-                    l.push_str(&format!(" · max {e} px"));
-                }
-                if let Some(p) = r.percent {
-                    l.push_str(&format!(" · {p} % size"));
-                }
-                l
-            }
+            ImageOp::CompressWith(goal, r) => compress_label(goal, r),
             ImageOp::CropExact(w, h) => format!("Crop · exactly {w}×{h} px"),
             ImageOp::CropRect(_, _, w, h) => format!("Crop · {w}×{h} px"),
             ImageOp::SetMeta(m) => {
@@ -767,6 +751,25 @@ pub fn output_with_suffix(input: &Path, suffix: &str, ext: &str, exists: impl Fn
         }
         n += 1;
     }
+}
+
+/// "Compress · 2 MB", "Compress · 40 % smaller", "Compress · balanced", plus the resize.
+fn compress_label(goal: &crate::compress::Goal, r: &crate::compress::Resize) -> String {
+    use crate::compress::{Goal, Preset};
+    let mut l = match goal {
+        Goal::TargetBytes(b) => format!("Compress · {}", format_kb((*b / 1024).clamp(1, u32::MAX as u64) as u32)),
+        Goal::Percent(p) => format!("Compress · {} % smaller", crate::compress::clamp_percent(*p)),
+        Goal::Preset(Preset::Light) => "Compress · light".into(),
+        Goal::Preset(Preset::Balanced) => "Compress · balanced".into(),
+        Goal::Preset(Preset::Strong) => "Compress · strong".into(),
+    };
+    if let Some(e) = r.max_edge {
+        l.push_str(&format!(" · max {e} px"));
+    }
+    if let Some(p) = r.percent {
+        l.push_str(&format!(" · {p} % size"));
+    }
+    l
 }
 
 fn format_kb(kb: u32) -> String {
@@ -1038,6 +1041,8 @@ pub enum FileTool {
     OrganizePdf(Vec<(usize, i32)>),
     /// Unpack an archive into a new sibling folder named after it (never merged, never overwritten).
     Extract,
+    /// Re-encode audio or video to a size target, percentage or preset (resize applies to video only).
+    Compress(crate::compress::Goal, crate::compress::Resize),
 }
 
 pub fn format_secs(s: f64) -> String {
@@ -1087,6 +1092,7 @@ impl FileTool {
             FileTool::Join => "Join videos into one MP4".into(),
             FileTool::OrganizePdf(p) => format!("Organize PDF · {} page{}", p.len(), if p.len() == 1 { "" } else { "s" }),
             FileTool::Extract => "Extract".into(),
+            FileTool::Compress(goal, r) => compress_label(goal, r),
         }
     }
     pub fn suffix(&self) -> String {
@@ -1107,6 +1113,7 @@ impl FileTool {
             FileTool::Bleep(..) => "bleeped".into(),
             FileTool::Join => "joined".into(),
             FileTool::OrganizePdf(_) => "organized".into(),
+            FileTool::Compress(..) => "compressed".into(),
             // it makes a folder named after the archive; no suffix is ever applied
             FileTool::Extract => String::new(),
         }
@@ -1481,5 +1488,22 @@ mod strip_tests {
         let s = strip_png(&p).unwrap();
         assert!(!s.windows(4).any(|w| w == b"tEXt" || w == b"eXIf"));
         assert!(s.windows(4).any(|w| w == b"IDAT"));
+    }
+}
+
+#[cfg(test)]
+mod compress_tool_tests {
+    use super::*;
+    use crate::compress::{Goal, Preset, Resize};
+
+    #[test]
+    fn compress_labels_and_suffix_for_audio_and_video() {
+        let none = Resize::default();
+        assert_eq!(FileTool::Compress(Goal::TargetBytes(2 * 1024 * 1024), none).label(), "Compress · 2 MB");
+        assert_eq!(FileTool::Compress(Goal::Percent(40), none).label(), "Compress · 40 % smaller");
+        assert_eq!(FileTool::Compress(Goal::Preset(Preset::Balanced), none).label(), "Compress · balanced");
+        let r = Resize { max_edge: Some(720), percent: None };
+        assert_eq!(FileTool::Compress(Goal::Preset(Preset::Strong), r).label(), "Compress · strong · max 720 px");
+        assert_eq!(FileTool::Compress(Goal::Percent(40), none).suffix(), "compressed");
     }
 }

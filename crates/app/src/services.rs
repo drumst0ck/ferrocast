@@ -29,6 +29,8 @@ pub enum Msg {
     CropLoaded(PathBuf, Option<Vec<u8>>),
     /// Pixel size of the first image in the Compress window (None: unreadable).
     CompressProbed(PathBuf, Option<(u32, u32)>),
+    /// Duration, audio and size of the first file in the media Compress window (None: unreadable).
+    MediaProbed(PathBuf, Option<ferrocast_core::compress::MediaInfo>),
     /// PNG of the image being redacted, scaled for display (None: unreadable).
     RedactLoaded(PathBuf, Option<Vec<u8>>),
     /// PNG of the image being framed, scaled for the live preview (None: unreadable).
@@ -1799,6 +1801,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::SplitPoints(..)
         | FileTool::Channels(..)
         | FileTool::Bleep(..)
+        | FileTool::Compress(..)
         | FileTool::Join => {
             return crate::media_tools::run(files, tool, ffmpeg);
         }
