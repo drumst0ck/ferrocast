@@ -52,7 +52,10 @@ pub enum Msg {
     /// Duration of the video whose speed is being set (None: unreadable).
     VideoDuration(PathBuf, Option<f64>),
     /// Pixel size and a preview frame of the video being cropped (None: unreadable).
-    VideoCropReady(PathBuf, Option<((u32, u32), Vec<u8>)>),
+    /// File, displayed size, duration (0 when unknown) and the first preview frame.
+    VideoCropReady(PathBuf, Option<((u32, u32), f64, Vec<u8>)>),
+    /// A reference frame for the crop and redact windows: file, time asked, PNG.
+    RefFrame(PathBuf, f64, Option<Vec<u8>>),
     VideoRedactReady(PathBuf, Option<((u32, u32), f64, Vec<u8>)>),
     /// Preview frame of the video being trimmed at this time (None: could not extract).
     VideoFrame(PathBuf, f64, Option<Vec<u8>>),

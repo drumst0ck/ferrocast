@@ -69,6 +69,44 @@ pub fn split_job(duration: f64, points: &[f64], parts: usize) -> Result<ferrocas
     Ok(ferrocast_core::convert::FileTool::SplitPoints(ranges, true))
 }
 
+/// One area of the video redaction window: a rectangle (displayed pixels) covered from `start`
+/// to `end` seconds, solid black or blurred.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Area {
+    pub rect: ferrocast_core::croprect::Rect,
+    pub start: f64,
+    pub end: f64,
+    pub blur: bool,
+}
+
+/// Most areas the redaction window holds (the core's limit).
+pub const MAX_REDACT_AREAS: usize = ferrocast_core::redactplan::MAX_AREAS;
+
+/// The job for the redaction window, or the message that names what is wrong (the window stays open).
+pub fn redact_job(areas: &[Area], duration: f64, size: (u32, u32)) -> Result<ferrocast_core::convert::FileTool, String> {
+    let list: Vec<ferrocast_core::redactplan::Redaction> = areas
+        .iter()
+        .map(|a| {
+            let (x, y, w, h) = ferrocast_core::croprect::tuple(a.rect);
+            ferrocast_core::redactplan::Redaction { x, y, w, h, start: a.start, end: a.end, blur: a.blur }
+        })
+        .collect();
+    ferrocast_core::redactplan::validate(&list, duration, size.0, size.1).map_err(|m| format!("Redact: {m}"))?;
+    Ok(ferrocast_core::convert::FileTool::RedactVideoMany(list))
+}
+
+/// `m:ss` for a time in seconds (whole seconds, rounded down; 0:00 for unusable numbers).
+pub fn clock(secs: f64) -> String {
+    let s = if secs.is_finite() && secs > 0.0 { secs as u64 } else { 0 };
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// A new area: a centred third of the frame, active for the whole clip.
+pub fn new_area(size: (u32, u32), duration: f64) -> Area {
+    let rect = ferrocast_core::croprect::with_size(ferrocast_core::croprect::full(size.0, size.1), size.0 / 3, size.1 / 3, size.0, size.1);
+    Area { rect, start: 0.0, end: duration.max(0.0), blur: false }
+}
+
 /// Media mode of the Compress window: audio or video, and the probe result (read off the UI
 /// thread: `loaded` is false until it arrives, `info` None when the file could not be read).
 #[derive(Clone, Debug, PartialEq)]
@@ -209,23 +247,26 @@ pub enum View {
         duration: Option<f64>,
         factor: f64,
     },
-    /// One movable video redaction area with an active time range.
+    /// Video redaction window: up to 64 movable areas, each with its own time range and style;
+    /// `sel` is the area being edited and `ref_t` the time of the frame shown behind them.
     VideoRedact {
         file: PathBuf,
         size: Option<(u32, u32)>,
-        rect: ferrocast_core::croprect::Rect,
         aspect: Option<(u32, u32)>,
         duration: f64,
-        start: f64,
-        end: f64,
-        blur: bool,
+        areas: Vec<Area>,
+        sel: usize,
+        ref_t: f64,
     },
-    /// Video crop window: file, pixel size once probed, the rectangle and an optional locked aspect.
+    /// Video crop window: file, pixel size once probed, the rectangle and an optional locked aspect,
+    /// plus the duration and the time of the reference frame shown behind the rectangle.
     VideoCrop {
         file: PathBuf,
         size: Option<(u32, u32)>,
         rect: ferrocast_core::croprect::Rect,
         aspect: Option<(u32, u32)>,
+        duration: f64,
+        ref_t: f64,
     },
     VideoSnapshot {
         file: PathBuf,
@@ -1124,6 +1165,49 @@ impl App {
         self.focus_first = true;
     }
 
+    /// Forget the reference-frame bookkeeping of a previous video window.
+    fn ref_frame_reset(&mut self) {
+        self.ctx.data_mut(|d| {
+            d.remove::<(PathBuf, f64)>(Id::new("ref-flight"));
+            d.remove::<(PathBuf, f64)>(Id::new("ref-asked"));
+            d.remove::<(PathBuf, f64)>(Id::new("ref-shown"));
+        });
+    }
+
+    /// Record that the texture behind the rectangles shows `file` at `t`.
+    fn ref_frame_shown(&mut self, file: &std::path::Path, t: f64) {
+        self.ctx.data_mut(|d| {
+            d.insert_temp(Id::new("ref-shown"), (file.to_path_buf(), t));
+            d.insert_temp(Id::new("ref-asked"), (file.to_path_buf(), t));
+        });
+    }
+
+    /// Ask for the frame at the slider's time when it is not the one shown: off the UI thread, one
+    /// request in flight, and only the newest time is asked for once the reply arrives.
+    pub(crate) fn pump_ref_frame(&mut self) {
+        let (View::VideoCrop { file, size: Some(_), duration, ref_t, .. } | View::VideoRedact { file, size: Some(_), duration, ref_t, .. }) =
+            self.view()
+        else {
+            return;
+        };
+        let (file, t) = (file.clone(), ferrocast_core::videoplan::frame_time(*duration, *ref_t));
+        let Some(ff) = self.tools.ffmpeg else { return };
+        let in_flight = self.ctx.data(|d| d.get_temp::<(PathBuf, f64)>(Id::new("ref-flight"))).is_some();
+        let shown = self.ctx.data(|d| d.get_temp::<(PathBuf, f64)>(Id::new("ref-shown")));
+        if in_flight || shown.is_some_and(|(f, s)| f == file && s == t) {
+            return;
+        }
+        self.ctx.data_mut(|d| {
+            d.insert_temp(Id::new("ref-flight"), (file.clone(), t));
+            d.insert_temp(Id::new("ref-asked"), (file.clone(), t));
+        });
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            let png = crate::media_tools::preview_frame(ff, &file, t);
+            bus.send(Msg::RefFrame(file, t, png));
+        });
+    }
+
     fn pop(&mut self) {
         self.sec_dirty = true;
         self.nav_at = Instant::now();
@@ -1346,17 +1430,12 @@ impl App {
                             if let Some(img) = services::decode_png(&png) {
                                 let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
                                 self.ctx.data_mut(|data| data.insert_temp(Id::new("crop-tex"), tex));
-                                if let Some(View::VideoRedact { size, rect, duration, end, .. }) = self.stack.last_mut() {
+                                let t = ferrocast_core::videoplan::frame_time(d, d * 0.1);
+                                self.ref_frame_shown(&file, t);
+                                if let Some(View::VideoRedact { size, areas, sel, duration, ref_t, .. }) = self.stack.last_mut() {
                                     *size = Some(dims);
-                                    *rect = ferrocast_core::croprect::with_size(
-                                        ferrocast_core::croprect::full(dims.0, dims.1),
-                                        dims.0 / 3,
-                                        dims.1 / 3,
-                                        dims.0,
-                                        dims.1,
-                                    );
-                                    *duration = d;
-                                    *end = d;
+                                    *areas = vec![new_area(dims, d)];
+                                    (*sel, *duration, *ref_t) = (0, d, t);
                                 }
                             } else {
                                 self.toast("Redact: could not decode the preview");
@@ -1369,19 +1448,41 @@ impl App {
                 Msg::VideoCropReady(file, ready) => {
                     if matches!(self.view(), View::VideoCrop { file: f, .. } if *f == file) {
                         match ready {
-                            Some((dims, png)) => {
+                            Some((dims, d, png)) => {
+                                let t = ferrocast_core::videoplan::frame_time(d, d * 0.1);
                                 if let Some(img) = services::decode_png(&png) {
                                     let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
-                                    self.ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                                    self.ctx.data_mut(|data| data.insert_temp(Id::new("crop-tex"), tex));
+                                    self.ref_frame_shown(&file, t);
                                 }
-                                if let Some(View::VideoCrop { size, rect, .. }) = self.stack.last_mut() {
+                                if let Some(View::VideoCrop { size, rect, duration, ref_t, .. }) = self.stack.last_mut() {
                                     *size = Some(dims);
                                     *rect = ferrocast_core::croprect::full(dims.0, dims.1);
+                                    (*duration, *ref_t) = (d, t);
                                 }
                             }
                             None => self.toast("Crop: could not read the video"),
                         }
                     }
+                }
+                Msg::RefFrame(file, t, png) => {
+                    // one request in flight, newest wins: the reply is used only for this file and the
+                    // time asked for last; the pump then asks again if the slider has moved on
+                    let flight: Option<(PathBuf, f64)> = self.ctx.data(|d| d.get_temp(Id::new("ref-flight")));
+                    if flight.as_ref().is_some_and(|(f, _)| *f == file) {
+                        self.ctx.data_mut(|d| d.remove::<(PathBuf, f64)>(Id::new("ref-flight")));
+                    }
+                    let asked: Option<(PathBuf, f64)> = self.ctx.data(|d| d.get_temp(Id::new("ref-asked")));
+                    let current = matches!(self.view(), View::VideoCrop { file: f, .. } | View::VideoRedact { file: f, .. } if *f == file);
+                    if current && asked.is_some_and(|(f, a)| f == file && a == t) {
+                        if let Some(img) = png.as_deref().and_then(services::decode_png) {
+                            let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                            self.ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                            self.ref_frame_shown(&file, t);
+                        }
+                    }
+                    self.pump_ref_frame();
+                    self.ctx.request_repaint();
                 }
                 Msg::MetadataLoaded(file, res) => {
                     if let Some(View::EditMetadata { file: f, original, working, error, .. }) = self.stack.last_mut() {
@@ -3640,21 +3741,14 @@ impl App {
                             if !duration.is_finite() || duration <= 0.0 {
                                 return None;
                             }
-                            crate::media_tools::preview_frame(ff, &f, duration * 0.1).map(|png| (dims, duration, png))
+                            let at = ferrocast_core::videoplan::frame_time(duration, duration * 0.1);
+                            crate::media_tools::preview_frame(ff, &f, at).map(|png| (dims, duration, png))
                         });
                         bus.send(Msg::VideoRedactReady(f, ready));
                     });
                     self.show();
-                    self.push(View::VideoRedact {
-                        file,
-                        size: None,
-                        rect: ferrocast_core::croprect::full(2, 2),
-                        aspect: None,
-                        duration: 0.0,
-                        start: 0.0,
-                        end: 0.0,
-                        blur: false,
-                    });
+                    self.ref_frame_reset();
+                    self.push(View::VideoRedact { file, size: None, aspect: None, duration: 0.0, areas: vec![], sel: 0, ref_t: 0.0 });
                 }
             },
             Act::CropVideo(file) => match self.tools.ffmpeg {
@@ -3664,13 +3758,22 @@ impl App {
                     let (bus, f) = (self.bus.clone(), file.clone());
                     std::thread::spawn(move || {
                         let ready = crate::media_tools::video_dims(ff, &f).and_then(|dims| {
-                            let at = crate::media_tools::video_info(ff, &f).map(|(d, _)| d * 0.1).unwrap_or(0.0);
-                            crate::media_tools::preview_frame(ff, &f, at).map(|png| (dims, png))
+                            let d = crate::media_tools::video_info(ff, &f).map(|(d, _)| d).unwrap_or(0.0);
+                            let at = ferrocast_core::videoplan::frame_time(d, d * 0.1);
+                            crate::media_tools::preview_frame(ff, &f, at).map(|png| (dims, d, png))
                         });
                         bus.send(Msg::VideoCropReady(f, ready));
                     });
                     self.show();
-                    self.push(View::VideoCrop { file, size: None, rect: ferrocast_core::croprect::full(2, 2), aspect: None });
+                    self.ref_frame_reset();
+                    self.push(View::VideoCrop {
+                        file,
+                        size: None,
+                        rect: ferrocast_core::croprect::full(2, 2),
+                        aspect: None,
+                        duration: 0.0,
+                        ref_t: 0.0,
+                    });
                 }
             },
             action @ (Act::TrimVideo(_) | Act::SnapshotVideo(_) | Act::SplitVideo(_)) => {

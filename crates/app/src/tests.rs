@@ -781,10 +781,20 @@ fn video_speed_view_renders_while_probing_and_after() {
 fn video_crop_view_renders_while_probing_and_after() {
     let mut app = fixture();
     let f = std::env::temp_dir().join(format!("fc-vcrop-{}.mp4", std::process::id()));
-    app.stack = vec![View::Root, View::VideoCrop { file: f.clone(), size: None, rect: ferrocast_core::croprect::full(2, 2), aspect: None }];
+    app.stack = vec![
+        View::Root,
+        View::VideoCrop {
+            file: f.clone(),
+            size: None,
+            rect: ferrocast_core::croprect::full(2, 2),
+            aspect: None,
+            duration: 0.0,
+            ref_t: 0.0,
+        },
+    ];
     render(&mut app, vec![]);
     let r = ferrocast_core::croprect::Rect { x: 10, y: 10, w: 100, h: 60 };
-    app.stack = vec![View::Root, View::VideoCrop { file: f, size: Some((640, 360)), rect: r, aspect: None }];
+    app.stack = vec![View::Root, View::VideoCrop { file: f, size: Some((640, 360)), rect: r, aspect: None, duration: 6.0, ref_t: 0.6 }];
     render(&mut app, vec![]);
     assert!(matches!(app.view(), View::VideoCrop { size: Some(_), .. }));
 }
@@ -933,16 +943,12 @@ fn video_redact_rejects_reversed_range_without_closing() {
     let mut app = fixture();
     app.stack = vec![
         View::Root,
-        View::VideoRedact {
-            file: std::path::PathBuf::from("/nonexistent-redact.mp4"),
-            size: Some((640, 360)),
-            rect: ferrocast_core::croprect::full(640, 360),
-            aspect: None,
-            duration: 8.0,
-            start: 5.0,
-            end: 2.0,
-            blur: false,
-        },
+        redact_view(
+            "/nonexistent-redact.mp4",
+            8.0,
+            vec![Area { rect: ferrocast_core::croprect::full(640, 360), start: 5.0, end: 2.0, blur: false }],
+            0,
+        ),
     ];
     render(&mut app, vec![]);
     render(&mut app, vec![Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
@@ -2220,14 +2226,6 @@ fn atrim_state(app: &App) -> ferrocast_core::videoplan::Trim {
     }
 }
 
-fn click_at(app: &mut App, pos: Pos2) {
-    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
-    render(app, vec![Event::PointerMoved(pos)]);
-    render(app, vec![btn(true)]);
-    render(app, vec![btn(false)]);
-    render(app, vec![]);
-}
-
 const ATRIM_START_BOX: (f32, f32) = (108.0, 312.0);
 const ATRIM_END_BOX: (f32, f32) = (195.0, 312.0);
 const ATRIM_SILENCE_BTN: (f32, f32) = (260.0, 312.0);
@@ -2679,4 +2677,275 @@ fn normalize_line_shows_measuring_the_delta_and_failure() {
     assert_eq!(normalize_line(Some(-31.0), -16.0), "now -31.0 LUFS → target -16 LUFS (+15.0 dB)");
     assert_eq!(normalize_line(Some(-9.0), -14.5), "now -9.0 LUFS → target -14.5 LUFS (-5.5 dB)");
     assert!(normalize_line(Some(f64::NAN), -16.0).contains("could not be measured"));
+}
+
+// ---- A11c / A12a: redact window with several areas, reference frame ----
+
+fn area(x: u32, y: u32, w: u32, h: u32, start: f64, end: f64, blur: bool) -> Area {
+    Area { rect: ferrocast_core::croprect::Rect { x, y, w, h }, start, end, blur }
+}
+
+fn three_areas() -> Vec<Area> {
+    vec![area(40, 30, 200, 120, 0.0, 6.0, false), area(300, 100, 150, 90, 1.0, 3.0, true), area(100, 200, 120, 80, 2.0, 5.5, false)]
+}
+
+fn redact_view(file: &str, duration: f64, areas: Vec<Area>, sel: usize) -> View {
+    View::VideoRedact { file: file.into(), size: Some((640, 360)), aspect: None, duration, areas, sel, ref_t: 0.6 }
+}
+
+fn redact_app(areas: Vec<Area>, sel: usize) -> App {
+    let mut app = fixture();
+    app.stack = vec![View::Root, redact_view("/nonexistent/fc-redact.mp4", 6.0, areas, sel)];
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    app
+}
+
+fn redact_areas(app: &App) -> (Vec<Area>, usize) {
+    match app.view() {
+        View::VideoRedact { areas, sel, .. } => (areas.clone(), *sel),
+        other => panic!("redact window closed unexpectedly: {}", other.title()),
+    }
+}
+
+fn click_at(app: &mut App, pos: Pos2) {
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(app, vec![Event::PointerMoved(pos)]);
+    render(app, vec![btn(true)]);
+    render(app, vec![btn(false)]);
+    render(app, vec![]);
+}
+
+// Layout of the redact window (content starts at y 58 pt): "+ Add area" is the first element of
+// the left column, rows follow every 30 pt, each with a delete button at the right of the column.
+const ADD_AREA_POS: (f32, f32) = (110.0, 79.0);
+fn row_pos(i: usize) -> Pos2 {
+    Pos2::new(90.0, 118.0 + 30.0 * i as f32)
+}
+fn delete_pos(i: usize) -> Pos2 {
+    Pos2::new(row_pos(i).x + 126.0, row_pos(i).y)
+}
+
+#[test]
+fn frame_time_for_the_reference_frame_never_leaves_the_clip() {
+    assert_eq!(ferrocast_core::videoplan::frame_time(6.0, 99.0), 5.96);
+}
+
+#[test]
+fn redact_job_builds_the_job_or_names_the_problem() {
+    use ferrocast_core::convert::FileTool;
+    let ok = redact_job(&three_areas(), 6.0, (640, 360)).unwrap();
+    match ok {
+        FileTool::RedactVideoMany(v) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!((v[1].x, v[1].y, v[1].w, v[1].h), (300, 100, 150, 90));
+            assert_eq!((v[1].start, v[1].end, v[1].blur), (1.0, 3.0, true));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        matches!(redact_job(&[area(0, 0, 100, 100, 0.0, 6.0, false)], 6.0, (640, 360)), Ok(FileTool::RedactVideoMany(v)) if v.len() == 1)
+    );
+    let err = |a: Vec<Area>| redact_job(&a, 6.0, (640, 360)).unwrap_err();
+    assert!(err(vec![area(0, 0, 100, 100, 5.0, 2.0, false)]).contains("area 1"), "reversed range");
+    assert!(
+        err(vec![area(0, 0, 100, 100, 0.0, 6.0, false), area(0, 0, 100, 100, 1.0, 9.0, false)]).contains("area 2"),
+        "past the duration"
+    );
+    assert!(err(vec![area(600, 0, 100, 100, 0.0, 6.0, false)]).contains("outside"), "out of the frame");
+    assert!(err(vec![area(0, 0, 100, 100, 0.0, 6.0, false); 65]).contains("too many"), "65 areas");
+    assert!(redact_job(&vec![area(0, 0, 100, 100, 0.0, 6.0, false); 64], 6.0, (640, 360)).is_ok(), "64 areas are allowed");
+    assert!(err(vec![]).contains("at least one"));
+}
+
+#[test]
+fn redact_view_renders_probing_ready_and_with_a_bad_selection_in_both_themes() {
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        let mut app = fixture();
+        app.ctx.set_theme(theme);
+        let f = "/nonexistent/fc-redact-render.mp4";
+        app.stack = vec![
+            View::Root,
+            View::VideoRedact { file: f.into(), size: None, aspect: None, duration: 0.0, areas: vec![], sel: 0, ref_t: 0.0 },
+        ];
+        render(&mut app, vec![]);
+        for (areas, sel) in [(three_areas()[..1].to_vec(), 0), (three_areas(), 1), (three_areas(), 2), (three_areas(), 7), (vec![], 3)] {
+            app.stack = vec![View::Root, redact_view(f, 6.0, areas, sel)];
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert!(matches!(app.view(), View::VideoRedact { .. }));
+        }
+    }
+}
+
+#[test]
+fn redact_escape_goes_back_and_starts_no_job() {
+    let mut app = redact_app(three_areas(), 0);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err(), "Escape starts no job");
+}
+
+#[test]
+fn redact_enter_with_an_invalid_area_keeps_the_window_and_starts_nothing() {
+    let mut areas = three_areas();
+    areas[1].start = 4.0;
+    areas[1].end = 1.0;
+    let mut app = redact_app(areas.clone(), 0);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert_eq!(redact_areas(&app).0, areas, "nothing edited");
+    assert!(app.rx.try_recv().is_err(), "an invalid area must not start work");
+}
+
+#[test]
+fn redact_add_area_button_adds_a_centred_third_covering_the_whole_clip() {
+    let mut app = redact_app(three_areas()[..1].to_vec(), 0);
+    click_at(&mut app, Pos2::new(ADD_AREA_POS.0, ADD_AREA_POS.1));
+    let (areas, sel) = redact_areas(&app);
+    assert_eq!(areas.len(), 2, "the click must have hit + Add area (layout moved?)");
+    assert_eq!(sel, 1, "the new area is selected");
+    assert_eq!(areas[1].rect, ferrocast_core::croprect::Rect { x: 214, y: 120, w: 213, h: 120 });
+    assert_eq!((areas[1].start, areas[1].end, areas[1].blur), (0.0, 6.0, false));
+}
+
+#[test]
+fn redact_add_area_stops_at_64() {
+    let mut app = redact_app(vec![area(0, 0, 100, 100, 0.0, 6.0, false); 64], 0);
+    click_at(&mut app, Pos2::new(ADD_AREA_POS.0, ADD_AREA_POS.1));
+    assert_eq!(redact_areas(&app).0.len(), 64);
+}
+
+#[test]
+fn redact_delete_removes_one_but_never_the_last() {
+    let mut app = redact_app(three_areas(), 2);
+    click_at(&mut app, delete_pos(0));
+    let (areas, sel) = redact_areas(&app);
+    assert_eq!(areas, three_areas()[1..].to_vec(), "the first area went away (layout moved?)");
+    assert_eq!(sel, 1, "the selection follows its area");
+    click_at(&mut app, delete_pos(0));
+    assert_eq!(redact_areas(&app).0.len(), 1);
+    click_at(&mut app, delete_pos(0));
+    assert_eq!(redact_areas(&app).0.len(), 1, "the last area cannot be deleted");
+}
+
+#[test]
+fn redact_clicking_a_row_selects_that_area() {
+    let mut app = redact_app(three_areas(), 0);
+    click_at(&mut app, row_pos(2));
+    assert_eq!(redact_areas(&app).1, 2, "layout moved?");
+}
+
+// L74-style: Escape while the Start box is being edited ends the edit, not the window.
+#[test]
+fn redact_start_box_keeps_escape_while_editing() {
+    let mut app = redact_app(three_areas(), 0);
+    // the Start box is the first number box of the strip above the picture: find it by clicking
+    // along the strip until the first click that starts an edit
+    let (mut hit, mut hit_x) = (false, 0.0);
+    for x in (260..560).step_by(4) {
+        click_at(&mut app, Pos2::new(x as f32, 79.0));
+        if app.ctx.egui_wants_keyboard_input() {
+            (hit, hit_x) = (true, x as f32);
+            break;
+        }
+    }
+    assert!(hit, "a click must have started editing a number box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::VideoRedact { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+    // that box is Start: typing a number into it and pressing Enter sets the selected area's start
+    let mut app = redact_app(three_areas(), 1);
+    click_at(&mut app, Pos2::new(hit_x, 79.0));
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![Event::Text("2.5".into())]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    render(&mut app, vec![]);
+    let (areas, _) = redact_areas(&app);
+    assert_eq!((areas[1].start, areas[1].end), (2.5, 3.0), "the first number box is Start of the selected area");
+    assert_eq!((areas[0], areas[2]), (three_areas()[0], three_areas()[2]));
+    assert!(app.rx.try_recv().is_err(), "Enter in the box starts no job");
+}
+
+#[test]
+fn dragging_inside_the_selected_area_moves_only_that_area() {
+    let mut app = redact_app(three_areas(), 1);
+    let before = redact_areas(&app).0;
+    // the 640x360 frame is drawn at about (307,182)-(675,389) pt (scale 0.575); the centre of area 2
+    // (300,100 150x90 -> frame point 375,145) is at about (522,265): inside, far from every handle
+    drag(&mut app, Pos2::new(522.0, 265.0), Pos2::new(552.0, 285.0));
+    let after = redact_areas(&app).0;
+    assert_ne!(after[1].rect, before[1].rect, "a drag inside the selected area must move it (layout moved?)");
+    assert_eq!((after[1].rect.w, after[1].rect.h), (150, 90), "moving keeps the size");
+    assert!(after[1].rect.x > 300 + 30 && after[1].rect.y > 100 + 15, "followed the pointer: {:?}", after[1].rect);
+    assert_eq!((after[0], after[2]), (before[0], before[2]), "other areas untouched");
+    assert_eq!(redact_areas(&app).1, 1, "the selection stays");
+}
+
+fn png_bytes() -> Vec<u8> {
+    let mut v = Vec::new();
+    image::DynamicImage::ImageRgba8(image::RgbaImage::new(8, 8))
+        .write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Png)
+        .unwrap();
+    v
+}
+
+fn crop_tex_id(app: &App) -> Option<egui::TextureId> {
+    app.ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("crop-tex"))).map(|t| t.id())
+}
+
+#[test]
+fn reference_frame_reply_replaces_the_texture_only_for_this_file_and_the_newest_time() {
+    let mut app = redact_app(three_areas(), 0);
+    let file = std::path::PathBuf::from("/nonexistent/fc-redact.mp4");
+    assert_eq!(crop_tex_id(&app), None);
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("ref-asked"), (file.clone(), 2.0f64)));
+    // another file
+    app.bus.send(Msg::RefFrame("/nonexistent/other.mp4".into(), 2.0, Some(png_bytes())));
+    app.drain();
+    assert_eq!(crop_tex_id(&app), None, "a reply for another file is ignored");
+    // an older time
+    app.bus.send(Msg::RefFrame(file.clone(), 1.0, Some(png_bytes())));
+    app.drain();
+    assert_eq!(crop_tex_id(&app), None, "a reply for an older time is ignored");
+    // the one asked for
+    app.bus.send(Msg::RefFrame(file, 2.0, Some(png_bytes())));
+    app.drain();
+    assert!(crop_tex_id(&app).is_some(), "the newest reply replaces the texture");
+    let (areas, sel) = redact_areas(&app);
+    assert_eq!((areas, sel), (three_areas(), 0), "rectangles are untouched");
+}
+
+#[test]
+fn crop_ready_carries_the_duration_and_the_reference_frame_control_renders() {
+    let mut app = fixture();
+    let f = std::path::PathBuf::from("/nonexistent/fc-vcrop-ref.mp4");
+    app.stack = vec![
+        View::Root,
+        View::VideoCrop {
+            file: f.clone(),
+            size: None,
+            rect: ferrocast_core::croprect::full(2, 2),
+            aspect: None,
+            duration: 0.0,
+            ref_t: 0.0,
+        },
+    ];
+    app.bus.send(Msg::VideoCropReady("/nonexistent/other.mp4".into(), Some(((640, 360), 6.0, png_bytes()))));
+    app.drain();
+    assert!(matches!(app.view(), View::VideoCrop { size: None, .. }), "another file is ignored");
+    app.bus.send(Msg::VideoCropReady(f, Some(((640, 360), 6.0, png_bytes()))));
+    app.drain();
+    match app.view() {
+        View::VideoCrop { size: Some((640, 360)), duration, ref_t, .. } => {
+            assert_eq!(*duration, 6.0);
+            assert!((*ref_t - 0.6).abs() < 1e-9, "the first frame is at 10% of the clip");
+        }
+        _ => panic!("crop window not ready"),
+    }
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        render(&mut app, vec![]);
+    }
 }

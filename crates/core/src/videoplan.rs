@@ -196,6 +196,15 @@ impl Trim {
     }
 }
 
+/// The time of the reference frame to decode for a cursor `t`: clamped to `0..=duration - 0.04`
+/// (one frame short of the end, which a decoder can always seek to). 0 when the numbers are unusable.
+pub fn frame_time(duration: f64, t: f64) -> f64 {
+    if !duration.is_finite() || duration <= 0.0 || !t.is_finite() {
+        return 0.0;
+    }
+    t.clamp(0.0, (duration - MIN_CLIP).max(0.0))
+}
+
 /// Frame rate from ffprobe's `r_frame_rate` text such as `30000/1001` or `25`.
 pub fn parse_rate(s: &str) -> Option<f64> {
     let s = s.trim();
@@ -423,5 +432,21 @@ mod tests {
         assert_eq!((v.start, v.end), (1.0, 4.0));
         assert!(v.set_range(-1.0, 99.0), "a range past the ends is clamped");
         assert!(v.is_whole());
+    }
+
+    #[test]
+    fn frame_time_clamps_to_a_decodable_frame() {
+        assert_eq!(frame_time(10.0, 0.0), 0.0);
+        assert_eq!(frame_time(10.0, 4.5), 4.5);
+        assert_eq!(frame_time(10.0, -3.0), 0.0, "below the start");
+        assert!((frame_time(10.0, 10.0) - 9.96).abs() < 1e-9, "the end is one frame short of the duration");
+        assert!((frame_time(10.0, 99.0) - 9.96).abs() < 1e-9, "past the end");
+        assert_eq!(frame_time(10.0, f64::NAN), 0.0);
+        assert_eq!(frame_time(f64::NAN, 3.0), 0.0);
+        assert_eq!(frame_time(0.0, 3.0), 0.0);
+        assert_eq!(frame_time(-5.0, 3.0), 0.0);
+        assert_eq!(frame_time(0.01, 5.0), 0.0, "a clip shorter than one frame only has frame 0");
+        assert_eq!(frame_time(0.04, 0.04), 0.0);
+        assert!((frame_time(0.1, 5.0) - 0.06).abs() < 1e-9);
     }
 }

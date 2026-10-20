@@ -168,24 +168,47 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
                     if let Some(dims) = crate::media_tools::video_dims(ff, &file) {
-                        if let Some(img) = crate::media_tools::preview_frame(ff, &file, 1.0).and_then(|b| services::decode_png(&b)) {
+                        let duration = crate::media_tools::video_info(ff, &file).map(|(d, _)| d).unwrap_or(0.0);
+                        let ref_t = ferrocast_core::videoplan::frame_time(duration, 2.0);
+                        if let Some(img) = crate::media_tools::preview_frame(ff, &file, ref_t).and_then(|b| services::decode_png(&b)) {
                             let tex = ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
                             ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                            ctx.data_mut(|d| d.insert_temp(Id::new("ref-shown"), (file.clone(), ref_t)));
                         }
-                        let rect = ferrocast_core::croprect::fit_aspect(dims.0, dims.1, 1, 1);
                         app.push(if std::env::var("FERROCAST_VIEW").as_deref() == Ok("vredact") {
+                            let area = |x: f64, y: f64, w: f64, h: f64, start: f64, end: f64, blur: bool| crate::app::Area {
+                                rect: ferrocast_core::croprect::Rect {
+                                    x: (dims.0 as f64 * x) as u32,
+                                    y: (dims.1 as f64 * y) as u32,
+                                    w: (dims.0 as f64 * w) as u32,
+                                    h: (dims.1 as f64 * h) as u32,
+                                },
+                                start,
+                                end,
+                                blur,
+                            };
                             View::VideoRedact {
                                 file,
                                 size: Some(dims),
-                                rect,
                                 aspect: None,
-                                duration: 4.0,
-                                start: 1.0,
-                                end: 3.0,
-                                blur: true,
+                                duration,
+                                areas: vec![
+                                    area(0.08, 0.1, 0.25, 0.3, 0.0, duration, false),
+                                    area(0.4, 0.3, 0.3, 0.35, 1.0, 3.0, true),
+                                    area(0.72, 0.62, 0.22, 0.3, 2.0, duration * 0.9, false),
+                                ],
+                                sel: 1,
+                                ref_t,
                             }
                         } else {
-                            View::VideoCrop { file, size: Some(dims), rect, aspect: Some((1, 1)) }
+                            View::VideoCrop {
+                                file,
+                                size: Some(dims),
+                                rect: ferrocast_core::croprect::fit_aspect(dims.0, dims.1, 1, 1),
+                                aspect: Some((1, 1)),
+                                duration,
+                                ref_t,
+                            }
                         });
                     }
                 }
@@ -788,19 +811,15 @@ impl App {
                 }
                 true
             }
-            View::VideoRedact { file, size: Some(_), rect, duration, start, end, blur, .. } if k.enter => {
-                if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start || end > duration {
-                    self.toast("Redact: use 0 ≤ start < end ≤ video duration");
-                } else {
-                    let (x, y, w, h) = ferrocast_core::croprect::tuple(rect);
-                    self.toast("Redacting video…");
-                    services::file_tool_files(
-                        vec![file],
-                        ferrocast_core::convert::FileTool::RedactVideo(x, y, w, h, start, end, blur),
-                        self.tools.ffmpeg,
-                        self.bus.clone(),
-                    );
-                    self.pop();
+            View::VideoRedact { file, size: Some(size), areas, duration, .. } if k.enter => {
+                match redact_job(&areas, duration, size) {
+                    Err(m) => self.toast(m),
+                    Ok(_) if self.tools.ffmpeg.is_none() => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                    Ok(tool) => {
+                        self.toast("Redacting video…");
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
                 }
                 true
             }
@@ -3034,6 +3053,145 @@ impl App {
         }
     }
 
+    /// "Reference frame" slider of the crop and redact windows: moving it asks (off the UI thread,
+    /// newest wins) for the frame at that time; the rectangles are not touched.
+    fn draw_ref_frame(&mut self, ui: &mut Ui, strip: Rect, pal: &Palette, duration: f64, ref_t: f64) {
+        let max = ferrocast_core::videoplan::frame_time(duration, duration);
+        if max <= 0.0 {
+            return;
+        }
+        let mut t = ref_t.clamp(0.0, max);
+        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Reference frame").size(12.0).color(pal.sub));
+                ui.spacing_mut().slider_width = 220.0;
+                ui.add(egui::Slider::new(&mut t, 0.0..=max).suffix(" s").fixed_decimals(2));
+            });
+        });
+        if t != ref_t {
+            if let Some(View::VideoCrop { ref_t: r, .. } | View::VideoRedact { ref_t: r, .. }) = self.stack.last_mut() {
+                *r = t;
+            }
+            ui.ctx().request_repaint();
+        }
+        self.pump_ref_frame();
+    }
+
+    /// Redact video: the areas on the left (add, select, delete), the picture with the selected
+    /// area's rectangle on the right, and the selected area's time range and style.
+    fn draw_video_redact(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette) {
+        let View::VideoRedact { size: Some(size), duration, areas, sel, ref_t, .. } = self.view().clone() else {
+            return;
+        };
+        if areas.is_empty() {
+            // cannot happen once the video is read; keep the window usable if it ever does
+            if let Some(View::VideoRedact { areas, sel, .. }) = self.stack.last_mut() {
+                (*areas, *sel) = (vec![crate::app::new_area(size, duration)], 0);
+            }
+            ui.ctx().request_repaint();
+            return;
+        }
+        let sel_now = sel.min(areas.len() - 1);
+        let mut areas_new = areas.clone();
+        let mut sel_new = sel_now;
+        // left column: "+ Add area" first (fixed place), then one row per area
+        let col = Rect::from_min_size(rect.min + Vec2::new(12.0, 8.0), Vec2::new(206.0, rect.height() - 16.0));
+        let full = areas.len() >= crate::app::MAX_REDACT_AREAS;
+        let add = Rect::from_min_size(col.min, Vec2::new(col.width(), 26.0));
+        let add_resp = ui.interact(add, Id::new("redact-add"), if full { egui::Sense::hover() } else { egui::Sense::click() });
+        let add_fill = if add_resp.hovered() && !full { pal.sel } else { pal.field };
+        ui.painter().rect_filled(add, 6.0, add_fill);
+        ui.painter().text(
+            add.center(),
+            egui::Align2::CENTER_CENTER,
+            if full { format!("Limit of {} areas", crate::app::MAX_REDACT_AREAS) } else { "+ Add area".to_string() },
+            FontId::proportional(13.0),
+            if full { pal.sub } else { pal.text },
+        );
+        if add_resp.clicked() && !full {
+            areas_new.push(crate::app::new_area(size, duration));
+            sel_new = areas_new.len() - 1;
+        }
+        let mut delete = None;
+        let can_delete = areas.len() > 1;
+        for (i, a) in areas.iter().enumerate() {
+            let row = Rect::from_min_size(col.min + Vec2::new(0.0, 34.0 + 30.0 * i as f32), Vec2::new(col.width(), 26.0));
+            if row.max.y > rect.max.y - 4.0 {
+                break;
+            }
+            let label_rect = Rect::from_min_max(row.min, Pos2::new(row.max.x - 26.0, row.max.y));
+            let del_rect = Rect::from_min_max(Pos2::new(row.max.x - 26.0, row.min.y), row.max);
+            let resp = ui.interact(label_rect, Id::new(("redact-row", i)), egui::Sense::click());
+            let del =
+                ui.interact(del_rect, Id::new(("redact-del", i)), if can_delete { egui::Sense::click() } else { egui::Sense::hover() });
+            if i == sel_now {
+                ui.painter().rect_filled(row, 6.0, pal.sel);
+                ui.painter().rect_stroke(row, 6.0, Stroke::new(1.0, pal.accent), StrokeKind::Inside);
+            } else if resp.hovered() || del.hovered() {
+                ui.painter().rect_filled(row, 6.0, pal.field);
+            }
+            ui.painter().text(
+                label_rect.left_center() + Vec2::new(8.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                format!("Area {} · {}–{} · {}", i + 1, clock(a.start), clock(a.end), if a.blur { "blur" } else { "solid" }),
+                FontId::proportional(12.0),
+                pal.text,
+            );
+            let x_color = if !can_delete {
+                pal.sep
+            } else if del.hovered() {
+                pal.danger
+            } else {
+                pal.sub
+            };
+            let c = del_rect.center();
+            ui.painter().line_segment([c + Vec2::new(-4.0, -4.0), c + Vec2::new(4.0, 4.0)], Stroke::new(1.5, x_color));
+            ui.painter().line_segment([c + Vec2::new(-4.0, 4.0), c + Vec2::new(4.0, -4.0)], Stroke::new(1.5, x_color));
+            if del.clicked() && can_delete {
+                delete = Some(i);
+            } else if resp.clicked() {
+                sel_new = i;
+            }
+        }
+        if let Some(i) = delete {
+            areas_new.remove(i);
+            sel_new = if sel_new > i || sel_new >= areas_new.len() { sel_new.saturating_sub(1) } else { sel_new };
+        }
+        // right side: range and style of the selected area, the reference frame, then the picture
+        let right = Rect::from_min_max(Pos2::new(rect.min.x + 232.0, rect.min.y), rect.max);
+        if sel_new == sel_now && sel_now < areas_new.len() {
+            let mut a = areas_new[sel_now];
+            let strip = Rect::from_min_size(right.min + Vec2::new(12.0, 4.0), Vec2::new(right.width() - 24.0, 30.0));
+            ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Area {}", sel_now + 1));
+                    ui.label("Start s");
+                    ui.add(egui::DragValue::new(&mut a.start).range(0.0..=duration).speed(0.04));
+                    ui.label("End s");
+                    ui.add(egui::DragValue::new(&mut a.end).range(0.0..=duration).speed(0.04));
+                    ui.selectable_value(&mut a.blur, false, "Solid");
+                    ui.selectable_value(&mut a.blur, true, "Blur");
+                });
+            });
+            areas_new[sel_now] = a;
+        }
+        if areas_new != areas || sel_new != sel {
+            if let Some(View::VideoRedact { areas, sel, .. }) = self.stack.last_mut() {
+                (*areas, *sel) = (areas_new.clone(), sel_new);
+            }
+            ui.ctx().request_repaint();
+        }
+        let ref_strip = Rect::from_min_size(right.min + Vec2::new(12.0, 36.0), Vec2::new(right.width() - 24.0, 28.0));
+        self.draw_ref_frame(ui, ref_strip, pal, duration, ref_t);
+        let sel_rect = areas_new.get(sel_new).map(|a| a.rect).unwrap_or_else(|| ferrocast_core::croprect::full(size.0, size.1));
+        let aspect = match self.view() {
+            View::VideoRedact { aspect, .. } => *aspect,
+            _ => None,
+        };
+        let area = Rect::from_min_max(right.min + Vec2::new(0.0, 64.0), right.max);
+        self.draw_crop(ui, area, pal, size, sel_rect, aspect);
+    }
+
     /// Crop editor: the picture with a draggable rectangle, aspect presets and exact size boxes.
     fn draw_crop(
         &mut self,
@@ -3083,7 +3241,12 @@ impl App {
                     }
                     rect = cr::with_size(rect, w, h, size.0, size.1);
                 }
-                ui.label(RichText::new(format!("{}×{} of {}×{} px", rect.w, rect.h, size.0, size.1)).size(12.0).color(pal.sub));
+                let note = if matches!(self.view(), View::VideoRedact { .. }) {
+                    format!("{}×{} px", rect.w, rect.h)
+                } else {
+                    format!("{}×{} of {}×{} px", rect.w, rect.h, size.0, size.1)
+                };
+                ui.label(RichText::new(note).size(12.0).color(pal.sub));
             });
         });
         let area = Rect::from_min_max(area_in.min + Vec2::new(16.0, 46.0), area_in.max - Vec2::new(16.0, 34.0));
@@ -3128,6 +3291,23 @@ impl App {
             ui.painter().rect_filled(r, 0.0, shade);
         }
         ui.painter().rect_stroke(sr, 0.0, Stroke::new(1.5, pal.accent), StrokeKind::Outside);
+        // the other redaction areas, as dim numbered outlines
+        if let View::VideoRedact { areas, sel, .. } = self.view() {
+            for (i, a) in areas.iter().enumerate().filter(|(i, _)| i != sel) {
+                let r = Rect::from_min_size(
+                    Pos2::new(img_rect.min.x + a.rect.x as f32 * scale, img_rect.min.y + a.rect.y as f32 * scale),
+                    Vec2::new(a.rect.w as f32 * scale, a.rect.h as f32 * scale),
+                );
+                ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, egui::Color32::from_white_alpha(130)), StrokeKind::Outside);
+                ui.painter().text(
+                    r.min + Vec2::new(4.0, 2.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("{}", i + 1),
+                    FontId::proportional(11.0),
+                    egui::Color32::from_white_alpha(170),
+                );
+            }
+        }
         for p in [
             sr.left_top(),
             sr.right_top(),
@@ -3144,7 +3324,7 @@ impl App {
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
             egui::Align2::CENTER_CENTER,
             if matches!(self.view(), View::VideoRedact { .. }) {
-                "drag to move/resize · preview marks area only · ↵ save redacted copy · esc cancel"
+                "drag to move/resize the selected area · the preview only marks it · ↵ save redacted copy · esc cancel"
             } else {
                 "drag inside to move · drag an edge or corner to resize · presets lock the ratio · ↵ save a cropped copy · esc cancel"
             },
@@ -3152,13 +3332,15 @@ impl App {
             pal.sub,
         );
         if (rect, aspect) != before {
-            if let Some(
-                View::CropImage { rect: r, aspect: a, .. }
-                | View::VideoCrop { rect: r, aspect: a, .. }
-                | View::VideoRedact { rect: r, aspect: a, .. },
-            ) = self.stack.last_mut()
-            {
-                (*r, *a) = (rect, aspect);
+            match self.stack.last_mut() {
+                Some(View::CropImage { rect: r, aspect: a, .. } | View::VideoCrop { rect: r, aspect: a, .. }) => (*r, *a) = (rect, aspect),
+                Some(View::VideoRedact { areas, sel, aspect: a, .. }) => {
+                    if let Some(area) = areas.get_mut(*sel) {
+                        area.rect = rect;
+                    }
+                    *a = aspect;
+                }
+                _ => {}
             }
             ctx.request_repaint();
         }
@@ -3717,23 +3899,8 @@ impl App {
                     }
                 });
             }
-            View::VideoRedact { size: Some(size), rect: cover, aspect, duration, mut start, mut end, mut blur, .. } => {
-                let strip = Rect::from_min_size(rect.min + Vec2::new(12.0, 4.0), Vec2::new(rect.width() - 24.0, 34.0));
-                ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Start s");
-                        ui.add(egui::DragValue::new(&mut start).range(0.0..=duration).speed(0.04));
-                        ui.label("End s");
-                        ui.add(egui::DragValue::new(&mut end).range(0.0..=duration).speed(0.04));
-                        ui.selectable_value(&mut blur, false, "Solid black");
-                        ui.selectable_value(&mut blur, true, "Blur");
-                    });
-                });
-                if let Some(View::VideoRedact { start: a, end: b, blur: c, .. }) = self.stack.last_mut() {
-                    (*a, *b, *c) = (start, end, blur);
-                }
-                let area = Rect::from_min_max(rect.min + Vec2::new(0.0, 38.0), rect.max);
-                self.draw_crop(ui, area, pal, size, cover, aspect);
+            View::VideoRedact { size: Some(_), .. } => {
+                self.draw_video_redact(ui, rect, pal);
             }
             View::VideoRedact { .. } => {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
@@ -3750,8 +3917,10 @@ impl App {
             View::EditMetadata { file, kind, original, working, remove_all, error } => {
                 self.draw_edit_metadata(ui, rect, pal, &file, kind, original, working, remove_all, error);
             }
-            View::VideoCrop { size: Some(size), rect: crop, aspect, .. } => {
-                self.draw_crop(ui, rect, pal, size, crop, aspect);
+            View::VideoCrop { size: Some(size), rect: crop, aspect, duration, ref_t, .. } => {
+                let strip = Rect::from_min_size(rect.min + Vec2::new(12.0, 4.0), Vec2::new(rect.width() - 24.0, 30.0));
+                self.draw_ref_frame(ui, strip, pal, duration, ref_t);
+                self.draw_crop(ui, Rect::from_min_max(rect.min + Vec2::new(0.0, 30.0), rect.max), pal, size, crop, aspect);
             }
             View::VideoCrop { .. } => {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
