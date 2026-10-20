@@ -479,3 +479,47 @@ fn annotate_view_renders_and_empty_drawing_is_not_saved() {
     assert!(matches!(app.view(), View::Annotate { .. }));
     let _ = std::fs::remove_file(&f);
 }
+
+#[test]
+fn snapshot_view_steps_without_changing_trim_markers() {
+    let mut app = fixture();
+    let file = std::path::PathBuf::from("/nonexistent-snapshot.mp4");
+    let t = ferrocast_core::videoplan::Trim::new(8.0, 25.0).unwrap();
+    app.stack = vec![View::Root, View::VideoSnapshot { file, trim: Some(t) }];
+    render(&mut app, vec![]);
+    let key = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    render(&mut app, vec![key(Key::ArrowRight)]);
+    match app.view() {
+        View::VideoSnapshot { trim: Some(after), .. } => {
+            assert!((after.cursor - 0.04).abs() < 1e-8);
+            assert_eq!((after.start, after.end), (t.start, t.end));
+        }
+        _ => panic!("snapshot viewer closed unexpectedly"),
+    }
+    render(&mut app, vec![key(Key::I), key(Key::O)]);
+    match app.view() {
+        View::VideoSnapshot { trim: Some(after), .. } => assert_eq!((after.start, after.end), (t.start, t.end)),
+        _ => panic!("snapshot viewer closed unexpectedly"),
+    }
+}
+
+#[test]
+fn trim_view_still_steps_and_sets_start_marker() {
+    let mut app = fixture();
+    app.stack = vec![
+        View::Root,
+        View::VideoTrim { file: std::path::PathBuf::from("/nonexistent-trim.mp4"), trim: ferrocast_core::videoplan::Trim::new(8.0, 25.0) },
+    ];
+    render(&mut app, vec![]);
+    let key = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    render(&mut app, vec![key(Key::ArrowRight)]);
+    render(&mut app, vec![key(Key::I)]);
+    match app.view() {
+        View::VideoTrim { trim: Some(t), .. } => {
+            assert!((t.cursor - 0.04).abs() < 1e-8);
+            assert!((t.start - 0.04).abs() < 1e-8);
+            assert_eq!(t.end, 8.0);
+        }
+        _ => panic!("trim viewer closed unexpectedly"),
+    }
+}

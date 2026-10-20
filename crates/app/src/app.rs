@@ -79,6 +79,10 @@ pub enum View {
         rect: ferrocast_core::croprect::Rect,
         aspect: Option<(u32, u32)>,
     },
+    VideoSnapshot {
+        file: PathBuf,
+        trim: Option<ferrocast_core::videoplan::Trim>,
+    },
     /// Video trim viewer: the file and its timeline state (None while the video is being probed).
     VideoTrim {
         file: PathBuf,
@@ -257,6 +261,7 @@ impl View {
             View::FrameImage { .. } => "Add Background",
             View::CollageImage { .. } => "Make a Collage",
             View::VideoTrim { .. } => "Trim Video",
+            View::VideoSnapshot { .. } => "Video Snapshots",
             View::VideoCrop { .. } => "Crop Video",
             View::VideoSpeed { .. } => "Change Video Speed",
             View::Convert(_) => "Convert",
@@ -1145,10 +1150,10 @@ impl App {
                     }
                 }
                 Msg::VideoInfo(file, info) => {
-                    if matches!(self.view(), View::VideoTrim { file: f, .. } if *f == file) {
+                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } if *f == file) {
                         match info.and_then(|(d, r)| ferrocast_core::videoplan::Trim::new(d, r)) {
                             Some(t) => {
-                                if let Some(View::VideoTrim { trim, .. }) = self.stack.last_mut() {
+                                if let Some(View::VideoTrim { trim, .. } | View::VideoSnapshot { trim, .. }) = self.stack.last_mut() {
                                     *trim = Some(t);
                                 }
                             }
@@ -1158,7 +1163,7 @@ impl App {
                 }
                 Msg::VideoFrame(file, t, png) => {
                     self.ctx.data_mut(|d| d.insert_temp(Id::new("vt-busy"), false));
-                    if matches!(self.view(), View::VideoTrim { file: f, .. } if *f == file) {
+                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } if *f == file) {
                         if let Some(img) = png.as_deref().and_then(services::decode_png) {
                             let tex = self.ctx.load_texture("vt-view", img, egui::TextureOptions::LINEAR);
                             self.ctx.data_mut(|d| {
@@ -2219,6 +2224,7 @@ impl App {
                     a.push(Action::new("Trim Video…", Act::TrimVideo(p.clone())).key(CMD_SHIFT, Key::V));
                     a.push(Action::new("Crop Video…", Act::CropVideo(p.clone())).key(CMD_SHIFT, Key::J));
                     a.push(Action::new("Change Speed…", Act::SpeedVideo(p.clone())).key(CMD_SHIFT, Key::L));
+                    a.push(Action::new("Video Snapshots…", Act::SnapshotVideo(p.clone())).key(CMD_SHIFT, Key::S));
                 }
                 if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Image {
                     a.push(Action::new("Annotate…", Act::AnnotateCanvas(p.clone())).key(CMD_SHIFT, Key::A));
@@ -3135,21 +3141,25 @@ impl App {
                     self.push(View::VideoCrop { file, size: None, rect: ferrocast_core::croprect::full(2, 2), aspect: None });
                 }
             },
-            Act::TrimVideo(file) => match self.tools.ffmpeg {
-                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
-                Some(ff) => {
-                    self.ctx.data_mut(|d| {
-                        d.remove::<egui::TextureHandle>(Id::new("vt-tex"));
-                        d.remove::<f64>(Id::new("vt-shown"));
-                        d.remove::<f64>(Id::new("vt-asked"));
-                        d.insert_temp(Id::new("vt-busy"), false);
-                    });
-                    let (bus, f) = (self.bus.clone(), file.clone());
-                    std::thread::spawn(move || bus.send(Msg::VideoInfo(f.clone(), crate::media_tools::video_info(ff, &f))));
-                    self.show();
-                    self.push(View::VideoTrim { file, trim: None });
+            action @ (Act::TrimVideo(_) | Act::SnapshotVideo(_)) => {
+                let snapshot = matches!(action, Act::SnapshotVideo(_));
+                let (Act::TrimVideo(file) | Act::SnapshotVideo(file)) = action else { unreachable!() };
+                match self.tools.ffmpeg {
+                    None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                    Some(ff) => {
+                        self.ctx.data_mut(|d| {
+                            d.remove::<egui::TextureHandle>(Id::new("vt-tex"));
+                            d.remove::<f64>(Id::new("vt-shown"));
+                            d.remove::<f64>(Id::new("vt-asked"));
+                            d.insert_temp(Id::new("vt-busy"), false);
+                        });
+                        let (bus, f) = (self.bus.clone(), file.clone());
+                        std::thread::spawn(move || bus.send(Msg::VideoInfo(f.clone(), crate::media_tools::video_info(ff, &f))));
+                        self.show();
+                        self.push(if snapshot { View::VideoSnapshot { file, trim: None } } else { View::VideoTrim { file, trim: None } });
+                    }
                 }
-            },
+            }
             Act::CollageImages(files) => {
                 if files.len() < 2 {
                     self.toast("A collage needs at least two images");

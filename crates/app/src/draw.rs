@@ -132,7 +132,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     }
                 }
             }
-            Ok("vtrim") => {
+            Ok("vtrim") | Ok("vsnapshot") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
                     if let Some((d, r)) = crate::media_tools::video_info(ff, &file) {
@@ -149,7 +149,11 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                                 d.insert_temp(Id::new("vt-asked"), t.cursor);
                             });
                         }
-                        app.push(View::VideoTrim { file, trim: Some(t) });
+                        app.push(if std::env::var("FERROCAST_VIEW").as_deref() == Ok("vsnapshot") {
+                            View::VideoSnapshot { file, trim: Some(t) }
+                        } else {
+                            View::VideoTrim { file, trim: Some(t) }
+                        });
                     }
                 }
             }
@@ -568,6 +572,16 @@ impl App {
                     );
                     self.pop();
                 }
+                true
+            }
+            View::VideoSnapshot { file, trim: Some(t) } if k.enter => {
+                self.toast("Saving full-resolution frame…");
+                services::file_tool_files(
+                    vec![file],
+                    ferrocast_core::convert::FileTool::Snapshot(t.cursor),
+                    self.tools.ffmpeg,
+                    self.bus.clone(),
+                );
                 true
             }
             View::VideoTrim { file, trim: Some(t) } if k.enter => {
@@ -1593,6 +1607,7 @@ impl App {
             ui.painter().text(area_in.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
             return;
         };
+        let snapshot = matches!(self.view(), View::VideoSnapshot { .. });
         let mut t = before;
         ctx.input_mut(|i| {
             let none = Modifiers::NONE;
@@ -1603,10 +1618,10 @@ impl App {
                     t.step_frames(frames);
                 }
             }
-            if i.consume_key(none, Key::I) {
+            if !snapshot && i.consume_key(none, Key::I) {
                 t.mark_start();
             }
-            if i.consume_key(none, Key::O) {
+            if !snapshot && i.consume_key(none, Key::O) {
                 t.mark_end();
             }
             if i.consume_key(none, Key::Home) {
@@ -1656,19 +1671,33 @@ impl App {
         ui.painter().text(
             Pos2::new(bar.min.x, bar.min.y - 18.0),
             egui::Align2::LEFT_CENTER,
-            format!("at {}   ·   start {}   ·   end {}   ·   clip {:.2} s", t.label(t.cursor), t.label(t.start), t.label(t.end), t.clip()),
+            if snapshot {
+                format!("at {} · PNG saves at original resolution", t.label(t.cursor))
+            } else {
+                format!(
+                    "at {}   ·   start {}   ·   end {}   ·   clip {:.2} s",
+                    t.label(t.cursor),
+                    t.label(t.start),
+                    t.label(t.end),
+                    t.clip()
+                )
+            },
             FontId::proportional(12.5),
             pal.text,
         );
         ui.painter().text(
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
             egui::Align2::CENTER_CENTER,
-            "←/→ frame · ⇧←/→ second · click the bar to jump · I start · O end · ↵ save the exact cut · esc cancel",
+            if snapshot {
+                "←/→ frame · ⇧←/→ second · click to jump · ↵ save full-resolution PNG · esc cancel"
+            } else {
+                "←/→ frame · ⇧←/→ second · click the bar to jump · I start · O end · ↵ save the exact cut · esc cancel"
+            },
             FontId::proportional(11.5),
             pal.sub,
         );
         if t != before {
-            if let Some(View::VideoTrim { trim, .. }) = self.stack.last_mut() {
+            if let Some(View::VideoTrim { trim, .. } | View::VideoSnapshot { trim, .. }) = self.stack.last_mut() {
                 *trim = Some(t);
             }
             ctx.request_repaint();
@@ -2620,7 +2649,7 @@ impl App {
             View::VideoCrop { .. } => {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
             }
-            View::VideoTrim { file, trim } => {
+            View::VideoTrim { file, trim } | View::VideoSnapshot { file, trim } => {
                 self.draw_video_trim(ui, rect, pal, &file, trim);
             }
             View::CollageImage { files, opts, color } => {

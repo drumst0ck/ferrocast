@@ -283,6 +283,8 @@ pub enum Act {
     CropVideo(PathBuf),
     /// Open the video trim viewer for this file.
     TrimVideo(PathBuf),
+    /// Select a video frame and save a full-resolution PNG.
+    SnapshotVideo(PathBuf),
     /// Open the collage editor for these images.
     CollageImages(Vec<PathBuf>),
     /// Open the background editor for this image.
