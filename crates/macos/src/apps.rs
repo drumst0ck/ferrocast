@@ -137,8 +137,9 @@ pub fn parse_finder_selection(out: &str) -> Vec<PathBuf> {
 
 /// Files and folders selected in Finder right now (needs Automation permission for Finder).
 pub fn finder_selection() -> anyhow::Result<Vec<PathBuf>> {
-    let out = crate::system::osascript(
+    let out = crate::system::osascript_timeout(
         "tell application \"Finder\"\nset out to \"\"\nrepeat with f in (selection as alias list)\nset out to out & POSIX path of f & linefeed\nend repeat\nreturn out\nend tell",
+        15,
     )?;
     Ok(parse_finder_selection(&out))
 }

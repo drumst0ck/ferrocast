@@ -11,6 +11,40 @@ pub fn osascript(script: &str) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Like `osascript`, but gives up (and kills the process) after `secs` seconds, so a pending
+/// Automation prompt cannot hang the caller forever.
+pub fn osascript_timeout(script: &str, secs: u64) -> anyhow::Result<String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = Command::new("/usr/bin/osascript").arg("-e").arg(script).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let (mut so, mut se) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let out = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = so.read_to_string(&mut s);
+        s
+    });
+    let err = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = se.read_to_string(&mut s);
+        s
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let status = loop {
+        if let Some(st) = child.try_wait()? {
+            break st;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("timed out after {secs} s (is a macOS Automation permission prompt waiting?)");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    anyhow::ensure!(status.success(), "{}", err.trim());
+    Ok(out.trim().to_string())
+}
+
 fn sh(cmd: &str, args: &[&str]) -> anyhow::Result<()> {
     let st = Command::new(cmd).args(args).status()?;
     anyhow::ensure!(st.success(), "{cmd} failed");
@@ -298,5 +332,23 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), n);
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::osascript_timeout;
+
+    #[test]
+    fn a_stuck_script_is_killed_at_the_deadline() {
+        let t = std::time::Instant::now();
+        let e = osascript_timeout("delay 30", 1).unwrap_err().to_string();
+        assert!(e.contains("timed out"), "{e}");
+        assert!(t.elapsed().as_secs() < 5, "returned long after the deadline");
+    }
+
+    #[test]
+    fn a_quick_script_returns_its_output() {
+        assert_eq!(osascript_timeout("return \"ok\"", 10).unwrap(), "ok");
     }
 }
