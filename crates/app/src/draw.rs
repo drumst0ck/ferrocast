@@ -2668,11 +2668,12 @@ impl App {
             if i.consume_key(none, Key::ArrowRight) {
                 plan.move_cursor(1);
             }
-            if i.consume_key(none, Key::R) {
-                plan.rotate(1);
-            }
+            // Shift+R first: egui matches Modifiers::NONE even when Shift is held, so plain R
+            // would otherwise consume Shift+R and turn the page the wrong way
             if i.consume_key(Modifiers::SHIFT, Key::R) {
                 plan.rotate(-1);
+            } else if i.consume_key(none, Key::R) {
+                plan.rotate(1);
             }
             if i.consume_key(none, Key::D) {
                 plan.duplicate();

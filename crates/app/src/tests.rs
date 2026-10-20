@@ -538,6 +538,70 @@ fn tapping_shift_command_or_control_switches_the_open_wheel() {
     assert_eq!(wheel_state(&app).unwrap().1, sel, "a held Shift keeps the selection");
 }
 
+fn key_mod_event(key: Key, modifiers: Modifiers) -> Event {
+    Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+}
+
+fn organizer_plan(app: &App) -> ferrocast_core::pdfplan::PdfPlan {
+    match app.view() {
+        View::PdfOrganize { plan, .. } => plan.clone(),
+        other => panic!("organizer closed unexpectedly: {}", other.title()),
+    }
+}
+
+// Characterisation tests of the organizer's keys (behaviour already existed; no RED).
+#[test]
+fn pdf_organizer_keys_edit_the_plan() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-orgkeys-{}.pdf", std::process::id()));
+    app.stack = vec![View::Root, View::PdfOrganize { file: f, n: 4, plan: ferrocast_core::pdfplan::PdfPlan::new(4) }];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert_eq!(organizer_plan(&app).cursor, 1);
+    render(&mut app, vec![key_event(Key::R)]);
+    assert_eq!(organizer_plan(&app).pages[1].turns, 1, "R turns the page clockwise");
+    render(&mut app, vec![key_mod_event(Key::R, Modifiers::SHIFT)]);
+    assert_eq!(organizer_plan(&app).pages[1].turns, 0, "Shift+R turns it back");
+    render(&mut app, vec![key_event(Key::D)]);
+    let p = organizer_plan(&app);
+    assert_eq!(p.pages.len(), 5, "D duplicates the page");
+    assert_eq!(p.pages[1].src, p.pages[2].src);
+    render(&mut app, vec![key_event(Key::Delete)]);
+    assert_eq!(organizer_plan(&app).pages.len(), 4, "Delete removes the page at the cursor");
+    let before: Vec<usize> = organizer_plan(&app).pages.iter().map(|p| p.src).collect();
+    render(&mut app, vec![key_mod_event(Key::ArrowRight, Modifiers::COMMAND)]);
+    let after: Vec<usize> = organizer_plan(&app).pages.iter().map(|p| p.src).collect();
+    assert_ne!(before, after, "Cmd+Right moves the page");
+    let mut a = after.clone();
+    let mut b = before.clone();
+    a.sort();
+    b.sort();
+    assert_eq!(a, b, "moving never loses or invents a page");
+}
+
+#[test]
+fn pdf_organizer_enter_without_edits_stays_open_and_starts_nothing() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-orgenter-{}.pdf", std::process::id()));
+    app.stack = vec![View::Root, View::PdfOrganize { file: f, n: 3, plan: ferrocast_core::pdfplan::PdfPlan::new(3) }];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::PdfOrganize { .. }), "an unchanged plan is not written and the view stays");
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn pdf_organizer_escape_goes_back_without_a_job() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-orgesc-{}.pdf", std::process::id()));
+    app.stack = vec![View::Root, View::PdfOrganize { file: f, n: 3, plan: ferrocast_core::pdfplan::PdfPlan::new(3) }];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::D)]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "Escape leaves the organizer");
+    assert!(app.rx.try_recv().is_err(), "Escape starts no job even after edits");
+}
+
 #[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
