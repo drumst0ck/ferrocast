@@ -1616,7 +1616,8 @@ impl App {
                         for (i, k) in ferrocast_core::annotate::COLORS.iter().enumerate() {
                             let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
                             ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(k[0], k[1], k[2]));
-                            if i == color {
+                            // ring the swatch that matches the actual backdrop
+                            if *c == *k {
                                 ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
                             }
                             if resp.clicked() {
@@ -1627,6 +1628,9 @@ impl App {
                         let white = egui::Color32::WHITE;
                         let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
                         ui.painter().circle_filled(r.center(), 8.0, white);
+                        if *c == [255, 255, 255] {
+                            ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
+                        }
                         if resp.clicked() {
                             *c = [255, 255, 255];
                         }
@@ -1652,7 +1656,11 @@ impl App {
                     pad: sc(o.pad),
                     radius: sc(o.radius),
                     shadow: sc(o.shadow),
-                    backdrop: o.backdrop.clone(),
+                    // the blur radius is relative to the canvas width, so it scales like the rest
+                    backdrop: match &o.backdrop {
+                        Backdrop::Blur(r) => Backdrop::Blur((r * k).max(1.0)),
+                        other => other.clone(),
+                    },
                 };
                 let out = services::frame_compose(&b, None, &small);
                 let (w, h) = (out.width() as usize, out.height() as usize);
