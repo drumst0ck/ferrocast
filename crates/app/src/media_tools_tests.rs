@@ -923,3 +923,97 @@ mod audio_samples_real {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// A10d/A10e: the pure parameter checks behind the normalize and channels windows.
+mod a10de {
+    use super::*;
+    use crate::media_tools::{channels_params, db_to_gain, normalize_params};
+
+    #[test]
+    fn normalize_params_accepts_the_window_ranges_and_builds_the_tool() {
+        assert_eq!(normalize_params(-16.0, 11.0, -1.5), Ok(FileTool::Normalize(-16.0, 11.0, -1.5)));
+        assert_eq!(normalize_params(-30.0, 1.0, -9.0), Ok(FileTool::Normalize(-30.0, 1.0, -9.0)));
+        assert_eq!(normalize_params(-5.0, 20.0, 0.0), Ok(FileTool::Normalize(-5.0, 20.0, 0.0)));
+    }
+
+    #[test]
+    fn normalize_params_refuses_out_of_range_and_non_numbers() {
+        for (t, r, p) in [
+            (-30.1, 11.0, -1.5),
+            (-4.9, 11.0, -1.5),
+            (-16.0, 0.9, -1.5),
+            (-16.0, 20.1, -1.5),
+            (-16.0, 11.0, -9.1),
+            (-16.0, 11.0, 0.1),
+            (f64::NAN, 11.0, -1.5),
+            (-16.0, f64::NAN, -1.5),
+            (-16.0, 11.0, f64::NAN),
+            (f64::INFINITY, 11.0, -1.5),
+            (-16.0, f64::NEG_INFINITY, -1.5),
+        ] {
+            let e = normalize_params(t, r, p).expect_err(&format!("{t} {r} {p}"));
+            assert!(!e.is_empty());
+        }
+    }
+
+    #[test]
+    fn db_to_gain_is_unity_at_zero_and_half_at_minus_six() {
+        assert_eq!(db_to_gain(0.0), 1.0);
+        assert!((db_to_gain(-6.0) - 0.5).abs() < 0.01, "{}", db_to_gain(-6.0));
+        assert!((db_to_gain(6.0) - 2.0).abs() < 0.02);
+        assert!((db_to_gain(-20.0) - 0.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn channels_params_converts_db_to_the_gain_the_tool_expects() {
+        assert_eq!(channels_params(true, 0.0, 0.0), Ok(FileTool::Channels(true, 1.0, 1.0)));
+        assert_eq!(channels_params(false, 0.0, 0.0), Ok(FileTool::Channels(false, 1.0, 1.0)));
+        match channels_params(true, -6.0, 12.0).unwrap() {
+            FileTool::Channels(true, l, r) => {
+                assert!((l - 0.5).abs() < 0.01, "{l}");
+                assert!((r - 3.98).abs() < 0.01 && r <= 4.0, "{r}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // the lowest setting stays a valid, quiet gain (the executor accepts 0.0..=4.0)
+        assert!(matches!(channels_params(false, -30.0, -30.0), Ok(FileTool::Channels(false, l, _)) if l > 0.0 && l < 0.04));
+    }
+
+    #[test]
+    fn channels_params_refuses_out_of_range_and_non_numbers() {
+        for (l, r) in [(-30.1, 0.0), (0.0, -31.0), (12.1, 0.0), (0.0, 13.0), (f64::NAN, 0.0), (0.0, f64::NAN), (f64::INFINITY, 0.0)] {
+            assert!(channels_params(true, l, r).is_err(), "{l} {r}");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires ffmpeg/ffprobe; creates isolated real media"]
+    fn a10d_measure_and_normalize_a_quiet_tone_and_probe_channels() {
+        let ff = Tools::detect().ffmpeg.expect("ffmpeg is required for this explicit check");
+        let dir = std::env::temp_dir().join(format!("fc-a10d-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let quiet = dir.join("quiet.wav");
+        command(ff, &["-f", "lavfi", "-i", "sine=f=440:d=4", "-af", "volume=-8dB"], &quiet);
+        let before = crate::media_tools::loudness(ff, &quiet).expect("measured");
+        assert!(before.is_finite() && before < -20.0 && before > -45.0, "plausible quiet tone, got {before}");
+        // exactly what the window dispatches
+        let tool = normalize_params(-16.0, 11.0, -1.5).unwrap();
+        let (out, errors) = run_file_tool(std::slice::from_ref(&quiet), &tool, Some(ff));
+        assert!(errors.is_empty(), "{errors:?}");
+        let after = crate::media_tools::loudness(ff, &out[0]).expect("measured result");
+        assert!((after - -16.0).abs() < 2.0, "normalized to about -16 LUFS, got {after} (was {before})");
+        // channels probe: a mono tone and a stereo one
+        let stereo = dir.join("stereo.wav");
+        command(ff, &["-f", "lavfi", "-i", "sine=f=440:d=1", "-ac", "2"], &stereo);
+        assert_eq!(crate::media_tools::audio_channel_count(ff, &quiet), Some(1));
+        assert_eq!(crate::media_tools::audio_channel_count(ff, &stereo), Some(2));
+        assert_eq!(crate::media_tools::audio_channel_count(ff, &dir.join("missing.wav")), None);
+        // -6 dB on both sides of a stereo copy lowers the loudness by about 6 LU
+        let tool = channels_params(true, -6.0, -6.0).unwrap();
+        let (out, errors) = run_file_tool(std::slice::from_ref(&stereo), &tool, Some(ff));
+        assert!(errors.is_empty(), "{errors:?}");
+        let (a, b) = (crate::media_tools::loudness(ff, &stereo).unwrap(), crate::media_tools::loudness(ff, &out[0]).unwrap());
+        assert!((a - b - 6.0).abs() < 0.5, "{a} -> {b}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

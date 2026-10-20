@@ -246,6 +246,23 @@ pub enum View {
         trim: Option<ferrocast_core::videoplan::Trim>,
         audio: Option<Arc<crate::media_tools::AudioSamples>>,
     },
+    /// Normalize window: the measured integrated loudness (None while measuring, NaN when it could
+    /// not be measured) and the target, loudness range and true-peak settings.
+    NormalizeAudio {
+        file: PathBuf,
+        loudness: Option<f64>,
+        target: f64,
+        range: f64,
+        peak: f64,
+    },
+    /// Audio channels window: mono or stereo output and the left/right volume in dB.
+    ChannelsAudio {
+        file: PathBuf,
+        in_channels: Option<u32>,
+        stereo: bool,
+        left_db: f64,
+        right_db: f64,
+    },
     /// Video trim viewer: the file and its timeline state (None while the video is being probed).
     VideoTrim {
         file: PathBuf,
@@ -452,6 +469,8 @@ impl View {
             View::CollageImage { .. } => "Make a Collage",
             View::VideoTrim { .. } => "Trim Video",
             View::AudioTrim { .. } => "Trim Audio",
+            View::NormalizeAudio { .. } => "Normalize Audio",
+            View::ChannelsAudio { .. } => "Audio Channels",
             View::VideoSnapshot { .. } => "Video Snapshots",
             View::VideoSplit { .. } => "Split Video",
             View::VideoCrop { .. } => "Crop Video",
@@ -1369,6 +1388,23 @@ impl App {
                                 Ok(fields) => (*working, *original, *error) = (fields.clone(), Some(fields), None),
                                 Err(e) => *error = Some(e),
                             }
+                        }
+                    }
+                }
+                Msg::LoudnessMeasured(file, l) => {
+                    if let Some(View::NormalizeAudio { file: f, loudness, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            *loudness = Some(l.filter(|l| l.is_finite()).unwrap_or(f64::NAN));
+                            if l.is_none_or(|l| !l.is_finite()) {
+                                self.toast("Normalize: could not measure the loudness of this file");
+                            }
+                        }
+                    }
+                }
+                Msg::ChannelsProbed(file, n) => {
+                    if let Some(View::ChannelsAudio { file: f, in_channels, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            *in_channels = n;
                         }
                     }
                 }
@@ -2522,7 +2558,11 @@ impl App {
                 ("Redact Areas…", "redact hide blur privacy", Act::RedactImage(p.clone())),
                 ("Add Background…", "background frame blur shadow", Act::FrameImage(p.clone())),
             ]),
-            Family::Audio => list.push(("Trim Audio…", "trim cut waveform silence start end", Act::TrimAudio(p.clone()))),
+            Family::Audio => list.extend([
+                ("Trim Audio…", "trim cut waveform silence start end", Act::TrimAudio(p.clone())),
+                ("Normalize…", "normalize loudness lufs volume level peak", Act::NormalizeAudio(p.clone())),
+                ("Channels…", "channels mono stereo left right volume balance", Act::AudioChannels(p.clone())),
+            ]),
             _ => {}
         }
         if ext(&p) == "pdf" {
@@ -3665,6 +3705,24 @@ impl App {
                     self.push(View::AudioTrim { file, trim: None, audio: None });
                 }
             },
+            Act::NormalizeAudio(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::LoudnessMeasured(f.clone(), crate::media_tools::loudness(ff, &f))));
+                    self.show();
+                    self.push(View::NormalizeAudio { file, loudness: None, target: -16.0, range: 11.0, peak: -1.5 });
+                }
+            },
+            Act::AudioChannels(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::ChannelsProbed(f.clone(), crate::media_tools::audio_channel_count(ff, &f))));
+                    self.show();
+                    self.push(View::ChannelsAudio { file, in_channels: None, stereo: false, left_db: 0.0, right_db: 0.0 });
+                }
+            },
             Act::CollageImages(files) => {
                 if files.len() < 2 {
                     self.toast("A collage needs at least two images");
@@ -4128,6 +4186,8 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (MergePdf, _) => ToolReach::File(FileTool::Merge),
         (SplitPdf, _) => ToolReach::File(FileTool::SplitPages),
         (SplitVideo, _) => ToolReach::File(FileTool::SplitEvery(60)),
+        (NormalizeAudio, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::NormalizeAudio(p)),
+        (AudioChannels, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::AudioChannels(p)),
         (NormalizeAudio, _) => ToolReach::File(FileTool::Normalize(-16.0, 11.0, -1.5)),
         (AudioChannels, _) => ToolReach::File(FileTool::Channels(false, 1.0, 1.0)),
         (AudioToVideo, _) => ToolReach::File(FileTool::Visualize(ferrocast_core::media::Canvas::Landscape)),

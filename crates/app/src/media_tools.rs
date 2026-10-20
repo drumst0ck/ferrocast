@@ -274,6 +274,54 @@ pub(crate) fn normalize_report(ff: &str, before: &Path, after: &Path) -> Option<
     Some(format!("{:.1} → {:.1} LUFS", loudness(ff, before)?, loudness(ff, after)?))
 }
 
+/// The measured-loudness line of the Normalize window; `loudness` None is "still measuring" and
+/// a non-finite value is a failed measurement.
+pub(crate) fn normalize_line(loudness: Option<f64>, target: f64) -> String {
+    let t = if target.fract() == 0.0 { format!("{target:.0}") } else { format!("{target:.1}") };
+    match loudness {
+        None => "measuring…".into(),
+        Some(l) if !l.is_finite() => format!("could not be measured · target {t} LUFS"),
+        Some(l) => format!("now {l:.1} LUFS → target {t} LUFS ({:+.1} dB)", target - l),
+    }
+}
+
+/// Channel count of the first audio stream (ffprobe, bounded), None when unreadable.
+pub(crate) fn audio_channel_count(ff: &str, file: &Path) -> Option<u32> {
+    let info = probe(ff, file).ok()?;
+    let n = streams(&info).find(|s| s["codec_type"] == "audio")?["channels"].as_u64()?;
+    u32::try_from(n).ok().filter(|n| *n > 0)
+}
+
+/// Linear gain for a level change in dB (0 dB = 1.0, -6 dB ≈ 0.5), the unit `FileTool::Channels` takes.
+pub(crate) fn db_to_gain(db: f64) -> f64 {
+    10f64.powf(db / 20.0)
+}
+
+/// Normalize window ranges: target -30..=-5 LUFS, range 1..=20 LU, true peak -9..=0 dBTP.
+pub(crate) fn normalize_params(target: f64, range: f64, peak: f64) -> Result<FileTool, String> {
+    if !(target.is_finite() && (-30.0..=-5.0).contains(&target)) {
+        return Err("Normalize: the target loudness must be between -30 and -5 LUFS".into());
+    }
+    if !(range.is_finite() && (1.0..=20.0).contains(&range)) {
+        return Err("Normalize: the loudness range must be between 1 and 20 LU".into());
+    }
+    if !(peak.is_finite() && (-9.0..=0.0).contains(&peak)) {
+        return Err("Normalize: the true peak must be between -9 and 0 dBTP".into());
+    }
+    Ok(FileTool::Normalize(target, range, peak))
+}
+
+/// Channels window: left and right volume in -30..=+12 dB become the linear gains of the tool
+/// (mono output mixes both sides, each scaled by its own gain).
+pub(crate) fn channels_params(stereo: bool, left_db: f64, right_db: f64) -> Result<FileTool, String> {
+    for (name, db) in [("left", left_db), ("right", right_db)] {
+        if !(db.is_finite() && (-30.0..=12.0).contains(&db)) {
+            return Err(format!("Channels: the {name} volume must be between -30 and +12 dB"));
+        }
+    }
+    Ok(FileTool::Channels(stereo, db_to_gain(left_db), db_to_gain(right_db)))
+}
+
 /// Checks a split before anything is written: at least two ranges, each finite, starting at or
 /// after 0, at least [`MIN_PIECE`] long and ending no later than `duration` (plus 0.05 s slack).
 pub(crate) fn validate_split(ranges: &[(f64, f64)], duration: f64) -> Result<(), String> {

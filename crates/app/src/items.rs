@@ -295,6 +295,10 @@ pub enum Act {
     TrimVideo(PathBuf),
     /// Open the audio trim window (waveform) for this file.
     TrimAudio(PathBuf),
+    /// Open the normalize window for this audio file.
+    NormalizeAudio(PathBuf),
+    /// Open the audio channels window for this audio file.
+    AudioChannels(PathBuf),
     /// Open the video split window for this file.
     SplitVideo(PathBuf),
     /// Select a video frame and save a full-resolution PNG.

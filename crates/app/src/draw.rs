@@ -248,6 +248,19 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     }
                 }
             }
+            Ok("anorm") | Ok("achan") => {
+                // measured / probed synchronously here (screenshot mode only)
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    app.push(if std::env::var("FERROCAST_VIEW").as_deref() == Ok("anorm") {
+                        let l = crate::media_tools::loudness(ff, &file);
+                        View::NormalizeAudio { file, loudness: l, target: -16.0, range: 11.0, peak: -1.5 }
+                    } else {
+                        let n = crate::media_tools::audio_channel_count(ff, &file);
+                        View::ChannelsAudio { file, in_channels: n, stereo: true, left_db: -3.0, right_db: 0.0 }
+                    });
+                }
+            }
             Ok("atrim") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
@@ -557,7 +570,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. }) && kbd_edit);
+            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. } | View::NormalizeAudio { .. } | View::ChannelsAudio { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -826,6 +839,28 @@ impl App {
                         self.bus.clone(),
                     );
                     self.pop();
+                }
+                true
+            }
+            View::NormalizeAudio { file, target, range, peak, .. } if k.enter => {
+                match crate::media_tools::normalize_params(target, range, peak) {
+                    Err(m) => self.toast(m),
+                    Ok(tool) => {
+                        self.toast("Normalizing…");
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
+                }
+                true
+            }
+            View::ChannelsAudio { file, stereo, left_db, right_db, .. } if k.enter => {
+                match crate::media_tools::channels_params(stereo, left_db, right_db) {
+                    Err(m) => self.toast(m),
+                    Ok(tool) => {
+                        self.toast(if stereo { "Converting channels to stereo…" } else { "Converting channels to mono…" });
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
                 }
                 true
             }
@@ -2171,6 +2206,137 @@ impl App {
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
             egui::Align2::CENTER_CENTER,
             "pick a preset or drag the slider · ↵ save a copy at this speed · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
+    /// Normalize window: measured loudness versus the target, with loudness, range and true-peak controls.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_normalize_audio(&mut self, ui: &mut Ui, area: Rect, pal: &Palette, loudness: Option<f64>, target: f64, range: f64, peak: f64) {
+        let ctx = ui.ctx().clone();
+        let (mut t, mut r, mut p) = (target, range, peak);
+        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(520.0, 240.0))), |ui| {
+            ui.spacing_mut().item_spacing.y = 14.0;
+            ui.label(RichText::new(crate::media_tools::normalize_line(loudness, t)).size(20.0).color(pal.text));
+            ui.horizontal(|ui| {
+                ui.label("Target loudness");
+                ui.add(
+                    egui::DragValue::new(&mut t)
+                        .range(-30.0..=-5.0)
+                        .clamp_existing_to_range(false)
+                        .speed(0.1)
+                        .suffix(" LUFS")
+                        .max_decimals(1),
+                );
+                for (v, name) in [(-23.0, "-23 broadcast"), (-16.0, "-16 podcast"), (-14.0, "-14 music")] {
+                    if ui.selectable_label((t - v).abs() < 1e-9, name).clicked() {
+                        t = v;
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Loudness range");
+                ui.add(
+                    egui::DragValue::new(&mut r).range(1.0..=20.0).clamp_existing_to_range(false).speed(0.1).suffix(" LU").max_decimals(1),
+                );
+                ui.add_space(16.0);
+                ui.label("True peak");
+                ui.add(
+                    egui::DragValue::new(&mut p)
+                        .range(-9.0..=0.0)
+                        .clamp_existing_to_range(false)
+                        .speed(0.1)
+                        .suffix(" dBTP")
+                        .max_decimals(1),
+                );
+            });
+            ui.label(
+                RichText::new(
+                    "The copy is levelled to the target; the original stays untouched. The result is measured again when it is done.",
+                )
+                .size(12.0)
+                .color(pal.sub),
+            );
+        });
+        if (t, r, p) != (target, range, peak) {
+            if let Some(View::NormalizeAudio { target, range, peak, .. }) = self.stack.last_mut() {
+                (*target, *range, *peak) = (t, r, p);
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area.center().x, area.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "pick a target or type one · ↵ save a normalized copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
+    /// Channels window: mono or stereo output and the volume of each side in dB.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_channels_audio(
+        &mut self,
+        ui: &mut Ui,
+        area: Rect,
+        pal: &Palette,
+        in_channels: Option<u32>,
+        stereo: bool,
+        left_db: f64,
+        right_db: f64,
+    ) {
+        let ctx = ui.ctx().clone();
+        let (mut st, mut l, mut r) = (stereo, left_db, right_db);
+        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(520.0, 240.0))), |ui| {
+            ui.spacing_mut().item_spacing.y = 14.0;
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut st, false, "Mono");
+                ui.selectable_value(&mut st, true, "Stereo");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Left volume");
+                ui.add(
+                    egui::DragValue::new(&mut l)
+                        .range(-30.0..=12.0)
+                        .clamp_existing_to_range(false)
+                        .speed(0.1)
+                        .suffix(" dB")
+                        .max_decimals(1),
+                );
+                ui.add_space(16.0);
+                ui.label("Right volume");
+                ui.add(
+                    egui::DragValue::new(&mut r)
+                        .range(-30.0..=12.0)
+                        .clamp_existing_to_range(false)
+                        .speed(0.1)
+                        .suffix(" dB")
+                        .max_decimals(1),
+                );
+                if small_btn(ui, pal, "reset") {
+                    (l, r) = (0.0, 0.0);
+                }
+            });
+            let note = match (in_channels, st) {
+                (Some(n), _) if n <= 1 && st => "This file is already mono: Stereo copies it to both sides, each with its own volume.",
+                (Some(n), _) if n <= 1 => "This file is already mono: Mono keeps it as one channel at the average of both volumes.",
+                (_, true) => "Stereo keeps the left and right channels, each at its own volume.",
+                _ => "Mono mixes left and right into one channel; each volume scales its own side.",
+            };
+            ui.label(RichText::new(if in_channels.is_none() { "Reading the file…" } else { note }).size(12.0).color(pal.sub));
+            ui.label(RichText::new("0 dB leaves a channel unchanged; the copy is saved as a new file.").size(12.0).color(pal.sub));
+        });
+        if (st, l, r) != (stereo, left_db, right_db) {
+            if let Some(View::ChannelsAudio { stereo, left_db, right_db, .. }) = self.stack.last_mut() {
+                (*stereo, *left_db, *right_db) = (st, l, r);
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area.center().x, area.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "pick Mono or Stereo, set the volumes · ↵ save a copy · esc cancel",
             FontId::proportional(11.5),
             pal.sub,
         );
@@ -3574,6 +3740,12 @@ impl App {
             }
             View::VideoSpeed { duration, factor, .. } => {
                 self.draw_video_speed(ui, rect, pal, duration, factor);
+            }
+            View::NormalizeAudio { loudness, target, range, peak, .. } => {
+                self.draw_normalize_audio(ui, rect, pal, loudness, target, range, peak);
+            }
+            View::ChannelsAudio { in_channels, stereo, left_db, right_db, .. } => {
+                self.draw_channels_audio(ui, rect, pal, in_channels, stereo, left_db, right_db);
             }
             View::EditMetadata { file, kind, original, working, remove_all, error } => {
                 self.draw_edit_metadata(ui, rect, pal, &file, kind, original, working, remove_all, error);

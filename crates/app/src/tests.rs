@@ -2442,3 +2442,230 @@ fn trim_audio_without_ffmpeg_shows_the_hint_and_opens_no_view() {
     assert_eq!(app.stack.len(), depth);
     assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
 }
+
+// ---- A10d/A10e: normalize and channels windows
+
+fn anorm_file() -> std::path::PathBuf {
+    std::env::temp_dir().join("fc-anorm-view.mp3")
+}
+
+fn anorm_view(app: &mut App, loudness: Option<f64>) {
+    app.stack = vec![View::Root, View::NormalizeAudio { file: anorm_file(), loudness, target: -16.0, range: 11.0, peak: -1.5 }];
+}
+
+fn achan_view(app: &mut App, in_channels: Option<u32>, stereo: bool) {
+    app.stack = vec![View::Root, View::ChannelsAudio { file: anorm_file(), in_channels, stereo, left_db: 0.0, right_db: 0.0 }];
+}
+
+const ANORM_TARGET_BOX: (f32, f32) = (249.0, 173.0);
+const ACHAN_LEFT_BOX: (f32, f32) = (214.0, 168.0);
+
+#[test]
+fn normalize_and_channels_views_render_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for l in [None, Some(-31.0), Some(-9.0), Some(f64::NAN)] {
+            anorm_view(&mut app, l);
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert_eq!(app.view().title(), "Normalize Audio");
+        }
+        for (c, s) in [(None, false), (Some(1), false), (Some(1), true), (Some(2), true), (Some(2), false), (Some(6), true)] {
+            achan_view(&mut app, c, s);
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert_eq!(app.view().title(), "Audio Channels");
+        }
+    }
+}
+
+#[test]
+fn measured_loudness_reaches_the_window_and_another_file_is_ignored() {
+    let mut app = fixture();
+    anorm_view(&mut app, None);
+    render(&mut app, vec![]);
+    app.bus.send(Msg::LoudnessMeasured(std::path::PathBuf::from("/nonexistent/other.mp3"), Some(-20.0)));
+    app.drain();
+    assert!(matches!(app.view(), View::NormalizeAudio { loudness: None, .. }), "a reply for another file is ignored");
+    app.bus.send(Msg::LoudnessMeasured(anorm_file(), Some(-31.0)));
+    app.drain();
+    assert!(matches!(app.view(), View::NormalizeAudio { loudness: Some(l), .. } if *l == -31.0));
+    render(&mut app, vec![]);
+    // a failed measurement is shown, the window stays usable
+    anorm_view(&mut app, None);
+    app.bus.send(Msg::LoudnessMeasured(anorm_file(), None));
+    app.drain();
+    assert!(matches!(app.view(), View::NormalizeAudio { loudness: Some(l), .. } if l.is_nan()));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("measure")), "{:?}", app.toast);
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn probed_channel_count_reaches_the_window_and_another_file_is_ignored() {
+    let mut app = fixture();
+    achan_view(&mut app, None, true);
+    app.bus.send(Msg::ChannelsProbed(std::path::PathBuf::from("/nonexistent/other.mp3"), Some(1)));
+    app.drain();
+    assert!(matches!(app.view(), View::ChannelsAudio { in_channels: None, .. }));
+    app.bus.send(Msg::ChannelsProbed(anorm_file(), Some(1)));
+    app.drain();
+    assert!(matches!(app.view(), View::ChannelsAudio { in_channels: Some(1), .. }));
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn normalize_and_channels_escape_goes_back_without_a_job() {
+    let mut app = fixture();
+    anorm_view(&mut app, Some(-31.0));
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err(), "Escape starts no job");
+    achan_view(&mut app, Some(2), true);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err(), "Escape starts no job");
+}
+
+#[test]
+fn normalize_and_channels_enter_with_valid_input_dispatches_and_goes_back() {
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
+    anorm_view(&mut app, Some(-31.0));
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root), "the window closes once the job is dispatched");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Normaliz")), "{:?}", app.toast);
+    app.toast = None;
+    achan_view(&mut app, Some(2), false);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("channel")), "{:?}", app.toast);
+}
+
+#[test]
+fn normalize_and_channels_enter_with_invalid_input_starts_nothing() {
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
+    app.stack = vec![View::Root, View::NormalizeAudio { file: anorm_file(), loudness: None, target: -2.0, range: 11.0, peak: -1.5 }];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::NormalizeAudio { .. }));
+    assert!(app.rx.try_recv().is_err());
+    app.stack =
+        vec![View::Root, View::ChannelsAudio { file: anorm_file(), in_channels: Some(2), stereo: true, left_db: f64::NAN, right_db: 0.0 }];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::ChannelsAudio { .. }));
+    assert!(app.rx.try_recv().is_err());
+}
+
+// L74-style: Escape while a number box is edited ends the edit but keeps the window; Enter
+// confirms the number and does not dispatch.
+#[test]
+fn normalize_target_box_keeps_escape_and_enter_while_editing() {
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
+    anorm_view(&mut app, Some(-31.0));
+    render(&mut app, vec![]);
+    click_at(&mut app, Pos2::new(ANORM_TARGET_BOX.0, ANORM_TARGET_BOX.1));
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the Target box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::NormalizeAudio { .. }), "Enter confirms the number, it does not start the job");
+    assert!(app.rx.try_recv().is_err());
+    click_at(&mut app, Pos2::new(ANORM_TARGET_BOX.0, ANORM_TARGET_BOX.1));
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::NormalizeAudio { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+}
+
+#[test]
+fn channels_left_box_keeps_escape_and_enter_while_editing() {
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg-fc-test");
+    achan_view(&mut app, Some(2), true);
+    render(&mut app, vec![]);
+    click_at(&mut app, Pos2::new(ACHAN_LEFT_BOX.0, ACHAN_LEFT_BOX.1));
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the Left box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::ChannelsAudio { .. }), "Enter confirms the number, it does not start the job");
+    assert!(app.rx.try_recv().is_err());
+    click_at(&mut app, Pos2::new(ACHAN_LEFT_BOX.0, ACHAN_LEFT_BOX.1));
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::ChannelsAudio { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+}
+
+#[test]
+fn convert_view_offers_normalize_and_channels_for_one_audio_file_only() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-anormoffer-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let has = |app: &mut App, names: &[&str], title: &str| -> bool {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.sections().iter().flat_map(|s| s.items.iter()).any(|i| {
+            i.title == title
+                && matches!(
+                    (title, &i.kind),
+                    ("Normalize…", Kind::Editor(Act::NormalizeAudio(_))) | ("Channels…", Kind::Editor(Act::AudioChannels(_)))
+                )
+        })
+    };
+    for title in ["Normalize…", "Channels…"] {
+        assert!(has(&mut app, &["a.mp3"], title), "{title}");
+        assert!(!has(&mut app, &["a.mp3", "b.mp3"], title), "{title}");
+        assert!(!has(&mut app, &["a.mp4"], title), "{title}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_normalize_and_channels_open_windows_for_one_file_and_keep_presets_for_several() {
+    use ferrocast_core::convert::FileTool;
+    use ferrocast_core::tools::{implemented, Impl, ToolId};
+    let a = std::path::PathBuf::from("/nonexistent/a.mp3");
+    let b = std::path::PathBuf::from("/nonexistent/b.mp3");
+    assert!(matches!(tool_reach(ToolId::NormalizeAudio, std::slice::from_ref(&a)), ToolReach::Act(Act::NormalizeAudio(_))));
+    assert!(matches!(tool_reach(ToolId::AudioChannels, std::slice::from_ref(&a)), ToolReach::Act(Act::AudioChannels(_))));
+    assert!(matches!(tool_reach(ToolId::NormalizeAudio, &[a.clone(), b.clone()]), ToolReach::File(FileTool::Normalize(..))));
+    assert!(matches!(tool_reach(ToolId::AudioChannels, &[a, b]), ToolReach::File(FileTool::Channels(..))));
+    assert_eq!(implemented(ToolId::NormalizeAudio), Impl::Window);
+    assert_eq!(implemented(ToolId::AudioChannels), Impl::Window);
+}
+
+#[test]
+fn normalize_and_channels_without_ffmpeg_show_the_hint_and_open_no_view() {
+    let mut app = fixture();
+    app.tools = Default::default();
+    let depth = app.stack.len();
+    app.perform(Act::NormalizeAudio(anorm_file()), false);
+    app.perform(Act::AudioChannels(anorm_file()), false);
+    assert_eq!(app.stack.len(), depth);
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
+}
+
+#[test]
+fn normalize_line_shows_measuring_the_delta_and_failure() {
+    use crate::media_tools::normalize_line;
+    assert_eq!(normalize_line(None, -16.0), "measuring…");
+    assert_eq!(normalize_line(Some(-31.0), -16.0), "now -31.0 LUFS → target -16 LUFS (+15.0 dB)");
+    assert_eq!(normalize_line(Some(-9.0), -14.5), "now -9.0 LUFS → target -14.5 LUFS (-5.5 dB)");
+    assert!(normalize_line(Some(f64::NAN), -16.0).contains("could not be measured"));
+}
