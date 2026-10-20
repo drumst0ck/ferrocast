@@ -121,6 +121,100 @@ pub fn segment_at(px: f32, py: f32, inner: f32, outer: f32, n: usize) -> Option<
     Some(((a + step / 2.0) / step) as usize % n)
 }
 
+/// Ring geometry in points from the wheel centre. One source for hit-testing and drawing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Geometry {
+    pub r_in: f32,
+    pub r_out: f32,
+    /// Angular gap left between neighbouring segments, in degrees.
+    pub gap_deg: f32,
+    /// Radial inset of a drawn sector from the ring edges.
+    pub inset: f32,
+}
+
+impl Geometry {
+    pub const DEFAULT: Geometry = Geometry { r_in: 70.0, r_out: 176.0, gap_deg: 2.5, inset: 2.0 };
+}
+
+/// Centre of segment `i` of `n` at radius `r`, relative to the wheel centre (y down).
+pub fn segment_center(i: usize, n: usize, r: f32) -> [f32; 2] {
+    if n == 0 {
+        return [0.0, 0.0];
+    }
+    let a = i as f32 * std::f32::consts::TAU / n as f32;
+    [a.sin() * r, -a.cos() * r]
+}
+
+/// Outline of sector `i` of `n`: the outer arc clockwise, then the inner arc back. Empty for an
+/// impossible request. `steps` is the tessellation of each arc (at least 1).
+pub fn sector_points(i: usize, n: usize, g: &Geometry, steps: usize) -> Vec<[f32; 2]> {
+    if n == 0 || i >= n {
+        return vec![];
+    }
+    let step = std::f32::consts::TAU / n as f32;
+    let gap = g.gap_deg.to_radians().min(step * 0.9);
+    let (a0, a1) = (i as f32 * step - step / 2.0 + gap / 2.0, i as f32 * step + step / 2.0 - gap / 2.0);
+    let (ro, ri) = (g.r_out - g.inset, g.r_in + g.inset);
+    let k = steps.max(1);
+    let at = |a: f32, r: f32| [a.sin() * r, -a.cos() * r];
+    let mut v: Vec<[f32; 2]> = (0..=k).map(|j| at(a0 + (a1 - a0) * j as f32 / k as f32, ro)).collect();
+    v.extend((0..=k).rev().map(|j| at(a0 + (a1 - a0) * j as f32 / k as f32, ri)));
+    v
+}
+
+/// Length of one segment's arc at radius `r`.
+pub fn arc_len(n: usize, r: f32) -> f32 {
+    if n == 0 {
+        0.0
+    } else {
+        std::f32::consts::TAU * r / n as f32
+    }
+}
+
+/// Whether a text label fits inside a segment at radius `r` (otherwise show an icon only).
+pub fn labels_fit(n: usize, r: f32) -> bool {
+    n > 0 && arc_len(n, r) >= 72.0
+}
+
+/// Ease-out cubic, clamped to 0..=1.
+pub fn ease_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Hub text for the files being dragged: a count line and a kind line.
+pub fn hub_text(files: &[std::path::PathBuf]) -> (String, String) {
+    use crate::convert::{ext, family_of, Family};
+    let count = format!("{} file{}", files.len(), if files.len() == 1 { "" } else { "s" });
+    let Some(first) = files.first() else { return (count, String::new()) };
+    let fam = family_of(first);
+    if files.iter().any(|f| family_of(f) != fam) {
+        return (count, "Mixed".to_string());
+    }
+    let sub = if fam == Family::Folder {
+        "Folder".to_string()
+    } else if files.len() == 1 {
+        let e = ext(first).to_ascii_uppercase();
+        match fam {
+            Family::Image => format!("{e} image"),
+            Family::Video => format!("{e} video"),
+            Family::Audio => format!("{e} audio"),
+            _ if e.is_empty() => "File".to_string(),
+            _ => format!("{e} file"),
+        }
+    } else {
+        match fam {
+            Family::Image => "images",
+            Family::Video => "videos",
+            Family::Audio => "audio files",
+            Family::Pdf => "PDFs",
+            _ => "files",
+        }
+        .to_string()
+    };
+    (count, sub)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +292,84 @@ mod tests {
         assert_eq!(segment_at(200.0, 0.0, 40.0, 160.0, 4), None, "outside");
         // boundary just left of 12 o'clock still belongs to segment 0
         assert_eq!(segment_at(-10.0, -100.0, 40.0, 160.0, 4), Some(0));
+    }
+
+    fn angle_of(p: [f32; 2]) -> f32 {
+        p[0].atan2(-p[1]).rem_euclid(std::f32::consts::TAU)
+    }
+
+    #[test]
+    fn every_segment_centre_hits_its_own_segment_for_one_to_twelve() {
+        let g = Geometry::DEFAULT;
+        for n in 1..=12 {
+            for i in 0..n {
+                let c = segment_center(i, n, (g.r_in + g.r_out) / 2.0);
+                assert_eq!(segment_at(c[0], c[1], g.r_in, g.r_out, n), Some(i), "n={n} i={i}");
+            }
+        }
+    }
+
+    #[test]
+    fn sector_points_stay_in_the_ring_and_leave_the_gap() {
+        let g = Geometry::DEFAULT;
+        let n = 8;
+        let step = std::f32::consts::TAU / n as f32;
+        let gap = g.gap_deg.to_radians();
+        let pts = sector_points(2, n, &g, 16);
+        assert!(pts.len() >= 4);
+        for p in &pts {
+            let r = (p[0] * p[0] + p[1] * p[1]).sqrt();
+            assert!(r >= g.r_in - 0.01 && r <= g.r_out + 0.01, "radius {r}");
+        }
+        let angles: Vec<f32> = pts.iter().map(|p| angle_of(*p)).collect();
+        let lo = angles.iter().cloned().fold(f32::MAX, f32::min);
+        let hi = angles.iter().cloned().fold(f32::MIN, f32::max);
+        assert!((lo - (2.0 * step - step / 2.0 + gap / 2.0)).abs() < 1e-3, "{lo}");
+        assert!((hi - (2.0 * step + step / 2.0 - gap / 2.0)).abs() < 1e-3, "{hi}");
+    }
+
+    #[test]
+    fn sector_points_degenerate_inputs_do_not_panic() {
+        let g = Geometry::DEFAULT;
+        assert!(sector_points(0, 0, &g, 16).is_empty());
+        assert!(sector_points(5, 3, &g, 16).is_empty());
+        assert!(!sector_points(0, 1, &g, 0).is_empty());
+    }
+
+    #[test]
+    fn labels_fit_only_when_the_arc_is_long_enough() {
+        assert!(labels_fit(8, 120.0));
+        assert!(labels_fit(9, 120.0));
+        assert!(!labels_fit(12, 120.0));
+        assert!(!labels_fit(0, 120.0));
+        assert!((arc_len(8, 100.0) - 78.539_82).abs() < 1e-3);
+    }
+
+    #[test]
+    fn easing_is_monotonic_and_pinned() {
+        assert_eq!(ease_out_cubic(0.0), 0.0);
+        assert_eq!(ease_out_cubic(1.0), 1.0);
+        assert_eq!(ease_out_cubic(-3.0), 0.0);
+        assert_eq!(ease_out_cubic(7.0), 1.0);
+        let mut prev = 0.0;
+        for k in 1..=20 {
+            let v = ease_out_cubic(k as f32 / 20.0);
+            assert!(v >= prev);
+            prev = v;
+        }
+    }
+
+    #[test]
+    fn hub_text_summarises_the_selection() {
+        use std::path::PathBuf;
+        let p = |s: &str| PathBuf::from(s);
+        assert_eq!(hub_text(&[p("/nonexistent/a.png")]), ("1 file".to_string(), "PNG image".to_string()));
+        assert_eq!(hub_text(&[p("/nonexistent/a.mp4")]), ("1 file".to_string(), "MP4 video".to_string()));
+        let many: Vec<PathBuf> = (0..12).map(|i| p(&format!("/nonexistent/{i}.png"))).collect();
+        assert_eq!(hub_text(&many), ("12 files".to_string(), "images".to_string()));
+        assert_eq!(hub_text(&[p("/nonexistent/a.png"), p("/nonexistent/b.mp3")]), ("2 files".to_string(), "Mixed".to_string()));
+        assert_eq!(hub_text(&[]), ("0 files".to_string(), String::new()));
+        let dir = std::env::temp_dir();
+        assert_eq!(hub_text(&[dir]), ("1 file".to_string(), "Folder".to_string()));
     }
 }

@@ -3684,8 +3684,8 @@ pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static
 }
 
 /// Wheel geometry, in points from its centre.
-pub(crate) const WHEEL_INNER: f32 = 58.0;
-pub(crate) const WHEEL_OUTER: f32 = 178.0;
+pub(crate) const WHEEL_INNER: f32 = ferrocast_core::wheel::Geometry::DEFAULT.r_in;
+pub(crate) const WHEEL_OUTER: f32 = ferrocast_core::wheel::Geometry::DEFAULT.r_out;
 
 /// Segment under an offset from the wheel centre.
 pub(crate) fn wheel_hit(d: Vec2, n: usize) -> Option<usize> {
