@@ -33,6 +33,7 @@ pub mod storage;
 pub mod subs;
 pub mod timer;
 pub mod timezones;
+pub mod tools;
 pub mod units;
 pub mod videoplan;
 pub mod wheel;
