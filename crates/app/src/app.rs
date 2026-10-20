@@ -2264,11 +2264,15 @@ impl App {
                                     FileTool::TrimSilence => "sf:scissors",
                                     FileTool::OrganizePdf(_) => "sf:doc.on.doc",
                                     FileTool::Extract => "sf:archivebox",
-                                    FileTool::Compress(..) => "sf:arrow.down.right.and.arrow.up.left",
+                                    FileTool::Compress(..) | FileTool::CompressPdf(_) => "sf:arrow.down.right.and.arrow.up.left",
                                 },
                                 [255, 140, 60],
                             ),
-                            accessory: "File tool".into(),
+                            accessory: if matches!(t, FileTool::CompressPdf(_)) && self.tools.gs.is_none() {
+                                "Needs Ghostscript".into()
+                            } else {
+                                "File tool".into()
+                            },
                             keywords: vec![],
                             kind: Kind::FileTool(files.clone(), t),
                         })
@@ -4000,6 +4004,9 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
             if !files.is_empty() && [Family::Audio, Family::Video].iter().any(|fam| files.iter().all(|f| family_of(f) == *fam)) =>
         {
             ToolReach::Act(Act::CompressMedia(files.to_vec()))
+        }
+        (Compress, _) if !files.is_empty() && files.iter().all(|f| family_of(f) == Family::Pdf) => {
+            ToolReach::File(FileTool::CompressPdf(ferrocast_core::compress::Preset::Balanced))
         }
         (RemoveMetadata, _) if images => ToolReach::Image(ImageOp::StripMetadata),
         (CreatePdf, _) if images => ToolReach::Image(ImageOp::CombinePdf),

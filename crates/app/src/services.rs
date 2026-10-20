@@ -1805,6 +1805,11 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::Join => {
             return crate::media_tools::run(files, tool, ffmpeg);
         }
+        FileTool::CompressPdf(preset) => {
+            let (o, e) = crate::route::compress_pdf(ferrocast_core::convert::Tools::detect().gs, files, *preset);
+            outs.extend(o);
+            errs.extend(e);
+        }
         FileTool::Extract => {
             let tools = ferrocast_core::convert::Tools::detect();
             for f in files {
@@ -1929,12 +1934,25 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
     (outs, errs)
 }
 
+/// Result line for a PDF compression: both sizes, or the honest "no gain" note (the output is kept).
+pub(crate) fn pdf_size_report(before: u64, after: u64) -> String {
+    if after < before {
+        format!("{before} B → {after} B")
+    } else {
+        "no smaller: the PDF was already compact".into()
+    }
+}
+
 pub fn file_tool_files(files: Vec<PathBuf>, tool: ferrocast_core::convert::FileTool, ffmpeg: Option<&'static str>, bus: Bus) {
     std::thread::spawn(move || {
         let (outs, errs) = run_file_tool(&files, &tool, ffmpeg);
         // only when one file produced one result, so the pair is certain
         let report = match (&tool, ffmpeg, files.as_slice(), outs.as_slice()) {
             (ferrocast_core::convert::FileTool::Normalize(..), Some(ff), [b], [a]) => crate::media_tools::normalize_report(ff, b, a),
+            (ferrocast_core::convert::FileTool::CompressPdf(_), _, [b], [a]) => {
+                let len = |p: &PathBuf| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+                Some(pdf_size_report(len(b), len(a)))
+            }
             _ => None,
         };
         let msg = match (outs.len(), errs.len()) {

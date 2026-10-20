@@ -1901,3 +1901,64 @@ fn compress_media_without_ffmpeg_toasts_the_hint_and_opens_nothing() {
     assert!(matches!(app.view(), View::Root));
     assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
 }
+
+// ---- A6d: PDF compress rows and mapping
+#[test]
+fn convert_view_offers_three_compress_pdf_rows_for_one_or_two_pdfs() {
+    use ferrocast_core::convert::FileTool;
+    let mut app = fixture();
+    let dir = tmp_dir("pdfc");
+    let (a, b, t) = (dir.join("a.pdf"), dir.join("b.pdf"), dir.join("a.txt"));
+    for f in [&a, &b, &t] {
+        std::fs::write(f, b"x").unwrap();
+    }
+    for files in [vec![a.clone()], vec![a.clone(), b.clone()]] {
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.invalidate_sections();
+        let items: Vec<_> = app.sections_cached().into_iter().flat_map(|s| s.items).collect();
+        let rows: Vec<_> = items.iter().filter(|i| i.title.starts_with("Compress PDF")).collect();
+        let titles: Vec<_> = rows.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(titles, ["Compress PDF · light", "Compress PDF · balanced", "Compress PDF · strong"]);
+        assert!(rows.iter().all(|r| matches!(&r.kind, Kind::FileTool(_, FileTool::CompressPdf(_)))));
+    }
+    app.stack = vec![View::Root, View::Convert(vec![t])];
+    app.invalidate_sections();
+    assert!(!app.sections_cached().into_iter().flat_map(|s| s.items).any(|i| i.title.starts_with("Compress PDF")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn compress_pdf_rows_say_when_ghostscript_is_missing() {
+    let mut app = fixture();
+    let dir = tmp_dir("pdfg");
+    let a = dir.join("a.pdf");
+    std::fs::write(&a, b"x").unwrap();
+    app.stack = vec![View::Root, View::Convert(vec![a])];
+    app.tools.gs = None;
+    app.invalidate_sections();
+    let items: Vec<_> = app.sections_cached().into_iter().flat_map(|s| s.items).collect();
+    assert!(items.iter().filter(|i| i.title.starts_with("Compress PDF")).all(|i| i.accessory == "Needs Ghostscript"));
+    app.tools.gs = Some("/gs");
+    app.invalidate_sections();
+    let items: Vec<_> = app.sections_cached().into_iter().flat_map(|s| s.items).collect();
+    assert!(items.iter().filter(|i| i.title.starts_with("Compress PDF")).all(|i| i.accessory == "File tool"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_compress_for_pdf_is_balanced_compress_pdf() {
+    use ferrocast_core::compress::Preset;
+    use ferrocast_core::convert::FileTool;
+    use ferrocast_core::tools::ToolId;
+    let p = vec![std::path::PathBuf::from("/nonexistent/a.pdf")];
+    assert!(matches!(tool_reach(ToolId::Compress, &p), ToolReach::File(FileTool::CompressPdf(Preset::Balanced))));
+    let two = vec![p[0].clone(), std::path::PathBuf::from("/nonexistent/b.pdf")];
+    assert!(matches!(tool_reach(ToolId::Compress, &two), ToolReach::File(FileTool::CompressPdf(Preset::Balanced))));
+}
+
+#[test]
+fn pdf_size_report_names_the_outcome() {
+    assert_eq!(crate::services::pdf_size_report(1000, 400), "1000 B → 400 B");
+    assert_eq!(crate::services::pdf_size_report(1000, 1000), "no smaller: the PDF was already compact");
+    assert_eq!(crate::services::pdf_size_report(1000, 1200), "no smaller: the PDF was already compact");
+}

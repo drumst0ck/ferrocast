@@ -27,6 +27,15 @@ pub enum Preset {
 }
 
 impl Preset {
+    /// Ghostscript `-dPDFSETTINGS` value for PDF compression.
+    pub fn pdf_setting(self) -> &'static str {
+        match self {
+            Preset::Light => "/printer",
+            Preset::Balanced => "/ebook",
+            Preset::Strong => "/screen",
+        }
+    }
+
     /// Rough share of the original size the result keeps.
     fn keep_percent(self) -> u64 {
         match self {
@@ -204,6 +213,13 @@ pub fn describe(plan: &Plan) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pdf_presets_map_to_ghostscript_settings() {
+        assert_eq!(Preset::Light.pdf_setting(), "/printer");
+        assert_eq!(Preset::Balanced.pdf_setting(), "/ebook");
+        assert_eq!(Preset::Strong.pdf_setting(), "/screen");
+    }
+
     use super::*;
 
     #[test]

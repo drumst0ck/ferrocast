@@ -374,3 +374,122 @@ mod compress_real {
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
+
+mod pdf_compress {
+    use crate::route::compress_pdf;
+    use ferrocast_core::compress::Preset;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    }
+
+    /// Three noisy JPEGs -> one three-page PDF (sips), so there is real image weight to shrink.
+    fn noisy_pdf(dir: &Path) -> PathBuf {
+        let mut pages = vec![];
+        for i in 0..3u32 {
+            let mut img = image::RgbImage::new(900, 900);
+            let mut x = 12345u32 + i;
+            for px in img.pixels_mut() {
+                x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+                *px = image::Rgb([(x >> 8) as u8, (x >> 16) as u8, (x >> 24) as u8]);
+            }
+            let png = dir.join(format!("n{i}.png"));
+            img.save(&png).unwrap();
+            let jpg = dir.join(format!("n{i}.jpg"));
+            assert!(Command::new("/usr/bin/sips")
+                .args(["-s", "format", "jpeg"])
+                .arg(&png)
+                .arg("--out")
+                .arg(&jpg)
+                .output()
+                .unwrap()
+                .status
+                .success());
+            let pdf = dir.join(format!("p{i}.pdf"));
+            assert!(Command::new("/usr/bin/sips")
+                .args(["-s", "format", "pdf"])
+                .arg(&jpg)
+                .arg("--out")
+                .arg(&pdf)
+                .output()
+                .unwrap()
+                .status
+                .success());
+            pages.push(pdf);
+        }
+        let out = dir.join("doc.pdf");
+        let join = "/System/Library/Automator/Combine PDF Pages.action/Contents/MacOS/join";
+        assert!(Command::new(join).arg("-o").arg(&out).args(&pages).status().unwrap().success());
+        for p in pages {
+            std::fs::remove_file(p).unwrap();
+        }
+        for i in 0..3 {
+            std::fs::remove_file(dir.join(format!("n{i}.png"))).unwrap();
+            std::fs::remove_file(dir.join(format!("n{i}.jpg"))).unwrap();
+        }
+        out
+    }
+
+    fn root(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ferrocast-pdfc-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn missing_ghostscript_returns_the_hint_and_creates_nothing() {
+        let d = root("none");
+        let f = d.join("a.pdf");
+        std::fs::write(&f, b"%PDF-1.4").unwrap();
+        let before = names(&d);
+        let (outs, errs) = compress_pdf(None, std::slice::from_ref(&f), Preset::Strong);
+        assert!(outs.is_empty());
+        assert_eq!(errs, ["Ghostscript (brew install ghostscript)"]);
+        assert_eq!(names(&d), before);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires ghostscript; builds a real image PDF"]
+    fn compress_pdf_strong_is_smaller_keeps_pages_and_never_touches_the_original() {
+        let gs = ferrocast_core::convert::Tools::detect().gs.expect("ghostscript is required for this explicit check");
+        let d = root("real");
+        let src = noisy_pdf(&d);
+        let orig = std::fs::read(&src).unwrap();
+        let pages = ferrocast_macos::pdf::page_count(&src).unwrap();
+        assert_eq!(pages, 3);
+        let (outs, errs) = compress_pdf(Some(gs), std::slice::from_ref(&src), Preset::Strong);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(outs, [d.join("doc compressed.pdf")]);
+        let out = std::fs::read(&outs[0]).unwrap();
+        assert!(out.starts_with(b"%PDF"));
+        assert!(out.len() < orig.len(), "{} vs {}", out.len(), orig.len());
+        assert_eq!(ferrocast_macos::pdf::page_count(&outs[0]).unwrap(), pages);
+        assert_eq!(std::fs::read(&src).unwrap(), orig, "original untouched");
+        let (again, errs) = compress_pdf(Some(gs), std::slice::from_ref(&src), Preset::Strong);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(again, [d.join("doc compressed 2.pdf")]);
+        assert!(names(&d).iter().all(|n| !n.contains("ferrocast")), "{:?}", names(&d));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires ghostscript"]
+    fn corrupt_pdf_fails_cleanly_and_leaves_nothing() {
+        let gs = ferrocast_core::convert::Tools::detect().gs.expect("ghostscript is required for this explicit check");
+        let d = root("bad");
+        let f = d.join("fake.pdf");
+        std::fs::write(&f, b"this is not a pdf at all").unwrap();
+        let before = names(&d);
+        let (outs, errs) = compress_pdf(Some(gs), std::slice::from_ref(&f), Preset::Balanced);
+        assert!(outs.is_empty(), "{outs:?}");
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert_eq!(names(&d), before);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+}

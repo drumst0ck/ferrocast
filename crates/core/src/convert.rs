@@ -81,7 +81,12 @@ pub struct Tools {
     pub cwebp: Option<&'static str>,
     /// RAR extractor (RAR is input only).
     pub unrar: Option<&'static str>,
+    /// Ghostscript, used only for PDF compression.
+    pub gs: Option<&'static str>,
 }
+
+/// Install hint shown when Ghostscript is missing.
+pub const GS_HINT: &str = "Ghostscript (brew install ghostscript)";
 
 impl Tools {
     /// Probe the usual install locations.
@@ -94,6 +99,7 @@ impl Tools {
             soffice: first(&["/opt/homebrew/bin/soffice", "/Applications/LibreOffice.app/Contents/MacOS/soffice"]),
             cwebp: first(&["/opt/homebrew/bin/cwebp", "/usr/local/bin/cwebp"]),
             unrar: first(&["/opt/homebrew/bin/unrar", "/usr/local/bin/unrar", "/Applications/rar/unrar"]),
+            gs: first(&["/opt/homebrew/bin/gs", "/usr/local/bin/gs", "/usr/bin/gs"]),
         }
     }
 }
@@ -486,6 +492,18 @@ pub fn soffice_written_path(input: &Path, out: &Path, ext: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compress_pdf_label_suffix_and_gs_detection_field() {
+        use crate::compress::Preset;
+        assert_eq!(FileTool::CompressPdf(Preset::Light).label(), "Compress PDF · light");
+        assert_eq!(FileTool::CompressPdf(Preset::Balanced).label(), "Compress PDF · balanced");
+        assert_eq!(FileTool::CompressPdf(Preset::Strong).label(), "Compress PDF · strong");
+        assert_eq!(FileTool::CompressPdf(Preset::Strong).suffix(), "compressed");
+        assert_eq!(Tools { gs: None, ..Default::default() }.gs, None);
+        assert_eq!(Tools { gs: Some("/gs"), ..Default::default() }.gs, Some("/gs"));
+        assert_eq!(GS_HINT, "Ghostscript (brew install ghostscript)");
+    }
+
     #[test]
     fn split_points_label_and_suffix() {
         let t = FileTool::SplitPoints(vec![(0.0, 3.0), (3.0, 7.0), (7.0, 10.0)], true);
@@ -1043,6 +1061,8 @@ pub enum FileTool {
     Extract,
     /// Re-encode audio or video to a size target, percentage or preset (resize applies to video only).
     Compress(crate::compress::Goal, crate::compress::Resize),
+    /// Smaller PDF through Ghostscript (optional tool), by preset only.
+    CompressPdf(crate::compress::Preset),
 }
 
 pub fn format_secs(s: f64) -> String {
@@ -1093,6 +1113,14 @@ impl FileTool {
             FileTool::OrganizePdf(p) => format!("Organize PDF · {} page{}", p.len(), if p.len() == 1 { "" } else { "s" }),
             FileTool::Extract => "Extract".into(),
             FileTool::Compress(goal, r) => compress_label(goal, r),
+            FileTool::CompressPdf(p) => format!(
+                "Compress PDF · {}",
+                match p {
+                    crate::compress::Preset::Light => "light",
+                    crate::compress::Preset::Balanced => "balanced",
+                    crate::compress::Preset::Strong => "strong",
+                }
+            ),
         }
     }
     pub fn suffix(&self) -> String {
@@ -1113,7 +1141,7 @@ impl FileTool {
             FileTool::Bleep(..) => "bleeped".into(),
             FileTool::Join => "joined".into(),
             FileTool::OrganizePdf(_) => "organized".into(),
-            FileTool::Compress(..) => "compressed".into(),
+            FileTool::Compress(..) | FileTool::CompressPdf(_) => "compressed".into(),
             // it makes a folder named after the archive; no suffix is ever applied
             FileTool::Extract => String::new(),
         }
@@ -1122,8 +1150,15 @@ impl FileTool {
     pub fn offered(family: Family, n: usize) -> Vec<FileTool> {
         match family {
             Family::Video if n > 1 => vec![FileTool::Join, FileTool::Merge],
-            Family::Audio | Family::Pdf if n > 1 => vec![FileTool::Merge],
-            Family::Pdf => vec![FileTool::SplitPages],
+            Family::Pdf if n > 1 => {
+                use crate::compress::Preset::*;
+                vec![FileTool::Merge, FileTool::CompressPdf(Light), FileTool::CompressPdf(Balanced), FileTool::CompressPdf(Strong)]
+            }
+            Family::Audio if n > 1 => vec![FileTool::Merge],
+            Family::Pdf => {
+                use crate::compress::Preset::*;
+                vec![FileTool::SplitPages, FileTool::CompressPdf(Light), FileTool::CompressPdf(Balanced), FileTool::CompressPdf(Strong)]
+            }
             Family::Archive => vec![FileTool::Extract],
             Family::Video => vec![
                 FileTool::Mute,
@@ -1449,7 +1484,10 @@ mod strip_tests {
         assert!(FileTool::offered(Family::Video, 1).contains(&FileTool::Mute));
         assert_eq!(FileTool::offered(Family::Video, 2)[0], FileTool::Join);
         assert_eq!(parse_tool_query("trim"), None);
-        assert_eq!(FileTool::offered(Family::Pdf, 1), vec![FileTool::SplitPages]);
+        use crate::compress::Preset::*;
+        let cp = [FileTool::CompressPdf(Light), FileTool::CompressPdf(Balanced), FileTool::CompressPdf(Strong)];
+        assert_eq!(FileTool::offered(Family::Pdf, 1), [vec![FileTool::SplitPages], cp.to_vec()].concat());
+        assert_eq!(FileTool::offered(Family::Pdf, 2), [vec![FileTool::Merge], cp.to_vec()].concat());
         assert_eq!(FileTool::offered(Family::Audio, 2), vec![FileTool::Merge]);
         assert!(FileTool::offered(Family::Image, 2).is_empty());
         assert_eq!(format_secs(3723.0), "1:02:03");
