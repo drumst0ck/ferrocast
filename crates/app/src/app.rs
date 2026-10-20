@@ -963,16 +963,21 @@ impl App {
                 let f = files.to_vec();
                 let paths = f.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\n");
                 let seg = |label: &str, symbol: &'static str, act: Act| WheelSeg { label: label.into(), symbol, pick: WheelPick::Act(act) };
-                vec![
-                    seg("Copy", "sf:doc.on.doc", Act::CopyFiles(f.clone())),
-                    seg("Copy Path", "sf:link", Act::CopyText(paths)),
-                    seg("Move to…", "sf:folder", Act::MoveFiles(f.clone())),
-                    seg("Terminal", "sf:terminal", Act::OpenInTerminal(f[0].clone())),
-                    seg("AirDrop", "sf:dot.radiowaves.left.and.right", Act::AirDrop(f.clone())),
-                    seg("Quick Look", "sf:eye", Act::QuickLook(f[0].clone())),
-                    seg("Float", "sf:tray.full", Act::AddToShelf(f.clone())),
-                    seg("Convert…", "sf:arrow.triangle.2.circlepath", Act::Convert(f)),
-                ]
+                // exactly the six file actions, in the order of ferrocast_core::tools::ACTIONS
+                ferrocast_core::tools::ACTIONS
+                    .into_iter()
+                    .map(|a| {
+                        use ferrocast_core::tools::ActionId;
+                        match a {
+                            ActionId::AirDrop => seg("AirDrop", "sf:dot.radiowaves.left.and.right", Act::AirDrop(f.clone())),
+                            ActionId::Float => seg("Float", "sf:tray.full", Act::AddToShelf(f.clone())),
+                            ActionId::Copy => seg("Copy", "sf:doc.on.doc", Act::CopyFiles(f.clone())),
+                            ActionId::Move => seg("Move to…", "sf:folder", Act::MoveFiles(f.clone())),
+                            ActionId::CopyPath => seg("Copy Path", "sf:link", Act::CopyText(paths.clone())),
+                            ActionId::OpenTerminal => seg("Terminal", "sf:terminal", Act::OpenInTerminal(f[0].clone())),
+                        }
+                    })
+                    .collect()
             }
             ferrocast_core::wheel::WheelKind::Tools => {
                 use ferrocast_core::convert::ImageOp;

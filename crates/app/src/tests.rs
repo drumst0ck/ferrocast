@@ -407,6 +407,20 @@ fn wheel_renders_for_any_segment_count_in_both_themes() {
 }
 
 #[test]
+fn actions_wheel_has_exactly_the_six_actions_in_order() {
+    use ferrocast_core::wheel::WheelKind;
+    let app = fixture();
+    let one = vec![std::path::PathBuf::from("/nonexistent/a.png")];
+    let many = vec![one[0].clone(), std::path::PathBuf::from("/nonexistent/b.png")];
+    let folder = vec![std::env::temp_dir()];
+    for files in [one, many, folder] {
+        let labels: Vec<String> = app.wheel_segments(WheelKind::Actions, &files).into_iter().map(|s| s.label).collect();
+        assert_eq!(labels, ["AirDrop", "Float", "Copy", "Move to…", "Copy Path", "Terminal"], "{files:?}");
+    }
+    assert!(app.wheel_segments(WheelKind::Actions, &[]).is_empty());
+}
+
+#[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
     let f = std::env::temp_dir().join(format!("fc-vspeed-{}.mp4", std::process::id()));
