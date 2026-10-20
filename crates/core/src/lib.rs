@@ -10,6 +10,7 @@ pub mod collage;
 pub mod croprect;
 pub use clipping::clipping_fixture_rsrc;
 pub mod color;
+pub mod compress;
 pub mod convert;
 pub mod currency;
 pub mod epub;
