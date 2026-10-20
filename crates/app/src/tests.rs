@@ -602,6 +602,52 @@ fn pdf_organizer_escape_goes_back_without_a_job() {
     assert!(app.rx.try_recv().is_err(), "Escape starts no job even after edits");
 }
 
+fn crop_app() -> App {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-cropfocus-{}.png", uuid::Uuid::new_v4()));
+    let rect = ferrocast_core::croprect::Rect { x: 0, y: 0, w: 100, h: 100 };
+    app.stack = vec![View::Root, View::CropImage { file: f, size: (1000, 600), rect, aspect: None }];
+    render(&mut app, vec![]);
+    app
+}
+
+/// Click the W box of the crop view (position taken from the layout; guarded by an assertion).
+fn click_crop_width_box(app: &mut App) {
+    let pos = Pos2::new(300.0, 89.0);
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(app, vec![Event::PointerMoved(pos)]);
+    render(app, vec![btn(true)]);
+    render(app, vec![btn(false)]);
+    render(app, vec![]);
+}
+
+// Regression test for L41 B1 (Enter and Escape were taken while a number box was being edited).
+#[test]
+fn crop_number_box_keeps_enter_and_escape_while_editing() {
+    let mut app = crop_app();
+    click_crop_width_box(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the W box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::CropImage { .. }), "Escape ends the edit, it must not close the crop view");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape, with nothing being edited, closes the view");
+    let mut app = crop_app();
+    click_crop_width_box(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CropImage { .. }), "Enter confirms the number, it must not save");
+    assert!(app.rx.try_recv().is_err(), "no crop job may start while editing");
+}
+
+#[test]
+fn crop_enter_without_a_focused_field_saves_and_leaves() {
+    let mut app = crop_app();
+    assert!(!app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root), "Enter on the crop view starts the crop and goes back");
+}
+
 #[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();

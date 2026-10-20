@@ -441,10 +441,16 @@ impl App {
         let hotkey = matches!(view, View::Hotkey { .. });
         let query_empty = self.query.is_empty();
         let panel = self.panel.is_some();
+        // egui drops the focus of a text field at the start of the frame in which Escape arrives,
+        // so "a field is being edited" must also look at the previous frame; otherwise the first
+        // Escape would cancel the edit and close the view at once
+        let kbd_now = ctx.egui_wants_keyboard_input();
+        let kbd_edit = kbd_now || ctx.data(|d| d.get_temp::<bool>(Id::new("kbd-prev"))).unwrap_or(false);
+        ctx.data_mut(|d| d.insert_temp(Id::new("kbd-prev"), kbd_now));
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. }) && ctx.egui_wants_keyboard_input());
+            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
