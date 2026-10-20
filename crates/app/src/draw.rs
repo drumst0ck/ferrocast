@@ -112,6 +112,19 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("vcrop") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    if let Some(dims) = crate::media_tools::video_dims(ff, &file) {
+                        if let Some(img) = crate::media_tools::preview_frame(ff, &file, 1.0).and_then(|b| services::decode_png(&b)) {
+                            let tex = ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                            ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                        }
+                        let rect = ferrocast_core::croprect::fit_aspect(dims.0, dims.1, 1, 1);
+                        app.push(View::VideoCrop { file, size: Some(dims), rect, aspect: Some((1, 1)) });
+                    }
+                }
+            }
             Ok("vtrim") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
@@ -392,7 +405,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. }) && ctx.egui_wants_keyboard_input());
+            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. }) && ctx.egui_wants_keyboard_input());
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -513,6 +526,22 @@ impl App {
                         vec![file],
                         ferrocast_core::convert::FileTool::OrganizePdf(plan.selection()),
                         None,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
+            View::VideoCrop { file, size: Some(size), rect, .. } if k.enter => {
+                if rect == ferrocast_core::croprect::full(size.0, size.1) {
+                    self.toast("Nothing to crop: drag the rectangle first");
+                } else {
+                    let (x, y, w, h) = ferrocast_core::croprect::tuple(rect);
+                    self.toast("Cropping video…");
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::CropVideo(x, y, w, h),
+                        self.tools.ffmpeg,
                         self.bus.clone(),
                     );
                     self.pop();
@@ -2075,7 +2104,7 @@ impl App {
             pal.sub,
         );
         if (rect, aspect) != before {
-            if let Some(View::CropImage { rect: r, aspect: a, .. }) = self.stack.last_mut() {
+            if let Some(View::CropImage { rect: r, aspect: a, .. } | View::VideoCrop { rect: r, aspect: a, .. }) = self.stack.last_mut() {
                 (*r, *a) = (rect, aspect);
             }
             ctx.request_repaint();
@@ -2519,6 +2548,12 @@ impl App {
                         self.save_notes();
                     }
                 });
+            }
+            View::VideoCrop { size: Some(size), rect: crop, aspect, .. } => {
+                self.draw_crop(ui, rect, pal, size, crop, aspect);
+            }
+            View::VideoCrop { .. } => {
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
             }
             View::VideoTrim { file, trim } => {
                 self.draw_video_trim(ui, rect, pal, &file, trim);

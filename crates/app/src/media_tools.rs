@@ -58,6 +58,14 @@ pub(crate) fn video_info(ff: &str, file: &Path) -> Option<(f64, f64)> {
     Some((duration, rate))
 }
 
+/// Pixel size of the first video stream.
+pub(crate) fn video_dims(ff: &str, file: &Path) -> Option<(u32, u32)> {
+    let info = probe(ff, file).ok()?;
+    let v = streams(&info).find(|s| s["codec_type"] == "video")?;
+    let (w, h) = (v["width"].as_u64()?, v["height"].as_u64()?);
+    (w >= 2 && h >= 2 && w <= 16384 && h <= 16384).then_some((w as u32, h as u32))
+}
+
 /// PNG of the frame at `t` seconds, at most 800 px wide, or None (bounded to 20 s).
 pub(crate) fn preview_frame(ff: &str, file: &Path, t: f64) -> Option<Vec<u8>> {
     if !t.is_finite() || t < 0.0 {

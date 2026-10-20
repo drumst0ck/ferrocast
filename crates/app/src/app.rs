@@ -66,6 +66,13 @@ pub enum View {
         color: usize,
         sel: Option<usize>,
     },
+    /// Video crop window: file, pixel size once probed, the rectangle and an optional locked aspect.
+    VideoCrop {
+        file: PathBuf,
+        size: Option<(u32, u32)>,
+        rect: ferrocast_core::croprect::Rect,
+        aspect: Option<(u32, u32)>,
+    },
     /// Video trim viewer: the file and its timeline state (None while the video is being probed).
     VideoTrim {
         file: PathBuf,
@@ -244,6 +251,7 @@ impl View {
             View::FrameImage { .. } => "Add Background",
             View::CollageImage { .. } => "Make a Collage",
             View::VideoTrim { .. } => "Trim Video",
+            View::VideoCrop { .. } => "Crop Video",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -1097,6 +1105,23 @@ impl App {
                                 });
                             }
                             None => self.toast("Annotate: could not read the image"),
+                        }
+                    }
+                }
+                Msg::VideoCropReady(file, ready) => {
+                    if matches!(self.view(), View::VideoCrop { file: f, .. } if *f == file) {
+                        match ready {
+                            Some((dims, png)) => {
+                                if let Some(img) = services::decode_png(&png) {
+                                    let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                                    self.ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                                }
+                                if let Some(View::VideoCrop { size, rect, .. }) = self.stack.last_mut() {
+                                    *size = Some(dims);
+                                    *rect = ferrocast_core::croprect::full(dims.0, dims.1);
+                                }
+                            }
+                            None => self.toast("Crop: could not read the video"),
                         }
                     }
                 }
@@ -2173,6 +2198,7 @@ impl App {
                 a.push(Action::new("Format Wheel", Act::OpenWheel(vec![p.clone()])).key(Modifiers::ALT, Key::Enter));
                 if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Video {
                     a.push(Action::new("Trim Video…", Act::TrimVideo(p.clone())).key(CMD_SHIFT, Key::V));
+                    a.push(Action::new("Crop Video…", Act::CropVideo(p.clone())).key(CMD_SHIFT, Key::J));
                 }
                 if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Image {
                     a.push(Action::new("Annotate…", Act::AnnotateCanvas(p.clone())).key(CMD_SHIFT, Key::A));
@@ -3061,6 +3087,22 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::CropVideo(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    self.ctx.data_mut(|d| d.remove::<egui::TextureHandle>(Id::new("crop-tex")));
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || {
+                        let ready = crate::media_tools::video_dims(ff, &f).and_then(|dims| {
+                            let at = crate::media_tools::video_info(ff, &f).map(|(d, _)| d * 0.1).unwrap_or(0.0);
+                            crate::media_tools::preview_frame(ff, &f, at).map(|png| (dims, png))
+                        });
+                        bus.send(Msg::VideoCropReady(f, ready));
+                    });
+                    self.show();
+                    self.push(View::VideoCrop { file, size: None, rect: ferrocast_core::croprect::full(2, 2), aspect: None });
+                }
+            },
             Act::TrimVideo(file) => match self.tools.ffmpeg {
                 None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
                 Some(ff) => {

@@ -363,6 +363,18 @@ fn pdf_organizer_view_renders_and_enter_without_edits_changes_nothing() {
 }
 
 #[test]
+fn video_crop_view_renders_while_probing_and_after() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-vcrop-{}.mp4", std::process::id()));
+    app.stack = vec![View::Root, View::VideoCrop { file: f.clone(), size: None, rect: ferrocast_core::croprect::full(2, 2), aspect: None }];
+    render(&mut app, vec![]);
+    let r = ferrocast_core::croprect::Rect { x: 10, y: 10, w: 100, h: 60 };
+    app.stack = vec![View::Root, View::VideoCrop { file: f, size: Some((640, 360)), rect: r, aspect: None }];
+    render(&mut app, vec![]);
+    assert!(matches!(app.view(), View::VideoCrop { size: Some(_), .. }));
+}
+
+#[test]
 fn video_trim_view_renders_while_probing_and_after() {
     let mut app = fixture();
     let f = std::env::temp_dir().join(format!("fc-vtrim-{}.mp4", std::process::id()));
