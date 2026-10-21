@@ -8,6 +8,13 @@ import conversions from '../../data/conversions.json';
 import tools from '../../data/tools.json';
 import { counts, STATUS_DATE } from '../../data/status';
 import type { HomeCopy } from '../../i18n/home.en';
+import { allTools } from '../../lib/seo/tools';
+
+const toolSlug = (id: string) => {
+  const t = allTools().find((x) => x.id === id);
+  if (!t) throw new Error(`home thumbnail references unknown tool "${id}"`);
+  return t.slug;
+};
 
 interface Props { t: HomeCopy; lang: 'en' | 'es'; fill: (s: string, v?: Record<string, string | number>) => string }
 const { t, lang, fill } = Astro.props;
@@ -59,7 +66,7 @@ for (const fam of families) if (!f.convert.families[fam.id]) throw new Error(`no
         <p>{fill(f.tools.text, v)}</p>
         <ul class="fh-thumbs" aria-label={f.tools.toolsAria}>
           {thumbs.map(([id, shot]) => (
-            <li><a href={`${base}/tools/${id}/`}><img src={img(shot)} alt={f.tools.shots[id]} width="1500" height="950" loading="lazy" decoding="async" /><span>{f.tools.names[id]}</span></a></li>
+            <li><a href={`${base}/tools/${toolSlug(id)}/`}><img src={img(shot)} alt={f.tools.shots[id]} width="1500" height="950" loading="lazy" decoding="async" /><span>{f.tools.names[id]}</span></a></li>
           ))}
         </ul>
       </article>
