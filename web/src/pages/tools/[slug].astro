@@ -1,0 +1,10 @@
+---
+import ToolPageView from '../../components/seo/ToolPage.astro';
+import { allTools } from '../../lib/seo/tools';
+
+export function getStaticPaths() {
+  return allTools().map((tool) => ({ params: { slug: tool.slug }, props: { tool } }));
+}
+const { tool } = Astro.props;
+---
+<ToolPageView tool={tool} />

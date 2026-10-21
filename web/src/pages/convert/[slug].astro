@@ -1,0 +1,14 @@
+---
+import PairPage from '../../components/seo/PairPage.astro';
+import FamilyHub from '../../components/seo/FamilyHub.astro';
+import { allPairs, familyHubs } from '../../lib/seo/convert';
+
+export function getStaticPaths() {
+  return [
+    ...allPairs().map((pair) => ({ params: { slug: pair.slug }, props: { pair, family: null } })),
+    ...familyHubs().map((f) => ({ params: { slug: f.id }, props: { pair: null, family: f.id } })),
+  ];
+}
+const { pair, family } = Astro.props;
+---
+{pair ? <PairPage pair={pair} /> : <FamilyHub id={family!} />}

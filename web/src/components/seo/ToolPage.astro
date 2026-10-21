@@ -1,0 +1,53 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../SiteHeader.astro';
+import SiteFooter from '../SiteFooter.astro';
+import Crumbs from './Crumbs.astro';
+import { getCollection } from 'astro:content';
+import { installCommand as brewBlock } from '../../data/install';
+import { levels } from '../../data/status';
+import { toolMeta, type ToolPage } from '../../lib/seo/tools';
+import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
+import '../../styles/seo.css';
+
+interface Props { tool: ToolPage }
+const { tool: t } = Astro.props;
+const meta = toolMeta(t);
+const docs = await getCollection('docs');
+const doc = docs.find((d) => d.id === `docs/files/tools/${t.docSlug}`);
+if (!doc) throw new Error(`no docs page for tool ${t.id}`);
+const canonical = `${SITE}/tools/${t.slug}/`;
+const crumbs: [string, string][] = [['Home', '/'], ['Tools', '/tools/'], [t.name, `/tools/${t.slug}/`]];
+const steps: [string, string][] = [
+  ['Install Ferrocast', 'Install it with Homebrew; it builds on your Mac.'],
+  ['Drag or select the file', 'Drag a file from Finder, or select it in the launcher.'],
+  ['Open the tool', t.shortcut ? `Press ${t.shortcut} on the file result, or tap ⌘ while dragging to open the Tools wheel.` : 'Tap ⌘ while dragging to open the Tools wheel, or use the Convert view.'],
+  [`Run ${t.name}`, 'The result is saved next to the original and never overwrites it.'],
+];
+const jsonLd = [breadcrumbs(crumbs), howTo(`${t.name} on Mac with Ferrocast`, meta.description, steps)];
+---
+<Base title={meta.title} description={meta.description} canonical={canonical} jsonLd={jsonLd}>
+  <SiteHeader current="files" />
+  <main class="seo" id="main">
+    <Crumbs items={crumbs} />
+    <h1>{t.name} on your Mac, offline</h1>
+    <p class="lead">{doc.data.description}</p>
+    <dl>
+      <dt>Status</dt><dd>{levels[t.level].label}: {levels[t.level].text}</dd>
+      <dt>Shortcut</dt><dd>{t.shortcut ? <kbd>{t.shortcut}</kbd> : 'None; open it from the Tools wheel or the Convert view'}</dd>
+      <dt>Input formats</dt><dd>{t.formats.map((f, i) => <><code>{f}</code>{i < t.formats.length - 1 ? ' ' : ''}</>)}</dd>
+    </dl>
+    {t.screenshot && <img class="shot" src={t.screenshot} alt={`${t.name} window in Ferrocast`} width="1500" height="950" loading="lazy" decoding="async" />}
+    <h2>How to use it</h2>
+    <ol>
+      <li>Drag a file, or select it in the launcher.</li>
+      <li>{t.shortcut ? <>Press <kbd>{t.shortcut}</kbd> on the file result, or</> : <>Open the Tools wheel:</>} tap <kbd>⌘</kbd> while dragging.</li>
+      <li>Choose <strong>{t.name}</strong>. The result is saved beside the original.</li>
+    </ol>
+    <p><a class="tl" href={`/docs/files/tools/${t.docSlug}/`}>Read the full guide, with limits</a></p>
+    <h2>Install Ferrocast</h2>
+    <pre><code>{brewBlock}</code></pre>
+    <p>Free, open source (MIT), Apple Silicon only. <a class="tl" href="/tools/">All file tools</a> · <a class="tl" href="/files/">All conversions</a></p>
+  </main>
+  <SiteFooter />
+</Base>

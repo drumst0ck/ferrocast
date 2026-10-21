@@ -1,0 +1,38 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../../components/SiteHeader.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
+import Crumbs from '../../components/seo/Crumbs.astro';
+import { getCollection } from 'astro:content';
+import { allTools } from '../../lib/seo/tools';
+import { breadcrumbs, SITE } from '../../lib/seo/jsonld';
+import '../../styles/seo.css';
+
+const tools = allTools();
+const docs = await getCollection('docs');
+const desc = (slug: string) => docs.find((d) => d.id === `docs/files/tools/${slug}`)?.data.description ?? '';
+const groups: [string, string][] = [['image', 'Image tools'], ['video', 'Video tools'], ['audio', 'Audio tools'], ['pdf', 'PDF tools'], ['archive', 'Archives'], ['any', 'Any file type']];
+const crumbs: [string, string][] = [['Home', '/'], ['Tools', '/tools/']];
+const title = 'File tools for Mac: compress, crop, trim, redact · Ferrocast';
+const description = `${tools.length} local file tools for images, video, audio and PDF: compress, crop, trim, split, merge, redact and more. Nothing is uploaded.`;
+if (title.length > 60 || description.length < 120 || description.length > 155) throw new Error(`tools hub meta out of range: ${title.length}/${description.length}`);
+---
+<Base title={title} description={description} canonical={`${SITE}/tools/`} jsonLd={breadcrumbs(crumbs)}>
+  <SiteHeader current="files" />
+  <main class="seo" id="main">
+    <Crumbs items={crumbs} />
+    <h1>File tools for your Mac</h1>
+    <p class="lead">{tools.length} tools that run on your Mac. Drag a file, tap <kbd>⌘</kbd>, and pick one. Results are saved next to the original and never overwrite it.</p>
+    {groups.map(([key, label]) => {
+      const list = tools.filter((t) => t.media === key);
+      return list.length > 0 && (
+        <section>
+          <h2>{label}</h2>
+          <ul>{list.map((t) => <li><a class="tl" href={`/tools/${t.slug}/`}>{t.name}</a>: {desc(t.docSlug)}</li>)}</ul>
+        </section>
+      );
+    })}
+    <p><a class="tl" href="/files/">Explore all 275 conversions</a> · <a class="tl" href="/docs/files/">Documentation</a></p>
+  </main>
+  <SiteFooter />
+</Base>
