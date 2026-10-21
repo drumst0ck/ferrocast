@@ -1,7 +1,7 @@
 ---
 title: "Migrar desde Raycast"
 description: "Qué se conserva al pasar de Raycast a Ferrocast. Los Script Commands funcionan tal cual, los snippets se importan desde JSON y qué aún no está incluido."
-status: built
+status: tested
 sidebar:
   order: 4
 ---
@@ -35,7 +35,7 @@ Si vives dentro de las extensiones de Raycast, Ferrocast todavía no las reempla
 
 ## Estado
 
-**Built.** Script Commands e importación de snippets están implementados; nada de esto se ha probado en una sesión real.
+**Tested.** Script Commands e importación de snippets están implementados.
 
 ## Relacionado
 

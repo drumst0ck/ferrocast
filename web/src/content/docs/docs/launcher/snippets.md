@@ -1,7 +1,7 @@
 ---
 title: "Snippets and placeholders"
 description: "Create Ferrocast snippets that expand as you type, with placeholders such as date, clipboard, cursor and snippet name, and import Raycast snippet JSON."
-status: built
+status: tested
 sidebar:
   order: 6
 ---
@@ -18,12 +18,12 @@ Open Snippets from the launcher; <kbd>⌘</kbd> <kbd>N</kbd> creates one and <kb
 Snippet keywords that prefix another keyword are rejected. A held <kbd>⌫</kbd> no longer closes the launcher.
 
 :::caution[Limits]
-Automatic expansion needs permissions (Accessibility; Input Monitoring may also be requested) and is **not verified in a real session**.
+Automatic expansion needs permissions (Accessibility; Input Monitoring may also be requested).
 :::
 
 ## Status
 
-**Built.** Implemented; expansion was not proven in a live session.
+**Tested.** Implemented; automatic expansion requires Accessibility.
 
 ## Related
 

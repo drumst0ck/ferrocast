@@ -3,7 +3,7 @@
   "slug": "annotate",
   "name": "Annotate photo",
   "status": "window",
-  "level": "built",
+  "level": "tested",
   "shortcut": "⇧⌘A",
   "formats": [
     "jpg",

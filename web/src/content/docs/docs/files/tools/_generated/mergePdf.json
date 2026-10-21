@@ -3,7 +3,7 @@
   "slug": "merge-pdf",
   "name": "Merge PDFs",
   "status": "preset",
-  "level": "built",
+  "level": "tested",
   "shortcut": null,
   "formats": [
     "pdf"

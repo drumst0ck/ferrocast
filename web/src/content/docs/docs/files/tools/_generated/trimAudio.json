@@ -3,7 +3,7 @@
   "slug": "trim-audio",
   "name": "Trim audio",
   "status": "window",
-  "level": "built",
+  "level": "tested",
   "shortcut": null,
   "formats": [
     "mp3",

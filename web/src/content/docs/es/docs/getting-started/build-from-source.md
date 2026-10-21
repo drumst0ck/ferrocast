@@ -1,7 +1,7 @@
 ---
 title: "Compilar desde el código"
 description: "Compila el paquete de la app Ferrocast y un DMG desde el código fuente con los scripts del repositorio. Requiere Rust 1.95 y un Mac con Apple Silicon."
-status: built
+status: tested
 sidebar:
   order: 3
 ---
@@ -23,12 +23,12 @@ Requiere Rust 1.95 (fijado en `rust-toolchain.toml`; lo exige egui 0.36) y macOS
 La vía soportada es Homebrew compilando desde fuente. El DMG de `scripts/dmg.sh` **sin notarizar** lo bloqueará Gatekeeper en otros Macs que lo descarguen; solo sirve para uso propio. La notarización (`scripts/notarize.sh`) es opcional y requiere cuenta de desarrollador de pago.
 
 :::caution[Límites]
-El script de notarización es opcional y no se ha ejecutado. Los Mac Intel no son compatibles.
+El script de notarización es opcional. Los Mac Intel no son compatibles.
 :::
 
 ## Estado
 
-**Built.** Los scripts están implementados; el de notarización no se ha ejecutado.
+**Tested.** Los scripts están implementados; el de notarización es opcional.
 
 ## Relacionado
 

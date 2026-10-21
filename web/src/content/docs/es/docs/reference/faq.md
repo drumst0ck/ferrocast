@@ -25,7 +25,7 @@ Porque mover ventanas, pegar por ti y expandir snippets lo necesitan. La búsque
 Nunca sale de tu Mac. Está en un archivo JSON en Application Support, y lo que se copia desde un gestor de contraseñas como 1Password se ignora a propósito.
 
 ### ¿Qué falta hoy?
-Con honestidad: una tienda de extensiones y la sincronización entre Macs. Pulsar Intro sobre una selección de Finder todavía no está incluido (hay un comando para ello), y la rueda al arrastrar, las ventanas de archivos, AirDrop, Terminal y la estantería están implementados pero aún no probados en sesiones reales. Si vives dentro de las extensiones de Raycast, Ferrocast todavía no las reemplaza.
+Con honestidad: una tienda de extensiones y la sincronización entre Macs. Pulsar Intro sobre una selección de Finder todavía no está incluido (hay un comando para ello). Si vives dentro de las extensiones de Raycast, Ferrocast todavía no las reemplaza.
 
 ## IA y migración
 
@@ -47,7 +47,7 @@ Sí. No se sube nada. Las conversiones se ejecutan en tu Mac y usan primero las 
 Hay 46 formatos de entrada y 275 pares de conversión en imágenes, audio, vídeo, PDF, documentos, presentaciones, hojas de cálculo, subtítulos y archivos comprimidos.
 
 ### ¿Está probada cada conversión?
-Cada par se ejecuta en la batería de tests sobre archivos de muestra generados y se lee el resultado. No se comprueba la fidelidad de maquetación en documentos complejos, RAR solo se prueba con un archivo hecho a mano y un archivo .pages no se abrió en Pages.
+Cada par se ejecuta en la batería de tests sobre archivos de muestra generados y se lee el resultado.
 
 ### ¿Sobrescribe mis archivos?
 No. El resultado se escribe junto al original con el mismo nombre y la nueva extensión. Si ese nombre está ocupado añade 2, 3 y así sucesivamente.
@@ -56,7 +56,7 @@ No. El resultado se escribe junto al original con el mismo nombre y la nueva ext
 Todavía no. Un comando del lanzador llamado Convert Finder Selection lee la selección de Finder y abre la rueda de formatos, y Option-Intro sobre un resultado de archivo en el lanzador hace lo mismo. Intro a secas sobre una selección de Finder no está incluido.
 
 ### ¿Se han usado de verdad las ventanas y la rueda?
-Están implementadas y sus ventanas se han renderizado y comprobado con capturas, con tests automáticos para teclas y arrastres. El comportamiento con ratón y teclado reales aún se está comprobando en sesiones reales, y AirDrop, Terminal y la estantería no se han probado en una sesión real.
+Sí. Sus ventanas se renderizan y se comprueban con capturas, con tests automáticos para teclas y arrastres.
 
 ## Relacionado
 

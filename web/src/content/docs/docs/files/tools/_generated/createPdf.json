@@ -3,7 +3,7 @@
   "slug": "create-pdf",
   "name": "Create a PDF",
   "status": "preset",
-  "level": "built",
+  "level": "tested",
   "shortcut": null,
   "formats": [
     "jpg",

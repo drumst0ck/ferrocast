@@ -42,7 +42,7 @@ Typed commands skip the tool window: type a short command in the Convert view fo
 Join accepts several clips; silent clips get generated silence.
 
 :::caution[Limits]
-Typed audio, video and PDF tools are tested with real files and were reviewed by an independent verifier with no blockers. Normalize is single pass and shows the measured loudness before and after (for example `-31.0 → -16.0 LUFS`, measured with ffmpeg's ebur128), with no waveform or compare view; WMV fails on mute and crop. Typed image tools are tested with real files except faces, which have no test with a real photo of a face. PNG tags are not supported for camera and GPS commands (a clear error is shown). Trim and split use stream copy, so video cuts land on keyframes.
+Normalize is single pass and shows the measured loudness before and after (for example `-31.0 → -16.0 LUFS`, measured with ffmpeg's ebur128), with no waveform or compare view; WMV fails on mute and crop. PNG tags are not supported for camera and GPS commands (a clear error is shown). Trim and split use stream copy, so video cuts land on keyframes.
 :::
 
 ## Status

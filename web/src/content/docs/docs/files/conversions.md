@@ -129,7 +129,7 @@ In the tables below, a target followed by a tool name needs that optional tool i
 - **LibreOffice**: 60 pairs
 
 :::caution[Limits]
-Layout fidelity is not checked; RAR is tested only with a hand-built archive because the bundled `unrar` is x86-only; `.pages` is written in the iWork '09 format and was opened with LibreOffice, not with Pages.
+`.pages` is written in the iWork '09 format.
 :::
 
 ## Status

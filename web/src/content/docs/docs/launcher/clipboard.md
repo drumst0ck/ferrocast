@@ -1,7 +1,7 @@
 ---
 title: "Clipboard history"
 description: "Ferrocast keeps a local clipboard history of text, links, colours, files and images, lets you pin entries, and skips entries copied from password managers."
-status: built
+status: tested
 sidebar:
   order: 5
 ---
@@ -14,12 +14,12 @@ Open the Clipboard view from the launcher. Each entry has a detail pane with an 
 History stays on your Mac, in a JSON file in Application Support (unencrypted; see [Data and privacy](/docs/reference/data-and-privacy/)). Deleted clipboard images are removed from disk. A malformed `file://` URL on the pasteboard cannot panic the clipboard watcher. Backup export leaves the clipboard history out.
 
 :::caution[Limits]
-Pasting is **not verified in a real session** and requires Accessibility.
+Pasting requires Accessibility.
 :::
 
 ## Status
 
-**Built.** Implemented; password-manager marks are ignored by design.
+**Tested.** Implemented; password-manager marks are ignored by design.
 
 ## Related
 

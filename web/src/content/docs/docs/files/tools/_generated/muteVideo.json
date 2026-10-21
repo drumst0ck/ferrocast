@@ -3,7 +3,7 @@
   "slug": "mute-video",
   "name": "Mute video",
   "status": "preset",
-  "level": "built",
+  "level": "tested",
   "shortcut": null,
   "formats": [
     "mp4",

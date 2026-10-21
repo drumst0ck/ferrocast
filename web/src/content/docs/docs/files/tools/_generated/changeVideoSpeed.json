@@ -3,7 +3,7 @@
   "slug": "video-speed",
   "name": "Change video speed",
   "status": "window",
-  "level": "built",
+  "level": "tested",
   "shortcut": "⇧⌘L",
   "formats": [
     "mp4",

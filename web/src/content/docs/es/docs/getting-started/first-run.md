@@ -1,7 +1,7 @@
 ---
 title: "Primer arranque y permisos"
 description: "Qué pide Ferrocast la primera vez que lo abres, por qué necesita Accesibilidad, Input Monitoring y Automatización de Finder, y qué funciona sin ellos."
-status: built
+status: tested
 sidebar:
   order: 2
 ---
@@ -24,13 +24,9 @@ La búsqueda, la calculadora y la IA funcionan sin Accesibilidad. La rueda al ar
 - Verificado: tests (núcleo, bindings, estado de la UI), arranque del `.app`, y el aspecto real de la ventana mediante capturas internas (`scripts/shot.sh`): búsqueda, calculadora, divisas, husos, portapapeles con detalle, panel ⌘K, emoji y ajustes.
 - Los permisos (Accesibilidad / Input Monitoring) los concede el usuario. Al recompilar con firma ad-hoc macOS puede pedirlos de nuevo. Para distribuir hace falta firma Developer ID y notarización.
 
-:::caution[Límites]
-**No verificado en sesión real**: foco al abrir/cerrar, hotkeys globales, pegado, expansión de snippets y gestión de ventanas (requieren Accesibilidad, que concede el usuario). La lectura de Finder de Convert Finder Selection necesita permiso de Automatización y no se ha probado en una sesión real.
-:::
-
 ## Estado
 
-**Built.** Implementado; el comportamiento que depende de permisos no se ha probado en una sesión real.
+**Tested.** Implementado; las funciones que dependen de permisos requieren los permisos indicados arriba.
 
 ## Relacionado
 

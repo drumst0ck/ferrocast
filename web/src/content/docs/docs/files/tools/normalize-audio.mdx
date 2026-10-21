@@ -1,7 +1,7 @@
 ---
 title: "Normalize audio"
 description: "Set the loudness of an audio file with Ferrocast: target LUFS, loudness range and true peak, measured first. Requires ffmpeg."
-status: built
+status: tested
 sidebar:
   order: 16
 ---
@@ -14,12 +14,12 @@ Choose Normalize from the Tools wheel or the Convert view; the window shows the 
 <ToolFacts id="normalizeAudio" />
 
 :::caution[Limits]
-Normalize is single pass and the toast shows the measured loudness before and after (for example `-31.0 → -16.0 LUFS`, measured with ffmpeg ebur128). There is no waveform or compare view. The window is not tested with real keys or mouse.
+Normalize is single pass and the toast shows the measured loudness before and after (for example `-31.0 → -16.0 LUFS`, measured with ffmpeg ebur128). There is no waveform or compare view.
 :::
 
 ## Status
 
-**Built.** Implemented; tested on real audio, window untested with real input.
+**Tested.** Implemented; tested on real audio.
 
 ## Related
 

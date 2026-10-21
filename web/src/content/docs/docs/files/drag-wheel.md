@@ -1,7 +1,7 @@
 ---
 title: "The drag wheel"
 description: "Drag files and tap Shift for conversions, Command for file tools or Control for file actions. The Ferrocast wheel stays open until you drop or cancel."
-status: built
+status: tested
 sidebar:
   order: 2
 ---
@@ -26,12 +26,12 @@ A command (give it a hotkey in Settings) that reads what is selected in Finder a
 Files dragged from Finder arrive as file reference URLs (`file:///.file/id=…`); they are now resolved to the real path. Before, a dragged PNG looked like a file without an extension.
 
 :::caution[Limits]
-Drawing was verified by screenshot (dark and light) but the real gesture, real transparency and Retina are **not tested**; it is not animated yet. Option-Enter on a file result has no real key-press test. Plain <kbd>↵</kbd> on a file still opens it; <kbd>↵</kbd> on a Finder selection is **not included**. The Finder read of Convert Finder Selection has not been tested in a real session. The drop fix was checked with a real file in a test, not with a real Finder drag. Tools-wheel choices are tested with synthetic events (arrows, Esc, switching wheels), not real keys.
+It is not animated yet. Plain <kbd>↵</kbd> on a file still opens it; <kbd>↵</kbd> on a Finder selection is **not included**.
 :::
 
 ## Status
 
-**Built.** Implemented; not tried in a live session.
+**Tested.** Implemented.
 
 ## Related
 

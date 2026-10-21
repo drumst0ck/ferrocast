@@ -1,7 +1,7 @@
 ---
 title: "Currency and time zones"
 description: "Convert currencies with ECB rates cached for 12 hours and time zones such as time in tokyo or 5pm ldn in sf directly from the Ferrocast search field."
-status: built
+status: tested
 sidebar:
   order: 3
 ---
@@ -21,7 +21,7 @@ Currency conversion requires network access.
 
 ## Status
 
-**Built.** Implemented; currency needs a network connection.
+**Tested.** Implemented; currency needs a network connection.
 
 ## Related
 

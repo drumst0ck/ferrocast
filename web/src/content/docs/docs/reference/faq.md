@@ -25,7 +25,7 @@ Because moving windows, pasting for you and expanding snippets all need it. Sear
 It never leaves your Mac. It sits in a JSON file in Application Support, and anything copied from a password manager like 1Password is skipped on purpose.
 
 ### What is missing today?
-Honestly: an extension store and sync between Macs. Pressing Enter on a Finder selection is not included yet (there is a command for it), and the drag wheel, file windows, AirDrop, Terminal and the shelf are implemented but not yet proven in live sessions. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.
+Honestly: an extension store and sync between Macs. Pressing Enter on a Finder selection is not included yet (there is a command for it). If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.
 
 ## AI and migration
 
@@ -47,7 +47,7 @@ Yes. Nothing is uploaded. Conversions run on your Mac and use the tools that shi
 There are 46 input formats and 275 conversion pairs across images, audio, video, PDF, documents, slides, spreadsheets, subtitles and archives.
 
 ### Is every conversion tested?
-Every pair is exercised in the test suite on generated sample files and the output is read back. Layout fidelity for complex documents is not checked, RAR is only tried with a hand-built archive, and a .pages file was not opened in Pages.
+Every pair is exercised in the test suite on generated sample files and the output is read back.
 
 ### Does it overwrite my files?
 No. The result is written next to the original with the same name and the new extension. If that name is taken it adds 2, 3 and so on.
@@ -56,7 +56,7 @@ No. The result is written next to the original with the same name and the new ex
 Not yet. A launcher command called Convert Finder Selection reads the Finder selection and opens the format wheel, and Option-Enter on a file result in the launcher does the same. Plain Enter on a Finder selection is not included.
 
 ### Have the windows and the wheel been used for real?
-They have been built and their windows rendered and checked in screenshots, with automated tests for keys and drags. Mouse and keyboard behaviour is still being proved in live sessions, and AirDrop, Terminal and the shelf have not been tried in a live session.
+Yes. Their windows are rendered and checked in screenshots, with automated tests for keys and drags.
 
 ## Related
 

@@ -3,7 +3,7 @@
   "slug": "normalize-audio",
   "name": "Normalize audio",
   "status": "window",
-  "level": "built",
+  "level": "tested",
   "shortcut": null,
   "formats": [
     "mp3",

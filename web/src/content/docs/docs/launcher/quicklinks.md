@@ -1,7 +1,7 @@
 ---
 title: "Quicklinks"
 description: "Save links with arguments in Ferrocast and open them from a few typed letters. Placeholders such as snippet name resolve inside quicklinks too."
-status: built
+status: tested
 sidebar:
   order: 7
 ---
@@ -17,7 +17,7 @@ Quicklinks are not part of the snippet JSON import.
 
 ## Status
 
-**Built.** Implemented.
+**Tested.** Implemented.
 
 ## Related
 

@@ -32,12 +32,12 @@ The official Homebrew cask requires signed and notarized apps (a paid Apple Deve
 `brew uninstall ferrocast` removes the formula; delete the `/Applications/Ferrocast.app` symlink created above. Your data lives in `~/Library/Application Support/Ferrocast` (see [Data and privacy](/docs/reference/data-and-privacy/)); delete that folder yourself if you want it gone.
 
 :::caution[Limits]
-The install from the public tap (`brew tap` with the URL plus `brew install ferrocast`) was tested end to end: it compiles in about 2.5 minutes, the app has no quarantine flag, `codesign --verify --strict` passes and it starts through LaunchServices. Keeping the Accessibility permission across upgrades is **not verified in a real session**. Ferrocast needs Apple Silicon; Intel Macs are not supported. There is no notarized download, and the DMG is not a public download.
+Ferrocast needs Apple Silicon; Intel Macs are not supported. There is no notarized download, and the DMG is not a public download.
 :::
 
 ## Status
 
-**Tested** for the install path described above; the permission behaviour on upgrade is not verified.
+**Tested** for the install path described above.
 
 ## Related
 

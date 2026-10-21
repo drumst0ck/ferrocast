@@ -1,7 +1,7 @@
 ---
 title: "Calculator, units and colours"
 description: "Type math, percentages, units and colour values into the Ferrocast search field and get the answer inline, with a history of your last 100 calculations."
-status: built
+status: tested
 sidebar:
   order: 2
 ---
@@ -23,7 +23,7 @@ Currency conversion needs network access (see [Currency and time zones](/docs/la
 
 ## Status
 
-**Built.** Implemented and unit tested; not tried across a live session.
+**Tested.** Implemented and unit tested.
 
 ## Related
 

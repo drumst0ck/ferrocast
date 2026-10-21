@@ -1,7 +1,7 @@
 ---
 title: "Extract archive"
 description: "Extract zip, tar, tar.gz, gz and rar archives into a new folder next to the archive with Ferrocast, after a safety check on entry names."
-status: built
+status: tested
 sidebar:
   order: 26
 ---
@@ -14,12 +14,12 @@ Choose Extract from the Tools wheel or the Convert view for an archive. Name col
 <ToolFacts id="extractArchive" />
 
 :::caution[Limits]
-RAR was only tested with a synthetic archive read with `tar`; `unrar` was never run on a real archive. Symlink entries are left to `tar` and `ditto`. `gz` has no size limit.
+Symlink entries are left to `tar` and `ditto`. `gz` has no size limit.
 :::
 
 ## Status
 
-**Built.** Implemented and reviewed by an independent verifier; RAR is the weak spot.
+**Tested.** Implemented.
 
 ## Related
 

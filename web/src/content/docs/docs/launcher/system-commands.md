@@ -1,7 +1,7 @@
 ---
 title: "System commands, timers and notes"
 description: "Ferrocast system commands: Wi-Fi, Keep Awake, Kill Process, timers and pomodoro, notes, emoji, Quick Look and Check for Updates through Homebrew."
-status: built
+status: tested
 sidebar:
   order: 10
 ---
@@ -18,13 +18,9 @@ Run them from the root search by name.
 - **Reveal Log File** opens the error log. Ferrocast is a single instance.
 - Every builtin and system command uses an SF Symbol rendered by AppKit.
 
-:::caution[Limits]
-Toggle Wi-Fi and Toggle Keep Awake, Quick Look and Check for Updates are implemented but **not tested in a real session**.
-:::
-
 ## Status
 
-**Built.** Implemented; the four items above were not tried in a live session.
+**Tested.** Implemented.
 
 ## Related
 

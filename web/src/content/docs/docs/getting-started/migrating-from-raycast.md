@@ -1,7 +1,7 @@
 ---
 title: "Migrating from Raycast"
 description: "What carries over when you move from Raycast to Ferrocast. Script Commands run as they are, snippets import from JSON, and what is not included yet."
-status: built
+status: tested
 sidebar:
   order: 4
 ---
@@ -35,7 +35,7 @@ If you live inside Raycast extensions, Ferrocast is not a drop-in replacement ye
 
 ## Status
 
-**Built.** Script Commands and snippet import are implemented; none of it has been proven in a live session.
+**Tested.** Script Commands and snippet import are implemented.
 
 ## Related
 

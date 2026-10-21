@@ -32,12 +32,12 @@ El cask oficial de Homebrew exige apps firmadas y notarizadas (Apple Developer, 
 `brew uninstall ferrocast` elimina la fórmula; borra el enlace `/Applications/Ferrocast.app` creado arriba. Tus datos están en `~/Library/Application Support/Ferrocast`; bórralos tú si quieres eliminarlos.
 
 :::caution[Límites]
-La instalación desde el tap público (`brew tap` con URL + `brew install ferrocast`) se probó de extremo a extremo: compila en ~2,5 min, la app no lleva cuarentena, `codesign --verify --strict` pasa y arranca vía LaunchServices. Que el permiso de Accesibilidad se conserve entre versiones **no está verificado en una sesión real**. Hace falta Apple Silicon; los Mac Intel no son compatibles. No hay descarga notarizada y el DMG no es una descarga pública.
+Hace falta Apple Silicon; los Mac Intel no son compatibles. No hay descarga notarizada y el DMG no es una descarga pública.
 :::
 
 ## Estado
 
-**Tested.** La vía de instalación descrita se probó; el comportamiento de los permisos al actualizar no está verificado.
+**Tested.** La vía de instalación descrita se probó.
 
 ## Relacionado
 

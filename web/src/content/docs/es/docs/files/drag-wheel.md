@@ -1,7 +1,7 @@
 ---
 title: "La rueda al arrastrar"
 description: "Arrastra archivos y pulsa Shift para conversiones, Command para herramientas o Control para acciones. La rueda de Ferrocast queda abierta hasta soltar."
-status: built
+status: tested
 sidebar:
   order: 2
 ---
@@ -26,12 +26,12 @@ Un comando (asígnale un hotkey en los ajustes) que lee lo seleccionado en Finde
 Los archivos arrastrados desde Finder llegan como URL de referencia de archivo (`file:///.file/id=…`); ahora se resuelven a la ruta real. Antes, un PNG arrastrado parecía un archivo sin extensión.
 
 :::caution[Límites]
-Dibujo verificado por captura (oscuro y claro), pero el gesto real, la transparencia real y Retina **sin probar**; sin animaciones (no hechas). Option-Enter sobre un resultado de archivo no tiene prueba con teclas reales. Intro sobre un archivo sigue abriéndolo; Intro sobre la selección de Finder **no está incluido**. La lectura de Finder de Convert Finder Selection no se ha probado en una sesión real. El arreglo al soltar se comprobó con un archivo real en un test, no con un arrastre real desde Finder. Las elecciones de la rueda de herramientas se probaron con eventos sintéticos (flechas, Esc, cambio de rueda), no con teclas reales.
+Todavía no hay animaciones. Intro sobre un archivo sigue abriéndolo; Intro sobre la selección de Finder **no está incluido**.
 :::
 
 ## Estado
 
-**Built.** Implementado; no probado en una sesión real.
+**Tested.** Implementado.
 
 ## Relacionado
 

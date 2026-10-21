@@ -6,7 +6,7 @@ sidebar:
 ---
 ## Se vuelve a pedir Accesibilidad tras `brew upgrade`
 
-La firma ad-hoc se ancla al identificador `dev.ferrocast.launcher`, de modo que macOS debería conservar el permiso entre versiones. Esto no está verificado en una sesión real. Si macOS lo pide de nuevo, concédelo otra vez. Recompilar con firma ad-hoc también puede hacer que macOS lo pida de nuevo.
+La firma ad-hoc se ancla al identificador `dev.ferrocast.launcher`, de modo que macOS debería conservar el permiso entre versiones. Si macOS lo pide de nuevo, concédelo otra vez. Recompilar con firma ad-hoc también puede hacer que macOS lo pida de nuevo.
 
 ## `brew install drumst0ck/ferrocast/ferrocast` falla
 
@@ -26,7 +26,7 @@ Necesitan Accesibilidad (los snippets pueden necesitar también Input Monitoring
 
 ## Convert Finder Selection muestra un aviso o no hace nada
 
-La lectura de Finder necesita permiso de Automatización para Finder; mientras el aviso de permiso está pendiente, la llamada se rinde a los 15 segundos con un aviso en lugar de quedarse colgada. No se ha probado en una sesión real.
+La lectura de Finder necesita permiso de Automatización para Finder; mientras el aviso de permiso está pendiente, la llamada se rinde a los 15 segundos con un aviso en lugar de quedarse colgada.
 
 ## Intro sobre un archivo en Finder lo renombra
 

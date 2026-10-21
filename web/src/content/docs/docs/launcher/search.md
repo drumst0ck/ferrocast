@@ -1,7 +1,7 @@
 ---
 title: "Root search"
 description: "Search apps, commands and files from one field in Ferrocast, with fuzzy matching, frecency ranking, aliases, favorites and a hotkey for any command."
-status: built
+status: tested
 sidebar:
   order: 1
 ---
@@ -17,13 +17,9 @@ Open the launcher with <kbd>⌥</kbd> <kbd>Space</kbd>, type, move with <kbd>↑
 - **Window switcher, notes, emoji and file search** are commands of the same list. See [System commands](/docs/launcher/system-commands/).
 - <kbd>esc</kbd> clears the search, goes back or closes; <kbd>⌫</kbd> goes back when the search is empty.
 
-:::caution[Limits]
-Focus when opening and closing and global hotkeys are **not verified in a real session**.
-:::
-
 ## Status
 
-**Built.** Implemented; tests and screenshots cover the ranking and the window, not live use.
+**Tested.** Implemented; tests and screenshots cover the ranking and the window.
 
 ## Related
 

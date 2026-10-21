@@ -3,7 +3,7 @@
   "slug": "crop-video",
   "name": "Crop video",
   "status": "window",
-  "level": "built",
+  "level": "tested",
   "shortcut": "⇧⌘J",
   "formats": [
     "mp4",

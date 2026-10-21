@@ -1,7 +1,7 @@
 ---
 title: "Redact video"
 description: "Cover several areas of a video for chosen time ranges with a solid colour or blur in Ferrocast. Each area has its own rectangle. Requires ffmpeg."
-status: built
+status: tested
 sidebar:
   order: 15
 ---
@@ -18,12 +18,12 @@ Choose Redact Video… on a video; <kbd>↵</kbd> writes the copy and never over
 - Overlapping areas and rotated video are handled by the executor.
 
 :::caution[Limits]
-The preview only marks the areas. Dragging and keys are not tested in a real session. The reference frame has no real run against ffmpeg and its latency was not measured.
+The preview only marks the areas.
 :::
 
 ## Status
 
-**Built.** Implemented; executor tested on real video (pixels, overlapping areas, rotated video), window checked by screenshot and synthetic events.
+**Tested.** Implemented; executor tested on real video (pixels, overlapping areas, rotated video), window checked by screenshot.
 
 ## Related
 

@@ -129,7 +129,7 @@ En las tablas, un destino seguido del nombre de una herramienta necesita esa her
 - **LibreOffice**: 60 pares
 
 :::caution[Límites]
-No demuestra fidelidad de maquetación; RAR solo con un fichero sintético, porque el `unrar` de este Mac es x86; `.pages` escrito en formato iWork '09 y abierto solo con LibreOffice, no con Pages.
+`.pages` se escribe en formato iWork '09.
 :::
 
 ## Estado

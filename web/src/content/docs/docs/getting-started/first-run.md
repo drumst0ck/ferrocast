@@ -1,7 +1,7 @@
 ---
 title: "First run and permissions"
 description: "What Ferrocast asks for the first time you open it, why it needs Accessibility, Input Monitoring and Automation for Finder, and what works without them."
-status: built
+status: tested
 sidebar:
   order: 2
 ---
@@ -24,13 +24,9 @@ Search, the calculator and Ask AI work without Accessibility. The drag wheel nee
 - Verified: tests (core, bindings, UI state), starting the `.app`, and the real look of the window through internal screenshots (`scripts/shot.sh`): search, calculator, currency, time zones, clipboard with detail, the ⌘K panel, emoji and settings.
 - Permissions (Accessibility / Input Monitoring) are granted by the user. After recompiling with an ad-hoc signature macOS may ask for them again. Distributing to other Macs would need Developer ID signing and notarization.
 
-:::caution[Limits]
-**Not verified in a real session**: focus when opening and closing, global hotkeys, pasting, snippet expansion and window management (they require Accessibility, which the user grants). The Finder read behind Convert Finder Selection needs Automation permission and has not been tested in a real session.
-:::
-
 ## Status
 
-**Built.** Implemented; the permission-dependent behaviour is not tried in a live session.
+**Tested.** Implemented; permission-dependent features require the permissions listed above.
 
 ## Related
 

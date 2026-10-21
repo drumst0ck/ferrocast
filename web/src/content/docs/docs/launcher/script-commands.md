@@ -1,7 +1,7 @@
 ---
 title: "Script Commands"
 description: "Turn any script into a Ferrocast command. Raycast-compatible metadata, full, compact, silent and inline output modes, and confirmation for risky scripts."
-status: built
+status: tested
 sidebar:
   order: 8
 ---
@@ -23,7 +23,7 @@ Script Command arguments (including those of type `password`) are passed on the 
 
 ## Status
 
-**Built.** Implemented for all four modes.
+**Tested.** Implemented for all four modes.
 
 ## Related
 

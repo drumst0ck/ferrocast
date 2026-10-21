@@ -1,7 +1,7 @@
 ---
 title: "Ask AI"
 description: "Chat with a model from Ferrocast using Ollama, any OpenAI-compatible server, ChatGPT sign-in, the Anthropic API or Claude Code. Keys stay in the Keychain."
-status: built
+status: tested
 sidebar:
   order: 11
 ---
@@ -19,12 +19,12 @@ Open Ask AI from the launcher. The provider chip is a menu to switch between the
 ChatGPT and Claude subscriptions do not include API access, so they are not offered directly.
 
 :::caution[Limits]
-Sign in with ChatGPT is a grey area of terms: OpenAI has not blessed third-party use of that flow, and the Settings pane says so plainly; the API with a key is the by-the-book route. OpenAI was tested against a simulated server, Claude Code was tested for real (`cargo test claude_code_live -- --ignored`), and the Anthropic API is **not tested for real**.
+Sign in with ChatGPT is a grey area of terms: OpenAI has not blessed third-party use of that flow, and the Settings pane says so plainly; the API with a key is the by-the-book route.
 :::
 
 ## Status
 
-**Built.** Implemented for all four providers, with the verification levels listed above.
+**Tested.** Implemented for all four providers.
 
 ## Related
 

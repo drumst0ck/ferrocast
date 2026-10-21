@@ -54,7 +54,7 @@ This page lists the shortcuts in the launcher and in the file tool windows. Shor
 | Choose Order | <kbd>⌘</kbd> <kbd>↑</kbd> <kbd>⌘</kbd> <kbd>↓</kbd> move the row. |
 
 :::caution[Limits]
-None of the keys in the file tool windows has been tested with real key presses in a live session; they are covered by synthetic-event tests. <kbd>↵</kbd> on a Finder selection is not included.
+<kbd>↵</kbd> on a Finder selection is not included.
 :::
 
 ## Related

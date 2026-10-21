@@ -3,7 +3,7 @@
   "slug": "edit-photos",
   "name": "Edit photo",
   "status": "window",
-  "level": "built",
+  "level": "tested",
   "shortcut": "⇧⌘E",
   "formats": [
     "jpg",

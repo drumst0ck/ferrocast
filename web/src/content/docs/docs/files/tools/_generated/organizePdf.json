@@ -3,7 +3,7 @@
   "slug": "organize-pdf",
   "name": "Organize PDF pages",
   "status": "window",
-  "level": "built",
+  "level": "tested",
   "shortcut": "⇧⌘O",
   "formats": [
     "pdf"

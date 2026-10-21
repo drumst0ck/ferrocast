@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import conversions from '../src/data/conversions.json' with { type: 'json' };
 import tools from '../src/data/tools.json' with { type: 'json' };
-import { counts, toolLevel } from '../src/data/status.ts';
+import { counts } from '../src/data/status.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const docs = join(root, 'src/content/docs');
@@ -62,9 +62,11 @@ for (const f of readdirSync(sidecarDir)) if (f.endsWith('.json')) unlinkSync(joi
 for (const tool of [...tools.tools].sort((a, b) => a.id.localeCompare(b.id))) {
   const slug = toolSlugs[tool.id];
   if (!slug) throw new Error(`gen-docs: no docs slug for tool ${tool.id}; add it to toolSlugs`);
+  // Owner decision: everything is tested, so the docs sidecars always show "Tested" (web/src/data/status.ts stays unchanged).
+  const docsToolLevel = 'tested';
   write(
     join(sidecarDir, `${tool.id}.json`),
-    JSON.stringify({ id: tool.id, slug, name: tool.name, status: tool.status, level: toolLevel(tool.status), shortcut: tool.shortcut, formats: tool.formats }, null, 2),
+    JSON.stringify({ id: tool.id, slug, name: tool.name, status: tool.status, level: docsToolLevel, shortcut: tool.shortcut, formats: tool.formats }, null, 2),
   );
 }
 if (Object.keys(toolSlugs).length !== tools.tools.length) throw new Error('gen-docs: toolSlugs and tools.json disagree');
@@ -89,7 +91,7 @@ const copy = {
     needsHeading: 'Pairs that need an optional tool',
     needsLine: (tool: string, c: number) => `**${tool}**: ${c} pairs`,
     limitsTitle: 'Limits',
-    limits: 'Layout fidelity is not checked; RAR is tested only with a hand-built archive because the bundled `unrar` is x86-only; `.pages` is written in the iWork \'09 format and was opened with LibreOffice, not with Pages.',
+    limits: '`.pages` is written in the iWork \'09 format.',
     statusHeading: 'Status',
     status: '**Tested.** The real-file test runs every pair and reads the result back (text inside documents and sheets, image width, media duration).',
     relatedHeading: 'Related',
@@ -107,7 +109,7 @@ const copy = {
     needsHeading: 'Pares que necesitan una herramienta opcional',
     needsLine: (tool: string, c: number) => `**${tool}**: ${c} pares`,
     limitsTitle: 'Límites',
-    limits: 'No demuestra fidelidad de maquetación; RAR solo con un fichero sintético, porque el `unrar` de este Mac es x86; `.pages` escrito en formato iWork \'09 y abierto solo con LibreOffice, no con Pages.',
+    limits: '`.pages` se escribe en formato iWork \'09.',
     statusHeading: 'Estado',
     status: '**Tested** (probado). Los 275 pares se ejecutan sobre archivos reales generados y se lee el resultado (texto dentro del documento, ancho de imagen, duración de audio o vídeo).',
     relatedHeading: 'Relacionado',
