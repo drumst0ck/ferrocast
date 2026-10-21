@@ -25,7 +25,7 @@ Porque mover ventanas, pegar por ti y expandir snippets lo necesitan. La búsque
 Nunca sale de tu Mac. Está en un archivo JSON en Application Support, y lo que se copia desde un gestor de contraseñas como 1Password se ignora a propósito.
 
 ### ¿Qué falta hoy?
-Con honestidad: una tienda de extensiones y la sincronización entre Macs. Si vives dentro de las extensiones de Raycast, Ferrocast todavía no las reemplaza.
+Con honestidad: una tienda de extensiones y la sincronización entre Macs.
 
 ## IA y migración
 

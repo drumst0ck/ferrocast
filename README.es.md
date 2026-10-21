@@ -34,6 +34,8 @@ Usa siempre el `brew tap` con la URL: la forma corta `brew install drumst0ck/fer
 - **Gestión de ventanas** con unos 40 diseños, más Kill Process, temporizadores, notas, emoji y Quick Look.
 - **Ask AI** con Ollama, cualquier servidor compatible con OpenAI, la API de Anthropic, Claude Code o Sign in with ChatGPT.
 
+No incluido: extensiones React, sincronización, Search Menu Bar Items y contexto de IA desde la selección o la pantalla. Ferrocast es independiente y no está afiliado a Raycast.
+
 ## Herramientas de archivo
 
 - Arrastra un archivo y pulsa <kbd>⇧</kbd> para conversiones, <kbd>⌘</kbd> para herramientas o <kbd>⌃</kbd> para acciones.
@@ -49,12 +51,6 @@ Explora todos los pares en <https://ferrocast.app/es/files/>.
 De serie, Ask AI habla con Ollama en tu propio Mac. Puedes apuntarlo a LM Studio, OpenAI o la API de Anthropic (las claves van al Keychain), o usar Claude Code con tu plan de Claude. Sign in with ChatGPT usa el mismo flujo que la CLI Codex de OpenAI; OpenAI no ha autorizado el uso por terceros, así que la API con clave es la vía correcta.
 
 Los datos viven en `~/Library/Application Support/Ferrocast` como JSON sin cifrar (`FERROCAST_DATA_DIR` cambia la ruta).
-
-## Comparación
-
-No incluido: extensiones React, sincronización, Search Menu Bar Items y contexto de IA desde la selección o la pantalla.
-
-Ferrocast está inspirado en Raycast, pero no es una réplica ni usa su marca ni sus assets. Es gratis y de licencia MIT, no necesita cuenta, guarda los datos en JSON en tu disco y no tiene tienda de extensiones. Raycast hace mucho más; la comparación medida y honesta está en <https://ferrocast.app/#why>. Raycast es marca de su propietario.
 
 ## Compilar desde el código
 

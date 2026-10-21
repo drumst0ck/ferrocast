@@ -4,7 +4,7 @@ description: "Qué se conserva al pasar de Raycast a Ferrocast. Los Script Comma
 sidebar:
   order: 4
 ---
-Ferrocast está inspirado en Raycast, pero es un proyecto independiente: no está afiliado a Raycast y no usa su marca ni sus assets. Esta es la única página de la documentación que compara ambos.
+Ferrocast es independiente y no está afiliado a Raycast.
 
 ## Qué se conserva
 
@@ -16,20 +16,10 @@ Ferrocast está inspirado en Raycast, pero es un proyecto independiente: no est�
 
 Extensiones React, sincronización, Search Menu Bar Items y contexto de IA (selección o pantalla). No hay tienda de extensiones.
 
-## Lado a lado
-
-| | Ferrocast | Raycast (según la página de inicio) |
-|---|---|---|
-| Precio | Gratis. Licencia MIT. | Nivel gratuito; suscripción Pro para IA y sincronización en la nube. |
-| Cuenta | Ninguna. | Opcional; necesaria para las funciones Pro. |
-| Extensiones | Script Commands (compatibles con Raycast). Sin tienda. | Miles en la Store. |
-| Código fuente | Abierto. | Cerrado. |
-| Instalación | Homebrew lo compila desde fuente en tu Mac. | Descarga firmada y notarizada. |
-
-«Raycast» es el nombre de un producto de terceros y se usa aquí solo para comparar.
+## Límites
 
 :::caution[Límites]
-Si vives dentro de las extensiones de Raycast, Ferrocast todavía no las reemplaza. Los argumentos de los Script Commands se pasan por línea de comandos, como en Raycast, y pueden verse con `ps` mientras el script corre.
+Los argumentos de los Script Commands se pasan por línea de comandos, como en Raycast, y pueden verse con `ps` mientras el script corre.
 :::
 
 ## Relacionado

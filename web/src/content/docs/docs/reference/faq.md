@@ -25,7 +25,7 @@ Because moving windows, pasting for you and expanding snippets all need it. Sear
 It never leaves your Mac. It sits in a JSON file in Application Support, and anything copied from a password manager like 1Password is skipped on purpose.
 
 ### What is missing today?
-Honestly: an extension store and sync between Macs. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.
+Honestly: an extension store and sync between Macs.
 
 ## AI and migration
 

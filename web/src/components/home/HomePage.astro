@@ -29,9 +29,8 @@ const vars = { pairs: c.pairs, inputs: c.inputs, tools: c.tools, actions: c.acti
 
 // Measured on the maintainer's Mac; see the method note in the Measured section. Update together.
 const bench = {
-  date: '2026-10-17', mac: 'MacBook with Apple M3, macOS 27', raycastVersion: '2.8.1',
+  date: '2026-10-17', mac: 'MacBook with Apple M3, macOS 27',
   ferro: { disk: es ? '8,5 MB' : '8.5 MB', mem: '145 MB', procs: '1' },
-  ray: { disk: '242 MB', mem: '154 MB', procs: '4' },
 };
 const benchDate = es ? '17 de octubre de 2026' : '2026-10-17';
 
@@ -139,18 +138,6 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
 
     <FilesBlock t={t} lang={lang} fill={fill} />
 
-    <section class="why wrap" id="why" aria-labelledby="h-why">
-      <div class="why-head" data-reveal>
-        <h2 id="h-why">{t.why.title}</h2>
-        <p>{t.why.intro}</p>
-      </div>
-      <div class="cmp" role="table" aria-label={t.why.tableAria} data-ferro={t.why.ferroCol}>
-        <div class="cmp-row cmp-head" role="row"><span role="columnheader"></span><span role="columnheader">{t.why.ferroCol}</span><span role="columnheader">{t.why.rayCol}</span></div>
-        {t.why.rows.map(([k, a, b], i) => <div class="cmp-row" role="row" data-reveal style={`transition-delay:${(i % 4) * 40}ms`}><span role="rowheader">{k}</span><span role="cell">{fill(a, vars)}</span><span role="cell" class="muted" data-col={t.why.rayCol}>{b}</span></div>)}
-      </div>
-      <p class="fine" data-reveal>{fill(t.why.disclaimer, { date: benchDate })}</p>
-    </section>
-
     <section class="more-list wrap" id="features" aria-labelledby="h-feat">
       <h2 id="h-feat" data-reveal>{t.features.title}</h2>
       <ul class="bento">
@@ -202,11 +189,10 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
         <p>{t.bench.lead}</p>
       </div>
       <div class="cmp" role="table" aria-label={t.bench.tableAria}>
-        <div class="cmp-row cmp-head" role="row"><span role="columnheader"></span><span role="columnheader">Ferrocast</span><span role="columnheader">Raycast {bench.raycastVersion}</span></div>
+        <div class="cmp-row cmp-head" role="row"><span role="columnheader"></span><span role="columnheader">Ferrocast</span></div>
         {[
-          [bench.ferro.disk, bench.ray.disk], [bench.ferro.mem, bench.ray.mem], [bench.ferro.procs, bench.ray.procs],
-          [t.bench.hotkey, t.bench.notMeasured], [t.bench.keystroke, t.bench.notMeasured], [t.bench.startFerro, t.bench.notMeasured],
-        ].map(([a, b], i) => <div class="cmp-row" role="row" data-reveal style={`transition-delay:${i * 40}ms`}><span role="rowheader">{t.bench.rows[i]}</span><span role="cell"><b>{a}</b></span><span role="cell" class="muted">{b}</span></div>)}
+          bench.ferro.disk, bench.ferro.mem, bench.ferro.procs, t.bench.hotkey, t.bench.keystroke, t.bench.startFerro,
+        ].map((a, i) => <div class="cmp-row" role="row" data-reveal style={`transition-delay:${i * 40}ms`}><span role="rowheader">{t.bench.rows[i]}</span><span role="cell"><b>{a}</b></span></div>)}
       </div>
       <p class="fine" data-reveal>{fill(t.bench.method, { mac: bench.mac, date: benchDate })}</p>
     </section>

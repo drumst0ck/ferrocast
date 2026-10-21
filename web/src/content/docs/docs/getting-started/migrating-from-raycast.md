@@ -4,7 +4,7 @@ description: "What carries over when you move from Raycast to Ferrocast. Script 
 sidebar:
   order: 4
 ---
-Ferrocast is inspired by Raycast but is a separate project: it is not affiliated with Raycast and uses none of its brand or assets. This page is the only place the docs compare the two.
+Ferrocast is independent and not affiliated with Raycast.
 
 ## What carries over
 
@@ -16,20 +16,10 @@ Ferrocast is inspired by Raycast but is a separate project: it is not affiliated
 
 React extensions, sync, Search Menu Bar Items and AI context (selection or screen). There is no extension store.
 
-## Side by side
-
-| | Ferrocast | Raycast (as described on the home page) |
-|---|---|---|
-| Price | Free. MIT licence. | Free tier; Pro subscription for AI and cloud sync. |
-| Account | None. | Optional; needed for Pro features. |
-| Extensions | Script Commands (Raycast-compatible). No store. | Thousands in the Store. |
-| Source code | Open. | Closed. |
-| Install | Homebrew builds it from source on your Mac. | Signed, notarized download. |
-
-"Raycast" is the name of a third-party product, used here only for comparison.
+## Limits
 
 :::caution[Limits]
-If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet. Script Command arguments are passed on the command line, as in Raycast, and can be seen with `ps` while the script runs.
+Script Command arguments are passed on the command line, as in Raycast, and can be seen with `ps` while the script runs.
 :::
 
 ## Related
