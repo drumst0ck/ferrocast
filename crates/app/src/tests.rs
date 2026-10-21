@@ -4773,3 +4773,177 @@ fn annotate_tool_strip_fits_the_window_width() {
     let right = strip.iter().map(|r| r.max.x).fold(0.0, f32::max);
     assert!(right <= ui::WIDTH - 12.0, "the tool strip ends at x={right}, the window is {} wide", ui::WIDTH);
 }
+
+// ---- U4a: the new windows read in both themes
+
+/// Source-over of `top` on an opaque `under`, as floats 0..255. `Color32` is premultiplied, so its
+/// channels are added as they are.
+fn over(under: [f32; 3], top: Color32) -> [f32; 3] {
+    let a = top.a() as f32 / 255.0;
+    let t = [top.r() as f32, top.g() as f32, top.b() as f32];
+    [0, 1, 2].map(|i| t[i] + under[i] * (1.0 - a))
+}
+
+/// WCAG relative luminance of an sRGB colour (0..255 channels).
+fn luminance(c: [f32; 3]) -> f32 {
+    let lin = |v: f32| {
+        let v = v / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+}
+
+/// WCAG contrast ratio of two opaque colours.
+fn contrast(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// The window fill as the user sees it. It is translucent, so the worst of a white and a black
+/// backdrop is used by the callers.
+fn window_over(pal: &Palette, backdrop: f32) -> [f32; 3] {
+    over([backdrop; 3], pal.bg)
+}
+
+#[test]
+fn palette_text_and_controls_keep_their_contrast_in_both_themes() {
+    let mut bad = vec![];
+    for dark in [false, true] {
+        let pal = palette(dark);
+        for backdrop in [0.0_f32, 255.0] {
+            let bg = window_over(&pal, backdrop);
+            let card = over(bg, pal.field);
+            let container = over(card, pal.field.gamma_multiply(1.3));
+            let segment = over(container, pal.sel.gamma_multiply(1.8));
+            let t = |c: Color32| [c.r() as f32, c.g() as f32, c.b() as f32];
+            let rows = [
+                ("text on bg", contrast(t(pal.text), bg), 4.5),
+                ("text on card", contrast(t(pal.text), card), 4.5),
+                ("sub on bg", contrast(t(pal.sub), bg), 3.0),
+                ("sub on card", contrast(t(pal.sub), card), 3.0),
+                ("selected segment vs its container", contrast(segment, container), 1.3),
+            ];
+            for (what, got, want) in rows {
+                eprintln!("U4a contrast dark={dark} backdrop={backdrop}: {what} = {got:.2} (want >= {want})");
+                if got < want {
+                    bad.push(format!("dark={dark} backdrop={backdrop}: {what} is {got:.2}, want >= {want}"));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "contrast too low:\n{}", bad.join("\n"));
+}
+
+#[test]
+fn the_last_row_of_a_form_card_draws_no_separator() {
+    let mut bad = vec![];
+    for (name, _, view) in u3_windows() {
+        let (cards, _) = form_cards(view);
+        for (i, c) in cards.iter().enumerate() {
+            let Some((title, last, _)) = c.rows.last() else { continue };
+            if let Some(y) = c.seps.iter().find(|y| (**y - last.max.y).abs() < 0.5) {
+                bad.push(format!("{name}: card {i} draws a separator at y={y} under its last row {title:?} (row ends at {})", last.max.y));
+            }
+            if c.seps.len() + 1 != c.rows.len() {
+                bad.push(format!("{name}: card {i} has {} rows but {} separators (want rows - 1)", c.rows.len(), c.seps.len()));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "separator under the last row:\n{}", bad.join("\n"));
+}
+
+/// The slider rail is `widgets.inactive.bg_fill`; on a card it must show in both themes.
+#[test]
+fn slider_rail_stands_out_from_the_card_in_both_themes() {
+    let mut bad = vec![];
+    for dark in [false, true] {
+        let mut app = fixture();
+        app.ctx.set_theme(if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+        app.stack = vec![View::Root, View::VideoSpeed { file: "/nonexistent/u4.mp4".into(), duration: Some(8.0), factor: 2.0 }];
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        let theme = if dark { egui::Theme::Dark } else { egui::Theme::Light };
+        let rail = app.ctx.style_of(theme).visuals.widgets.inactive.bg_fill;
+        let pal = palette(dark);
+        for backdrop in [0.0_f32, 255.0] {
+            let card = over(window_over(&pal, backdrop), pal.field);
+            let got = contrast(over(card, rail), card);
+            eprintln!("U4a slider rail dark={dark} backdrop={backdrop}: {got:.2}");
+            if got < 1.3 {
+                bad.push(format!("dark={dark} backdrop={backdrop}: the slider rail is {got:.2} against its card, want >= 1.3"));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "invisible slider rail:\n{}", bad.join("\n"));
+}
+
+/// Every filled circle of radius 8 (the colour swatches) a view drew in its second frame.
+fn swatch_circles(view: View, dark: bool) -> Vec<egui::epaint::CircleShape> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<egui::epaint::CircleShape>) {
+        match shape {
+            egui::Shape::Circle(c) if (c.radius - 8.0).abs() < 0.01 && c.fill != Color32::TRANSPARENT => out.push(*c),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut app = fixture();
+    app.ctx.set_theme(if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+    app.stack = vec![View::Root, view];
+    render(&mut app, vec![]);
+    let input =
+        egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))), ..Default::default() };
+    let ctx = app.ctx.clone();
+    let output = ctx.run_ui(input, |ui| app.draw(ui));
+    let mut found = vec![];
+    for s in &output.shapes {
+        walk(&s.shape, &mut found);
+    }
+    found
+}
+
+/// A swatch is as dark as a dark card or as light as a light one for some colours (black, white),
+/// so it needs an edge of its own.
+#[test]
+fn colour_swatches_have_an_edge_that_shows_on_the_card() {
+    use ferrocast_core::annotate::Tool;
+    let png = std::path::PathBuf::from("/nonexistent/u4.png");
+    let views = || {
+        vec![
+            (
+                "annotate",
+                View::Annotate { file: png.clone(), size: (100, 80), doc: Default::default(), tool: Tool::Arrow, color: 0, sel: None },
+            ),
+            ("collage", View::CollageImage { files: vec![png.clone(), png.clone()], opts: Default::default(), color: 0 }),
+            ("add background", View::FrameImage { file: png.clone(), size: (100, 80), opts: Default::default(), color: 4, picking: false }),
+            (
+                "redact image",
+                View::RedactImage { file: png.clone(), size: (100, 80), areas: vec![], sel: None, blur: false, radius: 24, color: 5 },
+            ),
+        ]
+    };
+    let mut bad = vec![];
+    for dark in [false, true] {
+        let pal = palette(dark);
+        let card = over(window_over(&pal, if dark { 0.0 } else { 255.0 }), pal.field);
+        for (name, view) in views() {
+            let circles = swatch_circles(view, dark);
+            if circles.len() < 6 {
+                bad.push(format!("{name} dark={dark}: found only {} swatches", circles.len()));
+            }
+            for c in circles {
+                let ring = if c.stroke.width >= 1.0 { contrast(over(card, c.stroke.color), card) } else { 0.0 };
+                if ring < 1.3 {
+                    bad.push(format!(
+                        "{name} dark={dark}: swatch {:?} has no edge that shows on the card (edge contrast {ring:.2}, stroke width {})",
+                        c.fill, c.stroke.width
+                    ));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "swatches without an edge:\n{}", bad.join("\n"));
+}

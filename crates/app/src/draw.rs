@@ -1334,6 +1334,8 @@ impl App {
         if ui.visuals().text_cursor.stroke.color != pal.accent {
             let accent = pal.accent;
             ctx.all_styles_mut(|st| {
+                // the slider rail is `widgets.inactive.bg_fill`; egui's grey 230 vanishes on a light card
+                st.visuals.widgets.inactive.bg_fill = palette(st.visuals.dark_mode).sel.gamma_multiply(2.0);
                 st.visuals.text_cursor.stroke.color = accent;
                 st.visuals.selection.bg_fill = accent.gamma_multiply(0.35);
                 st.visuals.selection.stroke.color = accent;
@@ -3029,7 +3031,7 @@ impl App {
                 form_row_stacked(ui, pal, "Background", "Colour behind the pictures.", |ui| {
                     for (i, k) in ferrocast_core::annotate::COLORS.iter().enumerate() {
                         let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                        ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(k[0], k[1], k[2]));
+                        swatch_dot(ui.painter(), r.center(), egui::Color32::from_rgb(k[0], k[1], k[2]), pal);
                         if o.bg == Some(*k) && i == color {
                             ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
                         }
@@ -3039,7 +3041,7 @@ impl App {
                         }
                     }
                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                    ui.painter().circle_filled(r.center(), 8.0, egui::Color32::WHITE);
+                    swatch_dot(ui.painter(), r.center(), egui::Color32::WHITE, pal);
                     if resp.clicked() {
                         o.bg = Some([255, 255, 255]);
                     }
@@ -3246,7 +3248,7 @@ impl App {
                         form_row_compact(ui, pal, "Colour", 40.0, |ui| {
                             // right to left: white first, then the palette in reverse, so it reads left to right
                             let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                            ui.painter().circle_filled(r.center(), 8.0, egui::Color32::WHITE);
+                            swatch_dot(ui.painter(), r.center(), egui::Color32::WHITE, pal);
                             if *c == [255, 255, 255] {
                                 ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
                             }
@@ -3255,7 +3257,7 @@ impl App {
                             }
                             for (i, k) in ferrocast_core::annotate::COLORS.iter().enumerate().rev() {
                                 let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                                ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(k[0], k[1], k[2]));
+                                swatch_dot(ui.painter(), r.center(), egui::Color32::from_rgb(k[0], k[1], k[2]), pal);
                                 // ring the swatch that matches the actual backdrop
                                 if *c == *k {
                                     ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
@@ -3404,7 +3406,7 @@ impl App {
                         } else {
                             for (i, c) in ferrocast_core::annotate::COLORS.iter().enumerate().rev() {
                                 let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                                ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
+                                swatch_dot(ui.painter(), r.center(), egui::Color32::from_rgb(c[0], c[1], c[2]), pal);
                                 if i == color {
                                     ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
                                 }
@@ -3924,7 +3926,7 @@ impl App {
                     for (i, c) in an::COLORS.iter().enumerate() {
                         let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
                         record_strip(&ctx, r.expand(2.0));
-                        ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
+                        swatch_dot(ui.painter(), r.center(), egui::Color32::from_rgb(c[0], c[1], c[2]), pal);
                         if i == color {
                             ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
                         }
@@ -5532,6 +5534,14 @@ impl RowLook {
 /// One row: title and description on the left, the control on the right, a hairline underneath.
 /// Returns (the row's rect, the rect the control used).
 fn row_impl(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) -> (Rect, Rect) {
+    let (r, used) = row_body(ui, pal, look, title, desc, control);
+    // hairline between rows, inset like the original launcher's settings
+    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
+    (r, used)
+}
+
+/// `row_impl` without the hairline underneath (the cards of the form windows place their own).
+fn row_body(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) -> (Rect, Rect) {
     let w = ui.available_width();
     let text_w = look.text_w.unwrap_or_else(|| (w * 0.46).min(w - 340.0).max(150.0));
     let mut used = Rect::NOTHING;
@@ -5554,10 +5564,7 @@ fn row_impl(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, 
             });
         });
     });
-    // hairline between rows, inset like the original launcher's settings
-    let r = inner.response.rect;
-    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
-    (r, used)
+    (inner.response.rect, used)
 }
 
 /// Model dropdown: Default, every model the provider lists, and Custom… (a free text field).
@@ -5627,7 +5634,8 @@ fn model_picker(
 
 /// Like `row`, but the control sits on its own line under the text, for wide controls.
 fn row_stacked(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
-    row_stacked_impl(ui, pal, title, desc, control);
+    let (r, _) = row_stacked_impl(ui, pal, title, desc, control);
+    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
 }
 
 fn row_stacked_impl(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) -> (Rect, Rect) {
@@ -5645,9 +5653,7 @@ fn row_stacked_impl(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control
             used = ui.min_rect();
         });
     });
-    let r = inner.response.rect;
-    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
-    (r, used)
+    (inner.response.rect, used)
 }
 
 // ---- form windows: the Settings card and row look, shared with the tool windows
@@ -5664,27 +5670,44 @@ fn form_rect(area: Rect) -> Rect {
 /// A rounded card with the Settings look; rows go inside it (`form_row`).
 fn card(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) {
     let idx = record_card_start(ui.ctx());
+    ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("form-sep-pending")));
     let r = group_rect(ui, pal, add);
+    ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("form-sep-pending")));
     record_card_end(ui.ctx(), idx, r);
 }
 
 /// A Settings-style row inside a card: title and one short grey description, control on the right.
 fn form_row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
-    let (r, c) = row_impl(ui, pal, RowLook::SETTINGS, title, desc, control);
+    let (r, c) = row_body(ui, pal, RowLook::SETTINGS, title, desc, control);
+    form_sep(ui, pal, r);
     record_row(ui.ctx(), title, r, c);
 }
 
 /// A tighter row for dense side panels and lists: title only, the title column `text_w` wide.
 fn form_row_compact(ui: &mut Ui, pal: &Palette, title: &str, text_w: f32, control: impl FnOnce(&mut Ui)) {
     let look = RowLook { pad_y: 6, text_w: Some(text_w), desc: false };
-    let (r, c) = row_impl(ui, pal, look, title, "", control);
+    let (r, c) = row_body(ui, pal, look, title, "", control);
+    form_sep(ui, pal, r);
     record_row(ui.ctx(), title, r, c);
 }
 
 /// A row whose control sits on its own line under the title (wide controls in narrow cards).
 fn form_row_stacked(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
     let (r, c) = row_stacked_impl(ui, pal, title, desc, control);
+    form_sep(ui, pal, r);
     record_row(ui.ctx(), title, r, c);
+}
+
+/// The hairline between two rows of a form card. A row only learns that it is not the last one when
+/// the next row starts, so each line is drawn by the row below it and the last row gets none (it
+/// would sit against the card's bottom edge). `card` forgets the pending line when it ends.
+fn form_sep(ui: &mut Ui, pal: &Palette, r: Rect) {
+    let id = Id::new("form-sep-pending");
+    if let Some(prev) = ui.ctx().data(|d| d.get_temp::<Rect>(id)) {
+        ui.painter().hline((prev.min.x + 14.0)..=(prev.max.x - 14.0), prev.max.y, Stroke::new(1.0, pal.sep));
+        record_sep(ui.ctx(), prev.max.y);
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, r));
 }
 
 /// What `card` and `form_row` drew in the latest pass: tests read it.
@@ -5694,12 +5717,14 @@ struct FormCard {
     rect: Rect,
     /// (title, row rect, rect the control used)
     rows: Vec<(String, Rect, Rect)>,
+    /// y of every separator line drawn inside the card
+    seps: Vec<f32>,
 }
 
 #[cfg(test)]
 impl Default for FormCard {
     fn default() -> Self {
-        FormCard { rect: Rect::NOTHING, rows: vec![] }
+        FormCard { rect: Rect::NOTHING, rows: vec![], seps: vec![] }
     }
 }
 
@@ -5735,6 +5760,18 @@ fn record_row(ctx: &egui::Context, title: &str, row: Rect, control: Rect) {
     });
 }
 
+#[cfg(test)]
+fn record_sep(ctx: &egui::Context, y: f32) {
+    ctx.data_mut(|d| {
+        if let Some(c) = d.get_temp_mut_or_default::<Vec<FormCard>>(Id::new("form-cards")).last_mut() {
+            c.seps.push(y);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn record_sep(_: &egui::Context, _: f32) {}
+
 #[cfg(not(test))]
 fn record_card_start(_: &egui::Context) -> usize {
     0
@@ -5757,6 +5794,12 @@ fn toggle(ui: &mut Ui, pal: &Palette, on: &mut bool) {
     p.rect_filled(r, 12.0, bg);
     let kx = r.min.x + 12.0 + (r.width() - 24.0) * t;
     p.circle_filled(Pos2::new(kx, r.center().y), 9.5, Color32::WHITE);
+}
+
+/// A colour swatch: the colour with a hairline edge, so black on a dark card and white on a light
+/// one still read as a dot.
+fn swatch_dot(p: &egui::Painter, at: Pos2, fill: Color32, pal: &Palette) {
+    p.add(egui::epaint::CircleShape { center: at, radius: 8.0, fill, stroke: Stroke::new(1.0, pal.border) });
 }
 
 /// `toggle`, returning whether it was flipped this frame.
