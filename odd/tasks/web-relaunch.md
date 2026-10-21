@@ -23,3 +23,4 @@ Plans: odd/plans/web-relaunch-master-plan.md (read first) + five sibling plans.
 
 ## Log
 - L1 owner: see odd/plans/web-relaunch-master-plan.md Log L1 (verbatim). "ejecutalo"
+- L3 (T5 prep): conversions.json exposes only {ext,label,needs} per pair (159/275 need an optional tool); engine, lossy and notes are NOT in the data. /convert pages must use `needs` plus family-level facts from README/CHANGELOG, never invented per-pair engine claims. Extending site_data.rs is optional and out of the first slice.
