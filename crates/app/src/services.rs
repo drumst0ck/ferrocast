@@ -49,6 +49,10 @@ pub enum Msg {
     ChannelsProbed(PathBuf, Option<u32>),
     /// Finder selection read for the format wheel (Err: message to show).
     FinderSelection(Result<Vec<PathBuf>, String>),
+    /// The Enter-on-Finder tap swallowed a Return (sent from the tap's helper thread).
+    FinderEnter,
+    /// The selection read for that Return finished (Err: message).
+    FinderEnterDone(Result<Vec<PathBuf>, String>),
     /// Duration of the video whose speed is being set (None: unreadable).
     VideoDuration(PathBuf, Option<f64>),
     /// Pixel size and a preview frame of the video being cropped (None: unreadable).
@@ -369,6 +373,53 @@ pub fn clipboard_texts(shared: &Shared) -> Vec<String> {
     }
     v
 }
+
+// ---------------------------------------------------------------------------
+// Enter on a Finder selection (opt-in): the OS-facing pieces behind injectable hooks
+
+/// Creates the tap; the returned value keeps it alive.
+pub type FinderStart = dyn Fn(Arc<ferrocast_core::finder_enter::InFlight>, Bus) -> Result<Box<dyn std::any::Any>, String> + Send + Sync;
+
+/// What the app needs from the system for "Enter on Finder selection". The defaults are the real
+/// thing; tests replace them so nothing touches the event system.
+#[derive(Clone)]
+pub struct FinderHooks {
+    /// Is Accessibility granted? The argument asks for the system prompt.
+    pub trusted: Arc<dyn Fn(bool) -> bool + Send + Sync>,
+    /// Create the tap. The returned value keeps it alive; dropping it removes the tap.
+    pub start: Arc<FinderStart>,
+    /// Read the Finder selection (blocking, up to 15 s; always called off the UI thread).
+    pub selection: Arc<dyn Fn() -> Result<Vec<PathBuf>, String> + Send + Sync>,
+    /// Give the Return back to Finder (marked so the tap lets it through). False: not sent.
+    pub repost: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl Default for FinderHooks {
+    fn default() -> Self {
+        FinderHooks {
+            trusted: Arc::new(ferrocast_macos::windows::accessibility_trusted),
+            start: Arc::new(|inflight, bus| {
+                let on_enter: Arc<dyn Fn() + Send + Sync> = Arc::new(move || bus.send(Msg::FinderEnter));
+                ferrocast_macos::finder_enter::start(inflight, on_enter).map(|t| Box::new(t) as Box<dyn std::any::Any>)
+            }),
+            selection: Arc::new(|| ferrocast_macos::apps::finder_selection().map_err(|e| e.to_string())),
+            repost: Arc::new(ferrocast_macos::finder_enter::repost_return),
+        }
+    }
+}
+
+/// State of the opt-in Enter-on-Finder feature. `tap` is `None` unless the setting is on and the
+/// tap was created.
+#[derive(Default)]
+pub struct FinderEnterState {
+    pub tap: Option<Box<dyn std::any::Any>>,
+    pub inflight: Arc<ferrocast_core::finder_enter::InFlight>,
+    /// A selection read is running; a further Return is passed through, never queued.
+    pub busy: bool,
+    pub hooks: FinderHooks,
+}
+
+pub const FINDER_ENTER_NEEDS_ACCESS: &str = "Enter on Finder needs Accessibility access";
 
 pub fn start_expansion(shared: Arc<Shared>) {
     shared.refresh_keywords();

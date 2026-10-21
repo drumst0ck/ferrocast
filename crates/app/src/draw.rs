@@ -5215,6 +5215,17 @@ impl App {
                                 let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
                                 segmented(ui, pal, &mut s.wheel_actions_key, &opts);
                             });
+                            row(
+                                ui,
+                                pal,
+                                "Enter on Finder selection",
+                                "Press Return on selected files in Finder to open the Convert wheel instead of renaming. Needs Accessibility access. Off by default.",
+                                |ui| {
+                                    toggle(ui, pal, &mut s.enter_on_finder);
+                                    #[cfg(test)]
+                                    ui.ctx().data_mut(|d| d.insert_temp(Id::new("enter-on-finder-toggle"), ui.min_rect()));
+                                },
+                            );
                             row(ui, pal, "Menu bar icon", "A small icon to open Ferrocast with the mouse. Needs a restart.", |ui| toggle(ui, pal, &mut s.show_menu_bar_icon));
                         });
                         ui.add_space(14.0);
@@ -5517,10 +5528,16 @@ impl App {
                     }
                 }
             }
+            let finder_enter_changed = s.enter_on_finder != self.settings.enter_on_finder;
+            let enter_on_finder = s.enter_on_finder;
             let theme_changed = s.theme != self.settings.theme;
             let dirs_changed = s.script_directories != self.settings.script_directories;
             self.settings = s;
             self.save_settings();
+            if finder_enter_changed {
+                // on: ask for Accessibility once and create the tap; off: remove it. No restart.
+                self.set_finder_enter(enter_on_finder, true);
+            }
             if theme_changed {
                 self.set_theme();
             }
