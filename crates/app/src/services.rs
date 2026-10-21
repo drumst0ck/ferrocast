@@ -1962,14 +1962,23 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         FileTool::SplitPages => {
             let js = "function run(a){ObjC.import('PDFKit');var d=$.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(a[0]));if(!d.js&&!d){return '0'}var n=d.pageCount;for(var i=0;i<n;i++){var o=$.PDFDocument.alloc.init;o.insertPageAtIndex(d.pageAtIndex(i),0);o.writeToFile(a[1]+'/'+(i+1)+'.pdf')}return ''+n}";
             let res = std::process::Command::new("/usr/bin/osascript").args(["-l", "JavaScript", "-e", js]).arg(first).arg(&tmp).output();
-            let n: usize = res.ok().and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok()).unwrap_or(0);
+            // what PDFKit printed on stderr (or why osascript did not run), kept for the error text
+            let (n, osa_err): (usize, String) = match res {
+                Ok(o) => {
+                    (String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(0), String::from_utf8_lossy(&o.stderr).trim().to_string())
+                }
+                Err(e) => (0, e.to_string()),
+            };
+            let why = if osa_err.is_empty() { String::new() } else { format!(": {osa_err}") };
             if n == 0 {
-                errs.push("could not read the PDF pages".into());
+                errs.push(format!("could not read the PDF pages{why}"));
             }
             for i in 1..=n {
                 let out = output_with_suffix(first, &format!("page {i}"), "pdf", |p| p.exists());
-                if std::fs::copy(tmp.join(format!("{i}.pdf")), &out).is_ok() {
-                    outs.push(out);
+                // a page PDFKit did not write is an error, never a silently shorter result
+                match std::fs::copy(tmp.join(format!("{i}.pdf")), &out) {
+                    Ok(_) => outs.push(out),
+                    Err(e) => errs.push(format!("page {i} of {n} was not written ({e}){why}")),
                 }
             }
         }
