@@ -5388,3 +5388,61 @@ fn clicking_outside_the_ring_cancels_the_wheel_and_the_hub_does_nothing() {
     assert!(!matches!(app.view(), View::Wheel { .. }), "a click outside the ring cancels the wheel");
     assert_eq!(app.stack.len(), 1, "back at the root, no tool window opened");
 }
+
+/// A wheel opened without a drag (Enter on a Finder selection, or "Format Wheel") has its centre
+/// parked off screen, so the global mouse position never lands on it: hovering must use the
+/// pointer position inside the window instead, as the click already does.
+#[test]
+fn hovering_a_segment_highlights_it_on_a_wheel_opened_without_a_drag() {
+    use ferrocast_core::wheel::{segment_center, Geometry};
+    let dir = std::env::temp_dir().join(format!("fc-wheel-hover-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(64, 48).save(&png).unwrap();
+    let (mut app, _, centre) = wheel_click_fixture(&png);
+    if let Some(View::Wheel { sel, .. }) = app.stack.last_mut() {
+        *sel = Some(0); // what Act::OpenWheel does
+    }
+    render(&mut app, vec![]);
+    let hover = |app: &App| app.ctx.data(|d| d.get_temp::<Option<usize>>(Id::new("wheel-hover"))).flatten();
+    assert_eq!(hover(&app), Some(0), "with the pointer away the keyboard selection shows");
+    let n = match app.view() {
+        View::Wheel { segs, .. } => segs.len(),
+        _ => panic!("wheel expected"),
+    };
+    let g = Geometry::DEFAULT;
+    for target in [2usize, 4, n - 1] {
+        let [dx, dy] = segment_center(target, n, (g.r_in + g.r_out) / 2.0);
+        render(&mut app, vec![Event::PointerMoved(centre + Vec2::new(dx, dy))]);
+        assert_eq!(hover(&app), Some(target), "the segment under the pointer is the highlighted one");
+    }
+    // pointer on the hub: back to the keyboard selection
+    render(&mut app, vec![Event::PointerMoved(centre)]);
+    assert_eq!(hover(&app), Some(0), "the hub falls back to the keyboard selection");
+}
+
+/// The drag-opened wheel (a real centre) must keep following the GLOBAL mouse: a pointer position
+/// egui happens to hold inside the window must not hijack its highlight.
+#[test]
+fn a_wheel_with_a_real_centre_ignores_the_pointer_inside_the_window() {
+    use ferrocast_core::wheel::{segment_center, Geometry};
+    let dir = std::env::temp_dir().join(format!("fc-wheel-hover2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(64, 48).save(&png).unwrap();
+    let (mut app, _, centre) = wheel_click_fixture(&png);
+    if let Some(View::Wheel { sel, center, .. }) = app.stack.last_mut() {
+        *sel = Some(0);
+        *center = Pos2::new(400.0, 300.0); // a real, on-screen centre: the drag-opened wheel
+    }
+    render(&mut app, vec![]);
+    let n = match app.view() {
+        View::Wheel { segs, .. } => segs.len(),
+        _ => panic!("wheel expected"),
+    };
+    let g = Geometry::DEFAULT;
+    let [dx, dy] = segment_center(3, n, (g.r_in + g.r_out) / 2.0);
+    render(&mut app, vec![Event::PointerMoved(centre + Vec2::new(dx, dy))]);
+    let hover = app.ctx.data(|d| d.get_temp::<Option<usize>>(Id::new("wheel-hover"))).flatten();
+    assert_eq!(hover, Some(0), "no global mouse in tests: the keyboard selection stays, the in-window pointer is ignored");
+}

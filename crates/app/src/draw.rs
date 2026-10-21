@@ -2005,8 +2005,16 @@ impl App {
         let g0 = Geometry::DEFAULT;
         let c = ui.max_rect().center();
         let n = segs.len();
+        // A wheel opened without a drag (Enter on a Finder selection, "Format Wheel") parks its
+        // centre off screen, so only the pointer inside the window is meaningful there. During a
+        // real drag the window gets no pointer events (egui could even hold a stale position), so a
+        // wheel with a real centre keeps using the global mouse position as before.
+        let parked = center.x < -5000.0;
         let mouse = mouse_top_left().map(|(m, _)| m);
-        let hover = if n == 0 { None } else { mouse.and_then(|m| wheel_hit(m - center, n)).or(sel) };
+        let under = if parked { ctx.input(|i| i.pointer.hover_pos()).map(|p| p - c) } else { mouse.map(|m| m - center) };
+        let hover = if n == 0 { None } else { under.and_then(|d| wheel_hit(d, n)).or(sel) };
+        #[cfg(test)]
+        ctx.data_mut(|d| d.insert_temp(Id::new("wheel-hover"), hover));
         let dark = self.dark;
         let (name, target_rgb) = match kind {
             WheelKind::Convert => ("CONVERT", [255.0f32, 140.0, 60.0]),
