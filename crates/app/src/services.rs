@@ -2507,9 +2507,20 @@ mod convert_tests {
         assert_eq!(out, vec![d.join("folder.zip")]);
     }
 
+    /// Vision needs an inference context that virtual CI machines do not have; there the
+    /// real-file tool test is skipped (it still runs in full on a real Mac).
+    fn vision_cannot_run() -> bool {
+        let fixture = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../macos/fixtures/text.png"));
+        matches!(ferrocast_macos::vision::detect(fixture, true, false), Err(e) if e.to_string().contains("inference context"))
+    }
+
     #[test]
     fn image_tools_on_real_files() {
         use ferrocast_core::convert::ImageOp;
+        if vision_cannot_run() {
+            eprintln!("skipped: Vision cannot create an inference context on this machine");
+            return;
+        }
         let d = tmp("tools");
         let src = d.join("pic.jpg");
         let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
