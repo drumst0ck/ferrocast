@@ -1690,32 +1690,41 @@ impl App {
                 if files.iter().all(|f| family_of(f) == Family::Image) {
                     // a typed size or dimensions ("500kb", "40%", "800x600") becomes a tool of its own
                     let typed = ferrocast_core::convert::parse_image_query(&q);
+                    let typed_op = typed.clone();
                     let tools: Vec<Item> = typed
                         .into_iter()
                         .chain(ImageOp::offered(files.len()))
+                        // a query that parsed as a tool is shown as typed; fuzzy matching would hide any with parameters
                         .filter(|op| {
-                            self.matches(
-                                &q,
-                                &op.label(),
-                                match op {
-                                    ImageOp::Compress(_) => "compress smaller jpeg",
-                                    ImageOp::Resize(_) => "resize scale",
-                                    ImageOp::Crop(..) => "crop aspect",
-                                    ImageOp::StripMetadata => "metadata exif gps strip",
-                                    ImageOp::CombinePdf => "pdf combine merge",
-                                    ImageOp::Rotate(_) => "rotate turn",
-                                    ImageOp::Flip(_) => "flip mirror",
-                                    ImageOp::Background(_) => "background pad square",
-                                    ImageOp::Collage => "collage grid",
-                                    ImageOp::Redact(_) => "redact hide blur privacy face text",
-                                    ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
-                                    ImageOp::Annotate => "annotate markup draw arrow text preview",
-                                    ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compress size smaller",
-                                    ImageOp::CropExact(..) => "crop exact dimensions pixels",
-                                    ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
-                                },
-                            )
-                            .is_some()
+                            typed_op.as_ref() == Some(op)
+                                || self
+                                    .matches(
+                                        &q,
+                                        &op.label(),
+                                        match op {
+                                            ImageOp::Compress(_) => "compress smaller jpeg",
+                                            ImageOp::Resize(_) => "resize scale",
+                                            ImageOp::Crop(..) => "crop aspect",
+                                            ImageOp::StripMetadata => "metadata exif gps strip",
+                                            ImageOp::CombinePdf => "pdf combine merge",
+                                            ImageOp::Rotate(_) => "rotate turn",
+                                            ImageOp::Flip(_) => "flip mirror",
+                                            ImageOp::Background(_) => "background pad square",
+                                            ImageOp::Collage | ImageOp::CollageWith(_) => "collage grid row column featured",
+                                            ImageOp::FrameWith(_) => "frame background blur shadow padding",
+                                            ImageOp::RedactWith(_) => "redact hide blur privacy area",
+                                            ImageOp::EditWith(_) => {
+                                                "edit photo brightness contrast saturation warmth clarity sharpen grain denoise dehaze"
+                                            }
+                                            ImageOp::Redact(_) => "redact hide blur privacy face text",
+                                            ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
+                                            ImageOp::Annotate => "annotate markup draw arrow text preview",
+                                            ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compress size smaller",
+                                            ImageOp::CropExact(..) => "crop exact dimensions pixels",
+                                            ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
+                                        },
+                                    )
+                                    .is_some()
                         })
                         .map(|op| Item {
                             id: format!("imgtool:{}", op.suffix()),
@@ -1731,7 +1740,10 @@ impl App {
                                     ImageOp::Rotate(_) => "sf:rotate.right",
                                     ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
                                     ImageOp::Background(_) => "sf:square.dashed",
-                                    ImageOp::Collage => "sf:square.grid.2x2",
+                                    ImageOp::Collage | ImageOp::CollageWith(_) => "sf:square.grid.2x2",
+                                    ImageOp::FrameWith(_) => "sf:square.dashed",
+                                    ImageOp::RedactWith(_) => "sf:eye.slash.fill",
+                                    ImageOp::EditWith(_) => "sf:slider.horizontal.3",
                                     ImageOp::Redact(_) => "sf:eye.slash.fill",
                                     ImageOp::Adjust(_) => "sf:slider.horizontal.3",
                                     ImageOp::Annotate => "sf:pencil.tip.crop.circle",
@@ -1775,7 +1787,7 @@ impl App {
                                     FileTool::CropVideo(..) => "sf:crop",
                                     FileTool::RedactVideo(..) | FileTool::Bleep(..) => "sf:eye.slash",
                                     FileTool::Normalize(..) | FileTool::Channels(..) => "sf:speaker.wave.2",
-                                    FileTool::Visualize(_) => "sf:waveform",
+                                    FileTool::Visualize(_) | FileTool::VisualizeImage(..) => "sf:waveform",
                                     FileTool::TrimSilence => "sf:scissors",
                                     FileTool::OrganizePdf(_) => "sf:doc.on.doc",
                                 },
@@ -1962,6 +1974,7 @@ impl App {
                 a.push(Action::new("Show in Finder", Act::Reveal(p.clone())).key(CMD, Key::Enter));
                 a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
                 a.push(Action::new("Convert…", Act::Convert(vec![p.clone()])).key(CMD, Key::T));
+                a.push(Action::new("Format Wheel", Act::OpenWheel(vec![p.clone()])).key(Modifiers::ALT, Key::Enter));
                 a.push(Action::new("Copy File", Act::CopyFiles(vec![p.clone()])).key(CMD_SHIFT, Key::Period));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Move to…", Act::MoveFiles(vec![p.clone()])).key(CMD_SHIFT, Key::M));
@@ -2831,6 +2844,17 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::OpenWheel(files) => {
+                let kind = ferrocast_core::wheel::WheelKind::Convert;
+                let segs = self.wheel_segments(kind, &files);
+                if segs.is_empty() {
+                    self.toast("No format options for this file");
+                } else {
+                    self.show();
+                    // no pointer involved: the centre is off screen, arrows and Enter choose
+                    self.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel: Some(0) });
+                }
+            }
             Act::QuickLook(p) => {
                 // qlmanage shows the system Quick Look panel; it exits when the panel closes.
                 let _ = std::process::Command::new("/usr/bin/qlmanage")
@@ -3059,7 +3083,10 @@ pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static
         ImageOp::Rotate(_) => "sf:rotate.right",
         ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
         ImageOp::Background(_) => "sf:square.dashed",
-        ImageOp::Collage => "sf:square.grid.2x2",
+        ImageOp::Collage | ImageOp::CollageWith(_) => "sf:square.grid.2x2",
+        ImageOp::FrameWith(_) => "sf:square.dashed",
+        ImageOp::RedactWith(_) => "sf:eye.slash.fill",
+        ImageOp::EditWith(_) => "sf:slider.horizontal.3",
         ImageOp::Redact(_) => "sf:eye.slash.fill",
         ImageOp::Adjust(_) => "sf:slider.horizontal.3",
         ImageOp::Annotate => "sf:pencil.tip.crop.circle",

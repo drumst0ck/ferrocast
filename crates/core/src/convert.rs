@@ -574,6 +574,14 @@ pub enum ImageOp {
     Background(&'static str),
     /// Every selected image in one grid picture.
     Collage,
+    /// Light, colour and detail controls (brightness … dehaze).
+    EditWith(crate::photo::PhotoOpts),
+    /// Redact faces, text or typed areas with a solid colour or a blur.
+    RedactWith(crate::redact::RedactSpec),
+    /// Put the picture on a colour or a blurred copy of itself, with padding, corners and shadow.
+    FrameWith(crate::frame::FrameOpts),
+    /// Collage with a chosen layout, final width, spacing, corner radius and background.
+    CollageWith(crate::collage::CollageOpts),
     /// Cover detected faces (true) or text (false) with solid boxes.
     Redact(bool),
     /// One-step photo adjustment.
@@ -621,6 +629,14 @@ impl ImageOp {
             ImageOp::Flip(false) => "Flip vertically".into(),
             ImageOp::Background(c) => format!("Square on {} background", if *c == "FFFFFF" { "white" } else { "black" }),
             ImageOp::Collage => "Make a collage".into(),
+            ImageOp::EditWith(_) => "Edit photo".into(),
+            ImageOp::RedactWith(_) => "Redact photo".into(),
+            ImageOp::FrameWith(_) => "Add a background".into(),
+            ImageOp::CollageWith(o) => format!(
+                "Collage · {}{}",
+                format!("{:?}", o.layout).to_lowercase(),
+                o.width.map(|w| format!(" · {w} px")).unwrap_or_default()
+            ),
             ImageOp::Redact(true) => "Redact faces".into(),
             ImageOp::Redact(false) => "Redact text".into(),
             ImageOp::Adjust(a) => match a {
@@ -660,7 +676,10 @@ impl ImageOp {
             ImageOp::Rotate(d) => format!("rotated {d}"),
             ImageOp::Flip(_) => "flipped".into(),
             ImageOp::Background(_) => "square".into(),
-            ImageOp::Collage => "collage".into(),
+            ImageOp::Collage | ImageOp::CollageWith(_) => "collage".into(),
+            ImageOp::FrameWith(_) => "framed".into(),
+            ImageOp::RedactWith(_) => "redacted".into(),
+            ImageOp::EditWith(_) => "edited".into(),
             ImageOp::Redact(_) => "redacted".into(),
             ImageOp::Adjust(_) => "edited".into(),
             ImageOp::Annotate => "annotated".into(),
@@ -731,9 +750,22 @@ fn format_kb(kb: u32) -> String {
 
 /// Image tool typed in the search box: `500kb`, `1.5mb`, `40%` (smaller) or `800x600`.
 pub fn parse_image_query(q: &str) -> Option<ImageOp> {
+    if let Some(o) = crate::photo::parse(q) {
+        return Some(ImageOp::EditWith(o));
+    }
+    if let Some(s) = crate::redact::parse(q) {
+        return Some(ImageOp::RedactWith(s));
+    }
+    if let Some(o) = crate::frame::parse(q) {
+        return Some(ImageOp::FrameWith(o));
+    }
+    if let Some(o) = crate::collage::parse(q) {
+        return Some(ImageOp::CollageWith(o));
+    }
     // `make Canon`, `model EOS R5`, `gps 40.4168,-3.7038`: keep the original case and spaces
     let raw = q.trim();
-    let lower = raw.to_lowercase();
+    // ASCII lowercasing keeps `raw[key.len()..]` on a character boundary (the Kelvin sign lowercases to `k`)
+    let lower = raw.to_ascii_lowercase();
     for key in ["make", "model", "gps"] {
         if let Some(rest) = lower.strip_prefix(key).filter(|r| r.starts_with(' ')) {
             let value = raw[key.len()..].trim();
@@ -958,6 +990,8 @@ pub enum FileTool {
     Normalize(f64, f64, f64),
     /// Audio → MP4 with a waveform (landscape/portrait/square).
     Visualize(crate::media::Canvas),
+    /// Same, over a still image instead of a waveform.
+    VisualizeImage(crate::media::Canvas, String),
     /// Strip silence from both ends of a recording.
     TrimSilence,
     /// Mono (false) or stereo (true) with per-channel gain.
@@ -1003,6 +1037,11 @@ impl FileTool {
                     crate::media::Canvas::Square => "square",
                 }
             ),
+            FileTool::VisualizeImage(c, img) => format!(
+                "Audio visualizer · {} · {}",
+                format!("{c:?}").to_lowercase(),
+                std::path::Path::new(img).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            ),
             FileTool::TrimSilence => "Trim silence at both ends".into(),
             FileTool::Channels(true, ..) => "Convert to stereo".into(),
             FileTool::Channels(false, ..) => "Convert to mono".into(),
@@ -1022,7 +1061,7 @@ impl FileTool {
             FileTool::CropVideo(..) => "cropped".into(),
             FileTool::RedactVideo(..) => "redacted".into(),
             FileTool::Normalize(..) => "normalized".into(),
-            FileTool::Visualize(_) => "visualizer".into(),
+            FileTool::Visualize(_) | FileTool::VisualizeImage(..) => "visualizer".into(),
             FileTool::TrimSilence => "trimmed".into(),
             FileTool::Channels(true, ..) => "stereo".into(),
             FileTool::Channels(false, ..) => "mono".into(),
@@ -1078,6 +1117,17 @@ pub fn parse_time(s: &str) -> Option<f64> {
 /// `crop 640x360 at 100,50`, `redact 10,10 200x100 0:05-0:09`, `redact … blur`, `bleep 0:05-0:07`,
 /// `normalize -14`, `mono`, `stereo`, `mute`, `visualizer portrait`.
 pub fn parse_tool_query(q: &str) -> Option<FileTool> {
+    // `visualizer square image /Users/me/cover.jpg`: the path keeps its case and spaces
+    if let Some(pos) = q.to_ascii_lowercase().find(" image ").filter(|_| q.trim().to_ascii_lowercase().starts_with("visualizer")) {
+        let canvas = match q.to_ascii_lowercase()[..pos].trim().strip_prefix("visualizer").unwrap_or("").trim() {
+            "portrait" => crate::media::Canvas::Portrait,
+            "square" => crate::media::Canvas::Square,
+            "" | "landscape" => crate::media::Canvas::Landscape,
+            _ => return None,
+        };
+        let path = q[pos + " image ".len()..].trim();
+        return (!path.is_empty()).then(|| FileTool::VisualizeImage(canvas, path.to_string()));
+    }
     let q = q.trim().to_lowercase();
     let range = |s: &str| -> Option<(f64, f64)> {
         let (a, b) = s.split_once('-')?;
@@ -1339,6 +1389,12 @@ mod strip_tests {
         assert_eq!(parse_tool_query("redact 10,10 200x100 0:05-0:09 blur"), Some(FileTool::RedactVideo(10, 10, 200, 100, 5.0, 9.0, true)));
         assert_eq!(parse_tool_query("bleep 0:05-0:07"), Some(FileTool::Bleep(5.0, 7.0)));
         assert_eq!(parse_tool_query("normalize -14"), Some(FileTool::Normalize(-14.0, 11.0, -1.5)));
+        assert_eq!(
+            parse_tool_query("Visualizer square image /Users/Me/My Cover.JPG"),
+            Some(FileTool::VisualizeImage(crate::media::Canvas::Square, "/Users/Me/My Cover.JPG".into()))
+        );
+        assert_eq!(parse_tool_query("visualizer image "), None);
+        assert_eq!(parse_tool_query("visualizer wide image /a.png"), None);
         assert_eq!(parse_tool_query("visualizer portrait"), Some(FileTool::Visualize(crate::media::Canvas::Portrait)));
         assert_eq!(parse_tool_query("mono"), Some(FileTool::Channels(false, 1.0, 1.0)));
         assert!(FileTool::offered(Family::Video, 1).contains(&FileTool::Mute));

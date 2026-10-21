@@ -1609,12 +1609,22 @@ fn image_size(p: &std::path::Path) -> Option<(u32, u32)> {
     Some((get("pixelWidth:")?, get("pixelHeight:")?))
 }
 
+/// sips under a hard deadline, with stderr drained so a chatty run cannot stall.
 fn sips(args: &[&str]) -> Result<(), String> {
-    let o = std::process::Command::new("/usr/bin/sips").args(args).output().map_err(|e| e.to_string())?;
-    if o.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("sips failed").trim().to_string())
+    crate::route::run_limited(std::process::Command::new("/usr/bin/sips").args(args), 120).map_err(|e| {
+        if e.is_empty() {
+            "sips failed".into()
+        } else {
+            e
+        }
+    })
+}
+
+/// Refuse sources that would need more than ~120 million pixels (480 MB as RGBA) to edit.
+fn check_source_size(f: &std::path::Path) -> Result<(), String> {
+    match image_size(f) {
+        Some((w, h)) if u64::from(w) * u64::from(h) > 120_000_000 => Err(format!("the image is too large to edit here ({w}×{h} px)")),
+        _ => Ok(()),
     }
 }
 
@@ -1622,21 +1632,71 @@ fn sips(args: &[&str]) -> Result<(), String> {
 /// Detect faces or text with Vision (on-device) and cover them with black boxes.
 /// Writes a PNG next to the original; errors when nothing was found.
 fn redact(f: &std::path::Path, faces: bool) -> Result<PathBuf, String> {
+    use ferrocast_core::redact::{RedactSpec, Source, Style};
+    let source = if faces { Source::Faces } else { Source::Text };
+    redact_with(f, &RedactSpec { source, style: Style::Solid([0, 0, 0]) })
+}
+
+fn redact_with(f: &std::path::Path, spec: &ferrocast_core::redact::RedactSpec) -> Result<PathBuf, String> {
+    check_source_size(f)?;
     use ferrocast_core::convert::{output_with_suffix, redact_rect};
-    let regions = ferrocast_macos::vision::detect(f, faces, !faces).map_err(|e| e.to_string())?;
-    if regions.is_empty() {
-        return Err(if faces { "no faces found".into() } else { "no text found".into() });
-    }
-    let tmp = std::env::temp_dir().join(format!("ferrocast-redact-{}.png", std::process::id()));
-    sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])?;
-    let mut img = image::open(&tmp).map_err(|e| e.to_string())?.to_rgba8();
+    use ferrocast_core::redact::{clamp_area, Area, Source, Style};
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-redact-{}-{}.png",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let loaded = sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+        .and_then(|_| image::open(&tmp).map_err(|e| e.to_string()));
     let _ = std::fs::remove_file(&tmp);
+    let mut img = loaded?.to_rgba8();
     let (iw, ih) = img.dimensions();
-    for r in regions {
-        let (x, y, w, h) = redact_rect(r.x, r.y, r.w, r.h, iw, ih, if faces { 0.15 } else { 0.05 });
-        for py in y..(y + h).min(ih) {
-            for px in x..(x + w).min(iw) {
-                img.put_pixel(px, py, image::Rgba([0, 0, 0, 255]));
+    let areas: Vec<Area> = match &spec.source {
+        Source::Areas(a) => {
+            let inside: Vec<Area> = a.iter().filter_map(|a| clamp_area(*a, iw, ih)).collect();
+            if inside.is_empty() {
+                return Err(format!("the areas lie outside the image ({iw}×{ih} px)"));
+            }
+            inside
+        }
+        src => {
+            let faces = *src == Source::Faces;
+            let regions = ferrocast_macos::vision::detect(f, faces, !faces).map_err(|e| e.to_string())?;
+            if regions.is_empty() {
+                return Err(if faces { "no faces found".into() } else { "no text found".into() });
+            }
+            regions
+                .iter()
+                .map(|r| {
+                    let (x, y, w, h) = redact_rect(r.x, r.y, r.w, r.h, iw, ih, if faces { 0.15 } else { 0.05 });
+                    Area { x, y, w, h }
+                })
+                .collect()
+        }
+    };
+    let original = img.clone();
+    for a in areas {
+        let (x1, y1) = ((a.x + a.w).min(iw), (a.y + a.h).min(ih));
+        match spec.style {
+            Style::Solid(c) => {
+                for py in a.y..y1 {
+                    for px in a.x..x1 {
+                        img.put_pixel(px, py, image::Rgba([c[0], c[1], c[2], 255]));
+                    }
+                }
+            }
+            Style::Blur(r) => {
+                // blur the area itself plus a margin, so the edge does not fade to black
+                let m = (r * 2.0) as u32;
+                let (bx, by) = (a.x.saturating_sub(m), a.y.saturating_sub(m));
+                let (bx1, by1) = ((x1 + m).min(iw), (y1 + m).min(ih));
+                let crop = image::imageops::crop_imm(&original, bx, by, bx1 - bx, by1 - by).to_image();
+                let blurred = image::imageops::blur(&crop, r);
+                for py in a.y..y1 {
+                    for px in a.x..x1 {
+                        img.put_pixel(px, py, *blurred.get_pixel(px - bx, py - by));
+                    }
+                }
             }
         }
     }
@@ -1669,6 +1729,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::RedactVideo(..)
         | FileTool::Normalize(..)
         | FileTool::Visualize(_)
+        | FileTool::VisualizeImage(..)
         | FileTool::TrimSilence
         | FileTool::Channels(..)
         | FileTool::Bleep(..)
@@ -1793,9 +1854,19 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
 pub fn file_tool_files(files: Vec<PathBuf>, tool: ferrocast_core::convert::FileTool, ffmpeg: Option<&'static str>, bus: Bus) {
     std::thread::spawn(move || {
         let (outs, errs) = run_file_tool(&files, &tool, ffmpeg);
+        // only when one file produced one result, so the pair is certain
+        let report = match (&tool, ffmpeg, files.as_slice(), outs.as_slice()) {
+            (ferrocast_core::convert::FileTool::Normalize(..), Some(ff), [b], [a]) => crate::media_tools::normalize_report(ff, b, a),
+            _ => None,
+        };
         let msg = match (outs.len(), errs.len()) {
             (0, _) => format!("{} failed: {}", tool.label(), errs.first().cloned().unwrap_or_default()),
-            (n, 0) => format!("{} · {n} file{} written", tool.label(), if n == 1 { "" } else { "s" }),
+            (n, 0) => format!(
+                "{} · {n} file{} written{}",
+                tool.label(),
+                if n == 1 { "" } else { "s" },
+                report.as_ref().map(|r| format!(" · {r}")).unwrap_or_default()
+            ),
             (n, e) => format!("{} · {n} written, {e} failed: {}", tool.label(), errs[0]),
         };
         if let Some(f) = outs.first() {
@@ -1852,29 +1923,172 @@ fn adjust(f: &std::path::Path, a: ferrocast_core::convert::Adjust) -> Result<Pat
     Ok(out)
 }
 
+fn edit_photo(f: &std::path::Path, o: &ferrocast_core::photo::PhotoOpts) -> Result<PathBuf, String> {
+    check_source_size(f)?;
+    use ferrocast_core::convert::output_with_suffix;
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-edit-{}-{}.png",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let loaded = sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+        .and_then(|_| image::open(&tmp).map_err(|e| e.to_string()));
+    let _ = std::fs::remove_file(&tmp);
+    let mut img = loaded?.to_rgba8();
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    ferrocast_core::photo::apply(&mut img, w, h, o);
+    let out = output_with_suffix(f, "edited", "png", |p| p.exists());
+    img.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// Lay the images out in a grid of 600 px cells on white, as one PNG next to the first.
-fn collage(files: &[PathBuf]) -> Result<PathBuf, String> {
-    use ferrocast_core::convert::{collage_grid, output_with_suffix};
-    const CELL: u32 = 600;
-    const GAP: u32 = 12;
+static COLLAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn collage(files: &[PathBuf], o: &ferrocast_core::collage::CollageOpts) -> Result<PathBuf, String> {
+    use ferrocast_core::collage::{corner_alpha, layout};
+    use ferrocast_core::convert::output_with_suffix;
     let first = files.first().ok_or("no images")?;
-    let (cols, rows) = collage_grid(files.len());
-    let (cw, ch) = (cols as u32 * (CELL + GAP) + GAP, rows as u32 * (CELL + GAP) + GAP);
-    let mut canvas = image::RgbaImage::from_pixel(cw, ch, image::Rgba([255, 255, 255, 255]));
-    let tmp = std::env::temp_dir().join(format!("ferrocast-collage-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&tmp);
-    for (i, f) in files.iter().enumerate() {
-        // sips reads every format and scales; the image crate only needs PNG
-        let cell = tmp.join(format!("{i}.png"));
-        sips(&["-s", "format", "png", "-Z", &CELL.to_string(), &f.to_string_lossy(), "--out", &cell.to_string_lossy()])?;
-        let img = image::open(&cell).map_err(|e| e.to_string())?.to_rgba8();
-        let (c, r) = ((i % cols) as u32, (i / cols) as u32);
-        let x = GAP + c * (CELL + GAP) + (CELL - img.width().min(CELL)) / 2;
-        let y = GAP + r * (CELL + GAP) + (CELL - img.height().min(CELL)) / 2;
-        image::imageops::overlay(&mut canvas, &img, x as i64, y as i64);
+    let ((cw, ch), cells) = layout(files.len(), o);
+    if u64::from(cw) * u64::from(ch) > 120_000_000 {
+        return Err("the collage would be too large; use a smaller width".into());
     }
+    let bg = o.bg.map(|c| image::Rgba([c[0], c[1], c[2], 255])).unwrap_or(image::Rgba([0, 0, 0, 0]));
+    let mut canvas = image::RgbaImage::from_pixel(cw, ch, bg);
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-collage-{}-{}",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let result: Result<(), String> = (|| {
+        for (f, cell) in files.iter().zip(&cells) {
+            // sips reads every format and scales; the image crate only needs PNG
+            let png = tmp.join(format!("{}.png", cell.x * 31 + cell.y));
+            sips(&["-s", "format", "png", "-Z", &cell.w.max(cell.h).to_string(), &f.to_string_lossy(), "--out", &png.to_string_lossy()])?;
+            let img = image::open(&png).map_err(|e| e.to_string())?.to_rgba8();
+            // fill the cell (cover), centred
+            let scale = (cell.w as f32 / img.width() as f32).max(cell.h as f32 / img.height() as f32);
+            let (nw, nh) =
+                (((img.width() as f32 * scale).ceil() as u32).max(cell.w), ((img.height() as f32 * scale).ceil() as u32).max(cell.h));
+            let scaled = image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle);
+            let (ox, oy) = ((nw - cell.w) / 2, (nh - cell.h) / 2);
+            for y in 0..cell.h {
+                for x in 0..cell.w {
+                    let a = corner_alpha(x, y, cell.w, cell.h, o.radius);
+                    if a <= 0.0 {
+                        continue;
+                    }
+                    let mut px = *scaled.get_pixel(x + ox, y + oy);
+                    px.0[3] = (px.0[3] as f32 * a) as u8;
+                    let dst = canvas.get_pixel_mut(cell.x + x, cell.y + y);
+                    let sa = px.0[3] as f32 / 255.0;
+                    for c in 0..3 {
+                        dst.0[c] = (px.0[c] as f32 * sa + dst.0[c] as f32 * (1.0 - sa)) as u8;
+                    }
+                    dst.0[3] = (px.0[3] as f32 + dst.0[3] as f32 * (1.0 - sa)).min(255.0) as u8;
+                }
+            }
+        }
+        Ok(())
+    })();
     let _ = std::fs::remove_dir_all(&tmp);
+    result?;
     let out = output_with_suffix(first, "collage", "png", |p| p.exists());
+    canvas.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+fn frame_image(f: &std::path::Path, o: &ferrocast_core::frame::FrameOpts) -> Result<PathBuf, String> {
+    check_source_size(f)?;
+    use ferrocast_core::collage::corner_alpha;
+    use ferrocast_core::convert::output_with_suffix;
+    use ferrocast_core::frame::{canvas_size, shadow_offset, Backdrop};
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-frame-{}-{}.png",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let loaded = sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+        .and_then(|_| image::open(&tmp).map_err(|e| e.to_string()));
+    let _ = std::fs::remove_file(&tmp);
+    let img = loaded?.to_rgba8();
+    let (w, h) = (img.width(), img.height());
+    let (cw, ch) = canvas_size(w, h, o);
+    if u64::from(cw) * u64::from(ch) > 120_000_000 {
+        return Err("the result would be too large; use less padding".into());
+    }
+    let mut canvas = match &o.backdrop {
+        Backdrop::Image(path) => {
+            // canonical absolute path: a name starting with `-` can never be read as a sips option
+            let canon = std::path::Path::new(path).canonicalize().ok().filter(|p| p.is_file());
+            let Some(canon) = canon else {
+                return Err(format!("{path} is not a readable image"));
+            };
+            let path = canon.to_string_lossy().to_string();
+            let path = path.as_str();
+            let bg_tmp = std::env::temp_dir().join(format!(
+                "ferrocast-framebg-{}-{}.png",
+                std::process::id(),
+                COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            let loaded = sips(&["-s", "format", "png", path, "--out", &bg_tmp.to_string_lossy()])
+                .and_then(|_| image::open(&bg_tmp).map_err(|e| e.to_string()));
+            let _ = std::fs::remove_file(&bg_tmp);
+            let bg = loaded.map_err(|e| format!("background image: {e}"))?.to_rgba8();
+            let scale = (cw as f32 / bg.width() as f32).max(ch as f32 / bg.height() as f32);
+            let (nw, nh) = (((bg.width() as f32 * scale).ceil() as u32).max(cw), ((bg.height() as f32 * scale).ceil() as u32).max(ch));
+            let big = image::imageops::resize(&bg, nw, nh, image::imageops::FilterType::Triangle);
+            image::imageops::crop_imm(&big, (nw - cw) / 2, (nh - ch) / 2, cw, ch).to_image()
+        }
+        Backdrop::Color(c) => image::RgbaImage::from_pixel(cw, ch, image::Rgba([c[0], c[1], c[2], 255])),
+        Backdrop::Blur(r) => {
+            let r = *r;
+            // cover the canvas with the picture, then blur it
+            let scale = (cw as f32 / w as f32).max(ch as f32 / h as f32);
+            let (nw, nh) = (((w as f32 * scale).ceil() as u32).max(cw), ((h as f32 * scale).ceil() as u32).max(ch));
+            // blur at a quarter of the size: same look, far less work
+            let small = image::imageops::resize(&img, (nw / 4).max(1), (nh / 4).max(1), image::imageops::FilterType::Triangle);
+            let blurred = image::imageops::blur(&small, (r / 4.0).max(0.5));
+            let big = image::imageops::resize(&blurred, nw, nh, image::imageops::FilterType::Triangle);
+            image::imageops::crop_imm(&big, (nw - cw) / 2, (nh - ch) / 2, cw, ch).to_image()
+        }
+    };
+    let rect_alpha = |x: u32, y: u32| corner_alpha(x, y, w, h, o.radius);
+    if o.shadow > 0 {
+        let (dx, dy) = shadow_offset(o);
+        let mut mask = image::GrayImage::new(cw, ch);
+        for y in 0..h {
+            for x in 0..w {
+                let (mx, my) = (o.pad as i32 + x as i32 + dx, o.pad as i32 + y as i32 + dy);
+                if mx >= 0 && my >= 0 && (mx as u32) < cw && (my as u32) < ch {
+                    mask.put_pixel(mx as u32, my as u32, image::Luma([(rect_alpha(x, y) * 255.0) as u8]));
+                }
+            }
+        }
+        let soft = image::imageops::blur(&mask, o.shadow as f32 / 2.0);
+        for (x, y, m) in soft.enumerate_pixels() {
+            let a = m.0[0] as f32 / 255.0 * 0.55;
+            let dst = canvas.get_pixel_mut(x, y);
+            for c in 0..3 {
+                dst.0[c] = (dst.0[c] as f32 * (1.0 - a)) as u8;
+            }
+        }
+    }
+    for y in 0..h {
+        for x in 0..w {
+            let src = img.get_pixel(x, y).0;
+            let a = rect_alpha(x, y) * (src[3] as f32 / 255.0);
+            if a <= 0.0 {
+                continue;
+            }
+            let dst = canvas.get_pixel_mut(o.pad + x, o.pad + y);
+            for (d, s) in dst.0.iter_mut().zip(src).take(3) {
+                *d = (s as f32 * a + *d as f32 * (1.0 - a)) as u8;
+            }
+        }
+    }
+    let out = output_with_suffix(f, "framed", "png", |p| p.exists());
     canvas.save(&out).map_err(|e| e.to_string())?;
     Ok(out)
 }
@@ -1926,6 +2140,33 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
         }
         return (outs, errs);
     }
+    if let ImageOp::EditWith(o) = op {
+        for f in files {
+            match edit_photo(f, o) {
+                Ok(p) => outs.push(p),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
+    if let ImageOp::RedactWith(spec) = op {
+        for f in files {
+            match redact_with(f, spec) {
+                Ok(p) => outs.push(p),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
+    if let ImageOp::FrameWith(o) = op {
+        for f in files {
+            match frame_image(f, o) {
+                Ok(p) => outs.push(p),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
     if let ImageOp::Adjust(a) = op {
         for f in files {
             match adjust(f, *a) {
@@ -1935,8 +2176,9 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
         }
         return (outs, errs);
     }
-    if *op == ImageOp::Collage {
-        match collage(files) {
+    if let ImageOp::Collage | ImageOp::CollageWith(_) = op {
+        let opts = if let ImageOp::CollageWith(o) = op { *o } else { Default::default() };
+        match collage(files, &opts) {
             Ok(o) => outs.push(o),
             Err(e) => errs.push(e),
         }
@@ -2029,6 +2271,10 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
             }
             ImageOp::CombinePdf
             | ImageOp::Collage
+            | ImageOp::CollageWith(_)
+            | ImageOp::FrameWith(_)
+            | ImageOp::RedactWith(_)
+            | ImageOp::EditWith(_)
             | ImageOp::Redact(_)
             | ImageOp::Adjust(_)
             | ImageOp::CompressToKb(_)
@@ -2218,6 +2464,98 @@ mod convert_tests {
         // 3 images → 2×2 grid of 600 px cells with 12 px gaps
         assert_eq!(image_size(&o[0]), Some((1236, 1236)));
         assert!(src.exists() && wide[0].exists(), "originals untouched");
+
+        // collage options: a row at an exact width, square corners cut to the background, no overwrite
+        let opts = ferrocast_core::collage::parse("collage row 1200 gap 20 radius 40 bg ff0000").unwrap();
+        let (o, e) = run_image_op(&[src.clone(), wide[0].clone(), src.clone()], &ImageOp::CollageWith(opts));
+        assert!(e.is_empty(), "{e:?}");
+        let (w, h) = image_size(&o[0]).unwrap();
+        assert!((1192..=1200).contains(&w), "width {w}");
+        assert!(h < w / 2, "a row of three is wide and short: {w}x{h}");
+        let img = image::open(&o[0]).unwrap().to_rgba8();
+        assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255], "edge is the red background");
+        assert_eq!(img.get_pixel(20, 20).0, [255, 0, 0, 255], "rounded corner shows the background");
+        assert_ne!(img.get_pixel(w / 6, h / 2).0, [255, 0, 0, 255], "picture centre is not background");
+        // edit photo: brightness lifts pixels, grayscale-saturation equalises channels, 0 is a copy
+        let ed = ferrocast_core::photo::parse("edit brightness 20").unwrap();
+        let (ep, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::EditWith(ed));
+        assert!(e.is_empty(), "{e:?}");
+        let (pw, ph) = image_size(&ep[0]).unwrap();
+        assert_eq!((pw, ph), (1024, 576), "size is kept");
+        let edit_base = d.join("edit-base.png");
+        sips(&["-s", "format", "png", &wide[0].to_string_lossy(), "--out", &edit_base.to_string_lossy()]).unwrap();
+        let (before, after) = (image::open(&edit_base).unwrap().to_rgba8(), image::open(&ep[0]).unwrap().to_rgba8());
+        let mean = |i: &image::RgbaImage| {
+            i.pixels().map(|p| p.0[0] as u64 + p.0[1] as u64 + p.0[2] as u64).sum::<u64>() / (i.width() as u64 * i.height() as u64)
+        };
+        assert!(mean(&after) > mean(&before) + 20, "brighter: {} → {}", mean(&before), mean(&after));
+        let gs = ferrocast_core::photo::parse("edit saturation -100").unwrap();
+        let (gp, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::EditWith(gs));
+        assert!(e.is_empty(), "{e:?}");
+        let gi = image::open(&gp[0]).unwrap().to_rgba8();
+        assert!(gi.pixels().all(|p| p.0[0] == p.0[1] && p.0[1] == p.0[2]), "fully desaturated");
+        assert!(ep[0] != gp[0], "never overwrites");
+        // redact typed areas: solid colour, then blur; outside the area the pixels are untouched
+        // the image crate only reads PNG: compare against a PNG copy of the same pixels
+        let base_png = d.join("redact-base.png");
+        sips(&["-s", "format", "png", &wide[0].to_string_lossy(), "--out", &base_png.to_string_lossy()]).unwrap();
+        let base = image::open(&base_png).unwrap().to_rgba8();
+        let spec = ferrocast_core::redact::parse("redact 100,100 200x100 500,300 50x50 color ff0000").unwrap();
+        let (rd, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::RedactWith(spec));
+        assert!(e.is_empty(), "{e:?}");
+        let ri = image::open(&rd[0]).unwrap().to_rgba8();
+        assert_eq!(ri.get_pixel(150, 150).0, [255, 0, 0, 255], "first area is solid");
+        assert_eq!(ri.get_pixel(520, 320).0, [255, 0, 0, 255], "second area is solid");
+        assert_eq!(ri.get_pixel(299, 199).0, [255, 0, 0, 255], "last pixel of the area");
+        assert_eq!(ri.get_pixel(300, 200), base.get_pixel(300, 200), "just outside is untouched");
+        assert_eq!(ri.get_pixel(99, 99), base.get_pixel(99, 99), "just outside is untouched");
+        let spec = ferrocast_core::redact::parse("redact 100,100 200x100 blur 15").unwrap();
+        let (rb, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::RedactWith(spec));
+        assert!(e.is_empty(), "{e:?}");
+        let bi = image::open(&rb[0]).unwrap().to_rgba8();
+        let diff = (0..100).filter(|i| bi.get_pixel(110 + i, 150) != base.get_pixel(110 + i, 150)).count();
+        assert!(diff > 20, "blur changes the area ({diff} of 100 pixels)");
+        assert_eq!(bi.get_pixel(300, 200), base.get_pixel(300, 200), "outside the blur is untouched");
+        assert!(rd[0] != rb[0], "never overwrites");
+        let spec = ferrocast_core::redact::parse("redact 5000,5000 10x10").unwrap();
+        let (none, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::RedactWith(spec));
+        assert!(none.is_empty() && e.len() == 1 && e[0].contains("outside the image"), "{e:?}");
+        // add a background: padded canvas, colour at the edge, rounded corner shows it, shadow darkens
+        let fo = ferrocast_core::frame::parse("frame pad 50 radius 60 bg 0000ff").unwrap();
+        let (fr, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(fo));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&fr[0]), Some((1024 + 100, 576 + 100)));
+        let fi = image::open(&fr[0]).unwrap().to_rgba8();
+        assert_eq!(fi.get_pixel(0, 0).0, [0, 0, 255, 255], "padding is the colour");
+        assert_eq!(fi.get_pixel(50, 50).0, [0, 0, 255, 255], "rounded corner shows the colour");
+        assert_ne!(fi.get_pixel(562, 338).0, [0, 0, 255, 255], "picture centre is the picture");
+        let sh = ferrocast_core::frame::parse("frame pad 80 shadow 40 bg ffffff").unwrap();
+        let (fs, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(sh));
+        assert!(e.is_empty(), "{e:?}");
+        let si = image::open(&fs[0]).unwrap().to_rgba8();
+        let below = si.get_pixel(80 + 512, 80 + 576 + 10).0;
+        assert!(below[0] < 250, "shadow darkens the area under the picture: {below:?}");
+        assert_eq!(si.get_pixel(2, 2).0, [255, 255, 255, 255], "far corner stays clean");
+        // another image as the background: its colour shows in the padding
+        let red_bg = d.join("red-bg.png");
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([255, 0, 0, 255])).save(&red_bg).unwrap();
+        let im = ferrocast_core::frame::parse(&format!("frame image {} pad 30", red_bg.display())).unwrap();
+        let (fm, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(im));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image::open(&fm[0]).unwrap().to_rgba8().get_pixel(2, 2).0, [255, 0, 0, 255], "padding shows the background image");
+        let bad = ferrocast_core::frame::parse("frame image /nonexistent/bg.png").unwrap();
+        let (none, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(bad));
+        assert!(none.is_empty() && e[0].contains("not a readable image"), "{e:?}");
+        let bl = ferrocast_core::frame::parse("frame blur 40").unwrap();
+        let (fb, e) = run_image_op(std::slice::from_ref(&wide[0]), &ImageOp::FrameWith(bl));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&fb[0]), Some((1024 + 128, 576 + 128)));
+        assert!(fr[0] != fs[0] && fs[0] != fb[0], "never overwrites");
+        let (o2, e) =
+            run_image_op(&[src.clone(), src.clone()], &ferrocast_core::convert::parse_image_query("collage featured bg none").unwrap());
+        assert!(e.is_empty(), "{e:?}");
+        assert_ne!(o[0], o2[0], "never overwrites");
+        assert_eq!(image::open(&o2[0]).unwrap().to_rgba8().get_pixel(0, 0).0[3], 0, "bg none is transparent");
 
         // Redact text: the rendered line is covered with black, the margins stay white
         let txt = d.join("text.png");
