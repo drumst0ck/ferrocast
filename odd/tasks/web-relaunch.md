@@ -18,7 +18,7 @@ Plans: odd/plans/web-relaunch-master-plan.md (read first) + five sibling plans.
 - T3 (S4) chain/18-docs-site: Starlight, IA, generated pages. Route: inline/worker. Commit: pending
 - T4 (S5) chain/19-home-redesign. Route: inline. Commit: pending
 - T5 (S6) chain/20-seo. Route: inline. Commit: pending
-- T6 (S7) chain/21-project-info. Route: inline. Commit: pending
+- T6 (S7) chain/21-project-info. Route: inline. Commit: chain/21-project-info (README EN/ES, STATUS, templates, About link). Repo metadata via gh pending consent (T7)
 - T7 External (S1) Coolify app+DB, DNS, GitHub repo metadata: needs owner credentials/consent. Status: pending
 
 ## Log
