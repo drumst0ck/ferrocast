@@ -1,7 +1,6 @@
 ---
 title: "File actions"
 description: "Seven Ferrocast file actions for any file or folder: Copy, Copy Path, Move to, Terminal or iTerm, AirDrop, Float on Shelf and Zip. Never overwrites."
-status: tested
 sidebar:
   order: 6
 ---
@@ -22,10 +21,6 @@ Hold <kbd>⌃</kbd> while dragging files to open the Actions wheel, or use the a
 :::caution[Limits]
 Zip is an action added on request: it is not one of the six actions of the app this project is measured against. Each selected file or folder gets its own `.zip` next to it, without overwriting, and the name loses the original extension (`photo.png` becomes `photo.zip`). Terminal for several files opens only the first file's location.
 :::
-
-## Status
-
-**Tested.** Implemented.
 
 ## Related
 

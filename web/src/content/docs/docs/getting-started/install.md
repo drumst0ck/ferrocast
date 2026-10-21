@@ -1,7 +1,6 @@
 ---
 title: "Install with Homebrew"
 description: "Install Ferrocast on Apple Silicon with Homebrew. The formula compiles the app on your Mac, so there is no quarantine flag and no paid developer account."
-status: tested
 sidebar:
   order: 1
 ---
@@ -34,10 +33,6 @@ The official Homebrew cask requires signed and notarized apps (a paid Apple Deve
 :::caution[Limits]
 Ferrocast needs Apple Silicon; Intel Macs are not supported. There is no notarized download, and the DMG is not a public download.
 :::
-
-## Status
-
-**Tested** for the install path described above.
 
 ## Related
 

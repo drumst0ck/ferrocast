@@ -44,7 +44,7 @@ export const es: HomeCopy = {
     items: [
       ['Rápido.', 'Un solo proceso y 8,5 MB en disco. El atajo dibuja la ventana en unos 2 ms en el Mac donde medimos; las cifras y el método están más abajo.'],
       ['Local.', 'Las conversiones se ejecutan en tu Mac. Tu historial, snippets y notas viven en archivos JSON legibles. La IA habla por defecto con tu propio modelo.'],
-      ['Honesto.', 'Cada función lleva un estado: Probado o Solo comando. La tabla completa está en la documentación.'],
+      ['Gratis.', 'Licencia MIT, sin cuenta ni suscripción. Lee el código, haz un fork, corrígelo.'],
     ],
   },
   stats: {
@@ -91,7 +91,6 @@ export const es: HomeCopy = {
     never: 'El resultado se guarda junto al original, nunca encima.',
     ctaExplore: 'Explorar todas las conversiones',
     ctaDocs: 'Leer la documentación',
-    statusLine: 'Estado a {date}: los 275 pares de conversión se han ejecutado sobre archivos reales en pruebas; las ventanas interactivas, la rueda de arrastre, AirDrop, Terminal y el estante están probados; pulsar Intro sobre una selección del Finder está disponible como ajuste opcional (Ajustes, General; desactivado por defecto, necesita Accesibilidad).',
   },
   why: {
     title: '¿Por qué no usar simplemente Raycast?',
@@ -103,7 +102,7 @@ export const es: HomeCopy = {
       ['Tus datos', 'Archivos JSON en tu disco. Ábrelos con cualquier editor.', 'Locales, con sincronización en la nube opcional en Pro.'],
       ['IA', 'Tu propio modelo: Ollama en tu Mac por defecto, cualquier servidor compatible con OpenAI, la API de Anthropic o Claude Code con tu plan de Claude.', 'Raycast AI con modelos alojados, en Pro.'],
       ['Conversión de archivos', '{pairs} pares, en local e integrada. Los pares que necesitan ffmpeg, LibreOffice o Ghostscript lo indican.', 'No integrada; depende de la extensión.'],
-      ['Herramientas de archivos', '{tools} herramientas: comprimir, recortar, cortar, redactar, organizar PDF y más. Probadas.', 'No integradas.'],
+      ['Herramientas de archivos', '{tools} herramientas: comprimir, recortar, cortar, redactar, organizar PDF y más.', 'No integradas.'],
       ['Código fuente', 'Abierto. Léelo, haz un fork, corrígelo.', 'Cerrado.'],
       ['Extensiones', 'Script Commands (compatibles con Raycast). Sin tienda.', 'Miles en la Store. Aquí es donde Raycast destaca.'],
       ['Instalación', 'Homebrew lo compila desde el código fuente en tu Mac.', 'Descarga firmada y notarizada.'],
@@ -167,7 +166,7 @@ export const es: HomeCopy = {
     chipsAria: 'Proveedores',
     chips: ['Ollama (por defecto)', 'LM Studio', 'Servidor compatible con OpenAI', 'API de Anthropic', 'Claude Code', 'Inicio de sesión con ChatGPT'],
     caveat: 'El inicio de sesión con ChatGPT sigue el flujo de la CLI Codex de OpenAI; funciona, pero OpenAI no ha respaldado que apps de terceros lo hagan, por lo que la API con clave es la vía reglamentaria.',
-    status: 'Estado: se admiten el proveedor compatible con OpenAI, Claude Code y la API de Anthropic (con tu propia clave).',
+    support: 'Se admiten el proveedor compatible con OpenAI, Claude Code y la API de Anthropic (con tu propia clave).',
     link: 'Más sobre Ask AI',
   },
   small: {

@@ -1,7 +1,6 @@
 ---
 title: "Calculator, units and colours"
 description: "Type math, percentages, units and colour values into the Ferrocast search field and get the answer inline, with a history of your last 100 calculations."
-status: tested
 sidebar:
   order: 2
 ---
@@ -20,10 +19,6 @@ The **Calculator History** command keeps the last 100 results; delete one entry 
 :::caution[Limits]
 Currency conversion needs network access (see [Currency and time zones](/docs/launcher/currency-and-time-zones/)).
 :::
-
-## Status
-
-**Tested.** Implemented and unit tested.
 
 ## Related
 

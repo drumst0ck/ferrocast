@@ -3,7 +3,6 @@
   "slug": "trim-video",
   "name": "Trim video",
   "status": "window",
-  "level": "tested",
   "shortcut": "⇧⌘V",
   "formats": [
     "mp4",

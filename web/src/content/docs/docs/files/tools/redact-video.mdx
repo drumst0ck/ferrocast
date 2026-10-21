@@ -1,7 +1,6 @@
 ---
 title: "Redact video"
 description: "Cover several areas of a video for chosen time ranges with a solid colour or blur in Ferrocast. Each area has its own rectangle. Requires ffmpeg."
-status: tested
 sidebar:
   order: 15
 ---
@@ -9,7 +8,7 @@ import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
 
 The Redact Video window lists areas; each has its own draggable rectangle, start and end seconds, and a solid or blur cover. A Reference frame slider picks which frame is shown.
 
-Choose Redact Video… on a video; <kbd>↵</kbd> writes the copy and never overwrites. Typed: `redact 10,10 200x100 0:05-0:09 blur`. Up to 64 areas.
+Choose Redact Video… on a video; <kbd>↵</kbd> writes the copy and never overwrites. Typed command: `redact 10,10 200x100 0:05-0:09 blur`. Up to 64 areas.
 
 <ToolFacts id="redactVideo" />
 
@@ -20,10 +19,6 @@ Choose Redact Video… on a video; <kbd>↵</kbd> writes the copy and never over
 :::caution[Limits]
 The preview only marks the areas.
 :::
-
-## Status
-
-**Tested.** Implemented; executor tested on real video (pixels, overlapping areas, rotated video), window checked by screenshot.
 
 ## Related
 

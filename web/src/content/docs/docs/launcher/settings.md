@@ -1,7 +1,6 @@
 ---
 title: "Settings and backup"
 description: "Ferrocast Settings has six tabs: General, Clipboard, Snippets, AI, Scripts and Advanced. Set hotkeys, launch at login, and export or import backups."
-status: tested
 sidebar:
   order: 12
 ---
@@ -20,10 +19,6 @@ Open it with <kbd>⌘</kbd> <kbd>,</kbd>. There is also a menu bar icon.
 :::caution[Limits]
 Launch at login is applied at the next login. Failed saves are reported.
 :::
-
-## Status
-
-**Tested.** Implemented; rendering is checked by screenshot.
 
 ## Related
 

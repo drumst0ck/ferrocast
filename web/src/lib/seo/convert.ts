@@ -84,7 +84,7 @@ export function pairMeta(p: Pair): { title: string; description: string } {
   return { title, description };
 }
 
-export function pairFacts(p: Pair): { requirement: string; limits: string[]; status: string } {
+export function pairFacts(p: Pair): { requirement: string; limits: string[] } {
   const requirement = p.needs
     ? `This pair needs ${p.needs}, which is optional and not bundled with Ferrocast. If it is missing, Ferrocast shows the install command: ${installCommand(p.needs)}.`
     : 'No extra tool needed: this pair runs with the tools that ship with macOS.';
@@ -92,11 +92,7 @@ export function pairFacts(p: Pair): { requirement: string; limits: string[]; sta
   if (p.outExt === 'pages') limits.push(".pages is written in the iWork '09 format.");
   if (p.inExt === 'rar') limits.push('RAR extraction needs a working unrar.');
   if (p.inExt === 'pdf' && ['png', 'jpg'].includes(p.outExt)) limits.push('Every page is exported, at 300 DPI.');
-  return {
-    requirement,
-    limits,
-    status: 'Tested: every one of the 275 pairs has been run on real files in tests.',
-  };
+  return { requirement, limits };
 }
 
 export function relatedPairs(p: Pair) {

@@ -1,7 +1,6 @@
 ---
 title: "La rueda al arrastrar"
 description: "Arrastra archivos y pulsa Shift para conversiones, Command para herramientas o Control para acciones. La rueda de Ferrocast queda abierta hasta soltar."
-status: tested
 sidebar:
   order: 2
 ---
@@ -32,10 +31,6 @@ Los archivos arrastrados desde Finder llegan como URL de referencia de archivo (
 :::caution[Límites]
 Todavía no hay animaciones. Intro sobre un resultado de archivo sigue abriéndolo.
 :::
-
-## Estado
-
-**Tested.**
 
 ## Relacionado
 

@@ -3,7 +3,6 @@
   "slug": "redact-image",
   "name": "Redact photo",
   "status": "window",
-  "level": "tested",
   "shortcut": "⇧⌘R",
   "formats": [
     "jpg",

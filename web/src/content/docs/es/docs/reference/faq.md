@@ -46,19 +46,12 @@ Sí. No se sube nada. Las conversiones se ejecutan en tu Mac y usan primero las 
 ### ¿Qué puede convertir?
 Hay 46 formatos de entrada y 275 pares de conversión en imágenes, audio, vídeo, PDF, documentos, presentaciones, hojas de cálculo, subtítulos y archivos comprimidos.
 
-### ¿Está probada cada conversión?
-Cada par se ejecuta en la batería de tests sobre archivos de muestra generados y se lee el resultado.
-
 ### ¿Sobrescribe mis archivos?
 No. El resultado se escribe junto al original con el mismo nombre y la nueva extensión. Si ese nombre está ocupado añade 2, 3 y así sucesivamente.
 
 ### ¿Puedo pulsar Intro sobre un archivo en Finder?
 Sí, como ajuste opcional. En Ajustes > General activa «Enter on Finder selection» (desactivado por defecto, necesita Accesibilidad) y al pulsar Intro sobre archivos seleccionados en Finder se abre la rueda de conversión en lugar de renombrar. El comando Convert Finder Selection también funciona, y Option-Intro sobre un resultado de archivo en el lanzador hace lo mismo.
 
-### ¿Están probadas las ventanas y la rueda?
-Sí. Las ventanas y la rueda están probadas.
-
 ## Relacionado
 
-- [Estado de las funciones](/es/docs/reference/status/)
 - [Solución de problemas](/es/docs/reference/troubleshooting/)

@@ -25,7 +25,7 @@ welcome, shortcuts, about), `FERROCAST_QUERY`, `FERROCAST_PANEL=1`. Use a throwa
 
 - Work on a topic branch and open small, chained pull requests (`chain/NN-topic`), about 400 changed lines each, with the tests and docs that belong to the behavior in the same slice.
 - Use Conventional Commit messages (`feat(web): …`, `fix(tools): …`).
-- Do not claim a feature is Tested unless you ran it (on real files or in a real session); describe in the PR how you checked anything that needs Accessibility or a live session. The record is `docs/STATUS.es.md`.
+- Only document what you have run; describe in the PR how you checked anything that needs Accessibility or a live session.
 
 ## Website, docs and changelog
 

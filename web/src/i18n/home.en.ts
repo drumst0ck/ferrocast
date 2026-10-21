@@ -45,7 +45,7 @@ export const en = {
     items: [
       ['Fast.', 'One process and 8.5 MB on disk. The hotkey draws the window in about 2 ms on the Mac we measured; the numbers and the method are below.'],
       ['Local.', 'Conversions run on your Mac. Your history, snippets and notes sit in plain JSON files. AI talks to your own model by default.'],
-      ['Honest.', 'Every feature carries a status: Tested or Typed. The full table is in the docs.'],
+      ['Free.', 'MIT licence, no account, no subscription. Read the source, fork it, fix it.'],
     ],
   },
   stats: {
@@ -92,7 +92,6 @@ export const en = {
     never: 'Results are written next to the original, never over it.',
     ctaExplore: 'Explore every conversion',
     ctaDocs: 'Read the docs',
-    statusLine: 'Status as of {date}: every conversion pair has run on real files in tests; the interactive windows, the drag wheel, AirDrop, Terminal and the shelf are tested; Enter on a Finder selection is available as an opt-in setting (Settings, General; off by default, needs Accessibility).',
   },
   why: {
     title: 'Why not just use Raycast?',
@@ -104,7 +103,7 @@ export const en = {
       ['Your data', 'JSON files on your disk. Open them in any editor.', 'Local, with optional cloud sync on Pro.'],
       ['AI', 'Your own model: Ollama on your Mac by default, any OpenAI-compatible server, the Anthropic API, or Claude Code with your Claude plan.', 'Raycast AI with hosted models, on Pro.'],
       ['File conversion', '{pairs} pairs, local, built in. Pairs that need ffmpeg, LibreOffice or Ghostscript say so.', 'Not built in; depends on the extension.'],
-      ['File tools', '{tools} tools: compress, crop, trim, redact, organize PDF and more. Tested.', 'Not built in.'],
+      ['File tools', '{tools} tools: compress, crop, trim, redact, organize PDF and more.', 'Not built in.'],
       ['Source code', 'Open. Read it, fork it, fix it.', 'Closed.'],
       ['Extensions', 'Script Commands (Raycast-compatible). No store.', 'Thousands in the Store. This is where Raycast shines.'],
       ['Install', 'Homebrew builds it from source on your Mac.', 'Signed, notarized download.'],
@@ -168,7 +167,7 @@ export const en = {
     chipsAria: 'Providers',
     chips: ['Ollama (default)', 'LM Studio', 'OpenAI-compatible server', 'Anthropic API', 'Claude Code', 'ChatGPT sign-in'],
     caveat: 'ChatGPT sign-in follows the flow of OpenAI’s Codex CLI; it works, but OpenAI has not blessed third-party apps doing that, so the API with a key is the by-the-book route.',
-    status: 'Status: the OpenAI-compatible provider, Claude Code and the Anthropic API (with your own key) are supported.',
+    support: 'The OpenAI-compatible provider, Claude Code and the Anthropic API (with your own key) are supported.',
     link: 'Read about Ask AI',
   },
   small: {

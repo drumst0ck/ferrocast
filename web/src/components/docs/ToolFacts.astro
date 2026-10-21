@@ -3,23 +3,21 @@
  * Facts for one file tool, read from the generated sidecar (scripts/gen-docs.ts, from tools.json).
  * Hand-written tool pages never repeat these values, so they cannot drift.
  */
-import { levels, type Level } from '../../data/status';
 interface Props { id: string; lang?: 'en' | 'es' }
 const { id, lang = 'en' } = Astro.props;
 const sidecars = import.meta.glob('../../content/docs/docs/files/tools/_generated/*.json', { eager: true, import: 'default' }) as Record<string, any>;
 const hit = Object.entries(sidecars).find(([path]) => path.endsWith(`/${id}.json`));
 if (!hit) throw new Error(`ToolFacts: no generated sidecar for tool "${id}". Run npm run gen:docs.`);
-const f = hit[1] as { id: string; name: string; status: string; level: Level; shortcut: string | null; formats: string[] };
+const f = hit[1] as { id: string; name: string; status: string; shortcut: string | null; formats: string[] };
 const L = lang === 'es'
-  ? { tool: 'Herramienta', shortcut: 'Atajo', none: 'Sin atajo (abre desde la rueda de herramientas o la vista Convertir)', status: 'Estado', formats: 'Formatos de entrada', window: 'Ventana', preset: 'Preajuste de un paso' }
-  : { tool: 'Tool', shortcut: 'Shortcut', none: 'No shortcut (open it from the Tools wheel or the Convert view)', status: 'Status', formats: 'Input formats', window: 'Window', preset: 'One-step preset' };
+  ? { tool: 'Herramienta', shortcut: 'Atajo', none: 'Sin atajo (abre desde la rueda de herramientas o la vista Convertir)', formats: 'Formatos de entrada', window: 'Ventana', preset: 'Preajuste de un paso' }
+  : { tool: 'Tool', shortcut: 'Shortcut', none: 'No shortcut (open it from the Tools wheel or the Convert view)', formats: 'Input formats', window: 'Window', preset: 'One-step preset' };
 const kind = f.status === 'window' ? L.window : f.status === 'preset' ? L.preset : f.status;
 ---
 <table class="fc-facts">
   <tbody>
     <tr><th scope="row">{L.tool}</th><td>{f.name} ({kind})</td></tr>
     <tr><th scope="row">{L.shortcut}</th><td>{f.shortcut ? <kbd>{f.shortcut}</kbd> : L.none}</td></tr>
-    <tr><th scope="row">{L.status}</th><td><span class={`fc-status fc-status-${f.level}`}><i aria-hidden="true"></i>{levels[f.level].label}</span></td></tr>
     <tr><th scope="row">{L.formats}</th><td>{f.formats.map((x, i) => <><code>{x}</code>{i < f.formats.length - 1 ? ' ' : ''}</>)}</td></tr>
   </tbody>
 </table>

@@ -1,7 +1,5 @@
 ---
 import tools from '../data/tools.json';
-import { toolLevel } from '../data/status';
-import StatusBadge from './StatusBadge.astro';
 
 const byId = new Map(tools.tools.map((t) => [t.id, t]));
 const groups: { name: string; blurb: string; ids: string[] }[] = [
@@ -69,7 +67,7 @@ const rows = tools.byFormat.map((b) => ({ ext: b.ext, single: b.single.map((id) 
           const t = byId.get(id)!;
           return (
             <li class="tc-card">
-              <div class="tc-top"><h4>{t.name}</h4><StatusBadge level={toolLevel(t.status)} /></div>
+              <div class="tc-top"><h4>{t.name}</h4></div>
               <p>{about[id]}</p>
               {t.shortcut && <p class="tc-key"><kbd>{t.shortcut}</kbd> <span>on a selected file in the launcher list</span></p>}
               {typed[id] && <p class="tc-typed"><span>Type</span> <code>{typed[id]}</code></p>}

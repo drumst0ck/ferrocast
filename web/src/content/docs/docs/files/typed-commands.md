@@ -1,7 +1,6 @@
 ---
 title: "Typed commands"
 description: "Every Ferrocast typed file command in one place: collage, frame, edit, redact, compress, crop, metadata, trim, split, speed, normalize, bleep, pages."
-status: typed
 sidebar:
   order: 5
 ---
@@ -44,10 +43,6 @@ Join accepts several clips; silent clips get generated silence.
 :::caution[Limits]
 Normalize is single pass and shows the measured loudness before and after (for example `-31.0 → -16.0 LUFS`, measured with ffmpeg's ebur128), with no waveform or compare view; WMV fails on mute and crop. PNG tags are not supported for camera and GPS commands (a clear error is shown). Trim and split use stream copy, so video cuts land on keyframes.
 :::
-
-## Status
-
-**Typed.** These are implemented as typed commands and tested with real files; live-preview windows exist for several of them (see each [tool page](/docs/files/tools/compress/)).
 
 ## Related
 

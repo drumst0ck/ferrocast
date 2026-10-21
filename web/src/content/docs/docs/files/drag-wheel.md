@@ -1,7 +1,6 @@
 ---
 title: "The drag wheel"
 description: "Drag files and tap Shift for conversions, Command for file tools or Control for file actions. The Ferrocast wheel stays open until you drop or cancel."
-status: tested
 sidebar:
   order: 2
 ---
@@ -32,10 +31,6 @@ Files dragged from Finder arrive as file reference URLs (`file:///.file/id=…`)
 :::caution[Limits]
 It is not animated yet. Plain <kbd>↵</kbd> on a file result still opens it.
 :::
-
-## Status
-
-**Tested.**
 
 ## Related
 

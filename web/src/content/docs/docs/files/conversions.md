@@ -1,7 +1,6 @@
 ---
 title: "Conversion reference"
 description: "Every file conversion Ferrocast supports: 275 pairs across 46 input formats in nine families, and which pairs need an optional tool."
-status: tested
 sidebar:
   order: 3
 ---
@@ -131,10 +130,6 @@ In the tables below, a target followed by a tool name needs that optional tool i
 :::caution[Limits]
 `.pages` is written in the iWork '09 format.
 :::
-
-## Status
-
-**Tested.** The real-file test runs every pair and reads the result back (text inside documents and sheets, image width, media duration).
 
 ## Related
 

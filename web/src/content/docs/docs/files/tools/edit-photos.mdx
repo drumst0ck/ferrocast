@@ -1,7 +1,6 @@
 ---
 title: "Edit photos"
 description: "Edit photos in Ferrocast with a live preview and nine sliders: brightness, contrast, saturation, warmth, clarity, sharpen, grain, denoise and dehaze."
-status: tested
 sidebar:
   order: 3
 ---
@@ -9,17 +8,13 @@ import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
 
 The photo editor shows nine sliders (brightness, contrast, saturation, warmth, clarity, sharpen, grain, denoise, dehaze) with the preview recomputed on a reduced copy.
 
-Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>E</kbd> on an image result; <kbd>↵</kbd> writes the full-size copy and never overwrites. Typed: `edit brightness 20 contrast 10 saturation -30 warmth 15 clarity 40 sharpen 30 grain 20 denoise 30 dehaze 50`. One-step presets: black & white, brighter, darker, more contrast.
+Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>E</kbd> on an image result; <kbd>↵</kbd> writes the full-size copy and never overwrites. Typed command: `edit brightness 20 contrast 10 saturation -30 warmth 15 clarity 40 sharpen 30 grain 20 denoise 30 dehaze 50`. One-step presets: black & white, brighter, darker, more contrast.
 
 <ToolFacts id="editImage" />
 
 :::caution[Limits]
 The preview uses a reduced copy.
 :::
-
-## Status
-
-**Tested.** Implemented; rendering verified by screenshot.
 
 ## Related
 

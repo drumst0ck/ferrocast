@@ -1,7 +1,6 @@
 ---
 title: "Referencia de conversiones"
 description: "Todas las conversiones de archivos de Ferrocast: 275 pares en 46 formatos de entrada y nueve familias, y qué pares necesitan una herramienta opcional."
-status: tested
 sidebar:
   order: 3
 ---
@@ -131,10 +130,6 @@ En las tablas, un destino seguido del nombre de una herramienta necesita esa her
 :::caution[Límites]
 `.pages` se escribe en formato iWork '09.
 :::
-
-## Estado
-
-**Tested** (probado). Los 275 pares se ejecutan sobre archivos reales generados y se lee el resultado (texto dentro del documento, ancho de imagen, duración de audio o vídeo).
 
 ## Relacionado
 

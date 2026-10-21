@@ -11,7 +11,7 @@ import FilesBlock from './FilesBlock.astro';
 import '../../styles/files.css';
 import '../../styles/home.css';
 import conversions from '../../data/conversions.json';
-import { counts, STATUS_DATE } from '../../data/status';
+import { counts } from '../../data/status';
 import { repo, installCommand as install, sourceCommand as source } from '../../data/install';
 import type { HomeCopy } from '../../i18n/home.en';
 
@@ -220,7 +220,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
         <ul class="fh-chips" aria-label={t.ai.chipsAria}>{t.ai.chips.map((x) => <li>{x}</li>)}</ul>
         <div class="aiblk-txt">
           <p>{t.ai.caveat}</p>
-          <p class="fine">{t.ai.status}</p>
+          <p class="fine">{t.ai.support}</p>
           <a class="tl" href={docs('/launcher/ask-ai/')}>{t.ai.link} →</a>
         </div>
       </div>

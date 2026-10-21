@@ -1,7 +1,6 @@
 ---
 title: "Action panel (⌘K)"
 description: "Press Command K on a result in Ferrocast to open the action panel with the actions and shortcuts for the selected item, such as favorites."
-status: tested
 sidebar:
   order: 4
 ---
@@ -16,10 +15,6 @@ Select a result and press <kbd>⌘</kbd> <kbd>K</kbd>. In the Convert view, <kbd
 - <kbd>⌃</kbd> <kbd>X</kbd> deletes the selected entry.
 
 The full list is in [Keyboard shortcuts](/docs/launcher/keyboard-shortcuts/).
-
-## Status
-
-**Tested.** Implemented; the panel is checked by screenshot.
 
 ## Related
 

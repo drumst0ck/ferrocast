@@ -21,7 +21,7 @@ Ferrocast is a Cargo workspace of three crates. The rule of thumb is to put logi
 
 ## Website data
 
-`web/src/data/conversions.json` and `tools.json` are generated from the Rust code with `cargo run -p ferrocast-core --example site_data`; the status vocabulary in `web/src/data/status.ts` is hand-written and throws at build time when the counts drift from 275 and 46. The docs reference pages are generated from those JSON files by `npm run gen:docs`.
+`web/src/data/conversions.json` and `tools.json` are generated from the Rust code with `cargo run -p ferrocast-core --example site_data`; `web/src/data/status.ts` throws at build time when the counts drift from 275 and 46. The docs reference pages are generated from those JSON files by `npm run gen:docs`.
 
 ## Related
 

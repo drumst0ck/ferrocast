@@ -1,7 +1,6 @@
 ---
 title: "Ask AI"
 description: "Chat with a model from Ferrocast using Ollama, any OpenAI-compatible server, ChatGPT sign-in, the Anthropic API or Claude Code. Keys stay in the Keychain."
-status: tested
 sidebar:
   order: 11
 ---
@@ -21,10 +20,6 @@ ChatGPT and Claude subscriptions do not include API access, so they are not offe
 :::caution[Limits]
 Sign in with ChatGPT is a grey area of terms: OpenAI has not blessed third-party use of that flow, and the Settings pane says so plainly; the API with a key is the by-the-book route.
 :::
-
-## Status
-
-**Tested.** Implemented for all four providers.
 
 ## Related
 

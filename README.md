@@ -50,13 +50,9 @@ Out of the box Ask AI talks to Ollama on your own Mac. You can point it at LM St
 
 Data lives in `~/Library/Application Support/Ferrocast` as plain, unencrypted JSON (`FERROCAST_DATA_DIR` changes the path).
 
-## Status and honesty
-
-Every feature listed is tested. Each one carries one of two labels: **Tested** (run on real files in tests) or **Typed** (typed command only). The full record is in [`docs/STATUS.es.md`](docs/STATUS.es.md) (Spanish) and at <https://ferrocast.app/docs/reference/status/>.
+## Comparison
 
 Not included: React extensions, sync, Search Menu Bar Items and AI context from selection or screen.
-
-## Comparison
 
 Ferrocast is inspired by Raycast but is not a replica and uses no Raycast brand or assets. It is free and MIT-licensed, needs no account, keeps data in JSON on your disk and has no extension store. Raycast does far more; see the measured, honest comparison at <https://ferrocast.app/#why>. Raycast is a trademark of its owner.
 

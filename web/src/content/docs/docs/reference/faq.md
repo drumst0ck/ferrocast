@@ -46,19 +46,12 @@ Yes. Nothing is uploaded. Conversions run on your Mac and use the tools that shi
 ### What can it convert?
 There are 46 input formats and 275 conversion pairs across images, audio, video, PDF, documents, slides, spreadsheets, subtitles and archives.
 
-### Is every conversion tested?
-Every pair is exercised in the test suite on generated sample files and the output is read back.
-
 ### Does it overwrite my files?
 No. The result is written next to the original with the same name and the new extension. If that name is taken it adds 2, 3 and so on.
 
 ### Can I press Enter on a file in Finder?
 Yes, as an opt-in setting. In Settings > General, turn on “Enter on Finder selection” (off by default, needs Accessibility) and pressing Return on selected files in Finder opens the Convert wheel instead of renaming. The Convert Finder Selection command also works, and Option-Enter on a file result in the launcher does the same.
 
-### Are the windows and the wheel tested?
-Yes. The windows and the wheel are tested.
-
 ## Related
 
-- [Feature status](/docs/reference/status/)
 - [Troubleshooting](/docs/reference/troubleshooting/)

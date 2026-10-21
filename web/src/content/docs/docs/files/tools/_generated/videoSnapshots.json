@@ -3,7 +3,6 @@
   "slug": "video-snapshots",
   "name": "Video snapshots",
   "status": "window",
-  "level": "tested",
   "shortcut": "⇧⌘S",
   "formats": [
     "mp4",

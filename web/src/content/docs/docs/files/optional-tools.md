@@ -1,7 +1,6 @@
 ---
 title: "Optional tools"
 description: "ffmpeg, LibreOffice, cwebp, Ghostscript and unrar are optional helpers for Ferrocast file tools. See what each unlocks and the Homebrew install line shown."
-status: tested
 sidebar:
   order: 8
 ---
@@ -20,10 +19,6 @@ See the exact pairs in [Conversions](/docs/files/conversions/), where each pair 
 :::caution[Limits]
 PDF compression requires Ghostscript; there is no native route. The system `tar` reads RAR first and `unrar` is the fallback.
 :::
-
-## Status
-
-**Tested.** Missing-tool hints are implemented; ffmpeg-based windows are tested through their executors.
 
 ## Related
 

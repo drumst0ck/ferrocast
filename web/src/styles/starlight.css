@@ -34,13 +34,6 @@ kbd {
 /* Light theme is not offered; the site is dark only. */
 starlight-theme-select { display: none; }
 
-/* Status badge (docs) */
-.fc-status { display: inline-flex; align-items: center; gap: 0.45em; padding: 0.15em 0.7em; border-radius: 999px; font-size: var(--sl-text-sm); border: 1px solid var(--sl-color-hairline); background: #19191c; }
-.fc-status i { width: 0.55em; height: 0.55em; border-radius: 50%; background: var(--sl-color-gray-3); }
-.fc-status-tested i { background: #4cc38a; }
-.fc-status-built i { background: #f0b34f; }
-.fc-status-typed i { background: #6ea8fe; }
-
 /* Limits block */
 .fc-limits { border-inline-start: 3px solid var(--sl-color-accent); background: #19191c; padding: 0.75rem 1rem; border-radius: 0 8px 8px 0; margin-block: 1rem; }
 .fc-limits > :first-child { margin-top: 0; } .fc-limits > :last-child { margin-bottom: 0; }

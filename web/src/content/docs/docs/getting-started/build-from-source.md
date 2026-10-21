@@ -1,7 +1,6 @@
 ---
 title: "Build from source"
 description: "Build the Ferrocast app bundle and a DMG from source with the repository scripts. Requires Rust 1.95 and a Mac with Apple Silicon."
-status: tested
 sidebar:
   order: 3
 ---
@@ -25,10 +24,6 @@ The supported route is Homebrew compiling from source. The **unnotarized** DMG f
 :::caution[Limits]
 The notarization script is optional. Intel Macs are not supported.
 :::
-
-## Status
-
-**Tested.** The scripts are implemented; the notarization script is optional.
 
 ## Related
 

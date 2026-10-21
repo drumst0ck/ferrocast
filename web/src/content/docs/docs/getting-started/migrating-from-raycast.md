@@ -1,7 +1,6 @@
 ---
 title: "Migrating from Raycast"
 description: "What carries over when you move from Raycast to Ferrocast. Script Commands run as they are, snippets import from JSON, and what is not included yet."
-status: tested
 sidebar:
   order: 4
 ---
@@ -32,10 +31,6 @@ React extensions, sync, Search Menu Bar Items and AI context (selection or scree
 :::caution[Limits]
 If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet. Script Command arguments are passed on the command line, as in Raycast, and can be seen with `ps` while the script runs.
 :::
-
-## Status
-
-**Tested.** Script Commands and snippet import are implemented.
 
 ## Related
 

@@ -1,7 +1,6 @@
 ---
 title: "Bleep audio"
 description: "Replace several ranges of an audio file with a 1 kHz tone in Ferrocast, chosen on the waveform. Offered for audio files only. Requires ffmpeg."
-status: tested
 sidebar:
   order: 20
 ---
@@ -9,17 +8,13 @@ import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
 
 Bleep Audio lists several ranges over the waveform and replaces each with a 1 kHz tone; up to 32 ranges, and overlapping ranges are merged.
 
-Choose Bleep for an audio file. Typed: `bleep 0:05-0:07`.
+Choose Bleep for an audio file. Typed command: `bleep 0:05-0:07`.
 
 <ToolFacts id="redactAudio" />
 
 :::caution[Limits]
 Offered for one audio file only; the executor rejects video.
 :::
-
-## Status
-
-**Tested.** Implemented; tested on real audio.
 
 ## Related
 

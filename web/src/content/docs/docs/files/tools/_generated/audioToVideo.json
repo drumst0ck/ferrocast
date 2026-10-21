@@ -3,7 +3,6 @@
   "slug": "audio-to-video",
   "name": "Audio to video",
   "status": "window",
-  "level": "tested",
   "shortcut": null,
   "formats": [
     "mp3",

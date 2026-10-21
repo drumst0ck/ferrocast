@@ -1,7 +1,6 @@
 ---
 title: "Migrar desde Raycast"
 description: "Qué se conserva al pasar de Raycast a Ferrocast. Los Script Commands funcionan tal cual, los snippets se importan desde JSON y qué aún no está incluido."
-status: tested
 sidebar:
   order: 4
 ---
@@ -32,10 +31,6 @@ Extensiones React, sincronización, Search Menu Bar Items y contexto de IA (sele
 :::caution[Límites]
 Si vives dentro de las extensiones de Raycast, Ferrocast todavía no las reemplaza. Los argumentos de los Script Commands se pasan por línea de comandos, como en Raycast, y pueden verse con `ps` mientras el script corre.
 :::
-
-## Estado
-
-**Tested.** Script Commands e importación de snippets están implementados.
 
 ## Relacionado
 

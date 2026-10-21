@@ -3,7 +3,6 @@
   "slug": "bleep-audio",
   "name": "Bleep audio",
   "status": "window",
-  "level": "tested",
   "shortcut": null,
   "formats": [
     "mp3",

@@ -1,7 +1,6 @@
 ---
 title: "Trim video"
 description: "Trim a video in Ferrocast with a frame-accurate viewer, timeline and start and end markers, or a typed trim range. Requires ffmpeg."
-status: tested
 sidebar:
   order: 9
 ---
@@ -9,17 +8,13 @@ import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
 
 The trim viewer shows the frame at the cursor with a timeline, start and end markers, and steps by frame or second. Pressing <kbd>↵</kbd> writes an exact, frame-accurate cut (re-encoded).
 
-Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>V</kbd> on a video result. <kbd>←</kbd> <kbd>→</kbd> step a frame, <kbd>⇧</kbd> <kbd>←</kbd> <kbd>→</kbd> a second, <kbd>I</kbd> and <kbd>O</kbd> set markers, <kbd>Home</kbd> and <kbd>End</kbd> jump, and you can click the bar. Typed: `trim 0:10-0:30` (stream copy, so cuts land on keyframes).
+Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>V</kbd> on a video result. <kbd>←</kbd> <kbd>→</kbd> step a frame, <kbd>⇧</kbd> <kbd>←</kbd> <kbd>→</kbd> a second, <kbd>I</kbd> and <kbd>O</kbd> set markers, <kbd>Home</kbd> and <kbd>End</kbd> jump, and you can click the bar. Typed command: `trim 0:10-0:30` (stream copy, so cuts land on keyframes).
 
 <ToolFacts id="trimVideo" />
 
 :::caution[Limits]
 Needs ffmpeg.
 :::
-
-## Status
-
-**Tested.** Implemented; rendering verified with a real frame.
 
 ## Related
 

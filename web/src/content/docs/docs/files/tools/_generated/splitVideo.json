@@ -3,7 +3,6 @@
   "slug": "split-video",
   "name": "Split video",
   "status": "window",
-  "level": "tested",
   "shortcut": null,
   "formats": [
     "mp4",

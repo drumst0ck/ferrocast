@@ -1,7 +1,6 @@
 ---
 title: "Compilar desde el código"
 description: "Compila el paquete de la app Ferrocast y un DMG desde el código fuente con los scripts del repositorio. Requiere Rust 1.95 y un Mac con Apple Silicon."
-status: tested
 sidebar:
   order: 3
 ---
@@ -25,10 +24,6 @@ La vía soportada es Homebrew compilando desde fuente. El DMG de `scripts/dmg.sh
 :::caution[Límites]
 El script de notarización es opcional. Los Mac Intel no son compatibles.
 :::
-
-## Estado
-
-**Tested.** Los scripts están implementados; el de notarización es opcional.
 
 ## Relacionado
 

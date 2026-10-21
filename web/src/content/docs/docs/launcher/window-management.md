@@ -1,7 +1,6 @@
 ---
 title: "Window management"
 description: "About 40 window layout commands in Ferrocast: halves, thirds, corners, center and moving between displays, driven by the macOS Accessibility permission."
-status: tested
 sidebar:
   order: 9
 ---
@@ -12,10 +11,6 @@ Run a command from the launcher by name, or give it its own hotkey with <kbd>⇧
 :::caution[Limits]
 Needs the Accessibility permission.
 :::
-
-## Status
-
-**Tested.** Implemented; requires Accessibility.
 
 ## Related
 

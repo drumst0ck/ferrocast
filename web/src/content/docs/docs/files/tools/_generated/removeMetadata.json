@@ -3,7 +3,6 @@
   "slug": "edit-metadata",
   "name": "Edit metadata",
   "status": "preset",
-  "level": "tested",
   "shortcut": null,
   "formats": [
     "jpg",

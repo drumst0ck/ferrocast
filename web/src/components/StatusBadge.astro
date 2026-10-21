@@ -1,7 +1,0 @@
----
-import { levels, type Level } from '../data/status';
-interface Props { level: Level; long?: boolean }
-const { level, long = false } = Astro.props;
-const l = levels[level];
----
-<span class={`sb sb-${level}`} title={l.text}><i aria-hidden="true"></i>{long ? l.text : l.short}{!long && <span class="sr-only">: {l.text}</span>}</span>

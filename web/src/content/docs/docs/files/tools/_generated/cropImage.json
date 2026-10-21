@@ -3,7 +3,6 @@
   "slug": "crop-image",
   "name": "Crop image",
   "status": "window",
-  "level": "tested",
   "shortcut": "⇧⌘K",
   "formats": [
     "jpg",

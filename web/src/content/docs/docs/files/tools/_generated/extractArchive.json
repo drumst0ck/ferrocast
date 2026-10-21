@@ -3,7 +3,6 @@
   "slug": "extract-archive",
   "name": "Extract archive",
   "status": "preset",
-  "level": "tested",
   "shortcut": null,
   "formats": [
     "zip",

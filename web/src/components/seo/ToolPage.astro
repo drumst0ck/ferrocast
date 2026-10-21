@@ -5,7 +5,6 @@ import SiteFooter from '../SiteFooter.astro';
 import Crumbs from './Crumbs.astro';
 import { getCollection } from 'astro:content';
 import { installCommand as brewBlock } from '../../data/install';
-import { levels } from '../../data/status';
 import { toolMeta, type ToolPage } from '../../lib/seo/tools';
 import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
 import '../../styles/seo.css';
@@ -33,7 +32,6 @@ const jsonLd = [breadcrumbs(crumbs), howTo(`${t.name} on Mac with Ferrocast`, me
     <h1>{t.name} on your Mac, offline</h1>
     <p class="lead">{doc.data.description}</p>
     <dl>
-      <dt>Status</dt><dd>{levels[t.level].label}: {levels[t.level].text}</dd>
       <dt>Shortcut</dt><dd>{t.shortcut ? <kbd>{t.shortcut}</kbd> : 'None; open it from the Tools wheel or the Convert view'}</dd>
       <dt>Input formats</dt><dd>{t.formats.map((f, i) => <><code>{f}</code>{i < t.formats.length - 1 ? ' ' : ''}</>)}</dd>
     </dl>

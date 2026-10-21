@@ -1,5 +1,4 @@
 import toolsData from '../../data/tools.json';
-import { levels, toolLevel, type Level } from '../../data/status';
 
 export interface ToolPage {
   id: string;
@@ -7,7 +6,6 @@ export interface ToolPage {
   name: string;
   docSlug: string;
   status: string;
-  level: Level;
   shortcut: string | null;
   formats: string[];
   screenshot: string | null;
@@ -54,7 +52,6 @@ export function allTools(): ToolPage[] {
       name: t.name,
       docSlug: m[0],
       status: t.status,
-      level: toolLevel(t.status),
       shortcut: t.shortcut,
       formats: t.formats,
       screenshot: m[1] ? `/img/${m[1]}.jpg` : null,
@@ -67,8 +64,7 @@ export function toolMeta(t: ToolPage): { title: string; description: string } {
   const title = `${t.name} on Mac, offline · Ferrocast`;
   const kind = t.status === 'window' ? 'a window' : 'a one-step preset';
   const opts = [
-    `${t.name} on your Mac with Ferrocast: ${kind}, ${levels[t.level].label.toLowerCase()} status, local only, nothing uploaded. Open it from the Tools wheel (⌘ while dragging).`,
-    `${t.name} on your Mac with Ferrocast: ${kind}, ${levels[t.level].label.toLowerCase()} status, local only, nothing uploaded. Open it from the Tools wheel.`,
+    `${t.name} on your Mac with Ferrocast: ${kind}, local only, nothing uploaded. Open it from the Tools wheel (⌘ while dragging).`,
     `${t.name} on your Mac with Ferrocast: ${kind}, local only, nothing uploaded. Open it from the Tools wheel.`,
   ];
   const description = opts.find((o) => o.length <= 155) ?? opts[opts.length - 1];

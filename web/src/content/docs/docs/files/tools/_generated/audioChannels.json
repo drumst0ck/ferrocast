@@ -3,7 +3,6 @@
   "slug": "audio-channels",
   "name": "Audio channels",
   "status": "window",
-  "level": "tested",
   "shortcut": null,
   "formats": [
     "mp3",

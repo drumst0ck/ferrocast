@@ -1,7 +1,6 @@
 ---
 title: "Script Commands"
 description: "Turn any script into a Ferrocast command. Raycast-compatible metadata, full, compact, silent and inline output modes, and confirmation for risky scripts."
-status: tested
 sidebar:
   order: 8
 ---
@@ -20,10 +19,6 @@ Manage script folders in Settings, Scripts tab, and run the commands from the la
 :::caution[Limits]
 Script Command arguments (including those of type `password`) are passed on the command line, as in Raycast, and can be seen with `ps` while the script runs. Do not put critical secrets there.
 :::
-
-## Status
-
-**Tested.** Implemented for all four modes.
 
 ## Related
 

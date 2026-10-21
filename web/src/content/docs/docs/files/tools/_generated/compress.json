@@ -3,7 +3,6 @@
   "slug": "compress",
   "name": "Compress",
   "status": "preset",
-  "level": "tested",
   "shortcut": null,
   "formats": [
     "jpg",

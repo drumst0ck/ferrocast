@@ -3,7 +3,6 @@
   "slug": "join-videos",
   "name": "Join videos",
   "status": "preset",
-  "level": "tested",
   "shortcut": null,
   "formats": [
     "mp4",

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { en } from './home.en';
 import { es } from './home.es';
-import { statusLine, STATUS_DATE } from '../data/status';
 
 /** Flatten to "path:type" (arrays keep their length) so any missing key, extra key or length drift shows up. */
 function shape(v: unknown, path = ''): string[] {
@@ -24,9 +23,6 @@ describe('home copy', () => {
     const bad: string[] = [];
     walk(en, es, '', bad);
     expect(bad).toEqual([]);
-  });
-  it('keeps the English status line identical to status.ts', () => {
-    expect(en.files.statusLine.replace('{date}', STATUS_DATE)).toBe(statusLine);
   });
   it('has meta descriptions that fit 140-155 characters once filled', () => {
     for (const t of [en, es]) {

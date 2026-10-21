@@ -3,7 +3,6 @@
   "slug": "split-pdf",
   "name": "Split PDF",
   "status": "preset",
-  "level": "tested",
   "shortcut": null,
   "formats": [
     "pdf"
