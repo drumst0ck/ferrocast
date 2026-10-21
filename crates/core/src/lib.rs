@@ -2,10 +2,12 @@
 //! placeholders, script commands, persisted models).
 
 pub mod ai;
+pub mod annotate;
 pub mod calc;
 pub mod chatgpt;
 pub mod clipping;
 pub mod collage;
+pub mod croprect;
 pub use clipping::clipping_fixture_rsrc;
 pub mod color;
 pub mod convert;
@@ -21,6 +23,7 @@ pub mod matrix;
 pub mod media;
 pub mod models;
 pub mod pages;
+pub mod pdfplan;
 pub mod photo;
 pub mod placeholders;
 pub mod ranking;

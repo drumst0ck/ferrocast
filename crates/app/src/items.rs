@@ -277,6 +277,20 @@ pub enum Act {
     ClearCalcHistory,
     /// Open the Convert view for these files.
     Convert(Vec<PathBuf>),
+    /// Open the collage editor for these images.
+    CollageImages(Vec<PathBuf>),
+    /// Open the background editor for this image.
+    FrameImage(PathBuf),
+    /// Open the redaction editor for this image.
+    RedactImage(PathBuf),
+    /// Open the crop editor for this image.
+    CropImage(PathBuf),
+    /// Open the live-preview photo editor for this image.
+    EditPhoto(PathBuf),
+    /// Open the annotation canvas for this image.
+    AnnotateCanvas(PathBuf),
+    /// Open the visual page organizer for this PDF.
+    OrganizePdf(PathBuf),
     /// Open the format wheel for these files, driven by the keyboard.
     OpenWheel(Vec<PathBuf>),
     /// Put the files on the clipboard, ready to paste in Finder.

@@ -57,6 +57,56 @@ pub enum View {
     CalcHistory,
     Shelf,
     Convert(Vec<PathBuf>),
+    /// Annotation canvas: original file, its pixel size, the drawing and the pen state.
+    Annotate {
+        file: PathBuf,
+        size: (u32, u32),
+        doc: ferrocast_core::annotate::Doc,
+        tool: ferrocast_core::annotate::Tool,
+        color: usize,
+        sel: Option<usize>,
+    },
+    /// Collage editor: the pictures, the options and the colour index.
+    CollageImage {
+        files: Vec<PathBuf>,
+        opts: ferrocast_core::collage::CollageOpts,
+        color: usize,
+    },
+    /// Background editor: file, pixel size, options and the colour index.
+    FrameImage {
+        file: PathBuf,
+        size: (u32, u32),
+        opts: ferrocast_core::frame::FrameOpts,
+        color: usize,
+    },
+    /// Redaction editor: file, pixel size, the areas, the selected one and the style.
+    RedactImage {
+        file: PathBuf,
+        size: (u32, u32),
+        areas: Vec<ferrocast_core::croprect::Rect>,
+        sel: Option<usize>,
+        blur: bool,
+        color: usize,
+    },
+    /// Crop editor: file, pixel size, the rectangle and an optional locked aspect.
+    CropImage {
+        file: PathBuf,
+        size: (u32, u32),
+        rect: ferrocast_core::croprect::Rect,
+        aspect: Option<(u32, u32)>,
+    },
+    /// Live-preview photo editor: original file, its pixel size and the control values.
+    EditPhoto {
+        file: PathBuf,
+        size: (u32, u32),
+        opts: ferrocast_core::photo::PhotoOpts,
+    },
+    /// Visual page organizer for one PDF: `n` source pages, the edited plan.
+    PdfOrganize {
+        file: PathBuf,
+        n: usize,
+        plan: ferrocast_core::pdfplan::PdfPlan,
+    },
     Notes,
     Colors(Rgba),
     SnippetForm {
@@ -181,6 +231,13 @@ impl View {
             View::Timers => "Timers",
             View::CalcHistory => "Calculator History",
             View::Shelf => "File Shelf",
+            View::PdfOrganize { .. } => "Organize PDF",
+            View::Annotate { .. } => "Annotate Image",
+            View::EditPhoto { .. } => "Edit Photo",
+            View::CropImage { .. } => "Crop Image",
+            View::RedactImage { .. } => "Redact Image",
+            View::FrameImage { .. } => "Add Background",
+            View::CollageImage { .. } => "Make a Collage",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -974,6 +1031,12 @@ impl App {
         self.reset_to_root();
         let Some(i) = picked.filter(|i| *i < segs.len()) else { return };
         match segs[i].pick.clone() {
+            WheelPick::Image(ferrocast_core::convert::ImageOp::Collage) if files.len() >= 2 => {
+                self.perform(Act::CollageImages(files), false);
+            }
+            WheelPick::Image(ferrocast_core::convert::ImageOp::Annotate) if files.len() == 1 => {
+                self.perform(Act::AnnotateCanvas(files[0].clone()), false);
+            }
             WheelPick::Image(op) => {
                 self.toast(format!("{}…", op.label()));
                 services::image_op_files(files, op, self.bus.clone());
@@ -1014,6 +1077,108 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::AnnotateLoaded(file, png) => {
+                    if matches!(self.view(), View::Annotate { file: f, .. } if *f == file) {
+                        match png.as_deref().and_then(|b| image::load_from_memory(b).ok()).map(|i| i.to_rgba8()) {
+                            Some(rgba) => {
+                                let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                                let ci = egui::ColorImage::from_rgba_unmultiplied([w, h], rgba.as_raw());
+                                let tex = self.ctx.load_texture("annot-view", ci, egui::TextureOptions::LINEAR);
+                                self.ctx.data_mut(|d| {
+                                    d.insert_temp(Id::new("annot-base"), std::sync::Arc::new((rgba.into_raw(), w, h)));
+                                    d.insert_temp(Id::new("annot-tex"), tex);
+                                    d.remove::<ferrocast_core::annotate::Doc>(Id::new("annot-last"));
+                                });
+                            }
+                            None => self.toast("Annotate: could not read the image"),
+                        }
+                    }
+                }
+                Msg::CollageLoaded(files, thumbs) => {
+                    if matches!(self.view(), View::CollageImage { files: f, .. } if *f == files) {
+                        let imgs: Vec<image::RgbaImage> =
+                            thumbs.into_iter().filter_map(|(w, h, px)| image::RgbaImage::from_raw(w as u32, h as u32, px)).collect();
+                        if imgs.len() == files.len() {
+                            self.ctx.data_mut(|d| {
+                                d.insert_temp(Id::new("collage-base"), std::sync::Arc::new(imgs));
+                                d.remove::<ferrocast_core::collage::CollageOpts>(Id::new("collage-last"));
+                            });
+                        } else {
+                            self.toast("Collage: could not read every image");
+                        }
+                    }
+                }
+                Msg::FrameLoaded(file, png) => {
+                    if matches!(self.view(), View::FrameImage { file: f, .. } if *f == file) {
+                        match png.as_deref().and_then(|b| image::load_from_memory(b).ok()).map(|i| i.to_rgba8()) {
+                            Some(rgba) => self.ctx.data_mut(|d| {
+                                d.insert_temp(Id::new("frame-base"), std::sync::Arc::new(rgba));
+                                d.remove::<(ferrocast_core::frame::FrameOpts, usize)>(Id::new("frame-last"));
+                            }),
+                            None => self.toast("Background: could not read the image"),
+                        }
+                    }
+                }
+                Msg::RedactLoaded(file, png) => {
+                    if matches!(self.view(), View::RedactImage { file: f, .. } if *f == file) {
+                        match png.as_deref().and_then(services::decode_png) {
+                            Some(img) => {
+                                let tex = self.ctx.load_texture("redact-view", img, egui::TextureOptions::LINEAR);
+                                self.ctx.data_mut(|d| d.insert_temp(Id::new("redact-tex"), tex));
+                            }
+                            None => self.toast("Redact: could not read the image"),
+                        }
+                    }
+                }
+                Msg::CropLoaded(file, png) => {
+                    if matches!(self.view(), View::CropImage { file: f, .. } if *f == file) {
+                        match png.as_deref().and_then(services::decode_png) {
+                            Some(img) => {
+                                let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                                self.ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                            }
+                            None => self.toast("Crop: could not read the image"),
+                        }
+                    }
+                }
+                Msg::EditLoaded(file, png) => {
+                    if matches!(self.view(), View::EditPhoto { file: f, .. } if *f == file) {
+                        match png.as_deref().and_then(|b| image::load_from_memory(b).ok()).map(|i| i.to_rgba8()) {
+                            Some(rgba) => {
+                                let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                                self.ctx.data_mut(|d| {
+                                    d.insert_temp(Id::new("edit-base"), std::sync::Arc::new((rgba.into_raw(), w, h)));
+                                    d.remove::<ferrocast_core::photo::PhotoOpts>(Id::new("edit-last"));
+                                });
+                            }
+                            None => self.toast("Edit Photo: could not read the image"),
+                        }
+                    }
+                }
+                Msg::StampChosen(file, at, picked) => {
+                    let Some((pw, ph, rgba)) = picked else { continue };
+                    let Some(img) = ferrocast_core::annotate::Img::new(pw, ph, rgba) else { continue };
+                    if let Some(View::Annotate { file: f, size, doc, color, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            // a quarter of the picture's width, keeping the stamp's own proportions
+                            let w = size.0 as f32 * 0.25;
+                            let style = ferrocast_core::annotate::Style {
+                                color: ferrocast_core::annotate::COLORS[(*color).min(5)],
+                                ..Default::default()
+                            };
+                            doc.add(ferrocast_core::annotate::Shape::Stamp { at, size: (w, w * ph as f32 / pw as f32), img }, style);
+                        }
+                    }
+                }
+                Msg::PdfThumb(file, i, png) => {
+                    // only for the organizer that asked for it
+                    if matches!(self.view(), View::PdfOrganize { file: f, .. } if *f == file) {
+                        if let Some(img) = png.as_deref().and_then(services::decode_png) {
+                            let tex = self.ctx.load_texture(format!("pdfthumb-{i}"), img, egui::TextureOptions::LINEAR);
+                            self.ctx.data_mut(|d| d.insert_temp(Id::new(("pdfthumb", i)), tex));
+                        }
+                    }
+                }
                 Msg::Moved(pairs) => {
                     // keep the file results pointing at the new places
                     for (old, new) in &pairs {
@@ -1720,7 +1885,7 @@ impl App {
                                             ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
                                             ImageOp::Annotate => "annotate markup draw arrow text preview",
                                             ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compress size smaller",
-                                            ImageOp::CropExact(..) => "crop exact dimensions pixels",
+                                            ImageOp::CropExact(..) | ImageOp::CropRect(..) => "crop exact dimensions pixels",
                                             ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
                                         },
                                     )
@@ -1748,7 +1913,7 @@ impl App {
                                     ImageOp::Adjust(_) => "sf:slider.horizontal.3",
                                     ImageOp::Annotate => "sf:pencil.tip.crop.circle",
                                     ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
-                                    ImageOp::CropExact(..) => "sf:crop",
+                                    ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
                                     ImageOp::SetMeta(_) => "sf:tag",
                                 },
                                 [255, 140, 60],
@@ -1975,6 +2140,16 @@ impl App {
                 a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
                 a.push(Action::new("Convert…", Act::Convert(vec![p.clone()])).key(CMD, Key::T));
                 a.push(Action::new("Format Wheel", Act::OpenWheel(vec![p.clone()])).key(Modifiers::ALT, Key::Enter));
+                if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Image {
+                    a.push(Action::new("Annotate…", Act::AnnotateCanvas(p.clone())).key(CMD_SHIFT, Key::A));
+                    a.push(Action::new("Edit Photo…", Act::EditPhoto(p.clone())).key(CMD_SHIFT, Key::E));
+                    a.push(Action::new("Crop…", Act::CropImage(p.clone())).key(CMD_SHIFT, Key::K));
+                    a.push(Action::new("Redact Areas…", Act::RedactImage(p.clone())).key(CMD_SHIFT, Key::R));
+                    a.push(Action::new("Add Background…", Act::FrameImage(p.clone())).key(CMD_SHIFT, Key::B));
+                }
+                if ferrocast_core::convert::ext(p) == "pdf" {
+                    a.push(Action::new("Organize Pages…", Act::OrganizePdf(p.clone())).key(CMD_SHIFT, Key::O));
+                }
                 a.push(Action::new("Copy File", Act::CopyFiles(vec![p.clone()])).key(CMD_SHIFT, Key::Period));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Move to…", Act::MoveFiles(vec![p.clone()])).key(CMD_SHIFT, Key::M));
@@ -2280,6 +2455,14 @@ impl App {
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
                 self.hide();
                 self.reset_to_root();
+            }
+            Kind::ImageTool(files, ferrocast_core::convert::ImageOp::Collage) if files.len() >= 2 => {
+                let f = files.clone();
+                self.perform(Act::CollageImages(f), false);
+            }
+            Kind::ImageTool(files, ferrocast_core::convert::ImageOp::Annotate) if files.len() == 1 => {
+                let f = files[0].clone();
+                self.perform(Act::AnnotateCanvas(f), false);
             }
             Kind::ImageTool(files, op) => {
                 let (files, op) = (files.clone(), op.clone());
@@ -2844,6 +3027,132 @@ impl App {
                 self.show();
                 self.push(View::Convert(files));
             }
+            Act::CollageImages(files) => {
+                if files.len() < 2 {
+                    self.toast("A collage needs at least two images");
+                } else {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("collage-tex"));
+                        d.remove::<std::sync::Arc<Vec<image::RgbaImage>>>(Id::new("collage-base"));
+                        d.remove::<ferrocast_core::collage::CollageOpts>(Id::new("collage-last"));
+                    });
+                    let (bus, fs) = (self.bus.clone(), files.clone());
+                    std::thread::spawn(move || {
+                        let thumbs: Vec<(usize, usize, Vec<u8>)> = fs
+                            .iter()
+                            .filter_map(|f| {
+                                let png = services::display_png(f, 300)?;
+                                let img = image::load_from_memory(&png).ok()?.to_rgba8();
+                                Some((img.width() as usize, img.height() as usize, img.into_raw()))
+                            })
+                            .collect();
+                        bus.send(Msg::CollageLoaded(fs, thumbs));
+                    });
+                    self.show();
+                    self.push(View::CollageImage { files, opts: Default::default(), color: 0 });
+                }
+            }
+            Act::FrameImage(file) => match services::image_size(&file) {
+                Some(size) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("frame-tex"));
+                        d.remove::<std::sync::Arc<image::RgbaImage>>(Id::new("frame-base"));
+                        d.remove::<(ferrocast_core::frame::FrameOpts, usize)>(Id::new("frame-last"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::FrameLoaded(f.clone(), services::display_png(&f, 600))));
+                    self.show();
+                    let pad = (size.0.max(size.1) / 12).max(8);
+                    self.push(View::FrameImage {
+                        file,
+                        size,
+                        opts: ferrocast_core::frame::FrameOpts { pad, radius: pad / 2, shadow: pad / 3, ..Default::default() },
+                        color: 4,
+                    });
+                }
+                None => self.toast("Background: could not read the image"),
+            },
+            Act::RedactImage(file) => match services::image_size(&file) {
+                Some(size) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("redact-tex"));
+                        d.remove::<(ferrocast_core::croprect::Handle, ferrocast_core::croprect::Rect, Pos2, usize)>(Id::new("redact-drag"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::RedactLoaded(f.clone(), services::display_png(&f, 1000))));
+                    self.show();
+                    self.push(View::RedactImage { file, size, areas: vec![], sel: None, blur: false, color: 5 });
+                }
+                None => self.toast("Redact: could not read the image"),
+            },
+            Act::CropImage(file) => match services::image_size(&file) {
+                Some(size) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("crop-tex"));
+                        d.remove::<(ferrocast_core::croprect::Handle, ferrocast_core::croprect::Rect, Pos2)>(Id::new("crop-drag"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::CropLoaded(f.clone(), services::display_png(&f, 1000))));
+                    self.show();
+                    self.push(View::CropImage { file, size, rect: ferrocast_core::croprect::full(size.0, size.1), aspect: None });
+                }
+                None => self.toast("Crop: could not read the image"),
+            },
+            Act::EditPhoto(file) => match services::image_size(&file) {
+                Some(size) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("edit-tex"));
+                        d.remove::<std::sync::Arc<(Vec<u8>, usize, usize)>>(Id::new("edit-base"));
+                        d.remove::<ferrocast_core::photo::PhotoOpts>(Id::new("edit-last"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::EditLoaded(f.clone(), services::display_png(&f, 800))));
+                    self.show();
+                    self.push(View::EditPhoto { file, size, opts: Default::default() });
+                }
+                None => self.toast("Edit Photo: could not read the image"),
+            },
+            Act::AnnotateCanvas(file) => match services::image_size(&file) {
+                Some(size) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("annot-tex"));
+                        d.remove::<std::sync::Arc<(Vec<u8>, usize, usize)>>(Id::new("annot-base"));
+                        d.remove::<ferrocast_core::annotate::Doc>(Id::new("annot-last"));
+                        d.remove::<Option<((f32, f32), String)>>(Id::new("annot-text"));
+                        d.remove::<bool>(Id::new("annot-typing"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::AnnotateLoaded(f.clone(), services::display_png(&f, 1600))));
+                    self.show();
+                    self.push(View::Annotate {
+                        file,
+                        size,
+                        doc: Default::default(),
+                        tool: ferrocast_core::annotate::Tool::Arrow,
+                        color: 0,
+                        sel: None,
+                    });
+                }
+                None => self.toast("Annotate: could not read the image"),
+            },
+            Act::OrganizePdf(file) => match ferrocast_macos::pdf::page_count(&file) {
+                Ok(n) if n > 0 => {
+                    for i in 0..n {
+                        self.ctx.data_mut(|d| d.remove::<egui::TextureHandle>(Id::new(("pdfthumb", i))));
+                    }
+                    let bus = self.bus.clone();
+                    let f = file.clone();
+                    std::thread::spawn(move || {
+                        for i in 0..n {
+                            bus.send(Msg::PdfThumb(f.clone(), i, ferrocast_macos::pdf::thumbnail(&f, i, 240).ok()));
+                        }
+                    });
+                    self.show();
+                    self.push(View::PdfOrganize { file, n, plan: ferrocast_core::pdfplan::PdfPlan::new(n) });
+                }
+                Ok(_) => self.toast("This PDF has no pages"),
+                Err(e) => self.toast(format!("Organize PDF: {e}")),
+            },
             Act::OpenWheel(files) => {
                 let kind = ferrocast_core::wheel::WheelKind::Convert;
                 let segs = self.wheel_segments(kind, &files);
@@ -3091,7 +3400,7 @@ pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static
         ImageOp::Adjust(_) => "sf:slider.horizontal.3",
         ImageOp::Annotate => "sf:pencil.tip.crop.circle",
         ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
-        ImageOp::CropExact(..) => "sf:crop",
+        ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
         ImageOp::SetMeta(_) => "sf:tag",
     }
 }

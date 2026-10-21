@@ -106,6 +106,38 @@ pub fn page_count(src: &Path) -> Result<usize, String> {
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
+const THUMB_JS: &str = r#"
+ObjC.import('Quartz');
+ObjC.import('AppKit');
+function run(argv) {
+  var doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
+  if (doc.isNil()) { throw new Error('cannot open PDF'); }
+  if (doc.isLocked) { throw new Error('PDF is locked'); }
+  var i = parseInt(argv[1]), max = parseInt(argv[2]);
+  if (!(i >= 0 && i < doc.pageCount)) { throw new Error('page out of range'); }
+  var page = doc.pageAtIndex(i);
+  var box = page.boundsForBox($.kPDFDisplayBoxCropBox);
+  var k = max / Math.max(box.size.width, box.size.height);
+  var img = page.thumbnailOfSizeForBox($.NSMakeSize(Math.max(1, Math.round(box.size.width * k)), Math.max(1, Math.round(box.size.height * k))), $.kPDFDisplayBoxCropBox);
+  var rep = $.NSBitmapImageRep.imageRepWithData(img.TIFFRepresentation);
+  var png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $());
+  if (!png.writeToFileAtomically(argv[3], true)) { throw new Error('cannot write thumbnail'); }
+  return 'ok';
+}
+"#;
+
+/// PNG bytes of page `index` (0-based) scaled so its longest side is `max_px`.
+pub fn thumbnail(src: &Path, index: usize, max_px: u32) -> Result<Vec<u8>, String> {
+    let s = path_str(src)?;
+    let dir = std::env::temp_dir().join(format!("ferrocast-thumb-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&dir).map_err(|e| e.to_string())?;
+    let out = dir.join("t.png");
+    let res = path_str(&out).and_then(|o| run_jxa(THUMB_JS, &[s, &index.to_string(), &max_px.clamp(16, 2048).to_string(), o]));
+    let bytes = res.and_then(|_| std::fs::read(&out).map_err(|e| e.to_string()));
+    let _ = std::fs::remove_dir_all(&dir);
+    bytes
+}
+
 /// Builds `dest` from the selected pages of `src`. Never overwrites `dest`.
 pub fn organize(src: &Path, pages: &[PageSel], dest: &Path) -> Result<(), String> {
     if pages.is_empty() {
@@ -208,6 +240,27 @@ function run(argv) {
 
     fn sel(index: usize, quarter_turns: i32) -> PageSel {
         PageSel { index, quarter_turns }
+    }
+
+    #[test]
+    fn thumbnails_are_pngs_of_the_requested_size() {
+        let d = tmp();
+        let s = fixture(&d);
+        let t = thumbnail(&s, 1, 120).unwrap();
+        assert_eq!(&t[..4], b"\x89PNG");
+        // the fixture page is square, so the longest side is the requested size
+        let w = u32::from_be_bytes([t[16], t[17], t[18], t[19]]);
+        let h = u32::from_be_bytes([t[20], t[21], t[22], t[23]]);
+        assert!(w.max(h) >= 118 && w.max(h) <= 122, "{w}x{h}");
+        assert!(thumbnail(&s, 3, 120).is_err(), "page out of range");
+        assert!(thumbnail(&d.join("missing.pdf"), 0, 120).is_err());
+        assert!(
+            std::fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with(&format!("ferrocast-thumb-{}-", std::process::id()))),
+            "scratch removed"
+        );
     }
 
     #[test]
