@@ -112,6 +112,64 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("vspeed") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    let d = crate::media_tools::video_info(ff, &file).map(|(d, _)| d);
+                    app.push(View::VideoSpeed { file, duration: d, factor: 2.0 });
+                }
+            }
+            Ok("vcrop") | Ok("vredact") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    if let Some(dims) = crate::media_tools::video_dims(ff, &file) {
+                        if let Some(img) = crate::media_tools::preview_frame(ff, &file, 1.0).and_then(|b| services::decode_png(&b)) {
+                            let tex = ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                            ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                        }
+                        let rect = ferrocast_core::croprect::fit_aspect(dims.0, dims.1, 1, 1);
+                        app.push(if std::env::var("FERROCAST_VIEW").as_deref() == Ok("vredact") {
+                            View::VideoRedact {
+                                file,
+                                size: Some(dims),
+                                rect,
+                                aspect: None,
+                                duration: 4.0,
+                                start: 1.0,
+                                end: 3.0,
+                                blur: true,
+                            }
+                        } else {
+                            View::VideoCrop { file, size: Some(dims), rect, aspect: Some((1, 1)) }
+                        });
+                    }
+                }
+            }
+            Ok("vtrim") | Ok("vsnapshot") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    if let Some((d, r)) = crate::media_tools::video_info(ff, &file) {
+                        let mut t = ferrocast_core::videoplan::Trim::new(d, r).unwrap();
+                        t.seek(d * 0.3);
+                        t.mark_start();
+                        t.seek(d * 0.7);
+                        t.mark_end();
+                        t.seek(d * 0.45);
+                        if let Some(img) = crate::media_tools::preview_frame(ff, &file, t.cursor).and_then(|b| services::decode_png(&b)) {
+                            let tex = ctx.load_texture("vt-view", img, egui::TextureOptions::LINEAR);
+                            ctx.data_mut(|d| {
+                                d.insert_temp(Id::new("vt-tex"), tex);
+                                d.insert_temp(Id::new("vt-asked"), t.cursor);
+                            });
+                        }
+                        app.push(if std::env::var("FERROCAST_VIEW").as_deref() == Ok("vsnapshot") {
+                            View::VideoSnapshot { file, trim: Some(t) }
+                        } else {
+                            View::VideoTrim { file, trim: Some(t) }
+                        });
+                    }
+                }
+            }
             Ok("collage") => {
                 let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
                     .unwrap_or_default()
@@ -371,7 +429,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. }) && ctx.egui_wants_keyboard_input());
+            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. }) && ctx.egui_wants_keyboard_input());
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -384,6 +442,7 @@ impl App {
             }
             k.cmd_enter = i.consume_key(CMD, Key::Enter);
             if (shape != Shape::Form || panel) && !typing {
+                k.repeat = i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, repeat: true, .. }));
                 k.enter = i.consume_key(Modifiers::NONE, Key::Enter);
             }
             if !typing {
@@ -492,6 +551,79 @@ impl App {
                         vec![file],
                         ferrocast_core::convert::FileTool::OrganizePdf(plan.selection()),
                         None,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
+            View::VideoSpeed { file, duration: Some(_), factor } if k.enter => {
+                if (factor - 1.0).abs() < 1e-9 {
+                    self.toast("Nothing to change: pick a speed other than 1×");
+                } else {
+                    self.toast("Changing speed…");
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::Speed(factor),
+                        self.tools.ffmpeg,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
+            View::VideoCrop { file, size: Some(size), rect, .. } if k.enter => {
+                if rect == ferrocast_core::croprect::full(size.0, size.1) {
+                    self.toast("Nothing to crop: drag the rectangle first");
+                } else {
+                    let (x, y, w, h) = ferrocast_core::croprect::tuple(rect);
+                    self.toast("Cropping video…");
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::CropVideo(x, y, w, h),
+                        self.tools.ffmpeg,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
+            View::VideoRedact { file, size: Some(_), rect, duration, start, end, blur, .. } if k.enter => {
+                if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start || end > duration {
+                    self.toast("Redact: use 0 ≤ start < end ≤ video duration");
+                } else {
+                    let (x, y, w, h) = ferrocast_core::croprect::tuple(rect);
+                    self.toast("Redacting video…");
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::RedactVideo(x, y, w, h, start, end, blur),
+                        self.tools.ffmpeg,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
+            View::VideoSnapshot { trim: Some(_), .. } if k.enter && k.repeat => true,
+            View::VideoSnapshot { file, trim: Some(t) } if k.enter => {
+                self.toast("Saving full-resolution frame…");
+                services::file_tool_files(
+                    vec![file],
+                    ferrocast_core::convert::FileTool::Snapshot(t.cursor),
+                    self.tools.ffmpeg,
+                    self.bus.clone(),
+                );
+                true
+            }
+            View::VideoTrim { file, trim: Some(t) } if k.enter => {
+                if t.is_whole() {
+                    self.toast("Nothing to trim: set a start (I) or an end (O) first");
+                } else {
+                    self.toast("Trimming…");
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::TrimExact(t.start, t.end),
+                        self.tools.ffmpeg,
                         self.bus.clone(),
                     );
                     self.pop();
@@ -1451,6 +1583,158 @@ impl App {
         p.text(c, Align2::CENTER_CENTER, hint, FontId::proportional(12.0), pal.text);
     }
 
+    /// Speed window: presets, a logarithmic slider and the resulting length. Pitch is preserved.
+    fn draw_video_speed(&mut self, ui: &mut Ui, area_in: Rect, pal: &Palette, duration: Option<f64>, factor: f64) {
+        use ferrocast_core::videoplan::{sped_duration, SPEED_MAX, SPEED_MIN};
+        let ctx = ui.ctx().clone();
+        let Some(d) = duration else {
+            ui.painter().text(area_in.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
+            return;
+        };
+        let mut f = factor;
+        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area_in.center(), Vec2::new(520.0, 220.0))), |ui| {
+            ui.spacing_mut().item_spacing.y = 14.0;
+            ui.horizontal(|ui| {
+                for p in [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0] {
+                    if ui.selectable_label((f - p).abs() < 1e-9, format!("{p}×")).clicked() {
+                        f = p;
+                    }
+                }
+            });
+            ui.add(egui::Slider::new(&mut f, SPEED_MIN..=SPEED_MAX).logarithmic(true).suffix("×"));
+            let len = sped_duration(d, f.clamp(SPEED_MIN, SPEED_MAX)).unwrap_or(d);
+            ui.label(RichText::new(format!("{d:.1} s  →  {len:.1} s")).size(22.0).color(pal.text));
+            ui.label(
+                RichText::new("The sound keeps its pitch. A video without sound just plays faster or slower.").size(12.0).color(pal.sub),
+            );
+        });
+        if (f - factor).abs() > 1e-12 {
+            if let Some(View::VideoSpeed { factor: x, .. }) = self.stack.last_mut() {
+                *x = f.clamp(SPEED_MIN, SPEED_MAX);
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "pick a preset or drag the slider · ↵ save a copy at this speed · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
+    /// Video trim viewer: the frame at the cursor, a timeline with start and end markers, and
+    /// stepping keys. Frames are extracted on a worker thread, one at a time, newest wins.
+    fn draw_video_trim(
+        &mut self,
+        ui: &mut Ui,
+        area_in: Rect,
+        pal: &Palette,
+        file: &std::path::Path,
+        trim: Option<ferrocast_core::videoplan::Trim>,
+    ) {
+        let ctx = ui.ctx().clone();
+        let Some(before) = trim else {
+            ui.painter().text(area_in.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
+            return;
+        };
+        let snapshot = matches!(self.view(), View::VideoSnapshot { .. });
+        let mut t = before;
+        ctx.input_mut(|i| {
+            let none = Modifiers::NONE;
+            for (key, frames) in [(Key::ArrowLeft, -1i64), (Key::ArrowRight, 1)] {
+                if i.consume_key(Modifiers::SHIFT, key) {
+                    t.step_secs(frames as f64);
+                } else if i.consume_key(none, key) {
+                    t.step_frames(frames);
+                }
+            }
+            if !snapshot && i.consume_key(none, Key::I) {
+                t.mark_start();
+            }
+            if !snapshot && i.consume_key(none, Key::O) {
+                t.mark_end();
+            }
+            if i.consume_key(none, Key::Home) {
+                t.seek(t.start);
+            }
+            if i.consume_key(none, Key::End) {
+                t.seek((t.end - t.frame()).max(0.0));
+            }
+        });
+        let bar = Rect::from_min_size(Pos2::new(area_in.min.x + 24.0, area_in.max.y - 92.0), Vec2::new(area_in.width() - 48.0, 26.0));
+        let resp = ui.interact(bar, Id::new("vt-bar"), egui::Sense::click_and_drag());
+        if let (true, Some(p)) = (resp.clicked() || resp.dragged(), resp.interact_pointer_pos()) {
+            t.seek(((p.x - bar.min.x) / bar.width()).clamp(0.0, 1.0) as f64 * t.duration);
+        }
+        let x_of = |s: f64| bar.min.x + (s / t.duration) as f32 * bar.width();
+        ui.painter().rect_filled(bar, 6.0, pal.field);
+        let sel = Rect::from_min_max(Pos2::new(x_of(t.start), bar.min.y), Pos2::new(x_of(t.end), bar.max.y));
+        ui.painter().rect_filled(sel, 6.0, pal.accent.gamma_multiply(0.45));
+        for m in [t.start, t.end] {
+            ui.painter().rect_filled(Rect::from_center_size(Pos2::new(x_of(m), bar.center().y), Vec2::new(4.0, 34.0)), 2.0, pal.accent);
+        }
+        ui.painter().rect_filled(Rect::from_center_size(Pos2::new(x_of(t.cursor), bar.center().y), Vec2::new(2.0, 34.0)), 1.0, pal.text);
+        // newest frame wanted: ask for it unless one is still being extracted
+        let busy: bool = ctx.data(|d| d.get_temp(Id::new("vt-busy"))).unwrap_or(false);
+        let asked: Option<f64> = ctx.data(|d| d.get_temp(Id::new("vt-asked")));
+        if !busy && asked != Some(t.cursor) {
+            if let Some(ff) = self.tools.ffmpeg {
+                ctx.data_mut(|d| {
+                    d.insert_temp(Id::new("vt-busy"), true);
+                    d.insert_temp(Id::new("vt-asked"), t.cursor);
+                });
+                let (bus, f, at) = (self.bus.clone(), file.to_path_buf(), t.cursor);
+                std::thread::spawn(move || bus.send(Msg::VideoFrame(f.clone(), at, crate::media_tools::preview_frame(ff, &f, at))));
+            }
+        }
+        let view = Rect::from_min_max(area_in.min + Vec2::new(24.0, 16.0), Pos2::new(area_in.max.x - 24.0, bar.min.y - 40.0));
+        match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("vt-tex"))) {
+            Some(tex) => {
+                let sz = tex.size_vec2();
+                let k = (view.width() / sz.x).min(view.height() / sz.y);
+                egui::Image::new(&tex).paint_at(ui, Rect::from_center_size(view.center(), sz * k));
+            }
+            None => {
+                ui.painter().text(view.center(), egui::Align2::CENTER_CENTER, "Loading frame…", FontId::proportional(16.0), pal.sub);
+            }
+        }
+        ui.painter().text(
+            Pos2::new(bar.min.x, bar.min.y - 18.0),
+            egui::Align2::LEFT_CENTER,
+            if snapshot {
+                format!("at {} · PNG saves at original resolution", t.label(t.cursor))
+            } else {
+                format!(
+                    "at {}   ·   start {}   ·   end {}   ·   clip {:.2} s",
+                    t.label(t.cursor),
+                    t.label(t.start),
+                    t.label(t.end),
+                    t.clip()
+                )
+            },
+            FontId::proportional(12.5),
+            pal.text,
+        );
+        ui.painter().text(
+            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            if snapshot {
+                "←/→ frame · ⇧←/→ second · click to jump · ↵ save full-resolution PNG · esc cancel"
+            } else {
+                "←/→ frame · ⇧←/→ second · click the bar to jump · I start · O end · ↵ save the exact cut · esc cancel"
+            },
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+        if t != before {
+            if let Some(View::VideoTrim { trim, .. } | View::VideoSnapshot { trim, .. }) = self.stack.last_mut() {
+                *trim = Some(t);
+            }
+            ctx.request_repaint();
+        }
+    }
+
     /// Collage editor: layout buttons, width/gap/corner sliders and a background; the preview is
     /// laid out on small copies of the pictures with the sizes scaled to match.
     fn draw_collage(
@@ -1937,12 +2221,21 @@ impl App {
         ui.painter().text(
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
             egui::Align2::CENTER_CENTER,
-            "drag inside to move · drag an edge or corner to resize · presets lock the ratio · ↵ save a cropped copy · esc cancel",
+            if matches!(self.view(), View::VideoRedact { .. }) {
+                "drag to move/resize · preview marks area only · ↵ save redacted copy · esc cancel"
+            } else {
+                "drag inside to move · drag an edge or corner to resize · presets lock the ratio · ↵ save a cropped copy · esc cancel"
+            },
             FontId::proportional(11.5),
             pal.sub,
         );
         if (rect, aspect) != before {
-            if let Some(View::CropImage { rect: r, aspect: a, .. }) = self.stack.last_mut() {
+            if let Some(
+                View::CropImage { rect: r, aspect: a, .. }
+                | View::VideoCrop { rect: r, aspect: a, .. }
+                | View::VideoRedact { rect: r, aspect: a, .. },
+            ) = self.stack.last_mut()
+            {
                 (*r, *a) = (rect, aspect);
             }
             ctx.request_repaint();
@@ -2386,6 +2679,39 @@ impl App {
                         self.save_notes();
                     }
                 });
+            }
+            View::VideoRedact { size: Some(size), rect: cover, aspect, duration, mut start, mut end, mut blur, .. } => {
+                let strip = Rect::from_min_size(rect.min + Vec2::new(12.0, 4.0), Vec2::new(rect.width() - 24.0, 34.0));
+                ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Start s");
+                        ui.add(egui::DragValue::new(&mut start).range(0.0..=duration).speed(0.04));
+                        ui.label("End s");
+                        ui.add(egui::DragValue::new(&mut end).range(0.0..=duration).speed(0.04));
+                        ui.selectable_value(&mut blur, false, "Solid black");
+                        ui.selectable_value(&mut blur, true, "Blur");
+                    });
+                });
+                if let Some(View::VideoRedact { start: a, end: b, blur: c, .. }) = self.stack.last_mut() {
+                    (*a, *b, *c) = (start, end, blur);
+                }
+                let area = Rect::from_min_max(rect.min + Vec2::new(0.0, 38.0), rect.max);
+                self.draw_crop(ui, area, pal, size, cover, aspect);
+            }
+            View::VideoRedact { .. } => {
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
+            }
+            View::VideoSpeed { duration, factor, .. } => {
+                self.draw_video_speed(ui, rect, pal, duration, factor);
+            }
+            View::VideoCrop { size: Some(size), rect: crop, aspect, .. } => {
+                self.draw_crop(ui, rect, pal, size, crop, aspect);
+            }
+            View::VideoCrop { .. } => {
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
+            }
+            View::VideoTrim { file, trim } | View::VideoSnapshot { file, trim } => {
+                self.draw_video_trim(ui, rect, pal, &file, trim);
             }
             View::CollageImage { files, opts, color } => {
                 self.draw_collage(ui, rect, pal, files.len(), opts, color);

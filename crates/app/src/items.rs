@@ -40,6 +40,7 @@ pub enum Builtin {
     CheckUpdates,
     CalcHistory,
     ConvertFiles,
+    ConvertFinderSelection,
     Shelf,
     SearchNotes,
     CreateNote,
@@ -73,6 +74,7 @@ impl Builtin {
         Builtin::CalcHistory,
         Builtin::ConvertFiles,
         Builtin::Shelf,
+        Builtin::ConvertFinderSelection,
         Builtin::SearchNotes,
         Builtin::CreateNote,
         Builtin::CreateScript,
@@ -104,6 +106,7 @@ impl Builtin {
             Builtin::CheckUpdates => "Check for Updates",
             Builtin::CalcHistory => "Calculator History",
             Builtin::ConvertFiles => "Convert Files",
+            Builtin::ConvertFinderSelection => "Convert Finder Selection",
             Builtin::Shelf => "File Shelf",
             Builtin::SearchNotes => "Search Notes",
             Builtin::CreateNote => "Create Note",
@@ -130,7 +133,7 @@ impl Builtin {
             Builtin::Timers => "Productivity",
             Builtin::CheckUpdates => "Ferrocast",
             Builtin::CalcHistory => "Calculator",
-            Builtin::ConvertFiles => "Files",
+            Builtin::ConvertFiles | Builtin::ConvertFinderSelection => "Files",
             Builtin::Shelf => "Files",
             Builtin::SearchNotes | Builtin::CreateNote => "Notes",
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
@@ -156,7 +159,7 @@ impl Builtin {
             Builtin::Timers => ("sf:timer", [245, 165, 36]),
             Builtin::CheckUpdates => ("sf:arrow.triangle.2.circlepath", [86, 194, 255]),
             Builtin::CalcHistory => ("sf:equal", [120, 120, 130]),
-            Builtin::ConvertFiles => ("sf:arrow.triangle.2.circlepath.doc.on.clipboard", [255, 140, 60]),
+            Builtin::ConvertFiles | Builtin::ConvertFinderSelection => ("sf:arrow.triangle.2.circlepath.doc.on.clipboard", [255, 140, 60]),
             Builtin::Shelf => ("sf:tray.full", [255, 140, 60]),
             Builtin::SearchNotes | Builtin::CreateNote => ("sf:pencil", [255, 197, 49]),
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => ("sf:terminal", [60, 60, 70]),
@@ -184,6 +187,7 @@ impl Builtin {
             Builtin::CalcHistory => &["calc", "history", "math", "results", "previous"],
             Builtin::Shelf => &["shelf", "float", "stash", "drop", "files", "keep"],
             Builtin::ConvertFiles => &["convert", "converter", "format", "png", "jpg", "mp4", "mp3", "pdf", "compress", "zip"],
+            Builtin::ConvertFinderSelection => &["finder", "selection", "convert", "wheel", "format"],
             Builtin::Settings => &["preferences", "config"],
             _ => &[],
         };
@@ -232,6 +236,8 @@ pub enum Kind {
     ImageTool(Vec<PathBuf>, ferrocast_core::convert::ImageOp),
     /// Trim, split or merge audio, video or PDF files.
     FileTool(Vec<PathBuf>, ferrocast_core::convert::FileTool),
+    /// Open an editor window (trim, crop, annotate, organize…) for a file.
+    Editor(Act),
 }
 
 #[derive(Clone, Debug)]
@@ -277,6 +283,16 @@ pub enum Act {
     ClearCalcHistory,
     /// Open the Convert view for these files.
     Convert(Vec<PathBuf>),
+    /// Open the video speed window for this file.
+    SpeedVideo(PathBuf),
+    /// Open the video crop window for this file.
+    CropVideo(PathBuf),
+    /// Select a timed video cover or blur area.
+    RedactVideo(PathBuf),
+    /// Open the video trim viewer for this file.
+    TrimVideo(PathBuf),
+    /// Select a video frame and save a full-resolution PNG.
+    SnapshotVideo(PathBuf),
     /// Open the collage editor for these images.
     CollageImages(Vec<PathBuf>),
     /// Open the background editor for this image.

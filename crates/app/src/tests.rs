@@ -363,6 +363,63 @@ fn pdf_organizer_view_renders_and_enter_without_edits_changes_nothing() {
 }
 
 #[test]
+fn convert_view_offers_the_editors_for_one_video_pdf_and_image() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-editors-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let titles = |app: &mut App, f: &str| -> Vec<String> {
+        let p = dir.join(f);
+        std::fs::write(&p, b"x").unwrap();
+        app.stack = vec![View::Root, View::Convert(vec![p])];
+        app.sections().iter().flat_map(|s| s.items.iter().filter(|i| matches!(i.kind, Kind::Editor(_))).map(|i| i.title.clone())).collect()
+    };
+    let v = titles(&mut app, "a.mp4");
+    for t in ["Trim Video…", "Crop Video…", "Change Speed…", "Video Snapshots…", "Redact Video…"] {
+        assert!(v.iter().any(|x| x == t), "{t} missing from {v:?}");
+    }
+    assert!(titles(&mut app, "a.pdf").iter().any(|x| x == "Organize Pages…"));
+    assert!(titles(&mut app, "a.png").iter().any(|x| x == "Crop…"));
+    assert!(titles(&mut app, "a.txt").is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn video_speed_view_renders_while_probing_and_after() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-vspeed-{}.mp4", std::process::id()));
+    app.stack = vec![View::Root, View::VideoSpeed { file: f.clone(), duration: None, factor: 2.0 }];
+    render(&mut app, vec![]);
+    app.stack = vec![View::Root, View::VideoSpeed { file: f, duration: Some(8.0), factor: 0.5 }];
+    render(&mut app, vec![]);
+    assert!(matches!(app.view(), View::VideoSpeed { duration: Some(_), .. }));
+}
+
+#[test]
+fn video_crop_view_renders_while_probing_and_after() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-vcrop-{}.mp4", std::process::id()));
+    app.stack = vec![View::Root, View::VideoCrop { file: f.clone(), size: None, rect: ferrocast_core::croprect::full(2, 2), aspect: None }];
+    render(&mut app, vec![]);
+    let r = ferrocast_core::croprect::Rect { x: 10, y: 10, w: 100, h: 60 };
+    app.stack = vec![View::Root, View::VideoCrop { file: f, size: Some((640, 360)), rect: r, aspect: None }];
+    render(&mut app, vec![]);
+    assert!(matches!(app.view(), View::VideoCrop { size: Some(_), .. }));
+}
+
+#[test]
+fn video_trim_view_renders_while_probing_and_after() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-vtrim-{}.mp4", std::process::id()));
+    app.stack = vec![View::Root, View::VideoTrim { file: f.clone(), trim: None }];
+    render(&mut app, vec![]);
+    let t = ferrocast_core::videoplan::Trim::new(12.0, 25.0);
+    assert!(t.is_some());
+    app.stack = vec![View::Root, View::VideoTrim { file: f, trim: t }];
+    render(&mut app, vec![]);
+    assert!(matches!(app.view(), View::VideoTrim { trim: Some(_), .. }));
+}
+
+#[test]
 fn collage_view_renders_and_needs_two_images() {
     let mut app = fixture();
     let a = std::env::temp_dir().join(format!("fc-collview-a-{}.png", std::process::id()));
@@ -442,4 +499,70 @@ fn annotate_view_renders_and_empty_drawing_is_not_saved() {
     render(&mut app, vec![]);
     assert!(matches!(app.view(), View::Annotate { .. }));
     let _ = std::fs::remove_file(&f);
+}
+
+#[test]
+fn snapshot_view_steps_without_changing_trim_markers() {
+    let mut app = fixture();
+    let file = std::path::PathBuf::from("/nonexistent-snapshot.mp4");
+    let t = ferrocast_core::videoplan::Trim::new(8.0, 25.0).unwrap();
+    app.stack = vec![View::Root, View::VideoSnapshot { file, trim: Some(t) }];
+    render(&mut app, vec![]);
+    let key = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    render(&mut app, vec![key(Key::ArrowRight)]);
+    match app.view() {
+        View::VideoSnapshot { trim: Some(after), .. } => {
+            assert!((after.cursor - 0.04).abs() < 1e-8);
+            assert_eq!((after.start, after.end), (t.start, t.end));
+        }
+        _ => panic!("snapshot viewer closed unexpectedly"),
+    }
+    render(&mut app, vec![key(Key::I), key(Key::O)]);
+    match app.view() {
+        View::VideoSnapshot { trim: Some(after), .. } => assert_eq!((after.start, after.end), (t.start, t.end)),
+        _ => panic!("snapshot viewer closed unexpectedly"),
+    }
+}
+
+#[test]
+fn trim_view_still_steps_and_sets_start_marker() {
+    let mut app = fixture();
+    app.stack = vec![
+        View::Root,
+        View::VideoTrim { file: std::path::PathBuf::from("/nonexistent-trim.mp4"), trim: ferrocast_core::videoplan::Trim::new(8.0, 25.0) },
+    ];
+    render(&mut app, vec![]);
+    let key = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    render(&mut app, vec![key(Key::ArrowRight)]);
+    render(&mut app, vec![key(Key::I)]);
+    match app.view() {
+        View::VideoTrim { trim: Some(t), .. } => {
+            assert!((t.cursor - 0.04).abs() < 1e-8);
+            assert!((t.start - 0.04).abs() < 1e-8);
+            assert_eq!(t.end, 8.0);
+        }
+        _ => panic!("trim viewer closed unexpectedly"),
+    }
+}
+
+#[test]
+fn video_redact_rejects_reversed_range_without_closing() {
+    let mut app = fixture();
+    app.stack = vec![
+        View::Root,
+        View::VideoRedact {
+            file: std::path::PathBuf::from("/nonexistent-redact.mp4"),
+            size: Some((640, 360)),
+            rect: ferrocast_core::croprect::full(640, 360),
+            aspect: None,
+            duration: 8.0,
+            start: 5.0,
+            end: 2.0,
+            blur: false,
+        },
+    ];
+    render(&mut app, vec![]);
+    render(&mut app, vec![Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    assert!(matches!(app.view(), View::VideoRedact { .. }));
+    assert!(app.rx.try_recv().is_err(), "invalid range must not start work");
 }

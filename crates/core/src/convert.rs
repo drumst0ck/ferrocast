@@ -974,6 +974,8 @@ pub fn strip_jpeg(b: &[u8]) -> Option<Vec<u8>> {
 pub enum FileTool {
     /// Keep from `start` to `end` seconds.
     Trim(f64, f64),
+    /// Same, re-encoded so the cut lands on the exact frame (video only, MP4 out).
+    TrimExact(f64, f64),
     /// Cut into pieces of this many seconds.
     SplitEvery(u32),
     /// Join the selected files, in order, into one.
@@ -1021,6 +1023,7 @@ impl FileTool {
     pub fn label(&self) -> String {
         match self {
             FileTool::Trim(a, b) => format!("Trim · {} to {}", format_secs(*a), format_secs(*b)),
+            FileTool::TrimExact(a, b) => format!("Trim (exact frames) · {} to {}", format_secs(*a), format_secs(*b)),
             FileTool::SplitEvery(n) if n % 60 == 0 => format!("Split · every {} min", n / 60),
             FileTool::SplitEvery(n) => format!("Split · every {n} s"),
             FileTool::Merge => "Merge into one file".into(),
@@ -1056,7 +1059,7 @@ impl FileTool {
     }
     pub fn suffix(&self) -> String {
         match self {
-            FileTool::Trim(..) => "trimmed".into(),
+            FileTool::Trim(..) | FileTool::TrimExact(..) => "trimmed".into(),
             FileTool::SplitEvery(_) | FileTool::SplitPages => "part".into(),
             FileTool::Merge => "merged".into(),
             FileTool::Mute => "muted".into(),

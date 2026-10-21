@@ -34,5 +34,6 @@ pub mod subs;
 pub mod timer;
 pub mod timezones;
 pub mod units;
+pub mod videoplan;
 pub mod wheel;
 pub mod xlsx;

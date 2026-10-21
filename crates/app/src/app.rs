@@ -66,6 +66,39 @@ pub enum View {
         color: usize,
         sel: Option<usize>,
     },
+    /// Video speed window: file, duration once probed and the chosen factor.
+    VideoSpeed {
+        file: PathBuf,
+        duration: Option<f64>,
+        factor: f64,
+    },
+    /// One movable video redaction area with an active time range.
+    VideoRedact {
+        file: PathBuf,
+        size: Option<(u32, u32)>,
+        rect: ferrocast_core::croprect::Rect,
+        aspect: Option<(u32, u32)>,
+        duration: f64,
+        start: f64,
+        end: f64,
+        blur: bool,
+    },
+    /// Video crop window: file, pixel size once probed, the rectangle and an optional locked aspect.
+    VideoCrop {
+        file: PathBuf,
+        size: Option<(u32, u32)>,
+        rect: ferrocast_core::croprect::Rect,
+        aspect: Option<(u32, u32)>,
+    },
+    VideoSnapshot {
+        file: PathBuf,
+        trim: Option<ferrocast_core::videoplan::Trim>,
+    },
+    /// Video trim viewer: the file and its timeline state (None while the video is being probed).
+    VideoTrim {
+        file: PathBuf,
+        trim: Option<ferrocast_core::videoplan::Trim>,
+    },
     /// Collage editor: the pictures, the options and the colour index.
     CollageImage {
         files: Vec<PathBuf>,
@@ -238,6 +271,11 @@ impl View {
             View::RedactImage { .. } => "Redact Image",
             View::FrameImage { .. } => "Add Background",
             View::CollageImage { .. } => "Make a Collage",
+            View::VideoTrim { .. } => "Trim Video",
+            View::VideoSnapshot { .. } => "Video Snapshots",
+            View::VideoCrop { .. } => "Crop Video",
+            View::VideoRedact { .. } => "Redact Video",
+            View::VideoSpeed { .. } => "Change Video Speed",
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
@@ -297,6 +335,8 @@ struct Keys {
     up: bool,
     down: bool,
     enter: bool,
+    /// The Enter press is an auto-repeat of a held key.
+    repeat: bool,
     cmd_enter: bool,
     esc: bool,
     backspace: bool,
@@ -1094,6 +1134,88 @@ impl App {
                         }
                     }
                 }
+                Msg::VideoRedactReady(file, ready) => {
+                    if matches!(self.view(), View::VideoRedact { file: f, .. } if *f == file) {
+                        if let Some((dims, d, png)) = ready {
+                            if let Some(img) = services::decode_png(&png) {
+                                let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                                self.ctx.data_mut(|data| data.insert_temp(Id::new("crop-tex"), tex));
+                                if let Some(View::VideoRedact { size, rect, duration, end, .. }) = self.stack.last_mut() {
+                                    *size = Some(dims);
+                                    *rect = ferrocast_core::croprect::with_size(
+                                        ferrocast_core::croprect::full(dims.0, dims.1),
+                                        dims.0 / 3,
+                                        dims.1 / 3,
+                                        dims.0,
+                                        dims.1,
+                                    );
+                                    *duration = d;
+                                    *end = d;
+                                }
+                            } else {
+                                self.toast("Redact: could not decode the preview");
+                            }
+                        } else {
+                            self.toast("Redact: could not read the video");
+                        }
+                    }
+                }
+                Msg::VideoCropReady(file, ready) => {
+                    if matches!(self.view(), View::VideoCrop { file: f, .. } if *f == file) {
+                        match ready {
+                            Some((dims, png)) => {
+                                if let Some(img) = services::decode_png(&png) {
+                                    let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                                    self.ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                                }
+                                if let Some(View::VideoCrop { size, rect, .. }) = self.stack.last_mut() {
+                                    *size = Some(dims);
+                                    *rect = ferrocast_core::croprect::full(dims.0, dims.1);
+                                }
+                            }
+                            None => self.toast("Crop: could not read the video"),
+                        }
+                    }
+                }
+                Msg::VideoDuration(file, d) => {
+                    if matches!(self.view(), View::VideoSpeed { file: f, .. } if *f == file) {
+                        match d.filter(|d| d.is_finite() && *d > 0.0) {
+                            Some(d) => {
+                                if let Some(View::VideoSpeed { duration, .. }) = self.stack.last_mut() {
+                                    *duration = Some(d);
+                                }
+                            }
+                            None => self.toast("Speed: could not read the video"),
+                        }
+                    }
+                }
+                Msg::VideoInfo(file, info) => {
+                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } if *f == file) {
+                        match info.and_then(|(d, r)| ferrocast_core::videoplan::Trim::new(d, r)) {
+                            Some(t) => {
+                                if let Some(View::VideoTrim { trim, .. } | View::VideoSnapshot { trim, .. }) = self.stack.last_mut() {
+                                    *trim = Some(t);
+                                }
+                            }
+                            None => self.toast("Trim: could not read the video"),
+                        }
+                    }
+                }
+                Msg::VideoFrame(file, t, png) => {
+                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } if *f == file) {
+                        self.ctx.data_mut(|d| d.insert_temp(Id::new("vt-busy"), false));
+                    }
+                    if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } if *f == file) {
+                        if let Some(img) = png.as_deref().and_then(services::decode_png) {
+                            let tex = self.ctx.load_texture("vt-view", img, egui::TextureOptions::LINEAR);
+                            self.ctx.data_mut(|d| {
+                                d.insert_temp(Id::new("vt-tex"), tex);
+                                d.insert_temp(Id::new("vt-shown"), t);
+                            });
+                        }
+                    }
+                    self.ctx.request_repaint();
+                }
                 Msg::CollageLoaded(files, thumbs) => {
                     if matches!(self.view(), View::CollageImage { files: f, .. } if *f == files) {
                         let imgs: Vec<image::RgbaImage> =
@@ -1198,6 +1320,21 @@ impl App {
                     let v = self.shelf.clone();
                     self.persist("shelf.json", &v);
                 }
+                Msg::FinderSelection(sel) => match sel {
+                    Ok(files) if !files.is_empty() => {
+                        self.show();
+                        self.reset_to_root();
+                        self.perform(Act::OpenWheel(files), true);
+                    }
+                    Ok(_) => {
+                        self.show();
+                        self.toast("Nothing is selected in Finder");
+                    }
+                    Err(e) => {
+                        self.show();
+                        self.toast(format!("Finder selection: {e} (allow Automation for Finder in System Settings)"));
+                    }
+                },
                 Msg::ConvertFiles(files) => {
                     self.show();
                     self.reset_to_root();
@@ -1943,7 +2080,7 @@ impl App {
                             subtitle: sub.clone(),
                             icon: Icon::Glyph(
                                 match t {
-                                    FileTool::Trim(..) => "sf:scissors",
+                                    FileTool::Trim(..) | FileTool::TrimExact(..) => "sf:scissors",
                                     FileTool::SplitEvery(_) | FileTool::SplitPages => "sf:square.split.2x1",
                                     FileTool::Merge | FileTool::Join => "sf:rectangle.stack",
                                     FileTool::Mute => "sf:speaker.slash",
@@ -1967,6 +2104,7 @@ impl App {
                         out.push(Section { title: "File tools".into(), items });
                     }
                 }
+                out.extend(self.editor_section(&files, &q, &sub));
                 out.retain(|sec| !sec.items.is_empty());
                 out
             }
@@ -2087,6 +2225,48 @@ impl App {
         }
     }
 
+    /// Editor windows offered for a single file in the Convert view (same windows as the file actions).
+    fn editor_section(&self, files: &[PathBuf], q: &str, sub: &str) -> Option<Section> {
+        use ferrocast_core::convert::{ext, family_of, Family};
+        let [p] = files else { return None };
+        let p = p.clone();
+        let mut list: Vec<(&str, &str, Act)> = vec![];
+        match family_of(&p) {
+            Family::Video => list.extend([
+                ("Trim Video…", "trim cut frame timeline", Act::TrimVideo(p.clone())),
+                ("Crop Video…", "crop video frame size", Act::CropVideo(p.clone())),
+                ("Change Speed…", "speed slow fast pitch", Act::SpeedVideo(p.clone())),
+                ("Video Snapshots…", "snapshot frame screenshot png", Act::SnapshotVideo(p.clone())),
+                ("Redact Video…", "redact hide blur privacy area", Act::RedactVideo(p.clone())),
+            ]),
+            Family::Image => list.extend([
+                ("Annotate…", "annotate markup draw arrow text", Act::AnnotateCanvas(p.clone())),
+                ("Edit Photo…", "edit photo brightness contrast", Act::EditPhoto(p.clone())),
+                ("Crop…", "crop aspect exact", Act::CropImage(p.clone())),
+                ("Redact Areas…", "redact hide blur privacy", Act::RedactImage(p.clone())),
+                ("Add Background…", "background frame blur shadow", Act::FrameImage(p.clone())),
+            ]),
+            _ => {}
+        }
+        if ext(&p) == "pdf" {
+            list.push(("Organize Pages…", "organize pages rotate reorder remove", Act::OrganizePdf(p.clone())));
+        }
+        let items: Vec<Item> = list
+            .into_iter()
+            .filter(|(title, kw, _)| self.matches(q, title, kw).is_some())
+            .map(|(title, _, act)| Item {
+                id: format!("editor:{title}"),
+                title: title.to_string(),
+                subtitle: sub.to_string(),
+                icon: Icon::Glyph("sf:slider.horizontal.3", [255, 140, 60]),
+                accessory: "Editor".into(),
+                keywords: vec![],
+                kind: Kind::Editor(act),
+            })
+            .collect();
+        (!items.is_empty()).then_some(Section { title: "Editors".into(), items })
+    }
+
     // --------------------------------------------------------------- actions
 
     fn actions_for(&self, item: &Item) -> Vec<Action> {
@@ -2140,6 +2320,13 @@ impl App {
                 a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
                 a.push(Action::new("Convert…", Act::Convert(vec![p.clone()])).key(CMD, Key::T));
                 a.push(Action::new("Format Wheel", Act::OpenWheel(vec![p.clone()])).key(Modifiers::ALT, Key::Enter));
+                if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Video {
+                    a.push(Action::new("Trim Video…", Act::TrimVideo(p.clone())).key(CMD_SHIFT, Key::V));
+                    a.push(Action::new("Crop Video…", Act::CropVideo(p.clone())).key(CMD_SHIFT, Key::J));
+                    a.push(Action::new("Change Speed…", Act::SpeedVideo(p.clone())).key(CMD_SHIFT, Key::L));
+                    a.push(Action::new("Video Snapshots…", Act::SnapshotVideo(p.clone())).key(CMD_SHIFT, Key::S));
+                    a.push(Action::new("Redact Video…", Act::RedactVideo(p.clone())));
+                }
                 if ferrocast_core::convert::family_of(p) == ferrocast_core::convert::Family::Image {
                     a.push(Action::new("Annotate…", Act::AnnotateCanvas(p.clone())).key(CMD_SHIFT, Key::A));
                     a.push(Action::new("Edit Photo…", Act::EditPhoto(p.clone())).key(CMD_SHIFT, Key::E));
@@ -2215,6 +2402,7 @@ impl App {
             Kind::Url(_) => a.push(Action::new("Open in Browser", Act::Run)),
             Kind::OpenWindow(_) => a.push(Action::new("Switch to Window", Act::Run)),
             Kind::Timer(..) => a.push(Action::new("Start Timer", Act::Run)),
+            Kind::Editor(_) => a.push(Action::new("Open Editor", Act::Run)),
             Kind::ConvertTo(files, t) => {
                 a.push(Action::new(
                     match t.needs {
@@ -2271,6 +2459,7 @@ impl App {
             Kind::Process(_) => "Kill Process",
             Kind::ConvertTo(..) => "Convert",
             Kind::ImageTool(..) | Kind::FileTool(..) => "Apply",
+            Kind::Editor(_) => "Open Editor",
             Kind::Timer(..) => "Start Timer",
             Kind::RunningTimer(_) => "Cancel Timer",
             Kind::WebSearch(_) => "Search",
@@ -2448,6 +2637,10 @@ impl App {
             Kind::Timer(secs, label) => {
                 let (secs, label) = (*secs, label.clone());
                 self.start_timer(secs, label);
+            }
+            Kind::Editor(act) => {
+                let act = act.clone();
+                self.perform(act, false);
             }
             Kind::FileTool(files, tool) => {
                 let (files, tool) = (files.clone(), tool.clone());
@@ -2686,6 +2879,13 @@ impl App {
                 ferrocast_macos::shelf::show(&v);
                 self.hide();
                 self.reset_to_root();
+            }
+            Builtin::ConvertFinderSelection => {
+                let bus = self.bus.clone();
+                self.hide();
+                std::thread::spawn(move || {
+                    bus.send(Msg::FinderSelection(ferrocast_macos::apps::finder_selection().map_err(|e| e.to_string())));
+                });
             }
             Builtin::ConvertFiles => {
                 let bus = self.bus.clone();
@@ -3026,6 +3226,84 @@ impl App {
             Act::Convert(files) => {
                 self.show();
                 self.push(View::Convert(files));
+            }
+            Act::SpeedVideo(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || {
+                        let d = crate::media_tools::video_info(ff, &f).map(|(d, _)| d);
+                        bus.send(Msg::VideoDuration(f, d));
+                    });
+                    self.show();
+                    self.push(View::VideoSpeed { file, duration: None, factor: 2.0 });
+                }
+            },
+            Act::RedactVideo(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    self.ctx.data_mut(|d| {
+                        d.remove::<egui::TextureHandle>(Id::new("crop-tex"));
+                        d.remove::<(ferrocast_core::croprect::Handle, ferrocast_core::croprect::Rect, Pos2)>(Id::new("crop-drag"));
+                    });
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || {
+                        let ready = crate::media_tools::video_dims(ff, &f).and_then(|dims| {
+                            let (duration, _) = crate::media_tools::video_info(ff, &f)?;
+                            if !duration.is_finite() || duration <= 0.0 {
+                                return None;
+                            }
+                            crate::media_tools::preview_frame(ff, &f, duration * 0.1).map(|png| (dims, duration, png))
+                        });
+                        bus.send(Msg::VideoRedactReady(f, ready));
+                    });
+                    self.show();
+                    self.push(View::VideoRedact {
+                        file,
+                        size: None,
+                        rect: ferrocast_core::croprect::full(2, 2),
+                        aspect: None,
+                        duration: 0.0,
+                        start: 0.0,
+                        end: 0.0,
+                        blur: false,
+                    });
+                }
+            },
+            Act::CropVideo(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    self.ctx.data_mut(|d| d.remove::<egui::TextureHandle>(Id::new("crop-tex")));
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || {
+                        let ready = crate::media_tools::video_dims(ff, &f).and_then(|dims| {
+                            let at = crate::media_tools::video_info(ff, &f).map(|(d, _)| d * 0.1).unwrap_or(0.0);
+                            crate::media_tools::preview_frame(ff, &f, at).map(|png| (dims, png))
+                        });
+                        bus.send(Msg::VideoCropReady(f, ready));
+                    });
+                    self.show();
+                    self.push(View::VideoCrop { file, size: None, rect: ferrocast_core::croprect::full(2, 2), aspect: None });
+                }
+            },
+            action @ (Act::TrimVideo(_) | Act::SnapshotVideo(_)) => {
+                let snapshot = matches!(action, Act::SnapshotVideo(_));
+                let (Act::TrimVideo(file) | Act::SnapshotVideo(file)) = action else { unreachable!() };
+                match self.tools.ffmpeg {
+                    None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                    Some(ff) => {
+                        self.ctx.data_mut(|d| {
+                            d.remove::<egui::TextureHandle>(Id::new("vt-tex"));
+                            d.remove::<f64>(Id::new("vt-shown"));
+                            d.remove::<f64>(Id::new("vt-asked"));
+                            d.insert_temp(Id::new("vt-busy"), false);
+                        });
+                        let (bus, f) = (self.bus.clone(), file.clone());
+                        std::thread::spawn(move || bus.send(Msg::VideoInfo(f.clone(), crate::media_tools::video_info(ff, &f))));
+                        self.show();
+                        self.push(if snapshot { View::VideoSnapshot { file, trim: None } } else { View::VideoTrim { file, trim: None } });
+                    }
+                }
             }
             Act::CollageImages(files) => {
                 if files.len() < 2 {
