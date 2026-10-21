@@ -10,6 +10,8 @@ pub enum WheelKind {
     Actions,
     /// File tools (compress, crop, trim, split, merge…).
     Tools,
+    /// Target languages for dragged text.
+    Translate,
 }
 
 /// One sample of the world, taken every few milliseconds.
@@ -20,6 +22,8 @@ pub struct Sample {
     pub drag_count: i64,
     /// The drag pasteboard holds file URLs.
     pub has_files: bool,
+    /// The drag pasteboard holds plain text (and no files).
+    pub has_text: bool,
     pub convert_key: bool,
     pub actions_key: bool,
     pub tools_key: bool,
@@ -42,7 +46,7 @@ pub struct Tracker {
     convert_was: bool,
     actions_was: bool,
     tools_was: bool,
-    open: bool,
+    open: Option<WheelKind>,
 }
 
 impl Tracker {
@@ -53,6 +57,7 @@ impl Tracker {
             // the drag pasteboard changes when a drag starts after the press
             let base = *self.down_count.get_or_insert(s.drag_count);
             let dragging_files = s.drag_count != base && s.has_files;
+            let dragging_text = s.drag_count != base && !s.has_files && s.has_text;
             let tapped = if s.convert_key && !self.convert_was {
                 Some(WheelKind::Convert)
             } else if s.tools_key && !self.tools_was {
@@ -63,19 +68,27 @@ impl Tracker {
                 None
             };
             if let Some(k) = tapped {
-                if self.open {
-                    ev = Some(WheelEvent::Switch(k));
-                } else if dragging_files {
-                    ev = Some(WheelEvent::Open(k));
-                    self.open = true;
+                match self.open {
+                    // a Translate wheel has nothing to switch to
+                    Some(WheelKind::Translate) => {}
+                    Some(_) => ev = Some(WheelEvent::Switch(k)),
+                    None if dragging_files => {
+                        ev = Some(WheelEvent::Open(k));
+                        self.open = Some(k);
+                    }
+                    None if dragging_text && k == WheelKind::Convert => {
+                        ev = Some(WheelEvent::Open(WheelKind::Translate));
+                        self.open = Some(WheelKind::Translate);
+                    }
+                    None => {}
                 }
             }
         } else {
-            if self.open {
+            if self.open.is_some() {
                 ev = Some(WheelEvent::Release);
             }
             self.down_count = None;
-            self.open = false;
+            self.open = None;
         }
         self.convert_was = s.convert_key;
         self.actions_was = s.actions_key;
@@ -258,7 +271,7 @@ mod tests {
     use super::*;
 
     fn s(left: bool, count: i64, files: bool, ck: bool, ak: bool) -> Sample {
-        Sample { left_down: left, drag_count: count, has_files: files, convert_key: ck, actions_key: ak, tools_key: false }
+        Sample { left_down: left, drag_count: count, has_files: files, has_text: false, convert_key: ck, actions_key: ak, tools_key: false }
     }
 
     #[test]
@@ -274,6 +287,72 @@ mod tests {
         t.step(s(true, 2, true, false, false));
         assert_eq!(t.step(s(true, 2, true, true, false)), Some(WheelEvent::Switch(WheelKind::Convert)));
         assert_eq!(t.step(s(false, 2, true, false, false)), Some(WheelEvent::Release));
+    }
+
+    fn text(left: bool, count: i64, convert: bool, tools: bool, actions: bool) -> Sample {
+        Sample {
+            left_down: left,
+            drag_count: count,
+            has_text: true,
+            convert_key: convert,
+            tools_key: tools,
+            actions_key: actions,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn text_drag_plus_convert_key_opens_translate() {
+        let mut t = Tracker::default();
+        assert_eq!(t.step(text(true, 5, false, false, false)), None); // press
+        assert_eq!(t.step(text(true, 5, true, false, false)), None); // key without a drag
+        assert_eq!(t.step(text(true, 5, false, false, false)), None);
+        assert_eq!(t.step(text(true, 6, false, false, false)), None); // text drag started
+        assert_eq!(t.step(text(true, 6, true, false, false)), Some(WheelEvent::Open(WheelKind::Translate)));
+        assert_eq!(t.step(text(true, 6, true, false, false)), None, "held, not re-opened");
+        assert_eq!(t.step(text(false, 6, false, false, false)), Some(WheelEvent::Release));
+    }
+
+    #[test]
+    fn text_drag_ignores_tools_and_actions_keys() {
+        let mut t = Tracker::default();
+        t.step(text(true, 1, false, false, false));
+        t.step(text(true, 2, false, false, false));
+        assert_eq!(t.step(text(true, 2, false, true, false)), None);
+        t.step(text(true, 2, false, false, false));
+        assert_eq!(t.step(text(true, 2, false, false, true)), None);
+        assert_eq!(t.step(text(false, 2, false, false, false)), None, "no wheel was open");
+    }
+
+    #[test]
+    fn open_translate_wheel_never_switches() {
+        let mut t = Tracker::default();
+        t.step(text(true, 1, false, false, false));
+        t.step(text(true, 2, false, false, false));
+        assert_eq!(t.step(text(true, 2, true, false, false)), Some(WheelEvent::Open(WheelKind::Translate)));
+        t.step(text(true, 2, false, false, false));
+        assert_eq!(t.step(text(true, 2, false, true, false)), None);
+        t.step(text(true, 2, false, false, false));
+        assert_eq!(t.step(text(true, 2, false, false, true)), None);
+        t.step(text(true, 2, false, false, false));
+        assert_eq!(t.step(text(true, 2, true, false, false)), None);
+        assert_eq!(t.step(text(false, 2, false, false, false)), Some(WheelEvent::Release));
+    }
+
+    #[test]
+    fn a_drag_with_files_and_text_is_a_file_drag() {
+        let mut t = Tracker::default();
+        let both = |count, ck| Sample {
+            left_down: true,
+            drag_count: count,
+            has_files: true,
+            has_text: true,
+            convert_key: ck,
+            ..Default::default()
+        };
+        t.step(both(1, false));
+        t.step(both(2, false));
+        assert_eq!(t.step(both(2, true)), Some(WheelEvent::Open(WheelKind::Convert)));
     }
 
     #[test]

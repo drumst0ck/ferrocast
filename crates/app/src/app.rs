@@ -1530,6 +1530,8 @@ impl App {
                     })
                     .collect()
             }
+            // filled in with the text subject (T4)
+            ferrocast_core::wheel::WheelKind::Translate => vec![],
             ferrocast_core::wheel::WheelKind::Tools => {
                 use ferrocast_core::convert::ext;
                 use ferrocast_core::tools::tools_for;

@@ -300,6 +300,7 @@ pub fn start_wheel(shared: Arc<Shared>, bus: Bus) {
                         left_down: left,
                         drag_count: if left { drag::drag_count() } else { 0 },
                         has_files: !files.is_empty(),
+                        has_text: false,
                         convert_key,
                         actions_key,
                         tools_key,

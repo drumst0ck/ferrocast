@@ -2036,6 +2036,7 @@ impl App {
             WheelKind::Convert => ("CONVERT", [255.0f32, 140.0, 60.0]),
             WheelKind::Tools => ("TOOLS", [86.0, 194.0, 255.0]),
             WheelKind::Actions => ("ACTIONS", [89.0, 212.0, 153.0]),
+            WheelKind::Translate => ("TRANSLATE", [180.0, 120.0, 255.0]),
         };
         let (count, kind_line) = hub_text(files);
         let hub_label = match hover.and_then(|i| segs.get(i)) {
