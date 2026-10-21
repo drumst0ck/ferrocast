@@ -6,7 +6,10 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "sync:changelog": "cp ../CHANGELOG.md src/data/CHANGELOG.md"
+    "test": "vitest run",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:generate": "drizzle-kit generate",
+    "changelog:push": "tsx scripts/changelog/push.ts"
   },
   "dependencies": {
     "@astrojs/node": "^9.5.5",
