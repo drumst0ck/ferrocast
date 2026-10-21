@@ -17,3 +17,17 @@
 | view: emoji, empty | sections max 0.931625 ms; icon sync 43 ms (12 renders); slow frames 7 |
 | view: emoji, query 'smile' | sections max 0.488042 ms; icon sync 23 ms (9 renders); slow frames 6 |
 | view: settings | sections max n/a ms; icon sync 5 ms (3 renders); slow frames 3 |
+
+## After P2 (hidden launcher no longer drawn), 3 runs, same Mac
+
+Cause found with the new `hidden repaint cause` lines: the whole UI was still laid out and painted while
+hidden, so the focused search box blinked its caret (egui `text_selection/visuals.rs:313`, ~every 0.5 s),
+pending icons re-requested frames (`ui.rs:105`) and each frame flushed an invisible GL surface.
+
+| Metric | Before (P0 baseline) | After P2 |
+|---|---|---|
+| frames drawn while hidden, 10 s after start | 105 per 10 s window | 7-8 (startup only) |
+| frames drawn while hidden afterwards | 243 in 20 s | 0 (3 runs, 4 windows) |
+| idle hidden CPU | 0.55 % | 0.00 % |
+| idle hidden context switches/s | 241 | 42-44 (the 25 ms wheel poller, P8) |
+| physical footprint 15 s after hidden start | 159 MB | 85-90 MB |

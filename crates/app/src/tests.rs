@@ -5580,3 +5580,37 @@ fn clipboard_sections_timing_1000_entries() {
         eprintln!("clipboard sections q={q:?}: {n} items, {:?}", t.elapsed());
     }
 }
+
+#[test]
+fn a_hidden_launcher_paints_nothing_and_requests_no_repaint_a_visible_one_does() {
+    let input =
+        || egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))), ..Default::default() };
+    let mut app = fixture();
+    let ctx = app.ctx.clone();
+    // the search box holds focus, as it does when the launcher was hidden with Escape or by losing focus
+    let mut visible_out = None;
+    for _ in 0..3 {
+        let mut o = ctx.run_ui(input(), |ui| app.draw_if_visible(ui));
+        o.textures_delta.clear();
+        visible_out = Some(o);
+    }
+    let visible_out = visible_out.unwrap();
+    assert!(!visible_out.shapes.is_empty(), "a visible launcher paints");
+
+    app.visible = false;
+    let mut hidden_out = None;
+    for _ in 0..3 {
+        let mut o = ctx.run_ui(input(), |ui| app.draw_if_visible(ui));
+        o.textures_delta.clear();
+        hidden_out = Some(o);
+    }
+    let hidden_out = hidden_out.unwrap();
+    assert!(hidden_out.shapes.is_empty(), "a hidden launcher paints nothing: {} shapes", hidden_out.shapes.len());
+    let delay = hidden_out.viewport_output.values().map(|v| v.repaint_delay).min().unwrap();
+    assert!(delay >= Duration::from_secs(3600), "a hidden launcher asks for no repaint, asked in {delay:?}");
+
+    // showing it again fades in from transparent, as before
+    app.visible = true;
+    let fade = ctx.animate_bool_with_time(Id::new("appear"), true, 0.14);
+    assert!(fade < 0.01, "the next show() starts transparent, got {fade}");
+}

@@ -72,8 +72,10 @@ kill $pid 2>/dev/null; wait $pid 2>/dev/null
 # top prints cumulative csw: per-second rate = (last - first) / (n - 1); the first line is since-boot noise for cpu
 cpu=$(tail -n +2 "$WORK/top" | awk '{s+=$2; n++} END{ if (n) printf "%.2f", s/n; else print "n/a" }')
 csw=$(awk '{gsub(/[+-]/,"",$4); v[NR]=$4+0} END{ if (NR>1) printf "%.0f", (v[NR]-v[1])/(NR-1); else print "n/a" }' "$WORK/top")
-hidden_frames=$(grep -E '^frames in' "$d/log" | sed -E 's/.*hidden=//' | awk '{s+=$1} END{print s+0}')
-frames_windows=$(grep -cE '^frames in' "$d/log")
+# the probe prints one line per 10 s window; the first window holds the startup frames, so it is skipped
+hidden_frames=$(grep -E '^frames in' "$d/log" | tail -n +2 | sed -E 's/.*hidden=//' | awk '{s+=$1} END{print s+0}')
+hidden_startup=$(grep -E '^frames in' "$d/log" | head -1 | sed -E 's/.*hidden=//')
+frames_windows=$(grep -E '^frames in' "$d/log" | tail -n +2 | wc -l | tr -d ' ')
 slow_hidden=$(grep -cE '^slow frame .* visible=false' "$d/log")
 
 # ---- 3. views: screenshot mode renders a few frames and exits ----
@@ -99,7 +101,8 @@ echo "| hidden start: App::new, median | $(median < "$WORK/new") ms |"
 echo "| hidden start: apps scan, median (153 apps on the dev Mac) | $(median < "$WORK/apps") ms |"
 echo "| hidden idle (${SETTLE}s after start, ${IDLE}s window): CPU | ${cpu} % |"
 echo "| hidden idle: context switches/s | ${csw} |"
-echo "| hidden idle: frames drawn while hidden (sum of printed 10 s windows: $frames_windows; none printed = 0) | ${hidden_frames} |"
+echo "| hidden: frames drawn in the first 10 s after start | ${hidden_startup:-n/a} |"
+echo "| hidden idle: frames drawn while hidden after that ($frames_windows windows of 10 s) | ${hidden_frames} |"
 echo "| hidden idle: slow frames while hidden | ${slow_hidden} |"
 echo "| physical footprint after ${SETTLE}s hidden / after idle window | ${footprint_start:-n/a} / ${footprint_idle:-n/a} |"
 view "root (empty query)" FERROCAST_QUERY=
