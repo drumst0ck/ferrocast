@@ -5030,7 +5030,7 @@ impl App {
                                         open_url = Some("https://github.com/drumst0ck/ferrocast".into());
                                     }
                                     if small_btn(ui, pal, "Changelog") {
-                                        open_url = Some("https://github.com/drumst0ck/ferrocast/blob/main/CHANGELOG.md".into());
+                                        open_url = Some("https://ferrocast.app/changelog/".into());
                                     }
                                     if small_btn(ui, pal, "Data folder") {
                                         open_url = Some(data_dir.clone());
