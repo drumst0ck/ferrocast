@@ -1391,7 +1391,11 @@ impl App {
         // Files dropped on the launcher open the converter.
         let dropped: Vec<std::path::PathBuf> =
             ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
-        // a drop that ends a wheel gesture arrives after the wheel hid the window: ignore it
+        // The drop that ends a wheel gesture arrives right after the wheel closed. When the picked
+        // tool showed its own window, that window is visible by now: the drop must not replace it
+        // with the converter.
+        let after_wheel = ctx.data(|d| d.get_temp::<Instant>(Id::new("wheel_end"))).is_some_and(|t| t.elapsed() < WHEEL_DROP_GRACE);
+        let dropped = if after_wheel { Vec::new() } else { dropped };
         if !dropped.is_empty() && self.visible && matches!(self.view(), View::Shelf) {
             // files dropped on an open shelf stay on the shelf
             self.perform(Act::AddToShelf(dropped), false);

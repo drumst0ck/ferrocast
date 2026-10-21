@@ -4328,3 +4328,84 @@ fn clicking_a_segmented_cell_sets_the_same_state_the_old_chips_did() {
     click_cell(&mut app, 0, 0);
     assert!(matches!(app.view(), View::FrameImage { opts, .. } if matches!(opts.backdrop, ferrocast_core::frame::Backdrop::Color(_))));
 }
+
+/// A dropped file for tests: egui 0.36 hands the app a trait object that only knows its path.
+#[derive(Debug)]
+struct TestDrop(std::path::PathBuf);
+
+impl egui::DroppedFile for TestDrop {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
+fn dropped(path: &std::path::Path) -> Vec<egui::DroppedFileHandle> {
+    vec![std::sync::Arc::new(TestDrop(path.to_path_buf()))]
+}
+
+/// The mouse release that picks a wheel segment also ends the drag, so macOS delivers a file DROP
+/// to the launcher right after the tool window was shown. That drop must not replace the window.
+#[test]
+fn the_drop_that_ends_a_wheel_gesture_does_not_replace_the_tool_window() {
+    use ferrocast_core::wheel::WheelKind;
+    let dir = std::env::temp_dir().join(format!("fc-wheel-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(64, 48).save(&png).unwrap();
+    for (label, title) in
+        [("Compress", "Compress Images"), ("Edit Photo", "Edit Photo"), ("Crop", "Crop Image"), ("Redact", "Redact Image")]
+    {
+        let mut app = fixture();
+        let files = vec![png.clone()];
+        let segs = app.wheel_segments(WheelKind::Tools, &files);
+        let i = segs.iter().position(|s| s.label == label).expect(label);
+        app.stack = vec![View::Root, View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind: WheelKind::Tools, sel: None }];
+        app.apply_wheel(Some(i));
+        assert_eq!(app.view().title(), title, "{label}: the tool window opens");
+        // the drop of the dragged file arrives on the next frame
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))),
+            dropped_files: dropped(&png),
+            ..Default::default()
+        };
+        let ctx = app.ctx.clone();
+        let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+        output.textures_delta.clear();
+        assert_eq!(app.view().title(), title, "{label}: the drop that ended the wheel gesture must not replace it");
+    }
+}
+
+/// A drop that is NOT the end of a wheel gesture still opens the converter, as before.
+#[test]
+fn an_ordinary_drop_on_the_visible_launcher_still_opens_the_converter() {
+    let dir = std::env::temp_dir().join(format!("fc-plain-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(8, 8).save(&png).unwrap();
+    let mut app = fixture();
+    app.visible = true;
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))),
+        dropped_files: dropped(&png),
+        ..Default::default()
+    };
+    let ctx = app.ctx.clone();
+    let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+    output.textures_delta.clear();
+    assert!(matches!(app.view(), View::Convert(_)), "got {:?}", app.view().title());
+}
+
+/// Characterisation (the function already exists, so there is no RED): the log line for a picked
+/// wheel segment names the wheel, the segment, the view that ended on top and whether the launcher
+/// is visible, and never a path.
+#[test]
+fn wheel_pick_log_line_names_the_segment_and_the_resulting_view_but_no_paths() {
+    use ferrocast_core::wheel::WheelKind;
+    let line = wheel_pick_log_line(WheelKind::Tools, "Crop", "Crop Image", true);
+    assert_eq!(line, "wheel pick Tools \"Crop\" -> view \"Crop Image\" launcher_visible=true");
+    let hidden = wheel_pick_log_line(WheelKind::Actions, "Copy Path", "Ferrocast", false);
+    assert!(hidden.contains("launcher_visible=false") && !hidden.contains('/'), "{hidden}");
+}

@@ -1459,12 +1459,16 @@ impl App {
 
     /// Close the wheel and run segment `picked` (None cancels).
     pub(crate) fn apply_wheel(&mut self, picked: Option<usize>) {
-        let Some(View::Wheel { files, segs, .. }) = self.stack.last().cloned() else { return };
+        let Some(View::Wheel { files, segs, kind, .. }) = self.stack.last().cloned() else { return };
+        // The release that picks a segment also ends the drag: macOS delivers the file DROP to the
+        // launcher right after. Remember when the gesture ended so that drop can be ignored.
+        self.ctx.data_mut(|d| d.insert_temp(Id::new("wheel_end"), Instant::now()));
         self.hide();
         self.reset_to_root();
         let Some(i) = picked.filter(|i| *i < segs.len()) else { return };
-        match segs[i].pick.clone() {
-            WheelPick::Act(Act::Convert(_)) if segs[i].needs.is_some() => self.toast(format!("{}: not available yet", segs[i].label)),
+        let (label, pick, needs) = (segs[i].label.clone(), segs[i].pick.clone(), segs[i].needs);
+        match pick {
+            WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(format!("{label}: not available yet")),
             WheelPick::File(tool) => {
                 self.toast(format!("{}…", tool.label()));
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
@@ -1491,6 +1495,7 @@ impl App {
             }
             WheelPick::Act(a) => self.perform(a, false),
         }
+        instance::log(&self.store.root, &wheel_pick_log_line(kind, &label, self.view().title(), self.visible));
     }
 
     fn reset_to_root(&mut self) {
@@ -4632,6 +4637,15 @@ pub(crate) fn tool_segment_with(t: ferrocast_core::tools::ToolId, files: &[PathB
     };
     WheelSeg { label: tool_label(t).into(), symbol: tool_symbol(t), needs: missing.then_some("Not available yet"), pick }
 }
+
+/// One diagnostic line for the log when a segment is picked: the wheel, the segment and the view
+/// that ended up on top. Never a path.
+pub(crate) fn wheel_pick_log_line(kind: ferrocast_core::wheel::WheelKind, label: &str, view_title: &str, visible: bool) -> String {
+    format!("wheel pick {kind:?} {label:?} -> view {view_title:?} launcher_visible={visible}")
+}
+
+/// A file drop that arrives within this long of a wheel gesture ending is the end of that same drag.
+pub(crate) const WHEEL_DROP_GRACE: Duration = Duration::from_millis(1500);
 
 /// One diagnostic line for the log when a wheel opens or switches: the kind, how many segments and
 /// the first three labels. Never a path.
