@@ -62,7 +62,8 @@ fn file_url_to_path(s: &str) -> Option<PathBuf> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(&rest[i + 1..i + 3], 16) {
+            // Slice bytes, not the str: a `%` followed by a multibyte character must not panic.
+            if let Some(b) = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
                 out.push(b);
                 i += 3;
                 continue;
@@ -208,6 +209,14 @@ pub fn restore(s: &Snapshot) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_url_decoding_survives_malformed_escapes() {
+        assert_eq!(file_url_to_path("file:///tmp/a%20b/"), Some(PathBuf::from("/tmp/a b")));
+        // `%a` followed by a two-byte `é`: used to slice inside the character and panic.
+        assert_eq!(file_url_to_path("file:///a%aé"), Some(PathBuf::from("/a%aé")));
+        assert_eq!(file_url_to_path("file://localhost/x%2"), Some(PathBuf::from("/x%2")));
+    }
     #[test]
     fn url_decode() {
         assert_eq!(file_url_to_path("file:///Users/me/My%20File.txt"), Some(PathBuf::from("/Users/me/My File.txt")));

@@ -10,7 +10,7 @@ pub const HEIGHT: f32 = 475.0;
 pub const COMPACT_HEIGHT: f32 = 58.0;
 pub const SEARCH_H: f32 = 58.0;
 pub const FOOTER_H: f32 = 38.0;
-pub const ROW_H: f32 = 46.0;
+pub const ROW_H: f32 = 42.0;
 pub const RADIUS: f32 = 14.0;
 
 #[derive(Clone, Copy)]
@@ -34,10 +34,10 @@ pub fn palette(dark: bool) -> Palette {
             text: Color32::from_gray(238),
             sub: Color32::from_gray(140),
             sel: Color32::from_white_alpha(24),
-            accent: Color32::from_rgb(255, 99, 99),
+            accent: Color32::from_rgb(240, 83, 95),
             field: Color32::from_white_alpha(14),
             sep: Color32::from_white_alpha(20),
-            danger: Color32::from_rgb(255, 99, 99),
+            danger: Color32::from_rgb(240, 83, 95),
         }
     } else {
         Palette {
@@ -46,7 +46,7 @@ pub fn palette(dark: bool) -> Palette {
             text: Color32::from_gray(30),
             sub: Color32::from_gray(120),
             sel: Color32::from_black_alpha(18),
-            accent: Color32::from_rgb(255, 99, 99),
+            accent: Color32::from_rgb(232, 54, 75),
             field: Color32::from_black_alpha(10),
             sep: Color32::from_black_alpha(22),
             danger: Color32::from_rgb(200, 40, 40),
@@ -56,17 +56,32 @@ pub fn palette(dark: bool) -> Palette {
 
 pub struct IconCache {
     pub map: HashMap<String, Option<TextureHandle>>,
-    pub budget: usize,
+    /// When this frame started painting; synchronous icon work stops after `FRAME_BUDGET`.
+    pub frame_start: std::time::Instant,
     pub images_dir: PathBuf,
+    /// PNG bytes fetched off the main thread, waiting to become textures.
+    pub prefetched: HashMap<String, Vec<u8>>,
+    /// Keys already handed to the prefetch thread.
+    pub inflight: std::collections::HashSet<String>,
 }
 
 impl IconCache {
     pub fn new(images_dir: PathBuf) -> Self {
-        IconCache { map: HashMap::new(), budget: 6, images_dir }
+        IconCache {
+            map: HashMap::new(),
+            frame_start: std::time::Instant::now(),
+            images_dir,
+            prefetched: HashMap::new(),
+            inflight: Default::default(),
+        }
     }
 
+    /// Main-thread time one frame may spend decoding icons; the rest shows a placeholder and
+    /// finishes next frame, so a list of emoji (5–30 ms each to render) never stalls the UI.
+    pub const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
+
     pub fn new_frame(&mut self) {
-        self.budget = 6;
+        self.frame_start = std::time::Instant::now();
     }
 
     pub fn texture(&mut self, ctx: &Context, icon: &Icon) -> Option<TextureHandle> {
@@ -79,11 +94,17 @@ impl IconCache {
         if let Some(t) = self.map.get(&key) {
             return t.clone();
         }
-        if self.budget == 0 {
+        // Bytes a background thread already fetched: only the texture upload is left, which is cheap.
+        if let Some(b) = self.prefetched.remove(&key) {
+            let tex = crate::services::decode_png(&b).map(|img| ctx.load_texture(&key, img, TextureOptions::LINEAR));
+            self.map.insert(key, tex.clone());
+            return tex;
+        }
+        if self.frame_start.elapsed() > Self::FRAME_BUDGET {
             ctx.request_repaint();
             return None;
         }
-        self.budget -= 1;
+        let t0 = std::time::Instant::now();
         let bytes = match icon {
             Icon::App(p) => ferrocast_macos::files::icon_png(p, 64.0),
             Icon::ClipImage(n) => std::fs::read(self.images_dir.join(n)).ok(),
@@ -91,6 +112,9 @@ impl IconCache {
             _ => None,
         };
         let tex = bytes.and_then(|b| crate::services::decode_png(&b)).map(|img| ctx.load_texture(&key, img, TextureOptions::LINEAR));
+        if std::env::var_os("FERROCAST_PROFILE").is_some() {
+            eprintln!("icon sync {key} {:?}", t0.elapsed());
+        }
         self.map.insert(key, tex.clone());
         tex
     }

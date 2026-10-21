@@ -19,12 +19,24 @@ pub enum Msg {
     Tray(String),
     Apps(Vec<AppInfo>),
     Files(String, Vec<PathBuf>),
-    Script { run: u64, text: String, code: i32 },
+    Script {
+        run: u64,
+        text: String,
+        code: i32,
+    },
     Toast(String),
     Rates(ferrocast_core::currency::Rates),
     ImportFile(PathBuf),
-    AiChunk { run: u64, text: String },
-    AiDone { run: u64, error: Option<String> },
+    AiChunk {
+        run: u64,
+        text: String,
+    },
+    AiDone {
+        run: u64,
+        error: Option<String>,
+    },
+    /// Icon PNG bytes fetched in the background for the first screen.
+    IconBytes(String, Vec<u8>),
     Wake,
 }
 
@@ -50,6 +62,31 @@ pub struct Shared {
     pub ignored_clipboard_count: AtomicI64,
     pub visible: AtomicBool,
     pub keywords: expansion::Keywords,
+}
+
+/// `just now`, `5 min ago`, `3 h ago`, `2 d ago`.
+pub fn ago(secs: i64) -> String {
+    match secs {
+        s if s < 60 => "just now".into(),
+        s if s < 3600 => format!("{} min ago", s / 60),
+        s if s < 86400 => format!("{} h ago", s / 3600),
+        s => format!("{} d ago", s / 86400),
+    }
+}
+
+/// Fetch icon PNGs for app paths off the main thread so the first screen paints complete.
+pub fn prefetch_app_icons(paths: Vec<String>, bus: Bus) {
+    if std::env::var_os("FERROCAST_NO_PREFETCH").is_some() {
+        return;
+    }
+    std::thread::spawn(move || {
+        for p in paths {
+            if let Some(b) = ferrocast_macos::files::icon_png(&p, 64.0) {
+                bus.tx.send(Msg::IconBytes(format!("app:{p}"), b)).ok();
+            }
+        }
+        bus.ctx.request_repaint();
+    });
 }
 
 pub fn now_secs() -> i64 {
@@ -241,7 +278,9 @@ pub fn start_expansion(shared: Arc<Shared>) {
             return;
         }
         let Some(sn) = s2.snippets.read().unwrap().iter().find(|s| s.keyword == kw).cloned() else { return };
-        let ctx = placeholders::Context { clipboard: clipboard_texts(&s2), ..Default::default() };
+        let snaps = s2.snippets.read().unwrap().clone();
+        let lookup = |n: &str| snaps.iter().find(|s| s.name == n).map(|s| s.text.clone());
+        let ctx = placeholders::Context { clipboard: clipboard_texts(&s2), snippets: Some(&lookup), ..Default::default() };
         let ex = placeholders::expand(&sn.text, Target::Snippet, &ctx);
         let back = ex.cursor.map(|c| ex.text.chars().count().saturating_sub(c));
         expansion::inject(kw.chars().count(), &ex.text, back, |count| s2.ignore_clipboard_count(count));
@@ -300,7 +339,8 @@ impl Hotkeys {
 
 /// Human readable hotkey: `Alt+Shift+KeyL` → `⌥⇧L`.
 pub fn hotkey_label(spec: &str) -> String {
-    spec.split('+')
+    let parts: Vec<String> = spec
+        .split('+')
         .map(|t| match t.to_uppercase().as_str() {
             "ALT" | "OPTION" => "⌥".to_string(),
             "SHIFT" => "⇧".to_string(),
@@ -309,7 +349,16 @@ pub fn hotkey_label(spec: &str) -> String {
             "SPACE" => "Space".to_string(),
             _ => t.trim_start_matches("Key").trim_start_matches("Digit").to_string(),
         })
-        .collect()
+        .collect();
+    // Modifiers run together (⇧⌘K); a named key such as Space or F3 gets a space before it.
+    let mut out = String::new();
+    for p in &parts {
+        if !out.is_empty() && p.chars().count() > 1 {
+            out.push(' ');
+        }
+        out.push_str(p);
+    }
+    out
 }
 
 /// egui key → global-hotkey key name.
@@ -625,6 +674,18 @@ pub fn choose_json_file() -> Option<PathBuf> {
     )
     .ok()?;
     (!out.is_empty()).then(|| PathBuf::from(out))
+}
+
+#[cfg(test)]
+mod hotkey_tests {
+    use super::*;
+
+    #[test]
+    fn hotkey_label_spacing() {
+        assert_eq!(hotkey_label("Alt+Space"), "⌥ Space");
+        assert_eq!(hotkey_label("Shift+Super+KeyK"), "⇧⌘K");
+        assert_eq!(hotkey_label("Control+F3"), "⌃ F3");
+    }
 }
 
 #[cfg(test)]

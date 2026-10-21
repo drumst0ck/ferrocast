@@ -1,0 +1,18 @@
+---
+import Base from '../layouts/Base.astro';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<Base title="Page not found · Ferrocast" description="That page does not exist.">
+  <main class="nf">
+    <img src={`${base}/icon.png`} alt="" width="72" height="72" />
+    <h1>No results</h1>
+    <p>That page does not exist. Try the home page instead.</p>
+    <a class="btn" href={`${base}/`}>Back to Ferrocast</a>
+  </main>
+</Base>
+<style>
+  .nf { min-height: 100svh; display: grid; place-content: center; justify-items: center; gap: 18px; text-align: center; padding: 24px; }
+  .nf img { border-radius: 18px; }
+  .nf h1 { font-size: var(--step-head); line-height: 1; }
+  .nf p { color: var(--muted); font-size: var(--step-lead); }
+</style>

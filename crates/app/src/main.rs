@@ -5,7 +5,12 @@ mod items;
 mod services;
 mod ui;
 
+/// Process start, for the FERROCAST_PROFILE first-frame measurement.
+pub static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 fn main() -> eframe::Result {
+    let _ = STARTED.set(std::time::Instant::now());
+    let prof = std::env::var_os("FERROCAST_PROFILE").is_some();
     let data_dir = ferrocast_core::storage::Store::default_location().root;
     // Two copies would fight over the global hotkey and the clipboard history.
     let Some(_instance_lock) = instance::acquire(&data_dir) else {
@@ -33,5 +38,19 @@ fn main() -> eframe::Result {
         })),
         ..Default::default()
     };
-    eframe::run_native("Ferrocast", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, hidden)))))
+    eframe::run_native(
+        "Ferrocast",
+        options,
+        Box::new(move |cc| {
+            if prof {
+                eprintln!("window+gl ready after {:?}", STARTED.get().map(|t| t.elapsed()).unwrap_or_default());
+            }
+            let t = std::time::Instant::now();
+            let app = app::App::new(cc, hidden);
+            if prof {
+                eprintln!("App::new {:?}", t.elapsed());
+            }
+            Ok(Box::new(app))
+        }),
+    )
 }

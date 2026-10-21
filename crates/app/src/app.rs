@@ -35,6 +35,14 @@ pub enum ArgTarget {
     Script(usize),
 }
 
+/// A countdown started from Root Search.
+pub struct RunningTimer {
+    pub ends_at: Instant,
+    pub secs: u64,
+    pub label: String,
+    pub cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
 #[derive(Clone)]
 pub enum View {
     Root,
@@ -44,6 +52,9 @@ pub enum View {
     Emoji,
     Files,
     Windows,
+    Processes,
+    Timers,
+    CalcHistory,
     Notes,
     Colors(Rgba),
     SnippetForm { id: Option<String>, name: String, text: String, keyword: String },
@@ -79,6 +90,9 @@ impl View {
             | View::Emoji
             | View::Files
             | View::Windows
+            | View::Processes
+            | View::Timers
+            | View::CalcHistory
             | View::Notes
             | View::Colors(_) => Shape::List,
             View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::Settings => Shape::Form,
@@ -94,6 +108,9 @@ impl View {
             View::Emoji => "Search Emoji & Symbols",
             View::Files => "Search Files",
             View::Windows => "Switch Windows",
+            View::Processes => "Kill Process",
+            View::Timers => "Timers",
+            View::CalcHistory => "Calculator History",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
             View::SnippetForm { .. } => "Snippet",
@@ -121,6 +138,9 @@ impl View {
             View::Emoji => "Search emoji by name…",
             View::Files => "Search files by name…",
             View::Windows => "Search open windows…",
+            View::Processes => "Search processes…",
+            View::Timers => "Search timers…",
+            View::CalcHistory => "Search past calculations…",
             View::Notes => "Search notes…",
             _ => "Filter…",
         }
@@ -187,6 +207,17 @@ pub struct App {
     files_req: String,
     query_changed_at: Instant,
     win_cache: Vec<running::WindowInfo>,
+    proc_cache: Vec<ferrocast_macos::process::ProcInfo>,
+    /// Running countdowns: when they end, their length, label, and a cancel flag.
+    timers: Vec<RunningTimer>,
+    calc_history: Vec<ferrocast_core::models::CalcEntry>,
+    recent_emoji: Vec<String>,
+    /// The app icon, decoded once for the footer.
+    app_icon: Option<egui::TextureHandle>,
+    /// Whether the 22 MB Unicode fallback font has been loaded.
+    wide_font: bool,
+    /// Set by show(); cleared by the first frame drawn afterwards (FERROCAST_PROFILE).
+    pub(crate) show_t: Option<Instant>,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
     inline: HashMap<PathBuf, (String, Instant)>,
@@ -197,14 +228,30 @@ pub struct App {
     scratch: String,
     key_scratch: String,
     rates: ferrocast_core::currency::Rates,
+    rates_checked_at: Instant,
+    /// Result list for the current query/view, reused across frames until something changes.
+    sec_cache: Option<(String, Vec<Section>)>,
+    sec_dirty: bool,
 }
 
-fn load_fonts(ctx: &Context) {
+/// San Francisco (the system face) first, Apple Symbols for ⌘⌥⇧ glyphs. Arial Unicode, the
+/// 22 MB fallback for scripts San Francisco lacks (CJK, Arabic, Hebrew, Thai…), costs about
+/// 40 MB of memory, so it is only added once such text actually shows up (see `App::ensure_wide_font`).
+fn load_fonts(ctx: &Context, wide: bool) {
     let mut fonts = egui::FontDefinitions::default();
-    for (name, path) in [
-        ("apple-symbols", "/System/Library/Fonts/Apple Symbols.ttf"),
-        ("arial-unicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
-    ] {
+    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNS.ttf") {
+        fonts.font_data.insert("sf-pro".into(), Arc::new(egui::FontData::from_owned(bytes)));
+        fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "sf-pro".into());
+    }
+    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNSMono.ttf") {
+        fonts.font_data.insert("sf-mono".into(), Arc::new(egui::FontData::from_owned(bytes)));
+        fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "sf-mono".into());
+    }
+    let mut extra = vec![("apple-symbols", "/System/Library/Fonts/Apple Symbols.ttf")];
+    if wide {
+        extra.push(("arial-unicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"));
+    }
+    for (name, path) in extra {
         if let Ok(bytes) = std::fs::read(path) {
             fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
             for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
@@ -215,12 +262,32 @@ fn load_fonts(ctx: &Context) {
     ctx.set_fonts(fonts);
 }
 
+/// Scripts outside what San Francisco and Apple Symbols cover.
+pub(crate) fn needs_wide_font(text: &str) -> bool {
+    text.chars().any(|c| {
+        let u = c as u32;
+        (0x0590..0x2000).contains(&u) || (0x2E80..0x1F000).contains(&u)
+    })
+}
+
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, hidden: bool) -> App {
         let ctx = cc.egui_ctx.clone();
-        load_fonts(&ctx);
+        let prof = std::env::var_os("FERROCAST_PROFILE").is_some();
+        let t = Instant::now();
+        load_fonts(&ctx, false);
+        if prof {
+            eprintln!("fonts {:?}", t.elapsed());
+        }
+        let t = Instant::now();
         let store = Store::default_location();
+        let calc_history = store.load("calc-history.json");
+        let recent_emoji = store.load("recent-emoji.json");
         let data = store.load_all();
+        if prof {
+            eprintln!("data {:?}", t.elapsed());
+        }
+        let t = Instant::now();
         let (tx, rx) = std::sync::mpsc::channel();
         let bus = Bus { tx, ctx: ctx.clone() };
         services::ensure_scripts_dir(&store);
@@ -235,6 +302,10 @@ impl App {
         });
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_expansion(shared.clone());
+        if prof {
+            eprintln!("services {:?}", t.elapsed());
+        }
+        let t = Instant::now();
         let mut hotkeys = Hotkeys::new(bus.clone());
         let mut toast = None;
         if let Some(h) = hotkeys.as_mut() {
@@ -245,7 +316,17 @@ impl App {
         }
         let tray = if data.settings.show_menu_bar_icon { services::make_tray(bus.clone()) } else { None };
         let b2 = bus.clone();
-        std::thread::spawn(move || b2.send(Msg::Apps(apps::list_apps())));
+        if prof {
+            eprintln!("hotkeys {:?}", t.elapsed());
+        }
+        std::thread::spawn(move || {
+            let t = Instant::now();
+            let a = apps::list_apps();
+            if std::env::var_os("FERROCAST_PROFILE").is_some() {
+                eprintln!("apps scan {:?} ({} apps)", t.elapsed(), a.len());
+            }
+            b2.send(Msg::Apps(a))
+        });
         let store_rates: ferrocast_core::currency::Rates = store.load("rates.json");
         if store_rates.is_stale(now_secs()) {
             services::refresh_rates(bus.clone());
@@ -285,6 +366,13 @@ impl App {
             files_req: String::new(),
             query_changed_at: Instant::now(),
             win_cache: vec![],
+            proc_cache: vec![],
+            timers: vec![],
+            calc_history,
+            recent_emoji,
+            app_icon: None,
+            wide_font: false,
+            show_t: None,
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -295,6 +383,9 @@ impl App {
             scratch: String::new(),
             key_scratch: String::new(),
             rates: store_rates,
+            rates_checked_at: Instant::now(),
+            sec_cache: None,
+            sec_dirty: true,
         };
         app.shared.visible.store(app.visible, Ordering::Relaxed);
         if !app.settings.onboarded && !hidden {
@@ -337,17 +428,20 @@ impl App {
     }
 
     fn save_settings(&mut self) {
-        let _ = self.store.save("settings.json", &self.settings);
+        let v = self.settings.clone();
+        self.persist("settings.json", &v);
         *self.shared.settings.write().unwrap() = self.settings.clone();
         self.rebuild();
     }
     fn save_snippets(&mut self) {
-        let _ = self.store.save("snippets.json", &self.snippets);
+        let v = self.snippets.clone();
+        self.persist("snippets.json", &v);
         *self.shared.snippets.write().unwrap() = self.snippets.clone();
         self.shared.refresh_keywords();
     }
     fn save_quicklinks(&mut self) {
-        let _ = self.store.save("quicklinks.json", &self.quicklinks);
+        let v = self.quicklinks.clone();
+        self.persist("quicklinks.json", &v);
         self.rebuild();
     }
     fn send_ai(&mut self) {
@@ -371,10 +465,13 @@ impl App {
     }
 
     fn save_notes(&mut self) {
-        let _ = self.store.save("notes.json", &self.notes);
+        let v = self.notes.clone();
+        self.persist("notes.json", &v);
     }
     fn save_frecency(&self) {
-        let _ = self.store.save("frecency.json", &self.frecency);
+        if let Err(e) = self.store.save("frecency.json", &self.frecency) {
+            instance::log(&self.store.root, &format!("saving frecency.json failed: {e:#}"));
+        }
     }
     fn apply_hotkeys(&mut self) {
         if let Some(h) = self.hotkeys.as_mut() {
@@ -385,7 +482,16 @@ impl App {
     }
 
     /// Rebuild the cached list of root-searchable items.
+    /// Load the Unicode fallback font the first time non-Latin text needs it.
+    pub(crate) fn ensure_wide_font(&mut self, text: &str) {
+        if !self.wide_font && needs_wide_font(text) {
+            self.wide_font = true;
+            load_fonts(&self.ctx, true);
+        }
+    }
+
     fn rebuild(&mut self) {
+        self.sec_dirty = true;
         let mut v = vec![];
         for a in &self.apps {
             v.push(Item {
@@ -465,6 +571,7 @@ impl App {
     // ------------------------------------------------------------- show/hide
 
     fn show(&mut self) {
+        self.sec_dirty = true;
         if self.hidden_at.elapsed() > Duration::from_secs(90) {
             self.stack = vec![View::Root];
             self.query.clear();
@@ -473,6 +580,7 @@ impl App {
         self.visible = true;
         self.had_focus = false;
         self.shown_at = Instant::now();
+        self.show_t = Some(Instant::now());
         self.panel = None;
         self.shared.visible.store(true, Ordering::Relaxed);
         if let Some(p) = launcher_origin() {
@@ -515,6 +623,14 @@ impl App {
         }
     }
 
+    /// Persist a data file; a failed write is surfaced instead of dropped on the floor.
+    fn persist<T: serde::Serialize>(&mut self, name: &str, value: &T) {
+        if let Err(e) = self.store.save(name, value) {
+            instance::log(&self.store.root, &format!("saving {name} failed: {e:#}"));
+            self.toast(format!("Could not save {name}: {e}"));
+        }
+    }
+
     fn toast(&mut self, s: impl Into<String>) {
         self.toast = Some((s.into(), Instant::now()));
         self.ctx.request_repaint_after(Duration::from_millis(2600));
@@ -527,23 +643,30 @@ impl App {
     }
 
     fn push(&mut self, v: View) {
+        self.sec_dirty = true;
         if matches!(v, View::Windows) {
             self.win_cache = running::list_windows();
+        }
+        if matches!(v, View::Processes) {
+            self.proc_cache = ferrocast_macos::process::list();
         }
         self.stack.push(v);
         self.query.clear();
         self.prev_query.clear();
         self.selected = 0;
+        self.scroll_to_sel = true;
         self.panel = None;
         self.focus_first = true;
     }
 
     fn pop(&mut self) {
+        self.sec_dirty = true;
         if self.stack.len() > 1 {
             self.stack.pop();
             self.query.clear();
             self.prev_query.clear();
             self.selected = 0;
+            self.scroll_to_sel = true;
             self.panel = None;
         } else {
             self.hide();
@@ -551,9 +674,11 @@ impl App {
     }
 
     fn reset_to_root(&mut self) {
+        self.sec_dirty = true;
         self.stack = vec![View::Root];
         self.query.clear();
         self.selected = 0;
+        self.scroll_to_sel = true;
         self.panel = None;
     }
 
@@ -561,6 +686,7 @@ impl App {
 
     fn drain(&mut self) {
         while let Ok(m) = self.rx.try_recv() {
+            self.sec_dirty = true;
             match m {
                 Msg::Wake => {}
                 Msg::Toast(t) => self.toast(t),
@@ -569,6 +695,11 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::IconBytes(k, b) => {
+                    if !self.icons.map.contains_key(&k) {
+                        self.icons.prefetched.insert(k, b);
+                    }
+                }
                 Msg::AiChunk { run, text } => {
                     for v in self.stack.iter_mut() {
                         if let View::Ai { answer, run: r, .. } = v {
@@ -729,7 +860,7 @@ impl App {
             }
             let mut recent: Vec<&Item> =
                 self.base.iter().filter(|i| !self.settings.is_favorite(&i.id) && self.frecency.last_used(&i.id).is_some()).collect();
-            recent.sort_by(|a, b| self.frecency.score(&b.id, now).partial_cmp(&self.frecency.score(&a.id, now)).unwrap());
+            recent.sort_by(|a, b| self.frecency.score(&b.id, now).total_cmp(&self.frecency.score(&a.id, now)));
             recent.truncate(8);
             if !recent.is_empty() {
                 out.push(Section { title: "Suggestions".into(), items: recent.into_iter().cloned().collect() });
@@ -801,6 +932,22 @@ impl App {
                 kind: Kind::Url(u),
             });
         }
+        if let Some(t) = ferrocast_core::timer::parse(q) {
+            let what = if t.label.is_empty() {
+                ferrocast_core::timer::describe(t.secs)
+            } else {
+                format!("{} ({})", t.label, ferrocast_core::timer::describe(t.secs))
+            };
+            top.push(Item {
+                id: "timer".into(),
+                title: format!("Start {what} timer"),
+                subtitle: String::new(),
+                icon: Icon::Glyph("◷", [245, 165, 36]),
+                accessory: "Timer".into(),
+                keywords: vec![],
+                kind: Kind::Timer(t.secs, t.label),
+            });
+        }
         if !top.is_empty() {
             out.push(Section { title: "Result".into(), items: top });
         }
@@ -821,7 +968,7 @@ impl App {
             .iter()
             .filter_map(|i| ranking::score(&self.rankable(i), q, &self.frecency, now, self.settings.sensitivity).map(|s| (s, i)))
             .collect();
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
         scored.truncate(40);
         if !scored.is_empty() {
             out.push(Section { title: "Results".into(), items: scored.into_iter().map(|(_, i)| i.clone()).collect() });
@@ -856,6 +1003,17 @@ impl App {
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchEmoji, q.to_string()),
         });
+        if q.split_whitespace().count() <= 3 && q.chars().all(|c| c.is_alphabetic() || c == ' ' || c == '-' || c == '\'') {
+            fb.push(Item {
+                id: "fallback:dict".into(),
+                title: format!("Look up “{q}” in Dictionary"),
+                subtitle: String::new(),
+                icon: Icon::Glyph("Aa", [120, 120, 130]),
+                accessory: "Fallback".into(),
+                keywords: vec![],
+                kind: Kind::Url(format!("dict://{}", q.replace(' ', "%20"))),
+            });
+        }
         fb.push(Item {
             id: "fallback:ai".into(),
             title: format!("Ask AI: “{q}”"),
@@ -884,6 +1042,53 @@ impl App {
             v.sort_by_key(|a| std::cmp::Reverse(a.0));
         }
         vec![Section { title: title.into(), items: v.into_iter().map(|(_, i)| i).collect() }]
+    }
+
+    /// Anything that can change the result list calls this; the next frame recomputes.
+    pub(crate) fn invalidate_sections(&mut self) {
+        self.sec_dirty = true;
+    }
+
+    /// `sections()` with a one-entry cache keyed on query and view. Building the list runs the
+    /// fuzzy matcher, the calculator and clipboard filtering, so it must not repeat every frame.
+    pub(crate) fn sections_cached(&mut self) -> Vec<Section> {
+        let key = format!("{}\u{0}{}\u{0}{}", self.query, self.stack.len(), self.view().title());
+        if !self.sec_dirty {
+            if let Some((k, v)) = &self.sec_cache {
+                if *k == key {
+                    return v.clone();
+                }
+            }
+        }
+        let t0 = Instant::now();
+        let v = self.sections();
+        if std::env::var_os("FERROCAST_PROFILE").is_some() {
+            eprintln!("sections {:?} q={:?}", t0.elapsed(), self.query);
+        }
+        if !self.wide_font && v.iter().flat_map(|s| s.items.iter()).any(|i| needs_wide_font(&i.title) || needs_wide_font(&i.subtitle)) {
+            self.wide_font = true;
+            load_fonts(&self.ctx, true);
+        }
+        // Fetch the icons this list will show before the painter asks for them.
+        let want: Vec<String> = v
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .filter_map(|i| match &i.icon {
+                Icon::App(p) => {
+                    let k = format!("app:{p}");
+                    (!self.icons.map.contains_key(&k) && !self.icons.prefetched.contains_key(&k) && self.icons.inflight.insert(k))
+                        .then(|| p.clone())
+                }
+                _ => None,
+            })
+            .take(40)
+            .collect();
+        if !want.is_empty() {
+            services::prefetch_app_icons(want, self.bus.clone());
+        }
+        self.sec_cache = Some((key, v.clone()));
+        self.sec_dirty = false;
+        v
     }
 
     fn sections(&self) -> Vec<Section> {
@@ -981,9 +1186,31 @@ impl App {
             }
             View::Emoji => {
                 let ql = q.to_lowercase();
-                let v: Vec<(i64, Item)> = emojis::iter()
-                    .filter(|e| ql.is_empty() || e.name().contains(&ql) || e.shortcodes().any(|s| s.contains(&ql)))
-                    .take(300)
+                // Rank before truncating so a name that starts with the query is never cut off
+                // by weaker matches that happen to come first in the catalogue.
+                let mut hits: Vec<_> =
+                    emojis::iter().filter(|e| ql.is_empty() || e.name().contains(&ql) || e.shortcodes().any(|s| s.contains(&ql))).collect();
+                hits.sort_by_key(|e| !e.name().starts_with(&ql));
+                hits.truncate(300);
+                let recent: Vec<Item> = if ql.is_empty() {
+                    self.recent_emoji
+                        .iter()
+                        .filter_map(|r| emojis::get(r))
+                        .map(|e| Item {
+                            id: format!("emoji:{}", e.as_str()),
+                            title: e.name().to_string(),
+                            subtitle: e.shortcode().map(|s| format!(":{s}:")).unwrap_or_default(),
+                            icon: Icon::Emoji(e.as_str().to_string()),
+                            accessory: "Recent".into(),
+                            keywords: vec![],
+                            kind: Kind::Emoji(e.as_str()),
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                };
+                let v: Vec<(i64, Item)> = hits
+                    .into_iter()
                     .map(|e| {
                         (
                             if e.name().starts_with(&ql) { 1 } else { 0 },
@@ -999,7 +1226,11 @@ impl App {
                         )
                     })
                     .collect();
-                self.sorted(v, "Emoji")
+                let mut out = self.sorted(v, "Emoji");
+                if !recent.is_empty() {
+                    out.insert(0, Section { title: "Recently used".into(), items: recent });
+                }
+                out
             }
             View::Files => {
                 if self.files.0 == q && !self.files.1.is_empty() {
@@ -1031,6 +1262,94 @@ impl App {
                     })
                     .collect();
                 self.sorted(v, "Windows")
+            }
+            View::Processes => {
+                let v = self
+                    .proc_cache
+                    .iter()
+                    .filter_map(|pr| {
+                        self.matches(&q, &pr.name, &pr.path).map(|sc| {
+                            (
+                                sc,
+                                Item {
+                                    id: format!("proc:{}", pr.pid),
+                                    title: pr.name.clone(),
+                                    subtitle: format!("PID {}", pr.pid),
+                                    icon: pr.bundle().map(Icon::App).unwrap_or(Icon::Glyph("›", [108, 108, 120])),
+                                    accessory: format!("{:.0}% CPU · {:.0} MB", pr.cpu, pr.mem_mb),
+                                    keywords: vec![],
+                                    kind: Kind::Process(pr.clone()),
+                                },
+                            )
+                        })
+                    })
+                    .collect();
+                self.sorted(v, "Processes")
+            }
+            View::CalcHistory => {
+                let now = now_secs();
+                let v: Vec<(i64, Item)> = self
+                    .calc_history
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, e)| {
+                        self.matches(&q, &e.question, &e.display).map(|sc| {
+                            (
+                                sc,
+                                Item {
+                                    id: format!("calc:{i}"),
+                                    title: e.display.clone(),
+                                    subtitle: e.question.clone(),
+                                    icon: Icon::Glyph("=", [120, 120, 130]),
+                                    accessory: services::ago(now - e.at),
+                                    keywords: vec![],
+                                    kind: Kind::Calc(ferrocast_core::calc::CalcResult {
+                                        question: e.question.clone(),
+                                        value: e.value,
+                                        unit: e.unit.clone(),
+                                        display: e.display.clone(),
+                                        raw: e.raw.clone(),
+                                    }),
+                                },
+                            )
+                        })
+                    })
+                    .collect();
+                self.sorted(v, "History")
+            }
+            View::Timers => {
+                let now = Instant::now();
+                let v: Vec<(i64, Item)> = self
+                    .timers
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, t)| {
+                        let title =
+                            if t.label.is_empty() { format!("{} timer", ferrocast_core::timer::describe(t.secs)) } else { t.label.clone() };
+                        self.matches(&q, &title, "").map(|sc| {
+                            let left = t.ends_at.saturating_duration_since(now).as_secs();
+                            (
+                                sc,
+                                Item {
+                                    id: format!("timer:{i}"),
+                                    title,
+                                    subtitle: format!(
+                                        "ends at {}",
+                                        chrono::Local::now()
+                                            .checked_add_signed(chrono::Duration::seconds(left as i64))
+                                            .map(|d| d.format("%H:%M").to_string())
+                                            .unwrap_or_default()
+                                    ),
+                                    icon: Icon::Glyph("◷", [245, 165, 36]),
+                                    accessory: ferrocast_core::timer::clock(left),
+                                    keywords: vec![],
+                                    kind: Kind::RunningTimer(i),
+                                },
+                            )
+                        })
+                    })
+                    .collect();
+                self.sorted(v, "Running")
             }
             View::Notes => {
                 let mut notes: Vec<&Note> =
@@ -1122,11 +1441,18 @@ impl App {
             Kind::File(p) => {
                 a.push(Action::new("Open", Act::Run));
                 a.push(Action::new("Show in Finder", Act::Reveal(p.clone())).key(CMD, Key::Enter));
+                a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Move to Trash", Act::Trash(p.clone())).key(CTRL, Key::X).danger());
             }
             Kind::Calc(r) => {
                 a.push(Action::new("Copy Answer", Act::CopyText(r.raw.clone())));
+                if matches!(self.view(), View::CalcHistory) {
+                    if let Some(i) = item.id.strip_prefix("calc:").and_then(|n| n.parse().ok()) {
+                        a.push(Action::new("Delete Entry", Act::DeleteCalcEntry(i)).key(CTRL, Key::X).danger());
+                    }
+                    a.push(Action::new("Clear History", Act::ClearCalcHistory).danger());
+                }
                 a.push(Action::new("Paste Answer to Active App", Act::PasteText(r.raw.clone())).key(CMD, Key::Enter));
                 a.push(
                     Action::new("Copy Question and Answer", Act::CopyText(format!("{} = {}", r.question, r.display)))
@@ -1164,6 +1490,14 @@ impl App {
             Kind::Window(_) => a.push(Action::new("Apply to Focused Window", Act::Run)),
             Kind::Url(_) => a.push(Action::new("Open in Browser", Act::Run)),
             Kind::OpenWindow(_) => a.push(Action::new("Switch to Window", Act::Run)),
+            Kind::Timer(..) => a.push(Action::new("Start Timer", Act::Run)),
+            Kind::RunningTimer(i) => a.push(Action::new("Cancel Timer", Act::CancelTimer(*i)).danger()),
+            Kind::Process(pr) => {
+                a.push(Action::new("Kill Process", Act::Run));
+                a.push(Action::new("Force Kill Process", Act::KillProcess(pr.pid, true)).key(CMD, Key::Enter).danger());
+                a.push(Action::new("Copy PID", Act::CopyText(pr.pid.to_string())).key(CMD_SHIFT, Key::C));
+                a.push(Action::new("Copy Path", Act::CopyText(pr.path.clone())).key(CMD, Key::P));
+            }
             _ => a.push(Action::new("Open", Act::Run)),
         }
         if matches!(self.view(), View::Root) && item.is_command() {
@@ -1200,6 +1534,9 @@ impl App {
             Kind::Script(_) => "Run Script Command",
             Kind::Url(_) => "Open in Browser",
             Kind::OpenWindow(_) => "Switch to Window",
+            Kind::Process(_) => "Kill Process",
+            Kind::Timer(..) => "Start Timer",
+            Kind::RunningTimer(_) => "Cancel Timer",
             Kind::WebSearch(_) => "Search",
             Kind::Window(_) => "Apply to Window",
             _ => "Run Command",
@@ -1330,8 +1667,9 @@ impl App {
                 }
             }
             Kind::Calc(r) => {
-                let t = r.raw.clone();
-                self.copy_text(&t)
+                let r = r.clone();
+                self.remember_calc(&r);
+                self.copy_text(&r.raw)
             }
             Kind::Color(c) => {
                 self.push(View::Colors(*c));
@@ -1354,6 +1692,7 @@ impl App {
             Kind::Clip(id) => self.perform(Act::ClipPaste(id.clone()), true),
             Kind::Emoji(e) => {
                 let e = e.to_string();
+                self.remember_emoji(&e);
                 self.paste_text(&e)
             }
             Kind::Note(id) => {
@@ -1366,7 +1705,142 @@ impl App {
                 running::activate(w.pid);
                 windows::raise_window(w.pid, &w.title);
             }
+            Kind::Process(pr) => {
+                let pid = pr.pid;
+                self.kill_process(pid, false);
+            }
+            Kind::Timer(secs, label) => {
+                let (secs, label) = (*secs, label.clone());
+                self.start_timer(secs, label);
+            }
+            Kind::RunningTimer(i) => {
+                let i = *i;
+                self.cancel_timer(i);
+            }
         }
+    }
+
+    /// Keep the last 100 distinct calculations, newest first.
+    fn remember_calc(&mut self, r: &ferrocast_core::calc::CalcResult) {
+        if matches!(self.view(), View::CalcHistory) {
+            return;
+        }
+        self.calc_history.retain(|e| e.question != r.question);
+        self.calc_history.insert(
+            0,
+            ferrocast_core::models::CalcEntry {
+                question: r.question.clone(),
+                display: r.display.clone(),
+                raw: r.raw.clone(),
+                value: r.value,
+                unit: r.unit.clone(),
+                at: now_secs(),
+            },
+        );
+        self.calc_history.truncate(100);
+        let v = self.calc_history.clone();
+        self.persist("calc-history.json", &v);
+    }
+
+    /// Up to 16 recently used emoji, newest first.
+    fn remember_emoji(&mut self, e: &str) {
+        self.recent_emoji.retain(|x| x != e);
+        self.recent_emoji.insert(0, e.to_string());
+        self.recent_emoji.truncate(16);
+        let v = self.recent_emoji.clone();
+        self.persist("recent-emoji.json", &v);
+    }
+
+    /// Ask Homebrew whether a newer formula is available; the answer arrives as a toast.
+    fn check_updates(&mut self) {
+        self.toast("Checking Homebrew…");
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].iter().find(|p| std::path::Path::new(p).exists());
+            let Some(brew) = brew else {
+                bus.send(Msg::Toast("Homebrew not found; update from the repository".into()));
+                return;
+            };
+            let installed = std::process::Command::new(brew)
+                .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+                .args(["list", "--versions", "ferrocast"])
+                .output()
+                .map(|o| o.status.success() && !o.stdout.is_empty())
+                .unwrap_or(false);
+            if !installed {
+                bus.send(Msg::Toast("Not installed with Homebrew; update from the repository".into()));
+                return;
+            }
+            let msg = match std::process::Command::new(brew)
+                .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+                .args(["outdated", "--verbose", "ferrocast"])
+                .output()
+            {
+                Ok(o) if o.status.success() => {
+                    let out = String::from_utf8_lossy(&o.stdout);
+                    match out.lines().find(|l| l.starts_with("ferrocast")) {
+                        Some(l) => format!("Update available: {} · run brew upgrade ferrocast", l.trim_start_matches("ferrocast").trim()),
+                        None => format!("Ferrocast {} is up to date", env!("CARGO_PKG_VERSION")),
+                    }
+                }
+                Ok(o) => format!("brew: {}", String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("unknown error")),
+                Err(e) => format!("Could not run brew: {e}"),
+            };
+            bus.send(Msg::Toast(msg));
+        });
+    }
+
+    /// Start a countdown; a thread sleeps and then notifies, unless the timer was cancelled.
+    fn start_timer(&mut self, secs: u64, label: String) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let what = if label.is_empty() { format!("{} timer", ferrocast_core::timer::describe(secs)) } else { label.clone() };
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(secs));
+            if flag.load(Ordering::Relaxed) {
+                return;
+            }
+            services::notify("Timer done", &what);
+            let _ = std::process::Command::new("/usr/bin/afplay").arg("/System/Library/Sounds/Glass.aiff").spawn();
+            bus.send(Msg::Wake);
+        });
+        self.timers.push(RunningTimer { ends_at: Instant::now() + Duration::from_secs(secs), secs, label, cancelled });
+        self.toast(format!("Timer started · {}", ferrocast_core::timer::clock(secs)));
+        self.hide();
+        self.reset_to_root();
+    }
+
+    fn cancel_timer(&mut self, i: usize) {
+        if i < self.timers.len() {
+            self.timers[i].cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.timers.remove(i);
+            self.toast("Timer cancelled");
+        }
+        self.sec_dirty = true;
+    }
+
+    /// Drop timers that already fired.
+    fn sweep_timers(&mut self) {
+        let now = Instant::now();
+        let before = self.timers.len();
+        self.timers.retain(|t| t.ends_at > now);
+        if self.timers.len() != before {
+            self.sec_dirty = true;
+        }
+    }
+
+    /// End a process from the Kill Process list and refresh it in place.
+    fn kill_process(&mut self, pid: i32, force: bool) {
+        let name = self.proc_cache.iter().find(|p| p.pid == pid).map(|p| p.name.clone()).unwrap_or_else(|| pid.to_string());
+        if ferrocast_macos::process::kill(pid, force) {
+            self.toast(format!("{} {name}", if force { "Force killed" } else { "Killed" }));
+        } else {
+            self.toast(format!("Could not kill {name}"));
+        }
+        self.proc_cache.retain(|p| p.pid != pid);
+        self.sec_dirty = true;
     }
 
     fn run_builtin(&mut self, b: Builtin) {
@@ -1423,6 +1897,10 @@ impl App {
             Builtin::SearchEmoji => self.push(View::Emoji),
             Builtin::SearchFiles => self.push(View::Files),
             Builtin::SwitchWindows => self.push(View::Windows),
+            Builtin::KillProcess => self.push(View::Processes),
+            Builtin::Timers => self.push(View::Timers),
+            Builtin::CheckUpdates => self.check_updates(),
+            Builtin::CalcHistory => self.push(View::CalcHistory),
             Builtin::SearchNotes => self.push(View::Notes),
             Builtin::CreateNote => self.new_note(),
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
@@ -1467,6 +1945,8 @@ impl App {
                         | system::SystemCommand::Volume(_)
                         | system::SystemCommand::EmptyTrash
                         | system::SystemCommand::ToggleHiddenFiles
+                        | system::SystemCommand::ToggleWifi
+                        | system::SystemCommand::KeepAwake
                 ) {
                     services::notify("Ferrocast", &msg);
                 }
@@ -1511,7 +1991,14 @@ impl App {
     }
 
     fn open_quicklink(&mut self, q: &Quicklink, args: HashMap<String, String>) {
-        let ctx = placeholders::Context { clipboard: services::clipboard_texts(&self.shared), arguments: args, ..Default::default() };
+        let snaps = self.snippets.clone();
+        let lookup = |n: &str| snaps.iter().find(|s| s.name == n).map(|s| s.text.clone());
+        let ctx = placeholders::Context {
+            clipboard: services::clipboard_texts(&self.shared),
+            arguments: args,
+            snippets: Some(&lookup),
+            ..Default::default()
+        };
         let is_path = q.link.starts_with('/') || q.link.starts_with('~');
         let target = placeholders::expand(&q.link, if is_path { Target::Snippet } else { Target::Quicklink }, &ctx).text;
         let with = q.open_with.clone();
@@ -1519,7 +2006,14 @@ impl App {
     }
 
     fn paste_snippet(&mut self, s: &Snippet, args: HashMap<String, String>) {
-        let ctx = placeholders::Context { clipboard: services::clipboard_texts(&self.shared), arguments: args, ..Default::default() };
+        let snaps = self.snippets.clone();
+        let lookup = |n: &str| snaps.iter().find(|s| s.name == n).map(|s| s.text.clone());
+        let ctx = placeholders::Context {
+            clipboard: services::clipboard_texts(&self.shared),
+            arguments: args,
+            snippets: Some(&lookup),
+            ..Default::default()
+        };
         let ex = placeholders::expand(&s.text, Target::Snippet, &ctx);
         clipboard::write_text(&ex.text);
         self.shared.mark_clipboard_write();
@@ -1553,6 +2047,11 @@ impl App {
         self.execute_script_cmd(idx, args);
     }
 
+    fn prune_clip_images(&self) {
+        let list = self.shared.clipboard.lock().unwrap().clone();
+        ferrocast_core::storage::prune_images(&self.store.images_dir(), &list);
+    }
+
     fn execute_script_cmd(&mut self, idx: usize, args: Vec<String>) {
         let Some(s) = self.scripts.get(idx).cloned() else { return };
         let args =
@@ -1562,8 +2061,8 @@ impl App {
         match s.mode {
             Mode::FullOutput | Mode::Inline => {
                 self.runs.insert(run, RunKind::Output);
-                // replace an Args view if present
-                if matches!(self.view(), View::Args { .. }) {
+                // drop any Confirm/Args views so Esc on the output doesn't return to them
+                while matches!(self.view(), View::Confirm { .. } | View::Args { .. }) {
                     self.stack.pop();
                 }
                 self.push(View::Output { run, title: s.title.clone(), text: String::new(), done: false });
@@ -1647,6 +2146,31 @@ impl App {
             Act::ForceQuitApp(pid) => {
                 running::force_quit(pid);
                 self.toast("Force quit");
+            }
+            Act::KillProcess(pid, force) => self.kill_process(pid, force),
+            Act::CancelTimer(i) => self.cancel_timer(i),
+            Act::ClearCalcHistory => {
+                self.calc_history.clear();
+                let v = self.calc_history.clone();
+                self.persist("calc-history.json", &v);
+                self.toast("History cleared");
+            }
+            Act::DeleteCalcEntry(i) => {
+                if i < self.calc_history.len() {
+                    self.calc_history.remove(i);
+                    let v = self.calc_history.clone();
+                    self.persist("calc-history.json", &v);
+                }
+            }
+            Act::QuickLook(p) => {
+                // qlmanage shows the system Quick Look panel; it exits when the panel closes.
+                let _ = std::process::Command::new("/usr/bin/qlmanage")
+                    .arg("-p")
+                    .arg(&p)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                self.hide();
             }
             Act::HideApp(pid) => {
                 running::hide(pid);
@@ -1767,10 +2291,12 @@ impl App {
             Act::ClipDelete(id) => {
                 self.shared.clipboard.lock().unwrap().retain(|e| e.id != id);
                 self.shared.save_clipboard();
+                self.prune_clip_images();
             }
             Act::ClipDeleteAll => {
                 self.shared.clipboard.lock().unwrap().retain(|e| e.pinned);
                 self.shared.save_clipboard();
+                self.prune_clip_images();
                 self.toast("Clipboard history cleared");
             }
             Act::ClipSaveSnippet(id) => {

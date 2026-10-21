@@ -1,6 +1,7 @@
 //! eframe::App implementation: event loop, keyboard handling and drawing.
 
 use super::*;
+use egui::TextureOptions;
 use egui::{Event, Frame as EFrame, RichText, TextEdit};
 use global_hotkey::hotkey::HotKey;
 use std::str::FromStr;
@@ -25,6 +26,17 @@ impl eframe::App for App {
         dev_screenshot(ctx, self);
         self.drain();
         self.tick_inline();
+        self.sweep_timers();
+        if matches!(self.view(), View::Timers) && !self.timers.is_empty() {
+            self.invalidate_sections();
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+        if self.rates_checked_at.elapsed() > Duration::from_secs(15 * 60) {
+            self.rates_checked_at = Instant::now();
+            if self.rates.is_stale(services::now_secs()) {
+                services::refresh_rates(self.bus.clone());
+            }
+        }
         if self.toast.as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_millis(2500)) {
             self.toast = None;
         }
@@ -70,6 +82,11 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut Ui, _f: &mut eframe::Frame) {
+        if let Some(t) = self.show_t.take() {
+            if std::env::var_os("FERROCAST_PROFILE").is_some() {
+                eprintln!("show -> frame {:?}", t.elapsed());
+            }
+        }
         self.draw(ui);
     }
 }
@@ -81,6 +98,11 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
     static FRAME: AtomicU32 = AtomicU32::new(0);
     let Ok(path) = std::env::var("FERROCAST_SCREENSHOT") else { return };
     let n = FRAME.fetch_add(1, Ordering::Relaxed);
+    if n == 0 && std::env::var_os("FERROCAST_PROFILE").is_some() {
+        if let Some(t0) = crate::STARTED.get() {
+            eprintln!("first frame after {:?}", t0.elapsed());
+        }
+    }
     if n == 2 {
         match std::env::var("FERROCAST_VIEW").as_deref() {
             Ok("clipboard") => app.push(View::Clipboard),
@@ -92,6 +114,23 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("welcome") => app.push(View::Welcome),
             Ok("shortcuts") => app.push(View::Shortcuts),
             Ok("about") => app.push(View::About),
+            Ok("processes") => app.push(View::Processes),
+            Ok("calchistory") => app.push(View::CalcHistory),
+            Ok("timers") => {
+                app.timers.push(crate::app::RunningTimer {
+                    ends_at: Instant::now() + Duration::from_secs(1500),
+                    secs: 1500,
+                    label: "Pomodoro".into(),
+                    cancelled: Default::default(),
+                });
+                app.timers.push(crate::app::RunningTimer {
+                    ends_at: Instant::now() + Duration::from_secs(600),
+                    secs: 600,
+                    label: String::new(),
+                    cancelled: Default::default(),
+                });
+                app.push(View::Timers);
+            }
             Ok("ai") => {
                 app.run_builtin(Builtin::AskAi);
                 if std::env::var("FERROCAST_AI_DEMO").is_ok() {
@@ -179,7 +218,11 @@ impl App {
                 k.enter = i.consume_key(Modifiers::NONE, Key::Enter);
             }
             k.esc = i.consume_key(Modifiers::NONE, Key::Escape);
-            k.backspace = shape == Shape::List && !panel && query_empty && i.key_pressed(Key::Backspace) && !i.modifiers.any();
+            k.backspace = shape == Shape::List
+                && !panel
+                && query_empty
+                && !i.modifiers.any()
+                && i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Backspace, pressed: true, repeat: false, .. }));
             k
         })
     }
@@ -237,7 +280,11 @@ impl App {
             }
             if k.enter || k.cmd_enter {
                 let acts = self.actions_for(&item);
-                if let Some(a) = acts.get(if k.enter { 0 } else { 1 }) {
+                // ⌘↵ runs the action that declares that shortcut; when an item has none, it
+                // behaves like ↵ rather than firing whatever happens to be listed second.
+                let pick =
+                    if k.enter { acts.first() } else { acts.iter().find(|a| a.shortcut == Some((CMD, Key::Enter))).or(acts.first()) };
+                if let Some(a) = pick {
                     self.do_action(item, a.kind.clone());
                     return true;
                 }
@@ -341,6 +388,7 @@ impl App {
     }
 
     fn do_action(&mut self, item: Item, act: Act) {
+        self.invalidate_sections();
         self.act_item = Some(item.clone());
         match act {
             Act::Run => {
@@ -439,6 +487,15 @@ impl App {
                     self.toast("Keyword already used by another snippet");
                     return;
                 }
+                if !kw.is_empty() {
+                    if let Some(o) = self.snippets.iter().find(|s| {
+                        Some(&s.id) != id.as_ref() && !s.keyword.is_empty() && (s.keyword.starts_with(&kw) || kw.starts_with(&s.keyword))
+                    }) {
+                        let msg = format!("Keyword conflicts with “{}”", o.keyword);
+                        self.toast(&msg);
+                        return;
+                    }
+                }
                 match id.and_then(|i| self.snippets.iter_mut().find(|s| s.id == i)) {
                     Some(s) => {
                         s.name = name.trim().into();
@@ -512,6 +569,18 @@ impl App {
         self.icons.new_frame();
         self.dark = ctx.theme() == egui::Theme::Dark;
         let pal = palette(self.dark);
+        // Brand-coloured caret and text selection instead of egui's default blue.
+        if ui.visuals().text_cursor.stroke.color != pal.accent {
+            let accent = pal.accent;
+            ctx.all_styles_mut(|st| {
+                st.visuals.text_cursor.stroke.color = accent;
+                st.visuals.selection.bg_fill = accent.gamma_multiply(0.35);
+                st.visuals.selection.stroke.color = accent;
+            });
+        }
+        // Fade the launcher in when it appears (opacity only; one multiply per shape).
+        let appear = ctx.animate_bool_with_time(Id::new("appear"), self.visible && self.shown_at.elapsed() > Duration::ZERO, 0.14);
+        ui.set_opacity(appear);
         let full = ui.max_rect();
         ui.painter().rect_filled(full, ui::RADIUS, pal.bg);
         ui.painter().rect_stroke(full, ui::RADIUS, Stroke::new(1.0, pal.border), StrokeKind::Inside);
@@ -524,13 +593,17 @@ impl App {
         }
         let keys = self.read_keys(&ctx);
         let shape = self.view().shape();
-        let sections = if shape == Shape::List { self.sections() } else { vec![] };
+        let q_now = self.query.clone();
+        self.ensure_wide_font(&q_now);
+        ctx.data_mut(|d| d.insert_temp(Id::new("sel_salt"), self.stack.len()));
+        let sections = if shape == Shape::List { self.sections_cached() } else { vec![] };
         let total: usize = sections.iter().map(|s| s.items.len()).sum();
         if self.selected >= total {
             self.selected = total.saturating_sub(1);
         }
         let cur = sections.iter().flat_map(|s| s.items.iter()).nth(self.selected).cloned();
         if self.handle_keys(&ctx, &keys, total, cur.clone()) {
+            self.invalidate_sections();
             ctx.request_repaint();
             return;
         }
@@ -633,6 +706,8 @@ impl App {
             },
         };
         self.draw_footer(ui, footer_rect, &pal, primary, shape == Shape::List);
+        // Keep the pop-in animation primed at 0 while the panel is closed.
+        ctx.animate_bool_with_time(Id::new("panel_pop"), self.panel.is_some(), 0.12);
         if self.panel.is_some() {
             self.draw_panel(ui, content, &pal);
         }
@@ -650,27 +725,66 @@ impl App {
         }
     }
 
-    fn draw_footer(&self, ui: &Ui, rect: Rect, pal: &Palette, primary: Option<String>, list: bool) {
+    fn draw_footer(&mut self, ui: &Ui, rect: Rect, pal: &Palette, primary: Option<String>, list: bool) {
         let p = ui.painter();
         let cy = rect.center().y;
+        // App icon at the far left, as the original launcher does.
+        let icon = self.app_icon.get_or_insert_with(|| {
+            let img = services::decode_png(include_bytes!("../../../resources/icon-1024.png"))
+                .unwrap_or_else(|| egui::ColorImage::filled([1, 1], Color32::TRANSPARENT));
+            ui.ctx().load_texture("app-icon", img, TextureOptions::LINEAR)
+        });
+        let ir = Rect::from_center_size(Pos2::new(rect.min.x + 26.0, cy), Vec2::splat(18.0));
+        p.image(icon.id(), ir, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        let tx = rect.min.x + 42.0;
+        let q = self.query.trim();
+        let searching = list
+            && q.chars().count() >= 2
+            && self.files.0 != q
+            && match self.view() {
+                View::Root => self.settings.file_search_in_root,
+                View::Files => true,
+                _ => false,
+            };
         match &self.toast {
             Some((t, _)) => {
-                p.text(Pos2::new(rect.min.x + 18.0, cy), Align2::LEFT_CENTER, t, FontId::proportional(12.5), pal.accent);
+                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, t, FontId::proportional(12.5), pal.accent);
+            }
+            None if searching => {
+                // Three dots that pulse while Spotlight answers; cheap, and it stops on its own.
+                let t = ui.ctx().input(|i| i.time);
+                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, "Searching files", FontId::proportional(12.5), pal.sub);
+                let w = p.layout_no_wrap("Searching files".into(), FontId::proportional(12.5), pal.sub).size().x;
+                for k in 0..3 {
+                    let a = (((t * 3.0 - k as f64 * 0.6).sin() * 0.5 + 0.5) * 255.0) as u8;
+                    p.circle_filled(
+                        Pos2::new(tx + w + 6.0 + k as f32 * 7.0, cy + 3.0),
+                        1.8,
+                        Color32::from_rgba_unmultiplied(pal.sub.r(), pal.sub.g(), pal.sub.b(), a),
+                    );
+                }
+                ui.ctx().request_repaint_after(Duration::from_millis(60));
             }
             None => {
-                p.text(Pos2::new(rect.min.x + 18.0, cy), Align2::LEFT_CENTER, self.view().title(), FontId::proportional(12.5), pal.sub);
+                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, self.view().title(), FontId::proportional(12.5), pal.sub);
             }
         }
         let mut x = rect.max.x - 16.0;
+        let mut first = true;
         let mut hint = |label: &str, key: &str| {
-            let kg = p.layout_no_wrap(key.to_string(), FontId::proportional(12.0), pal.text);
+            if !first {
+                // thin separator between hint groups, as in the original launcher footers
+                p.vline(x + 9.0, (cy - 9.0)..=(cy + 9.0), Stroke::new(1.0, pal.sep));
+            }
+            first = false;
+            let kg = p.layout_no_wrap(key.to_string(), FontId::proportional(11.5), pal.text);
             let lg = p.layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.sub);
-            let kw = kg.size().x + 12.0;
+            let kw = (kg.size().x + 12.0).max(22.0);
             let kr = Rect::from_min_size(Pos2::new(x - kw, cy - 10.0), Vec2::new(kw, 20.0));
             p.rect_filled(kr, 5.0, pal.field);
-            p.galley(Pos2::new(kr.min.x + 6.0, cy - kg.size().y / 2.0), kg, pal.text);
+            p.galley(Pos2::new(kr.center().x - kg.size().x / 2.0, cy - kg.size().y / 2.0), kg, pal.text);
             let lx = kr.min.x - 8.0 - lg.size().x;
-            p.galley(Pos2::new(lx, cy - lg.size().y / 2.0), lg, pal.sub);
+            p.galley(Pos2::new(lx, cy - lg.size().y / 2.0), lg, pal.text);
             x = lx - 18.0;
         };
         if list {
@@ -714,7 +828,13 @@ impl App {
                         let selected = idx == sel;
                         let painter = ui.painter().clone();
                         if selected {
-                            painter.rect_filled(r.shrink2(Vec2::new(6.0, 1.0)), 8.0, pal.sel);
+                            // The highlight glides from its previous row to this one (y and height
+                            // are animated; the row itself is painted at its real position).
+                            let salt = ctx.data(|d| d.get_temp::<usize>(Id::new("sel_salt"))).unwrap_or(0);
+                            let ay = ctx.animate_value_with_time(Id::new(("sel_y", salt)), r.min.y, 0.11);
+                            let ah = ctx.animate_value_with_time(Id::new(("sel_h", salt)), r.height(), 0.11);
+                            let hr = Rect::from_min_size(Pos2::new(r.min.x, ay), Vec2::new(r.width(), ah));
+                            painter.rect_filled(hr.shrink2(Vec2::new(6.0, 1.0)), 8.0, pal.sel);
                             if scroll_sel {
                                 ui.scroll_to_rect(r, None);
                             }
@@ -727,6 +847,12 @@ impl App {
                         }
                         if resp.double_clicked() {
                             double = Some(idx);
+                        }
+                        // Rows scrolled out of view still take part in layout and selection, but
+                        // painting them (and fetching their icons) would be wasted work.
+                        if !ui.is_rect_visible(r) {
+                            idx += 1;
+                            continue;
                         }
                         if is_calc {
                             // Calculator card: question on the left, big answer on the right.
@@ -742,7 +868,7 @@ impl App {
                             painter.text(
                                 Pos2::new(r.min.x + half / 2.0, mid + 20.0),
                                 Align2::CENTER_CENTER,
-                                "Calculator",
+                                if item.accessory.is_empty() { "Calculator" } else { item.accessory.as_str() },
                                 FontId::proportional(11.5),
                                 pal.sub,
                             );
@@ -764,7 +890,7 @@ impl App {
                             idx += 1;
                             continue;
                         }
-                        let icon_rect = Rect::from_center_size(Pos2::new(r.min.x + 32.0, r.center().y), Vec2::splat(28.0));
+                        let icon_rect = Rect::from_center_size(Pos2::new(r.min.x + 31.0, r.center().y), Vec2::splat(26.0));
                         ui::paint_icon(&mut self.icons, ui, icon_rect, &item.icon, pal);
                         let mut acc: Vec<String> = vec![];
                         if is_root {
@@ -786,11 +912,11 @@ impl App {
                         let ag = painter.layout_no_wrap(acc, FontId::proportional(12.0), pal.sub);
                         let aw = ag.size().x;
                         painter.galley(Pos2::new(right - aw, r.center().y - ag.size().y / 2.0), ag, pal.sub);
-                        let tx = r.min.x + 54.0;
+                        let tx = r.min.x + 52.0;
                         let clip = Rect::from_min_max(Pos2::new(tx, r.min.y), Pos2::new((right - aw - 10.0).max(tx + 20.0), r.max.y));
                         let p = painter.with_clip_rect(clip);
-                        let title = elide(&p, &item.title, FontId::proportional(14.5), clip.width());
-                        let tg = p.layout_no_wrap(title, FontId::proportional(14.5), pal.text);
+                        let title = elide(&p, &item.title, FontId::proportional(14.0), clip.width());
+                        let tg = p.layout_no_wrap(title, FontId::proportional(14.0), pal.text);
                         let tw = tg.size().x;
                         p.galley(Pos2::new(tx, r.center().y - tg.size().y / 2.0), tg, pal.text);
                         if !item.subtitle.is_empty() {
@@ -846,6 +972,11 @@ impl App {
             Pos2::new(content.max.x - 340.0, content.max.y - h - 6.0),
             Pos2::new(content.max.x - 12.0, content.max.y - 6.0),
         );
+        // Pop in from the bottom-right corner: scale 0.96 → 1 and fade, 120 ms.
+        let t = ui.ctx().animate_bool_with_time(Id::new("panel_pop"), true, 0.12);
+        let rect = Rect::from_min_size(rect.max - rect.size() * (0.96 + 0.04 * t), rect.size() * (0.96 + 0.04 * t))
+            .translate(Vec2::new(0.0, (1.0 - t) * 8.0));
+        ui.set_opacity(t);
         let painter = ui.painter().clone();
         painter.rect_filled(rect.expand(1.0), 10.0, Color32::from_black_alpha(90));
         painter.rect_filled(rect, 10.0, if self.dark { Color32::from_rgb(34, 34, 38) } else { Color32::from_rgb(246, 246, 248) });
@@ -1094,6 +1225,7 @@ impl App {
                                 ("esc", "Clear search, go back, or close"),
                                 ("⌫ (empty search)", "Go back"),
                                 ("⌃ X", "Delete the selected entry"),
+                                ("⌘ Y", "Quick Look the selected file"),
                             ];
                             egui::Grid::new("shortcuts").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
                                 for (k, d) in rows {

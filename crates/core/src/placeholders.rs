@@ -234,13 +234,15 @@ fn apply_offset(mut t: DateTime<Local>, off: &str) -> DateTime<Local> {
         let Some(unit) = rest.chars().last() else { continue };
         let Ok(n) = rest[..rest.len() - unit.len_utf8()].parse::<i64>() else { continue };
         let n = n * sign;
+        // Absurd offsets must not panic: try_* returns None and the step is skipped.
+        let add = |t: DateTime<Local>, d: Option<Duration>| d.and_then(|d| t.checked_add_signed(d)).unwrap_or(t);
         t = match unit {
-            'm' => t + Duration::minutes(n),
-            'h' => t + Duration::hours(n),
-            'd' => t + Duration::days(n),
-            'w' => t + Duration::weeks(n),
+            'm' => add(t, Duration::try_minutes(n)),
+            'h' => add(t, Duration::try_hours(n)),
+            'd' => add(t, Duration::try_days(n)),
+            'w' => add(t, Duration::try_weeks(n)),
             'M' | 'y' => {
-                let months = if unit == 'y' { n * 12 } else { n };
+                let months = if unit == 'y' { n.saturating_mul(12) } else { n }.clamp(-(u32::MAX as i64), u32::MAX as i64);
                 if months >= 0 {
                     t.checked_add_months(Months::new(months as u32)).unwrap_or(t)
                 } else {
@@ -473,6 +475,8 @@ mod tests {
         assert_eq!(expand("{date format=\"MMM d, h:mm a\"}", Target::Snippet, &c).text, "Jun 15, 1:44 PM");
         assert_eq!(expand("{date format=\"yyyy-MM-dd\" offset=\"+3M -5d\"}", Target::Snippet, &c).text, "2022-09-10");
         assert_eq!(expand("{time offset=\"+3h +30m\" format=\"HH:mm\"}", Target::Snippet, &c).text, "17:14");
+        // Out-of-range offsets are ignored instead of panicking.
+        assert_eq!(expand("{date format=\"yyyy\" offset=\"+99999999999d +99999999999999y\"}", Target::Snippet, &c).text, "2022");
         assert_eq!(expand("{date format=\"h:mm 'on the eve of' MMMM d\"}", Target::Snippet, &c).text, "1:44 on the eve of June 15");
     }
 

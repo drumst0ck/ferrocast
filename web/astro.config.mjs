@@ -1,2 +1,6 @@
 import { defineConfig } from 'astro/config';
-export default defineConfig({ site: 'https://drumst0ck.github.io', base: '/ferrocast' });
+export default defineConfig({
+  site: 'https://drumst0ck.github.io',
+  base: '/ferrocast',
+  devToolbar: { enabled: false },
+});

@@ -14,9 +14,13 @@ const ALIASES: &[(&str, &str)] = &[
     ("chicago", "America/Chicago"),
     ("utc", "UTC"),
     ("gmt", "UTC"),
-    ("cet", "Europe/Paris"),
-    ("pst", "America/Los_Angeles"),
-    ("est", "America/New_York"),
+    // Zone abbreviations are fixed offsets, not cities: "est" is UTC-5 even in July.
+    ("cet", "Etc/GMT-1"),
+    ("cest", "Etc/GMT-2"),
+    ("pst", "Etc/GMT+8"),
+    ("pdt", "Etc/GMT+7"),
+    ("est", "EST"),
+    ("edt", "Etc/GMT+4"),
     ("jfk", "America/New_York"),
     ("lax", "America/Los_Angeles"),
     ("sao paulo", "America/Sao_Paulo"),
@@ -86,7 +90,12 @@ pub fn evaluate(input: &str, now: DateTime<Utc>) -> Option<(String, String)> {
     let clock = parse_clock(clock)?;
     let (from, to) = (lookup(from_city)?, lookup(to_city)?);
     let local_date = now.with_timezone(&from).date_naive();
-    let src = from.from_local_datetime(&local_date.and_time(clock)).single()?;
+    // A clock that falls in a DST gap or overlap still resolves (earliest valid instant).
+    let naive = local_date.and_time(clock);
+    let src = from
+        .from_local_datetime(&naive)
+        .earliest()
+        .or_else(|| from.from_local_datetime(&(naive + chrono::Duration::hours(1))).earliest())?;
     let dst = src.with_timezone(&to);
     let day_differs = dst.date_naive() != src.date_naive();
     Some((
@@ -101,6 +110,25 @@ mod tests {
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 1, 15, 12, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn abbreviations_are_fixed_offsets() {
+        // In July New York is on EDT (UTC-4); "est" must still mean UTC-5.
+        let summer = Utc.with_ymd_and_hms(2026, 7, 15, 12, 0, 0).unwrap();
+        let (_, a) = evaluate("5pm est in utc", summer).unwrap();
+        assert!(a.starts_with("10:00 PM"), "{a}");
+        let (_, a) = evaluate("5pm pst in utc", summer).unwrap();
+        assert!(a.starts_with("1:00 AM"), "{a}");
+        let (_, a) = evaluate("12pm cet in utc", summer).unwrap();
+        assert!(a.starts_with("11:00 AM"), "{a}");
+    }
+
+    #[test]
+    fn dst_gap_still_answers() {
+        // 2:30 AM does not exist in New York on 2026-03-08 (clocks jump to 3:00).
+        let day = Utc.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap();
+        assert!(evaluate("2:30am nyc in utc", day).is_some());
     }
 
     #[test]

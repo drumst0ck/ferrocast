@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://drumst0ck.github.io/ferrocast/sitemap.xml

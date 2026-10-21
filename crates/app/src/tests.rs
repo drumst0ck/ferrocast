@@ -50,6 +50,13 @@ fn fixture() -> App {
         files_req: String::new(),
         query_changed_at: Instant::now(),
         win_cache: vec![],
+        proc_cache: vec![],
+        timers: vec![],
+        calc_history: vec![],
+        recent_emoji: vec![],
+        app_icon: None,
+        wide_font: false,
+        show_t: None,
         runs: HashMap::new(),
         next_run: 1,
         inline: HashMap::new(),
@@ -60,6 +67,9 @@ fn fixture() -> App {
         scratch: String::new(),
         key_scratch: String::new(),
         rates: Default::default(),
+        rates_checked_at: Instant::now(),
+        sec_cache: None,
+        sec_dirty: true,
     };
     app.rebuild();
     app
@@ -251,4 +261,43 @@ fn ai_turns_accumulate_as_history_and_failed_turns_do_not() {
     set_prompt(&mut app, "q3");
     app.send_ai();
     assert!(matches!(app.view(), View::Ai { history, .. } if history.len() == 1), "failed turn must not become context");
+}
+
+#[test]
+fn output_view_does_not_leave_confirm_underneath() {
+    let mut app = fixture();
+    let source = "# @raycast.schemaVersion 1\n# @raycast.title Example\n# @raycast.mode fullOutput\n# @raycast.needsConfirmation true\n";
+    app.scripts = vec![script::parse(std::path::Path::new("/nonexistent-ferrocast-test-script"), source).unwrap()];
+    app.run_script_cmd(0, vec!["argument".into()]);
+    assert!(matches!(app.view(), View::Confirm { .. }));
+    app.execute_script_cmd(0, vec!["argument".into()]);
+    assert!(matches!(app.view(), View::Output { .. }));
+    assert!(!app.stack.iter().any(|v| matches!(v, View::Confirm { .. } | View::Args { .. })));
+}
+
+#[test]
+fn snippet_keyword_prefix_conflicts_are_rejected() {
+    let mut app = fixture();
+    app.snippets.push(Snippet::new("Signature", "hello", "!sig"));
+    for kw in ["!s", "!sig", "!signature"] {
+        app.stack = vec![View::Root, View::SnippetForm { id: None, name: "N".into(), text: "t".into(), keyword: kw.into() }];
+        app.save_form();
+        assert_eq!(app.snippets.len(), 1, "{kw} must be rejected");
+        assert!(app.toast.is_some(), "{kw} must toast");
+    }
+    app.stack = vec![View::Root, View::SnippetForm { id: None, name: "N".into(), text: "t".into(), keyword: "!other".into() }];
+    app.save_form();
+    assert_eq!(app.snippets.len(), 2);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn push_and_pop_scroll_to_first_row() {
+    let mut app = fixture();
+    app.scroll_to_sel = false;
+    app.push(View::Snippets);
+    assert!(app.scroll_to_sel);
+    app.scroll_to_sel = false;
+    app.pop();
+    assert!(app.scroll_to_sel);
 }

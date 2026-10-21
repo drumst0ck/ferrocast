@@ -18,5 +18,7 @@ ferrocast-core = { path = "crates/core" }
 ferrocast-macos = { path = "crates/macos" }
 
 [profile.release]
-lto = "thin"
+lto = "fat"
+codegen-units = 1
+opt-level = 3
 strip = true

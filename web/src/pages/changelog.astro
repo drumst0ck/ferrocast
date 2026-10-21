@@ -1,0 +1,33 @@
+---
+import Base from '../layouts/Base.astro';
+import { Content as Changelog } from '../../../CHANGELOG.md';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const repo = 'https://github.com/drumst0ck/ferrocast';
+---
+<Base title="Changelog · Ferrocast" description="What changed in Ferrocast, release by release.">
+  <header class="top">
+    <a class="mark" href={`${base}/`}><img src={`${base}/icon.png`} alt="" width="30" height="30" />Ferrocast</a>
+    <nav class="nav" aria-label="Main"><a href={`${base}/#features`}>Features</a><a href={`${base}/#install`}>Install</a><a href={repo}>GitHub</a></nav>
+    <a class="btn" href={`${base}/#install`}>Install</a>
+  </header>
+  <main class="wrap prose">
+    <Changelog />
+    <p class="muted">Also on <a class="tl" href={`${repo}/blob/main/CHANGELOG.md`}>GitHub</a>.</p>
+  </main>
+  <footer class="foot">
+    <span>A fast launcher for macOS</span>
+    <nav aria-label="Links"><a href={`${base}/`}>Home</a><a href={repo}>GitHub</a><a href={`${repo}/blob/main/LICENSE`}>License</a></nav>
+    <span class="r">2026 · MIT</span>
+  </footer>
+</Base>
+<style is:global>
+  .prose { max-width: 760px; margin: clamp(40px, 6vw, 80px) auto 0; display: grid; gap: 18px; }
+  .prose h1 { font-size: var(--step-head); line-height: 1; margin-bottom: 12px; }
+  .prose h2 { font-size: var(--step-lead); margin-top: 28px; }
+  .prose h3 { font-family: var(--font-text); font-weight: 500; font-size: 1.125rem; letter-spacing: 0; margin-top: 18px; color: var(--muted); }
+  .prose ul { margin: 0; padding-left: 1.2em; display: grid; gap: 10px; color: var(--ink); }
+  .prose li::marker { color: var(--accent); }
+  .prose code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: .92em; background: var(--surface); padding: 2px 6px; border-radius: 6px; }
+  .prose p { color: var(--muted); }
+  .prose .foot { margin-top: 120px; }
+</style>

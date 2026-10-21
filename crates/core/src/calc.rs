@@ -36,7 +36,14 @@ fn tokenize(s: &str) -> Option<Vec<Tok>> {
             i += 1;
         } else if c.is_ascii_digit() || (c == '.' && chars.get(i + 1).is_some_and(|d| d.is_ascii_digit())) {
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.' || chars[i] == '_') {
+            while i < chars.len()
+                && (chars[i].is_ascii_digit()
+                    || chars[i] == '.'
+                    || chars[i] == '_'
+                    || (chars[i] == ','
+                        && chars.get(i + 1).is_some_and(|d| d.is_ascii_digit())
+                        && chars.get(i + 3).is_some_and(|d| d.is_ascii_digit())))
+            {
                 i += 1;
             }
             // scientific notation
@@ -52,7 +59,7 @@ fn tokenize(s: &str) -> Option<Vec<Tok>> {
                     }
                 }
             }
-            let text: String = chars[start..i].iter().filter(|c| **c != '_').collect();
+            let text: String = chars[start..i].iter().filter(|c| **c != '_' && **c != ',').collect();
             let mut v: f64 = text.parse().ok()?;
             // Shorthand suffixes: 10k, 2.5M, 1B (only if not followed by a letter)
             if i < chars.len() && !chars.get(i + 1).is_some_and(|c| c.is_alphabetic()) {
@@ -67,9 +74,13 @@ fn tokenize(s: &str) -> Option<Vec<Tok>> {
                 }
             }
             out.push(Tok::Num(v));
+        } else if c == 'x' && !chars.get(i + 1).is_some_and(|n| n.is_alphanumeric()) && i > 0 && !chars[i - 1].is_alphanumeric() {
+            // a lone `x` between operands means multiply: `2 x 3`
+            out.push(Tok::Op('*'));
+            i += 1;
         } else if c.is_alphabetic() || c == '°' || c == '²' {
             let start = i;
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '°' || chars[i] == '²' || chars[i] == '/') {
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '°' || chars[i] == '²') {
                 i += 1;
             }
             out.push(Tok::Ident(chars[start..i].iter().collect::<String>().to_lowercase()));
@@ -168,9 +179,10 @@ impl Parser {
             }
             let rhs = self.unary()?;
             let a = if lhs.percent && (op == '*' || op == '/') { lhs.v / 100.0 } else { lhs.v };
+            let b = if rhs.percent && matches!(op, '*' | '/' | 'i') { rhs.v / 100.0 } else { rhs.v };
             lhs = match op {
-                '*' | 'i' => Val { v: a * rhs.v, percent: false },
-                '/' => Val { v: a / rhs.v, percent: false },
+                '*' | 'i' => Val { v: a * b, percent: false },
+                '/' => Val { v: a / b, percent: false },
                 'm' => Val { v: a.rem_euclid(rhs.v), percent: false },
                 'o' => Val { v: lhs.v / 100.0 * rhs.v, percent: false },
                 'f' => Val { v: rhs.v * (1.0 - lhs.v / 100.0), percent: false },
@@ -411,7 +423,7 @@ fn looks_like_math(s: &str) -> bool {
         "sqrt", "root", "sin", "cos", "tan", "log", "ln", "pi", " of ", " off ", "power", "squared", "cubed", "abs", "mod", "min", "max",
         "plus", "minus", "times", "fact", "floor", "ceil", "round", "exp",
     ];
-    (has_digit || lower.contains("pi")) && (has_op || words.iter().any(|w| lower.contains(w)))
+    (has_digit || lower.contains("pi")) && (has_op || lower.contains(" x ") || words.iter().any(|w| lower.contains(w)))
 }
 
 /// Try to split `"<expr> <unit> in|to|as <unit>"`.
@@ -440,6 +452,16 @@ fn try_conversion(s: &str, rem_px: f64) -> Option<CalcResult> {
     })
 }
 
+/// Two decimals for amounts of at least one unit; smaller amounts keep their significant digits.
+fn round_money(v: f64) -> f64 {
+    if v.abs() >= 1.0 {
+        (v * 100.0).round() / 100.0
+    } else {
+        let digits = 10f64.powi((2 - v.abs().log10().floor() as i32).max(2));
+        (v * digits).round() / digits
+    }
+}
+
 /// `100 usd in eur`, `10k gbp to jpy`.
 fn try_currency(s: &str, rates: &crate::currency::Rates) -> Option<CalcResult> {
     let lower = s.to_lowercase();
@@ -464,8 +486,8 @@ fn try_currency(s: &str, rates: &crate::currency::Rates) -> Option<CalcResult> {
         question: format!("{} {from} → {to}", format_number(value, true)),
         value: out,
         unit: Some(to.clone()),
-        display: format!("{} {to}", format_number((out * 100.0).round() / 100.0, true)),
-        raw: format_number((out * 100.0).round() / 100.0, false),
+        display: format!("{} {to}", format_number(round_money(out), true)),
+        raw: format_number(out, false),
     })
 }
 
@@ -502,6 +524,42 @@ mod tests {
     }
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn percent_on_the_right_of_times_and_divide() {
+        assert!(close(ev("200 * 10%"), 20.0));
+        assert!(close(ev("50 / 20%"), 250.0));
+        assert!(close(ev("10% * 200"), 20.0));
+    }
+
+    #[test]
+    fn constants_divided() {
+        assert!(close(ev("pi/2"), std::f64::consts::FRAC_PI_2));
+        assert!(close(ev("2pi/3"), 2.0 * std::f64::consts::PI / 3.0));
+        assert!(close(ev("e/2"), std::f64::consts::E / 2.0));
+    }
+
+    #[test]
+    fn x_as_multiply_and_thousands_separators() {
+        assert!(close(ev("2 x 3"), 6.0));
+        assert!(close(ev("1,000 * 2"), 2000.0));
+    }
+
+    #[test]
+    fn slash_units_still_convert() {
+        let r = evaluate("100 km/h in mph", 16.0).unwrap();
+        assert!((r.value - 62.137).abs() < 0.01);
+    }
+
+    #[test]
+    fn small_currency_values_keep_precision() {
+        let rates = crate::currency::Rates::parse(r#"{"base":"EUR","date":"d","rates":{"USD":1.0,"JPY":150.0}}"#, 0).unwrap();
+        let r = evaluate_with_rates("1 jpy in usd", 16.0, Some(&rates)).unwrap();
+        assert_eq!(r.raw, "0.0066666667");
+        assert!(r.display.starts_with("0.0067") || r.display.starts_with("0.0066"));
+        let r = evaluate_with_rates("100 usd in jpy", 16.0, Some(&rates)).unwrap();
+        assert_eq!(r.display, "15,000 JPY");
     }
 
     #[test]

@@ -1,106 +1,428 @@
 ---
 import Base from '../layouts/Base.astro';
-import Launcher from '../components/Launcher.astro';
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const img = (n: string) => `${base}/img/${n}.jpg`;
 const repo = 'https://github.com/drumst0ck/ferrocast';
-const features = [
-  ['Búsqueda raíz', 'Apps y comandos con ranking por frecuencia, alias y favoritos.'],
-  ['Calculadora y conversor', 'Mates, porcentajes, unidades, colores y divisas (tasas del BCE).'],
-  ['Husos horarios', 'Escribe «time in tokyo» o «5pm ldn in sf» y obtén la hora al instante.'],
-  ['Portapapeles', 'Historial de texto, archivos e imágenes con pin; ignora gestores de contraseñas.'],
-  ['Snippets', 'Placeholders y auto-expansión mientras escribes en cualquier app.'],
-  ['Quicklinks', 'Enlaces con argumentos para saltar a donde quieras en un atajo.'],
-  ['Script Commands', 'Compatibles con Raycast: modos full, compact, silent e inline.'],
-  ['Ventanas', 'Unos 40 comandos para colocar y mover ventanas con el teclado.'],
-  ['Ask AI', 'Streaming y conversación con Ollama, LM Studio u OpenAI; la clave vive en el Keychain.'],
+// Measured on the maintainer's Mac; see the method note in the Measured section. Update together.
+const bench = {
+  date: '2026-10-17', mac: 'MacBook with Apple M3, macOS 27', raycastVersion: '2.8.1',
+  ferro: { disk: '8.5 MB', mem: '145 MB', procs: '1', start: 'about 150 ms' },
+  ray: { disk: '242 MB', mem: '154 MB', procs: '4', start: 'not measured' },
+};
+const compare = [
+  ['Price', 'Free. MIT licence.', 'Free tier; Pro subscription for AI and cloud sync.'],
+  ['Account', 'None.', 'Optional; needed for Pro features.'],
+  ['Your data', 'JSON files on your disk. Open them in any editor.', 'Local, with optional cloud sync on Pro.'],
+  ['AI', 'Your own model: Ollama on your Mac by default, or any OpenAI-compatible server.', 'Raycast AI with hosted models, on Pro.'],
+  ['Source code', 'Open. Read it, fork it, fix it.', 'Closed.'],
+  ['Extensions', 'Script Commands (Raycast-compatible). No store.', 'Thousands in the Store. This is where Raycast shines.'],
+  ['Install', 'Homebrew builds it from source on your Mac.', 'Signed, notarized download.'],
+  ['Footprint', 'One process, 8.5 MB on disk.', 'Several processes, 242 MB on disk.'],
 ];
+const views = [
+  ['Search', 'search', 'Apps, commands and files in a single field, with math and currency conversion on the same line.'],
+  ['Actions', 'panel', 'Press ⌘K for actions: aliases, a hotkey for any command, favorites and more.'],
+  ['Clipboard', 'clipboard', 'Text, links, colors, files and images. Pin what matters; password managers are ignored.'],
+  ['Snippets', 'snippets', 'Type a keyword and it expands as you write, with placeholders like {date}, {clipboard} and {cursor}.'],
+  ['Ask AI', 'ai', 'Chat with Ollama, LM Studio or OpenAI. Answers stream in, and your key stays in the Keychain.'],
+  ['Settings', 'settings', 'Your hotkey, theme, compact mode, search sensitivity, clipboard retention and launch at login.'],
+];
+const extras = [
+  ['Script Commands', 'Turn any script into a command. Works with Raycast Script Commands in full, compact, silent and inline modes.'],
+  ['Quicklinks', 'Links with arguments. Type a few letters and land exactly where you meant to go.'],
+  ['Window management', 'Halves, thirds, corners, center, and move between displays. About 40 commands.'],
+  ['Currency, time zones and history', 'ECB exchange rates and time zone conversion in the search box, with a history of your last calculations.'],
+  ['Files, windows and processes', 'Find files with Spotlight, jump between open windows, and kill a runaway process.'],
+  ['Hotkeys and aliases', 'Give any app or command its own shortcut or short name, and keep favorites close.'],
+  ['Timers, notes and emoji', 'Type timer 10m or pomodoro and get a notification when it ends. Jot a note, paste any emoji by name.'],
+  ['Backup', 'Export your data and import snippets as JSON. Your setup travels with you.'],
+];
+const keys = [
+  [['⌥', 'Space'], 'Open or close Ferrocast. You can change it in Settings.'],
+  [['↑', '↓'], 'Move the selection.'],
+  [['↵'], 'Run the primary action.'],
+  [['⌘', '↵'], 'Run the secondary action.'],
+  [['⌘', 'K'], 'Open the action panel for the selected item.'],
+  [['⌘', ','], 'Open Settings.'],
+  [['⌘', 'N'], 'New snippet, quicklink or note in those lists.'],
+  [['⇧', '⌘', 'F'], 'Add or remove a favorite.'],
+  [['⇧', '⌘', ','], 'Set a hotkey for a command.'],
+  [['esc'], 'Clear the search, go back, or close.'],
+  [['⌃', 'X'], 'Delete the selected entry.'],
+  [['⌘', 'Y'], 'Quick Look the selected file.'],
+  [['⌘', '.'], 'Pin or unpin a clipboard entry.'],
+  [['⌘', 'E'], 'Edit the selected snippet or quicklink.'],
+  [['⌫'], 'Go back when the search is empty.'],
+];
+const scText = ['#!/bin/bash', '# @raycast.mode compact', 'date +%H:%M'].join('\n');
 const faq = [
-  ['¿Es una copia de Raycast?', 'No. Está inspirado en él, pero no usa su marca ni sus assets, y no pretende ser una réplica completa.'],
-  ['¿Por qué se instala con Homebrew y compila?', 'El cask oficial exige apps firmadas y notarizadas (cuenta de pago). Al compilar en tu Mac no hay cuarentena y Gatekeeper no interviene.'],
-  ['¿Qué permisos necesita?', 'Accesibilidad (y Input Monitoring para snippets). Los concedes tú la primera vez desde la pantalla de bienvenida.'],
-  ['¿Dónde se guardan mis datos?', 'En JSON sin cifrar en ~/Library/Application Support/Ferrocast. Puedes cambiarlo con FERROCAST_DATA_DIR.'],
+  ['How do I open it?', 'Press ⌥ Space from any app. You can change the shortcut in Settings.'],
+  ['Is it free?', 'Completely. MIT licence, no account, no Pro tier waiting behind a paywall. If it saves you time, star the repo.'],
+  ['Will it run on my Mac?', 'It runs on Apple Silicon Macs. Intel Macs are not supported.'],
+  ['Do I need to be a developer to install it?', 'No, but you do need to open Terminal once and paste four lines. Homebrew does the rest. Grab a coffee while it builds.'],
+  ['Why does it ask for Accessibility access?', 'Because moving windows, pasting for you and expanding snippets all need it. Search, the calculator and AI work without it. A welcome screen walks you through it.'],
+  ['Is my clipboard history private?', 'It never leaves your Mac. It sits in a JSON file in Application Support, and anything copied from a password manager like 1Password is skipped on purpose.'],
+  ['Does Ask AI send my text to the cloud?', 'Only if you tell it to. Out of the box it talks to Ollama on your own Mac. Point it at LM Studio or OpenAI if you prefer; the key goes in the Keychain.'],
+  ['Coming from Raycast. Will my stuff work?', 'Your Script Commands run as they are, and snippets import from a JSON export. Quicklinks you recreate in a minute.'],
+  ['What is missing today?', 'Honestly: an extension store and sync between Macs. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.'],
 ];
-const install = `brew tap drumst0ck/ferrocast ${repo}
+const install = `brew tap drumst0ck/ferrocast \\
+  ${repo}
 brew install ferrocast
-ln -sfn "$(brew --prefix)/opt/ferrocast/Ferrocast.app" /Applications/Ferrocast.app
+ln -sfn "$(brew --prefix)/opt/ferrocast/Ferrocast.app" \\
+  /Applications/Ferrocast.app
 open /Applications/Ferrocast.app`;
+const source = `git clone ${repo}
+cd ferrocast
+scripts/bundle.sh
+open dist/Ferrocast.app`;
 ---
-<Base title="Ferrocast — launcher para macOS escrito en Rust" description="Ferrocast es un launcher para macOS escrito en Rust, inspirado en Raycast: búsqueda, calculadora, portapapeles, snippets, ventanas y Ask AI.">
-  <header class="wrap nav">
-    <a class="brand" href="#"><img src={`${base}/icon.png`} alt="" width="32" height="32" />Ferrocast</a>
-    <nav><a href="#funciones">Funciones</a><a href="#instalar">Instalar</a><a href="#faq">FAQ</a><a href={repo}>GitHub</a></nav>
+<Base title="Ferrocast: a fast launcher for your Mac" description="Ferrocast is a fast, native launcher for macOS. Search apps, do math, convert currencies, paste from your clipboard history, manage windows and ask AI, all from the keyboard.">
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="cursor-light" aria-hidden="true"></div>
+  <header class="top">
+    <a class="mark" href="#"><img src={`${base}/icon.png`} alt="" width="30" height="30" />Ferrocast</a>
+    <nav class="nav" aria-label="Main"><a href="#why">Why</a><a href="#features">Features</a><a href="#tour">Tour</a><a href="#shortcuts">Shortcuts</a><a href="#install">Install</a><a href="#faq">FAQ</a><a href={repo}>GitHub</a></nav>
+    <a class="btn" href="#install">Install</a>
   </header>
 
-  <main>
-    <section class="wrap hero">
-      <div>
-        <p class="eyebrow">macOS · Apple Silicon · Rust</p>
-        <h1>Tu Mac, a un atajo de distancia.</h1>
-        <p class="lead">Un launcher rápido y nativo en Rust. Busca, calcula, pega, organiza ventanas y pregunta a una IA local sin quitar las manos del teclado.</p>
-        <div class="cta">
-          <a class="btn primary" href="#instalar">Instalar con Homebrew</a>
-          <a class="btn" href={repo}>Ver código</a>
+  <main id="main">
+    <section class="hero" aria-label="Introduction">
+      <div class="hero-bg" aria-hidden="true"><i></i><i></i></div>
+      <div class="copy">
+        <h1 class="lines"><span class="line"><span data-line style="--i:0">Launch, calculate,</span></span><span class="line"><span data-line style="--i:1">paste and ask.</span></span></h1>
+        <p class="sub" data-rise style="--i:3">Ferrocast is a small, open-source launcher for the Mac. Hit ⌥ Space, type half a word, and the thing you wanted is already there. No account, no subscription, nothing phoning home.</p>
+        <div class="acts" data-rise style="--i:4"><a class="btn big" href="#install">Install with Homebrew</a><a class="tl" href={repo}>View on GitHub</a></div>
+        <p class="proof" data-rise style="--i:5">Apple Silicon · MIT licence · Made by one person who got tired of waiting for menus</p>
+      </div>
+      <div class="hero-3d" data-rise style="--i:2">
+        <canvas id="keys" aria-hidden="true"></canvas>
+        <img class="fb" src={`${base}/icon.png`} alt="" width="256" height="256" />
+      </div>
+    </section>
+
+    <section class="stage" aria-label="Live demo">
+      <div class="lzwrap"><div class="lz" data-ui id="lz">
+        <label class="sr-only" for="lzq">Search Ferrocast</label>
+        <input class="lz-in" id="lzq" type="text" placeholder="Search apps, commands, files… or calculate" autocomplete="off" spellcheck="false" value="100 usd in eur" />
+        <div class="lz-body" id="lzb" aria-live="polite"></div>
+        <div class="lz-foot"><span>Ferrocast</span><span><b id="lzact">Copy Answer</b><kbd>↵</kbd><b style="margin-left:18px">Actions</b><kbd>⌘K</kbd></span></div>
+      </div></div>
+      <div class="tryrow" data-reveal role="group" aria-label="Examples">
+        <button type="button" data-q="100 usd in eur">100 usd in eur</button>
+        <button type="button" data-q="5pm ldn in sf">5pm ldn in sf</button>
+        <button type="button" data-q="time in tokyo">time in tokyo</button>
+        <button type="button" data-q="18% of 240">18% of 240</button>
+        <button type="button" data-q="5 km in mi">5 km in mi</button>
+        <button type="button" data-q="left half">left half</button>
+      </div>
+    </section>
+
+    <section class="credo wrap" aria-labelledby="h-credo">
+      <h2 class="sr-only" id="h-credo">Why Ferrocast</h2>
+      <p data-reveal>We did not build this to shave seconds off your day. We built it because every little wait, every menu you have to hunt through, costs you the thought you were holding. Ferrocast shows up, answers, and gets out of the way before you notice it was there.</p>
+    </section>
+
+    <section class="why wrap" id="why" aria-labelledby="h-why">
+      <div class="why-head" data-reveal>
+        <h2 id="h-why">Why not just use Raycast?</h2>
+        <p>Fair question. Raycast is a great product; we used it for years, and it is the yardstick we hold this one against. Ferrocast is for the days you would rather own the tool than rent it: no account, no tier, your data in files you can read, and an AI that runs on your own machine. If you live inside Raycast extensions, stay there. If you mostly launch, calculate, paste and move windows, this does that, and it is yours.</p>
+      </div>
+      <div class="cmp" role="table" aria-label="Ferrocast compared with Raycast">
+        <div class="cmp-row cmp-head" role="row"><span role="columnheader"></span><span role="columnheader">Ferrocast</span><span role="columnheader">Raycast</span></div>
+        {compare.map(([k, a, b], i) => <div class="cmp-row" role="row" data-reveal style={`transition-delay:${i * 40}ms`}><span role="rowheader">{k}</span><span role="cell">{a}</span><span role="cell" class="muted">{b}</span></div>)}
+      </div>
+      <p class="fine" data-reveal>Raycast facts are from raycast.com and its pricing page as of {bench.date}. If something is out of date, open an issue and we will fix it.</p>
+    </section>
+
+    <section class="stats" aria-label="Ferrocast at a glance">
+      <dl>
+        <div data-reveal><dt>2 keys</dt><dd>⌥ Space, from anywhere. Change it if you like.</dd></div>
+        <div data-reveal style="transition-delay:80ms"><dt>~40</dt><dd>Ways to throw a window exactly where you want it.</dd></div>
+        <div data-reveal style="transition-delay:160ms"><dt>Local</dt><dd>Your history, snippets and notes stay on your disk, in plain JSON.</dd></div>
+        <div data-reveal style="transition-delay:240ms"><dt>MIT</dt><dd>Free, open source, and yours to fork.</dd></div>
+      </dl>
+    </section>
+
+    <section class="bench wrap" id="speed" aria-labelledby="h-bench">
+      <div class="why-head" data-reveal>
+        <h2 id="h-bench">Measured, not promised</h2>
+        <p>We measured both apps on the same Mac, in the same minute, with the same commands. The honest summary: on disk Ferrocast is a rounding error next to Raycast, in memory they are about the same, Ferrocast draws its first frame in under a fifth of a second, and once it is running the launcher answers a hotkey in about two milliseconds. Raycast does far more than we do, and its extension runtime is part of what you see below, so read this as what you pay for what you get, not as a scoreboard.</p>
+      </div>
+      <div class="cmp" role="table" aria-label="Footprint measured on the same Mac">
+        <div class="cmp-row cmp-head" role="row"><span role="columnheader"></span><span role="columnheader">Ferrocast</span><span role="columnheader">Raycast {bench.raycastVersion}</span></div>
+        <div class="cmp-row" role="row" data-reveal><span role="rowheader">App on disk</span><span role="cell"><b>{bench.ferro.disk}</b></span><span role="cell" class="muted">{bench.ray.disk}</span></div>
+        <div class="cmp-row" role="row" data-reveal style="transition-delay:40ms"><span role="rowheader">Memory at idle</span><span role="cell"><b>{bench.ferro.mem}</b></span><span role="cell" class="muted">{bench.ray.mem}</span></div>
+        <div class="cmp-row" role="row" data-reveal style="transition-delay:80ms"><span role="rowheader">Processes</span><span role="cell"><b>{bench.ferro.procs}</b></span><span role="cell" class="muted">{bench.ray.procs}</span></div>
+        <div class="cmp-row" role="row" data-reveal style="transition-delay:120ms"><span role="rowheader">Hotkey to drawn frame</span><span role="cell"><b>about 2 ms</b></span><span role="cell" class="muted">not measured</span></div>
+        <div class="cmp-row" role="row" data-reveal style="transition-delay:160ms"><span role="rowheader">Keystroke to new results</span><span role="cell"><b>0.1 to 0.3 ms</b></span><span role="cell" class="muted">not measured</span></div>
+        <div class="cmp-row" role="row" data-reveal style="transition-delay:200ms"><span role="rowheader">Cold start to first frame</span><span role="cell"><b>{bench.ferro.start}</b></span><span role="cell" class="muted">{bench.ray.start}</span></div>
+      </div>
+      <p class="fine" data-reveal>Method: {bench.mac}, {bench.date}. Disk is <code>du -sh</code> of the app bundle. Memory is resident size from <code>ps -axo rss</code>, summed over every process the app runs, with both apps idle and their windows shown. Hotkey to frame is the time from the show call to the next frame the app draws (1.6 to 2.6 ms; the display adds its own refresh on top). Keystroke to results is how long the list takes to recompute for queries like “100 usd in eur”. Cold start is process launch to first rendered frame over five launches (136 to 167 ms), almost all of it macOS creating the window. None of these could be measured for Raycast fairly from the outside, so those cells stay blank rather than guessed. Your numbers will differ.</p>
+    </section>
+
+    <section class="feat wrap" id="features" aria-labelledby="h-feat">
+      <h2 class="sr-only" id="h-feat">What it does</h2>
+      <p class="big" data-reveal>Type a few letters and the app opens <span class="slot"><img src={`${base}/slot/home.jpg`} alt="" width="381" height="147" loading="eager" /></span>. Type a sum, a currency or a time zone and the answer is right there <span class="slot"><img src={`${base}/slot/tz.jpg`} alt="" width="381" height="147" loading="eager" /></span>. Everything you copy waits in your history <span class="slot"><img src={`${base}/slot/clipboard.jpg`} alt="" width="381" height="147" loading="eager" /></span>. And when you need a second brain, ask your own AI <span class="slot"><img src={`${base}/slot/ai.jpg`} alt="" width="381" height="147" loading="eager" /></span>, running on your Mac or wherever you point it.</p>
+      <div class="more" data-reveal>
+        <p>One window for apps, files, maths, currencies, time zones, clipboard history, snippets, windows, emoji, timers and notes. Everything lives in a few JSON files you can open with a text editor.</p>
+        <a class="btn" href="#install">Install with Homebrew</a>
+      </div>
+    </section>
+
+    <section class="story" id="tour" aria-labelledby="h-story" style={`--n:${views.length}`}>
+      <div class="story-in">
+        <div class="story-txt">
+          <h2 class="sr-only" id="h-story">A tour of the app</h2>
+          <ol class="steps">
+            {views.map(([n, , d], i) => <li class:list={['step', { on: i === 0 }]} data-i={i}><h3>{n}</h3><p>{d}</p></li>)}
+          </ol>
+          <div class="dots" role="group" aria-label="Screens">
+            {views.map(([n], i) => <button type="button" class:list={{ on: i === 0 }} data-i={i} aria-label={n}></button>)}
+          </div>
         </div>
-        <p class="hint">Atajo por defecto: <kbd>⌥</kbd> <kbd>Space</kbd></p>
+        <div class="story-vis">
+          <div class="story-card" id="scard">
+            {views.map(([n, f], i) => <img class:list={['sv', { on: i === 0 }]} data-i={i} src={img(f)} alt={`Real Ferrocast screenshot: ${n}`} width="1300" height="823" loading={i === 0 ? 'eager' : 'lazy'} />)}
+          </div>
+        </div>
       </div>
-      <Launcher />
     </section>
 
-    <section id="funciones" class="wrap block">
-      <h2>Todo lo que haces veinte veces al día</h2>
-      <div class="grid">
-        {features.map(([t, d]) => <article><h3>{t}</h3><p>{d}</p></article>)}
+    <section class="vid" aria-labelledby="h-vid">
+      <div class="vid-head" data-reveal>
+        <h2 id="h-vid">No mock-ups. This is the app.</h2>
+        <p>We did not fake this in a design tool. Every frame is a screenshot the app took of itself while a query was typed.</p>
       </div>
-      <p class="note">Aún no incluye extensiones React, sincronización ni contexto de IA por selección o pantalla.</p>
+      <div class="vstage" id="vstage">
+        <div class="vwrap" id="vwrap">
+          <video id="vplay" muted loop playsinline preload="none" poster={`${base}/video/poster.jpg`} aria-label="Ferrocast answering a currency conversion, a time zone question, a percentage and a window command">
+            <source src={`${base}/video/ferrocast.mp4`} type="video/mp4" />
+          </video>
+        </div>
+      </div>
     </section>
 
-    <section id="instalar" class="wrap block">
-      <h2>Instalar</h2>
-      <p class="sub">Sin cuenta de desarrollador: la fórmula compila en tu Mac (necesita Rust; brew lo instala). La primera vez tarda unos minutos.</p>
-      <pre><code>{install}</code></pre>
-      <p class="sub">Concede Accesibilidad cuando lo pida. Para actualizar: <code>brew upgrade ferrocast</code>.</p>
+    <section class="more-list wrap" aria-labelledby="h-more">
+      <h2 id="h-more" data-reveal>The small things you end up using every day</h2>
+      <ul class="bento">
+        {extras.map(([t, d], i) => <li class={`b${i}`} data-reveal style={`transition-delay:${(i % 3) * 70}ms`}><b>{t}</b><span>{d}</span>{i === 2 && <div class="snap" aria-hidden="true"><i></i></div>}{i === 0 && <code class="sc" aria-hidden="true">{scText}</code>}{i === 1 && <div class="ql" aria-hidden="true"><i class="k">gh</i><i>drumst0ck/ferrocast</i><em>→</em><i>github.com/drumst0ck/ferrocast</i></div>}{i === 3 && <div class="fx" aria-hidden="true">1 USD<em>→</em>0.92 EUR</div>}</li>)}
+      </ul>
     </section>
 
-    <section id="faq" class="wrap block">
-      <h2>Preguntas frecuentes</h2>
-      <div class="faq">
-        {faq.map(([q, a]) => <details><summary>{q}</summary><p>{a}</p></details>)}
+    <section class="keys wrap" id="shortcuts" aria-labelledby="h-keys">
+      <div class="keys-head" data-reveal>
+        <h2 id="h-keys">Your hands never leave the keyboard</h2>
+        <p>These are the ones worth learning first. Press ⌘ K on anything and it shows you the rest.</p>
+      </div>
+      <ul class="keylist">
+        {keys.map(([combo, what], i) => <li data-reveal style={`transition-delay:${(i % 3) * 60}ms`}><span class="combo">{combo.map((k) => <kbd>{k}</kbd>)}</span><span>{what}</span></li>)}
+      </ul>
+    </section>
+
+    <section class="how" id="install" aria-labelledby="h-how">
+      <h2 id="h-how" data-reveal>Installed in the time it takes to make a coffee</h2>
+      <div class="ex" data-reveal>
+        <h3>Paste this into Terminal.</h3>
+        <div class="call"><pre><code id="inst">{install}</code></pre><button class="cp" type="button" data-copy="inst">Copy</button></div>
+        <p class="note">Homebrew builds Ferrocast from source on your own Mac, which is why the first install takes a few minutes and why there is no Gatekeeper warning: nothing you did not compile ever runs. Apple Silicon only, for now.</p>
+      </div>
+      <div class="ex" data-reveal>
+        <h3>Open it once and say yes to Accessibility.</h3>
+        <div class="call"><span class="typed">⌥ Space</span></div>
+        <div class="resp crop"><img src={img('home')} alt="Ferrocast just opened, showing the command list" width="1300" height="823" loading="lazy" /></div>
+      </div>
+      <div class="ex wide" data-reveal>
+        <h3>Then just start typing.</h3>
+        <div class="call"><span class="typed">5pm ldn in sf</span></div>
+        <div class="resp"><img src={img('tz')} alt="Ferrocast answers that 5 PM in London is 9:00 AM in San Francisco" width="1300" height="823" loading="lazy" /></div>
+      </div>
+    </section>
+
+    <section class="faq" id="faq" aria-labelledby="h-faq">
+      <ul class="fl">
+        <li class="fh" id="h-faq">Things people ask us</li>
+        {faq.map(([q, a], i) => <li><button type="button" aria-expanded={i === 0 ? 'true' : 'false'} data-i={i}>{q}</button><p class="ans">{a}</p></li>)}
+      </ul>
+      <p class="fp" id="fp" aria-live="polite">{faq[0][1]}</p>
+    </section>
+
+    <section class="cta" aria-labelledby="h-cta">
+      <div class="l">
+        <h2 id="h-cta" class="lines"><span class="line"><span data-line style="--i:0">Try it</span></span><span class="line"><span data-line style="--i:1">today.</span></span></h2>
+        <p data-reveal>Four lines in Terminal, a few minutes of compiling, and ⌥ Space is yours. If it does not stick, brew uninstall it and nothing is left behind.</p>
+      </div>
+      <div class="dlg" data-ui data-reveal>
+        <h3>Install Ferrocast</h3>
+        <div class="seg" role="group" aria-label="Method"><button type="button" aria-pressed="true" data-m="brew">Homebrew</button><button type="button" aria-pressed="false" data-m="src">From source</button></div>
+        <pre><code id="dlgcode">{install}</code></pre>
+        <button class="btn" type="button" id="dlgcp">Copy commands</button>
+        <small>MIT licence. The whole thing is on GitHub, issues welcome.</small>
       </div>
     </section>
   </main>
 
-  <footer class="wrap foot">
-    <span>Ferrocast · Licencia MIT</span>
-    <a href={repo}>github.com/drumst0ck/ferrocast</a>
+  <footer class="foot">
+    <span data-reveal>A fast launcher for macOS</span>
+    <nav aria-label="Links"><a href="#install">Install</a><a href={repo}>GitHub</a><a href={`${base}/changelog/`}>Changelog</a><a href={`${repo}/blob/main/LICENSE`}>License</a></nav>
+    <span class="r">2026 · MIT</span>
   </footer>
-</Base>
 
-<style>
-  .nav { display: flex; justify-content: space-between; align-items: center; padding-block: 20px; }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; text-decoration: none; }
-  .brand img { border-radius: 8px; }
-  nav { display: flex; gap: 22px; font-size: .95rem; color: var(--mute); }
-  nav a { text-decoration: none; } nav a:hover { color: var(--ink); }
-  .hero { display: grid; grid-template-columns: 1.05fr .95fr; gap: 56px; align-items: center; padding-block: 72px 96px; }
-  .eyebrow { font-family: var(--mono); font-size: .8rem; color: var(--accent); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 18px; }
-  h1 { font-size: clamp(2.6rem, 6vw, 4.6rem); line-height: 1.02; letter-spacing: -.035em; }
-  .lead { color: var(--mute); font-size: 1.15rem; margin: 22px 0 30px; max-width: 46ch; }
-  .cta { display: flex; gap: 12px; flex-wrap: wrap; }
-  .hint { color: var(--mute); margin-top: 20px; font-size: .9rem; }
-  .block { padding-block: 64px; border-top: 1px solid var(--line); }
-  h2 { font-size: clamp(1.7rem, 3.5vw, 2.4rem); letter-spacing: -.025em; margin-bottom: 32px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
-  article { background: var(--bg); padding: 26px; }
-  article h3 { font-size: 1.05rem; margin-bottom: 6px; }
-  article p, .sub, .note { color: var(--mute); }
-  .note { margin-top: 20px; font-size: .9rem; }
-  .sub { max-width: 70ch; margin-bottom: 18px; }
-  pre { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; overflow-x: auto; margin-bottom: 18px; font-size: .9rem; line-height: 1.7; }
-  .faq { display: grid; gap: 10px; max-width: 800px; }
-  details { border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; background: var(--panel); }
-  summary { cursor: pointer; font-weight: 600; }
-  details p { color: var(--mute); margin-top: 10px; }
-  .foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-block: 40px; border-top: 1px solid var(--line); color: var(--mute); font-size: .9rem; }
-  .foot a { text-decoration: none; }
-  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; padding-block: 40px 64px; } nav a:not(:last-child) { display: none; } }
-</style>
+  <script is:inline define:vars={{ install, source, faq: faq.map((f) => f[1]), descs: views.map((v) => v[2]) }}>
+    (function () {
+      var $ = function (s, r) { return (r || document).querySelector(s); }, $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+      /* copy buttons */
+      function copy(text, btn, done) { var ok = function () { var o = btn.textContent; btn.textContent = done; setTimeout(function () { btn.textContent = o; }, 1600); }; if (navigator.clipboard) navigator.clipboard.writeText(text).then(ok, ok); else ok(); }
+      $$('[data-copy]').forEach(function (b) { b.addEventListener('click', function () { copy($('#' + b.dataset.copy).textContent, b, 'Copied'); }); });
+      /* cta dialog */
+      var code = $('#dlgcode'), mode = 'brew';
+      $$('.seg button').forEach(function (b) { b.addEventListener('click', function () { mode = b.dataset.m; code.textContent = mode === 'brew' ? install : source; $$('.seg button').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); }); }); });
+      $('#dlgcp').addEventListener('click', function () { copy(code.textContent, $('#dlgcp'), 'Copied'); });
+      /* pinned story: scroll chooses the screen, 3D card sweeps */
+      var story = $('.story'), steps = $$('.step'), svs = $$('.sv'), dots = $$('.dots button'), scard = $('#scard'), n = steps.length, cur = -1, sp = 0, sx = 0, sy = 0, stx = 0, sty = 0;
+      function setStep(i) { if (i === cur) return; cur = i; steps.forEach(function (e, k) { e.classList.toggle('on', k === i); }); svs.forEach(function (e, k) { e.classList.toggle('on', k === i); }); dots.forEach(function (e, k) { e.classList.toggle('on', k === i); }); }
+      function storyFrame() {
+        var r = story.getBoundingClientRect(), span = r.height - innerHeight, p = Math.min(1, Math.max(0, -r.top / span));
+        sp += (p - sp) * 0.12; sx += (stx - sx) * 0.08; sy += (sty - sy) * 0.08;
+        setStep(Math.min(n - 1, Math.floor(p * n * 0.999)));
+        if (!reduce) scard.style.transform = 'rotateY(' + (-16 + sp * 26 + sx * 6).toFixed(2) + 'deg) rotateX(' + (7 - sp * 5 - sy * 4).toFixed(2) + 'deg) translateZ(0)';
+        if (r.bottom > 0 && r.top < innerHeight) requestAnimationFrame(storyFrame);
+      }
+      var storyOn = false;
+      new IntersectionObserver(function (en) { var v = en[0].isIntersecting; if (v && !storyOn) { storyOn = true; storyFrame(); } if (!v) storyOn = false; }, { threshold: 0 }).observe(story);
+      story.addEventListener('pointermove', function (e) { var r = story.getBoundingClientRect(); stx = ((e.clientX / innerWidth) - 0.5) * 2; sty = ((e.clientY / innerHeight) - 0.5) * 2; });
+      dots.forEach(function (d, i) { d.addEventListener('click', function () { var top = story.getBoundingClientRect().top + scrollY, span = story.offsetHeight - innerHeight; scrollTo({ top: top + ((i + 0.5) / n) * span, behavior: reduce ? 'auto' : 'smooth' }); }); });
+
+      /* faq */
+      var fb = $$('.fl button'), fp = $('#fp');
+      function ask(i) { fb.forEach(function (b, k) { b.setAttribute('aria-expanded', k === i ? 'true' : 'false'); b.parentNode.classList.toggle('on', k === i); }); fp.classList.add('out'); setTimeout(function () { fp.textContent = faq[i]; fp.classList.remove('out'); }, 120); }
+      fb.forEach(function (b, i) { b.addEventListener('click', function () { ask(i); }); b.addEventListener('mouseenter', function () { if (matchMedia('(hover:hover)').matches) ask(i); }); b.addEventListener('focus', function () { ask(i); }); });
+      fb[0].parentNode.classList.add('on');
+
+
+      var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      /* generic 3D entrance: tilted at first, straightens while scrolling, follows the pointer */
+      function tilt(section, el, opts) {
+        var px = 0, py = 0, cx = 0, cy = 0, raf = 0, o = opts || {};
+        function frame() {
+          raf = 0;
+          var r = section.getBoundingClientRect(), vh = innerHeight;
+          var p = Math.min(1, Math.max(0, (vh * 0.98 - r.top) / (vh * 0.62)));
+          cx += (px - cx) * 0.08; cy += (py - cy) * 0.08;
+          var rx = (1 - p) * (o.rx || 30) - cy * 5, ry = cx * 8 + (o.ry || 0) * (1 - p), ty = (1 - p) * 70, sc = 0.9 + p * 0.1;
+          el.style.transform = 'translate3d(0,' + ty.toFixed(1) + 'px,0) rotateX(' + rx.toFixed(2) + 'deg) rotateY(' + ry.toFixed(2) + 'deg) scale(' + sc.toFixed(3) + ')';
+          el.style.setProperty('--glow', (0.25 + p * 0.55).toFixed(2));
+          if (r.bottom > 0 && r.top < vh && (Math.abs(px - cx) > 0.002 || Math.abs(py - cy) > 0.002)) raf = requestAnimationFrame(frame);
+        }
+        function kick() { if (!raf) raf = requestAnimationFrame(frame); }
+        addEventListener('scroll', kick, { passive: true }); addEventListener('resize', kick);
+        section.addEventListener('pointermove', function (e) { var r = section.getBoundingClientRect(); px = ((e.clientX - r.left) / r.width - 0.5) * 2; py = ((e.clientY - r.top) / r.height - 0.5) * 2; kick(); });
+        section.addEventListener('pointerleave', function () { px = 0; py = 0; kick(); });
+        frame();
+      }
+      if (!reduce) { tilt($('.stage'), $('.lzwrap')); tilt($('#vstage'), $('#vwrap'), { rx: 24, ry: -12 }); }
+
+      /* video plays only while visible */
+      var vp = $('#vplay');
+      if (vp && !reduce) new IntersectionObserver(function (en) { if (en[0].isIntersecting) { vp.preload = 'auto'; var pr = vp.play(); if (pr && pr.catch) pr.catch(function () {}); } else vp.pause(); }, { threshold: 0.25 }).observe(vp);
+
+      /* nav: highlight the section in view */
+      var navLinks = $$('.nav a[href^="#"]');
+      if (navLinks.length && 'IntersectionObserver' in window) {
+        var navIo = new IntersectionObserver(function (en) {
+          en.forEach(function (e) { if (e.isIntersecting) navLinks.forEach(function (a) { a.classList.toggle('on', a.getAttribute('href') === '#' + e.target.id); }); });
+        }, { rootMargin: '-40% 0px -55% 0px' });
+        navLinks.forEach(function (a) { var sec = document.querySelector(a.getAttribute('href')); if (sec) navIo.observe(sec); });
+      }
+
+      /* global cursor light */
+      var cl = $('.cursor-light');
+      if (cl && !reduce && matchMedia('(hover:hover) and (pointer:fine)').matches) {
+        var lx = innerWidth / 2, ly = innerHeight / 2, tx = lx, ty2 = ly, lraf = 0;
+        function lstep() { lx += (tx - lx) * 0.12; ly += (ty2 - ly) * 0.12; cl.style.transform = 'translate3d(' + (lx - 260).toFixed(1) + 'px,' + (ly - 260).toFixed(1) + 'px,0)'; lraf = (Math.abs(tx - lx) + Math.abs(ty2 - ly) > 0.5) ? requestAnimationFrame(lstep) : 0; }
+        addEventListener('pointermove', function (e) { tx = e.clientX; ty2 = e.clientY; cl.style.opacity = 1; if (!lraf) lraf = requestAnimationFrame(lstep); }, { passive: true });
+        document.addEventListener('pointerleave', function () { cl.style.opacity = 0; });
+      }
+
+      /* spotlight follows the cursor on bento cards */
+      $$('.bento li').forEach(function (li) { li.addEventListener('pointermove', function (e) { var r = li.getBoundingClientRect(); li.style.setProperty('--mx', (e.clientX - r.left) + 'px'); li.style.setProperty('--my', (e.clientY - r.top) + 'px'); }); });
+
+      /* launcher */
+      var q = $('#lzq'), body = $('#lzb'), act = $('#lzact'), sel = 0, items = [], timer, touched = false, cur = {};
+      var cmds = [['Ask AI', 'AI', 'AI', '#a45cf0'], ['Clipboard History', 'Ferrocast', '⎘', '#f0535f'], ['Search Snippets', 'Snippets', '{ }', '#f5a524'], ['Search Emoji & Symbols', 'Emoji', ':)', '#f5c524'], ['Left Half', 'Window Management', '▣', '#46c98b'], ['Right Half', 'Window Management', '▣', '#46c98b'], ['Maximize', 'Window Management', '▣', '#46c98b'], ['Keyboard Shortcuts', 'Ferrocast', '⌘', '#6c6c78'], ['Settings', 'Ferrocast', 'S', '#6c6c78']];
+      var zones = { ldn: ['Europe/London', 'London'], london: ['Europe/London', 'London'], sf: ['America/Los_Angeles', 'San Francisco'], nyc: ['America/New_York', 'New York'], ny: ['America/New_York', 'New York'], tokyo: ['Asia/Tokyo', 'Tokyo'], madrid: ['Europe/Madrid', 'Madrid'], paris: ['Europe/Paris', 'Paris'], berlin: ['Europe/Berlin', 'Berlin'] };
+      var dist = { km: 1000, m: 1, mi: 1609.344, ft: 0.3048, in: 0.0254, cm: 0.01 };
+      function fmt(n) { return (Math.round(n * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); }
+      function esc(s) { return s.replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+      function offset(tz, d) { var o = {}; new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(d).forEach(function (x) { o[x.type] = +x.value; }); return Date.UTC(o.year, o.month - 1, o.day, o.hour % 24, o.minute, o.second) - d.getTime(); }
+      function inZone(tz, d) { return new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d); }
+      function calc(v) {
+        var s = v.trim().toLowerCase(), m;
+        if ((m = s.match(/^(\d+(?:\.\d+)?)\s*([a-z]{3})\s+(?:in|to)\s+([a-z]{3})$/)) && !dist[m[2]]) return { cur: [+m[1], m[2].toUpperCase(), m[3].toUpperCase()] };
+        if ((m = s.match(/^(\d+(?:\.\d+)?)\s*(km|mi|m|ft|in|cm)\s+(?:in|to)\s+(km|mi|m|ft|in|cm)$/))) return { q: m[1] + ' ' + m[2] + ' → ' + m[3], a: fmt(m[1] * dist[m[2]] / dist[m[3]]) + ' ' + m[3] };
+        if ((m = s.match(/^time in (\w+)$/)) && zones[m[1]]) return { q: 'Time in ' + zones[m[1]][1], a: inZone(zones[m[1]][0], new Date()) };
+        if ((m = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(\w+)\s+in\s+(\w+)$/)) && zones[m[4]] && zones[m[5]]) {
+          var h = m[3] ? +m[1] % 12 + (m[3] === 'pm' ? 12 : 0) : +m[1], now = new Date(), base = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, +(m[2] || 0)), t = new Date(base - offset(zones[m[4]][0], new Date(base)));
+          return { q: m[1] + (m[2] ? ':' + m[2] : '') + (m[3] ? ' ' + m[3].toUpperCase() : '') + ' ' + zones[m[4]][1], a: inZone(zones[m[5]][0], t) };
+        }
+        if ((m = s.match(/^(\d+(?:\.\d+)?)\s*%\s*of\s*(\d+(?:\.\d+)?)$/))) return { q: m[1] + '% of ' + m[2], a: fmt(m[1] * m[2] / 100) };
+        if (/^[\d\s+\-*/().,%^]*\d[\d\s+\-*/().,%^]*$/.test(s) && /[+\-*/^%]/.test(s)) { try { var r = Function('"use strict";return (' + s.replace(/,/g, '.').replace(/\^/g, '**') + ')')(); if (isFinite(r)) return { q: v.trim(), a: fmt(r) }; } catch (e) {} }
+        return null;
+      }
+      function row(i, title, sub, ic, bg, key, extra) { return '<div class="lz-r' + (i === sel ? ' sel' : '') + '" data-i="' + i + '"><span class="ic" style="background:' + bg + '">' + ic + '</span><span class="t">' + title + (sub ? '<i>' + sub + '</i>' : '') + '</span><span class="k">' + key + '</span></div>'; }
+      function render() {
+        var v = q.value, r = v.trim() ? calc(v) : null, html = '', i = 0; items = [];
+        if (r && r.cur) { var k = r.cur[1] + r.cur[2]; if (cur[k] === undefined) { html += '<div class="lz-h">Result</div><div class="lz-res"><div><div class="q">' + r.cur[0] + ' ' + r.cur[1] + ' → ' + r.cur[2] + '</div><small>Calculator</small></div><span class="ar">→</span><div><div class="a">…</div><small>Answer</small></div></div>'; fetchRate(r.cur); } else if (cur[k]) { r = { q: r.cur[0] + ' ' + r.cur[1] + ' → ' + r.cur[2], a: fmt(r.cur[0] * cur[k]) + ' ' + r.cur[2] }; } else { r = null; } }
+        if (r && r.a) { html += '<div class="lz-h">Result</div><div class="lz-res"><div><div class="q">' + esc(r.q) + '</div><small>Calculator</small></div><span class="ar">→</span><div><div class="a">' + esc(r.a) + '</div><small>Answer</small></div></div>'; items.push({ copy: r.a }); i = 1; }
+        var f = cmds.filter(function (c) { return !v.trim() || (c[0] + ' ' + c[1]).toLowerCase().indexOf(v.trim().toLowerCase()) > -1; });
+        if (!(r && r.a)) {
+          if (f.length) { html += '<div class="lz-h">' + (v.trim() ? 'Results' : 'Commands') + '</div>'; f.slice(0, 6).forEach(function (c) { html += row(i, esc(c[0]), esc(c[1]), c[2], c[3], 'Command'); items.push({}); i++; }); }
+        }
+        if (v.trim()) { html += '<div class="lz-h">Use with…</div>'; [['Search the web for “' + esc(v.trim()) + '”', '⌕', '#6c6c78'], ['Ask AI: “' + esc(v.trim()) + '”', 'AI', '#a45cf0']].forEach(function (c) { html += row(i, c[0], '', c[1], c[2], 'Fallback'); items.push({}); i++; }); }
+        if (sel >= items.length) sel = 0;
+        body.innerHTML = html;
+        $$('.lz-r', body).forEach(function (el) { el.classList.toggle('sel', +el.dataset.i === sel); });
+        var s = $('.lz-res'); if (s && items[0] && items[0].copy) { s.classList.toggle('sel', sel === 0); }
+        act.textContent = items[sel] && items[sel].copy ? 'Copy Answer' : 'Open';
+      }
+      function fetchRate(c) { var k = c[1] + c[2]; fetch('https://api.frankfurter.dev/v1/latest?base=' + c[1] + '&symbols=' + c[2]).then(function (r) { return r.json(); }).then(function (j) { cur[k] = (j.rates && j.rates[c[2]]) || 0; render(); }).catch(function () { cur[k] = 0; render(); }); }
+      function set(v) { q.value = v; sel = 0; render(); }
+      q.addEventListener('input', function () { touched = true; sel = 0; render(); });
+      q.addEventListener('keydown', function (e) {
+        touched = true;
+        if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, items.length - 1); render(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); render(); }
+        else if (e.key === 'Enter' && items[sel] && items[sel].copy) { copy(items[sel].copy, act, 'Copied'); }
+      });
+      body.addEventListener('click', function (e) { var r = e.target.closest('.lz-r'); if (r) { sel = +r.dataset.i; render(); } var res = e.target.closest('.lz-res'); if (res && items[0] && items[0].copy) copy(items[0].copy, act, 'Copied'); });
+      $$('.tryrow button').forEach(function (b) { b.addEventListener('click', function () { touched = true; set(b.dataset.q); q.focus({ preventScroll: true }); }); });
+      render();
+      /* idle typing demo until the visitor touches it */
+      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        var demo = ['5pm ldn in sf', '18% of 240', '5 km in mi', 'left half', '100 usd in eur'], di = 0, ci = 0, typing = true;
+        var stage = $('.stage'); var seen = false; new IntersectionObserver(function (en) { seen = en[0].isIntersecting; }, { threshold: .3 }).observe(stage);
+        function tick() {
+          if (touched) return;
+          if (!seen || document.hidden) return setTimeout(tick, 600);
+          var w = demo[di];
+          if (typing) { ci++; q.value = w.slice(0, ci); render(); if (ci >= w.length) { typing = false; return setTimeout(tick, 2600); } return setTimeout(tick, 70); }
+          ci--; q.value = w.slice(0, Math.max(ci, 0)); render(); if (ci <= 0) { typing = true; di = (di + 1) % demo.length; return setTimeout(tick, 350); } setTimeout(tick, 28);
+        }
+        setTimeout(tick, 4500);
+      }
+    })();
+  </script>
+  <script>
+    const cv = document.querySelector<HTMLCanvasElement>('#keys');
+    const host = document.querySelector('.hero-3d');
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    function webgl() { try { const t = document.createElement('canvas'); return !!(t.getContext('webgl2') || t.getContext('webgl')); } catch { return false; } }
+    if (cv && host) {
+      if (!webgl()) host.classList.add('fallback');
+      else {
+        const start = () => import('../scripts/keys3d.js').then((m) => { m.init(cv, { reduced }); host.classList.add('ok'); }).catch(() => host.classList.add('fallback'));
+        if ('requestIdleCallback' in window) (window as any).requestIdleCallback(start); else setTimeout(start, 200);
+      }
+    }
+  </script>
+</Base>

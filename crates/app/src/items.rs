@@ -35,6 +35,10 @@ pub enum Builtin {
     SearchEmoji,
     SearchFiles,
     SwitchWindows,
+    KillProcess,
+    Timers,
+    CheckUpdates,
+    CalcHistory,
     SearchNotes,
     CreateNote,
     CreateScript,
@@ -61,6 +65,10 @@ impl Builtin {
         Builtin::SearchEmoji,
         Builtin::SearchFiles,
         Builtin::SwitchWindows,
+        Builtin::KillProcess,
+        Builtin::Timers,
+        Builtin::CheckUpdates,
+        Builtin::CalcHistory,
         Builtin::SearchNotes,
         Builtin::CreateNote,
         Builtin::CreateScript,
@@ -87,6 +95,10 @@ impl Builtin {
             Builtin::SearchEmoji => "Search Emoji & Symbols",
             Builtin::SearchFiles => "Search Files",
             Builtin::SwitchWindows => "Switch Windows",
+            Builtin::KillProcess => "Kill Process",
+            Builtin::Timers => "Timers",
+            Builtin::CheckUpdates => "Check for Updates",
+            Builtin::CalcHistory => "Calculator History",
             Builtin::SearchNotes => "Search Notes",
             Builtin::CreateNote => "Create Note",
             Builtin::CreateScript => "Create Script Command",
@@ -108,6 +120,10 @@ impl Builtin {
             Builtin::SearchEmoji => "Emoji & Symbols",
             Builtin::SearchFiles => "File Search",
             Builtin::SwitchWindows => "Navigation",
+            Builtin::KillProcess => "System",
+            Builtin::Timers => "Productivity",
+            Builtin::CheckUpdates => "Ferrocast",
+            Builtin::CalcHistory => "Calculator",
             Builtin::SearchNotes | Builtin::CreateNote => "Notes",
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
             Builtin::Settings | Builtin::Quit => "Ferrocast",
@@ -128,6 +144,10 @@ impl Builtin {
             Builtin::SearchEmoji => ("☺", [255, 197, 49]),
             Builtin::SearchFiles => ("🔍", [120, 120, 130]),
             Builtin::SwitchWindows => ("⊞", [89, 212, 153]),
+            Builtin::KillProcess => ("✕", [240, 83, 95]),
+            Builtin::Timers => ("◷", [245, 165, 36]),
+            Builtin::CheckUpdates => ("↻", [86, 194, 255]),
+            Builtin::CalcHistory => ("=", [120, 120, 130]),
             Builtin::SearchNotes | Builtin::CreateNote => ("✎", [255, 197, 49]),
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => ("›_", [60, 60, 70]),
             Builtin::Settings => ("⚙", [120, 120, 130]),
@@ -148,6 +168,10 @@ impl Builtin {
             Builtin::SearchEmoji => &["emoji", "symbols", "unicode"],
             Builtin::SearchFiles => &["finder", "find"],
             Builtin::SwitchWindows => &["windows", "switch"],
+            Builtin::KillProcess => &["kill", "process", "force quit", "task", "cpu", "memory"],
+            Builtin::Timers => &["timer", "countdown", "pomodoro", "alarm"],
+            Builtin::CheckUpdates => &["update", "upgrade", "brew", "version", "new version"],
+            Builtin::CalcHistory => &["calc", "history", "math", "results", "previous"],
             Builtin::Settings => &["preferences", "config"],
             _ => &[],
         };
@@ -185,6 +209,11 @@ pub enum Kind {
     Emoji(&'static str),
     Note(String),
     OpenWindow(WindowInfo),
+    Process(ferrocast_macos::process::ProcInfo),
+    /// Start a countdown of this many seconds with an optional label.
+    Timer(u64, String),
+    /// A running timer, by its index in `App::timers`.
+    RunningTimer(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -209,6 +238,7 @@ impl Item {
     }
 }
 
+#[derive(Clone)]
 pub struct Section {
     pub title: String,
     pub items: Vec<Item>,
@@ -222,6 +252,12 @@ pub enum Act {
     Reveal(PathBuf),
     QuitApp(i32),
     ForceQuitApp(i32),
+    /// Send SIGTERM (false) or SIGKILL (true) to a process.
+    KillProcess(i32, bool),
+    CancelTimer(usize),
+    QuickLook(PathBuf),
+    ClearCalcHistory,
+    DeleteCalcEntry(usize),
     HideApp(i32),
     ToggleFavorite,
     MoveFavorite(isize),
@@ -248,7 +284,10 @@ pub enum Act {
     Trash(PathBuf),
     EditScript(PathBuf),
     RunSystem(SystemCommand),
-    RunScript { index: usize, args: Vec<String> },
+    RunScript {
+        index: usize,
+        args: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug)]
