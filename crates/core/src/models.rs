@@ -240,6 +240,21 @@ pub struct Settings {
     pub wheel_tools_key: String,
     /// Opt-in: Return on a Finder selection opens the Convert wheel (needs Accessibility).
     pub enter_on_finder: bool,
+    /// Target languages on the Translate wheel (names the model understands).
+    pub translate_languages: Vec<String>,
+    pub translate_output: TranslateOutput,
+    /// Provider that translates; `None` follows the chat provider.
+    pub translate_provider: Option<AiProvider>,
+}
+
+/// What happens with a finished translation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum TranslateOutput {
+    /// Paste it over the selection in the app the text came from.
+    #[default]
+    Replace,
+    /// Only put it on the clipboard.
+    Copy,
 }
 
 impl Default for Settings {
@@ -279,6 +294,9 @@ impl Default for Settings {
             wheel_actions_key: "Control".into(),
             wheel_tools_key: "Command".into(),
             enter_on_finder: false,
+            translate_languages: crate::translate::DEFAULT_LANGUAGES.iter().map(|s| s.to_string()).collect(),
+            translate_output: TranslateOutput::default(),
+            translate_provider: None,
         }
     }
 }
