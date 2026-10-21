@@ -5849,3 +5849,118 @@ fn settings_show_the_translation_controls_and_keep_other_settings_untouched() {
     assert_eq!(app.settings.translate_provider, None);
     assert_eq!(app.settings.ai_provider, d.ai_provider);
 }
+
+// ---------------------------------------------------------------- updates (no network, no threads)
+
+fn fake_release(ver: &str) -> ferrocast_core::update::Release {
+    use ferrocast_core::update::{Release, Version};
+    Release {
+        version: Version::parse(ver).unwrap(),
+        tag: format!("v{ver}"),
+        zip_url: format!("https://example.invalid/Ferrocast-{ver}.zip"),
+        sums_url: "https://example.invalid/SHA256SUMS.txt".into(),
+        notes: "- faster\n- fixes".into(),
+        html_url: "https://example.invalid/release".into(),
+    }
+}
+
+fn toast_text(app: &App) -> String {
+    app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
+}
+
+#[test]
+fn manual_check_without_release_toasts_up_to_date() {
+    use ferrocast_core::update::Channel;
+    let mut app = fixture();
+    app.handle_update_checked(true, Ok(None), Channel::Direct, true);
+    assert!(toast_text(&app).contains("up to date"), "{}", toast_text(&app));
+    assert!(app.settings.update_last_check.is_some());
+}
+
+#[test]
+fn available_in_ask_first_opens_the_update_view() {
+    use ferrocast_core::update::Channel;
+    let mut app = fixture();
+    app.settings.update_install = UpdateInstall::AskFirst;
+    app.handle_update_checked(false, Ok(Some(fake_release("99.0.0"))), Channel::Direct, true);
+    match app.view() {
+        View::Update { release } => assert_eq!(release.tag, "v99.0.0"),
+        _ => panic!("expected the update view"),
+    }
+}
+
+#[test]
+fn skipped_release_is_silent_on_automatic_and_shown_on_manual() {
+    use ferrocast_core::update::Channel;
+    let mut app = fixture();
+    app.settings.update_skipped = Some("99.0.0".into());
+    app.handle_update_checked(false, Ok(Some(fake_release("99.0.0"))), Channel::Direct, true);
+    assert!(matches!(app.view(), View::Root));
+    assert!(toast_text(&app).is_empty());
+    app.handle_update_checked(true, Ok(Some(fake_release("99.0.0"))), Channel::Direct, true);
+    assert!(matches!(app.view(), View::Update { .. }));
+}
+
+#[test]
+fn automatic_install_on_dev_channel_toasts_refusal_without_view() {
+    use ferrocast_core::update::Channel;
+    let mut app = fixture();
+    app.settings.update_install = UpdateInstall::Automatic;
+    app.handle_update_checked(false, Ok(Some(fake_release("99.0.0"))), Channel::Dev, true);
+    assert!(matches!(app.view(), View::Root));
+    assert!(toast_text(&app).contains("Development build"), "{}", toast_text(&app));
+}
+
+#[test]
+fn update_failed_toasts_and_keeps_the_view() {
+    let mut app = fixture();
+    app.stack.push(View::Settings);
+    app.bus.send(Msg::UpdateFailed("checksum mismatch".into()));
+    app.drain();
+    assert!(matches!(app.view(), View::Settings));
+    assert!(toast_text(&app).contains("checksum mismatch"));
+}
+
+#[test]
+fn automatic_check_error_only_logs_and_manual_error_toasts() {
+    use ferrocast_core::update::Channel;
+    let mut app = fixture();
+    app.handle_update_checked(false, Err("offline".into()), Channel::Direct, true);
+    assert!(toast_text(&app).is_empty());
+    app.handle_update_checked(true, Err("offline".into()), Channel::Direct, true);
+    assert!(toast_text(&app).contains("offline"));
+}
+
+#[test]
+fn poller_is_not_started_when_update_check_is_off() {
+    let mut app = fixture();
+    app.settings.update_check = false;
+    *app.shared.settings.write().unwrap() = app.settings.clone();
+    assert!(services::start_update_poller(app.shared.clone(), app.bus.clone()).is_none());
+}
+
+#[test]
+fn skipping_a_version_persists_it() {
+    let mut app = fixture();
+    app.skip_update(&fake_release("99.0.0"));
+    assert_eq!(app.settings.update_skipped.as_deref(), Some("99.0.0"));
+    let saved: Settings = app.store.load("settings.json");
+    assert_eq!(saved.update_skipped.as_deref(), Some("99.0.0"));
+}
+
+#[test]
+fn update_view_renders_in_both_themes() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::Update { release: fake_release("99.0.0") }];
+    for dark in [true, false] {
+        app.dark = dark;
+        render(&mut app, vec![]);
+    }
+}
+
+#[test]
+fn bundle_of_finds_the_app_directory() {
+    let exe = std::path::Path::new("/Applications/Ferrocast.app/Contents/MacOS/ferrocast");
+    assert_eq!(instance::bundle_of(exe), Some(PathBuf::from("/Applications/Ferrocast.app")));
+    assert_eq!(instance::bundle_of(std::path::Path::new("/usr/bin/ferrocast")), None);
+}

@@ -548,6 +548,10 @@ pub enum View {
         /// Segment chosen with the arrow keys.
         sel: Option<usize>,
     },
+    /// A newer stable release is available (ask-first mode, or a manual check).
+    Update {
+        release: ferrocast_core::update::Release,
+    },
 }
 
 /// One wheel segment: label, SF symbol, and what releasing on it does.
@@ -688,6 +692,7 @@ impl View {
             View::Shortcuts => "Keyboard Shortcuts",
             View::About => "About Ferrocast",
             View::Wheel { .. } => "Wheel",
+            View::Update { .. } => "Update available",
         }
     }
     fn placeholder(&self) -> &'static str {
@@ -914,6 +919,12 @@ impl App {
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_expansion(shared.clone());
         services::start_wheel(shared.clone(), bus.clone());
+        let _ = services::start_update_poller(shared.clone(), bus.clone());
+        if let Ok(exe) = std::env::current_exe() {
+            // leftovers of a previous self-update; file removal off the startup path
+            let root = store.root.clone();
+            std::thread::spawn(move || instance::cleanup_update_leftovers(&root, &exe));
+        }
         {
             // the floating panel reports its edits; the app persists them
             let b = bus.clone();
@@ -1694,6 +1705,40 @@ impl App {
             }
             match m {
                 Msg::Wake => {}
+                Msg::UpdateChecked { manual, result } => {
+                    let exe = std::env::current_exe().unwrap_or_default();
+                    self.handle_update_checked(
+                        manual,
+                        result,
+                        ferrocast_core::update::channel_of(&exe),
+                        services::parent_writable_cached(),
+                    );
+                    if matches!(self.view(), View::Update { .. }) && !self.visible {
+                        // show() may reset the stack after a long hide: put the view back on top
+                        let v = self.view().clone();
+                        self.show();
+                        if !matches!(self.view(), View::Update { .. }) {
+                            self.push(v);
+                        }
+                    }
+                }
+                Msg::UpdateInstalled { path } => {
+                    // exit first: it releases the instance lock the relaunched copy needs
+                    let _ = std::process::Command::new("/bin/sh")
+                        .arg("-c")
+                        .arg("sleep 1; open -n \"$1\"")
+                        .arg("ferrocast-relaunch")
+                        .arg(&path)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                    std::process::exit(0);
+                }
+                Msg::UpdateFailed(e) => {
+                    instance::log(&self.store.root, &format!("update failed: {e}"));
+                    self.toast(format!("Update failed: {e}"));
+                }
                 Msg::Toast(t) => {
                     // A sign-in or sign-out may just have finished; let Settings re-read the Keychain.
                     self.ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));
@@ -3598,13 +3643,18 @@ impl App {
         self.persist("recent-emoji.json", &v);
     }
 
-    /// Ask Homebrew whether a newer formula is available; the answer arrives as a toast.
+    /// Manual "Check for Updates": Homebrew installs ask brew, every other install asks the GitHub feed.
     fn check_updates(&mut self) {
+        let exe = std::env::current_exe().unwrap_or_default();
+        if ferrocast_core::update::channel_of(&exe) != ferrocast_core::update::Channel::Brew {
+            self.toast("Checking for updates…");
+            services::update_check(self.bus.clone(), true, exe);
+            return;
+        }
         self.toast("Checking Homebrew…");
         let bus = self.bus.clone();
         std::thread::spawn(move || {
-            let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].iter().find(|p| std::path::Path::new(p).exists());
-            let Some(brew) = brew else {
+            let Some(brew) = services::brew_path() else {
                 bus.send(Msg::Toast("Homebrew not found; update from the repository".into()));
                 return;
             };
@@ -3635,6 +3685,74 @@ impl App {
             };
             bus.send(Msg::Toast(msg));
         });
+    }
+
+    /// Decide what a finished feed check means. `channel` and `writable` are injected so tests need
+    /// neither the real executable path nor the filesystem.
+    pub(crate) fn handle_update_checked(
+        &mut self,
+        manual: bool,
+        result: Result<Option<ferrocast_core::update::Release>, String>,
+        channel: ferrocast_core::update::Channel,
+        writable: bool,
+    ) {
+        use ferrocast_core::update::{self, Decision};
+        let latest = match result {
+            Ok(l) => l,
+            Err(e) => {
+                if manual {
+                    self.toast(e);
+                } else {
+                    instance::log(&self.store.root, &format!("update check failed: {e}"));
+                }
+                return;
+            }
+        };
+        self.settings.update_last_check = Some(now_secs());
+        self.save_settings();
+        let current = update::Version::parse(env!("CARGO_PKG_VERSION")).expect("CARGO_PKG_VERSION is semver");
+        let release = match update::decide(&current, latest, self.settings.update_skipped.as_deref()) {
+            Decision::UpToDate => {
+                if manual {
+                    self.toast(format!("Ferrocast {} is up to date", env!("CARGO_PKG_VERSION")));
+                }
+                return;
+            }
+            Decision::Skipped(r) if manual => r,
+            Decision::Skipped(_) => return,
+            Decision::Available(r) => r,
+        };
+        match self.settings.update_install {
+            UpdateInstall::AskFirst => self.push(View::Update { release }),
+            UpdateInstall::Automatic => self.start_update(release, channel, writable),
+        }
+    }
+
+    /// Carry out the plan for the install channel: download and swap, `brew upgrade`, or a refusal toast.
+    pub(crate) fn start_update(
+        &mut self,
+        release: ferrocast_core::update::Release,
+        channel: ferrocast_core::update::Channel,
+        writable: bool,
+    ) {
+        use ferrocast_core::update::Plan;
+        let ver = release.tag.trim_start_matches('v').to_string();
+        match ferrocast_core::update::plan_for(channel, writable) {
+            Plan::Refuse(reason) => self.toast(reason),
+            Plan::Download => {
+                self.toast(format!("Updating to {ver}…"));
+                services::update_install(release, self.store.root.clone(), self.bus.clone());
+            }
+            Plan::BrewUpgrade => {
+                self.toast(format!("Updating to {ver} with Homebrew…"));
+                services::brew_upgrade(self.bus.clone());
+            }
+        }
+    }
+
+    pub(crate) fn skip_update(&mut self, release: &ferrocast_core::update::Release) {
+        self.settings.update_skipped = Some(release.tag.trim_start_matches('v').to_string());
+        self.save_settings();
     }
 
     /// Start a countdown; a thread sleeps and then notifies, unless the timer was cancelled.

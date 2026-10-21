@@ -17,6 +17,16 @@ use std::time::Duration;
 pub enum Msg {
     Hotkey(u32),
     Tray(String),
+    /// Result of a feed check: `Ok(None)` means no stable release was found.
+    UpdateChecked {
+        manual: bool,
+        result: Result<Option<ferrocast_core::update::Release>, String>,
+    },
+    /// The new bundle is in place at `path`; relaunch it.
+    UpdateInstalled {
+        path: PathBuf,
+    },
+    UpdateFailed(String),
     Apps(Vec<AppInfo>),
     Files(String, Vec<PathBuf>),
     /// PNG thumbnail of page `index` of the PDF being organized (None: could not render).
@@ -737,6 +747,201 @@ pub fn refresh_rates(bus: Bus) {
             if let Some(r) = ferrocast_core::currency::Rates::parse(&String::from_utf8_lossy(&o.stdout), now_secs()) {
                 bus.send(Msg::Rates(r));
             }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Updates (GitHub Releases feed, see odd/plans/release-and-auto-update-plan.md)
+// Everything here runs off the UI thread; the pure decisions live in `ferrocast_core::update`.
+
+const FEED_URL: &str = "https://api.github.com/repos/drumst0ck/ferrocast/releases/latest";
+
+/// Whether the running bundle's parent directory accepted a probe file at the last check.
+static PARENT_WRITABLE: AtomicBool = AtomicBool::new(true);
+
+pub fn parent_writable_cached() -> bool {
+    PARENT_WRITABLE.load(Ordering::Relaxed)
+}
+
+/// Really try to create and remove a file in the bundle's parent (permission bits lie for ACLs and
+/// other owners). Blocking filesystem work: call it off the UI thread.
+fn probe_parent_writable(exe: &std::path::Path) -> bool {
+    let Some(parent) = crate::instance::bundle_of(exe).and_then(|b| b.parent().map(|p| p.to_path_buf())) else {
+        return false;
+    };
+    let probe = parent.join(format!(".ferrocast-write-test-{}", std::process::id()));
+    let ok = std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
+
+/// Run a command with a hard deadline; the error is the first stderr line.
+fn run_deadline(mut cmd: std::process::Command, secs: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let name = cmd.get_program().to_string_lossy().rsplit('/').next().unwrap_or("command").to_string();
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("{name}: {e}"))?;
+    fn drain(r: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut v = vec![];
+            if let Some(mut r) = r {
+                let _ = r.read_to_end(&mut v);
+            }
+            v
+        })
+    }
+    let (out, err) = (drain(child.stdout.take()), drain(child.stderr.take()));
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{name}: timed out after {secs} s"));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => return Err(format!("{name}: {e}")),
+        }
+    };
+    let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    if status.success() {
+        Ok(out)
+    } else {
+        let line = String::from_utf8_lossy(&err).lines().next().unwrap_or("").trim().to_string();
+        Err(if line.is_empty() { format!("{name}: {status}") } else { format!("{name}: {line}") })
+    }
+}
+
+fn curl_to_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
+    let mut c = std::process::Command::new("/usr/bin/curl");
+    c.args(["-sfL", "-m", "600", "-o"]).arg(dest).arg(url);
+    run_deadline(c, 620).map(|_| ())
+}
+
+fn fetch_feed() -> Result<Option<ferrocast_core::update::Release>, String> {
+    let mut c = std::process::Command::new("/usr/bin/curl");
+    c.args(["-sf", "-m", "15", "-H", "Accept: application/vnd.github+json", "-H"])
+        .arg(format!("User-Agent: Ferrocast/{}", env!("CARGO_PKG_VERSION")))
+        .arg(FEED_URL);
+    let out = run_deadline(c, 20).map_err(|e| format!("Could not check for updates ({e})"))?;
+    Ok(ferrocast_core::update::parse_latest(&String::from_utf8_lossy(&out)))
+}
+
+/// Blocking check; sends the result to the app. Also refreshes the cached "bundle folder writable" flag.
+fn check_blocking(bus: &Bus, manual: bool, exe: &std::path::Path) {
+    PARENT_WRITABLE.store(probe_parent_writable(exe), Ordering::Relaxed);
+    bus.send(Msg::UpdateChecked { manual, result: fetch_feed() });
+}
+
+/// One-shot check on its own thread.
+pub fn update_check(bus: Bus, manual: bool, current_exe: PathBuf) {
+    std::thread::spawn(move || check_blocking(&bus, manual, &current_exe));
+}
+
+/// Background poller: first check 30 s after launch, then whenever the 24 h cadence is due,
+/// re-evaluated every 10 minutes. `None` (no thread at all) when automatic checks are off at startup;
+/// turning the toggle off later is honoured by re-reading the shared settings on every loop.
+pub fn start_update_poller(shared: Arc<Shared>, bus: Bus) -> Option<std::thread::JoinHandle<()>> {
+    if !shared.settings.read().unwrap().update_check {
+        return None;
+    }
+    std::thread::Builder::new()
+        .name("update-poller".into())
+        .spawn(move || {
+            std::thread::sleep(Duration::from_secs(30));
+            loop {
+                let (on, last) = {
+                    let s = shared.settings.read().unwrap();
+                    (s.update_check, s.update_last_check)
+                };
+                if on && ferrocast_core::update::due(last, now_secs()) {
+                    if let Ok(exe) = std::env::current_exe() {
+                        check_blocking(&bus, false, &exe);
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(600));
+            }
+        })
+        .ok()
+}
+
+fn install_blocking(release: &ferrocast_core::update::Release, store_root: &std::path::Path) -> Result<PathBuf, String> {
+    use ferrocast_core::update::{sum_for, verify_sha256};
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let bundle = crate::instance::bundle_of(&exe).ok_or("The running app is not inside an .app bundle")?;
+    let ver = release.tag.trim_start_matches('v');
+    let zip_name = format!("Ferrocast-{ver}.zip");
+    let dir = store_root.join("updates").join(ver);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let (zip, sums) = (dir.join(&zip_name), dir.join("SHA256SUMS.txt"));
+    curl_to_file(&release.zip_url, &zip)?;
+    curl_to_file(&release.sums_url, &sums)?;
+    // 1. integrity: nothing below touches the running bundle until this and codesign both pass
+    let expected = sum_for(&std::fs::read_to_string(&sums).map_err(|e| e.to_string())?, &zip_name)
+        .ok_or_else(|| format!("No checksum for {zip_name} in SHA256SUMS.txt"))?;
+    if !verify_sha256(&std::fs::read(&zip).map_err(|e| e.to_string())?, &expected) {
+        return Err("Checksum mismatch: the download was discarded".into());
+    }
+    let extract = dir.join("extract");
+    let mut d = std::process::Command::new("/usr/bin/ditto");
+    d.args(["-x", "-k"]).arg(&zip).arg(&extract);
+    run_deadline(d, 120)?;
+    let new_app = extract.join("Ferrocast.app");
+    if !new_app.is_dir() {
+        return Err("The update archive has no Ferrocast.app".into());
+    }
+    let mut cs = std::process::Command::new("/usr/bin/codesign");
+    cs.args(["--verify", "--deep", "--strict"]).arg(&new_app);
+    run_deadline(cs, 60).map_err(|e| format!("Signature check failed ({e})"))?;
+    // 2. swap: keep the old bundle as .previous (removed on the next launch)
+    let previous = bundle.with_file_name(format!("{}.previous", bundle.file_name().unwrap_or_default().to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&previous); // stale leftover of an earlier update, never this run's
+    std::fs::rename(&bundle, &previous).map_err(|e| format!("Could not move the current app aside: {e}"))?;
+    // rename fails across volumes (support folder vs /Applications): fall back to a copy
+    let placed = std::fs::rename(&new_app, &bundle).map_err(|e| e.to_string()).or_else(|_| {
+        let mut c = std::process::Command::new("/usr/bin/ditto");
+        c.arg(&new_app).arg(&bundle);
+        run_deadline(c, 120).map(|_| ())
+    });
+    if let Err(e) = placed {
+        let _ = std::fs::remove_dir_all(&bundle); // our own partial copy
+        let _ = std::fs::rename(&previous, &bundle);
+        return Err(format!("Could not install the update, the old version was restored ({e})"));
+    }
+    Ok(bundle)
+}
+
+/// Download, verify and swap the bundle; ends with `UpdateInstalled` or `UpdateFailed`.
+pub fn update_install(release: ferrocast_core::update::Release, store_root: PathBuf, bus: Bus) {
+    std::thread::spawn(move || match install_blocking(&release, &store_root) {
+        Ok(path) => bus.send(Msg::UpdateInstalled { path }),
+        Err(e) => bus.send(Msg::UpdateFailed(e)),
+    });
+}
+
+pub fn brew_path() -> Option<&'static str> {
+    ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].into_iter().find(|p| std::path::Path::new(p).exists())
+}
+
+/// `brew upgrade ferrocast`, then relaunch the stable `opt` symlink of the formula.
+pub fn brew_upgrade(bus: Bus) {
+    std::thread::spawn(move || {
+        let Some(brew) = brew_path() else {
+            bus.send(Msg::UpdateFailed("Homebrew not found".into()));
+            return;
+        };
+        let mut c = std::process::Command::new(brew);
+        c.env("HOMEBREW_NO_AUTO_UPDATE", "1").args(["upgrade", "ferrocast"]);
+        match run_deadline(c, 1200) {
+            Ok(_) => {
+                // <prefix>/bin/brew -> <prefix>/opt/ferrocast/Ferrocast.app
+                let prefix = std::path::Path::new(brew).parent().and_then(|p| p.parent()).unwrap_or(std::path::Path::new("/opt/homebrew"));
+                bus.send(Msg::UpdateInstalled { path: prefix.join("opt/ferrocast/Ferrocast.app") });
+            }
+            Err(e) => bus.send(Msg::UpdateFailed(e)),
         }
     });
 }

@@ -33,6 +33,22 @@ pub fn log(dir: &Path, msg: &str) {
     }
 }
 
+/// The `.app` directory that contains the running executable (`…/Ferrocast.app/Contents/MacOS/ferrocast`).
+pub fn bundle_of(exe: &Path) -> Option<PathBuf> {
+    exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(Path::to_path_buf)
+}
+
+/// After a self-update: drop the previous bundle and the download folder. Both are best effort.
+pub fn cleanup_update_leftovers(store_root: &Path, exe: &Path) {
+    if let Some(app) = bundle_of(exe) {
+        if let Some(name) = app.file_name() {
+            let previous = app.with_file_name(format!("{}.previous", name.to_string_lossy()));
+            let _ = std::fs::remove_dir_all(previous);
+        }
+    }
+    let _ = std::fs::remove_dir_all(store_root.join("updates"));
+}
+
 /// Send panics to the log (the app has no terminal when launched from Finder).
 pub fn install_panic_hook(dir: PathBuf) {
     let default = std::panic::take_hook();

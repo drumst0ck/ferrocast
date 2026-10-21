@@ -1113,6 +1113,12 @@ impl App {
                 }
                 true
             }
+            View::Update { release } if k.enter => {
+                self.pop();
+                let exe = std::env::current_exe().unwrap_or_default();
+                self.start_update(release, ferrocast_core::update::channel_of(&exe), services::parent_writable_cached());
+                true
+            }
             View::Welcome if k.enter => {
                 windows::accessibility_trusted(true);
                 true
@@ -1614,6 +1620,7 @@ impl App {
                 View::Confirm { .. } => Some("Confirm".into()),
                 View::Ai { .. } => Some("Ask".into()),
                 View::Welcome => Some("Grant Accessibility".into()),
+                View::Update { .. } => Some("Install and relaunch".into()),
                 View::SnippetForm { .. } | View::QuicklinkForm { .. } => Some("Save".into()),
                 View::Alias { .. } | View::CreateScript { .. } => Some("Save".into()),
                 _ => None,
@@ -4743,6 +4750,8 @@ impl App {
                 let mut pick_model: Option<String> = None;
                 let mut want_models = false;
                 let mut open_url: Option<String> = None;
+                // 1 install, 2 later, 3 skip (View::Update buttons)
+                let mut update_act: u8 = 0;
                 // The match below borrows the view stack mutably; take the icon cache out so these
                 // screens can still draw cached symbols.
                 let mut icons = std::mem::replace(&mut self.icons, IconCache::new(self.store.images_dir()));
@@ -5017,6 +5026,33 @@ impl App {
                                 }
                             });
                         }
+                        View::Update { release } => {
+                            egui::ScrollArea::vertical().id_salt("update").auto_shrink([false; 2]).show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = 6.0;
+                                ui.add_space(4.0);
+                                ui.label(RichText::new(format!("Ferrocast {} is available", release.tag.trim_start_matches('v'))).size(20.0).color(pal.text));
+                                ui.label(RichText::new(format!("You have {}.", env!("CARGO_PKG_VERSION"))).size(13.0).color(pal.sub));
+                                ui.add_space(8.0);
+                                let notes: String = release.notes.lines().take(40).collect::<Vec<_>>().join("\n");
+                                let notes = if notes.trim().is_empty() { "No release notes.".to_string() } else { notes };
+                                group(ui, pal, |ui| {
+                                    ui.label(RichText::new(notes).size(13.0).color(pal.text));
+                                });
+                                ui.add_space(10.0);
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    if accent_btn(ui, pal, "Install and relaunch") {
+                                        update_act = 1;
+                                    }
+                                    if small_btn(ui, pal, "Later") {
+                                        update_act = 2;
+                                    }
+                                    if small_btn(ui, pal, "Skip this version") {
+                                        update_act = 3;
+                                    }
+                                });
+                            });
+                        }
                         View::About => {
                             egui::ScrollArea::vertical().id_salt("about").auto_shrink([false; 2]).show(ui, |ui| {
                             ui.spacing_mut().item_spacing.y = 6.0;
@@ -5147,6 +5183,19 @@ impl App {
                 }
                 if let Some(u) = open_url {
                     let _ = std::process::Command::new("/usr/bin/open").arg(&u).status();
+                }
+                if update_act != 0 {
+                    if let View::Update { release } = self.view().clone() {
+                        self.pop();
+                        match update_act {
+                            1 => {
+                                let exe = std::env::current_exe().unwrap_or_default();
+                                self.start_update(release, ferrocast_core::update::channel_of(&exe), services::parent_writable_cached());
+                            }
+                            3 => self.skip_update(&release),
+                            _ => {}
+                        }
+                    }
                 }
                 if grant {
                     windows::accessibility_trusted(true);
