@@ -7,6 +7,7 @@ mod matrix_test;
 mod media_tools;
 #[cfg(test)]
 mod media_tools_tests;
+mod perf;
 mod route;
 mod services;
 mod ui;

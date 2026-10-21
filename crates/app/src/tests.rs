@@ -5549,3 +5549,34 @@ fn a_wheel_with_a_real_centre_ignores_the_pointer_inside_the_window() {
     let hover = app.ctx.data(|d| d.get_temp::<Option<usize>>(Id::new("wheel-hover"))).flatten();
     assert_eq!(hover, Some(0), "no global mouse in tests: the keyboard selection stays, the in-window pointer is ignored");
 }
+
+/// Timing probe for odd/plans/performance-plan.md (P0), not a pass/fail gate:
+/// `cargo test --release -p ferrocast clipboard_sections_timing -- --ignored --nocapture`
+#[test]
+#[ignore = "timing probe; prints microseconds"]
+fn clipboard_sections_timing_1000_entries() {
+    let mut app = fixture();
+    let now = now_secs();
+    *app.shared.clipboard.lock().unwrap() = (0..1000)
+        .map(|i| ClipEntry {
+            id: format!("clip-{i}"),
+            kind: ClipKind::Text,
+            content: format!("line {i} of a fairly typical clipboard text entry with some words ").repeat(4),
+            title: None,
+            copied_at: now - i * 60,
+            pinned: false,
+            source_app: Some("Safari".into()),
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        })
+        .collect();
+    app.push(View::Clipboard);
+    for q in ["", "line 5", "zzz"] {
+        app.query = q.into();
+        app.invalidate_sections();
+        let t = std::time::Instant::now();
+        let n: usize = app.sections_cached().iter().map(|s| s.items.len()).sum();
+        eprintln!("clipboard sections q={q:?}: {n} items, {:?}", t.elapsed());
+    }
+}

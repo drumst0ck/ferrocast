@@ -144,7 +144,8 @@ impl eframe::App for App {
                 eprintln!("show -> frame {:?}", t.elapsed());
             }
         }
-        self.draw(ui);
+        let visible = self.visible;
+        crate::perf::frame(visible, || self.draw(ui));
     }
 }
 
