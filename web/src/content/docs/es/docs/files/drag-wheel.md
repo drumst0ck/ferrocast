@@ -12,6 +12,14 @@ Empieza a arrastrar archivos y pulsa <kbd>⇧</kbd> para conversiones, <kbd>⌘<
 
 Un anillo «halo»: un acento por rueda, sector resaltado con degradado y brillo, centro con el nombre de la rueda, el recuento y el tipo, y todos los segmentos con su nombre bajo el icono (desde 9 la letra es más pequeña y los nombres largos se cortan con «…»; el nombre completo sale en el centro al pasar por encima). La rueda de acciones tiene las seis acciones de archivo más Zip; la de conversión muestra todas las salidas, atenuando las que necesitan una herramienta no instalada y mostrando la orden de instalación.
 
+## Traducir texto arrastrado
+
+Arrastra texto seleccionado (desde cualquier app que permita arrastrar una selección) y toca la tecla Convert (<kbd>⇧</kbd> por defecto). Se abre una cuarta rueda, morada, con tus idiomas; suelta sobre uno para traducir. La selección se reemplaza en la app de origen o solo se copia, según Ajustes > General > «After translating».
+
+La traducción usa los mismos proveedores de IA que Ask AI: un servidor compatible con OpenAI (Ollama lo mantiene en tu Mac), Anthropic, Sign in with ChatGPT o Claude Code (tus propias suscripciones). Elige el motor en Ajustes > AI > Translation, o déjalo en «Same as chat». El texto seleccionado se envía a ese proveedor y a nadie más. Los idiomas son una lista separada por comas en Ajustes > General (hasta 12). Las selecciones de más de 20.000 caracteres se rechazan.
+
+Esta rueda no tiene otra a la que cambiar, así que <kbd>⌘</kbd> y <kbd>⌃</kbd> no hacen nada mientras está abierta.
+
 ## Herramientas según el formato
 
 Una tabla de 26 herramientas decide qué ofrecen la rueda de herramientas y la vista Convertir para cada tipo de archivo; las que no tienen ventana usan presets o comandos escritos.

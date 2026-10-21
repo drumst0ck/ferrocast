@@ -42,6 +42,7 @@ No incluido: extensiones React, sincronización, Search Menu Bar Items y context
 - **275 conversiones** entre 46 formatos de entrada (imágenes, audio, vídeo, documentos, hojas de cálculo, PDF, presentaciones, subtítulos, archivos comprimidos).
 - **26 herramientas**: comprimir, recortar, cortar, dividir, unir, ocultar zonas, anotar, editar metadatos, organizar páginas de PDF y más.
 - **7 acciones**: AirDrop, estantería, copiar, mover, copiar ruta, Terminal y Zip.
+- **Rueda de traducción**: arrastra texto seleccionado, pulsa <kbd>⇧</kbd> y suelta sobre un idioma. Usa tu proveedor de Ask AI (Ollama se queda en local; también sirven las suscripciones de ChatGPT y Claude).
 - Todo en local. Primero las herramientas de macOS; ffmpeg, LibreOffice, cwebp, unrar y Ghostscript son opcionales. El resultado queda junto al original y nunca lo sobrescribe.
 
 Explora todos los pares en <https://ferrocast.app/es/files/>.

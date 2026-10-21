@@ -12,6 +12,14 @@ Start dragging files, then tap <kbd>⇧</kbd> for conversions, <kbd>⌘</kbd> fo
 
 A halo ring: one accent per wheel, a gradient sector with an edge glow, a centre showing the wheel name, the file count and kind, and every segment showing its name under the icon (from nine segments the text is smaller and long names are cut with an ellipsis; the hub shows the full name of the hovered one). The Actions wheel has the six file actions plus Zip; the Convert wheel shows every output, dimming the ones whose tool is not installed and showing the install command.
 
+## Translate dragged text
+
+Drag selected text (from any app that lets you drag a selection) and tap the Convert key (<kbd>⇧</kbd> by default). A fourth, purple wheel opens with your languages; release over one to translate. The selection is replaced in the app it came from, or only copied, depending on Settings > General > “After translating”.
+
+Translation uses the same AI providers as Ask AI: an OpenAI-compatible server (Ollama keeps it on your Mac), Anthropic, Sign in with ChatGPT or Claude Code (your own subscriptions). Pick the engine in Settings > AI > Translation, or leave it on “Same as chat”. The selected text is sent to that provider and to no one else. Languages are a comma-separated list in Settings > General (up to 12). Selections over 20,000 characters are refused.
+
+This wheel has no other wheel to switch to, so <kbd>⌘</kbd> and <kbd>⌃</kbd> do nothing while it is open.
+
 ## Tools per format
 
 A table of 26 tools sets what the Tools wheel and the Convert view offer for each file type. Tools without a window use presets or typed commands. See [File tools](/docs/files/tools/compress/) and [Typed commands](/docs/files/typed-commands/).
