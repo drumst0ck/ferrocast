@@ -3762,3 +3762,214 @@ fn bleep_enter_with_valid_ranges_dispatches_and_goes_back() {
     assert!(matches!(app.view(), View::Root), "a valid job closes the window");
     assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Bleeping")), "{:?}", app.toast);
 }
+
+// ---- A8c: drag to reorder (Choose Order list and collage strip)
+
+fn pointer_button(pos: Pos2, pressed: bool) -> Event {
+    Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
+}
+
+/// Press at `from`, then walk to `to` in steps (egui needs a drag threshold and a frame after the
+/// press before a drag starts). The button stays down on return.
+fn drag_begin(app: &mut App, from: Pos2, to: Pos2) {
+    render(app, vec![Event::PointerMoved(from)]);
+    render(app, vec![pointer_button(from, true)]);
+    render(app, vec![]);
+    for k in 1..=4 {
+        let p = from + (to - from) * (k as f32 / 4.0) + Vec2::new(0.0, if k == 1 { 8.0 } else { 0.0 });
+        render(app, vec![Event::PointerMoved(p)]);
+    }
+    render(app, vec![Event::PointerMoved(to)]);
+}
+
+fn drag_release(app: &mut App, at: Pos2) {
+    render(app, vec![pointer_button(at, false)]);
+    render(app, vec![]);
+}
+
+fn dnd_rects(app: &App, id: &str) -> Vec<Rect> {
+    app.ctx.data(|d| d.get_temp::<Vec<Rect>>(Id::new(("dnd-rects", id)))).unwrap_or_default()
+}
+
+fn reorder_rows(app: &mut App, n: usize) -> Vec<Rect> {
+    open_reorder(app, ReorderPurpose::MergePdf, reorder_files(n));
+    render(app, vec![]);
+    render(app, vec![]);
+    dnd_rects(app, "reorder-rows")
+}
+
+#[test]
+fn drag_reorder_renders_for_empty_1_2_5_files_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for n in [0, 1, 2, 5] {
+            let rows = reorder_rows(&mut app, n);
+            assert_eq!(rows.len(), n);
+            let imgs: Vec<image::RgbaImage> = (0..n).map(|_| image::RgbaImage::new(8, 8)).collect();
+            app.ctx.data_mut(|d| d.insert_temp(Id::new("collage-base"), Arc::new(imgs)));
+            app.stack = vec![View::Root, View::CollageImage { files: reorder_files(n), opts: Default::default(), color: 0 }];
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+        }
+    }
+}
+
+#[test]
+fn dragging_a_row_past_another_moves_it_and_the_cursor_follows() {
+    let mut app = fixture();
+    let f = reorder_files(5);
+    let rows = reorder_rows(&mut app, 5);
+    let (from, to) = (rows[0].center() - Vec2::new(60.0, 0.0), rows[3].center() + Vec2::new(-60.0, 10.0));
+    drag_begin(&mut app, from, to);
+    assert_eq!(reorder_state(&app).0, f, "nothing moves until the release");
+    drag_release(&mut app, to);
+    let (files, cursor) = reorder_state(&app);
+    assert_eq!(files, vec![f[1].clone(), f[2].clone(), f[3].clone(), f[0].clone(), f[4].clone()], "the row ends where it was dropped");
+    assert_eq!(cursor, 3, "the cursor follows the moved row");
+}
+
+#[test]
+fn dragging_a_row_to_the_top_and_to_the_end_of_the_list() {
+    let mut app = fixture();
+    let f = reorder_files(4);
+    let rows = reorder_rows(&mut app, 4);
+    drag_begin(&mut app, rows[2].center() - Vec2::new(60.0, 0.0), rows[0].min + Vec2::new(100.0, 3.0));
+    drag_release(&mut app, rows[0].min + Vec2::new(100.0, 3.0));
+    assert_eq!(reorder_state(&app), (vec![f[2].clone(), f[0].clone(), f[1].clone(), f[3].clone()], 0));
+    let rows = dnd_rects(&app, "reorder-rows");
+    let end = rows[3].max - Vec2::new(100.0, 3.0);
+    drag_begin(&mut app, rows[0].center() - Vec2::new(60.0, 0.0), end);
+    drag_release(&mut app, end);
+    assert_eq!(reorder_state(&app), (vec![f[0].clone(), f[1].clone(), f[3].clone(), f[2].clone()], 3));
+}
+
+#[test]
+fn releasing_where_the_row_was_changes_nothing() {
+    let mut app = fixture();
+    let f = reorder_files(4);
+    let rows = reorder_rows(&mut app, 4);
+    let at = rows[1].center() - Vec2::new(60.0, 0.0);
+    drag_begin(&mut app, at, at + Vec2::new(0.0, 12.0));
+    drag_release(&mut app, at + Vec2::new(0.0, 6.0));
+    assert_eq!(reorder_state(&app), (f, 0));
+}
+
+#[test]
+fn releasing_outside_the_list_cancels_the_drag() {
+    let mut app = fixture();
+    let f = reorder_files(4);
+    for outside in [Pos2::new(ui::WIDTH + 60.0, 200.0), Pos2::new(60.0, 8.0), Pos2::new(60.0, ui::HEIGHT - 2.0)] {
+        let rows = reorder_rows(&mut app, 4);
+        drag_begin(&mut app, rows[0].center() - Vec2::new(60.0, 0.0), outside);
+        drag_release(&mut app, outside);
+        assert_eq!(reorder_state(&app), (f.clone(), 0), "released at {outside:?}");
+    }
+}
+
+#[test]
+fn escape_during_a_drag_cancels_it_and_does_not_leave_the_view() {
+    let mut app = fixture();
+    let f = reorder_files(4);
+    let rows = reorder_rows(&mut app, 4);
+    let to = rows[3].center() + Vec2::new(-60.0, 10.0);
+    drag_begin(&mut app, rows[0].center() - Vec2::new(60.0, 0.0), to);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Reorder { .. }), "the first Escape only cancels the drag");
+    render(&mut app, vec![Event::PointerMoved(to + Vec2::new(0.0, 3.0))]);
+    drag_release(&mut app, to);
+    assert_eq!(reorder_state(&app), (f, 0), "the order is unchanged after the cancelled drag");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape leaves as before");
+}
+
+#[test]
+fn row_buttons_and_clicks_still_work_next_to_the_drag_source() {
+    let mut app = fixture();
+    let f = reorder_files(3);
+    let rows = reorder_rows(&mut app, 3);
+    // click the "down" button of row 0 (right side), then select row 2 by clicking its name
+    let down = Pos2::new(rows[0].max.x - 50.0 + 32.0, rows[0].center().y);
+    render(&mut app, vec![Event::PointerMoved(down)]);
+    render(&mut app, vec![pointer_button(down, true)]);
+    render(&mut app, vec![]);
+    render(&mut app, vec![pointer_button(down, false)]);
+    assert_eq!(reorder_state(&app), (vec![f[1].clone(), f[0].clone(), f[2].clone()], 1));
+    let name = rows[2].center() - Vec2::new(60.0, 0.0);
+    render(&mut app, vec![Event::PointerMoved(name)]);
+    render(&mut app, vec![pointer_button(name, true)]);
+    render(&mut app, vec![pointer_button(name, false)]);
+    assert_eq!(reorder_state(&app).1, 2, "a plain click selects the row");
+}
+
+fn collage_view(app: &mut App, n: usize) {
+    let imgs: Vec<image::RgbaImage> = (0..n).map(|i| image::RgbaImage::new(10 + i as u32, 8)).collect();
+    app.ctx.data_mut(|d| {
+        d.insert_temp(Id::new("collage-base"), Arc::new(imgs));
+        d.remove::<Vec<Rect>>(Id::new(("dnd-rects", "collage-strip")));
+    });
+    app.stack = vec![View::Root, View::CollageImage { files: reorder_files(n), opts: Default::default(), color: 0 }];
+    render(app, vec![]);
+    render(app, vec![]);
+}
+
+fn collage_state(app: &App) -> (Vec<std::path::PathBuf>, Vec<u32>) {
+    let widths = app
+        .ctx
+        .data(|d| d.get_temp::<Arc<Vec<image::RgbaImage>>>(Id::new("collage-base")))
+        .map(|b| b.iter().map(|i| i.width()).collect())
+        .unwrap_or_default();
+    match app.view() {
+        View::CollageImage { files, .. } => (files.clone(), widths),
+        other => panic!("collage closed unexpectedly: {}", other.title()),
+    }
+}
+
+#[test]
+fn dragging_a_collage_picture_reorders_the_files_and_the_loaded_images() {
+    let mut app = fixture();
+    let f = reorder_files(3);
+    collage_view(&mut app, 3);
+    let chips = dnd_rects(&app, "collage-strip");
+    assert_eq!(chips.len(), 3);
+    let to = chips[2].max - Vec2::new(3.0, 8.0);
+    let tex_before = app.ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("collage-tex"))).map(|t| t.id());
+    drag_begin(&mut app, chips[0].center(), to);
+    drag_release(&mut app, to);
+    let (files, widths) = collage_state(&app);
+    assert_eq!(files, vec![f[1].clone(), f[2].clone(), f[0].clone()], "the order Enter hands to the collage job");
+    assert_eq!(widths, vec![11, 12, 10], "the pictures the preview composes follow the same order");
+    let tex_after = app.ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("collage-tex"))).map(|t| t.id());
+    assert!(tex_before.is_some() && tex_after.is_some() && tex_before != tex_after, "the preview recomposes");
+}
+
+#[test]
+fn collage_drag_released_outside_or_escaped_changes_nothing_and_one_picture_has_no_strip() {
+    let mut app = fixture();
+    let f = reorder_files(3);
+    collage_view(&mut app, 3);
+    let chips = dnd_rects(&app, "collage-strip");
+    drag_begin(&mut app, chips[0].center(), Pos2::new(ui::WIDTH + 40.0, 300.0));
+    drag_release(&mut app, Pos2::new(ui::WIDTH + 40.0, 300.0));
+    assert_eq!(collage_state(&app), (f.clone(), vec![10, 11, 12]));
+    let to = chips[2].max - Vec2::new(3.0, 8.0);
+    drag_begin(&mut app, chips[0].center(), to);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::CollageImage { .. }));
+    drag_release(&mut app, to);
+    assert_eq!(collage_state(&app), (f, vec![10, 11, 12]));
+    collage_view(&mut app, 1);
+    assert!(dnd_rects(&app, "collage-strip").is_empty(), "a single picture shows no strip");
+}
+
+#[test]
+fn collage_thumbnails_that_arrive_after_a_reorder_follow_the_current_order() {
+    let p = |s: &str| std::path::PathBuf::from(s);
+    let loaded = vec![p("a"), p("b"), p("c")];
+    let now = vec![p("c"), p("a"), p("b")];
+    assert_eq!(align_to_current(&now, &loaded, vec![1, 2, 3]), Some(vec![3, 1, 2]));
+    let dup_now = vec![p("a"), p("a"), p("b")];
+    assert_eq!(align_to_current(&dup_now, &[p("a"), p("b"), p("a")], vec![1, 2, 3]), Some(vec![1, 3, 2]));
+    assert_eq!(align_to_current(&[p("a"), p("x")], &[p("a"), p("b")], vec![1, 2]), None, "a different set of files is stale");
+    assert_eq!(align_to_current(&now, &loaded, vec![1, 2]), None, "an image missing");
+}

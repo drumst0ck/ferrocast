@@ -243,6 +243,24 @@ pub fn compress_goal(
     Ok((goal, r))
 }
 
+/// Thumbnails were decoded for `loaded` (the order the collage had when the job started); the
+/// pictures may have been dragged into another order since. Returns `items` rearranged to the
+/// `now` order, or `None` when the file sets differ or an item is missing (a stale result).
+pub fn align_to_current<T>(now: &[PathBuf], loaded: &[PathBuf], items: Vec<T>) -> Option<Vec<T>> {
+    if now.len() != loaded.len() || items.len() != loaded.len() {
+        return None;
+    }
+    let mut slots: Vec<Option<T>> = items.into_iter().map(Some).collect();
+    let mut taken = vec![false; loaded.len()];
+    let mut out = Vec::with_capacity(now.len());
+    for f in now {
+        let i = (0..loaded.len()).find(|&i| !taken[i] && loaded[i] == *f)?;
+        taken[i] = true;
+        out.push(slots[i].take()?);
+    }
+    Some(out)
+}
+
 /// Pure mapping from the window's purpose to the job that Enter starts.
 pub fn reorder_job(purpose: ReorderPurpose, files: Vec<PathBuf>) -> ReorderJob {
     use ferrocast_core::convert::{FileTool, ImageOp};
@@ -1691,10 +1709,24 @@ impl App {
                     self.ctx.request_repaint();
                 }
                 Msg::CollageLoaded(files, thumbs) => {
-                    if matches!(self.view(), View::CollageImage { files: f, .. } if *f == files) {
+                    let current = match self.view() {
+                        View::CollageImage { files: f, .. } => Some(f.clone()),
+                        _ => None,
+                    };
+                    let same_files = |a: &[PathBuf]| {
+                        let (mut x, mut y) = (a.to_vec(), files.clone());
+                        x.sort();
+                        y.sort();
+                        x == y
+                    };
+                    // a result for another collage is ignored silently, as before
+                    if let Some(current) = current.filter(|c| same_files(c)) {
                         let imgs: Vec<image::RgbaImage> =
                             thumbs.into_iter().filter_map(|(w, h, px)| image::RgbaImage::from_raw(w as u32, h as u32, px)).collect();
-                        if imgs.len() == files.len() {
+                        // the pictures may have been dragged into a new order while they loaded
+                        let imgs = align_to_current(&current, &files, imgs);
+                        if let Some(imgs) = imgs {
+                            self.ctx.data_mut(|d| d.remove::<std::sync::Arc<Vec<egui::TextureHandle>>>(Id::new("collage-strip")));
                             self.ctx.data_mut(|d| {
                                 d.insert_temp(Id::new("collage-base"), std::sync::Arc::new(imgs));
                                 d.remove::<ferrocast_core::collage::CollageOpts>(Id::new("collage-last"));
@@ -4022,6 +4054,7 @@ impl App {
                 } else {
                     self.ctx.data_mut(|d| {
                         d.remove::<egui::TextureHandle>(Id::new("collage-tex"));
+                        d.remove::<std::sync::Arc<Vec<egui::TextureHandle>>>(Id::new("collage-strip"));
                         d.remove::<std::sync::Arc<Vec<image::RgbaImage>>>(Id::new("collage-base"));
                         d.remove::<ferrocast_core::collage::CollageOpts>(Id::new("collage-last"));
                     });

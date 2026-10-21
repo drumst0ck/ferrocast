@@ -36,6 +36,13 @@ pub fn drop_index(from: usize, slot: usize, len: usize) -> usize {
     to.min(len - 1)
 }
 
+/// The slot (gap before row `k`, `rows.len()` = after the last) a pointer coordinate `p` falls in,
+/// given each row's `(start, end)` extent along the list axis: the first row whose midpoint is
+/// still ahead of the pointer. Above the first row is 0, below the last is `rows.len()`.
+pub fn slot_for_pointer(rows: &[(f32, f32)], p: f32) -> usize {
+    rows.iter().position(|(a, b)| p < (a + b) / 2.0).unwrap_or(rows.len())
+}
+
 /// Files in the order they were selected (Finder gives the pick order), without repeats.
 pub fn finder_order(paths: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
     let mut out: Vec<std::path::PathBuf> = Vec::with_capacity(paths.len());
@@ -51,6 +58,19 @@ pub fn finder_order(paths: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn slot_for_pointer_uses_row_midpoints() {
+        let rows = [(0.0, 40.0), (44.0, 84.0), (88.0, 128.0)];
+        assert_eq!(slot_for_pointer(&rows, -50.0), 0, "above the first row");
+        assert_eq!(slot_for_pointer(&rows, 19.9), 0);
+        assert_eq!(slot_for_pointer(&rows, 20.0), 1, "at the midpoint the pointer is past the row");
+        assert_eq!(slot_for_pointer(&rows, 70.0), 2);
+        assert_eq!(slot_for_pointer(&rows, 108.0), 3);
+        assert_eq!(slot_for_pointer(&rows, 900.0), 3, "below the last row is the end slot");
+        assert_eq!(slot_for_pointer(&[], 5.0), 0, "empty list");
+        assert_eq!(slot_for_pointer(&[(0.0, 10.0)], f32::NAN), 1, "NaN never panics");
+    }
 
     fn v() -> Vec<char> {
         vec!['a', 'b', 'c', 'd']

@@ -2979,11 +2979,12 @@ impl App {
         ui: &mut Ui,
         area_in: Rect,
         pal: &Palette,
-        n: usize,
+        files: Vec<PathBuf>,
         opts: ferrocast_core::collage::CollageOpts,
         color: usize,
     ) {
         use ferrocast_core::collage::{layout, Layout};
+        let n = files.len();
         let ctx = ui.ctx().clone();
         let (mut o, mut color) = (opts, color);
         let panel = Rect::from_min_max(Pos2::new(area_in.max.x - 300.0, area_in.min.y + 12.0), area_in.max - Vec2::new(16.0, 34.0));
@@ -3041,7 +3042,95 @@ impl App {
             }
             ctx.request_repaint();
         }
-        let area = Rect::from_min_max(area_in.min + Vec2::new(16.0, 14.0), Pos2::new(area_in.max.x - 316.0, area_in.max.y - 34.0));
+        let mut area = Rect::from_min_max(area_in.min + Vec2::new(16.0, 14.0), Pos2::new(area_in.max.x - 316.0, area_in.max.y - 34.0));
+        let base: Option<std::sync::Arc<Vec<image::RgbaImage>>> = ctx.data(|d| d.get_temp(Id::new("collage-base")));
+        if n >= 2 {
+            // one small chip per picture, draggable: the order here is the order of the collage
+            let strip = Rect::from_min_size(area.min, Vec2::new(area.width(), 70.0));
+            area.min.y += 78.0;
+            let chips: Option<std::sync::Arc<Vec<egui::TextureHandle>>> =
+                match (&base, ctx.data(|d| d.get_temp::<std::sync::Arc<Vec<egui::TextureHandle>>>(Id::new("collage-strip")))) {
+                    (_, Some(c)) if c.len() == n => Some(c),
+                    (Some(b), _) if b.len() == n => {
+                        let v: Vec<egui::TextureHandle> = b
+                            .iter()
+                            .enumerate()
+                            .map(|(i, img)| {
+                                let ci =
+                                    egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+                                ctx.load_texture(format!("collage-chip-{i}"), ci, egui::TextureOptions::LINEAR)
+                            })
+                            .collect();
+                        let v = std::sync::Arc::new(v);
+                        ctx.data_mut(|d| d.insert_temp(Id::new("collage-strip"), v.clone()));
+                        Some(v)
+                    }
+                    _ => None,
+                };
+            let mut dropped = None;
+            ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+                egui::ScrollArea::horizontal().id_salt("collage-strip-scroll").auto_shrink([false, true]).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        dropped = drag_reorder_cells(
+                            ui,
+                            "collage-strip",
+                            n,
+                            true,
+                            pal,
+                            |ui, i, lifted| {
+                                let (r, _) = ui.allocate_exact_size(Vec2::new(64.0, 52.0), egui::Sense::hover());
+                                ui.painter().rect_filled(r, 8.0, if lifted { pal.sel } else { pal.field });
+                                match chips.as_ref().and_then(|c| c.get(i)) {
+                                    Some(t) => {
+                                        let s = t.size_vec2();
+                                        let k = ((r.width() - 8.0) / s.x).min((r.height() - 8.0) / s.y);
+                                        egui::Image::new(t).paint_at(ui, Rect::from_center_size(r.center(), s * k));
+                                    }
+                                    None => {
+                                        let name = files[i].file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                                        let p = ui.painter().with_clip_rect(r.shrink(3.0));
+                                        p.text(r.center(), egui::Align2::CENTER_CENTER, name, FontId::proportional(10.5), pal.sub);
+                                    }
+                                }
+                                ui.painter().text(
+                                    r.left_bottom() + Vec2::new(6.0, -4.0),
+                                    egui::Align2::LEFT_BOTTOM,
+                                    (i + 1).to_string(),
+                                    FontId::proportional(11.0),
+                                    pal.text,
+                                );
+                                if lifted {
+                                    ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+                                }
+                            },
+                            |_, _, _| {},
+                        )
+                        .moved;
+                    });
+                });
+            });
+            if let Some((from, to)) = dropped {
+                use ferrocast_core::reorder::move_item;
+                if let Some(View::CollageImage { files: f, .. }) = self.stack.last_mut() {
+                    move_item(f, from, to);
+                }
+                ctx.data_mut(|d| {
+                    if let Some(b) = d.get_temp::<std::sync::Arc<Vec<image::RgbaImage>>>(Id::new("collage-base")) {
+                        let mut v = (*b).clone();
+                        move_item(&mut v, from, to);
+                        d.insert_temp(Id::new("collage-base"), std::sync::Arc::new(v));
+                    }
+                    if let Some(c) = d.get_temp::<std::sync::Arc<Vec<egui::TextureHandle>>>(Id::new("collage-strip")) {
+                        let mut v = (*c).clone();
+                        move_item(&mut v, from, to);
+                        d.insert_temp(Id::new("collage-strip"), std::sync::Arc::new(v));
+                    }
+                    d.remove::<ferrocast_core::collage::CollageOpts>(Id::new("collage-last"));
+                });
+                ctx.request_repaint();
+            }
+        }
         let base: Option<std::sync::Arc<Vec<image::RgbaImage>>> = ctx.data(|d| d.get_temp(Id::new("collage-base")));
         if let Some(b) = base {
             let last: Option<ferrocast_core::collage::CollageOpts> = ctx.data(|d| d.get_temp(Id::new("collage-last")));
@@ -4000,7 +4089,7 @@ impl App {
 
     /// Ordered list of files: ↑/↓ choose, ⌘↑/⌘↓ (or the row buttons) move, ↵ runs.
     fn draw_reorder(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, purpose: ReorderPurpose, files: Vec<PathBuf>, cursor: usize) {
-        use ferrocast_core::reorder::{move_down, move_up};
+        use ferrocast_core::reorder::{move_down, move_item, move_up};
         let ctx = ui.ctx().clone();
         let (mut files, mut cursor) = (files, cursor);
         let before = (files.clone(), cursor);
@@ -4023,6 +4112,7 @@ impl App {
             }
         });
         let mut click: Option<(usize, i8)> = None; // (row, 0 select / -1 up / 1 down)
+        let mut dropped: Option<(usize, usize)> = None;
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(Vec2::new(16.0, 12.0))), |ui| {
             ui.label(RichText::new(format!("{} files · first to last", files.len())).size(13.0).color(pal.text));
             let hint = match purpose {
@@ -4033,62 +4123,81 @@ impl App {
             ui.label(RichText::new(hint).size(12.0).color(pal.sub));
             ui.add_space(6.0);
             egui::ScrollArea::vertical().id_salt("reorder-list").auto_shrink([false, false]).show(ui, |ui| {
-                for (pos, f) in files.iter().enumerate() {
-                    let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 44.0), egui::Sense::click());
-                    let on = pos == cursor;
-                    ui.painter().rect_filled(r, 8.0, if on { pal.sel } else { pal.field });
-                    if on {
-                        ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
-                        ui.scroll_to_rect(r, None);
-                    }
-                    if resp.clicked() {
-                        click = Some((pos, 0));
-                    }
-                    ui.painter().text(
-                        Pos2::new(r.min.x + 22.0, r.center().y),
-                        egui::Align2::CENTER_CENTER,
-                        (pos + 1).to_string(),
-                        FontId::proportional(14.0),
-                        pal.sub,
-                    );
-                    let text_rect = Rect::from_min_max(Pos2::new(r.min.x + 42.0, r.min.y), Pos2::new(r.max.x - 76.0, r.max.y));
-                    let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.display().to_string());
-                    let kind = f.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
-                    let p = ui.painter().with_clip_rect(text_rect);
-                    p.text(
-                        Pos2::new(text_rect.min.x, r.center().y - 8.0),
-                        egui::Align2::LEFT_CENTER,
-                        name,
-                        FontId::proportional(14.0),
-                        pal.text,
-                    );
-                    p.text(
-                        Pos2::new(text_rect.min.x, r.center().y + 10.0),
-                        egui::Align2::LEFT_CENTER,
-                        kind,
-                        FontId::proportional(11.5),
-                        pal.sub,
-                    );
-                    for (b, (glyph, dir)) in [("↑", -1i8), ("↓", 1i8)].into_iter().enumerate() {
-                        let br = Rect::from_center_size(Pos2::new(r.max.x - 50.0 + b as f32 * 32.0, r.center().y), Vec2::new(28.0, 28.0));
-                        let enabled = if dir < 0 { pos > 0 } else { pos < last };
-                        let bresp = ui.interact(br, Id::new(("reorder-btn", pos, dir)), egui::Sense::click());
-                        let fill = if bresp.hovered() && enabled { pal.sel } else { pal.bg };
-                        ui.painter().rect_filled(br, 6.0, fill);
-                        ui.painter().text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
-                            glyph,
-                            FontId::proportional(14.0),
-                            if enabled { pal.text } else { pal.sub.gamma_multiply(0.4) },
-                        );
-                        if bresp.clicked() && enabled {
-                            click = Some((pos, dir));
+                let res = drag_reorder_cells(
+                    ui,
+                    "reorder-rows",
+                    files.len(),
+                    false,
+                    pal,
+                    |ui, pos, lifted| {
+                        let f = &files[pos];
+                        let (r, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 44.0), egui::Sense::hover());
+                        let on = pos == cursor;
+                        ui.painter().rect_filled(r, 8.0, if on || lifted { pal.sel } else { pal.field });
+                        if on || lifted {
+                            ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
                         }
-                    }
+                        if on && !lifted {
+                            ui.scroll_to_rect(r, None);
+                        }
+                        ui.painter().text(
+                            Pos2::new(r.min.x + 22.0, r.center().y),
+                            egui::Align2::CENTER_CENTER,
+                            (pos + 1).to_string(),
+                            FontId::proportional(14.0),
+                            pal.sub,
+                        );
+                        let text_rect = Rect::from_min_max(Pos2::new(r.min.x + 42.0, r.min.y), Pos2::new(r.max.x - 76.0, r.max.y));
+                        let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.display().to_string());
+                        let kind = f.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
+                        let p = ui.painter().with_clip_rect(text_rect);
+                        p.text(
+                            Pos2::new(text_rect.min.x, r.center().y - 8.0),
+                            egui::Align2::LEFT_CENTER,
+                            name,
+                            FontId::proportional(14.0),
+                            pal.text,
+                        );
+                        p.text(
+                            Pos2::new(text_rect.min.x, r.center().y + 10.0),
+                            egui::Align2::LEFT_CENTER,
+                            kind,
+                            FontId::proportional(11.5),
+                            pal.sub,
+                        );
+                    },
+                    |ui, pos, r| {
+                        for (b, (glyph, dir)) in [("↑", -1i8), ("↓", 1i8)].into_iter().enumerate() {
+                            let br =
+                                Rect::from_center_size(Pos2::new(r.max.x - 50.0 + b as f32 * 32.0, r.center().y), Vec2::new(28.0, 28.0));
+                            let enabled = if dir < 0 { pos > 0 } else { pos < last };
+                            let bresp = ui.interact(br, Id::new(("reorder-btn", pos, dir)), egui::Sense::click());
+                            let fill = if bresp.hovered() && enabled { pal.sel } else { pal.bg };
+                            ui.painter().rect_filled(br, 6.0, fill);
+                            ui.painter().text(
+                                br.center(),
+                                egui::Align2::CENTER_CENTER,
+                                glyph,
+                                FontId::proportional(14.0),
+                                if enabled { pal.text } else { pal.sub.gamma_multiply(0.4) },
+                            );
+                            if bresp.clicked() && enabled {
+                                click = Some((pos, dir));
+                            }
+                        }
+                    },
+                );
+                if let Some(c) = res.clicked {
+                    click = Some((c, 0));
                 }
+                dropped = res.moved;
             });
         });
+        if let Some((from, to)) = dropped {
+            if move_item(&mut files, from, to) {
+                cursor = to;
+            }
+        }
         match click {
             Some((pos, 0)) => cursor = pos,
             Some((pos, -1)) => {
@@ -4297,7 +4406,7 @@ impl App {
                 self.draw_visualize_audio(ui, rect, pal, &file, orient, style, image, picking);
             }
             View::CollageImage { files, opts, color } => {
-                self.draw_collage(ui, rect, pal, files.len(), opts, color);
+                self.draw_collage(ui, rect, pal, files, opts, color);
             }
             View::FrameImage { file, size, opts, color, picking } => {
                 self.draw_frame(ui, rect, pal, &file, size, opts, color, picking);
@@ -5249,6 +5358,104 @@ impl App {
 }
 
 // ---- settings widgets: a tone-stepped card of rows, each with a title, a description and its control.
+
+/// Drag-to-reorder for a run of equal cells, shared by the Choose Order list (vertical) and the
+/// collage picture strip (horizontal). `cell(ui, i, lifted)` draws cell `i`; `lifted` is true for
+/// the copy that follows the pointer, whose original place is left as a dimmed hole. While a drag
+/// is over the cells an insertion line shows where it would land. Returns `(from, to)` when a
+/// release changed the order (`to` already accounts for the removal); a release where the cell
+/// was, or outside the cells, or an Escape during the drag, changes nothing. `overlay` draws
+/// widgets (buttons) on top of a resting cell, after the cell's own drag/click area so they win
+/// the pointer. A plain click on a cell is reported in `clicked`.
+#[derive(Default)]
+struct CellDrag {
+    moved: Option<(usize, usize)>,
+    clicked: Option<usize>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drag_reorder_cells(
+    ui: &mut Ui,
+    name: &'static str,
+    count: usize,
+    horizontal: bool,
+    pal: &Palette,
+    mut cell: impl FnMut(&mut Ui, usize, bool),
+    mut overlay: impl FnMut(&mut Ui, usize, Rect),
+) -> CellDrag {
+    use ferrocast_core::reorder::{drop_index, slot_for_pointer};
+    let mut out = CellDrag::default();
+    let ctx = ui.ctx().clone();
+    let key = Id::new(("dnd-reorder", name));
+    let prev_id = Id::new(("dnd-prev", name));
+    // egui ends the payload (not the pointer drag) when Escape arrives, and the source would set
+    // it again next frame: a payload that vanished while the button is still down is a cancel
+    let payload_now = |ctx: &Context| egui::DragAndDrop::payload::<(Id, usize)>(ctx).filter(|p| p.0 == key).map(|p| p.1);
+    let prev: bool = ctx.data(|d| d.get_temp(prev_id)).unwrap_or(false);
+    if prev && payload_now(&ctx).is_none() && ctx.input(|i| i.pointer.primary_down()) {
+        ctx.stop_dragging();
+    }
+    let mut rects: Vec<Rect> = Vec::with_capacity(count);
+    for i in 0..count {
+        let id = key.with(i);
+        let lifted = ctx.is_being_dragged(id);
+        let r = if lifted {
+            // the same as Ui::dnd_drag_source: the cell is painted on a tooltip layer that follows
+            // the pointer, while the cell's own place stays reserved
+            egui::DragAndDrop::set_payload(&ctx, (key, i));
+            let layer = egui::LayerId::new(egui::Order::Tooltip, id);
+            let resp = ui.scope_builder(UiBuilder::new().layer_id(layer), |ui| cell(ui, i, true)).response;
+            if let Some(p) = ctx.pointer_interact_pos() {
+                ctx.transform_layer_shapes(layer, egui::emath::TSTransform::from_translation(p - resp.rect.center()));
+            }
+            ui.painter().rect_filled(resp.rect, 8.0, pal.bg.gamma_multiply(0.6));
+            ui.painter().rect_stroke(resp.rect, 8.0, Stroke::new(1.0, pal.sub.gamma_multiply(0.5)), StrokeKind::Inside);
+            resp.rect
+        } else {
+            let r = ui.scope(|ui| cell(ui, i, false)).response.rect;
+            // click and drag on one widget (dnd_drag_source only senses drag, which would hide clicks)
+            let resp = ui.interact(r, id, egui::Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Grab);
+            resp.dnd_set_drag_payload((key, i));
+            if resp.clicked() {
+                out.clicked = Some(i);
+            }
+            overlay(ui, i, r);
+            r
+        };
+        rects.push(r);
+    }
+    ctx.data_mut(|d| d.insert_temp(Id::new(("dnd-rects", name)), rects.clone()));
+    let from = payload_now(&ctx);
+    ctx.data_mut(|d| d.insert_temp(prev_id, from.is_some()));
+    let (Some(from), true) = (from, count > 0) else { return out };
+    let bounds = rects.iter().fold(Rect::NOTHING, |a, r| a.union(*r)).intersect(ui.clip_rect());
+    let Some(pointer) = ctx.input(|i| i.pointer.latest_pos()).filter(|p| bounds.contains(*p)) else { return out };
+    let extent = |r: &Rect| if horizontal { (r.min.x, r.max.x) } else { (r.min.y, r.max.y) };
+    let spans: Vec<(f32, f32)> = rects.iter().map(extent).collect();
+    let slot = slot_for_pointer(&spans, if horizontal { pointer.x } else { pointer.y });
+    let to = drop_index(from, slot, count);
+    if to == from {
+        return out;
+    }
+    if ctx.input(|i| i.pointer.any_released()) {
+        out.moved = Some((from, to));
+        return out;
+    }
+    let at = match slot {
+        0 => extent(&rects[0]).0,
+        k if k >= count => extent(&rects[count - 1]).1,
+        k => (extent(&rects[k - 1]).1 + extent(&rects[k]).0) / 2.0,
+    };
+    let (a, b) = if horizontal {
+        (Pos2::new(at, bounds.min.y), Pos2::new(at, bounds.max.y))
+    } else {
+        (Pos2::new(bounds.min.x, at), Pos2::new(bounds.max.x, at))
+    };
+    ui.painter().line_segment([a, b], Stroke::new(3.0, pal.accent));
+    ui.painter().circle_filled(a, 3.5, pal.accent);
+    ui.painter().circle_filled(b, 3.5, pal.accent);
+    out
+}
 
 fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     ui.label(RichText::new(title).size(12.5).color(pal.sub));
