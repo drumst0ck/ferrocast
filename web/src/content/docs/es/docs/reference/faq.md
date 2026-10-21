@@ -10,7 +10,7 @@ sidebar:
 Pulsa <kbd>⌥</kbd> <kbd>Space</kbd> desde cualquier app. Puedes cambiar el atajo en los ajustes.
 
 ### ¿Es gratis?
-Del todo. Licencia MIT, sin cuenta y sin un nivel Pro detrás de un muro de pago.
+Sí. Licencia MIT, sin cuenta y sin nivel Pro.
 
 ### ¿Funcionará en mi Mac?
 Funciona en Macs con Apple Silicon. Los Mac Intel no son compatibles.

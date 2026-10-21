@@ -199,7 +199,7 @@ export const es: HomeCopy = {
     heading: 'Lo que nos preguntan',
     items: [
       ['¿Cómo se abre?', 'Pulsa ⌥ Space desde cualquier app. Puedes cambiar el atajo en Ajustes.'],
-      ['¿Es gratis?', 'Del todo. Licencia MIT, sin cuenta y sin un plan Pro esperando tras un muro de pago. Si te ahorra tiempo, dale una estrella al repositorio.'],
+      ['¿Es gratis?', 'Sí. Licencia MIT, sin cuenta y sin plan Pro. Si te ahorra tiempo, dale una estrella al repositorio.'],
       ['¿Las conversiones son realmente locales?', 'Sí. No se sube nada: las conversiones se ejecutan en tu Mac. Primero se usan las herramientas de macOS; ffmpeg, LibreOffice y Ghostscript son opcionales y solo se usan si están instalados. Los pares que necesitan una lo indican en la página Archivos.'],
       ['¿Qué formatos puede convertir?', 'Imágenes, audio, vídeo, PDF, documentos, presentaciones, hojas de cálculo, subtítulos y archivos comprimidos: {inputs} formatos de entrada y {pairs} pares de conversión. El explorador de la página Archivos permite buscarlos.'],
       ['¿Necesito ffmpeg?', 'Para muchos pares no: primero se usan las herramientas de macOS (sips, afconvert, avconvert, textutil, ditto). ffmpeg, LibreOffice, cwebp, unrar y Ghostscript son opcionales y solo se usan si están instalados; los pares que necesitan una están marcados.'],

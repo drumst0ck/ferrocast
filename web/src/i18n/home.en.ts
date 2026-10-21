@@ -200,7 +200,7 @@ export const en = {
     heading: 'Things people ask us',
     items: [
       ['How do I open it?', 'Press ⌥ Space from any app. You can change the shortcut in Settings.'],
-      ['Is it free?', 'Completely. MIT licence, no account, no Pro tier waiting behind a paywall. If it saves you time, star the repo.'],
+      ['Is it free?', 'Yes. MIT licence, no account, no Pro tier. If it saves you time, star the repo.'],
       ['Are conversions really local?', 'Yes. Nothing is uploaded: conversions run on your Mac. macOS tools come first; ffmpeg, LibreOffice and Ghostscript are optional and used only when they are installed. Pairs that need one say so on the Files page.'],
       ['Which formats can it convert?', 'Images, audio, video, PDF, documents, slides, spreadsheets, subtitles and archives: {inputs} input formats and {pairs} conversion pairs. The explorer on the Files page lets you search them.'],
       ['Do I need ffmpeg?', 'Not for many pairs: macOS tools come first (sips, afconvert, avconvert, textutil, ditto). ffmpeg, LibreOffice, cwebp, unrar and Ghostscript are optional and used only when installed; pairs that need one are marked.'],
