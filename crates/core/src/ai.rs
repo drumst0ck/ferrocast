@@ -2,6 +2,9 @@
 
 pub const DEFAULT_BASE_URL: &str = "http://localhost:11434/v1";
 pub const DEFAULT_MODEL: &str = "llama3.2";
+pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-5";
+pub const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
+pub const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models";
 pub const SYSTEM_PROMPT: &str = "You are a concise assistant inside a keyboard launcher. Answer directly; prefer short answers.";
 
 pub fn endpoint(base_url: &str) -> String {
@@ -29,6 +32,84 @@ pub fn build_chat_request(model: &str, history: &[(String, String)], question: &
     }
     messages.push(serde_json::json!({"role": "user", "content": question}));
     serde_json::json!({"model": model, "stream": true, "messages": messages}).to_string()
+}
+
+/// Anthropic Messages API request (streaming). The system prompt is a top-level field there.
+pub fn build_anthropic_request(model: &str, history: &[(String, String)], question: &str) -> String {
+    let mut messages = vec![];
+    for (q, a) in history {
+        messages.push(serde_json::json!({"role": "user", "content": q}));
+        messages.push(serde_json::json!({"role": "assistant", "content": a}));
+    }
+    messages.push(serde_json::json!({"role": "user", "content": question}));
+    serde_json::json!({"model": model, "max_tokens": 1024, "stream": true, "system": SYSTEM_PROMPT, "messages": messages}).to_string()
+}
+
+/// curl config for the Anthropic API: key and version go in headers, body via stdin.
+pub fn anthropic_curl_config(api_key: &str, body: &str) -> String {
+    format!(
+        "url = {}\nrequest = \"POST\"\nheader = \"Content-Type: application/json\"\nheader = \"anthropic-version: 2023-06-01\"\nheader = {}\ndata = {}\n",
+        curl_config_quote(ANTHROPIC_URL),
+        curl_config_quote(&format!("x-api-key: {api_key}")),
+        curl_config_quote(body)
+    )
+}
+
+/// One `text/event-stream` line from the Anthropic Messages API.
+pub fn parse_anthropic_sse_line(line: &str) -> Sse {
+    let line = line.trim();
+    let Some(data) = line.strip_prefix("data:") else {
+        return Sse::Ignore;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(data.trim()) else {
+        return Sse::Ignore;
+    };
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("content_block_delta") => match v.pointer("/delta/text").and_then(|t| t.as_str()) {
+            Some(t) if !t.is_empty() => Sse::Delta(t.to_string()),
+            _ => Sse::Ignore,
+        },
+        Some("message_stop") => Sse::Done,
+        Some("error") => Sse::Error(v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("unknown error").to_string()),
+        _ => Sse::Ignore,
+    }
+}
+
+/// One line of `claude -p --output-format stream-json --include-partial-messages`.
+pub fn parse_claude_code_line(line: &str) -> Sse {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+        return Sse::Ignore;
+    };
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("stream_event") => match v.pointer("/event/type").and_then(|t| t.as_str()) {
+            Some("content_block_delta") => match v.pointer("/event/delta/text").and_then(|t| t.as_str()) {
+                Some(t) if !t.is_empty() => Sse::Delta(t.to_string()),
+                _ => Sse::Ignore,
+            },
+            _ => Sse::Ignore,
+        },
+        Some("result") => {
+            if v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false) {
+                Sse::Error(v.get("result").and_then(|r| r.as_str()).unwrap_or("Claude Code reported an error").to_string())
+            } else {
+                Sse::Done
+            }
+        }
+        _ => Sse::Ignore,
+    }
+}
+
+/// The conversation as one prompt for a tool that only takes a single message.
+pub fn transcript_prompt(history: &[(String, String)], question: &str) -> String {
+    if history.is_empty() {
+        return question.to_string();
+    }
+    let mut out = String::from("Earlier in this conversation:\n");
+    for (q, a) in history {
+        out.push_str(&format!("\nUser: {q}\nAssistant: {a}\n"));
+    }
+    out.push_str(&format!("\nNow the user asks: {question}"));
+    out
 }
 
 #[derive(Debug, PartialEq)]
@@ -109,6 +190,42 @@ pub fn curl_config(url: &str, api_key: Option<&str>, body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn anthropic_stream_lines() {
+        assert_eq!(
+            parse_anthropic_sse_line(r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}"#),
+            Sse::Delta("Hel".into())
+        );
+        assert_eq!(parse_anthropic_sse_line(r#"data: {"type":"message_stop"}"#), Sse::Done);
+        assert_eq!(
+            parse_anthropic_sse_line(r#"data: {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#),
+            Sse::Error("invalid x-api-key".into())
+        );
+        assert_eq!(parse_anthropic_sse_line("event: ping"), Sse::Ignore);
+        let v: serde_json::Value = serde_json::from_str(&build_anthropic_request("m", &[("q".into(), "a".into())], "q2")).unwrap();
+        assert_eq!(v["system"], SYSTEM_PROMPT);
+        assert_eq!(v["messages"].as_array().unwrap().len(), 3);
+        assert!(anthropic_curl_config("sk-x", "{}").contains("x-api-key: sk-x"));
+    }
+
+    #[test]
+    fn claude_code_stream_lines() {
+        assert_eq!(
+            parse_claude_code_line(
+                r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi there"}}}"#
+            ),
+            Sse::Delta("hi there".into())
+        );
+        assert_eq!(parse_claude_code_line(r#"{"type":"result","subtype":"success","is_error":false,"result":"hi there"}"#), Sse::Done);
+        assert_eq!(
+            parse_claude_code_line(r#"{"type":"result","is_error":true,"result":"Not logged in"}"#),
+            Sse::Error("Not logged in".into())
+        );
+        assert_eq!(parse_claude_code_line(r#"{"type":"system","subtype":"init"}"#), Sse::Ignore);
+        assert!(transcript_prompt(&[("a".into(), "b".into())], "c").contains("User: a"));
+        assert_eq!(transcript_prompt(&[], "c"), "c");
+    }
 
     #[test]
     fn endpoint_normalises_slashes() {

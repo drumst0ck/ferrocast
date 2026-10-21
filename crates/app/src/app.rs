@@ -218,6 +218,12 @@ pub struct App {
     wide_font: bool,
     /// Set by show(); cleared by the first frame drawn afterwards (FERROCAST_PROFILE).
     pub(crate) show_t: Option<Instant>,
+    /// Last push/pop/reset, to debounce clicks across view changes.
+    pub(crate) nav_at: Instant,
+    /// Warm Claude Code process while Ask AI is open (ClaudeCode provider only).
+    claude: Option<std::sync::Arc<services::ClaudeSession>>,
+    /// Model lists for the Settings picker, by `services::models_key`; `None` while loading.
+    pub(crate) ai_models: std::collections::HashMap<String, Option<Result<Vec<String>, String>>>,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
     inline: HashMap<PathBuf, (String, Instant)>,
@@ -268,6 +274,37 @@ pub(crate) fn needs_wide_font(text: &str) -> bool {
         let u = c as u32;
         (0x0590..0x2000).contains(&u) || (0x2E80..0x1F000).contains(&u)
     })
+}
+
+/// SF Symbol for each system command (white on the grey tile).
+fn system_symbol(c: &system::SystemCommand) -> &'static str {
+    use system::SystemCommand::*;
+    match c {
+        LockScreen => "sf:lock",
+        Sleep => "sf:moon.zzz",
+        SleepDisplays => "sf:display",
+        Restart => "sf:arrow.counterclockwise",
+        ShutDown => "sf:power",
+        LogOut => "sf:rectangle.portrait.and.arrow.right",
+        ScreenSaver => "sf:sparkles.tv",
+        PlayPause => "sf:playpause",
+        NextTrack => "sf:forward",
+        PreviousTrack => "sf:backward",
+        ToggleMute => "sf:speaker.slash",
+        VolumeUp => "sf:speaker.wave.3",
+        VolumeDown => "sf:speaker.wave.1",
+        Volume(_) => "sf:speaker.wave.2",
+        ShowDesktop => "sf:menubar.dock.rectangle",
+        ToggleAppearance => "sf:circle.lefthalf.filled",
+        OpenTrash | EmptyTrash => "sf:trash",
+        EjectAll => "sf:eject",
+        ToggleHiddenFiles | UnhideAll => "sf:eye",
+        HideAllExceptFrontmost => "sf:eye.slash",
+        QuitAllApps => "sf:xmark.circle",
+        DismissNotifications => "sf:bell.slash",
+        ToggleWifi => "sf:wifi",
+        KeepAwake => "sf:cup.and.saucer",
+    }
 }
 
 impl App {
@@ -373,6 +410,9 @@ impl App {
             app_icon: None,
             wide_font: false,
             show_t: None,
+            nav_at: Instant::now(),
+            claude: None,
+            ai_models: Default::default(),
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -461,7 +501,42 @@ impl App {
             }
             _ => return,
         };
+        if self.settings.ai_provider == ferrocast_core::models::AiProvider::ClaudeCode {
+            // The warm session already holds the conversation; send only the new turn.
+            if self.claude.as_ref().is_none_or(|c| !c.is_alive()) {
+                match services::ClaudeSession::start(&self.settings, self.bus.clone()) {
+                    Ok(c) => self.claude = Some(c),
+                    Err(e) => {
+                        self.bus.send(Msg::AiDone { run, error: Some(e) });
+                        return;
+                    }
+                }
+            }
+            if let Err(e) = self.claude.as_ref().unwrap().ask(run, &question) {
+                self.bus.send(Msg::AiDone { run, error: Some(e) });
+            }
+            return;
+        }
         services::ask_ai(&self.settings, history, question, run, self.bus.clone());
+    }
+
+    /// Start Claude Code in the background so the first answer does not pay its boot time.
+    fn warm_claude(&mut self) {
+        if self.settings.ai_provider == ferrocast_core::models::AiProvider::ClaudeCode && self.claude.as_ref().is_none_or(|c| !c.is_alive())
+        {
+            if let Ok(c) = services::ClaudeSession::start(&self.settings, self.bus.clone()) {
+                self.claude = Some(c);
+            }
+        }
+    }
+
+    /// Drop the warm session once Ask AI is no longer on the stack.
+    fn cool_claude(&mut self) {
+        if !self.stack.iter().any(|v| matches!(v, View::Ai { .. })) {
+            if let Some(c) = self.claude.take() {
+                c.kill();
+            }
+        }
     }
 
     fn save_notes(&mut self) {
@@ -521,7 +596,7 @@ impl App {
                 id: c.id(),
                 title: c.title().into(),
                 subtitle: "Window Management".into(),
-                icon: Icon::Glyph("▣", [89, 212, 153]),
+                icon: Icon::Glyph("sf:rectangle.lefthalf.filled", [89, 212, 153]),
                 accessory: "Command".into(),
                 keywords: vec!["window".into(), "resize".into(), "move".into()],
                 kind: Kind::Window(*c),
@@ -532,7 +607,7 @@ impl App {
                 id: c.id(),
                 title: c.title(),
                 subtitle: "System".into(),
-                icon: Icon::Glyph("⌘", [90, 90, 105]),
+                icon: Icon::Glyph(system_symbol(c), [90, 90, 105]),
                 accessory: "Command".into(),
                 keywords: c.keywords().iter().map(|s| s.to_string()).collect(),
                 kind: Kind::System(*c),
@@ -543,7 +618,7 @@ impl App {
                 id: format!("quicklink:{}", q.id),
                 title: q.name.clone(),
                 subtitle: q.link.clone(),
-                icon: Icon::Glyph("↗", [86, 194, 255]),
+                icon: Icon::Glyph("sf:link", [86, 194, 255]),
                 accessory: "Quicklink".into(),
                 keywords: vec![],
                 kind: Kind::Quicklink { id: q.id.clone(), arg: None },
@@ -557,7 +632,7 @@ impl App {
                 subtitle: sub,
                 icon: match s.icon.clone().filter(|i| i.chars().count() <= 2 && !i.is_ascii()) {
                     Some(e) => Icon::Emoji(e),
-                    None => Icon::Glyph("›_", [60, 60, 70]),
+                    None => Icon::Glyph("sf:terminal", [60, 60, 70]),
                 },
                 accessory: "Script Command".into(),
                 keywords: s.description.iter().cloned().collect(),
@@ -644,11 +719,15 @@ impl App {
 
     fn push(&mut self, v: View) {
         self.sec_dirty = true;
+        self.nav_at = Instant::now();
         if matches!(v, View::Windows) {
             self.win_cache = running::list_windows();
         }
         if matches!(v, View::Processes) {
             self.proc_cache = ferrocast_macos::process::list();
+        }
+        if matches!(v, View::Ai { .. }) {
+            self.warm_claude();
         }
         self.stack.push(v);
         self.query.clear();
@@ -661,6 +740,7 @@ impl App {
 
     fn pop(&mut self) {
         self.sec_dirty = true;
+        self.nav_at = Instant::now();
         if self.stack.len() > 1 {
             self.stack.pop();
             self.query.clear();
@@ -668,6 +748,7 @@ impl App {
             self.selected = 0;
             self.scroll_to_sel = true;
             self.panel = None;
+            self.cool_claude();
         } else {
             self.hide();
         }
@@ -675,11 +756,13 @@ impl App {
 
     fn reset_to_root(&mut self) {
         self.sec_dirty = true;
+        self.nav_at = Instant::now();
         self.stack = vec![View::Root];
         self.query.clear();
         self.selected = 0;
         self.scroll_to_sel = true;
         self.panel = None;
+        self.cool_claude();
     }
 
     // ------------------------------------------------------------- messages
@@ -689,12 +772,31 @@ impl App {
             self.sec_dirty = true;
             match m {
                 Msg::Wake => {}
-                Msg::Toast(t) => self.toast(t),
+                Msg::Toast(t) => {
+                    // A sign-in or sign-out may just have finished; let Settings re-read the Keychain.
+                    self.ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));
+                    self.toast(t)
+                }
                 Msg::Apps(a) => {
                     self.apps = a;
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::AiModels(k, r) => {
+                    self.ai_models.insert(k, Some(r));
+                }
+                Msg::ChatGptDeviceCode(code) => {
+                    self.show();
+                    self.push(View::Output {
+                        run: 0,
+                        title: "Sign in with ChatGPT".into(),
+                        text: format!(
+                            "Your code:\n\n    {code}\n\nIt is already on your clipboard. A browser tab with {} should be open; paste the code there and approve. This screen can be closed; Ferrocast keeps waiting in the background and will tell you when it is done.",
+                            ferrocast_core::chatgpt::DEVICE_VERIFICATION_URL
+                        ),
+                        done: true,
+                    });
+                }
                 Msg::IconBytes(k, b) => {
                     if !self.icons.map.contains_key(&k) {
                         self.icons.prefetched.insert(k, b);
@@ -893,7 +995,7 @@ impl App {
                 id: "time".into(),
                 title: r.display.clone(),
                 subtitle: r.question.clone(),
-                icon: Icon::Glyph("◷", [255, 99, 99]),
+                icon: Icon::Glyph("sf:timer", [255, 99, 99]),
                 accessory: "Time".into(),
                 keywords: vec![],
                 kind: Kind::Calc(r),
@@ -904,7 +1006,7 @@ impl App {
                 id: "calc".into(),
                 title: r.display.clone(),
                 subtitle: r.question.clone(),
-                icon: Icon::Glyph("=", [255, 99, 99]),
+                icon: Icon::Glyph("sf:equal", [255, 99, 99]),
                 accessory: "Calculator".into(),
                 keywords: vec![],
                 kind: Kind::Calc(r),
@@ -926,7 +1028,7 @@ impl App {
                 id: "url".into(),
                 title: format!("Open {u}"),
                 subtitle: String::new(),
-                icon: Icon::Glyph("🌐", [86, 194, 255]),
+                icon: Icon::Glyph("sf:globe", [86, 194, 255]),
                 accessory: "URL".into(),
                 keywords: vec![],
                 kind: Kind::Url(u),
@@ -942,7 +1044,7 @@ impl App {
                 id: "timer".into(),
                 title: format!("Start {what} timer"),
                 subtitle: String::new(),
-                icon: Icon::Glyph("◷", [245, 165, 36]),
+                icon: Icon::Glyph("sf:timer", [245, 165, 36]),
                 accessory: "Timer".into(),
                 keywords: vec![],
                 kind: Kind::Timer(t.secs, t.label),
@@ -980,7 +1082,7 @@ impl App {
             id: "fallback:web".into(),
             title: format!("Search the web for “{q}”"),
             subtitle: String::new(),
-            icon: Icon::Glyph("🔍", [120, 120, 130]),
+            icon: Icon::Glyph("sf:magnifyingglass", [120, 120, 130]),
             accessory: "Fallback".into(),
             keywords: vec![],
             kind: Kind::WebSearch(q.to_string()),
@@ -989,7 +1091,7 @@ impl App {
             id: "fallback:files".into(),
             title: format!("Search files for “{q}”"),
             subtitle: String::new(),
-            icon: Icon::Glyph("🔍", [120, 120, 130]),
+            icon: Icon::Glyph("sf:magnifyingglass", [120, 120, 130]),
             accessory: "Fallback".into(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchFiles, q.to_string()),
@@ -998,7 +1100,7 @@ impl App {
             id: "fallback:emoji".into(),
             title: format!("Search emoji for “{q}”"),
             subtitle: String::new(),
-            icon: Icon::Glyph("☺", [255, 197, 49]),
+            icon: Icon::Glyph("sf:face.smiling", [255, 197, 49]),
             accessory: "Fallback".into(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchEmoji, q.to_string()),
@@ -1008,7 +1110,7 @@ impl App {
                 id: "fallback:dict".into(),
                 title: format!("Look up “{q}” in Dictionary"),
                 subtitle: String::new(),
-                icon: Icon::Glyph("Aa", [120, 120, 130]),
+                icon: Icon::Glyph("sf:character.book.closed", [120, 120, 130]),
                 accessory: "Fallback".into(),
                 keywords: vec![],
                 kind: Kind::Url(format!("dict://{}", q.replace(' ', "%20"))),
@@ -1018,7 +1120,7 @@ impl App {
             id: "fallback:ai".into(),
             title: format!("Ask AI: “{q}”"),
             subtitle: String::new(),
-            icon: Icon::Glyph("✦", [168, 110, 255]),
+            icon: Icon::Glyph("sf:sparkles", [168, 110, 255]),
             accessory: "Fallback".into(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::AskAi, q.to_string()),
@@ -1106,10 +1208,12 @@ impl App {
                     }
                     let icon = match e.kind {
                         ClipKind::Image => Icon::ClipImage(e.content.clone()),
-                        ClipKind::Color => Rgba::parse(&e.content).map(Icon::Color).unwrap_or(Icon::Glyph("⎘", [255, 99, 99])),
-                        ClipKind::Link => Icon::Glyph("↗", [86, 194, 255]),
-                        ClipKind::File => Icon::Glyph("📄", [120, 120, 130]),
-                        ClipKind::Text => Icon::Glyph("T", [90, 90, 105]),
+                        ClipKind::Color => {
+                            Rgba::parse(&e.content).map(Icon::Color).unwrap_or(Icon::Glyph("sf:doc.on.clipboard", [255, 99, 99]))
+                        }
+                        ClipKind::Link => Icon::Glyph("sf:link", [86, 194, 255]),
+                        ClipKind::File => Icon::Glyph("sf:doc", [120, 120, 130]),
+                        ClipKind::Text => Icon::Glyph("sf:text.alignleft", [90, 90, 105]),
                     };
                     let age = now - e.copied_at;
                     let pinned_flag = e.pinned;
@@ -1150,7 +1254,7 @@ impl App {
                                     id: format!("snippet:{}", s.id),
                                     title: s.name.clone(),
                                     subtitle: s.text.lines().next().unwrap_or("").chars().take(60).collect(),
-                                    icon: Icon::Glyph("✂", [255, 167, 38]),
+                                    icon: Icon::Glyph("sf:scissors", [255, 167, 38]),
                                     accessory: s.keyword.clone(),
                                     keywords: vec![],
                                     kind: Kind::Snippet(s.id.clone()),
@@ -1173,7 +1277,7 @@ impl App {
                                     id: format!("quicklink:{}", l.id),
                                     title: l.name.clone(),
                                     subtitle: l.link.chars().take(70).collect(),
-                                    icon: Icon::Glyph("↗", [86, 194, 255]),
+                                    icon: Icon::Glyph("sf:link", [86, 194, 255]),
                                     accessory: String::new(),
                                     keywords: vec![],
                                     kind: Kind::Quicklink { id: l.id.clone(), arg: None },
@@ -1252,7 +1356,7 @@ impl App {
                                     id: format!("win:{}", w.id),
                                     title: t,
                                     subtitle: w.app.clone(),
-                                    icon: Icon::Glyph("⊞", [89, 212, 153]),
+                                    icon: Icon::Glyph("sf:macwindow.on.rectangle", [89, 212, 153]),
                                     accessory: String::new(),
                                     keywords: vec![],
                                     kind: Kind::OpenWindow(w.clone()),
@@ -1275,7 +1379,7 @@ impl App {
                                     id: format!("proc:{}", pr.pid),
                                     title: pr.name.clone(),
                                     subtitle: format!("PID {}", pr.pid),
-                                    icon: pr.bundle().map(Icon::App).unwrap_or(Icon::Glyph("›", [108, 108, 120])),
+                                    icon: pr.bundle().map(Icon::App).unwrap_or(Icon::Glyph("sf:chevron.right", [108, 108, 120])),
                                     accessory: format!("{:.0}% CPU · {:.0} MB", pr.cpu, pr.mem_mb),
                                     keywords: vec![],
                                     kind: Kind::Process(pr.clone()),
@@ -1300,7 +1404,7 @@ impl App {
                                     id: format!("calc:{i}"),
                                     title: e.display.clone(),
                                     subtitle: e.question.clone(),
-                                    icon: Icon::Glyph("=", [120, 120, 130]),
+                                    icon: Icon::Glyph("sf:equal", [120, 120, 130]),
                                     accessory: services::ago(now - e.at),
                                     keywords: vec![],
                                     kind: Kind::Calc(ferrocast_core::calc::CalcResult {
@@ -1340,7 +1444,7 @@ impl App {
                                             .map(|d| d.format("%H:%M").to_string())
                                             .unwrap_or_default()
                                     ),
-                                    icon: Icon::Glyph("◷", [245, 165, 36]),
+                                    icon: Icon::Glyph("sf:timer", [245, 165, 36]),
                                     accessory: ferrocast_core::timer::clock(left),
                                     keywords: vec![],
                                     kind: Kind::RunningTimer(i),
@@ -1363,7 +1467,7 @@ impl App {
                             id: format!("note:{}", n.id),
                             title: n.title(),
                             subtitle: String::new(),
-                            icon: Icon::Glyph("✎", [255, 197, 49]),
+                            icon: Icon::Glyph("sf:pencil", [255, 197, 49]),
                             accessory: String::new(),
                             keywords: vec![],
                             kind: Kind::Note(n.id.clone()),
