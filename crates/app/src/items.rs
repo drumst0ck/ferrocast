@@ -331,6 +331,8 @@ pub enum Act {
     OpenWheel(Vec<PathBuf>),
     /// Put the files on the clipboard, ready to paste in Finder.
     CopyFiles(Vec<PathBuf>),
+    /// Compress each item to its own ZIP next to it.
+    ZipFiles(Vec<PathBuf>),
     /// Ask for a folder and move the files there.
     MoveFiles(Vec<PathBuf>),
     /// Open the folder (or the file's folder) in iTerm2 or Terminal.

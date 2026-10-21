@@ -171,16 +171,53 @@ pub fn arc_len(n: usize, r: f32) -> f32 {
     }
 }
 
-/// Whether a text label fits inside a segment at radius `r` (otherwise show an icon only).
-pub fn labels_fit(n: usize, r: f32) -> bool {
-    // a ring of nine or more is icon only: long labels such as "Remove metadata" overflow a sector
-    (1..=8).contains(&n) && arc_len(n, r) >= 72.0
+/// The text drawn under a segment's icon and its font size, or `None` when the ring has no
+/// segments. Every segment is labelled so the wheel is never icon-only: up to eight segments use
+/// 11 pt with room for 17 characters; from nine on the sector is narrower, so the font is 10 pt and
+/// the label is cut with an ellipsis to the arc width (the hub still shows the full name of the
+/// hovered segment).
+pub fn ring_label(label: &str, n: usize, r: f32) -> Option<(String, f32)> {
+    if n == 0 {
+        return None;
+    }
+    let (size, max_chars) = if n <= 8 { (11.0, 17) } else { (10.0, (((arc_len(n, r) - 8.0) / 5.4) as usize).clamp(6, 17)) };
+    let text = if label.chars().count() > max_chars {
+        format!("{}\u{2026}", label.chars().take(max_chars - 1).collect::<String>())
+    } else {
+        label.to_string()
+    };
+    Some((text, size))
 }
 
 /// Ease-out cubic, clamped to 0..=1.
 pub fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)
+}
+
+/// Progress of an animation of `duration_ms` after `elapsed_ms`, eased (ease-out cubic) and
+/// clamped to 0..=1. A zero or negative duration is finished immediately (1.0).
+pub fn anim_progress(elapsed_ms: f32, duration_ms: f32) -> f32 {
+    if duration_ms <= 0.0 {
+        return 1.0;
+    }
+    ease_out_cubic(elapsed_ms / duration_ms)
+}
+
+/// Linear interpolation from `a` to `b`.
+pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a * (1.0 - t) + b * t
+}
+
+/// Cross-fade of two things at progress `p` (0..=1): `(outgoing alpha, incoming alpha)`.
+pub fn crossfade_alpha(p: f32) -> (f32, f32) {
+    let p = p.clamp(0.0, 1.0);
+    (1.0 - p, p)
+}
+
+/// Start delay of segment `i` when a wheel switches: 12 ms per segment, at most 96 ms.
+pub fn stagger_ms(i: usize) -> f32 {
+    (i.min(8) * 12) as f32
 }
 
 /// Hub text for the files being dragged: a count line and a kind line.
@@ -338,11 +375,23 @@ mod tests {
     }
 
     #[test]
-    fn labels_fit_only_when_the_arc_is_long_enough() {
-        assert!(labels_fit(8, 120.0));
-        assert!(!labels_fit(9, 120.0), "nine or more segments are icon only");
-        assert!(!labels_fit(12, 120.0));
-        assert!(!labels_fit(0, 120.0));
+    fn every_segment_is_labelled_and_long_names_are_cut_to_the_arc() {
+        // up to eight segments: unchanged, 11 pt, 17 characters
+        assert_eq!(ring_label("Compress", 7, 123.0), Some(("Compress".to_string(), 11.0)));
+        assert_eq!(ring_label("PowerPoint (PPTX)", 8, 123.0), Some(("PowerPoint (PPTX)".to_string(), 11.0)));
+        assert_eq!(ring_label("Remove all the metadata", 8, 123.0), Some(("Remove all the m\u{2026}".to_string(), 11.0)));
+        // nine or more: still labelled (the old rule hid every label), smaller and cut to the arc
+        assert_eq!(ring_label("Compress", 9, 123.0), Some(("Compress".to_string(), 10.0)));
+        assert_eq!(ring_label("Snapshots", 9, 123.0), Some(("Snapshots".to_string(), 10.0)));
+        let (long, size) = ring_label("PowerPoint (PPTX)", 9, 123.0).unwrap();
+        assert_eq!(size, 10.0);
+        assert!(long.ends_with('\u{2026}') && long.chars().count() <= 14, "{long:?}");
+        let (tight, _) = ring_label("Remove metadata", 12, 123.0).unwrap();
+        assert!(tight.ends_with('\u{2026}') && tight.chars().count() <= 10, "{tight:?}");
+        // a short name is never cut, even on a crowded ring
+        assert_eq!(ring_label("Mute", 12, 123.0), Some(("Mute".to_string(), 10.0)));
+        // no segments, no label
+        assert_eq!(ring_label("Mute", 0, 123.0), None);
         assert!((arc_len(8, 100.0) - 78.539_82).abs() < 1e-3);
     }
 
@@ -358,6 +407,32 @@ mod tests {
             assert!(v >= prev);
             prev = v;
         }
+    }
+
+    #[test]
+    fn anim_progress_is_eased_clamped_and_instant_for_zero_duration() {
+        assert_eq!(anim_progress(0.0, 120.0), 0.0);
+        assert_eq!(anim_progress(120.0, 120.0), 1.0);
+        assert_eq!(anim_progress(500.0, 120.0), 1.0);
+        assert_eq!(anim_progress(-5.0, 120.0), 0.0);
+        assert!((anim_progress(60.0, 120.0) - 0.875).abs() < 1e-6, "ease_out_cubic(0.5) = 0.875");
+        assert_eq!(anim_progress(0.0, 0.0), 1.0, "zero duration is already finished");
+        assert_eq!(anim_progress(0.0, -1.0), 1.0);
+    }
+
+    #[test]
+    fn lerp_and_crossfade_and_stagger() {
+        assert_eq!(lerp(2.0, 4.0, 0.0), 2.0);
+        assert_eq!(lerp(2.0, 4.0, 1.0), 4.0);
+        assert_eq!(lerp(2.0, 4.0, 0.5), 3.0);
+        assert_eq!(crossfade_alpha(0.0), (1.0, 0.0));
+        assert_eq!(crossfade_alpha(1.0), (0.0, 1.0));
+        assert_eq!(crossfade_alpha(0.25), (0.75, 0.25));
+        assert_eq!(crossfade_alpha(9.0), (0.0, 1.0));
+        assert_eq!(crossfade_alpha(-9.0), (1.0, 0.0));
+        assert_eq!(stagger_ms(0), 0.0);
+        assert_eq!(stagger_ms(3), 36.0);
+        assert_eq!(stagger_ms(40), 96.0);
     }
 
     #[test]

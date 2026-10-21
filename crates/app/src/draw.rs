@@ -12,6 +12,62 @@ enum Detail {
     Image(String, Vec<(String, String)>),
 }
 
+/// Per-open animation state of the drop wheel, kept in the egui context (not in `App`).
+/// Times are egui seconds. It starts fresh when the wheel was not drawn for 0.3 s or is removed.
+#[derive(Clone)]
+pub(crate) struct WheelAnim {
+    /// Reduce Motion, read once when the wheel opened: every duration is 0.
+    reduce: bool,
+    /// Dev aid `FERROCAST_WHEEL_ANIM_T=<ms>`: every animation is frozen at this elapsed time.
+    frozen: Option<f32>,
+    last: f64,
+    open_t0: f64,
+    kind: ferrocast_core::wheel::WheelKind,
+    from_rgb: [f32; 3],
+    to_rgb: [f32; 3],
+    kind_t0: f64,
+    /// per segment: (from, to, start time) of the highlight
+    hl: Vec<(f32, f32, f64)>,
+    hub_cur: String,
+    hub_prev: String,
+    hub_t0: f64,
+    mouse: Option<Pos2>,
+}
+
+impl WheelAnim {
+    fn open(now: f64, kind: ferrocast_core::wheel::WheelKind, rgb: [f32; 3], hub: &str, reduce: bool) -> Self {
+        let frozen = std::env::var("FERROCAST_WHEEL_ANIM_T").ok().and_then(|v| v.parse::<f32>().ok()).filter(|_| !reduce);
+        WheelAnim {
+            reduce,
+            frozen,
+            last: now,
+            open_t0: now,
+            kind,
+            from_rgb: rgb,
+            to_rgb: rgb,
+            kind_t0: f64::NEG_INFINITY,
+            hl: Vec::new(),
+            hub_cur: hub.to_string(),
+            hub_prev: String::new(),
+            hub_t0: f64::NEG_INFINITY,
+            mouse: None,
+        }
+    }
+}
+
+/// Reduce Motion for a wheel that is opening: a test hook in the context, then
+/// `FERROCAST_REDUCE_MOTION=1|0`, then the system setting.
+fn wheel_reduce_motion(ctx: &Context) -> bool {
+    if let Some(v) = ctx.data(|d| d.get_temp::<bool>(Id::new("wheel_reduce_motion"))) {
+        return v;
+    }
+    match std::env::var("FERROCAST_REDUCE_MOTION").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => ferrocast_macos::system::reduce_motion(),
+    }
+}
+
 impl eframe::App for App {
     fn clear_color(&self, _v: &egui::Visuals) -> [f32; 4] {
         [0.0; 4]
@@ -105,6 +161,12 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
         }
     }
     if n == 2 {
+        // FERROCAST_THEME=light|dark applies to every screenshot, not only the wheel
+        match std::env::var("FERROCAST_THEME").as_deref() {
+            Ok("light") => ctx.set_theme(egui::ThemePreference::Light),
+            Ok("dark") => ctx.set_theme(egui::ThemePreference::Dark),
+            _ => {}
+        }
         match std::env::var("FERROCAST_VIEW").as_deref() {
             Ok("clipboard") => app.push(View::Clipboard),
             Ok("snippets") => app.push(View::Snippets),
@@ -1328,6 +1390,8 @@ impl App {
         if ui.visuals().text_cursor.stroke.color != pal.accent {
             let accent = pal.accent;
             ctx.all_styles_mut(|st| {
+                // the slider rail is `widgets.inactive.bg_fill`; egui's grey 230 vanishes on a light card
+                st.visuals.widgets.inactive.bg_fill = palette(st.visuals.dark_mode).sel.gamma_multiply(2.0);
                 st.visuals.text_cursor.stroke.color = accent;
                 st.visuals.selection.bg_fill = accent.gamma_multiply(0.35);
                 st.visuals.selection.stroke.color = accent;
@@ -1391,7 +1455,11 @@ impl App {
         // Files dropped on the launcher open the converter.
         let dropped: Vec<std::path::PathBuf> =
             ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
-        // a drop that ends a wheel gesture arrives after the wheel hid the window: ignore it
+        // The drop that ends a wheel gesture arrives right after the wheel closed. When the picked
+        // tool showed its own window, that window is visible by now: the drop must not replace it
+        // with the converter.
+        let after_wheel = ctx.data(|d| d.get_temp::<Instant>(Id::new("wheel_end"))).is_some_and(|t| t.elapsed() < WHEEL_DROP_GRACE);
+        let dropped = if after_wheel { Vec::new() } else { dropped };
         if !dropped.is_empty() && self.visible && matches!(self.view(), View::Shelf) {
             // files dropped on an open shelf stay on the shelf
             self.perform(Act::AddToShelf(dropped), false);
@@ -1585,8 +1653,25 @@ impl App {
             }
         }
         let mut x = rect.max.x - 16.0;
+        let mut window_chips = self.view().footer_hints();
+        // The left text (title or toast) wins: drop the least important chips until both fit.
+        let left_w = match &self.toast {
+            Some((t, _)) => p.layout_no_wrap(t.clone(), FontId::proportional(12.5), pal.accent).size().x,
+            None => p.layout_no_wrap(self.view().title().into(), FontId::proportional(12.5), pal.sub).size().x,
+        };
+        let chip_w = |(l, k): &(&str, &str)| {
+            let kw = (p.layout_no_wrap(k.to_string(), FontId::proportional(11.5), pal.text).size().x + 12.0).max(22.0);
+            kw + 8.0 + p.layout_no_wrap(l.to_string(), FontId::proportional(12.5), pal.sub).size().x + 18.0
+        };
+        while window_chips.len() > 1 && tx + left_w + 16.0 + window_chips.iter().map(chip_w).sum::<f32>() > rect.max.x - 16.0 {
+            window_chips.remove(if window_chips.len() > 2 { window_chips.len() - 2 } else { window_chips.len() - 1 });
+        }
         let mut first = true;
+        #[cfg(test)]
+        let mut drawn: Vec<(String, String)> = vec![];
         let mut hint = |label: &str, key: &str| {
+            #[cfg(test)]
+            drawn.insert(0, (label.to_string(), key.to_string()));
             if !first {
                 // thin separator between hint groups, as in the original launcher footers
                 p.vline(x + 9.0, (cy - 9.0)..=(cy + 9.0), Stroke::new(1.0, pal.sep));
@@ -1602,15 +1687,24 @@ impl App {
             p.galley(Pos2::new(lx, cy - lg.size().y / 2.0), lg, pal.text);
             x = lx - 18.0;
         };
-        if list {
-            hint("Actions", "⌘K");
+        if !window_chips.is_empty() {
+            // tool windows: chips in reading order, so the primary action ends up leftmost
+            for (label, key) in window_chips.iter().rev() {
+                hint(label, key);
+            }
+        } else {
+            if list {
+                hint("Actions", "⌘K");
+            }
+            if let Some(pl) = primary {
+                hint(&pl, "↵");
+            }
+            if !list && self.stack.len() > 1 {
+                hint("Back", "esc");
+            }
         }
-        if let Some(pl) = primary {
-            hint(&pl, "↵");
-        }
-        if !list && self.stack.len() > 1 {
-            hint("Back", "esc");
-        }
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-chips"), drawn));
     }
 
     fn draw_list(&mut self, ui: &mut Ui, rect: Rect, sections: &[Section], pal: &Palette) -> (Option<usize>, Option<usize>) {
@@ -1874,7 +1968,9 @@ impl App {
     }
 
     /// The drop wheel: a ring of segments around the window centre; the one under the
-    /// pointer (sampled globally, since a drag owns the mouse) is highlighted.
+    /// pointer (sampled globally, since a drag owns the mouse) is highlighted. Highlight, open,
+    /// switch and hub-text changes are animated from per-wheel state in the egui context
+    /// (`WheelAnim`); Reduce Motion (read once per open) makes every state jump to its end value.
     #[allow(clippy::too_many_arguments)]
     fn draw_wheel(
         &mut self,
@@ -1886,26 +1982,110 @@ impl App {
         kind: ferrocast_core::wheel::WheelKind,
         sel: Option<usize>,
     ) {
-        use ferrocast_core::wheel::{hub_text, labels_fit, sector_points, segment_center, Geometry, WheelKind};
+        use ferrocast_core::wheel::{
+            anim_progress, crossfade_alpha, hub_text, lerp, ring_label, sector_points, segment_center, stagger_ms, Geometry, WheelKind,
+        };
         let ctx = ui.ctx().clone();
-        ctx.request_repaint_after(Duration::from_millis(16));
-        let g = Geometry::DEFAULT;
+        let g0 = Geometry::DEFAULT;
         let c = ui.max_rect().center();
         let n = segs.len();
-        let hover = if n == 0 { None } else { mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, n)).or(sel) };
+        let mouse = mouse_top_left().map(|(m, _)| m);
+        let hover = if n == 0 { None } else { mouse.and_then(|m| wheel_hit(m - center, n)).or(sel) };
         let dark = self.dark;
-        let (name, rgb) = match kind {
-            WheelKind::Convert => ("CONVERT", [255u8, 140, 60]),
-            WheelKind::Tools => ("TOOLS", [86, 194, 255]),
-            WheelKind::Actions => ("ACTIONS", [89, 212, 153]),
+        let (name, target_rgb) = match kind {
+            WheelKind::Convert => ("CONVERT", [255.0f32, 140.0, 60.0]),
+            WheelKind::Tools => ("TOOLS", [86.0, 194.0, 255.0]),
+            WheelKind::Actions => ("ACTIONS", [89.0, 212.0, 153.0]),
         };
+        let (count, kind_line) = hub_text(files);
+        let hub_label = match hover.and_then(|i| segs.get(i)) {
+            Some(sg) if sg.label.chars().count() > 16 => format!("{}…", sg.label.chars().take(15).collect::<String>()),
+            Some(sg) => sg.label.clone(),
+            None => count,
+        };
+
+        // ---- animation state -------------------------------------------------------------
+        let now = ctx.input(|i| i.time);
+        let dt = ctx.input(|i| i.unstable_dt).clamp(0.0, 0.1) as f64;
+        let key = Id::new("wheel_anim");
+        let old = ctx.data(|d| d.get_temp::<WheelAnim>(key)).filter(|s| now - s.last < 0.3);
+        let fresh = old.is_none();
+        let mut st = old.unwrap_or_else(|| WheelAnim::open(now, kind, target_rgb, &hub_label, wheel_reduce_motion(&ctx)));
+        // the start of a transition is the previous frame, so its first frame already moves
+        let prev = if fresh { now - dt } else { st.last };
+        st.hl.resize(n, (0.0, 0.0, f64::NEG_INFINITY));
+        // an animation that never started (`-inf`) is finished; a frozen dev clock only holds started ones
+        let el = |t0: f64| match st.frozen {
+            Some(ms) if t0.is_finite() => ms,
+            _ => ((now - t0) * 1000.0) as f32,
+        };
+        let dur = |ms: f32| if st.reduce { 0.0 } else { ms };
+        // wheel kind switched: cross-fade the accent, bring the new segments in
+        if st.kind != kind {
+            let p = anim_progress(el(st.kind_t0), dur(120.0));
+            for (k, v) in st.from_rgb.iter_mut().enumerate() {
+                *v = lerp(*v, st.to_rgb[k], p);
+            }
+            st.kind = kind;
+            st.to_rgb = target_rgb;
+            st.kind_t0 = prev;
+        }
+        let p_kind = anim_progress(el(st.kind_t0), dur(120.0));
+        let rgb_f = [0, 1, 2].map(|k| lerp(st.from_rgb[k], st.to_rgb[k], p_kind));
+        let rgb = rgb_f.map(|v| v.round().clamp(0.0, 255.0) as u8);
         let accent = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-        let outer = g.r_out + 10.0;
+        // per-segment highlight: (from, to, start); value eased between from and to
+        let mut hv = vec![0.0f32; n];
+        let mut animating = false;
+        for (i, h) in st.hl.iter_mut().enumerate() {
+            let target = if hover == Some(i) { 1.0 } else { 0.0 };
+            let cur = lerp(h.0, h.1, anim_progress(el(h.2), dur(120.0)));
+            if target != h.1 {
+                *h = (cur, target, prev);
+            }
+            let pr = anim_progress(el(h.2), dur(120.0));
+            hv[i] = lerp(h.0, h.1, pr);
+            animating |= pr < 1.0;
+        }
+        // open: the ring grows from 0.92 and fades in
+        let p_open = anim_progress(el(st.open_t0), dur(140.0));
+        let (scale, open_alpha) = (lerp(0.92, 1.0, p_open), p_open);
+        animating |= p_open < 1.0;
+        // hub text cross-fade
+        if st.hub_cur != hub_label {
+            st.hub_prev = std::mem::replace(&mut st.hub_cur, hub_label);
+            st.hub_t0 = prev;
+        }
+        let p_hub = anim_progress(el(st.hub_t0), dur(80.0));
+        let (hub_out, hub_in) = crossfade_alpha(p_hub);
+        animating |= p_hub < 1.0;
+        // switch: fade and scale each new segment in with a stagger (the last one ends at 120 + 96 ms)
+        let seg_in: Vec<f32> = (0..n).map(|i| anim_progress(el(st.kind_t0) - dur(stagger_ms(i)), dur(120.0))).collect();
+        animating |= p_kind < 1.0 || seg_in.iter().any(|p| *p < 1.0);
+        // repaint policy: 60 fps only while something moves; otherwise 30 fps to poll the pointer
+        let moved = st.mouse != mouse;
+        st.mouse = mouse;
+        ctx.request_repaint_after(Duration::from_millis(if animating || moved { 16 } else { 33 }));
+        st.last = now;
+        #[cfg(test)]
+        {
+            let probe = Id::new("wheel-anim-probe");
+            let which = sel.or(hover);
+            let mut v: Vec<(f32, f32, f32)> = ctx.data(|d| d.get_temp(probe)).unwrap_or_default();
+            v.push((which.and_then(|i| hv.get(i).copied()).unwrap_or(0.0), scale, open_alpha));
+            ctx.data_mut(|d| d.insert_temp(probe, v));
+        }
+        ctx.data_mut(|d| d.insert_temp(key, st.clone()));
+
+        // ---- drawing ---------------------------------------------------------------------
+        let g = Geometry { r_in: g0.r_in * scale, r_out: g0.r_out * scale, ..g0 };
+        let outer = g.r_out + 10.0 * scale;
         let (white, black) = (Color32::from_white_alpha, Color32::from_black_alpha);
+        ui.set_opacity(open_alpha);
         let p = ui.painter().clone();
         // soft shadow, then the translucent disc and its rim
         for (k, a) in if dark { [(16.0, 10u8), (10.0, 14), (5.0, 20)] } else { [(16.0, 6), (10.0, 9), (5.0, 12)] } {
-            p.circle_filled(c + Vec2::new(0.0, 6.0), outer + k, black(a));
+            p.circle_filled(c + Vec2::new(0.0, 6.0), outer + k * scale, black(a));
         }
         p.circle_filled(
             c,
@@ -1923,15 +2103,22 @@ impl App {
         // ring track
         p.circle_stroke(c, (g.r_in + g.r_out) / 2.0, Stroke::new(g.r_out - g.r_in, if dark { white(8) } else { black(6) }));
         let at = |q: [f32; 2]| c + Vec2::new(q[0], q[1]);
+        // while one segment is highlighted the others dim a little
+        let any_on = hv.iter().cloned().fold(0.0f32, f32::max);
         for (i, seg) in segs.iter().enumerate() {
-            let on = hover == Some(i);
-            if on {
-                let pts = sector_points(i, n, &g, 16);
+            let h = hv[i];
+            let sa = seg_in[i];
+            let seg_alpha = open_alpha * sa * (1.0 - 0.3 * any_on * (1.0 - h));
+            ui.set_opacity(open_alpha * sa);
+            let p = ui.painter().clone();
+            if h > 0.003 {
+                let gh = Geometry { r_out: lerp(g.r_out - 8.0 * scale, g.r_out, h), ..g };
+                let pts = sector_points(i, n, &gh, 16);
                 let k = pts.len() / 2 - 1;
                 let mut mesh = egui::Mesh::default();
                 for j in 0..=k {
-                    mesh.colored_vertex(at(pts[j]), accent.gamma_multiply(0.34));
-                    mesh.colored_vertex(at(pts[pts.len() - 1 - j]), accent.gamma_multiply(0.10));
+                    mesh.colored_vertex(at(pts[j]), accent.gamma_multiply(0.34 * h));
+                    mesh.colored_vertex(at(pts[pts.len() - 1 - j]), accent.gamma_multiply(0.10 * h));
                 }
                 for j in 0..k as u32 {
                     let b = j * 2;
@@ -1939,69 +2126,64 @@ impl App {
                     mesh.add_triangle(b + 1, b + 3, b + 2);
                 }
                 p.add(egui::Shape::mesh(mesh));
-                p.add(egui::Shape::closed_line(pts.iter().map(|q| at(*q)).collect(), Stroke::new(1.5, accent)));
+                p.add(egui::Shape::closed_line(pts.iter().map(|q| at(*q)).collect(), Stroke::new(1.5, accent.gamma_multiply(h))));
                 // glow along the outer edge
                 let edge: Vec<Pos2> = pts[..=k].iter().map(|q| at(*q)).collect();
-                for (w, a) in [(10.0, 18u8), (6.0, 32), (3.0, 70)] {
-                    p.add(egui::Shape::line(edge.clone(), Stroke::new(w, Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], a))));
+                for (w, a) in [(10.0, 18.0f32), (6.0, 32.0), (3.0, 70.0)] {
+                    p.add(egui::Shape::line(
+                        edge.clone(),
+                        Stroke::new(w * lerp(0.6, 1.0, h), Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], (a * h) as u8)),
+                    ));
                 }
-            } else if n > 1 {
+            }
+            if n > 1 && h < 0.99 {
                 let a = (i as f32 - 0.5) * std::f32::consts::TAU / n as f32;
                 let d = Vec2::new(a.sin(), -a.cos());
                 p.line_segment(
-                    [c + d * (g.r_in + 2.0), c + d * (g.r_out - 2.0)],
+                    [c + d * (g.r_in + 2.0 * scale), c + d * (g.r_out - 2.0 * scale)],
                     Stroke::new(1.0, if dark { white(16) } else { black(14) }),
                 );
             }
+            // tile, icon and label: dimmed with the segment, popped in by the switch animation
+            ui.set_opacity(seg_alpha.clamp(0.0, 1.0));
+            let pop = lerp(0.85, 1.0, sa) * scale;
             let r_mid = (g.r_in + g.r_out) / 2.0;
             let mid = at(segment_center(i, n, r_mid));
-            let fits = labels_fit(n, r_mid);
-            let tile = (if n > 8 { 24.0 } else { 28.0 }) * if on { 1.12 } else { 1.0 };
-            let ir = Rect::from_center_size(if fits { mid - Vec2::new(0.0, 8.0) } else { mid }, Vec2::splat(tile));
+            let ring_text = ring_label(&seg.label, n, (g0.r_in + g0.r_out) / 2.0);
+            let fits = ring_text.is_some();
+            let tile = (if n > 8 { 24.0 } else { 28.0 }) * lerp(1.0, 1.12, h) * pop;
+            let ir = Rect::from_center_size(if fits { mid - Vec2::new(0.0, 8.0 * pop) } else { mid }, Vec2::splat(tile));
             ui.painter().rect_filled(
-                ir.expand(4.0),
-                9.0,
-                Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], if on { 46 } else { 22 }),
+                ir.expand(4.0 * pop),
+                9.0 * pop,
+                Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], lerp(22.0, 46.0, h) as u8),
             );
             let tone = if seg.needs.is_some() { [rgb[0] / 3 + 60, rgb[1] / 3 + 60, rgb[2] / 3 + 60] } else { rgb };
             ui::paint_icon(&mut self.icons, ui, ir, &Icon::Glyph(seg.symbol, tone), pal);
-            if fits {
-                let col = if on { pal.text } else { pal.sub };
-                let label = if seg.label.chars().count() > 17 {
-                    format!("{}…", seg.label.chars().take(16).collect::<String>())
-                } else {
-                    seg.label.clone()
-                };
-                ui.painter().text(mid + Vec2::new(0.0, 22.0), Align2::CENTER_CENTER, label, FontId::proportional(11.0), col);
+            if let Some((label, size)) = ring_text {
+                let col = pal.sub.lerp_to_gamma(pal.text, h);
+                ui.painter().text(mid + Vec2::new(0.0, 22.0 * pop), Align2::CENTER_CENTER, label, FontId::proportional(size * pop), col);
             }
         }
-        // hub: wheel name, hovered label or file summary, kind line
+        // hub: wheel name, hovered label or file summary (cross-faded), kind line
+        ui.set_opacity(open_alpha);
         let p = ui.painter();
-        p.circle_filled(c, g.r_in - 6.0, if dark { white(10) } else { black(6) });
-        p.circle_stroke(c, g.r_in - 6.0, Stroke::new(1.0, pal.border));
-        let (count, kind_line) = hub_text(files);
-        p.text(c - Vec2::new(0.0, 30.0), Align2::CENTER_CENTER, name, FontId::proportional(9.5), accent);
-        match hover.and_then(|i| segs.get(i)) {
-            Some(sg) => {
-                let l = if sg.label.chars().count() > 16 {
-                    format!("{}…", sg.label.chars().take(15).collect::<String>())
-                } else {
-                    sg.label.clone()
-                };
-                p.text(c, Align2::CENTER_CENTER, l, FontId::proportional(13.0), pal.text);
-            }
-            None => {
-                p.text(c, Align2::CENTER_CENTER, count, FontId::proportional(13.0), pal.text);
-            }
+        let hub_font = FontId::proportional(13.0 * scale);
+        p.circle_filled(c, g.r_in - 6.0 * scale, if dark { white(10) } else { black(6) });
+        p.circle_stroke(c, g.r_in - 6.0 * scale, Stroke::new(1.0, pal.border));
+        p.text(c - Vec2::new(0.0, 30.0 * scale), Align2::CENTER_CENTER, name, FontId::proportional(9.5 * scale), accent);
+        if hub_out > 0.0 {
+            p.text(c, Align2::CENTER_CENTER, &st.hub_prev, hub_font.clone(), pal.text.gamma_multiply(hub_out));
         }
-        p.text(c + Vec2::new(0.0, 18.0), Align2::CENTER_CENTER, kind_line, FontId::proportional(10.5), pal.sub);
+        p.text(c, Align2::CENTER_CENTER, &st.hub_cur, hub_font, pal.text.gamma_multiply(hub_in));
+        p.text(c + Vec2::new(0.0, 18.0 * scale), Align2::CENTER_CENTER, kind_line, FontId::proportional(10.5 * scale), pal.sub);
         for (j, (sym, k)) in [("⇧", WheelKind::Convert), ("⌘", WheelKind::Tools), ("⌃", WheelKind::Actions)].into_iter().enumerate() {
-            let x = c.x + (j as f32 - 1.0) * 16.0;
+            let x = c.x + (j as f32 - 1.0) * 16.0 * scale;
             p.text(
-                Pos2::new(x, c.y + 38.0),
+                Pos2::new(x, c.y + 38.0 * scale),
                 Align2::CENTER_CENTER,
                 sym,
-                FontId::proportional(10.0),
+                FontId::proportional(10.0 * scale),
                 if k == kind { accent } else { pal.sub },
             );
         }
@@ -2024,8 +2206,8 @@ impl App {
         let ctx = ui.ctx().clone();
         let (mut mode, mut kb, mut percent, mut preset, max_edge, mut resize) = state;
         let mut edge = max_edge.unwrap_or(1600);
-        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area_in.center(), Vec2::new(520.0, 300.0))), |ui| {
-            ui.spacing_mut().item_spacing.y = 12.0;
+        ui.scope_builder(UiBuilder::new().max_rect(form_rect(area_in)), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
             let first = files.first().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let dims = match media {
                 None => size.map(|(w, h)| format!(" · {w}×{h} px")).unwrap_or_else(|| " · reading size…".into()),
@@ -2042,42 +2224,42 @@ impl App {
             };
             let more = if files.len() > 1 { format!(" and {} more", files.len() - 1) } else { String::new() };
             ui.label(RichText::new(format!("{first}{more}{dims}")).size(12.5).color(pal.sub));
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut mode, 0, "Size");
-                ui.selectable_value(&mut mode, 1, "Percent");
-                ui.selectable_value(&mut mode, 2, "Preset");
-            });
-            ui.horizontal(|ui| match mode {
-                0 => {
-                    ui.label("Target size");
-                    let max_kb = if media.is_some() { crate::app::MEDIA_MAX_KB } else { 100_000 };
-                    ui.add(egui::DragValue::new(&mut kb).range(10..=max_kb).clamp_existing_to_range(false).speed(10.0).suffix(" KB"));
-                }
-                1 => {
-                    ui.label("Make it");
-                    ui.add(egui::DragValue::new(&mut percent).range(1..=95).clamp_existing_to_range(false).speed(0.5).suffix(" % smaller"));
-                }
-                _ => {
-                    for (i, n) in ["Light", "Balanced", "Strong"].into_iter().enumerate() {
-                        ui.selectable_value(&mut preset, i, n);
-                    }
-                }
-            });
-            // an audio file has nothing to resize
-            if media.is_none_or(|m| m.video) {
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut resize, "Resize while compressing");
-                    ui.add_enabled(
-                        resize,
-                        egui::DragValue::new(&mut edge)
-                            .range(64..=16_000)
-                            .clamp_existing_to_range(false)
-                            .speed(10.0)
-                            .prefix("longest edge ")
-                            .suffix(" px"),
-                    );
+            ui.add_space(8.0);
+            card(ui, pal, |ui| {
+                form_row(ui, pal, "Goal", "Choose a size, a percentage or a preset.", |ui| {
+                    seg_index(ui, pal, &mut mode, &["Size", "Percent", "Preset"]);
                 });
-            }
+                match mode {
+                    0 => form_row(ui, pal, "Target size", "The copy aims for this file size.", |ui| {
+                        let max_kb = if media.is_some() { crate::app::MEDIA_MAX_KB } else { 100_000 };
+                        ui.add(egui::DragValue::new(&mut kb).range(10..=max_kb).clamp_existing_to_range(false).speed(10.0).suffix(" KB"));
+                    }),
+                    1 => form_row(ui, pal, "Reduction", "How much smaller the copy should be.", |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut percent).range(1..=95).clamp_existing_to_range(false).speed(0.5).suffix(" % smaller"),
+                        );
+                    }),
+                    _ => form_row(ui, pal, "Preset", "Light keeps detail, Strong saves the most.", |ui| {
+                        seg_index(ui, pal, &mut preset, &["Light", "Balanced", "Strong"]);
+                    }),
+                }
+                // an audio file has nothing to resize
+                if media.is_none_or(|m| m.video) {
+                    form_row(ui, pal, "Resize", "Shrink the longest edge while compressing.", |ui| {
+                        toggle(ui, pal, &mut resize);
+                        ui.add_enabled(
+                            resize,
+                            egui::DragValue::new(&mut edge)
+                                .range(64..=16_000)
+                                .clamp_existing_to_range(false)
+                                .speed(10.0)
+                                .prefix("longest edge ")
+                                .suffix(" px"),
+                        );
+                    });
+                }
+            });
+            ui.add_space(10.0);
             let line = if let Some(m) = media {
                 // bitrate arithmetic only (no encoding): what Enter would use, or why it cannot run
                 match (&m.info, compress_media_job(m.video, orig_bytes, m.info.as_ref(), mode, kb, percent, preset, Some(edge), resize)) {
@@ -2109,13 +2291,14 @@ impl App {
                     Err(_) => "Enter a value in range to see an estimate".to_string(),
                 }
             };
-            ui.label(RichText::new(line).size(18.0).color(pal.text));
-            let note = match media {
+            note(ui, pal, &line);
+            ui.add_space(4.0);
+            let nt = match media {
                 None => "The copy is a JPEG next to the original; the original is never changed.",
                 Some(m) if m.video => "The copy is an MP4 next to the original; the original is never changed.",
                 Some(_) => "The copy keeps mp3, m4a, ogg or opus and is an m4a otherwise; the original is never changed.",
             };
-            ui.label(RichText::new(note).size(12.0).color(pal.sub));
+            note(ui, pal, nt);
         });
         let edge_changed = edge != max_edge.unwrap_or(1600);
         if (mode, kb, percent, preset, resize) != (state.0, state.1, state.2, state.3, state.5) || edge_changed {
@@ -2128,13 +2311,6 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "pick a goal · ↵ save compressed copies · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
     }
 
     /// Edit Metadata window: rows grouped by file, track and chapter, a text box per editable row
@@ -2165,78 +2341,75 @@ impl App {
         let gif = ferrocast_core::convert::ext(file) == "gif";
         let edits = if gif { vec![] } else { build_edits(&original, &working) };
         let (before, before_all) = (working.clone(), remove_all);
-        let inner = area.shrink2(Vec2::new(26.0, 14.0));
+        let inner = form_rect(area);
         ui.scope_builder(UiBuilder::new().max_rect(inner), |ui| {
             ui.set_clip_rect(inner.expand(2.0));
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut remove_all, "Remove all metadata");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let summary = if remove_all {
-                        "all tags and chapters will be removed".to_string()
-                    } else {
-                        match edits.len() {
-                            1 => "1 change".to_string(),
-                            n => format!("{n} changes"),
-                        }
-                    };
-                    ui.label(RichText::new(summary).size(12.5).color(if edits.is_empty() && !remove_all { pal.sub } else { pal.text }));
-                });
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let summary = if remove_all {
+                "All tags and chapters will be removed.".to_string()
+            } else {
+                match edits.len() {
+                    0 => "No changes yet.".to_string(),
+                    1 => "1 change.".to_string(),
+                    n => format!("{n} changes."),
+                }
+            };
+            card(ui, pal, |ui| {
+                form_row(ui, pal, "Remove all metadata", &summary, |ui| toggle(ui, pal, &mut remove_all));
             });
+            ui.add_space(6.0);
             if remove_all {
-                ui.label(
-                    RichText::new("Container brands and some muxer tags stay: the format itself writes them.").size(11.5).color(pal.sub),
-                );
+                note(ui, pal, "Container brands and some muxer tags stay: the format itself writes them.");
             }
             if gif {
-                ui.label(RichText::new("GIF files cannot store tags: you can only remove all metadata.").size(11.5).color(pal.sub));
+                note(ui, pal, "GIF files cannot store tags: you can only remove all metadata.");
             }
             if kind == crate::app::MetaKind::Pdf {
-                ui.label(RichText::new("Creator and Producer are shown but not written back.").size(11.5).color(pal.sub));
+                note(ui, pal, "Creator and Producer are shown but not written back.");
             }
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             let list_h = (inner.max.y - ui.cursor().min.y - 22.0).max(40.0);
             let mut first_edit = true;
             egui::ScrollArea::vertical().id_salt("meta-rows").max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
                 ui.add_enabled_ui(!remove_all, |ui| {
-                    ui.spacing_mut().item_spacing.y = 6.0;
-                    let mut last: Option<Group> = None;
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     if working.is_empty() {
-                        ui.label(RichText::new("This file has no metadata.").size(13.0).color(pal.sub));
+                        note(ui, pal, "This file has no metadata.");
                     }
-                    for f in working.iter_mut() {
-                        if last.as_ref() != Some(&f.group) {
-                            let head = match &f.group {
-                                Group::File => "File".to_string(),
-                                Group::Track { index, kind } => format!("Track {} · {kind}", index + 1),
-                                Group::Chapter(i) => format!("Chapter {}", i + 1),
-                            };
-                            ui.add_space(6.0);
-                            ui.label(RichText::new(head).size(13.0).strong().color(pal.text));
-                            last = Some(f.group.clone());
-                        }
-                        ui.horizontal(|ui| {
-                            let (kr, _) = ui.allocate_exact_size(Vec2::new(130.0, 22.0), egui::Sense::hover());
-                            ui.painter().text(
-                                kr.left_center(),
-                                egui::Align2::LEFT_CENTER,
-                                elide(ui.painter(), &f.key, FontId::proportional(12.5), 124.0),
-                                FontId::proportional(12.5),
-                                pal.sub,
-                            );
-                            if f.editable && !gif {
-                                let r = ui.add(TextEdit::singleline(&mut f.value).desired_width(300.0).font(FontId::proportional(13.0)));
-                                if first_edit {
-                                    first_edit = false;
-                                    ctx.data_mut(|d| d.insert_temp(Id::new("meta-first-edit"), r.rect));
-                                }
-                                if small_btn(ui, pal, "clear") {
-                                    f.value.clear();
-                                }
-                            } else {
-                                let shown = elide(ui.painter(), &f.value, FontId::proportional(13.0), 380.0);
-                                ui.label(RichText::new(shown).size(13.0).color(pal.sub));
+                    // one card per group (file, track, chapter), fields in file order
+                    let mut start = 0;
+                    while start < working.len() {
+                        let group = working[start].group.clone();
+                        let end = working[start..].iter().position(|f| f.group != group).map_or(working.len(), |n| start + n);
+                        let head = match &group {
+                            Group::File => "File".to_string(),
+                            Group::Track { index, kind } => format!("Track {} · {kind}", index + 1),
+                            Group::Chapter(i) => format!("Chapter {}", i + 1),
+                        };
+                        ui.add_space(if start == 0 { 2.0 } else { 12.0 });
+                        section(ui, pal, &head);
+                        card(ui, pal, |ui| {
+                            for f in working[start..end].iter_mut() {
+                                let key = elide(ui.painter(), &f.key, FontId::proportional(13.5), 128.0);
+                                form_row_compact(ui, pal, &key, 140.0, |ui| {
+                                    if f.editable && !gif {
+                                        if small_btn(ui, pal, "clear") {
+                                            f.value.clear();
+                                        }
+                                        let r = ui
+                                            .add(TextEdit::singleline(&mut f.value).desired_width(230.0).font(FontId::proportional(13.0)));
+                                        if first_edit {
+                                            first_edit = false;
+                                            ctx.data_mut(|d| d.insert_temp(Id::new("meta-first-edit"), r.rect));
+                                        }
+                                    } else {
+                                        let shown = elide(ui.painter(), &f.value, FontId::proportional(13.0), 270.0);
+                                        ui.label(RichText::new(shown).size(13.0).color(pal.sub));
+                                    }
+                                });
                             }
                         });
+                        start = end;
                     }
                 });
             });
@@ -2247,13 +2420,7 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area.center().x, area.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "edit a value or clear it · ↵ save a copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area.center().x, area.max.y - 14.0), "edit a value or clear it", pal);
     }
 
     /// Speed window: presets, a logarithmic slider and the resulting length. Pitch is preserved.
@@ -2265,21 +2432,29 @@ impl App {
             return;
         };
         let mut f = factor;
-        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area_in.center(), Vec2::new(520.0, 220.0))), |ui| {
-            ui.spacing_mut().item_spacing.y = 14.0;
-            ui.horizontal(|ui| {
-                for p in [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0] {
-                    if ui.selectable_label((f - p).abs() < 1e-9, format!("{p}×")).clicked() {
-                        f = p;
+        ui.scope_builder(UiBuilder::new().max_rect(form_rect(area_in)), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            card(ui, pal, |ui| {
+                form_row_stacked(ui, pal, "Speed", "Pick a preset, or drag the slider below.", |ui| {
+                    const PRESETS: [f64; 7] = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0];
+                    let labels = PRESETS.map(|p| format!("{p}×"));
+                    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                    let sel = PRESETS.iter().position(|p| (f - p).abs() < 1e-9);
+                    if let (Some(i), _) = segmented_bar(ui, pal, sel, &labels, 56.0, 22.0) {
+                        f = PRESETS[i];
                     }
-                }
+                });
+                form_row(ui, pal, "Fine tune", "Any speed from slow motion to fast forward.", |ui| {
+                    ui.spacing_mut().slider_width = 170.0;
+                    ui.add(egui::Slider::new(&mut f, SPEED_MIN..=SPEED_MAX).logarithmic(true).suffix("×"));
+                });
+                let len = sped_duration(d, f.clamp(SPEED_MIN, SPEED_MAX)).unwrap_or(d);
+                form_row(ui, pal, "New length", "The video after the change.", |ui| {
+                    ui.label(RichText::new(format!("{d:.1} s  →  {len:.1} s")).size(15.0).color(pal.text));
+                });
             });
-            ui.add(egui::Slider::new(&mut f, SPEED_MIN..=SPEED_MAX).logarithmic(true).suffix("×"));
-            let len = sped_duration(d, f.clamp(SPEED_MIN, SPEED_MAX)).unwrap_or(d);
-            ui.label(RichText::new(format!("{d:.1} s  →  {len:.1} s")).size(22.0).color(pal.text));
-            ui.label(
-                RichText::new("The sound keeps its pitch. A video without sound just plays faster or slower.").size(12.0).color(pal.sub),
-            );
+            ui.add_space(10.0);
+            note(ui, pal, "The sound keeps its pitch. A video without sound just plays faster or slower.");
         });
         if (f - factor).abs() > 1e-12 {
             if let Some(View::VideoSpeed { factor: x, .. }) = self.stack.last_mut() {
@@ -2287,13 +2462,7 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "pick a preset or drag the slider · ↵ save a copy at this speed · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "pick a preset or drag the slider", pal);
     }
 
     /// Normalize window: measured loudness versus the target, with loudness, range and true-peak controls.
@@ -2301,47 +2470,54 @@ impl App {
     fn draw_normalize_audio(&mut self, ui: &mut Ui, area: Rect, pal: &Palette, loudness: Option<f64>, target: f64, range: f64, peak: f64) {
         let ctx = ui.ctx().clone();
         let (mut t, mut r, mut p) = (target, range, peak);
-        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(520.0, 240.0))), |ui| {
-            ui.spacing_mut().item_spacing.y = 14.0;
-            ui.label(RichText::new(crate::media_tools::normalize_line(loudness, t)).size(20.0).color(pal.text));
-            ui.horizontal(|ui| {
-                ui.label("Target loudness");
-                ui.add(
-                    egui::DragValue::new(&mut t)
-                        .range(-30.0..=-5.0)
-                        .clamp_existing_to_range(false)
-                        .speed(0.1)
-                        .suffix(" LUFS")
-                        .max_decimals(1),
-                );
-                for (v, name) in [(-23.0, "-23 broadcast"), (-16.0, "-16 podcast"), (-14.0, "-14 music")] {
-                    if ui.selectable_label((t - v).abs() < 1e-9, name).clicked() {
-                        t = v;
+        ui.scope_builder(UiBuilder::new().max_rect(form_rect(area)), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            card(ui, pal, |ui| {
+                form_row(ui, pal, "Target loudness", "The level the copy is levelled to.", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut t)
+                            .range(-30.0..=-5.0)
+                            .clamp_existing_to_range(false)
+                            .speed(0.1)
+                            .suffix(" LUFS")
+                            .max_decimals(1),
+                    );
+                });
+                form_row(ui, pal, "Preset", "Broadcast, podcast or music levels.", |ui| {
+                    const GOALS: [(f64, &str); 3] = [(-23.0, "-23 broadcast"), (-16.0, "-16 podcast"), (-14.0, "-14 music")];
+                    let sel = GOALS.iter().position(|(v, _)| (t - v).abs() < 1e-9);
+                    if let (Some(i), _) = segmented_bar(ui, pal, sel, &GOALS.map(|(_, n)| n), 0.0, 16.0) {
+                        t = GOALS[i].0;
                     }
-                }
+                });
+                form_row(ui, pal, "Loudness range", "How much the level may vary.", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut r)
+                            .range(1.0..=20.0)
+                            .clamp_existing_to_range(false)
+                            .speed(0.1)
+                            .suffix(" LU")
+                            .max_decimals(1),
+                    );
+                });
+                form_row(ui, pal, "True peak", "The loudest peak allowed.", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut p)
+                            .range(-9.0..=0.0)
+                            .clamp_existing_to_range(false)
+                            .speed(0.1)
+                            .suffix(" dBTP")
+                            .max_decimals(1),
+                    );
+                });
             });
-            ui.horizontal(|ui| {
-                ui.label("Loudness range");
-                ui.add(
-                    egui::DragValue::new(&mut r).range(1.0..=20.0).clamp_existing_to_range(false).speed(0.1).suffix(" LU").max_decimals(1),
-                );
-                ui.add_space(16.0);
-                ui.label("True peak");
-                ui.add(
-                    egui::DragValue::new(&mut p)
-                        .range(-9.0..=0.0)
-                        .clamp_existing_to_range(false)
-                        .speed(0.1)
-                        .suffix(" dBTP")
-                        .max_decimals(1),
-                );
-            });
-            ui.label(
-                RichText::new(
-                    "The copy is levelled to the target; the original stays untouched. The result is measured again when it is done.",
-                )
-                .size(12.0)
-                .color(pal.sub),
+            ui.add_space(10.0);
+            note(ui, pal, &crate::media_tools::normalize_line(loudness, t));
+            ui.add_space(4.0);
+            note(
+                ui,
+                pal,
+                "The copy is levelled to the target; the original stays untouched. The result is measured again when it is done.",
             );
         });
         if (t, r, p) != (target, range, peak) {
@@ -2350,13 +2526,7 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area.center().x, area.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "pick a target or type one · ↵ save a normalized copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area.center().x, area.max.y - 14.0), "pick a target or type one", pal);
     }
 
     /// Channels window: mono or stereo output and the volume of each side in dB.
@@ -2373,44 +2543,48 @@ impl App {
     ) {
         let ctx = ui.ctx().clone();
         let (mut st, mut l, mut r) = (stereo, left_db, right_db);
-        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(520.0, 240.0))), |ui| {
-            ui.spacing_mut().item_spacing.y = 14.0;
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut st, false, "Mono");
-                ui.selectable_value(&mut st, true, "Stereo");
+        ui.scope_builder(UiBuilder::new().max_rect(form_rect(area)), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            card(ui, pal, |ui| {
+                form_row(ui, pal, "Output", "Mono mixes both sides into one channel.", |ui| {
+                    segmented(ui, pal, &mut st, &[(false, "Mono"), (true, "Stereo")]);
+                });
+                form_row(ui, pal, "Left volume", "Gain of the left channel.", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut l)
+                            .range(-30.0..=12.0)
+                            .clamp_existing_to_range(false)
+                            .speed(0.1)
+                            .suffix(" dB")
+                            .max_decimals(1),
+                    );
+                });
+                form_row(ui, pal, "Right volume", "Gain of the right channel.", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut r)
+                            .range(-30.0..=12.0)
+                            .clamp_existing_to_range(false)
+                            .speed(0.1)
+                            .suffix(" dB")
+                            .max_decimals(1),
+                    );
+                });
+                form_row(ui, pal, "Reset", "Back to 0 dB on both sides.", |ui| {
+                    if small_btn(ui, pal, "reset") {
+                        (l, r) = (0.0, 0.0);
+                    }
+                });
             });
-            ui.horizontal(|ui| {
-                ui.label("Left volume");
-                ui.add(
-                    egui::DragValue::new(&mut l)
-                        .range(-30.0..=12.0)
-                        .clamp_existing_to_range(false)
-                        .speed(0.1)
-                        .suffix(" dB")
-                        .max_decimals(1),
-                );
-                ui.add_space(16.0);
-                ui.label("Right volume");
-                ui.add(
-                    egui::DragValue::new(&mut r)
-                        .range(-30.0..=12.0)
-                        .clamp_existing_to_range(false)
-                        .speed(0.1)
-                        .suffix(" dB")
-                        .max_decimals(1),
-                );
-                if small_btn(ui, pal, "reset") {
-                    (l, r) = (0.0, 0.0);
-                }
-            });
-            let note = match (in_channels, st) {
+            ui.add_space(10.0);
+            let msg = match (in_channels, st) {
                 (Some(n), _) if n <= 1 && st => "This file is already mono: Stereo copies it to both sides, each with its own volume.",
                 (Some(n), _) if n <= 1 => "This file is already mono: Mono keeps it as one channel at the average of both volumes.",
                 (_, true) => "Stereo keeps the left and right channels, each at its own volume.",
                 _ => "Mono mixes left and right into one channel; each volume scales its own side.",
             };
-            ui.label(RichText::new(if in_channels.is_none() { "Reading the file…" } else { note }).size(12.0).color(pal.sub));
-            ui.label(RichText::new("0 dB leaves a channel unchanged; the copy is saved as a new file.").size(12.0).color(pal.sub));
+            note(ui, pal, if in_channels.is_none() { "Reading the file…" } else { msg });
+            ui.add_space(4.0);
+            note(ui, pal, "0 dB leaves a channel unchanged; the copy is saved as a new file.");
         });
         if (st, l, r) != (stereo, left_db, right_db) {
             if let Some(View::ChannelsAudio { stereo, left_db, right_db, .. }) = self.stack.last_mut() {
@@ -2418,13 +2592,7 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area.center().x, area.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "pick Mono or Stereo, set the volumes · ↵ save a copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area.center().x, area.max.y - 14.0), "pick Mono or Stereo, set the volumes", pal);
     }
 
     /// Audio to video window: waveform or still picture, and the canvas shape. No number or text
@@ -2447,33 +2615,50 @@ impl App {
         let (mut o, mut st) = (orient, style);
         let mut choose = false;
         let mut rects = [Rect::NOTHING; 5];
-        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(520.0, 240.0))), |ui| {
-            ui.spacing_mut().item_spacing.y = 14.0;
+        ui.scope_builder(UiBuilder::new().max_rect(form_rect(area)), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
             ui.label(
-                RichText::new(file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(13.0).color(pal.sub),
+                RichText::new(file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(12.5).color(pal.sub),
             );
-            ui.horizontal(|ui| {
-                rects[0] = ui.selectable_value(&mut st, VisStyle::Waveform, "Waveform").rect;
-                rects[1] = ui.selectable_value(&mut st, VisStyle::Still, "Still image").rect;
-            });
-            ui.horizontal(|ui| {
-                rects[2] = ui.selectable_value(&mut o, Canvas::Landscape, "Landscape").rect;
-                rects[3] = ui.selectable_value(&mut o, Canvas::Portrait, "Portrait").rect;
-                rects[4] = ui.selectable_value(&mut o, Canvas::Square, "Square").rect;
-            });
-            if st == VisStyle::Still {
-                ui.horizontal(|ui| {
-                    choose = ui.add_enabled(!picking, egui::Button::new(if picking { "Choosing…" } else { "Choose picture…" })).clicked();
-                    let (text, color) = match &image {
-                        Some(p) if p.is_file() => (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), pal.text),
-                        Some(p) => (format!("{} (not found)", p.display()), pal.sub),
-                        None => ("no picture chosen yet".to_string(), pal.sub),
-                    };
-                    ui.label(RichText::new(text).size(12.5).color(color));
+            ui.add_space(8.0);
+            card(ui, pal, |ui| {
+                form_row(ui, pal, "Picture", "A moving waveform, or one still image.", |ui| {
+                    let sel = [VisStyle::Waveform, VisStyle::Still].iter().position(|v| *v == st);
+                    let (hit, cells) = segmented_bar(ui, pal, sel, &["Waveform", "Still image"], 56.0, 22.0);
+                    if let Some(i) = hit {
+                        st = [VisStyle::Waveform, VisStyle::Still][i];
+                    }
+                    rects[..2].copy_from_slice(&cells);
                 });
-            }
-            ui.label(RichText::new(crate::media_tools::visualize_line(o, st)).size(12.5).color(pal.sub));
-            ui.label(RichText::new("The video is saved as a new MP4 next to the audio; nothing is overwritten.").size(12.0).color(pal.sub));
+                form_row(ui, pal, "Shape", "The canvas of the video.", |ui| {
+                    let all = [Canvas::Landscape, Canvas::Portrait, Canvas::Square];
+                    let (hit, cells) =
+                        segmented_bar(ui, pal, all.iter().position(|v| *v == o), &["Landscape", "Portrait", "Square"], 56.0, 22.0);
+                    if let Some(i) = hit {
+                        o = all[i];
+                    }
+                    rects[2..].copy_from_slice(&cells);
+                });
+                if st == VisStyle::Still {
+                    form_row(ui, pal, "Image", "The picture shown while the audio plays.", |ui| {
+                        choose =
+                            ui.add_enabled(!picking, egui::Button::new(if picking { "Choosing…" } else { "Choose picture…" })).clicked();
+                        let (text, color) = match &image {
+                            Some(p) if p.is_file() => {
+                                (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), pal.text)
+                            }
+                            Some(p) => (format!("{} (not found)", p.display()), pal.sub),
+                            None => ("none yet".to_string(), pal.sub),
+                        };
+                        let text = elide(ui.painter(), &text, FontId::proportional(12.5), 120.0);
+                        ui.label(RichText::new(text).size(12.5).color(color));
+                    });
+                }
+            });
+            ui.add_space(10.0);
+            note(ui, pal, &crate::media_tools::visualize_line(o, st));
+            ui.add_space(4.0);
+            note(ui, pal, "The video is saved as a new MP4 next to the audio; nothing is overwritten.");
         });
         ctx.data_mut(|d| d.insert_temp(Id::new("avis-rects"), rects));
         if choose && !picking {
@@ -2489,13 +2674,7 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area.center().x, area.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "pick the picture and the shape · ↵ make the video · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area.center().x, area.max.y - 14.0), "pick the picture and the shape", pal);
     }
 
     /// Video trim viewer: the frame at the cursor, a timeline with start and end markers, and
@@ -2621,19 +2800,7 @@ impl App {
             FontId::proportional(12.5),
             pal.text,
         );
-        ui.painter().text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            if snapshot {
-                "←/→ frame · ⇧←/→ second · click to jump · ↵ save full-resolution PNG · esc cancel"
-            } else if split {
-                "←/→ frame · ⇧←/→ second · click the bar to jump · M cut here · ⌫ remove last · ↵ split · esc cancel"
-            } else {
-                "←/→ frame · ⇧←/→ second · click the bar to jump · I start · O end · ↵ save the exact cut · esc cancel"
-            },
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "click the bar to jump", pal);
         if split {
             let clips = ferrocast_core::videoplan::split_ranges(t.duration, &points, parts).len();
             let row = Rect::from_min_size(Pos2::new(bar.min.x, bar.max.y + 8.0), Vec2::new(bar.width(), 24.0));
@@ -2776,13 +2943,7 @@ impl App {
             FontId::proportional(12.5),
             pal.text,
         );
-        painter.text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "←/→ 10 ms · ⇧←/→ second · click the waveform to jump · I start · O end · ↵ save the cut · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "click the waveform to jump", pal);
         let (mut start, mut end, mut silence) = (t.start, t.end, false);
         let row = Rect::from_min_size(Pos2::new(wave.min.x, wave.max.y + 30.0), Vec2::new(wave.width(), 26.0));
         ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
@@ -2957,12 +3118,11 @@ impl App {
                 pal.text,
             );
         }
-        ui.painter().text(
+        note_line(
+            ui,
             Pos2::new(right.center().x, rect.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "click a shaded range to select it · overlapping ranges are merged · ↵ save bleeped copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
+            "click a shaded range to select it · overlapping ranges are merged",
+            pal,
         );
         if ranges_new != ranges || sel_new != sel {
             if let Some(View::BleepAudio { ranges, sel, .. }) = self.stack.last_mut() {
@@ -2989,51 +3149,54 @@ impl App {
         let (mut o, mut color) = (opts, color);
         let panel = Rect::from_min_max(Pos2::new(area_in.max.x - 300.0, area_in.min.y + 12.0), area_in.max - Vec2::new(16.0, 34.0));
         ui.scope_builder(UiBuilder::new().max_rect(panel), |ui| {
-            ui.spacing_mut().slider_width = 150.0;
-            ui.spacing_mut().item_spacing.y = 8.0;
-            ui.horizontal(|ui| {
-                for (l, t) in [(Layout::Grid, "Grid"), (Layout::Row, "Row"), (Layout::Column, "Column"), (Layout::Featured, "Featured")] {
-                    if ui.selectable_label(o.layout == l, t).clicked() {
-                        o.layout = l;
+            ui.spacing_mut().slider_width = 96.0;
+            ui.spacing_mut().item_spacing.y = 0.0;
+            card(ui, pal, |ui| {
+                form_row_stacked(ui, pal, "Layout", "How the pictures are arranged.", |ui| {
+                    // the side card is 256 pt wide inside: a tight padding keeps the four cells in it
+                    let all = [Layout::Grid, Layout::Row, Layout::Column, Layout::Featured];
+                    let sel = all.iter().position(|l| *l == o.layout);
+                    if let (Some(i), _) = segmented_bar(ui, pal, sel, &["Grid", "Row", "Column", "Featured"], 0.0, 8.0) {
+                        o.layout = all[i];
                     }
+                });
+                let mut auto = o.width.is_none();
+                form_row_compact(ui, pal, "Auto width", 110.0, |ui| {
+                    if toggle_changed(ui, pal, &mut auto) {
+                        o.width = if auto { None } else { Some(1600) };
+                    }
+                });
+                if let Some(w) = o.width.as_mut() {
+                    form_row_compact(ui, pal, "Width", 62.0, |ui| {
+                        ui.add(egui::Slider::new(w, 200..=6000));
+                    });
                 }
-            });
-            let mut auto = o.width.is_none();
-            if ui.checkbox(&mut auto, "Automatic width").changed() {
-                o.width = if auto { None } else { Some(1600) };
-            }
-            if let Some(w) = o.width.as_mut() {
-                ui.horizontal(|ui| {
-                    ui.add_sized([70.0, 18.0], egui::Label::new(RichText::new("Width").size(12.5).color(pal.sub)));
-                    ui.add(egui::Slider::new(w, 200..=6000));
-                });
-            }
-            for (label, v, max) in [("Spacing", &mut o.gap, 100u32), ("Corners", &mut o.radius, 300)] {
-                ui.horizontal(|ui| {
-                    ui.add_sized([70.0, 18.0], egui::Label::new(RichText::new(label).size(12.5).color(pal.sub)));
-                    ui.add(egui::Slider::new(v, 0..=max));
-                });
-            }
-            ui.horizontal(|ui| {
-                for (i, k) in ferrocast_core::annotate::COLORS.iter().enumerate() {
+                for (label, v, max) in [("Spacing", &mut o.gap, 100u32), ("Corners", &mut o.radius, 300)] {
+                    form_row_compact(ui, pal, label, 62.0, |ui| {
+                        ui.add(egui::Slider::new(v, 0..=max));
+                    });
+                }
+                form_row_stacked(ui, pal, "Background", "Colour behind the pictures.", |ui| {
+                    for (i, k) in ferrocast_core::annotate::COLORS.iter().enumerate() {
+                        let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+                        swatch_dot(ui.painter(), r.center(), egui::Color32::from_rgb(k[0], k[1], k[2]), pal);
+                        if o.bg == Some(*k) && i == color {
+                            ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
+                        }
+                        if resp.clicked() {
+                            color = i;
+                            o.bg = Some(*k);
+                        }
+                    }
                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                    ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(k[0], k[1], k[2]));
-                    if o.bg == Some(*k) && i == color {
-                        ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
-                    }
+                    swatch_dot(ui.painter(), r.center(), egui::Color32::WHITE, pal);
                     if resp.clicked() {
-                        color = i;
-                        o.bg = Some(*k);
+                        o.bg = Some([255, 255, 255]);
                     }
-                }
-                let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                ui.painter().circle_filled(r.center(), 8.0, egui::Color32::WHITE);
-                if resp.clicked() {
-                    o.bg = Some([255, 255, 255]);
-                }
-                if ui.selectable_label(o.bg.is_none(), "None").clicked() {
-                    o.bg = None;
-                }
+                    if ui.selectable_label(o.bg.is_none(), "None").clicked() {
+                        o.bg = None;
+                    }
+                });
             });
         });
         if o != opts {
@@ -3168,13 +3331,7 @@ impl App {
                 ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
             }
         }
-        ui.painter().text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            format!("{n} pictures · the preview is a reduced copy · ↵ save the collage · esc cancel"),
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), format!("{n} pictures · the preview is a reduced copy"), pal);
     }
 
     /// Background editor: sliders for padding, corners and shadow, a colour or blurred backdrop;
@@ -3199,79 +3356,84 @@ impl App {
         let image_on = matches!(o.backdrop, Backdrop::Image(_));
         let panel = Rect::from_min_max(Pos2::new(area_in.max.x - 300.0, area_in.min.y + 12.0), area_in.max - Vec2::new(16.0, 34.0));
         ui.scope_builder(UiBuilder::new().max_rect(panel), |ui| {
-            ui.spacing_mut().slider_width = 170.0;
-            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.spacing_mut().slider_width = 96.0;
+            ui.spacing_mut().item_spacing.y = 0.0;
             let cap = size.0.max(size.1) / 3;
-            for (label, v, max) in
-                [("Padding", &mut o.pad, cap.max(8)), ("Corners", &mut o.radius, cap.max(8)), ("Shadow", &mut o.shadow, 100)]
-            {
-                ui.horizontal(|ui| {
-                    ui.add_sized([70.0, 18.0], egui::Label::new(RichText::new(label).size(12.5).color(pal.sub)));
-                    ui.add(egui::Slider::new(v, 0..=max));
-                });
-            }
-            ui.horizontal(|ui| {
-                if ui.selectable_label(matches!(o.backdrop, Backdrop::Color(_)), "Colour").clicked()
-                    && !matches!(o.backdrop, Backdrop::Color(_))
+            card(ui, pal, |ui| {
+                for (label, v, max) in
+                    [("Padding", &mut o.pad, cap.max(8)), ("Corners", &mut o.radius, cap.max(8)), ("Shadow", &mut o.shadow, 100)]
                 {
-                    o.backdrop = Backdrop::Color(ferrocast_core::annotate::COLORS[color.min(5)]);
-                }
-                if ui.selectable_label(blur_on, "Blur").clicked() && !blur_on {
-                    o.backdrop = Backdrop::Blur(30.0);
-                }
-                if ui.selectable_label(image_on, "Image").clicked() && !image_on {
-                    // reuse the picture already loaded for the preview, if there is one
-                    let kept: Option<std::sync::Arc<(String, image::RgbaImage)>> = ctx.data(|d| d.get_temp(Id::new("frame-bg")));
-                    o.backdrop = Backdrop::Image(kept.map(|k| k.0.clone()).unwrap_or_default());
-                }
-            });
-            match &mut o.backdrop {
-                Backdrop::Blur(r) => {
-                    ui.horizontal(|ui| {
-                        ui.add_sized([70.0, 18.0], egui::Label::new(RichText::new("Blur").size(12.5).color(pal.sub)));
-                        ui.add(egui::Slider::new(r, 1.0..=100.0));
+                    form_row_compact(ui, pal, label, 62.0, |ui| {
+                        ui.add(egui::Slider::new(v, 0..=max));
                     });
                 }
-                Backdrop::Color(c) => {
-                    ui.horizontal(|ui| {
-                        for (i, k) in ferrocast_core::annotate::COLORS.iter().enumerate() {
+                form_row_compact(ui, pal, "Backdrop", 70.0, |ui| {
+                    let sel = if blur_on {
+                        1
+                    } else if image_on {
+                        2
+                    } else {
+                        0
+                    };
+                    match segmented_bar(ui, pal, Some(sel), &["Colour", "Blur", "Image"], 0.0, 12.0).0 {
+                        Some(0) if sel != 0 => o.backdrop = Backdrop::Color(ferrocast_core::annotate::COLORS[color.min(5)]),
+                        Some(1) if sel != 1 => o.backdrop = Backdrop::Blur(30.0),
+                        Some(2) if sel != 2 => {
+                            // reuse the picture already loaded for the preview, if there is one
+                            let kept: Option<std::sync::Arc<(String, image::RgbaImage)>> = ctx.data(|d| d.get_temp(Id::new("frame-bg")));
+                            o.backdrop = Backdrop::Image(kept.map(|k| k.0.clone()).unwrap_or_default());
+                        }
+                        _ => {}
+                    }
+                });
+                match &mut o.backdrop {
+                    Backdrop::Blur(r) => {
+                        form_row_compact(ui, pal, "Blur", 62.0, |ui| {
+                            ui.add(egui::Slider::new(r, 1.0..=100.0));
+                        });
+                    }
+                    Backdrop::Color(c) => {
+                        form_row_compact(ui, pal, "Colour", 40.0, |ui| {
+                            // right to left: white first, then the palette in reverse, so it reads left to right
                             let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                            ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(k[0], k[1], k[2]));
-                            // ring the swatch that matches the actual backdrop
-                            if *c == *k {
+                            swatch_dot(ui.painter(), r.center(), egui::Color32::WHITE, pal);
+                            if *c == [255, 255, 255] {
                                 ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
                             }
                             if resp.clicked() {
-                                color = i;
-                                *c = *k;
+                                *c = [255, 255, 255];
                             }
-                        }
-                        let white = egui::Color32::WHITE;
-                        let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                        ui.painter().circle_filled(r.center(), 8.0, white);
-                        if *c == [255, 255, 255] {
-                            ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
-                        }
-                        if resp.clicked() {
-                            *c = [255, 255, 255];
-                        }
-                    });
+                            for (i, k) in ferrocast_core::annotate::COLORS.iter().enumerate().rev() {
+                                let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+                                swatch_dot(ui.painter(), r.center(), egui::Color32::from_rgb(k[0], k[1], k[2]), pal);
+                                // ring the swatch that matches the actual backdrop
+                                if *c == *k {
+                                    ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
+                                }
+                                if resp.clicked() {
+                                    color = i;
+                                    *c = *k;
+                                }
+                            }
+                        });
+                    }
+                    Backdrop::Image(path) => {
+                        let name = std::path::Path::new(path.as_str()).file_name().map(|n| n.to_string_lossy().to_string());
+                        let text = match name {
+                            Some(n) => n,
+                            None if picking => "choosing…".to_string(),
+                            None => "no picture chosen yet".to_string(),
+                        };
+                        form_row_stacked(ui, pal, "Picture", "Shown behind the photo.", |ui| {
+                            if ui.add_enabled(!picking, egui::Button::new("Choose image…")).clicked() {
+                                choose = true;
+                            }
+                            let text = elide(ui.painter(), &text, FontId::proportional(12.5), 120.0);
+                            ui.label(RichText::new(text).size(12.5).color(pal.sub));
+                        });
+                    }
                 }
-                Backdrop::Image(path) => {
-                    let name = std::path::Path::new(path.as_str()).file_name().map(|n| n.to_string_lossy().to_string());
-                    let text = match name {
-                        Some(n) => n,
-                        None if picking => "choosing…".to_string(),
-                        None => "no picture chosen yet".to_string(),
-                    };
-                    ui.horizontal(|ui| {
-                        if ui.add_enabled(!picking, egui::Button::new("Choose image…")).clicked() {
-                            choose = true;
-                        }
-                        ui.label(RichText::new(text).size(12.5).color(pal.sub));
-                    });
-                }
-            }
+            });
         });
         if choose && !picking {
             let (bus, f) = (self.bus.clone(), file.to_path_buf());
@@ -3335,13 +3497,7 @@ impl App {
                 ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
             }
         }
-        ui.painter().text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "drag a slider · the preview is a reduced copy · ↵ save a full-size copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "drag a slider · the preview is a reduced copy", pal);
     }
 
     /// Redaction editor: drag on the picture to add an area, drag an area to move or resize it,
@@ -3378,40 +3534,45 @@ impl App {
             // a drag in progress holds an area index that no longer means the same area
             ctx.data_mut(|d| d.remove::<(cr::Handle, cr::Rect, Pos2, usize)>(Id::new("redact-drag")));
         }
-        let strip = Rect::from_min_size(area_in.min + Vec2::new(12.0, 8.0), Vec2::new(area_in.width() - 24.0, 30.0));
-        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
-            ui.horizontal(|ui| {
-                if ui.selectable_label(!blur, "Solid").clicked() {
-                    blur = false;
-                }
-                if ui.selectable_label(blur, "Blur").clicked() {
-                    blur = true;
-                }
-                if blur {
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("Blur").size(12.0).color(pal.sub));
-                    ui.spacing_mut().slider_width = 120.0;
-                    ui.add(egui::Slider::new(&mut radius, crate::app::REDACT_BLUR_RANGE).suffix(" px"));
-                } else {
-                    ui.add_space(8.0);
-                    for (i, c) in ferrocast_core::annotate::COLORS.iter().enumerate() {
-                        let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                        ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
-                        if i == color {
-                            ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
+        let strip = Rect::from_min_size(area_in.min + Vec2::new(0.0, 6.0), Vec2::new(area_in.width(), 90.0));
+        let strip_bottom = ui
+            .scope_builder(UiBuilder::new().max_rect(form_rect(strip)), |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                card(ui, pal, |ui| {
+                    form_row_compact(ui, pal, "Cover", 70.0, |ui| {
+                        // right to left: the count first, the Solid / Blur choice last
+                        ui.label(
+                            RichText::new(format!("{} area{}", areas.len(), if areas.len() == 1 { "" } else { "s" }))
+                                .size(12.0)
+                                .color(pal.sub),
+                        );
+                        ui.add_space(6.0);
+                        if blur {
+                            ui.spacing_mut().slider_width = 120.0;
+                            ui.add(egui::Slider::new(&mut radius, crate::app::REDACT_BLUR_RANGE).suffix(" px"));
+                            ui.label(RichText::new("Blur").size(12.0).color(pal.sub));
+                        } else {
+                            for (i, c) in ferrocast_core::annotate::COLORS.iter().enumerate().rev() {
+                                let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+                                swatch_dot(ui.painter(), r.center(), egui::Color32::from_rgb(c[0], c[1], c[2]), pal);
+                                if i == color {
+                                    ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
+                                }
+                                if resp.clicked() {
+                                    color = i;
+                                }
+                            }
                         }
-                        if resp.clicked() {
-                            color = i;
-                        }
-                    }
-                }
-                ui.add_space(10.0);
-                ui.label(
-                    RichText::new(format!("{} area{}", areas.len(), if areas.len() == 1 { "" } else { "s" })).size(12.0).color(pal.sub),
-                );
-            });
-        });
-        let area = Rect::from_min_max(area_in.min + Vec2::new(16.0, 46.0), area_in.max - Vec2::new(16.0, 34.0));
+                        ui.add_space(6.0);
+                        segmented(ui, pal, &mut blur, &[(false, "Solid"), (true, "Blur")]);
+                    });
+                });
+            })
+            .response
+            .rect
+            .max
+            .y;
+        let area = Rect::from_min_max(Pos2::new(area_in.min.x + 16.0, strip_bottom + 8.0), area_in.max - Vec2::new(16.0, 34.0));
         let scale = (area.width() / size.0 as f32).min(area.height() / size.1 as f32).max(0.01);
         let img_rect = Rect::from_center_size(area.center(), Vec2::new(size.0 as f32 * scale, size.1 as f32 * scale));
         let resp = ui.interact(img_rect.expand(8.0), Id::new("redact-canvas"), egui::Sense::click_and_drag());
@@ -3484,12 +3645,11 @@ impl App {
                 }
             }
         }
-        ui.painter().text(
+        note_line(
+            ui,
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "drag to add an area · drag an area to move, corners to resize · ⌫ remove · the preview only marks areas; the cover is applied on save · ↵ save · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
+            "drag to add an area · drag an area to move, corners to resize · the preview only marks areas; the cover is applied on save",
+            pal,
         );
         if (areas.clone(), sel, (blur, radius), color) != before {
             if let Some(View::RedactImage { areas: a, sel: s, blur: b, radius: r, color: c, .. }) = self.stack.last_mut() {
@@ -3615,8 +3775,7 @@ impl App {
                     ui.add(egui::DragValue::new(&mut a.start).range(0.0..=duration).speed(0.04));
                     ui.label("End s");
                     ui.add(egui::DragValue::new(&mut a.end).range(0.0..=duration).speed(0.04));
-                    ui.selectable_value(&mut a.blur, false, "Solid");
-                    ui.selectable_value(&mut a.blur, true, "Blur");
+                    segmented(ui, pal, &mut a.blur, &[(false, "Solid"), (true, "Blur")]);
                 });
             });
             areas_new[sel_now] = a;
@@ -3655,19 +3814,13 @@ impl App {
         let strip = Rect::from_min_size(area_in.min + Vec2::new(12.0, 8.0), Vec2::new(area_in.width() - 24.0, 30.0));
         ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
             ui.horizontal(|ui| {
-                for (label, a) in [
-                    ("Free", None),
-                    ("1:1", Some((1, 1))),
-                    ("4:3", Some((4, 3))),
-                    ("3:2", Some((3, 2))),
-                    ("16:9", Some((16, 9))),
-                    ("9:16", Some((9, 16))),
-                ] {
-                    if ui.selectable_label(aspect == a, label).clicked() {
-                        aspect = a;
-                        if let Some((w, h)) = a {
-                            rect = cr::fit_aspect(size.0, size.1, w, h);
-                        }
+                // tighter cells: in the video windows the strip shares its line with the W and H boxes
+                const ASPECTS: [Option<(u32, u32)>; 6] = [None, Some((1, 1)), Some((4, 3)), Some((3, 2)), Some((16, 9)), Some((9, 16))];
+                let sel = ASPECTS.iter().position(|a| *a == aspect);
+                if let (Some(i), _) = segmented_bar(ui, pal, sel, &["Free", "1:1", "4:3", "3:2", "16:9", "9:16"], 0.0, 16.0) {
+                    aspect = ASPECTS[i];
+                    if let Some((w, h)) = aspect {
+                        rect = cr::fit_aspect(size.0, size.1, w, h);
                     }
                 }
                 ui.add_space(10.0);
@@ -3766,16 +3919,15 @@ impl App {
         ] {
             ui.painter().rect_filled(Rect::from_center_size(p, Vec2::splat(8.0)), 1.0, pal.accent);
         }
-        ui.painter().text(
+        note_line(
+            ui,
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
             if matches!(self.view(), View::VideoRedact { .. }) {
-                "drag to move/resize the selected area · the preview only marks it · ↵ save redacted copy · esc cancel"
+                "drag to move/resize the selected area · the preview only marks it"
             } else {
-                "drag inside to move · drag an edge or corner to resize · presets lock the ratio · ↵ save a cropped copy · esc cancel"
+                "drag inside to move · drag an edge or corner to resize · presets lock the ratio"
             },
-            FontId::proportional(11.5),
-            pal.sub,
+            pal,
         );
         if (rect, aspect) != before {
             match self.stack.last_mut() {
@@ -3799,26 +3951,27 @@ impl App {
         let mut o = opts;
         let panel = Rect::from_min_max(Pos2::new(rect.max.x - 300.0, rect.min.y + 12.0), rect.max - Vec2::new(16.0, 34.0));
         ui.scope_builder(UiBuilder::new().max_rect(panel), |ui| {
-            ui.spacing_mut().slider_width = 170.0;
-            ui.spacing_mut().item_spacing.y = 8.0;
-            for (label, v, signed) in [
-                ("Brightness", &mut o.brightness, true),
-                ("Contrast", &mut o.contrast, true),
-                ("Saturation", &mut o.saturation, true),
-                ("Warmth", &mut o.warmth, true),
-                ("Clarity", &mut o.clarity, false),
-                ("Sharpen", &mut o.sharpen, false),
-                ("Grain", &mut o.grain, false),
-                ("Denoise", &mut o.denoise, false),
-                ("Dehaze", &mut o.dehaze, false),
-            ] {
-                ui.horizontal(|ui| {
-                    ui.add_sized([78.0, 18.0], egui::Label::new(RichText::new(label).size(12.5).color(pal.sub)));
-                    ui.add(egui::Slider::new(v, if signed { -100..=100 } else { 0..=100 }).show_value(true));
-                });
-            }
-            ui.add_space(6.0);
-            if ui.button("Reset").clicked() {
+            ui.spacing_mut().slider_width = 96.0;
+            ui.spacing_mut().item_spacing.y = 0.0;
+            card(ui, pal, |ui| {
+                for (label, v, signed) in [
+                    ("Brightness", &mut o.brightness, true),
+                    ("Contrast", &mut o.contrast, true),
+                    ("Saturation", &mut o.saturation, true),
+                    ("Warmth", &mut o.warmth, true),
+                    ("Clarity", &mut o.clarity, false),
+                    ("Sharpen", &mut o.sharpen, false),
+                    ("Grain", &mut o.grain, false),
+                    ("Denoise", &mut o.denoise, false),
+                    ("Dehaze", &mut o.dehaze, false),
+                ] {
+                    form_row_compact(ui, pal, label, 76.0, |ui| {
+                        ui.add(egui::Slider::new(v, if signed { -100..=100 } else { 0..=100 }).show_value(true));
+                    });
+                }
+            });
+            ui.add_space(8.0);
+            if small_btn(ui, pal, "Reset") {
                 o = Default::default();
             }
         });
@@ -3853,13 +4006,7 @@ impl App {
                 ui.painter().text(img_rect.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
             }
         }
-        ui.painter().text(
-            Pos2::new(rect.center().x, rect.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "drag a slider · the preview is a reduced copy · ↵ save a full-size copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(rect.center().x, rect.max.y - 14.0), "drag a slider · the preview is a reduced copy", pal);
     }
 
     /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.
@@ -3895,42 +4042,53 @@ impl App {
                 }
             }
         });
-        let strip = Rect::from_min_size(rect.min + Vec2::new(12.0, 8.0), Vec2::new(rect.width() - 24.0, 30.0));
-        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
-            ui.horizontal(|ui| {
-                for (t, l) in [
-                    (Tool::Select, "Select"),
-                    (Tool::Arrow, "Arrow"),
-                    (Tool::Line, "Line"),
-                    (Tool::Box, "Box"),
-                    (Tool::Ellipse, "Ellipse"),
-                    (Tool::Highlight, "Highlight"),
-                    (Tool::Pen, "Pen"),
-                    (Tool::Number, "Number"),
-                    (Tool::Magnifier, "Magnifier"),
-                    (Tool::Text, "Text"),
-                    (Tool::Callout, "Callout"),
-                    (Tool::Stamp, "Image"),
-                ] {
-                    if ui.selectable_label(tool == t, l).clicked() {
-                        tool = t;
-                        sel = None;
+        let strip = Rect::from_min_size(rect.min + Vec2::new(12.0, 6.0), Vec2::new(rect.width() - 24.0, 60.0));
+        let strip_bottom = ui
+            .scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                // the tools wrap if the window is narrow; the colours get a row of their own
+                ui.horizontal_wrapped(|ui| {
+                    for (t, l) in [
+                        (Tool::Select, "Select"),
+                        (Tool::Arrow, "Arrow"),
+                        (Tool::Line, "Line"),
+                        (Tool::Box, "Box"),
+                        (Tool::Ellipse, "Ellipse"),
+                        (Tool::Highlight, "Highlight"),
+                        (Tool::Pen, "Pen"),
+                        (Tool::Number, "Number"),
+                        (Tool::Magnifier, "Magnifier"),
+                        (Tool::Text, "Text"),
+                        (Tool::Callout, "Callout"),
+                        (Tool::Stamp, "Image"),
+                    ] {
+                        let resp = ui.selectable_label(tool == t, l);
+                        record_strip(&ctx, resp.rect);
+                        if resp.clicked() {
+                            tool = t;
+                            sel = None;
+                        }
                     }
-                }
-                ui.add_space(8.0);
-                for (i, c) in an::COLORS.iter().enumerate() {
-                    let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-                    ui.painter().circle_filled(r.center(), 8.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
-                    if i == color {
-                        ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
+                });
+                ui.horizontal(|ui| {
+                    for (i, c) in an::COLORS.iter().enumerate() {
+                        let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+                        record_strip(&ctx, r.expand(2.0));
+                        swatch_dot(ui.painter(), r.center(), egui::Color32::from_rgb(c[0], c[1], c[2]), pal);
+                        if i == color {
+                            ui.painter().circle_stroke(r.center(), 10.0, Stroke::new(1.5, pal.text));
+                        }
+                        if resp.clicked() {
+                            color = i;
+                        }
                     }
-                    if resp.clicked() {
-                        color = i;
-                    }
-                }
-            });
-        });
-        let area = Rect::from_min_max(rect.min + Vec2::new(12.0, 46.0), rect.max - Vec2::new(12.0, 30.0));
+                });
+            })
+            .response
+            .rect
+            .max
+            .y;
+        let area = Rect::from_min_max(Pos2::new(rect.min.x + 12.0, strip_bottom + 6.0), rect.max - Vec2::new(12.0, 30.0));
         let scale = (area.width() / size.0 as f32).min(area.height() / size.1 as f32).max(0.01);
         let img_rect = Rect::from_center_size(area.center(), Vec2::new(size.0 as f32 * scale, size.1 as f32 * scale));
         let to_img = |p: Pos2| ((p.x - img_rect.min.x) / scale, (p.y - img_rect.min.y) / scale);
@@ -4073,12 +4231,11 @@ impl App {
             );
             ui.painter().rect_stroke(r, 2.0, Stroke::new(1.5, pal.accent), StrokeKind::Outside);
         }
-        ui.painter().text(
+        note_line(
+            ui,
             Pos2::new(rect.center().x, rect.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "drag to draw · click a Number to place · Select: click and drag to move · ⌘Z undo · ⌫ delete · ↵ save a copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
+            "drag to draw · click a Number to place · Select: click and drag to move",
+            pal,
         );
         if (doc.clone(), tool, color, sel) != before {
             if let Some(View::Annotate { doc: d, tool: t, color: c, sel: s, .. }) = self.stack.last_mut() {
@@ -4117,10 +4274,11 @@ impl App {
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(Vec2::new(16.0, 12.0))), |ui| {
             ui.label(RichText::new(format!("{} files · first to last", files.len())).size(13.0).color(pal.text));
             let hint = match purpose {
-                ReorderPurpose::JoinVideos => "First clip sets the canvas · drag a row or ⌘↑/⌘↓ to move · ↵ join",
-                ReorderPurpose::CreatePdf => "One page per picture · drag a row or ⌘↑/⌘↓ to move · ↵ create PDF",
-                _ => "Drag a row or ⌘↑/⌘↓ to move · ↵ merge",
+                ReorderPurpose::JoinVideos => "First clip sets the canvas · drag a row to move",
+                ReorderPurpose::CreatePdf => "One page per picture · drag a row to move",
+                _ => "Drag a row to move",
             };
+            record_note(ui.ctx(), hint);
             ui.label(RichText::new(hint).size(12.0).color(pal.sub));
             ui.add_space(6.0);
             egui::ScrollArea::vertical().id_salt("reorder-list").auto_shrink([false, false]).show(ui, |ui| {
@@ -4343,12 +4501,6 @@ impl App {
                 }
                 ctx.request_repaint();
             }
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("←/→ choose · drag or ⌘←/→ move · R rotate (⇧R back) · D duplicate · ⌫ remove · ↵ save a copy · esc cancel")
-                    .size(11.5)
-                    .color(pal.sub),
-            );
         });
     }
 
@@ -5489,18 +5641,59 @@ fn note(ui: &mut Ui, pal: &Palette, text: &str) {
 }
 
 fn group(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) {
+    group_rect(ui, pal, add);
+}
+
+/// `group`, returning the rect of the card it drew.
+fn group_rect(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) -> Rect {
     let fill = pal.field;
-    egui::Frame::new().fill(fill).corner_radius(10.0).inner_margin(egui::Margin::symmetric(0, 2)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = 0.0;
-        add(ui);
-    });
+    egui::Frame::new()
+        .fill(fill)
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::symmetric(0, 2))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui);
+        })
+        .response
+        .rect
 }
 
 fn row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
+    row_impl(ui, pal, RowLook::SETTINGS, title, desc, control);
+}
+
+/// How a settings-style row is laid out. `SETTINGS` is the look of the Settings pane.
+#[derive(Clone, Copy)]
+struct RowLook {
+    /// vertical padding above and below the text
+    pad_y: i8,
+    /// width of the title column; `None` = the Settings rule
+    text_w: Option<f32>,
+    /// draw the grey description line
+    desc: bool,
+}
+
+impl RowLook {
+    const SETTINGS: RowLook = RowLook { pad_y: 11, text_w: None, desc: true };
+}
+
+/// One row: title and description on the left, the control on the right, a hairline underneath.
+/// Returns (the row's rect, the rect the control used).
+fn row_impl(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) -> (Rect, Rect) {
+    let (r, used) = row_body(ui, pal, look, title, desc, control);
+    // hairline between rows, inset like the original launcher's settings
+    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
+    (r, used)
+}
+
+/// `row_impl` without the hairline underneath (the cards of the form windows place their own).
+fn row_body(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) -> (Rect, Rect) {
     let w = ui.available_width();
-    let text_w = (w * 0.46).min(w - 340.0).max(150.0);
-    let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 11)).show(ui, |ui| {
+    let text_w = look.text_w.unwrap_or_else(|| (w * 0.46).min(w - 340.0).max(150.0));
+    let mut used = Rect::NOTHING;
+    let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, look.pad_y)).show(ui, |ui| {
         ui.set_width(w - 28.0);
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
@@ -5508,17 +5701,18 @@ fn row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce
                 ui.set_max_width(text_w);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.label(RichText::new(title).size(13.5).color(pal.text));
-                ui.label(RichText::new(desc).size(11.5).color(pal.sub));
+                if look.desc {
+                    ui.label(RichText::new(desc).size(11.5).color(pal.sub));
+                }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 control(ui);
+                used = ui.min_rect();
             });
         });
     });
-    // hairline between rows, inset like the original launcher's settings
-    let r = inner.response.rect;
-    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
+    (inner.response.rect, used)
 }
 
 /// Model dropdown: Default, every model the provider lists, and Custom… (a free text field).
@@ -5588,7 +5782,13 @@ fn model_picker(
 
 /// Like `row`, but the control sits on its own line under the text, for wide controls.
 fn row_stacked(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
+    let (r, _) = row_stacked_impl(ui, pal, title, desc, control);
+    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
+}
+
+fn row_stacked_impl(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) -> (Rect, Rect) {
     let w = ui.available_width();
+    let mut used = Rect::NOTHING;
     let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 11)).show(ui, |ui| {
         ui.set_width(w - 28.0);
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -5598,11 +5798,136 @@ fn row_stacked(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: imp
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             control(ui);
+            used = ui.min_rect();
         });
     });
-    let r = inner.response.rect;
-    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
+    (inner.response.rect, used)
 }
+
+// ---- form windows: the Settings card and row look, shared with the tool windows
+
+/// Widest card a form window draws; the card is centred in the window.
+const FORM_W: f32 = 560.0;
+
+/// The centred column a form window draws its cards in, inside the content `area`.
+fn form_rect(area: Rect) -> Rect {
+    let w = FORM_W.min(area.width() - 32.0);
+    Rect::from_min_max(Pos2::new(area.center().x - w / 2.0, area.min.y + 4.0), Pos2::new(area.center().x + w / 2.0, area.max.y - 30.0))
+}
+
+/// A rounded card with the Settings look; rows go inside it (`form_row`).
+fn card(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) {
+    let idx = record_card_start(ui.ctx());
+    ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("form-sep-pending")));
+    let r = group_rect(ui, pal, add);
+    ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("form-sep-pending")));
+    record_card_end(ui.ctx(), idx, r);
+}
+
+/// A Settings-style row inside a card: title and one short grey description, control on the right.
+fn form_row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
+    let (r, c) = row_body(ui, pal, RowLook::SETTINGS, title, desc, control);
+    form_sep(ui, pal, r);
+    record_row(ui.ctx(), title, r, c);
+}
+
+/// A tighter row for dense side panels and lists: title only, the title column `text_w` wide.
+fn form_row_compact(ui: &mut Ui, pal: &Palette, title: &str, text_w: f32, control: impl FnOnce(&mut Ui)) {
+    let look = RowLook { pad_y: 6, text_w: Some(text_w), desc: false };
+    let (r, c) = row_body(ui, pal, look, title, "", control);
+    form_sep(ui, pal, r);
+    record_row(ui.ctx(), title, r, c);
+}
+
+/// A row whose control sits on its own line under the title (wide controls in narrow cards).
+fn form_row_stacked(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
+    let (r, c) = row_stacked_impl(ui, pal, title, desc, control);
+    form_sep(ui, pal, r);
+    record_row(ui.ctx(), title, r, c);
+}
+
+/// The hairline between two rows of a form card. A row only learns that it is not the last one when
+/// the next row starts, so each line is drawn by the row below it and the last row gets none (it
+/// would sit against the card's bottom edge). `card` forgets the pending line when it ends.
+fn form_sep(ui: &mut Ui, pal: &Palette, r: Rect) {
+    let id = Id::new("form-sep-pending");
+    if let Some(prev) = ui.ctx().data(|d| d.get_temp::<Rect>(id)) {
+        ui.painter().hline((prev.min.x + 14.0)..=(prev.max.x - 14.0), prev.max.y, Stroke::new(1.0, pal.sep));
+        record_sep(ui.ctx(), prev.max.y);
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, r));
+}
+
+/// What `card` and `form_row` drew in the latest pass: tests read it.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+struct FormCard {
+    rect: Rect,
+    /// (title, row rect, rect the control used)
+    rows: Vec<(String, Rect, Rect)>,
+    /// y of every separator line drawn inside the card
+    seps: Vec<f32>,
+}
+
+#[cfg(test)]
+impl Default for FormCard {
+    fn default() -> Self {
+        FormCard { rect: Rect::NOTHING, rows: vec![], seps: vec![] }
+    }
+}
+
+#[cfg(test)]
+fn record_card_start(ctx: &egui::Context) -> usize {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| {
+        if d.get_temp::<u64>(Id::new("form-cards-pass")) != Some(pass) {
+            d.insert_temp(Id::new("form-cards-pass"), pass);
+            d.insert_temp(Id::new("form-cards"), Vec::<FormCard>::new());
+        }
+        let list = d.get_temp_mut_or_default::<Vec<FormCard>>(Id::new("form-cards"));
+        list.push(FormCard::default());
+        list.len() - 1
+    })
+}
+
+#[cfg(test)]
+fn record_card_end(ctx: &egui::Context, idx: usize, rect: Rect) {
+    ctx.data_mut(|d| {
+        if let Some(c) = d.get_temp_mut_or_default::<Vec<FormCard>>(Id::new("form-cards")).get_mut(idx) {
+            c.rect = rect;
+        }
+    });
+}
+
+#[cfg(test)]
+fn record_row(ctx: &egui::Context, title: &str, row: Rect, control: Rect) {
+    ctx.data_mut(|d| {
+        if let Some(c) = d.get_temp_mut_or_default::<Vec<FormCard>>(Id::new("form-cards")).last_mut() {
+            c.rows.push((title.to_string(), row, control));
+        }
+    });
+}
+
+#[cfg(test)]
+fn record_sep(ctx: &egui::Context, y: f32) {
+    ctx.data_mut(|d| {
+        if let Some(c) = d.get_temp_mut_or_default::<Vec<FormCard>>(Id::new("form-cards")).last_mut() {
+            c.seps.push(y);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn record_sep(_: &egui::Context, _: f32) {}
+
+#[cfg(not(test))]
+fn record_card_start(_: &egui::Context) -> usize {
+    0
+}
+#[cfg(not(test))]
+fn record_card_end(_: &egui::Context, _: usize, _: Rect) {}
+#[cfg(not(test))]
+fn record_row(_: &egui::Context, _: &str, _: Rect, _: Rect) {}
 
 /// A pill switch that slides in 120 ms.
 fn toggle(ui: &mut Ui, pal: &Palette, on: &mut bool) {
@@ -5617,6 +5942,19 @@ fn toggle(ui: &mut Ui, pal: &Palette, on: &mut bool) {
     p.rect_filled(r, 12.0, bg);
     let kx = r.min.x + 12.0 + (r.width() - 24.0) * t;
     p.circle_filled(Pos2::new(kx, r.center().y), 9.5, Color32::WHITE);
+}
+
+/// A colour swatch: the colour with a hairline edge, so black on a dark card and white on a light
+/// one still read as a dot.
+fn swatch_dot(p: &egui::Painter, at: Pos2, fill: Color32, pal: &Palette) {
+    p.add(egui::epaint::CircleShape { center: at, radius: 8.0, fill, stroke: Stroke::new(1.0, pal.border) });
+}
+
+/// `toggle`, returning whether it was flipped this frame.
+fn toggle_changed(ui: &mut Ui, pal: &Palette, on: &mut bool) -> bool {
+    let before = *on;
+    toggle(ui, pal, on);
+    *on != before
 }
 
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
@@ -5663,26 +6001,83 @@ fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
 
 /// Segmented control: one filled segment slides under the chosen option.
 fn segmented<T: PartialEq + Clone>(ui: &mut Ui, pal: &Palette, value: &mut T, options: &[(T, &str)]) {
-    let seg_w = options
+    let idx = options.iter().position(|(v, _)| v == value).unwrap_or(0);
+    let labels: Vec<&str> = options.iter().map(|(_, l)| *l).collect();
+    if let (Some(i), _) = segmented_bar(ui, pal, Some(idx), &labels, 56.0, 22.0) {
+        *value = options[i].0.clone();
+    }
+}
+
+/// `segmented` over a plain index (`0..labels.len()`), for windows that keep a mode as a `usize`.
+fn seg_index(ui: &mut Ui, pal: &Palette, value: &mut usize, labels: &[&str]) {
+    if let (Some(i), _) = segmented_bar(ui, pal, Some((*value).min(labels.len() - 1)), labels, 56.0, 22.0) {
+        *value = i;
+    }
+}
+
+/// The index-based core of `segmented`, for values that are not a plain enum (an index, a bool, an
+/// `Option`, a float preset). `sel` is the chosen option, or `None` when the current value matches
+/// none of them (no segment is filled then). Returns the option clicked this frame and the rect of
+/// every cell. `min_w` and `pad` set the cell width (widest label + `pad`, at least `min_w`);
+/// Settings uses 56 and 22, narrow panels can ask for less.
+fn segmented_bar(ui: &mut Ui, pal: &Palette, sel: Option<usize>, labels: &[&str], min_w: f32, pad: f32) -> (Option<usize>, Vec<Rect>) {
+    let seg_w = labels
         .iter()
-        .map(|(_, l)| ui.painter().layout_no_wrap(l.to_string(), FontId::proportional(12.0), pal.text).size().x + 22.0)
-        .fold(56.0f32, f32::max);
-    let (r, base) = ui.allocate_exact_size(Vec2::new(seg_w * options.len() as f32 + 4.0, 26.0), Sense::hover());
+        .map(|l| ui.painter().layout_no_wrap(l.to_string(), FontId::proportional(12.0), pal.text).size().x + pad)
+        .fold(min_w, f32::max);
+    let (r, base) = ui.allocate_exact_size(Vec2::new(seg_w * labels.len() as f32 + 4.0, 26.0), Sense::hover());
     let id = base.id;
     let p = ui.painter().clone();
     p.rect_filled(r, 8.0, pal.field.gamma_multiply(1.3));
-    let idx = options.iter().position(|(v, _)| v == value).unwrap_or(0);
-    let x = ui.ctx().animate_value_with_time(id.with("seg"), idx as f32, 0.14);
-    let sr = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + x * seg_w, r.min.y + 2.0), Vec2::new(seg_w, 22.0));
-    p.rect_filled(sr, 6.0, pal.sel.gamma_multiply(1.8));
-    for (i, (v, label)) in options.iter().enumerate() {
+    if let Some(idx) = sel {
+        let x = ui.ctx().animate_value_with_time(id.with("seg"), idx as f32, 0.14);
+        let sr = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + x * seg_w, r.min.y + 2.0), Vec2::new(seg_w, 22.0));
+        p.rect_filled(sr, 6.0, pal.sel.gamma_multiply(1.8));
+    }
+    let mut clicked = None;
+    let mut cells = Vec::with_capacity(labels.len());
+    for (i, label) in labels.iter().enumerate() {
         let cell = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + i as f32 * seg_w, r.min.y), Vec2::new(seg_w, 26.0));
         let resp = ui.interact(cell, id.with(("cell", i)), Sense::click());
         if resp.clicked() {
-            *value = v.clone();
+            clicked = Some(i);
         }
-        p.text(cell.center(), Align2::CENTER_CENTER, *label, FontId::proportional(12.0), if i == idx { pal.text } else { pal.sub });
+        p.text(cell.center(), Align2::CENTER_CENTER, *label, FontId::proportional(12.0), if sel == Some(i) { pal.text } else { pal.sub });
+        cells.push(cell);
     }
+    #[cfg(test)]
+    {
+        // tests read what each window drew: one entry per bar, its container and its cells
+        let key = Id::new("segmented-count");
+        ui.ctx().data_mut(|d| {
+            let list = d.get_temp_mut_or_default::<Vec<(Rect, Vec<Rect>)>>(key);
+            list.retain(|(c, _)| c.min != r.min);
+            list.push((r, cells.clone()));
+        });
+    }
+    (clicked, cells)
+}
+
+/// Tests read the rect of every control of the Annotate tool strip (cleared by the test).
+fn record_strip(ctx: &egui::Context, r: Rect) {
+    #[cfg(test)]
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<Rect>>(Id::new("annot-strip")).push(r));
+    #[cfg(not(test))]
+    let _ = (ctx, r);
+}
+
+/// The grey one-line note under a tool window (information only; keys live in the footer).
+fn note_line(ui: &Ui, at: Pos2, text: impl AsRef<str>, pal: &Palette) {
+    record_note(ui.ctx(), text.as_ref());
+    ui.painter().text(at, Align2::CENTER_CENTER, text.as_ref(), FontId::proportional(11.5), pal.sub);
+}
+
+/// Tests read every note a window drew (cleared by the test before rendering).
+fn record_note(ctx: &egui::Context, text: &str) {
+    #[cfg(test)]
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<String>>(Id::new("body-notes")).push(text.to_string()));
+    #[cfg(not(test))]
+    let _ = (ctx, text);
 }
 
 fn keycap(ui: &mut Ui, pal: &Palette, label: &str) {

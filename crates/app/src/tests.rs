@@ -408,17 +408,79 @@ fn wheel_renders_for_any_segment_count_in_both_themes() {
 }
 
 #[test]
-fn actions_wheel_has_exactly_the_six_actions_in_order() {
+fn actions_wheel_has_the_six_actions_in_order_plus_zip_last() {
     use ferrocast_core::wheel::WheelKind;
     let app = fixture();
     let one = vec![std::path::PathBuf::from("/nonexistent/a.png")];
     let many = vec![one[0].clone(), std::path::PathBuf::from("/nonexistent/b.png")];
     let folder = vec![std::env::temp_dir()];
-    for files in [one, many, folder] {
-        let labels: Vec<String> = app.wheel_segments(WheelKind::Actions, &files).into_iter().map(|s| s.label).collect();
-        assert_eq!(labels, ["AirDrop", "Float", "Copy", "Move to…", "Copy Path", "Terminal"], "{files:?}");
+    let unknown = vec![std::path::PathBuf::from("/nonexistent/data.qzx9")];
+    let noext = vec![std::path::PathBuf::from("/nonexistent/Makefile")];
+    for files in [one, many, folder, unknown, noext] {
+        let segs = app.wheel_segments(WheelKind::Actions, &files);
+        let labels: Vec<String> = segs.iter().map(|s| s.label.clone()).collect();
+        assert_eq!(labels, ["AirDrop", "Float", "Copy", "Move to…", "Copy Path", "Terminal", "Zip"], "{files:?}");
+        match &segs[6].pick {
+            WheelPick::Act(Act::ZipFiles(z)) => assert_eq!(z, &files),
+            _ => panic!("Zip segment must carry Act::ZipFiles"),
+        }
+        assert_eq!(segs[6].symbol, "sf:doc.zipper");
+        assert!(segs[6].needs.is_none());
     }
     assert!(app.wheel_segments(WheelKind::Actions, &[]).is_empty());
+}
+
+#[test]
+fn zip_of_a_vanished_file_toasts_and_starts_nothing() {
+    let mut app = fixture();
+    let gone = std::env::temp_dir().join(format!("fc-zip-gone-{}.txt", uuid::Uuid::new_v4()));
+    app.perform(Act::ZipFiles(vec![gone]), true);
+    assert!(app.toast.is_some(), "must toast");
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn zip_target_zips_any_kind_of_item_next_to_it() {
+    let dir = std::env::temp_dir().join(format!("fc-zip-real-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    std::fs::write(&png, b"\x89PNG\r\n\x1a\nfake").unwrap();
+    let txt = dir.join("note.txt");
+    std::fs::write(&txt, b"hello").unwrap();
+    let noext = dir.join("Makefile");
+    std::fs::write(&noext, b"all:").unwrap();
+    let acc = dir.join("Informe año ñandú final.txt");
+    std::fs::write(&acc, b"hola").unwrap();
+    let folder = dir.join("My Folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("inner.txt"), b"inner").unwrap();
+    let tools = Default::default();
+    let t = crate::app::zip_target();
+    for (item, member) in [
+        (&png, "pic.png"),
+        (&txt, "note.txt"),
+        (&noext, "Makefile"),
+        (&acc, "Informe año ñandú final.txt"),
+        (&folder, "My Folder/inner.txt"),
+    ] {
+        let before = std::fs::read(item).ok();
+        let (made, errs) = crate::services::run_conversion(std::slice::from_ref(item), &t, &tools);
+        assert!(errs.is_empty(), "{errs:?}");
+        // output_path swaps the extension: pic.png -> pic.zip, Makefile -> Makefile.zip
+        let name = item.file_stem().unwrap().to_string_lossy().to_string();
+        let expect = dir.join(format!("{name}.zip"));
+        assert_eq!(made, std::slice::from_ref(&expect));
+        assert!(std::fs::read(&expect).unwrap().starts_with(b"PK"));
+        let out = std::process::Command::new("unzip").arg("-l").arg(&expect).output().unwrap();
+        let listing = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(out.status.success() && listing.contains(member), "{listing}");
+        assert_eq!(std::fs::read(item).ok(), before, "original untouched");
+        // a second run never overwrites
+        let (again, errs) = crate::services::run_conversion(std::slice::from_ref(item), &t, &tools);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(again, [dir.join(format!("{name} 2.zip"))]);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -482,6 +544,91 @@ fn wheel_state(app: &App) -> Option<(ferrocast_core::wheel::WheelKind, Option<us
     }
 }
 
+// ---- wheel animation (B3/B4) -----------------------------------------------------------------
+
+/// Frames recorded by `draw_wheel` in a test build: (highlight of the selected segment, open scale,
+/// open alpha). egui's clock advances 1/60 s per `render` call, so the tests drive it deterministically.
+fn wheel_probe(app: &App) -> Vec<(f32, f32, f32)> {
+    app.ctx.data(|d| d.get_temp(Id::new("wheel-anim-probe"))).unwrap_or_default()
+}
+
+fn wheel_with_selection(app: &mut App, kind: ferrocast_core::wheel::WheelKind, n: usize, sel: Option<usize>, reduce: bool) {
+    let files = vec![std::path::PathBuf::from("/nonexistent/a.png")];
+    let segs: Vec<WheelSeg> = (0..n)
+        .map(|i| WheelSeg { label: format!("Option {i}"), symbol: "sf:photo", needs: None, pick: WheelPick::Act(Act::Run) })
+        .collect();
+    app.ctx.data_mut(|d| {
+        d.insert_temp(Id::new("wheel_reduce_motion"), reduce);
+        d.remove::<Vec<(f32, f32, f32)>>(Id::new("wheel-anim-probe"));
+        d.remove::<super::WheelAnim>(Id::new("wheel_anim"));
+    });
+    app.stack = vec![View::Root, View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel }];
+}
+
+#[test]
+fn wheel_highlight_eases_in_when_motion_is_allowed() {
+    let mut app = fixture();
+    wheel_with_selection(&mut app, ferrocast_core::wheel::WheelKind::Tools, 7, Some(2), false);
+    for _ in 0..30 {
+        render(&mut app, vec![]);
+    }
+    let frames = wheel_probe(&app);
+    assert_eq!(frames.len(), 30);
+    let first = frames[0].0;
+    assert!(first > 0.0 && first < 1.0, "first frame must be mid-transition, got {first}");
+    assert!(frames.windows(2).all(|w| w[1].0 >= w[0].0), "highlight must never go backwards: {frames:?}");
+    assert!(frames[4].0 < 1.0, "120 ms is about 7 frames, frame 5 is still moving: {}", frames[4].0);
+    assert_eq!(frames[29].0, 1.0, "0.5 s later the highlight is complete");
+    // open animation: starts small and transparent, ends exactly at 1
+    assert!(frames[0].1 >= 0.92 && frames[0].1 < 1.0 && frames[0].2 < 1.0, "open starts mid-way: {:?}", frames[0]);
+    assert_eq!((frames[29].1, frames[29].2), (1.0, 1.0));
+}
+
+#[test]
+fn wheel_reduce_motion_jumps_to_the_end_state_but_still_highlights() {
+    let mut app = fixture();
+    wheel_with_selection(&mut app, ferrocast_core::wheel::WheelKind::Tools, 7, Some(2), true);
+    render(&mut app, vec![]);
+    let frames = wheel_probe(&app);
+    assert_eq!(frames[0], (1.0, 1.0, 1.0), "highlight, open scale and open alpha are final on the first frame");
+    // with nothing selected the highlight is off, and a selection change is instant
+    wheel_with_selection(&mut app, ferrocast_core::wheel::WheelKind::Tools, 7, None, true);
+    render(&mut app, vec![]);
+    assert_eq!(wheel_probe(&app)[0].0, 0.0);
+    if let Some(View::Wheel { sel, .. }) = app.stack.last_mut() {
+        *sel = Some(4);
+    }
+    render(&mut app, vec![]);
+    assert_eq!(wheel_probe(&app)[1].0, 1.0, "the highlight still changes, instantly");
+}
+
+#[test]
+fn wheel_renders_through_open_switch_and_hover_animations_in_both_themes() {
+    use ferrocast_core::wheel::WheelKind;
+    for reduce in [false, true] {
+        for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+            for n in [1usize, 7, 9, 12] {
+                let mut app = fixture();
+                app.ctx.set_theme(theme);
+                wheel_with_selection(&mut app, WheelKind::Convert, n, None, reduce);
+                for f in 0..24 {
+                    // step the selection, and tap Command half-way (a switch to the tools wheel)
+                    if let Some(View::Wheel { sel, .. }) = app.stack.last_mut() {
+                        *sel = Some(f % n);
+                    }
+                    if f == 12 {
+                        render_mods(&mut app, vec![], Modifiers { command: true, ..Modifiers::NONE });
+                    } else {
+                        render(&mut app, vec![]);
+                    }
+                }
+                assert!(matches!(app.view(), View::Wheel { .. }), "n={n} reduce={reduce}: the wheel must still be open");
+                assert_eq!(wheel_probe(&app).len(), 24);
+            }
+        }
+    }
+}
+
 // Characterisation tests of the wheel's key handling (the behaviour already existed; no RED).
 #[test]
 fn wheel_arrows_step_and_wrap_around() {
@@ -526,7 +673,7 @@ fn tapping_shift_command_or_control_switches_the_open_wheel() {
     render_mods(&mut app, vec![], Modifiers::NONE);
     render_mods(&mut app, vec![], Modifiers::CTRL);
     assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Actions, "Control opens the actions wheel");
-    assert_eq!(wheel_state(&app).unwrap().2, 6);
+    assert_eq!(wheel_state(&app).unwrap().2, 7);
     render_mods(&mut app, vec![], Modifiers::NONE);
     render_mods(&mut app, vec![], Modifiers::SHIFT);
     assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Convert, "Shift goes back to conversions");
@@ -613,7 +760,7 @@ fn crop_app() -> App {
 
 /// Click the W box of the crop view (position taken from the layout; guarded by an assertion).
 fn click_crop_width_box(app: &mut App) {
-    let pos = Pos2::new(300.0, 89.0);
+    let pos = Pos2::new(325.0, 93.0);
     let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     render(app, vec![Event::PointerMoved(pos)]);
     render(app, vec![btn(true)]);
@@ -1592,7 +1739,7 @@ fn click_compress_kb_box(app: &mut App) {
 }
 
 // centre of the KB box in points (found by probing the layout; breaks if the controls move)
-const COMPRESS_KB_BOX: (f32, f32) = (210.0, 156.0);
+const COMPRESS_KB_BOX: (f32, f32) = (616.0, 180.0);
 
 // L74 style: Escape while the number box is edited ends the edit but keeps the window.
 #[test]
@@ -1831,7 +1978,7 @@ fn media_probe_result_reaches_the_window() {
     }
 }
 
-const COMPRESS_MEDIA_KB_BOX: (f32, f32) = (210.0, 156.0);
+const COMPRESS_MEDIA_KB_BOX: (f32, f32) = (616.0, 180.0);
 
 // L74 style: Escape and Enter inside the number box of the media window keep it open.
 #[test]
@@ -2468,8 +2615,8 @@ fn achan_view(app: &mut App, in_channels: Option<u32>, stereo: bool) {
     app.stack = vec![View::Root, View::ChannelsAudio { file: anorm_file(), in_channels, stereo, left_db: 0.0, right_db: 0.0 }];
 }
 
-const ANORM_TARGET_BOX: (f32, f32) = (249.0, 173.0);
-const ACHAN_LEFT_BOX: (f32, f32) = (214.0, 168.0);
+const ANORM_TARGET_BOX: (f32, f32) = (607.0, 105.0);
+const ACHAN_LEFT_BOX: (f32, f32) = (619.0, 158.0);
 
 #[test]
 fn normalize_and_channels_views_render_in_both_themes() {
@@ -3514,7 +3661,7 @@ fn deleting_an_area_during_a_drag_does_not_move_another_one() {
 /// Click the blur slider's value box by scanning the strip from the right (guarded by an assertion).
 fn click_redact_blur_box(app: &mut App) {
     for x in (200..600).rev().step_by(6) {
-        click_at(app, Pos2::new(x as f32, 81.0));
+        click_at(app, Pos2::new(x as f32, 103.0));
         if app.ctx.egui_wants_keyboard_input() {
             return;
         }
@@ -4133,4 +4280,755 @@ fn organizer_click_still_selects_a_page_next_to_the_drag_source() {
     render(&mut app, vec![pointer_button(at, false)]);
     assert_eq!(organizer_plan(&app).cursor, 2, "a plain click selects the page");
     assert_eq!(page_srcs(&app), [0, 1, 2, 3]);
+}
+
+// ---- U2: key hints live in the footer chips, not in a grey sentence in the body
+
+const BACK: (&str, &str) = ("Back", "esc");
+
+/// Every tool window with its expected footer chips (reading order) and the information-only notes
+/// its body may still draw.
+type Chips = Vec<(&'static str, &'static str)>;
+
+fn u2_windows() -> Vec<(&'static str, View, Chips, Vec<String>)> {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    let png = std::path::PathBuf::from("/nonexistent/u2.png");
+    let mp4 = std::path::PathBuf::from("/nonexistent/u2.mp4");
+    let r = ferrocast_core::croprect::Rect { x: 5, y: 5, w: 20, h: 20 };
+    let area = Area { rect: ferrocast_core::croprect::full(64, 36), start: 0.0, end: 2.0, blur: false };
+    let trim = ferrocast_core::videoplan::Trim::new(12.0, 25.0);
+    let jump_bar = || vec!["click the bar to jump".to_string()];
+    let s = |t: &str| vec![t.to_string()];
+    let save = ("Save copy", "↵");
+    let trim_chips = vec![("Trim", "↵"), ("Start", "I"), ("End", "O"), BACK];
+    vec![
+        ("compress images", compress_view(vec![png.clone()], Some((400, 300)), 0, 500), vec![("Compress", "↵"), BACK], vec![]),
+        ("compress media", media_view(vec![mp4.clone()], true, some_info(true), 2, 500), vec![("Compress", "↵"), BACK], vec![]),
+        ("metadata", meta_view("/nonexistent/u2.mp4", Some(vec![]), None), vec![save, BACK], s("edit a value or clear it")),
+        (
+            "speed",
+            View::VideoSpeed { file: mp4.clone(), duration: Some(8.0), factor: 2.0 },
+            vec![save, BACK],
+            s("pick a preset or drag the slider"),
+        ),
+        (
+            "normalize",
+            View::NormalizeAudio { file: anorm_file(), loudness: None, target: -16.0, range: 11.0, peak: -1.5 },
+            vec![("Normalize", "↵"), BACK],
+            s("pick a target or type one"),
+        ),
+        (
+            "channels",
+            View::ChannelsAudio { file: anorm_file(), in_channels: Some(2), stereo: true, left_db: 0.0, right_db: 0.0 },
+            vec![save, BACK],
+            s("pick Mono or Stereo, set the volumes"),
+        ),
+        (
+            "audio to video",
+            View::VisualizeAudio { file: avis_file(), orient: Canvas::Landscape, style: VisStyle::Waveform, image: None, picking: false },
+            vec![("Make video", "↵"), BACK],
+            s("pick the picture and the shape"),
+        ),
+        ("trim video", View::VideoTrim { file: mp4.clone(), trim }, trim_chips.clone(), jump_bar()),
+        (
+            "trim audio",
+            View::AudioTrim {
+                file: atrim_file(),
+                trim: ferrocast_core::videoplan::Trim::new(6.0, 100.0),
+                audio: Some(synth_audio(6.0, 1.0, 3.0)),
+            },
+            trim_chips,
+            s("click the waveform to jump"),
+        ),
+        ("snapshot", View::VideoSnapshot { file: mp4.clone(), trim }, vec![("Save PNG", "↵"), ("Frame", "←/→"), BACK], jump_bar()),
+        (
+            "split",
+            View::VideoSplit { file: mp4.clone(), trim, points: vec![], parts: 2 },
+            vec![("Split", "↵"), ("Cut here", "M"), ("Remove last", "⌫"), BACK],
+            jump_bar(),
+        ),
+        ("bleep", bleep_view(bleep_ranges3(), 0), vec![save, BACK], s("click a shaded range to select it · overlapping ranges are merged")),
+        (
+            "collage",
+            View::CollageImage { files: vec![png.clone(), png.clone()], opts: Default::default(), color: 0 },
+            vec![("Save collage", "↵"), BACK],
+            s("2 pictures · the preview is a reduced copy"),
+        ),
+        (
+            "frame",
+            View::FrameImage { file: png.clone(), size: (100, 80), opts: Default::default(), color: 4, picking: false },
+            vec![save, BACK],
+            s("drag a slider · the preview is a reduced copy"),
+        ),
+        (
+            "photo",
+            View::EditPhoto { file: png.clone(), size: (100, 80), opts: Default::default() },
+            vec![save, BACK],
+            s("drag a slider · the preview is a reduced copy"),
+        ),
+        (
+            "redact image",
+            View::RedactImage { file: png.clone(), size: (100, 80), areas: vec![r], sel: Some(0), blur: true, radius: 24, color: 5 },
+            vec![save, ("Remove", "⌫"), BACK],
+            s("drag to add an area · drag an area to move, corners to resize · the preview only marks areas; the cover is applied on save"),
+        ),
+        (
+            "redact video",
+            redact_view("/nonexistent/u2.mp4", 6.0, vec![area], 0),
+            vec![save, BACK],
+            s("drag to move/resize the selected area · the preview only marks it"),
+        ),
+        (
+            "crop image",
+            View::CropImage { file: png.clone(), size: (1000, 600), rect: r, aspect: None },
+            vec![("Crop", "↵"), BACK],
+            s("drag inside to move · drag an edge or corner to resize · presets lock the ratio"),
+        ),
+        (
+            "crop video",
+            View::VideoCrop { file: mp4.clone(), size: Some((640, 360)), rect: r, aspect: None, duration: 6.0, ref_t: 0.6 },
+            vec![("Crop", "↵"), BACK],
+            s("drag inside to move · drag an edge or corner to resize · presets lock the ratio"),
+        ),
+        (
+            "annotate",
+            View::Annotate {
+                file: png.clone(),
+                size: (100, 80),
+                doc: Default::default(),
+                tool: ferrocast_core::annotate::Tool::Arrow,
+                color: 0,
+                sel: None,
+            },
+            vec![save, ("Undo", "⌘Z"), ("Delete", "⌫"), BACK],
+            s("drag to draw · click a Number to place · Select: click and drag to move"),
+        ),
+        (
+            "reorder join",
+            View::Reorder { purpose: ReorderPurpose::JoinVideos, files: reorder_files(3), cursor: 0 },
+            vec![("Join", "↵"), ("Move", "⌘↑/↓"), BACK],
+            s("First clip sets the canvas · drag a row to move"),
+        ),
+        (
+            "reorder pdf from pictures",
+            View::Reorder { purpose: ReorderPurpose::CreatePdf, files: reorder_files(3), cursor: 0 },
+            vec![("Create PDF", "↵"), ("Move", "⌘↑/↓"), BACK],
+            s("One page per picture · drag a row to move"),
+        ),
+        (
+            "reorder merge pdf",
+            View::Reorder { purpose: ReorderPurpose::MergePdf, files: reorder_files(3), cursor: 0 },
+            vec![("Merge", "↵"), ("Move", "⌘↑/↓"), BACK],
+            s("Drag a row to move"),
+        ),
+        (
+            "reorder merge audio",
+            View::Reorder { purpose: ReorderPurpose::MergeAudio, files: reorder_files(3), cursor: 0 },
+            vec![("Merge", "↵"), ("Move", "⌘↑/↓"), BACK],
+            s("Drag a row to move"),
+        ),
+        (
+            "organize pdf",
+            View::PdfOrganize { file: std::env::temp_dir().join("fc-u2.pdf"), n: 3, plan: ferrocast_core::pdfplan::PdfPlan::new(3) },
+            vec![save, ("Rotate", "R"), ("Remove", "⌫"), BACK],
+            vec![],
+        ),
+    ]
+}
+
+/// What the footer drew (chips left to right) and the body notes of `view` after two frames.
+fn footer_and_notes(view: View) -> (Vec<(String, String)>, Vec<String>) {
+    let mut app = fixture();
+    app.ctx.data_mut(|d| d.remove::<Vec<String>>(Id::new("body-notes")));
+    app.stack = vec![View::Root, view];
+    render(&mut app, vec![]);
+    app.ctx.data_mut(|d| d.remove::<Vec<String>>(Id::new("body-notes")));
+    render(&mut app, vec![]);
+    let chips = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
+    let notes = app.ctx.data(|d| d.get_temp(Id::new("body-notes"))).unwrap_or_default();
+    (chips, notes)
+}
+
+#[test]
+fn tool_windows_show_their_keys_in_the_footer_and_only_information_in_the_body() {
+    let mut bad = vec![];
+    for (name, view, chips, notes) in u2_windows() {
+        let (got_chips, got_notes) = footer_and_notes(view);
+        let want: Vec<(String, String)> = chips.iter().map(|(l, k)| (l.to_string(), k.to_string())).collect();
+        if got_chips != want {
+            bad.push(format!("{name}: footer chips {got_chips:?}, want {want:?}"));
+        }
+        if got_notes != notes {
+            bad.push(format!("{name}: body notes {got_notes:?}, want {notes:?}"));
+        }
+        let glyphs = ["↵", "esc", "⌘", "⇧", "⌫", "←", "→", "↑", "↓"];
+        if let Some(n) = got_notes.iter().find(|n| glyphs.iter().any(|g| n.contains(g))) {
+            bad.push(format!("{name}: the body still prints key names: {n:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "footer chips / body notes are wrong:\n{}", bad.join("\n"));
+}
+
+#[test]
+fn footer_hints_are_pure_per_view_and_at_most_four_chips_with_back_last() {
+    let windows = u2_windows();
+    for (name, view, chips, _) in &windows {
+        assert_eq!(&view.footer_hints(), chips, "{name}");
+        assert!(chips.len() <= 4, "{name}: at most four chips");
+        assert_eq!(chips.last(), Some(&BACK), "{name}: Back esc is last");
+        assert_eq!(chips[0].1, "↵", "{name}: the primary action comes first");
+    }
+    for v in [View::Root, View::Clipboard, View::Snippets, View::Settings, View::Files, View::Notes, View::Welcome] {
+        assert!(v.footer_hints().is_empty(), "{} keeps the footer it had", v.title());
+    }
+}
+
+/// Views whose footer already drew hints keep drawing exactly them.
+#[test]
+fn list_and_settings_footers_are_unchanged() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::Settings];
+    render(&mut app, vec![]);
+    let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
+    assert_eq!(chips, vec![("Back".to_string(), "esc".to_string())]);
+    app.stack = vec![View::Root, View::Snippets];
+    render(&mut app, vec![]);
+    let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
+    assert!(chips.iter().any(|(l, k)| l == "Actions" && k == "⌘K"), "{chips:?}");
+    assert!(!chips.iter().any(|(l, _)| l == "Back"), "list views have no Back chip");
+}
+
+// ---- U1: exclusive choices use the Settings segmented control
+
+/// Every segmented bar drawn by `view` after two frames, top to bottom then left to right, as
+/// (cell count). Each bar must be ONE container whose cells sit inside it, side by side.
+fn segmented_bars(view: View) -> Vec<usize> {
+    let mut app = fixture();
+    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+    app.stack = vec![View::Root, view];
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    let mut bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+    bars.sort_by(|a, b| (a.0.min.y, a.0.min.x).partial_cmp(&(b.0.min.y, b.0.min.x)).unwrap());
+    for (container, cells) in &bars {
+        assert!(cells.iter().all(|c| container.contains_rect(*c)), "cells stay inside their container");
+        assert!(cells.windows(2).all(|w| w[0].max.x <= w[1].min.x + 0.01 && w[0].min.y == w[1].min.y), "cells sit side by side");
+        assert!(container.max.x <= ui::WIDTH, "the bar fits the window width ({} > {})", container.max.x, ui::WIDTH);
+    }
+    bars.iter().map(|(_, c)| c.len()).collect()
+}
+
+#[test]
+fn exclusive_choices_in_the_tool_windows_are_segmented_bars() {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    let png = std::path::PathBuf::from("/nonexistent/u1.png");
+    let r = ferrocast_core::croprect::Rect { x: 5, y: 5, w: 20, h: 20 };
+    let area = Area { rect: ferrocast_core::croprect::full(64, 36), start: 0.0, end: 2.0, blur: false };
+    let mut got: Vec<(&str, Vec<usize>, Vec<usize>)> = vec![];
+    let mut check = |name: &'static str, want: Vec<usize>, view: View| got.push((name, want, segmented_bars(view)));
+    check("compress goal, size", vec![3], compress_view(vec![png.clone()], Some((400, 300)), 0, 500));
+    check("compress goal, preset", vec![3, 3], compress_view(vec![png.clone()], Some((400, 300)), 2, 500));
+    check("compress media", vec![3, 3], media_view(vec!["/nonexistent/u1.mp4".into()], true, some_info(true), 2, 500));
+    check("video speed", vec![7], View::VideoSpeed { file: "/nonexistent/u1.mp4".into(), duration: Some(8.0), factor: 2.0 });
+    check(
+        "normalize presets",
+        vec![3],
+        View::NormalizeAudio { file: anorm_file(), loudness: None, target: -16.0, range: 11.0, peak: -1.5 },
+    );
+    check("channels", vec![2], View::ChannelsAudio { file: anorm_file(), in_channels: Some(2), stereo: true, left_db: 0.0, right_db: 0.0 });
+    check(
+        "audio to video",
+        vec![2, 3],
+        View::VisualizeAudio { file: avis_file(), orient: Canvas::Landscape, style: VisStyle::Waveform, image: None, picking: false },
+    );
+    check("collage layout", vec![4], View::CollageImage { files: vec![png.clone(), png.clone()], opts: Default::default(), color: 0 });
+    check(
+        "frame backdrop",
+        vec![3],
+        View::FrameImage { file: png.clone(), size: (100, 80), opts: Default::default(), color: 4, picking: false },
+    );
+    check(
+        "redact image",
+        vec![2],
+        View::RedactImage { file: png.clone(), size: (100, 80), areas: vec![r], sel: Some(0), blur: true, radius: 24, color: 5 },
+    );
+    check(
+        "redact video (style bar, then the aspect strip of the shared crop)",
+        vec![2, 6],
+        redact_view("/nonexistent/u1.mp4", 6.0, vec![area], 0),
+    );
+    check("crop image aspect", vec![6], View::CropImage { file: png.clone(), size: (1000, 600), rect: r, aspect: None });
+    check(
+        "crop video aspect",
+        vec![6],
+        View::VideoCrop { file: "/nonexistent/u1.mp4".into(), size: Some((640, 360)), rect: r, aspect: None, duration: 6.0, ref_t: 0.6 },
+    );
+    let bad: Vec<String> =
+        got.iter().filter(|(_, w, g)| w != g).map(|(n, w, g)| format!("{n}: want bars with {w:?} cells, drew {g:?}")).collect();
+    assert!(bad.is_empty(), "exclusive choices must be ONE segmented bar each:\n{}", bad.join("\n"));
+}
+
+/// Cells of the `bar`-th segmented bar (top to bottom, left to right) drawn by the open view.
+fn seg_cells(app: &App, bar: usize) -> Vec<Rect> {
+    let mut bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+    bars.sort_by(|a, b| (a.0.min.y, a.0.min.x).partial_cmp(&(b.0.min.y, b.0.min.x)).unwrap());
+    bars[bar].1.clone()
+}
+
+fn click_cell(app: &mut App, bar: usize, cell: usize) {
+    let at = seg_cells(app, bar)[cell].center();
+    click_at(app, at);
+    render(app, vec![]);
+}
+
+#[test]
+fn clicking_a_segmented_cell_sets_the_same_state_the_old_chips_did() {
+    // usize mode (compress goal) and index preset
+    let mut app = compress_app(0, 500);
+    click_cell(&mut app, 0, 2);
+    assert!(matches!(app.view(), View::CompressImage { mode: 2, .. }));
+    click_cell(&mut app, 1, 0);
+    assert!(matches!(app.view(), View::CompressImage { mode: 2, preset: 0, .. }));
+    click_cell(&mut app, 0, 1);
+    assert!(matches!(app.view(), View::CompressImage { mode: 1, preset: 0, .. }));
+    // bool (channels)
+    let mut app = fixture();
+    achan_view(&mut app, Some(2), true);
+    render(&mut app, vec![]);
+    click_cell(&mut app, 0, 0);
+    assert!(matches!(app.view(), View::ChannelsAudio { stereo: false, .. }));
+    click_cell(&mut app, 0, 1);
+    assert!(matches!(app.view(), View::ChannelsAudio { stereo: true, .. }));
+    // float presets: speed (x4 is cell 6) and normalize (-14 is cell 2)
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::VideoSpeed { file: "/nonexistent/u1.mp4".into(), duration: Some(8.0), factor: 2.0 }];
+    render(&mut app, vec![]);
+    click_cell(&mut app, 0, 6);
+    assert!(matches!(app.view(), View::VideoSpeed { factor, .. } if (*factor - 4.0).abs() < 1e-9));
+    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+    anorm_view(&mut app, None);
+    render(&mut app, vec![]);
+    click_cell(&mut app, 0, 2);
+    assert!(matches!(app.view(), View::NormalizeAudio { target, .. } if (*target + 14.0).abs() < 1e-9));
+    // Option aspect (crop): 16:9 locks the ratio and refits the rectangle, Free keeps it
+    let mut app = crop_app();
+    click_cell(&mut app, 0, 4);
+    assert!(
+        matches!(app.view(), View::CropImage { aspect: Some((16, 9)), rect, .. } if *rect == ferrocast_core::croprect::fit_aspect(1000, 600, 16, 9))
+    );
+    click_cell(&mut app, 0, 0);
+    assert!(matches!(app.view(), View::CropImage { aspect: None, .. }));
+    // enum with side effects (frame backdrop)
+    let mut app = fixture();
+    let f = std::path::PathBuf::from("/nonexistent/u1.png");
+    app.stack = vec![View::Root, View::FrameImage { file: f, size: (100, 80), opts: Default::default(), color: 4, picking: false }];
+    render(&mut app, vec![]);
+    click_cell(&mut app, 0, 1);
+    assert!(matches!(app.view(), View::FrameImage { opts, .. } if matches!(opts.backdrop, ferrocast_core::frame::Backdrop::Blur(_))));
+    click_cell(&mut app, 0, 0);
+    assert!(matches!(app.view(), View::FrameImage { opts, .. } if matches!(opts.backdrop, ferrocast_core::frame::Backdrop::Color(_))));
+}
+
+/// A dropped file for tests: egui 0.36 hands the app a trait object that only knows its path.
+#[derive(Debug)]
+struct TestDrop(std::path::PathBuf);
+
+impl egui::DroppedFile for TestDrop {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
+fn dropped(path: &std::path::Path) -> Vec<egui::DroppedFileHandle> {
+    vec![std::sync::Arc::new(TestDrop(path.to_path_buf()))]
+}
+
+/// The mouse release that picks a wheel segment also ends the drag, so macOS delivers a file DROP
+/// to the launcher right after the tool window was shown. That drop must not replace the window.
+#[test]
+fn the_drop_that_ends_a_wheel_gesture_does_not_replace_the_tool_window() {
+    use ferrocast_core::wheel::WheelKind;
+    let dir = std::env::temp_dir().join(format!("fc-wheel-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(64, 48).save(&png).unwrap();
+    for (label, title) in
+        [("Compress", "Compress Images"), ("Edit Photo", "Edit Photo"), ("Crop", "Crop Image"), ("Redact", "Redact Image")]
+    {
+        let mut app = fixture();
+        let files = vec![png.clone()];
+        let segs = app.wheel_segments(WheelKind::Tools, &files);
+        let i = segs.iter().position(|s| s.label == label).expect(label);
+        app.stack = vec![View::Root, View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind: WheelKind::Tools, sel: None }];
+        app.apply_wheel(Some(i));
+        assert_eq!(app.view().title(), title, "{label}: the tool window opens");
+        // the drop of the dragged file arrives on the next frame
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))),
+            dropped_files: dropped(&png),
+            ..Default::default()
+        };
+        let ctx = app.ctx.clone();
+        let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+        output.textures_delta.clear();
+        assert_eq!(app.view().title(), title, "{label}: the drop that ended the wheel gesture must not replace it");
+    }
+}
+
+/// A drop that is NOT the end of a wheel gesture still opens the converter, as before.
+#[test]
+fn an_ordinary_drop_on_the_visible_launcher_still_opens_the_converter() {
+    let dir = std::env::temp_dir().join(format!("fc-plain-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(8, 8).save(&png).unwrap();
+    let mut app = fixture();
+    app.visible = true;
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))),
+        dropped_files: dropped(&png),
+        ..Default::default()
+    };
+    let ctx = app.ctx.clone();
+    let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+    output.textures_delta.clear();
+    assert!(matches!(app.view(), View::Convert(_)), "got {:?}", app.view().title());
+}
+
+/// Characterisation (the function already exists, so there is no RED): the log line for a picked
+/// wheel segment names the wheel, the segment, the view that ended on top and whether the launcher
+/// is visible, and never a path.
+#[test]
+fn wheel_pick_log_line_names_the_segment_and_the_resulting_view_but_no_paths() {
+    use ferrocast_core::wheel::WheelKind;
+    let line = wheel_pick_log_line(WheelKind::Tools, "Crop", "Crop Image", true);
+    assert_eq!(line, "wheel pick Tools \"Crop\" -> view \"Crop Image\" launcher_visible=true");
+    let hidden = wheel_pick_log_line(WheelKind::Actions, "Copy Path", "Ferrocast", false);
+    assert!(hidden.contains("launcher_visible=false") && !hidden.contains('/'), "{hidden}");
+}
+
+// ---- U3: form windows draw their controls as rows of a Settings-style card
+
+/// The cards (with their rows) and the segmented bars `view` drew in its second frame.
+fn form_cards(view: View) -> (Vec<FormCard>, Vec<Rect>) {
+    let mut app = fixture();
+    app.ctx.data_mut(|d| {
+        d.remove::<Vec<FormCard>>(Id::new("form-cards"));
+        d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count"));
+    });
+    app.stack = vec![View::Root, view];
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    let cards: Vec<FormCard> = app.ctx.data(|d| d.get_temp(Id::new("form-cards"))).unwrap_or_default();
+    let bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+    (cards, bars.into_iter().map(|b| b.0).collect())
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum FormPlace {
+    /// the card is centred in the window
+    Centred,
+    /// preview on the left, the card is a side panel on the right half
+    SidePanel,
+}
+
+fn u3_windows() -> Vec<(&'static str, FormPlace, View)> {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    use FormPlace::*;
+    let png = std::path::PathBuf::from("/nonexistent/u3.png");
+    let mp4 = std::path::PathBuf::from("/nonexistent/u3.mp4");
+    let few = {
+        use ferrocast_core::metaform::Group;
+        vec![
+            meta_field(Group::File, "title", "Hello", true),
+            meta_field(Group::File, "major_brand", "isom", false),
+            meta_field(Group::Track { index: 0, kind: "audio".into() }, "language", "eng", true),
+        ]
+    };
+    vec![
+        (
+            "audio to video",
+            Centred,
+            View::VisualizeAudio { file: avis_file(), orient: Canvas::Landscape, style: VisStyle::Waveform, image: None, picking: false },
+        ),
+        (
+            "audio to video, still",
+            Centred,
+            View::VisualizeAudio { file: avis_file(), orient: Canvas::Square, style: VisStyle::Still, image: None, picking: false },
+        ),
+        ("normalize", Centred, View::NormalizeAudio { file: anorm_file(), loudness: Some(-20.0), target: -16.0, range: 11.0, peak: -1.5 }),
+        ("channels", Centred, View::ChannelsAudio { file: anorm_file(), in_channels: Some(2), stereo: true, left_db: 0.0, right_db: 0.0 }),
+        ("compress image, size", Centred, compress_view(vec![png.clone()], Some((400, 300)), 0, 500)),
+        ("compress image, preset", Centred, compress_view(vec![png.clone()], Some((400, 300)), 2, 500)),
+        ("compress video", Centred, media_view(vec![mp4.clone()], true, some_info(true), 1, 500)),
+        ("compress audio", Centred, media_view(vec!["/nonexistent/u3.mp3".into()], false, some_info(false), 0, 500)),
+        ("metadata", Centred, meta_view("/x/a.mp4", Some(few), None)),
+        ("video speed", Centred, View::VideoSpeed { file: mp4.clone(), duration: Some(8.0), factor: 2.0 }),
+        (
+            "redact image options",
+            Centred,
+            View::RedactImage { file: png.clone(), size: (100, 80), areas: vec![], sel: None, blur: false, radius: 24, color: 5 },
+        ),
+        (
+            "add background",
+            SidePanel,
+            View::FrameImage { file: png.clone(), size: (100, 80), opts: Default::default(), color: 4, picking: false },
+        ),
+        ("collage", SidePanel, View::CollageImage { files: vec![png.clone(), png.clone()], opts: Default::default(), color: 0 }),
+        ("edit photo", SidePanel, View::EditPhoto { file: png, size: (100, 80), opts: Default::default() }),
+    ]
+}
+
+#[test]
+fn form_windows_group_their_controls_in_a_card_inside_the_window() {
+    let mut bad = vec![];
+    for (name, place, view) in u3_windows() {
+        let (cards, bars) = form_cards(view);
+        if cards.is_empty() {
+            bad.push(format!("{name}: drew no card (want at least one)"));
+            continue;
+        }
+        let content = Rect::from_min_max(Pos2::new(0.0, ui::SEARCH_H), Pos2::new(ui::WIDTH, ui::HEIGHT - ui::FOOTER_H));
+        for (i, c) in cards.iter().enumerate() {
+            if !content.contains_rect(c.rect) {
+                bad.push(format!("{name}: card {i} {:?} is not inside the window content {content:?}", c.rect));
+            }
+            if c.rect.width() > 600.0 {
+                bad.push(format!("{name}: card {i} is {} pt wide (max 600)", c.rect.width()));
+            }
+            match place {
+                FormPlace::Centred if (c.rect.center().x - ui::WIDTH / 2.0).abs() >= 4.0 => {
+                    bad.push(format!("{name}: card {i} is centred at {} not {}", c.rect.center().x, ui::WIDTH / 2.0))
+                }
+                FormPlace::SidePanel if c.rect.min.x < ui::WIDTH / 2.0 => {
+                    bad.push(format!("{name}: side card {i} starts at {}", c.rect.min.x))
+                }
+                _ => {}
+            }
+            if c.rows.is_empty() {
+                bad.push(format!("{name}: card {i} has no row"));
+            }
+            for (title, row, control) in &c.rows {
+                if title.trim().is_empty() {
+                    bad.push(format!("{name}: card {i} has a row without a title"));
+                }
+                if !c.rect.contains_rect(*row) {
+                    bad.push(format!("{name}: row {title:?} {row:?} sticks out of its card {:?}", c.rect));
+                }
+                if !c.rect.contains_rect(*control) {
+                    bad.push(format!("{name}: the control of {title:?} {control:?} sticks out of its card {:?}", c.rect));
+                }
+            }
+        }
+        for b in bars {
+            if !cards.iter().any(|c| c.rect.contains_rect(b)) {
+                bad.push(format!("{name}: a segmented bar {b:?} lies outside every card"));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "form windows must use cards:\n{}", bad.join("\n"));
+}
+
+#[test]
+fn annotate_tool_strip_fits_the_window_width() {
+    let mut app = fixture();
+    app.ctx.data_mut(|d| d.remove::<Vec<Rect>>(Id::new("annot-strip")));
+    app.stack = vec![
+        View::Root,
+        View::Annotate {
+            file: "/nonexistent/u3.png".into(),
+            size: (100, 80),
+            doc: Default::default(),
+            tool: ferrocast_core::annotate::Tool::Arrow,
+            color: 0,
+            sel: None,
+        },
+    ];
+    render(&mut app, vec![]);
+    app.ctx.data_mut(|d| d.remove::<Vec<Rect>>(Id::new("annot-strip")));
+    render(&mut app, vec![]);
+    let strip: Vec<Rect> = app.ctx.data(|d| d.get_temp(Id::new("annot-strip"))).unwrap_or_default();
+    assert!(strip.len() >= 18, "12 tools and 6 colours, got {}", strip.len());
+    let right = strip.iter().map(|r| r.max.x).fold(0.0, f32::max);
+    assert!(right <= ui::WIDTH - 12.0, "the tool strip ends at x={right}, the window is {} wide", ui::WIDTH);
+}
+
+// ---- U4a: the new windows read in both themes
+
+/// Source-over of `top` on an opaque `under`, as floats 0..255. `Color32` is premultiplied, so its
+/// channels are added as they are.
+fn over(under: [f32; 3], top: Color32) -> [f32; 3] {
+    let a = top.a() as f32 / 255.0;
+    let t = [top.r() as f32, top.g() as f32, top.b() as f32];
+    [0, 1, 2].map(|i| t[i] + under[i] * (1.0 - a))
+}
+
+/// WCAG relative luminance of an sRGB colour (0..255 channels).
+fn luminance(c: [f32; 3]) -> f32 {
+    let lin = |v: f32| {
+        let v = v / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+}
+
+/// WCAG contrast ratio of two opaque colours.
+fn contrast(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// The window fill as the user sees it. It is translucent, so the worst of a white and a black
+/// backdrop is used by the callers.
+fn window_over(pal: &Palette, backdrop: f32) -> [f32; 3] {
+    over([backdrop; 3], pal.bg)
+}
+
+#[test]
+fn palette_text_and_controls_keep_their_contrast_in_both_themes() {
+    let mut bad = vec![];
+    for dark in [false, true] {
+        let pal = palette(dark);
+        for backdrop in [0.0_f32, 255.0] {
+            let bg = window_over(&pal, backdrop);
+            let card = over(bg, pal.field);
+            let container = over(card, pal.field.gamma_multiply(1.3));
+            let segment = over(container, pal.sel.gamma_multiply(1.8));
+            let t = |c: Color32| [c.r() as f32, c.g() as f32, c.b() as f32];
+            let rows = [
+                ("text on bg", contrast(t(pal.text), bg), 4.5),
+                ("text on card", contrast(t(pal.text), card), 4.5),
+                ("sub on bg", contrast(t(pal.sub), bg), 3.0),
+                ("sub on card", contrast(t(pal.sub), card), 3.0),
+                ("selected segment vs its container", contrast(segment, container), 1.3),
+            ];
+            for (what, got, want) in rows {
+                eprintln!("U4a contrast dark={dark} backdrop={backdrop}: {what} = {got:.2} (want >= {want})");
+                if got < want {
+                    bad.push(format!("dark={dark} backdrop={backdrop}: {what} is {got:.2}, want >= {want}"));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "contrast too low:\n{}", bad.join("\n"));
+}
+
+#[test]
+fn the_last_row_of_a_form_card_draws_no_separator() {
+    let mut bad = vec![];
+    for (name, _, view) in u3_windows() {
+        let (cards, _) = form_cards(view);
+        for (i, c) in cards.iter().enumerate() {
+            let Some((title, last, _)) = c.rows.last() else { continue };
+            if let Some(y) = c.seps.iter().find(|y| (**y - last.max.y).abs() < 0.5) {
+                bad.push(format!("{name}: card {i} draws a separator at y={y} under its last row {title:?} (row ends at {})", last.max.y));
+            }
+            if c.seps.len() + 1 != c.rows.len() {
+                bad.push(format!("{name}: card {i} has {} rows but {} separators (want rows - 1)", c.rows.len(), c.seps.len()));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "separator under the last row:\n{}", bad.join("\n"));
+}
+
+/// The slider rail is `widgets.inactive.bg_fill`; on a card it must show in both themes.
+#[test]
+fn slider_rail_stands_out_from_the_card_in_both_themes() {
+    let mut bad = vec![];
+    for dark in [false, true] {
+        let mut app = fixture();
+        app.ctx.set_theme(if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+        app.stack = vec![View::Root, View::VideoSpeed { file: "/nonexistent/u4.mp4".into(), duration: Some(8.0), factor: 2.0 }];
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        let theme = if dark { egui::Theme::Dark } else { egui::Theme::Light };
+        let rail = app.ctx.style_of(theme).visuals.widgets.inactive.bg_fill;
+        let pal = palette(dark);
+        for backdrop in [0.0_f32, 255.0] {
+            let card = over(window_over(&pal, backdrop), pal.field);
+            let got = contrast(over(card, rail), card);
+            eprintln!("U4a slider rail dark={dark} backdrop={backdrop}: {got:.2}");
+            if got < 1.3 {
+                bad.push(format!("dark={dark} backdrop={backdrop}: the slider rail is {got:.2} against its card, want >= 1.3"));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "invisible slider rail:\n{}", bad.join("\n"));
+}
+
+/// Every filled circle of radius 8 (the colour swatches) a view drew in its second frame.
+fn swatch_circles(view: View, dark: bool) -> Vec<egui::epaint::CircleShape> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<egui::epaint::CircleShape>) {
+        match shape {
+            egui::Shape::Circle(c) if (c.radius - 8.0).abs() < 0.01 && c.fill != Color32::TRANSPARENT => out.push(*c),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut app = fixture();
+    app.ctx.set_theme(if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+    app.stack = vec![View::Root, view];
+    render(&mut app, vec![]);
+    let input =
+        egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))), ..Default::default() };
+    let ctx = app.ctx.clone();
+    let output = ctx.run_ui(input, |ui| app.draw(ui));
+    let mut found = vec![];
+    for s in &output.shapes {
+        walk(&s.shape, &mut found);
+    }
+    found
+}
+
+/// A swatch is as dark as a dark card or as light as a light one for some colours (black, white),
+/// so it needs an edge of its own.
+#[test]
+fn colour_swatches_have_an_edge_that_shows_on_the_card() {
+    use ferrocast_core::annotate::Tool;
+    let png = std::path::PathBuf::from("/nonexistent/u4.png");
+    let views = || {
+        vec![
+            (
+                "annotate",
+                View::Annotate { file: png.clone(), size: (100, 80), doc: Default::default(), tool: Tool::Arrow, color: 0, sel: None },
+            ),
+            ("collage", View::CollageImage { files: vec![png.clone(), png.clone()], opts: Default::default(), color: 0 }),
+            ("add background", View::FrameImage { file: png.clone(), size: (100, 80), opts: Default::default(), color: 4, picking: false }),
+            (
+                "redact image",
+                View::RedactImage { file: png.clone(), size: (100, 80), areas: vec![], sel: None, blur: false, radius: 24, color: 5 },
+            ),
+        ]
+    };
+    let mut bad = vec![];
+    for dark in [false, true] {
+        let pal = palette(dark);
+        let card = over(window_over(&pal, if dark { 0.0 } else { 255.0 }), pal.field);
+        for (name, view) in views() {
+            let circles = swatch_circles(view, dark);
+            if circles.len() < 6 {
+                bad.push(format!("{name} dark={dark}: found only {} swatches", circles.len()));
+            }
+            for c in circles {
+                let ring = if c.stroke.width >= 1.0 { contrast(over(card, c.stroke.color), card) } else { 0.0 };
+                if ring < 1.3 {
+                    bad.push(format!(
+                        "{name} dark={dark}: swatch {:?} has no edge that shows on the card (edge contrast {ring:.2}, stroke width {})",
+                        c.fill, c.stroke.width
+                    ));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "swatches without an edge:\n{}", bad.join("\n"));
 }

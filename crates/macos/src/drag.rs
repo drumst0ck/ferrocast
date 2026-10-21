@@ -43,7 +43,9 @@ pub fn drag_files() -> Vec<PathBuf> {
 mod tests {
     #[test]
     fn samples_without_a_drag() {
-        assert!(!super::left_down());
+        // Only that sampling works: whether the physical left button is down is the user's, not the
+        // test's (asserting `!left_down()` failed whenever the mouse was in use while the suite ran).
+        let _ = super::left_down();
         let _ = super::modifier_bits();
         let c = super::drag_count();
         assert_eq!(super::drag_count(), c, "stable while nothing is dragged");

@@ -139,6 +139,12 @@ pub fn frame_job(opts: &ferrocast_core::frame::FrameOpts) -> Result<ferrocast_co
 }
 
 /// `m:ss` for a time in seconds (whole seconds, rounded down; 0:00 for unusable numbers).
+/// The ZIP output for the "Zip" action. Built by hand because the planner does not offer ZIP for
+/// known types; `ditto` zips any file or folder and keeps the original.
+pub fn zip_target() -> ferrocast_core::convert::Target {
+    ferrocast_core::convert::Target { ext: "zip", label: "ZIP", engine: ferrocast_core::convert::Engine::Archive, needs: None }
+}
+
 pub fn clock(secs: f64) -> String {
     let s = if secs.is_finite() && secs > 0.0 { secs as u64 } else { 0 };
     format!("{}:{:02}", s / 60, s % 60)
@@ -588,6 +594,43 @@ impl View {
             | View::Colors(_) => Shape::List,
             View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::Settings => Shape::Form,
             _ => Shape::Single,
+        }
+    }
+    /// Footer key chips (label, key), left to right, for the tool windows; empty for every other view.
+    /// The primary action (what Enter does in that window) comes first, then the most useful other
+    /// keys, and Back last; at most four chips so the footer fits next to the title.
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        const BACK: (&str, &str) = ("Back", "esc");
+        const SAVE: (&str, &str) = ("Save copy", "↵");
+        let trim = vec![("Trim", "↵"), ("Start", "I"), ("End", "O"), BACK];
+        match self {
+            View::CompressImage { .. } => vec![("Compress", "↵"), BACK],
+            View::EditMetadata { .. }
+            | View::VideoSpeed { .. }
+            | View::ChannelsAudio { .. }
+            | View::BleepAudio { .. }
+            | View::FrameImage { .. }
+            | View::EditPhoto { .. }
+            | View::VideoRedact { .. } => vec![SAVE, BACK],
+            View::NormalizeAudio { .. } => vec![("Normalize", "↵"), BACK],
+            View::VisualizeAudio { .. } => vec![("Make video", "↵"), BACK],
+            View::VideoTrim { .. } | View::AudioTrim { .. } => trim,
+            View::VideoSnapshot { .. } => vec![("Save PNG", "↵"), ("Frame", "←/→"), BACK],
+            View::VideoSplit { .. } => vec![("Split", "↵"), ("Cut here", "M"), ("Remove last", "⌫"), BACK],
+            View::CollageImage { .. } => vec![("Save collage", "↵"), BACK],
+            View::RedactImage { .. } => vec![SAVE, ("Remove", "⌫"), BACK],
+            View::CropImage { .. } | View::VideoCrop { .. } => vec![("Crop", "↵"), BACK],
+            View::Annotate { .. } => vec![SAVE, ("Undo", "⌘Z"), ("Delete", "⌫"), BACK],
+            View::Reorder { purpose, .. } => {
+                let primary = match purpose {
+                    ReorderPurpose::JoinVideos => "Join",
+                    ReorderPurpose::CreatePdf => "Create PDF",
+                    ReorderPurpose::MergePdf | ReorderPurpose::MergeAudio => "Merge",
+                };
+                vec![(primary, "↵"), ("Move", "⌘↑/↓"), BACK]
+            }
+            View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
+            _ => vec![],
         }
     }
     fn title(&self) -> &'static str {
@@ -1357,7 +1400,7 @@ impl App {
                     needs: None,
                     pick: WheelPick::Act(act),
                 };
-                // exactly the six file actions, in the order of ferrocast_core::tools::ACTIONS
+                // the six Tangerine actions plus Zip (user addition), in the order of ferrocast_core::tools::ACTIONS
                 ferrocast_core::tools::ACTIONS
                     .into_iter()
                     .map(|a| {
@@ -1369,6 +1412,7 @@ impl App {
                             ActionId::Move => seg("Move to…", "sf:folder", Act::MoveFiles(f.clone())),
                             ActionId::CopyPath => seg("Copy Path", "sf:link", Act::CopyText(paths.clone())),
                             ActionId::OpenTerminal => seg("Terminal", "sf:terminal", Act::OpenInTerminal(f[0].clone())),
+                            ActionId::Zip => seg("Zip", "sf:doc.zipper", Act::ZipFiles(f.clone())),
                         }
                     })
                     .collect()
@@ -1415,6 +1459,7 @@ impl App {
         };
         self.prev_pid = running::frontmost().map(|f| f.pid).filter(|p| *p != std::process::id() as i32);
         self.stack = vec![View::Root, View::Wheel { files, center, segs, kind, sel: None }];
+        self.ctx.data_mut(|d| d.remove::<draw::WheelAnim>(Id::new("wheel_anim")));
         self.panel = None;
         self.visible = true;
         self.had_focus = false;
@@ -1452,12 +1497,17 @@ impl App {
 
     /// Close the wheel and run segment `picked` (None cancels).
     pub(crate) fn apply_wheel(&mut self, picked: Option<usize>) {
-        let Some(View::Wheel { files, segs, .. }) = self.stack.last().cloned() else { return };
+        let Some(View::Wheel { files, segs, kind, .. }) = self.stack.last().cloned() else { return };
+        // The release that picks a segment also ends the drag: macOS delivers the file DROP to the
+        // launcher right after. Remember when the gesture ended so that drop can be ignored.
+        self.ctx.data_mut(|d| d.insert_temp(Id::new("wheel_end"), Instant::now()));
+        self.ctx.data_mut(|d| d.remove::<draw::WheelAnim>(Id::new("wheel_anim")));
         self.hide();
         self.reset_to_root();
         let Some(i) = picked.filter(|i| *i < segs.len()) else { return };
-        match segs[i].pick.clone() {
-            WheelPick::Act(Act::Convert(_)) if segs[i].needs.is_some() => self.toast(format!("{}: not available yet", segs[i].label)),
+        let (label, pick, needs) = (segs[i].label.clone(), segs[i].pick.clone(), segs[i].needs);
+        match pick {
+            WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(format!("{label}: not available yet")),
             WheelPick::File(tool) => {
                 self.toast(format!("{}…", tool.label()));
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
@@ -1484,6 +1534,7 @@ impl App {
             }
             WheelPick::Act(a) => self.perform(a, false),
         }
+        instance::log(&self.store.root, &wheel_pick_log_line(kind, &label, self.view().title(), self.visible));
     }
 
     fn reset_to_root(&mut self) {
@@ -2996,6 +3047,7 @@ impl App {
                     a.push(Action::new("Organize Pages…", Act::OrganizePdf(p.clone())).key(CMD_SHIFT, Key::O));
                 }
                 a.push(Action::new("Copy File", Act::CopyFiles(vec![p.clone()])).key(CMD_SHIFT, Key::Period));
+                a.push(Action::new("Compress to ZIP", Act::ZipFiles(vec![p.clone()])));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Move to…", Act::MoveFiles(vec![p.clone()])).key(CMD_SHIFT, Key::M));
                 a.push(
@@ -3853,6 +3905,19 @@ impl App {
                     format!("{} files copied", files.len())
                 });
             }
+            Act::ZipFiles(files) => {
+                // each item gets its own ZIP next to it; a selection that vanished starts nothing
+                if files.is_empty() || files.iter().any(|p| !p.exists()) {
+                    self.toast("Can't zip: a selected file no longer exists");
+                } else {
+                    self.toast(if files.len() == 1 {
+                        "Compressing to ZIP…".to_string()
+                    } else {
+                        format!("Compressing {} items to ZIP…", files.len())
+                    });
+                    services::convert_files(files, zip_target(), self.tools, self.bus.clone());
+                }
+            }
             Act::MoveFiles(files) => {
                 let bus = self.bus.clone();
                 self.hide();
@@ -4611,6 +4676,15 @@ pub(crate) fn tool_segment_with(t: ferrocast_core::tools::ToolId, files: &[PathB
     };
     WheelSeg { label: tool_label(t).into(), symbol: tool_symbol(t), needs: missing.then_some("Not available yet"), pick }
 }
+
+/// One diagnostic line for the log when a segment is picked: the wheel, the segment and the view
+/// that ended up on top. Never a path.
+pub(crate) fn wheel_pick_log_line(kind: ferrocast_core::wheel::WheelKind, label: &str, view_title: &str, visible: bool) -> String {
+    format!("wheel pick {kind:?} {label:?} -> view {view_title:?} launcher_visible={visible}")
+}
+
+/// A file drop that arrives within this long of a wheel gesture ending is the end of that same drag.
+pub(crate) const WHEEL_DROP_GRACE: Duration = Duration::from_millis(1500);
 
 /// One diagnostic line for the log when a wheel opens or switches: the kind, how many segments and
 /// the first three labels. Never a path.

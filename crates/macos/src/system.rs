@@ -2,6 +2,13 @@
 
 use std::process::{Command, Stdio};
 
+/// True when System Settings > Accessibility > Display > Reduce motion is on
+/// (`NSWorkspace.accessibilityDisplayShouldReduceMotion`). Cheap, but callers should still read it
+/// once per use (e.g. when a wheel opens), not every frame.
+pub fn reduce_motion() -> bool {
+    objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+}
+
 /// Run AppleScript, returning trimmed stdout.
 pub fn osascript(script: &str) -> anyhow::Result<String> {
     let out = Command::new("/usr/bin/osascript").arg("-e").arg(script).output()?;
@@ -337,7 +344,7 @@ mod tests {
 
 #[cfg(test)]
 mod timeout_tests {
-    use super::osascript_timeout;
+    use super::{osascript_timeout, reduce_motion};
 
     #[test]
     fn a_stuck_script_is_killed_at_the_deadline() {
@@ -345,6 +352,13 @@ mod timeout_tests {
         let e = osascript_timeout("delay 30", 1).unwrap_err().to_string();
         assert!(e.contains("timed out"), "{e}");
         assert!(t.elapsed().as_secs() < 5, "returned long after the deadline");
+    }
+
+    #[test]
+    fn reduce_motion_reads_the_system_flag_without_panicking() {
+        let v = reduce_motion();
+        println!("reduce_motion() = {v}");
+        assert_eq!(v, reduce_motion(), "stable between calls");
     }
 
     #[test]

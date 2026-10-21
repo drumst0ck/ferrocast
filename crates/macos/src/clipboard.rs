@@ -76,9 +76,22 @@ pub(crate) fn file_url_to_path(s: &str) -> Option<PathBuf> {
     if p.is_empty() {
         return None;
     }
+    // A file REFERENCE url (`file:///.file/id=<n>.<m>`) is not a path: ask Foundation for the
+    // real one. Gone file: nothing, rather than a bogus path every tool would choke on.
+    if p.starts_with("/.file/id=") {
+        return file_reference_path(s);
+    }
     // keep the root: "file:///" must stay "/", never become an empty path
     let trimmed = p.trim_end_matches('/');
     Some(PathBuf::from(if trimmed.is_empty() { "/" } else { trimmed }))
+}
+
+/// Real path behind a `file:///.file/id=...` reference url, or `None` when it no longer resolves.
+fn file_reference_path(url: &str) -> Option<PathBuf> {
+    let url = NSURL::URLWithString(&NSString::from_str(url))?;
+    let real = url.filePathURL()?;
+    let path = real.path()?.to_string();
+    (!path.is_empty() && !path.starts_with("/.file/id=")).then(|| PathBuf::from(path))
 }
 
 /// `NSURL` for a file path, or `None` for an empty one: `+[NSURL fileURLWithPath:]` returns NULL
@@ -218,6 +231,29 @@ pub fn restore(s: &Snapshot) {
 
 #[cfg(test)]
 mod tests {
+
+    /// A drag from Finder can carry a file REFERENCE url (`file:///.file/id=<n>.<m>`). Taken
+    /// literally it is a path without a name or extension that no tool can open (seen in a real
+    /// session: `ditto: Cannot get the real path for source '/.file/id=...'`, and the drop wheel
+    /// offered only ZIP for a PNG). It must resolve to the real path.
+    #[test]
+    fn file_reference_urls_resolve_to_the_real_path() {
+        let dir = std::env::temp_dir().join(format!("fc-fileref-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("picture one.png");
+        std::fs::write(&file, b"x").unwrap();
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&file.to_string_lossy()));
+        let reference = url.fileReferenceURL().expect("a file reference url for an existing file");
+        let text = reference.absoluteString().expect("absolute string").to_string();
+        assert!(text.contains("/.file/id="), "test needs a real reference url: {text}");
+        let got = file_url_to_path(&text).expect("resolved");
+        assert_eq!(std::fs::canonicalize(&got).unwrap(), std::fs::canonicalize(&file).unwrap(), "{text} -> {got:?}");
+        assert!(!got.to_string_lossy().contains(".file/id="), "{got:?}");
+        // a reference to a file that is gone resolves to nothing instead of a bogus path
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(file_url_to_path(&text), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use super::*;
 
     #[test]
