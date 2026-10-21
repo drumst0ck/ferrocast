@@ -1665,7 +1665,10 @@ impl App {
 
     fn drain(&mut self) {
         while let Ok(m) = self.rx.try_recv() {
-            self.sec_dirty = true;
+            // icon bytes only feed the icon cache: the list holds icon descriptors, not pixels
+            if !matches!(m, Msg::IconBytes(..)) {
+                self.sec_dirty = true;
+            }
             match m {
                 Msg::Wake => {}
                 Msg::Toast(t) => {

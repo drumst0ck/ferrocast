@@ -5614,3 +5614,29 @@ fn a_hidden_launcher_paints_nothing_and_requests_no_repaint_a_visible_one_does()
     let fade = ctx.animate_bool_with_time(Id::new("appear"), true, 0.14);
     assert!(fade < 0.01, "the next show() starts transparent, got {fade}");
 }
+
+#[test]
+fn only_messages_that_can_change_the_list_mark_the_sections_dirty() {
+    let mut app = fixture();
+    render(&mut app, vec![]);
+    let _ = app.sections_cached();
+    assert!(!app.sec_dirty, "a computed list is clean");
+
+    // up to 40 of these arrive after every query; they only feed the icon cache
+    for i in 0..40 {
+        app.bus.send(Msg::IconBytes(format!("app:/Applications/A{i}.app"), vec![1, 2, 3]));
+    }
+    app.drain();
+    assert!(!app.sec_dirty, "icon bytes must not rebuild the list");
+    assert_eq!(app.icons.prefetched.len(), 40, "the bytes still reach the icon cache");
+
+    // everything else keeps invalidating (clipboard change, apps, files, toasts...)
+    for (label, msg) in
+        [("Wake", Msg::Wake), ("Apps", Msg::Apps(vec![])), ("Files", Msg::Files("q".into(), vec![])), ("Toast", Msg::Toast("t".into()))]
+    {
+        app.bus.send(msg);
+        app.drain();
+        assert!(app.sec_dirty, "{label} marks the list dirty");
+        let _ = app.sections_cached();
+    }
+}
