@@ -9,7 +9,7 @@ Branch: feat/translate-wheel · Plan: odd/plans/text-translate-wheel-plan.md · 
 
 ## Tasks
 - T1 S1,S4 core wheel.rs has_text + Translate — commit: see git log (TW1)
-- T2 S1,S3 core translate.rs — commit: pending
+- T2 S1,S3 core translate.rs + settings fields — commit: TW2 (git log)
 - T3 S1 macos drag_text — commit: pending
 - T4 S1,S2,S4 app wiring — commit: pending
 - T5 S3 settings UI — commit: pending
@@ -19,3 +19,5 @@ Branch: feat/translate-wheel · Plan: odd/plans/text-translate-wheel-plan.md · 
 - L1 "traza el pan que ejecutara sonnet, la idea es que al igual que tenemos la ruleta para transformar archivos al seleccionar texto podamos traducirlo al idioma que queramos"
 - L2 "vamos a dejar el translate con ia como dijiste al principio, pero que pueda usar tu sub de claude o openai almigual que el chat con ia que ya tenemos inolementado y incluir en opciones que quieres usar como motor de traduccion"
 - L3 "ejecutalo"
+
+- L4 Slice boundary: TW1+TW2 (459 lines) form slice 1; TW3-TW4 are slice 2, TW5-TW6 slice 3. Push/PR stay the user's decision.
