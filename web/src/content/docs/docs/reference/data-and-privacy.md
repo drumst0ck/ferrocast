@@ -4,7 +4,7 @@ description: "Where Ferrocast keeps its data, what is stored unencrypted, which 
 sidebar:
   order: 1
 ---
-Ferrocast keeps its data in JSON files in `~/Library/Application Support/Ferrocast`. The files are **unencrypted** and open in any editor. Set `FERROCAST_DATA_DIR` to use another folder (see [Environment variables](/docs/reference/environment-variables/)).
+Ferrocast keeps its data in JSON files in `~/Library/Application Support/Ferrocast`. The files are unencrypted and open in any editor. Set `FERROCAST_DATA_DIR` to use another folder (see [Environment variables](/docs/reference/environment-variables/)).
 
 ## What lives where
 

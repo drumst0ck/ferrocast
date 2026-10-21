@@ -14,7 +14,7 @@ A halo ring: one accent per wheel, a gradient sector with an edge glow, a centre
 
 ## Tools per format
 
-A table of 26 tools decides what the Tools wheel and the Convert view offer for each file type; tools without a window use presets or typed commands. See [File tools](/docs/files/tools/compress/) and [Typed commands](/docs/files/typed-commands/).
+A table of 26 tools sets what the Tools wheel and the Convert view offer for each file type. Tools without a window use presets or typed commands. See [File tools](/docs/files/tools/compress/) and [Typed commands](/docs/files/typed-commands/).
 
 ## Convert Finder Selection
 

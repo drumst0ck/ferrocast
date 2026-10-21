@@ -20,7 +20,7 @@ Always use the `brew tap` form with the URL. The short form `brew install drumst
 
 ## Why a formula and not a cask
 
-The official Homebrew cask requires signed and notarized apps (a paid Apple Developer account) and disables the ones that do not pass Gatekeeper from September 2026. Building from source on your own machine means the app carries **no quarantine flag** and Gatekeeper does not get involved: no paid account is needed and no protection is bypassed. In exchange, the first install compiles for a few minutes and the signature is ad-hoc, for local use.
+The official Homebrew cask requires signed and notarized apps (a paid Apple Developer account) and disables the ones that do not pass Gatekeeper from September 2026. Building from source on your own machine means the app carries no quarantine flag and Gatekeeper does not get involved: no paid account is needed and no protection is bypassed. In exchange, the first install compiles for a few minutes and the signature is ad-hoc, for local use.
 
 ## Update
 

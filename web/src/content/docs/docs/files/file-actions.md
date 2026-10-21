@@ -19,7 +19,7 @@ Hold <kbd>⌃</kbd> while dragging files to open the Actions wheel, or use the a
 | Zip | Compress each selected file or folder into its own ZIP next to it. An existing ZIP is never overwritten. |
 
 :::caution[Limits]
-Zip is an action added on request: it is not one of the six actions of the app this project is measured against. Each selected file or folder gets its own `.zip` next to it, without overwriting, and the name loses the original extension (`photo.png` becomes `photo.zip`). Terminal for several files opens only the first file's location.
+Zip was added on request. Each selected file or folder gets its own `.zip` next to it, without overwriting, and the name loses the original extension (`photo.png` becomes `photo.zip`). Terminal for several files opens only the first file's location.
 :::
 
 ## Related

@@ -8,9 +8,9 @@ Ferrocast is independent and not affiliated with Raycast.
 
 ## What carries over
 
-- **Script Commands** run as they are. Ferrocast reads Raycast-compatible metadata and supports the full, compact, silent and inline modes. See [Script Commands](/docs/launcher/script-commands/).
-- **Snippets** import from a Raycast JSON export (Settings, backup and import). See [Snippets](/docs/launcher/snippets/) and [Settings](/docs/launcher/settings/).
-- **Quicklinks** you recreate by hand; it takes a minute. See [Quicklinks](/docs/launcher/quicklinks/).
+- Script Commands run as they are. Ferrocast reads Raycast-compatible metadata and supports the full, compact, silent and inline modes. See [Script Commands](/docs/launcher/script-commands/).
+- Snippets import from a Raycast JSON export (Settings, backup and import). See [Snippets](/docs/launcher/snippets/) and [Settings](/docs/launcher/settings/).
+- Quicklinks you recreate by hand; it takes a minute. See [Quicklinks](/docs/launcher/quicklinks/).
 
 ## What is not included
 

@@ -10,10 +10,10 @@ Open the launcher with <kbd>⌥</kbd> <kbd>Space</kbd>, type, move with <kbd>↑
 
 ## Options
 
-- **Aliases and favorites**: give any app or command a short name; <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>F</kbd> adds or removes a favorite (on a file result the same keys run Float on Shelf).
-- **Hotkey per command**: <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>,</kbd> sets a hotkey for the selected command.
-- **Fallback**: when nothing matches, a “Look up in Dictionary” fallback is offered.
-- **Window switcher, notes, emoji and file search** are commands of the same list. See [System commands](/docs/launcher/system-commands/).
+- Aliases and favorites: give any app or command a short name; <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>F</kbd> adds or removes a favorite (on a file result the same keys run Float on Shelf).
+- Hotkey per command: <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>,</kbd> sets a hotkey for the selected command.
+- Fallback: when nothing matches, a “Look up in Dictionary” fallback is offered.
+- Window switcher, notes, emoji and file search are commands of the same list. See [System commands](/docs/launcher/system-commands/).
 - <kbd>esc</kbd> clears the search, goes back or closes; <kbd>⌫</kbd> goes back when the search is empty.
 
 ## Related

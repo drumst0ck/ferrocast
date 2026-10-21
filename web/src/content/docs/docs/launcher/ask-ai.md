@@ -18,7 +18,7 @@ Open Ask AI from the launcher. The provider chip is a menu to switch between the
 ChatGPT and Claude subscriptions do not include API access, so they are not offered directly.
 
 :::caution[Limits]
-Sign in with ChatGPT is a grey area of terms: OpenAI has not blessed third-party use of that flow, and the Settings pane says so plainly; the API with a key is the by-the-book route.
+Sign in with ChatGPT is a grey area of terms: OpenAI has not blessed third-party use of that flow, and the Settings pane says so; the API with a key is the by-the-book route.
 :::
 
 ## Related

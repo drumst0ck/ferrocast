@@ -10,7 +10,7 @@ sidebar:
 Press <kbd>⌥</kbd> <kbd>Space</kbd> from any app. You can change the shortcut in Settings.
 
 ### Is it free?
-Completely. MIT licence, no account, no Pro tier waiting behind a paywall.
+Yes. MIT licence, no account, no Pro tier.
 
 ### Will it run on my Mac?
 It runs on Apple Silicon Macs. Intel Macs are not supported.
@@ -25,7 +25,7 @@ Because moving windows, pasting for you and expanding snippets all need it. Sear
 It never leaves your Mac. It sits in a JSON file in Application Support, and anything copied from a password manager like 1Password is skipped on purpose.
 
 ### What is missing today?
-Honestly: an extension store and sync between Macs.
+An extension store and sync between Macs.
 
 ## AI and migration
 

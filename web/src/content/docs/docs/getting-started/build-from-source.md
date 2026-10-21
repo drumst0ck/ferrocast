@@ -19,7 +19,7 @@ It requires Rust 1.95 (pinned in `rust-toolchain.toml`; egui 0.36 requires it) a
 
 ## Distribution
 
-The supported route is Homebrew compiling from source. The **unnotarized** DMG from `scripts/dmg.sh` will be blocked by Gatekeeper on other Macs that download it, so it is only for your own use. Notarization (`scripts/notarize.sh`) is optional and requires a paid developer account.
+The supported route is Homebrew compiling from source. The unnotarized DMG from `scripts/dmg.sh` will be blocked by Gatekeeper on other Macs that download it, so it is only for your own use. Notarization (`scripts/notarize.sh`) is optional and requires a paid developer account.
 
 :::caution[Limits]
 The notarization script is optional. Intel Macs are not supported.
