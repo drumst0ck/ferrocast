@@ -2043,9 +2043,7 @@ impl App {
             let more = if files.len() > 1 { format!(" and {} more", files.len() - 1) } else { String::new() };
             ui.label(RichText::new(format!("{first}{more}{dims}")).size(12.5).color(pal.sub));
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut mode, 0, "Size");
-                ui.selectable_value(&mut mode, 1, "Percent");
-                ui.selectable_value(&mut mode, 2, "Preset");
+                seg_index(ui, pal, &mut mode, &["Size", "Percent", "Preset"]);
             });
             ui.horizontal(|ui| match mode {
                 0 => {
@@ -2058,9 +2056,7 @@ impl App {
                     ui.add(egui::DragValue::new(&mut percent).range(1..=95).clamp_existing_to_range(false).speed(0.5).suffix(" % smaller"));
                 }
                 _ => {
-                    for (i, n) in ["Light", "Balanced", "Strong"].into_iter().enumerate() {
-                        ui.selectable_value(&mut preset, i, n);
-                    }
+                    seg_index(ui, pal, &mut preset, &["Light", "Balanced", "Strong"]);
                 }
             });
             // an audio file has nothing to resize
@@ -2268,10 +2264,12 @@ impl App {
         ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area_in.center(), Vec2::new(520.0, 220.0))), |ui| {
             ui.spacing_mut().item_spacing.y = 14.0;
             ui.horizontal(|ui| {
-                for p in [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0] {
-                    if ui.selectable_label((f - p).abs() < 1e-9, format!("{p}×")).clicked() {
-                        f = p;
-                    }
+                const PRESETS: [f64; 7] = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0];
+                let labels = PRESETS.map(|p| format!("{p}×"));
+                let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                let sel = PRESETS.iter().position(|p| (f - p).abs() < 1e-9);
+                if let (Some(i), _) = segmented_bar(ui, pal, sel, &labels, 56.0, 22.0) {
+                    f = PRESETS[i];
                 }
             });
             ui.add(egui::Slider::new(&mut f, SPEED_MIN..=SPEED_MAX).logarithmic(true).suffix("×"));
@@ -2314,10 +2312,10 @@ impl App {
                         .suffix(" LUFS")
                         .max_decimals(1),
                 );
-                for (v, name) in [(-23.0, "-23 broadcast"), (-16.0, "-16 podcast"), (-14.0, "-14 music")] {
-                    if ui.selectable_label((t - v).abs() < 1e-9, name).clicked() {
-                        t = v;
-                    }
+                const GOALS: [(f64, &str); 3] = [(-23.0, "-23 broadcast"), (-16.0, "-16 podcast"), (-14.0, "-14 music")];
+                let sel = GOALS.iter().position(|(v, _)| (t - v).abs() < 1e-9);
+                if let (Some(i), _) = segmented_bar(ui, pal, sel, &GOALS.map(|(_, n)| n), 0.0, 16.0) {
+                    t = GOALS[i].0;
                 }
             });
             ui.horizontal(|ui| {
@@ -2376,8 +2374,7 @@ impl App {
         ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(520.0, 240.0))), |ui| {
             ui.spacing_mut().item_spacing.y = 14.0;
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut st, false, "Mono");
-                ui.selectable_value(&mut st, true, "Stereo");
+                segmented(ui, pal, &mut st, &[(false, "Mono"), (true, "Stereo")]);
             });
             ui.horizontal(|ui| {
                 ui.label("Left volume");
@@ -2453,13 +2450,21 @@ impl App {
                 RichText::new(file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(13.0).color(pal.sub),
             );
             ui.horizontal(|ui| {
-                rects[0] = ui.selectable_value(&mut st, VisStyle::Waveform, "Waveform").rect;
-                rects[1] = ui.selectable_value(&mut st, VisStyle::Still, "Still image").rect;
+                let sel = [VisStyle::Waveform, VisStyle::Still].iter().position(|v| *v == st);
+                let (hit, cells) = segmented_bar(ui, pal, sel, &["Waveform", "Still image"], 56.0, 22.0);
+                if let Some(i) = hit {
+                    st = [VisStyle::Waveform, VisStyle::Still][i];
+                }
+                rects[..2].copy_from_slice(&cells);
             });
             ui.horizontal(|ui| {
-                rects[2] = ui.selectable_value(&mut o, Canvas::Landscape, "Landscape").rect;
-                rects[3] = ui.selectable_value(&mut o, Canvas::Portrait, "Portrait").rect;
-                rects[4] = ui.selectable_value(&mut o, Canvas::Square, "Square").rect;
+                let all = [Canvas::Landscape, Canvas::Portrait, Canvas::Square];
+                let (hit, cells) =
+                    segmented_bar(ui, pal, all.iter().position(|v| *v == o), &["Landscape", "Portrait", "Square"], 56.0, 22.0);
+                if let Some(i) = hit {
+                    o = all[i];
+                }
+                rects[2..].copy_from_slice(&cells);
             });
             if st == VisStyle::Still {
                 ui.horizontal(|ui| {
@@ -2992,10 +2997,11 @@ impl App {
             ui.spacing_mut().slider_width = 150.0;
             ui.spacing_mut().item_spacing.y = 8.0;
             ui.horizontal(|ui| {
-                for (l, t) in [(Layout::Grid, "Grid"), (Layout::Row, "Row"), (Layout::Column, "Column"), (Layout::Featured, "Featured")] {
-                    if ui.selectable_label(o.layout == l, t).clicked() {
-                        o.layout = l;
-                    }
+                // the side panel is 284 pt wide: a tighter padding keeps the four cells inside it
+                let all = [Layout::Grid, Layout::Row, Layout::Column, Layout::Featured];
+                let sel = all.iter().position(|l| *l == o.layout);
+                if let (Some(i), _) = segmented_bar(ui, pal, sel, &["Grid", "Row", "Column", "Featured"], 0.0, 16.0) {
+                    o.layout = all[i];
                 }
             });
             let mut auto = o.width.is_none();
@@ -3211,18 +3217,22 @@ impl App {
                 });
             }
             ui.horizontal(|ui| {
-                if ui.selectable_label(matches!(o.backdrop, Backdrop::Color(_)), "Colour").clicked()
-                    && !matches!(o.backdrop, Backdrop::Color(_))
-                {
-                    o.backdrop = Backdrop::Color(ferrocast_core::annotate::COLORS[color.min(5)]);
-                }
-                if ui.selectable_label(blur_on, "Blur").clicked() && !blur_on {
-                    o.backdrop = Backdrop::Blur(30.0);
-                }
-                if ui.selectable_label(image_on, "Image").clicked() && !image_on {
-                    // reuse the picture already loaded for the preview, if there is one
-                    let kept: Option<std::sync::Arc<(String, image::RgbaImage)>> = ctx.data(|d| d.get_temp(Id::new("frame-bg")));
-                    o.backdrop = Backdrop::Image(kept.map(|k| k.0.clone()).unwrap_or_default());
+                let sel = if blur_on {
+                    1
+                } else if image_on {
+                    2
+                } else {
+                    0
+                };
+                match segmented_bar(ui, pal, Some(sel), &["Colour", "Blur", "Image"], 56.0, 22.0).0 {
+                    Some(0) if sel != 0 => o.backdrop = Backdrop::Color(ferrocast_core::annotate::COLORS[color.min(5)]),
+                    Some(1) if sel != 1 => o.backdrop = Backdrop::Blur(30.0),
+                    Some(2) if sel != 2 => {
+                        // reuse the picture already loaded for the preview, if there is one
+                        let kept: Option<std::sync::Arc<(String, image::RgbaImage)>> = ctx.data(|d| d.get_temp(Id::new("frame-bg")));
+                        o.backdrop = Backdrop::Image(kept.map(|k| k.0.clone()).unwrap_or_default());
+                    }
+                    _ => {}
                 }
             });
             match &mut o.backdrop {
@@ -3381,12 +3391,7 @@ impl App {
         let strip = Rect::from_min_size(area_in.min + Vec2::new(12.0, 8.0), Vec2::new(area_in.width() - 24.0, 30.0));
         ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
             ui.horizontal(|ui| {
-                if ui.selectable_label(!blur, "Solid").clicked() {
-                    blur = false;
-                }
-                if ui.selectable_label(blur, "Blur").clicked() {
-                    blur = true;
-                }
+                segmented(ui, pal, &mut blur, &[(false, "Solid"), (true, "Blur")]);
                 if blur {
                     ui.add_space(8.0);
                     ui.label(RichText::new("Blur").size(12.0).color(pal.sub));
@@ -3615,8 +3620,7 @@ impl App {
                     ui.add(egui::DragValue::new(&mut a.start).range(0.0..=duration).speed(0.04));
                     ui.label("End s");
                     ui.add(egui::DragValue::new(&mut a.end).range(0.0..=duration).speed(0.04));
-                    ui.selectable_value(&mut a.blur, false, "Solid");
-                    ui.selectable_value(&mut a.blur, true, "Blur");
+                    segmented(ui, pal, &mut a.blur, &[(false, "Solid"), (true, "Blur")]);
                 });
             });
             areas_new[sel_now] = a;
@@ -3655,19 +3659,13 @@ impl App {
         let strip = Rect::from_min_size(area_in.min + Vec2::new(12.0, 8.0), Vec2::new(area_in.width() - 24.0, 30.0));
         ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
             ui.horizontal(|ui| {
-                for (label, a) in [
-                    ("Free", None),
-                    ("1:1", Some((1, 1))),
-                    ("4:3", Some((4, 3))),
-                    ("3:2", Some((3, 2))),
-                    ("16:9", Some((16, 9))),
-                    ("9:16", Some((9, 16))),
-                ] {
-                    if ui.selectable_label(aspect == a, label).clicked() {
-                        aspect = a;
-                        if let Some((w, h)) = a {
-                            rect = cr::fit_aspect(size.0, size.1, w, h);
-                        }
+                // tighter cells: in the video windows the strip shares its line with the W and H boxes
+                const ASPECTS: [Option<(u32, u32)>; 6] = [None, Some((1, 1)), Some((4, 3)), Some((3, 2)), Some((16, 9)), Some((9, 16))];
+                let sel = ASPECTS.iter().position(|a| *a == aspect);
+                if let (Some(i), _) = segmented_bar(ui, pal, sel, &["Free", "1:1", "4:3", "3:2", "16:9", "9:16"], 0.0, 16.0) {
+                    aspect = ASPECTS[i];
+                    if let Some((w, h)) = aspect {
+                        rect = cr::fit_aspect(size.0, size.1, w, h);
                     }
                 }
                 ui.add_space(10.0);
@@ -5663,26 +5661,61 @@ fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
 
 /// Segmented control: one filled segment slides under the chosen option.
 fn segmented<T: PartialEq + Clone>(ui: &mut Ui, pal: &Palette, value: &mut T, options: &[(T, &str)]) {
-    let seg_w = options
+    let idx = options.iter().position(|(v, _)| v == value).unwrap_or(0);
+    let labels: Vec<&str> = options.iter().map(|(_, l)| *l).collect();
+    if let (Some(i), _) = segmented_bar(ui, pal, Some(idx), &labels, 56.0, 22.0) {
+        *value = options[i].0.clone();
+    }
+}
+
+/// `segmented` over a plain index (`0..labels.len()`), for windows that keep a mode as a `usize`.
+fn seg_index(ui: &mut Ui, pal: &Palette, value: &mut usize, labels: &[&str]) {
+    if let (Some(i), _) = segmented_bar(ui, pal, Some((*value).min(labels.len() - 1)), labels, 56.0, 22.0) {
+        *value = i;
+    }
+}
+
+/// The index-based core of `segmented`, for values that are not a plain enum (an index, a bool, an
+/// `Option`, a float preset). `sel` is the chosen option, or `None` when the current value matches
+/// none of them (no segment is filled then). Returns the option clicked this frame and the rect of
+/// every cell. `min_w` and `pad` set the cell width (widest label + `pad`, at least `min_w`);
+/// Settings uses 56 and 22, narrow panels can ask for less.
+fn segmented_bar(ui: &mut Ui, pal: &Palette, sel: Option<usize>, labels: &[&str], min_w: f32, pad: f32) -> (Option<usize>, Vec<Rect>) {
+    let seg_w = labels
         .iter()
-        .map(|(_, l)| ui.painter().layout_no_wrap(l.to_string(), FontId::proportional(12.0), pal.text).size().x + 22.0)
-        .fold(56.0f32, f32::max);
-    let (r, base) = ui.allocate_exact_size(Vec2::new(seg_w * options.len() as f32 + 4.0, 26.0), Sense::hover());
+        .map(|l| ui.painter().layout_no_wrap(l.to_string(), FontId::proportional(12.0), pal.text).size().x + pad)
+        .fold(min_w, f32::max);
+    let (r, base) = ui.allocate_exact_size(Vec2::new(seg_w * labels.len() as f32 + 4.0, 26.0), Sense::hover());
     let id = base.id;
     let p = ui.painter().clone();
     p.rect_filled(r, 8.0, pal.field.gamma_multiply(1.3));
-    let idx = options.iter().position(|(v, _)| v == value).unwrap_or(0);
-    let x = ui.ctx().animate_value_with_time(id.with("seg"), idx as f32, 0.14);
-    let sr = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + x * seg_w, r.min.y + 2.0), Vec2::new(seg_w, 22.0));
-    p.rect_filled(sr, 6.0, pal.sel.gamma_multiply(1.8));
-    for (i, (v, label)) in options.iter().enumerate() {
+    if let Some(idx) = sel {
+        let x = ui.ctx().animate_value_with_time(id.with("seg"), idx as f32, 0.14);
+        let sr = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + x * seg_w, r.min.y + 2.0), Vec2::new(seg_w, 22.0));
+        p.rect_filled(sr, 6.0, pal.sel.gamma_multiply(1.8));
+    }
+    let mut clicked = None;
+    let mut cells = Vec::with_capacity(labels.len());
+    for (i, label) in labels.iter().enumerate() {
         let cell = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + i as f32 * seg_w, r.min.y), Vec2::new(seg_w, 26.0));
         let resp = ui.interact(cell, id.with(("cell", i)), Sense::click());
         if resp.clicked() {
-            *value = v.clone();
+            clicked = Some(i);
         }
-        p.text(cell.center(), Align2::CENTER_CENTER, *label, FontId::proportional(12.0), if i == idx { pal.text } else { pal.sub });
+        p.text(cell.center(), Align2::CENTER_CENTER, *label, FontId::proportional(12.0), if sel == Some(i) { pal.text } else { pal.sub });
+        cells.push(cell);
     }
+    #[cfg(test)]
+    {
+        // tests read what each window drew: one entry per bar, its container and its cells
+        let key = Id::new("segmented-count");
+        ui.ctx().data_mut(|d| {
+            let list = d.get_temp_mut_or_default::<Vec<(Rect, Vec<Rect>)>>(key);
+            list.retain(|(c, _)| c.min != r.min);
+            list.push((r, cells.clone()));
+        });
+    }
+    (clicked, cells)
 }
 
 fn keycap(ui: &mut Ui, pal: &Palette, label: &str) {

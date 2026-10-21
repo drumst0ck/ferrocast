@@ -675,7 +675,7 @@ fn crop_app() -> App {
 
 /// Click the W box of the crop view (position taken from the layout; guarded by an assertion).
 fn click_crop_width_box(app: &mut App) {
-    let pos = Pos2::new(300.0, 89.0);
+    let pos = Pos2::new(325.0, 93.0);
     let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     render(app, vec![Event::PointerMoved(pos)]);
     render(app, vec![btn(true)]);
@@ -1654,7 +1654,7 @@ fn click_compress_kb_box(app: &mut App) {
 }
 
 // centre of the KB box in points (found by probing the layout; breaks if the controls move)
-const COMPRESS_KB_BOX: (f32, f32) = (210.0, 156.0);
+const COMPRESS_KB_BOX: (f32, f32) = (210.0, 165.0);
 
 // L74 style: Escape while the number box is edited ends the edit but keeps the window.
 #[test]
@@ -1893,7 +1893,7 @@ fn media_probe_result_reaches_the_window() {
     }
 }
 
-const COMPRESS_MEDIA_KB_BOX: (f32, f32) = (210.0, 156.0);
+const COMPRESS_MEDIA_KB_BOX: (f32, f32) = (210.0, 165.0);
 
 // L74 style: Escape and Enter inside the number box of the media window keep it open.
 #[test]
@@ -4195,4 +4195,136 @@ fn organizer_click_still_selects_a_page_next_to_the_drag_source() {
     render(&mut app, vec![pointer_button(at, false)]);
     assert_eq!(organizer_plan(&app).cursor, 2, "a plain click selects the page");
     assert_eq!(page_srcs(&app), [0, 1, 2, 3]);
+}
+
+// ---- U1: exclusive choices use the Settings segmented control
+
+/// Every segmented bar drawn by `view` after two frames, top to bottom then left to right, as
+/// (cell count). Each bar must be ONE container whose cells sit inside it, side by side.
+fn segmented_bars(view: View) -> Vec<usize> {
+    let mut app = fixture();
+    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+    app.stack = vec![View::Root, view];
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    let mut bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+    bars.sort_by(|a, b| (a.0.min.y, a.0.min.x).partial_cmp(&(b.0.min.y, b.0.min.x)).unwrap());
+    for (container, cells) in &bars {
+        assert!(cells.iter().all(|c| container.contains_rect(*c)), "cells stay inside their container");
+        assert!(cells.windows(2).all(|w| w[0].max.x <= w[1].min.x + 0.01 && w[0].min.y == w[1].min.y), "cells sit side by side");
+        assert!(container.max.x <= ui::WIDTH, "the bar fits the window width ({} > {})", container.max.x, ui::WIDTH);
+    }
+    bars.iter().map(|(_, c)| c.len()).collect()
+}
+
+#[test]
+fn exclusive_choices_in_the_tool_windows_are_segmented_bars() {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    let png = std::path::PathBuf::from("/nonexistent/u1.png");
+    let r = ferrocast_core::croprect::Rect { x: 5, y: 5, w: 20, h: 20 };
+    let area = Area { rect: ferrocast_core::croprect::full(64, 36), start: 0.0, end: 2.0, blur: false };
+    let mut got: Vec<(&str, Vec<usize>, Vec<usize>)> = vec![];
+    let mut check = |name: &'static str, want: Vec<usize>, view: View| got.push((name, want, segmented_bars(view)));
+    check("compress goal, size", vec![3], compress_view(vec![png.clone()], Some((400, 300)), 0, 500));
+    check("compress goal, preset", vec![3, 3], compress_view(vec![png.clone()], Some((400, 300)), 2, 500));
+    check("compress media", vec![3, 3], media_view(vec!["/nonexistent/u1.mp4".into()], true, some_info(true), 2, 500));
+    check("video speed", vec![7], View::VideoSpeed { file: "/nonexistent/u1.mp4".into(), duration: Some(8.0), factor: 2.0 });
+    check(
+        "normalize presets",
+        vec![3],
+        View::NormalizeAudio { file: anorm_file(), loudness: None, target: -16.0, range: 11.0, peak: -1.5 },
+    );
+    check("channels", vec![2], View::ChannelsAudio { file: anorm_file(), in_channels: Some(2), stereo: true, left_db: 0.0, right_db: 0.0 });
+    check(
+        "audio to video",
+        vec![2, 3],
+        View::VisualizeAudio { file: avis_file(), orient: Canvas::Landscape, style: VisStyle::Waveform, image: None, picking: false },
+    );
+    check("collage layout", vec![4], View::CollageImage { files: vec![png.clone(), png.clone()], opts: Default::default(), color: 0 });
+    check(
+        "frame backdrop",
+        vec![3],
+        View::FrameImage { file: png.clone(), size: (100, 80), opts: Default::default(), color: 4, picking: false },
+    );
+    check(
+        "redact image",
+        vec![2],
+        View::RedactImage { file: png.clone(), size: (100, 80), areas: vec![r], sel: Some(0), blur: true, radius: 24, color: 5 },
+    );
+    check(
+        "redact video (style bar, then the aspect strip of the shared crop)",
+        vec![2, 6],
+        redact_view("/nonexistent/u1.mp4", 6.0, vec![area], 0),
+    );
+    check("crop image aspect", vec![6], View::CropImage { file: png.clone(), size: (1000, 600), rect: r, aspect: None });
+    check(
+        "crop video aspect",
+        vec![6],
+        View::VideoCrop { file: "/nonexistent/u1.mp4".into(), size: Some((640, 360)), rect: r, aspect: None, duration: 6.0, ref_t: 0.6 },
+    );
+    let bad: Vec<String> =
+        got.iter().filter(|(_, w, g)| w != g).map(|(n, w, g)| format!("{n}: want bars with {w:?} cells, drew {g:?}")).collect();
+    assert!(bad.is_empty(), "exclusive choices must be ONE segmented bar each:\n{}", bad.join("\n"));
+}
+
+/// Cells of the `bar`-th segmented bar (top to bottom, left to right) drawn by the open view.
+fn seg_cells(app: &App, bar: usize) -> Vec<Rect> {
+    let mut bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+    bars.sort_by(|a, b| (a.0.min.y, a.0.min.x).partial_cmp(&(b.0.min.y, b.0.min.x)).unwrap());
+    bars[bar].1.clone()
+}
+
+fn click_cell(app: &mut App, bar: usize, cell: usize) {
+    let at = seg_cells(app, bar)[cell].center();
+    click_at(app, at);
+    render(app, vec![]);
+}
+
+#[test]
+fn clicking_a_segmented_cell_sets_the_same_state_the_old_chips_did() {
+    // usize mode (compress goal) and index preset
+    let mut app = compress_app(0, 500);
+    click_cell(&mut app, 0, 2);
+    assert!(matches!(app.view(), View::CompressImage { mode: 2, .. }));
+    click_cell(&mut app, 1, 0);
+    assert!(matches!(app.view(), View::CompressImage { mode: 2, preset: 0, .. }));
+    click_cell(&mut app, 0, 1);
+    assert!(matches!(app.view(), View::CompressImage { mode: 1, preset: 0, .. }));
+    // bool (channels)
+    let mut app = fixture();
+    achan_view(&mut app, Some(2), true);
+    render(&mut app, vec![]);
+    click_cell(&mut app, 0, 0);
+    assert!(matches!(app.view(), View::ChannelsAudio { stereo: false, .. }));
+    click_cell(&mut app, 0, 1);
+    assert!(matches!(app.view(), View::ChannelsAudio { stereo: true, .. }));
+    // float presets: speed (x4 is cell 6) and normalize (-14 is cell 2)
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::VideoSpeed { file: "/nonexistent/u1.mp4".into(), duration: Some(8.0), factor: 2.0 }];
+    render(&mut app, vec![]);
+    click_cell(&mut app, 0, 6);
+    assert!(matches!(app.view(), View::VideoSpeed { factor, .. } if (*factor - 4.0).abs() < 1e-9));
+    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+    anorm_view(&mut app, None);
+    render(&mut app, vec![]);
+    click_cell(&mut app, 0, 2);
+    assert!(matches!(app.view(), View::NormalizeAudio { target, .. } if (*target + 14.0).abs() < 1e-9));
+    // Option aspect (crop): 16:9 locks the ratio and refits the rectangle, Free keeps it
+    let mut app = crop_app();
+    click_cell(&mut app, 0, 4);
+    assert!(
+        matches!(app.view(), View::CropImage { aspect: Some((16, 9)), rect, .. } if *rect == ferrocast_core::croprect::fit_aspect(1000, 600, 16, 9))
+    );
+    click_cell(&mut app, 0, 0);
+    assert!(matches!(app.view(), View::CropImage { aspect: None, .. }));
+    // enum with side effects (frame backdrop)
+    let mut app = fixture();
+    let f = std::path::PathBuf::from("/nonexistent/u1.png");
+    app.stack = vec![View::Root, View::FrameImage { file: f, size: (100, 80), opts: Default::default(), color: 4, picking: false }];
+    render(&mut app, vec![]);
+    click_cell(&mut app, 0, 1);
+    assert!(matches!(app.view(), View::FrameImage { opts, .. } if matches!(opts.backdrop, ferrocast_core::frame::Backdrop::Blur(_))));
+    click_cell(&mut app, 0, 0);
+    assert!(matches!(app.view(), View::FrameImage { opts, .. } if matches!(opts.backdrop, ferrocast_core::frame::Backdrop::Color(_))));
 }
