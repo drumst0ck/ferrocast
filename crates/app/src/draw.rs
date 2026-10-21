@@ -1916,7 +1916,7 @@ impl App {
         kind: ferrocast_core::wheel::WheelKind,
         sel: Option<usize>,
     ) {
-        use ferrocast_core::wheel::{hub_text, labels_fit, sector_points, segment_center, Geometry, WheelKind};
+        use ferrocast_core::wheel::{hub_text, ring_label, sector_points, segment_center, Geometry, WheelKind};
         let ctx = ui.ctx().clone();
         ctx.request_repaint_after(Duration::from_millis(16));
         let g = Geometry::DEFAULT;
@@ -1985,7 +1985,8 @@ impl App {
             }
             let r_mid = (g.r_in + g.r_out) / 2.0;
             let mid = at(segment_center(i, n, r_mid));
-            let fits = labels_fit(n, r_mid);
+            let ring_text = ring_label(&seg.label, n, r_mid);
+            let fits = ring_text.is_some();
             let tile = (if n > 8 { 24.0 } else { 28.0 }) * if on { 1.12 } else { 1.0 };
             let ir = Rect::from_center_size(if fits { mid - Vec2::new(0.0, 8.0) } else { mid }, Vec2::splat(tile));
             ui.painter().rect_filled(
@@ -1995,14 +1996,9 @@ impl App {
             );
             let tone = if seg.needs.is_some() { [rgb[0] / 3 + 60, rgb[1] / 3 + 60, rgb[2] / 3 + 60] } else { rgb };
             ui::paint_icon(&mut self.icons, ui, ir, &Icon::Glyph(seg.symbol, tone), pal);
-            if fits {
+            if let Some((label, size)) = ring_text {
                 let col = if on { pal.text } else { pal.sub };
-                let label = if seg.label.chars().count() > 17 {
-                    format!("{}…", seg.label.chars().take(16).collect::<String>())
-                } else {
-                    seg.label.clone()
-                };
-                ui.painter().text(mid + Vec2::new(0.0, 22.0), Align2::CENTER_CENTER, label, FontId::proportional(11.0), col);
+                ui.painter().text(mid + Vec2::new(0.0, 22.0), Align2::CENTER_CENTER, label, FontId::proportional(size), col);
             }
         }
         // hub: wheel name, hovered label or file summary, kind line
