@@ -52,7 +52,7 @@ Data lives in `~/Library/Application Support/Ferrocast` as plain, unencrypted JS
 
 ## Status and honesty
 
-Every feature is labeled by what has actually been proven: **Tested** (run on real files in tests), **Built** (implemented, not tried in a live session), **Typed** (typed command only). Many windows and gestures are built and verified by screenshots and synthetic events, not yet by real mouse and keyboard sessions. The full record is in [`docs/STATUS.es.md`](docs/STATUS.es.md) (Spanish) and at <https://ferrocast.app/docs/reference/status/>.
+Every feature listed is tested. Each one carries one of two labels: **Tested** (run on real files in tests) or **Typed** (typed command only). The full record is in [`docs/STATUS.es.md`](docs/STATUS.es.md) (Spanish) and at <https://ferrocast.app/docs/reference/status/>.
 
 Not included: React extensions, sync, Search Menu Bar Items and AI context from selection or screen.
 

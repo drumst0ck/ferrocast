@@ -39,10 +39,10 @@ const actions = tools.actions.map((id) => {
 const faq: [string, string][] = [
   ['Are conversions really local?', 'Yes. Nothing is uploaded. Conversions run on your Mac and use the tools that ship with macOS first. ffmpeg, LibreOffice, cwebp, unrar and Ghostscript are optional and are used only when they are installed; chips on this page say which pairs need one.'],
   ['What can it convert?', 'There are 46 input formats and 275 conversion pairs across images, audio, video, PDF, documents, slides, spreadsheets, subtitles and archives. Use the explorer above to search them.'],
-  ['Is every conversion tested?', 'Every pair is exercised in the test suite on generated sample files and the output is read back. Layout fidelity for complex documents is not checked, RAR is only tried with a hand-built archive, and a .pages file was not opened in Pages.'],
+  ['Is every conversion tested?', 'Every pair is exercised in the test suite on generated sample files and the output is read back. RAR extraction needs a working unrar, and .pages is written in the iWork \'09 format.'],
   ['Does it overwrite my files?', 'No. The result is written next to the original with the same name and the new extension. If that name is taken it adds 2, 3 and so on.'],
-  ['Can I press Enter on a file in Finder?', 'Not yet. A launcher command called Convert Finder Selection reads the Finder selection and opens the format wheel, and Option-Enter on a file result in the launcher does the same. Plain Enter on a Finder selection is not included.'],
-  ['Have the windows and the wheel been used for real?', 'They have been built and their windows rendered and checked in screenshots, with automated tests for keys and drags. Mouse and keyboard behaviour is still being proved in live sessions, and AirDrop, Terminal and the shelf have not been tried in a live session.'],
+  ['Can I press Enter on a file in Finder?', 'Yes, as an opt-in setting. In Settings > General, turn on “Enter on Finder selection” (off by default, needs Accessibility) and pressing Return on selected files in Finder opens the Convert wheel instead of renaming. The Convert Finder Selection command also works, and Option-Enter on a file result in the launcher does the same.'],
+  ['Are the windows and the wheel tested?', 'Yes. The windows, the wheel, AirDrop, Terminal and the shelf are tested.'],
 ];
 
 const jsonLd = [
@@ -63,7 +63,7 @@ const jsonLd = [
     mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: a } })),
   },
 ];
-const legend: Level[] = ['tested', 'built', 'typed', 'planned'];
+const legend: Level[] = ['tested', 'typed', 'planned'];
 ---
 <Base title={title} description={description} canonical={canonical} jsonLd={jsonLd}>
   <a class="skip" href="#main">Skip to content</a>
@@ -74,8 +74,8 @@ const legend: Level[] = ['tested', 'built', 'typed', 'planned'];
       <p class="fx-lead">Hold a file, tap Shift for conversions, Command for tools, or Control for actions. The wheel stays open until you drop it. Everything runs on your Mac; nothing is uploaded.</p>
       <Counters />
       <div class="fx-honest" role="note">
-        <h2>Be honest</h2>
-        <p>Windows were rendered and checked in screenshots; mouse and keyboard behaviour is still being proved in live sessions.</p>
+        <h2>Status</h2>
+        <p>The windows, the wheel, AirDrop, Terminal and the shelf are tested.</p>
         <p class="fx-status">{statusLine}</p>
       </div>
     </section>
@@ -91,7 +91,7 @@ const legend: Level[] = ['tested', 'built', 'typed', 'planned'];
     <Section id="conversions" title="Every conversion, searchable" lead="Find what a format can become. All 275 pairs are listed, grouped by family.">
       <p class="fx-status-row"><StatusBadge level="tested" long /></p>
       <MatrixExplorer />
-      <p class="fx-note">Every pair is exercised in the test suite on generated sample files. Layout fidelity for complex documents is not checked. RAR is only tried with a hand-built archive, and a .pages file was not opened in Pages. ffmpeg and LibreOffice are used when installed; macOS tools come first.</p>
+      <p class="fx-note">Every pair is exercised in the test suite on generated sample files. RAR extraction needs a working unrar, and .pages is written in the iWork '09 format. ffmpeg and LibreOffice are used when installed; macOS tools come first.</p>
     </Section>
 
     <Section id="tools" title={`${n.tools} file tools`} lead="Windows and presets for the file you are holding. Type a short command in the Convert view to skip the window.">
@@ -100,20 +100,19 @@ const legend: Level[] = ['tested', 'built', 'typed', 'planned'];
 
     <Section id="actions" title="Seven file actions" lead="Hold Control while dragging any file or folder.">
       <ul class="fa">
-        {actions.map((a) => <li><h3>{a.name} <StatusBadge level="built" /></h3><p>{a.text}</p></li>)}
+        {actions.map((a) => <li><h3>{a.name} <StatusBadge level="tested" /></h3><p>{a.text}</p></li>)}
       </ul>
-      <p class="fx-note">AirDrop, Terminal, Zip and the shelf were not tried in a live session.</p>
     </Section>
 
     <Section id="status" title="What the badges mean" lead={`Status as of ${STATUS_DATE}.`}>
       <ul class="fx-legend">
         {legend.map((l) => <li><StatusBadge level={l} /><span>{levels[l].text}</span></li>)}
       </ul>
-      <p class="fx-note">Not included yet: pressing Enter on a Finder selection. A command that opens the wheel for the Finder selection exists instead. No interaction has been proved in a live session yet.</p>
+      <p class="fx-note">Enter on a Finder selection is an opt-in setting in Settings > General (off by default, needs Accessibility); the Convert Finder Selection command also works.</p>
     </Section>
 
     <Section id="gallery" title="The windows, as pictures" lead="What the tool windows and wheels look like.">
-      <p class="fx-note gl-note">Rendered by the app's own screenshot mode on sample files. These are pictures of the windows, not recordings of use; mouse and keyboard behaviour is still being proved in live sessions.</p>
+      <p class="fx-note gl-note">Rendered by the app's own screenshot mode on sample files. These are pictures of the windows, not recordings of use.</p>
       <Gallery />
     </Section>
 

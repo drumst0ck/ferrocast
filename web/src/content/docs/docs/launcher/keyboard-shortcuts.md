@@ -53,8 +53,8 @@ This page lists the shortcuts in the launcher and in the file tool windows. Shor
 | PDF organizer | <kbd>R</kbd> rotate, <kbd>⇧</kbd> <kbd>R</kbd> rotate back, <kbd>D</kbd> duplicate, <kbd>⌫</kbd> remove, <kbd>⌘</kbd> <kbd>←</kbd> <kbd>→</kbd> move the page. |
 | Choose Order | <kbd>⌘</kbd> <kbd>↑</kbd> <kbd>⌘</kbd> <kbd>↓</kbd> move the row. |
 
-:::caution[Limits]
-<kbd>↵</kbd> on a Finder selection is not included.
+:::note[Enter on a Finder selection]
+<kbd>↵</kbd> on selected files in Finder opens the Convert wheel instead of renaming when you turn on Settings > General > “Enter on Finder selection” (off by default, needs Accessibility).
 :::
 
 ## Related

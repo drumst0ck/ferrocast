@@ -2,10 +2,9 @@
 import Default from '@astrojs/starlight/components/PageTitle.astro';
 import { levels } from '../../data/status';
 const { entry, locale } = Astro.locals.starlightRoute;
-const status = entry.data.status as 'tested' | 'built' | 'typed' | undefined;
+const status = entry.data.status as 'tested' | 'typed' | undefined;
 const es: Record<string, string> = {
-  tested: 'Probado en archivos reales',
-  built: 'Implementado, no probado en sesión real',
+  tested: 'Probado',
   typed: 'Solo con orden escrita',
 };
 const text = status ? (locale === 'es' ? es[status] : levels[status].text) : '';

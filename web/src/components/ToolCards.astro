@@ -15,7 +15,7 @@ const grouped = new Set(groups.flatMap((g) => g.ids));
 for (const t of tools.tools) if (!grouped.has(t.id)) throw new Error(`tool ${t.id} is not in any card group`);
 for (const id of grouped) if (!byId.has(id)) throw new Error(`card group names unknown tool ${id}`);
 
-// Hand-written one-liners. They say what the tool does, never that it was tried live.
+// Hand-written one-liners. They say what the tool does.
 const about: Record<string, string> = {
   editImage: 'Sliders for brightness, contrast, saturation, warmth, clarity, sharpen, grain, denoise and dehaze, with a preview on a smaller copy.',
   annotateImage: 'Arrows, lines, boxes, ellipses, highlights, pen, numbered labels, magnifiers, text, callouts and image stamps. Saves a PNG copy.',

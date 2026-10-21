@@ -19,19 +19,23 @@ Una tabla de 26 herramientas decide qué ofrecen la rueda de herramientas y la v
 
 ## Convert Finder Selection
 
-Un comando (asígnale un hotkey en los ajustes) que lee lo seleccionado en Finder y abre la rueda de conversión para ello. No intercepta Intro, así que el cambio de nombre de Finder sigue funcionando. La lectura de Finder necesita permiso de Automatización.
+Un comando (asígnale un hotkey en los ajustes) que lee lo seleccionado en Finder y abre la rueda de conversión para ello. No intercepta Intro, así que el cambio de nombre de Finder sigue funcionando salvo que actives el ajuste de abajo. La lectura de Finder necesita permiso de Automatización.
+
+## Intro sobre la selección de Finder
+
+Un ajuste opcional en Ajustes > General, fila «Enter on Finder selection»: pulsa Intro sobre archivos seleccionados en Finder para abrir la rueda de conversión en lugar de renombrar. Necesita acceso de Accesibilidad y está desactivado por defecto. El comando Convert Finder Selection también funciona.
 
 ## Arreglo al soltar
 
 Los archivos arrastrados desde Finder llegan como URL de referencia de archivo (`file:///.file/id=…`); ahora se resuelven a la ruta real. Antes, un PNG arrastrado parecía un archivo sin extensión.
 
 :::caution[Límites]
-Todavía no hay animaciones. Intro sobre un archivo sigue abriéndolo; Intro sobre la selección de Finder **no está incluido**.
+Todavía no hay animaciones. Intro sobre un resultado de archivo sigue abriéndolo.
 :::
 
 ## Estado
 
-**Tested.** Implementado.
+**Tested.**
 
 ## Relacionado
 

@@ -41,9 +41,9 @@ describe('conversion pages data', () => {
     expect(installCommand('LibreOffice')).toBe('brew install --cask libreoffice');
     expect(installCommand('cwebp')).toBe('brew install webp');
   });
-  it('keeps the documented limits on the pairs they apply to', () => {
+  it('keeps the real limits on the pairs they apply to', () => {
     const limits = (slug: string) => pairFacts(pairs.find((p) => p.slug === slug)!).limits.join(' ');
-    expect(limits('docx-to-pdf')).toMatch(/layout/i);
+    expect(limits('docx-to-pdf')).toBe('');
     expect(limits('docx-to-pages')).toMatch(/iWork '09/);
     expect(limits('pdf-to-png')).toMatch(/300 DPI/);
     expect(limits('heic-to-jpg')).not.toMatch(/layout|iWork|300 DPI/);

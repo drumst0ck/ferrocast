@@ -30,7 +30,7 @@ La lectura de Finder necesita permiso de Automatización para Finder; mientras e
 
 ## Intro sobre un archivo en Finder lo renombra
 
-Es el comportamiento propio de Finder. Ferrocast no intercepta Intro; usa Convert Finder Selection o <kbd>⌥</kbd> <kbd>↵</kbd> sobre un resultado de archivo.
+Es el comportamiento propio de Finder, salvo que actives Ajustes > General > «Enter on Finder selection» (desactivado por defecto, necesita Accesibilidad), que abre la rueda de conversión en lugar de renombrar. También puedes usar Convert Finder Selection o <kbd>⌥</kbd> <kbd>↵</kbd> sobre un resultado de archivo.
 
 ## Algo falló sin avisar
 

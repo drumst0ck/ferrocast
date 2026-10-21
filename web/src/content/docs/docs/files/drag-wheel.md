@@ -19,19 +19,23 @@ A table of 26 tools decides what the Tools wheel and the Convert view offer for 
 
 ## Convert Finder Selection
 
-A command (give it a hotkey in Settings) that reads what is selected in Finder and opens the conversion wheel for it. It does not intercept Return, so Finder's rename keeps working. The Finder read needs Automation permission.
+A command (give it a hotkey in Settings) that reads what is selected in Finder and opens the conversion wheel for it. It does not intercept Return, so Finder's rename keeps working unless you turn on the setting below. The Finder read needs Automation permission.
+
+## Enter on Finder selection
+
+An opt-in setting in Settings > General, row “Enter on Finder selection”: press Return on selected files in Finder to open the Convert wheel instead of renaming. It needs Accessibility access and is off by default. The Convert Finder Selection command also works.
 
 ## Drop fix
 
 Files dragged from Finder arrive as file reference URLs (`file:///.file/id=…`); they are now resolved to the real path. Before, a dragged PNG looked like a file without an extension.
 
 :::caution[Limits]
-It is not animated yet. Plain <kbd>↵</kbd> on a file still opens it; <kbd>↵</kbd> on a Finder selection is **not included**.
+It is not animated yet. Plain <kbd>↵</kbd> on a file result still opens it.
 :::
 
 ## Status
 
-**Tested.** Implemented.
+**Tested.**
 
 ## Related
 

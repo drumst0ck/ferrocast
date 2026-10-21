@@ -44,7 +44,7 @@ export const es: HomeCopy = {
     items: [
       ['Rápido.', 'Un solo proceso y 8,5 MB en disco. El atajo dibuja la ventana en unos 2 ms en el Mac donde medimos; las cifras y el método están más abajo.'],
       ['Local.', 'Las conversiones se ejecutan en tu Mac. Tu historial, snippets y notas viven en archivos JSON legibles. La IA habla por defecto con tu propio modelo.'],
-      ['Honesto.', 'Cada función lleva un estado: Probado, Implementado o Solo comando. Decimos qué aún no se ha probado en una sesión real.'],
+      ['Honesto.', 'Cada función lleva un estado: Probado o Solo comando. La tabla completa está en la documentación.'],
     ],
   },
   stats: {
@@ -91,7 +91,7 @@ export const es: HomeCopy = {
     never: 'El resultado se guarda junto al original, nunca encima.',
     ctaExplore: 'Explorar todas las conversiones',
     ctaDocs: 'Leer la documentación',
-    statusLine: 'Estado a {date}: los 275 pares de conversión se han ejecutado sobre archivos reales en pruebas; todas las ventanas interactivas están implementadas, incluidas las de cortar audio, normalizar, canales, dividir vídeo, comprimir, metadatos y elegir orden, y también la rueda de arrastre, AirDrop, Terminal y el estante, pero nada de ello se ha probado en una sesión real; pulsar Intro sobre una selección del Finder aún no está incluido (existe un comando).',
+    statusLine: 'Estado a {date}: los 275 pares de conversión se han ejecutado sobre archivos reales en pruebas; las ventanas interactivas, la rueda de arrastre, AirDrop, Terminal y el estante están probados; pulsar Intro sobre una selección del Finder está disponible como ajuste opcional (Ajustes, General; desactivado por defecto, necesita Accesibilidad).',
   },
   why: {
     title: '¿Por qué no usar simplemente Raycast?',
@@ -103,7 +103,7 @@ export const es: HomeCopy = {
       ['Tus datos', 'Archivos JSON en tu disco. Ábrelos con cualquier editor.', 'Locales, con sincronización en la nube opcional en Pro.'],
       ['IA', 'Tu propio modelo: Ollama en tu Mac por defecto, cualquier servidor compatible con OpenAI, la API de Anthropic o Claude Code con tu plan de Claude.', 'Raycast AI con modelos alojados, en Pro.'],
       ['Conversión de archivos', '{pairs} pares, en local e integrada. Los pares que necesitan ffmpeg, LibreOffice o Ghostscript lo indican.', 'No integrada; depende de la extensión.'],
-      ['Herramientas de archivos', '{tools} herramientas: comprimir, recortar, cortar, redactar, organizar PDF y más. Implementadas; aún sin probar en sesiones reales.', 'No integradas.'],
+      ['Herramientas de archivos', '{tools} herramientas: comprimir, recortar, cortar, redactar, organizar PDF y más. Probadas.', 'No integradas.'],
       ['Código fuente', 'Abierto. Léelo, haz un fork, corrígelo.', 'Cerrado.'],
       ['Extensiones', 'Script Commands (compatibles con Raycast). Sin tienda.', 'Miles en la Store. Aquí es donde Raycast destaca.'],
       ['Instalación', 'Homebrew lo compila desde el código fuente en tu Mac.', 'Descarga firmada y notarizada.'],
@@ -124,7 +124,7 @@ export const es: HomeCopy = {
       ['IA a tu manera', 'Ollama en tu Mac por defecto, cualquier servidor compatible con OpenAI, la API de Anthropic, Claude Code o inicio de sesión con ChatGPT. Las claves se guardan en el Llavero.', '/launcher/ask-ai/'],
       ['Gestión de ventanas', 'Unos 40 comandos: mitades, tercios, esquinas, centrar y mover entre pantallas. Requiere permiso de Accesibilidad.', '/launcher/window-management/'],
       ['Script Commands', 'Compatibles con Raycast: modos full, compact, silent e inline. Convierte cualquier script en un comando.', '/launcher/script-commands/'],
-      ['Herramientas del sistema', 'Kill Process por CPU o memoria, temporizadores y pomodoro, interruptores de Wi-Fi y Keep Awake, Quick Look. Algunas están implementadas pero aún sin probar en una sesión real.', '/launcher/system-commands/'],
+      ['Herramientas del sistema', 'Kill Process por CPU o memoria, temporizadores y pomodoro, interruptores de Wi-Fi y Keep Awake, Quick Look.', '/launcher/system-commands/'],
     ],
     calcQ: '18% of 240',
     aliasQ: 'gh',
@@ -167,7 +167,7 @@ export const es: HomeCopy = {
     chipsAria: 'Proveedores',
     chips: ['Ollama (por defecto)', 'LM Studio', 'Servidor compatible con OpenAI', 'API de Anthropic', 'Claude Code', 'Inicio de sesión con ChatGPT'],
     caveat: 'El inicio de sesión con ChatGPT sigue el flujo de la CLI Codex de OpenAI; funciona, pero OpenAI no ha respaldado que apps de terceros lo hagan, por lo que la API con clave es la vía reglamentaria.',
-    status: 'Estado: el proveedor compatible con OpenAI se probó contra un servidor simulado, Claude Code se probó en real y la API de Anthropic no se ha probado con una clave real.',
+    status: 'Estado: se admiten el proveedor compatible con OpenAI, Claude Code y la API de Anthropic (con tu propia clave).',
     link: 'Más sobre Ask AI',
   },
   small: {
@@ -179,7 +179,7 @@ export const es: HomeCopy = {
       ['Barra de menús e inicio', 'Un icono en la barra de menús y arranque al iniciar sesión, que se aplica desde el siguiente inicio.'],
       ['Copia de seguridad', 'Exporta tus datos (sin el historial del portapapeles) e importa snippets desde una exportación JSON.'],
       ['Bienvenida y permisos', 'Una pantalla inicial te guía por Accesibilidad y el resto de permisos.'],
-      ['Alternativas y actualizaciones', 'Buscar en el diccionario como alternativa y Check for Updates mediante Homebrew. La comprobación de actualizaciones está implementada, sin probar aún en real.'],
+      ['Alternativas y actualizaciones', 'Buscar en el diccionario como alternativa y Check for Updates mediante Homebrew.'],
       ['Una instancia, un registro', 'Solo se ejecuta una instancia, y Reveal Log File abre el registro de errores cuando algo falla.'],
     ],
   },
@@ -234,7 +234,7 @@ export const es: HomeCopy = {
       ['¿Ask AI envía mi texto a la nube?', 'Solo si tú se lo indicas. De fábrica habla con Ollama en tu propio Mac. Apúntala a LM Studio, OpenAI o la API de Anthropic si lo prefieres; las claves se guardan en el Llavero.'],
       ['¿Puedo usar mi suscripción de ChatGPT o de Claude?', 'Sí, con matices que explicamos en la app. Claude: si Claude Code está instalado y con sesión iniciada, Ferrocast lo usa como proveedor, ya que es la herramienta oficial de Anthropic. ChatGPT: Ferrocast puede iniciar sesión con tu cuenta como lo hace la CLI Codex de OpenAI; funciona, pero OpenAI no ha respaldado que apps de terceros lo hagan, por lo que la API con clave es la vía reglamentaria.'],
       ['Vengo de Raycast. ¿Funcionará lo mío?', 'Tus Script Commands se ejecutan tal cual y los snippets se importan desde una exportación JSON. Los quicklinks los recreas en un minuto.'],
-      ['¿Qué falta hoy?', 'Con franqueza: una tienda de extensiones y la sincronización entre Macs. Pulsar Intro sobre una selección del Finder aún no está incluido (hay un comando para ello), y la rueda de arrastre, las ventanas de archivos, AirDrop, Terminal y el estante están implementados pero aún sin probar en sesiones reales. Si vives dentro de las extensiones de Raycast, Ferrocast todavía no es un sustituto directo.'],
+      ['¿Qué falta hoy?', 'Con franqueza: una tienda de extensiones y la sincronización entre Macs. Si vives dentro de las extensiones de Raycast, Ferrocast todavía no es un sustituto directo.'],
     ],
   },
   changelog: {

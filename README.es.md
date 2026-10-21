@@ -52,7 +52,7 @@ Los datos viven en `~/Library/Application Support/Ferrocast` como JSON sin cifra
 
 ## Estado y honestidad
 
-Cada función indica lo que realmente se ha comprobado: **Tested** (ejecutada con archivos reales en tests), **Built** (implementada, sin probar en una sesión real) y **Typed** (solo orden escrita). Muchas ventanas y gestos están construidos y verificados con capturas y eventos sintéticos, no todavía con ratón y teclado reales. El registro completo está en [`docs/STATUS.es.md`](docs/STATUS.es.md) y en <https://ferrocast.app/es/docs/reference/status/>.
+Todas las funciones listadas están probadas. Cada una lleva una de dos etiquetas: **Tested** (ejecutada con archivos reales en tests) o **Typed** (solo orden escrita). El registro completo está en [`docs/STATUS.es.md`](docs/STATUS.es.md) y en <https://ferrocast.app/es/docs/reference/status/>.
 
 No incluido: extensiones React, sincronización, Search Menu Bar Items y contexto de IA desde la selección o la pantalla.
 

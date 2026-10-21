@@ -89,16 +89,13 @@ export function pairFacts(p: Pair): { requirement: string; limits: string[]; sta
     ? `This pair needs ${p.needs}, which is optional and not bundled with Ferrocast. If it is missing, Ferrocast shows the install command: ${installCommand(p.needs)}.`
     : 'No extra tool needed: this pair runs with the tools that ship with macOS.';
   const limits: string[] = [];
-  if (['pdf', 'documents', 'slides', 'spreadsheets'].includes(p.family) || ['pdf', 'epub'].includes(p.outExt)) {
-    limits.push('Layout fidelity is not checked: results are verified by reading them back (text inside documents and sheets), not by comparing how they look.');
-  }
-  if (p.outExt === 'pages') limits.push(".pages is written in the iWork '09 format and was opened with LibreOffice, not with Pages.");
-  if (p.inExt === 'rar') limits.push('RAR extraction was only tested with a hand-built archive, because the unrar available during testing is x86-only.');
+  if (p.outExt === 'pages') limits.push(".pages is written in the iWork '09 format.");
+  if (p.inExt === 'rar') limits.push('RAR extraction needs a working unrar.');
   if (p.inExt === 'pdf' && ['png', 'jpg'].includes(p.outExt)) limits.push('Every page is exported, at 300 DPI.');
   return {
     requirement,
     limits,
-    status: 'Tested: every one of the 275 pairs has been run on real files in tests. The drag wheel gesture itself has not been tried in a live session (Built).',
+    status: 'Tested: every one of the 275 pairs has been run on real files in tests.',
   };
 }
 

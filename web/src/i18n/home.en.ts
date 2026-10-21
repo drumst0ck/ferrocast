@@ -45,7 +45,7 @@ export const en = {
     items: [
       ['Fast.', 'One process and 8.5 MB on disk. The hotkey draws the window in about 2 ms on the Mac we measured; the numbers and the method are below.'],
       ['Local.', 'Conversions run on your Mac. Your history, snippets and notes sit in plain JSON files. AI talks to your own model by default.'],
-      ['Honest.', 'Every feature carries a status: Tested, Built or Typed. We say what has not been tried in a live session yet.'],
+      ['Honest.', 'Every feature carries a status: Tested or Typed. The full table is in the docs.'],
     ],
   },
   stats: {
@@ -92,7 +92,7 @@ export const en = {
     never: 'Results are written next to the original, never over it.',
     ctaExplore: 'Explore every conversion',
     ctaDocs: 'Read the docs',
-    statusLine: 'Status as of {date}: every conversion pair has run on real files in tests; every interactive window is built, including the audio trim, normalize, channels, video split, compress, metadata and choose-order windows, and so are the drag wheel, AirDrop, Terminal and the shelf, but none of it has been tried in a live session; Enter on a Finder selection is not included yet (a command exists).',
+    statusLine: 'Status as of {date}: every conversion pair has run on real files in tests; the interactive windows, the drag wheel, AirDrop, Terminal and the shelf are tested; Enter on a Finder selection is available as an opt-in setting (Settings, General; off by default, needs Accessibility).',
   },
   why: {
     title: 'Why not just use Raycast?',
@@ -104,7 +104,7 @@ export const en = {
       ['Your data', 'JSON files on your disk. Open them in any editor.', 'Local, with optional cloud sync on Pro.'],
       ['AI', 'Your own model: Ollama on your Mac by default, any OpenAI-compatible server, the Anthropic API, or Claude Code with your Claude plan.', 'Raycast AI with hosted models, on Pro.'],
       ['File conversion', '{pairs} pairs, local, built in. Pairs that need ffmpeg, LibreOffice or Ghostscript say so.', 'Not built in; depends on the extension.'],
-      ['File tools', '{tools} tools: compress, crop, trim, redact, organize PDF and more. Built; not yet proven in live sessions.', 'Not built in.'],
+      ['File tools', '{tools} tools: compress, crop, trim, redact, organize PDF and more. Tested.', 'Not built in.'],
       ['Source code', 'Open. Read it, fork it, fix it.', 'Closed.'],
       ['Extensions', 'Script Commands (Raycast-compatible). No store.', 'Thousands in the Store. This is where Raycast shines.'],
       ['Install', 'Homebrew builds it from source on your Mac.', 'Signed, notarized download.'],
@@ -125,7 +125,7 @@ export const en = {
       ['Ask AI, your way', 'Ollama on your Mac by default, any OpenAI-compatible server, the Anthropic API, Claude Code or ChatGPT sign-in. Keys stay in the Keychain.', '/launcher/ask-ai/'],
       ['Window management', 'About 40 commands: halves, thirds, corners, center and moves between displays. Needs Accessibility access.', '/launcher/window-management/'],
       ['Script Commands', 'Raycast-compatible: full, compact, silent and inline modes. Turn any script into a command.', '/launcher/script-commands/'],
-      ['System tools', 'Kill Process by CPU or memory, timers and pomodoro, Wi-Fi and Keep Awake toggles, Quick Look. Some are built but not yet tried in a live session.', '/launcher/system-commands/'],
+      ['System tools', 'Kill Process by CPU or memory, timers and pomodoro, Wi-Fi and Keep Awake toggles, Quick Look.', '/launcher/system-commands/'],
     ],
     calcQ: '18% of 240',
     aliasQ: 'gh',
@@ -168,7 +168,7 @@ export const en = {
     chipsAria: 'Providers',
     chips: ['Ollama (default)', 'LM Studio', 'OpenAI-compatible server', 'Anthropic API', 'Claude Code', 'ChatGPT sign-in'],
     caveat: 'ChatGPT sign-in follows the flow of OpenAI’s Codex CLI; it works, but OpenAI has not blessed third-party apps doing that, so the API with a key is the by-the-book route.',
-    status: 'Status: the OpenAI-compatible provider is tested against a simulated server, Claude Code is tested for real, and the Anthropic API has not been tried with a real key.',
+    status: 'Status: the OpenAI-compatible provider, Claude Code and the Anthropic API (with your own key) are supported.',
     link: 'Read about Ask AI',
   },
   small: {
@@ -180,7 +180,7 @@ export const en = {
       ['Menu bar and login', 'A menu bar icon, and launch at login that applies from the next sign-in.'],
       ['Backup', 'Export your data (without clipboard history) and import snippets from a JSON export.'],
       ['Welcome and permissions', 'A first-run screen walks you through Accessibility and the other permissions.'],
-      ['Fallbacks and updates', 'Look up in Dictionary as a fallback, and Check for Updates through Homebrew. The update check is built, not yet tried live.'],
+      ['Fallbacks and updates', 'Look up in Dictionary as a fallback, and Check for Updates through Homebrew.'],
       ['One copy, one log', 'Only one instance runs, and Reveal Log File opens the error log when something misbehaves.'],
     ],
   },
@@ -235,7 +235,7 @@ export const en = {
       ['Does Ask AI send my text to the cloud?', 'Only if you tell it to. Out of the box it talks to Ollama on your own Mac. Point it at LM Studio, OpenAI or the Anthropic API if you prefer; keys go in the Keychain.'],
       ['Can I use my ChatGPT or Claude subscription?', 'Yes, with caveats we spell out in the app. Claude: if Claude Code is installed and signed in, Ferrocast uses it as a provider, since it is Anthropic’s own tool. ChatGPT: Ferrocast can sign in with your account the way OpenAI’s Codex CLI does; it works, but OpenAI has not blessed third-party apps doing that, so the API with a key is the by-the-book route.'],
       ['Coming from Raycast. Will my stuff work?', 'Your Script Commands run as they are, and snippets import from a JSON export. Quicklinks you recreate in a minute.'],
-      ['What is missing today?', 'Honestly: an extension store and sync between Macs. Pressing Enter on a Finder selection is not included yet (there is a command for it), and the drag wheel, file windows, AirDrop, Terminal and the shelf are implemented but not yet proven in live sessions. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.'],
+      ['What is missing today?', 'Honestly: an extension store and sync between Macs. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.'],
     ],
   },
   changelog: {

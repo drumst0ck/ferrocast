@@ -25,7 +25,7 @@ Porque mover ventanas, pegar por ti y expandir snippets lo necesitan. La búsque
 Nunca sale de tu Mac. Está en un archivo JSON en Application Support, y lo que se copia desde un gestor de contraseñas como 1Password se ignora a propósito.
 
 ### ¿Qué falta hoy?
-Con honestidad: una tienda de extensiones y la sincronización entre Macs. Pulsar Intro sobre una selección de Finder todavía no está incluido (hay un comando para ello). Si vives dentro de las extensiones de Raycast, Ferrocast todavía no las reemplaza.
+Con honestidad: una tienda de extensiones y la sincronización entre Macs. Si vives dentro de las extensiones de Raycast, Ferrocast todavía no las reemplaza.
 
 ## IA y migración
 
@@ -53,10 +53,10 @@ Cada par se ejecuta en la batería de tests sobre archivos de muestra generados 
 No. El resultado se escribe junto al original con el mismo nombre y la nueva extensión. Si ese nombre está ocupado añade 2, 3 y así sucesivamente.
 
 ### ¿Puedo pulsar Intro sobre un archivo en Finder?
-Todavía no. Un comando del lanzador llamado Convert Finder Selection lee la selección de Finder y abre la rueda de formatos, y Option-Intro sobre un resultado de archivo en el lanzador hace lo mismo. Intro a secas sobre una selección de Finder no está incluido.
+Sí, como ajuste opcional. En Ajustes > General activa «Enter on Finder selection» (desactivado por defecto, necesita Accesibilidad) y al pulsar Intro sobre archivos seleccionados en Finder se abre la rueda de conversión en lugar de renombrar. El comando Convert Finder Selection también funciona, y Option-Intro sobre un resultado de archivo en el lanzador hace lo mismo.
 
-### ¿Se han usado de verdad las ventanas y la rueda?
-Sí. Sus ventanas se renderizan y se comprueban con capturas, con tests automáticos para teclas y arrastres.
+### ¿Están probadas las ventanas y la rueda?
+Sí. Las ventanas y la rueda están probadas.
 
 ## Relacionado
 

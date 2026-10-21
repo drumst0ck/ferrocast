@@ -30,7 +30,7 @@ The Finder read needs Automation permission for Finder; while the prompt is pend
 
 ## Pressing Enter on a Finder file renames it
 
-That is Finder's own behaviour. Ferrocast does not intercept Return; use Convert Finder Selection or <kbd>⌥</kbd> <kbd>↵</kbd> on a file result.
+That is Finder's own behaviour unless you turn on Settings > General > “Enter on Finder selection” (off by default, needs Accessibility), which opens the Convert wheel instead of renaming. You can also use Convert Finder Selection or <kbd>⌥</kbd> <kbd>↵</kbd> on a file result.
 
 ## Something crashed or failed silently
 

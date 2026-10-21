@@ -25,7 +25,7 @@ Because moving windows, pasting for you and expanding snippets all need it. Sear
 It never leaves your Mac. It sits in a JSON file in Application Support, and anything copied from a password manager like 1Password is skipped on purpose.
 
 ### What is missing today?
-Honestly: an extension store and sync between Macs. Pressing Enter on a Finder selection is not included yet (there is a command for it). If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.
+Honestly: an extension store and sync between Macs. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.
 
 ## AI and migration
 
@@ -53,10 +53,10 @@ Every pair is exercised in the test suite on generated sample files and the outp
 No. The result is written next to the original with the same name and the new extension. If that name is taken it adds 2, 3 and so on.
 
 ### Can I press Enter on a file in Finder?
-Not yet. A launcher command called Convert Finder Selection reads the Finder selection and opens the format wheel, and Option-Enter on a file result in the launcher does the same. Plain Enter on a Finder selection is not included.
+Yes, as an opt-in setting. In Settings > General, turn on “Enter on Finder selection” (off by default, needs Accessibility) and pressing Return on selected files in Finder opens the Convert wheel instead of renaming. The Convert Finder Selection command also works, and Option-Enter on a file result in the launcher does the same.
 
-### Have the windows and the wheel been used for real?
-Yes. Their windows are rendered and checked in screenshots, with automated tests for keys and drags.
+### Are the windows and the wheel tested?
+Yes. The windows and the wheel are tested.
 
 ## Related
 
