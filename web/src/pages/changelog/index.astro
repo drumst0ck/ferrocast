@@ -4,17 +4,19 @@ import SiteHeader from '../../components/SiteHeader.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
 import ChangelogEntries from '../../components/ChangelogEntries.astro';
 import { loadReleases, versionLabel } from '../../lib/changelog/load';
+import { changelogIndexMeta } from '../../lib/changelog/meta';
 
 export const prerender = false;
 
 const repo = 'https://github.com/drumst0ck/ferrocast';
 const releases = await loadReleases();
+const meta = changelogIndexMeta();
 const tag = Astro.url.searchParams.get('tag')?.toLowerCase().replace(/[^a-z0-9-]/g, '') || null;
 const allTags = releases ? [...new Set(releases.flatMap((r) => r.entries.flatMap((e) => e.tags)))].sort() : [];
 const canonical = new URL('/changelog/', Astro.site).href;
 if (!releases) Astro.response.status = 503;
 ---
-<Base title="Changelog · Ferrocast" description="What changed in Ferrocast, release by release: new tools, fixes and known limitations, with a feed you can subscribe to." canonical={canonical}>
+<Base title={meta.title} description={meta.description} canonical={canonical}>
   <SiteHeader />
   <main class="wrap prose" id="main">
     <h1>Changelog</h1>

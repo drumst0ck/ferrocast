@@ -4,6 +4,7 @@ import SiteHeader from '../../components/SiteHeader.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
 import ChangelogEntries from '../../components/ChangelogEntries.astro';
 import { loadRelease, versionLabel } from '../../lib/changelog/load';
+import { releaseMeta } from '../../lib/changelog/meta';
 
 export const prerender = false;
 
@@ -12,8 +13,7 @@ const { release, ok } = await loadRelease(version.toLowerCase());
 if (!ok) Astro.response.status = 503;
 else if (!release) return new Response(null, { status: 404, headers: { Location: '/changelog/' } });
 const r = release!;
-const first = r.entries.find((e) => e.category === 'added');
-const description = (r.summary ?? `Ferrocast ${versionLabel(r.version)}: ${r.entries.length} changes${first ? `, including ${first.title ?? first.bodyMd.slice(0, 60)}` : ''}.`).slice(0, 155);
+const meta = releaseMeta(r);
 const canonical = new URL(`/changelog/${r.version}/`, Astro.site).href;
 const jsonLd = {
   '@context': 'https://schema.org',
@@ -26,7 +26,7 @@ const jsonLd = {
   ...(r.releasedOn ? { datePublished: r.releasedOn } : {}),
 };
 ---
-<Base title={`Ferrocast ${versionLabel(r.version)} release notes`} description={description} canonical={canonical} jsonLd={jsonLd}>
+<Base title={meta.title} description={meta.description} canonical={canonical} jsonLd={jsonLd}>
   <SiteHeader />
   <main class="wrap prose" id="main">
     <p class="muted"><a class="tl" href="/changelog/">← All releases</a></p>
