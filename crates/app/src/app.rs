@@ -1036,16 +1036,28 @@ impl App {
             return;
         }
         if !(self.finder.hooks.trusted)(prompt) {
+            self.finder_log("finder-enter: tap NOT started: Accessibility is not granted");
             self.toast(services::FINDER_ENTER_NEEDS_ACCESS);
             return;
         }
-        match (self.finder.hooks.start)(self.finder.inflight.clone(), self.bus.clone()) {
-            Ok(tap) => self.finder.tap = Some(tap),
+        let (root, log) = (self.store.root.clone(), self.finder.hooks.log.clone());
+        let tap_log: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |line| log(&root, line));
+        match (self.finder.hooks.start)(self.finder.inflight.clone(), self.bus.clone(), tap_log) {
+            Ok(tap) => {
+                self.finder.tap = Some(tap);
+                self.finder_log("finder-enter: tap started");
+            }
             Err(e) => {
                 eprintln!("ferrocast: Enter on Finder: {e}");
+                self.finder_log(&format!("finder-enter: tap NOT started: {e}"));
                 self.toast(services::FINDER_ENTER_NEEDS_ACCESS);
             }
         }
+    }
+
+    /// One line in ferrocast.log through the injected hook (never key content or file paths).
+    fn finder_log(&self, line: &str) {
+        (self.finder.hooks.log)(&self.store.root, line);
     }
 
     /// Give the swallowed Return back to Finder. The tap keeps passing Returns through for a
@@ -1071,6 +1083,7 @@ impl App {
             return;
         }
         self.finder.busy = true;
+        self.finder_log("finder-enter: Return intercepted, reading the Finder selection");
         let (bus, read) = (self.bus.clone(), self.finder.hooks.selection.clone());
         std::thread::spawn(move || {
             let sel =
@@ -1085,14 +1098,28 @@ impl App {
         use ferrocast_core::finder_enter::{outcome, EnterOutcome};
         match outcome(&sel) {
             EnterOutcome::OpenWheel(files) if !self.wheel_segments(ferrocast_core::wheel::WheelKind::Convert, &files).is_empty() => {
+                self.finder_log(&format!("finder-enter: selection read ok, {} item(s) -> opening the wheel", files.len()));
                 self.finder.inflight.end();
                 self.show();
                 self.reset_to_root();
                 self.perform(Act::OpenWheel(files), true);
             }
             _ => {
-                if let Err(e) = &sel {
-                    eprintln!("ferrocast: Enter on Finder: selection: {e}");
+                match &sel {
+                    Err(e) => {
+                        eprintln!("ferrocast: Enter on Finder: selection: {e}");
+                        self.finder_log(&format!("finder-enter: selection read FAILED: {e} -> giving the Return back"));
+                        let due = self.finder.last_failure_notice.is_none_or(|t| t.elapsed() >= Duration::from_secs(60));
+                        if due {
+                            self.finder.last_failure_notice = Some(Instant::now());
+                            (self.finder.hooks.notify)("Ferrocast", &ferrocast_core::finder_enter::finder_read_failure_message(e));
+                        }
+                    }
+                    Ok(f) if f.is_empty() => self.finder_log("finder-enter: selection read ok, empty -> giving the Return back"),
+                    Ok(f) => self.finder_log(&format!(
+                        "finder-enter: selection read ok, {} item(s), no conversion available -> giving the Return back",
+                        f.len()
+                    )),
                 }
                 self.finder_repost();
             }

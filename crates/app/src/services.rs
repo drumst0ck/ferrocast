@@ -378,7 +378,14 @@ pub fn clipboard_texts(shared: &Shared) -> Vec<String> {
 // Enter on a Finder selection (opt-in): the OS-facing pieces behind injectable hooks
 
 /// Creates the tap; the returned value keeps it alive.
-pub type FinderStart = dyn Fn(Arc<ferrocast_core::finder_enter::InFlight>, Bus) -> Result<Box<dyn std::any::Any>, String> + Send + Sync;
+pub type FinderStart = dyn Fn(Arc<ferrocast_core::finder_enter::InFlight>, Bus, Arc<dyn Fn(&str) + Send + Sync>) -> Result<Box<dyn std::any::Any>, String>
+    + Send
+    + Sync;
+
+/// Appends a line to ferrocast.log in the given store directory.
+pub type FinderLog = Arc<dyn Fn(&std::path::Path, &str) + Send + Sync>;
+/// Posts a macOS notification (title, message).
+pub type FinderNotify = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 /// What the app needs from the system for "Enter on Finder selection". The defaults are the real
 /// thing; tests replace them so nothing touches the event system.
@@ -392,18 +399,24 @@ pub struct FinderHooks {
     pub selection: Arc<dyn Fn() -> Result<Vec<PathBuf>, String> + Send + Sync>,
     /// Give the Return back to Finder (marked so the tap lets it through). False: not sent.
     pub repost: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// Append a line to ferrocast.log in the given store directory.
+    pub log: FinderLog,
+    /// Post a macOS notification (title, message). Tests post nothing.
+    pub notify: FinderNotify,
 }
 
 impl Default for FinderHooks {
     fn default() -> Self {
         FinderHooks {
             trusted: Arc::new(ferrocast_macos::windows::accessibility_trusted),
-            start: Arc::new(|inflight, bus| {
+            start: Arc::new(|inflight, bus, log| {
                 let on_enter: Arc<dyn Fn() + Send + Sync> = Arc::new(move || bus.send(Msg::FinderEnter));
-                ferrocast_macos::finder_enter::start(inflight, on_enter).map(|t| Box::new(t) as Box<dyn std::any::Any>)
+                ferrocast_macos::finder_enter::start(inflight, on_enter, log).map(|t| Box::new(t) as Box<dyn std::any::Any>)
             }),
             selection: Arc::new(|| ferrocast_macos::apps::finder_selection().map_err(|e| e.to_string())),
             repost: Arc::new(ferrocast_macos::finder_enter::repost_return),
+            log: Arc::new(crate::instance::log),
+            notify: Arc::new(notify),
         }
     }
 }
@@ -417,6 +430,8 @@ pub struct FinderEnterState {
     /// A selection read is running; a further Return is passed through, never queued.
     pub busy: bool,
     pub hooks: FinderHooks,
+    /// When the last "could not read the Finder selection" notification was posted (max one per minute).
+    pub last_failure_notice: Option<std::time::Instant>,
 }
 
 pub const FINDER_ENTER_NEEDS_ACCESS: &str = "Enter on Finder needs Accessibility access";

@@ -80,6 +80,31 @@ With the setting off there is no tap, no workspace observer and no Accessibility
 2. If the keyboard misbehaves and Ferrocast's window is not reachable: quit Ferrocast (Activity Monitor or `killall ferrocast`). The tap dies with the process.
 3. Remove Ferrocast from **System Settings > Privacy & Security > Accessibility**. Without it the tap cannot exist.
 
+## Diagnostics (no effect on any decision)
+
+Everything goes to `ferrocast.log` (in the Ferrocast data directory). No key content, no file paths.
+
+- App side, one line per event: `finder-enter: tap started`, `tap NOT started: <reason>`,
+  `Return intercepted, reading the Finder selection`, `selection read ok, N item(s) -> opening the wheel`,
+  `selection read ok, empty -> giving the Return back`, `selection read FAILED: <error> -> giving the Return back`.
+  A failed read also posts one notification (at most once per 60 s); error `-1743` / "not authorized"
+  means the Finder Automation permission is missing (System Settings > Privacy & Security > Automation).
+- Tap side: the callback only does atomic increments/stores (`Diag`, Relaxed). The tap thread's existing 2 s tick
+  logs ONE line, only if the Return count changed since the last tick, e.g.
+  `finder-enter: Return seen 3, intercepted 1, passed: precheck 1 (not-finder-front 1), pid 0 (finder_pid=412 focused_pid=412), role 1 (role=AXTextFi window_subrole=AXStanda why=role-not-a-selection-role), busy 0, send 0`.
+  The tick runs on the thread that runs the callback, so the log write happens between callbacks, never inside one.
+  Role texts are cut to their first 8 bytes.
+- Counters: `seen` = key-downs of Return; `intercepted` = swallowed; `precheck` = passed on the cheap checks
+  (causes: marker = our own re-post, repeat, modifiers, disabled, not-finder-front = Finder not frontmost per the
+  activation observer); `pid` = the focused element is not in Finder's process or its pid was unreadable
+  (`focused_pid=-1`: unreadable, `0`: not read because the role check failed first); `role` = the focused element
+  is not a selection in a standard window (`why=` says which step failed: no-focused-element, no-role,
+  role-not-a-selection-role, no-window, no-window-subrole, window-not-standard); `busy` = another Return in flight
+  or the 300 ms hold; `send` = the helper channel failed.
+- `tap was disabled by macOS and re-enabled (N time(s) so far)` is logged when macOS disabled the tap (timeout or user input).
+- Reading it: `seen 0` while pressing Return = no key-downs reach the tap (tap dead or disabled). `intercepted > 0`
+  with no wheel = look at the app-side `selection read` line.
+
 ## Not tested automatically
 
 The tap itself, the activation observer, the Accessibility reads, sleep/wake recovery, Quick Look,

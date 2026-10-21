@@ -21,7 +21,7 @@ use ferrocast_core::finder_enter as rules;
 use ferrocast_core::finder_enter::InFlight;
 use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
@@ -54,6 +54,193 @@ pub fn selection_role(raw: &[u8]) -> Option<&'static str> {
 pub fn normal_window_subrole(raw: &[u8]) -> Option<&'static str> {
     let t = text_of(raw)?;
     (t == rules::NORMAL_WINDOW_SUBROLE).then_some(rules::NORMAL_WINDOW_SUBROLE)
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics: plain atomics, written by the callback (Relaxed, no locks, no allocation, no I/O)
+// and read by the tap thread's 2 s tick, which formats and logs one line.
+
+/// Why `focused_selection_role` returned `None` (or `REASON_OK`).
+pub const REASON_OK: u8 = 0;
+pub const REASON_NO_FOCUSED: u8 = 1;
+pub const REASON_NO_ROLE: u8 = 2;
+pub const REASON_ROLE_NOT_SELECTION: u8 = 3;
+pub const REASON_NO_WINDOW: u8 = 4;
+pub const REASON_NO_SUBROLE: u8 = 5;
+pub const REASON_SUBROLE_NOT_STANDARD: u8 = 6;
+
+/// Short name of a reason code, for the log line.
+pub fn reason_name(code: u8) -> &'static str {
+    match code {
+        REASON_OK => "ok",
+        REASON_NO_FOCUSED => "no-focused-element",
+        REASON_NO_ROLE => "no-role",
+        REASON_ROLE_NOT_SELECTION => "role-not-a-selection-role",
+        REASON_NO_WINDOW => "no-window",
+        REASON_NO_SUBROLE => "no-window-subrole",
+        REASON_SUBROLE_NOT_STANDARD => "window-not-standard",
+        _ => "unknown",
+    }
+}
+
+/// First 8 bytes of a NUL-terminated text, zero padded, as a big-endian number (no allocation).
+pub fn pack_text(buf: &[u8]) -> u64 {
+    let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len()).min(8);
+    let mut b = [0u8; 8];
+    b[..end].copy_from_slice(&buf[..end]);
+    u64::from_be_bytes(b)
+}
+
+/// The text packed by `pack_text` ("" for 0; invalid UTF-8 bytes become '?').
+pub fn unpack_text(v: u64) -> String {
+    let b = v.to_be_bytes();
+    let end = b.iter().position(|c| *c == 0).unwrap_or(8);
+    String::from_utf8_lossy(&b[..end]).replace('\u{fffd}', "?")
+}
+
+#[derive(Default)]
+pub struct Diag {
+    pub returns_seen: AtomicU64,
+    pub passed_precheck: AtomicU64,
+    pub pc_marker: AtomicU64,
+    pub pc_repeat: AtomicU64,
+    pub pc_modifiers: AtomicU64,
+    pub pc_disabled: AtomicU64,
+    pub pc_not_finder_front: AtomicU64,
+    pub passed_pid: AtomicU64,
+    pub passed_role: AtomicU64,
+    pub passed_busy: AtomicU64,
+    pub passed_send: AtomicU64,
+    pub intercepted: AtomicU64,
+    /// Times the callback saw TapDisabledByTimeout / TapDisabledByUserInput and re-enabled.
+    pub reenabled: AtomicU64,
+    pub last_focused_pid: AtomicI32,
+    pub last_finder_pid: AtomicI32,
+    pub last_role: AtomicU64,
+    pub last_reason: AtomicU8,
+    pub last_window_subrole: AtomicU64,
+}
+
+/// Plain numbers and unpacked text of a `Diag`, for formatting.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub returns_seen: u64,
+    pub intercepted: u64,
+    pub precheck: u64,
+    pub pc_marker: u64,
+    pub pc_repeat: u64,
+    pub pc_modifiers: u64,
+    pub pc_disabled: u64,
+    pub pc_not_finder_front: u64,
+    pub pid: u64,
+    pub role: u64,
+    pub busy: u64,
+    pub send: u64,
+    pub finder_pid: i32,
+    pub focused_pid: i32,
+    pub last_role: String,
+    pub last_window_subrole: String,
+    pub reason: u8,
+}
+
+impl Diag {
+    fn bump(c: &AtomicU64) {
+        c.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn seen(&self) {
+        Self::bump(&self.returns_seen);
+    }
+    /// Count a pre-check failure and, where it can be told without allocation, why. The first
+    /// matching cause wins, in the order of `rules::pre_check`'s own conjuncts.
+    /// "Finder not frontmost" is the cause by elimination, so `_finder_front` is not read.
+    pub fn precheck_failed(&self, user_data: i64, autorepeat: bool, mods_empty: bool, enabled: bool, _finder_front: bool) {
+        Self::bump(&self.passed_precheck);
+        let c = if rules::is_repost(user_data) {
+            &self.pc_marker
+        } else if autorepeat {
+            &self.pc_repeat
+        } else if !mods_empty {
+            &self.pc_modifiers
+        } else if !enabled {
+            &self.pc_disabled
+        } else {
+            &self.pc_not_finder_front
+        };
+        Self::bump(c);
+    }
+    pub fn pid_failed(&self) {
+        Self::bump(&self.passed_pid);
+    }
+    pub fn role_failed(&self) {
+        Self::bump(&self.passed_role);
+    }
+    pub fn busy_failed(&self) {
+        Self::bump(&self.passed_busy);
+    }
+    pub fn send_failed(&self) {
+        Self::bump(&self.passed_send);
+    }
+    pub fn intercepted(&self) {
+        Self::bump(&self.intercepted);
+    }
+    pub fn tap_reenabled(&self) {
+        Self::bump(&self.reenabled);
+    }
+    pub fn snapshot(&self) -> Snapshot {
+        let l = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        Snapshot {
+            returns_seen: l(&self.returns_seen),
+            intercepted: l(&self.intercepted),
+            precheck: l(&self.passed_precheck),
+            pc_marker: l(&self.pc_marker),
+            pc_repeat: l(&self.pc_repeat),
+            pc_modifiers: l(&self.pc_modifiers),
+            pc_disabled: l(&self.pc_disabled),
+            pc_not_finder_front: l(&self.pc_not_finder_front),
+            pid: l(&self.passed_pid),
+            role: l(&self.passed_role),
+            busy: l(&self.passed_busy),
+            send: l(&self.passed_send),
+            finder_pid: self.last_finder_pid.load(Ordering::Relaxed),
+            focused_pid: self.last_focused_pid.load(Ordering::Relaxed),
+            last_role: unpack_text(l(&self.last_role)),
+            last_window_subrole: unpack_text(l(&self.last_window_subrole)),
+            reason: self.last_reason.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// The one log line for a snapshot. Never contains key content or file paths.
+pub fn format_diag(s: &Snapshot) -> String {
+    let causes: Vec<String> = [
+        ("marker", s.pc_marker),
+        ("repeat", s.pc_repeat),
+        ("modifiers", s.pc_modifiers),
+        ("disabled", s.pc_disabled),
+        ("not-finder-front", s.pc_not_finder_front),
+    ]
+    .iter()
+    .filter(|(_, n)| *n > 0)
+    .map(|(name, n)| format!("{name} {n}"))
+    .collect();
+    let causes = if causes.is_empty() { String::new() } else { format!(" ({})", causes.join(", ")) };
+    let text = |t: &str| if t.is_empty() { "-".to_string() } else { t.to_string() };
+    format!(
+        "finder-enter: Return seen {}, intercepted {}, passed: precheck {}{causes}, pid {} (finder_pid={} focused_pid={}), \
+         role {} (role={} window_subrole={} why={}), busy {}, send {}",
+        s.returns_seen,
+        s.intercepted,
+        s.precheck,
+        s.pid,
+        s.finder_pid,
+        s.focused_pid,
+        s.role,
+        text(&s.last_role),
+        text(&s.last_window_subrole),
+        reason_name(s.reason),
+        s.busy,
+        s.send
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -98,16 +285,47 @@ fn with_text<R>(v: &Owned, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
 }
 
 /// Role of the focused element and its owning process id (`None` when unreadable), but only when
-/// it sits in an ordinary window; otherwise `None`.
-fn focused_selection_role(sys: &SystemWide, n: &Names) -> Option<(&'static str, Option<i32>)> {
-    let focused = copy_attr(sys.0, &n.focused)?;
+/// it sits in an ordinary window; otherwise `None`. `diag` receives the last pid, role text,
+/// window subrole text and the reason for a `None` (atomic stores only; the result is unchanged).
+fn focused_selection_role(sys: &SystemWide, n: &Names, diag: &Diag) -> Option<(&'static str, Option<i32>)> {
+    diag.last_focused_pid.store(0, Ordering::Relaxed); // 0 = not read in this call
+    diag.last_role.store(0, Ordering::Relaxed);
+    diag.last_window_subrole.store(0, Ordering::Relaxed);
+    let Some(focused) = copy_attr(sys.0, &n.focused) else {
+        diag.last_reason.store(REASON_NO_FOCUSED, Ordering::Relaxed);
+        return None;
+    };
     let el = focused.0 as AXUIElementRef;
-    let role = copy_attr(el, &n.role).and_then(|r| with_text(&r, selection_role))??;
+    let Some((packed, mapped)) = copy_attr(el, &n.role).and_then(|r| with_text(&r, |b| (pack_text(b), selection_role(b)))) else {
+        diag.last_reason.store(REASON_NO_ROLE, Ordering::Relaxed);
+        return None;
+    };
+    diag.last_role.store(packed, Ordering::Relaxed);
+    let Some(role) = mapped else {
+        diag.last_reason.store(REASON_ROLE_NOT_SELECTION, Ordering::Relaxed);
+        return None;
+    };
     let mut pid: i32 = 0;
     let pid = (unsafe { AXUIElementGetPid(el, &mut pid) } == kAXErrorSuccess).then_some(pid);
-    let win = copy_attr(el, &n.window)?;
-    let sub = copy_attr(win.0 as AXUIElementRef, &n.subrole).and_then(|s| with_text(&s, normal_window_subrole))?;
-    rules::window_is_normal(sub).then_some((role, pid))
+    diag.last_focused_pid.store(pid.unwrap_or(-1), Ordering::Relaxed);
+    let Some(win) = copy_attr(el, &n.window) else {
+        diag.last_reason.store(REASON_NO_WINDOW, Ordering::Relaxed);
+        return None;
+    };
+    let Some((packed, sub)) =
+        copy_attr(win.0 as AXUIElementRef, &n.subrole).and_then(|s| with_text(&s, |b| (pack_text(b), normal_window_subrole(b))))
+    else {
+        diag.last_reason.store(REASON_NO_SUBROLE, Ordering::Relaxed);
+        return None;
+    };
+    diag.last_window_subrole.store(packed, Ordering::Relaxed);
+    if rules::window_is_normal(sub) {
+        diag.last_reason.store(REASON_OK, Ordering::Relaxed);
+        Some((role, pid))
+    } else {
+        diag.last_reason.store(REASON_SUBROLE_NOT_STANDARD, Ordering::Relaxed);
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +400,11 @@ fn finder_pid_now() -> i32 {
 
 /// Create the tap. Returns an error (no tap exists) when it cannot be created, normally because
 /// Accessibility is not granted. `on_enter` runs on a helper thread, never inside the callback.
-pub fn start(inflight: Arc<InFlight>, on_enter: Arc<dyn Fn() + Send + Sync>) -> Result<FinderEnterTap, String> {
+pub fn start(
+    inflight: Arc<InFlight>,
+    on_enter: Arc<dyn Fn() + Send + Sync>,
+    log: Arc<dyn Fn(&str) + Send + Sync>,
+) -> Result<FinderEnterTap, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let enabled = Arc::new(AtomicBool::new(true));
     let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<RunLoopHandle, String>>(1);
@@ -198,7 +420,7 @@ pub fn start(inflight: Arc<InFlight>, on_enter: Arc<dyn Fn() + Send + Sync>) -> 
     let (stop2, enabled2) = (stop.clone(), enabled.clone());
     let thread = std::thread::Builder::new()
         .name("finder-enter-tap".into())
-        .spawn(move || run(stop2, enabled2, inflight, tx, ready_tx))
+        .spawn(move || run(stop2, enabled2, inflight, tx, ready_tx, log))
         .map_err(|e| e.to_string())?;
     match ready_rx.recv_timeout(Duration::from_secs(3)) {
         Ok(Ok(rl)) => Ok(FinderEnterTap { stop, enabled, run_loop: Some(rl), thread: Some(thread) }),
@@ -220,6 +442,7 @@ fn run(
     inflight: Arc<InFlight>,
     tx: mpsc::Sender<()>,
     ready: mpsc::SyncSender<Result<RunLoopHandle, String>>,
+    log: Arc<dyn Fn(&str) + Send + Sync>,
 ) {
     use objc2_app_kit::{NSWorkspace, NSWorkspaceDidActivateApplicationNotification};
     use objc2_foundation::NSNotification;
@@ -228,6 +451,7 @@ fn run(
     // pid of Finder while it is frontmost, else 0 (seeded here, kept by the activation observer)
     let finder_pid = Arc::new(AtomicI32::new(finder_pid_now()));
     let port = Arc::new(AtomicPtr::<c_void>::new(std::ptr::null_mut()));
+    let diag = Arc::new(Diag::default());
 
     let sys = SystemWide(unsafe { AXUIElementCreateSystemWide() });
     let names = Names {
@@ -238,6 +462,7 @@ fn run(
     };
 
     let (front_cb, enabled_cb, port_cb, pid_cb) = (front.clone(), enabled.clone(), port.clone(), finder_pid.clone());
+    let diag_cb = diag.clone();
     let tap = CGEventTap::new(
         CGEventTapLocation::Session,
         CGEventTapPlacement::HeadInsertEventTap,
@@ -246,6 +471,7 @@ fn run(
         move |_proxy, ty, ev| {
             match ty {
                 CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
+                    diag_cb.tap_reenabled();
                     let p = port_cb.load(Ordering::Relaxed);
                     if !p.is_null() {
                         unsafe { CGEventTapEnable(p, true) };
@@ -258,32 +484,40 @@ fn run(
             if ev.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) != i64::from(crate::keyboard::keycode::RETURN) {
                 return CallbackResult::Keep;
             }
+            diag_cb.seen();
+            diag_cb.last_finder_pid.store(pid_cb.load(Ordering::Relaxed), Ordering::Relaxed);
             let user_data = ev.get_integer_value_field(EventField::EVENT_SOURCE_USER_DATA);
             let repeat = ev.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT) != 0;
             let mods = rules::modifiers_empty(ev.get_flags().bits());
             let finder = front_cb.load(Ordering::Relaxed);
             if !rules::pre_check(user_data, true, repeat, mods, enabled_cb.load(Ordering::Relaxed), finder) {
+                diag_cb.precheck_failed(user_data, repeat, mods, enabled_cb.load(Ordering::Relaxed), finder);
                 return CallbackResult::Keep;
             }
-            let (role, focused_pid) = match focused_selection_role(&sys, &names) {
+            let (role, focused_pid) = match focused_selection_role(&sys, &names, &diag_cb) {
                 Some((r, p)) => (Some(r), p),
                 None => (None, None),
             };
             // defense in depth: a stale `front` must not swallow Return in another app
             if !rules::pid_ok(pid_cb.load(Ordering::Relaxed), focused_pid) {
+                diag_cb.pid_failed();
                 return CallbackResult::Keep;
             }
             if !rules::should_intercept(finder.then_some(rules::FINDER_BUNDLE), role, mods, true) {
+                diag_cb.role_failed();
                 return CallbackResult::Keep;
             }
             // one Return at a time; an extra one passes through
             if !inflight.try_begin() {
+                diag_cb.busy_failed();
                 return CallbackResult::Keep;
             }
             if tx.send(()).is_err() {
                 inflight.end();
+                diag_cb.send_failed();
                 return CallbackResult::Keep;
             }
+            diag_cb.intercepted();
             CallbackResult::Drop
         },
     );
@@ -321,6 +555,7 @@ fn run(
     let _ = ready.send(Ok(RunLoopHandle(rl)));
 
     let mut last_enable = Instant::now();
+    let (mut logged_seen, mut logged_reenabled) = (0u64, 0u64);
     while !stop.load(Ordering::SeqCst) {
         let t = Instant::now();
         CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(500), false);
@@ -328,6 +563,17 @@ fn run(
         if last_enable.elapsed() > Duration::from_secs(2) {
             tap.enable();
             last_enable = Instant::now();
+            // diagnostics: one line, and only while Returns are being seen (never key content or paths)
+            let snap = diag.snapshot();
+            if snap.returns_seen != logged_seen {
+                logged_seen = snap.returns_seen;
+                log(&format_diag(&snap));
+            }
+            let re = diag.reenabled.load(Ordering::Relaxed);
+            if re != logged_reenabled {
+                logged_reenabled = re;
+                log(&format!("finder-enter: tap was disabled by macOS and re-enabled ({re} time(s) so far)"));
+            }
         }
         if t.elapsed() < Duration::from_millis(20) && !stop.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(100));
@@ -380,6 +626,87 @@ mod tests {
             assert_eq!(normal_window_subrole(format!("{r}\0").as_bytes()), None, "{r}");
         }
         assert_eq!(normal_window_subrole(b""), None);
+    }
+
+    fn sample() -> Snapshot {
+        Snapshot {
+            returns_seen: 3,
+            intercepted: 1,
+            precheck: 1,
+            pc_not_finder_front: 1,
+            pid: 0,
+            role: 1,
+            busy: 0,
+            send: 0,
+            finder_pid: 412,
+            focused_pid: 412,
+            last_role: "AXTextFi".into(),
+            last_window_subrole: "AXStanda".into(),
+            reason: REASON_ROLE_NOT_SELECTION,
+            ..Snapshot::default()
+        }
+    }
+
+    #[test]
+    fn format_diag_is_exact_for_a_known_snapshot() {
+        assert_eq!(
+            format_diag(&sample()),
+            "finder-enter: Return seen 3, intercepted 1, passed: precheck 1 (not-finder-front 1), pid 0 (finder_pid=412 focused_pid=412), \
+             role 1 (role=AXTextFi window_subrole=AXStanda why=role-not-a-selection-role), busy 0, send 0"
+        );
+    }
+
+    #[test]
+    fn format_diag_lists_only_the_precheck_causes_that_happened_and_dashes_for_empty_text() {
+        let s = Snapshot { returns_seen: 5, precheck: 4, pc_marker: 1, pc_repeat: 1, pc_modifiers: 2, ..Snapshot::default() };
+        assert_eq!(
+            format_diag(&s),
+            "finder-enter: Return seen 5, intercepted 0, passed: precheck 4 (marker 1, repeat 1, modifiers 2), pid 0 (finder_pid=0 focused_pid=0), \
+             role 0 (role=- window_subrole=- why=ok), busy 0, send 0"
+        );
+    }
+
+    #[test]
+    fn text_packs_into_eight_bytes_and_unpacks_again() {
+        assert_eq!(unpack_text(pack_text(b"AXList\0junk")), "AXList");
+        assert_eq!(unpack_text(pack_text(b"AXTextField\0")), "AXTextFi", "only the first 8 bytes");
+        assert_eq!(unpack_text(pack_text(b"12345678")), "12345678");
+        assert_eq!(unpack_text(pack_text(b"")), "");
+        assert_eq!(unpack_text(0), "");
+        assert_eq!(unpack_text(0x4158_4C69_7374_0000), "AXList");
+        assert_eq!(pack_text(b"AXList\0"), 0x4158_4C69_7374_0000);
+        assert_eq!(unpack_text(pack_text(&[0xff, b'a', 0])), "?a");
+    }
+
+    #[test]
+    fn a_fresh_diag_is_all_zero_and_counters_add_up() {
+        let d = Diag::default();
+        assert_eq!(d.snapshot(), Snapshot::default());
+        d.seen();
+        d.seen();
+        d.precheck_failed(rules::REPOST_MARKER, true, false, false, false);
+        d.precheck_failed(0, true, false, false, false);
+        d.precheck_failed(0, false, false, false, false);
+        d.precheck_failed(0, false, true, false, false);
+        d.precheck_failed(0, false, true, true, false);
+        d.pid_failed();
+        d.role_failed();
+        d.role_failed();
+        d.busy_failed();
+        d.send_failed();
+        d.intercepted();
+        d.tap_reenabled();
+        d.last_finder_pid.store(7, Ordering::Relaxed);
+        d.last_role.store(pack_text(b"AXList"), Ordering::Relaxed);
+        d.last_reason.store(REASON_NO_WINDOW, Ordering::Relaxed);
+        let s = d.snapshot();
+        assert_eq!((s.returns_seen, s.intercepted, s.precheck), (2, 1, 5));
+        assert_eq!((s.pc_marker, s.pc_repeat, s.pc_modifiers, s.pc_disabled, s.pc_not_finder_front), (1, 1, 1, 1, 1));
+        assert_eq!((s.pid, s.role, s.busy, s.send), (1, 2, 1, 1));
+        assert_eq!(d.reenabled.load(Ordering::Relaxed), 1);
+        assert_eq!((s.finder_pid, s.last_role.as_str(), s.reason), (7, "AXList", REASON_NO_WINDOW));
+        assert_eq!(reason_name(REASON_NO_WINDOW), "no-window");
+        assert_eq!(reason_name(200), "unknown");
     }
 
     use std::cell::RefCell;

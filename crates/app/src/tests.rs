@@ -5,9 +5,11 @@ use super::*;
 fn inert_finder_hooks() -> services::FinderHooks {
     services::FinderHooks {
         trusted: Arc::new(|_| false),
-        start: Arc::new(|_, _| Err("inert".into())),
+        start: Arc::new(|_, _, _| Err("inert".into())),
         selection: Arc::new(|| Ok(vec![])),
         repost: Arc::new(|| false),
+        log: Arc::new(|_, _| {}),
+        notify: Arc::new(|_, _| {}),
     }
 }
 
@@ -5056,6 +5058,10 @@ struct FinderProbe {
     drops: Arc<std::sync::atomic::AtomicUsize>,
     reads: std::sync::atomic::AtomicUsize,
     reposts: std::sync::atomic::AtomicUsize,
+    /// Lines passed to the injected log hook.
+    lines: Mutex<Vec<String>>,
+    /// (title, message) passed to the injected notify hook.
+    notes: Mutex<Vec<(String, String)>>,
 }
 
 struct DropCount(Arc<std::sync::atomic::AtomicUsize>);
@@ -5068,14 +5074,15 @@ impl Drop for DropCount {
 type Selection = Arc<dyn Fn() -> Result<Vec<PathBuf>, String> + Send + Sync>;
 
 fn finder_hooks(probe: &Arc<FinderProbe>, trusted: bool, start_ok: bool, selection: Selection) -> services::FinderHooks {
-    let (p1, p2, p3, p4) = (probe.clone(), probe.clone(), probe.clone(), probe.clone());
+    let (p1, p2, p3, p4, p5, p6) = (probe.clone(), probe.clone(), probe.clone(), probe.clone(), probe.clone(), probe.clone());
     services::FinderHooks {
         trusted: Arc::new(move |prompt| {
             p1.prompts.lock().unwrap().push(prompt);
             trusted
         }),
-        start: Arc::new(move |_, _| {
+        start: Arc::new(move |_, _, tap_log| {
             p2.starts.fetch_add(1, Ordering::SeqCst);
+            tap_log("finder-enter: probe line from the tap thread");
             if start_ok {
                 Ok(Box::new(DropCount(p2.drops.clone())) as Box<dyn std::any::Any>)
             } else {
@@ -5090,6 +5097,8 @@ fn finder_hooks(probe: &Arc<FinderProbe>, trusted: bool, start_ok: bool, selecti
             p4.reposts.fetch_add(1, Ordering::SeqCst);
             true
         }),
+        log: Arc::new(move |_, line| p5.lines.lock().unwrap().push(line.to_string())),
+        notify: Arc::new(move |t, m| p6.notes.lock().unwrap().push((t.to_string(), m.to_string()))),
     }
 }
 
@@ -5213,6 +5222,100 @@ fn a_failed_selection_read_also_gives_the_return_back() {
     app.bus.send(Msg::FinderEnter);
     pump(&mut app, |a| count(&probe.reposts) == 1 && !a.finder.busy);
     assert!(!matches!(app.view(), View::Wheel { .. }));
+}
+
+fn lines(p: &FinderProbe) -> Vec<String> {
+    p.lines.lock().unwrap().clone()
+}
+
+fn notes(p: &FinderProbe) -> Vec<(String, String)> {
+    p.notes.lock().unwrap().clone()
+}
+
+const AUTOMATION_TEXT: &str =
+    "Enter on Finder: Ferrocast is not allowed to control Finder. Allow it in System Settings > Privacy & Security > Automation.";
+
+#[test]
+fn an_empty_selection_logs_a_line_and_posts_no_notification() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 1 && !a.finder.busy);
+    let l = lines(&probe);
+    assert!(l.contains(&"finder-enter: Return intercepted, reading the Finder selection".to_string()), "{l:?}");
+    assert!(l.contains(&"finder-enter: selection read ok, empty -> giving the Return back".to_string()), "{l:?}");
+    assert!(notes(&probe).is_empty(), "an empty selection is not an error");
+}
+
+#[test]
+fn a_denied_automation_read_logs_the_error_and_notifies_once_per_minute() {
+    let probe = Arc::new(FinderProbe::default());
+    let err = "execution error: Not authorized to send Apple events to Finder. (-1743)";
+    let mut app = finder_app(&probe, true, Arc::new(move || Err(err.into())));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 1 && !a.finder.busy);
+    let l = lines(&probe);
+    assert!(l.contains(&format!("finder-enter: selection read FAILED: {err} -> giving the Return back")), "{l:?}");
+    assert_eq!(notes(&probe), vec![("Ferrocast".to_string(), AUTOMATION_TEXT.to_string())]);
+    // a second failure within 60 s: logged again, but no second notification
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 2 && !a.finder.busy);
+    assert_eq!(notes(&probe).len(), 1, "rate limited");
+    assert_eq!(lines(&probe).iter().filter(|x| x.contains("selection read FAILED")).count(), 2);
+    // after the minute has passed a new one is posted
+    app.finder.last_failure_notice = Some(Instant::now() - Duration::from_secs(61));
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 3 && !a.finder.busy);
+    assert_eq!(notes(&probe).len(), 2);
+}
+
+#[test]
+fn another_read_error_notifies_with_the_generic_text() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Err("timed out after 15 s".into())));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 1 && !a.finder.busy);
+    assert_eq!(
+        notes(&probe),
+        vec![("Ferrocast".to_string(), "Enter on Finder could not read the Finder selection: timed out after 15 s".to_string())]
+    );
+}
+
+#[test]
+fn a_selection_logs_the_item_count_and_notifies_nothing() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![PathBuf::from("/nonexistent/a.png"), PathBuf::from("/nonexistent/b.png")])));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| matches!(a.view(), View::Wheel { .. }));
+    let l = lines(&probe);
+    assert!(l.contains(&"finder-enter: selection read ok, 2 item(s) -> opening the wheel".to_string()), "{l:?}");
+    assert!(!l.iter().any(|x| x.contains("nonexistent")), "no file paths in the log: {l:?}");
+    assert!(notes(&probe).is_empty());
+}
+
+#[test]
+fn the_tap_started_and_not_started_lines_are_logged() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, false);
+    let l = lines(&probe);
+    assert!(l.contains(&"finder-enter: tap started".to_string()), "{l:?}");
+    assert!(l.contains(&"finder-enter: probe line from the tap thread".to_string()), "the tap's log closure reaches the log hook: {l:?}");
+
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, false, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, false);
+    assert_eq!(lines(&probe), vec!["finder-enter: tap NOT started: Accessibility is not granted".to_string()]);
+
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = fixture();
+    app.finder.hooks = finder_hooks(&probe, true, false, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, false);
+    assert_eq!(lines(&probe).last().map(String::as_str), Some("finder-enter: tap NOT started: no tap"));
 }
 
 #[test]

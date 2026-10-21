@@ -122,9 +122,48 @@ pub fn outcome(selection: &Result<Vec<PathBuf>, String>) -> EnterOutcome {
     }
 }
 
+/// Human text for the one notification posted when the Finder selection read fails.
+pub fn finder_read_failure_message(err: &str) -> String {
+    if err.contains("-1743") || err.to_lowercase().contains("not authorized") {
+        return "Enter on Finder: Ferrocast is not allowed to control Finder. Allow it in System Settings > Privacy & Security > Automation."
+            .into();
+    }
+    let first = err.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("unknown error");
+    let short: String = first.chars().take(100).collect();
+    format!("Enter on Finder could not read the Finder selection: {short}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_failure_message_names_the_automation_permission_for_denied_access() {
+        let want =
+            "Enter on Finder: Ferrocast is not allowed to control Finder. Allow it in System Settings > Privacy & Security > Automation.";
+        assert_eq!(finder_read_failure_message("execution error: Not authorized to send Apple events to Finder. (-1743)"), want);
+        assert_eq!(finder_read_failure_message("osascript: not authorized"), want);
+        assert_eq!(finder_read_failure_message("x -1743 y"), want);
+    }
+
+    #[test]
+    fn read_failure_message_for_other_errors_is_generic_and_short() {
+        assert_eq!(
+            finder_read_failure_message("timed out after 15 s"),
+            "Enter on Finder could not read the Finder selection: timed out after 15 s"
+        );
+        let long = "e".repeat(300);
+        let m = finder_read_failure_message(&format!("  {long}\nsecond line"));
+        assert!(m.starts_with("Enter on Finder could not read the Finder selection: eee"));
+        assert!(!m.contains('\n') && !m.contains("second"), "first line only");
+        assert!(m.chars().count() < 160, "short: {}", m.chars().count());
+    }
+
+    #[test]
+    fn read_failure_message_with_an_empty_error_is_still_a_sentence() {
+        assert_eq!(finder_read_failure_message(""), "Enter on Finder could not read the Finder selection: unknown error");
+        assert_eq!(finder_read_failure_message("  \n "), "Enter on Finder could not read the Finder selection: unknown error");
+    }
 
     const ALLOWED: [&str; 5] = ["AXList", "AXOutline", "AXBrowser", "AXScrollArea", "AXImage"];
 
