@@ -117,6 +117,38 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("about") => app.push(View::About),
             Ok("processes") => app.push(View::Processes),
             Ok("calchistory") => app.push(View::CalcHistory),
+            Ok("shelf") => {
+                app.shelf = std::env::var("FERROCAST_FILES")
+                    .unwrap_or_default()
+                    .split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                app.push(View::Shelf);
+            }
+            Ok("convert") => app.push(View::Convert(
+                std::env::var("FERROCAST_FILES")
+                    .unwrap_or_default()
+                    .split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect(),
+            )),
+            Ok("wheel") => {
+                let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
+                    .unwrap_or_default()
+                    .split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                let kind = if std::env::var("FERROCAST_WHEEL").as_deref() == Ok("actions") {
+                    ferrocast_core::wheel::WheelKind::Actions
+                } else {
+                    ferrocast_core::wheel::WheelKind::Convert
+                };
+                let segs = app.wheel_segments(kind, &files);
+                app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs });
+            }
             Ok("settings-ai") => {
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 3usize));
                 app.push(View::Settings);
@@ -619,6 +651,10 @@ impl App {
                 st.visuals.selection.stroke.color = accent;
             });
         }
+        if let View::Wheel { center, segs, files } = self.view().clone() {
+            self.draw_wheel(ui, &pal, center, &segs, files.len());
+            return;
+        }
         // Fade the launcher in when it appears (opacity only; one multiply per shape).
         let appear = ctx.animate_bool_with_time(Id::new("appear"), self.visible && self.shown_at.elapsed() > Duration::ZERO, 0.14);
         ui.set_opacity(appear);
@@ -631,6 +667,23 @@ impl App {
             self.selected = 0;
             self.scroll_to_sel = true;
             self.query_changed_at = Instant::now();
+        }
+        // Files dropped on the launcher open the converter.
+        let dropped: Vec<std::path::PathBuf> =
+            ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
+        // a drop that ends a wheel gesture arrives after the wheel hid the window: ignore it
+        if !dropped.is_empty() && self.visible && matches!(self.view(), View::Shelf) {
+            // files dropped on an open shelf stay on the shelf
+            self.perform(Act::AddToShelf(dropped), false);
+            self.invalidate_sections();
+            ctx.request_repaint();
+            return;
+        }
+        if !dropped.is_empty() && self.visible {
+            self.reset_to_root();
+            self.push(View::Convert(dropped));
+            ctx.request_repaint();
+            return;
         }
         let keys = self.read_keys(&ctx);
         let shape = self.view().shape();
@@ -1098,6 +1151,50 @@ impl App {
             self.panel = None;
             self.do_action(item, act);
         }
+    }
+
+    /// The drop wheel: a ring of segments around the window centre; the one under the
+    /// pointer (sampled globally, since a drag owns the mouse) is highlighted.
+    fn draw_wheel(&mut self, ui: &mut Ui, pal: &Palette, center: Pos2, segs: &[WheelSeg], nfiles: usize) {
+        let ctx = ui.ctx().clone();
+        ctx.request_repaint_after(Duration::from_millis(16));
+        let c = ui.max_rect().center();
+        let hover = mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, segs.len()));
+        let p = ui.painter();
+        let n = segs.len();
+        let step = std::f32::consts::TAU / n as f32;
+        // backdrop ring
+        p.circle_filled(c, WHEEL_OUTER + 6.0, pal.bg);
+        p.circle_stroke(c, WHEEL_OUTER + 6.0, Stroke::new(1.0, pal.border));
+        let accent = Color32::from_rgb(255, 140, 60);
+        for (i, seg) in segs.iter().enumerate() {
+            // segment i is centred on i*step, measured clockwise from 12 o'clock
+            let a0 = i as f32 * step - step / 2.0;
+            let pt = |a: f32, r: f32| c + Vec2::new(a.sin(), -a.cos()) * r;
+            if hover == Some(i) {
+                let k = 24;
+                let mut pts: Vec<Pos2> = (0..=k).map(|j| pt(a0 + step * j as f32 / k as f32, WHEEL_OUTER)).collect();
+                pts.extend((0..=k).rev().map(|j| pt(a0 + step * j as f32 / k as f32, WHEEL_INNER)));
+                // egui fills convex shapes only: draw the sector as quads
+                for j in 0..k {
+                    let q = vec![pts[j], pts[j + 1], pts[pts.len() - 2 - j], pts[pts.len() - 1 - j]];
+                    p.add(egui::Shape::convex_polygon(q, accent.gamma_multiply(0.35), Stroke::NONE));
+                }
+            }
+            p.line_segment([pt(a0, WHEEL_INNER), pt(a0, WHEEL_OUTER)], Stroke::new(1.0, pal.sep));
+            let mid = pt(a0 + step / 2.0, (WHEEL_INNER + WHEEL_OUTER) / 2.0);
+            let ir = Rect::from_center_size(mid - Vec2::new(0.0, 10.0), Vec2::splat(22.0));
+            ui::paint_icon(&mut self.icons, ui, ir, &Icon::Glyph(seg.symbol, [255, 140, 60]), pal);
+            let col = if hover == Some(i) { pal.text } else { pal.sub };
+            ui.painter().text(mid + Vec2::new(0.0, 14.0), Align2::CENTER_CENTER, &seg.label, FontId::proportional(11.5), col);
+        }
+        let p = ui.painter();
+        p.circle_filled(c, WHEEL_INNER - 4.0, pal.field);
+        let hint = match hover {
+            Some(i) => segs[i].label.clone(),
+            None => format!("{nfiles} file{}", if nfiles == 1 { "" } else { "s" }),
+        };
+        p.text(c, Align2::CENTER_CENTER, hint, FontId::proportional(12.0), pal.text);
     }
 
     fn draw_single(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette) {
@@ -1730,6 +1827,15 @@ impl App {
                             });
                             row(ui, pal, "Compact mode", "Show only the search bar until you type.", |ui| toggle(ui, pal, &mut s.compact_mode));
                             row(ui, pal, "Launch at login", "Start Ferrocast when you sign in to your Mac.", |ui| toggle(ui, pal, &mut s.launch_at_login));
+                            row(ui, pal, "Drop wheel", "While dragging files, tap a key to open a wheel of conversions or actions.", |ui| toggle(ui, pal, &mut s.drop_wheel));
+                            row(ui, pal, "Convert wheel key", "Tap during a file drag for conversions.", |ui| {
+                                let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                segmented(ui, pal, &mut s.wheel_convert_key, &opts);
+                            });
+                            row(ui, pal, "Actions wheel key", "Tap during a file drag for copy, move, AirDrop…", |ui| {
+                                let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                segmented(ui, pal, &mut s.wheel_actions_key, &opts);
+                            });
                             row(ui, pal, "Menu bar icon", "A small icon to open Ferrocast with the mouse. Needs a restart.", |ui| toggle(ui, pal, &mut s.show_menu_bar_icon));
                         });
                         ui.add_space(14.0);

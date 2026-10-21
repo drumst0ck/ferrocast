@@ -222,7 +222,7 @@ html:not(.js) .lzwrap { transform: none; }
 .bento .b0 { grid-column: span 4; } .bento .b1 { grid-column: span 2; }
 .bento .b2, .bento .b3, .bento .b4 { grid-column: span 2; }
 .bento .b5, .bento .b6 { grid-column: span 3; }
-.bento .b7, .bento .b8, .bento .b9 { grid-column: span 2; }
+.bento .b7, .bento .b8 { grid-column: span 3; }
 .bento .b0 { background: linear-gradient(135deg, #1d1d21 0%, #2a1519 100%); }
 .bento .sc { position: absolute; right: 24px; bottom: 22px; background: #121214; border-radius: 12px; padding: 14px 18px; font-size: 13px; line-height: 1.7; color: #e9e8ee; white-space: pre; font-family: ui-monospace, 'SF Mono', Menlo, monospace; box-shadow: 0 20px 50px rgba(0,0,0,.45); transform: rotate(-2deg); }
 .bento .snap { position: relative; margin-top: auto; height: 96px; background: #121214; border-radius: 10px; overflow: hidden; }
@@ -305,7 +305,7 @@ html:not(.js) .vwrap { transform: none; }
 .more-list .bento .b0, .more-list .bento .b1 { grid-column: span 3; }
 .more-list .bento .b2, .more-list .bento .b3, .more-list .bento .b4 { grid-column: span 2; }
 .more-list .bento .b5, .more-list .bento .b6, .more-list .bento .b7 { grid-column: span 2; }
-@media (max-width: 62em) { .more-list .bento .b0, .more-list .bento .b1, .more-list .bento .b2, .more-list .bento .b3, .more-list .bento .b4, .more-list .bento .b5, .more-list .bento .b6, .more-list .bento .b7 { grid-column: span 1; } .more-list .bento .b0 { grid-column: 1 / -1; } }
+@media (max-width: 62em) { .more-list .bento .b0, .more-list .bento .b1, .more-list .bento .b2, .more-list .bento .b3, .more-list .bento .b4, .more-list .bento .b5, .more-list .bento .b6, .more-list .bento .b7, .more-list .bento .b8 { grid-column: span 1; } .more-list .bento .b0 { grid-column: 1 / -1; } }
 @media (max-width: 47.9em) { .credo p { font-size: 24px; } .more-list .bento .b0, .more-list .bento .b1, .more-list .bento .b2, .more-list .bento .b3, .more-list .bento .b4, .more-list .bento .b5, .more-list .bento .b6, .more-list .bento .b7 { grid-column: 1 / -1; } }
 
 /* ===== shortcuts ===== */

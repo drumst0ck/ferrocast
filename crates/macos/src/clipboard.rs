@@ -53,7 +53,7 @@ pub fn is_concealed() -> bool {
     })
 }
 
-fn file_url_to_path(s: &str) -> Option<PathBuf> {
+pub(crate) fn file_url_to_path(s: &str) -> Option<PathBuf> {
     let rest = s.strip_prefix("file://")?;
     let rest = rest.strip_prefix("localhost").unwrap_or(rest);
     // percent-decode

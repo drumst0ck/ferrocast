@@ -39,6 +39,14 @@ pub enum Msg {
     IconBytes(String, Vec<u8>),
     /// Device-code sign-in: show this code to the user while we poll.
     ChatGptDeviceCode(String),
+    /// Files picked for conversion.
+    ConvertFiles(Vec<PathBuf>),
+    /// Files moved by Move to…: (old, new) paths.
+    Moved(Vec<(PathBuf, PathBuf)>),
+    /// A key was tapped while dragging these files: show the wheel.
+    WheelOpen(ferrocast_core::wheel::WheelKind, Vec<PathBuf>),
+    /// The mouse was released while the wheel was open.
+    WheelRelease,
     /// Model list for the Settings picker, keyed by `models_key`.
     AiModels(String, Result<Vec<String>, String>),
     Wake,
@@ -202,6 +210,50 @@ fn record(shared: &Shared, content: clipboard::ClipContent, source: Option<Strin
     });
     storage::prune_images(&shared.store.images_dir(), &list);
     let _ = shared.store.save("clipboard.json", &*list);
+}
+
+/// Samples mouse, modifiers and the drag pasteboard every 25 ms (no permission needed)
+/// and reports wheel open/release events.
+pub fn start_wheel(shared: Arc<Shared>, bus: Bus) {
+    use ferrocast_core::wheel::{key_mask, Sample, Tracker, WheelEvent};
+    use ferrocast_macos::drag;
+    std::thread::Builder::new()
+        .name("drop-wheel".into())
+        .spawn(move || {
+            let mut tracker = Tracker::default();
+            loop {
+                let (on, ck, ak) = {
+                    let s = shared.settings.read().unwrap();
+                    (s.drop_wheel, key_mask(&s.wheel_convert_key), key_mask(&s.wheel_actions_key))
+                };
+                if !on {
+                    tracker = Tracker::default();
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+                objc2::rc::autoreleasepool(|_| {
+                    let left = drag::left_down();
+                    let bits = drag::modifier_bits();
+                    let (convert_key, actions_key) = (ck != 0 && bits & ck != 0, ak != 0 && bits & ak != 0);
+                    // reading the pasteboard items only matters at the moment a key is tapped
+                    let files = if left && (convert_key || actions_key) { drag::drag_files() } else { vec![] };
+                    let sample = Sample {
+                        left_down: left,
+                        drag_count: if left { drag::drag_count() } else { 0 },
+                        has_files: !files.is_empty(),
+                        convert_key,
+                        actions_key,
+                    };
+                    match tracker.step(sample) {
+                        Some(WheelEvent::Open(k)) => bus.send(Msg::WheelOpen(k, files)),
+                        Some(WheelEvent::Release) => bus.send(Msg::WheelRelease),
+                        None => {}
+                    }
+                });
+            }
+        })
+        .expect("spawn wheel thread");
 }
 
 pub fn start_clipboard(shared: Arc<Shared>, bus: Bus) {
@@ -1257,6 +1309,327 @@ pub fn export_backup(data_root: &std::path::Path, dest_dir: &std::path::Path, st
     st.success().then_some(out).ok_or_else(|| "tar failed".to_string())
 }
 
+/// Convert every file to `target` in a background thread; one toast at the end, first output
+/// revealed in Finder. Failures are reported with the tool's last stderr line.
+pub fn convert_files(files: Vec<PathBuf>, target: ferrocast_core::convert::Target, tools: ferrocast_core::convert::Tools, bus: Bus) {
+    std::thread::spawn(move || {
+        let (outputs, errors) = run_conversion(&files, &target, &tools);
+        let msg = match (outputs.len(), errors.len()) {
+            (0, _) => format!("Conversion failed: {}", errors.first().cloned().unwrap_or_default()),
+            (n, 0) => format!("Converted {n} file{} to {}", if n == 1 { "" } else { "s" }, target.label),
+            (n, e) => format!("Converted {n}, {e} failed: {}", errors[0]),
+        };
+        if let Some(first) = outputs.first() {
+            let _ = ferrocast_macos::apps::reveal(first);
+        }
+        notify("Ferrocast", &msg);
+        bus.send(Msg::Toast(msg));
+    });
+}
+
+/// Run the planned conversion for each file, synchronously. Returns the files written and
+/// one message per failure. No UI side effects, so it can be tested.
+pub fn run_conversion(
+    files: &[PathBuf],
+    target: &ferrocast_core::convert::Target,
+    tools: &ferrocast_core::convert::Tools,
+) -> (Vec<PathBuf>, Vec<String>) {
+    use ferrocast_core::convert::{output_path, plan, soffice_written_path, Engine};
+    {
+        let mut outputs: Vec<PathBuf> = vec![];
+        let mut errors: Vec<String> = vec![];
+        for f in files {
+            let out = output_path(f, target.ext, |p| p.exists());
+            let cmd = match plan(f, target, &out, tools) {
+                Ok(c) => c,
+                Err(e) => {
+                    errors.push(e);
+                    continue;
+                }
+            };
+            let res = std::process::Command::new(&cmd[0]).args(&cmd[1..]).output();
+            match res {
+                Ok(o) if o.status.success() => {
+                    if target.engine == Engine::Soffice {
+                        let written = soffice_written_path(f, &out, target.ext);
+                        if written != out && written.exists() {
+                            let _ = std::fs::rename(&written, &out);
+                        }
+                    }
+                    if out.exists() {
+                        outputs.push(out);
+                    } else {
+                        errors.push(format!(
+                            "{}: no output produced",
+                            f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                        ));
+                    }
+                }
+                Ok(o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    errors.push(format!(
+                        "{}: {}",
+                        f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                        err.lines().last().unwrap_or("conversion failed").trim()
+                    ));
+                }
+                Err(e) => errors.push(format!("could not run {}: {e}", cmd[0])),
+            }
+        }
+        (outputs, errors)
+    }
+}
+
+/// Pixel size of an image via sips.
+fn image_size(p: &std::path::Path) -> Option<(u32, u32)> {
+    let o = std::process::Command::new("/usr/bin/sips").args(["-g", "pixelWidth", "-g", "pixelHeight"]).arg(p).output().ok()?;
+    let t = String::from_utf8_lossy(&o.stdout);
+    let get = |k: &str| t.lines().find_map(|l| l.trim().strip_prefix(k).map(|v| v.trim().parse::<u32>().ok())).flatten();
+    Some((get("pixelWidth:")?, get("pixelHeight:")?))
+}
+
+fn sips(args: &[&str]) -> Result<(), String> {
+    let o = std::process::Command::new("/usr/bin/sips").args(args).output().map_err(|e| e.to_string())?;
+    if o.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("sips failed").trim().to_string())
+    }
+}
+
+/// Run one image tool on each file (or once for Combine). Returns outputs and failures.
+/// Detect faces or text with Vision (on-device) and cover them with black boxes.
+/// Writes a PNG next to the original; errors when nothing was found.
+fn redact(f: &std::path::Path, faces: bool) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::{output_with_suffix, redact_rect};
+    let regions = ferrocast_macos::vision::detect(f, faces, !faces).map_err(|e| e.to_string())?;
+    if regions.is_empty() {
+        return Err(if faces { "no faces found".into() } else { "no text found".into() });
+    }
+    let tmp = std::env::temp_dir().join(format!("ferrocast-redact-{}.png", std::process::id()));
+    sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])?;
+    let mut img = image::open(&tmp).map_err(|e| e.to_string())?.to_rgba8();
+    let _ = std::fs::remove_file(&tmp);
+    let (iw, ih) = img.dimensions();
+    for r in regions {
+        let (x, y, w, h) = redact_rect(r.x, r.y, r.w, r.h, iw, ih, if faces { 0.15 } else { 0.05 });
+        for py in y..(y + h).min(ih) {
+            for px in x..(x + w).min(iw) {
+                img.put_pixel(px, py, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+    }
+    let out = output_with_suffix(f, "redacted", "png", |p| p.exists());
+    img.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// Apply a one-step adjustment; writes a PNG next to the original.
+fn adjust(f: &std::path::Path, a: ferrocast_core::convert::Adjust) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::{output_with_suffix, Adjust};
+    let tmp = std::env::temp_dir().join(format!("ferrocast-adjust-{}.png", std::process::id()));
+    sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])?;
+    let img = image::open(&tmp).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&tmp);
+    let img = match a {
+        Adjust::BlackAndWhite => image::DynamicImage::ImageLumaA8(img.to_luma_alpha8()),
+        Adjust::Brighter => img.brighten(30),
+        Adjust::Darker => img.brighten(-30),
+        Adjust::MoreContrast => img.adjust_contrast(20.0),
+    };
+    let out = output_with_suffix(f, "edited", "png", |p| p.exists());
+    img.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// Lay the images out in a grid of 600 px cells on white, as one PNG next to the first.
+fn collage(files: &[PathBuf]) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::{collage_grid, output_with_suffix};
+    const CELL: u32 = 600;
+    const GAP: u32 = 12;
+    let first = files.first().ok_or("no images")?;
+    let (cols, rows) = collage_grid(files.len());
+    let (cw, ch) = (cols as u32 * (CELL + GAP) + GAP, rows as u32 * (CELL + GAP) + GAP);
+    let mut canvas = image::RgbaImage::from_pixel(cw, ch, image::Rgba([255, 255, 255, 255]));
+    let tmp = std::env::temp_dir().join(format!("ferrocast-collage-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+    for (i, f) in files.iter().enumerate() {
+        // sips reads every format and scales; the image crate only needs PNG
+        let cell = tmp.join(format!("{i}.png"));
+        sips(&["-s", "format", "png", "-Z", &CELL.to_string(), &f.to_string_lossy(), "--out", &cell.to_string_lossy()])?;
+        let img = image::open(&cell).map_err(|e| e.to_string())?.to_rgba8();
+        let (c, r) = ((i % cols) as u32, (i / cols) as u32);
+        let x = GAP + c * (CELL + GAP) + (CELL - img.width().min(CELL)) / 2;
+        let y = GAP + r * (CELL + GAP) + (CELL - img.height().min(CELL)) / 2;
+        image::imageops::overlay(&mut canvas, &img, x as i64, y as i64);
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    let out = output_with_suffix(first, "collage", "png", |p| p.exists());
+    canvas.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) -> (Vec<PathBuf>, Vec<String>) {
+    use ferrocast_core::convert::{crop_size, ext, output_with_suffix, strip_jpeg, strip_png, ImageOp};
+    let name = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let mut outs = vec![];
+    let mut errs = vec![];
+    if *op == ImageOp::CombinePdf {
+        let Some(first) = files.first() else { return (outs, errs) };
+        let out = output_with_suffix(first, &op.suffix(), "pdf", |p| p.exists());
+        let tmp = std::env::temp_dir().join(format!("ferrocast-pdf-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let mut pages = vec![];
+        for (i, f) in files.iter().enumerate() {
+            let pg = tmp.join(format!("{i:04}.pdf"));
+            match sips(&["-s", "format", "pdf", &f.to_string_lossy(), "--out", &pg.to_string_lossy()]) {
+                Ok(()) => pages.push(pg),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        let join = "/System/Library/Automator/Combine PDF Pages.action/Contents/MacOS/join";
+        let ok = !pages.is_empty()
+            && std::process::Command::new(join).arg("-o").arg(&out).args(&pages).status().map(|s| s.success()).unwrap_or(false);
+        let _ = std::fs::remove_dir_all(&tmp);
+        if ok && out.exists() {
+            outs.push(out);
+        } else if errs.is_empty() {
+            errs.push("could not combine the pages into a PDF".into());
+        }
+        return (outs, errs);
+    }
+    if let ImageOp::Redact(faces) = op {
+        for f in files {
+            match redact(f, *faces) {
+                Ok(o) => outs.push(o),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
+    if let ImageOp::Adjust(a) = op {
+        for f in files {
+            match adjust(f, *a) {
+                Ok(o) => outs.push(o),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
+    if *op == ImageOp::Collage {
+        match collage(files) {
+            Ok(o) => outs.push(o),
+            Err(e) => errs.push(e),
+        }
+        return (outs, errs);
+    }
+    for f in files {
+        let e = ext(f);
+        let res: Result<PathBuf, String> = (|| match op {
+            ImageOp::Compress(q) => {
+                let out = output_with_suffix(f, &op.suffix(), "jpg", |p| p.exists());
+                sips(&[
+                    "-s",
+                    "format",
+                    "jpeg",
+                    "-s",
+                    "formatOptions",
+                    &q.to_string(),
+                    &f.to_string_lossy(),
+                    "--out",
+                    &out.to_string_lossy(),
+                ])?;
+                Ok(out)
+            }
+            ImageOp::Resize(px) => {
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                sips(&["-Z", &px.to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::Crop(rw, rh) => {
+                let (w, h) = image_size(f).ok_or("could not read the image size")?;
+                let (cw, ch) = crop_size(w, h, *rw, *rh);
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                // sips crops around the centre
+                sips(&["-c", &ch.to_string(), &cw.to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::StripMetadata => {
+                let bytes = std::fs::read(f).map_err(|e| e.to_string())?;
+                let clean = match e.as_str() {
+                    "jpg" | "jpeg" => strip_jpeg(&bytes),
+                    "png" => strip_png(&bytes),
+                    _ => None,
+                }
+                .ok_or("metadata removal supports JPEG and PNG; convert to one of those first")?;
+                let out = output_with_suffix(f, &op.suffix(), &e, |p| p.exists());
+                std::fs::write(&out, clean).map_err(|e| e.to_string())?;
+                Ok(out)
+            }
+            ImageOp::Rotate(d) => {
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                sips(&["-r", &d.to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::Flip(h) => {
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                sips(&["-f", if *h { "horizontal" } else { "vertical" }, &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::Background(c) => {
+                let (w, h) = image_size(f).ok_or("could not read the image size")?;
+                let side = w.max(h).to_string();
+                // JPEG has no alpha, so a padded PNG keeps the background exact
+                let out = output_with_suffix(f, &op.suffix(), "png", |p| p.exists());
+                sips(&["-s", "format", "png", "-p", &side, &side, "--padColor", c, &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::Annotate => {
+                // never mark up the original: copy it, then open the copy in Preview
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                std::fs::copy(f, &out).map_err(|e| e.to_string())?;
+                if std::env::var_os("FERROCAST_NO_OPEN").is_none() {
+                    let _ = std::process::Command::new("/usr/bin/open").args(["-a", "Preview"]).arg(&out).status();
+                }
+                Ok(out)
+            }
+            ImageOp::CombinePdf | ImageOp::Collage | ImageOp::Redact(_) | ImageOp::Adjust(_) => unreachable!(),
+        })();
+        match res {
+            Ok(o) if o.exists() => outs.push(o),
+            Ok(_) => errs.push(format!("{}: no output produced", name(f))),
+            Err(e) => errs.push(format!("{}: {e}", name(f))),
+        }
+    }
+    (outs, errs)
+}
+
+pub fn image_op_files(files: Vec<PathBuf>, op: ferrocast_core::convert::ImageOp, bus: Bus) {
+    std::thread::spawn(move || {
+        let (outs, errs) = run_image_op(&files, &op);
+        let msg = match (outs.len(), errs.len()) {
+            (0, _) => format!("{} failed: {}", op.label(), errs.first().cloned().unwrap_or_default()),
+            (n, 0) => format!("{} · {n} file{} written", op.label(), if n == 1 { "" } else { "s" }),
+            (n, e) => format!("{} · {n} written, {e} failed: {}", op.label(), errs[0]),
+        };
+        // Annotate already opened Preview; revealing would pull Finder in front of it
+        if let Some(f) = outs.first().filter(|_| op != ferrocast_core::convert::ImageOp::Annotate) {
+            let _ = ferrocast_macos::apps::reveal(f);
+        }
+        notify("Ferrocast", &msg);
+        bus.send(Msg::Toast(msg));
+    });
+}
+
+/// Native multi-file chooser (blocks; call from a thread).
+pub fn choose_files() -> Vec<PathBuf> {
+    let out = ferrocast_macos::system::osascript(
+        "set fs to choose file with prompt \"Choose files to convert\" with multiple selections allowed\nset outp to \"\"\nrepeat with f in fs\nset outp to outp & POSIX path of f & linefeed\nend repeat\nreturn outp",
+    )
+    .unwrap_or_default();
+    out.lines().filter(|l| !l.trim().is_empty()).map(|l| PathBuf::from(l.trim())).collect()
+}
+
 /// Ask the user for a JSON file with a native dialog (blocks; call from a thread).
 pub fn choose_json_file() -> Option<PathBuf> {
     let out = ferrocast_macos::system::osascript(
@@ -1264,6 +1637,290 @@ pub fn choose_json_file() -> Option<PathBuf> {
     )
     .ok()?;
     (!out.is_empty()).then(|| PathBuf::from(out))
+}
+
+#[cfg(test)]
+mod convert_tests {
+    use super::*;
+    use ferrocast_core::convert::{targets, Tools};
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("fc-conv-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn png_to_jpeg_with_sips_and_no_overwrite() {
+        let d = tmp("img");
+        let src = d.join("photo.png");
+        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png"), &src).unwrap();
+        let t = targets(&src, &Tools::default()).into_iter().find(|t| t.ext == "jpg").unwrap();
+        let (out, err) = run_conversion(std::slice::from_ref(&src), &t, &Tools::default());
+        assert!(err.is_empty(), "{err:?}");
+        assert_eq!(out, vec![d.join("photo.jpg")]);
+        assert_eq!(&std::fs::read(&out[0]).unwrap()[..3], &[0xFF, 0xD8, 0xFF], "JPEG magic");
+        // second run must not overwrite
+        let (out2, _) = run_conversion(&[src], &t, &Tools::default());
+        assert_eq!(out2, vec![d.join("photo 2.jpg")]);
+    }
+
+    #[test]
+    fn text_to_docx_and_folder_to_zip() {
+        let d = tmp("doc");
+        let txt = d.join("notes.txt");
+        std::fs::write(&txt, "hello").unwrap();
+        let t = targets(&txt, &Tools::default()).into_iter().find(|t| t.ext == "docx").unwrap();
+        let (out, err) = run_conversion(&[txt], &t, &Tools::default());
+        assert!(err.is_empty(), "{err:?}");
+        assert_eq!(&std::fs::read(&out[0]).unwrap()[..2], b"PK", "docx is a zip");
+        let folder = d.join("folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("a.txt"), "a").unwrap();
+        let z = targets(&folder, &Tools::default()).into_iter().find(|t| t.ext == "zip").unwrap();
+        let (out, err) = run_conversion(&[folder], &z, &Tools::default());
+        assert!(err.is_empty(), "{err:?}");
+        assert_eq!(out, vec![d.join("folder.zip")]);
+    }
+
+    /// Vision needs an inference context that virtual CI machines do not have; there the
+    /// real-file tool test is skipped (it still runs in full on a real Mac).
+    fn vision_cannot_run() -> bool {
+        let fixture = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../macos/fixtures/text.png"));
+        matches!(ferrocast_macos::vision::detect(fixture, true, false), Err(e) if e.to_string().contains("inference context"))
+    }
+
+    #[test]
+    fn image_tools_on_real_files() {
+        use ferrocast_core::convert::ImageOp;
+        if vision_cannot_run() {
+            eprintln!("skipped: Vision cannot create an inference context on this machine");
+            return;
+        }
+        let d = tmp("tools");
+        let src = d.join("pic.jpg");
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
+        assert!(std::process::Command::new("/usr/bin/sips")
+            .args(["-s", "format", "jpeg", icon, "--out"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("/usr/bin/sips")
+            .args(["-s", "make", "TestCam", "-s", "artist", "Me"])
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success());
+        let one = std::slice::from_ref(&src);
+
+        let (o, e) = run_image_op(one, &ImageOp::Resize(640));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((640, 640)));
+
+        let (o, e) = run_image_op(one, &ImageOp::Crop(16, 9));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((1024, 576)));
+
+        let (o, e) = run_image_op(one, &ImageOp::Compress(40));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(std::fs::metadata(&o[0]).unwrap().len() < std::fs::metadata(&src).unwrap().len());
+
+        let tags = |p: &std::path::Path| {
+            String::from_utf8_lossy(
+                &std::process::Command::new("/usr/bin/sips").args(["-g", "make", "-g", "artist"]).arg(p).output().unwrap().stdout,
+            )
+            .to_string()
+        };
+        assert!(tags(&src).contains("TestCam"));
+        let (o, e) = run_image_op(one, &ImageOp::StripMetadata);
+        assert!(e.is_empty(), "{e:?}");
+        assert!(!tags(&o[0]).contains("TestCam") && !tags(&o[0]).contains("Me"), "{}", tags(&o[0]));
+        assert_eq!(image_size(&o[0]), Some((1024, 1024)), "image data intact");
+
+        let second = d.join("pic2.png");
+        std::fs::copy(icon, &second).unwrap();
+        let (o, e) = run_image_op(&[src.clone(), second], &ImageOp::CombinePdf);
+        assert!(e.is_empty(), "{e:?}");
+        let pdf = std::fs::read(&o[0]).unwrap();
+        // count "/Type" [spaces] "/Page" not followed by "s" (that would be /Pages)
+        let mut pages = 0;
+        for i in 0..pdf.len().saturating_sub(12) {
+            if &pdf[i..i + 5] == b"/Type" {
+                let mut j = i + 5;
+                while pdf[j] == b' ' {
+                    j += 1;
+                }
+                if pdf[j..].starts_with(b"/Page") && pdf.get(j + 5) != Some(&b's') {
+                    pages += 1;
+                }
+            }
+        }
+        assert_eq!(pages, 2, "one page per image");
+
+        // a 16:9 picture makes rotation and padding observable
+        let (wide, e) = run_image_op(one, &ImageOp::Crop(16, 9));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&wide[0]), Some((1024, 576)));
+        let (o, e) = run_image_op(&wide, &ImageOp::Rotate(90));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((576, 1024)));
+        let (o, e) = run_image_op(&wide, &ImageOp::Flip(true));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((1024, 576)));
+        let (o, e) = run_image_op(&wide, &ImageOp::Background("FFFFFF"));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((1024, 1024)));
+        let img = image::open(&o[0]).unwrap().to_rgba8();
+        assert_eq!(img.get_pixel(0, 0).0[..3], [255, 255, 255], "padding is white");
+        let (o, e) = run_image_op(&[src.clone(), wide[0].clone(), src.clone()], &ImageOp::Collage);
+        assert!(e.is_empty(), "{e:?}");
+        // 3 images → 2×2 grid of 600 px cells with 12 px gaps
+        assert_eq!(image_size(&o[0]), Some((1236, 1236)));
+        assert!(src.exists() && wide[0].exists(), "originals untouched");
+
+        // Redact text: the rendered line is covered with black, the margins stay white
+        let txt = d.join("text.png");
+        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../macos/fixtures/text.png"), &txt).unwrap();
+        let dark = |p: &std::path::Path| image::open(p).unwrap().to_rgba8().pixels().filter(|px| px.0[0] < 20).count();
+        let before = dark(&txt);
+        let (o, e) = run_image_op(std::slice::from_ref(&txt), &ImageOp::Redact(false));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(dark(&o[0]) > before * 3, "text boxes filled: {} vs {before}", dark(&o[0]));
+        let red = image::open(&o[0]).unwrap().to_rgba8();
+        assert_eq!(red.get_pixel(red.width() - 1, red.height() - 1).0[..3], [255, 255, 255], "untouched corner");
+        // adjustments: brighter raises the mean, black & white makes R == G == B
+        use ferrocast_core::convert::Adjust;
+        let mean = |p: &std::path::Path| {
+            let i = image::open(p).unwrap().to_rgba8();
+            i.pixels().map(|px| px.0[0] as u64 + px.0[1] as u64 + px.0[2] as u64).sum::<u64>() / (i.width() * i.height()) as u64
+        };
+        // the image crate here decodes PNG only: measure the JPEG source through a PNG copy
+        let base_png = d.join("base.png");
+        sips(&["-s", "format", "png", &src.to_string_lossy(), "--out", &base_png.to_string_lossy()]).unwrap();
+        let base = mean(&base_png);
+        let (o, e) = run_image_op(one, &ImageOp::Adjust(Adjust::Brighter));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(mean(&o[0]) > base);
+        let (o, e) = run_image_op(one, &ImageOp::Adjust(Adjust::Darker));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(mean(&o[0]) < base);
+        let (o, e) = run_image_op(one, &ImageOp::Adjust(Adjust::BlackAndWhite));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(image::open(&o[0]).unwrap().to_rgba8().pixels().all(|px| px.0[0] == px.0[1] && px.0[1] == px.0[2]));
+        // annotate makes a byte-identical copy (Preview is not opened under test)
+        std::env::set_var("FERROCAST_NO_OPEN", "1");
+        let (o, e) = run_image_op(one, &ImageOp::Annotate);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(std::fs::read(&o[0]).unwrap(), std::fs::read(&src).unwrap());
+        assert!(o[0].to_string_lossy().contains("annotated"));
+        // no faces in a text picture → a clear error, no file
+        let (o, e) = run_image_op(std::slice::from_ref(&txt), &ImageOp::Redact(true));
+        assert!(o.is_empty() && e[0].contains("no faces found"), "{e:?}");
+    }
+
+    /// Uses ffmpeg and LibreOffice when installed; skips each case otherwise.
+    #[test]
+    fn optional_tools_on_real_files() {
+        let tools = Tools::detect();
+        let d = tmp("optional");
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
+        let pick = |p: &std::path::Path, ext: &str| targets(p, &tools).into_iter().find(|t| t.ext == ext).unwrap();
+        if tools.cwebp.is_some() {
+            let png = d.join("i.png");
+            std::fs::copy(icon, &png).unwrap();
+            let (o, e) = run_conversion(std::slice::from_ref(&png), &pick(&png, "webp"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert_eq!(&std::fs::read(&o[0]).unwrap()[8..12], b"WEBP");
+        }
+        if let Some(ff) = tools.ffmpeg {
+            // one second of silence → WAV (afconvert) → MP3 (ffmpeg)
+            let wav = d.join("s.wav");
+            assert!(std::process::Command::new(ff)
+                .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1"])
+                .arg(&wav)
+                .status()
+                .unwrap()
+                .success());
+            let (o, e) = run_conversion(std::slice::from_ref(&wav), &pick(&wav, "mp3"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            let b = std::fs::read(&o[0]).unwrap();
+            assert!(b.starts_with(b"ID3") || (b[0] == 0xFF && b[1] & 0xE0 == 0xE0), "mp3 header");
+            let (o, e) = run_conversion(std::slice::from_ref(&wav), &pick(&wav, "m4a"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert_eq!(&std::fs::read(&o[0]).unwrap()[4..8], b"ftyp");
+            let (o, e) = run_conversion(std::slice::from_ref(&wav), &pick(&wav, "ogg"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"OggS"));
+            // a 1 s test clip → MOV is the source for video targets
+            let mov = d.join("clip.mov");
+            assert!(std::process::Command::new(ff)
+                .args([
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=size=160x120:rate=10",
+                    "-t",
+                    "1",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p"
+                ])
+                .arg(&mov)
+                .status()
+                .unwrap()
+                .success());
+            let srt = d.join("s.srt");
+            std::fs::write(&srt, "1\n00:00:01,000 --> 00:00:02,000\nHello\n").unwrap();
+            let (o, e) = run_conversion(std::slice::from_ref(&srt), &pick(&srt, "vtt"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read_to_string(&o[0]).unwrap().starts_with("WEBVTT"));
+            for ext in ["webm", "mkv", "gif", "mp4"] {
+                let (o, e) = run_conversion(std::slice::from_ref(&mov), &pick(&mov, ext), &tools);
+                assert!(e.is_empty(), "{ext}: {e:?}");
+                assert!(std::fs::metadata(&o[0]).unwrap().len() > 100, "{ext} has content");
+            }
+        }
+        if tools.soffice.is_some() {
+            let txt = d.join("doc.txt");
+            std::fs::write(&txt, "Hello from Ferrocast").unwrap();
+            let docx = run_conversion(std::slice::from_ref(&txt), &pick(&txt, "docx"), &tools).0.remove(0);
+            let (o, e) = run_conversion(std::slice::from_ref(&docx), &pick(&docx, "pdf"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"%PDF"));
+            let csv = d.join("t.csv");
+            std::fs::write(&csv, "a,b\n1,2\n").unwrap();
+            let (o, e) = run_conversion(std::slice::from_ref(&csv), &pick(&csv, "xlsx"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"));
+            let xlsx = o[0].clone();
+            let (o, e) = run_conversion(std::slice::from_ref(&xlsx), &pick(&xlsx, "csv"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read_to_string(&o[0]).unwrap().contains("1,2"));
+            // PDF → DOCX needs the Writer PDF import filter
+            let pdf = d.join("doc.pdf");
+            assert!(pdf.exists());
+            let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "docx"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"));
+        }
+    }
+
+    #[test]
+    fn missing_tool_reports_instead_of_running() {
+        let d = tmp("missing");
+        let src = d.join("p.png");
+        std::fs::write(&src, b"x").unwrap();
+        let t = targets(&src, &Tools::default()).into_iter().find(|t| t.ext == "webp").unwrap();
+        let (out, err) = run_conversion(&[src], &t, &Tools::default());
+        assert!(out.is_empty());
+        assert!(err[0].contains("cwebp"));
+    }
 }
 
 #[cfg(test)]

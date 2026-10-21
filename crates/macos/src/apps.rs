@@ -138,3 +138,100 @@ mod tests {
         assert!(apps.iter().any(|a| a.name == "Safari" || a.name == "Calculator"), "{} apps", apps.len());
     }
 }
+
+/// Open the AirDrop recipient picker for these files. Call on the main thread.
+pub fn airdrop(paths: &[PathBuf]) -> anyhow::Result<()> {
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::{NSSharingService, NSSharingServiceNameSendViaAirDrop};
+    use objc2_foundation::{NSArray, NSString, NSURL};
+    let service = NSSharingService::sharingServiceNamed(unsafe { NSSharingServiceNameSendViaAirDrop })
+        .ok_or_else(|| anyhow::anyhow!("AirDrop is not available on this Mac"))?;
+    let urls: Vec<Retained<AnyObject>> = paths
+        .iter()
+        .map(|p| Retained::into_super(Retained::into_super(NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy())))))
+        .collect();
+    let items = NSArray::from_retained_slice(&urls);
+    if !unsafe { service.canPerformWithItems(Some(&items)) } {
+        anyhow::bail!("AirDrop cannot share these items");
+    }
+    unsafe { service.performWithItems(&items) };
+    Ok(())
+}
+
+/// The folder to open in a terminal: the path itself if it is a folder, else its parent.
+pub fn terminal_dir(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("/"))
+    }
+}
+
+/// Open a folder (or a file's folder) in iTerm2 if installed, otherwise Terminal.
+pub fn open_in_terminal(path: &Path) -> anyhow::Result<&'static str> {
+    let dir = terminal_dir(path);
+    let app = if Path::new("/Applications/iTerm.app").exists() { "iTerm" } else { "Terminal" };
+    let st = std::process::Command::new("/usr/bin/open").args(["-a", app]).arg(&dir).status()?;
+    if !st.success() {
+        anyhow::bail!("could not open {app}");
+    }
+    Ok(app)
+}
+
+/// Move items into `dest`, never overwriting: a clash gets " 2", " 3"… before the extension.
+/// Returns the new paths.
+pub fn move_into(paths: &[PathBuf], dest: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut out = vec![];
+    for p in paths {
+        let name = p.file_name().ok_or_else(|| anyhow::anyhow!("invalid path"))?;
+        let mut target = dest.join(name);
+        let (stem, ext) = (
+            p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+            p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default(),
+        );
+        let mut n = 2;
+        while target.exists() {
+            target = dest.join(format!("{stem} {n}{ext}"));
+            n += 1;
+        }
+        if std::fs::rename(p, &target).is_err() {
+            // another volume: let mv copy and delete
+            let st = std::process::Command::new("/bin/mv").arg(p).arg(&target).status()?;
+            if !st.success() {
+                anyhow::bail!("could not move {}", p.display());
+            }
+        }
+        out.push(target);
+    }
+    Ok(out)
+}
+
+/// Native folder chooser (blocks).
+pub fn choose_folder(prompt: &str) -> Option<PathBuf> {
+    let out = crate::system::osascript(&format!("POSIX path of (choose folder with prompt \"{}\")", prompt.replace('"', ""))).ok()?;
+    (!out.trim().is_empty()).then(|| PathBuf::from(out.trim()))
+}
+
+#[cfg(test)]
+mod file_action_tests {
+    use super::*;
+
+    #[test]
+    fn move_into_renames_on_clash_and_terminal_dir() {
+        let base = std::env::temp_dir().join(format!("fc-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (src, dst) = (base.join("src"), base.join("dst"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("a.txt"), "new").unwrap();
+        std::fs::write(dst.join("a.txt"), "old").unwrap();
+        let out = move_into(&[src.join("a.txt")], &dst).unwrap();
+        assert_eq!(out, vec![dst.join("a 2.txt")]);
+        assert!(!src.join("a.txt").exists());
+        assert_eq!(std::fs::read_to_string(dst.join("a.txt")).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(&out[0]).unwrap(), "new");
+        assert_eq!(terminal_dir(&dst.join("a.txt")), dst);
+        assert_eq!(terminal_dir(&dst), dst);
+    }
+}

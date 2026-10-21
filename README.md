@@ -69,6 +69,11 @@ Los datos viven en `~/Library/Application Support/Ferrocast` (JSON sin cifrar;
 | Exportar copia de seguridad (sin historial del portapapeles), importar snippets (JSON de Raycast) | Implementado |
 | Instancia única, log de errores (`Reveal Log File`) | Implementado |
 | Icono, entitlements, DMG, fórmula de Homebrew | Implementado; el script de notarización es opcional y no se ha ejecutado |
+| Conversión de archivos (imagen, audio, vídeo, documentos, hojas, subtítulos, carpetas→ZIP) con herramientas de macOS; ffmpeg, LibreOffice y cwebp opcionales | Implementado; 17 conversiones probadas con archivos reales |
+| Herramientas de imagen: comprimir, redimensionar, recortar, quitar metadatos, PDF combinado, rotar, voltear, fondo, collage, ajustes, redactar caras/texto (Vision), anotar en Vista Previa | Implementado; probado con archivos reales (anotar y caras: sin prueba con foto real de una cara) |
+| Acciones de archivo (copiar, copiar ruta, mover a…, Terminal/iTerm, AirDrop) y File Shelf | Implementado; AirDrop y Terminal no probados en sesión real |
+| Rueda al arrastrar archivos (Shift: conversiones, Control: acciones) | Implementado; dibujo verificado por captura, el gesto real sin probar |
+| Estantería flotante en ventana aparte anclada a un borde | No incluido |
 | Extensiones React, sync, Search Menu Bar Items, contexto de IA (selección/pantalla) | No incluido |
 
 ## Distribución

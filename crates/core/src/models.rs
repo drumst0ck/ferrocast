@@ -229,6 +229,11 @@ pub struct Settings {
     pub chatgpt_model: String,
     pub launch_at_login: bool,
     pub onboarded: bool,
+    /// Tap a key while dragging files to open a wheel of conversions or actions.
+    pub drop_wheel: bool,
+    /// "Shift", "Control", "Option" or "Command".
+    pub wheel_convert_key: String,
+    pub wheel_actions_key: String,
 }
 
 impl Default for Settings {
@@ -263,6 +268,9 @@ impl Default for Settings {
             chatgpt_model: String::new(),
             launch_at_login: false,
             onboarded: false,
+            drop_wheel: true,
+            wheel_convert_key: "Shift".into(),
+            wheel_actions_key: "Control".into(),
         }
     }
 }

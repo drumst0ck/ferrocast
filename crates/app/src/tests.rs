@@ -54,12 +54,14 @@ fn fixture() -> App {
         timers: vec![],
         calc_history: vec![],
         recent_emoji: vec![],
+        shelf: vec![],
         app_icon: None,
         wide_font: false,
         show_t: None,
         nav_at: Instant::now(),
         claude: None,
         ai_models: Default::default(),
+        tools: Default::default(),
         runs: HashMap::new(),
         next_run: 1,
         inline: HashMap::new(),
@@ -303,4 +305,23 @@ fn push_and_pop_scroll_to_first_row() {
     app.scroll_to_sel = false;
     app.pop();
     assert!(app.scroll_to_sel);
+}
+
+#[test]
+fn shelf_adds_once_lists_and_removes() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-shelf-{}.txt", std::process::id()));
+    std::fs::write(&f, "x").unwrap();
+    app.perform(Act::AddToShelf(vec![f.clone()]), false);
+    app.perform(Act::AddToShelf(vec![f.clone()]), false);
+    assert_eq!(app.shelf, vec![f.clone()], "no duplicates");
+    app.stack = vec![View::Root, View::Shelf];
+    app.invalidate_sections();
+    let items: Vec<String> = app.sections_cached().into_iter().flat_map(|s| s.items).map(|i| i.title).collect();
+    assert_eq!(items, vec![f.file_name().unwrap().to_string_lossy().to_string()]);
+    render(&mut app, vec![]);
+    app.perform(Act::RemoveFromShelf(f.clone()), false);
+    assert!(app.shelf.is_empty());
+    assert!(f.exists(), "removing from the shelf never touches the file");
+    let _ = std::fs::remove_file(&f);
 }

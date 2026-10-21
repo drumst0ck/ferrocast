@@ -55,22 +55,85 @@ pub enum View {
     Processes,
     Timers,
     CalcHistory,
+    Shelf,
+    Convert(Vec<PathBuf>),
     Notes,
     Colors(Rgba),
-    SnippetForm { id: Option<String>, name: String, text: String, keyword: String },
-    QuicklinkForm { id: Option<String>, name: String, link: String, open_with: String },
+    SnippetForm {
+        id: Option<String>,
+        name: String,
+        text: String,
+        keyword: String,
+    },
+    QuicklinkForm {
+        id: Option<String>,
+        name: String,
+        link: String,
+        open_with: String,
+    },
     NoteEdit(String),
-    Args { target: ArgTarget, title: String, defs: Vec<ArgDef>, values: Vec<String> },
-    Output { run: u64, title: String, text: String, done: bool },
-    Confirm { msg: String, act: Act },
+    Args {
+        target: ArgTarget,
+        title: String,
+        defs: Vec<ArgDef>,
+        values: Vec<String>,
+    },
+    Output {
+        run: u64,
+        title: String,
+        text: String,
+        done: bool,
+    },
+    Confirm {
+        msg: String,
+        act: Act,
+    },
     Settings,
-    Alias { id: String, name: String, value: String },
-    Hotkey { id: String, name: String, err: String },
-    CreateScript { title: String, mode: usize },
+    Alias {
+        id: String,
+        name: String,
+        value: String,
+    },
+    Hotkey {
+        id: String,
+        name: String,
+        err: String,
+    },
+    CreateScript {
+        title: String,
+        mode: usize,
+    },
     Welcome,
     Shortcuts,
     About,
-    Ai { prompt: String, asked: String, answer: String, history: Vec<(String, String)>, busy: bool, run: u64 },
+    Ai {
+        prompt: String,
+        asked: String,
+        answer: String,
+        history: Vec<(String, String)>,
+        busy: bool,
+        run: u64,
+    },
+    /// Radial menu shown under the pointer during a file drag; `center` is in screen points.
+    Wheel {
+        files: Vec<PathBuf>,
+        center: Pos2,
+        segs: Vec<WheelSeg>,
+    },
+}
+
+/// One wheel segment: label, SF symbol, and what releasing on it does.
+#[derive(Clone)]
+pub struct WheelSeg {
+    pub label: String,
+    pub symbol: &'static str,
+    pub pick: WheelPick,
+}
+
+#[derive(Clone)]
+pub enum WheelPick {
+    Convert(ferrocast_core::convert::Target),
+    Act(Act),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -93,6 +156,8 @@ impl View {
             | View::Processes
             | View::Timers
             | View::CalcHistory
+            | View::Shelf
+            | View::Convert(_)
             | View::Notes
             | View::Colors(_) => Shape::List,
             View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::Settings => Shape::Form,
@@ -111,6 +176,8 @@ impl View {
             View::Processes => "Kill Process",
             View::Timers => "Timers",
             View::CalcHistory => "Calculator History",
+            View::Shelf => "File Shelf",
+            View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::Colors(_) => "Copy Color as…",
             View::SnippetForm { .. } => "Snippet",
@@ -127,6 +194,7 @@ impl View {
             View::Welcome => "Welcome to Ferrocast",
             View::Shortcuts => "Keyboard Shortcuts",
             View::About => "About Ferrocast",
+            View::Wheel { .. } => "Wheel",
         }
     }
     fn placeholder(&self) -> &'static str {
@@ -141,6 +209,8 @@ impl View {
             View::Processes => "Search processes…",
             View::Timers => "Search timers…",
             View::CalcHistory => "Search past calculations…",
+            View::Shelf => "Search the shelf…",
+            View::Convert(_) => "Convert to…",
             View::Notes => "Search notes…",
             _ => "Filter…",
         }
@@ -212,6 +282,8 @@ pub struct App {
     timers: Vec<RunningTimer>,
     calc_history: Vec<ferrocast_core::models::CalcEntry>,
     recent_emoji: Vec<String>,
+    /// Files kept on the File Shelf (persisted in shelf.json).
+    shelf: Vec<PathBuf>,
     /// The app icon, decoded once for the footer.
     app_icon: Option<egui::TextureHandle>,
     /// Whether the 22 MB Unicode fallback font has been loaded.
@@ -223,6 +295,8 @@ pub struct App {
     /// Warm Claude Code process while Ask AI is open (ClaudeCode provider only).
     claude: Option<std::sync::Arc<services::ClaudeSession>>,
     /// Model lists for the Settings picker, by `services::models_key`; `None` while loading.
+    /// Optional conversion tools found on this Mac (probed once).
+    tools: ferrocast_core::convert::Tools,
     pub(crate) ai_models: std::collections::HashMap<String, Option<Result<Vec<String>, String>>>,
     runs: HashMap<u64, RunKind>,
     next_run: u64,
@@ -320,6 +394,7 @@ impl App {
         let store = Store::default_location();
         let calc_history = store.load("calc-history.json");
         let recent_emoji = store.load("recent-emoji.json");
+        let shelf: Vec<PathBuf> = store.load("shelf.json");
         let data = store.load_all();
         if prof {
             eprintln!("data {:?}", t.elapsed());
@@ -339,6 +414,7 @@ impl App {
         });
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_expansion(shared.clone());
+        services::start_wheel(shared.clone(), bus.clone());
         if prof {
             eprintln!("services {:?}", t.elapsed());
         }
@@ -407,12 +483,14 @@ impl App {
             timers: vec![],
             calc_history,
             recent_emoji,
+            shelf,
             app_icon: None,
             wide_font: false,
             show_t: None,
             nav_at: Instant::now(),
             claude: None,
             ai_models: Default::default(),
+            tools: ferrocast_core::convert::Tools::detect(),
             runs: HashMap::new(),
             next_run: 1,
             inline: HashMap::new(),
@@ -754,6 +832,92 @@ impl App {
         }
     }
 
+    /// Segments for a wheel over these files.
+    pub(crate) fn wheel_segments(&self, kind: ferrocast_core::wheel::WheelKind, files: &[PathBuf]) -> Vec<WheelSeg> {
+        use ferrocast_core::convert::{family_of, targets, Family};
+        let Some(first) = files.first() else { return vec![] };
+        match kind {
+            ferrocast_core::wheel::WheelKind::Convert => {
+                let symbol = match family_of(first) {
+                    Family::Image | Family::Pdf => "sf:photo",
+                    Family::Audio => "sf:waveform",
+                    Family::Video => "sf:film",
+                    Family::Archive | Family::Folder => "sf:archivebox",
+                    _ => "sf:doc.text",
+                };
+                targets(first, &self.tools)
+                    .into_iter()
+                    .filter(|t| t.needs.is_none())
+                    .take(8)
+                    .map(|t| WheelSeg { label: t.label.to_string(), symbol, pick: WheelPick::Convert(t) })
+                    .collect()
+            }
+            ferrocast_core::wheel::WheelKind::Actions => {
+                let f = files.to_vec();
+                let paths = f.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\n");
+                let seg = |label: &str, symbol: &'static str, act: Act| WheelSeg { label: label.into(), symbol, pick: WheelPick::Act(act) };
+                vec![
+                    seg("Copy", "sf:doc.on.doc", Act::CopyFiles(f.clone())),
+                    seg("Copy Path", "sf:link", Act::CopyText(paths)),
+                    seg("Move to…", "sf:folder", Act::MoveFiles(f.clone())),
+                    seg("Terminal", "sf:terminal", Act::OpenInTerminal(f[0].clone())),
+                    seg("AirDrop", "sf:dot.radiowaves.left.and.right", Act::AirDrop(f.clone())),
+                    seg("Quick Look", "sf:eye", Act::QuickLook(f[0].clone())),
+                    seg("Float", "sf:tray.full", Act::AddToShelf(f.clone())),
+                    seg("Convert…", "sf:arrow.triangle.2.circlepath", Act::Convert(f)),
+                ]
+            }
+        }
+    }
+
+    /// Show the wheel centred under the pointer, without moving the drag's focus elsewhere.
+    fn show_wheel(&mut self, kind: ferrocast_core::wheel::WheelKind, files: Vec<PathBuf>) {
+        let segs = self.wheel_segments(kind, &files);
+        if segs.is_empty() {
+            return;
+        }
+        let size = Vec2::new(ui::WIDTH, ui::HEIGHT);
+        let center = match mouse_top_left() {
+            Some((m, screen)) => {
+                let min = Pos2::new(
+                    (m.x - size.x / 2.0).clamp(screen.min.x, (screen.max.x - size.x).max(screen.min.x)),
+                    (m.y - size.y / 2.0).clamp(screen.min.y, (screen.max.y - size.y).max(screen.min.y)),
+                );
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(min));
+                min + size / 2.0
+            }
+            None => Pos2::ZERO,
+        };
+        self.prev_pid = running::frontmost().map(|f| f.pid).filter(|p| *p != std::process::id() as i32);
+        self.stack = vec![View::Root, View::Wheel { files, center, segs }];
+        self.panel = None;
+        self.visible = true;
+        self.had_focus = false;
+        self.shown_at = Instant::now();
+        self.shared.visible.store(true, Ordering::Relaxed);
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            objc2_app_kit::NSApplication::sharedApplication(mtm).unhide(None);
+        }
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        self.ctx.request_repaint();
+    }
+
+    /// Mouse released: run the segment under the pointer, if any, and close the wheel.
+    fn release_wheel(&mut self) {
+        let Some(View::Wheel { files, center, segs }) = self.stack.last().cloned() else { return };
+        let picked = mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, segs.len()));
+        self.hide();
+        self.reset_to_root();
+        let Some(i) = picked else { return };
+        match segs[i].pick.clone() {
+            WheelPick::Convert(t) => {
+                self.toast(format!("Converting to {}…", t.label));
+                services::convert_files(files, t, self.tools, self.bus.clone());
+            }
+            WheelPick::Act(a) => self.perform(a, false),
+        }
+    }
+
     fn reset_to_root(&mut self) {
         self.sec_dirty = true;
         self.nav_at = Instant::now();
@@ -782,6 +946,24 @@ impl App {
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
+                Msg::Moved(pairs) => {
+                    // keep the file results pointing at the new places
+                    for (old, new) in &pairs {
+                        for f in self.files.1.iter_mut() {
+                            if f == old {
+                                *f = new.clone();
+                            }
+                        }
+                    }
+                    self.toast(format!("Moved {} item{}", pairs.len(), if pairs.len() == 1 { "" } else { "s" }));
+                }
+                Msg::WheelOpen(kind, files) => self.show_wheel(kind, files),
+                Msg::WheelRelease => self.release_wheel(),
+                Msg::ConvertFiles(files) => {
+                    self.show();
+                    self.reset_to_root();
+                    self.push(View::Convert(files));
+                }
                 Msg::AiModels(k, r) => {
                     self.ai_models.insert(k, Some(r));
                 }
@@ -1390,6 +1572,116 @@ impl App {
                     .collect();
                 self.sorted(v, "Processes")
             }
+            View::Convert(files) => {
+                let files = files.clone();
+                let Some(first) = files.first() else { return vec![] };
+                let names: Vec<String> = files.iter().filter_map(|f| f.file_name().map(|n| n.to_string_lossy().to_string())).collect();
+                let sub = if files.len() == 1 { names[0].clone() } else { format!("{} files · {}", files.len(), names.join(", ")) };
+                let v: Vec<(i64, Item)> = ferrocast_core::convert::targets(first, &self.tools)
+                    .into_iter()
+                    .filter_map(|t| {
+                        self.matches(&q, t.label, t.ext).map(|sc| {
+                            (
+                                sc,
+                                Item {
+                                    id: format!("convert:{}", t.ext),
+                                    title: t.label.to_string(),
+                                    subtitle: sub.clone(),
+                                    icon: Icon::Glyph(
+                                        match ferrocast_core::convert::family_of(first) {
+                                            ferrocast_core::convert::Family::Image | ferrocast_core::convert::Family::Pdf => "sf:photo",
+                                            ferrocast_core::convert::Family::Audio => "sf:waveform",
+                                            ferrocast_core::convert::Family::Video => "sf:film",
+                                            ferrocast_core::convert::Family::Archive | ferrocast_core::convert::Family::Folder => {
+                                                "sf:archivebox"
+                                            }
+                                            _ => "sf:doc.text",
+                                        },
+                                        [255, 140, 60],
+                                    ),
+                                    accessory: match t.needs {
+                                        Some(n) => format!("Needs {}", n.split(' ').next().unwrap_or(n)),
+                                        None => format!(".{} · {}", t.ext, t.engine.label()),
+                                    },
+                                    keywords: vec![],
+                                    kind: Kind::ConvertTo(files.clone(), t),
+                                },
+                            )
+                        })
+                    })
+                    .collect();
+                let mut out = self.sorted(v, "Convert to");
+                // image tools when every file is an image
+                use ferrocast_core::convert::{family_of, Family, ImageOp};
+                if files.iter().all(|f| family_of(f) == Family::Image) {
+                    let tools: Vec<Item> = ImageOp::offered(files.len())
+                        .into_iter()
+                        .filter(|op| {
+                            self.matches(
+                                &q,
+                                &op.label(),
+                                match op {
+                                    ImageOp::Compress(_) => "compress smaller jpeg",
+                                    ImageOp::Resize(_) => "resize scale",
+                                    ImageOp::Crop(..) => "crop aspect",
+                                    ImageOp::StripMetadata => "metadata exif gps strip",
+                                    ImageOp::CombinePdf => "pdf combine merge",
+                                    ImageOp::Rotate(_) => "rotate turn",
+                                    ImageOp::Flip(_) => "flip mirror",
+                                    ImageOp::Background(_) => "background pad square",
+                                    ImageOp::Collage => "collage grid",
+                                    ImageOp::Redact(_) => "redact hide blur privacy face text",
+                                    ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
+                                    ImageOp::Annotate => "annotate markup draw arrow text preview",
+                                },
+                            )
+                            .is_some()
+                        })
+                        .map(|op| Item {
+                            id: format!("imgtool:{}", op.suffix()),
+                            title: op.label(),
+                            subtitle: sub.clone(),
+                            icon: Icon::Glyph(
+                                match op {
+                                    ImageOp::Compress(_) => "sf:arrow.down.right.and.arrow.up.left",
+                                    ImageOp::Resize(_) => "sf:arrow.up.left.and.down.right.magnifyingglass",
+                                    ImageOp::Crop(..) => "sf:crop",
+                                    ImageOp::StripMetadata => "sf:eye.slash",
+                                    ImageOp::CombinePdf => "sf:doc.richtext",
+                                    ImageOp::Rotate(_) => "sf:rotate.right",
+                                    ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
+                                    ImageOp::Background(_) => "sf:square.dashed",
+                                    ImageOp::Collage => "sf:square.grid.2x2",
+                                    ImageOp::Redact(_) => "sf:eye.slash.fill",
+                                    ImageOp::Adjust(_) => "sf:slider.horizontal.3",
+                                    ImageOp::Annotate => "sf:pencil.tip.crop.circle",
+                                },
+                                [255, 140, 60],
+                            ),
+                            accessory: "Image tool".into(),
+                            keywords: vec![],
+                            kind: Kind::ImageTool(files.clone(), op),
+                        })
+                        .collect();
+                    if !tools.is_empty() {
+                        out.push(Section { title: "Image tools".into(), items: tools });
+                    }
+                }
+                out.retain(|sec| !sec.items.is_empty());
+                out
+            }
+            View::Shelf => {
+                let v: Vec<(i64, Item)> = self
+                    .shelf
+                    .iter()
+                    .filter(|p| p.exists())
+                    .filter_map(|p| {
+                        let it = file_item(p);
+                        self.matches(&q, &it.title, &it.subtitle).map(|sc| (sc, it))
+                    })
+                    .collect();
+                self.sorted(v, "On the shelf")
+            }
             View::CalcHistory => {
                 let now = now_secs();
                 let v: Vec<(i64, Item)> = self
@@ -1546,7 +1838,24 @@ impl App {
                 a.push(Action::new("Open", Act::Run));
                 a.push(Action::new("Show in Finder", Act::Reveal(p.clone())).key(CMD, Key::Enter));
                 a.push(Action::new("Quick Look", Act::QuickLook(p.clone())).key(CMD, Key::Y));
+                a.push(Action::new("Convert…", Act::Convert(vec![p.clone()])).key(CMD, Key::T));
+                a.push(Action::new("Copy File", Act::CopyFiles(vec![p.clone()])).key(CMD_SHIFT, Key::Period));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
+                a.push(Action::new("Move to…", Act::MoveFiles(vec![p.clone()])).key(CMD_SHIFT, Key::M));
+                a.push(
+                    Action::new(
+                        if std::path::Path::new("/Applications/iTerm.app").exists() { "Open in iTerm" } else { "Open in Terminal" },
+                        Act::OpenInTerminal(p.clone()),
+                    )
+                    .key(CMD_SHIFT, Key::T),
+                );
+                a.push(Action::new("AirDrop", Act::AirDrop(vec![p.clone()])));
+                if matches!(self.view(), View::Shelf) {
+                    a.push(Action::new("Remove from Shelf", Act::RemoveFromShelf(p.clone())).key(CMD, Key::Backspace));
+                    a.push(Action::new("Clear Shelf", Act::ClearShelf).danger());
+                } else {
+                    a.push(Action::new("Float on Shelf", Act::AddToShelf(vec![p.clone()])).key(CMD_SHIFT, Key::F));
+                }
                 a.push(Action::new("Move to Trash", Act::Trash(p.clone())).key(CTRL, Key::X).danger());
             }
             Kind::Calc(r) => {
@@ -1595,6 +1904,16 @@ impl App {
             Kind::Url(_) => a.push(Action::new("Open in Browser", Act::Run)),
             Kind::OpenWindow(_) => a.push(Action::new("Switch to Window", Act::Run)),
             Kind::Timer(..) => a.push(Action::new("Start Timer", Act::Run)),
+            Kind::ConvertTo(files, t) => {
+                a.push(Action::new(
+                    match t.needs {
+                        Some(_) => "Copy install command",
+                        None => "Convert",
+                    },
+                    Act::Run,
+                ));
+                a.push(Action::new("Reveal original in Finder", Act::Reveal(files[0].clone())).key(CMD, Key::Enter));
+            }
             Kind::RunningTimer(i) => a.push(Action::new("Cancel Timer", Act::CancelTimer(*i)).danger()),
             Kind::Process(pr) => {
                 a.push(Action::new("Kill Process", Act::Run));
@@ -1639,6 +1958,8 @@ impl App {
             Kind::Url(_) => "Open in Browser",
             Kind::OpenWindow(_) => "Switch to Window",
             Kind::Process(_) => "Kill Process",
+            Kind::ConvertTo(..) => "Convert",
+            Kind::ImageTool(..) => "Apply",
             Kind::Timer(..) => "Start Timer",
             Kind::RunningTimer(_) => "Cancel Timer",
             Kind::WebSearch(_) => "Search",
@@ -1816,6 +2137,35 @@ impl App {
             Kind::Timer(secs, label) => {
                 let (secs, label) = (*secs, label.clone());
                 self.start_timer(secs, label);
+            }
+            Kind::ImageTool(files, op) => {
+                let (files, op) = (files.clone(), op.clone());
+                self.toast(format!("{}…", op.label()));
+                services::image_op_files(files, op, self.bus.clone());
+                self.hide();
+                self.reset_to_root();
+            }
+            Kind::ConvertTo(files, t) => {
+                if let Some(n) = t.needs {
+                    // "ffmpeg (brew install ffmpeg)" → copy the command in parentheses
+                    let cmd = n.split_once('(').map(|(_, c)| c.trim_end_matches(')').to_string()).unwrap_or_else(|| n.to_string());
+                    self.copy_text(&cmd);
+                    self.toast(format!("Install command copied: {cmd}"));
+                    return;
+                }
+                let (files, t) = (files.clone(), t.clone());
+                self.toast(format!(
+                    "Converting {} to {}…",
+                    if files.len() == 1 {
+                        files[0].file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                    } else {
+                        format!("{} files", files.len())
+                    },
+                    t.label
+                ));
+                services::convert_files(files, t, self.tools, self.bus.clone());
+                self.hide();
+                self.reset_to_root();
             }
             Kind::RunningTimer(i) => {
                 let i = *i;
@@ -2005,6 +2355,17 @@ impl App {
             Builtin::Timers => self.push(View::Timers),
             Builtin::CheckUpdates => self.check_updates(),
             Builtin::CalcHistory => self.push(View::CalcHistory),
+            Builtin::Shelf => self.push(View::Shelf),
+            Builtin::ConvertFiles => {
+                let bus = self.bus.clone();
+                self.hide();
+                std::thread::spawn(move || {
+                    let files = services::choose_files();
+                    if !files.is_empty() {
+                        bus.send(Msg::ConvertFiles(files));
+                    }
+                });
+            }
             Builtin::SearchNotes => self.push(View::Notes),
             Builtin::CreateNote => self.new_note(),
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
@@ -2253,6 +2614,29 @@ impl App {
             }
             Act::KillProcess(pid, force) => self.kill_process(pid, force),
             Act::CancelTimer(i) => self.cancel_timer(i),
+            Act::AddToShelf(files) => {
+                let n = files.len();
+                for f in files {
+                    if !self.shelf.contains(&f) {
+                        self.shelf.insert(0, f);
+                    }
+                }
+                let v = self.shelf.clone();
+                self.persist("shelf.json", &v);
+                self.toast(format!("{n} item{} on the shelf", if n == 1 { "" } else { "s" }));
+            }
+            Act::RemoveFromShelf(p) => {
+                self.shelf.retain(|f| *f != p);
+                let v = self.shelf.clone();
+                self.persist("shelf.json", &v);
+                self.invalidate_sections();
+            }
+            Act::ClearShelf => {
+                self.shelf.clear();
+                self.persist("shelf.json", &Vec::<PathBuf>::new());
+                self.invalidate_sections();
+                self.toast("Shelf cleared");
+            }
             Act::ClearCalcHistory => {
                 self.calc_history.clear();
                 let v = self.calc_history.clone();
@@ -2265,6 +2649,48 @@ impl App {
                     let v = self.calc_history.clone();
                     self.persist("calc-history.json", &v);
                 }
+            }
+            Act::CopyFiles(files) => {
+                ferrocast_macos::clipboard::write_files(&files);
+                self.shared.mark_clipboard_write();
+                self.toast(if files.len() == 1 {
+                    "File copied, paste it in Finder".to_string()
+                } else {
+                    format!("{} files copied", files.len())
+                });
+            }
+            Act::MoveFiles(files) => {
+                let bus = self.bus.clone();
+                self.hide();
+                std::thread::spawn(move || {
+                    let Some(dest) = apps::choose_folder("Move to") else { return };
+                    match apps::move_into(&files, &dest) {
+                        Ok(new) => {
+                            let pairs = files.into_iter().zip(new.iter().cloned()).collect();
+                            bus.send(Msg::Moved(pairs));
+                            let _ = apps::reveal(&new[0]);
+                        }
+                        Err(e) => bus.send(Msg::Toast(format!("Move failed: {e}"))),
+                    }
+                });
+            }
+            Act::OpenInTerminal(p) => match apps::open_in_terminal(&p) {
+                Ok(_) => {
+                    self.hide();
+                    self.reset_to_root();
+                }
+                Err(e) => self.toast(format!("Could not open a terminal: {e}")),
+            },
+            Act::AirDrop(files) => {
+                // the picker attaches to the frontmost app; hide first so it is not hidden with us
+                self.hide();
+                if let Err(e) = apps::airdrop(&files) {
+                    self.toast(format!("AirDrop: {e}"));
+                }
+            }
+            Act::Convert(files) => {
+                self.show();
+                self.push(View::Convert(files));
             }
             Act::QuickLook(p) => {
                 // qlmanage shows the system Quick Look panel; it exits when the panel closes.
@@ -2482,6 +2908,32 @@ fn looks_like_url(q: &str) -> Option<String> {
 }
 
 /// Top-left origin (points) to center the launcher on the screen under the cursor.
+/// Wheel geometry, in points from its centre.
+pub(crate) const WHEEL_INNER: f32 = 58.0;
+pub(crate) const WHEEL_OUTER: f32 = 178.0;
+
+/// Segment under an offset from the wheel centre.
+pub(crate) fn wheel_hit(d: Vec2, n: usize) -> Option<usize> {
+    ferrocast_core::wheel::segment_at(d.x, d.y, WHEEL_INNER, WHEEL_OUTER, n)
+}
+
+/// Pointer position and its screen's visible frame, in top-left screen points.
+pub(crate) fn mouse_top_left() -> Option<(Pos2, Rect)> {
+    use objc2_app_kit::{NSEvent, NSScreen};
+    let mtm = objc2::MainThreadMarker::new()?;
+    let screens = NSScreen::screens(mtm);
+    let primary_h = screens.iter().next()?.frame().size.height;
+    let m = NSEvent::mouseLocation();
+    let scr = screens.iter().find(|s| {
+        let f = s.frame();
+        m.x >= f.origin.x && m.x < f.origin.x + f.size.width && m.y >= f.origin.y && m.y < f.origin.y + f.size.height
+    })?;
+    let v = scr.visibleFrame();
+    let top = primary_h - (v.origin.y + v.size.height);
+    let r = Rect::from_min_size(Pos2::new(v.origin.x as f32, top as f32), Vec2::new(v.size.width as f32, v.size.height as f32));
+    Some((Pos2::new(m.x as f32, (primary_h - m.y) as f32), r))
+}
+
 fn launcher_origin() -> Option<Pos2> {
     use objc2_app_kit::{NSEvent, NSScreen};
     let mtm = objc2::MainThreadMarker::new()?;

@@ -39,6 +39,8 @@ pub enum Builtin {
     Timers,
     CheckUpdates,
     CalcHistory,
+    ConvertFiles,
+    Shelf,
     SearchNotes,
     CreateNote,
     CreateScript,
@@ -69,6 +71,8 @@ impl Builtin {
         Builtin::Timers,
         Builtin::CheckUpdates,
         Builtin::CalcHistory,
+        Builtin::ConvertFiles,
+        Builtin::Shelf,
         Builtin::SearchNotes,
         Builtin::CreateNote,
         Builtin::CreateScript,
@@ -99,6 +103,8 @@ impl Builtin {
             Builtin::Timers => "Timers",
             Builtin::CheckUpdates => "Check for Updates",
             Builtin::CalcHistory => "Calculator History",
+            Builtin::ConvertFiles => "Convert Files",
+            Builtin::Shelf => "File Shelf",
             Builtin::SearchNotes => "Search Notes",
             Builtin::CreateNote => "Create Note",
             Builtin::CreateScript => "Create Script Command",
@@ -124,6 +130,8 @@ impl Builtin {
             Builtin::Timers => "Productivity",
             Builtin::CheckUpdates => "Ferrocast",
             Builtin::CalcHistory => "Calculator",
+            Builtin::ConvertFiles => "Files",
+            Builtin::Shelf => "Files",
             Builtin::SearchNotes | Builtin::CreateNote => "Notes",
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
             Builtin::Settings | Builtin::Quit => "Ferrocast",
@@ -148,6 +156,8 @@ impl Builtin {
             Builtin::Timers => ("sf:timer", [245, 165, 36]),
             Builtin::CheckUpdates => ("sf:arrow.triangle.2.circlepath", [86, 194, 255]),
             Builtin::CalcHistory => ("sf:equal", [120, 120, 130]),
+            Builtin::ConvertFiles => ("sf:arrow.triangle.2.circlepath.doc.on.clipboard", [255, 140, 60]),
+            Builtin::Shelf => ("sf:tray.full", [255, 140, 60]),
             Builtin::SearchNotes | Builtin::CreateNote => ("sf:pencil", [255, 197, 49]),
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => ("sf:terminal", [60, 60, 70]),
             Builtin::Settings => ("sf:gearshape", [120, 120, 130]),
@@ -172,6 +182,8 @@ impl Builtin {
             Builtin::Timers => &["timer", "countdown", "pomodoro", "alarm"],
             Builtin::CheckUpdates => &["update", "upgrade", "brew", "version", "new version"],
             Builtin::CalcHistory => &["calc", "history", "math", "results", "previous"],
+            Builtin::Shelf => &["shelf", "float", "stash", "drop", "files", "keep"],
+            Builtin::ConvertFiles => &["convert", "converter", "format", "png", "jpg", "mp4", "mp3", "pdf", "compress", "zip"],
             Builtin::Settings => &["preferences", "config"],
             _ => &[],
         };
@@ -214,6 +226,10 @@ pub enum Kind {
     Timer(u64, String),
     /// A running timer, by its index in `App::timers`.
     RunningTimer(usize),
+    /// Convert the files to this target.
+    ConvertTo(Vec<PathBuf>, ferrocast_core::convert::Target),
+    /// Run an image tool on the files.
+    ImageTool(Vec<PathBuf>, ferrocast_core::convert::ImageOp),
 }
 
 #[derive(Clone, Debug)]
@@ -257,6 +273,20 @@ pub enum Act {
     CancelTimer(usize),
     QuickLook(PathBuf),
     ClearCalcHistory,
+    /// Open the Convert view for these files.
+    Convert(Vec<PathBuf>),
+    /// Put the files on the clipboard, ready to paste in Finder.
+    CopyFiles(Vec<PathBuf>),
+    /// Ask for a folder and move the files there.
+    MoveFiles(Vec<PathBuf>),
+    /// Open the folder (or the file's folder) in iTerm2 or Terminal.
+    OpenInTerminal(PathBuf),
+    /// Share through AirDrop.
+    AirDrop(Vec<PathBuf>),
+    /// Keep the files on the shelf.
+    AddToShelf(Vec<PathBuf>),
+    RemoveFromShelf(PathBuf),
+    ClearShelf,
     DeleteCalcEntry(usize),
     HideApp(i32),
     ToggleFavorite,
