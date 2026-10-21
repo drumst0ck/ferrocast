@@ -57,7 +57,7 @@ fn every_tool_appears_exactly_once_with_its_real_status() {
         assert_eq!(hits.len(), 1, "tool {id} must appear exactly once");
         assert_eq!(hits[0]["status"], site_data::status_key(tools::implemented(t)), "status of {id}");
     }
-    assert_eq!(v["actions"].as_array().unwrap().len(), 6);
+    assert_eq!(v["actions"].as_array().unwrap().len(), 7, "Tangerine's six actions plus Zip");
 }
 
 #[test]

@@ -139,6 +139,12 @@ pub fn frame_job(opts: &ferrocast_core::frame::FrameOpts) -> Result<ferrocast_co
 }
 
 /// `m:ss` for a time in seconds (whole seconds, rounded down; 0:00 for unusable numbers).
+/// The ZIP output for the "Zip" action. Built by hand because the planner does not offer ZIP for
+/// known types; `ditto` zips any file or folder and keeps the original.
+pub fn zip_target() -> ferrocast_core::convert::Target {
+    ferrocast_core::convert::Target { ext: "zip", label: "ZIP", engine: ferrocast_core::convert::Engine::Archive, needs: None }
+}
+
 pub fn clock(secs: f64) -> String {
     let s = if secs.is_finite() && secs > 0.0 { secs as u64 } else { 0 };
     format!("{}:{:02}", s / 60, s % 60)
@@ -1357,7 +1363,7 @@ impl App {
                     needs: None,
                     pick: WheelPick::Act(act),
                 };
-                // exactly the six file actions, in the order of ferrocast_core::tools::ACTIONS
+                // the six Tangerine actions plus Zip (user addition), in the order of ferrocast_core::tools::ACTIONS
                 ferrocast_core::tools::ACTIONS
                     .into_iter()
                     .map(|a| {
@@ -1369,6 +1375,7 @@ impl App {
                             ActionId::Move => seg("Move to…", "sf:folder", Act::MoveFiles(f.clone())),
                             ActionId::CopyPath => seg("Copy Path", "sf:link", Act::CopyText(paths.clone())),
                             ActionId::OpenTerminal => seg("Terminal", "sf:terminal", Act::OpenInTerminal(f[0].clone())),
+                            ActionId::Zip => seg("Zip", "sf:doc.zipper", Act::ZipFiles(f.clone())),
                         }
                     })
                     .collect()
@@ -2996,6 +3003,7 @@ impl App {
                     a.push(Action::new("Organize Pages…", Act::OrganizePdf(p.clone())).key(CMD_SHIFT, Key::O));
                 }
                 a.push(Action::new("Copy File", Act::CopyFiles(vec![p.clone()])).key(CMD_SHIFT, Key::Period));
+                a.push(Action::new("Compress to ZIP", Act::ZipFiles(vec![p.clone()])));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Move to…", Act::MoveFiles(vec![p.clone()])).key(CMD_SHIFT, Key::M));
                 a.push(
@@ -3852,6 +3860,19 @@ impl App {
                 } else {
                     format!("{} files copied", files.len())
                 });
+            }
+            Act::ZipFiles(files) => {
+                // each item gets its own ZIP next to it; a selection that vanished starts nothing
+                if files.is_empty() || files.iter().any(|p| !p.exists()) {
+                    self.toast("Can't zip: a selected file no longer exists");
+                } else {
+                    self.toast(if files.len() == 1 {
+                        "Compressing to ZIP…".to_string()
+                    } else {
+                        format!("Compressing {} items to ZIP…", files.len())
+                    });
+                    services::convert_files(files, zip_target(), self.tools, self.bus.clone());
+                }
             }
             Act::MoveFiles(files) => {
                 let bus = self.bus.clone();

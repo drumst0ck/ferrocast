@@ -6,9 +6,9 @@ const MAX = 8;
 type Seg = { label: string; needs?: string | null };
 const labelOf: Record<string, string> = {};
 for (const t of tools.tools) labelOf[t.id] = t.name;
-const actionNames: Record<string, string> = { airDrop: 'AirDrop', float: 'Float shelf', copy: 'Copy', move: 'Move to…', copyPath: 'Copy Path', openTerminal: 'Terminal' };
+const actionNames: Record<string, string> = { airDrop: 'AirDrop', float: 'Float shelf', copy: 'Copy', move: 'Move to…', copyPath: 'Copy Path', openTerminal: 'Terminal', zip: 'Zip' };
 
-// Samples: a PDF for conversions (9 targets), an MP4 for tools, the six actions.
+// Samples: a PDF for conversions (9 targets), an MP4 for tools, the seven actions.
 const pdf = conversions.families.flatMap((f) => f.inputs).find((i) => i.ext === 'pdf');
 const mp4 = tools.byFormat.find((b) => b.ext === 'mp4');
 if (!pdf || !mp4) throw new Error('wheel demo sample missing from generated data');

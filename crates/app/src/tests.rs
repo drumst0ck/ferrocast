@@ -408,17 +408,79 @@ fn wheel_renders_for_any_segment_count_in_both_themes() {
 }
 
 #[test]
-fn actions_wheel_has_exactly_the_six_actions_in_order() {
+fn actions_wheel_has_the_six_actions_in_order_plus_zip_last() {
     use ferrocast_core::wheel::WheelKind;
     let app = fixture();
     let one = vec![std::path::PathBuf::from("/nonexistent/a.png")];
     let many = vec![one[0].clone(), std::path::PathBuf::from("/nonexistent/b.png")];
     let folder = vec![std::env::temp_dir()];
-    for files in [one, many, folder] {
-        let labels: Vec<String> = app.wheel_segments(WheelKind::Actions, &files).into_iter().map(|s| s.label).collect();
-        assert_eq!(labels, ["AirDrop", "Float", "Copy", "Move to…", "Copy Path", "Terminal"], "{files:?}");
+    let unknown = vec![std::path::PathBuf::from("/nonexistent/data.qzx9")];
+    let noext = vec![std::path::PathBuf::from("/nonexistent/Makefile")];
+    for files in [one, many, folder, unknown, noext] {
+        let segs = app.wheel_segments(WheelKind::Actions, &files);
+        let labels: Vec<String> = segs.iter().map(|s| s.label.clone()).collect();
+        assert_eq!(labels, ["AirDrop", "Float", "Copy", "Move to…", "Copy Path", "Terminal", "Zip"], "{files:?}");
+        match &segs[6].pick {
+            WheelPick::Act(Act::ZipFiles(z)) => assert_eq!(z, &files),
+            _ => panic!("Zip segment must carry Act::ZipFiles"),
+        }
+        assert_eq!(segs[6].symbol, "sf:doc.zipper");
+        assert!(segs[6].needs.is_none());
     }
     assert!(app.wheel_segments(WheelKind::Actions, &[]).is_empty());
+}
+
+#[test]
+fn zip_of_a_vanished_file_toasts_and_starts_nothing() {
+    let mut app = fixture();
+    let gone = std::env::temp_dir().join(format!("fc-zip-gone-{}.txt", uuid::Uuid::new_v4()));
+    app.perform(Act::ZipFiles(vec![gone]), true);
+    assert!(app.toast.is_some(), "must toast");
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn zip_target_zips_any_kind_of_item_next_to_it() {
+    let dir = std::env::temp_dir().join(format!("fc-zip-real-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    std::fs::write(&png, b"\x89PNG\r\n\x1a\nfake").unwrap();
+    let txt = dir.join("note.txt");
+    std::fs::write(&txt, b"hello").unwrap();
+    let noext = dir.join("Makefile");
+    std::fs::write(&noext, b"all:").unwrap();
+    let acc = dir.join("Informe año ñandú final.txt");
+    std::fs::write(&acc, b"hola").unwrap();
+    let folder = dir.join("My Folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("inner.txt"), b"inner").unwrap();
+    let tools = Default::default();
+    let t = crate::app::zip_target();
+    for (item, member) in [
+        (&png, "pic.png"),
+        (&txt, "note.txt"),
+        (&noext, "Makefile"),
+        (&acc, "Informe año ñandú final.txt"),
+        (&folder, "My Folder/inner.txt"),
+    ] {
+        let before = std::fs::read(item).ok();
+        let (made, errs) = crate::services::run_conversion(std::slice::from_ref(item), &t, &tools);
+        assert!(errs.is_empty(), "{errs:?}");
+        // output_path swaps the extension: pic.png -> pic.zip, Makefile -> Makefile.zip
+        let name = item.file_stem().unwrap().to_string_lossy().to_string();
+        let expect = dir.join(format!("{name}.zip"));
+        assert_eq!(made, std::slice::from_ref(&expect));
+        assert!(std::fs::read(&expect).unwrap().starts_with(b"PK"));
+        let out = std::process::Command::new("unzip").arg("-l").arg(&expect).output().unwrap();
+        let listing = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(out.status.success() && listing.contains(member), "{listing}");
+        assert_eq!(std::fs::read(item).ok(), before, "original untouched");
+        // a second run never overwrites
+        let (again, errs) = crate::services::run_conversion(std::slice::from_ref(item), &t, &tools);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert_eq!(again, [dir.join(format!("{name} 2.zip"))]);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -526,7 +588,7 @@ fn tapping_shift_command_or_control_switches_the_open_wheel() {
     render_mods(&mut app, vec![], Modifiers::NONE);
     render_mods(&mut app, vec![], Modifiers::CTRL);
     assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Actions, "Control opens the actions wheel");
-    assert_eq!(wheel_state(&app).unwrap().2, 6);
+    assert_eq!(wheel_state(&app).unwrap().2, 7);
     render_mods(&mut app, vec![], Modifiers::NONE);
     render_mods(&mut app, vec![], Modifiers::SHIFT);
     assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Convert, "Shift goes back to conversions");

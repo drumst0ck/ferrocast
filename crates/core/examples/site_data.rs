@@ -197,6 +197,7 @@ fn action_key(a: ActionId) -> &'static str {
         ActionId::Move => "move",
         ActionId::CopyPath => "copyPath",
         ActionId::OpenTerminal => "openTerminal",
+        ActionId::Zip => "zip",
     }
 }
 

@@ -29,6 +29,7 @@ const actionCopy: Record<string, [string, string]> = {
   move: ['Move to…', 'Pick a destination folder and move the files there. An existing file is never overwritten.'],
   copyPath: ['Copy Path', 'Copy the path of each selected item, one per line.'],
   openTerminal: ['Terminal / iTerm2', 'Open a folder, or the folder that holds a file, in Terminal or iTerm2.'],
+  zip: ['Zip', 'Compress each selected file or folder into its own ZIP next to it. An existing ZIP is never overwritten. This one is an addition to the six actions of the app this project is measured against.'],
 };
 const actions = tools.actions.map((id) => {
   if (!actionCopy[id]) throw new Error(`no copy for action ${id}`);
@@ -97,11 +98,11 @@ const legend: Level[] = ['tested', 'built', 'typed', 'planned'];
       <ToolCards />
     </Section>
 
-    <Section id="actions" title="Six file actions" lead="Hold Control while dragging any file or folder.">
+    <Section id="actions" title="Seven file actions" lead="Hold Control while dragging any file or folder.">
       <ul class="fa">
         {actions.map((a) => <li><h3>{a.name} <StatusBadge level="built" /></h3><p>{a.text}</p></li>)}
       </ul>
-      <p class="fx-note">AirDrop, Terminal and the shelf were not tried in a live session.</p>
+      <p class="fx-note">AirDrop, Terminal, Zip and the shelf were not tried in a live session.</p>
     </Section>
 
     <Section id="status" title="What the badges mean" lead={`Status as of ${STATUS_DATE}.`}>

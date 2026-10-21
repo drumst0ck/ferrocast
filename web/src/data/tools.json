@@ -330,7 +330,8 @@
     "copy",
     "move",
     "copyPath",
-    "openTerminal"
+    "openTerminal",
+    "zip"
   ],
   "byFormat": [
     {

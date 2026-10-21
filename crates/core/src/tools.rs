@@ -63,7 +63,8 @@ impl ToolId {
     ];
 }
 
-/// The six file actions, in the order the actions wheel shows them.
+/// The file actions, in the order the actions wheel shows them: Tangerine's six, then `Zip`.
+/// `Zip` is an addition requested by the user, not part of Tangerine's list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionId {
     AirDrop,
@@ -72,10 +73,11 @@ pub enum ActionId {
     Move,
     CopyPath,
     OpenTerminal,
+    Zip,
 }
 
-pub const ACTIONS: [ActionId; 6] =
-    [ActionId::AirDrop, ActionId::Float, ActionId::Copy, ActionId::Move, ActionId::CopyPath, ActionId::OpenTerminal];
+pub const ACTIONS: [ActionId; 7] =
+    [ActionId::AirDrop, ActionId::Float, ActionId::Copy, ActionId::Move, ActionId::CopyPath, ActionId::OpenTerminal, ActionId::Zip];
 
 /// How a tool is reachable in Ferrocast today. An honest table: website and UI read it, so a tool
 /// is never advertised as a window when it is only a preset or a typed command.
@@ -214,10 +216,10 @@ mod tests {
     }
 
     #[test]
-    fn six_actions_in_tangerine_order() {
+    fn tangerine_six_actions_in_order_then_zip() {
         assert_eq!(
             ACTIONS,
-            [ActionId::AirDrop, ActionId::Float, ActionId::Copy, ActionId::Move, ActionId::CopyPath, ActionId::OpenTerminal]
+            [ActionId::AirDrop, ActionId::Float, ActionId::Copy, ActionId::Move, ActionId::CopyPath, ActionId::OpenTerminal, ActionId::Zip]
         );
     }
 }
