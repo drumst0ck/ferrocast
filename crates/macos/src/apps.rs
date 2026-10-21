@@ -26,7 +26,97 @@ fn search_roots() -> Vec<PathBuf> {
     v
 }
 
+/// Display names of an app in the given preferred languages (e.g. "es-ES"), read from the bundle's
+/// own localisation files, as Finder and Spotlight show them ("Captura de Pantalla" for
+/// Screenshot.app). Never reads anything outside the bundle.
+pub(crate) fn localized_names(app: &Path, languages: &[String]) -> Vec<String> {
+    let res = app.join("Contents/Resources");
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |dict: &dyn Fn(&str) -> Option<String>| {
+        for key in ["CFBundleDisplayName", "CFBundleName"] {
+            if let Some(n) = dict(key).map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+    };
+    // One locale tag as written on disk: "es-ES" and "es_ES" are the same, "es" matches "es_419".
+    let base_of = |tag: &str| tag.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+    let wanted: Vec<String> = languages.iter().map(|l| base_of(l)).filter(|b| !b.is_empty()).collect();
+    if wanted.is_empty() {
+        return out;
+    }
+    let loctable = plist::Value::from_file(res.join("InfoPlist.loctable")).ok();
+    for want in &wanted {
+        if let Some(dict) = loctable.as_ref().and_then(|v| v.as_dictionary()) {
+            // exact language first ("es"), then regional variants ("es_419")
+            let mut keys: Vec<&String> = dict.keys().filter(|k| base_of(k) == *want).collect();
+            keys.sort_by_key(|k| (k.contains(['-', '_']), k.len()));
+            for k in keys {
+                if let Some(d) = dict.get(k).and_then(|v| v.as_dictionary()) {
+                    push(&|key| d.get(key).and_then(|v| v.as_string()).map(String::from));
+                }
+            }
+        }
+        let Ok(rd) = std::fs::read_dir(&res) else { continue };
+        let mut dirs: Vec<PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "lproj"))
+            .filter(|p| p.file_stem().is_some_and(|n| base_of(&n.to_string_lossy()) == *want))
+            .collect();
+        dirs.sort();
+        for d in dirs {
+            if let Some(strings) = read_strings_file(&d.join("InfoPlist.strings")) {
+                push(&|key| strings.get(key).cloned());
+            }
+        }
+    }
+    out
+}
+
+/// `InfoPlist.strings` as key -> value: an XML/binary property list, or the classic
+/// `"key" = "value";` text (UTF-8, or UTF-16 with a byte-order mark).
+fn read_strings_file(path: &Path) -> Option<std::collections::HashMap<String, String>> {
+    let bytes = std::fs::read(path).ok()?;
+    if let Ok(v) = plist::Value::from_reader(std::io::Cursor::new(&bytes)) {
+        let d = v.as_dictionary()?;
+        return Some(d.iter().filter_map(|(k, v)| Some((k.clone(), v.as_string()?.to_string()))).collect());
+    }
+    let text = match bytes.as_slice() {
+        [0xFF, 0xFE, rest @ ..] => {
+            String::from_utf16(&rest.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>()).ok()?
+        }
+        [0xFE, 0xFF, rest @ ..] => {
+            String::from_utf16(&rest.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect::<Vec<_>>()).ok()?
+        }
+        _ => String::from_utf8(bytes).ok()?,
+    };
+    let mut map = std::collections::HashMap::new();
+    for line in text.lines() {
+        let line = line.trim();
+        // "key" = "value";  (no escapes beyond \" are expected in application names)
+        let Some(rest) = line.strip_prefix('"') else { continue };
+        let Some((key, rest)) = rest.split_once("\" =") else { continue };
+        let rest = rest.trim().trim_end_matches(';').trim();
+        if let Some(val) = rest.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+            map.insert(key.to_string(), val.replace("\\\"", "\""));
+        }
+    }
+    Some(map)
+}
+
+/// The user's preferred languages, most preferred first (e.g. ["es-ES", "en-US"]).
+fn preferred_languages() -> Vec<String> {
+    objc2_foundation::NSLocale::preferredLanguages().iter().map(|s| s.to_string()).collect()
+}
+
 fn read_info(app: &Path) -> Option<AppInfo> {
+    read_info_with(app, &preferred_languages())
+}
+
+fn read_info_with(app: &Path, languages: &[String]) -> Option<AppInfo> {
     let plist_path = app.join("Contents/Info.plist");
     let fallback = app.file_stem()?.to_string_lossy().to_string();
     let mut info = AppInfo { name: fallback.clone(), path: app.to_path_buf(), bundle_id: None, keywords: vec![] };
@@ -47,8 +137,13 @@ fn read_info(app: &Path) -> Option<AppInfo> {
             }
         }
     }
-    // Localized display name (e.g. System Settings) from InfoPlist.strings is
-    // costly; the file stem is already the user-facing name for most apps.
+    // The name Finder shows in the user's language ("Captura de Pantalla"), so searching in that
+    // language finds the app; the displayed name stays the file name.
+    for n in localized_names(app, languages) {
+        if !n.eq_ignore_ascii_case(&info.name) && !info.keywords.contains(&n) {
+            info.keywords.push(n);
+        }
+    }
     Some(info)
 }
 
@@ -165,6 +260,60 @@ mod tests {
         assert!(super::parse_finder_selection("").is_empty());
         let _ = std::fs::remove_file(&f);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    fn langs(l: &[&str]) -> Vec<String> {
+        l.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Real system data: Screenshot.app ships its Spanish name in InfoPlist.loctable. The macOS
+    /// process itself reports the English one (a plain process has no Spanish localisation), which
+    /// is why Ferrocast has to read the file.
+    #[test]
+    fn screenshot_app_is_known_by_its_spanish_name_for_a_spanish_user() {
+        let app = std::path::Path::new("/System/Applications/Utilities/Screenshot.app");
+        if !app.join("Contents/Resources/InfoPlist.loctable").exists() {
+            return;
+        }
+        let es = super::localized_names(app, &langs(&["es-ES"]));
+        assert!(es.iter().any(|n| n == "Captura de Pantalla"), "{es:?}");
+        let en = super::localized_names(app, &langs(&["en-US"]));
+        assert!(!en.iter().any(|n| n == "Captura de Pantalla"), "an English user does not get the Spanish name: {en:?}");
+        assert!(super::localized_names(app, &[]).is_empty(), "no preferred language, no names");
+    }
+
+    #[test]
+    fn read_info_adds_the_localized_name_as_a_search_keyword() {
+        let app = std::path::Path::new("/System/Applications/Utilities/Screenshot.app");
+        if !app.join("Contents/Resources/InfoPlist.loctable").exists() {
+            return;
+        }
+        let info = super::read_info_with(app, &langs(&["es-ES"])).unwrap();
+        assert_eq!(info.name, "Screenshot", "the displayed name stays the file name");
+        assert!(info.keywords.iter().any(|k| k == "Captura de Pantalla"), "{:?}", info.keywords);
+    }
+
+    #[test]
+    fn localized_names_come_from_lproj_strings_in_xml_and_text_form() {
+        let base = std::env::temp_dir().join(format!("fc-loc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let res = base.join("Fake.app/Contents/Resources");
+        std::fs::create_dir_all(res.join("es.lproj")).unwrap();
+        std::fs::create_dir_all(res.join("de.lproj")).unwrap();
+        std::fs::create_dir_all(res.join("fr_CA.lproj")).unwrap();
+        std::fs::write(
+            res.join("es.lproj/InfoPlist.strings"),
+            r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleDisplayName</key><string>Cámara Falsa</string></dict></plist>"#,
+        )
+        .unwrap();
+        std::fs::write(res.join("de.lproj/InfoPlist.strings"), "/* comment */\n\"CFBundleName\" = \"Falsche Kamera\";\n").unwrap();
+        std::fs::write(res.join("fr_CA.lproj/InfoPlist.strings"), "\"CFBundleDisplayName\" = \"Fausse caméra\";").unwrap();
+        let app = base.join("Fake.app");
+        assert_eq!(super::localized_names(&app, &langs(&["es-ES"])), vec!["Cámara Falsa".to_string()]);
+        assert_eq!(super::localized_names(&app, &langs(&["de"])), vec!["Falsche Kamera".to_string()]);
+        assert_eq!(super::localized_names(&app, &langs(&["fr-FR"])), vec!["Fausse caméra".to_string()], "same base language, other region");
+        assert!(super::localized_names(&app, &langs(&["ja-JP"])).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
