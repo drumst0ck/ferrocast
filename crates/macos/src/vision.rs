@@ -54,10 +54,19 @@ mod tests {
     #[test]
     fn finds_text_in_a_rendered_line() {
         let p = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/text.png");
-        let r = super::detect(std::path::Path::new(p), false, true).unwrap();
+        // virtual CI machines cannot create a Vision inference context: skip only for that error
+        let run = |faces: bool, text: bool| match super::detect(std::path::Path::new(p), faces, text) {
+            Ok(r) => Some(r),
+            Err(e) if e.to_string().contains("inference context") => {
+                eprintln!("skipped: Vision cannot create an inference context on this machine");
+                None
+            }
+            Err(e) => panic!("{e}"),
+        };
+        let Some(r) = run(false, true) else { return };
         assert!(!r.is_empty(), "no text found");
         assert!(r.iter().all(|b| b.x >= 0.0 && b.y >= 0.0 && b.x + b.w <= 1.01 && b.y + b.h <= 1.01), "{r:?}");
-        let faces = super::detect(std::path::Path::new(p), true, false).unwrap();
+        let Some(faces) = run(true, false) else { return };
         assert!(faces.is_empty(), "no faces in a text image");
     }
 }
