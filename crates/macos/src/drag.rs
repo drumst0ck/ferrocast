@@ -2,7 +2,7 @@
 //! pasteboard, for the drop wheel. Safe to call from a background thread.
 
 use objc2::rc::Retained;
-use objc2_app_kit::{NSEvent, NSPasteboard, NSPasteboardNameDrag, NSPasteboardTypeFileURL};
+use objc2_app_kit::{NSEvent, NSPasteboard, NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSPasteboardTypeString};
 use std::path::PathBuf;
 
 /// Is the left mouse button held anywhere on screen?
@@ -39,6 +39,18 @@ pub fn drag_files() -> Vec<PathBuf> {
     }
 }
 
+/// Plain text on the drag pasteboard (a selection being dragged), if any. Blank text is `None`.
+/// Longer than `ferrocast_core::translate::MAX_CHARS` is returned whole; the caller decides.
+pub fn drag_text() -> Option<String> {
+    unsafe {
+        pb().pasteboardItems()?
+            .iter()
+            .filter_map(|it| it.stringForType(NSPasteboardTypeString))
+            .map(|s| s.to_string())
+            .find(|s| !s.trim().is_empty())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -50,5 +62,8 @@ mod tests {
         let c = super::drag_count();
         assert_eq!(super::drag_count(), c, "stable while nothing is dragged");
         let _ = super::drag_files();
+        // nothing is being dragged: no text, or whatever a previous drag left; never a panic
+        let t = super::drag_text();
+        assert!(t.is_none_or(|t| !t.trim().is_empty()));
     }
 }
