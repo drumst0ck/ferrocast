@@ -1008,6 +1008,8 @@ pub enum FileTool {
     Join,
     /// New PDF from these pages in order: (0-based source page, quarter turns clockwise).
     OrganizePdf(Vec<(usize, i32)>),
+    /// Unpack an archive into a new sibling folder named after it (never merged, never overwritten).
+    Extract,
 }
 
 pub fn format_secs(s: f64) -> String {
@@ -1055,6 +1057,7 @@ impl FileTool {
             FileTool::Bleep(a, b) => format!("Bleep · {} to {}", format_secs(*a), format_secs(*b)),
             FileTool::Join => "Join videos into one MP4".into(),
             FileTool::OrganizePdf(p) => format!("Organize PDF · {} page{}", p.len(), if p.len() == 1 { "" } else { "s" }),
+            FileTool::Extract => "Extract".into(),
         }
     }
     pub fn suffix(&self) -> String {
@@ -1075,6 +1078,8 @@ impl FileTool {
             FileTool::Bleep(..) => "bleeped".into(),
             FileTool::Join => "joined".into(),
             FileTool::OrganizePdf(_) => "organized".into(),
+            // it makes a folder named after the archive; no suffix is ever applied
+            FileTool::Extract => String::new(),
         }
     }
     /// Tools offered for `n` selected files of one family.
@@ -1083,6 +1088,7 @@ impl FileTool {
             Family::Video if n > 1 => vec![FileTool::Join, FileTool::Merge],
             Family::Audio | Family::Pdf if n > 1 => vec![FileTool::Merge],
             Family::Pdf => vec![FileTool::SplitPages],
+            Family::Archive => vec![FileTool::Extract],
             Family::Video => vec![
                 FileTool::Mute,
                 FileTool::Speed(2.0),

@@ -1799,6 +1799,15 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::Join => {
             return crate::media_tools::run(files, tool, ffmpeg);
         }
+        FileTool::Extract => {
+            let tools = ferrocast_core::convert::Tools::detect();
+            for f in files {
+                match crate::route::extract_archive(f, &tools) {
+                    Ok(dir) => outs.push(dir),
+                    Err(e) => errs.push(e),
+                }
+            }
+        }
         FileTool::OrganizePdf(sel) => {
             let pages: Vec<_> = sel.iter().map(|&(index, quarter_turns)| ferrocast_macos::pdf::PageSel { index, quarter_turns }).collect();
             for f in files.iter().filter(|f| ext(f) == "pdf") {

@@ -12,7 +12,21 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Run a command with a deadline; stdout is discarded, stderr is returned on failure.
 pub(crate) fn run_limited(cmd: &mut Command, secs: u64) -> Result<(), String> {
-    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    run_io(cmd, secs, Stdio::null(), false).map(|_| ())
+}
+
+/// Largest listing `run_listing` accepts; a longer one is refused rather than truncated, because a
+/// truncated list could hide an unsafe entry.
+const LISTING_CAP: u64 = 64 << 20;
+
+/// Run a command under the same deadline and capped stderr, and return its stdout (at most
+/// `LISTING_CAP` bytes; more is an error).
+pub(crate) fn run_listing(cmd: &mut Command, secs: u64) -> Result<Vec<u8>, String> {
+    run_io(cmd, secs, Stdio::piped(), true)
+}
+
+fn run_io(cmd: &mut Command, secs: u64, stdout: Stdio, capture: bool) -> Result<Vec<u8>, String> {
+    cmd.stdout(stdout).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     // drained concurrently (capped): a chatty tool must not fill the pipe and stall until the deadline
     let stderr = child.stderr.take();
@@ -24,21 +38,37 @@ pub(crate) fn run_limited(cmd: &mut Command, secs: u64) -> Result<(), String> {
         }
         buf
     });
+    let out_reader = capture.then(|| child.stdout.take()).flatten().map(|mut r| {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            let _ = (&mut r).take(LISTING_CAP + 1).read_to_end(&mut buf);
+            // keep draining so the child is never blocked on a full pipe
+            let _ = std::io::copy(&mut r, &mut std::io::sink());
+            buf
+        })
+    });
     let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
         match child.try_wait() {
             Ok(Some(st)) => {
                 let err = reader.join().unwrap_or_default();
-                return if st.success() {
-                    Ok(())
-                } else {
+                let out = out_reader.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
+                return if !st.success() {
                     Err(String::from_utf8_lossy(&err).lines().last().unwrap_or("command failed").trim().to_string())
+                } else if out.len() as u64 > LISTING_CAP {
+                    Err("archive listing is too large".into())
+                } else {
+                    Ok(out)
                 };
             }
             Ok(None) if Instant::now() > deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
+                if let Some(h) = out_reader {
+                    let _ = h.join();
+                }
                 return Err(format!("timed out after {secs} s"));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(40)),
@@ -320,4 +350,135 @@ fn document(f: &Path, e: &str, out_ext: &str, tools: &Tools, sc: &Path) -> Resul
         }
         other => Err(format!("{e} to {other} is not available yet")),
     }
+}
+
+// ------------------------------------------------------------------ extractArchive
+
+/// True when an archive entry name could land outside the destination folder: absolute, a `..`
+/// component (with `/` or `\\` as separator), a Windows drive prefix, or a NUL byte.
+pub(crate) fn unsafe_entry(name: &str) -> bool {
+    let b = name.as_bytes();
+    if b.contains(&0) || name.starts_with('/') || name.starts_with('\\') {
+        return true;
+    }
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b.len() == 2 || b[2] == b'/' || b[2] == b'\\') {
+        return true;
+    }
+    name.split(['/', '\\']).any(|c| c == "..")
+}
+
+/// Refuse the whole archive when any listed entry is unsafe; the listing is one name per line.
+fn guard_listing(listing: &[u8]) -> Result<(), String> {
+    if listing.contains(&0) {
+        return Err("unsafe path in archive: entry with a NUL byte".into());
+    }
+    let text = String::from_utf8_lossy(listing);
+    match text.lines().find(|l| unsafe_entry(l)) {
+        Some(bad) => Err(format!("unsafe path in archive: {bad}")),
+        None => Ok(()),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Zip,
+    Tar,
+    Tgz,
+    Gz,
+    Rar,
+}
+
+fn archive_kind(f: &Path) -> Result<Kind, String> {
+    let name = f.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        return Ok(Kind::Tgz);
+    }
+    match ext(f).as_str() {
+        "zip" => Ok(Kind::Zip),
+        "tar" => Ok(Kind::Tar),
+        "gz" => Ok(Kind::Gz),
+        "rar" => Ok(Kind::Rar),
+        other => Err(format!("Extract does not support .{other} archives")),
+    }
+}
+
+/// The folder name for an archive: its file name without the archive extension(s).
+fn folder_stem(f: &Path) -> String {
+    let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let lower = name.to_ascii_lowercase();
+    let cut = [".tar.gz", ".tgz", ".zip", ".tar", ".gz", ".rar"].iter().find(|e| lower.ends_with(*e)).map(|e| e.len()).unwrap_or(0);
+    let stem = name[..name.len() - cut].trim().to_string();
+    if stem.is_empty() || stem == "." || stem == ".." {
+        "archive".into()
+    } else {
+        stem
+    }
+}
+
+/// Create a fresh sibling folder; `create_dir` is atomic and fails if the name exists (as a folder
+/// or a file), so an existing item is never merged into or replaced.
+fn make_folder(f: &Path) -> Result<PathBuf, String> {
+    let parent = f.parent().unwrap_or(Path::new("."));
+    let stem = folder_stem(f);
+    for n in 1..=10_000u32 {
+        let dir = parent.join(if n == 1 { stem.clone() } else { format!("{stem} {n}") });
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not create {}: {e}", dir.display())),
+        }
+    }
+    Err("no free folder name".into())
+}
+
+const EXTRACT_SECS: u64 = 120;
+
+/// Unpack `f` into a new sibling folder and return it. Entries are listed and checked first, so an
+/// archive with an unsafe path is refused before anything is created. On any failure the folder
+/// made here is removed. The archive itself is only ever read.
+pub(crate) fn extract_archive(f: &Path, tools: &Tools) -> Result<PathBuf, String> {
+    let kind = archive_kind(f)?;
+    // RAR: libarchive (the system tar) reads RAR5 and most RAR4 on its own; unrar is only the
+    // fallback for what tar cannot open. The listing doubles as the traversal guard's input.
+    let rar_listing = if kind == Kind::Rar { run_listing(Command::new("/usr/bin/tar").arg("-tf").arg(f), EXTRACT_SECS).ok() } else { None };
+    let rar_via_tar = rar_listing.is_some();
+    let unrar = if kind == Kind::Rar && !rar_via_tar { Some(tools.unrar.ok_or("needs unrar (brew install --cask rar)")?) } else { None };
+    // 1. guard, before any folder exists
+    match kind {
+        Kind::Zip => guard_listing(&run_listing(Command::new("/usr/bin/unzip").arg("-Z1").arg(f), EXTRACT_SECS)?)?,
+        Kind::Tar => guard_listing(&run_listing(Command::new("/usr/bin/tar").arg("-tf").arg(f), EXTRACT_SECS)?)?,
+        Kind::Tgz => guard_listing(&run_listing(Command::new("/usr/bin/tar").arg("-tzf").arg(f), EXTRACT_SECS)?)?,
+        Kind::Rar => match &rar_listing {
+            Some(listing) => guard_listing(listing)?,
+            None => guard_listing(&run_listing(Command::new(unrar.unwrap_or_default()).arg("lb").arg(f), EXTRACT_SECS)?)?,
+        },
+        Kind::Gz => {}
+    }
+    // 2. extract into a folder that did not exist
+    let dir = make_folder(f)?;
+    let res = match kind {
+        Kind::Zip => run_limited(Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(f).arg(&dir), EXTRACT_SECS),
+        Kind::Tar => run_limited(Command::new("/usr/bin/tar").arg("-xf").arg(f).arg("-C").arg(&dir), EXTRACT_SECS),
+        Kind::Tgz => run_limited(Command::new("/usr/bin/tar").arg("-xzf").arg(f).arg("-C").arg(&dir), EXTRACT_SECS),
+        Kind::Rar if rar_via_tar => run_limited(Command::new("/usr/bin/tar").arg("-xf").arg(f).arg("-C").arg(&dir), EXTRACT_SECS),
+        Kind::Rar => run_limited(
+            Command::new(unrar.unwrap_or_default()).args(["x", "-y", "-idq"]).arg(f).arg(format!("{}/", dir.display())),
+            EXTRACT_SECS,
+        ),
+        Kind::Gz => gunzip_into(f, &dir),
+    };
+    match res {
+        Ok(()) => Ok(dir),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            Err(format!("could not extract {}: {e}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()))
+        }
+    }
+}
+
+/// A bare .gz holds one file: `gunzip -c` into `dir/<name without .gz>`.
+fn gunzip_into(f: &Path, dir: &Path) -> Result<(), String> {
+    let name = folder_stem(f);
+    let out = std::fs::File::create(dir.join(name)).map_err(|e| e.to_string())?;
+    run_io(Command::new("/usr/bin/gunzip").arg("-c").arg(f), EXTRACT_SECS, Stdio::from(out), false).map(|_| ())
 }

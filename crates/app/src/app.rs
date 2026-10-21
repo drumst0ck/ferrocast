@@ -2072,7 +2072,8 @@ impl App {
                 }
                 // trim, split and merge for audio, video and PDF
                 let fam = family_of(first);
-                if files.iter().all(|f| family_of(f) == fam) && matches!(fam, Family::Audio | Family::Video | Family::Pdf) {
+                if files.iter().all(|f| family_of(f) == fam) && matches!(fam, Family::Audio | Family::Video | Family::Pdf | Family::Archive)
+                {
                     use ferrocast_core::convert::FileTool;
                     let typed = ferrocast_core::convert::parse_tool_query(&q);
                     let items: Vec<Item> = typed
@@ -2098,6 +2099,7 @@ impl App {
                                     FileTool::Visualize(_) | FileTool::VisualizeImage(..) => "sf:waveform",
                                     FileTool::TrimSilence => "sf:scissors",
                                     FileTool::OrganizePdf(_) => "sf:doc.on.doc",
+                                    FileTool::Extract => "sf:archivebox",
                                 },
                                 [255, 140, 60],
                             ),
@@ -2276,8 +2278,20 @@ impl App {
 
     /// Tools the format table lists but Ferrocast cannot do yet; shown, not hidden (parity plan A2).
     fn missing_tools_section(&self, files: &[PathBuf], q: &str, sub: &str) -> Option<Section> {
+        use ferrocast_core::tools::{implemented, Impl};
+        self.tools_section_where(files, q, sub, |t| implemented(t) == Impl::Missing)
+    }
+
+    /// The "Tools" rows for the tools `is_missing` selects (the real table, or a synthetic one in tests).
+    pub(crate) fn tools_section_where(
+        &self,
+        files: &[PathBuf],
+        q: &str,
+        sub: &str,
+        is_missing: impl Fn(ferrocast_core::tools::ToolId) -> bool,
+    ) -> Option<Section> {
         use ferrocast_core::convert::ext;
-        use ferrocast_core::tools::{implemented, tools_for, Impl};
+        use ferrocast_core::tools::tools_for;
         let first = files.first()?;
         let multi = files.len() > 1;
         let list = tools_for(&ext(first), multi);
@@ -2286,7 +2300,7 @@ impl App {
         }
         let items: Vec<Item> = list
             .into_iter()
-            .filter(|t| implemented(*t) == Impl::Missing)
+            .filter(|t| is_missing(*t))
             .filter(|t| self.matches(q, tool_label(*t), "tool").is_some())
             .map(|t| Item {
                 id: format!("tool:{}", tool_label(t)),
@@ -3737,6 +3751,7 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (AudioChannels, _) => ToolReach::File(FileTool::Channels(false, 1.0, 1.0)),
         (AudioToVideo, _) => ToolReach::File(FileTool::Visualize(ferrocast_core::media::Canvas::Landscape)),
         (TrimAudio, _) => ToolReach::File(FileTool::TrimSilence),
+        (ExtractArchive, _) if !files.is_empty() => ToolReach::File(FileTool::Extract),
         _ => ToolReach::Open,
     }
 }
@@ -3803,7 +3818,11 @@ pub(crate) fn tool_symbol(t: ferrocast_core::tools::ToolId) -> &'static str {
 
 /// Wheel segment for a tool over these files.
 pub(crate) fn tool_segment(t: ferrocast_core::tools::ToolId, files: &[PathBuf]) -> WheelSeg {
-    let missing = ferrocast_core::tools::implemented(t) == ferrocast_core::tools::Impl::Missing;
+    tool_segment_with(t, files, ferrocast_core::tools::implemented(t) == ferrocast_core::tools::Impl::Missing)
+}
+
+/// Same, with the "missing" status given (so the "Not available yet" mark can be tested).
+pub(crate) fn tool_segment_with(t: ferrocast_core::tools::ToolId, files: &[PathBuf], missing: bool) -> WheelSeg {
     let pick = match tool_reach(t, files) {
         ToolReach::Act(a) => WheelPick::Act(a),
         ToolReach::Image(op) => WheelPick::Image(op),

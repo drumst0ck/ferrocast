@@ -708,6 +708,31 @@ fn clicking_the_trim_bar_seeks_proportionally() {
     }
 }
 
+/// A hand-built 58-byte RAR5 holding in.txt ("inside rar"); the same bytes as the matrix test.
+const SYNTHETIC_RAR: [u8; 58] = [
+    0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00, 0xc5, 0x1a, 0x33, 0x32, 0x03, 0x01, 0x00, 0x00, 0xdb, 0x87, 0x37, 0x92, 0x13, 0x02,
+    0x02, 0x0a, 0x04, 0x0a, 0x00, 0x38, 0x6e, 0x35, 0x91, 0x00, 0x00, 0x06, 0x69, 0x6e, 0x2e, 0x74, 0x78, 0x74, 0x69, 0x6e, 0x73, 0x69,
+    0x64, 0x65, 0x20, 0x72, 0x61, 0x72, 0x19, 0xb2, 0x3a, 0x35, 0x03, 0x05, 0x00, 0x00,
+];
+
+#[test]
+fn rar_extracts_through_tar_when_unrar_is_not_installed() {
+    let d = tmp_dir("rar-tar");
+    let rar = d.join("pack.rar");
+    std::fs::write(&rar, SYNTHETIC_RAR).unwrap();
+    let no_unrar = ferrocast_core::convert::Tools::default();
+    let out = crate::route::extract_archive(&rar, &no_unrar).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(out, d.join("pack"));
+    assert_eq!(std::fs::read_to_string(out.join("in.txt")).unwrap(), "inside rar");
+    assert_eq!(std::fs::read(&rar).unwrap(), SYNTHETIC_RAR, "archive untouched");
+    // garbage with a .rar name still fails cleanly: no unrar to fall back on, folder removed
+    let bad = d.join("bad.rar");
+    std::fs::write(&bad, b"not a rar").unwrap();
+    let err = crate::route::extract_archive(&bad, &no_unrar).unwrap_err();
+    assert!(err.contains("unrar"), "{err}");
+    assert!(!d.join("bad").exists(), "no leftover folder");
+}
+
 #[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
@@ -906,8 +931,12 @@ fn tools_wheel_follows_tools_for_per_format() {
     assert_eq!(labels(&["a.png", "b.jpeg"]), ["Compress", "Metadata", "Crop", "Create PDF", "Collage"]);
     assert_eq!(labels(&["a.pdf"]), ["Compress", "Metadata", "Split PDF", "Organize"]);
     assert_eq!(labels(&["a.gif"]), ["Metadata"]);
-    // an archive's only tool is not available yet and says so
-    assert_eq!(tools_wheel_titles(&app, &["a.zip"]), [("Extract".to_string(), Some("Not available yet"))]);
+    // an archive's only tool is Extract, now implemented: no "Not available yet" mark
+    assert_eq!(tools_wheel_titles(&app, &["a.zip"]), [("Extract".to_string(), None)]);
+    // the generic mapping still marks a tool whose implemented() is Missing (synthetic value)
+    let zip = vec![std::path::PathBuf::from("/nonexistent/a.zip")];
+    assert_eq!(tool_segment_with(ferrocast_core::tools::ToolId::ExtractArchive, &zip, true).needs, Some("Not available yet"));
+    assert_eq!(tool_segment_with(ferrocast_core::tools::ToolId::ExtractArchive, &zip, false).needs, None);
     // no tools for text: the single fallback segment, not marked missing
     assert_eq!(tools_wheel_titles(&app, &["a.txt"]), [("Open tools…".to_string(), None)]);
     // mixed families fall back too
@@ -932,6 +961,9 @@ fn tool_reach_maps_tools_to_windows_and_presets() {
     assert!(matches!(tool_reach(ToolId::MuteVideo, std::slice::from_ref(&v)), ToolReach::File(FileTool::Mute)));
     assert!(matches!(tool_reach(ToolId::TrimVideo, std::slice::from_ref(&v)), ToolReach::Act(Act::TrimVideo(_))));
     assert!(matches!(tool_reach(ToolId::ExtractArchive, &[]), ToolReach::Open));
+    let z = std::path::PathBuf::from("/nonexistent/a.zip");
+    assert!(matches!(tool_reach(ToolId::ExtractArchive, std::slice::from_ref(&z)), ToolReach::File(FileTool::Extract)));
+    assert!(matches!(tool_reach(ToolId::ExtractArchive, &[z.clone(), z]), ToolReach::File(FileTool::Extract)));
 }
 
 #[test]
@@ -956,12 +988,203 @@ fn nine_segment_tools_wheel_renders_in_both_themes() {
 #[test]
 fn convert_view_lists_a_missing_tool_instead_of_hiding_it() {
     let mut app = fixture();
-    let titles = |app: &mut App, f: &str| -> Vec<(String, String)> {
+    let zip = vec![std::path::PathBuf::from("/nonexistent/a.zip")];
+    // the generic mechanism, with a synthetic "everything is missing" predicate
+    let sec = app.tools_section_where(&zip, "", "sub", |_| true).expect("a Tools section");
+    assert!(sec.items.iter().any(|i| i.title == "Extract" && i.accessory == "Not available yet"));
+    // real table: nothing is Missing any more, so no format gets such a row
+    let mut titles = |f: &str| -> Vec<(String, String)> {
         app.stack = vec![View::Root, View::Convert(vec![std::path::PathBuf::from(format!("/nonexistent/{f}"))])];
         app.invalidate_sections();
         app.sections_cached().into_iter().flat_map(|s| s.items).map(|i| (i.title, i.accessory)).collect()
     };
-    assert!(titles(&mut app, "a.zip").contains(&("Extract".to_string(), "Not available yet".to_string())));
-    // a format whose tools are all implemented gets no such row
-    assert!(!titles(&mut app, "a.mp4").iter().any(|(_, a)| a == "Not available yet"));
+    for f in ["a.zip", "a.mp4"] {
+        assert!(!titles(f).iter().any(|(_, a)| a == "Not available yet"), "{f}");
+    }
+}
+
+#[test]
+fn convert_view_offers_extract_for_an_archive() {
+    let mut app = fixture();
+    let dir = tmp_dir("offer");
+    let z = dir.join("a.zip");
+    std::fs::write(&z, b"x").unwrap();
+    app.stack = vec![View::Root, View::Convert(vec![z.clone()])];
+    app.invalidate_sections();
+    let items: Vec<_> = app.sections_cached().into_iter().flat_map(|s| s.items).collect();
+    let row = items.iter().find(|i| i.title == "Extract").expect("Extract row for an archive");
+    assert!(matches!(&row.kind, Kind::FileTool(_, ferrocast_core::convert::FileTool::Extract)));
+    // not offered for a non-archive
+    let t = dir.join("a.txt");
+    std::fs::write(&t, b"x").unwrap();
+    app.stack = vec![View::Root, View::Convert(vec![t])];
+    app.invalidate_sections();
+    assert!(!app.sections_cached().into_iter().flat_map(|s| s.items).any(|i| i.title == "Extract"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ------------------------------------------------------------ extractArchive (A14)
+
+fn tmp_dir(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("ferrocast-extract-{tag}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn sh(cwd: &std::path::Path, prog: &str, args: &[&str]) {
+    let st = std::process::Command::new(prog).args(args).current_dir(cwd).output().unwrap();
+    assert!(st.status.success(), "{prog} {args:?}: {}", String::from_utf8_lossy(&st.stderr));
+}
+
+fn names(d: &std::path::Path) -> Vec<String> {
+    let mut v: Vec<String> =
+        std::fs::read_dir(d).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
+    v.sort();
+    v
+}
+
+fn extract(f: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    crate::route::extract_archive(f, &ferrocast_core::convert::Tools::detect())
+}
+
+/// A folder `src/` with `a.txt` and `sub/b.txt`, in a fresh temp dir.
+fn tree(tag: &str) -> std::path::PathBuf {
+    let d = tmp_dir(tag);
+    std::fs::create_dir_all(d.join("src/sub")).unwrap();
+    std::fs::write(d.join("src/a.txt"), "alpha").unwrap();
+    std::fs::write(d.join("src/sub/b.txt"), "beta").unwrap();
+    d
+}
+
+fn check_tree(out: &std::path::Path) {
+    assert_eq!(std::fs::read_to_string(out.join("a.txt")).unwrap(), "alpha");
+    assert_eq!(std::fs::read_to_string(out.join("sub/b.txt")).unwrap(), "beta");
+}
+
+#[test]
+fn extract_zip_tar_and_targz_make_a_named_sibling_folder() {
+    let d = tree("kinds");
+    sh(&d.join("src"), "/usr/bin/zip", &["-qr", "../photos.zip", "."]);
+    sh(&d.join("src"), "/usr/bin/tar", &["-cf", "../pack.tar", "."]);
+    sh(&d.join("src"), "/usr/bin/tar", &["-czf", "../deep.tar.gz", "."]);
+    sh(&d.join("src"), "/usr/bin/tar", &["-czf", "../short.tgz", "."]);
+    let before = std::fs::read(d.join("photos.zip")).unwrap();
+    for (archive, folder) in [("photos.zip", "photos"), ("pack.tar", "pack"), ("deep.tar.gz", "deep"), ("short.tgz", "short")] {
+        let out = extract(&d.join(archive)).unwrap_or_else(|e| panic!("{archive}: {e}"));
+        assert_eq!(out, d.join(folder), "{archive}");
+        check_tree(&out);
+    }
+    assert_eq!(std::fs::read(d.join("photos.zip")).unwrap(), before, "archive untouched");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn extract_plain_gz_writes_the_single_file_inside_the_folder() {
+    let d = tmp_dir("gz");
+    std::fs::write(d.join("notes.txt"), "plain text").unwrap();
+    sh(&d, "/usr/bin/gzip", &["-k", "notes.txt"]);
+    std::fs::remove_file(d.join("notes.txt")).unwrap();
+    let out = extract(&d.join("notes.txt.gz")).unwrap();
+    assert_eq!(out, d.join("notes.txt"), "folder named after the archive without .gz");
+    assert!(out.is_dir());
+    assert_eq!(std::fs::read_to_string(out.join("notes.txt")).unwrap(), "plain text");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn extracting_twice_makes_name_2_and_leaves_the_first_alone() {
+    let d = tree("twice");
+    sh(&d.join("src"), "/usr/bin/zip", &["-qr", "../photos.zip", "."]);
+    let first = extract(&d.join("photos.zip")).unwrap();
+    std::fs::write(first.join("mine.txt"), "keep").unwrap();
+    let second = extract(&d.join("photos.zip")).unwrap();
+    let third = extract(&d.join("photos.zip")).unwrap();
+    assert_eq!(second, d.join("photos 2"));
+    assert_eq!(third, d.join("photos 3"));
+    assert_eq!(std::fs::read_to_string(first.join("mine.txt")).unwrap(), "keep", "first folder untouched");
+    assert!(!second.join("mine.txt").exists(), "never merged");
+    check_tree(&second);
+    // a plain file with the folder's name also forces the next suffix
+    std::fs::write(d.join("pack"), "file").unwrap();
+    sh(&d.join("src"), "/usr/bin/tar", &["-cf", "../pack.tar", "."]);
+    assert_eq!(extract(&d.join("pack.tar")).unwrap(), d.join("pack 2"));
+    assert_eq!(std::fs::read_to_string(d.join("pack")).unwrap(), "file");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn extract_refuses_a_traversal_archive_and_creates_nothing() {
+    let d = tmp_dir("evil");
+    let work = d.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(d.join("escape.txt"), "outside").unwrap();
+    sh(&work, "/usr/bin/tar", &["-cPf", "../evil.tar", "../escape.txt"]);
+    sh(&work, "/usr/bin/zip", &["-q", "../evil.zip", "../escape.txt"]);
+    sh(&work, "/usr/bin/tar", &["-cPf", "../abs.tar", &d.join("escape.txt").to_string_lossy()]);
+    sh(&work, "/usr/bin/tar", &["-czPf", "../evil.tgz", "../escape.txt"]);
+    let listing = names(&d);
+    for a in ["evil.tar", "evil.zip", "abs.tar", "evil.tgz"] {
+        let before = std::fs::read(d.join(a)).unwrap();
+        let err = extract(&d.join(a)).unwrap_err();
+        assert!(err.starts_with("unsafe path in archive: "), "{a}: {err}");
+        assert_eq!(names(&d), listing, "{a}: nothing created beside the archives");
+        assert_eq!(names(&work), Vec::<String>::new(), "{a}: nothing created in work");
+        assert_eq!(std::fs::read(d.join(a)).unwrap(), before);
+    }
+    assert_eq!(std::fs::read_to_string(d.join("escape.txt")).unwrap(), "outside");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn unsafe_entry_check_covers_dotdot_absolute_backslash_and_drive() {
+    use crate::route::unsafe_entry;
+    for bad in ["../x", "a/../../x", "/etc/passwd", "a\\..\\b", "\\server\\x", "C:\\x", "c:/x", "a/..", "a\0b"] {
+        assert!(unsafe_entry(bad), "{bad:?}");
+    }
+    for ok in ["a.txt", "sub/b.txt", "./a", "dir/", "a..b/c", "..hidden", "x:y/z"] {
+        assert!(!unsafe_entry(ok), "{ok:?}");
+    }
+}
+
+#[test]
+fn extracting_a_corrupt_archive_fails_cleanly_and_removes_the_folder() {
+    let d = tmp_dir("corrupt");
+    let before_dir = |name: &str, bytes: &[u8]| {
+        std::fs::write(d.join(name), bytes).unwrap();
+    };
+    before_dir("bad.zip", b"this is not a zip at all");
+    before_dir("bad.tar", b"this is not a tar at all");
+    before_dir("bad.tar.gz", b"this is not gzip at all");
+    before_dir("bad.gz", b"this is not gzip at all");
+    let listing = names(&d);
+    for a in ["bad.zip", "bad.tar", "bad.tar.gz", "bad.gz"] {
+        let err = extract(&d.join(a)).unwrap_err();
+        assert!(!err.is_empty(), "{a}");
+        assert_eq!(names(&d), listing, "{a}: no folder left behind");
+        assert_eq!(std::fs::read(d.join(a)).unwrap().len(), if a == "bad.zip" || a == "bad.tar" { 24 } else { 23 }, "{a} unchanged");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn extract_tool_runs_through_run_file_tool_for_several_archives() {
+    use ferrocast_core::convert::FileTool;
+    let d = tree("several");
+    sh(&d.join("src"), "/usr/bin/zip", &["-qr", "../one.zip", "."]);
+    sh(&d.join("src"), "/usr/bin/tar", &["-cf", "../two.tar", "."]);
+    let (outs, errs) = crate::services::run_file_tool(&[d.join("one.zip"), d.join("two.tar")], &FileTool::Extract, None);
+    assert!(errs.is_empty(), "{errs:?}");
+    assert_eq!(outs, vec![d.join("one"), d.join("two")]);
+    check_tree(&outs[0]);
+    check_tree(&outs[1]);
+    // an unsafe one fails alone; the good one still extracts
+    let work = d.join("src");
+    std::fs::write(d.join("escape.txt"), "o").unwrap();
+    sh(&work, "/usr/bin/tar", &["-cPf", "../evil.tar", "../escape.txt"]);
+    let (outs, errs) = crate::services::run_file_tool(&[d.join("evil.tar"), d.join("one.zip")], &FileTool::Extract, None);
+    assert_eq!(outs, vec![d.join("one 2")]);
+    assert_eq!(errs.len(), 1);
+    assert!(errs[0].contains("unsafe path in archive: ../escape.txt"), "{errs:?}");
+    assert!(!d.join("evil").exists());
+    let _ = std::fs::remove_dir_all(&d);
 }

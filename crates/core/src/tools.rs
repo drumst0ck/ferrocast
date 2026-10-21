@@ -98,9 +98,8 @@ pub fn implemented(t: ToolId) -> Impl {
         EditImage | AnnotateImage | FrameImage | CropImage | RedactImage | CreateCollage | TrimVideo | CropVideo | ChangeVideoSpeed
         | VideoSnapshots | RedactVideo | OrganizePdf => Impl::Window,
         Compress | RemoveMetadata | JoinVideos | SplitVideo | MuteVideo | AudioChannels | NormalizeAudio | MergePdf | SplitPdf
-        | CreatePdf => Impl::Preset,
+        | CreatePdf | ExtractArchive => Impl::Preset,
         AudioToVideo | TrimAudio | RedactAudio => Impl::Typed,
-        ExtractArchive => Impl::Missing,
     }
 }
 
