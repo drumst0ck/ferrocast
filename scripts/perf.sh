@@ -50,7 +50,7 @@ to_ms() { awk '{ v=$0; if (v ~ /µs$/) { sub(/µs$/,"",v); print v/1000 } else i
 field() { grep -E "$2" "$1" | head -1 | sed -E "$3" | to_ms; }
 
 # ---- 1. hidden start, N runs ----
-: > "$WORK/gl"; : > "$WORK/new"; : > "$WORK/apps"
+: > "$WORK/gl"; : > "$WORK/new"; : > "$WORK/apps"; : > "$WORK/apps_warm"
 for _ in $(seq "$RUNS"); do
   d=$(fresh_dir)
   FERROCAST_DATA_DIR=$d FERROCAST_PROFILE=1 "$BIN" --hidden 2> "$d/log" & pid=$!
@@ -58,6 +58,10 @@ for _ in $(seq "$RUNS"); do
   field "$d/log" 'window\+gl ready' 's/.*after //' >> "$WORK/gl"
   field "$d/log" '^App::new' 's/App::new //' >> "$WORK/new"
   field "$d/log" '^apps scan' 's/apps scan ([^ ]+) .*/\1/' >> "$WORK/apps"
+  # second start in the same data directory: the apps cache (apps-cache.plist) now exists
+  FERROCAST_DATA_DIR=$d FERROCAST_PROFILE=1 "$BIN" --hidden 2> "$d/log2" & pid=$!
+  sleep 3; kill $pid 2>/dev/null; wait $pid 2>/dev/null
+  field "$d/log2" '^apps scan' 's/apps scan ([^ ]+) .*/\1/' >> "$WORK/apps_warm"
 done
 
 # ---- 2. hidden idle: top (cpu, context switches/s), probe counters, footprint ----
@@ -98,7 +102,8 @@ echo "| Metric | Result |"
 echo "|---|---|"
 echo "| hidden start: window+gl ready, median of $RUNS | $(median < "$WORK/gl") ms |"
 echo "| hidden start: App::new, median | $(median < "$WORK/new") ms |"
-echo "| hidden start: apps scan, median (153 apps on the dev Mac) | $(median < "$WORK/apps") ms |"
+echo "| hidden start: apps scan, no cache yet, median (153 apps on the dev Mac) | $(median < "$WORK/apps") ms |"
+echo "| hidden start: apps scan, cache present, median | $(median < "$WORK/apps_warm") ms |"
 echo "| hidden idle (${SETTLE}s after start, ${IDLE}s window): CPU | ${cpu} % |"
 echo "| hidden idle: context switches/s | ${csw} |"
 echo "| hidden: frames drawn in the first 10 s after start | ${hidden_startup:-n/a} |"

@@ -31,3 +31,11 @@ pending icons re-requested frames (`ui.rs:105`) and each frame flushed an invisi
 | idle hidden CPU | 0.55 % | 0.00 % |
 | idle hidden context switches/s | 241 | 42-44 (the 25 ms wheel poller, P8) |
 | physical footprint 15 s after hidden start | 159 MB | 85-90 MB |
+
+## After P1 (apps scan cache), same Mac
+
+| Metric | Before | After P1 |
+|---|---|---|
+| `apps scan` at start, no cache yet | 126 ms | 130 ms (parses everything once, then writes `apps-cache.plist`, 25 KB) |
+| `apps scan` at start, cache present | 126 ms | 7.1 ms (median of 5 second starts) |
+| `list_apps` real scan, release test | 141 ms | 5.5 ms warm; result identical to the uncached scan (ignored test `real_scan_is_identical_with_and_without_the_cache`) |
