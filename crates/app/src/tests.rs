@@ -544,6 +544,91 @@ fn wheel_state(app: &App) -> Option<(ferrocast_core::wheel::WheelKind, Option<us
     }
 }
 
+// ---- wheel animation (B3/B4) -----------------------------------------------------------------
+
+/// Frames recorded by `draw_wheel` in a test build: (highlight of the selected segment, open scale,
+/// open alpha). egui's clock advances 1/60 s per `render` call, so the tests drive it deterministically.
+fn wheel_probe(app: &App) -> Vec<(f32, f32, f32)> {
+    app.ctx.data(|d| d.get_temp(Id::new("wheel-anim-probe"))).unwrap_or_default()
+}
+
+fn wheel_with_selection(app: &mut App, kind: ferrocast_core::wheel::WheelKind, n: usize, sel: Option<usize>, reduce: bool) {
+    let files = vec![std::path::PathBuf::from("/nonexistent/a.png")];
+    let segs: Vec<WheelSeg> = (0..n)
+        .map(|i| WheelSeg { label: format!("Option {i}"), symbol: "sf:photo", needs: None, pick: WheelPick::Act(Act::Run) })
+        .collect();
+    app.ctx.data_mut(|d| {
+        d.insert_temp(Id::new("wheel_reduce_motion"), reduce);
+        d.remove::<Vec<(f32, f32, f32)>>(Id::new("wheel-anim-probe"));
+        d.remove::<super::WheelAnim>(Id::new("wheel_anim"));
+    });
+    app.stack = vec![View::Root, View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel }];
+}
+
+#[test]
+fn wheel_highlight_eases_in_when_motion_is_allowed() {
+    let mut app = fixture();
+    wheel_with_selection(&mut app, ferrocast_core::wheel::WheelKind::Tools, 7, Some(2), false);
+    for _ in 0..30 {
+        render(&mut app, vec![]);
+    }
+    let frames = wheel_probe(&app);
+    assert_eq!(frames.len(), 30);
+    let first = frames[0].0;
+    assert!(first > 0.0 && first < 1.0, "first frame must be mid-transition, got {first}");
+    assert!(frames.windows(2).all(|w| w[1].0 >= w[0].0), "highlight must never go backwards: {frames:?}");
+    assert!(frames[4].0 < 1.0, "120 ms is about 7 frames, frame 5 is still moving: {}", frames[4].0);
+    assert_eq!(frames[29].0, 1.0, "0.5 s later the highlight is complete");
+    // open animation: starts small and transparent, ends exactly at 1
+    assert!(frames[0].1 >= 0.92 && frames[0].1 < 1.0 && frames[0].2 < 1.0, "open starts mid-way: {:?}", frames[0]);
+    assert_eq!((frames[29].1, frames[29].2), (1.0, 1.0));
+}
+
+#[test]
+fn wheel_reduce_motion_jumps_to_the_end_state_but_still_highlights() {
+    let mut app = fixture();
+    wheel_with_selection(&mut app, ferrocast_core::wheel::WheelKind::Tools, 7, Some(2), true);
+    render(&mut app, vec![]);
+    let frames = wheel_probe(&app);
+    assert_eq!(frames[0], (1.0, 1.0, 1.0), "highlight, open scale and open alpha are final on the first frame");
+    // with nothing selected the highlight is off, and a selection change is instant
+    wheel_with_selection(&mut app, ferrocast_core::wheel::WheelKind::Tools, 7, None, true);
+    render(&mut app, vec![]);
+    assert_eq!(wheel_probe(&app)[0].0, 0.0);
+    if let Some(View::Wheel { sel, .. }) = app.stack.last_mut() {
+        *sel = Some(4);
+    }
+    render(&mut app, vec![]);
+    assert_eq!(wheel_probe(&app)[1].0, 1.0, "the highlight still changes, instantly");
+}
+
+#[test]
+fn wheel_renders_through_open_switch_and_hover_animations_in_both_themes() {
+    use ferrocast_core::wheel::WheelKind;
+    for reduce in [false, true] {
+        for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+            for n in [1usize, 7, 9, 12] {
+                let mut app = fixture();
+                app.ctx.set_theme(theme);
+                wheel_with_selection(&mut app, WheelKind::Convert, n, None, reduce);
+                for f in 0..24 {
+                    // step the selection, and tap Command half-way (a switch to the tools wheel)
+                    if let Some(View::Wheel { sel, .. }) = app.stack.last_mut() {
+                        *sel = Some(f % n);
+                    }
+                    if f == 12 {
+                        render_mods(&mut app, vec![], Modifiers { command: true, ..Modifiers::NONE });
+                    } else {
+                        render(&mut app, vec![]);
+                    }
+                }
+                assert!(matches!(app.view(), View::Wheel { .. }), "n={n} reduce={reduce}: the wheel must still be open");
+                assert_eq!(wheel_probe(&app).len(), 24);
+            }
+        }
+    }
+}
+
 // Characterisation tests of the wheel's key handling (the behaviour already existed; no RED).
 #[test]
 fn wheel_arrows_step_and_wrap_around() {

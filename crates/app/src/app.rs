@@ -1459,6 +1459,7 @@ impl App {
         };
         self.prev_pid = running::frontmost().map(|f| f.pid).filter(|p| *p != std::process::id() as i32);
         self.stack = vec![View::Root, View::Wheel { files, center, segs, kind, sel: None }];
+        self.ctx.data_mut(|d| d.remove::<draw::WheelAnim>(Id::new("wheel_anim")));
         self.panel = None;
         self.visible = true;
         self.had_focus = false;
@@ -1500,6 +1501,7 @@ impl App {
         // The release that picks a segment also ends the drag: macOS delivers the file DROP to the
         // launcher right after. Remember when the gesture ended so that drop can be ignored.
         self.ctx.data_mut(|d| d.insert_temp(Id::new("wheel_end"), Instant::now()));
+        self.ctx.data_mut(|d| d.remove::<draw::WheelAnim>(Id::new("wheel_anim")));
         self.hide();
         self.reset_to_root();
         let Some(i) = picked.filter(|i| *i < segs.len()) else { return };

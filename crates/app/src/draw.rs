@@ -12,6 +12,62 @@ enum Detail {
     Image(String, Vec<(String, String)>),
 }
 
+/// Per-open animation state of the drop wheel, kept in the egui context (not in `App`).
+/// Times are egui seconds. It starts fresh when the wheel was not drawn for 0.3 s or is removed.
+#[derive(Clone)]
+pub(crate) struct WheelAnim {
+    /// Reduce Motion, read once when the wheel opened: every duration is 0.
+    reduce: bool,
+    /// Dev aid `FERROCAST_WHEEL_ANIM_T=<ms>`: every animation is frozen at this elapsed time.
+    frozen: Option<f32>,
+    last: f64,
+    open_t0: f64,
+    kind: ferrocast_core::wheel::WheelKind,
+    from_rgb: [f32; 3],
+    to_rgb: [f32; 3],
+    kind_t0: f64,
+    /// per segment: (from, to, start time) of the highlight
+    hl: Vec<(f32, f32, f64)>,
+    hub_cur: String,
+    hub_prev: String,
+    hub_t0: f64,
+    mouse: Option<Pos2>,
+}
+
+impl WheelAnim {
+    fn open(now: f64, kind: ferrocast_core::wheel::WheelKind, rgb: [f32; 3], hub: &str, reduce: bool) -> Self {
+        let frozen = std::env::var("FERROCAST_WHEEL_ANIM_T").ok().and_then(|v| v.parse::<f32>().ok()).filter(|_| !reduce);
+        WheelAnim {
+            reduce,
+            frozen,
+            last: now,
+            open_t0: now,
+            kind,
+            from_rgb: rgb,
+            to_rgb: rgb,
+            kind_t0: f64::NEG_INFINITY,
+            hl: Vec::new(),
+            hub_cur: hub.to_string(),
+            hub_prev: String::new(),
+            hub_t0: f64::NEG_INFINITY,
+            mouse: None,
+        }
+    }
+}
+
+/// Reduce Motion for a wheel that is opening: a test hook in the context, then
+/// `FERROCAST_REDUCE_MOTION=1|0`, then the system setting.
+fn wheel_reduce_motion(ctx: &Context) -> bool {
+    if let Some(v) = ctx.data(|d| d.get_temp::<bool>(Id::new("wheel_reduce_motion"))) {
+        return v;
+    }
+    match std::env::var("FERROCAST_REDUCE_MOTION").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => ferrocast_macos::system::reduce_motion(),
+    }
+}
+
 impl eframe::App for App {
     fn clear_color(&self, _v: &egui::Visuals) -> [f32; 4] {
         [0.0; 4]
@@ -1912,7 +1968,9 @@ impl App {
     }
 
     /// The drop wheel: a ring of segments around the window centre; the one under the
-    /// pointer (sampled globally, since a drag owns the mouse) is highlighted.
+    /// pointer (sampled globally, since a drag owns the mouse) is highlighted. Highlight, open,
+    /// switch and hub-text changes are animated from per-wheel state in the egui context
+    /// (`WheelAnim`); Reduce Motion (read once per open) makes every state jump to its end value.
     #[allow(clippy::too_many_arguments)]
     fn draw_wheel(
         &mut self,
@@ -1924,26 +1982,110 @@ impl App {
         kind: ferrocast_core::wheel::WheelKind,
         sel: Option<usize>,
     ) {
-        use ferrocast_core::wheel::{hub_text, ring_label, sector_points, segment_center, Geometry, WheelKind};
+        use ferrocast_core::wheel::{
+            anim_progress, crossfade_alpha, hub_text, lerp, ring_label, sector_points, segment_center, stagger_ms, Geometry, WheelKind,
+        };
         let ctx = ui.ctx().clone();
-        ctx.request_repaint_after(Duration::from_millis(16));
-        let g = Geometry::DEFAULT;
+        let g0 = Geometry::DEFAULT;
         let c = ui.max_rect().center();
         let n = segs.len();
-        let hover = if n == 0 { None } else { mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, n)).or(sel) };
+        let mouse = mouse_top_left().map(|(m, _)| m);
+        let hover = if n == 0 { None } else { mouse.and_then(|m| wheel_hit(m - center, n)).or(sel) };
         let dark = self.dark;
-        let (name, rgb) = match kind {
-            WheelKind::Convert => ("CONVERT", [255u8, 140, 60]),
-            WheelKind::Tools => ("TOOLS", [86, 194, 255]),
-            WheelKind::Actions => ("ACTIONS", [89, 212, 153]),
+        let (name, target_rgb) = match kind {
+            WheelKind::Convert => ("CONVERT", [255.0f32, 140.0, 60.0]),
+            WheelKind::Tools => ("TOOLS", [86.0, 194.0, 255.0]),
+            WheelKind::Actions => ("ACTIONS", [89.0, 212.0, 153.0]),
         };
+        let (count, kind_line) = hub_text(files);
+        let hub_label = match hover.and_then(|i| segs.get(i)) {
+            Some(sg) if sg.label.chars().count() > 16 => format!("{}…", sg.label.chars().take(15).collect::<String>()),
+            Some(sg) => sg.label.clone(),
+            None => count,
+        };
+
+        // ---- animation state -------------------------------------------------------------
+        let now = ctx.input(|i| i.time);
+        let dt = ctx.input(|i| i.unstable_dt).clamp(0.0, 0.1) as f64;
+        let key = Id::new("wheel_anim");
+        let old = ctx.data(|d| d.get_temp::<WheelAnim>(key)).filter(|s| now - s.last < 0.3);
+        let fresh = old.is_none();
+        let mut st = old.unwrap_or_else(|| WheelAnim::open(now, kind, target_rgb, &hub_label, wheel_reduce_motion(&ctx)));
+        // the start of a transition is the previous frame, so its first frame already moves
+        let prev = if fresh { now - dt } else { st.last };
+        st.hl.resize(n, (0.0, 0.0, f64::NEG_INFINITY));
+        // an animation that never started (`-inf`) is finished; a frozen dev clock only holds started ones
+        let el = |t0: f64| match st.frozen {
+            Some(ms) if t0.is_finite() => ms,
+            _ => ((now - t0) * 1000.0) as f32,
+        };
+        let dur = |ms: f32| if st.reduce { 0.0 } else { ms };
+        // wheel kind switched: cross-fade the accent, bring the new segments in
+        if st.kind != kind {
+            let p = anim_progress(el(st.kind_t0), dur(120.0));
+            for (k, v) in st.from_rgb.iter_mut().enumerate() {
+                *v = lerp(*v, st.to_rgb[k], p);
+            }
+            st.kind = kind;
+            st.to_rgb = target_rgb;
+            st.kind_t0 = prev;
+        }
+        let p_kind = anim_progress(el(st.kind_t0), dur(120.0));
+        let rgb_f = [0, 1, 2].map(|k| lerp(st.from_rgb[k], st.to_rgb[k], p_kind));
+        let rgb = rgb_f.map(|v| v.round().clamp(0.0, 255.0) as u8);
         let accent = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-        let outer = g.r_out + 10.0;
+        // per-segment highlight: (from, to, start); value eased between from and to
+        let mut hv = vec![0.0f32; n];
+        let mut animating = false;
+        for (i, h) in st.hl.iter_mut().enumerate() {
+            let target = if hover == Some(i) { 1.0 } else { 0.0 };
+            let cur = lerp(h.0, h.1, anim_progress(el(h.2), dur(120.0)));
+            if target != h.1 {
+                *h = (cur, target, prev);
+            }
+            let pr = anim_progress(el(h.2), dur(120.0));
+            hv[i] = lerp(h.0, h.1, pr);
+            animating |= pr < 1.0;
+        }
+        // open: the ring grows from 0.92 and fades in
+        let p_open = anim_progress(el(st.open_t0), dur(140.0));
+        let (scale, open_alpha) = (lerp(0.92, 1.0, p_open), p_open);
+        animating |= p_open < 1.0;
+        // hub text cross-fade
+        if st.hub_cur != hub_label {
+            st.hub_prev = std::mem::replace(&mut st.hub_cur, hub_label);
+            st.hub_t0 = prev;
+        }
+        let p_hub = anim_progress(el(st.hub_t0), dur(80.0));
+        let (hub_out, hub_in) = crossfade_alpha(p_hub);
+        animating |= p_hub < 1.0;
+        // switch: fade and scale each new segment in with a stagger (the last one ends at 120 + 96 ms)
+        let seg_in: Vec<f32> = (0..n).map(|i| anim_progress(el(st.kind_t0) - dur(stagger_ms(i)), dur(120.0))).collect();
+        animating |= p_kind < 1.0 || seg_in.iter().any(|p| *p < 1.0);
+        // repaint policy: 60 fps only while something moves; otherwise 30 fps to poll the pointer
+        let moved = st.mouse != mouse;
+        st.mouse = mouse;
+        ctx.request_repaint_after(Duration::from_millis(if animating || moved { 16 } else { 33 }));
+        st.last = now;
+        #[cfg(test)]
+        {
+            let probe = Id::new("wheel-anim-probe");
+            let which = sel.or(hover);
+            let mut v: Vec<(f32, f32, f32)> = ctx.data(|d| d.get_temp(probe)).unwrap_or_default();
+            v.push((which.and_then(|i| hv.get(i).copied()).unwrap_or(0.0), scale, open_alpha));
+            ctx.data_mut(|d| d.insert_temp(probe, v));
+        }
+        ctx.data_mut(|d| d.insert_temp(key, st.clone()));
+
+        // ---- drawing ---------------------------------------------------------------------
+        let g = Geometry { r_in: g0.r_in * scale, r_out: g0.r_out * scale, ..g0 };
+        let outer = g.r_out + 10.0 * scale;
         let (white, black) = (Color32::from_white_alpha, Color32::from_black_alpha);
+        ui.set_opacity(open_alpha);
         let p = ui.painter().clone();
         // soft shadow, then the translucent disc and its rim
         for (k, a) in if dark { [(16.0, 10u8), (10.0, 14), (5.0, 20)] } else { [(16.0, 6), (10.0, 9), (5.0, 12)] } {
-            p.circle_filled(c + Vec2::new(0.0, 6.0), outer + k, black(a));
+            p.circle_filled(c + Vec2::new(0.0, 6.0), outer + k * scale, black(a));
         }
         p.circle_filled(
             c,
@@ -1961,15 +2103,22 @@ impl App {
         // ring track
         p.circle_stroke(c, (g.r_in + g.r_out) / 2.0, Stroke::new(g.r_out - g.r_in, if dark { white(8) } else { black(6) }));
         let at = |q: [f32; 2]| c + Vec2::new(q[0], q[1]);
+        // while one segment is highlighted the others dim a little
+        let any_on = hv.iter().cloned().fold(0.0f32, f32::max);
         for (i, seg) in segs.iter().enumerate() {
-            let on = hover == Some(i);
-            if on {
-                let pts = sector_points(i, n, &g, 16);
+            let h = hv[i];
+            let sa = seg_in[i];
+            let seg_alpha = open_alpha * sa * (1.0 - 0.3 * any_on * (1.0 - h));
+            ui.set_opacity(open_alpha * sa);
+            let p = ui.painter().clone();
+            if h > 0.003 {
+                let gh = Geometry { r_out: lerp(g.r_out - 8.0 * scale, g.r_out, h), ..g };
+                let pts = sector_points(i, n, &gh, 16);
                 let k = pts.len() / 2 - 1;
                 let mut mesh = egui::Mesh::default();
                 for j in 0..=k {
-                    mesh.colored_vertex(at(pts[j]), accent.gamma_multiply(0.34));
-                    mesh.colored_vertex(at(pts[pts.len() - 1 - j]), accent.gamma_multiply(0.10));
+                    mesh.colored_vertex(at(pts[j]), accent.gamma_multiply(0.34 * h));
+                    mesh.colored_vertex(at(pts[pts.len() - 1 - j]), accent.gamma_multiply(0.10 * h));
                 }
                 for j in 0..k as u32 {
                     let b = j * 2;
@@ -1977,65 +2126,64 @@ impl App {
                     mesh.add_triangle(b + 1, b + 3, b + 2);
                 }
                 p.add(egui::Shape::mesh(mesh));
-                p.add(egui::Shape::closed_line(pts.iter().map(|q| at(*q)).collect(), Stroke::new(1.5, accent)));
+                p.add(egui::Shape::closed_line(pts.iter().map(|q| at(*q)).collect(), Stroke::new(1.5, accent.gamma_multiply(h))));
                 // glow along the outer edge
                 let edge: Vec<Pos2> = pts[..=k].iter().map(|q| at(*q)).collect();
-                for (w, a) in [(10.0, 18u8), (6.0, 32), (3.0, 70)] {
-                    p.add(egui::Shape::line(edge.clone(), Stroke::new(w, Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], a))));
+                for (w, a) in [(10.0, 18.0f32), (6.0, 32.0), (3.0, 70.0)] {
+                    p.add(egui::Shape::line(
+                        edge.clone(),
+                        Stroke::new(w * lerp(0.6, 1.0, h), Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], (a * h) as u8)),
+                    ));
                 }
-            } else if n > 1 {
+            }
+            if n > 1 && h < 0.99 {
                 let a = (i as f32 - 0.5) * std::f32::consts::TAU / n as f32;
                 let d = Vec2::new(a.sin(), -a.cos());
                 p.line_segment(
-                    [c + d * (g.r_in + 2.0), c + d * (g.r_out - 2.0)],
+                    [c + d * (g.r_in + 2.0 * scale), c + d * (g.r_out - 2.0 * scale)],
                     Stroke::new(1.0, if dark { white(16) } else { black(14) }),
                 );
             }
+            // tile, icon and label: dimmed with the segment, popped in by the switch animation
+            ui.set_opacity(seg_alpha.clamp(0.0, 1.0));
+            let pop = lerp(0.85, 1.0, sa) * scale;
             let r_mid = (g.r_in + g.r_out) / 2.0;
             let mid = at(segment_center(i, n, r_mid));
-            let ring_text = ring_label(&seg.label, n, r_mid);
+            let ring_text = ring_label(&seg.label, n, (g0.r_in + g0.r_out) / 2.0);
             let fits = ring_text.is_some();
-            let tile = (if n > 8 { 24.0 } else { 28.0 }) * if on { 1.12 } else { 1.0 };
-            let ir = Rect::from_center_size(if fits { mid - Vec2::new(0.0, 8.0) } else { mid }, Vec2::splat(tile));
+            let tile = (if n > 8 { 24.0 } else { 28.0 }) * lerp(1.0, 1.12, h) * pop;
+            let ir = Rect::from_center_size(if fits { mid - Vec2::new(0.0, 8.0 * pop) } else { mid }, Vec2::splat(tile));
             ui.painter().rect_filled(
-                ir.expand(4.0),
-                9.0,
-                Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], if on { 46 } else { 22 }),
+                ir.expand(4.0 * pop),
+                9.0 * pop,
+                Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], lerp(22.0, 46.0, h) as u8),
             );
             let tone = if seg.needs.is_some() { [rgb[0] / 3 + 60, rgb[1] / 3 + 60, rgb[2] / 3 + 60] } else { rgb };
             ui::paint_icon(&mut self.icons, ui, ir, &Icon::Glyph(seg.symbol, tone), pal);
             if let Some((label, size)) = ring_text {
-                let col = if on { pal.text } else { pal.sub };
-                ui.painter().text(mid + Vec2::new(0.0, 22.0), Align2::CENTER_CENTER, label, FontId::proportional(size), col);
+                let col = pal.sub.lerp_to_gamma(pal.text, h);
+                ui.painter().text(mid + Vec2::new(0.0, 22.0 * pop), Align2::CENTER_CENTER, label, FontId::proportional(size * pop), col);
             }
         }
-        // hub: wheel name, hovered label or file summary, kind line
+        // hub: wheel name, hovered label or file summary (cross-faded), kind line
+        ui.set_opacity(open_alpha);
         let p = ui.painter();
-        p.circle_filled(c, g.r_in - 6.0, if dark { white(10) } else { black(6) });
-        p.circle_stroke(c, g.r_in - 6.0, Stroke::new(1.0, pal.border));
-        let (count, kind_line) = hub_text(files);
-        p.text(c - Vec2::new(0.0, 30.0), Align2::CENTER_CENTER, name, FontId::proportional(9.5), accent);
-        match hover.and_then(|i| segs.get(i)) {
-            Some(sg) => {
-                let l = if sg.label.chars().count() > 16 {
-                    format!("{}…", sg.label.chars().take(15).collect::<String>())
-                } else {
-                    sg.label.clone()
-                };
-                p.text(c, Align2::CENTER_CENTER, l, FontId::proportional(13.0), pal.text);
-            }
-            None => {
-                p.text(c, Align2::CENTER_CENTER, count, FontId::proportional(13.0), pal.text);
-            }
+        let hub_font = FontId::proportional(13.0 * scale);
+        p.circle_filled(c, g.r_in - 6.0 * scale, if dark { white(10) } else { black(6) });
+        p.circle_stroke(c, g.r_in - 6.0 * scale, Stroke::new(1.0, pal.border));
+        p.text(c - Vec2::new(0.0, 30.0 * scale), Align2::CENTER_CENTER, name, FontId::proportional(9.5 * scale), accent);
+        if hub_out > 0.0 {
+            p.text(c, Align2::CENTER_CENTER, &st.hub_prev, hub_font.clone(), pal.text.gamma_multiply(hub_out));
         }
-        p.text(c + Vec2::new(0.0, 18.0), Align2::CENTER_CENTER, kind_line, FontId::proportional(10.5), pal.sub);
+        p.text(c, Align2::CENTER_CENTER, &st.hub_cur, hub_font, pal.text.gamma_multiply(hub_in));
+        p.text(c + Vec2::new(0.0, 18.0 * scale), Align2::CENTER_CENTER, kind_line, FontId::proportional(10.5 * scale), pal.sub);
         for (j, (sym, k)) in [("⇧", WheelKind::Convert), ("⌘", WheelKind::Tools), ("⌃", WheelKind::Actions)].into_iter().enumerate() {
-            let x = c.x + (j as f32 - 1.0) * 16.0;
+            let x = c.x + (j as f32 - 1.0) * 16.0 * scale;
             p.text(
-                Pos2::new(x, c.y + 38.0),
+                Pos2::new(x, c.y + 38.0 * scale),
                 Align2::CENTER_CENTER,
                 sym,
-                FontId::proportional(10.0),
+                FontId::proportional(10.0 * scale),
                 if k == kind { accent } else { pal.sub },
             );
         }
