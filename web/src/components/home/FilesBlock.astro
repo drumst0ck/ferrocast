@@ -1,0 +1,82 @@
+---
+/*
+ * Home "Files" block: three key cards, the interactive wheel, screenshots, tool thumbnails, honesty line.
+ * Copy comes from the shared home copy object; counts and tool lists come from generated data.
+ */
+import WheelDemo from '../WheelDemo.astro';
+import conversions from '../../data/conversions.json';
+import tools from '../../data/tools.json';
+import { counts, STATUS_DATE } from '../../data/status';
+import type { HomeCopy } from '../../i18n/home.en';
+
+interface Props { t: HomeCopy; lang: 'en' | 'es'; fill: (s: string, v?: Record<string, string | number>) => string }
+const { t, lang, fill } = Astro.props;
+const f = t.files;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const img = (n: string) => `${base}/img/${n}.jpg`;
+const docs = (p: string) => `${base}${lang === 'es' ? '/es' : ''}/docs${p}`;
+const c = counts();
+const v = { pairs: c.pairs, inputs: c.inputs, tools: c.tools, actions: c.actions, date: STATUS_DATE };
+
+// Tool thumbnails: existing screenshots only. Ids must exist in tools.json (build fails otherwise).
+const thumbs: [id: keyof typeof f.tools.names, shot: string][] = [
+  ['compress', 'files-compress-image'], ['editImage', 'files-edit'], ['cropImage', 'files-crop'], ['redactImage', 'files-redact'],
+  ['trimVideo', 'files-vtrim'], ['organizePdf', 'files-organize'], ['trimAudio', 'files-atrim'], ['createCollage', 'files-collage'],
+];
+const actionNames: Record<string, string> = f.actions.names;
+const ids = new Set(tools.tools.map((x) => x.id));
+for (const [id] of thumbs) if (!ids.has(id)) throw new Error(`home thumbnail tool ${id} is not in tools.json`);
+const families = conversions.families.map((fam) => ({ id: fam.id as keyof typeof f.convert.families, n: fam.inputs.length }));
+for (const fam of families) if (!f.convert.families[fam.id]) throw new Error(`no family label for ${fam.id}`);
+---
+<section class="fh" id="files" aria-labelledby="h-files">
+  <div class="fh-in wrap">
+    <div class="why-head" data-reveal>
+      <h2 id="h-files">{f.title}</h2>
+      <p>{f.lead}</p>
+    </div>
+    <ol class="kx" aria-label={f.keysAria}>
+      {f.keys.map(([sym, name, d, id]) => (
+        <li class={`kx-${id}`}><kbd aria-hidden="true">{sym}</kbd><div><h3>{name}</h3><p>{d}</p></div></li>
+      ))}
+    </ol>
+    <div class="fh-demo">
+      <h3 class="fh-sub">{f.demoHeading}</h3>
+      <p class="muted">{f.demoLead}</p>
+      <WheelDemo />
+    </div>
+    <div class="fh-cols">
+      <article class="fh-col fh-convert">
+        <img src={img('files-wheel-convert')} alt={f.convert.shotAlt} width="1500" height="950" loading="lazy" decoding="async" />
+        <h3>{f.convert.title}</h3>
+        <p>{fill(f.convert.text, v)}</p>
+        <ul class="fh-chips" aria-label={f.convert.title}>
+          {families.map((fam) => <li>{f.convert.families[fam.id]}<i>{fill(f.convert.inputsLabel, { n: fam.n })}</i></li>)}
+        </ul>
+      </article>
+      <article class="fh-col fh-tools">
+        <h3>{f.tools.title}</h3>
+        <p>{fill(f.tools.text, v)}</p>
+        <ul class="fh-thumbs" aria-label={f.tools.toolsAria}>
+          {thumbs.map(([id, shot]) => (
+            <li><a href={`${base}/tools/${id}/`}><img src={img(shot)} alt={f.tools.shots[id]} width="1500" height="950" loading="lazy" decoding="async" /><span>{f.tools.names[id]}</span></a></li>
+          ))}
+        </ul>
+      </article>
+      <article class="fh-col fh-actions">
+        <img src={img('files-wheel-actions')} alt={f.actions.shotAlt} width="1500" height="950" loading="lazy" decoding="async" />
+        <h3>{f.actions.title}</h3>
+        <p>{fill(f.actions.text, v)}</p>
+        <ul class="fh-chips">
+          {tools.actions.map((id) => <li>{actionNames[id] ?? id}</li>)}
+        </ul>
+      </article>
+    </div>
+    <p class="fh-never">{f.never}</p>
+    <div class="fh-cta">
+      <a class="btn big" href={`${base}/files/`}>{f.ctaExplore} →</a>
+      <a class="tl" href={docs('/files/')}>{f.ctaDocs} →</a>
+    </div>
+    <p class="fine">{fill(f.statusLine, v)}</p>
+  </div>
+</section>

@@ -1,17 +1,21 @@
 ---
-interface Props { current?: string }
-const { current = '' } = Astro.props;
+interface Props { current?: string; switchHref?: string; switchLabel?: string; switchAria?: string; lang?: 'en' | 'es' }
+const { current = '', switchHref, switchLabel = 'ES', switchAria, lang = 'en' } = Astro.props;
+const home = lang === 'es' ? `${import.meta.env.BASE_URL.replace(/\/$/, '')}/es/` : `${import.meta.env.BASE_URL.replace(/\/$/, '')}/`;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const repo = 'https://github.com/drumst0ck/ferrocast';
 ---
 <header class="top">
-  <a class="mark" href={`${base}/`}><img src={`${base}/icon.png`} alt="" width="30" height="30" />Ferrocast</a>
+  <a class="mark" href={home}><img src={`${base}/icon.png`} alt="" width="30" height="30" />Ferrocast</a>
   <nav class="nav" aria-label="Main">
+    <slot name="nav">
     <a href={`${base}/#features`}>Features</a>
     <a href={`${base}/files/`} class:list={{ on: current === 'files' }} aria-current={current === 'files' ? 'page' : undefined}>Files</a>
     <a href={`${base}/#install`}>Install</a>
     <a href={`${base}/changelog/`}>Changelog</a>
     <a href={repo}>GitHub</a>
+    </slot>
   </nav>
-  <a class="btn" href={`${base}/#install`}>Install</a>
+  {switchHref && <a class="lang" href={switchHref} hreflang={lang === 'es' ? 'en' : 'es'} lang={lang === 'es' ? 'en' : 'es'} aria-label={switchAria}>{switchLabel}</a>}
+  <a class="btn" href={`${home}#install`}><slot name="cta">Install</slot></a>
 </header>
