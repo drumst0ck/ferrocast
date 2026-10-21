@@ -1429,6 +1429,22 @@ impl App {
                 self.apply_wheel(sel);
                 return;
             }
+            // A click picks the segment under the pointer, and a click outside the ring cancels.
+            // During a drag the pick happens on the mouse RELEASE (the drag watcher sends it), but a
+            // wheel opened without a drag (Enter on a Finder selection) has no release event and used
+            // to look locked. The press of a drag happens in Finder, so no click reaches here then.
+            if ctx.input(|i| i.pointer.primary_clicked()) {
+                if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                    let d = pos - ui.max_rect().center();
+                    if let Some(i) = wheel_hit(d, n) {
+                        self.apply_wheel(Some(i));
+                        return;
+                    } else if d.length() > WHEEL_OUTER {
+                        self.apply_wheel(None);
+                        return;
+                    }
+                }
+            }
             if (next || prev) && n > 0 {
                 let ns = ferrocast_core::wheel::step_sel(sel, n, next);
                 if let Some(View::Wheel { sel, .. }) = self.stack.last_mut() {

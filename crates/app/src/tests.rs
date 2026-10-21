@@ -5330,3 +5330,61 @@ fn the_toggle_with_accessibility_missing_keeps_the_setting_and_toasts() {
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Enter on Finder needs Accessibility access"));
     assert_eq!(probe.prompts.lock().unwrap().len(), 1, "no retry loop");
 }
+
+/// A wheel opened WITHOUT a drag (Enter on a Finder selection) has no mouse-release event to pick
+/// with, so it must answer to clicks: a segment is chosen, a click outside the ring cancels and a
+/// click on the hub does nothing.
+fn wheel_click_fixture(png: &std::path::Path) -> (App, Vec<ferrocast_core::wheel::WheelKind>, Pos2) {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    let files = vec![png.to_path_buf()];
+    let segs = app.wheel_segments(WheelKind::Tools, &files);
+    app.stack = vec![View::Root, View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind: WheelKind::Tools, sel: None }];
+    render(&mut app, vec![]);
+    let centre = Pos2::new(ui::WIDTH / 2.0, ui::HEIGHT / 2.0);
+    (app, vec![WheelKind::Tools], centre)
+}
+
+fn wheel_click_at(app: &mut App, at: Pos2) {
+    render(app, vec![Event::PointerMoved(at)]);
+    render(app, vec![pointer_button(at, true)]);
+    render(app, vec![pointer_button(at, false)]);
+}
+
+#[test]
+fn clicking_a_wheel_segment_picks_it_when_there_was_no_drag() {
+    use ferrocast_core::wheel::{segment_center, Geometry};
+    let dir = std::env::temp_dir().join(format!("fc-wheel-click-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(64, 48).save(&png).unwrap();
+    let (mut app, _, centre) = wheel_click_fixture(&png);
+    let segs = match app.view() {
+        View::Wheel { segs, .. } => segs.clone(),
+        _ => panic!("wheel expected"),
+    };
+    let i = segs.iter().position(|s| s.label == "Crop").expect("a Crop segment");
+    let g = Geometry::DEFAULT;
+    let [dx, dy] = segment_center(i, segs.len(), (g.r_in + g.r_out) / 2.0);
+    wheel_click_at(&mut app, centre + Vec2::new(dx, dy));
+    assert_eq!(
+        app.view().title(),
+        "Crop Image",
+        "the click on Crop opens the crop window (wheel still open: {})",
+        matches!(app.view(), View::Wheel { .. })
+    );
+}
+
+#[test]
+fn clicking_outside_the_ring_cancels_the_wheel_and_the_hub_does_nothing() {
+    let dir = std::env::temp_dir().join(format!("fc-wheel-click2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(64, 48).save(&png).unwrap();
+    let (mut app, _, centre) = wheel_click_fixture(&png);
+    wheel_click_at(&mut app, centre);
+    assert!(matches!(app.view(), View::Wheel { .. }), "a click on the hub changes nothing");
+    wheel_click_at(&mut app, centre + Vec2::new(ferrocast_core::wheel::Geometry::DEFAULT.r_out + 24.0, 0.0));
+    assert!(!matches!(app.view(), View::Wheel { .. }), "a click outside the ring cancels the wheel");
+    assert_eq!(app.stack.len(), 1, "back at the root, no tool window opened");
+}
