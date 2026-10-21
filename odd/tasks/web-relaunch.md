@@ -17,7 +17,7 @@ Plans: odd/plans/web-relaunch-master-plan.md (read first) + five sibling plans.
 - T2 (S3) chain/17-changelog-db: schema, parser, API, pages, RSS. Route: inline. Commit: d4f9e78 + two follow-ups on chain/17-changelog-db. Verified locally: 17 tests, E2E push, feeds, 401/422, DB-down 503, docker migrate. Not verified in production.
 - T3 (S4) chain/18-docs-site: Starlight, IA, generated pages. Route: inline/worker. Commit: pending
 - T4 (S5) chain/19-home-redesign. Route: inline. Commit: pending
-- T5 (S6) chain/20-seo. Route: inline. Commit: pending
+- T5 (S6) chain/20-seo. Route: inline. Commit: chain/20-seo (data layer, merge of 19, pages). Verified locally: build, 29 tests, 0 broken links, 0 duplicate meta over 311 pages. Not done: ES pages for /convert and /tools, per-page OG images, analytics, Search Console, Lighthouse CI
 - T6 (S7) chain/21-project-info. Route: inline. Commit: pending
 - T7 External (S1) Coolify app+DB, DNS, GitHub repo metadata: needs owner credentials/consent. Status: pending
 
