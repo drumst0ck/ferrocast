@@ -1373,9 +1373,19 @@ pub fn export_backup(data_root: &std::path::Path, dest_dir: &std::path::Path, st
 
 /// Convert every file to `target` in a background thread; one toast at the end, first output
 /// revealed in Finder. Failures are reported with the tool's last stderr line.
+/// One line for `ferrocast.log` describing failed conversions (the toast alone vanishes), or
+/// `None` when nothing failed.
+pub(crate) fn conversion_log_line(target: &ferrocast_core::convert::Target, files: usize, errors: &[String]) -> Option<String> {
+    (!errors.is_empty())
+        .then(|| format!("convert to {} ({:?}) failed for {files} file(s): {}", target.ext, target.engine, errors.join(" | ")))
+}
+
 pub fn convert_files(files: Vec<PathBuf>, target: ferrocast_core::convert::Target, tools: ferrocast_core::convert::Tools, bus: Bus) {
     std::thread::spawn(move || {
         let (outputs, errors) = run_conversion(&files, &target, &tools);
+        if let Some(line) = conversion_log_line(&target, files.len(), &errors) {
+            crate::instance::log(&ferrocast_core::storage::Store::default_location().root, &line);
+        }
         let msg = match (outputs.len(), errors.len()) {
             (0, _) => format!("Conversion failed: {}", errors.first().cloned().unwrap_or_default()),
             (n, 0) => format!("Converted {n} file{} to {}", if n == 1 { "" } else { "s" }, target.label),
@@ -2683,6 +2693,16 @@ mod convert_tests {
         let (out, err) = run_conversion(&[folder], &z, &Tools::default());
         assert!(err.is_empty(), "{err:?}");
         assert_eq!(out, vec![d.join("folder.zip")]);
+    }
+
+    #[test]
+    fn conversion_failures_make_a_log_line_with_target_engine_and_messages() {
+        let folder = std::path::Path::new("/d/folder");
+        let z = targets(folder, &Tools::default()).into_iter().find(|t| t.ext == "zip").unwrap();
+        assert_eq!(conversion_log_line(&z, 2, &[]), None, "no errors, no line");
+        let line = conversion_log_line(&z, 2, &["a: bad path".to_string(), "b: nope".to_string()]).unwrap();
+        assert!(line.starts_with("convert to zip (Archive) failed for 2 file(s): "), "{line}");
+        assert!(line.contains("a: bad path | b: nope"), "{line}");
     }
 
     /// A photo-like JPEG (smooth gradients plus noise, a few hundred KB) made with sips.
