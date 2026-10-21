@@ -1,8 +1,8 @@
 /*
  * Hand-written status vocabulary for the website.
  *
- * KEEP IN SYNC: this file mirrors the status table in the repository README (and the odd/ task log).
- * Refresh it by hand whenever the README status table changes. conversions.json and tools.json are
+ * KEEP IN SYNC: this file mirrors the status record in docs/STATUS.es.md (moved out of the README) and the odd/ task log.
+ * Refresh it by hand whenever docs/STATUS.es.md changes. conversions.json and tools.json are
  * generated from the Rust code (cargo run -p ferrocast-core --example site_data); this file is not.
  */
 import conversions from './conversions.json';
