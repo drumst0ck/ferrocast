@@ -1429,6 +1429,22 @@ impl App {
                 self.apply_wheel(sel);
                 return;
             }
+            // A click picks the segment under the pointer, and a click outside the ring cancels.
+            // During a drag the pick happens on the mouse RELEASE (the drag watcher sends it), but a
+            // wheel opened without a drag (Enter on a Finder selection) has no release event and used
+            // to look locked. The press of a drag happens in Finder, so no click reaches here then.
+            if ctx.input(|i| i.pointer.primary_clicked()) {
+                if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                    let d = pos - ui.max_rect().center();
+                    if let Some(i) = wheel_hit(d, n) {
+                        self.apply_wheel(Some(i));
+                        return;
+                    } else if d.length() > WHEEL_OUTER {
+                        self.apply_wheel(None);
+                        return;
+                    }
+                }
+            }
             if (next || prev) && n > 0 {
                 let ns = ferrocast_core::wheel::step_sel(sel, n, next);
                 if let Some(View::Wheel { sel, .. }) = self.stack.last_mut() {
@@ -1989,8 +2005,16 @@ impl App {
         let g0 = Geometry::DEFAULT;
         let c = ui.max_rect().center();
         let n = segs.len();
+        // A wheel opened without a drag (Enter on a Finder selection, "Format Wheel") parks its
+        // centre off screen, so only the pointer inside the window is meaningful there. During a
+        // real drag the window gets no pointer events (egui could even hold a stale position), so a
+        // wheel with a real centre keeps using the global mouse position as before.
+        let parked = center.x < -5000.0;
         let mouse = mouse_top_left().map(|(m, _)| m);
-        let hover = if n == 0 { None } else { mouse.and_then(|m| wheel_hit(m - center, n)).or(sel) };
+        let under = if parked { ctx.input(|i| i.pointer.hover_pos()).map(|p| p - c) } else { mouse.map(|m| m - center) };
+        let hover = if n == 0 { None } else { under.and_then(|d| wheel_hit(d, n)).or(sel) };
+        #[cfg(test)]
+        ctx.data_mut(|d| d.insert_temp(Id::new("wheel-hover"), hover));
         let dark = self.dark;
         let (name, target_rgb) = match kind {
             WheelKind::Convert => ("CONVERT", [255.0f32, 140.0, 60.0]),
@@ -5215,6 +5239,17 @@ impl App {
                                 let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
                                 segmented(ui, pal, &mut s.wheel_actions_key, &opts);
                             });
+                            row(
+                                ui,
+                                pal,
+                                "Enter on Finder selection",
+                                "Press Return on selected files in Finder to open the Convert wheel instead of renaming. Needs Accessibility access. Off by default.",
+                                |ui| {
+                                    toggle(ui, pal, &mut s.enter_on_finder);
+                                    #[cfg(test)]
+                                    ui.ctx().data_mut(|d| d.insert_temp(Id::new("enter-on-finder-toggle"), ui.min_rect()));
+                                },
+                            );
                             row(ui, pal, "Menu bar icon", "A small icon to open Ferrocast with the mouse. Needs a restart.", |ui| toggle(ui, pal, &mut s.show_menu_bar_icon));
                         });
                         ui.add_space(14.0);
@@ -5517,10 +5552,16 @@ impl App {
                     }
                 }
             }
+            let finder_enter_changed = s.enter_on_finder != self.settings.enter_on_finder;
+            let enter_on_finder = s.enter_on_finder;
             let theme_changed = s.theme != self.settings.theme;
             let dirs_changed = s.script_directories != self.settings.script_directories;
             self.settings = s;
             self.save_settings();
+            if finder_enter_changed {
+                // on: ask for Accessibility once and create the tap; off: remove it. No restart.
+                self.set_finder_enter(enter_on_finder, true);
+            }
             if theme_changed {
                 self.set_theme();
             }

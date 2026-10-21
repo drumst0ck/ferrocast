@@ -751,6 +751,8 @@ pub struct App {
     scripts: Vec<ScriptCommand>,
     base: Vec<Item>,
     hotkeys: Option<Hotkeys>,
+    /// Opt-in Enter on a Finder selection (tap, in-flight guard, injectable system hooks).
+    finder: services::FinderEnterState,
     _tray: Option<tray_icon::TrayIcon>,
     icons: IconCache,
     stack: Vec<View>,
@@ -959,6 +961,7 @@ impl App {
             scripts: vec![],
             base: vec![],
             hotkeys,
+            finder: Default::default(),
             _tray: tray,
             stack: vec![View::Root],
             query: String::new(),
@@ -1012,7 +1015,115 @@ impl App {
         app.reload_scripts();
         app.set_theme();
         app.rebuild();
+        if app.settings.enter_on_finder {
+            // at startup never show the system prompt again; the user can toggle the setting
+            app.set_finder_enter(true, false);
+        }
         app
+    }
+
+    /// Turn the Enter-on-Finder tap on or off. Off removes it; on needs Accessibility (asked once
+    /// with `prompt`), and without it nothing is created and a toast explains why.
+    pub(crate) fn set_finder_enter(&mut self, on: bool, prompt: bool) {
+        if !on {
+            // dropping the handle stops the tap thread and removes the tap and the observer
+            self.finder.tap = None;
+            self.finder.busy = false;
+            self.finder.inflight.end();
+            return;
+        }
+        if self.finder.tap.is_some() {
+            return;
+        }
+        if !(self.finder.hooks.trusted)(prompt) {
+            self.finder_log("finder-enter: tap NOT started: Accessibility is not granted");
+            self.toast(services::FINDER_ENTER_NEEDS_ACCESS);
+            return;
+        }
+        let (root, log) = (self.store.root.clone(), self.finder.hooks.log.clone());
+        let tap_log: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |line| log(&root, line));
+        match (self.finder.hooks.start)(self.finder.inflight.clone(), self.bus.clone(), tap_log) {
+            Ok(tap) => {
+                self.finder.tap = Some(tap);
+                self.finder_log("finder-enter: tap started");
+            }
+            Err(e) => {
+                eprintln!("ferrocast: Enter on Finder: {e}");
+                self.finder_log(&format!("finder-enter: tap NOT started: {e}"));
+                self.toast(services::FINDER_ENTER_NEEDS_ACCESS);
+            }
+        }
+    }
+
+    /// One line in ferrocast.log through the injected hook (never key content or file paths).
+    fn finder_log(&self, line: &str) {
+        (self.finder.hooks.log)(&self.store.root, line);
+    }
+
+    /// Give the swallowed Return back to Finder. The tap keeps passing Returns through for a
+    /// moment longer, so the re-post can never meet a second interception even if the marker
+    /// were lost on the way.
+    fn finder_repost(&mut self) {
+        (self.finder.hooks.repost)();
+        // free the busy flag, but keep passing Returns through for 300 ms (restarts on each re-post)
+        self.finder.inflight.end();
+        self.finder.inflight.hold_from(Instant::now());
+    }
+
+    /// The tap swallowed a Return: read the Finder selection off the UI thread.
+    fn on_finder_enter(&mut self) {
+        if self.finder.tap.is_none() {
+            // a late message from a tap that was just turned off: the key was consumed, give it back
+            self.finder_repost();
+            return;
+        }
+        if self.finder.busy {
+            // one at a time: the extra Return is passed through, never queued
+            (self.finder.hooks.repost)();
+            return;
+        }
+        self.finder.busy = true;
+        self.finder_log("finder-enter: Return intercepted, reading the Finder selection");
+        let (bus, read) = (self.bus.clone(), self.finder.hooks.selection.clone());
+        std::thread::spawn(move || {
+            let sel =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read())).unwrap_or_else(|_| Err("selection read failed".into()));
+            bus.send(Msg::FinderEnterDone(sel));
+        });
+    }
+
+    /// The selection read finished: open the Convert wheel, or give the Return back to Finder.
+    fn on_finder_enter_done(&mut self, sel: Result<Vec<PathBuf>, String>) {
+        self.finder.busy = false;
+        use ferrocast_core::finder_enter::{outcome, EnterOutcome};
+        match outcome(&sel) {
+            EnterOutcome::OpenWheel(files) if !self.wheel_segments(ferrocast_core::wheel::WheelKind::Convert, &files).is_empty() => {
+                self.finder_log(&format!("finder-enter: selection read ok, {} item(s) -> opening the wheel", files.len()));
+                self.finder.inflight.end();
+                self.show();
+                self.reset_to_root();
+                self.perform(Act::OpenWheel(files), true);
+            }
+            _ => {
+                match &sel {
+                    Err(e) => {
+                        eprintln!("ferrocast: Enter on Finder: selection: {e}");
+                        self.finder_log(&format!("finder-enter: selection read FAILED: {e} -> giving the Return back"));
+                        let due = self.finder.last_failure_notice.is_none_or(|t| t.elapsed() >= Duration::from_secs(60));
+                        if due {
+                            self.finder.last_failure_notice = Some(Instant::now());
+                            (self.finder.hooks.notify)("Ferrocast", &ferrocast_core::finder_enter::finder_read_failure_message(e));
+                        }
+                    }
+                    Ok(f) if f.is_empty() => self.finder_log("finder-enter: selection read ok, empty -> giving the Return back"),
+                    Ok(f) => self.finder_log(&format!(
+                        "finder-enter: selection read ok, {} item(s), no conversion available -> giving the Return back",
+                        f.len()
+                    )),
+                }
+                self.finder_repost();
+            }
+        }
     }
 
     // ------------------------------------------------------------------ data
@@ -1952,6 +2063,8 @@ impl App {
                         self.toast(format!("Finder selection: {e} (allow Automation for Finder in System Settings)"));
                     }
                 },
+                Msg::FinderEnter => self.on_finder_enter(),
+                Msg::FinderEnterDone(sel) => self.on_finder_enter_done(sel),
                 Msg::ConvertFiles(files) => {
                     self.show();
                     self.reset_to_root();

@@ -18,3 +18,5 @@ core-foundation = "0.10"
 accessibility-sys = "0.2"
 foreign-types-shared = "0.3"
 objc2-core-graphics = "0.3"
+ferrocast-core.workspace = true
+block2 = "0.6"

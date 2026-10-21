@@ -238,6 +238,8 @@ pub struct Settings {
     pub wheel_convert_key: String,
     pub wheel_actions_key: String,
     pub wheel_tools_key: String,
+    /// Opt-in: Return on a Finder selection opens the Convert wheel (needs Accessibility).
+    pub enter_on_finder: bool,
 }
 
 impl Default for Settings {
@@ -276,6 +278,7 @@ impl Default for Settings {
             wheel_convert_key: "Shift".into(),
             wheel_actions_key: "Control".into(),
             wheel_tools_key: "Command".into(),
+            enter_on_finder: false,
         }
     }
 }
@@ -332,6 +335,19 @@ pub struct Data {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enter_on_finder_is_off_by_default_and_old_settings_files_still_load() {
+        assert!(!Settings::default().enter_on_finder);
+        let old = r#"{"launcher_hotkey":"Alt+Space","compact_mode":true,"drop_wheel":false}"#;
+        let s: Settings = serde_json::from_str(old).expect("a settings.json without the field loads");
+        assert!(!s.enter_on_finder);
+        assert!(s.compact_mode, "other fields are still read");
+        let on: Settings = serde_json::from_str(r#"{"enter_on_finder":true}"#).unwrap();
+        assert!(on.enter_on_finder);
+        let round: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(round.enter_on_finder);
+    }
 
     #[test]
     fn favorites() {

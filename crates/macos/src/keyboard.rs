@@ -15,14 +15,25 @@ pub mod keycode {
 }
 
 fn post_key(code: CGKeyCode, flags: CGEventFlags) {
+    post_key_marked(code, flags, SYNTHETIC_MARKER);
+}
+
+/// Post a key press with an explicit user-data marker, so a tap can recognise its own re-posts.
+pub fn post_key_marked(code: CGKeyCode, flags: CGEventFlags, marker: i64) {
     let Ok(src) = CGEventSource::new(CGEventSourceStateID::HIDSystemState) else { return };
     for down in [true, false] {
         if let Ok(ev) = CGEvent::new_keyboard_event(src.clone(), code, down) {
             ev.set_flags(flags);
-            ev.set_integer_value_field(core_graphics::event::EventField::EVENT_SOURCE_USER_DATA, SYNTHETIC_MARKER);
+            ev.set_integer_value_field(core_graphics::event::EventField::EVENT_SOURCE_USER_DATA, marker);
             ev.post(CGEventTapLocation::HID);
         }
     }
+}
+
+/// Give a Return the Finder-Enter tap swallowed back to the system. The event carries
+/// `finder_enter::REPOST_MARKER`, which the tap always lets through.
+pub fn repost_return() {
+    post_key_marked(keycode::RETURN, CGEventFlags::CGEventFlagNull, ferrocast_core::finder_enter::REPOST_MARKER);
 }
 
 /// Press a key `n` times without modifiers.

@@ -1,5 +1,18 @@
 use super::*;
 
+/// Hooks that touch nothing: Accessibility is not granted, no tap can start, the selection is
+/// empty and nothing is re-posted. Tests that exercise Enter-on-Finder replace them.
+fn inert_finder_hooks() -> services::FinderHooks {
+    services::FinderHooks {
+        trusted: Arc::new(|_| false),
+        start: Arc::new(|_, _, _| Err("inert".into())),
+        selection: Arc::new(|| Ok(vec![])),
+        repost: Arc::new(|| false),
+        log: Arc::new(|_, _| {}),
+        notify: Arc::new(|_, _| {}),
+    }
+}
+
 fn fixture() -> App {
     let ctx = Context::default();
     let store = Store::new(std::env::temp_dir().join(format!("ferrocast-ui-test-{}", uuid::Uuid::new_v4())));
@@ -31,6 +44,7 @@ fn fixture() -> App {
         scripts: vec![],
         base: vec![],
         hotkeys: None,
+        finder: services::FinderEnterState { hooks: inert_finder_hooks(), ..Default::default() },
         _tray: None,
         icons: IconCache::new(store.images_dir()),
         stack: vec![View::Root],
@@ -5031,4 +5045,507 @@ fn colour_swatches_have_an_edge_that_shows_on_the_card() {
         }
     }
     assert!(bad.is_empty(), "swatches without an edge:\n{}", bad.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// Enter on a Finder selection (opt-in). The tap itself needs a real session and is NOT tested
+// here: these tests drive the app side through injected hooks and never post real key events.
+
+#[derive(Default)]
+struct FinderProbe {
+    prompts: Mutex<Vec<bool>>,
+    starts: std::sync::atomic::AtomicUsize,
+    drops: Arc<std::sync::atomic::AtomicUsize>,
+    reads: std::sync::atomic::AtomicUsize,
+    reposts: std::sync::atomic::AtomicUsize,
+    /// Lines passed to the injected log hook.
+    lines: Mutex<Vec<String>>,
+    /// (title, message) passed to the injected notify hook.
+    notes: Mutex<Vec<(String, String)>>,
+}
+
+struct DropCount(Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for DropCount {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+type Selection = Arc<dyn Fn() -> Result<Vec<PathBuf>, String> + Send + Sync>;
+
+fn finder_hooks(probe: &Arc<FinderProbe>, trusted: bool, start_ok: bool, selection: Selection) -> services::FinderHooks {
+    let (p1, p2, p3, p4, p5, p6) = (probe.clone(), probe.clone(), probe.clone(), probe.clone(), probe.clone(), probe.clone());
+    services::FinderHooks {
+        trusted: Arc::new(move |prompt| {
+            p1.prompts.lock().unwrap().push(prompt);
+            trusted
+        }),
+        start: Arc::new(move |_, _, tap_log| {
+            p2.starts.fetch_add(1, Ordering::SeqCst);
+            tap_log("finder-enter: probe line from the tap thread");
+            if start_ok {
+                Ok(Box::new(DropCount(p2.drops.clone())) as Box<dyn std::any::Any>)
+            } else {
+                Err("no tap".into())
+            }
+        }),
+        selection: Arc::new(move || {
+            p3.reads.fetch_add(1, Ordering::SeqCst);
+            selection()
+        }),
+        repost: Arc::new(move || {
+            p4.reposts.fetch_add(1, Ordering::SeqCst);
+            true
+        }),
+        log: Arc::new(move |_, line| p5.lines.lock().unwrap().push(line.to_string())),
+        notify: Arc::new(move |t, m| p6.notes.lock().unwrap().push((t.to_string(), m.to_string()))),
+    }
+}
+
+fn finder_app(probe: &Arc<FinderProbe>, trusted: bool, selection: Selection) -> App {
+    let mut app = fixture();
+    app.finder.hooks = finder_hooks(probe, trusted, true, selection);
+    app
+}
+
+/// Drain the bus until `done` holds (the selection read runs on a worker thread).
+fn pump(app: &mut App, done: impl Fn(&App) -> bool) {
+    let t = Instant::now();
+    while !done(app) && t.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(5));
+        app.drain();
+    }
+    assert!(done(app), "timed out waiting for the Finder-Enter handler");
+}
+
+/// Scroll the Settings pane until the Enter-on-Finder toggle is on screen; returns its centre.
+fn scroll_to_enter_toggle(app: &mut App) -> Option<Pos2> {
+    let at = |app: &App| app.ctx.data(|d| d.get_temp::<Rect>(Id::new("enter-on-finder-toggle")));
+    let pane = Pos2::new(500.0, 200.0);
+    render(app, vec![Event::PointerMoved(pane)]);
+    for _ in 0..8 {
+        let r = at(app)?;
+        if r.center().y < ui::HEIGHT - 40.0 {
+            // let the scroll animation settle, then read the final place
+            for _ in 0..30 {
+                render(app, vec![]);
+            }
+            return at(app).map(|r| r.center());
+        }
+        render(
+            app,
+            vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -150.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        render(app, vec![]);
+    }
+    at(app).map(|r| r.center())
+}
+
+fn count(n: &std::sync::atomic::AtomicUsize) -> usize {
+    n.load(Ordering::SeqCst)
+}
+
+#[test]
+fn with_the_setting_off_no_tap_is_made_and_nothing_is_asked() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![])));
+    assert!(!app.settings.enter_on_finder, "off by default");
+    app.set_finder_enter(false, true);
+    render(&mut app, vec![]);
+    assert!(app.finder.tap.is_none());
+    assert!(probe.prompts.lock().unwrap().is_empty(), "no Accessibility prompt while the feature is off");
+    assert_eq!(count(&probe.starts), 0);
+}
+
+#[test]
+fn enabling_without_accessibility_makes_no_tap_asks_once_and_toasts() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, false, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, true);
+    assert!(app.finder.tap.is_none(), "no tap without Accessibility");
+    assert_eq!(count(&probe.starts), 0, "the tap is not even attempted");
+    assert_eq!(*probe.prompts.lock().unwrap(), vec![true], "asked exactly once, with the system prompt");
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Enter on Finder needs Accessibility access"));
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    assert_eq!(probe.prompts.lock().unwrap().len(), 1, "no retry loop");
+}
+
+#[test]
+fn a_tap_that_cannot_be_created_takes_the_same_graceful_path() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = fixture();
+    app.finder.hooks = finder_hooks(&probe, true, false, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, true);
+    assert_eq!(count(&probe.starts), 1);
+    assert!(app.finder.tap.is_none());
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Enter on Finder needs Accessibility access"));
+}
+
+#[test]
+fn enabling_creates_the_tap_once_and_disabling_drops_it_without_a_restart() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, true);
+    app.set_finder_enter(true, true);
+    assert!(app.finder.tap.is_some());
+    assert_eq!(count(&probe.starts), 1, "a second enable does not create a second tap");
+    assert_eq!(count(&probe.drops), 0);
+    app.set_finder_enter(false, true);
+    assert!(app.finder.tap.is_none());
+    assert_eq!(count(&probe.drops), 1, "turning it off drops (removes) the tap");
+    app.set_finder_enter(true, true);
+    assert_eq!(count(&probe.starts), 2, "and it can be turned on again");
+}
+
+#[test]
+fn an_empty_selection_gives_the_return_back_to_finder() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 1 && !a.finder.busy);
+    assert_eq!(count(&probe.reads), 1);
+    assert!(!matches!(app.view(), View::Wheel { .. }), "no wheel for an empty selection");
+}
+
+#[test]
+fn a_failed_selection_read_also_gives_the_return_back() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Err("Automation denied".into())));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 1 && !a.finder.busy);
+    assert!(!matches!(app.view(), View::Wheel { .. }));
+}
+
+fn lines(p: &FinderProbe) -> Vec<String> {
+    p.lines.lock().unwrap().clone()
+}
+
+fn notes(p: &FinderProbe) -> Vec<(String, String)> {
+    p.notes.lock().unwrap().clone()
+}
+
+const AUTOMATION_TEXT: &str =
+    "Enter on Finder: Ferrocast is not allowed to control Finder. Allow it in System Settings > Privacy & Security > Automation.";
+
+#[test]
+fn an_empty_selection_logs_a_line_and_posts_no_notification() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 1 && !a.finder.busy);
+    let l = lines(&probe);
+    assert!(l.contains(&"finder-enter: Return intercepted, reading the Finder selection".to_string()), "{l:?}");
+    assert!(l.contains(&"finder-enter: selection read ok, empty -> giving the Return back".to_string()), "{l:?}");
+    assert!(notes(&probe).is_empty(), "an empty selection is not an error");
+}
+
+#[test]
+fn a_denied_automation_read_logs_the_error_and_notifies_once_per_minute() {
+    let probe = Arc::new(FinderProbe::default());
+    let err = "execution error: Not authorized to send Apple events to Finder. (-1743)";
+    let mut app = finder_app(&probe, true, Arc::new(move || Err(err.into())));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 1 && !a.finder.busy);
+    let l = lines(&probe);
+    assert!(l.contains(&format!("finder-enter: selection read FAILED: {err} -> giving the Return back")), "{l:?}");
+    assert_eq!(notes(&probe), vec![("Ferrocast".to_string(), AUTOMATION_TEXT.to_string())]);
+    // a second failure within 60 s: logged again, but no second notification
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 2 && !a.finder.busy);
+    assert_eq!(notes(&probe).len(), 1, "rate limited");
+    assert_eq!(lines(&probe).iter().filter(|x| x.contains("selection read FAILED")).count(), 2);
+    // after the minute has passed a new one is posted
+    app.finder.last_failure_notice = Some(Instant::now() - Duration::from_secs(61));
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 3 && !a.finder.busy);
+    assert_eq!(notes(&probe).len(), 2);
+}
+
+#[test]
+fn another_read_error_notifies_with_the_generic_text() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Err("timed out after 15 s".into())));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 1 && !a.finder.busy);
+    assert_eq!(
+        notes(&probe),
+        vec![("Ferrocast".to_string(), "Enter on Finder could not read the Finder selection: timed out after 15 s".to_string())]
+    );
+}
+
+#[test]
+fn a_selection_logs_the_item_count_and_notifies_nothing() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![PathBuf::from("/nonexistent/a.png"), PathBuf::from("/nonexistent/b.png")])));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| matches!(a.view(), View::Wheel { .. }));
+    let l = lines(&probe);
+    assert!(l.contains(&"finder-enter: selection read ok, 2 item(s) -> opening the wheel".to_string()), "{l:?}");
+    assert!(!l.iter().any(|x| x.contains("nonexistent")), "no file paths in the log: {l:?}");
+    assert!(notes(&probe).is_empty());
+}
+
+#[test]
+fn the_tap_started_and_not_started_lines_are_logged() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, false);
+    let l = lines(&probe);
+    assert!(l.contains(&"finder-enter: tap started".to_string()), "{l:?}");
+    assert!(l.contains(&"finder-enter: probe line from the tap thread".to_string()), "the tap's log closure reaches the log hook: {l:?}");
+
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, false, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, false);
+    assert_eq!(lines(&probe), vec!["finder-enter: tap NOT started: Accessibility is not granted".to_string()]);
+
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = fixture();
+    app.finder.hooks = finder_hooks(&probe, true, false, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, false);
+    assert_eq!(lines(&probe).last().map(String::as_str), Some("finder-enter: tap NOT started: no tap"));
+}
+
+#[test]
+fn a_selection_opens_the_convert_wheel_and_reposts_nothing() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![PathBuf::from("/nonexistent/a.png")])));
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| matches!(a.view(), View::Wheel { .. }));
+    assert_eq!(wheel_state(&app).map(|w| w.0), Some(ferrocast_core::wheel::WheelKind::Convert));
+    assert_eq!(count(&probe.reposts), 0, "the Return stays consumed when the wheel opens");
+    assert!(!app.finder.busy);
+}
+
+// The `wheel_segments(..).is_empty() => repost` guard in `on_finder_enter_done` is not testable:
+// `convert::targets` always yields at least a ZIP target for any non-empty selection, and an empty
+// selection is already turned into a re-post by `outcome`.
+#[test]
+fn a_repost_frees_the_busy_flag_and_starts_the_300ms_pass_through_window() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![])));
+    app.set_finder_enter(true, true);
+    assert!(app.finder.inflight.try_begin(), "the tap swallowed a Return");
+    app.bus.send(Msg::FinderEnter);
+    pump(&mut app, |a| count(&probe.reposts) == 1 && !a.finder.busy);
+    assert!(app.finder.inflight.in_hold(Instant::now()), "re-post starts the pass-through window");
+    assert!(!app.finder.inflight.is_busy(), "the busy flag is free again");
+    assert!(!app.finder.inflight.try_begin(), "a Return right after the re-post passes through");
+}
+
+#[test]
+fn a_second_return_while_one_is_handled_is_passed_through_not_queued() {
+    let probe = Arc::new(FinderProbe::default());
+    let (gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
+    let gate_rx = Mutex::new(gate_rx);
+    let sel: Selection = Arc::new(move || {
+        let _ = gate_rx.lock().unwrap().recv_timeout(Duration::from_secs(5));
+        Ok(vec![PathBuf::from("/nonexistent/a.png")])
+    });
+    let mut app = finder_app(&probe, true, sel);
+    app.set_finder_enter(true, true);
+    app.bus.send(Msg::FinderEnter);
+    app.bus.send(Msg::FinderEnter);
+    app.drain();
+    assert!(app.finder.busy, "the first is still being handled");
+    assert_eq!(count(&probe.reposts), 1, "the extra Return is given back at once");
+    let _ = gate_tx.send(());
+    pump(&mut app, |a| matches!(a.view(), View::Wheel { .. }));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(count(&probe.reads), 1, "only one selection read ran");
+    assert_eq!(count(&probe.reposts), 1, "the wheel of the first one opened, nothing else was posted");
+}
+
+#[test]
+fn a_return_that_arrives_after_the_tap_was_removed_is_given_back() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![PathBuf::from("/nonexistent/a.png")])));
+    app.bus.send(Msg::FinderEnter); // no tap: a late message from a tap that was just turned off
+    app.drain();
+    assert_eq!(count(&probe.reposts), 1);
+    assert_eq!(count(&probe.reads), 0, "no selection read, no wheel");
+    assert!(!matches!(app.view(), View::Wheel { .. }));
+}
+
+#[test]
+fn the_settings_toggle_renders_in_both_themes_and_flips_the_setting() {
+    for dark in [true, false] {
+        let probe = Arc::new(FinderProbe::default());
+        let mut app = finder_app(&probe, true, Arc::new(|| Ok(vec![])));
+        app.ctx.set_theme(if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+        app.stack = vec![View::Root, View::Settings];
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        let pos = scroll_to_enter_toggle(&mut app);
+        assert!(pos.is_some(), "dark={dark}: the 'Enter on Finder selection' toggle was not drawn");
+        let pos = pos.unwrap();
+        assert!(pos.y < ui::HEIGHT && pos.x < ui::WIDTH, "dark={dark}: toggle off screen at {pos:?}");
+        assert!(!app.settings.enter_on_finder, "dark={dark}: off by default");
+        let click = |app: &mut App| {
+            let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            render(app, vec![Event::PointerMoved(pos)]);
+            render(app, vec![btn(true)]);
+            render(app, vec![btn(false)]);
+            render(app, vec![]);
+        };
+        click(&mut app);
+        assert!(app.settings.enter_on_finder, "dark={dark}: a click turns it on");
+        assert!(app.finder.tap.is_some(), "dark={dark}: turning it on creates the tap");
+        assert_eq!(*probe.prompts.lock().unwrap(), vec![true]);
+        click(&mut app);
+        assert!(!app.settings.enter_on_finder, "dark={dark}: a second click turns it off");
+        assert!(app.finder.tap.is_none(), "dark={dark}: turning it off removes the tap");
+        assert_eq!(count(&probe.drops), 1);
+    }
+}
+
+#[test]
+fn the_toggle_with_accessibility_missing_keeps_the_setting_and_toasts() {
+    let probe = Arc::new(FinderProbe::default());
+    let mut app = finder_app(&probe, false, Arc::new(|| Ok(vec![])));
+    app.stack = vec![View::Root, View::Settings];
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    let pos = scroll_to_enter_toggle(&mut app);
+    assert!(pos.is_some(), "toggle not drawn");
+    let pos = pos.unwrap();
+    assert!(pos.y < ui::HEIGHT, "toggle still off screen at {pos:?}");
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(&mut app, vec![Event::PointerMoved(pos)]);
+    render(&mut app, vec![btn(true)]);
+    render(&mut app, vec![btn(false)]);
+    render(&mut app, vec![]);
+    assert!(app.settings.enter_on_finder, "the setting stays as the user set it");
+    assert!(app.finder.tap.is_none());
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Enter on Finder needs Accessibility access"));
+    assert_eq!(probe.prompts.lock().unwrap().len(), 1, "no retry loop");
+}
+
+/// A wheel opened WITHOUT a drag (Enter on a Finder selection) has no mouse-release event to pick
+/// with, so it must answer to clicks: a segment is chosen, a click outside the ring cancels and a
+/// click on the hub does nothing.
+fn wheel_click_fixture(png: &std::path::Path) -> (App, Vec<ferrocast_core::wheel::WheelKind>, Pos2) {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    let files = vec![png.to_path_buf()];
+    let segs = app.wheel_segments(WheelKind::Tools, &files);
+    app.stack = vec![View::Root, View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind: WheelKind::Tools, sel: None }];
+    render(&mut app, vec![]);
+    let centre = Pos2::new(ui::WIDTH / 2.0, ui::HEIGHT / 2.0);
+    (app, vec![WheelKind::Tools], centre)
+}
+
+fn wheel_click_at(app: &mut App, at: Pos2) {
+    render(app, vec![Event::PointerMoved(at)]);
+    render(app, vec![pointer_button(at, true)]);
+    render(app, vec![pointer_button(at, false)]);
+}
+
+#[test]
+fn clicking_a_wheel_segment_picks_it_when_there_was_no_drag() {
+    use ferrocast_core::wheel::{segment_center, Geometry};
+    let dir = std::env::temp_dir().join(format!("fc-wheel-click-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(64, 48).save(&png).unwrap();
+    let (mut app, _, centre) = wheel_click_fixture(&png);
+    let segs = match app.view() {
+        View::Wheel { segs, .. } => segs.clone(),
+        _ => panic!("wheel expected"),
+    };
+    let i = segs.iter().position(|s| s.label == "Crop").expect("a Crop segment");
+    let g = Geometry::DEFAULT;
+    let [dx, dy] = segment_center(i, segs.len(), (g.r_in + g.r_out) / 2.0);
+    wheel_click_at(&mut app, centre + Vec2::new(dx, dy));
+    assert_eq!(
+        app.view().title(),
+        "Crop Image",
+        "the click on Crop opens the crop window (wheel still open: {})",
+        matches!(app.view(), View::Wheel { .. })
+    );
+}
+
+#[test]
+fn clicking_outside_the_ring_cancels_the_wheel_and_the_hub_does_nothing() {
+    let dir = std::env::temp_dir().join(format!("fc-wheel-click2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(64, 48).save(&png).unwrap();
+    let (mut app, _, centre) = wheel_click_fixture(&png);
+    wheel_click_at(&mut app, centre);
+    assert!(matches!(app.view(), View::Wheel { .. }), "a click on the hub changes nothing");
+    wheel_click_at(&mut app, centre + Vec2::new(ferrocast_core::wheel::Geometry::DEFAULT.r_out + 24.0, 0.0));
+    assert!(!matches!(app.view(), View::Wheel { .. }), "a click outside the ring cancels the wheel");
+    assert_eq!(app.stack.len(), 1, "back at the root, no tool window opened");
+}
+
+/// A wheel opened without a drag (Enter on a Finder selection, or "Format Wheel") has its centre
+/// parked off screen, so the global mouse position never lands on it: hovering must use the
+/// pointer position inside the window instead, as the click already does.
+#[test]
+fn hovering_a_segment_highlights_it_on_a_wheel_opened_without_a_drag() {
+    use ferrocast_core::wheel::{segment_center, Geometry};
+    let dir = std::env::temp_dir().join(format!("fc-wheel-hover-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(64, 48).save(&png).unwrap();
+    let (mut app, _, centre) = wheel_click_fixture(&png);
+    if let Some(View::Wheel { sel, .. }) = app.stack.last_mut() {
+        *sel = Some(0); // what Act::OpenWheel does
+    }
+    render(&mut app, vec![]);
+    let hover = |app: &App| app.ctx.data(|d| d.get_temp::<Option<usize>>(Id::new("wheel-hover"))).flatten();
+    assert_eq!(hover(&app), Some(0), "with the pointer away the keyboard selection shows");
+    let n = match app.view() {
+        View::Wheel { segs, .. } => segs.len(),
+        _ => panic!("wheel expected"),
+    };
+    let g = Geometry::DEFAULT;
+    for target in [2usize, 4, n - 1] {
+        let [dx, dy] = segment_center(target, n, (g.r_in + g.r_out) / 2.0);
+        render(&mut app, vec![Event::PointerMoved(centre + Vec2::new(dx, dy))]);
+        assert_eq!(hover(&app), Some(target), "the segment under the pointer is the highlighted one");
+    }
+    // pointer on the hub: back to the keyboard selection
+    render(&mut app, vec![Event::PointerMoved(centre)]);
+    assert_eq!(hover(&app), Some(0), "the hub falls back to the keyboard selection");
+}
+
+/// The drag-opened wheel (a real centre) must keep following the GLOBAL mouse: a pointer position
+/// egui happens to hold inside the window must not hijack its highlight.
+#[test]
+fn a_wheel_with_a_real_centre_ignores_the_pointer_inside_the_window() {
+    use ferrocast_core::wheel::{segment_center, Geometry};
+    let dir = std::env::temp_dir().join(format!("fc-wheel-hover2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pic.png");
+    image::RgbImage::new(64, 48).save(&png).unwrap();
+    let (mut app, _, centre) = wheel_click_fixture(&png);
+    if let Some(View::Wheel { sel, center, .. }) = app.stack.last_mut() {
+        *sel = Some(0);
+        *center = Pos2::new(400.0, 300.0); // a real, on-screen centre: the drag-opened wheel
+    }
+    render(&mut app, vec![]);
+    let n = match app.view() {
+        View::Wheel { segs, .. } => segs.len(),
+        _ => panic!("wheel expected"),
+    };
+    let g = Geometry::DEFAULT;
+    let [dx, dy] = segment_center(3, n, (g.r_in + g.r_out) / 2.0);
+    render(&mut app, vec![Event::PointerMoved(centre + Vec2::new(dx, dy))]);
+    let hover = app.ctx.data(|d| d.get_temp::<Option<usize>>(Id::new("wheel-hover"))).flatten();
+    assert_eq!(hover, Some(0), "no global mouse in tests: the keyboard selection stays, the in-window pointer is ignored");
 }
