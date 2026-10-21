@@ -41,6 +41,12 @@ pub enum Msg {
     CollageLoaded(Vec<PathBuf>, Vec<(usize, usize, Vec<u8>)>),
     /// Duration and frame rate of the video being trimmed (None: unreadable).
     VideoInfo(PathBuf, Option<(f64, f64)>),
+    /// Mono samples of the audio being trimmed (Err: message to show).
+    AudioLoaded(PathBuf, Result<crate::media_tools::AudioSamples, String>),
+    /// Integrated loudness (LUFS) of the file in the Normalize window (None: could not be measured).
+    LoudnessMeasured(PathBuf, Option<f64>),
+    /// Channel count of the file in the Channels window (None: unreadable).
+    ChannelsProbed(PathBuf, Option<u32>),
     /// Finder selection read for the format wheel (Err: message to show).
     FinderSelection(Result<Vec<PathBuf>, String>),
     /// Duration of the video whose speed is being set (None: unreadable).
@@ -610,6 +616,10 @@ pub fn run_script(cmd: &ScriptCommand, args: Vec<String>, run: u64, bus: Bus) {
 }
 
 pub fn notify(title: &str, msg: &str) {
+    // tests dispatch real jobs that fail on purpose; they must not raise system notifications
+    if cfg!(test) {
+        return;
+    }
     let script = format!(
         "display notification \"{}\" with title \"{}\"",
         msg.replace('\\', "\\\\").replace('"', "\\\""),
@@ -1795,6 +1805,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::Snapshot(_)
         | FileTool::CropVideo(..)
         | FileTool::RedactVideo(..)
+        | FileTool::RedactVideoMany(..)
         | FileTool::Normalize(..)
         | FileTool::Visualize(_)
         | FileTool::VisualizeImage(..)

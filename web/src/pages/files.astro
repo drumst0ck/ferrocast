@@ -1,0 +1,121 @@
+---
+import Base from '../layouts/Base.astro';
+import '../styles/files.css';
+import SiteHeader from '../components/SiteHeader.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import Section from '../components/Section.astro';
+import StatusBadge from '../components/StatusBadge.astro';
+import KeysExplainer from '../components/KeysExplainer.astro';
+import Counters from '../components/Counters.astro';
+import WheelDemo from '../components/WheelDemo.astro';
+import MatrixExplorer from '../components/MatrixExplorer.astro';
+import ToolCards from '../components/ToolCards.astro';
+import tools from '../data/tools.json';
+import { counts, levels, statusLine, STATUS_DATE, type Level } from '../data/status';
+
+const n = counts(); // throws at build time if the generated data is not 275 pairs over 46 inputs
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const site = 'https://drumst0ck.github.io';
+const canonical = `${site}${base}/files/`;
+const title = 'Convert & file tools for Mac · Ferrocast';
+const description = 'Convert between 275 format pairs and use image, video, PDF and audio tools from a drag-and-drop wheel. Everything runs locally on your Mac, no uploads.';
+if (description.length < 140 || description.length > 155) throw new Error(`description is ${description.length} characters`);
+
+const actionCopy: Record<string, [string, string]> = {
+  airDrop: ['AirDrop', 'Send the selected files with the system sharing picker.'],
+  float: ['Float shelf', 'Keep files on a small floating shelf that stays on top and pins to a screen edge. Files can be dropped onto it.'],
+  copy: ['Copy', 'Put the files on the clipboard, ready to paste in Finder.'],
+  move: ['Move to…', 'Pick a destination folder and move the files there. An existing file is never overwritten.'],
+  copyPath: ['Copy Path', 'Copy the path of each selected item, one per line.'],
+  openTerminal: ['Terminal / iTerm2', 'Open a folder, or the folder that holds a file, in Terminal or iTerm2.'],
+};
+const actions = tools.actions.map((id) => {
+  if (!actionCopy[id]) throw new Error(`no copy for action ${id}`);
+  return { id, name: actionCopy[id][0], text: actionCopy[id][1] };
+});
+
+const faq: [string, string][] = [
+  ['Are conversions really local?', 'Yes. Nothing is uploaded. Conversions run on your Mac and use the tools that ship with macOS first. ffmpeg, LibreOffice, cwebp, unrar and Ghostscript are optional and are used only when they are installed; chips on this page say which pairs need one.'],
+  ['What can it convert?', 'There are 46 input formats and 275 conversion pairs across images, audio, video, PDF, documents, slides, spreadsheets, subtitles and archives. Use the explorer above to search them.'],
+  ['Is every conversion tested?', 'Every pair is exercised in the test suite on generated sample files and the output is read back. Layout fidelity for complex documents is not checked, RAR is only tried with a hand-built archive, and a .pages file was not opened in Pages.'],
+  ['Does it overwrite my files?', 'No. The result is written next to the original with the same name and the new extension. If that name is taken it adds 2, 3 and so on.'],
+  ['Can I press Enter on a file in Finder?', 'Not yet. A launcher command called Convert Finder Selection reads the Finder selection and opens the format wheel, and Option-Enter on a file result in the launcher does the same. Plain Enter on a Finder selection is not included.'],
+  ['Have the windows and the wheel been used for real?', 'They have been built and their windows rendered and checked in screenshots, with automated tests for keys and drags. Mouse and keyboard behaviour is still being proved in live sessions, and AirDrop, Terminal and the shelf have not been tried in a live session.'],
+];
+
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Ferrocast',
+    applicationCategory: 'UtilitiesApplication',
+    operatingSystem: 'macOS',
+    description,
+    url: canonical,
+    license: 'https://opensource.org/licenses/MIT',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: a } })),
+  },
+];
+const legend: Level[] = ['tested', 'built', 'typed', 'planned'];
+---
+<Base title={title} description={description} canonical={canonical} jsonLd={jsonLd}>
+  <a class="skip" href="#main">Skip to content</a>
+  <SiteHeader current="files" />
+  <main id="main" class="fx-main">
+    <section class="fx-hero" aria-label="Introduction">
+      <h1>Drag a file. Tap a key. Drop.</h1>
+      <p class="fx-lead">Hold a file, tap Shift for conversions, Command for tools, or Control for actions. The wheel stays open until you drop it. Everything runs on your Mac; nothing is uploaded.</p>
+      <Counters />
+      <div class="fx-honest" role="note">
+        <h2>Be honest</h2>
+        <p>Windows were rendered and checked in screenshots; mouse and keyboard behaviour is still being proved in live sessions.</p>
+        <p class="fx-status">{statusLine}</p>
+      </div>
+    </section>
+
+    <Section id="keys" title="Three keys, three wheels" lead="Start dragging a file, then tap a key. Tap another key to switch wheels; the wheel stays open until you drop or cancel.">
+      <KeysExplainer />
+    </Section>
+
+    <Section id="wheel" title="Try the wheel" lead="A picture of each wheel, built from the lists the app uses. Pick a key, then move around with the arrow keys.">
+      <WheelDemo />
+    </Section>
+
+    <Section id="conversions" title="Every conversion, searchable" lead="Find what a format can become. All 275 pairs are listed, grouped by family.">
+      <p class="fx-status-row"><StatusBadge level="tested" long /></p>
+      <MatrixExplorer />
+      <p class="fx-note">Every pair is exercised in the test suite on generated sample files. Layout fidelity for complex documents is not checked. RAR is only tried with a hand-built archive, and a .pages file was not opened in Pages. ffmpeg and LibreOffice are used when installed; macOS tools come first.</p>
+    </Section>
+
+    <Section id="tools" title={`${n.tools} file tools`} lead="Windows and presets for the file you are holding. Type a short command in the Convert view to skip the window.">
+      <ToolCards />
+    </Section>
+
+    <Section id="actions" title="Six file actions" lead="Hold Control while dragging any file or folder.">
+      <ul class="fa">
+        {actions.map((a) => <li><h3>{a.name} <StatusBadge level="built" /></h3><p>{a.text}</p></li>)}
+      </ul>
+      <p class="fx-note">AirDrop, Terminal and the shelf were not tried in a live session.</p>
+    </Section>
+
+    <Section id="status" title="What the badges mean" lead={`Status as of ${STATUS_DATE}.`}>
+      <ul class="fx-legend">
+        {legend.map((l) => <li><StatusBadge level={l} /><span>{levels[l].text}</span></li>)}
+      </ul>
+      <p class="fx-note">Not included yet: pressing Enter on a Finder selection. A command that opens the wheel for the Finder selection exists instead. No interaction has been proved in a live session yet.</p>
+    </Section>
+
+    <Section id="faq" title="Questions about conversions">
+      <div class="fx-faq">
+        {faq.map(([q, a]) => <details><summary>{q}</summary><p>{a}</p></details>)}
+      </div>
+      <p class="fx-links"><a class="tl" href={`${base}/`}>Back to the Ferrocast home page</a><a class="tl" href={`${base}/changelog/`}>Read the changelog</a></p>
+    </Section>
+  </main>
+  <SiteFooter />
+</Base>

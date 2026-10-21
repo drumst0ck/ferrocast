@@ -248,6 +248,33 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     }
                 }
             }
+            Ok("anorm") | Ok("achan") => {
+                // measured / probed synchronously here (screenshot mode only)
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    app.push(if std::env::var("FERROCAST_VIEW").as_deref() == Ok("anorm") {
+                        let l = crate::media_tools::loudness(ff, &file);
+                        View::NormalizeAudio { file, loudness: l, target: -16.0, range: 11.0, peak: -1.5 }
+                    } else {
+                        let n = crate::media_tools::audio_channel_count(ff, &file);
+                        View::ChannelsAudio { file, in_channels: n, stereo: true, left_db: -3.0, right_db: 0.0 }
+                    });
+                }
+            }
+            Ok("atrim") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    match crate::media_tools::audio_samples(ff, &file, crate::media_tools::AUDIO_CAP) {
+                        Ok(a) => {
+                            let mut t = ferrocast_core::videoplan::Trim::new(a.duration, 100.0).unwrap();
+                            t.set_range(1.0, 4.0);
+                            t.seek(2.2);
+                            app.push(View::AudioTrim { file, trim: Some(t), audio: Some(std::sync::Arc::new(a)) });
+                        }
+                        Err(e) => app.toast(e),
+                    }
+                }
+            }
             Ok("collage") => {
                 let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
                     .unwrap_or_default()
@@ -543,7 +570,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. }) && kbd_edit);
+            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. } | View::NormalizeAudio { .. } | View::ChannelsAudio { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -794,6 +821,43 @@ impl App {
                     Ok(_) if self.tools.ffmpeg.is_none() => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
                     Ok(tool) => {
                         self.toast("Splitting…");
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
+                }
+                true
+            }
+            View::AudioTrim { file, trim: Some(t), .. } if k.enter => {
+                if t.is_whole() {
+                    self.toast("Nothing to trim: set a start (I) or an end (O) first");
+                } else {
+                    self.toast("Trimming…");
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::Trim(t.start, t.end),
+                        self.tools.ffmpeg,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
+            View::NormalizeAudio { file, target, range, peak, .. } if k.enter => {
+                match crate::media_tools::normalize_params(target, range, peak) {
+                    Err(m) => self.toast(m),
+                    Ok(tool) => {
+                        self.toast("Normalizing…");
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
+                }
+                true
+            }
+            View::ChannelsAudio { file, stereo, left_db, right_db, .. } if k.enter => {
+                match crate::media_tools::channels_params(stereo, left_db, right_db) {
+                    Err(m) => self.toast(m),
+                    Ok(tool) => {
+                        self.toast(if stereo { "Converting channels to stereo…" } else { "Converting channels to mono…" });
                         services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
                         self.pop();
                     }
@@ -2147,6 +2211,137 @@ impl App {
         );
     }
 
+    /// Normalize window: measured loudness versus the target, with loudness, range and true-peak controls.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_normalize_audio(&mut self, ui: &mut Ui, area: Rect, pal: &Palette, loudness: Option<f64>, target: f64, range: f64, peak: f64) {
+        let ctx = ui.ctx().clone();
+        let (mut t, mut r, mut p) = (target, range, peak);
+        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(520.0, 240.0))), |ui| {
+            ui.spacing_mut().item_spacing.y = 14.0;
+            ui.label(RichText::new(crate::media_tools::normalize_line(loudness, t)).size(20.0).color(pal.text));
+            ui.horizontal(|ui| {
+                ui.label("Target loudness");
+                ui.add(
+                    egui::DragValue::new(&mut t)
+                        .range(-30.0..=-5.0)
+                        .clamp_existing_to_range(false)
+                        .speed(0.1)
+                        .suffix(" LUFS")
+                        .max_decimals(1),
+                );
+                for (v, name) in [(-23.0, "-23 broadcast"), (-16.0, "-16 podcast"), (-14.0, "-14 music")] {
+                    if ui.selectable_label((t - v).abs() < 1e-9, name).clicked() {
+                        t = v;
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Loudness range");
+                ui.add(
+                    egui::DragValue::new(&mut r).range(1.0..=20.0).clamp_existing_to_range(false).speed(0.1).suffix(" LU").max_decimals(1),
+                );
+                ui.add_space(16.0);
+                ui.label("True peak");
+                ui.add(
+                    egui::DragValue::new(&mut p)
+                        .range(-9.0..=0.0)
+                        .clamp_existing_to_range(false)
+                        .speed(0.1)
+                        .suffix(" dBTP")
+                        .max_decimals(1),
+                );
+            });
+            ui.label(
+                RichText::new(
+                    "The copy is levelled to the target; the original stays untouched. The result is measured again when it is done.",
+                )
+                .size(12.0)
+                .color(pal.sub),
+            );
+        });
+        if (t, r, p) != (target, range, peak) {
+            if let Some(View::NormalizeAudio { target, range, peak, .. }) = self.stack.last_mut() {
+                (*target, *range, *peak) = (t, r, p);
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area.center().x, area.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "pick a target or type one · ↵ save a normalized copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
+    /// Channels window: mono or stereo output and the volume of each side in dB.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_channels_audio(
+        &mut self,
+        ui: &mut Ui,
+        area: Rect,
+        pal: &Palette,
+        in_channels: Option<u32>,
+        stereo: bool,
+        left_db: f64,
+        right_db: f64,
+    ) {
+        let ctx = ui.ctx().clone();
+        let (mut st, mut l, mut r) = (stereo, left_db, right_db);
+        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(520.0, 240.0))), |ui| {
+            ui.spacing_mut().item_spacing.y = 14.0;
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut st, false, "Mono");
+                ui.selectable_value(&mut st, true, "Stereo");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Left volume");
+                ui.add(
+                    egui::DragValue::new(&mut l)
+                        .range(-30.0..=12.0)
+                        .clamp_existing_to_range(false)
+                        .speed(0.1)
+                        .suffix(" dB")
+                        .max_decimals(1),
+                );
+                ui.add_space(16.0);
+                ui.label("Right volume");
+                ui.add(
+                    egui::DragValue::new(&mut r)
+                        .range(-30.0..=12.0)
+                        .clamp_existing_to_range(false)
+                        .speed(0.1)
+                        .suffix(" dB")
+                        .max_decimals(1),
+                );
+                if small_btn(ui, pal, "reset") {
+                    (l, r) = (0.0, 0.0);
+                }
+            });
+            let note = match (in_channels, st) {
+                (Some(n), _) if n <= 1 && st => "This file is already mono: Stereo copies it to both sides, each with its own volume.",
+                (Some(n), _) if n <= 1 => "This file is already mono: Mono keeps it as one channel at the average of both volumes.",
+                (_, true) => "Stereo keeps the left and right channels, each at its own volume.",
+                _ => "Mono mixes left and right into one channel; each volume scales its own side.",
+            };
+            ui.label(RichText::new(if in_channels.is_none() { "Reading the file…" } else { note }).size(12.0).color(pal.sub));
+            ui.label(RichText::new("0 dB leaves a channel unchanged; the copy is saved as a new file.").size(12.0).color(pal.sub));
+        });
+        if (st, l, r) != (stereo, left_db, right_db) {
+            if let Some(View::ChannelsAudio { stereo, left_db, right_db, .. }) = self.stack.last_mut() {
+                (*stereo, *left_db, *right_db) = (st, l, r);
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area.center().x, area.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "pick Mono or Stereo, set the volumes · ↵ save a copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
     /// Video trim viewer: the frame at the cursor, a timeline with start and end markers, and
     /// stepping keys. Frames are extracted on a worker thread, one at a time, newest wins.
     fn draw_video_trim(
@@ -2310,6 +2505,153 @@ impl App {
             }
             if let Some(View::VideoSplit { points: p, parts: n, .. }) = self.stack.last_mut() {
                 (*p, *n) = (points, parts.clamp(2, 50));
+            }
+            ctx.request_repaint();
+        }
+    }
+
+    /// Audio trim window: the waveform with the selected range, markers and cursor, exact Start
+    /// and End boxes and a "Trim silence" button. Samples are read off the UI thread.
+    fn draw_audio_trim(
+        &mut self,
+        ui: &mut Ui,
+        area_in: Rect,
+        pal: &Palette,
+        trim: Option<ferrocast_core::videoplan::Trim>,
+        audio: Option<std::sync::Arc<crate::media_tools::AudioSamples>>,
+    ) {
+        let ctx = ui.ctx().clone();
+        let (Some(before), Some(audio)) = (trim, audio) else {
+            ui.painter().text(area_in.center(), egui::Align2::CENTER_CENTER, "Reading the audio…", FontId::proportional(16.0), pal.sub);
+            return;
+        };
+        let mut t = before;
+        // a number box being edited keeps the letters and arrows
+        let editing = ctx.egui_wants_keyboard_input();
+        ctx.input_mut(|i| {
+            let none = Modifiers::NONE;
+            if editing {
+                return;
+            }
+            // Shift first: egui matches Modifiers::NONE even while Shift is held
+            for (key, steps) in [(Key::ArrowLeft, -1i64), (Key::ArrowRight, 1)] {
+                if i.consume_key(Modifiers::SHIFT, key) {
+                    t.step_secs(steps as f64);
+                } else if i.consume_key(none, key) {
+                    t.step_frames(steps);
+                }
+            }
+            if i.consume_key(none, Key::I) {
+                t.mark_start();
+            }
+            if i.consume_key(none, Key::O) {
+                t.mark_end();
+            }
+            if i.consume_key(none, Key::Home) {
+                t.seek(t.start);
+            }
+            if i.consume_key(none, Key::End) {
+                t.seek((t.end - t.frame()).max(0.0));
+            }
+        });
+        let wave = Rect::from_min_max(area_in.min + Vec2::new(24.0, 16.0), Pos2::new(area_in.max.x - 24.0, area_in.max.y - 150.0));
+        let resp = ui.interact(wave, Id::new("at-wave"), egui::Sense::click_and_drag());
+        if let (true, Some(p)) = (resp.clicked() || resp.dragged(), resp.interact_pointer_pos()) {
+            t.seek(((p.x - wave.min.x) / wave.width()).clamp(0.0, 1.0) as f64 * t.duration);
+        }
+        let x_of = |s: f64| wave.min.x + (s / t.duration) as f32 * wave.width();
+        let painter = ui.painter();
+        painter.rect_filled(wave, 6.0, pal.field);
+        painter.rect_filled(
+            Rect::from_min_max(Pos2::new(x_of(t.start), wave.min.y), Pos2::new(x_of(t.end), wave.max.y)),
+            0.0,
+            pal.accent.gamma_multiply(0.22),
+        );
+        // at most 800 buckets, recomputed only when the samples or the width change
+        let buckets = (wave.width() as usize).clamp(1, 800);
+        let key = (std::sync::Arc::as_ptr(&audio) as usize, audio.samples.len(), buckets);
+        let cached: Option<crate::media_tools::PeaksCache> = ctx.data(|d| d.get_temp(Id::new("at-peaks")));
+        let bars = match cached {
+            Some((k, p)) if k == key => p,
+            _ => {
+                let p = std::sync::Arc::new(ferrocast_core::waveform::peaks(&audio.samples, buckets));
+                ctx.data_mut(|d| d.insert_temp(Id::new("at-peaks"), (key, p.clone())));
+                p
+            }
+        };
+        // the samples may cover only the start of a long file
+        let covered = (audio.samples.len() as f64 / audio.rate.max(1) as f64 / t.duration).clamp(0.0, 1.0) as f32;
+        let (mid, half) = (wave.center().y, wave.height() / 2.0 - 4.0);
+        for (i, (lo, hi)) in bars.iter().enumerate() {
+            let frac = (i as f32 + 0.5) / bars.len() as f32;
+            let x = wave.min.x + frac * covered * wave.width();
+            let inside = (x_of(t.start)..=x_of(t.end)).contains(&x);
+            let top = (mid - *hi as f32 / 32768.0 * half).min(mid - 0.5);
+            let bottom = (mid - *lo as f32 / 32768.0 * half).max(mid + 0.5);
+            painter.line_segment([Pos2::new(x, top), Pos2::new(x, bottom)], Stroke::new(1.0, if inside { pal.text } else { pal.sub }));
+        }
+        for m in [t.start, t.end] {
+            painter.rect_filled(
+                Rect::from_center_size(Pos2::new(x_of(m), wave.center().y), Vec2::new(3.0, wave.height())),
+                1.5,
+                pal.accent,
+            );
+        }
+        painter.rect_filled(
+            Rect::from_center_size(Pos2::new(x_of(t.cursor), wave.center().y), Vec2::new(2.0, wave.height())),
+            1.0,
+            pal.text,
+        );
+        let note = if audio.truncated {
+            format!("   ·   waveform covers the first {:.0} min", audio.samples.len() as f64 / audio.rate.max(1) as f64 / 60.0)
+        } else {
+            String::new()
+        };
+        painter.text(
+            Pos2::new(wave.min.x, wave.max.y + 14.0),
+            egui::Align2::LEFT_CENTER,
+            format!(
+                "at {}   ·   start {}   ·   end {}   ·   clip {:.2} s{note}",
+                t.label(t.cursor),
+                t.label(t.start),
+                t.label(t.end),
+                t.clip()
+            ),
+            FontId::proportional(12.5),
+            pal.text,
+        );
+        painter.text(
+            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "←/→ 10 ms · ⇧←/→ second · click the waveform to jump · I start · O end · ↵ save the cut · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+        let (mut start, mut end, mut silence) = (t.start, t.end, false);
+        let row = Rect::from_min_size(Pos2::new(wave.min.x, wave.max.y + 30.0), Vec2::new(wave.width(), 26.0));
+        ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Start s");
+                ui.add(egui::DragValue::new(&mut start).range(0.0..=t.duration).speed(0.01).fixed_decimals(2));
+                ui.label("End s");
+                ui.add(egui::DragValue::new(&mut end).range(0.0..=t.duration).speed(0.01).fixed_decimals(2));
+                silence = ui.button("Trim silence").clicked();
+            });
+        });
+        if (start - t.start).abs() > 1e-9 {
+            t.set_start(start);
+        } else if (end - t.end).abs() > 1e-9 {
+            t.set_end(end);
+        }
+        if silence {
+            match ferrocast_core::waveform::silence_bounds(&audio.samples, audio.rate, -40.0) {
+                Some((a, b)) if t.set_range(a, b) => {}
+                _ => self.toast("No silence to trim"),
+            }
+        }
+        if t != before {
+            if let Some(View::AudioTrim { trim, .. }) = self.stack.last_mut() {
+                *trim = Some(t);
             }
             ctx.request_repaint();
         }
@@ -3399,6 +3741,12 @@ impl App {
             View::VideoSpeed { duration, factor, .. } => {
                 self.draw_video_speed(ui, rect, pal, duration, factor);
             }
+            View::NormalizeAudio { loudness, target, range, peak, .. } => {
+                self.draw_normalize_audio(ui, rect, pal, loudness, target, range, peak);
+            }
+            View::ChannelsAudio { in_channels, stereo, left_db, right_db, .. } => {
+                self.draw_channels_audio(ui, rect, pal, in_channels, stereo, left_db, right_db);
+            }
             View::EditMetadata { file, kind, original, working, remove_all, error } => {
                 self.draw_edit_metadata(ui, rect, pal, &file, kind, original, working, remove_all, error);
             }
@@ -3410,6 +3758,9 @@ impl App {
             }
             View::VideoTrim { file, trim } | View::VideoSnapshot { file, trim } | View::VideoSplit { file, trim, .. } => {
                 self.draw_video_trim(ui, rect, pal, &file, trim);
+            }
+            View::AudioTrim { trim, audio, .. } => {
+                self.draw_audio_trim(ui, rect, pal, trim, audio);
             }
             View::CollageImage { files, opts, color } => {
                 self.draw_collage(ui, rect, pal, files.len(), opts, color);

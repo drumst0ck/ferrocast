@@ -239,6 +239,30 @@ pub enum View {
         points: Vec<f64>,
         parts: usize,
     },
+    /// Audio trim window: the file, its timeline state and the waveform samples (both None while
+    /// the audio is being read).
+    AudioTrim {
+        file: PathBuf,
+        trim: Option<ferrocast_core::videoplan::Trim>,
+        audio: Option<Arc<crate::media_tools::AudioSamples>>,
+    },
+    /// Normalize window: the measured integrated loudness (None while measuring, NaN when it could
+    /// not be measured) and the target, loudness range and true-peak settings.
+    NormalizeAudio {
+        file: PathBuf,
+        loudness: Option<f64>,
+        target: f64,
+        range: f64,
+        peak: f64,
+    },
+    /// Audio channels window: mono or stereo output and the left/right volume in dB.
+    ChannelsAudio {
+        file: PathBuf,
+        in_channels: Option<u32>,
+        stereo: bool,
+        left_db: f64,
+        right_db: f64,
+    },
     /// Video trim viewer: the file and its timeline state (None while the video is being probed).
     VideoTrim {
         file: PathBuf,
@@ -444,6 +468,9 @@ impl View {
             View::FrameImage { .. } => "Add Background",
             View::CollageImage { .. } => "Make a Collage",
             View::VideoTrim { .. } => "Trim Video",
+            View::AudioTrim { .. } => "Trim Audio",
+            View::NormalizeAudio { .. } => "Normalize Audio",
+            View::ChannelsAudio { .. } => "Audio Channels",
             View::VideoSnapshot { .. } => "Video Snapshots",
             View::VideoSplit { .. } => "Split Video",
             View::VideoCrop { .. } => "Crop Video",
@@ -1364,6 +1391,23 @@ impl App {
                         }
                     }
                 }
+                Msg::LoudnessMeasured(file, l) => {
+                    if let Some(View::NormalizeAudio { file: f, loudness, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            *loudness = Some(l.filter(|l| l.is_finite()).unwrap_or(f64::NAN));
+                            if l.is_none_or(|l| !l.is_finite()) {
+                                self.toast("Normalize: could not measure the loudness of this file");
+                            }
+                        }
+                    }
+                }
+                Msg::ChannelsProbed(file, n) => {
+                    if let Some(View::ChannelsAudio { file: f, in_channels, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            *in_channels = n;
+                        }
+                    }
+                }
                 Msg::VideoDuration(file, d) => {
                     if matches!(self.view(), View::VideoSpeed { file: f, .. } if *f == file) {
                         match d.filter(|d| d.is_finite() && *d > 0.0) {
@@ -1391,6 +1435,28 @@ impl App {
                             None => self.toast("Trim: could not read the video"),
                         }
                     }
+                }
+                Msg::AudioLoaded(file, res) => {
+                    // a stale waveform cache must never outlive the samples it was built from
+                    self.ctx.data_mut(|d| d.remove::<crate::media_tools::PeaksCache>(Id::new("at-peaks")));
+                    if matches!(self.view(), View::AudioTrim { file: f, .. } if *f == file) {
+                        match res {
+                            Ok(a) => {
+                                let t = ferrocast_core::videoplan::Trim::new(a.duration, 100.0);
+                                if let (Some(t), Some(View::AudioTrim { trim, audio, .. })) = (t, self.stack.last_mut()) {
+                                    (*trim, *audio) = (Some(t), Some(Arc::new(a)));
+                                } else {
+                                    self.pop();
+                                    self.toast("Trim Audio: this audio is too short");
+                                }
+                            }
+                            Err(e) => {
+                                self.pop();
+                                self.toast(format!("Trim Audio: {e}"));
+                            }
+                        }
+                    }
+                    self.ctx.request_repaint();
                 }
                 Msg::VideoFrame(file, t, png) => {
                     if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } | View::VideoSplit { file: f, .. } if *f == file)
@@ -2299,7 +2365,7 @@ impl App {
                                     FileTool::Speed(_) => "sf:speedometer",
                                     FileTool::Snapshot(_) => "sf:camera",
                                     FileTool::CropVideo(..) => "sf:crop",
-                                    FileTool::RedactVideo(..) | FileTool::Bleep(..) => "sf:eye.slash",
+                                    FileTool::RedactVideo(..) | FileTool::RedactVideoMany(..) | FileTool::Bleep(..) => "sf:eye.slash",
                                     FileTool::Normalize(..) | FileTool::Channels(..) => "sf:speaker.wave.2",
                                     FileTool::Visualize(_) | FileTool::VisualizeImage(..) => "sf:waveform",
                                     FileTool::TrimSilence => "sf:scissors",
@@ -2491,6 +2557,11 @@ impl App {
                 ("Crop…", "crop aspect exact", Act::CropImage(p.clone())),
                 ("Redact Areas…", "redact hide blur privacy", Act::RedactImage(p.clone())),
                 ("Add Background…", "background frame blur shadow", Act::FrameImage(p.clone())),
+            ]),
+            Family::Audio => list.extend([
+                ("Trim Audio…", "trim cut waveform silence start end", Act::TrimAudio(p.clone())),
+                ("Normalize…", "normalize loudness lufs volume level peak", Act::NormalizeAudio(p.clone())),
+                ("Channels…", "channels mono stereo left right volume balance", Act::AudioChannels(p.clone())),
             ]),
             _ => {}
         }
@@ -3622,6 +3693,36 @@ impl App {
                     }
                 }
             }
+            Act::TrimAudio(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || {
+                        let res = crate::media_tools::audio_samples(ff, &f, crate::media_tools::AUDIO_CAP);
+                        bus.send(Msg::AudioLoaded(f, res));
+                    });
+                    self.show();
+                    self.push(View::AudioTrim { file, trim: None, audio: None });
+                }
+            },
+            Act::NormalizeAudio(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::LoudnessMeasured(f.clone(), crate::media_tools::loudness(ff, &f))));
+                    self.show();
+                    self.push(View::NormalizeAudio { file, loudness: None, target: -16.0, range: 11.0, peak: -1.5 });
+                }
+            },
+            Act::AudioChannels(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || bus.send(Msg::ChannelsProbed(f.clone(), crate::media_tools::audio_channel_count(ff, &f))));
+                    self.show();
+                    self.push(View::ChannelsAudio { file, in_channels: None, stereo: false, left_db: 0.0, right_db: 0.0 });
+                }
+            },
             Act::CollageImages(files) => {
                 if files.len() < 2 {
                     self.toast("A collage needs at least two images");
@@ -4085,9 +4186,12 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (MergePdf, _) => ToolReach::File(FileTool::Merge),
         (SplitPdf, _) => ToolReach::File(FileTool::SplitPages),
         (SplitVideo, _) => ToolReach::File(FileTool::SplitEvery(60)),
+        (NormalizeAudio, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::NormalizeAudio(p)),
+        (AudioChannels, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::AudioChannels(p)),
         (NormalizeAudio, _) => ToolReach::File(FileTool::Normalize(-16.0, 11.0, -1.5)),
         (AudioChannels, _) => ToolReach::File(FileTool::Channels(false, 1.0, 1.0)),
         (AudioToVideo, _) => ToolReach::File(FileTool::Visualize(ferrocast_core::media::Canvas::Landscape)),
+        (TrimAudio, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::TrimAudio(p)),
         (TrimAudio, _) => ToolReach::File(FileTool::TrimSilence),
         (ExtractArchive, _) if !files.is_empty() => ToolReach::File(FileTool::Extract),
         _ => ToolReach::Open,

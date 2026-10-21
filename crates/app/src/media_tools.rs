@@ -2,6 +2,7 @@
 use ferrocast_core::compress::{self, Goal, Plan, Resize};
 use ferrocast_core::convert::{family_of, output_with_suffix, Family, FileTool};
 use ferrocast_core::media;
+use ferrocast_core::redactplan::{self, Redaction};
 use ferrocast_core::videoplan::MIN_PIECE;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -121,6 +122,50 @@ fn streams(info: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value>
     info["streams"].as_array().into_iter().flatten()
 }
 
+/// Sample rate of the mono PCM the audio trim window works on.
+pub(crate) const AUDIO_RATE: u32 = 8000;
+/// Most PCM bytes read for the waveform: 32 MiB is about 33 minutes at 8 kHz.
+pub(crate) const AUDIO_CAP: u64 = 32 << 20;
+
+/// Mono 8 kHz samples of an audio file for the waveform, and the real duration of the file.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AudioSamples {
+    pub samples: Vec<i16>,
+    pub rate: u32,
+    /// Duration of the whole file (ffprobe), even when the samples were cut at the cap.
+    pub duration: f64,
+    /// The file held more PCM than the cap, so `samples` covers only its start.
+    pub truncated: bool,
+}
+
+/// Cached waveform bars: (samples address, sample count, bucket count) and the peaks drawn.
+pub(crate) type PeaksCache = ((usize, usize, usize), std::sync::Arc<Vec<(i16, i16)>>);
+
+/// Little-endian signed 16-bit PCM bytes to samples; an odd trailing byte is ignored.
+pub(crate) fn pcm_s16le(bytes: &[u8]) -> Vec<i16> {
+    bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+}
+
+/// Decode `path` to mono 8 kHz PCM (at most `cap_bytes` of it) under a 60 s deadline. Never call
+/// it on the UI thread.
+pub(crate) fn audio_samples(ffmpeg: &str, path: &Path, cap_bytes: u64) -> Result<AudioSamples, String> {
+    let info = probe_raw(ffmpeg, path, &["-show_format"])?;
+    let info: serde_json::Value = serde_json::from_slice(&info).map_err(|e| e.to_string())?;
+    let duration = info["format"]["duration"]
+        .as_str()
+        .and_then(|d| d.parse::<f64>().ok())
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .ok_or("could not read the length of this audio")?;
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-nostdin", "-v", "error", "-i"]).arg(path).args(["-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "-"]);
+    let (bytes, truncated) = crate::route::run_capped(&mut cmd, 60, cap_bytes)?;
+    let samples = pcm_s16le(&bytes);
+    if samples.is_empty() {
+        return Err("no audio in this file".into());
+    }
+    Ok(AudioSamples { samples, rate: AUDIO_RATE, duration, truncated })
+}
+
 /// Duration (s) and frame rate of a video, from ffprobe under its own deadline.
 pub(crate) fn video_info(ff: &str, file: &Path) -> Option<(f64, f64)> {
     let info = probe(ff, file).ok()?;
@@ -228,6 +273,54 @@ pub(crate) fn loudness(ff: &str, file: &Path) -> Option<f64> {
 /// "-31.0 → -16.0 LUFS" for a normalize result, when both measurements work.
 pub(crate) fn normalize_report(ff: &str, before: &Path, after: &Path) -> Option<String> {
     Some(format!("{:.1} → {:.1} LUFS", loudness(ff, before)?, loudness(ff, after)?))
+}
+
+/// The measured-loudness line of the Normalize window; `loudness` None is "still measuring" and
+/// a non-finite value is a failed measurement.
+pub(crate) fn normalize_line(loudness: Option<f64>, target: f64) -> String {
+    let t = if target.fract() == 0.0 { format!("{target:.0}") } else { format!("{target:.1}") };
+    match loudness {
+        None => "measuring…".into(),
+        Some(l) if !l.is_finite() => format!("could not be measured · target {t} LUFS"),
+        Some(l) => format!("now {l:.1} LUFS → target {t} LUFS ({:+.1} dB)", target - l),
+    }
+}
+
+/// Channel count of the first audio stream (ffprobe, bounded), None when unreadable.
+pub(crate) fn audio_channel_count(ff: &str, file: &Path) -> Option<u32> {
+    let info = probe(ff, file).ok()?;
+    let n = streams(&info).find(|s| s["codec_type"] == "audio")?["channels"].as_u64()?;
+    u32::try_from(n).ok().filter(|n| *n > 0)
+}
+
+/// Linear gain for a level change in dB (0 dB = 1.0, -6 dB ≈ 0.5), the unit `FileTool::Channels` takes.
+pub(crate) fn db_to_gain(db: f64) -> f64 {
+    10f64.powf(db / 20.0)
+}
+
+/// Normalize window ranges: target -30..=-5 LUFS, range 1..=20 LU, true peak -9..=0 dBTP.
+pub(crate) fn normalize_params(target: f64, range: f64, peak: f64) -> Result<FileTool, String> {
+    if !(target.is_finite() && (-30.0..=-5.0).contains(&target)) {
+        return Err("Normalize: the target loudness must be between -30 and -5 LUFS".into());
+    }
+    if !(range.is_finite() && (1.0..=20.0).contains(&range)) {
+        return Err("Normalize: the loudness range must be between 1 and 20 LU".into());
+    }
+    if !(peak.is_finite() && (-9.0..=0.0).contains(&peak)) {
+        return Err("Normalize: the true peak must be between -9 and 0 dBTP".into());
+    }
+    Ok(FileTool::Normalize(target, range, peak))
+}
+
+/// Channels window: left and right volume in -30..=+12 dB become the linear gains of the tool
+/// (mono output mixes both sides, each scaled by its own gain).
+pub(crate) fn channels_params(stereo: bool, left_db: f64, right_db: f64) -> Result<FileTool, String> {
+    for (name, db) in [("left", left_db), ("right", right_db)] {
+        if !(db.is_finite() && (-30.0..=12.0).contains(&db)) {
+            return Err(format!("Channels: the {name} volume must be between -30 and +12 dB"));
+        }
+    }
+    Ok(FileTool::Channels(stereo, db_to_gain(left_db), db_to_gain(right_db)))
 }
 
 /// Checks a split before anything is written: at least two ranges, each finite, starting at or
@@ -349,6 +442,49 @@ fn compress_one(ff: &str, file: &Path, goal: Goal, resize: &Resize) -> Result<Pa
     result
 }
 
+/// Covers several timed areas of one video in a single pass. Areas are checked against the
+/// PROBED duration and displayed size (rotation applied) before anything is written; the copy is
+/// staged privately and published with `create_new`, so the original is never touched, nothing is
+/// overwritten and a failure leaves nothing behind.
+fn redact_many_one(ff: &str, file: &Path, areas: &[Redaction]) -> Result<PathBuf, String> {
+    if family_of(file) != Family::Video {
+        return Err("this tool requires video files".into());
+    }
+    let info = probe(ff, file)?;
+    let duration = info["format"]["duration"]
+        .as_str()
+        .and_then(|d| d.parse::<f64>().ok())
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .ok_or("could not read the video duration")?;
+    let (width, height) =
+        streams(&info).find(|s| s["codec_type"] == "video").and_then(display_dims).ok_or("could not read the video size")?;
+    redactplan::validate(areas, duration, width, height)?;
+    let has_audio = streams(&info).any(|s| s["codec_type"] == "audio");
+    let input = file.to_str().ok_or("input path is not UTF-8")?;
+    let scratch = std::env::temp_dir().join(format!("ferrocast-media-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&scratch).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let staged = scratch.join("output.mp4");
+        let out = staged.to_str().ok_or("output path is not UTF-8")?;
+        let args = media::redact_video_many(input, out, areas, width, height, has_audio);
+        crate::route::run_limited(Command::new(ff).args(["-nostdin", "-n", "-loglevel", "error"]).args(args), 900)?;
+        if std::fs::metadata(&staged).map_err(|e| e.to_string())?.len() == 0 {
+            return Err("redaction produced an empty file".to_string());
+        }
+        let dest = output_with_suffix(file, "redacted", "mp4", |p| p.exists());
+        use std::io::Write;
+        let mut src = std::fs::File::open(&staged).map_err(|e| e.to_string())?;
+        let mut dst = std::fs::OpenOptions::new().write(true).create_new(true).open(&dest).map_err(|e| e.to_string())?;
+        if let Err(e) = std::io::copy(&mut src, &mut dst).and_then(|_| dst.flush()) {
+            let _ = std::fs::remove_file(&dest);
+            return Err(e.to_string());
+        }
+        Ok(dest)
+    })();
+    let _ = std::fs::remove_dir_all(scratch);
+    result
+}
+
 pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (Vec<PathBuf>, Vec<String>) {
     let Some(ff) = ffmpeg else {
         return (vec![], vec!["ffmpeg is not installed (brew install ffmpeg)".into()]);
@@ -368,6 +504,13 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
         }
         if let FileTool::EditMetadata(edits, remove_all) = tool {
             match edit_metadata_one(ff, file, edits, *remove_all) {
+                Ok(p) => made.push(p),
+                Err(e) => errors.push(format!("{}: {e}", file.display())),
+            }
+            continue;
+        }
+        if let FileTool::RedactVideoMany(areas) = tool {
+            match redact_many_one(ff, file, areas) {
                 Ok(p) => made.push(p),
                 Err(e) => errors.push(format!("{}: {e}", file.display())),
             }

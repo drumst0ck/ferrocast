@@ -96,10 +96,9 @@ pub fn implemented(t: ToolId) -> Impl {
     use ToolId::*;
     match t {
         EditImage | AnnotateImage | FrameImage | CropImage | RedactImage | CreateCollage | TrimVideo | CropVideo | ChangeVideoSpeed
-        | VideoSnapshots | RedactVideo | OrganizePdf | SplitVideo => Impl::Window,
-        Compress | RemoveMetadata | JoinVideos | MuteVideo | AudioChannels | NormalizeAudio | MergePdf | SplitPdf | CreatePdf
-        | ExtractArchive => Impl::Preset,
-        AudioToVideo | TrimAudio | RedactAudio => Impl::Typed,
+        | VideoSnapshots | RedactVideo | OrganizePdf | SplitVideo | TrimAudio | NormalizeAudio | AudioChannels => Impl::Window,
+        Compress | RemoveMetadata | JoinVideos | MuteVideo | MergePdf | SplitPdf | CreatePdf | ExtractArchive => Impl::Preset,
+        AudioToVideo | RedactAudio => Impl::Typed,
     }
 }
 

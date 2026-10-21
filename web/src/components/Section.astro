@@ -1,0 +1,11 @@
+---
+interface Props { id: string; title: string; lead?: string; level?: 2 }
+const { id, title, lead } = Astro.props;
+---
+<section class="fx-section wrap" id={id} aria-labelledby={`h-${id}`}>
+  <div class="fx-head">
+    <h2 id={`h-${id}`}>{title}</h2>
+    {lead && <p class="fx-lead">{lead}</p>}
+  </div>
+  <slot />
+</section>

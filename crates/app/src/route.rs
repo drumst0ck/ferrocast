@@ -12,7 +12,7 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Run a command with a deadline; stdout is discarded, stderr is returned on failure.
 pub(crate) fn run_limited(cmd: &mut Command, secs: u64) -> Result<(), String> {
-    run_io(cmd, secs, Stdio::null(), false).map(|_| ())
+    run_io(cmd, secs, Stdio::null(), None).map(|_| ())
 }
 
 /// Largest listing `run_listing` accepts; a longer one is refused rather than truncated, because a
@@ -22,10 +22,34 @@ const LISTING_CAP: u64 = 64 << 20;
 /// Run a command under the same deadline and capped stderr, and return its stdout (at most
 /// `LISTING_CAP` bytes; more is an error).
 pub(crate) fn run_listing(cmd: &mut Command, secs: u64) -> Result<Vec<u8>, String> {
-    run_io(cmd, secs, Stdio::piped(), true)
+    let (out, truncated) = run_io(cmd, secs, Stdio::piped(), Some(LISTING_CAP))?;
+    if truncated {
+        return Err("archive listing is too large".into());
+    }
+    Ok(out)
 }
 
-fn run_io(cmd: &mut Command, secs: u64, stdout: Stdio, capture: bool) -> Result<Vec<u8>, String> {
+/// Run a command under the same deadline and return the first `cap` bytes of its stdout and
+/// whether more was written. The rest is drained and dropped so the child never blocks on a full
+/// pipe; stderr is drained too.
+pub(crate) fn run_capped(cmd: &mut Command, secs: u64, cap: u64) -> Result<(Vec<u8>, bool), String> {
+    run_io(cmd, secs, Stdio::piped(), Some(cap))
+}
+
+/// Read at most `cap` bytes from `r`, then drain whatever is left. The flag is true when the
+/// source held more than `cap` bytes.
+pub(crate) fn read_capped(mut r: impl std::io::Read, cap: u64) -> (Vec<u8>, bool) {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    let _ = (&mut r).take(cap.saturating_add(1)).read_to_end(&mut buf);
+    let truncated = buf.len() as u64 > cap;
+    buf.truncate(cap as usize);
+    // keep draining so the child is never blocked on a full pipe
+    let _ = std::io::copy(&mut r, &mut std::io::sink());
+    (buf, truncated)
+}
+
+fn run_io(cmd: &mut Command, secs: u64, stdout: Stdio, capture: Option<u64>) -> Result<(Vec<u8>, bool), String> {
     cmd.stdout(stdout).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     // drained concurrently (capped): a chatty tool must not fill the pipe and stall until the deadline
@@ -38,16 +62,7 @@ fn run_io(cmd: &mut Command, secs: u64, stdout: Stdio, capture: bool) -> Result<
         }
         buf
     });
-    let out_reader = capture.then(|| child.stdout.take()).flatten().map(|mut r| {
-        std::thread::spawn(move || {
-            use std::io::Read;
-            let mut buf = Vec::new();
-            let _ = (&mut r).take(LISTING_CAP + 1).read_to_end(&mut buf);
-            // keep draining so the child is never blocked on a full pipe
-            let _ = std::io::copy(&mut r, &mut std::io::sink());
-            buf
-        })
-    });
+    let out_reader = capture.and_then(|cap| child.stdout.take().map(|r| std::thread::spawn(move || read_capped(r, cap))));
     let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
         match child.try_wait() {
@@ -56,8 +71,6 @@ fn run_io(cmd: &mut Command, secs: u64, stdout: Stdio, capture: bool) -> Result<
                 let out = out_reader.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
                 return if !st.success() {
                     Err(String::from_utf8_lossy(&err).lines().last().unwrap_or("command failed").trim().to_string())
-                } else if out.len() as u64 > LISTING_CAP {
-                    Err("archive listing is too large".into())
                 } else {
                     Ok(out)
                 };
@@ -480,7 +493,7 @@ pub(crate) fn extract_archive(f: &Path, tools: &Tools) -> Result<PathBuf, String
 fn gunzip_into(f: &Path, dir: &Path) -> Result<(), String> {
     let name = folder_stem(f);
     let out = std::fs::File::create(dir.join(name)).map_err(|e| e.to_string())?;
-    run_io(Command::new("/usr/bin/gunzip").arg("-c").arg(f), EXTRACT_SECS, Stdio::from(out), false).map(|_| ())
+    run_io(Command::new("/usr/bin/gunzip").arg("-c").arg(f), EXTRACT_SECS, Stdio::from(out), None).map(|_| ())
 }
 
 /// Compress each PDF with Ghostscript at the preset's `-dPDFSETTINGS`. Output goes next to the

@@ -1,0 +1,96 @@
+---
+import conversions from '../data/conversions.json';
+import tools from '../data/tools.json';
+
+const MAX = 8;
+type Seg = { label: string; needs?: string | null };
+const labelOf: Record<string, string> = {};
+for (const t of tools.tools) labelOf[t.id] = t.name;
+const actionNames: Record<string, string> = { airDrop: 'AirDrop', float: 'Float shelf', copy: 'Copy', move: 'Move to…', copyPath: 'Copy Path', openTerminal: 'Terminal' };
+
+// Samples: a PDF for conversions (9 targets), an MP4 for tools, the six actions.
+const pdf = conversions.families.flatMap((f) => f.inputs).find((i) => i.ext === 'pdf');
+const mp4 = tools.byFormat.find((b) => b.ext === 'mp4');
+if (!pdf || !mp4) throw new Error('wheel demo sample missing from generated data');
+
+const wheels = [
+  { id: 'convert', key: 'Shift', sym: '⇧', name: 'Convert', color: '#ff8c3c', sample: 'a PDF', all: pdf.outputs.map((o): Seg => ({ label: o.label, needs: o.needs })) },
+  { id: 'tools', key: 'Command', sym: '⌘', name: 'Tools', color: '#56c2ff', sample: 'an MP4 video', all: mp4.single.map((id): Seg => ({ label: labelOf[id] })) },
+  { id: 'actions', key: 'Control', sym: '⌃', name: 'Actions', color: '#59d499', sample: 'any file or folder', all: tools.actions.map((id): Seg => ({ label: actionNames[id] ?? id })) },
+];
+
+const C = 200, R_IN = 84, R_OUT = 188, GAP = 2.6;
+const pt = (r: number, deg: number) => { const a = ((deg - 90) * Math.PI) / 180; return [C + r * Math.cos(a), C + r * Math.sin(a)]; };
+const f = (n: number) => n.toFixed(1);
+function sector(i: number, n: number) {
+  const step = 360 / n, a0 = i * step + GAP / 2, a1 = (i + 1) * step - GAP / 2;
+  const [x0, y0] = pt(R_OUT, a0), [x1, y1] = pt(R_OUT, a1), [x2, y2] = pt(R_IN, a1), [x3, y3] = pt(R_IN, a0);
+  const large = a1 - a0 > 180 ? 1 : 0;
+  return `M${f(x0)} ${f(y0)}A${R_OUT} ${R_OUT} 0 ${large} 1 ${f(x1)} ${f(y1)}L${f(x2)} ${f(y2)}A${R_IN} ${R_IN} 0 ${large} 0 ${f(x3)} ${f(y3)}Z`;
+}
+function lines(label: string): string[] {
+  const words = label.split(' '), out: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    if (cur && (cur + ' ' + w).length > 10) { out.push(cur); cur = w; } else cur = cur ? cur + ' ' + w : w;
+  }
+  if (cur) out.push(cur);
+  const clip = (s: string) => (s.length > 11 ? s.slice(0, 10) + '…' : s);
+  return out.slice(0, 2).map(clip);
+}
+
+const built = wheels.map((w) => {
+  const hidden = w.all.length > MAX ? w.all.length - (MAX - 1) : 0;
+  const shown: Seg[] = hidden ? [...w.all.slice(0, MAX - 1), { label: `+${hidden} more` }] : w.all;
+  const extra = hidden ? w.all.slice(MAX - 1) : [];
+  const segs = shown.map((s, i) => {
+    const mid = (i + 0.5) * (360 / shown.length);
+    const [tx, ty] = pt((R_IN + R_OUT) / 2, mid);
+    return { ...s, d: sector(i, shown.length), tx: f(tx), ty: f(ty), lines: lines(s.label), more: hidden > 0 && i === shown.length - 1 };
+  });
+  return { ...w, segs, extra };
+});
+---
+<div class="wd" data-wheel-demo>
+  <div class="wd-tabs" role="tablist" aria-label="Wheel keys">
+    {built.map((w, i) => (
+      <button type="button" role="tab" id={`wd-tab-${w.id}`} aria-controls={`wd-p-${w.id}`} aria-selected={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1} data-wheel={w.id} style={`--wc:${w.color}`}><kbd aria-hidden="true">{w.sym}</kbd>{w.key} <span>{w.name}</span></button>
+    ))}
+  </div>
+  <div class="wd-stage">
+    {built.map((w, i) => (
+      <div class="wd-panel" id={`wd-p-${w.id}`} role="tabpanel" aria-labelledby={`wd-tab-${w.id}`} data-wheel={w.id} data-on={i === 0 ? 'true' : 'false'} style={`--wc:${w.color}`}>
+        <svg viewBox="0 0 400 400" role="group" aria-label={`${w.key} wheel: ${w.name.toLowerCase()} for ${w.sample}, ${w.segs.length} segments`} class="wd-svg">
+          <circle cx={C} cy={C} r={R_OUT + 6} class="wd-disc" />
+          {w.segs.map((s, k) => (
+            <g class:list={['wd-seg', { 'wd-needs': !!s.needs, 'wd-more': s.more }]} role="img" tabindex={k === 0 ? 0 : -1} aria-label={s.needs ? `${s.label}, needs ${s.needs}` : s.label} data-label={s.label} data-note={s.needs ? `needs ${s.needs}` : s.more ? `also ${w.extra.map((x) => x.label).join(', ')}` : ''}>
+              <path d={s.d} />
+              <text x={s.tx} y={s.ty} text-anchor="middle" aria-hidden="true">
+                {s.lines.map((l, j) => <tspan x={s.tx} dy={j === 0 ? (s.lines.length === 2 ? '-0.3em' : '0.35em') : '1.15em'}>{l}</tspan>)}
+              </text>
+              {s.needs && <circle cx={s.tx} cy={f(Number(s.ty) + 22)} r="3" class="wd-dot" aria-hidden="true" />}
+            </g>
+          ))}
+          <circle cx={C} cy={C} r={R_IN - 12} class="wd-hub" />
+          <text x={C} y={C - 6} text-anchor="middle" class="wd-hub-name" aria-hidden="true">{w.name}</text>
+          <text x={C} y={C + 16} text-anchor="middle" class="wd-hub-sub" aria-hidden="true" data-default={`${w.key} · ${w.sample}`}>{w.key} · {w.sample}</text>
+        </svg>
+        <p class="wd-cap" aria-live="polite" data-default={`Sample: ${w.sample}. Drag a file, tap ${w.key}.`}>Sample: {w.sample}. Drag a file, tap {w.key}.</p>
+      </div>
+    ))}
+  </div>
+  <p class="wd-note small muted">This is a picture of the wheel built from the same lists the app uses, not a recording of the app. Hover or focus a segment, press <kbd>Shift</kbd>, <kbd>⌘</kbd> or <kbd>Ctrl</kbd>, and use the arrow keys. Segments marked with a dot need an optional tool installed.</p>
+  <noscript>
+    <div class="wd-nojs">
+      {built.map((w) => (
+        <div>
+          <h3>{w.key}: {w.name} ({w.sample})</h3>
+          <ul>
+            {[...w.segs.filter((s) => !s.more), ...w.extra].map((s) => <li>{s.label}{s.needs ? ` (needs ${s.needs})` : ''}</li>)}
+          </ul>
+        </div>
+      ))}
+    </div>
+  </noscript>
+</div>
+<script>import '../scripts/wheel-demo.js';</script>
