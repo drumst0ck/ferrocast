@@ -69,6 +69,109 @@ pub fn split_job(duration: f64, points: &[f64], parts: usize) -> Result<ferrocas
     Ok(ferrocast_core::convert::FileTool::SplitPoints(ranges, true))
 }
 
+/// One area of the video redaction window: a rectangle (displayed pixels) covered from `start`
+/// to `end` seconds, solid black or blurred.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Area {
+    pub rect: ferrocast_core::croprect::Rect,
+    pub start: f64,
+    pub end: f64,
+    pub blur: bool,
+}
+
+/// Most areas the redaction window holds (the core's limit).
+pub const MAX_REDACT_AREAS: usize = ferrocast_core::redactplan::MAX_AREAS;
+
+/// The job for the redaction window, or the message that names what is wrong (the window stays open).
+pub fn redact_job(areas: &[Area], duration: f64, size: (u32, u32)) -> Result<ferrocast_core::convert::FileTool, String> {
+    let list: Vec<ferrocast_core::redactplan::Redaction> = areas
+        .iter()
+        .map(|a| {
+            let (x, y, w, h) = ferrocast_core::croprect::tuple(a.rect);
+            ferrocast_core::redactplan::Redaction { x, y, w, h, start: a.start, end: a.end, blur: a.blur }
+        })
+        .collect();
+    ferrocast_core::redactplan::validate(&list, duration, size.0, size.1).map_err(|m| format!("Redact: {m}"))?;
+    Ok(ferrocast_core::convert::FileTool::RedactVideoMany(list))
+}
+
+/// Blur radius range of the redaction window's slider, in pixels.
+pub const REDACT_BLUR_RANGE: std::ops::RangeInclusive<u32> = 2..=80;
+/// Radius the slider starts at (the old fixed value).
+pub const REDACT_BLUR_DEFAULT: u32 = 24;
+
+/// The job for the image redaction window, or the message that names what is wrong.
+pub fn redact_job_image(
+    areas: &[ferrocast_core::croprect::Rect],
+    blur: bool,
+    radius: u32,
+    color: usize,
+) -> Result<ferrocast_core::convert::ImageOp, String> {
+    use ferrocast_core::redact::{Area, RedactSpec, Source, Style};
+    if areas.is_empty() {
+        return Err("Nothing to redact: drag a rectangle on the picture first".into());
+    }
+    let list = areas.iter().map(|r| Area { x: r.x, y: r.y, w: r.w, h: r.h }).collect();
+    let style = if blur {
+        Style::Blur(radius.clamp(*REDACT_BLUR_RANGE.start(), *REDACT_BLUR_RANGE.end()) as f32)
+    } else {
+        Style::Solid(ferrocast_core::annotate::COLORS[color.min(5)])
+    };
+    Ok(ferrocast_core::convert::ImageOp::RedactWith(RedactSpec { source: Source::Areas(list), style }))
+}
+
+/// The job for the background window, or the message that names what is wrong (the window stays
+/// open). An image backdrop must be a readable picture.
+pub fn frame_job(opts: &ferrocast_core::frame::FrameOpts) -> Result<ferrocast_core::convert::ImageOp, String> {
+    if let ferrocast_core::frame::Backdrop::Image(path) = &opts.backdrop {
+        if path.is_empty() {
+            return Err("Background: choose a picture first".into());
+        }
+        let p = std::path::Path::new(path);
+        if !p.is_file() {
+            return Err(format!("Background: {path} was not found"));
+        }
+        if services::image_size(p).is_none() {
+            return Err("Background: could not read that picture".into());
+        }
+    }
+    Ok(ferrocast_core::convert::ImageOp::FrameWith(opts.clone()))
+}
+
+/// `m:ss` for a time in seconds (whole seconds, rounded down; 0:00 for unusable numbers).
+pub fn clock(secs: f64) -> String {
+    let s = if secs.is_finite() && secs > 0.0 { secs as u64 } else { 0 };
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// A new area: a centred third of the frame, active for the whole clip.
+pub fn new_area(size: (u32, u32), duration: f64) -> Area {
+    let rect = ferrocast_core::croprect::with_size(ferrocast_core::croprect::full(size.0, size.1), size.0 / 3, size.1 / 3, size.0, size.1);
+    Area { rect, start: 0.0, end: duration.max(0.0), blur: false }
+}
+
+/// Most ranges the bleep window holds (the core's limit).
+pub const MAX_BLEEP_RANGES: usize = ferrocast_core::media::MAX_BLEEPS;
+
+/// Default new bleep range: one second centred in the clip, clamped to short clips.
+pub fn new_bleep_range(duration: f64) -> (f64, f64) {
+    let d = if duration.is_finite() { duration.max(0.0) } else { 0.0 };
+    let len = d.min(1.0);
+    let start = ((d - len) / 2.0 * 100.0).round() / 100.0;
+    (start, (start + len).min(d))
+}
+
+/// The job for the bleep window, or the message that names what is wrong (the window stays open).
+pub fn bleep_job(ranges: &[(f64, f64)], duration: f64) -> Result<ferrocast_core::convert::FileTool, String> {
+    ferrocast_core::media::validate_bleeps(ranges, duration).map(ferrocast_core::convert::FileTool::BleepMany)
+}
+
+/// `0:01.5` style time with tenths, for the range list.
+pub fn clock_tenths(secs: f64) -> String {
+    let t = if secs.is_finite() && secs > 0.0 { (secs * 10.0).round() as u64 } else { 0 };
+    format!("{}:{:02}.{}", t / 600, t / 10 % 60, t % 10)
+}
+
 /// Media mode of the Compress window: audio or video, and the probe result (read off the UI
 /// thread: `loaded` is false until it arrives, `info` None when the file could not be read).
 #[derive(Clone, Debug, PartialEq)]
@@ -140,6 +243,24 @@ pub fn compress_goal(
     Ok((goal, r))
 }
 
+/// Thumbnails were decoded for `loaded` (the order the collage had when the job started); the
+/// pictures may have been dragged into another order since. Returns `items` rearranged to the
+/// `now` order, or `None` when the file sets differ or an item is missing (a stale result).
+pub fn align_to_current<T>(now: &[PathBuf], loaded: &[PathBuf], items: Vec<T>) -> Option<Vec<T>> {
+    if now.len() != loaded.len() || items.len() != loaded.len() {
+        return None;
+    }
+    let mut slots: Vec<Option<T>> = items.into_iter().map(Some).collect();
+    let mut taken = vec![false; loaded.len()];
+    let mut out = Vec::with_capacity(now.len());
+    for f in now {
+        let i = (0..loaded.len()).find(|&i| !taken[i] && loaded[i] == *f)?;
+        taken[i] = true;
+        out.push(slots[i].take()?);
+    }
+    Some(out)
+}
+
 /// Pure mapping from the window's purpose to the job that Enter starts.
 pub fn reorder_job(purpose: ReorderPurpose, files: Vec<PathBuf>) -> ReorderJob {
     use ferrocast_core::convert::{FileTool, ImageOp};
@@ -209,23 +330,26 @@ pub enum View {
         duration: Option<f64>,
         factor: f64,
     },
-    /// One movable video redaction area with an active time range.
+    /// Video redaction window: up to 64 movable areas, each with its own time range and style;
+    /// `sel` is the area being edited and `ref_t` the time of the frame shown behind them.
     VideoRedact {
         file: PathBuf,
         size: Option<(u32, u32)>,
-        rect: ferrocast_core::croprect::Rect,
         aspect: Option<(u32, u32)>,
         duration: f64,
-        start: f64,
-        end: f64,
-        blur: bool,
+        areas: Vec<Area>,
+        sel: usize,
+        ref_t: f64,
     },
-    /// Video crop window: file, pixel size once probed, the rectangle and an optional locked aspect.
+    /// Video crop window: file, pixel size once probed, the rectangle and an optional locked aspect,
+    /// plus the duration and the time of the reference frame shown behind the rectangle.
     VideoCrop {
         file: PathBuf,
         size: Option<(u32, u32)>,
         rect: ferrocast_core::croprect::Rect,
         aspect: Option<(u32, u32)>,
+        duration: f64,
+        ref_t: f64,
     },
     VideoSnapshot {
         file: PathBuf,
@@ -246,6 +370,15 @@ pub enum View {
         trim: Option<ferrocast_core::videoplan::Trim>,
         audio: Option<Arc<crate::media_tools::AudioSamples>>,
     },
+    /// Bleep window: waveform peaks (None while the audio is read), the clip length and the
+    /// ranges to replace with a tone; `sel` is the selected range.
+    BleepAudio {
+        file: PathBuf,
+        duration: f64,
+        peaks: Option<Arc<Vec<(i16, i16)>>>,
+        ranges: Vec<(f64, f64)>,
+        sel: usize,
+    },
     /// Normalize window: the measured integrated loudness (None while measuring, NaN when it could
     /// not be measured) and the target, loudness range and true-peak settings.
     NormalizeAudio {
@@ -262,6 +395,15 @@ pub enum View {
         stereo: bool,
         left_db: f64,
         right_db: f64,
+    },
+    /// Audio to video window: waveform or a chosen still picture, and the canvas shape. `picking`
+    /// is true while the native chooser is open (one at a time).
+    VisualizeAudio {
+        file: PathBuf,
+        orient: ferrocast_core::media::Canvas,
+        style: crate::media_tools::VisStyle,
+        image: Option<PathBuf>,
+        picking: bool,
     },
     /// Video trim viewer: the file and its timeline state (None while the video is being probed).
     VideoTrim {
@@ -280,14 +422,18 @@ pub enum View {
         size: (u32, u32),
         opts: ferrocast_core::frame::FrameOpts,
         color: usize,
+        /// The native picture chooser is open (one dialog at a time).
+        picking: bool,
     },
-    /// Redaction editor: file, pixel size, the areas, the selected one and the style.
+    /// Redaction editor: file, pixel size, the areas, the selected one and the style
+    /// (`radius` is the blur radius in pixels, used when `blur` is on).
     RedactImage {
         file: PathBuf,
         size: (u32, u32),
         areas: Vec<ferrocast_core::croprect::Rect>,
         sel: Option<usize>,
         blur: bool,
+        radius: u32,
         color: usize,
     },
     /// Crop editor: file, pixel size, the rectangle and an optional locked aspect.
@@ -469,8 +615,10 @@ impl View {
             View::CollageImage { .. } => "Make a Collage",
             View::VideoTrim { .. } => "Trim Video",
             View::AudioTrim { .. } => "Trim Audio",
+            View::BleepAudio { .. } => "Bleep Audio",
             View::NormalizeAudio { .. } => "Normalize Audio",
             View::ChannelsAudio { .. } => "Audio Channels",
+            View::VisualizeAudio { .. } => "Audio to Video",
             View::VideoSnapshot { .. } => "Video Snapshots",
             View::VideoSplit { .. } => "Split Video",
             View::VideoCrop { .. } => "Crop Video",
@@ -1124,6 +1272,49 @@ impl App {
         self.focus_first = true;
     }
 
+    /// Forget the reference-frame bookkeeping of a previous video window.
+    fn ref_frame_reset(&mut self) {
+        self.ctx.data_mut(|d| {
+            d.remove::<(PathBuf, f64)>(Id::new("ref-flight"));
+            d.remove::<(PathBuf, f64)>(Id::new("ref-asked"));
+            d.remove::<(PathBuf, f64)>(Id::new("ref-shown"));
+        });
+    }
+
+    /// Record that the texture behind the rectangles shows `file` at `t`.
+    fn ref_frame_shown(&mut self, file: &std::path::Path, t: f64) {
+        self.ctx.data_mut(|d| {
+            d.insert_temp(Id::new("ref-shown"), (file.to_path_buf(), t));
+            d.insert_temp(Id::new("ref-asked"), (file.to_path_buf(), t));
+        });
+    }
+
+    /// Ask for the frame at the slider's time when it is not the one shown: off the UI thread, one
+    /// request in flight, and only the newest time is asked for once the reply arrives.
+    pub(crate) fn pump_ref_frame(&mut self) {
+        let (View::VideoCrop { file, size: Some(_), duration, ref_t, .. } | View::VideoRedact { file, size: Some(_), duration, ref_t, .. }) =
+            self.view()
+        else {
+            return;
+        };
+        let (file, t) = (file.clone(), ferrocast_core::videoplan::frame_time(*duration, *ref_t));
+        let Some(ff) = self.tools.ffmpeg else { return };
+        let in_flight = self.ctx.data(|d| d.get_temp::<(PathBuf, f64)>(Id::new("ref-flight"))).is_some();
+        let shown = self.ctx.data(|d| d.get_temp::<(PathBuf, f64)>(Id::new("ref-shown")));
+        if in_flight || shown.is_some_and(|(f, s)| f == file && s == t) {
+            return;
+        }
+        self.ctx.data_mut(|d| {
+            d.insert_temp(Id::new("ref-flight"), (file.clone(), t));
+            d.insert_temp(Id::new("ref-asked"), (file.clone(), t));
+        });
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            let png = crate::media_tools::preview_frame(ff, &file, t);
+            bus.send(Msg::RefFrame(file, t, png));
+        });
+    }
+
     fn pop(&mut self) {
         self.sec_dirty = true;
         self.nav_at = Instant::now();
@@ -1206,6 +1397,7 @@ impl App {
     /// Show the wheel centred under the pointer, without moving the drag's focus elsewhere.
     fn show_wheel(&mut self, kind: ferrocast_core::wheel::WheelKind, files: Vec<PathBuf>) {
         let segs = self.wheel_segments(kind, &files);
+        instance::log(&self.store.root, &wheel_log_line("open", kind, &segs, files.len()));
         if segs.is_empty() {
             return;
         }
@@ -1246,6 +1438,7 @@ impl App {
     pub(crate) fn switch_wheel(&mut self, kind: ferrocast_core::wheel::WheelKind) {
         let Some(View::Wheel { files, .. }) = self.stack.last().cloned() else { return };
         let segs = self.wheel_segments(kind, &files);
+        instance::log(&self.store.root, &wheel_log_line("switch", kind, &segs, files.len()));
         if segs.is_empty() {
             return;
         }
@@ -1344,17 +1537,12 @@ impl App {
                             if let Some(img) = services::decode_png(&png) {
                                 let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
                                 self.ctx.data_mut(|data| data.insert_temp(Id::new("crop-tex"), tex));
-                                if let Some(View::VideoRedact { size, rect, duration, end, .. }) = self.stack.last_mut() {
+                                let t = ferrocast_core::videoplan::frame_time(d, d * 0.1);
+                                self.ref_frame_shown(&file, t);
+                                if let Some(View::VideoRedact { size, areas, sel, duration, ref_t, .. }) = self.stack.last_mut() {
                                     *size = Some(dims);
-                                    *rect = ferrocast_core::croprect::with_size(
-                                        ferrocast_core::croprect::full(dims.0, dims.1),
-                                        dims.0 / 3,
-                                        dims.1 / 3,
-                                        dims.0,
-                                        dims.1,
-                                    );
-                                    *duration = d;
-                                    *end = d;
+                                    *areas = vec![new_area(dims, d)];
+                                    (*sel, *duration, *ref_t) = (0, d, t);
                                 }
                             } else {
                                 self.toast("Redact: could not decode the preview");
@@ -1367,19 +1555,41 @@ impl App {
                 Msg::VideoCropReady(file, ready) => {
                     if matches!(self.view(), View::VideoCrop { file: f, .. } if *f == file) {
                         match ready {
-                            Some((dims, png)) => {
+                            Some((dims, d, png)) => {
+                                let t = ferrocast_core::videoplan::frame_time(d, d * 0.1);
                                 if let Some(img) = services::decode_png(&png) {
                                     let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
-                                    self.ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                                    self.ctx.data_mut(|data| data.insert_temp(Id::new("crop-tex"), tex));
+                                    self.ref_frame_shown(&file, t);
                                 }
-                                if let Some(View::VideoCrop { size, rect, .. }) = self.stack.last_mut() {
+                                if let Some(View::VideoCrop { size, rect, duration, ref_t, .. }) = self.stack.last_mut() {
                                     *size = Some(dims);
                                     *rect = ferrocast_core::croprect::full(dims.0, dims.1);
+                                    (*duration, *ref_t) = (d, t);
                                 }
                             }
                             None => self.toast("Crop: could not read the video"),
                         }
                     }
+                }
+                Msg::RefFrame(file, t, png) => {
+                    // one request in flight, newest wins: the reply is used only for this file and the
+                    // time asked for last; the pump then asks again if the slider has moved on
+                    let flight: Option<(PathBuf, f64)> = self.ctx.data(|d| d.get_temp(Id::new("ref-flight")));
+                    if flight.as_ref().is_some_and(|(f, _)| *f == file) {
+                        self.ctx.data_mut(|d| d.remove::<(PathBuf, f64)>(Id::new("ref-flight")));
+                    }
+                    let asked: Option<(PathBuf, f64)> = self.ctx.data(|d| d.get_temp(Id::new("ref-asked")));
+                    let current = matches!(self.view(), View::VideoCrop { file: f, .. } | View::VideoRedact { file: f, .. } if *f == file);
+                    if current && asked.is_some_and(|(f, a)| f == file && a == t) {
+                        if let Some(img) = png.as_deref().and_then(services::decode_png) {
+                            let tex = self.ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
+                            self.ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                            self.ref_frame_shown(&file, t);
+                        }
+                    }
+                    self.pump_ref_frame();
+                    self.ctx.request_repaint();
                 }
                 Msg::MetadataLoaded(file, res) => {
                     if let Some(View::EditMetadata { file: f, original, working, error, .. }) = self.stack.last_mut() {
@@ -1458,6 +1668,29 @@ impl App {
                     }
                     self.ctx.request_repaint();
                 }
+                Msg::BleepAudioLoaded(file, res) => {
+                    if matches!(self.view(), View::BleepAudio { file: f, .. } if *f == file) {
+                        match res {
+                            Ok(a) => {
+                                let covered = (a.samples.len() as f64 / f64::from(a.rate.max(1)) / a.duration).clamp(0.0, 1.0);
+                                let real = ((800.0 * covered).ceil() as usize).clamp(1, 800);
+                                let mut bars = ferrocast_core::waveform::peaks(&a.samples, real);
+                                bars.resize(800, (0, 0));
+                                if let Some(View::BleepAudio { duration, peaks, ranges, sel, .. }) = self.stack.last_mut() {
+                                    *duration = a.duration;
+                                    *peaks = Some(Arc::new(bars));
+                                    *ranges = vec![new_bleep_range(a.duration)];
+                                    *sel = 0;
+                                }
+                            }
+                            Err(e) => {
+                                self.pop();
+                                self.toast(format!("Bleep Audio: {e}"));
+                            }
+                        }
+                    }
+                    self.ctx.request_repaint();
+                }
                 Msg::VideoFrame(file, t, png) => {
                     if matches!(self.view(), View::VideoTrim { file: f, .. } | View::VideoSnapshot { file: f, .. } | View::VideoSplit { file: f, .. } if *f == file)
                     {
@@ -1476,10 +1709,24 @@ impl App {
                     self.ctx.request_repaint();
                 }
                 Msg::CollageLoaded(files, thumbs) => {
-                    if matches!(self.view(), View::CollageImage { files: f, .. } if *f == files) {
+                    let current = match self.view() {
+                        View::CollageImage { files: f, .. } => Some(f.clone()),
+                        _ => None,
+                    };
+                    let same_files = |a: &[PathBuf]| {
+                        let (mut x, mut y) = (a.to_vec(), files.clone());
+                        x.sort();
+                        y.sort();
+                        x == y
+                    };
+                    // a result for another collage is ignored silently, as before
+                    if let Some(current) = current.filter(|c| same_files(c)) {
                         let imgs: Vec<image::RgbaImage> =
                             thumbs.into_iter().filter_map(|(w, h, px)| image::RgbaImage::from_raw(w as u32, h as u32, px)).collect();
-                        if imgs.len() == files.len() {
+                        // the pictures may have been dragged into a new order while they loaded
+                        let imgs = align_to_current(&current, &files, imgs);
+                        if let Some(imgs) = imgs {
+                            self.ctx.data_mut(|d| d.remove::<std::sync::Arc<Vec<egui::TextureHandle>>>(Id::new("collage-strip")));
                             self.ctx.data_mut(|d| {
                                 d.insert_temp(Id::new("collage-base"), std::sync::Arc::new(imgs));
                                 d.remove::<ferrocast_core::collage::CollageOpts>(Id::new("collage-last"));
@@ -1497,6 +1744,42 @@ impl App {
                                 d.remove::<(ferrocast_core::frame::FrameOpts, usize)>(Id::new("frame-last"));
                             }),
                             None => self.toast("Background: could not read the image"),
+                        }
+                    }
+                }
+                Msg::FramePicked(file, picked) => {
+                    let mut load = None;
+                    if let Some(View::FrameImage { file: f, opts, picking, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            *picking = false;
+                            if let Some(p) = picked {
+                                let path = p.to_string_lossy().to_string();
+                                opts.backdrop = ferrocast_core::frame::Backdrop::Image(path.clone());
+                                load = Some((p, path));
+                            }
+                        }
+                    }
+                    if let Some((p, path)) = load {
+                        let bus = self.bus.clone();
+                        std::thread::spawn(move || bus.send(Msg::FrameBgLoaded(file, path, services::display_png(&p, 600))));
+                    }
+                }
+                Msg::FrameBgLoaded(file, path, png) => {
+                    use ferrocast_core::frame::Backdrop;
+                    let current = matches!(self.view(), View::FrameImage { file: f, opts, .. }
+                        if *f == file && opts.backdrop == Backdrop::Image(path.clone()));
+                    if current {
+                        match png.as_deref().and_then(|b| image::load_from_memory(b).ok()).map(|i| i.to_rgba8()) {
+                            Some(rgba) => self.ctx.data_mut(|d| {
+                                d.insert_temp(Id::new("frame-bg"), std::sync::Arc::new((path, rgba)));
+                                d.remove::<(ferrocast_core::frame::FrameOpts, usize)>(Id::new("frame-last"));
+                            }),
+                            None => {
+                                if let Some(View::FrameImage { opts, .. }) = self.stack.last_mut() {
+                                    opts.backdrop = Backdrop::Image(String::new());
+                                }
+                                self.toast("Background: could not read that picture");
+                            }
                         }
                     }
                 }
@@ -1547,6 +1830,16 @@ impl App {
                                 });
                             }
                             None => self.toast("Edit Photo: could not read the image"),
+                        }
+                    }
+                }
+                Msg::VisualPicked(file, picked) => {
+                    if let Some(View::VisualizeAudio { file: f, image, picking, .. }) = self.stack.last_mut() {
+                        if *f == file {
+                            *picking = false;
+                            if picked.is_some() {
+                                *image = picked;
+                            }
                         }
                     }
                 }
@@ -2365,7 +2658,10 @@ impl App {
                                     FileTool::Speed(_) => "sf:speedometer",
                                     FileTool::Snapshot(_) => "sf:camera",
                                     FileTool::CropVideo(..) => "sf:crop",
-                                    FileTool::RedactVideo(..) | FileTool::RedactVideoMany(..) | FileTool::Bleep(..) => "sf:eye.slash",
+                                    FileTool::RedactVideo(..)
+                                    | FileTool::RedactVideoMany(..)
+                                    | FileTool::Bleep(..)
+                                    | FileTool::BleepMany(..) => "sf:eye.slash",
                                     FileTool::Normalize(..) | FileTool::Channels(..) => "sf:speaker.wave.2",
                                     FileTool::Visualize(_) | FileTool::VisualizeImage(..) => "sf:waveform",
                                     FileTool::TrimSilence => "sf:scissors",
@@ -2560,8 +2856,10 @@ impl App {
             ]),
             Family::Audio => list.extend([
                 ("Trim Audio…", "trim cut waveform silence start end", Act::TrimAudio(p.clone())),
+                ("Bleep…", "bleep censor mute beep swear tone ranges", Act::BleepAudio(p.clone())),
                 ("Normalize…", "normalize loudness lufs volume level peak", Act::NormalizeAudio(p.clone())),
                 ("Channels…", "channels mono stereo left right volume balance", Act::AudioChannels(p.clone())),
+                ("Audio to Video…", "audio video visualizer waveform picture image mp4", Act::VisualizeAudio(p.clone())),
             ]),
             _ => {}
         }
@@ -3638,21 +3936,14 @@ impl App {
                             if !duration.is_finite() || duration <= 0.0 {
                                 return None;
                             }
-                            crate::media_tools::preview_frame(ff, &f, duration * 0.1).map(|png| (dims, duration, png))
+                            let at = ferrocast_core::videoplan::frame_time(duration, duration * 0.1);
+                            crate::media_tools::preview_frame(ff, &f, at).map(|png| (dims, duration, png))
                         });
                         bus.send(Msg::VideoRedactReady(f, ready));
                     });
                     self.show();
-                    self.push(View::VideoRedact {
-                        file,
-                        size: None,
-                        rect: ferrocast_core::croprect::full(2, 2),
-                        aspect: None,
-                        duration: 0.0,
-                        start: 0.0,
-                        end: 0.0,
-                        blur: false,
-                    });
+                    self.ref_frame_reset();
+                    self.push(View::VideoRedact { file, size: None, aspect: None, duration: 0.0, areas: vec![], sel: 0, ref_t: 0.0 });
                 }
             },
             Act::CropVideo(file) => match self.tools.ffmpeg {
@@ -3662,13 +3953,22 @@ impl App {
                     let (bus, f) = (self.bus.clone(), file.clone());
                     std::thread::spawn(move || {
                         let ready = crate::media_tools::video_dims(ff, &f).and_then(|dims| {
-                            let at = crate::media_tools::video_info(ff, &f).map(|(d, _)| d * 0.1).unwrap_or(0.0);
-                            crate::media_tools::preview_frame(ff, &f, at).map(|png| (dims, png))
+                            let d = crate::media_tools::video_info(ff, &f).map(|(d, _)| d).unwrap_or(0.0);
+                            let at = ferrocast_core::videoplan::frame_time(d, d * 0.1);
+                            crate::media_tools::preview_frame(ff, &f, at).map(|png| (dims, d, png))
                         });
                         bus.send(Msg::VideoCropReady(f, ready));
                     });
                     self.show();
-                    self.push(View::VideoCrop { file, size: None, rect: ferrocast_core::croprect::full(2, 2), aspect: None });
+                    self.ref_frame_reset();
+                    self.push(View::VideoCrop {
+                        file,
+                        size: None,
+                        rect: ferrocast_core::croprect::full(2, 2),
+                        aspect: None,
+                        duration: 0.0,
+                        ref_t: 0.0,
+                    });
                 }
             },
             action @ (Act::TrimVideo(_) | Act::SnapshotVideo(_) | Act::SplitVideo(_)) => {
@@ -3705,6 +4005,18 @@ impl App {
                     self.push(View::AudioTrim { file, trim: None, audio: None });
                 }
             },
+            Act::BleepAudio(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(ff) => {
+                    let (bus, f) = (self.bus.clone(), file.clone());
+                    std::thread::spawn(move || {
+                        let res = crate::media_tools::audio_samples(ff, &f, crate::media_tools::AUDIO_CAP);
+                        bus.send(Msg::BleepAudioLoaded(f, res));
+                    });
+                    self.show();
+                    self.push(View::BleepAudio { file, duration: 0.0, peaks: None, ranges: vec![], sel: 0 });
+                }
+            },
             Act::NormalizeAudio(file) => match self.tools.ffmpeg {
                 None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
                 Some(ff) => {
@@ -3723,12 +4035,26 @@ impl App {
                     self.push(View::ChannelsAudio { file, in_channels: None, stereo: false, left_db: 0.0, right_db: 0.0 });
                 }
             },
+            Act::VisualizeAudio(file) => match self.tools.ffmpeg {
+                None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                Some(_) => {
+                    self.show();
+                    self.push(View::VisualizeAudio {
+                        file,
+                        orient: ferrocast_core::media::Canvas::Landscape,
+                        style: crate::media_tools::VisStyle::Waveform,
+                        image: None,
+                        picking: false,
+                    });
+                }
+            },
             Act::CollageImages(files) => {
                 if files.len() < 2 {
                     self.toast("A collage needs at least two images");
                 } else {
                     self.ctx.data_mut(|d| {
                         d.remove::<egui::TextureHandle>(Id::new("collage-tex"));
+                        d.remove::<std::sync::Arc<Vec<egui::TextureHandle>>>(Id::new("collage-strip"));
                         d.remove::<std::sync::Arc<Vec<image::RgbaImage>>>(Id::new("collage-base"));
                         d.remove::<ferrocast_core::collage::CollageOpts>(Id::new("collage-last"));
                     });
@@ -3753,6 +4079,7 @@ impl App {
                     self.ctx.data_mut(|d| {
                         d.remove::<egui::TextureHandle>(Id::new("frame-tex"));
                         d.remove::<std::sync::Arc<image::RgbaImage>>(Id::new("frame-base"));
+                        d.remove::<std::sync::Arc<(String, image::RgbaImage)>>(Id::new("frame-bg"));
                         d.remove::<(ferrocast_core::frame::FrameOpts, usize)>(Id::new("frame-last"));
                     });
                     let (bus, f) = (self.bus.clone(), file.clone());
@@ -3764,6 +4091,7 @@ impl App {
                         size,
                         opts: ferrocast_core::frame::FrameOpts { pad, radius: pad / 2, shadow: pad / 3, ..Default::default() },
                         color: 4,
+                        picking: false,
                     });
                 }
                 None => self.toast("Background: could not read the image"),
@@ -3777,7 +4105,15 @@ impl App {
                     let (bus, f) = (self.bus.clone(), file.clone());
                     std::thread::spawn(move || bus.send(Msg::RedactLoaded(f.clone(), services::display_png(&f, 1000))));
                     self.show();
-                    self.push(View::RedactImage { file, size, areas: vec![], sel: None, blur: false, color: 5 });
+                    self.push(View::RedactImage {
+                        file,
+                        size,
+                        areas: vec![],
+                        sel: None,
+                        blur: false,
+                        radius: REDACT_BLUR_DEFAULT,
+                        color: 5,
+                    });
                 }
                 None => self.toast("Redact: could not read the image"),
             },
@@ -4190,9 +4526,11 @@ pub(crate) fn tool_reach(tool: ferrocast_core::tools::ToolId, files: &[PathBuf])
         (AudioChannels, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::AudioChannels(p)),
         (NormalizeAudio, _) => ToolReach::File(FileTool::Normalize(-16.0, 11.0, -1.5)),
         (AudioChannels, _) => ToolReach::File(FileTool::Channels(false, 1.0, 1.0)),
+        (AudioToVideo, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::VisualizeAudio(p)),
         (AudioToVideo, _) => ToolReach::File(FileTool::Visualize(ferrocast_core::media::Canvas::Landscape)),
         (TrimAudio, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::TrimAudio(p)),
         (TrimAudio, _) => ToolReach::File(FileTool::TrimSilence),
+        (RedactAudio, Some(p)) if family_of(&p) == Family::Audio => ToolReach::Act(Act::BleepAudio(p)),
         (ExtractArchive, _) if !files.is_empty() => ToolReach::File(FileTool::Extract),
         _ => ToolReach::Open,
     }
@@ -4272,6 +4610,13 @@ pub(crate) fn tool_segment_with(t: ferrocast_core::tools::ToolId, files: &[PathB
         ToolReach::Open => WheelPick::Act(Act::Convert(files.to_vec())),
     };
     WheelSeg { label: tool_label(t).into(), symbol: tool_symbol(t), needs: missing.then_some("Not available yet"), pick }
+}
+
+/// One diagnostic line for the log when a wheel opens or switches: the kind, how many segments and
+/// the first three labels. Never a path.
+pub(crate) fn wheel_log_line(event: &str, kind: ferrocast_core::wheel::WheelKind, segs: &[WheelSeg], files: usize) -> String {
+    let first = segs.iter().take(3).map(|s| s.label.as_str()).collect::<Vec<_>>().join(",");
+    format!("wheel {event} {kind:?} segs={} files={files} first={first}", segs.len())
 }
 
 /// SF Symbol for a conversion output, so a ring of formats is told apart at a glance.

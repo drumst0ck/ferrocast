@@ -2,7 +2,7 @@
 
 use objc2::rc::Retained;
 use objc2::AnyThread;
-use objc2_foundation::{NSArray, NSDictionary, NSString, NSURL};
+use objc2_foundation::{NSArray, NSDictionary};
 use objc2_vision::{VNDetectFaceRectanglesRequest, VNDetectTextRectanglesRequest, VNImageRequestHandler, VNRequest};
 use std::path::Path;
 
@@ -17,7 +17,7 @@ pub struct Region {
 
 /// Faces and/or text boxes in an image. Runs locally; nothing leaves the Mac.
 pub fn detect(path: &Path, faces: bool, text: bool) -> anyhow::Result<Vec<Region>> {
-    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    let Some(url) = crate::clipboard::ns_file_url(path) else { anyhow::bail!("No image path was given") };
     let handler = unsafe { VNImageRequestHandler::initWithURL_options(VNImageRequestHandler::alloc(), &url, &NSDictionary::new()) };
     let face_req = unsafe { VNDetectFaceRectanglesRequest::new() };
     let text_req = unsafe { VNDetectTextRectanglesRequest::new() };

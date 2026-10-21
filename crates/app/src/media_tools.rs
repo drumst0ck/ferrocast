@@ -298,6 +298,43 @@ pub(crate) fn db_to_gain(db: f64) -> f64 {
     10f64.powf(db / 20.0)
 }
 
+/// What the audio to video window puts on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisStyle {
+    Waveform,
+    Still,
+}
+
+/// A picture the visualizer accepts: a file of a type ffmpeg reads as one still frame.
+pub(crate) fn picture_ok(p: &Path) -> bool {
+    p.is_file() && matches!(ferrocast_core::convert::ext(p).as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tiff" | "tif")
+}
+
+/// The job the audio to video window starts. Still image needs a picture that exists now.
+pub(crate) fn visualize_job(orient: media::Canvas, style: VisStyle, image: Option<&Path>) -> Result<FileTool, String> {
+    match style {
+        VisStyle::Waveform => Ok(FileTool::Visualize(orient)),
+        VisStyle::Still => {
+            let Some(p) = image.filter(|p| !p.as_os_str().is_empty()) else {
+                return Err("Audio to Video: choose a picture first".into());
+            };
+            if !picture_ok(p) {
+                return Err(format!("Audio to Video: {} is not a readable picture (png, jpg, webp, bmp or tiff)", p.display()));
+            }
+            Ok(FileTool::VisualizeImage(orient, p.to_string_lossy().into_owned()))
+        }
+    }
+}
+
+/// One line under the controls: the real canvas size from the builder.
+pub(crate) fn visualize_line(orient: media::Canvas, style: VisStyle) -> String {
+    let (w, h) = orient.size();
+    match style {
+        VisStyle::Waveform => format!("{w}×{h} MP4 with the waveform"),
+        VisStyle::Still => format!("{w}×{h} MP4 with your picture"),
+    }
+}
+
 /// Normalize window ranges: target -30..=-5 LUFS, range 1..=20 LU, true peak -9..=0 dBTP.
 pub(crate) fn normalize_params(target: f64, range: f64, peak: f64) -> Result<FileTool, String> {
     if !(target.is_finite() && (-30.0..=-5.0).contains(&target)) {
@@ -590,9 +627,7 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
                     FileTool::Visualize(canvas) => media::visualizer(input, None, canvas, out),
                     FileTool::VisualizeImage(canvas, ref img) => {
                         let p = Path::new(img.as_str());
-                        if !p.is_file()
-                            || !matches!(ferrocast_core::convert::ext(p).as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tiff" | "tif")
-                        {
+                        if !picture_ok(p) {
                             return Err(format!("{img} is not a readable image (png, jpg, webp, bmp or tiff)"));
                         }
                         media::visualizer(input, Some(img.as_str()), canvas, out)
@@ -604,6 +639,11 @@ pub(crate) fn run(files: &[PathBuf], tool: &FileTool, ffmpeg: Option<&str>) -> (
                         media::channels(input, in_channels, stereo, l, r, out)
                     }
                     FileTool::Bleep(a, b) if finite_range(a, b) => media::bleep(input, a, b, out),
+                    FileTool::BleepMany(ref ranges) => {
+                        let duration = info["format"]["duration"].as_str().and_then(|d| d.parse::<f64>().ok()).unwrap_or(f64::NAN);
+                        let ranges = media::validate_bleeps(ranges, duration)?;
+                        media::bleep_many(input, &ranges, out)
+                    }
                     FileTool::Join if files.len() >= 2 && width >= 2 && height >= 2 => {
                         // Silent clips get generated silence of the same length inside the filter graph.
                         let (mut has, mut durs) = (vec![], vec![]);

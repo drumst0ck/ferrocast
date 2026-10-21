@@ -73,7 +73,22 @@ pub(crate) fn file_url_to_path(s: &str) -> Option<PathBuf> {
         i += 1;
     }
     let p = String::from_utf8(out).ok()?;
-    Some(PathBuf::from(p.trim_end_matches('/')))
+    if p.is_empty() {
+        return None;
+    }
+    // keep the root: "file:///" must stay "/", never become an empty path
+    let trimmed = p.trim_end_matches('/');
+    Some(PathBuf::from(if trimmed.is_empty() { "/" } else { trimmed }))
+}
+
+/// `NSURL` for a file path, or `None` for an empty one: `+[NSURL fileURLWithPath:]` returns NULL
+/// for "" and the binding panics on NULL, which crashed the app in a real session.
+pub(crate) fn ns_file_url(p: &std::path::Path) -> Option<Retained<NSURL>> {
+    let s = p.to_string_lossy();
+    if s.is_empty() {
+        return None;
+    }
+    Some(NSURL::fileURLWithPath(&NSString::from_str(&s)))
 }
 
 fn png_from_data(data: &NSData) -> Option<(Vec<u8>, u32, u32)> {
@@ -128,13 +143,8 @@ pub fn write_text(s: &str) {
 pub fn write_files(paths: &[PathBuf]) {
     let pb = pb();
     pb.clearContents();
-    let urls: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = paths
-        .iter()
-        .map(|p| {
-            let url = NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()));
-            ProtocolObject::from_retained(url)
-        })
-        .collect();
+    let urls: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> =
+        paths.iter().filter_map(|p| ns_file_url(p)).map(ProtocolObject::from_retained).collect();
     let arr = NSArray::from_retained_slice(&urls);
     pb.writeObjects(&arr);
 }
@@ -209,6 +219,25 @@ pub fn restore(s: &Snapshot) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_root_or_empty_file_url_never_gives_an_empty_path() {
+        // "file:///" used to lose its only slash and become an empty path, which made
+        // +[NSURL fileURLWithPath:] return NULL and panic (seen in the real log)
+        assert_eq!(file_url_to_path("file:///"), Some(PathBuf::from("/")));
+        assert_eq!(file_url_to_path("file:////"), Some(PathBuf::from("/")));
+        assert_eq!(file_url_to_path("file://localhost/"), Some(PathBuf::from("/")));
+        assert_eq!(file_url_to_path("file://"), None);
+        assert_eq!(file_url_to_path("file://localhost"), None);
+        assert_eq!(file_url_to_path("file:///tmp/"), Some(PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn ns_file_url_refuses_an_empty_path_instead_of_panicking() {
+        assert!(ns_file_url(std::path::Path::new("")).is_none());
+        assert!(ns_file_url(std::path::Path::new("/tmp")).is_some());
+        assert!(ns_file_url(std::path::Path::new("relative/name.txt")).is_some());
+    }
 
     #[test]
     fn file_url_decoding_survives_malformed_escapes() {

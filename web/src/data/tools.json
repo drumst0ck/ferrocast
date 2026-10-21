@@ -214,7 +214,7 @@
     {
       "id": "audioToVideo",
       "name": "Audio to video",
-      "status": "typed",
+      "status": "window",
       "shortcut": null,
       "formats": [
         "mp3",
@@ -250,7 +250,7 @@
     {
       "id": "redactAudio",
       "name": "Bleep audio",
-      "status": "typed",
+      "status": "window",
       "shortcut": null,
       "formats": [
         "mp3",

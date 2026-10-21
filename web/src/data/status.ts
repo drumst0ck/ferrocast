@@ -10,7 +10,7 @@ import tools from './tools.json';
 
 export type Level = 'tested' | 'built' | 'typed' | 'planned';
 
-export const STATUS_DATE = '2026-10-20';
+export const STATUS_DATE = '2026-10-21';
 
 export const levels: Record<Level, { label: string; short: string; text: string }> = {
   tested: { label: 'Tested', short: 'Tested', text: 'Run on real files in tests' },
@@ -27,7 +27,7 @@ export function toolLevel(status: string): Level {
   return 'planned';
 }
 
-export const statusLine = `Status as of ${STATUS_DATE}: every conversion pair has run on real files in tests; every interactive window, the drag wheel, AirDrop, Terminal and the shelf are implemented but not yet tried in a live session; Enter on a Finder selection is not included yet (a command exists).`;
+export const statusLine = `Status as of ${STATUS_DATE}: every conversion pair has run on real files in tests; every interactive window is built, including the audio trim, normalize, channels, video split, compress, metadata and choose-order windows, and so are the drag wheel, AirDrop, Terminal and the shelf, but none of it has been tried in a live session; Enter on a Finder selection is not included yet (a command exists).`;
 
 /** Counters computed from the generated data. Throws at build time if the data drifts. */
 export function counts() {

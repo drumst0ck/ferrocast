@@ -185,6 +185,9 @@ pub struct CommandConfig {
     pub disabled: bool,
 }
 
+/// Hotkeys bound out of the box; the user can change or remove them in Settings.
+pub const DEFAULT_HOTKEYS: &[(&str, &str)] = &[("builtin:clipboard-history", "Control+KeyV")];
+
 /// Where Ask AI sends its questions.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum AiProvider {
@@ -281,8 +284,13 @@ impl Settings {
     pub fn alias(&self, id: &str) -> Option<&str> {
         self.commands.get(id).and_then(|c| c.alias.as_deref()).filter(|a| !a.is_empty())
     }
+    /// Effective hotkey: the user's choice, else the built-in default. An empty
+    /// string means the user removed the hotkey on purpose.
     pub fn hotkey(&self, id: &str) -> Option<&str> {
-        self.commands.get(id).and_then(|c| c.hotkey.as_deref()).filter(|a| !a.is_empty())
+        match self.commands.get(id).and_then(|c| c.hotkey.as_deref()) {
+            Some(h) => Some(h).filter(|a| !a.is_empty()),
+            None => DEFAULT_HOTKEYS.iter().find(|(c, _)| *c == id).map(|(_, h)| *h),
+        }
     }
     pub fn is_disabled(&self, id: &str) -> bool {
         self.commands.get(id).is_some_and(|c| c.disabled)
@@ -348,6 +356,18 @@ mod tests {
         let s: Settings = serde_json::from_str("{\"compact_mode\": true}").unwrap();
         assert!(s.compact_mode);
         assert_eq!(s.launcher_hotkey, "Alt+Space");
+    }
+
+    #[test]
+    fn default_hotkey_can_be_overridden_or_removed() {
+        let mut s = Settings::default();
+        let id = "builtin:clipboard-history";
+        assert_eq!(s.hotkey(id), Some("Control+KeyV"));
+        s.command_mut(id).hotkey = Some("Alt+KeyV".into());
+        assert_eq!(s.hotkey(id), Some("Alt+KeyV"));
+        s.command_mut(id).hotkey = Some(String::new());
+        assert_eq!(s.hotkey(id), None);
+        assert_eq!(s.hotkey("builtin:other"), None);
     }
 
     #[test]

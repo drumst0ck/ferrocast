@@ -10,6 +10,7 @@ import Counters from '../components/Counters.astro';
 import WheelDemo from '../components/WheelDemo.astro';
 import MatrixExplorer from '../components/MatrixExplorer.astro';
 import ToolCards from '../components/ToolCards.astro';
+import Gallery from '../components/Gallery.astro';
 import tools from '../data/tools.json';
 import { counts, levels, statusLine, STATUS_DATE, type Level } from '../data/status';
 
@@ -108,6 +109,11 @@ const legend: Level[] = ['tested', 'built', 'typed', 'planned'];
         {legend.map((l) => <li><StatusBadge level={l} /><span>{levels[l].text}</span></li>)}
       </ul>
       <p class="fx-note">Not included yet: pressing Enter on a Finder selection. A command that opens the wheel for the Finder selection exists instead. No interaction has been proved in a live session yet.</p>
+    </Section>
+
+    <Section id="gallery" title="The windows, as pictures" lead="What the tool windows and wheels look like.">
+      <p class="fx-note gl-note">Rendered by the app's own screenshot mode on sample files. These are pictures of the windows, not recordings of use; mouse and keyboard behaviour is still being proved in live sessions.</p>
+      <Gallery />
     </Section>
 
     <Section id="faq" title="Questions about conversions">

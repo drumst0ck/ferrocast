@@ -168,24 +168,47 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
                     if let Some(dims) = crate::media_tools::video_dims(ff, &file) {
-                        if let Some(img) = crate::media_tools::preview_frame(ff, &file, 1.0).and_then(|b| services::decode_png(&b)) {
+                        let duration = crate::media_tools::video_info(ff, &file).map(|(d, _)| d).unwrap_or(0.0);
+                        let ref_t = ferrocast_core::videoplan::frame_time(duration, 2.0);
+                        if let Some(img) = crate::media_tools::preview_frame(ff, &file, ref_t).and_then(|b| services::decode_png(&b)) {
                             let tex = ctx.load_texture("crop-view", img, egui::TextureOptions::LINEAR);
                             ctx.data_mut(|d| d.insert_temp(Id::new("crop-tex"), tex));
+                            ctx.data_mut(|d| d.insert_temp(Id::new("ref-shown"), (file.clone(), ref_t)));
                         }
-                        let rect = ferrocast_core::croprect::fit_aspect(dims.0, dims.1, 1, 1);
                         app.push(if std::env::var("FERROCAST_VIEW").as_deref() == Ok("vredact") {
+                            let area = |x: f64, y: f64, w: f64, h: f64, start: f64, end: f64, blur: bool| crate::app::Area {
+                                rect: ferrocast_core::croprect::Rect {
+                                    x: (dims.0 as f64 * x) as u32,
+                                    y: (dims.1 as f64 * y) as u32,
+                                    w: (dims.0 as f64 * w) as u32,
+                                    h: (dims.1 as f64 * h) as u32,
+                                },
+                                start,
+                                end,
+                                blur,
+                            };
                             View::VideoRedact {
                                 file,
                                 size: Some(dims),
-                                rect,
                                 aspect: None,
-                                duration: 4.0,
-                                start: 1.0,
-                                end: 3.0,
-                                blur: true,
+                                duration,
+                                areas: vec![
+                                    area(0.08, 0.1, 0.25, 0.3, 0.0, duration, false),
+                                    area(0.4, 0.3, 0.3, 0.35, 1.0, 3.0, true),
+                                    area(0.72, 0.62, 0.22, 0.3, 2.0, duration * 0.9, false),
+                                ],
+                                sel: 1,
+                                ref_t,
                             }
                         } else {
-                            View::VideoCrop { file, size: Some(dims), rect, aspect: Some((1, 1)) }
+                            View::VideoCrop {
+                                file,
+                                size: Some(dims),
+                                rect: ferrocast_core::croprect::fit_aspect(dims.0, dims.1, 1, 1),
+                                aspect: Some((1, 1)),
+                                duration,
+                                ref_t,
+                            }
                         });
                     }
                 }
@@ -261,6 +284,35 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     });
                 }
             }
+            Ok("avis") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                app.push(View::VisualizeAudio {
+                    file,
+                    orient: ferrocast_core::media::Canvas::Portrait,
+                    style: crate::media_tools::VisStyle::Waveform,
+                    image: None,
+                    picking: false,
+                });
+            }
+            Ok("bleep") => {
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(ff) = app.tools.ffmpeg {
+                    match crate::media_tools::audio_samples(ff, &file, crate::media_tools::AUDIO_CAP) {
+                        Ok(a) => {
+                            let bars = ferrocast_core::waveform::peaks(&a.samples, 800);
+                            let ranges = vec![(0.8, 1.6), (2.5, 3.5), (4.4, 5.2)];
+                            app.push(View::BleepAudio {
+                                file,
+                                duration: a.duration,
+                                peaks: Some(std::sync::Arc::new(bars)),
+                                ranges,
+                                sel: 1,
+                            });
+                        }
+                        Err(e) => app.toast(e),
+                    }
+                }
+            }
             Ok("atrim") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
@@ -309,7 +361,17 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                         shadow: 40,
                         backdrop: ferrocast_core::frame::Backdrop::Color(ferrocast_core::annotate::COLORS[4]),
                     };
-                    app.push(View::FrameImage { file, size, opts, color: 4 });
+                    let mut opts = opts;
+                    // FERROCAST_FRAME_IMAGE=/path/pic.png preselects the picture backdrop
+                    if let Ok(bg) = std::env::var("FERROCAST_FRAME_IMAGE") {
+                        if let Some(rgba) =
+                            services::display_png(std::path::Path::new(&bg), 600).and_then(|p| image::load_from_memory(&p).ok())
+                        {
+                            ctx.data_mut(|d| d.insert_temp(Id::new("frame-bg"), std::sync::Arc::new((bg.clone(), rgba.to_rgba8()))));
+                            opts.backdrop = ferrocast_core::frame::Backdrop::Image(bg);
+                        }
+                    }
+                    app.push(View::FrameImage { file, size, opts, color: 4, picking: false });
                 }
             }
             Ok("redact") => {
@@ -323,7 +385,8 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                         ferrocast_core::croprect::Rect { x: size.0 / 8, y: size.1 / 5, w: size.0 / 3, h: size.1 / 5 },
                         ferrocast_core::croprect::Rect { x: size.0 / 2, y: size.1 / 2, w: size.0 / 4, h: size.1 / 4 },
                     ];
-                    app.push(View::RedactImage { file, size, areas, sel: Some(1), blur: false, color: 5 });
+                    let blur = std::env::var("FERROCAST_REDACT_BLUR").is_ok();
+                    app.push(View::RedactImage { file, size, areas, sel: Some(1), blur, radius: 24, color: 5 });
                 }
             }
             Ok("crop") => {
@@ -570,7 +633,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. } | View::NormalizeAudio { .. } | View::ChannelsAudio { .. }) && kbd_edit);
+            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::RedactImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. } | View::BleepAudio { .. } | View::NormalizeAudio { .. } | View::ChannelsAudio { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -788,22 +851,31 @@ impl App {
                 }
                 true
             }
-            View::VideoRedact { file, size: Some(_), rect, duration, start, end, blur, .. } if k.enter => {
-                if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start || end > duration {
-                    self.toast("Redact: use 0 ≤ start < end ≤ video duration");
-                } else {
-                    let (x, y, w, h) = ferrocast_core::croprect::tuple(rect);
-                    self.toast("Redacting video…");
-                    services::file_tool_files(
-                        vec![file],
-                        ferrocast_core::convert::FileTool::RedactVideo(x, y, w, h, start, end, blur),
-                        self.tools.ffmpeg,
-                        self.bus.clone(),
-                    );
-                    self.pop();
+            View::VideoRedact { file, size: Some(size), areas, duration, .. } if k.enter => {
+                match redact_job(&areas, duration, size) {
+                    Err(m) => self.toast(m),
+                    Ok(_) if self.tools.ffmpeg.is_none() => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                    Ok(tool) => {
+                        self.toast("Redacting video…");
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
                 }
                 true
             }
+            View::BleepAudio { file, duration, ranges, peaks: Some(_), .. } if k.enter => {
+                match bleep_job(&ranges, duration) {
+                    Err(m) => self.toast(m),
+                    Ok(_) if self.tools.ffmpeg.is_none() => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                    Ok(tool) => {
+                        self.toast("Bleeping…");
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
+                }
+                true
+            }
+            View::BleepAudio { .. } if k.enter => true,
             View::VideoSnapshot { trim: Some(_), .. } if k.enter && k.repeat => true,
             View::VideoSnapshot { file, trim: Some(t) } if k.enter => {
                 self.toast("Saving full-resolution frame…");
@@ -864,6 +936,18 @@ impl App {
                 }
                 true
             }
+            View::VisualizeAudio { file, orient, style, image, .. } if k.enter => {
+                match crate::media_tools::visualize_job(orient, style, image.as_deref()) {
+                    Err(m) => self.toast(m),
+                    Ok(_) if self.tools.ffmpeg.is_none() => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                    Ok(tool) => {
+                        self.toast("Making the video…");
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
+                }
+                true
+            }
             View::VideoTrim { file, trim: Some(t) } if k.enter => {
                 if t.is_whole() {
                     self.toast("Nothing to trim: set a start (I) or an end (O) first");
@@ -886,23 +970,24 @@ impl App {
                 true
             }
             View::FrameImage { file, opts, .. } if k.enter => {
-                self.toast("Saving framed copy…");
-                services::image_op_files(vec![file], ferrocast_core::convert::ImageOp::FrameWith(opts), self.bus.clone());
-                self.pop();
+                match crate::app::frame_job(&opts) {
+                    Ok(op) => {
+                        self.toast("Saving framed copy…");
+                        services::image_op_files(vec![file], op, self.bus.clone());
+                        self.pop();
+                    }
+                    Err(m) => self.toast(&m),
+                }
                 true
             }
-            View::RedactImage { file, areas, blur, color, .. } if k.enter => {
-                if areas.is_empty() {
-                    self.toast("Nothing to redact: drag a rectangle on the picture first");
-                } else {
-                    use ferrocast_core::redact::{Area, RedactSpec, Source, Style};
-                    let list = areas.iter().map(|r| Area { x: r.x, y: r.y, w: r.w, h: r.h }).collect();
-                    let c = ferrocast_core::annotate::COLORS[color.min(5)];
-                    let style = if blur { Style::Blur(24.0) } else { Style::Solid(c) };
-                    self.toast("Saving redacted copy…");
-                    let op = ferrocast_core::convert::ImageOp::RedactWith(RedactSpec { source: Source::Areas(list), style });
-                    services::image_op_files(vec![file], op, self.bus.clone());
-                    self.pop();
+            View::RedactImage { file, areas, blur, radius, color, .. } if k.enter => {
+                match crate::app::redact_job_image(&areas, blur, radius, color) {
+                    Ok(op) => {
+                        self.toast("Saving redacted copy…");
+                        services::image_op_files(vec![file], op, self.bus.clone());
+                        self.pop();
+                    }
+                    Err(m) => self.toast(&m),
                 }
                 true
             }
@@ -2342,6 +2427,77 @@ impl App {
         );
     }
 
+    /// Audio to video window: waveform or still picture, and the canvas shape. No number or text
+    /// field, so it needs no entry in the kbd_edit list.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_visualize_audio(
+        &mut self,
+        ui: &mut Ui,
+        area: Rect,
+        pal: &Palette,
+        file: &std::path::Path,
+        orient: ferrocast_core::media::Canvas,
+        style: crate::media_tools::VisStyle,
+        image: Option<std::path::PathBuf>,
+        picking: bool,
+    ) {
+        use crate::media_tools::VisStyle;
+        use ferrocast_core::media::Canvas;
+        let ctx = ui.ctx().clone();
+        let (mut o, mut st) = (orient, style);
+        let mut choose = false;
+        let mut rects = [Rect::NOTHING; 5];
+        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(520.0, 240.0))), |ui| {
+            ui.spacing_mut().item_spacing.y = 14.0;
+            ui.label(
+                RichText::new(file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).size(13.0).color(pal.sub),
+            );
+            ui.horizontal(|ui| {
+                rects[0] = ui.selectable_value(&mut st, VisStyle::Waveform, "Waveform").rect;
+                rects[1] = ui.selectable_value(&mut st, VisStyle::Still, "Still image").rect;
+            });
+            ui.horizontal(|ui| {
+                rects[2] = ui.selectable_value(&mut o, Canvas::Landscape, "Landscape").rect;
+                rects[3] = ui.selectable_value(&mut o, Canvas::Portrait, "Portrait").rect;
+                rects[4] = ui.selectable_value(&mut o, Canvas::Square, "Square").rect;
+            });
+            if st == VisStyle::Still {
+                ui.horizontal(|ui| {
+                    choose = ui.add_enabled(!picking, egui::Button::new(if picking { "Choosing…" } else { "Choose picture…" })).clicked();
+                    let (text, color) = match &image {
+                        Some(p) if p.is_file() => (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), pal.text),
+                        Some(p) => (format!("{} (not found)", p.display()), pal.sub),
+                        None => ("no picture chosen yet".to_string(), pal.sub),
+                    };
+                    ui.label(RichText::new(text).size(12.5).color(color));
+                });
+            }
+            ui.label(RichText::new(crate::media_tools::visualize_line(o, st)).size(12.5).color(pal.sub));
+            ui.label(RichText::new("The video is saved as a new MP4 next to the audio; nothing is overwritten.").size(12.0).color(pal.sub));
+        });
+        ctx.data_mut(|d| d.insert_temp(Id::new("avis-rects"), rects));
+        if choose && !picking {
+            let (bus, f) = (self.bus.clone(), file.to_path_buf());
+            std::thread::spawn(move || bus.send(Msg::VisualPicked(f, services::choose_picture_file())));
+        }
+        if (o, st) != (orient, style) || (choose && !picking) {
+            if let Some(View::VisualizeAudio { orient, style, picking, .. }) = self.stack.last_mut() {
+                (*orient, *style) = (o, st);
+                if choose {
+                    *picking = true;
+                }
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area.center().x, area.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "pick the picture and the shape · ↵ make the video · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
     /// Video trim viewer: the frame at the cursor, a timeline with start and end markers, and
     /// stepping keys. Frames are extracted on a worker thread, one at a time, newest wins.
     fn draw_video_trim(
@@ -2657,6 +2813,165 @@ impl App {
         }
     }
 
+    /// Bleep window: the ranges on the left (add, select, delete), the waveform with every range
+    /// shaded (the selected one stronger) and the selected range's Start and End boxes.
+    fn draw_bleep(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette) {
+        let View::BleepAudio { duration, peaks: Some(peaks), ranges, sel, .. } = self.view().clone() else {
+            return;
+        };
+        if ranges.is_empty() {
+            // cannot happen once the audio is read; keep the window usable if it ever does
+            if let Some(View::BleepAudio { ranges, sel, .. }) = self.stack.last_mut() {
+                (*ranges, *sel) = (vec![crate::app::new_bleep_range(duration)], 0);
+            }
+            ui.ctx().request_repaint();
+            return;
+        }
+        let sel_now = sel.min(ranges.len() - 1);
+        let mut ranges_new = ranges.clone();
+        let mut sel_new = sel_now;
+        // left column: "+ Add range" first (fixed place), then one row per range
+        let col = Rect::from_min_size(rect.min + Vec2::new(12.0, 8.0), Vec2::new(206.0, rect.height() - 16.0));
+        let full = ranges.len() >= crate::app::MAX_BLEEP_RANGES;
+        let add = Rect::from_min_size(col.min, Vec2::new(col.width(), 26.0));
+        let add_resp = ui.interact(add, Id::new("bleep-add"), if full { egui::Sense::hover() } else { egui::Sense::click() });
+        ui.painter().rect_filled(add, 6.0, if add_resp.hovered() && !full { pal.sel } else { pal.field });
+        ui.painter().text(
+            add.center(),
+            egui::Align2::CENTER_CENTER,
+            if full { format!("Limit of {} ranges", crate::app::MAX_BLEEP_RANGES) } else { "+ Add range".to_string() },
+            FontId::proportional(13.0),
+            if full { pal.sub } else { pal.text },
+        );
+        if add_resp.clicked() && !full {
+            ranges_new.push(crate::app::new_bleep_range(duration));
+            sel_new = ranges_new.len() - 1;
+        }
+        let mut delete = None;
+        let can_delete = ranges.len() > 1;
+        for (i, (a, b)) in ranges.iter().enumerate() {
+            let row = Rect::from_min_size(col.min + Vec2::new(0.0, 34.0 + 30.0 * i as f32), Vec2::new(col.width(), 26.0));
+            if row.max.y > rect.max.y - 4.0 {
+                break;
+            }
+            let label_rect = Rect::from_min_max(row.min, Pos2::new(row.max.x - 26.0, row.max.y));
+            let del_rect = Rect::from_min_max(Pos2::new(row.max.x - 26.0, row.min.y), row.max);
+            let resp = ui.interact(label_rect, Id::new(("bleep-row", i)), egui::Sense::click());
+            let del =
+                ui.interact(del_rect, Id::new(("bleep-del", i)), if can_delete { egui::Sense::click() } else { egui::Sense::hover() });
+            if i == sel_now {
+                ui.painter().rect_filled(row, 6.0, pal.sel);
+                ui.painter().rect_stroke(row, 6.0, Stroke::new(1.0, pal.accent), StrokeKind::Inside);
+            } else if resp.hovered() || del.hovered() {
+                ui.painter().rect_filled(row, 6.0, pal.field);
+            }
+            ui.painter().text(
+                label_rect.left_center() + Vec2::new(8.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                format!("Range {} · {}–{}", i + 1, crate::app::clock_tenths(*a), crate::app::clock_tenths(*b)),
+                FontId::proportional(12.0),
+                pal.text,
+            );
+            let x_color = if !can_delete {
+                pal.sep
+            } else if del.hovered() {
+                pal.danger
+            } else {
+                pal.sub
+            };
+            let c = del_rect.center();
+            ui.painter().line_segment([c + Vec2::new(-4.0, -4.0), c + Vec2::new(4.0, 4.0)], Stroke::new(1.5, x_color));
+            ui.painter().line_segment([c + Vec2::new(-4.0, 4.0), c + Vec2::new(4.0, -4.0)], Stroke::new(1.5, x_color));
+            if del.clicked() && can_delete {
+                delete = Some(i);
+            } else if resp.clicked() {
+                sel_new = i;
+            }
+        }
+        if let Some(i) = delete {
+            ranges_new.remove(i);
+            sel_new = if sel_new > i || sel_new >= ranges_new.len() { sel_new.saturating_sub(1) } else { sel_new };
+        }
+        // right side: Start and End of the selected range, then the waveform
+        let right = Rect::from_min_max(Pos2::new(rect.min.x + 232.0, rect.min.y), rect.max);
+        if sel_new == sel_now && sel_now < ranges_new.len() {
+            let (mut a, mut b) = ranges_new[sel_now];
+            let strip = Rect::from_min_size(right.min + Vec2::new(12.0, 4.0), Vec2::new(right.width() - 24.0, 30.0));
+            ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Range {}", sel_now + 1));
+                    ui.label("Start s");
+                    ui.add(egui::DragValue::new(&mut a).range(0.0..=duration).speed(0.02).fixed_decimals(2));
+                    ui.label("End s");
+                    ui.add(egui::DragValue::new(&mut b).range(0.0..=duration).speed(0.02).fixed_decimals(2));
+                });
+            });
+            ranges_new[sel_now] = (a, b);
+        }
+        let wave = Rect::from_min_max(right.min + Vec2::new(12.0, 46.0), Pos2::new(right.max.x - 12.0, right.max.y - 56.0));
+        if wave.width() > 8.0 && wave.height() > 8.0 && duration > 0.0 {
+            let x_of = |s: f64| wave.min.x + (s / duration).clamp(0.0, 1.0) as f32 * wave.width();
+            let resp = ui.interact(wave, Id::new("bleep-wave"), egui::Sense::click());
+            if let (true, Some(p)) = (resp.clicked(), resp.interact_pointer_pos()) {
+                // clicking inside a range selects it
+                let t = ((p.x - wave.min.x) / wave.width()).clamp(0.0, 1.0) as f64 * duration;
+                if let Some(i) = ranges_new.iter().position(|(a, b)| (*a..=*b).contains(&t)) {
+                    sel_new = i;
+                }
+            }
+            let painter = ui.painter();
+            painter.rect_filled(wave, 6.0, pal.field);
+            for (i, (a, b)) in ranges_new.iter().enumerate() {
+                let (lo, hi) = (a.min(*b), a.max(*b));
+                let strong = i == sel_new.min(ranges_new.len() - 1);
+                let r = Rect::from_min_max(Pos2::new(x_of(lo), wave.min.y), Pos2::new(x_of(hi).max(x_of(lo) + 1.0), wave.max.y));
+                painter.rect_filled(r, 0.0, pal.accent.gamma_multiply(if strong { 0.45 } else { 0.2 }));
+                if strong {
+                    painter.rect_stroke(r, 0.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+                }
+                painter.text(
+                    r.min + Vec2::new(3.0, 2.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("{}", i + 1),
+                    FontId::proportional(11.0),
+                    pal.text,
+                );
+            }
+            let (mid, half) = (wave.center().y, wave.height() / 2.0 - 4.0);
+            for (i, (lo, hi)) in peaks.iter().enumerate() {
+                let x = wave.min.x + (i as f32 + 0.5) / peaks.len() as f32 * wave.width();
+                let top = (mid - *hi as f32 / 32768.0 * half).min(mid - 0.5);
+                let bottom = (mid - *lo as f32 / 32768.0 * half).max(mid + 0.5);
+                painter.line_segment([Pos2::new(x, top), Pos2::new(x, bottom)], Stroke::new(1.0, pal.text));
+            }
+            painter.text(
+                Pos2::new(wave.min.x, wave.max.y + 14.0),
+                egui::Align2::LEFT_CENTER,
+                format!(
+                    "{} range{} · clip {}",
+                    ranges_new.len(),
+                    if ranges_new.len() == 1 { "" } else { "s" },
+                    crate::app::clock_tenths(duration)
+                ),
+                FontId::proportional(12.5),
+                pal.text,
+            );
+        }
+        ui.painter().text(
+            Pos2::new(right.center().x, rect.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "click a shaded range to select it · overlapping ranges are merged · ↵ save bleeped copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+        if ranges_new != ranges || sel_new != sel {
+            if let Some(View::BleepAudio { ranges, sel, .. }) = self.stack.last_mut() {
+                (*ranges, *sel) = (ranges_new, sel_new);
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+
     /// Collage editor: layout buttons, width/gap/corner sliders and a background; the preview is
     /// laid out on small copies of the pictures with the sizes scaled to match.
     fn draw_collage(
@@ -2664,11 +2979,12 @@ impl App {
         ui: &mut Ui,
         area_in: Rect,
         pal: &Palette,
-        n: usize,
+        files: Vec<PathBuf>,
         opts: ferrocast_core::collage::CollageOpts,
         color: usize,
     ) {
         use ferrocast_core::collage::{layout, Layout};
+        let n = files.len();
         let ctx = ui.ctx().clone();
         let (mut o, mut color) = (opts, color);
         let panel = Rect::from_min_max(Pos2::new(area_in.max.x - 300.0, area_in.min.y + 12.0), area_in.max - Vec2::new(16.0, 34.0));
@@ -2726,7 +3042,96 @@ impl App {
             }
             ctx.request_repaint();
         }
-        let area = Rect::from_min_max(area_in.min + Vec2::new(16.0, 14.0), Pos2::new(area_in.max.x - 316.0, area_in.max.y - 34.0));
+        let mut area = Rect::from_min_max(area_in.min + Vec2::new(16.0, 14.0), Pos2::new(area_in.max.x - 316.0, area_in.max.y - 34.0));
+        let base: Option<std::sync::Arc<Vec<image::RgbaImage>>> = ctx.data(|d| d.get_temp(Id::new("collage-base")));
+        if n >= 2 {
+            // one small chip per picture, draggable: the order here is the order of the collage
+            let strip = Rect::from_min_size(area.min, Vec2::new(area.width(), 70.0));
+            area.min.y += 78.0;
+            let chips: Option<std::sync::Arc<Vec<egui::TextureHandle>>> =
+                match (&base, ctx.data(|d| d.get_temp::<std::sync::Arc<Vec<egui::TextureHandle>>>(Id::new("collage-strip")))) {
+                    (_, Some(c)) if c.len() == n => Some(c),
+                    (Some(b), _) if b.len() == n => {
+                        let v: Vec<egui::TextureHandle> = b
+                            .iter()
+                            .enumerate()
+                            .map(|(i, img)| {
+                                let ci =
+                                    egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+                                ctx.load_texture(format!("collage-chip-{i}"), ci, egui::TextureOptions::LINEAR)
+                            })
+                            .collect();
+                        let v = std::sync::Arc::new(v);
+                        ctx.data_mut(|d| d.insert_temp(Id::new("collage-strip"), v.clone()));
+                        Some(v)
+                    }
+                    _ => None,
+                };
+            let mut dropped = None;
+            ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+                egui::ScrollArea::horizontal().id_salt("collage-strip-scroll").auto_shrink([false, true]).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        dropped = drag_reorder_cells(
+                            ui,
+                            "collage-strip",
+                            n,
+                            true,
+                            pal,
+                            |ui, i, lifted| {
+                                let (r, _) = ui.allocate_exact_size(Vec2::new(64.0, 52.0), egui::Sense::hover());
+                                ui.painter().rect_filled(r, 8.0, if lifted { pal.sel } else { pal.field });
+                                match chips.as_ref().and_then(|c| c.get(i)) {
+                                    Some(t) => {
+                                        let s = t.size_vec2();
+                                        let k = ((r.width() - 8.0) / s.x).min((r.height() - 8.0) / s.y);
+                                        egui::Image::new(t).paint_at(ui, Rect::from_center_size(r.center(), s * k));
+                                    }
+                                    None => {
+                                        let name = files[i].file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                                        let p = ui.painter().with_clip_rect(r.shrink(3.0));
+                                        p.text(r.center(), egui::Align2::CENTER_CENTER, name, FontId::proportional(10.5), pal.sub);
+                                    }
+                                }
+                                // the index sits on a small dark pill fully inside the chip
+                                let galley = ui.painter().layout_no_wrap((i + 1).to_string(), FontId::proportional(10.5), Color32::WHITE);
+                                let pill = Rect::from_min_size(
+                                    Pos2::new(r.min.x + 4.0, r.max.y - 4.0 - (galley.size().y + 2.0)),
+                                    galley.size() + Vec2::new(8.0, 2.0),
+                                );
+                                ui.painter().rect_filled(pill, pill.height() / 2.0, Color32::from_black_alpha(190));
+                                ui.painter().galley(pill.center() - galley.size() / 2.0, galley, Color32::WHITE);
+                                if lifted {
+                                    ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+                                }
+                            },
+                            |_, _, _| {},
+                        )
+                        .moved;
+                    });
+                });
+            });
+            if let Some((from, to)) = dropped {
+                use ferrocast_core::reorder::move_item;
+                if let Some(View::CollageImage { files: f, .. }) = self.stack.last_mut() {
+                    move_item(f, from, to);
+                }
+                ctx.data_mut(|d| {
+                    if let Some(b) = d.get_temp::<std::sync::Arc<Vec<image::RgbaImage>>>(Id::new("collage-base")) {
+                        let mut v = (*b).clone();
+                        move_item(&mut v, from, to);
+                        d.insert_temp(Id::new("collage-base"), std::sync::Arc::new(v));
+                    }
+                    if let Some(c) = d.get_temp::<std::sync::Arc<Vec<egui::TextureHandle>>>(Id::new("collage-strip")) {
+                        let mut v = (*c).clone();
+                        move_item(&mut v, from, to);
+                        d.insert_temp(Id::new("collage-strip"), std::sync::Arc::new(v));
+                    }
+                    d.remove::<ferrocast_core::collage::CollageOpts>(Id::new("collage-last"));
+                });
+                ctx.request_repaint();
+            }
+        }
         let base: Option<std::sync::Arc<Vec<image::RgbaImage>>> = ctx.data(|d| d.get_temp(Id::new("collage-base")));
         if let Some(b) = base {
             let last: Option<ferrocast_core::collage::CollageOpts> = ctx.data(|d| d.get_temp(Id::new("collage-last")));
@@ -2774,19 +3179,24 @@ impl App {
 
     /// Background editor: sliders for padding, corners and shadow, a colour or blurred backdrop;
     /// the preview is composed on a 600 px copy with the sizes scaled down.
+    #[allow(clippy::too_many_arguments)]
     fn draw_frame(
         &mut self,
         ui: &mut Ui,
         area_in: Rect,
         pal: &Palette,
+        file: &std::path::Path,
         size: (u32, u32),
         opts: ferrocast_core::frame::FrameOpts,
         color: usize,
+        picking: bool,
     ) {
         use ferrocast_core::frame::Backdrop;
         let ctx = ui.ctx().clone();
         let (mut o, mut color) = (opts.clone(), color);
+        let mut choose = false;
         let blur_on = matches!(o.backdrop, Backdrop::Blur(_));
+        let image_on = matches!(o.backdrop, Backdrop::Image(_));
         let panel = Rect::from_min_max(Pos2::new(area_in.max.x - 300.0, area_in.min.y + 12.0), area_in.max - Vec2::new(16.0, 34.0));
         ui.scope_builder(UiBuilder::new().max_rect(panel), |ui| {
             ui.spacing_mut().slider_width = 170.0;
@@ -2801,13 +3211,18 @@ impl App {
                 });
             }
             ui.horizontal(|ui| {
-                if ui.selectable_label(!blur_on, "Colour").clicked() {
-                    if let Backdrop::Blur(_) = o.backdrop {
-                        o.backdrop = Backdrop::Color(ferrocast_core::annotate::COLORS[color.min(5)]);
-                    }
+                if ui.selectable_label(matches!(o.backdrop, Backdrop::Color(_)), "Colour").clicked()
+                    && !matches!(o.backdrop, Backdrop::Color(_))
+                {
+                    o.backdrop = Backdrop::Color(ferrocast_core::annotate::COLORS[color.min(5)]);
                 }
                 if ui.selectable_label(blur_on, "Blur").clicked() && !blur_on {
                     o.backdrop = Backdrop::Blur(30.0);
+                }
+                if ui.selectable_label(image_on, "Image").clicked() && !image_on {
+                    // reuse the picture already loaded for the preview, if there is one
+                    let kept: Option<std::sync::Arc<(String, image::RgbaImage)>> = ctx.data(|d| d.get_temp(Id::new("frame-bg")));
+                    o.backdrop = Backdrop::Image(kept.map(|k| k.0.clone()).unwrap_or_default());
                 }
             });
             match &mut o.backdrop {
@@ -2842,12 +3257,34 @@ impl App {
                         }
                     });
                 }
-                Backdrop::Image(_) => {}
+                Backdrop::Image(path) => {
+                    let name = std::path::Path::new(path.as_str()).file_name().map(|n| n.to_string_lossy().to_string());
+                    let text = match name {
+                        Some(n) => n,
+                        None if picking => "choosing…".to_string(),
+                        None => "no picture chosen yet".to_string(),
+                    };
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(!picking, egui::Button::new("Choose image…")).clicked() {
+                            choose = true;
+                        }
+                        ui.label(RichText::new(text).size(12.5).color(pal.sub));
+                    });
+                }
             }
         });
-        if o != opts {
-            if let Some(View::FrameImage { opts: p, color: c, .. }) = self.stack.last_mut() {
+        if choose && !picking {
+            let (bus, f) = (self.bus.clone(), file.to_path_buf());
+            std::thread::spawn(move || {
+                bus.send(Msg::FramePicked(f, services::choose_picture_with_prompt("Choose a picture for the background")))
+            });
+        }
+        if o != opts || (choose && !picking) {
+            if let Some(View::FrameImage { opts: p, color: c, picking: pk, .. }) = self.stack.last_mut() {
                 (*p, *c) = (o.clone(), color);
+                if choose {
+                    *pk = true;
+                }
             }
             ctx.request_repaint();
         }
@@ -2868,7 +3305,14 @@ impl App {
                         other => other.clone(),
                     },
                 };
-                let out = services::frame_compose(&b, None, &small);
+                // the chosen backdrop picture, once it is loaded (a white backdrop until then)
+                let bg: Option<std::sync::Arc<(String, image::RgbaImage)>> = match &o.backdrop {
+                    Backdrop::Image(p) => {
+                        ctx.data(|d| d.get_temp::<std::sync::Arc<(String, image::RgbaImage)>>(Id::new("frame-bg"))).filter(|b| b.0 == *p)
+                    }
+                    _ => None,
+                };
+                let out = services::frame_compose(&b, bg.as_deref().map(|b| &b.1), &small);
                 let (w, h) = (out.width() as usize, out.height() as usize);
                 let tex = ctx.load_texture(
                     "frame-view",
@@ -2912,20 +3356,28 @@ impl App {
         size: (u32, u32),
         areas: Vec<ferrocast_core::croprect::Rect>,
         sel: Option<usize>,
-        blur: bool,
+        style: (bool, u32),
         color: usize,
     ) {
         use ferrocast_core::croprect as cr;
         let ctx = ui.ctx().clone();
-        let before = (areas.clone(), sel, blur, color);
-        let (mut areas, mut sel, mut blur, mut color) = (areas, sel, blur, color);
+        let before = (areas.clone(), sel, style, color);
+        let (mut areas, mut sel, (mut blur, mut radius), mut color) = (areas, sel, style, color);
+        let mut deleted = false;
+        let editing = ctx.egui_wants_keyboard_input();
         ctx.input_mut(|i| {
-            if i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace) {
+            // Backspace belongs to the blur box while it is being typed in
+            if !editing && (i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)) {
                 if let Some(s) = sel.take().filter(|s| *s < areas.len()) {
                     areas.remove(s);
+                    deleted = true;
                 }
             }
         });
+        if deleted {
+            // a drag in progress holds an area index that no longer means the same area
+            ctx.data_mut(|d| d.remove::<(cr::Handle, cr::Rect, Pos2, usize)>(Id::new("redact-drag")));
+        }
         let strip = Rect::from_min_size(area_in.min + Vec2::new(12.0, 8.0), Vec2::new(area_in.width() - 24.0, 30.0));
         ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
             ui.horizontal(|ui| {
@@ -2935,7 +3387,12 @@ impl App {
                 if ui.selectable_label(blur, "Blur").clicked() {
                     blur = true;
                 }
-                if !blur {
+                if blur {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Blur").size(12.0).color(pal.sub));
+                    ui.spacing_mut().slider_width = 120.0;
+                    ui.add(egui::Slider::new(&mut radius, crate::app::REDACT_BLUR_RANGE).suffix(" px"));
+                } else {
                     ui.add_space(8.0);
                     for (i, c) in ferrocast_core::annotate::COLORS.iter().enumerate() {
                         let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
@@ -2958,8 +3415,16 @@ impl App {
         let scale = (area.width() / size.0 as f32).min(area.height() / size.1 as f32).max(0.01);
         let img_rect = Rect::from_center_size(area.center(), Vec2::new(size.0 as f32 * scale, size.1 as f32 * scale));
         let resp = ui.interact(img_rect.expand(8.0), Id::new("redact-canvas"), egui::Sense::click_and_drag());
+        ctx.data_mut(|d| d.insert_temp(Id::new("redact-img-rect"), img_rect));
         let to_img = |p: Pos2| ((p.x - img_rect.min.x) / scale, (p.y - img_rect.min.y) / scale);
         type Drag = (cr::Handle, cr::Rect, Pos2, usize);
+        if resp.clicked() {
+            // a plain click selects the topmost area under it, or clears the selection on empty space
+            if let Some(p) = resp.interact_pointer_pos() {
+                let q = to_img(p);
+                sel = areas.iter().enumerate().rev().find(|(_, r)| cr::hit(**r, q.0, q.1, scale, 10.0).is_some()).map(|(i, _)| i);
+            }
+        }
         if resp.drag_started() {
             if let Some(p) = resp.interact_pointer_pos() {
                 let q = to_img(p);
@@ -3022,16 +3487,155 @@ impl App {
         ui.painter().text(
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
             egui::Align2::CENTER_CENTER,
-            "drag on the picture to add an area · drag an area to move, corners to resize · ⌫ remove · the cover is applied on save · ↵ save a copy · esc cancel",
+            "drag to add an area · drag an area to move, corners to resize · ⌫ remove · the preview only marks areas; the cover is applied on save · ↵ save · esc cancel",
             FontId::proportional(11.5),
             pal.sub,
         );
-        if (areas.clone(), sel, blur, color) != before {
-            if let Some(View::RedactImage { areas: a, sel: s, blur: b, color: c, .. }) = self.stack.last_mut() {
-                (*a, *s, *b, *c) = (areas, sel, blur, color);
+        if (areas.clone(), sel, (blur, radius), color) != before {
+            if let Some(View::RedactImage { areas: a, sel: s, blur: b, radius: r, color: c, .. }) = self.stack.last_mut() {
+                (*a, *s, *b, *r, *c) = (areas, sel, blur, radius, color);
             }
             ctx.request_repaint();
         }
+    }
+
+    /// "Reference frame" slider of the crop and redact windows: moving it asks (off the UI thread,
+    /// newest wins) for the frame at that time; the rectangles are not touched.
+    fn draw_ref_frame(&mut self, ui: &mut Ui, strip: Rect, pal: &Palette, duration: f64, ref_t: f64) {
+        let max = ferrocast_core::videoplan::frame_time(duration, duration);
+        if max <= 0.0 {
+            return;
+        }
+        let mut t = ref_t.clamp(0.0, max);
+        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Reference frame").size(12.0).color(pal.sub));
+                ui.spacing_mut().slider_width = 220.0;
+                ui.add(egui::Slider::new(&mut t, 0.0..=max).suffix(" s").fixed_decimals(2));
+            });
+        });
+        if t != ref_t {
+            if let Some(View::VideoCrop { ref_t: r, .. } | View::VideoRedact { ref_t: r, .. }) = self.stack.last_mut() {
+                *r = t;
+            }
+            ui.ctx().request_repaint();
+        }
+        self.pump_ref_frame();
+    }
+
+    /// Redact video: the areas on the left (add, select, delete), the picture with the selected
+    /// area's rectangle on the right, and the selected area's time range and style.
+    fn draw_video_redact(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette) {
+        let View::VideoRedact { size: Some(size), duration, areas, sel, ref_t, .. } = self.view().clone() else {
+            return;
+        };
+        if areas.is_empty() {
+            // cannot happen once the video is read; keep the window usable if it ever does
+            if let Some(View::VideoRedact { areas, sel, .. }) = self.stack.last_mut() {
+                (*areas, *sel) = (vec![crate::app::new_area(size, duration)], 0);
+            }
+            ui.ctx().request_repaint();
+            return;
+        }
+        let sel_now = sel.min(areas.len() - 1);
+        let mut areas_new = areas.clone();
+        let mut sel_new = sel_now;
+        // left column: "+ Add area" first (fixed place), then one row per area
+        let col = Rect::from_min_size(rect.min + Vec2::new(12.0, 8.0), Vec2::new(206.0, rect.height() - 16.0));
+        let full = areas.len() >= crate::app::MAX_REDACT_AREAS;
+        let add = Rect::from_min_size(col.min, Vec2::new(col.width(), 26.0));
+        let add_resp = ui.interact(add, Id::new("redact-add"), if full { egui::Sense::hover() } else { egui::Sense::click() });
+        let add_fill = if add_resp.hovered() && !full { pal.sel } else { pal.field };
+        ui.painter().rect_filled(add, 6.0, add_fill);
+        ui.painter().text(
+            add.center(),
+            egui::Align2::CENTER_CENTER,
+            if full { format!("Limit of {} areas", crate::app::MAX_REDACT_AREAS) } else { "+ Add area".to_string() },
+            FontId::proportional(13.0),
+            if full { pal.sub } else { pal.text },
+        );
+        if add_resp.clicked() && !full {
+            areas_new.push(crate::app::new_area(size, duration));
+            sel_new = areas_new.len() - 1;
+        }
+        let mut delete = None;
+        let can_delete = areas.len() > 1;
+        for (i, a) in areas.iter().enumerate() {
+            let row = Rect::from_min_size(col.min + Vec2::new(0.0, 34.0 + 30.0 * i as f32), Vec2::new(col.width(), 26.0));
+            if row.max.y > rect.max.y - 4.0 {
+                break;
+            }
+            let label_rect = Rect::from_min_max(row.min, Pos2::new(row.max.x - 26.0, row.max.y));
+            let del_rect = Rect::from_min_max(Pos2::new(row.max.x - 26.0, row.min.y), row.max);
+            let resp = ui.interact(label_rect, Id::new(("redact-row", i)), egui::Sense::click());
+            let del =
+                ui.interact(del_rect, Id::new(("redact-del", i)), if can_delete { egui::Sense::click() } else { egui::Sense::hover() });
+            if i == sel_now {
+                ui.painter().rect_filled(row, 6.0, pal.sel);
+                ui.painter().rect_stroke(row, 6.0, Stroke::new(1.0, pal.accent), StrokeKind::Inside);
+            } else if resp.hovered() || del.hovered() {
+                ui.painter().rect_filled(row, 6.0, pal.field);
+            }
+            ui.painter().text(
+                label_rect.left_center() + Vec2::new(8.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                format!("Area {} · {}–{} · {}", i + 1, clock(a.start), clock(a.end), if a.blur { "blur" } else { "solid" }),
+                FontId::proportional(12.0),
+                pal.text,
+            );
+            let x_color = if !can_delete {
+                pal.sep
+            } else if del.hovered() {
+                pal.danger
+            } else {
+                pal.sub
+            };
+            let c = del_rect.center();
+            ui.painter().line_segment([c + Vec2::new(-4.0, -4.0), c + Vec2::new(4.0, 4.0)], Stroke::new(1.5, x_color));
+            ui.painter().line_segment([c + Vec2::new(-4.0, 4.0), c + Vec2::new(4.0, -4.0)], Stroke::new(1.5, x_color));
+            if del.clicked() && can_delete {
+                delete = Some(i);
+            } else if resp.clicked() {
+                sel_new = i;
+            }
+        }
+        if let Some(i) = delete {
+            areas_new.remove(i);
+            sel_new = if sel_new > i || sel_new >= areas_new.len() { sel_new.saturating_sub(1) } else { sel_new };
+        }
+        // right side: range and style of the selected area, the reference frame, then the picture
+        let right = Rect::from_min_max(Pos2::new(rect.min.x + 232.0, rect.min.y), rect.max);
+        if sel_new == sel_now && sel_now < areas_new.len() {
+            let mut a = areas_new[sel_now];
+            let strip = Rect::from_min_size(right.min + Vec2::new(12.0, 4.0), Vec2::new(right.width() - 24.0, 30.0));
+            ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Area {}", sel_now + 1));
+                    ui.label("Start s");
+                    ui.add(egui::DragValue::new(&mut a.start).range(0.0..=duration).speed(0.04));
+                    ui.label("End s");
+                    ui.add(egui::DragValue::new(&mut a.end).range(0.0..=duration).speed(0.04));
+                    ui.selectable_value(&mut a.blur, false, "Solid");
+                    ui.selectable_value(&mut a.blur, true, "Blur");
+                });
+            });
+            areas_new[sel_now] = a;
+        }
+        if areas_new != areas || sel_new != sel {
+            if let Some(View::VideoRedact { areas, sel, .. }) = self.stack.last_mut() {
+                (*areas, *sel) = (areas_new.clone(), sel_new);
+            }
+            ui.ctx().request_repaint();
+        }
+        let ref_strip = Rect::from_min_size(right.min + Vec2::new(12.0, 36.0), Vec2::new(right.width() - 24.0, 28.0));
+        self.draw_ref_frame(ui, ref_strip, pal, duration, ref_t);
+        let sel_rect = areas_new.get(sel_new).map(|a| a.rect).unwrap_or_else(|| ferrocast_core::croprect::full(size.0, size.1));
+        let aspect = match self.view() {
+            View::VideoRedact { aspect, .. } => *aspect,
+            _ => None,
+        };
+        let area = Rect::from_min_max(right.min + Vec2::new(0.0, 64.0), right.max);
+        self.draw_crop(ui, area, pal, size, sel_rect, aspect);
     }
 
     /// Crop editor: the picture with a draggable rectangle, aspect presets and exact size boxes.
@@ -3083,7 +3687,12 @@ impl App {
                     }
                     rect = cr::with_size(rect, w, h, size.0, size.1);
                 }
-                ui.label(RichText::new(format!("{}×{} of {}×{} px", rect.w, rect.h, size.0, size.1)).size(12.0).color(pal.sub));
+                let note = if matches!(self.view(), View::VideoRedact { .. }) {
+                    format!("{}×{} px", rect.w, rect.h)
+                } else {
+                    format!("{}×{} of {}×{} px", rect.w, rect.h, size.0, size.1)
+                };
+                ui.label(RichText::new(note).size(12.0).color(pal.sub));
             });
         });
         let area = Rect::from_min_max(area_in.min + Vec2::new(16.0, 46.0), area_in.max - Vec2::new(16.0, 34.0));
@@ -3128,6 +3737,23 @@ impl App {
             ui.painter().rect_filled(r, 0.0, shade);
         }
         ui.painter().rect_stroke(sr, 0.0, Stroke::new(1.5, pal.accent), StrokeKind::Outside);
+        // the other redaction areas, as dim numbered outlines
+        if let View::VideoRedact { areas, sel, .. } = self.view() {
+            for (i, a) in areas.iter().enumerate().filter(|(i, _)| i != sel) {
+                let r = Rect::from_min_size(
+                    Pos2::new(img_rect.min.x + a.rect.x as f32 * scale, img_rect.min.y + a.rect.y as f32 * scale),
+                    Vec2::new(a.rect.w as f32 * scale, a.rect.h as f32 * scale),
+                );
+                ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, egui::Color32::from_white_alpha(130)), StrokeKind::Outside);
+                ui.painter().text(
+                    r.min + Vec2::new(4.0, 2.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("{}", i + 1),
+                    FontId::proportional(11.0),
+                    egui::Color32::from_white_alpha(170),
+                );
+            }
+        }
         for p in [
             sr.left_top(),
             sr.right_top(),
@@ -3144,7 +3770,7 @@ impl App {
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
             egui::Align2::CENTER_CENTER,
             if matches!(self.view(), View::VideoRedact { .. }) {
-                "drag to move/resize · preview marks area only · ↵ save redacted copy · esc cancel"
+                "drag to move/resize the selected area · the preview only marks it · ↵ save redacted copy · esc cancel"
             } else {
                 "drag inside to move · drag an edge or corner to resize · presets lock the ratio · ↵ save a cropped copy · esc cancel"
             },
@@ -3152,13 +3778,15 @@ impl App {
             pal.sub,
         );
         if (rect, aspect) != before {
-            if let Some(
-                View::CropImage { rect: r, aspect: a, .. }
-                | View::VideoCrop { rect: r, aspect: a, .. }
-                | View::VideoRedact { rect: r, aspect: a, .. },
-            ) = self.stack.last_mut()
-            {
-                (*r, *a) = (rect, aspect);
+            match self.stack.last_mut() {
+                Some(View::CropImage { rect: r, aspect: a, .. } | View::VideoCrop { rect: r, aspect: a, .. }) => (*r, *a) = (rect, aspect),
+                Some(View::VideoRedact { areas, sel, aspect: a, .. }) => {
+                    if let Some(area) = areas.get_mut(*sel) {
+                        area.rect = rect;
+                    }
+                    *a = aspect;
+                }
+                _ => {}
             }
             ctx.request_repaint();
         }
@@ -3462,7 +4090,7 @@ impl App {
 
     /// Ordered list of files: ↑/↓ choose, ⌘↑/⌘↓ (or the row buttons) move, ↵ runs.
     fn draw_reorder(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, purpose: ReorderPurpose, files: Vec<PathBuf>, cursor: usize) {
-        use ferrocast_core::reorder::{move_down, move_up};
+        use ferrocast_core::reorder::{move_down, move_item, move_up};
         let ctx = ui.ctx().clone();
         let (mut files, mut cursor) = (files, cursor);
         let before = (files.clone(), cursor);
@@ -3485,72 +4113,92 @@ impl App {
             }
         });
         let mut click: Option<(usize, i8)> = None; // (row, 0 select / -1 up / 1 down)
+        let mut dropped: Option<(usize, usize)> = None;
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(Vec2::new(16.0, 12.0))), |ui| {
             ui.label(RichText::new(format!("{} files · first to last", files.len())).size(13.0).color(pal.text));
             let hint = match purpose {
-                ReorderPurpose::JoinVideos => "First clip sets the canvas · ⌘↑/⌘↓ move · ↵ join",
-                ReorderPurpose::CreatePdf => "One page per picture · ⌘↑/⌘↓ move · ↵ create PDF",
-                _ => "⌘↑/⌘↓ move · ↵ merge",
+                ReorderPurpose::JoinVideos => "First clip sets the canvas · drag a row or ⌘↑/⌘↓ to move · ↵ join",
+                ReorderPurpose::CreatePdf => "One page per picture · drag a row or ⌘↑/⌘↓ to move · ↵ create PDF",
+                _ => "Drag a row or ⌘↑/⌘↓ to move · ↵ merge",
             };
             ui.label(RichText::new(hint).size(12.0).color(pal.sub));
             ui.add_space(6.0);
             egui::ScrollArea::vertical().id_salt("reorder-list").auto_shrink([false, false]).show(ui, |ui| {
-                for (pos, f) in files.iter().enumerate() {
-                    let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 44.0), egui::Sense::click());
-                    let on = pos == cursor;
-                    ui.painter().rect_filled(r, 8.0, if on { pal.sel } else { pal.field });
-                    if on {
-                        ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
-                        ui.scroll_to_rect(r, None);
-                    }
-                    if resp.clicked() {
-                        click = Some((pos, 0));
-                    }
-                    ui.painter().text(
-                        Pos2::new(r.min.x + 22.0, r.center().y),
-                        egui::Align2::CENTER_CENTER,
-                        (pos + 1).to_string(),
-                        FontId::proportional(14.0),
-                        pal.sub,
-                    );
-                    let text_rect = Rect::from_min_max(Pos2::new(r.min.x + 42.0, r.min.y), Pos2::new(r.max.x - 76.0, r.max.y));
-                    let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.display().to_string());
-                    let kind = f.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
-                    let p = ui.painter().with_clip_rect(text_rect);
-                    p.text(
-                        Pos2::new(text_rect.min.x, r.center().y - 8.0),
-                        egui::Align2::LEFT_CENTER,
-                        name,
-                        FontId::proportional(14.0),
-                        pal.text,
-                    );
-                    p.text(
-                        Pos2::new(text_rect.min.x, r.center().y + 10.0),
-                        egui::Align2::LEFT_CENTER,
-                        kind,
-                        FontId::proportional(11.5),
-                        pal.sub,
-                    );
-                    for (b, (glyph, dir)) in [("↑", -1i8), ("↓", 1i8)].into_iter().enumerate() {
-                        let br = Rect::from_center_size(Pos2::new(r.max.x - 50.0 + b as f32 * 32.0, r.center().y), Vec2::new(28.0, 28.0));
-                        let enabled = if dir < 0 { pos > 0 } else { pos < last };
-                        let bresp = ui.interact(br, Id::new(("reorder-btn", pos, dir)), egui::Sense::click());
-                        let fill = if bresp.hovered() && enabled { pal.sel } else { pal.bg };
-                        ui.painter().rect_filled(br, 6.0, fill);
-                        ui.painter().text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
-                            glyph,
-                            FontId::proportional(14.0),
-                            if enabled { pal.text } else { pal.sub.gamma_multiply(0.4) },
-                        );
-                        if bresp.clicked() && enabled {
-                            click = Some((pos, dir));
+                let res = drag_reorder_cells(
+                    ui,
+                    "reorder-rows",
+                    files.len(),
+                    false,
+                    pal,
+                    |ui, pos, lifted| {
+                        let f = &files[pos];
+                        let (r, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 44.0), egui::Sense::hover());
+                        let on = pos == cursor;
+                        ui.painter().rect_filled(r, 8.0, if on || lifted { pal.sel } else { pal.field });
+                        if on || lifted {
+                            ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
                         }
-                    }
+                        if on && !lifted {
+                            ui.scroll_to_rect(r, None);
+                        }
+                        ui.painter().text(
+                            Pos2::new(r.min.x + 22.0, r.center().y),
+                            egui::Align2::CENTER_CENTER,
+                            (pos + 1).to_string(),
+                            FontId::proportional(14.0),
+                            pal.sub,
+                        );
+                        let text_rect = Rect::from_min_max(Pos2::new(r.min.x + 42.0, r.min.y), Pos2::new(r.max.x - 76.0, r.max.y));
+                        let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.display().to_string());
+                        let kind = f.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
+                        let p = ui.painter().with_clip_rect(text_rect);
+                        p.text(
+                            Pos2::new(text_rect.min.x, r.center().y - 8.0),
+                            egui::Align2::LEFT_CENTER,
+                            name,
+                            FontId::proportional(14.0),
+                            pal.text,
+                        );
+                        p.text(
+                            Pos2::new(text_rect.min.x, r.center().y + 10.0),
+                            egui::Align2::LEFT_CENTER,
+                            kind,
+                            FontId::proportional(11.5),
+                            pal.sub,
+                        );
+                    },
+                    |ui, pos, r| {
+                        for (b, (glyph, dir)) in [("↑", -1i8), ("↓", 1i8)].into_iter().enumerate() {
+                            let br =
+                                Rect::from_center_size(Pos2::new(r.max.x - 50.0 + b as f32 * 32.0, r.center().y), Vec2::new(28.0, 28.0));
+                            let enabled = if dir < 0 { pos > 0 } else { pos < last };
+                            let bresp = ui.interact(br, Id::new(("reorder-btn", pos, dir)), egui::Sense::click());
+                            let fill = if bresp.hovered() && enabled { pal.sel } else { pal.bg };
+                            ui.painter().rect_filled(br, 6.0, fill);
+                            ui.painter().text(
+                                br.center(),
+                                egui::Align2::CENTER_CENTER,
+                                glyph,
+                                FontId::proportional(14.0),
+                                if enabled { pal.text } else { pal.sub.gamma_multiply(0.4) },
+                            );
+                            if bresp.clicked() && enabled {
+                                click = Some((pos, dir));
+                            }
+                        }
+                    },
+                );
+                if let Some(c) = res.clicked {
+                    click = Some((c, 0));
                 }
+                dropped = res.moved;
             });
         });
+        if let Some((from, to)) = dropped {
+            if move_item(&mut files, from, to) {
+                cursor = to;
+            }
+        }
         match click {
             Some((pos, 0)) => cursor = pos,
             Some((pos, -1)) => {
@@ -3631,52 +4279,73 @@ impl App {
                     .color(pal.sub),
             );
             ui.add_space(8.0);
+            let mut res = CellDrag::default();
             egui::ScrollArea::horizontal().id_salt("pdf-strip").auto_shrink([false, true]).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for (pos, page) in plan.pages.iter().enumerate() {
-                        let (r, resp) = ui.allocate_exact_size(Vec2::new(116.0, 168.0), egui::Sense::click());
-                        if resp.clicked() {
-                            if let Some(View::PdfOrganize { plan: p, .. }) = self.stack.last_mut() {
-                                p.cursor = pos;
+                    // each cell is one page entry (rotation included) and can be dragged to a new place
+                    res = drag_reorder_cells(
+                        ui,
+                        "pdf-strip",
+                        plan.pages.len(),
+                        true,
+                        pal,
+                        |ui, pos, lifted| {
+                            let page = &plan.pages[pos];
+                            let (r, _) = ui.allocate_exact_size(Vec2::new(116.0, 168.0), egui::Sense::hover());
+                            let on = pos == plan.cursor;
+                            ui.painter().rect_filled(r, 8.0, if on || lifted { pal.sel } else { pal.field });
+                            if on || lifted {
+                                ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
                             }
-                        }
-                        let on = pos == plan.cursor;
-                        ui.painter().rect_filled(r, 8.0, if on { pal.sel } else { pal.field });
-                        if on {
-                            ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
-                            ui.scroll_to_rect(r, None);
-                        }
-                        let boxr = Rect::from_min_size(r.min + Vec2::new(8.0, 8.0), Vec2::new(100.0, 128.0));
-                        match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new(("pdfthumb", page.src)))) {
-                            Some(tex) => {
-                                let odd = page.turns % 2 == 1;
-                                let t = tex.size_vec2();
-                                // the page as shown: swapped sides when turned a quarter
-                                let shown = if odd { Vec2::new(t.y, t.x) } else { t };
-                                let k = (boxr.width() / shown.x).min(boxr.height() / shown.y);
-                                let size = t * k;
-                                let img = egui::Image::new(&tex)
-                                    .fit_to_exact_size(size)
-                                    .rotate(page.turns as f32 * std::f32::consts::FRAC_PI_2, Vec2::splat(0.5));
-                                img.paint_at(ui, Rect::from_center_size(boxr.center(), size));
+                            if on && !lifted {
+                                ui.scroll_to_rect(r, None);
                             }
-                            None => {
-                                ui.painter().text(boxr.center(), egui::Align2::CENTER_CENTER, "…", FontId::proportional(18.0), pal.sub);
+                            let boxr = Rect::from_min_size(r.min + Vec2::new(8.0, 8.0), Vec2::new(100.0, 128.0));
+                            match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new(("pdfthumb", page.src)))) {
+                                Some(tex) => {
+                                    let odd = page.turns % 2 == 1;
+                                    let t = tex.size_vec2();
+                                    // the page as shown: swapped sides when turned a quarter
+                                    let shown = if odd { Vec2::new(t.y, t.x) } else { t };
+                                    let k = (boxr.width() / shown.x).min(boxr.height() / shown.y);
+                                    let size = t * k;
+                                    let img = egui::Image::new(&tex)
+                                        .fit_to_exact_size(size)
+                                        .rotate(page.turns as f32 * std::f32::consts::FRAC_PI_2, Vec2::splat(0.5));
+                                    img.paint_at(ui, Rect::from_center_size(boxr.center(), size));
+                                }
+                                None => {
+                                    ui.painter().text(boxr.center(), egui::Align2::CENTER_CENTER, "…", FontId::proportional(18.0), pal.sub);
+                                }
                             }
-                        }
-                        ui.painter().text(
-                            Pos2::new(r.center().x, r.max.y - 14.0),
-                            egui::Align2::CENTER_CENTER,
-                            PdfPlan::label(page),
-                            FontId::proportional(12.0),
-                            if on { pal.text } else { pal.sub },
-                        );
-                    }
+                            ui.painter().text(
+                                Pos2::new(r.center().x, r.max.y - 14.0),
+                                egui::Align2::CENTER_CENTER,
+                                PdfPlan::label(page),
+                                FontId::proportional(12.0),
+                                if on { pal.text } else { pal.sub },
+                            );
+                        },
+                        |_, _, _| {},
+                    );
                 });
             });
+            let mut edited = plan.clone();
+            if let Some(c) = res.clicked {
+                edited.cursor = c;
+            }
+            if let Some((from, to)) = res.moved {
+                edited.move_page(from, to);
+            }
+            if edited != plan {
+                if let Some(View::PdfOrganize { plan: p, .. }) = self.stack.last_mut() {
+                    *p = edited;
+                }
+                ctx.request_repaint();
+            }
             ui.add_space(8.0);
             ui.label(
-                RichText::new("←/→ choose · R rotate (⇧R back) · D duplicate · ⌫ remove · ⌘←/→ move · ↵ save a copy · esc cancel")
+                RichText::new("←/→ choose · drag or ⌘←/→ move · R rotate (⇧R back) · D duplicate · ⌫ remove · ↵ save a copy · esc cancel")
                     .size(11.5)
                     .color(pal.sub),
             );
@@ -3717,23 +4386,8 @@ impl App {
                     }
                 });
             }
-            View::VideoRedact { size: Some(size), rect: cover, aspect, duration, mut start, mut end, mut blur, .. } => {
-                let strip = Rect::from_min_size(rect.min + Vec2::new(12.0, 4.0), Vec2::new(rect.width() - 24.0, 34.0));
-                ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Start s");
-                        ui.add(egui::DragValue::new(&mut start).range(0.0..=duration).speed(0.04));
-                        ui.label("End s");
-                        ui.add(egui::DragValue::new(&mut end).range(0.0..=duration).speed(0.04));
-                        ui.selectable_value(&mut blur, false, "Solid black");
-                        ui.selectable_value(&mut blur, true, "Blur");
-                    });
-                });
-                if let Some(View::VideoRedact { start: a, end: b, blur: c, .. }) = self.stack.last_mut() {
-                    (*a, *b, *c) = (start, end, blur);
-                }
-                let area = Rect::from_min_max(rect.min + Vec2::new(0.0, 38.0), rect.max);
-                self.draw_crop(ui, area, pal, size, cover, aspect);
+            View::VideoRedact { size: Some(_), .. } => {
+                self.draw_video_redact(ui, rect, pal);
             }
             View::VideoRedact { .. } => {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
@@ -3750,8 +4404,10 @@ impl App {
             View::EditMetadata { file, kind, original, working, remove_all, error } => {
                 self.draw_edit_metadata(ui, rect, pal, &file, kind, original, working, remove_all, error);
             }
-            View::VideoCrop { size: Some(size), rect: crop, aspect, .. } => {
-                self.draw_crop(ui, rect, pal, size, crop, aspect);
+            View::VideoCrop { size: Some(size), rect: crop, aspect, duration, ref_t, .. } => {
+                let strip = Rect::from_min_size(rect.min + Vec2::new(12.0, 4.0), Vec2::new(rect.width() - 24.0, 30.0));
+                self.draw_ref_frame(ui, strip, pal, duration, ref_t);
+                self.draw_crop(ui, Rect::from_min_max(rect.min + Vec2::new(0.0, 30.0), rect.max), pal, size, crop, aspect);
             }
             View::VideoCrop { .. } => {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
@@ -3762,14 +4418,23 @@ impl App {
             View::AudioTrim { trim, audio, .. } => {
                 self.draw_audio_trim(ui, rect, pal, trim, audio);
             }
+            View::BleepAudio { peaks: Some(_), .. } => {
+                self.draw_bleep(ui, rect, pal);
+            }
+            View::BleepAudio { .. } => {
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the audio…", FontId::proportional(16.0), pal.sub);
+            }
+            View::VisualizeAudio { file, orient, style, image, picking } => {
+                self.draw_visualize_audio(ui, rect, pal, &file, orient, style, image, picking);
+            }
             View::CollageImage { files, opts, color } => {
-                self.draw_collage(ui, rect, pal, files.len(), opts, color);
+                self.draw_collage(ui, rect, pal, files, opts, color);
             }
-            View::FrameImage { size, opts, color, .. } => {
-                self.draw_frame(ui, rect, pal, size, opts, color);
+            View::FrameImage { file, size, opts, color, picking } => {
+                self.draw_frame(ui, rect, pal, &file, size, opts, color, picking);
             }
-            View::RedactImage { size, areas, sel, blur, color, .. } => {
-                self.draw_redact(ui, rect, pal, size, areas, sel, blur, color);
+            View::RedactImage { size, areas, sel, blur, radius, color, .. } => {
+                self.draw_redact(ui, rect, pal, size, areas, sel, (blur, radius), color);
             }
             View::CropImage { size, rect: crop, aspect, .. } => {
                 self.draw_crop(ui, rect, pal, size, crop, aspect);
@@ -4291,7 +4956,7 @@ impl App {
                 }
                 if clear_hotkey {
                     if let View::Hotkey { id, .. } = self.view().clone() {
-                        self.settings.command_mut(&id).hotkey = None;
+                        self.settings.command_mut(&id).hotkey = Some(String::new());
                         self.save_settings();
                         self.apply_hotkeys();
                         self.toast("Hotkey removed");
@@ -4715,6 +5380,104 @@ impl App {
 }
 
 // ---- settings widgets: a tone-stepped card of rows, each with a title, a description and its control.
+
+/// Drag-to-reorder for a run of equal cells, shared by the Choose Order list (vertical) and the
+/// collage picture strip (horizontal). `cell(ui, i, lifted)` draws cell `i`; `lifted` is true for
+/// the copy that follows the pointer, whose original place is left as a dimmed hole. While a drag
+/// is over the cells an insertion line shows where it would land. Returns `(from, to)` when a
+/// release changed the order (`to` already accounts for the removal); a release where the cell
+/// was, or outside the cells, or an Escape during the drag, changes nothing. `overlay` draws
+/// widgets (buttons) on top of a resting cell, after the cell's own drag/click area so they win
+/// the pointer. A plain click on a cell is reported in `clicked`.
+#[derive(Default)]
+struct CellDrag {
+    moved: Option<(usize, usize)>,
+    clicked: Option<usize>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drag_reorder_cells(
+    ui: &mut Ui,
+    name: &'static str,
+    count: usize,
+    horizontal: bool,
+    pal: &Palette,
+    mut cell: impl FnMut(&mut Ui, usize, bool),
+    mut overlay: impl FnMut(&mut Ui, usize, Rect),
+) -> CellDrag {
+    use ferrocast_core::reorder::{drop_index, slot_for_pointer};
+    let mut out = CellDrag::default();
+    let ctx = ui.ctx().clone();
+    let key = Id::new(("dnd-reorder", name));
+    let prev_id = Id::new(("dnd-prev", name));
+    // egui ends the payload (not the pointer drag) when Escape arrives, and the source would set
+    // it again next frame: a payload that vanished while the button is still down is a cancel
+    let payload_now = |ctx: &Context| egui::DragAndDrop::payload::<(Id, usize)>(ctx).filter(|p| p.0 == key).map(|p| p.1);
+    let prev: bool = ctx.data(|d| d.get_temp(prev_id)).unwrap_or(false);
+    if prev && payload_now(&ctx).is_none() && ctx.input(|i| i.pointer.primary_down()) {
+        ctx.stop_dragging();
+    }
+    let mut rects: Vec<Rect> = Vec::with_capacity(count);
+    for i in 0..count {
+        let id = key.with(i);
+        let lifted = ctx.is_being_dragged(id);
+        let r = if lifted {
+            // the same as Ui::dnd_drag_source: the cell is painted on a tooltip layer that follows
+            // the pointer, while the cell's own place stays reserved
+            egui::DragAndDrop::set_payload(&ctx, (key, i));
+            let layer = egui::LayerId::new(egui::Order::Tooltip, id);
+            let resp = ui.scope_builder(UiBuilder::new().layer_id(layer), |ui| cell(ui, i, true)).response;
+            if let Some(p) = ctx.pointer_interact_pos() {
+                ctx.transform_layer_shapes(layer, egui::emath::TSTransform::from_translation(p - resp.rect.center()));
+            }
+            ui.painter().rect_filled(resp.rect, 8.0, pal.bg.gamma_multiply(0.6));
+            ui.painter().rect_stroke(resp.rect, 8.0, Stroke::new(1.0, pal.sub.gamma_multiply(0.5)), StrokeKind::Inside);
+            resp.rect
+        } else {
+            let r = ui.scope(|ui| cell(ui, i, false)).response.rect;
+            // click and drag on one widget (dnd_drag_source only senses drag, which would hide clicks)
+            let resp = ui.interact(r, id, egui::Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Grab);
+            resp.dnd_set_drag_payload((key, i));
+            if resp.clicked() {
+                out.clicked = Some(i);
+            }
+            overlay(ui, i, r);
+            r
+        };
+        rects.push(r);
+    }
+    ctx.data_mut(|d| d.insert_temp(Id::new(("dnd-rects", name)), rects.clone()));
+    let from = payload_now(&ctx);
+    ctx.data_mut(|d| d.insert_temp(prev_id, from.is_some()));
+    let (Some(from), true) = (from, count > 0) else { return out };
+    let bounds = rects.iter().fold(Rect::NOTHING, |a, r| a.union(*r)).intersect(ui.clip_rect());
+    let Some(pointer) = ctx.input(|i| i.pointer.latest_pos()).filter(|p| bounds.contains(*p)) else { return out };
+    let extent = |r: &Rect| if horizontal { (r.min.x, r.max.x) } else { (r.min.y, r.max.y) };
+    let spans: Vec<(f32, f32)> = rects.iter().map(extent).collect();
+    let slot = slot_for_pointer(&spans, if horizontal { pointer.x } else { pointer.y });
+    let to = drop_index(from, slot, count);
+    if to == from {
+        return out;
+    }
+    if ctx.input(|i| i.pointer.any_released()) {
+        out.moved = Some((from, to));
+        return out;
+    }
+    let at = match slot {
+        0 => extent(&rects[0]).0,
+        k if k >= count => extent(&rects[count - 1]).1,
+        k => (extent(&rects[k - 1]).1 + extent(&rects[k]).0) / 2.0,
+    };
+    let (a, b) = if horizontal {
+        (Pos2::new(at, bounds.min.y), Pos2::new(at, bounds.max.y))
+    } else {
+        (Pos2::new(bounds.min.x, at), Pos2::new(bounds.max.x, at))
+    };
+    ui.painter().line_segment([a, b], Stroke::new(3.0, pal.accent));
+    ui.painter().circle_filled(a, 3.5, pal.accent);
+    ui.painter().circle_filled(b, 3.5, pal.accent);
+    out
+}
 
 fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     ui.label(RichText::new(title).size(12.5).color(pal.sub));

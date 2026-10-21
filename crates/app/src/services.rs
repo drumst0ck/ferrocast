@@ -52,12 +52,22 @@ pub enum Msg {
     /// Duration of the video whose speed is being set (None: unreadable).
     VideoDuration(PathBuf, Option<f64>),
     /// Pixel size and a preview frame of the video being cropped (None: unreadable).
-    VideoCropReady(PathBuf, Option<((u32, u32), Vec<u8>)>),
+    /// File, displayed size, duration (0 when unknown) and the first preview frame.
+    VideoCropReady(PathBuf, Option<((u32, u32), f64, Vec<u8>)>),
+    /// A reference frame for the crop and redact windows: file, time asked, PNG.
+    RefFrame(PathBuf, f64, Option<Vec<u8>>),
+    BleepAudioLoaded(PathBuf, Result<crate::media_tools::AudioSamples, String>),
     VideoRedactReady(PathBuf, Option<((u32, u32), f64, Vec<u8>)>),
     /// Preview frame of the video being trimmed at this time (None: could not extract).
     VideoFrame(PathBuf, f64, Option<Vec<u8>>),
     /// A picture chosen to stamp onto the image being annotated: where, and its RGBA pixels.
     StampChosen(PathBuf, (f32, f32), Option<(usize, usize, Vec<u8>)>),
+    /// A picture chosen for the audio to video window of this file (None: cancelled).
+    VisualPicked(PathBuf, Option<PathBuf>),
+    /// A picture chosen as the backdrop of the background window of this file (None: cancelled).
+    FramePicked(PathBuf, Option<PathBuf>),
+    /// The reduced backdrop picture read off the UI thread: file, path as chosen, PNG (None: unreadable).
+    FrameBgLoaded(PathBuf, String, Option<Vec<u8>>),
     Script {
         run: u64,
         text: String,
@@ -430,8 +440,10 @@ impl Hotkeys {
             Err(e) => errors.push(format!("{spec}: {e}")),
         };
         add(self, &s.launcher_hotkey, "__launcher");
-        for (id, c) in &s.commands {
-            if let Some(h) = c.hotkey.as_deref().filter(|h| !h.is_empty()) {
+        let ids: std::collections::BTreeSet<&str> =
+            s.commands.keys().map(String::as_str).chain(ferrocast_core::models::DEFAULT_HOTKEYS.iter().map(|(id, _)| *id)).collect();
+        for id in ids {
+            if let Some(h) = s.hotkey(id) {
                 add(self, h, id);
             }
         }
@@ -1814,6 +1826,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::SplitPoints(..)
         | FileTool::Channels(..)
         | FileTool::Bleep(..)
+        | FileTool::BleepMany(..)
         | FileTool::Compress(..)
         | FileTool::Join => {
             return crate::media_tools::run(files, tool, ffmpeg);
@@ -2601,6 +2614,21 @@ pub fn choose_stamp_image() -> Option<(usize, usize, Vec<u8>)> {
     let png = display_png(&path, 1200)?;
     let img = image::load_from_memory(&png).ok()?.to_rgba8();
     Some((img.width() as usize, img.height() as usize, img.into_raw()))
+}
+
+/// Ask for one picture with the native dialog and return its path, or None when cancelled
+/// (blocks; call from a thread).
+pub fn choose_picture_file() -> Option<PathBuf> {
+    choose_picture_with_prompt("Choose a picture for the video")
+}
+
+/// Same dialog with another prompt (the prompt is a fixed string, never user text).
+pub fn choose_picture_with_prompt(prompt: &str) -> Option<PathBuf> {
+    let out =
+        ferrocast_macos::system::osascript(&format!("POSIX path of (choose file of type {{\"public.image\"}} with prompt \"{prompt}\")"))
+            .ok()?;
+    let out = out.trim();
+    (!out.is_empty()).then(|| PathBuf::from(out))
 }
 
 /// Ask the user for a JSON file with a native dialog (blocks; call from a thread).

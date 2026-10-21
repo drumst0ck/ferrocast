@@ -323,6 +323,66 @@ pub fn bleep(input: &str, from: f64, to: f64, out: &str) -> Vec<String> {
     s(&["-i", input, "-filter_complex", &fc, "-map", "[out]", out])
 }
 
+/// Most bleep ranges one job takes.
+pub const MAX_BLEEPS: usize = 32;
+
+/// Check bleep ranges against the clip length: each start < end inside 0..=duration, at most
+/// `MAX_BLEEPS`. The result is sorted with overlapping or touching ranges merged. Errors name the
+/// range by its 1-based position in the input.
+pub fn validate_bleeps(ranges: &[(f64, f64)], duration: f64) -> Result<Vec<(f64, f64)>, String> {
+    if ranges.is_empty() {
+        return Err("Bleep: add at least one range".into());
+    }
+    if ranges.len() > MAX_BLEEPS {
+        return Err(format!("Bleep: too many ranges (at most {MAX_BLEEPS})"));
+    }
+    if !duration.is_finite() || duration <= 0.0 {
+        return Err("Bleep: the clip length is unknown".into());
+    }
+    for (i, &(a, b)) in ranges.iter().enumerate() {
+        let n = i + 1;
+        if !a.is_finite() || !b.is_finite() {
+            return Err(format!("Bleep: range {n} is not a number"));
+        }
+        if a < 0.0 || b > duration {
+            return Err(format!("Bleep: range {n} is outside the clip (0 to {duration:.2} s)"));
+        }
+        if b <= a {
+            return Err(format!("Bleep: range {n} must end after it starts"));
+        }
+    }
+    let mut sorted = ranges.to_vec();
+    sorted.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut merged: Vec<(f64, f64)> = Vec::with_capacity(sorted.len());
+    for (a, b) in sorted {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    Ok(merged)
+}
+
+/// Replace every range (already validated: sorted, disjoint) with a 1 kHz bleep. One range is
+/// exactly `bleep`; several mute all of them in one pass and mix one delayed tone per range.
+pub fn bleep_many(input: &str, ranges: &[(f64, f64)], out: &str) -> Vec<String> {
+    if let [(a, b)] = ranges {
+        return bleep(input, *a, *b, out);
+    }
+    let gate = ranges.iter().map(|(a, b)| format!("between(t\\,{a}\\,{b})")).collect::<Vec<_>>().join("+");
+    let mut fc = format!("[0:a]volume=0:enable='{gate}'[a]");
+    for (i, (a, b)) in ranges.iter().enumerate() {
+        let ms = (a * 1000.0) as u64;
+        fc.push_str(&format!(";sine=frequency=1000:duration={}[t{i}];[t{i}]adelay={ms}|{ms},volume=0.5[b{i}]", b - a));
+    }
+    fc.push_str(";[a]");
+    for i in 0..ranges.len() {
+        fc.push_str(&format!("[b{i}]"));
+    }
+    fc.push_str(&format!("amix=inputs={}:duration=first:normalize=0[out]", ranges.len() + 1));
+    s(&["-i", input, "-filter_complex", &fc, "-map", "[out]", out])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,5 +775,48 @@ mod compress_arg_tests {
         assert!(v.contains(&"-an".to_string()));
         assert!(!v.contains(&"aac".to_string()) && !v.contains(&"-b:a".to_string()) && !v.contains(&"0:a:0".to_string()));
         assert_eq!(v.last().map(String::as_str), Some("o.mp4"));
+    }
+
+    #[test]
+    fn validate_bleeps_accepts_sorts_and_merges() {
+        assert_eq!(validate_bleeps(&[(1.0, 2.0)], 6.0), Ok(vec![(1.0, 2.0)]));
+        assert_eq!(validate_bleeps(&[(4.0, 5.0), (1.0, 2.0)], 6.0), Ok(vec![(1.0, 2.0), (4.0, 5.0)]), "sorted");
+        assert_eq!(validate_bleeps(&[(1.0, 3.0), (2.0, 4.0)], 6.0), Ok(vec![(1.0, 4.0)]), "overlap merged");
+        assert_eq!(validate_bleeps(&[(1.0, 2.0), (2.0, 3.0)], 6.0), Ok(vec![(1.0, 3.0)]), "adjacent merged");
+        assert_eq!(validate_bleeps(&[(1.0, 5.0), (2.0, 3.0)], 6.0), Ok(vec![(1.0, 5.0)]), "contained merged");
+        assert_eq!(validate_bleeps(&[(0.0, 6.0)], 6.0), Ok(vec![(0.0, 6.0)]), "whole clip");
+    }
+
+    #[test]
+    fn validate_bleeps_names_the_bad_range() {
+        let err = |r: &[(f64, f64)]| validate_bleeps(r, 6.0).unwrap_err();
+        assert!(err(&[(1.0, 2.0), (4.0, 3.0)]).contains("range 2"), "reversed");
+        assert!(err(&[(2.0, 2.0)]).contains("range 1"), "empty");
+        assert!(err(&[(1.0, 2.0), (3.0, 4.0), (5.0, 6.5)]).contains("range 3"), "past the duration");
+        assert!(err(&[(-0.5, 2.0)]).contains("range 1"), "negative");
+        assert!(err(&[(1.0, 2.0), (f64::NAN, 3.0)]).contains("range 2"), "NaN");
+        assert!(err(&[(1.0, f64::INFINITY)]).contains("range 1"), "infinite");
+        assert!(err(&[]).contains("at least one"));
+        assert!(validate_bleeps(&[(1.0, 2.0)], f64::NAN).is_err(), "NaN duration");
+        let many: Vec<(f64, f64)> = (0..33).map(|i| (i as f64 * 0.1, i as f64 * 0.1 + 0.05)).collect();
+        assert!(err(&many).contains("too many"), "33 ranges");
+        assert_eq!(validate_bleeps(&many[..32], 6.0).unwrap().len(), 32, "32 ranges are allowed");
+    }
+
+    #[test]
+    fn bleep_many_with_one_range_is_the_single_builder() {
+        assert_eq!(bleep_many("a", &[(2.0, 3.5)], "o"), bleep("a", 2.0, 3.5, "o"));
+    }
+
+    #[test]
+    fn bleep_many_gates_every_range() {
+        let args = bleep_many("a", &[(1.0, 2.0), (3.0, 3.5), (5.0, 6.0)], "o");
+        let g = args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1].clone();
+        assert_eq!(g.matches("between(t").count(), 3, "{g}");
+        assert_eq!(g.matches("sine=frequency=1000").count(), 3, "{g}");
+        assert!(g.contains("adelay=1000|1000") && g.contains("adelay=3000|3000") && g.contains("adelay=5000|5000"), "{g}");
+        assert!(g.contains("duration=0.5"), "{g}");
+        assert!(g.contains("amix=inputs=4:duration=first:normalize=0"), "{g}");
+        assert_eq!(args.last().unwrap(), "o");
     }
 }
