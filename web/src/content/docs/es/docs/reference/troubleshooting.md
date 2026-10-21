@@ -26,7 +26,7 @@ Necesitan Accesibilidad (los snippets pueden necesitar también Input Monitoring
 
 ## Convert Finder Selection muestra un aviso o no hace nada
 
-La lectura de Finder necesita permiso de Automatización para Finder; mientras el aviso de permiso está pendiente, la llamada se rinde a los 15 segundos con un aviso en lugar de quedarse colgada.
+La lectura de Finder necesita permiso de Automatización para Finder; mientras el aviso de permiso está pendiente, la llamada vence a los 15 segundos y muestra un aviso en lugar de quedarse colgada.
 
 ## Intro sobre un archivo en Finder lo renombra
 

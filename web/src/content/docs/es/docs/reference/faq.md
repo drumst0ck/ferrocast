@@ -25,7 +25,7 @@ Porque mover ventanas, pegar por ti y expandir snippets lo necesitan. La búsque
 Nunca sale de tu Mac. Está en un archivo JSON en Application Support, y lo que se copia desde un gestor de contraseñas como 1Password se ignora a propósito.
 
 ### ¿Qué falta hoy?
-Con honestidad: una tienda de extensiones y la sincronización entre Macs.
+Faltan una tienda de extensiones y la sincronización entre Macs.
 
 ## IA y migración
 
@@ -33,7 +33,7 @@ Con honestidad: una tienda de extensiones y la sincronización entre Macs.
 Solo si tú lo indicas. De fábrica habla con Ollama en tu propio Mac. Apúntalo a LM Studio, OpenAI o la API de Anthropic si lo prefieres; las claves van al Keychain.
 
 ### ¿Puedo usar mi suscripción de ChatGPT o de Claude?
-Sí, con matices que la app explica. Claude: si Claude Code está instalado y con sesión iniciada, Ferrocast lo usa como proveedor, porque es la herramienta de Anthropic. ChatGPT: Ferrocast puede iniciar sesión con tu cuenta como hace la CLI Codex de OpenAI; funciona, pero OpenAI no ha bendecido que apps de terceros lo hagan, así que la API con clave es la vía correcta. Consulta [Ask AI](/es/docs/launcher/ask-ai/).
+Sí, con matices que la app explica. Claude: si Claude Code está instalado y con sesión iniciada, Ferrocast lo usa como proveedor, porque es la herramienta de Anthropic. ChatGPT: Ferrocast puede iniciar sesión con tu cuenta como hace la CLI Codex de OpenAI; funciona, pero OpenAI no ha respaldado que apps de terceros lo hagan, por lo que la vía recomendada es la API con clave. Consulta [Ask AI](/es/docs/launcher/ask-ai/).
 
 ### Vengo de Raycast. ¿Funcionará lo mío?
 Tus Script Commands funcionan tal cual y los snippets se importan desde una exportación JSON. Los quicklinks los recreas en un minuto. Consulta [Migrar desde Raycast](/es/docs/getting-started/migrating-from-raycast/).
