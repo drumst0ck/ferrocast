@@ -1,0 +1,27 @@
+---
+title: "Extract archive"
+description: "Extract zip, tar, tar.gz, gz and rar archives into a new folder next to the archive with Ferrocast, after a safety check on entry names."
+status: built
+sidebar:
+  order: 26
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+Extract Archive unpacks zip, tar, tar.gz/tgz and gz (and rar) into a new folder named after the archive, never into an existing one. It first refuses archives with absolute or `..` entry names.
+
+Choose Extract from the Tools wheel or the Convert view for an archive. Name collisions add 2, 3 and so on. RAR is read with the system `tar` first, with `unrar` as fallback.
+
+<ToolFacts id="extractArchive" />
+
+:::caution[Limits]
+RAR was only tested with a synthetic archive read with `tar`; `unrar` was never run on a real archive. Symlink entries are left to `tar` and `ditto`. `gz` has no size limit.
+:::
+
+## Status
+
+**Built.** Implemented and reviewed by an independent verifier; RAR is the weak spot.
+
+## Related
+
+- [Optional tools](/docs/files/optional-tools/)
+- [Conversions](/docs/files/conversions/)

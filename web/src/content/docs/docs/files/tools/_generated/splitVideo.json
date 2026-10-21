@@ -1,0 +1,13 @@
+{
+  "id": "splitVideo",
+  "slug": "split-video",
+  "name": "Split video",
+  "status": "window",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "mp4",
+    "mov",
+    "mkv"
+  ]
+}

@@ -1,0 +1,33 @@
+---
+title: "Annotate photos"
+description: "Annotate an image in Ferrocast with arrows, boxes, highlights, numbered labels, text, callouts and a magnifier on its own canvas. Saves a PNG copy."
+status: built
+sidebar:
+  order: 4
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+The annotation canvas draws arrows, lines, boxes, ellipses, highlights, freehand, numbered labels and a magnifier with a live preview, and saves a full-size PNG copy. With several images selected, Annotate opens Preview instead.
+
+Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>A</kbd> on an image result, or choose Annotate in the Tools wheel or the Convert list; <kbd>↵</kbd> saves and never overwrites.
+
+<ToolFacts id="annotateImage" />
+
+## Options
+
+- Free text with the system Arial font.
+- Callouts with a pointer (drag from the target, then type).
+- Image stamps from the native file chooser.
+
+:::caution[Limits]
+Rendering and saving are tested with a real file; mouse and keys are not tested in a real session. Typing free text, and image stamps from the native file chooser, are not tested in a real session.
+:::
+
+## Status
+
+**Built.** Implemented; drawing verified by screenshot and saving with a real file, mouse and keys untested live.
+
+## Related
+
+- [Edit photos](/docs/files/tools/edit-photos/)
+- [Redact image](/docs/files/tools/redact-image/)

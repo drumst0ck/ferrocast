@@ -1,0 +1,15 @@
+{
+  "id": "annotateImage",
+  "slug": "annotate",
+  "name": "Annotate photo",
+  "status": "window",
+  "level": "built",
+  "shortcut": "⇧⌘A",
+  "formats": [
+    "jpg",
+    "png",
+    "webp",
+    "heic",
+    "tiff"
+  ]
+}

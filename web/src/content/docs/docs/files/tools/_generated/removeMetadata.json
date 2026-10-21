@@ -1,0 +1,24 @@
+{
+  "id": "removeMetadata",
+  "slug": "edit-metadata",
+  "name": "Edit metadata",
+  "status": "preset",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "jpg",
+    "png",
+    "webp",
+    "heic",
+    "tiff",
+    "mp3",
+    "m4a",
+    "wav",
+    "flac",
+    "mp4",
+    "mov",
+    "mkv",
+    "gif",
+    "pdf"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "audioToVideo",
+  "slug": "audio-to-video",
+  "name": "Audio to video",
+  "status": "window",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "mp3",
+    "m4a",
+    "wav",
+    "flac"
+  ]
+}

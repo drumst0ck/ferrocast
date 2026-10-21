@@ -1,0 +1,14 @@
+{
+  "id": "redactAudio",
+  "slug": "bleep-audio",
+  "name": "Bleep audio",
+  "status": "window",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "mp3",
+    "m4a",
+    "wav",
+    "flac"
+  ]
+}

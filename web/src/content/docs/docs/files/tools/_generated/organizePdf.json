@@ -1,0 +1,11 @@
+{
+  "id": "organizePdf",
+  "slug": "organize-pdf",
+  "name": "Organize PDF pages",
+  "status": "window",
+  "level": "built",
+  "shortcut": "⇧⌘O",
+  "formats": [
+    "pdf"
+  ]
+}

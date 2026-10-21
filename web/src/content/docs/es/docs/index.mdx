@@ -1,0 +1,30 @@
+---
+title: "Documentación de Ferrocast"
+description: "Ferrocast es un lanzador de teclado rápido para macOS escrito en Rust, con conversión local de archivos. Instalación, funciones y referencias."
+sidebar:
+  order: 0
+---
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Ferrocast es un lanzador para macOS escrito en Rust, inspirado en Raycast. No es una réplica completa ni usa marca o assets de Raycast. Busca apps, comandos y archivos, calcula, convierte divisas y husos horarios, guarda el historial del portapapeles, expande snippets, gestiona ventanas, consulta modelos de IA y convierte y edita archivos en local desde una rueda que aparece al arrastrar.
+
+Pulsa <kbd>⌥</kbd> <kbd>Space</kbd> desde cualquier app para abrirlo. Es gratuito, con licencia MIT, no necesita cuenta y funciona solo en Macs con Apple Silicon. Se instala con Homebrew, que lo compila en tu Mac.
+
+## Para quién es
+
+Para quien quiere un lanzador rápido, pensado para el teclado, cuyos datos se quedan en archivos JSON de su propio disco, y no echa en falta una tienda de extensiones porque le bastan los Script Commands. Si vives dentro de las extensiones de Raycast, Ferrocast todavía no las reemplaza.
+
+## Qué no es
+
+Hoy faltan, con honestidad: una tienda de extensiones y la sincronización entre Macs. Extensiones React, Search Menu Bar Items y contexto de IA (selección o pantalla) no están incluidos. Pulsar Intro sobre una selección de Finder tampoco está incluido; existe el comando Convert Finder Selection. La rueda al arrastrar, las ventanas de archivos, AirDrop, Terminal y la estantería están implementadas, pero aún no se han probado en sesiones reales.
+
+:::note[Cómo leer las etiquetas de estado]
+Cada página de una función lleva una de tres etiquetas: **Tested** (probado en archivos reales en tests), **Built** (implementado, no probado en sesión real) y **Typed** (solo con orden escrita). La tabla completa está en [Estado de las funciones](/es/docs/reference/status/), que está en inglés.
+:::
+
+<CardGrid>
+  <LinkCard title="Instalar" description="Homebrew, compilado en tu Mac." href="/es/docs/getting-started/install/" />
+  <LinkCard title="Primer arranque" description="Bienvenida y permisos." href="/es/docs/getting-started/first-run/" />
+  <LinkCard title="Herramientas de archivos" description="Convierte y edita archivos arrastrando." href="/es/docs/files/" />
+  <LinkCard title="Estado de las funciones" description="Qué está Tested, Built o Typed." href="/es/docs/reference/status/" />
+</CardGrid>

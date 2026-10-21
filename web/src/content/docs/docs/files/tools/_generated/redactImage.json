@@ -1,0 +1,15 @@
+{
+  "id": "redactImage",
+  "slug": "redact-image",
+  "name": "Redact photo",
+  "status": "window",
+  "level": "built",
+  "shortcut": "⇧⌘R",
+  "formats": [
+    "jpg",
+    "png",
+    "webp",
+    "heic",
+    "tiff"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "videoSnapshots",
+  "slug": "video-snapshots",
+  "name": "Video snapshots",
+  "status": "window",
+  "level": "built",
+  "shortcut": "⇧⌘S",
+  "formats": [
+    "mp4",
+    "mov",
+    "mkv"
+  ]
+}

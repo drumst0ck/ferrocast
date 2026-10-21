@@ -1,0 +1,16 @@
+{
+  "id": "createPdf",
+  "slug": "create-pdf",
+  "name": "Create a PDF",
+  "status": "preset",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "jpg",
+    "png",
+    "webp",
+    "heic",
+    "tiff",
+    "svg"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "splitPdf",
+  "slug": "split-pdf",
+  "name": "Split PDF",
+  "status": "preset",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "pdf"
+  ]
+}

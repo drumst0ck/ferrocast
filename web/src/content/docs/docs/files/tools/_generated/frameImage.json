@@ -1,0 +1,15 @@
+{
+  "id": "frameImage",
+  "slug": "add-background",
+  "name": "Add a background",
+  "status": "window",
+  "level": "built",
+  "shortcut": "⇧⌘B",
+  "formats": [
+    "jpg",
+    "png",
+    "webp",
+    "heic",
+    "tiff"
+  ]
+}

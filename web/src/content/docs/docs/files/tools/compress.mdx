@@ -1,0 +1,35 @@
+---
+title: "Compress"
+description: "Compress images by size, percentage or preset, and audio, video and PDF files, with Ferrocast. Output is a new copy next to the original."
+status: built
+sidebar:
+  order: 1
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+Compress makes a smaller copy of images, audio, video and PDF. Images can be compressed to a size, a percentage or a preset, with an optional resize; audio and video go through ffmpeg with computed bitrates; PDF goes through optional Ghostscript with presets only.
+
+Open it from the Tools wheel or the Convert view, or type a target in the Convert view: `500kb`, `1.5mb` or `40%`. The Compress Images window has Size, Percent and Preset modes.
+
+<ToolFacts id="compress" />
+
+## Options
+
+- Size target: a binary search over JPEG quality finds the best fit, and an impossible target is handled.
+- Presets Light, Balanced and Strong keep 70, 50 and 30 % of the size, with an optional resize that never upscales.
+- Audio and video use ffmpeg with a bitrate computed from the target size and duration.
+- PDF uses presets only and requires Ghostscript.
+
+:::caution[Limits]
+The size estimate is rough, not a sample encode. PDF needs Ghostscript; there is no native route. Quality and large files are untested.
+:::
+
+## Status
+
+**Built.** Implemented; typed size targets and the image route are tested with real files, audio and video compression use ffmpeg, and quality and large files are untested.
+
+## Related
+
+- [Optional tools](/docs/files/optional-tools/)
+- [Typed commands](/docs/files/typed-commands/)
+- [Edit metadata](/docs/files/tools/edit-metadata/)

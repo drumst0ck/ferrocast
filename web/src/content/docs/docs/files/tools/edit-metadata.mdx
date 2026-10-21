@@ -1,0 +1,33 @@
+---
+title: "Edit metadata"
+description: "Inspect, edit or remove metadata of audio, video, GIF and PDF files in Ferrocast, grouped by file, track and chapter. Images use typed commands."
+status: built
+sidebar:
+  order: 2
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+Edit metadata opens one window for audio, video, GIF and PDF with fields grouped by file, track and chapter, plus a Remove all option. Removing metadata from JPEG and PNG images is lossless.
+
+Pick Edit metadata from the Tools wheel or the Convert view for a file. For images use typed commands in the Convert view: `make Canon`, `model EOS R5` or `gps 40.4,-3.7` (JPEG).
+
+<ToolFacts id="removeMetadata" />
+
+## Options
+
+- Editable text boxes with a per-row clear button; technical keys are read-only.
+- A Remove all metadata toggle and a changes counter.
+- Camera (make, model) and GPS tags are written in Rust for JPEG.
+
+:::caution[Limits]
+Chapters are read-only, a GIF can only be stripped, and Remove all leaves some container tags. Images keep their typed commands. PNG tags are not supported (a clear error is shown). The window has no test with a real mouse and keyboard.
+:::
+
+## Status
+
+**Built.** Implemented and tested with real files; the window is not tried with a real mouse and keyboard.
+
+## Related
+
+- [Typed commands](/docs/files/typed-commands/)
+- [Compress](/docs/files/tools/compress/)

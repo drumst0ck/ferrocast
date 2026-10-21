@@ -1,0 +1,14 @@
+{
+  "id": "extractArchive",
+  "slug": "extract-archive",
+  "name": "Extract archive",
+  "status": "preset",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "zip",
+    "tar",
+    "gz",
+    "rar"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "id": "createCollage",
+  "slug": "collage",
+  "name": "Make a collage",
+  "status": "window",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "jpg",
+    "png",
+    "webp",
+    "heic",
+    "tiff",
+    "svg"
+  ]
+}

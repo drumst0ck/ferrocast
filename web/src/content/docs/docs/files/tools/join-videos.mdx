@@ -1,0 +1,27 @@
+---
+title: "Join videos"
+description: "Join several video clips into one MP4 with Ferrocast, choosing their order. Silent clips get generated silence. Requires ffmpeg."
+status: built
+sidebar:
+  order: 12
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+Join Videos merges several clips into one video. The first clip sets the canvas, and silent clips get generated silence.
+
+Select several videos and choose Join from the Tools wheel or the Convert view. A Choose Order window lets you order the clips with <kbd>⌘</kbd> <kbd>↑</kbd> and <kbd>⌘</kbd> <kbd>↓</kbd>, or by dragging rows.
+
+<ToolFacts id="joinVideos" />
+
+:::caution[Limits]
+Dragging rows was tested only with synthetic pointer events, not a real mouse or trackpad. Enter running the join is not tested.
+:::
+
+## Status
+
+**Built.** Implemented; executor tested with real media, window untested with real input.
+
+## Related
+
+- [Split video](/docs/files/tools/split-video/)
+- [Merge PDFs](/docs/files/tools/merge-pdf/)

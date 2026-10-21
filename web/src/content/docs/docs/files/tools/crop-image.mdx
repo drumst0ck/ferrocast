@@ -1,0 +1,27 @@
+---
+title: "Crop image"
+description: "Crop an image in Ferrocast with a draggable rectangle, fixed aspect ratios such as 1:1 or 16:9, or exact width and height. Saves a copy."
+status: built
+sidebar:
+  order: 6
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+The crop editor shows a draggable rectangle with eight handles, aspect presets (1:1, 4:3, 3:2, 16:9, 9:16) and exact width and height boxes.
+
+Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>K</kbd> on an image result; <kbd>↵</kbd> writes the cropped copy and never overwrites. Typed: `800x600` for an exact crop.
+
+<ToolFacts id="cropImage" />
+
+:::caution[Limits]
+The crop itself is tested on a real image; dragging is not tested in a real session.
+:::
+
+## Status
+
+**Built.** Implemented; the crop is tested on a real image, dragging is untested live.
+
+## Related
+
+- [Crop video](/docs/files/tools/crop-video/)
+- [Typed commands](/docs/files/typed-commands/)

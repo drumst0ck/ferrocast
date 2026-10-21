@@ -1,0 +1,15 @@
+{
+  "id": "cropImage",
+  "slug": "crop-image",
+  "name": "Crop image",
+  "status": "window",
+  "level": "built",
+  "shortcut": "⇧⌘K",
+  "formats": [
+    "jpg",
+    "png",
+    "webp",
+    "heic",
+    "tiff"
+  ]
+}

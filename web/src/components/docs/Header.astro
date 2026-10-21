@@ -1,0 +1,35 @@
+---
+import Search from 'virtual:starlight/components/Search';
+import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
+import SocialIcons from 'virtual:starlight/components/SocialIcons';
+const { locale } = Astro.locals.starlightRoute;
+const es = locale === 'es';
+const prefix = es ? '/es' : '';
+const links = [
+  ['/', es ? 'Inicio' : 'Home'],
+  ['/files/', es ? 'Archivos' : 'Files'],
+  [`${prefix}/docs/`, 'Docs'],
+  ['/changelog/', es ? 'Cambios' : 'Changelog'],
+];
+---
+<div class="fc-header">
+  <a class="fc-mark" href="/"><img src="/icon.png" alt="" width="28" height="28" />Ferrocast</a>
+  <nav class="fc-nav" aria-label="Main">
+    {links.map(([href, label]) => <a href={href} aria-current={href === `${prefix}/docs/` ? 'true' : undefined}>{label}</a>)}
+  </nav>
+  <div class="fc-tools">
+    <Search />
+    <SocialIcons />
+    <LanguageSelect />
+  </div>
+</div>
+<style>
+  .fc-header { display: flex; align-items: center; gap: 1.25rem; height: 100%; }
+  .fc-mark { display: inline-flex; align-items: center; gap: 0.6rem; font-family: var(--sl-font-system); font-weight: 500; color: var(--sl-color-white); text-decoration: none; }
+  .fc-mark img { border-radius: 7px; }
+  .fc-nav { display: none; gap: 1rem; }
+  .fc-nav a { color: var(--sl-color-gray-2); text-decoration: none; font-size: var(--sl-text-sm); }
+  .fc-nav a:hover, .fc-nav a[aria-current] { color: var(--sl-color-white); }
+  .fc-tools { display: flex; align-items: center; gap: 0.75rem; margin-inline-start: auto; }
+  @media (min-width: 50rem) { .fc-nav { display: flex; } }
+</style>

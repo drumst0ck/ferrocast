@@ -1,0 +1,27 @@
+---
+title: "Audio to video"
+description: "Make an MP4 from one audio file with Ferrocast, showing the waveform or a still image in landscape, portrait or square. Requires ffmpeg."
+status: built
+sidebar:
+  order: 17
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+Audio to Video builds an MP4 from one audio file using the waveform or a chosen still image, in landscape, portrait or square (Portrait is 720x1280, Square 1080x1080).
+
+Choose Audio to Video for an audio file. Use Choose picture… for a still. Typed: `visualizer square image /path/cover.jpg`.
+
+<ToolFacts id="audioToVideo" />
+
+:::caution[Limits]
+Offered for one audio file only. The native image dialog is not tested. Not tested with real keys or mouse.
+:::
+
+## Status
+
+**Built.** Implemented; tested on real audio, window untested with real input.
+
+## Related
+
+- [Bleep audio](/docs/files/tools/bleep-audio/)
+- [Trim audio](/docs/files/tools/trim-audio/)

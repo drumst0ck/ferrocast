@@ -19,6 +19,9 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - name: Generated docs are up to date
+        run: npm run gen:docs && git diff --exit-code -- src/content src/components/docs
       - run: npm run build
+      - run: npm test
       - name: Docker image builds
         run: docker build -t ferrocast-web:ci .

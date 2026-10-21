@@ -1,0 +1,37 @@
+---
+title: "File tools overview"
+description: "Convert, compress, edit and organise files locally with Ferrocast. Drag a file, tap Shift, Command or Control, and drop it on a wheel. Nothing is uploaded."
+status: built
+sidebar:
+  order: 1
+---
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Ferrocast converts images, audio, video, documents, spreadsheets, subtitles and folders, and edits them with 26 tools and 7 file actions, all on your Mac. Nothing is uploaded. Built-in macOS tools come first (sips, afconvert, avconvert, textutil, ditto); ffmpeg, LibreOffice and cwebp are optional, and a missing one shows its install command.
+
+Drag files and tap a key: <kbd>⇧</kbd> **Shift** for conversions, <kbd>⌘</kbd> **Command** for file tools, <kbd>⌃</kbd> **Control** for file actions. Or press <kbd>⌘</kbd> <kbd>T</kbd> on a file result, run **Convert Files**, or press <kbd>⌥</kbd> <kbd>↵</kbd> on a file result to open the format wheel.
+
+## Output rules
+
+The result is written next to the original with the same base name and the new extension, and **never overwrites**: if that name is taken it appends 2, 3 and so on. A toast shows the result with a Reveal action.
+
+<CardGrid>
+  <LinkCard title="Drag wheel" description="Three wheels and their keys." href="/docs/files/drag-wheel/" />
+  <LinkCard title="Conversions" description="Every format pair, generated from the app data." href="/docs/files/conversions/" />
+  <LinkCard title="Typed commands" description="Short commands that skip the window." href="/docs/files/typed-commands/" />
+  <LinkCard title="Optional tools" description="ffmpeg, LibreOffice, cwebp, Ghostscript, unrar." href="/docs/files/optional-tools/" />
+</CardGrid>
+
+:::caution[Limits]
+Every conversion pair has run on real files in tests, but windows, the drag wheel, AirDrop, Terminal, Zip and the shelf have **not been tried in a live session**. Enter on a Finder selection is not included; the Convert Finder Selection command exists instead.
+:::
+
+## Status
+
+**Built.** Conversions are **Tested** (see [Conversions](/docs/files/conversions/)); the windows and the wheel are built and checked by screenshots and synthetic-event tests.
+
+## Related
+
+- [File actions](/docs/files/file-actions/)
+- [Shelf](/docs/files/shelf/)
+- [Feature status](/docs/reference/status/)

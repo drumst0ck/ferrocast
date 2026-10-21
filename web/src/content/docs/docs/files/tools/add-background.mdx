@@ -1,0 +1,31 @@
+---
+title: "Add a background"
+description: "Place an image on a colour, a blurred copy or another picture in Ferrocast, with padding, rounded corners and a shadow. Previewed live, saved as a copy."
+status: built
+sidebar:
+  order: 5
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+The background editor adds padding, corners and a shadow around an image and sets a colour, a blurred copy or another image as backdrop, with the preview composed on a reduced copy.
+
+Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>B</kbd> on an image result; <kbd>↵</kbd> writes the full-size copy and never overwrites. Typed: `frame blur 40 pad 80 shadow 30`, or `frame image /path/bg.jpg` for another picture. A square white or black background is also a preset.
+
+<ToolFacts id="frameImage" />
+
+## Options
+
+- Backdrop choices: Colour, Blur or Image (Choose image…).
+
+:::caution[Limits]
+Sliders are not tested in a real session. The native file dialog behind Choose image… is not tested in a real session.
+:::
+
+## Status
+
+**Built.** Implemented; drawing verified by screenshot, sliders and the file dialog untested live.
+
+## Related
+
+- [Typed commands](/docs/files/typed-commands/)
+- [Collage](/docs/files/tools/collage/)

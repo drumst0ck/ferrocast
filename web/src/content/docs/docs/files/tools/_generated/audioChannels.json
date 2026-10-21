@@ -1,0 +1,14 @@
+{
+  "id": "audioChannels",
+  "slug": "audio-channels",
+  "name": "Audio channels",
+  "status": "window",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "mp3",
+    "m4a",
+    "wav",
+    "flac"
+  ]
+}

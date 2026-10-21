@@ -1,0 +1,20 @@
+---
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+import { levels } from '../../data/status';
+const { entry, locale } = Astro.locals.starlightRoute;
+const status = entry.data.status as 'tested' | 'built' | 'typed' | undefined;
+const es: Record<string, string> = {
+  tested: 'Probado en archivos reales',
+  built: 'Implementado, no probado en sesión real',
+  typed: 'Solo con orden escrita',
+};
+const text = status ? (locale === 'es' ? es[status] : levels[status].text) : '';
+---
+<Default><slot /></Default>
+{status && (
+  <p class={`fc-status fc-status-${status}`} title={text}><i aria-hidden="true"></i><strong>{levels[status].label}</strong><span>{text}</span></p>
+)}
+<style>
+  p { margin-top: 0.75rem; }
+  .fc-status span { color: var(--sl-color-gray-3); }
+</style>

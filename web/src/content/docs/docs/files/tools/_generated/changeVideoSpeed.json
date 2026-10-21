@@ -1,0 +1,13 @@
+{
+  "id": "changeVideoSpeed",
+  "slug": "video-speed",
+  "name": "Change video speed",
+  "status": "window",
+  "level": "built",
+  "shortcut": "⇧⌘L",
+  "formats": [
+    "mp4",
+    "mov",
+    "mkv"
+  ]
+}

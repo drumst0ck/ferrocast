@@ -1,0 +1,27 @@
+---
+title: "Trim audio"
+description: "Trim audio in Ferrocast on a waveform with exact start and end boxes and a Trim silence button, as a new copy next to the original. Requires ffmpeg."
+status: built
+sidebar:
+  order: 18
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+Trim Audio shows the waveform with markers, exact start and end boxes and a Trim silence button that removes silence at the ends.
+
+Choose Trim from the Tools wheel or the Convert view for an audio file. Typed: `trim 0:10-0:30` or `silence`.
+
+<ToolFacts id="trimAudio" />
+
+:::caution[Limits]
+The silence threshold is per sample, so a single click shifts it. Not tested with real keys or mouse. There is no before and after comparison bar.
+:::
+
+## Status
+
+**Built.** Implemented; tested on real audio, window untested with real input.
+
+## Related
+
+- [Normalize audio](/docs/files/tools/normalize-audio/)
+- [Split video](/docs/files/tools/split-video/)

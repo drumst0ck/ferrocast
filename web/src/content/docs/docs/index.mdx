@@ -1,0 +1,30 @@
+---
+title: "Ferrocast documentation"
+description: "Ferrocast is a fast keyboard launcher for macOS written in Rust, with local file conversion and file tools. Find install steps, features and references."
+sidebar:
+  order: 0
+---
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Ferrocast is a launcher for macOS written in Rust, inspired by Raycast. It is not a complete replica and it uses no Raycast brand or assets. It searches apps, commands and files, does math, currency and time-zone conversion, keeps clipboard history, expands snippets, manages windows, asks AI models, and converts and edits files locally from a drag-and-drop wheel.
+
+Press <kbd>⌥</kbd> <kbd>Space</kbd> from any app to open it. It is free, MIT licensed, needs no account, and runs on Apple Silicon Macs only. It installs with Homebrew, which compiles it on your Mac.
+
+## Who it is for
+
+People who want a fast, keyboard-driven launcher whose data stays in JSON files on their own disk, and who are fine with Script Commands instead of an extension store. If you live inside Raycast extensions, Ferrocast is not a drop-in replacement yet.
+
+## What it is not
+
+Honestly missing today: an extension store and sync between Macs. React extensions, Search Menu Bar Items and AI context (selection or screen) are not included. Pressing Enter on a Finder selection is not included either; the Convert Finder Selection command exists instead. The drag wheel, the file windows, AirDrop, Terminal and the shelf are implemented but not yet proven in live sessions.
+
+:::note[How to read the status labels]
+Every feature page carries one of three labels: **Tested** (run on real files in tests), **Built** (implemented, not tried in a live session) and **Typed** (typed command only). The full table is in [Feature status](/docs/reference/status/).
+:::
+
+<CardGrid>
+  <LinkCard title="Install" description="Homebrew, compiled on your Mac." href="/docs/getting-started/install/" />
+  <LinkCard title="First run" description="Welcome and permissions." href="/docs/getting-started/first-run/" />
+  <LinkCard title="File tools" description="Convert and edit files by dragging." href="/docs/files/" />
+  <LinkCard title="Feature status" description="What is Tested, Built or Typed." href="/docs/reference/status/" />
+</CardGrid>

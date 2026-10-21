@@ -1,0 +1,15 @@
+{
+  "id": "editImage",
+  "slug": "edit-photos",
+  "name": "Edit photo",
+  "status": "window",
+  "level": "built",
+  "shortcut": "⇧⌘E",
+  "formats": [
+    "jpg",
+    "png",
+    "webp",
+    "heic",
+    "tiff"
+  ]
+}

@@ -1,0 +1,46 @@
+/* Starlight theme: site tokens from web/src/styles/site.css (bg #0f0f11, accent #f0535f). */
+:root, :root[data-theme='dark'], :root[data-theme='light'] {
+  --sl-color-bg: #0f0f11;
+  --sl-color-bg-nav: #0f0f11;
+  --sl-color-bg-sidebar: #0f0f11;
+  --sl-color-bg-inline-code: #232327;
+  --sl-color-hairline: #2a2a2f;
+  --sl-color-hairline-light: #2a2a2f;
+  --sl-color-hairline-shade: #19191c;
+  --sl-color-black: #0f0f11;
+  --sl-color-gray-6: #19191c;
+  --sl-color-gray-5: #2a2a2f;
+  --sl-color-gray-4: #6f6d75;
+  --sl-color-gray-3: #a8a6ad;
+  --sl-color-gray-2: #cfcdd3;
+  --sl-color-gray-1: #e4e3e8;
+  --sl-color-white: #f4f4f6;
+  --sl-color-accent-low: #3a1217;
+  --sl-color-accent: #f0535f;
+  --sl-color-accent-high: #ff9aa2;
+  --sl-color-text: #cfcdd3;
+  --sl-color-text-accent: #ff8a93;
+  --sl-color-text-invert: #1a0709;
+  --sl-font: 'Stack Sans Text', 'Helvetica Neue', system-ui, sans-serif;
+  --sl-font-system: 'Stack Sans Text', 'Helvetica Neue', system-ui, sans-serif;
+  --fc-display: 'Stack Sans Headline', 'Helvetica Neue', system-ui, sans-serif;
+}
+h1, h2 { font-family: var(--fc-display); font-weight: 300; letter-spacing: -0.01em; }
+kbd {
+  font-family: var(--sl-font-system); font-size: 0.85em; padding: 0.1em 0.45em;
+  border: 1px solid var(--sl-color-hairline); border-bottom-width: 2px; border-radius: 5px;
+  background: #19191c; color: var(--sl-color-white);
+}
+/* Light theme is not offered; the site is dark only. */
+starlight-theme-select { display: none; }
+
+/* Status badge (docs) */
+.fc-status { display: inline-flex; align-items: center; gap: 0.45em; padding: 0.15em 0.7em; border-radius: 999px; font-size: var(--sl-text-sm); border: 1px solid var(--sl-color-hairline); background: #19191c; }
+.fc-status i { width: 0.55em; height: 0.55em; border-radius: 50%; background: var(--sl-color-gray-3); }
+.fc-status-tested i { background: #4cc38a; }
+.fc-status-built i { background: #f0b34f; }
+.fc-status-typed i { background: #6ea8fe; }
+
+/* Limits block */
+.fc-limits { border-inline-start: 3px solid var(--sl-color-accent); background: #19191c; padding: 0.75rem 1rem; border-radius: 0 8px 8px 0; margin-block: 1rem; }
+.fc-limits > :first-child { margin-top: 0; } .fc-limits > :last-child { margin-bottom: 0; }

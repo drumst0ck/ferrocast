@@ -1,0 +1,14 @@
+{
+  "id": "trimAudio",
+  "slug": "trim-audio",
+  "name": "Trim audio",
+  "status": "window",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "mp3",
+    "m4a",
+    "wav",
+    "flac"
+  ]
+}

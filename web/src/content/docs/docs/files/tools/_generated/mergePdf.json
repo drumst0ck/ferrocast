@@ -1,0 +1,11 @@
+{
+  "id": "mergePdf",
+  "slug": "merge-pdf",
+  "name": "Merge PDFs",
+  "status": "preset",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "pdf"
+  ]
+}

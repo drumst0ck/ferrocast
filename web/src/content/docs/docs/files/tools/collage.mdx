@@ -1,0 +1,31 @@
+---
+title: "Make a collage"
+description: "Combine two or more images into a collage in Ferrocast: grid, row, column or featured layouts with width, spacing, corners and background."
+status: built
+sidebar:
+  order: 8
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+With two or more images selected, the Collage tool opens a layout editor with grid, row, column and featured layouts, automatic or exact width, spacing, corners and background, previewed on small copies.
+
+Choose Collage in the Tools wheel or the Convert list with two or more images; <kbd>↵</kbd> writes the collage and never overwrites. Typed: `collage row 1600 gap 16 radius 12 bg 000000`.
+
+<ToolFacts id="createCollage" />
+
+## Options
+
+- A strip of numbered thumbnails above the preview can be dragged to reorder the pictures.
+
+:::caution[Limits]
+Sliders are not tested in a real session. Reordering by dragging thumbnails was tested with synthetic pointer events only.
+:::
+
+## Status
+
+**Built.** Implemented; drawing verified by screenshot, sliders and dragging untested live.
+
+## Related
+
+- [Add a background](/docs/files/tools/add-background/)
+- [Create a PDF](/docs/files/tools/create-pdf/)

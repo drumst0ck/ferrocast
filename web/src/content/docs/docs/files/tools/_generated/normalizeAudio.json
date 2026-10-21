@@ -1,0 +1,14 @@
+{
+  "id": "normalizeAudio",
+  "slug": "normalize-audio",
+  "name": "Normalize audio",
+  "status": "window",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "mp3",
+    "m4a",
+    "wav",
+    "flac"
+  ]
+}

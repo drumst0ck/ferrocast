@@ -1,0 +1,31 @@
+---
+title: "Crop video"
+description: "Crop the frame of a video in Ferrocast with a draggable rectangle, aspect presets or exact width and height. Requires ffmpeg."
+status: built
+sidebar:
+  order: 10
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+The video crop window shows a real frame with a draggable crop rectangle, aspect presets and exact width and height, and keeps audio.
+
+Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>J</kbd> on a video result; <kbd>↵</kbd> writes the cropped copy and never overwrites. Typed: `crop 640x360 at 100,50`. A Reference frame slider (also in Redact Video) picks which frame is shown.
+
+<ToolFacts id="cropVideo" />
+
+## Options
+
+- Rotated phone video is handled: the displayed size swaps width and height for a ±90/270 rotation.
+
+:::caution[Limits]
+Needs ffmpeg. Dragging is not tested in a real session and the reference frame is fixed at 10% of the duration (the Reference frame control has no real run against ffmpeg and its latency was not measured). WMV fails on crop. No real rotated-file crop was run through the app.
+:::
+
+## Status
+
+**Built.** Implemented; drawing verified by screenshot, dragging untested live.
+
+## Related
+
+- [Crop image](/docs/files/tools/crop-image/)
+- [Redact video](/docs/files/tools/redact-video/)

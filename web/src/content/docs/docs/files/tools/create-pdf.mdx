@@ -1,0 +1,27 @@
+---
+title: "Create a PDF"
+description: "Combine selected images into one PDF with Ferrocast, one page per image, in an order you choose. Output sits next to the originals."
+status: built
+sidebar:
+  order: 25
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+Create a PDF combines selected images into one PDF with a page per image.
+
+Select the images and choose Combine into one PDF from the Tools wheel or the Convert view; the Choose Order window orders them with <kbd>⌘</kbd> <kbd>↑</kbd> and <kbd>⌘</kbd> <kbd>↓</kbd> or by dragging.
+
+<ToolFacts id="createPdf" />
+
+:::caution[Limits]
+Dragging rows was tested only with synthetic pointer events. Enter running the merge is not tested.
+:::
+
+## Status
+
+**Built.** Implemented as a one-step preset; tested with real files.
+
+## Related
+
+- [Merge PDFs](/docs/files/tools/merge-pdf/)
+- [Collage](/docs/files/tools/collage/)

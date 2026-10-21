@@ -1,0 +1,13 @@
+{
+  "id": "trimVideo",
+  "slug": "trim-video",
+  "name": "Trim video",
+  "status": "window",
+  "level": "built",
+  "shortcut": "⇧⌘V",
+  "formats": [
+    "mp4",
+    "mov",
+    "mkv"
+  ]
+}

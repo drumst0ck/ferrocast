@@ -1,0 +1,13 @@
+{
+  "id": "redactVideo",
+  "slug": "redact-video",
+  "name": "Redact video",
+  "status": "window",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "mp4",
+    "mov",
+    "mkv"
+  ]
+}

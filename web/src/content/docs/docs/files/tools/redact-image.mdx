@@ -1,0 +1,31 @@
+---
+title: "Redact photos"
+description: "Redact faces or text on-device with Vision, or cover areas you drag with a solid colour or a blur. Ferrocast saves the result as a copy."
+status: built
+sidebar:
+  order: 7
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+The redaction editor lets you drag areas onto an image, move or resize them and choose a solid colour or a blur. Faces and text can also be found on-device with Vision.
+
+Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>R</kbd> on an image result; <kbd>↵</kbd> writes the copy and never overwrites. Typed: `redact faces`, `redact text blur 25`, `redact 10,10 200x100 300,40 80x80 color ff0000` or `redact 10,10 200x100 blur`.
+
+<ToolFacts id="redactImage" />
+
+## Options
+
+- A Blur slider sets the radius from 2 to 80 px; clicking empty space deselects the area.
+
+:::caution[Limits]
+Dragging is not tested in a real session. The preview only marks the areas; the cover is applied when saving. Faces have no test with a real photo of a face.
+:::
+
+## Status
+
+**Built.** Implemented; drawing verified by screenshot, dragging untested live, faces untested on a real photo.
+
+## Related
+
+- [Redact video](/docs/files/tools/redact-video/)
+- [Typed commands](/docs/files/typed-commands/)

@@ -1,0 +1,13 @@
+{
+  "id": "cropVideo",
+  "slug": "crop-video",
+  "name": "Crop video",
+  "status": "window",
+  "level": "built",
+  "shortcut": "⇧⌘J",
+  "formats": [
+    "mp4",
+    "mov",
+    "mkv"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "joinVideos",
+  "slug": "join-videos",
+  "name": "Join videos",
+  "status": "preset",
+  "level": "built",
+  "shortcut": null,
+  "formats": [
+    "mp4",
+    "mov",
+    "mkv"
+  ]
+}

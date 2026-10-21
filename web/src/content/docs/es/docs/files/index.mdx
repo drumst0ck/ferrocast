@@ -1,0 +1,37 @@
+---
+title: "Resumen de las herramientas de archivos"
+description: "Convierte, comprime, edita y organiza archivos en local con Ferrocast. Arrastra un archivo, pulsa Shift, Command o Control y suéltalo. No se sube nada."
+status: built
+sidebar:
+  order: 1
+---
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Ferrocast convierte imágenes, audio, vídeo, documentos, hojas de cálculo, subtítulos y carpetas, y los edita con 26 herramientas y 7 acciones de archivo, todo en tu Mac. No se sube nada. Primero se usan las herramientas de macOS (sips, afconvert, avconvert, textutil, ditto); ffmpeg, LibreOffice y cwebp son opcionales y, si falta una, se muestra su orden de instalación.
+
+Arrastra archivos y pulsa una tecla: <kbd>⇧</kbd> **Shift** para conversiones, <kbd>⌘</kbd> **Command** para herramientas, <kbd>⌃</kbd> **Control** para acciones. También puedes pulsar <kbd>⌘</kbd> <kbd>T</kbd> sobre un resultado de archivo, ejecutar **Convert Files** o pulsar <kbd>⌥</kbd> <kbd>↵</kbd> sobre un resultado de archivo para abrir la rueda de formatos.
+
+## Reglas de salida
+
+El resultado se escribe junto al original con el mismo nombre base y la nueva extensión, y **nunca sobrescribe**: si ese nombre está ocupado añade 2, 3 y así sucesivamente. Un aviso muestra el resultado con la acción Reveal.
+
+<CardGrid>
+  <LinkCard title="Rueda al arrastrar" description="Tres ruedas y sus teclas." href="/es/docs/files/drag-wheel/" />
+  <LinkCard title="Conversiones" description="Cada par de formatos, generado desde los datos de la app." href="/es/docs/files/conversions/" />
+  <LinkCard title="Órdenes escritas" description="Órdenes cortas que evitan la ventana." href="/es/docs/files/typed-commands/" />
+  <LinkCard title="Herramientas opcionales" description="ffmpeg, LibreOffice, cwebp, Ghostscript, unrar." href="/es/docs/files/optional-tools/" />
+</CardGrid>
+
+:::caution[Límites]
+Los 275 pares de conversión se han ejecutado sobre archivos reales en tests, pero las ventanas, la rueda al arrastrar, AirDrop, Terminal, Zip y la estantería **no se han probado en una sesión real**. Intro sobre una selección de Finder no está incluido; existe el comando Convert Finder Selection.
+:::
+
+## Estado
+
+**Built.** Las conversiones son **Tested** (consulta [Conversiones](/es/docs/files/conversions/)); las ventanas y la rueda están implementadas y comprobadas con capturas y tests de eventos sintéticos.
+
+## Relacionado
+
+- [Acciones de archivo](/es/docs/files/file-actions/)
+- [Estantería](/es/docs/files/shelf/)
+- [Estado de las funciones](/es/docs/reference/status/)

@@ -1,0 +1,27 @@
+---
+title: "Merge PDFs"
+description: "Merge two or more PDF files into one with Ferrocast, choosing the order in a Choose Order window. Output is a new copy next to the originals."
+status: built
+sidebar:
+  order: 21
+---
+import ToolFacts from '../../../../../components/docs/ToolFacts.astro';
+
+Merge combines selected PDFs into one PDF.
+
+Select two or more PDFs and choose Merge in the Convert view; the Choose Order window orders the files with <kbd>⌘</kbd> <kbd>↑</kbd> and <kbd>⌘</kbd> <kbd>↓</kbd>, or by dragging rows.
+
+<ToolFacts id="mergePdf" />
+
+:::caution[Limits]
+Dragging rows was tested only with synthetic pointer events. Enter running the merge is not tested.
+:::
+
+## Status
+
+**Built.** Implemented; tested with real files (merge then split into 2 pages), window untested live.
+
+## Related
+
+- [Split PDF](/docs/files/tools/split-pdf/)
+- [Organize PDF pages](/docs/files/tools/organize-pdf/)
