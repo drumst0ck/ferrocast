@@ -10,8 +10,19 @@
   },
   "dependencies": {
     "@astrojs/node": "^9.5.5",
+    "@astrojs/rss": "^4.0.19",
     "@astrojs/sitemap": "^3.7.4",
     "astro": "^5.0.0",
+    "drizzle-orm": "^0.45.4",
+    "marked": "^18.1.1",
+    "postgres": "^3.4.9",
+    "sanitize-html": "^2.18.1",
     "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/sanitize-html": "^2.16.2",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15",
+    "vitest": "^4.1.12"
   }
 }
