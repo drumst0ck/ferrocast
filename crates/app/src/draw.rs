@@ -4750,6 +4750,7 @@ impl App {
                 let mut pick_model: Option<String> = None;
                 let mut want_models = false;
                 let mut open_url: Option<String> = None;
+                let mut check_now = false;
                 // 1 install, 2 later, 3 skip (View::Update buttons)
                 let mut update_act: u8 = 0;
                 // The match below borrows the view stack mutably; take the icon cache out so these
@@ -5070,7 +5071,7 @@ impl App {
                                 ui.add_space(12.0);
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 8.0;
-                                    let total = 3.0 * 96.0;
+                                    let total = 4.0 * 96.0 + 3.0 * 8.0;
                                     ui.add_space((ui.available_width() - total).max(0.0) / 2.0);
                                     if small_btn(ui, pal, "GitHub") {
                                         open_url = Some("https://github.com/drumst0ck/ferrocast".into());
@@ -5080,6 +5081,9 @@ impl App {
                                     }
                                     if small_btn(ui, pal, "Data folder") {
                                         open_url = Some(data_dir.clone());
+                                    }
+                                    if small_btn(ui, pal, "Check for Updates…") {
+                                        check_now = true;
                                     }
                                 });
                             });
@@ -5184,6 +5188,9 @@ impl App {
                 if let Some(u) = open_url {
                     let _ = std::process::Command::new("/usr/bin/open").arg(&u).status();
                 }
+                if check_now {
+                    self.check_updates();
+                }
                 if update_act != 0 {
                     if let View::Update { release } = self.view().clone() {
                         self.pop();
@@ -5229,6 +5236,19 @@ impl App {
         let (mut rec, mut req_acc, mut open_data, mut add_dir, mut save_key, mut test_ai) = (false, false, false, false, false, false);
         let (mut chatgpt_in, mut chatgpt_out, mut chatgpt_device) = (false, false, false);
         let mut fetch_models = false;
+        let (mut check_now, mut install_now) = (false, false);
+        let update_channel = {
+            let id = Id::new("update_channel");
+            match ctx.data(|d| d.get_temp::<ferrocast_core::update::Channel>(id)) {
+                Some(c) => c,
+                None => {
+                    let c = ferrocast_core::update::channel_of(&std::env::current_exe().unwrap_or_default());
+                    ctx.data_mut(|d| d.insert_temp(id, c));
+                    c
+                }
+            }
+        };
+        let update_available = self.update_available.clone();
         let models_key = services::models_key(&self.settings);
         let models_state = self.ai_models.get(&models_key).cloned();
         let mut remove_dir = None;
@@ -5340,6 +5360,58 @@ impl App {
                             );
                             row(ui, pal, "Menu bar icon", "A small icon to open Ferrocast with the mouse. Needs a restart.", |ui| toggle(ui, pal, &mut s.show_menu_bar_icon));
                         });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Updates");
+                        group(ui, pal, |ui| {
+                            row(
+                                ui,
+                                pal,
+                                "Check for updates automatically",
+                                "Checks GitHub once a day. Off means Ferrocast never contacts GitHub by itself.",
+                                |ui| toggle(ui, pal, &mut s.update_check),
+                            );
+                            row(
+                                ui,
+                                pal,
+                                "Install updates",
+                                "Ask first shows the release notes and lets you skip a version. Automatically installs and relaunches.",
+                                |ui| {
+                                    use ferrocast_core::models::UpdateInstall as U;
+                                    segmented(ui, pal, &mut s.update_install, &[(U::AskFirst, "Ask first"), (U::Automatic, "Automatically")]);
+                                },
+                            );
+                            let checked = match s.update_last_check {
+                                Some(t) => format!("Checked {}", services::ago(services::now_secs() - t)),
+                                None => "Checked never".to_string(),
+                            };
+                            let desc = match &update_available {
+                                Some(r) => format!(
+                                    "Version {} · {checked} · {} available",
+                                    env!("CARGO_PKG_VERSION"),
+                                    r.tag.trim_start_matches('v')
+                                ),
+                                None => format!("Version {} · {checked}", env!("CARGO_PKG_VERSION")),
+                            };
+                            row(ui, pal, "Version", &desc, |ui| {
+                                if update_available.is_some() && accent_btn(ui, pal, "Install") {
+                                    install_now = true;
+                                }
+                                if small_btn(ui, pal, "Check now") {
+                                    check_now = true;
+                                }
+                            });
+                        });
+                        match update_channel {
+                            ferrocast_core::update::Channel::Brew => {
+                                ui.add_space(10.0);
+                                note(ui, pal, "Installed with Homebrew: updates run brew upgrade ferrocast.");
+                            }
+                            ferrocast_core::update::Channel::Dev => {
+                                ui.add_space(10.0);
+                                note(ui, pal, "Development build: updates are checked but never installed.");
+                            }
+                            ferrocast_core::update::Channel::Direct => {}
+                        }
                         ui.add_space(14.0);
                         section(ui, pal, "Root Search");
                         group(ui, pal, |ui| {
@@ -5643,6 +5715,15 @@ impl App {
         }
         if open_data {
             let _ = std::process::Command::new("/usr/bin/open").arg(&self.store.root).status();
+        }
+        if check_now {
+            self.check_updates();
+        }
+        if install_now {
+            if let Some(release) = self.update_available.clone() {
+                self.push(View::Update { release });
+                return;
+            }
         }
         if rec {
             self.push(View::Hotkey { id: "__launcher".into(), name: "Ferrocast launcher".into(), err: String::new() });

@@ -600,11 +600,15 @@ pub fn key_code_name(k: egui::Key) -> Option<String> {
 // ---------------------------------------------------------------------------
 // Tray
 
+/// Tray entries above the separator, as (id, label).
+pub fn tray_items() -> [(&'static str, &'static str); 4] {
+    [("open", "Open Ferrocast"), ("clipboard", "Clipboard History"), ("settings", "Settings…"), ("check_updates", "Check for Updates…")]
+}
+
 pub fn make_tray(bus: Bus) -> Option<tray_icon::TrayIcon> {
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     let menu = Menu::new();
-    let items = [("open", "Open Ferrocast"), ("clipboard", "Clipboard History"), ("settings", "Settings…")];
-    for (id, label) in items {
+    for (id, label) in tray_items() {
         menu.append(&MenuItem::with_id(id, label, true, None)).ok()?;
     }
     menu.append(&PredefinedMenuItem::separator()).ok()?;

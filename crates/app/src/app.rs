@@ -753,6 +753,8 @@ pub struct App {
     quicklinks: Vec<Quicklink>,
     notes: Vec<Note>,
     frecency: Frecency,
+    /// Newest release found by a check that is newer than the running version (drives Settings).
+    update_available: Option<ferrocast_core::update::Release>,
     apps: Vec<apps::AppInfo>,
     apps_at: Instant,
     scripts: Vec<ScriptCommand>,
@@ -972,6 +974,7 @@ impl App {
             quicklinks: data.quicklinks,
             notes: data.notes,
             frecency: data.frecency,
+            update_available: None,
             apps: vec![],
             apps_at: Instant::now(),
             scripts: vec![],
@@ -2249,6 +2252,7 @@ impl App {
                         self.reset_to_root();
                         self.push(View::Settings);
                     }
+                    "check_updates" => self.check_updates(),
                     "quit" => std::process::exit(0),
                     _ => {}
                 },
@@ -3644,11 +3648,16 @@ impl App {
     }
 
     /// Manual "Check for Updates": Homebrew installs ask brew, every other install asks the GitHub feed.
-    fn check_updates(&mut self) {
+    pub(crate) fn check_updates(&mut self) {
         let exe = std::env::current_exe().unwrap_or_default();
+        self.check_updates_via(exe, services::update_check);
+    }
+
+    /// `check_updates` with the feed check injected so tests never touch the network.
+    pub(crate) fn check_updates_via(&mut self, exe: PathBuf, feed: impl FnOnce(Bus, bool, PathBuf)) {
         if ferrocast_core::update::channel_of(&exe) != ferrocast_core::update::Channel::Brew {
             self.toast("Checking for updates…");
-            services::update_check(self.bus.clone(), true, exe);
+            feed(self.bus.clone(), true, exe);
             return;
         }
         self.toast("Checking Homebrew…");
@@ -3711,7 +3720,12 @@ impl App {
         self.settings.update_last_check = Some(now_secs());
         self.save_settings();
         let current = update::Version::parse(env!("CARGO_PKG_VERSION")).expect("CARGO_PKG_VERSION is semver");
-        let release = match update::decide(&current, latest, self.settings.update_skipped.as_deref()) {
+        let decision = update::decide(&current, latest, self.settings.update_skipped.as_deref());
+        self.update_available = match &decision {
+            Decision::UpToDate => None,
+            Decision::Skipped(r) | Decision::Available(r) => Some(r.clone()),
+        };
+        let release = match decision {
             Decision::UpToDate => {
                 if manual {
                     self.toast(format!("Ferrocast {} is up to date", env!("CARGO_PKG_VERSION")));

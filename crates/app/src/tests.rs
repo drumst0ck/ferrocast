@@ -39,6 +39,7 @@ fn fixture() -> App {
         quicklinks: vec![],
         notes: vec![],
         frecency: Frecency::default(),
+        update_available: None,
         apps: vec![],
         apps_at: Instant::now(),
         scripts: vec![],
@@ -5963,4 +5964,63 @@ fn bundle_of_finds_the_app_directory() {
     let exe = std::path::Path::new("/Applications/Ferrocast.app/Contents/MacOS/ferrocast");
     assert_eq!(instance::bundle_of(exe), Some(PathBuf::from("/Applications/Ferrocast.app")));
     assert_eq!(instance::bundle_of(std::path::Path::new("/usr/bin/ferrocast")), None);
+}
+
+// ---- RU4: Updates controls in Settings, About and the tray
+
+#[test]
+fn drawing_general_tab_and_about_changes_no_update_setting() {
+    for dark in [true, false] {
+        let mut app = fixture();
+        app.settings.theme = if dark { Theme::Dark } else { Theme::Light };
+        app.settings.update_check = true;
+        app.stack = vec![View::Root, View::Settings];
+        app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 0usize));
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        app.stack = vec![View::Root, View::About];
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        assert!(app.settings.update_check);
+        assert_eq!(app.settings.update_install, UpdateInstall::AskFirst);
+    }
+}
+
+#[test]
+fn general_tab_shows_available_release_without_changing_settings() {
+    let mut app = fixture();
+    app.update_available = Some(fake_release("99.0.0"));
+    app.stack = vec![View::Root, View::Settings];
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 0usize));
+    render(&mut app, vec![]);
+    assert!(app.settings.update_check);
+    assert!(matches!(app.view(), View::Settings));
+}
+
+#[test]
+fn tray_menu_has_check_for_updates_before_the_separator() {
+    let items = services::tray_items();
+    let at = items.iter().position(|(id, label)| *id == "check_updates" && *label == "Check for Updates…");
+    assert!(at.is_some(), "{items:?}");
+    assert!(items.iter().any(|(id, _)| *id == "settings"));
+}
+
+#[test]
+fn check_now_entry_point_toasts_and_requests_a_manual_check() {
+    let mut app = fixture();
+    let exe = std::path::PathBuf::from("/Applications/Ferrocast.app/Contents/MacOS/ferrocast");
+    let calls = std::cell::RefCell::new(vec![]);
+    app.check_updates_via(exe.clone(), |_bus, manual, e| calls.borrow_mut().push((manual, e)));
+    assert_eq!(toast_text(&app), "Checking for updates…");
+    assert_eq!(*calls.borrow(), vec![(true, exe)]);
+}
+
+#[test]
+fn update_checks_record_the_available_release() {
+    use ferrocast_core::update::Channel;
+    let mut app = fixture();
+    app.handle_update_checked(false, Ok(Some(fake_release("99.0.0"))), Channel::Direct, true);
+    assert!(app.update_available.is_some());
+    app.handle_update_checked(true, Ok(None), Channel::Direct, true);
+    assert!(app.update_available.is_none());
 }
