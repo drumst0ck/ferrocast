@@ -1,0 +1,11 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ferrocast
+      POSTGRES_PASSWORD: ferrocast
+      POSTGRES_DB: ferrocast
+    ports: ['5432:5432']
+    volumes: ['ferrocast-pg:/var/lib/postgresql/data']
+volumes:
+  ferrocast-pg:

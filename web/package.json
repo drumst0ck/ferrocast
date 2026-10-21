@@ -5,9 +5,12 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "astro preview"
+    "preview": "astro preview",
+    "sync:changelog": "cp ../CHANGELOG.md src/data/CHANGELOG.md"
   },
   "dependencies": {
+    "@astrojs/node": "^9.5.5",
+    "@astrojs/sitemap": "^3.7.4",
     "astro": "^5.0.0",
     "three": "^0.170.0"
   }
