@@ -63,9 +63,41 @@ pub struct IconCache {
     pub prefetched: HashMap<String, Vec<u8>>,
     /// Keys already handed to the prefetch thread.
     pub inflight: std::collections::HashSet<String>,
+    /// Where worker threads send decoded clipboard images; `None` loads them on the calling thread.
+    bus: Option<crate::services::Bus>,
+    /// Clipboard image keys, least recently used first.
+    clip_lru: std::collections::VecDeque<String>,
 }
 
+/// Longest side, in pixels, of a clipboard image texture (the detail pane shows it at most this big).
+pub const CLIP_IMAGE_PX: u32 = 720;
+/// Clipboard image textures kept at once; the least recently used one is dropped.
+pub const CLIP_TEXTURES: usize = 32;
+
 impl IconCache {
+    /// Load clipboard images on worker threads that answer through `bus`.
+    pub fn with_bus(mut self, bus: crate::services::Bus) -> Self {
+        self.bus = Some(bus);
+        self
+    }
+
+    /// Store a texture; clipboard images are tracked by recency and the oldest ones are dropped
+    /// (dropping the handle frees the GPU texture), so browsing many pictures cannot grow without bound.
+    fn put(&mut self, key: String, tex: Option<TextureHandle>) {
+        self.inflight.remove(&key);
+        let is_clip = key.starts_with("clip:");
+        self.map.insert(key.clone(), tex);
+        if is_clip {
+            self.clip_lru.retain(|k| *k != key);
+            self.clip_lru.push_back(key);
+            while self.clip_lru.len() > CLIP_TEXTURES {
+                if let Some(old) = self.clip_lru.pop_front() {
+                    self.map.remove(&old);
+                }
+            }
+        }
+    }
+
     pub fn new(images_dir: PathBuf) -> Self {
         IconCache {
             map: HashMap::new(),
@@ -73,6 +105,8 @@ impl IconCache {
             images_dir,
             prefetched: HashMap::new(),
             inflight: Default::default(),
+            bus: None,
+            clip_lru: Default::default(),
         }
     }
 
@@ -93,13 +127,32 @@ impl IconCache {
             _ => return None,
         };
         if let Some(t) = self.map.get(&key) {
-            return t.clone();
+            let t = t.clone();
+            if key.starts_with("clip:") {
+                if let Some(i) = self.clip_lru.iter().position(|k| *k == key) {
+                    let k = self.clip_lru.remove(i).unwrap_or_default();
+                    self.clip_lru.push_back(k);
+                }
+            }
+            return t;
         }
         // Bytes a background thread already fetched: only the texture upload is left, which is cheap.
         if let Some(b) = self.prefetched.remove(&key) {
             let tex = crate::services::decode_png(&b).map(|img| ctx.load_texture(&key, img, TextureOptions::LINEAR));
-            self.map.insert(key, tex.clone());
+            self.put(key, tex.clone());
             return tex;
+        }
+        // A clipboard picture can be huge: a worker downscales it, the UI shows a placeholder meanwhile.
+        if let (Icon::ClipImage(n), Some(bus)) = (icon, &self.bus) {
+            if self.inflight.insert(key.clone()) {
+                let (path, bus) = (self.images_dir.join(n), bus.clone());
+                std::thread::spawn(move || {
+                    // an unreadable file sends empty bytes, which settle as "no picture"
+                    let bytes = crate::services::display_png(&path, CLIP_IMAGE_PX).unwrap_or_default();
+                    bus.send(crate::services::Msg::IconBytes(key, bytes));
+                });
+            }
+            return None;
         }
         if self.frame_start.elapsed() > Self::FRAME_BUDGET {
             ctx.request_repaint();
@@ -121,7 +174,7 @@ impl IconCache {
         if std::env::var_os("FERROCAST_PROFILE").is_some() {
             eprintln!("icon sync {key} {:?}", t0.elapsed());
         }
-        self.map.insert(key, tex.clone());
+        self.put(key, tex.clone());
         tex
     }
 }

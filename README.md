@@ -36,6 +36,7 @@ scripts/dmg.sh             # dist/Ferrocast-<versión>.dmg
 open dist/Ferrocast.app    # atajo por defecto: ⌥ Space; la primera vez muestra Welcome & Permissions
 cargo test --workspace     # ~70 tests
 scripts/shot.sh out.png FERROCAST_QUERY="100 usd in eur"   # render the UI to a PNG (no screen permission needed)
+scripts/perf.sh             # performance baseline table (startup, idle, views); FERROCAST_PROFILE=1 prints slow frames
 ```
 
 Requiere Rust 1.95 (fijado en `rust-toolchain.toml`; lo exige egui 0.36) y macOS en Apple Silicon.

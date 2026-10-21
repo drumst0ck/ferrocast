@@ -1,5 +1,6 @@
 //! Installed application discovery and control.
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,10 +113,6 @@ fn preferred_languages() -> Vec<String> {
     objc2_foundation::NSLocale::preferredLanguages().iter().map(|s| s.to_string()).collect()
 }
 
-fn read_info(app: &Path) -> Option<AppInfo> {
-    read_info_with(app, &preferred_languages())
-}
-
 fn read_info_with(app: &Path, languages: &[String]) -> Option<AppInfo> {
     let plist_path = app.join("Contents/Info.plist");
     let fallback = app.file_stem()?.to_string_lossy().to_string();
@@ -147,32 +144,159 @@ fn read_info_with(app: &Path, languages: &[String]) -> Option<AppInfo> {
     Some(info)
 }
 
-fn scan_dir(dir: &Path, depth: usize, out: &mut Vec<AppInfo>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        let is_app = p.extension().is_some_and(|x| x == "app");
-        if is_app {
-            // follow symlinks to real bundles
-            let real = std::fs::canonicalize(&p).unwrap_or(p.clone());
-            if real.is_dir() {
-                if let Some(mut i) = read_info(&real) {
-                    i.path = p.clone();
-                    out.push(i);
+/// What the scan cache needs to know to trust an entry: the files a parse reads, by modification time
+/// (nanoseconds since the epoch; 0 when missing) and the languages the names were resolved for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Stamp {
+    info_plist: u64,
+    loctable: u64,
+    resources: u64,
+    languages: Vec<String>,
+}
+
+/// One cached bundle. A background-only helper is cached too (`skip`) so it is not parsed every time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct CacheEntry {
+    stamp: Stamp,
+    skip: bool,
+    name: String,
+    /// Empty means the bundle has no identifier.
+    bundle_id: String,
+    keywords: Vec<String>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct ScanCache {
+    /// Keyed by the real (symlink-resolved) bundle path.
+    apps: std::collections::HashMap<String, CacheEntry>,
+}
+
+fn mtime_nanos(p: &Path) -> u64 {
+    std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+fn stamp_of(app: &Path, languages: &[String]) -> Stamp {
+    let res = app.join("Contents/Resources");
+    Stamp {
+        info_plist: mtime_nanos(&app.join("Contents/Info.plist")),
+        loctable: mtime_nanos(&res.join("InfoPlist.loctable")),
+        resources: mtime_nanos(&res),
+        languages: languages.to_vec(),
+    }
+}
+
+struct Scanner<'a> {
+    languages: &'a [String],
+    old: ScanCache,
+    new: ScanCache,
+    stats: ScanStats,
+}
+
+impl Scanner<'_> {
+    /// The info of the bundle at `real`, from the cache when its files did not change.
+    fn info(&mut self, real: &Path) -> Option<AppInfo> {
+        let key = real.to_string_lossy().to_string();
+        let stamp = stamp_of(real, self.languages);
+        let entry = match self.old.apps.get(&key).filter(|e| e.stamp == stamp) {
+            Some(e) => {
+                self.stats.hits += 1;
+                e.clone()
+            }
+            None => {
+                self.stats.misses += 1;
+                match read_info_with(real, self.languages) {
+                    Some(i) => {
+                        CacheEntry { stamp, skip: false, name: i.name, bundle_id: i.bundle_id.unwrap_or_default(), keywords: i.keywords }
+                    }
+                    None => CacheEntry { stamp, skip: true, name: String::new(), bundle_id: String::new(), keywords: vec![] },
                 }
             }
-        } else if depth > 0 && p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
-            scan_dir(&p, depth - 1, out);
+        };
+        let info = (!entry.skip).then(|| AppInfo {
+            name: entry.name.clone(),
+            path: real.to_path_buf(),
+            bundle_id: Some(entry.bundle_id.clone()).filter(|b| !b.is_empty()),
+            keywords: entry.keywords.clone(),
+        });
+        self.new.apps.insert(key, entry);
+        info
+    }
+
+    fn scan_dir(&mut self, dir: &Path, depth: usize, out: &mut Vec<AppInfo>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            let is_app = p.extension().is_some_and(|x| x == "app");
+            if is_app {
+                // follow symlinks to real bundles
+                let real = std::fs::canonicalize(&p).unwrap_or(p.clone());
+                if real.is_dir() {
+                    if let Some(mut i) = self.info(&real) {
+                        i.path = p.clone();
+                        out.push(i);
+                    }
+                }
+            } else if depth > 0 && p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+                self.scan_dir(&p, depth - 1, out);
+            }
         }
     }
 }
 
+/// How many apps a scan took from the cache and how many it had to parse.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct ScanStats {
+    pub hits: usize,
+    pub misses: usize,
+}
+
+fn read_cache(path: &Path) -> ScanCache {
+    plist::from_file(path).unwrap_or_default()
+}
+
+/// Write the cache next to its final name and rename, so a crash never leaves half a file.
+/// Any failure only means the next scan parses again.
+fn write_cache(path: &Path, cache: &ScanCache) {
+    let tmp = path.with_extension("plist.tmp");
+    if plist::to_file_binary(&tmp, cache).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+fn scan_roots(roots: &[PathBuf], languages: &[String], cache: Option<&Path>) -> (Vec<AppInfo>, ScanStats) {
+    let mut scanner =
+        Scanner { languages, old: cache.map(read_cache).unwrap_or_default(), new: ScanCache::default(), stats: ScanStats::default() };
+    let mut out = vec![];
+    for r in roots {
+        scanner.scan_dir(r, 2, &mut out);
+    }
+    if let Some(path) = cache {
+        // rewrite only when something changed: a miss, or an app that is gone
+        if scanner.stats.misses > 0 || scanner.new.apps.len() != scanner.old.apps.len() {
+            write_cache(path, &scanner.new);
+        }
+    }
+    (finish(out), scanner.stats)
+}
+
 /// List installed apps (deduplicated by bundle id, then path), sorted by name.
 pub fn list_apps() -> Vec<AppInfo> {
-    let mut out = vec![];
-    for r in search_roots() {
-        scan_dir(&r, 2, &mut out);
-    }
+    list_apps_cached(None)
+}
+
+/// `list_apps` with the parsed names kept in `cache` (a file in the data directory): an app is parsed
+/// again only when its Info.plist, localisation table or Resources folder changed, or the preferred
+/// languages did. A missing, corrupt or unwritable cache just means a full parse.
+pub fn list_apps_cached(cache: Option<&Path>) -> Vec<AppInfo> {
+    scan_roots(&search_roots(), &preferred_languages(), cache).0
+}
+
+fn finish(mut out: Vec<AppInfo>) -> Vec<AppInfo> {
     let mut seen_ids = std::collections::HashSet::new();
     let mut seen_paths = std::collections::HashSet::new();
     out.retain(|a| {
@@ -248,6 +372,7 @@ pub fn trash(path: &Path) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[test]
     fn finder_selection_keeps_existing_absolute_paths_only() {
         let dir = std::env::temp_dir().join(format!("fc-fsel-{}", std::process::id()));
@@ -314,6 +439,124 @@ mod tests {
         assert_eq!(super::localized_names(&app, &langs(&["fr-FR"])), vec!["Fausse caméra".to_string()], "same base language, other region");
         assert!(super::localized_names(&app, &langs(&["ja-JP"])).is_empty());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ---- scan cache (performance plan P1) ----
+
+    fn fake_app(root: &Path, name: &str, id: &str, extra: &str) -> PathBuf {
+        let app = root.join(format!("{name}.app"));
+        std::fs::create_dir_all(app.join("Contents/Resources")).unwrap();
+        let xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>{id}</string>\
+             <key>CFBundleDisplayName</key><string>{name} Display</string>{extra}</dict></plist>"
+        );
+        std::fs::write(app.join("Contents/Info.plist"), xml).unwrap();
+        app
+    }
+
+    fn scan_fixture(roots: &[PathBuf], cache: &Path) -> (Vec<AppInfo>, ScanStats) {
+        scan_roots(roots, &langs(&["en"]), Some(cache))
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("fc-apps-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_second_scan_reads_every_app_from_the_cache_and_returns_the_same_list() {
+        let d = scratch("hit");
+        fake_app(&d, "Alpha", "x.alpha", "");
+        fake_app(&d, "Beta", "x.beta", "<key>LSBackgroundOnly</key><true/>");
+        let cache = d.join("cache.plist");
+        let (first, s1) = scan_fixture(std::slice::from_ref(&d), &cache);
+        assert_eq!((s1.hits, s1.misses), (0, 2), "cold scan parses everything");
+        assert!(cache.exists());
+        let (second, s2) = scan_fixture(std::slice::from_ref(&d), &cache);
+        assert_eq!((s2.hits, s2.misses), (2, 0), "warm scan parses nothing (a background-only app is cached too)");
+        assert_eq!(first, second);
+        assert_eq!(second.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Alpha"]);
+        assert_eq!(second[0].keywords, ["Alpha Display"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_changed_bundle_is_reparsed_alone_and_a_new_language_invalidates_all() {
+        let d = scratch("stale");
+        let a = fake_app(&d, "Alpha", "x.alpha", "");
+        fake_app(&d, "Gamma", "x.gamma", "");
+        let cache = d.join("cache.plist");
+        scan_fixture(std::slice::from_ref(&d), &cache);
+        // an update rewrites Info.plist with a new mtime and new content
+        let info = a.join("Contents/Info.plist");
+        let xml = std::fs::read_to_string(&info).unwrap().replace("Alpha Display", "Alpha Renamed");
+        std::fs::write(&info, xml).unwrap();
+        let f = std::fs::File::options().write(true).open(&info).unwrap();
+        f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(120)).unwrap();
+        let (list, s) = scan_fixture(std::slice::from_ref(&d), &cache);
+        assert_eq!((s.hits, s.misses), (1, 1), "only the changed app is parsed again");
+        assert_eq!(list.iter().find(|a| a.name == "Alpha").unwrap().keywords, ["Alpha Renamed"]);
+        // another preferred language must not reuse names resolved for the old one
+        let (_, s) = scan_roots(std::slice::from_ref(&d), &langs(&["es"]), Some(&cache));
+        assert_eq!((s.hits, s.misses), (0, 2));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_corrupt_or_unwritable_cache_never_changes_the_result() {
+        let d = scratch("bad");
+        fake_app(&d, "Alpha", "x.alpha", "");
+        let (plain, _) = scan_roots(std::slice::from_ref(&d), &langs(&["en"]), None);
+        let cache = d.join("cache.plist");
+        std::fs::write(&cache, b"not a plist at all \xff\x00").unwrap();
+        let (with_bad, s) = scan_fixture(std::slice::from_ref(&d), &cache);
+        assert_eq!(with_bad, plain);
+        assert_eq!((s.hits, s.misses), (0, 1));
+        // the broken file was replaced by a valid one
+        assert_eq!(scan_fixture(std::slice::from_ref(&d), &cache).1.hits, 1);
+        // a cache path inside a missing directory only means no caching
+        let (unwritable, _) = scan_fixture(std::slice::from_ref(&d), &d.join("missing/dir/cache.plist"));
+        assert_eq!(unwritable, plain);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_uninstalled_app_leaves_the_cache_and_the_list() {
+        let d = scratch("gone");
+        let a = fake_app(&d, "Alpha", "x.alpha", "");
+        fake_app(&d, "Beta", "x.beta", "");
+        let cache = d.join("cache.plist");
+        scan_fixture(std::slice::from_ref(&d), &cache);
+        std::fs::remove_dir_all(&a).unwrap();
+        let (list, s) = scan_fixture(std::slice::from_ref(&d), &cache);
+        assert_eq!(list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Beta"]);
+        assert_eq!((s.hits, s.misses), (1, 0));
+        let again = scan_fixture(std::slice::from_ref(&d), &cache).0;
+        assert_eq!(again, list);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Differential check on this Mac's real applications, with timings:
+    /// `cargo test --release -p ferrocast-macos real_scan -- --ignored --nocapture`
+    #[test]
+    #[ignore = "scans the real application folders"]
+    fn real_scan_is_identical_with_and_without_the_cache() {
+        let d = scratch("real");
+        let cache = d.join("cache.plist");
+        let t = std::time::Instant::now();
+        let plain = list_apps();
+        eprintln!("no cache: {} apps in {:?}", plain.len(), t.elapsed());
+        let t = std::time::Instant::now();
+        let cold = list_apps_cached(Some(&cache));
+        eprintln!("cold cache: {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let warm = list_apps_cached(Some(&cache));
+        eprintln!("warm cache: {:?} (cache file {} bytes)", t.elapsed(), std::fs::metadata(&cache).unwrap().len());
+        assert_eq!(plain, cold);
+        assert_eq!(plain, warm);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

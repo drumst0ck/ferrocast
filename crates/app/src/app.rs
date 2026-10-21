@@ -929,12 +929,13 @@ impl App {
         }
         let tray = if data.settings.show_menu_bar_icon { services::make_tray(bus.clone()) } else { None };
         let b2 = bus.clone();
+        let apps_cache = store.path("apps-cache.plist");
         if prof {
             eprintln!("hotkeys {:?}", t.elapsed());
         }
         std::thread::spawn(move || {
             let t = Instant::now();
-            let a = apps::list_apps();
+            let a = apps::list_apps_cached(Some(&apps_cache));
             if std::env::var_os("FERROCAST_PROFILE").is_some() {
                 eprintln!("apps scan {:?} ({} apps)", t.elapsed(), a.len());
             }
@@ -945,7 +946,7 @@ impl App {
             services::refresh_rates(bus.clone());
         }
         let mut app = App {
-            icons: IconCache::new(store.images_dir()),
+            icons: IconCache::new(store.images_dir()).with_bus(bus.clone()),
             ctx,
             shared,
             bus,
@@ -1359,7 +1360,8 @@ impl App {
         if self.apps_at.elapsed() > Duration::from_secs(600) {
             self.apps_at = Instant::now();
             let b = self.bus.clone();
-            std::thread::spawn(move || b.send(Msg::Apps(apps::list_apps())));
+            let apps_cache = self.store.path("apps-cache.plist");
+            std::thread::spawn(move || b.send(Msg::Apps(apps::list_apps_cached(Some(&apps_cache)))));
         }
         self.ctx.request_repaint();
     }
@@ -1663,7 +1665,10 @@ impl App {
 
     fn drain(&mut self) {
         while let Ok(m) = self.rx.try_recv() {
-            self.sec_dirty = true;
+            // icon bytes only feed the icon cache: the list holds icon descriptors, not pixels
+            if !matches!(m, Msg::IconBytes(..)) {
+                self.sec_dirty = true;
+            }
             match m {
                 Msg::Wake => {}
                 Msg::Toast(t) => {

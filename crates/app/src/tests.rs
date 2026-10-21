@@ -5549,3 +5549,204 @@ fn a_wheel_with_a_real_centre_ignores_the_pointer_inside_the_window() {
     let hover = app.ctx.data(|d| d.get_temp::<Option<usize>>(Id::new("wheel-hover"))).flatten();
     assert_eq!(hover, Some(0), "no global mouse in tests: the keyboard selection stays, the in-window pointer is ignored");
 }
+
+/// Timing probe for odd/plans/performance-plan.md (P0), not a pass/fail gate:
+/// `cargo test --release -p ferrocast clipboard_sections_timing -- --ignored --nocapture`
+#[test]
+#[ignore = "timing probe; prints microseconds"]
+fn clipboard_sections_timing_1000_entries() {
+    let mut app = fixture();
+    let now = now_secs();
+    *app.shared.clipboard.lock().unwrap() = (0..1000)
+        .map(|i| ClipEntry {
+            id: format!("clip-{i}"),
+            kind: ClipKind::Text,
+            content: format!("line {i} of a fairly typical clipboard text entry with some words ").repeat(4),
+            title: None,
+            copied_at: now - i * 60,
+            pinned: false,
+            source_app: Some("Safari".into()),
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        })
+        .collect();
+    app.push(View::Clipboard);
+    for q in ["", "line 5", "zzz"] {
+        app.query = q.into();
+        app.invalidate_sections();
+        let t = std::time::Instant::now();
+        let n: usize = app.sections_cached().iter().map(|s| s.items.len()).sum();
+        eprintln!("clipboard sections q={q:?}: {n} items, {:?}", t.elapsed());
+    }
+}
+
+#[test]
+fn a_hidden_launcher_paints_nothing_and_requests_no_repaint_a_visible_one_does() {
+    let input =
+        || egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))), ..Default::default() };
+    let mut app = fixture();
+    let ctx = app.ctx.clone();
+    // the search box holds focus, as it does when the launcher was hidden with Escape or by losing focus
+    let mut visible_out = None;
+    for _ in 0..3 {
+        let mut o = ctx.run_ui(input(), |ui| app.draw_if_visible(ui));
+        o.textures_delta.clear();
+        visible_out = Some(o);
+    }
+    let visible_out = visible_out.unwrap();
+    assert!(!visible_out.shapes.is_empty(), "a visible launcher paints");
+
+    app.visible = false;
+    let mut hidden_out = None;
+    for _ in 0..3 {
+        let mut o = ctx.run_ui(input(), |ui| app.draw_if_visible(ui));
+        o.textures_delta.clear();
+        hidden_out = Some(o);
+    }
+    let hidden_out = hidden_out.unwrap();
+    assert!(hidden_out.shapes.is_empty(), "a hidden launcher paints nothing: {} shapes", hidden_out.shapes.len());
+    let delay = hidden_out.viewport_output.values().map(|v| v.repaint_delay).min().unwrap();
+    assert!(delay >= Duration::from_secs(3600), "a hidden launcher asks for no repaint, asked in {delay:?}");
+
+    // showing it again fades in from transparent, as before
+    app.visible = true;
+    let fade = ctx.animate_bool_with_time(Id::new("appear"), true, 0.14);
+    assert!(fade < 0.01, "the next show() starts transparent, got {fade}");
+}
+
+#[test]
+fn only_messages_that_can_change_the_list_mark_the_sections_dirty() {
+    let mut app = fixture();
+    render(&mut app, vec![]);
+    let _ = app.sections_cached();
+    assert!(!app.sec_dirty, "a computed list is clean");
+
+    // up to 40 of these arrive after every query; they only feed the icon cache
+    for i in 0..40 {
+        app.bus.send(Msg::IconBytes(format!("app:/Applications/A{i}.app"), vec![1, 2, 3]));
+    }
+    app.drain();
+    assert!(!app.sec_dirty, "icon bytes must not rebuild the list");
+    assert_eq!(app.icons.prefetched.len(), 40, "the bytes still reach the icon cache");
+
+    // everything else keeps invalidating (clipboard change, apps, files, toasts...)
+    for (label, msg) in
+        [("Wake", Msg::Wake), ("Apps", Msg::Apps(vec![])), ("Files", Msg::Files("q".into(), vec![])), ("Toast", Msg::Toast("t".into()))]
+    {
+        app.bus.send(msg);
+        app.drain();
+        assert!(app.sec_dirty, "{label} marks the list dirty");
+        let _ = app.sections_cached();
+    }
+}
+
+/// Steady-state frame cost of a long list, for odd/plans/performance-plan.md (P4):
+/// `cargo test --release -p ferrocast list_frame_timing -- --ignored --nocapture`
+#[test]
+#[ignore = "timing probe; prints milliseconds per frame"]
+fn list_frame_timing_clipboard_1000_and_emoji() {
+    let mut app = fixture();
+    let now = now_secs();
+    *app.shared.clipboard.lock().unwrap() = (0..1000)
+        .map(|i| ClipEntry {
+            id: format!("clip-{i}"),
+            kind: ClipKind::Text,
+            content: format!("line {i} of a fairly typical clipboard text entry with some words ").repeat(4),
+            title: None,
+            copied_at: now - i * 60,
+            pinned: false,
+            source_app: Some("Safari".into()),
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        })
+        .collect();
+    for (name, view) in [("clipboard 1000", View::Clipboard), ("emoji", View::Emoji), ("root", View::Root)] {
+        app.stack = vec![View::Root, view];
+        if name == "root" {
+            app.stack = vec![View::Root];
+        }
+        for _ in 0..5 {
+            render(&mut app, vec![]);
+        }
+        let n = 30;
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            render(&mut app, vec![]);
+        }
+        eprintln!("{name}: {:?} per frame (mean of {n}, after warm-up)", t.elapsed() / n);
+    }
+}
+
+fn write_png(dir: &std::path::Path, name: &str, w: u32, h: u32) {
+    std::fs::create_dir_all(dir).unwrap();
+    image::RgbaImage::from_pixel(w, h, image::Rgba([200, 80, 40, 255])).save(dir.join(name)).unwrap();
+}
+
+#[test]
+fn a_big_clipboard_image_is_decoded_off_the_ui_thread_and_downscaled() {
+    let mut app = fixture();
+    write_png(&app.store.images_dir(), "big.png", 2400, 1800);
+    app.icons = IconCache::new(app.store.images_dir()).with_bus(app.bus.clone());
+    let ctx = app.ctx.clone();
+    let icon = Icon::ClipImage("big.png".into());
+    app.icons.new_frame();
+    assert!(app.icons.texture(&ctx, &icon).is_none(), "the UI thread shows a placeholder, it does not decode the file");
+    // the worker answers with PNG bytes through the bus; drain() hands them to the cache
+    let t = Instant::now();
+    let tex = loop {
+        app.drain();
+        app.icons.new_frame();
+        if let Some(t) = app.icons.texture(&ctx, &icon) {
+            break t;
+        }
+        assert!(t.elapsed() < Duration::from_secs(20), "the image never arrived");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let [w, h] = tex.size();
+    assert!(w.max(h) <= ui::CLIP_IMAGE_PX as usize, "{w}x{h} must be at most {} px", ui::CLIP_IMAGE_PX);
+    assert_eq!(w * 3, h * 4, "the aspect ratio is kept: {w}x{h}");
+    // a file that cannot be read settles as "no picture" instead of retrying every frame
+    let bad = Icon::ClipImage("missing.png".into());
+    let t = Instant::now();
+    while {
+        app.drain();
+        app.icons.new_frame();
+        app.icons.texture(&ctx, &bad);
+        !app.icons.map.contains_key("clip:missing.png")
+    } {
+        assert!(t.elapsed() < Duration::from_secs(20), "a missing file never settled");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(app.icons.map["clip:missing.png"].is_none());
+}
+
+#[test]
+fn clipboard_image_textures_are_capped_least_recently_used_first() {
+    let mut app = fixture();
+    let dir = app.store.images_dir();
+    let total = ui::CLIP_TEXTURES + 8;
+    for i in 0..total {
+        write_png(&dir, &format!("i{i}.png"), 8, 8);
+    }
+    let ctx = app.ctx.clone();
+    for i in 0..total {
+        app.icons.new_frame();
+        assert!(app.icons.texture(&ctx, &Icon::ClipImage(format!("i{i}.png"))).is_some(), "i{i}");
+        // keep image 0 in use: it must survive the eviction of older, untouched ones
+        app.icons.texture(&ctx, &Icon::ClipImage("i0.png".into()));
+    }
+    let clip_keys = app.icons.map.keys().filter(|k| k.starts_with("clip:")).count();
+    assert_eq!(clip_keys, ui::CLIP_TEXTURES, "the cache never holds more than the cap");
+    assert!(app.icons.map.contains_key("clip:i0.png"), "the recently used image stays");
+    assert!(!app.icons.map.contains_key("clip:i1.png"), "the least recently used one was dropped");
+    assert!(app.icons.map.contains_key(&format!("clip:i{}.png", total - 1)), "the newest stays");
+    // an evicted image loads again when it is shown again
+    app.icons.new_frame();
+    assert!(app.icons.texture(&ctx, &Icon::ClipImage("i1.png".into())).is_some());
+    // other icon kinds are never evicted
+    app.icons.new_frame();
+    assert!(app.icons.texture(&ctx, &Icon::Glyph("sf:command", [1, 2, 3])).is_some());
+    assert!(app.icons.map.keys().any(|k| k.starts_with("glyph:")));
+}

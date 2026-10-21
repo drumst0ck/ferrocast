@@ -199,4 +199,35 @@ mod tests {
         f.record("b", "", 1_000_000);
         assert!(f.score("b", 1_000_000) > f.score("a", 1_000_000));
     }
+
+    /// Timing probe for odd/plans/performance-plan.md (P0), not a pass/fail gate:
+    /// `cargo test --release -p ferrocast-core ranking_timing -- --ignored --nocapture`
+    #[test]
+    #[ignore = "timing probe; prints microseconds"]
+    fn ranking_timing_500_items() {
+        let kw = vec!["browser".to_string(), "internet".to_string()];
+        let titles: Vec<String> = (0..500).map(|i| format!("Application Number {i} Studio")).collect();
+        let items: Vec<Rankable> = titles
+            .iter()
+            .enumerate()
+            .map(|(i, t)| Rankable {
+                id: Box::leak(format!("app:{i}").into_boxed_str()),
+                title: t,
+                subtitle: "/Applications",
+                keywords: &kw,
+                alias: None,
+            })
+            .collect();
+        let f = Frecency::default();
+        for q in ["a", "app 4", "studio", "zzz"] {
+            let t = std::time::Instant::now();
+            let mut hits = 0;
+            for it in &items {
+                if score(it, q, &f, 1_700_000_000, Sensitivity::Medium).is_some() {
+                    hits += 1;
+                }
+            }
+            eprintln!("ranking q={q:?}: {} items, {hits} hits, {:?}", items.len(), t.elapsed());
+        }
+    }
 }

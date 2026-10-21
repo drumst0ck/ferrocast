@@ -144,7 +144,23 @@ impl eframe::App for App {
                 eprintln!("show -> frame {:?}", t.elapsed());
             }
         }
-        self.draw(ui);
+        let visible = self.visible;
+        let ctx = ui.ctx().clone();
+        crate::perf::frame(visible, || ctx.repaint_causes().iter().map(|c| c.to_string()).collect(), || self.draw_if_visible(ui));
+    }
+}
+
+impl App {
+    /// While the launcher window is hidden nothing is laid out or painted: a focused search box
+    /// would otherwise blink its caret (a repaint every ~0.5 s), pending icons would keep
+    /// requesting frames, and every frame would flush an invisible GL surface.
+    pub(crate) fn draw_if_visible(&mut self, ui: &mut Ui) {
+        if self.visible {
+            self.draw(ui);
+            return;
+        }
+        // keep the fade-in of the next show() starting from transparent
+        ui.ctx().animate_bool_with_time(Id::new("appear"), false, 0.0);
     }
 }
 
