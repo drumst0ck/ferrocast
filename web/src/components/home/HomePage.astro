@@ -465,11 +465,13 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
     function webgl() { try { const t = document.createElement('canvas'); return !!(t.getContext('webgl2') || t.getContext('webgl')); } catch { return false; } }
     if (cv && host) {
       // The 3D keys are decoration: never loaded with reduced motion, no WebGL, or before they scroll near the viewport.
-      if (reduced || !webgl()) host.classList.add('fallback');
+      // Wide screens only: on phones the decorative 3D costs seconds of main-thread time for nothing.
+      const wide = matchMedia('(min-width: 900px)').matches;
+      if (reduced || !wide || !webgl()) host.classList.add('fallback');
       else {
         const start = () => import('../../scripts/keys3d.js').then((m) => { m.init(cv, { reduced }); host.classList.add('ok'); }).catch(() => host.classList.add('fallback'));
         if ('IntersectionObserver' in window) {
-          const io = new IntersectionObserver((en) => { if (en[0].isIntersecting) { io.disconnect(); if ('requestIdleCallback' in window) (window as any).requestIdleCallback(start); else setTimeout(start, 200); } }, { rootMargin: '200px' });
+          const io = new IntersectionObserver((en) => { if (en[0].isIntersecting) { io.disconnect(); const go = () => { if ('requestIdleCallback' in window) (window as any).requestIdleCallback(start, { timeout: 4000 }); else setTimeout(start, 600); }; if (document.readyState === 'complete') go(); else addEventListener('load', go, { once: true }); } }, { rootMargin: '200px' });
           io.observe(host);
         } else host.classList.add('fallback');
       }

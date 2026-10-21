@@ -1,6 +1,9 @@
 ---
+import '../styles/fonts.css';
 import '../styles/base.css';
 import '../styles/site.css';
+import headlineLatin from '../assets/fonts/stack-sans-headline-latin.woff2?url';
+import textLatin from '../assets/fonts/stack-sans-text-latin.woff2?url';
 const { title, description, canonical, ogImage, jsonLd, lang = 'en', alternates } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
@@ -28,9 +31,8 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <meta property="og:image:height" content="630" />
     <link rel="apple-touch-icon" href={`${base}/icon.png`} />
     <link rel="icon" type="image/png" href={`${base}/favicon.png`} />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Stack+Sans+Headline:wght@300&family=Stack+Sans+Text:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="preload" as="font" type="font/woff2" href={headlineLatin} crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href={textLatin} crossorigin />
     {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
     <script is:inline>document.documentElement.classList.add('js')</script>
   </head>

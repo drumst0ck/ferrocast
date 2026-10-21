@@ -23,15 +23,12 @@ export default defineConfig({
       },
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/drumst0ck/ferrocast' }],
       editLink: { baseUrl: 'https://github.com/drumst0ck/ferrocast/edit/master/web/src/content/docs/' },
-      customCss: ['./src/styles/starlight.css'],
+      customCss: ['./src/styles/fonts.css', './src/styles/starlight.css'],
       components: {
         Header: './src/components/docs/Header.astro',
         PageTitle: './src/components/docs/PageTitle.astro',
       },
       head: [
-        { tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
-        { tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' } },
-        { tag: 'link', attrs: { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Stack+Sans+Headline:wght@300&family=Stack+Sans+Text:wght@400;500&display=swap' } },
         { tag: 'meta', attrs: { property: 'og:image', content: 'https://ferrocast.app/og-docs.jpg' } },
         { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
       ],
