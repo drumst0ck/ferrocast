@@ -245,6 +245,13 @@ pub struct Settings {
     pub translate_output: TranslateOutput,
     /// Provider that translates; `None` follows the chat provider.
     pub translate_provider: Option<AiProvider>,
+    /// Check GitHub for new stable releases (off = never touch the network).
+    pub update_check: bool,
+    pub update_install: UpdateInstall,
+    /// Version the user chose to skip.
+    pub update_skipped: Option<String>,
+    /// Unix seconds of the last automatic check.
+    pub update_last_check: Option<i64>,
 }
 
 /// What happens with a finished translation.
@@ -255,6 +262,14 @@ pub enum TranslateOutput {
     Replace,
     /// Only put it on the clipboard.
     Copy,
+}
+
+/// How a found update is installed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum UpdateInstall {
+    Automatic,
+    #[default]
+    AskFirst,
 }
 
 impl Default for Settings {
@@ -297,6 +312,10 @@ impl Default for Settings {
             translate_languages: crate::translate::DEFAULT_LANGUAGES.iter().map(|s| s.to_string()).collect(),
             translate_output: TranslateOutput::default(),
             translate_provider: None,
+            update_check: true,
+            update_install: UpdateInstall::default(),
+            update_skipped: None,
+            update_last_check: None,
         }
     }
 }

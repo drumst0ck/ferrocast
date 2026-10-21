@@ -41,6 +41,7 @@ pub mod timezones;
 pub mod tools;
 pub mod translate;
 pub mod units;
+pub mod update;
 pub mod videoplan;
 pub mod waveform;
 pub mod wheel;
