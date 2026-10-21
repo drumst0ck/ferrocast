@@ -5830,3 +5830,22 @@ fn the_log_line_of_a_translate_wheel_has_no_text() {
     let pick = wheel_pick_log_line(WheelKind::Translate, "Spanish", "Root", false);
     assert!(pick.contains("Spanish"), "{pick}");
 }
+
+#[test]
+fn settings_show_the_translation_controls_and_keep_other_settings_untouched() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::Settings];
+    for tab in [0usize, 3] {
+        app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), tab));
+        for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+            app.ctx.set_theme(theme);
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+        }
+    }
+    // drawing alone changes nothing: defaults stay, chat provider untouched
+    let d = Settings::default();
+    assert_eq!(app.settings.translate_languages, d.translate_languages);
+    assert_eq!(app.settings.translate_provider, None);
+    assert_eq!(app.settings.ai_provider, d.ai_provider);
+}

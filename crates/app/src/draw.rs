@@ -5265,6 +5265,19 @@ impl App {
                                 let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
                                 segmented(ui, pal, &mut s.wheel_actions_key, &opts);
                             });
+                            row(ui, pal, "Translate languages", "Drag selected text and tap the Convert key. Comma-separated, up to 12.", |ui| {
+                                let id = Id::new("translate_langs_buf");
+                                let mut buf: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| s.translate_languages.join(", "));
+                                let edit = TextEdit::singleline(&mut buf).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("English, Spanish, French…");
+                                if ui.add(edit).changed() {
+                                    s.translate_languages = ferrocast_core::translate::parse_list(&buf);
+                                }
+                                ui.ctx().data_mut(|d| d.insert_temp(id, buf));
+                            });
+                            row(ui, pal, "After translating", "Paste over the selection, or only copy the translation.", |ui| {
+                                use ferrocast_core::models::TranslateOutput as T;
+                                segmented(ui, pal, &mut s.translate_output, &[(T::Replace, "Replace selection"), (T::Copy, "Copy only")]);
+                            });
                             row(
                                 ui,
                                 pal,
@@ -5323,6 +5336,27 @@ impl App {
                                 P::ChatGpt => "Signs in with your ChatGPT account the way OpenAI's Codex CLI does and uses your ChatGPT plan. No API key.",
                             }, |ui| {
                                 segmented(ui, pal, &mut s.ai_provider, &[(P::OpenAiCompatible, "OpenAI API"), (P::ChatGpt, "ChatGPT"), (P::Anthropic, "Anthropic"), (P::ClaudeCode, "Claude Code")]);
+                            });
+                        });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Translation");
+                        group(ui, pal, |ui| {
+                            let engine = s.translate_provider;
+                            let desc = match engine {
+                                None => "Translating dragged text uses the provider chosen above.".to_string(),
+                                Some(p) => {
+                                    let name = ferrocast_core::translate::provider_name(p);
+                                    let ready = if p == P::ClaudeCode && services::claude_code_path().is_none() { " Claude Code is not installed." } else { "" };
+                                    format!("Translations use {name} with the model and sign-in set for it. Choose it as the provider above to configure it.{ready}")
+                                }
+                            };
+                            row_stacked(ui, pal, "Translation engine", &desc, |ui| {
+                                segmented(
+                                    ui,
+                                    pal,
+                                    &mut s.translate_provider,
+                                    &[(None, "Same as chat"), (Some(P::OpenAiCompatible), "OpenAI API"), (Some(P::ChatGpt), "ChatGPT"), (Some(P::Anthropic), "Anthropic"), (Some(P::ClaudeCode), "Claude Code")],
+                                );
                             });
                         });
                         ui.add_space(14.0);
