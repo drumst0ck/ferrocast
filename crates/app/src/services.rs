@@ -98,6 +98,13 @@ pub enum Msg {
     Moved(Vec<(PathBuf, PathBuf)>),
     /// A key was tapped while dragging these files: show the wheel.
     WheelOpen(ferrocast_core::wheel::WheelKind, Vec<PathBuf>),
+    /// Dragged text opened the Translate wheel.
+    WheelOpenText(String),
+    /// A translation finished (`lang` is the target language).
+    Translated {
+        lang: String,
+        result: Result<String, String>,
+    },
     /// The floating shelf panel's items changed (drop in, remove, clear).
     ShelfChanged(Vec<PathBuf>),
     /// Another wheel key was tapped while the wheel was open.
@@ -296,16 +303,23 @@ pub fn start_wheel(shared: Arc<Shared>, bus: Bus) {
                         (ck != 0 && bits & ck != 0, ak != 0 && bits & ak != 0, tk != 0 && bits & tk != 0);
                     // reading the pasteboard items only matters at the moment a key is tapped
                     let files = if left && (convert_key || actions_key || tools_key) { drag::drag_files() } else { vec![] };
+                    // a text drag only matters for the Convert key (the Translate wheel)
+                    let text = if left && convert_key && files.is_empty() { drag::drag_text() } else { None };
                     let sample = Sample {
                         left_down: left,
                         drag_count: if left { drag::drag_count() } else { 0 },
                         has_files: !files.is_empty(),
-                        has_text: false,
+                        has_text: text.is_some(),
                         convert_key,
                         actions_key,
                         tools_key,
                     };
                     match tracker.step(sample) {
+                        Some(WheelEvent::Open(ferrocast_core::wheel::WheelKind::Translate)) => {
+                            if let Some(t) = text {
+                                bus.send(Msg::WheelOpenText(t));
+                            }
+                        }
                         Some(WheelEvent::Open(k)) => bus.send(Msg::WheelOpen(k, files)),
                         Some(WheelEvent::Switch(k)) => bus.send(Msg::WheelSwitch(k)),
                         Some(WheelEvent::Release) => bus.send(Msg::WheelRelease),
@@ -1400,6 +1414,17 @@ pub fn ai_stream_with_key(
     } else {
         err.trim().lines().last().unwrap_or("").to_string()
     })
+}
+
+/// Translate `text` into `lang` with the translation engine's provider, off the UI thread.
+/// `settings` already carries the engine (see `translate::engine_settings`).
+pub fn translate_text(settings: &Settings, text: String, lang: String, bus: Bus) {
+    let settings = settings.clone();
+    std::thread::spawn(move || {
+        let mut out = String::new();
+        let result = ai_stream(&settings, &[], &ferrocast_core::translate::prompt(&text, &lang), |t| out.push_str(t)).map(|()| out);
+        bus.send(Msg::Translated { lang, result });
+    });
 }
 
 pub fn ask_ai(settings: &Settings, history: Vec<(String, String)>, question: String, run: u64, bus: Bus) {

@@ -566,6 +566,8 @@ pub enum WheelPick {
     Image(ferrocast_core::convert::ImageOp),
     File(ferrocast_core::convert::FileTool),
     Act(Act),
+    /// Translate the dragged text into this language.
+    Translate(String),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -789,6 +791,8 @@ pub struct App {
     pub(crate) nav_at: Instant,
     /// Warm Claude Code process while Ask AI is open (ClaudeCode provider only).
     claude: Option<std::sync::Arc<services::ClaudeSession>>,
+    /// The text a Translate wheel is about; never logged.
+    wheel_text: Option<String>,
     /// Model lists for the Settings picker, by `services::models_key`; `None` while loading.
     /// Optional conversion tools found on this Mac (probed once).
     tools: ferrocast_core::convert::Tools,
@@ -991,6 +995,7 @@ impl App {
             show_t: None,
             nav_at: Instant::now(),
             claude: None,
+            wheel_text: None,
             ai_models: Default::default(),
             tools: ferrocast_core::convert::Tools::detect(),
             runs: HashMap::new(),
@@ -1490,6 +1495,12 @@ impl App {
     /// Segments for a wheel over these files.
     pub(crate) fn wheel_segments(&self, kind: ferrocast_core::wheel::WheelKind, files: &[PathBuf]) -> Vec<WheelSeg> {
         use ferrocast_core::convert::targets;
+        if kind == ferrocast_core::wheel::WheelKind::Translate {
+            return ferrocast_core::translate::languages(&self.settings.translate_languages)
+                .into_iter()
+                .map(|l| WheelSeg { label: l.clone(), symbol: "sf:globe", needs: None, pick: WheelPick::Translate(l) })
+                .collect();
+        }
         let Some(first) = files.first() else { return vec![] };
         match kind {
             ferrocast_core::wheel::WheelKind::Convert => {
@@ -1530,8 +1541,7 @@ impl App {
                     })
                     .collect()
             }
-            // filled in with the text subject (T4)
-            ferrocast_core::wheel::WheelKind::Translate => vec![],
+            ferrocast_core::wheel::WheelKind::Translate => unreachable!("handled above"),
             ferrocast_core::wheel::WheelKind::Tools => {
                 use ferrocast_core::convert::ext;
                 use ferrocast_core::tools::tools_for;
@@ -1596,7 +1606,11 @@ impl App {
 
     /// Switch an open wheel to another kind, keeping its position.
     pub(crate) fn switch_wheel(&mut self, kind: ferrocast_core::wheel::WheelKind) {
-        let Some(View::Wheel { files, .. }) = self.stack.last().cloned() else { return };
+        let Some(View::Wheel { files, kind: current, .. }) = self.stack.last().cloned() else { return };
+        // a text wheel has nothing to switch to, and file wheels never become one
+        if current == ferrocast_core::wheel::WheelKind::Translate || kind == ferrocast_core::wheel::WheelKind::Translate {
+            return;
+        }
         let segs = self.wheel_segments(kind, &files);
         instance::log(&self.store.root, &wheel_log_line("switch", kind, &segs, files.len()));
         if segs.is_empty() {
@@ -1622,6 +1636,13 @@ impl App {
         let Some(i) = picked.filter(|i| *i < segs.len()) else { return };
         let (label, pick, needs) = (segs[i].label.clone(), segs[i].pick.clone(), segs[i].needs);
         match pick {
+            WheelPick::Translate(lang) => {
+                if let Some(text) = self.wheel_text.take() {
+                    let engine = ferrocast_core::translate::engine_settings(&self.settings);
+                    self.toast(format!("Translating to {lang} with {}…", ferrocast_core::translate::engine_label(&self.settings)));
+                    services::translate_text(&engine, text, lang, self.bus.clone());
+                }
+            }
             WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(format!("{label}: not available yet")),
             WheelPick::File(tool) => {
                 self.toast(format!("{}…", tool.label()));
@@ -2047,7 +2068,29 @@ impl App {
                     }
                     self.toast(format!("Moved {} item{}", pairs.len(), if pairs.len() == 1 { "" } else { "s" }));
                 }
-                Msg::WheelOpen(kind, files) => self.show_wheel(kind, files),
+                Msg::WheelOpen(kind, files) => {
+                    self.wheel_text = None;
+                    self.show_wheel(kind, files)
+                }
+                Msg::WheelOpenText(text) => {
+                    if text.chars().count() > ferrocast_core::translate::MAX_CHARS {
+                        self.toast("Selection too long to translate");
+                    } else {
+                        self.wheel_text = Some(text);
+                        self.show_wheel(ferrocast_core::wheel::WheelKind::Translate, vec![]);
+                    }
+                }
+                Msg::Translated { lang, result } => {
+                    use ferrocast_core::translate::{outcome, Outcome};
+                    match outcome(result, &lang, self.settings.translate_output) {
+                        Outcome::Paste(t) => self.paste_text(&t),
+                        Outcome::Copy(t, toast) => {
+                            self.copy_text(&t);
+                            self.toast(toast);
+                        }
+                        Outcome::Fail(toast) => self.toast(toast),
+                    }
+                }
                 Msg::WheelRelease => self.release_wheel(),
                 Msg::WheelSwitch(k) => self.switch_wheel(k),
                 Msg::ShelfChanged(v) => {

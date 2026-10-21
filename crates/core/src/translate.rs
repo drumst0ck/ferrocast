@@ -1,6 +1,6 @@
 //! Translating selected text with the AI providers of the chat. Pure helpers; the app runs the call.
 
-use crate::models::{AiProvider, Settings};
+use crate::models::{AiProvider, Settings, TranslateOutput};
 
 /// Languages on the wheel until the user chooses their own.
 pub const DEFAULT_LANGUAGES: [&str; 8] = ["English", "Spanish", "French", "German", "Portuguese", "Italian", "Japanese", "Chinese"];
@@ -10,9 +10,6 @@ pub const MAX_LANGUAGES: usize = 12;
 
 /// Longest selection sent to a model, in characters.
 pub const MAX_CHARS: usize = 20_000;
-
-/// System prompt of a translation request.
-pub const SYSTEM: &str = "You are a translation engine. Output only the translation of the user's text.";
 
 /// The wheel's languages from the setting: trimmed, without blanks or duplicates, at most 12;
 /// the defaults when nothing is left.
@@ -77,6 +74,34 @@ pub fn engine_settings(s: &Settings) -> Settings {
     match s.translate_provider {
         Some(p) => Settings { ai_provider: p, ..s.clone() },
         None => s.clone(),
+    }
+}
+
+/// What the app does with a finished translation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// Paste over the selection (the text is also left on the clipboard).
+    Paste(String),
+    /// Clipboard only: the text and the toast.
+    Copy(String, String),
+    /// Nothing usable: the toast.
+    Fail(String),
+}
+
+/// Decide what to do with the result of translating into `lang`.
+pub fn outcome(result: Result<String, String>, lang: &str, output: TranslateOutput) -> Outcome {
+    match result {
+        Err(e) => Outcome::Fail(format!("Translation failed: {e}")),
+        Ok(raw) => {
+            let text = clean_reply(&raw);
+            if text.is_empty() {
+                return Outcome::Fail("Translation failed: empty reply".into());
+            }
+            match output {
+                TranslateOutput::Replace => Outcome::Paste(text),
+                TranslateOutput::Copy => Outcome::Copy(text, format!("Translated to {lang}, copied")),
+            }
+        }
     }
 }
 
@@ -157,6 +182,15 @@ mod tests {
         let e = engine_settings(&t);
         assert_eq!(e.ai_provider, AiProvider::Anthropic);
         assert_eq!(Settings { ai_provider: chat.ai_provider, ..e }, t, "only the provider changes");
+    }
+
+    #[test]
+    fn outcome_follows_the_output_setting_and_the_reply() {
+        use crate::models::TranslateOutput::{Copy, Replace};
+        assert_eq!(outcome(Ok("\"Hola\"".into()), "Spanish", Replace), Outcome::Paste("Hola".into()));
+        assert_eq!(outcome(Ok("Hola".into()), "Spanish", Copy), Outcome::Copy("Hola".into(), "Translated to Spanish, copied".into()));
+        assert_eq!(outcome(Err("no key".into()), "Spanish", Replace), Outcome::Fail("Translation failed: no key".into()));
+        assert_eq!(outcome(Ok("  ".into()), "Spanish", Replace), Outcome::Fail("Translation failed: empty reply".into()));
     }
 
     #[test]

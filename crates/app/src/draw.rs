@@ -2038,7 +2038,10 @@ impl App {
             WheelKind::Actions => ("ACTIONS", [89.0, 212.0, 153.0]),
             WheelKind::Translate => ("TRANSLATE", [180.0, 120.0, 255.0]),
         };
-        let (count, kind_line) = hub_text(files);
+        let (count, kind_line) = match (kind, &self.wheel_text) {
+            (WheelKind::Translate, Some(t)) => ferrocast_core::translate::hub_text(t),
+            _ => hub_text(files),
+        };
         let hub_label = match hover.and_then(|i| segs.get(i)) {
             Some(sg) if sg.label.chars().count() > 16 => format!("{}…", sg.label.chars().take(15).collect::<String>()),
             Some(sg) => sg.label.clone(),
@@ -2218,7 +2221,13 @@ impl App {
         }
         p.text(c, Align2::CENTER_CENTER, &st.hub_cur, hub_font, pal.text.gamma_multiply(hub_in));
         p.text(c + Vec2::new(0.0, 18.0 * scale), Align2::CENTER_CENTER, kind_line, FontId::proportional(10.5 * scale), pal.sub);
-        for (j, (sym, k)) in [("⇧", WheelKind::Convert), ("⌘", WheelKind::Tools), ("⌃", WheelKind::Actions)].into_iter().enumerate() {
+        // a text wheel has no other wheel to switch to, so no key legend
+        let legend: &[(&str, WheelKind)] = if kind == WheelKind::Translate {
+            &[]
+        } else {
+            &[("⇧", WheelKind::Convert), ("⌘", WheelKind::Tools), ("⌃", WheelKind::Actions)]
+        };
+        for (j, (sym, k)) in legend.iter().copied().enumerate() {
             let x = c.x + (j as f32 - 1.0) * 16.0 * scale;
             p.text(
                 Pos2::new(x, c.y + 38.0 * scale),

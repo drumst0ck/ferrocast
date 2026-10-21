@@ -74,6 +74,7 @@ fn fixture() -> App {
         show_t: None,
         nav_at: Instant::now(),
         claude: None,
+        wheel_text: None,
         ai_models: Default::default(),
         tools: Default::default(),
         runs: HashMap::new(),
@@ -5749,4 +5750,83 @@ fn clipboard_image_textures_are_capped_least_recently_used_first() {
     app.icons.new_frame();
     assert!(app.icons.texture(&ctx, &Icon::Glyph("sf:command", [1, 2, 3])).is_some());
     assert!(app.icons.map.keys().any(|k| k.starts_with("glyph:")));
+}
+
+// ---- translate wheel (TW4) --------------------------------------------------------------------
+
+fn open_translate_wheel(app: &mut App) {
+    app.bus.send(Msg::WheelOpenText("Hello world".into()));
+    app.drain();
+}
+
+#[test]
+fn translate_wheel_lists_the_configured_languages_in_order() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    let labels = |app: &App| app.wheel_segments(WheelKind::Translate, &[]).into_iter().map(|s| s.label).collect::<Vec<_>>();
+    assert_eq!(labels(&app), ferrocast_core::translate::DEFAULT_LANGUAGES);
+    app.settings.translate_languages = vec!["Catalan".into(), "Korean".into(), "catalan".into()];
+    assert_eq!(labels(&app), ["Catalan", "Korean"]);
+    app.settings.translate_languages = (0..15).map(|i| format!("L{i}")).collect();
+    assert_eq!(labels(&app).len(), 12);
+    assert!(app.wheel_segments(WheelKind::Translate, &[]).iter().all(|s| matches!(s.pick, WheelPick::Translate(_))));
+}
+
+#[test]
+fn dragged_text_opens_the_translate_wheel_and_a_huge_selection_does_not() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    open_translate_wheel(&mut app);
+    assert_eq!(wheel_state(&app).map(|s| (s.0, s.2)), Some((WheelKind::Translate, 8)));
+    let mut app = fixture();
+    app.bus.send(Msg::WheelOpenText("x".repeat(ferrocast_core::translate::MAX_CHARS + 1)));
+    app.drain();
+    assert!(wheel_state(&app).is_none(), "no wheel for a selection that is too long");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("too long")), "{:?}", app.toast);
+}
+
+#[test]
+fn translate_wheel_renders_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        open_translate_wheel(&mut app);
+        render(&mut app, vec![]);
+        render(&mut app, vec![key_event(Key::ArrowRight)]);
+        assert!(wheel_state(&app).is_some());
+    }
+}
+
+#[test]
+fn modifier_taps_do_not_switch_a_translate_wheel() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    open_translate_wheel(&mut app);
+    render_mods(&mut app, vec![], Modifiers::NONE);
+    for m in [Modifiers::SHIFT, Modifiers::NONE, Modifiers::COMMAND, Modifiers::NONE, Modifiers::CTRL] {
+        render_mods(&mut app, vec![], m);
+        assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Translate);
+    }
+    app.switch_wheel(WheelKind::Actions);
+    assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Translate);
+}
+
+#[test]
+fn a_failed_translation_toasts_and_does_not_touch_the_view() {
+    let mut app = fixture();
+    app.bus.send(Msg::Translated { lang: "Spanish".into(), result: Err("Claude Code is not installed.".into()) });
+    app.drain();
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Claude Code is not installed")), "{:?}", app.toast);
+    assert!(matches!(app.view(), View::Root));
+}
+
+#[test]
+fn the_log_line_of_a_translate_wheel_has_no_text() {
+    use ferrocast_core::wheel::WheelKind;
+    let app = fixture();
+    let segs = app.wheel_segments(WheelKind::Translate, &[]);
+    let line = wheel_log_line("open", WheelKind::Translate, &segs, 0);
+    assert!(line.contains("Translate") && line.contains("segs=8"), "{line}");
+    let pick = wheel_pick_log_line(WheelKind::Translate, "Spanish", "Root", false);
+    assert!(pick.contains("Spanish"), "{pick}");
 }
