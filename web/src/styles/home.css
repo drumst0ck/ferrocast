@@ -1,0 +1,104 @@
+/* Home page additions (header language switch, hero CTAs, credo, Files block, features, Ask AI, changelog teaser).
+   Tokens and easing come from base.css/site.css; the light scheme is handled at the bottom. */
+
+/* header: language switch */
+.top .lang { min-height: 44px; min-width: 44px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius); font-size: var(--step-small); color: var(--muted); text-decoration: none; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); transition: color 160ms ease, box-shadow 160ms ease; }
+.top:has(.lang) .nav { margin-inline: auto; }
+@media (hover:hover) { .top .lang:hover { color: var(--ink); box-shadow: inset 0 0 0 1px var(--accent); } }
+
+/* hero */
+.hero .btn.alt.big { box-shadow: none; }
+.hero .proof { font-variant-numeric: tabular-nums; }
+
+/* live demo: file row state */
+[data-ui] .lz-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px 4px 58px; }
+[data-ui] .lz-chip { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 14px; border-radius: 999px; background: #2c2c2f; color: #f2f2f2; font-size: 15px; }
+[data-ui] .lz-chip.on { background: var(--c-convert, #ff8c3c); color: #1a0f05; }
+[data-ui] .lz-chip i { font-style: normal; font-size: 12px; opacity: .75; }
+[data-ui] .lz-note { margin: 10px 12px 6px; font-size: 13px; color: #a9a9af; max-width: none; line-height: 1.5; }
+
+/* credo: three short promises */
+.credo-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px 40px; }
+.credo-list li { display: grid; gap: 10px; align-content: start; }
+.credo-list b { font-family: var(--font-display); font-weight: 300; font-size: var(--step-head); line-height: 1; letter-spacing: -.03em; }
+.credo-list span { color: #d3d2d8; font-size: var(--step-body); line-height: 1.5; max-width: 32ch; }
+.stats dt.nums { font-variant-numeric: tabular-nums; }
+
+/* Files block: full-bleed stage that hosts the wheel */
+.fh { margin-top: var(--gap-sec); background: var(--stage); padding-block: clamp(56px, 7vw, 112px); position: relative; isolation: isolate; overflow: hidden; }
+.fh::before { content: ''; position: absolute; inset: -20% 0 auto; height: 70%; z-index: -1; background: radial-gradient(ellipse 50% 60% at 15% 20%, rgba(255,140,60,.16), transparent 70%), radial-gradient(ellipse 45% 55% at 85% 10%, rgba(86,194,255,.14), transparent 70%); pointer-events: none; }
+.fh .why-head p { color: #d3d2d8; }
+.fh .kx { margin-top: 8px; }
+.fh .kx li { background: var(--bg); }
+.fh .kx h3 { font-size: 1.1875rem; }
+.fh-demo { margin-top: clamp(40px, 5vw, 72px); display: grid; gap: 8px; justify-items: center; text-align: center; }
+.fh-demo .muted { max-width: 52ch; margin-inline: auto; margin-bottom: 16px; }
+.fh-demo .wd { width: min(100%, 880px); text-align: left; }
+.fh-sub { font-family: var(--font-display); font-weight: 300; font-size: var(--step-lead); letter-spacing: -.02em; }
+.fh-cols { margin-top: clamp(48px, 6vw, 88px); display: grid; grid-template-columns: 1fr 1.5fr 1fr; gap: 16px; align-items: start; }
+.fh-col { background: var(--bg); border-radius: 18px; padding: 22px; display: grid; gap: 12px; align-content: start; box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); min-width: 0; }
+.fh-col img { width: 100%; height: auto; border-radius: 12px; display: block; background: #1d1d1f; }
+.fh-col h3 { font-family: var(--font-display); font-weight: 300; font-size: clamp(1.5rem, 1.1rem + 1vw, 2rem); letter-spacing: -.02em; line-height: 1.1; }
+.fh-col p { color: var(--muted); font-size: 1.0625rem; line-height: 1.5; }
+.fh-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.fh-chips li { display: inline-flex; align-items: baseline; gap: 8px; min-height: 36px; padding: 6px 14px; border-radius: 999px; background: var(--surface); font-size: var(--step-small); line-height: 1.2; align-items: center; }
+.fh-chips li i { font-style: normal; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.fh-thumbs { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.fh-thumbs a { display: grid; gap: 8px; text-decoration: none; color: var(--ink); min-height: 44px; }
+.fh-thumbs img { transition: transform 260ms var(--ease-out), box-shadow 260ms ease; box-shadow: 0 0 0 1px rgba(255,255,255,.08); }
+.fh-thumbs span { font-size: var(--step-small); }
+@media (hover:hover) { .fh-thumbs a:hover img { transform: translateY(-3px); box-shadow: 0 0 0 1px var(--accent); } .fh-thumbs a:hover span { color: var(--accent); } }
+.fh-never { margin-top: 28px; font-family: var(--font-display); font-weight: 300; font-size: var(--step-lead); letter-spacing: -.015em; max-width: 34em; }
+.fh-cta { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; }
+.fh .fine { margin-top: 28px; }
+@media (max-width: 62em) { .fh-cols { grid-template-columns: 1fr; } }
+@media (max-width: 30em) { .fh-thumbs { grid-template-columns: 1fr 1fr; gap: 8px; } }
+
+/* features bento: docs link and decorations that sit inside the flow */
+.bento li { gap: 12px; }
+.bento .feat-doc { margin-top: auto; align-self: flex-start; position: relative; min-height: 44px; display: inline-flex; align-items: center; font-size: var(--step-small); }
+.bento .sc { position: static; margin-top: 8px; align-self: stretch; overflow-x: auto; }
+.bento .snap, .bento .ql, .bento .fx { margin-top: 8px; }
+.bento .feat-doc { margin-top: auto; }
+@media (max-width: 47.9em) { .bento .feat-doc { margin-top: 4px; } }
+
+/* small things */
+.smalls li b { font-weight: 500; font-size: 1.1875rem; color: var(--ink); }
+.smalls li span { line-height: 1.5; }
+.more-list.small .smalls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 62em) { .more-list.small .smalls { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 47.9em) { .more-list.small .smalls { grid-template-columns: 1fr; } }
+
+/* shortcuts link and faq heading class (renamed from .fh to avoid the Files block) */
+.keys-head .tl { justify-self: start; min-height: 44px; display: inline-flex; align-items: center; }
+.fl .fh-q { color: var(--muted); font-size: 1.125rem; margin-bottom: 14px; }
+.how .note .tl { white-space: nowrap; }
+
+/* Ask AI block */
+.aiblk { margin-top: var(--gap-sec); }
+.aiblk-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 32px 56px; align-items: start; }
+.aiblk-cols .fh-chips li { min-height: 44px; padding-inline: 18px; font-size: 1rem; }
+.aiblk-txt { display: grid; gap: 14px; justify-items: start; }
+.aiblk-txt p { font-size: 1.0625rem; line-height: 1.55; color: #d3d2d8; }
+.aiblk-txt .fine { margin-top: 0; color: var(--muted); }
+.aiblk-txt .tl { min-height: 44px; display: inline-flex; align-items: center; }
+@media (max-width: 62em) { .aiblk-cols { grid-template-columns: 1fr; } }
+
+/* changelog teaser */
+.clog { margin-top: var(--gap-sec); }
+.clog .why-head p { font-size: var(--step-lead); }
+.clog-list { margin: 0; padding-left: 1.1em; color: var(--muted); font-size: 1.0625rem; line-height: 1.6; }
+.clog .fh-cta .tl { min-height: 44px; display: inline-flex; align-items: center; }
+
+@media (max-width: 62em) { .credo-list { grid-template-columns: 1fr; } }
+
+/* light scheme: the stage band follows --stage; cards sit on the page ground */
+@media (prefers-color-scheme: light) {
+  .top .lang { box-shadow: inset 0 0 0 1px rgba(0,0,0,.14); }
+  .credo-list span, .aiblk-txt p, .fh .why-head p { color: #2c2b31; }
+  .fh-col, .fh .kx li { box-shadow: inset 0 0 0 1px rgba(0,0,0,.07); }
+  .fh-thumbs img { box-shadow: 0 0 0 1px rgba(0,0,0,.1); }
+  .fh::before { opacity: .6; }
+}
+@media (prefers-reduced-motion: reduce) { .fh-thumbs img { transition: none; } }
+.hero h1 .line > span { text-wrap: balance; }

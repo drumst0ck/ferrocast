@@ -1,0 +1,478 @@
+---
+/*
+ * The home page, shared by / (English) and /es/ (Spanish). All copy comes from the `t` object
+ * (web/src/i18n/home.{en,es}.ts); numbers come from counts() and the generated data.
+ */
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../SiteHeader.astro';
+import FilesBlock from './FilesBlock.astro';
+import '../../styles/files.css';
+import '../../styles/home.css';
+import conversions from '../../data/conversions.json';
+import { counts, STATUS_DATE } from '../../data/status';
+import { repo, installCommand as install, sourceCommand as source } from '../../data/install';
+import type { HomeCopy } from '../../i18n/home.en';
+
+interface Props { t: HomeCopy; lang: 'en' | 'es' }
+const { t, lang } = Astro.props;
+const es = lang === 'es';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const site = 'https://ferrocast.app';
+const homePath = es ? `${base}/es/` : `${base}/`;
+const img = (n: string) => `${base}/img/${n}.jpg`;
+const docs = (p: string) => `${base}${es ? '/es' : ''}/docs${p}`;
+const c = counts(); // throws at build time if the generated data drifts from 275 pairs / 46 inputs
+const fill = (s: string, v: Record<string, string | number> = {}) => s.replace(/\{(\w+)\}/g, (m, k) => (k in v ? String(v[k]) : m));
+const vars = { pairs: c.pairs, inputs: c.inputs, tools: c.tools, actions: c.actions };
+
+// Measured on the maintainer's Mac; see the method note in the Measured section. Update together.
+const bench = {
+  date: '2026-10-17', mac: 'MacBook with Apple M3, macOS 27', raycastVersion: '2.8.1',
+  ferro: { disk: es ? '8,5 MB' : '8.5 MB', mem: '145 MB', procs: '1' },
+  ray: { disk: '242 MB', mem: '154 MB', procs: '4' },
+};
+const benchDate = es ? '17 de octubre de 2026' : '2026-10-17';
+
+const description = fill(t.meta.description, vars);
+if (description.length < 140 || description.length > 155) throw new Error(`home (${lang}) description is ${description.length} characters`);
+const title = t.meta.title;
+
+const canonical = `${site}${homePath}`;
+const alternates = { en: `${site}${base}/`, es: `${site}${base}/es/`, 'x-default': `${site}${base}/` };
+const switchHref = es ? `${base}/` : `${base}/es/`;
+
+// Demo: the file row is a static mock built from conversions.json (HEIC outputs).
+const heic = conversions.families.flatMap((fam) => fam.inputs).find((i) => i.ext === 'heic');
+if (!heic) throw new Error('heic input missing from conversions.json');
+const fileOuts = heic.outputs.map((o) => ({ ext: o.ext, label: o.label, needs: o.needs }));
+
+// Changelog teaser: read ../CHANGELOG.md at build time when reachable; otherwise render a plain link block.
+type Teaser = { version: string; date: string; titles: string[] } | null;
+function readTeaser(): Teaser {
+  try {
+    const file = path.resolve(process.cwd(), '..', 'CHANGELOG.md');
+    if (!existsSync(file)) return null;
+    const lines = readFileSync(file, 'utf8').split('\n');
+    const heads = lines.map((l, i) => [l.match(/^## \[(.+?)\](?:\s*-\s*(\S+))?/), i] as const).filter(([m]) => m);
+    const rel = heads.find(([m]) => m![1].toLowerCase() !== 'unreleased');
+    const unrel = heads.find(([m]) => m![1].toLowerCase() === 'unreleased');
+    if (!rel) return null;
+    const titles: string[] = [];
+    if (unrel) {
+      const end = heads.find(([, i]) => i > unrel[1])?.[1] ?? lines.length;
+      let inAdded = false;
+      for (const l of lines.slice(unrel[1] + 1, end)) {
+        if (l.startsWith('### ')) inAdded = l.trim() === '### Added';
+        else if (inAdded && titles.length < 3) { const m = l.match(/^- \*\*(.+?)\*\*/); if (m) titles.push(m[1].replace(/[:.]$/, '')); }
+      }
+    }
+    return { version: rel[0]![1], date: rel[0]![2] ?? '', titles };
+  } catch { return null; }
+}
+const teaser = readTeaser();
+
+const faq = t.faq.items.map(([q, a]) => [q, fill(a, vars)] as [string, string]);
+const jsonLd = [
+  { '@context': 'https://schema.org', '@type': 'SoftwareApplication', name: 'Ferrocast', applicationCategory: 'UtilitiesApplication', operatingSystem: 'macOS', description: t.json.appDescription, url: canonical, inLanguage: lang, license: 'https://opensource.org/licenses/MIT', offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' } },
+  { '@context': 'https://schema.org', '@type': 'FAQPage', inLanguage: lang, mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: a } })) },
+];
+const steps = t.tour.steps;
+const shotSize = (f: string) => (f.startsWith('files-') ? [1500, 950] : [1300, 823]);
+const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.demo.open, fileHeading: t.demo.fileHeading, fileKind: t.demo.fileKind, fileNeeds: t.demo.fileNeeds, fileAction: t.demo.fileAction, fileNote: t.demo.fileNote };
+---
+<Base title={title} description={description} canonical={canonical} jsonLd={jsonLd} lang={lang} alternates={alternates}>
+  <a class="skip" href="#main">{t.skip}</a>
+  <div class="cursor-light" aria-hidden="true"></div>
+  <SiteHeader lang={lang} switchHref={switchHref} switchLabel={t.nav.switchLabel} switchAria={t.nav.switchAria}>
+    <Fragment slot="nav">
+      <a href="#features">{t.nav.features}</a>
+      <a href="#files">{t.nav.files}</a>
+      <a href={docs('/')}>{t.nav.docs}</a>
+      <a href="#install">{t.nav.install}</a>
+      <a href="#faq">{t.nav.faq}</a>
+      <a href={`${base}/changelog/`}>{t.nav.changelog}</a>
+      <a href={repo}>{t.nav.github}</a>
+    </Fragment>
+    <Fragment slot="cta">{t.nav.installBtn}</Fragment>
+  </SiteHeader>
+
+  <main id="main">
+    <section class="hero" aria-label={t.hero.aria}>
+      <div class="hero-bg" aria-hidden="true"><i></i><i></i></div>
+      <div class="copy">
+        <h1 class="lines"><span class="line"><span data-line style="--i:0">{t.hero.line1}</span></span><span class="line"><span data-line style="--i:1">{t.hero.line2}</span></span></h1>
+        <p class="sub" data-rise style="--i:3">{t.hero.sub}</p>
+        <div class="acts" data-rise style="--i:4"><a class="btn big" href="#install">{t.hero.ctaInstall}</a><a class="btn alt big" href="#files">{t.hero.ctaFiles}</a></div>
+        <p class="proof" data-rise style="--i:5">{fill(t.hero.proof, vars)}</p>
+      </div>
+      <div class="hero-3d" data-rise style="--i:2">
+        <canvas id="keys" aria-hidden="true"></canvas>
+        <img class="fb" src={`${base}/icon.png`} alt="" width="256" height="256" />
+      </div>
+    </section>
+
+    <section class="stage" aria-label={t.demo.aria}>
+      <div class="lzwrap"><div class="lz" data-ui id="lz">
+        <label class="sr-only" for="lzq">{t.demo.searchLabel}</label>
+        <input class="lz-in" id="lzq" type="text" placeholder={t.demo.placeholder} autocomplete="off" spellcheck="false" value="100 usd in eur" />
+        <div class="lz-body" id="lzb" aria-live="polite"></div>
+        <div class="lz-foot"><span>{t.demo.foot}</span><span><b id="lzact">{t.demo.copyAnswer}</b><kbd>↵</kbd><b style="margin-left:18px">{t.demo.actions}</b><kbd>⌘K</kbd></span></div>
+      </div></div>
+      <div class="tryrow" data-reveal role="group" aria-label={t.demo.examplesAria}>
+        {t.demo.tries.map((q) => <button type="button" data-q={q}>{q}</button>)}
+      </div>
+    </section>
+
+    <section class="credo wrap" aria-label={t.credo.aria}>
+      <ul class="credo-list">
+        {t.credo.items.map(([h, p], i) => <li data-reveal style={`transition-delay:${i * 80}ms`}><b>{h}</b><span>{p}</span></li>)}
+      </ul>
+    </section>
+
+    <section class="stats" aria-label={t.stats.aria}>
+      <dl>
+        {t.stats.items.map(([n, d], i) => <div data-reveal style={`transition-delay:${i * 80}ms`}><dt class="nums">{fill(n, vars)}</dt><dd>{fill(d, vars)}</dd></div>)}
+      </dl>
+    </section>
+
+    <FilesBlock t={t} lang={lang} fill={fill} />
+
+    <section class="why wrap" id="why" aria-labelledby="h-why">
+      <div class="why-head" data-reveal>
+        <h2 id="h-why">{t.why.title}</h2>
+        <p>{t.why.intro}</p>
+      </div>
+      <div class="cmp" role="table" aria-label={t.why.tableAria} data-ferro={t.why.ferroCol}>
+        <div class="cmp-row cmp-head" role="row"><span role="columnheader"></span><span role="columnheader">{t.why.ferroCol}</span><span role="columnheader">{t.why.rayCol}</span></div>
+        {t.why.rows.map(([k, a, b], i) => <div class="cmp-row" role="row" data-reveal style={`transition-delay:${(i % 4) * 40}ms`}><span role="rowheader">{k}</span><span role="cell">{fill(a, vars)}</span><span role="cell" class="muted" data-col={t.why.rayCol}>{b}</span></div>)}
+      </div>
+      <p class="fine" data-reveal>{fill(t.why.disclaimer, { date: benchDate })}</p>
+    </section>
+
+    <section class="more-list wrap" id="features" aria-labelledby="h-feat">
+      <h2 id="h-feat" data-reveal>{t.features.title}</h2>
+      <ul class="bento">
+        {t.features.cards.map(([name, text, link], i) => <li class={`b${i}`} data-reveal style={`transition-delay:${(i % 3) * 70}ms`}><b>{name}</b><span>{text}</span>
+          {i === 1 && <div class="fx" aria-hidden="true">{t.features.calcQ}<em>→</em>43.2</div>}
+          {i === 3 && <div class="ql" aria-hidden="true"><i class="k">{t.features.aliasQ}</i><i>drumst0ck/ferrocast</i><em>→</em><i>github.com/drumst0ck/ferrocast</i></div>}
+          {i === 5 && <div class="snap" aria-hidden="true"><i></i></div>}
+          {i === 6 && <code class="sc" aria-hidden="true">{['#!/bin/bash', '# @raycast.mode compact', 'date +%H:%M'].join('\n')}</code>}
+          <a class="tl feat-doc" href={docs(link)}>{t.features.docsLabel} →</a></li>)}
+      </ul>
+    </section>
+
+    <section class="story" id="tour" aria-label={t.tour.aria} style={`--n:${steps.length}`}>
+      <div class="story-in">
+        <div class="story-txt">
+          <h2 class="sr-only">{t.tour.heading}</h2>
+          <ol class="steps">
+            {steps.map(([n, , d], i) => <li class:list={['step', { on: i === 0 }]} data-i={i}><h3>{n}</h3><p>{d}</p></li>)}
+          </ol>
+          <div class="dots" role="group" aria-label={t.tour.dots}>
+            {steps.map(([n], i) => <button type="button" class:list={{ on: i === 0 }} data-i={i} aria-label={n}></button>)}
+          </div>
+        </div>
+        <div class="story-vis">
+          <div class="story-card" id="scard">
+            {steps.map(([n, f], i) => <img class:list={['sv', { on: i === 0 }]} data-i={i} src={img(f)} alt={fill(t.tour.alt, { name: n })} width={shotSize(f)[0]} height={shotSize(f)[1]} loading={i === 0 ? 'eager' : 'lazy'} />)}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="vid" aria-labelledby="h-vid">
+      <div class="vid-head" data-reveal>
+        <h2 id="h-vid">{t.video.title}</h2>
+        <p>{t.video.lead}</p>
+      </div>
+      <div class="vstage" id="vstage">
+        <div class="vwrap" id="vwrap">
+          <video id="vplay" muted loop playsinline preload="none" poster={`${base}/video/poster.jpg`} aria-label={t.video.aria}>
+            <source src={`${base}/video/ferrocast.mp4`} type="video/mp4" />
+          </video>
+        </div>
+      </div>
+    </section>
+
+    <section class="bench wrap" id="speed" aria-labelledby="h-bench">
+      <div class="why-head" data-reveal>
+        <h2 id="h-bench">{t.bench.title}</h2>
+        <p>{t.bench.lead}</p>
+      </div>
+      <div class="cmp" role="table" aria-label={t.bench.tableAria}>
+        <div class="cmp-row cmp-head" role="row"><span role="columnheader"></span><span role="columnheader">Ferrocast</span><span role="columnheader">Raycast {bench.raycastVersion}</span></div>
+        {[
+          [bench.ferro.disk, bench.ray.disk], [bench.ferro.mem, bench.ray.mem], [bench.ferro.procs, bench.ray.procs],
+          [t.bench.hotkey, t.bench.notMeasured], [t.bench.keystroke, t.bench.notMeasured], [t.bench.startFerro, t.bench.notMeasured],
+        ].map(([a, b], i) => <div class="cmp-row" role="row" data-reveal style={`transition-delay:${i * 40}ms`}><span role="rowheader">{t.bench.rows[i]}</span><span role="cell"><b>{a}</b></span><span role="cell" class="muted">{b}</span></div>)}
+      </div>
+      <p class="fine" data-reveal>{fill(t.bench.method, { mac: bench.mac, date: benchDate })}</p>
+    </section>
+
+    <section class="aiblk wrap" id="ai" aria-labelledby="h-ai">
+      <div class="why-head" data-reveal>
+        <h2 id="h-ai">{t.ai.title}</h2>
+        <p>{t.ai.lead}</p>
+      </div>
+      <div class="aiblk-cols" data-reveal>
+        <ul class="fh-chips" aria-label={t.ai.chipsAria}>{t.ai.chips.map((x) => <li>{x}</li>)}</ul>
+        <div class="aiblk-txt">
+          <p>{t.ai.caveat}</p>
+          <p class="fine">{t.ai.status}</p>
+          <a class="tl" href={docs('/launcher/ask-ai/')}>{t.ai.link} →</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="more-list wrap small" aria-labelledby="h-more">
+      <h2 id="h-more" data-reveal>{t.small.title}</h2>
+      <ul class="keylist smalls">
+        {t.small.items.map(([h, d], i) => <li data-reveal style={`transition-delay:${(i % 3) * 60}ms`}><b>{h}</b><span>{d}</span></li>)}
+      </ul>
+    </section>
+
+    <section class="keys wrap" id="shortcuts" aria-labelledby="h-keys">
+      <div class="keys-head" data-reveal>
+        <h2 id="h-keys">{t.shortcuts.title}</h2>
+        <p>{t.shortcuts.lead}</p>
+        <a class="tl" href={docs('/launcher/keyboard-shortcuts/')}>{t.shortcuts.docs} →</a>
+      </div>
+      <ul class="keylist">
+        {t.shortcuts.list.map(([combo, what], i) => <li data-reveal style={`transition-delay:${(i % 3) * 60}ms`}><span class="combo">{(combo as string[]).map((k) => <kbd>{k}</kbd>)}</span><span>{what}</span></li>)}
+      </ul>
+    </section>
+
+    <section class="how" id="install" aria-labelledby="h-how">
+      <h2 id="h-how" data-reveal>{t.install.title}</h2>
+      <div class="ex" data-reveal>
+        <h3>{t.install.step1}</h3>
+        <div class="call"><pre><code id="inst">{install}</code></pre><button class="cp" type="button" data-copy="inst">{t.install.copy}</button></div>
+        <p class="note">{t.install.note} <a class="tl" href={docs('/getting-started/install/')}>{t.install.docs} →</a></p>
+      </div>
+      <div class="ex" data-reveal>
+        <h3>{t.install.step2}</h3>
+        <div class="call"><span class="typed">⌥ Space</span></div>
+        <div class="resp crop"><img src={img('home')} alt={t.install.step2Alt} width="1300" height="823" loading="lazy" /></div>
+      </div>
+      <div class="ex wide" data-reveal>
+        <h3>{t.install.step3}</h3>
+        <div class="call"><span class="typed">5pm ldn in sf</span></div>
+        <div class="resp"><img src={img('tz')} alt={t.install.step3Alt} width="1300" height="823" loading="lazy" /></div>
+      </div>
+    </section>
+
+    <section class="faq" id="faq" aria-labelledby="h-faq">
+      <ul class="fl">
+        <li class="fh-q" id="h-faq">{t.faq.heading}</li>
+        {faq.map(([q, a], i) => <li><button type="button" aria-expanded={i === 0 ? 'true' : 'false'} data-i={i}>{q}</button><p class="ans">{a}</p></li>)}
+      </ul>
+      <p class="fp" id="fp" aria-live="polite">{faq[0][1]}</p>
+    </section>
+
+    <section class="clog wrap" id="changelog" aria-labelledby="h-clog">
+      <div class="why-head" data-reveal>
+        <h2 id="h-clog">{t.changelog.title}</h2>
+        {teaser ? (
+          <p>{t.changelog.latest}: <b class="nums">{teaser.version}</b>{teaser.date && <span class="muted"> · {teaser.date}</span>}</p>
+          <ul class="clog-list">{teaser.titles.map((x) => <li>{x}</li>)}</ul>
+        ) : <p>{t.changelog.fallback}</p>}
+        {teaser && teaser.titles.length > 0 && <p class="fine">{t.changelog.unreleased}: {teaser.titles.join(' · ')}</p>}
+      </div>
+      <div class="fh-cta"><a class="tl" href={`${base}/changelog/`}>{t.changelog.all} →</a><a class="tl" href={`${base}/changelog/rss.xml`} aria-label={t.changelog.rssAria}>{t.changelog.rss}</a></div>
+    </section>
+
+    <section class="cta" aria-labelledby="h-cta">
+      <div class="l">
+        <h2 id="h-cta" class="lines"><span class="line"><span data-line style="--i:0">{t.cta.title1}</span></span><span class="line"><span data-line style="--i:1">{t.cta.title2}</span></span></h2>
+        <p data-reveal>{t.cta.lead}</p>
+      </div>
+      <div class="dlg" data-ui data-reveal>
+        <h3>{t.cta.dialogTitle}</h3>
+        <div class="seg" role="group" aria-label={t.cta.methodAria}><button type="button" aria-pressed="true" data-m="brew">{t.cta.homebrew}</button><button type="button" aria-pressed="false" data-m="src">{t.cta.source}</button></div>
+        <pre><code id="dlgcode">{install}</code></pre>
+        <button class="btn" type="button" id="dlgcp">{t.cta.copyAll}</button>
+        <small>{t.cta.small}</small>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span data-reveal>{t.footer.tagline}</span>
+    <nav aria-label={t.footer.linksAria}><a href="#install">{t.nav.install}</a><a href={docs('/')}>{t.nav.docs}</a><a href={`${base}/changelog/`}>{t.nav.changelog}</a><a href={repo}>{t.nav.github}</a><a href={`${repo}/blob/main/LICENSE`}>{t.footer.license}</a></nav>
+    <span class="r">{t.footer.copyright}</span>
+  </footer>
+
+  <script is:inline define:vars={{ install, source, faq: faq.map((f) => f[1]), T: clientT, fileOuts }}>
+    (function () {
+      var $ = function (s, r) { return (r || document).querySelector(s); }, $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+      /* copy buttons */
+      function copy(text, btn, done) { var ok = function () { var o = btn.textContent; btn.textContent = done; setTimeout(function () { btn.textContent = o; }, 1600); }; if (navigator.clipboard) navigator.clipboard.writeText(text).then(ok, ok); else ok(); }
+      $$('[data-copy]').forEach(function (b) { b.addEventListener('click', function () { copy($('#' + b.dataset.copy).textContent, b, T.copied); }); });
+      /* cta dialog */
+      var code = $('#dlgcode'), mode = 'brew';
+      $$('.seg button').forEach(function (b) { b.addEventListener('click', function () { mode = b.dataset.m; code.textContent = mode === 'brew' ? install : source; $$('.seg button').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); }); }); });
+      $('#dlgcp').addEventListener('click', function () { copy(code.textContent, $('#dlgcp'), T.copied); });
+      /* pinned story: scroll chooses the screen, 3D card sweeps */
+      var story = $('.story'), steps = $$('.step'), svs = $$('.sv'), dots = $$('.dots button'), scard = $('#scard'), n = steps.length, cur = -1, sp = 0, sx = 0, sy = 0, stx = 0, sty = 0;
+      function setStep(i) { if (i === cur) return; cur = i; steps.forEach(function (e, k) { e.classList.toggle('on', k === i); }); svs.forEach(function (e, k) { e.classList.toggle('on', k === i); }); dots.forEach(function (e, k) { e.classList.toggle('on', k === i); }); }
+      function storyFrame() {
+        var r = story.getBoundingClientRect(), span = r.height - innerHeight, p = Math.min(1, Math.max(0, -r.top / span));
+        sp += (p - sp) * 0.12; sx += (stx - sx) * 0.08; sy += (sty - sy) * 0.08;
+        setStep(Math.min(n - 1, Math.floor(p * n * 0.999)));
+        if (!reduce) scard.style.transform = 'rotateY(' + (-16 + sp * 26 + sx * 6).toFixed(2) + 'deg) rotateX(' + (7 - sp * 5 - sy * 4).toFixed(2) + 'deg) translateZ(0)';
+        if (r.bottom > 0 && r.top < innerHeight) requestAnimationFrame(storyFrame);
+      }
+      var storyOn = false;
+      new IntersectionObserver(function (en) { var v = en[0].isIntersecting; if (v && !storyOn) { storyOn = true; storyFrame(); } if (!v) storyOn = false; }, { threshold: 0 }).observe(story);
+      story.addEventListener('pointermove', function (e) { var r = story.getBoundingClientRect(); stx = ((e.clientX / innerWidth) - 0.5) * 2; sty = ((e.clientY / innerHeight) - 0.5) * 2; });
+      dots.forEach(function (d, i) { d.addEventListener('click', function () { var top = story.getBoundingClientRect().top + scrollY, span = story.offsetHeight - innerHeight; scrollTo({ top: top + ((i + 0.5) / n) * span, behavior: reduce ? 'auto' : 'smooth' }); }); });
+
+      /* faq */
+      var fb = $$('.fl button'), fp = $('#fp');
+      function ask(i) { fb.forEach(function (b, k) { b.setAttribute('aria-expanded', k === i ? 'true' : 'false'); b.parentNode.classList.toggle('on', k === i); }); fp.classList.add('out'); setTimeout(function () { fp.textContent = faq[i]; fp.classList.remove('out'); }, 120); }
+      fb.forEach(function (b, i) { b.addEventListener('click', function () { ask(i); }); b.addEventListener('mouseenter', function () { if (matchMedia('(hover:hover)').matches) ask(i); }); b.addEventListener('focus', function () { ask(i); }); });
+      fb[0].parentNode.classList.add('on');
+
+
+      var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      /* generic 3D entrance: tilted at first, straightens while scrolling, follows the pointer */
+      function tilt(section, el, opts) {
+        var px = 0, py = 0, cx = 0, cy = 0, raf = 0, o = opts || {};
+        function frame() {
+          raf = 0;
+          var r = section.getBoundingClientRect(), vh = innerHeight;
+          var p = Math.min(1, Math.max(0, (vh * 0.98 - r.top) / (vh * 0.62)));
+          cx += (px - cx) * 0.08; cy += (py - cy) * 0.08;
+          var rx = (1 - p) * (o.rx || 30) - cy * 5, ry = cx * 8 + (o.ry || 0) * (1 - p), ty = (1 - p) * 70, sc = 0.9 + p * 0.1;
+          el.style.transform = 'translate3d(0,' + ty.toFixed(1) + 'px,0) rotateX(' + rx.toFixed(2) + 'deg) rotateY(' + ry.toFixed(2) + 'deg) scale(' + sc.toFixed(3) + ')';
+          el.style.setProperty('--glow', (0.25 + p * 0.55).toFixed(2));
+          if (r.bottom > 0 && r.top < vh && (Math.abs(px - cx) > 0.002 || Math.abs(py - cy) > 0.002)) raf = requestAnimationFrame(frame);
+        }
+        function kick() { if (!raf) raf = requestAnimationFrame(frame); }
+        addEventListener('scroll', kick, { passive: true }); addEventListener('resize', kick);
+        section.addEventListener('pointermove', function (e) { var r = section.getBoundingClientRect(); px = ((e.clientX - r.left) / r.width - 0.5) * 2; py = ((e.clientY - r.top) / r.height - 0.5) * 2; kick(); });
+        section.addEventListener('pointerleave', function () { px = 0; py = 0; kick(); });
+        frame();
+      }
+      if (!reduce) { tilt($('.stage'), $('.lzwrap')); tilt($('#vstage'), $('#vwrap'), { rx: 24, ry: -12 }); }
+
+      /* video plays only while visible */
+      var vp = $('#vplay');
+      if (vp && !reduce) new IntersectionObserver(function (en) { if (en[0].isIntersecting) { vp.preload = 'auto'; var pr = vp.play(); if (pr && pr.catch) pr.catch(function () {}); } else vp.pause(); }, { threshold: 0.25 }).observe(vp);
+
+      /* nav: highlight the section in view */
+      var navLinks = $$('.nav a[href^="#"], .nav a[href*="/#"]');
+      if (navLinks.length && 'IntersectionObserver' in window) {
+        var navIo = new IntersectionObserver(function (en) {
+          en.forEach(function (e) { if (e.isIntersecting) navLinks.forEach(function (a) { a.classList.toggle('on', a.hash === '#' + e.target.id); }); });
+        }, { rootMargin: '-40% 0px -55% 0px' });
+        navLinks.forEach(function (a) { var sec = a.hash && document.querySelector(a.hash); if (sec) navIo.observe(sec); });
+      }
+
+      /* global cursor light */
+      var cl = $('.cursor-light');
+      if (cl && !reduce && matchMedia('(hover:hover) and (pointer:fine)').matches) {
+        var lx = innerWidth / 2, ly = innerHeight / 2, tx = lx, ty2 = ly, lraf = 0;
+        function lstep() { lx += (tx - lx) * 0.12; ly += (ty2 - ly) * 0.12; cl.style.transform = 'translate3d(' + (lx - 260).toFixed(1) + 'px,' + (ly - 260).toFixed(1) + 'px,0)'; lraf = (Math.abs(tx - lx) + Math.abs(ty2 - ly) > 0.5) ? requestAnimationFrame(lstep) : 0; }
+        addEventListener('pointermove', function (e) { tx = e.clientX; ty2 = e.clientY; cl.style.opacity = 1; if (!lraf) lraf = requestAnimationFrame(lstep); }, { passive: true });
+        document.addEventListener('pointerleave', function () { cl.style.opacity = 0; });
+      }
+
+      /* spotlight follows the cursor on bento cards */
+      $$('.bento li').forEach(function (li) { li.addEventListener('pointermove', function (e) { var r = li.getBoundingClientRect(); li.style.setProperty('--mx', (e.clientX - r.left) + 'px'); li.style.setProperty('--my', (e.clientY - r.top) + 'px'); }); });
+
+      /* launcher */
+      var q = $('#lzq'), body = $('#lzb'), act = $('#lzact'), sel = 0, items = [], timer, touched = false, cur = {};
+      var cmds = [['Ask AI', 'AI', 'AI', '#a45cf0'], ['Clipboard History', 'Ferrocast', '⎘', '#f0535f'], ['Search Snippets', 'Snippets', '{ }', '#f5a524'], ['Search Emoji & Symbols', 'Emoji', ':)', '#f5c524'], ['Left Half', 'Window Management', '▣', '#46c98b'], ['Right Half', 'Window Management', '▣', '#46c98b'], ['Maximize', 'Window Management', '▣', '#46c98b'], ['Keyboard Shortcuts', 'Ferrocast', '⌘', '#6c6c78'], ['Settings', 'Ferrocast', 'S', '#6c6c78']];
+      var zones = { ldn: ['Europe/London', 'London'], london: ['Europe/London', 'London'], sf: ['America/Los_Angeles', 'San Francisco'], nyc: ['America/New_York', 'New York'], ny: ['America/New_York', 'New York'], tokyo: ['Asia/Tokyo', 'Tokyo'], madrid: ['Europe/Madrid', 'Madrid'], paris: ['Europe/Paris', 'Paris'], berlin: ['Europe/Berlin', 'Berlin'] };
+      var dist = { km: 1000, m: 1, mi: 1609.344, ft: 0.3048, in: 0.0254, cm: 0.01 };
+      function fmt(n) { return (Math.round(n * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); }
+      function esc(s) { return s.replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+      function offset(tz, d) { var o = {}; new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(d).forEach(function (x) { o[x.type] = +x.value; }); return Date.UTC(o.year, o.month - 1, o.day, o.hour % 24, o.minute, o.second) - d.getTime(); }
+      function inZone(tz, d) { return new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d); }
+      function calc(v) {
+        var s = v.trim().toLowerCase(), m;
+        if ((m = s.match(/^(\d+(?:\.\d+)?)\s*([a-z]{3})\s+(?:in|to)\s+([a-z]{3})$/)) && !dist[m[2]]) return { cur: [+m[1], m[2].toUpperCase(), m[3].toUpperCase()] };
+        if ((m = s.match(/^(\d+(?:\.\d+)?)\s*(km|mi|m|ft|in|cm)\s+(?:in|to)\s+(km|mi|m|ft|in|cm)$/))) return { q: m[1] + ' ' + m[2] + ' → ' + m[3], a: fmt(m[1] * dist[m[2]] / dist[m[3]]) + ' ' + m[3] };
+        if ((m = s.match(/^time in (\w+)$/)) && zones[m[1]]) return { q: 'Time in ' + zones[m[1]][1], a: inZone(zones[m[1]][0], new Date()) };
+        if ((m = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(\w+)\s+in\s+(\w+)$/)) && zones[m[4]] && zones[m[5]]) {
+          var h = m[3] ? +m[1] % 12 + (m[3] === 'pm' ? 12 : 0) : +m[1], now = new Date(), base = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, +(m[2] || 0)), t = new Date(base - offset(zones[m[4]][0], new Date(base)));
+          return { q: m[1] + (m[2] ? ':' + m[2] : '') + (m[3] ? ' ' + m[3].toUpperCase() : '') + ' ' + zones[m[4]][1], a: inZone(zones[m[5]][0], t) };
+        }
+        if ((m = s.match(/^(\d+(?:\.\d+)?)\s*%\s*of\s*(\d+(?:\.\d+)?)$/))) return { q: m[1] + '% of ' + m[2], a: fmt(m[1] * m[2] / 100) };
+        if (/^[\d\s+\-*/().,%^]*\d[\d\s+\-*/().,%^]*$/.test(s) && /[+\-*/^%]/.test(s)) { try { var r = Function('"use strict";return (' + s.replace(/,/g, '.').replace(/\^/g, '**') + ')')(); if (isFinite(r)) return { q: v.trim(), a: fmt(r) }; } catch (e) {} }
+        return null;
+      }
+      function row(i, title, sub, ic, bg, key, extra) { return '<div class="lz-r' + (i === sel ? ' sel' : '') + '" data-i="' + i + '"><span class="ic" style="background:' + bg + '">' + ic + '</span><span class="t">' + title + (sub ? '<i>' + sub + '</i>' : '') + '</span><span class="k">' + key + '</span></div>'; }
+      function needsOf(n) { return T.fileNeeds.replace('{tool}', n); }
+      function fileHtml() {
+        var chips = fileOuts.map(function (o) { return '<span class="lz-chip' + (o.ext === 'jpg' ? ' on' : '') + '">' + esc(o.label) + (o.needs ? '<i>' + esc(needsOf(o.needs)) + '</i>' : '') + '</span>'; }).join('');
+        return '<div class="lz-h">' + esc(T.fileHeading) + '</div>' + row(0, 'photo.heic', esc(T.fileKind), 'HEIC', '#46c98b', '⇧') + '<div class="lz-chips" role="presentation">' + chips + '</div><p class="lz-note">' + esc(T.fileNote) + '</p>';
+      }
+      function render() {
+        var v = q.value, isFile = /^heic\s+(to|in)\b/i.test(v.trim());
+        if (isFile) { sel = 0; items = [{}]; body.innerHTML = fileHtml(); act.textContent = T.fileAction; return; }
+        var r = v.trim() ? calc(v) : null, html = '', i = 0; items = [];
+        if (r && r.cur) { var k = r.cur[1] + r.cur[2]; if (cur[k] === undefined) { html += '<div class="lz-h">Result</div><div class="lz-res"><div><div class="q">' + r.cur[0] + ' ' + r.cur[1] + ' → ' + r.cur[2] + '</div><small>Calculator</small></div><span class="ar">→</span><div><div class="a">…</div><small>Answer</small></div></div>'; fetchRate(r.cur); } else if (cur[k]) { r = { q: r.cur[0] + ' ' + r.cur[1] + ' → ' + r.cur[2], a: fmt(r.cur[0] * cur[k]) + ' ' + r.cur[2] }; } else { r = null; } }
+        if (r && r.a) { html += '<div class="lz-h">Result</div><div class="lz-res"><div><div class="q">' + esc(r.q) + '</div><small>Calculator</small></div><span class="ar">→</span><div><div class="a">' + esc(r.a) + '</div><small>Answer</small></div></div>'; items.push({ copy: r.a }); i = 1; }
+        var f = cmds.filter(function (c) { return !v.trim() || (c[0] + ' ' + c[1]).toLowerCase().indexOf(v.trim().toLowerCase()) > -1; });
+        if (!(r && r.a)) {
+          if (f.length) { html += '<div class="lz-h">' + (v.trim() ? 'Results' : 'Commands') + '</div>'; f.slice(0, 6).forEach(function (c) { html += row(i, esc(c[0]), esc(c[1]), c[2], c[3], 'Command'); items.push({}); i++; }); }
+        }
+        if (v.trim()) { html += '<div class="lz-h">Use with…</div>'; [['Search the web for “' + esc(v.trim()) + '”', '⌕', '#6c6c78'], ['Ask AI: “' + esc(v.trim()) + '”', 'AI', '#a45cf0']].forEach(function (c) { html += row(i, c[0], '', c[1], c[2], 'Fallback'); items.push({}); i++; }); }
+        if (sel >= items.length) sel = 0;
+        body.innerHTML = html;
+        $$('.lz-r', body).forEach(function (el) { el.classList.toggle('sel', +el.dataset.i === sel); });
+        var s = $('.lz-res'); if (s && items[0] && items[0].copy) { s.classList.toggle('sel', sel === 0); }
+        act.textContent = items[sel] && items[sel].copy ? T.copyAnswer : T.open;
+      }
+      function fetchRate(c) { var k = c[1] + c[2]; fetch('https://api.frankfurter.dev/v1/latest?base=' + c[1] + '&symbols=' + c[2]).then(function (r) { return r.json(); }).then(function (j) { cur[k] = (j.rates && j.rates[c[2]]) || 0; render(); }).catch(function () { cur[k] = 0; render(); }); }
+      function set(v) { q.value = v; sel = 0; render(); }
+      q.addEventListener('input', function () { touched = true; sel = 0; render(); });
+      q.addEventListener('keydown', function (e) {
+        touched = true;
+        if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, items.length - 1); render(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); render(); }
+        else if (e.key === 'Enter' && items[sel] && items[sel].copy) { copy(items[sel].copy, act, T.copied); }
+      });
+      body.addEventListener('click', function (e) { var r = e.target.closest('.lz-r'); if (r) { sel = +r.dataset.i; render(); } var res = e.target.closest('.lz-res'); if (res && items[0] && items[0].copy) copy(items[0].copy, act, T.copied); });
+      $$('.tryrow button').forEach(function (b) { b.addEventListener('click', function () { touched = true; set(b.dataset.q); q.focus({ preventScroll: true }); }); });
+      render();
+      /* idle typing demo until the visitor touches it */
+      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        var demo = ['100 usd in eur', 'time in tokyo', 'heic to jpg'], paused = false, lzEl = $('#lz');
+        ['mouseenter', 'focusin'].forEach(function (ev) { lzEl.addEventListener(ev, function () { paused = true; }); });
+        ['mouseleave', 'focusout'].forEach(function (ev) { lzEl.addEventListener(ev, function () { paused = false; }); });
+        var di = 0, ci = 0, typing = true;
+        var stage = $('.stage'); var seen = false; new IntersectionObserver(function (en) { seen = en[0].isIntersecting; }, { threshold: .3 }).observe(stage);
+        function tick() {
+          if (touched) return;
+          if (!seen || document.hidden || paused) return setTimeout(tick, 600);
+          var w = demo[di];
+          if (typing) { ci++; q.value = w.slice(0, ci); render(); if (ci >= w.length) { typing = false; return setTimeout(tick, 4200); } return setTimeout(tick, 70); }
+          ci--; q.value = w.slice(0, Math.max(ci, 0)); render(); if (ci <= 0) { typing = true; di = (di + 1) % demo.length; return setTimeout(tick, 350); } setTimeout(tick, 28);
+        }
+        setTimeout(tick, 4500);
+      }
+    })();
+  </script>
+  <script>
+    const cv = document.querySelector<HTMLCanvasElement>('#keys');
+    const host = document.querySelector('.hero-3d');
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    function webgl() { try { const t = document.createElement('canvas'); return !!(t.getContext('webgl2') || t.getContext('webgl')); } catch { return false; } }
+    if (cv && host) {
+      // The 3D keys are decoration: never loaded with reduced motion, no WebGL, or before they scroll near the viewport.
+      if (reduced || !webgl()) host.classList.add('fallback');
+      else {
+        const start = () => import('../../scripts/keys3d.js').then((m) => { m.init(cv, { reduced }); host.classList.add('ok'); }).catch(() => host.classList.add('fallback'));
+        if ('IntersectionObserver' in window) {
+          const io = new IntersectionObserver((en) => { if (en[0].isIntersecting) { io.disconnect(); if ('requestIdleCallback' in window) (window as any).requestIdleCallback(start); else setTimeout(start, 200); } }, { rootMargin: '200px' });
+          io.observe(host);
+        } else host.classList.add('fallback');
+      }
+    }
+  </script>
+</Base>
