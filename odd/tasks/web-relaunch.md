@@ -14,7 +14,7 @@ Plans: odd/plans/web-relaunch-master-plan.md (read first) + five sibling plans.
 
 ## Tasks
 - T1 (S1,S2) chain/16-web-infra: Dockerfile, node adapter, origin change, healthz, www redirect, CI, redirect shell. Route: inline. Commit: see git log (chain/16-web-infra)
-- T2 (S3) chain/17-changelog-db: schema, parser, API, pages, RSS. Route: inline. Commit: in progress (chain/17-changelog-db)
+- T2 (S3) chain/17-changelog-db: schema, parser, API, pages, RSS. Route: inline. Commit: d4f9e78 + two follow-ups on chain/17-changelog-db. Verified locally: 17 tests, E2E push, feeds, 401/422, DB-down 503, docker migrate. Not verified in production.
 - T3 (S4) chain/18-docs-site: Starlight, IA, generated pages. Route: inline/worker. Commit: pending
 - T4 (S5) chain/19-home-redesign. Route: inline. Commit: pending
 - T5 (S6) chain/20-seo. Route: inline. Commit: pending
