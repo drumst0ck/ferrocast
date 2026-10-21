@@ -2,6 +2,12 @@ mod app;
 mod clipboard_policy;
 mod instance;
 mod items;
+#[cfg(test)]
+mod matrix_test;
+mod media_tools;
+#[cfg(test)]
+mod media_tools_tests;
+mod route;
 mod services;
 mod ui;
 

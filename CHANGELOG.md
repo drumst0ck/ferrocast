@@ -9,6 +9,10 @@ First public build.
 - Image tools: compress, resize, crop to an aspect ratio, remove metadata (lossless for JPEG and PNG), combine into one PDF, rotate, flip, square on a white or black background, collage, one-step edits (black & white, brighter, darker, more contrast), redact faces or text on-device with Vision, and annotate a copy in Preview.
 - File actions on file results: Copy File (paste it in Finder), Copy Path, Move to… (never overwrites), Open in iTerm or Terminal, AirDrop, Float on Shelf.
 - Drop wheel: while dragging files, tap Shift for a ring of conversions or Control for file actions; release over a segment to run it. Keys and on/off in Settings → General. No Accessibility permission needed.
+- Tools wheel (Command) with arrow-key, Enter and Escape control; tapping Shift, Command or Control switches an open wheel.
+- Compress to a size or percentage (`500kb`, `40%`), exact crop (`800x600`), camera and GPS tags (`make Canon`, `gps 40.4,-3.7`), trim/split/merge audio, video and PDF (`trim 0:10-0:30`, `split 30s`).
+- More formats: WMA, WMV, EPUB, PPTX from PDF, ODS, TSV, TAR, SVG input, PDF to images (every page, 300 DPI) and to text, subtitles to text, slides to images. RAR to ZIP is implemented but untested here. PDF to XLSX/PAGES and docs to PAGES are not included.
+- Floating shelf: a native always-on-top panel pinned to a screen edge; drop files in, drag them out. Not yet verified in a real session.
 - File Shelf: keep files at hand in a persisted list with every file action; drop files on the open shelf to add them.
 - Kill Process: processes busiest first with app icon, CPU and memory; ↵ terminates, ⌘↵ force-kills.
 - Timers: `timer 10m`, `pomodoro`, `set a timer for 1h 30m`; notification and sound when done; Timers view with cancel.

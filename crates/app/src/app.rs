@@ -119,6 +119,9 @@ pub enum View {
         files: Vec<PathBuf>,
         center: Pos2,
         segs: Vec<WheelSeg>,
+        kind: ferrocast_core::wheel::WheelKind,
+        /// Segment chosen with the arrow keys.
+        sel: Option<usize>,
     },
 }
 
@@ -133,6 +136,7 @@ pub struct WheelSeg {
 #[derive(Clone)]
 pub enum WheelPick {
     Convert(ferrocast_core::convert::Target),
+    Image(ferrocast_core::convert::ImageOp),
     Act(Act),
 }
 
@@ -415,6 +419,11 @@ impl App {
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_expansion(shared.clone());
         services::start_wheel(shared.clone(), bus.clone());
+        {
+            // the floating panel reports its edits; the app persists them
+            let b = bus.clone();
+            ferrocast_macos::shelf::set_on_change(Box::new(move |v| b.send(Msg::ShelfChanged(v))));
+        }
         if prof {
             eprintln!("services {:?}", t.elapsed());
         }
@@ -760,7 +769,8 @@ impl App {
         self.hidden_at = Instant::now();
         self.shared.visible.store(false, Ordering::Relaxed);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        if let Some(mtm) = objc2::MainThreadMarker::new() {
+        // hiding the whole app would also hide the floating shelf panel
+        if let Some(mtm) = objc2::MainThreadMarker::new().filter(|_| !ferrocast_macos::shelf::is_visible()) {
             objc2_app_kit::NSApplication::sharedApplication(mtm).hide(None);
         }
         if let Some(pid) = self.prev_pid {
@@ -867,6 +877,39 @@ impl App {
                     seg("Convert…", "sf:arrow.triangle.2.circlepath", Act::Convert(f)),
                 ]
             }
+            ferrocast_core::wheel::WheelKind::Tools => {
+                use ferrocast_core::convert::ImageOp;
+                if files.iter().all(|f| family_of(f) == Family::Image) {
+                    // the most used tool of each kind, so eight fit on the ring
+                    let ops = [
+                        ImageOp::Compress(60),
+                        ImageOp::Resize(1280),
+                        ImageOp::Crop(1, 1),
+                        ImageOp::StripMetadata,
+                        ImageOp::Rotate(90),
+                        ImageOp::Redact(true),
+                        ImageOp::Annotate,
+                        if files.len() > 1 { ImageOp::CombinePdf } else { ImageOp::Background("FFFFFF") },
+                    ];
+                    ops.into_iter()
+                        .map(|op| WheelSeg {
+                            label: match op {
+                                ImageOp::Background(_) => "Background".into(),
+                                ImageOp::Annotate => "Annotate".into(),
+                                _ => op.label().split(" · ").next().unwrap_or_default().to_string(),
+                            },
+                            symbol: image_op_symbol(&op),
+                            pick: WheelPick::Image(op),
+                        })
+                        .collect()
+                } else {
+                    vec![WheelSeg {
+                        label: "Open tools…".into(),
+                        symbol: "sf:wrench.and.screwdriver",
+                        pick: WheelPick::Act(Act::Convert(files.to_vec())),
+                    }]
+                }
+            }
         }
     }
 
@@ -889,7 +932,7 @@ impl App {
             None => Pos2::ZERO,
         };
         self.prev_pid = running::frontmost().map(|f| f.pid).filter(|p| *p != std::process::id() as i32);
-        self.stack = vec![View::Root, View::Wheel { files, center, segs }];
+        self.stack = vec![View::Root, View::Wheel { files, center, segs, kind, sel: None }];
         self.panel = None;
         self.visible = true;
         self.had_focus = false;
@@ -904,12 +947,37 @@ impl App {
 
     /// Mouse released: run the segment under the pointer, if any, and close the wheel.
     fn release_wheel(&mut self) {
-        let Some(View::Wheel { files, center, segs }) = self.stack.last().cloned() else { return };
-        let picked = mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, segs.len()));
+        let Some(View::Wheel { center, segs, sel, .. }) = self.stack.last().cloned() else { return };
+        let picked = mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, segs.len())).or(sel);
+        self.apply_wheel(picked);
+    }
+
+    /// Switch an open wheel to another kind, keeping its position.
+    pub(crate) fn switch_wheel(&mut self, kind: ferrocast_core::wheel::WheelKind) {
+        let Some(View::Wheel { files, .. }) = self.stack.last().cloned() else { return };
+        let segs = self.wheel_segments(kind, &files);
+        if segs.is_empty() {
+            return;
+        }
+        if let Some(View::Wheel { segs: s, kind: k, sel, .. }) = self.stack.last_mut() {
+            *s = segs;
+            *k = kind;
+            *sel = None;
+        }
+        self.ctx.request_repaint();
+    }
+
+    /// Close the wheel and run segment `picked` (None cancels).
+    pub(crate) fn apply_wheel(&mut self, picked: Option<usize>) {
+        let Some(View::Wheel { files, segs, .. }) = self.stack.last().cloned() else { return };
         self.hide();
         self.reset_to_root();
-        let Some(i) = picked else { return };
+        let Some(i) = picked.filter(|i| *i < segs.len()) else { return };
         match segs[i].pick.clone() {
+            WheelPick::Image(op) => {
+                self.toast(format!("{}…", op.label()));
+                services::image_op_files(files, op, self.bus.clone());
+            }
             WheelPick::Convert(t) => {
                 self.toast(format!("Converting to {}…", t.label));
                 services::convert_files(files, t, self.tools, self.bus.clone());
@@ -959,6 +1027,12 @@ impl App {
                 }
                 Msg::WheelOpen(kind, files) => self.show_wheel(kind, files),
                 Msg::WheelRelease => self.release_wheel(),
+                Msg::WheelSwitch(k) => self.switch_wheel(k),
+                Msg::ShelfChanged(v) => {
+                    self.shelf = v;
+                    let v = self.shelf.clone();
+                    self.persist("shelf.json", &v);
+                }
                 Msg::ConvertFiles(files) => {
                     self.show();
                     self.reset_to_root();
@@ -1614,8 +1688,11 @@ impl App {
                 // image tools when every file is an image
                 use ferrocast_core::convert::{family_of, Family, ImageOp};
                 if files.iter().all(|f| family_of(f) == Family::Image) {
-                    let tools: Vec<Item> = ImageOp::offered(files.len())
+                    // a typed size or dimensions ("500kb", "40%", "800x600") becomes a tool of its own
+                    let typed = ferrocast_core::convert::parse_image_query(&q);
+                    let tools: Vec<Item> = typed
                         .into_iter()
+                        .chain(ImageOp::offered(files.len()))
                         .filter(|op| {
                             self.matches(
                                 &q,
@@ -1633,6 +1710,9 @@ impl App {
                                     ImageOp::Redact(_) => "redact hide blur privacy face text",
                                     ImageOp::Adjust(_) => "edit adjust photo brightness contrast black white grayscale",
                                     ImageOp::Annotate => "annotate markup draw arrow text preview",
+                                    ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compress size smaller",
+                                    ImageOp::CropExact(..) => "crop exact dimensions pixels",
+                                    ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
                                 },
                             )
                             .is_some()
@@ -1655,6 +1735,9 @@ impl App {
                                     ImageOp::Redact(_) => "sf:eye.slash.fill",
                                     ImageOp::Adjust(_) => "sf:slider.horizontal.3",
                                     ImageOp::Annotate => "sf:pencil.tip.crop.circle",
+                                    ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
+                                    ImageOp::CropExact(..) => "sf:crop",
+                                    ImageOp::SetMeta(_) => "sf:tag",
                                 },
                                 [255, 140, 60],
                             ),
@@ -1665,6 +1748,46 @@ impl App {
                         .collect();
                     if !tools.is_empty() {
                         out.push(Section { title: "Image tools".into(), items: tools });
+                    }
+                }
+                // trim, split and merge for audio, video and PDF
+                let fam = family_of(first);
+                if files.iter().all(|f| family_of(f) == fam) && matches!(fam, Family::Audio | Family::Video | Family::Pdf) {
+                    use ferrocast_core::convert::FileTool;
+                    let typed = ferrocast_core::convert::parse_tool_query(&q);
+                    let items: Vec<Item> = typed
+                        .iter()
+                        .cloned()
+                        .chain(FileTool::offered(fam, files.len()))
+                        .filter(|t| typed.as_ref() == Some(t) || self.matches(&q, &t.label(), "trim split merge cut join").is_some())
+                        .map(|t| Item {
+                            id: format!("filetool:{}", t.label()),
+                            title: t.label(),
+                            subtitle: sub.clone(),
+                            icon: Icon::Glyph(
+                                match t {
+                                    FileTool::Trim(..) => "sf:scissors",
+                                    FileTool::SplitEvery(_) | FileTool::SplitPages => "sf:square.split.2x1",
+                                    FileTool::Merge | FileTool::Join => "sf:rectangle.stack",
+                                    FileTool::Mute => "sf:speaker.slash",
+                                    FileTool::Speed(_) => "sf:speedometer",
+                                    FileTool::Snapshot(_) => "sf:camera",
+                                    FileTool::CropVideo(..) => "sf:crop",
+                                    FileTool::RedactVideo(..) | FileTool::Bleep(..) => "sf:eye.slash",
+                                    FileTool::Normalize(..) | FileTool::Channels(..) => "sf:speaker.wave.2",
+                                    FileTool::Visualize(_) => "sf:waveform",
+                                    FileTool::TrimSilence => "sf:scissors",
+                                    FileTool::OrganizePdf(_) => "sf:doc.on.doc",
+                                },
+                                [255, 140, 60],
+                            ),
+                            accessory: "File tool".into(),
+                            keywords: vec![],
+                            kind: Kind::FileTool(files.clone(), t),
+                        })
+                        .collect();
+                    if !items.is_empty() {
+                        out.push(Section { title: "File tools".into(), items });
                     }
                 }
                 out.retain(|sec| !sec.items.is_empty());
@@ -1959,7 +2082,7 @@ impl App {
             Kind::OpenWindow(_) => "Switch to Window",
             Kind::Process(_) => "Kill Process",
             Kind::ConvertTo(..) => "Convert",
-            Kind::ImageTool(..) => "Apply",
+            Kind::ImageTool(..) | Kind::FileTool(..) => "Apply",
             Kind::Timer(..) => "Start Timer",
             Kind::RunningTimer(_) => "Cancel Timer",
             Kind::WebSearch(_) => "Search",
@@ -2137,6 +2260,13 @@ impl App {
             Kind::Timer(secs, label) => {
                 let (secs, label) = (*secs, label.clone());
                 self.start_timer(secs, label);
+            }
+            Kind::FileTool(files, tool) => {
+                let (files, tool) = (files.clone(), tool.clone());
+                self.toast(format!("{}…", tool.label()));
+                services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
+                self.hide();
+                self.reset_to_root();
             }
             Kind::ImageTool(files, op) => {
                 let (files, op) = (files.clone(), op.clone());
@@ -2355,7 +2485,12 @@ impl App {
             Builtin::Timers => self.push(View::Timers),
             Builtin::CheckUpdates => self.check_updates(),
             Builtin::CalcHistory => self.push(View::CalcHistory),
-            Builtin::Shelf => self.push(View::Shelf),
+            Builtin::Shelf => {
+                let v = self.shelf.clone();
+                ferrocast_macos::shelf::show(&v);
+                self.hide();
+                self.reset_to_root();
+            }
             Builtin::ConvertFiles => {
                 let bus = self.bus.clone();
                 self.hide();
@@ -2623,15 +2758,19 @@ impl App {
                 }
                 let v = self.shelf.clone();
                 self.persist("shelf.json", &v);
+                // Float: the always-on-top panel pinned to the screen edge
+                ferrocast_macos::shelf::show(&v);
                 self.toast(format!("{n} item{} on the shelf", if n == 1 { "" } else { "s" }));
             }
             Act::RemoveFromShelf(p) => {
+                ferrocast_macos::shelf::remove(&p);
                 self.shelf.retain(|f| *f != p);
                 let v = self.shelf.clone();
                 self.persist("shelf.json", &v);
                 self.invalidate_sections();
             }
             Act::ClearShelf => {
+                ferrocast_macos::shelf::clear();
                 self.shelf.clear();
                 self.persist("shelf.json", &Vec::<PathBuf>::new());
                 self.invalidate_sections();
@@ -2908,6 +3047,28 @@ fn looks_like_url(q: &str) -> Option<String> {
 }
 
 /// Top-left origin (points) to center the launcher on the screen under the cursor.
+/// SF symbol for an image tool.
+pub(crate) fn image_op_symbol(op: &ferrocast_core::convert::ImageOp) -> &'static str {
+    use ferrocast_core::convert::ImageOp;
+    match op {
+        ImageOp::Compress(_) => "sf:arrow.down.right.and.arrow.up.left",
+        ImageOp::Resize(_) => "sf:arrow.up.left.and.down.right.magnifyingglass",
+        ImageOp::Crop(..) => "sf:crop",
+        ImageOp::StripMetadata => "sf:eye.slash",
+        ImageOp::CombinePdf => "sf:doc.richtext",
+        ImageOp::Rotate(_) => "sf:rotate.right",
+        ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
+        ImageOp::Background(_) => "sf:square.dashed",
+        ImageOp::Collage => "sf:square.grid.2x2",
+        ImageOp::Redact(_) => "sf:eye.slash.fill",
+        ImageOp::Adjust(_) => "sf:slider.horizontal.3",
+        ImageOp::Annotate => "sf:pencil.tip.crop.circle",
+        ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "sf:arrow.down.right.and.arrow.up.left",
+        ImageOp::CropExact(..) => "sf:crop",
+        ImageOp::SetMeta(_) => "sf:tag",
+    }
+}
+
 /// Wheel geometry, in points from its centre.
 pub(crate) const WHEEL_INNER: f32 = 58.0;
 pub(crate) const WHEEL_OUTER: f32 = 178.0;

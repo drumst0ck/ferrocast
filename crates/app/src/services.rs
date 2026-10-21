@@ -45,6 +45,10 @@ pub enum Msg {
     Moved(Vec<(PathBuf, PathBuf)>),
     /// A key was tapped while dragging these files: show the wheel.
     WheelOpen(ferrocast_core::wheel::WheelKind, Vec<PathBuf>),
+    /// The floating shelf panel's items changed (drop in, remove, clear).
+    ShelfChanged(Vec<PathBuf>),
+    /// Another wheel key was tapped while the wheel was open.
+    WheelSwitch(ferrocast_core::wheel::WheelKind),
     /// The mouse was released while the wheel was open.
     WheelRelease,
     /// Model list for the Settings picker, keyed by `models_key`.
@@ -222,9 +226,9 @@ pub fn start_wheel(shared: Arc<Shared>, bus: Bus) {
         .spawn(move || {
             let mut tracker = Tracker::default();
             loop {
-                let (on, ck, ak) = {
+                let (on, ck, ak, tk) = {
                     let s = shared.settings.read().unwrap();
-                    (s.drop_wheel, key_mask(&s.wheel_convert_key), key_mask(&s.wheel_actions_key))
+                    (s.drop_wheel, key_mask(&s.wheel_convert_key), key_mask(&s.wheel_actions_key), key_mask(&s.wheel_tools_key))
                 };
                 if !on {
                     tracker = Tracker::default();
@@ -235,18 +239,21 @@ pub fn start_wheel(shared: Arc<Shared>, bus: Bus) {
                 objc2::rc::autoreleasepool(|_| {
                     let left = drag::left_down();
                     let bits = drag::modifier_bits();
-                    let (convert_key, actions_key) = (ck != 0 && bits & ck != 0, ak != 0 && bits & ak != 0);
+                    let (convert_key, actions_key, tools_key) =
+                        (ck != 0 && bits & ck != 0, ak != 0 && bits & ak != 0, tk != 0 && bits & tk != 0);
                     // reading the pasteboard items only matters at the moment a key is tapped
-                    let files = if left && (convert_key || actions_key) { drag::drag_files() } else { vec![] };
+                    let files = if left && (convert_key || actions_key || tools_key) { drag::drag_files() } else { vec![] };
                     let sample = Sample {
                         left_down: left,
                         drag_count: if left { drag::drag_count() } else { 0 },
                         has_files: !files.is_empty(),
                         convert_key,
                         actions_key,
+                        tools_key,
                     };
                     match tracker.step(sample) {
                         Some(WheelEvent::Open(k)) => bus.send(Msg::WheelOpen(k, files)),
+                        Some(WheelEvent::Switch(k)) => bus.send(Msg::WheelSwitch(k)),
                         Some(WheelEvent::Release) => bus.send(Msg::WheelRelease),
                         None => {}
                     }
@@ -1340,20 +1347,84 @@ pub fn run_conversion(
         let mut errors: Vec<String> = vec![];
         for f in files {
             let out = output_path(f, target.ext, |p| p.exists());
-            let cmd = match plan(f, target, &out, tools) {
+            // cwebp reads png/jpeg/tiff/webp only: other images go through a sips PNG
+            let mut pivot_png: Option<PathBuf> = None;
+            let f: &std::path::PathBuf = if target.engine == Engine::Cwebp
+                && !matches!(ferrocast_core::convert::ext(f).as_str(), "png" | "jpg" | "jpeg" | "tif" | "tiff" | "webp")
+            {
+                static PIVOT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let tmp = std::env::temp_dir().join(format!(
+                    "ferrocast-cw-{}-{}.png",
+                    std::process::id(),
+                    PIVOT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                ));
+                match sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()]) {
+                    Ok(()) => {
+                        pivot_png = Some(tmp);
+                        pivot_png.as_ref().unwrap_or(f)
+                    }
+                    Err(e) => {
+                        errors.push(format!("{}: {e}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+                        continue;
+                    }
+                }
+            } else {
+                f
+            };
+            if target.engine == Engine::Route {
+                match crate::route::route_convert(f, target, tools) {
+                    Ok(mut o) => outputs.append(&mut o),
+                    Err(e) => errors.push(format!("{}: {e}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())),
+                }
+                continue;
+            }
+            if matches!(target.engine, Engine::SubtitleText | Engine::SlideImages | Engine::Unrar) {
+                match special_convert(f, target, tools) {
+                    Ok(mut o) => outputs.append(&mut o),
+                    Err(e) => errors.push(format!("{}: {e}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())),
+                }
+                continue;
+            }
+            if target.engine == Engine::Pdfkit {
+                match pdfkit_convert(f, target.ext) {
+                    Ok(mut o) => outputs.append(&mut o),
+                    Err(e) => errors.push(format!("{}: {e}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())),
+                }
+                continue;
+            }
+            let mut cmd = match plan(f, target, &out, tools) {
                 Ok(c) => c,
                 Err(e) => {
                     errors.push(e);
+                    if let Some(p) = &pivot_png {
+                        let _ = std::fs::remove_file(p);
+                    }
                     continue;
                 }
             };
+            // soffice names its own output <stem>.<ext> in --outdir; next to the original that
+            // could overwrite a different file. Work in a scratch folder, then move to `out`.
+            let scratch = (target.engine == Engine::Soffice).then(|| {
+                let d = std::env::temp_dir().join(format!(
+                    "ferrocast-so-{}-{}",
+                    std::process::id(),
+                    out.file_name().map(|n| n.to_string_lossy().len()).unwrap_or(0)
+                ));
+                let _ = std::fs::remove_dir_all(&d);
+                let _ = std::fs::create_dir_all(&d);
+                if let Some(i) = cmd.iter().position(|a| a == "--outdir") {
+                    cmd[i + 1] = d.to_string_lossy().to_string();
+                }
+                d
+            });
             let res = std::process::Command::new(&cmd[0]).args(&cmd[1..]).output();
             match res {
                 Ok(o) if o.status.success() => {
-                    if target.engine == Engine::Soffice {
-                        let written = soffice_written_path(f, &out, target.ext);
-                        if written != out && written.exists() {
-                            let _ = std::fs::rename(&written, &out);
+                    if let Some(d) = &scratch {
+                        let written = soffice_written_path(f, &d.join("x"), target.ext);
+                        if written.exists() && std::fs::rename(&written, &out).is_err() {
+                            // another volume: copy, then drop the scratch copy
+                            let _ = std::fs::copy(&written, &out);
                         }
                     }
                     if out.exists() {
@@ -1367,17 +1438,167 @@ pub fn run_conversion(
                 }
                 Ok(o) => {
                     let err = String::from_utf8_lossy(&o.stderr);
-                    errors.push(format!(
-                        "{}: {}",
-                        f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-                        err.lines().last().unwrap_or("conversion failed").trim()
-                    ));
+                    let last = err.lines().last().unwrap_or("conversion failed").trim();
+                    // ffmpeg's "-vn" on a silent video leaves no stream to write
+                    let msg = if target.engine == Engine::Ffmpeg
+                        && matches!(target.ext, "mp3" | "m4a" | "wav" | "aiff" | "ogg" | "opus" | "wma" | "flac")
+                        && last.contains("Invalid argument")
+                    {
+                        "this video has no audio track".to_string()
+                    } else {
+                        last.to_string()
+                    };
+                    errors.push(format!("{}: {msg}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
                 }
                 Err(e) => errors.push(format!("could not run {}: {e}", cmd[0])),
+            }
+            if let Some(d) = scratch {
+                let _ = std::fs::remove_dir_all(d);
+            }
+            if let Some(p) = pivot_png {
+                let _ = std::fs::remove_file(p);
             }
         }
         (outputs, errors)
     }
+}
+
+/// Conversions that are not one command: subtitle text, slides → page images, RAR → ZIP.
+fn special_convert(
+    f: &std::path::Path,
+    target: &ferrocast_core::convert::Target,
+    tools: &ferrocast_core::convert::Tools,
+) -> Result<Vec<PathBuf>, String> {
+    use ferrocast_core::convert::{output_path, subtitle_text, Engine};
+    let scratch = std::env::temp_dir().join(format!(
+        "ferrocast-sp-{}-{}",
+        std::process::id(),
+        f.file_name().map(|n| n.to_string_lossy().len()).unwrap_or(0)
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
+    let res = (|| -> Result<Vec<PathBuf>, String> {
+        match target.engine {
+            Engine::SubtitleText => {
+                let text = subtitle_text(&std::fs::read_to_string(f).map_err(|e| e.to_string())?);
+                let out = output_path(f, "txt", |p| p.exists());
+                std::fs::write(&out, text + "\n").map_err(|e| e.to_string())?;
+                Ok(vec![out])
+            }
+            Engine::SlideImages => {
+                let so = tools.soffice.ok_or("LibreOffice is not installed")?;
+                let o = std::process::Command::new(so)
+                    .args(["--headless", "--convert-to", "pdf", "--outdir"])
+                    .arg(&scratch)
+                    .arg(f)
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                let pdf = scratch.join(format!("{}.pdf", f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()));
+                if !o.status.success() || !pdf.exists() {
+                    return Err("LibreOffice could not render the slides".into());
+                }
+                // name the pages after the original deck, not the scratch PDF
+                let named = scratch.join(f.file_name().ok_or("bad path")?).with_extension("pdf");
+                if named != pdf {
+                    std::fs::rename(&pdf, &named).map_err(|e| e.to_string())?;
+                }
+                let pages = pdfkit_convert(&named, target.ext)?;
+                // pdfkit wrote next to the scratch PDF: move beside the original
+                let mut outs = vec![];
+                for p in pages {
+                    let dest = f.parent().unwrap_or(std::path::Path::new(".")).join(p.file_name().ok_or("bad path")?);
+                    let dest = if dest.exists() {
+                        ferrocast_core::convert::output_with_suffix(&dest, "", target.ext, |q| q.exists())
+                    } else {
+                        dest
+                    };
+                    std::fs::rename(&p, &dest).or_else(|_| std::fs::copy(&p, &dest).map(|_| ())).map_err(|e| e.to_string())?;
+                    outs.push(dest);
+                }
+                Ok(outs)
+            }
+            Engine::Unrar => {
+                let un = tools.unrar.ok_or("unrar is not installed")?;
+                let ex = scratch.join("x");
+                std::fs::create_dir_all(&ex).map_err(|e| e.to_string())?;
+                let o = std::process::Command::new(un)
+                    .args(["x", "-y", "-idq"])
+                    .arg(f)
+                    .arg(format!("{}/", ex.display()))
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if !o.status.success() {
+                    return Err(String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .last()
+                        .unwrap_or("could not extract the RAR")
+                        .trim()
+                        .to_string());
+                }
+                let out = output_path(f, "zip", |p| p.exists());
+                let st = std::process::Command::new("/usr/bin/ditto")
+                    .args(["-c", "-k", "--sequesterRsrc"])
+                    .arg(&ex)
+                    .arg(&out)
+                    .status()
+                    .map_err(|e| e.to_string())?;
+                if st.success() && out.exists() {
+                    Ok(vec![out])
+                } else {
+                    Err("could not write the ZIP".into())
+                }
+            }
+            _ => Err("not a special conversion".into()),
+        }
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    res
+}
+
+/// PDF → page images (300 DPI, every page) or its text layer, through PDFKit/AppKit.
+pub(crate) fn pdfkit_convert(f: &std::path::Path, ext: &str) -> Result<Vec<PathBuf>, String> {
+    use ferrocast_core::convert::{output_path, output_with_suffix};
+    let tmp = std::env::temp_dir().join(format!("ferrocast-pdfkit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let run = |script: &str, args: &[&str]| {
+        std::process::Command::new("/usr/bin/osascript")
+            .args(["-l", "JavaScript", "-e", script])
+            .args(args)
+            .output()
+            .map_err(|e| e.to_string())
+    };
+    let result = (|| -> Result<Vec<PathBuf>, String> {
+        if ext == "txt" || ext == "md" {
+            let o = run(
+                "function run(a){ObjC.import('PDFKit');var d=$.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(a[0]));return d?ObjC.unwrap(d.string)||'':''}",
+                &[&f.to_string_lossy()],
+            )?;
+            let text = String::from_utf8_lossy(&o.stdout).trim_end().to_string();
+            if text.trim().is_empty() {
+                return Err("no text layer in this PDF (it may be a scan)".into());
+            }
+            let out = output_path(f, ext, |p| p.exists());
+            std::fs::write(&out, text + "\n").map_err(|e| e.to_string())?;
+            return Ok(vec![out]);
+        }
+        const PAGES: &str = "function run(a){ObjC.import('AppKit');ObjC.import('Foundation');var rep=$.NSPDFImageRep.imageRepWithData($.NSData.dataWithContentsOfFile(a[0]));if(!rep){return '0'}var n=rep.pageCount;var s=300/72;for(var i=0;i<n;i++){rep.currentPage=i;var b=rep.bounds;var w=Math.round(b.size.width*s),h=Math.round(b.size.height*s);var bmp=$.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel($(),w,h,8,4,true,false,$('NSCalibratedRGBColorSpace'),0,0);var ctx=$.NSGraphicsContext.graphicsContextWithBitmapImageRep(bmp);$.NSGraphicsContext.saveGraphicsState;$.NSGraphicsContext.currentContext=ctx;$.NSColor.whiteColor.set;$.NSBezierPath.fillRect($.NSMakeRect(0,0,w,h));rep.drawInRect($.NSMakeRect(0,0,w,h));$.NSGraphicsContext.restoreGraphicsState;var t=a[2]=='jpg'?$.NSBitmapImageFileTypeJPEG:$.NSBitmapImageFileTypePNG;bmp.representationUsingTypeProperties(t,$()).writeToFileAtomically(a[1]+'/'+(i+1)+'.'+a[2],true)}return ''+n}";
+        let o = run(PAGES, &[&f.to_string_lossy(), &tmp.to_string_lossy(), ext])?;
+        let n: usize = String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(0);
+        if n == 0 {
+            return Err("could not read the PDF pages".into());
+        }
+        let mut outs = vec![];
+        for i in 1..=n {
+            let out =
+                if n == 1 { output_path(f, ext, |p| p.exists()) } else { output_with_suffix(f, &format!("page {i}"), ext, |p| p.exists()) };
+            std::fs::copy(tmp.join(format!("{i}.{ext}")), &out).map_err(|e| e.to_string())?;
+            outs.push(out);
+        }
+        Ok(outs)
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
 }
 
 /// Pixel size of an image via sips.
@@ -1421,6 +1642,195 @@ fn redact(f: &std::path::Path, faces: bool) -> Result<PathBuf, String> {
     }
     let out = output_with_suffix(f, "redacted", "png", |p| p.exists());
     img.save(&out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// Trim, split or merge audio, video or PDF files. Outputs go next to the first input.
+pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool, ffmpeg: Option<&str>) -> (Vec<PathBuf>, Vec<String>) {
+    use ferrocast_core::convert::{ext, output_with_suffix, FileTool};
+    let mut outs = vec![];
+    let mut errs = vec![];
+    let Some(first) = files.first() else { return (outs, errs) };
+    let e0 = ext(first);
+    let is_pdf = e0 == "pdf";
+    let tmp = std::env::temp_dir().join(format!("ferrocast-ft-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+    let need_ff = |errs: &mut Vec<String>| {
+        if ffmpeg.is_none() {
+            errs.push("ffmpeg is not installed (brew install ffmpeg)".into());
+        }
+        ffmpeg
+    };
+    match tool {
+        FileTool::Mute
+        | FileTool::Speed(_)
+        | FileTool::Snapshot(_)
+        | FileTool::CropVideo(..)
+        | FileTool::RedactVideo(..)
+        | FileTool::Normalize(..)
+        | FileTool::Visualize(_)
+        | FileTool::TrimSilence
+        | FileTool::Channels(..)
+        | FileTool::Bleep(..)
+        | FileTool::Join => {
+            return crate::media_tools::run(files, tool, ffmpeg);
+        }
+        FileTool::OrganizePdf(sel) => {
+            let pages: Vec<_> = sel.iter().map(|&(index, quarter_turns)| ferrocast_macos::pdf::PageSel { index, quarter_turns }).collect();
+            for f in files.iter().filter(|f| ext(f) == "pdf") {
+                let out = output_with_suffix(f, &tool.suffix(), "pdf", |p| p.exists());
+                match ferrocast_macos::pdf::organize(f, &pages, &out) {
+                    Ok(()) => outs.push(out),
+                    Err(e) => errs.push(format!("{}: {e}", f.display())),
+                }
+            }
+            if files.iter().all(|f| ext(f) != "pdf") {
+                errs.push("this tool requires PDF files".into());
+            }
+        }
+        FileTool::Merge if is_pdf => {
+            let out = output_with_suffix(first, &tool.suffix(), "pdf", |p| p.exists());
+            let join = "/System/Library/Automator/Combine PDF Pages.action/Contents/MacOS/join";
+            let ok = std::process::Command::new(join).arg("-o").arg(&out).args(files).status().map(|s| s.success()).unwrap_or(false);
+            if ok && out.exists() {
+                outs.push(out);
+            } else {
+                errs.push("could not merge the PDFs".into());
+            }
+        }
+        FileTool::SplitPages => {
+            let js = "function run(a){ObjC.import('PDFKit');var d=$.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(a[0]));if(!d.js&&!d){return '0'}var n=d.pageCount;for(var i=0;i<n;i++){var o=$.PDFDocument.alloc.init;o.insertPageAtIndex(d.pageAtIndex(i),0);o.writeToFile(a[1]+'/'+(i+1)+'.pdf')}return ''+n}";
+            let res = std::process::Command::new("/usr/bin/osascript").args(["-l", "JavaScript", "-e", js]).arg(first).arg(&tmp).output();
+            let n: usize = res.ok().and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok()).unwrap_or(0);
+            if n == 0 {
+                errs.push("could not read the PDF pages".into());
+            }
+            for i in 1..=n {
+                let out = output_with_suffix(first, &format!("page {i}"), "pdf", |p| p.exists());
+                if std::fs::copy(tmp.join(format!("{i}.pdf")), &out).is_ok() {
+                    outs.push(out);
+                }
+            }
+        }
+        FileTool::Merge => {
+            if let Some(ff) = need_ff(&mut errs) {
+                let list: String = files.iter().map(|f| format!("file '{}'\n", f.to_string_lossy().replace('\'', "'\\''"))).collect();
+                let lf = tmp.join("list.txt");
+                let _ = std::fs::write(&lf, list);
+                let out = output_with_suffix(first, &tool.suffix(), &e0, |p| p.exists());
+                let r = std::process::Command::new(ff)
+                    .args(["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i"])
+                    .arg(&lf)
+                    .args(["-c", "copy"])
+                    .arg(&out)
+                    .output();
+                match r {
+                    Ok(o) if o.status.success() && out.exists() => outs.push(out),
+                    Ok(o) => errs.push(format!(
+                        "merge failed (files need the same format): {}",
+                        String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("")
+                    )),
+                    Err(e) => errs.push(e.to_string()),
+                }
+            }
+        }
+        FileTool::Trim(a, b) => {
+            if let Some(ff) = need_ff(&mut errs) {
+                for f in files {
+                    let out = output_with_suffix(f, &tool.suffix(), &ext(f), |p| p.exists());
+                    let r = std::process::Command::new(ff)
+                        .args(["-y", "-loglevel", "error", "-ss", &a.to_string(), "-to", &b.to_string(), "-i"])
+                        .arg(f)
+                        .args(["-c", "copy"])
+                        .arg(&out)
+                        .output();
+                    match r {
+                        Ok(o) if o.status.success() && out.exists() => outs.push(out),
+                        Ok(o) => errs.push(format!("{}: {}", f.display(), String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or(""))),
+                        Err(e) => errs.push(e.to_string()),
+                    }
+                }
+            }
+        }
+        FileTool::SplitEvery(n) => {
+            if let Some(ff) = need_ff(&mut errs) {
+                for f in files {
+                    let pattern = tmp.join(format!("seg%03d.{}", ext(f)));
+                    let r = std::process::Command::new(ff)
+                        .args(["-y", "-loglevel", "error", "-i"])
+                        .arg(f)
+                        .args(["-f", "segment", "-segment_time", &n.to_string(), "-c", "copy", "-reset_timestamps", "1"])
+                        .arg(&pattern)
+                        .output();
+                    if !matches!(&r, Ok(o) if o.status.success()) {
+                        errs.push(format!("{}: could not split", f.display()));
+                        continue;
+                    }
+                    let mut parts: Vec<_> = std::fs::read_dir(&tmp)
+                        .map(|d| {
+                            d.flatten()
+                                .map(|e| e.path())
+                                .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("seg")))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    parts.sort();
+                    for (i, p) in parts.iter().enumerate() {
+                        let out = output_with_suffix(f, &format!("part {}", i + 1), &ext(f), |p| p.exists());
+                        if std::fs::copy(p, &out).is_ok() {
+                            outs.push(out);
+                        }
+                        let _ = std::fs::remove_file(p);
+                    }
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    (outs, errs)
+}
+
+pub fn file_tool_files(files: Vec<PathBuf>, tool: ferrocast_core::convert::FileTool, ffmpeg: Option<&'static str>, bus: Bus) {
+    std::thread::spawn(move || {
+        let (outs, errs) = run_file_tool(&files, &tool, ffmpeg);
+        let msg = match (outs.len(), errs.len()) {
+            (0, _) => format!("{} failed: {}", tool.label(), errs.first().cloned().unwrap_or_default()),
+            (n, 0) => format!("{} · {n} file{} written", tool.label(), if n == 1 { "" } else { "s" }),
+            (n, e) => format!("{} · {n} written, {e} failed: {}", tool.label(), errs[0]),
+        };
+        if let Some(f) = outs.first() {
+            let _ = ferrocast_macos::apps::reveal(f);
+        }
+        notify("Ferrocast", &msg);
+        bus.send(Msg::Toast(msg));
+    });
+}
+
+/// JPEG at the highest quality that meets a size target (KB, or percent smaller than the source).
+fn compress_to_size(f: &std::path::Path, op: &ferrocast_core::convert::ImageOp) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::{fit_quality, output_with_suffix, ImageOp};
+    let original = std::fs::metadata(f).map_err(|e| e.to_string())?.len();
+    let target = match op {
+        ImageOp::CompressToKb(kb) => *kb as u64 * 1024,
+        ImageOp::CompressByPercent(p) => original * (100 - *p as u64) / 100,
+        _ => return Err("not a size target".into()),
+    };
+    let tmp = std::env::temp_dir().join(format!("ferrocast-fit-{}.jpg", std::process::id()));
+    let encode = |q: u8| -> Option<u64> {
+        sips(&["-s", "format", "jpeg", "-s", "formatOptions", &q.to_string(), &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+            .ok()?;
+        std::fs::metadata(&tmp).ok().map(|m| m.len())
+    };
+    let q = fit_quality(target, encode);
+    let out = output_with_suffix(f, &op.suffix(), "jpg", |p| p.exists());
+    let res = sips(&["-s", "format", "jpeg", "-s", "formatOptions", &q.to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()]);
+    let _ = std::fs::remove_file(&tmp);
+    res?;
+    let size = std::fs::metadata(&out).map_err(|e| e.to_string())?.len();
+    if size > target {
+        // lowest quality still too big: keep the file but say so
+        return Err(format!("smallest result is {} KB, above the target; try resizing too", size / 1024));
+    }
     Ok(out)
 }
 
@@ -1507,6 +1917,15 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
         }
         return (outs, errs);
     }
+    if matches!(op, ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_)) {
+        for f in files {
+            match compress_to_size(f, op) {
+                Ok(o) => outs.push(o),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
     if let ImageOp::Adjust(a) = op {
         for f in files {
             match adjust(f, *a) {
@@ -1584,6 +2003,21 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
                 sips(&["-s", "format", "png", "-p", &side, &side, "--padColor", c, &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
                 Ok(out)
             }
+            ImageOp::CropExact(w, h) => {
+                let (iw, ih) = image_size(f).ok_or("could not read the image size")?;
+                let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
+                // never ask sips for more than the image has
+                sips(&["-c", &(*h).min(ih).to_string(), &(*w).min(iw).to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()])?;
+                Ok(out)
+            }
+            ImageOp::SetMeta(m) => {
+                let bytes = std::fs::read(f).map_err(|e| e.to_string())?;
+                let tagged =
+                    ferrocast_core::convert::set_jpeg_meta(&bytes, m).ok_or("writing tags supports JPEG; convert to JPEG first")?;
+                let out = output_with_suffix(f, &op.suffix(), &e, |p| p.exists());
+                std::fs::write(&out, tagged).map_err(|e| e.to_string())?;
+                Ok(out)
+            }
             ImageOp::Annotate => {
                 // never mark up the original: copy it, then open the copy in Preview
                 let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
@@ -1593,7 +2027,12 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
                 }
                 Ok(out)
             }
-            ImageOp::CombinePdf | ImageOp::Collage | ImageOp::Redact(_) | ImageOp::Adjust(_) => unreachable!(),
+            ImageOp::CombinePdf
+            | ImageOp::Collage
+            | ImageOp::Redact(_)
+            | ImageOp::Adjust(_)
+            | ImageOp::CompressToKb(_)
+            | ImageOp::CompressByPercent(_) => unreachable!(),
         })();
         match res {
             Ok(o) if o.exists() => outs.push(o),
@@ -1809,6 +2248,54 @@ mod convert_tests {
         let (o, e) = run_image_op(one, &ImageOp::Adjust(Adjust::BlackAndWhite));
         assert!(e.is_empty(), "{e:?}");
         assert!(image::open(&o[0]).unwrap().to_rgba8().pixels().all(|px| px.0[0] == px.0[1] && px.0[1] == px.0[2]));
+        // compress to a size target: the JPEG source is ~hundreds of KB, ask for far less
+        let orig = std::fs::metadata(&src).unwrap().len();
+        let (o, e) = run_image_op(one, &ImageOp::CompressByPercent(50));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(std::fs::metadata(&o[0]).unwrap().len() <= orig / 2, "50% smaller");
+        let kb = (orig / 1024 / 2).max(1) as u32;
+        let (o, e) = run_image_op(one, &ImageOp::CompressToKb(kb));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(std::fs::metadata(&o[0]).unwrap().len() <= kb as u64 * 1024, "within {kb} KB");
+        // an impossible target reports instead of pretending
+        let (o, e) = run_image_op(one, &ImageOp::CompressToKb(1));
+        assert!(o.is_empty() && e[0].contains("above the target"), "{e:?}");
+        // exact crop: dimensions are exact, and clamped to the image
+        let (o, e) = run_image_op(one, &ImageOp::CropExact(300, 200));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((300, 200)));
+        let (o, e) = run_image_op(one, &ImageOp::CropExact(5000, 5000));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((1024, 1024)), "never larger than the image");
+        // camera and GPS tags written into EXIF, read back by sips; pixels untouched
+        let meta = ferrocast_core::convert::MetaEdit { make: "Ferro".into(), model: "Cast 1".into(), gps: Some((40.4168, -3.7038)) };
+        let (o, e) = run_image_op(one, &ImageOp::SetMeta(meta));
+        assert!(e.is_empty(), "{e:?}");
+        let tagged = tags(&o[0]);
+        assert!(tagged.contains("Ferro"), "{tagged}");
+        let model =
+            String::from_utf8_lossy(&std::process::Command::new("/usr/bin/sips").args(["-g", "model"]).arg(&o[0]).output().unwrap().stdout)
+                .to_string();
+        assert!(model.contains("Cast 1"), "{model}");
+        // GPS read back by ImageIO (independent of our writer); it reports magnitudes plus a ref
+        let js = format!(
+            "ObjC.import('ImageIO');ObjC.import('Foundation');var s=$.CGImageSourceCreateWithURL($.NSURL.fileURLWithPath('{}'),$());JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGImageSourceCopyPropertiesAtIndex(s,0,$())))['{{GPS}}'])",
+            o[0].display()
+        );
+        let gps = String::from_utf8_lossy(
+            &std::process::Command::new("/usr/bin/osascript").args(["-l", "JavaScript", "-e", &js]).output().unwrap().stdout,
+        )
+        .to_string();
+        assert!(gps.contains("\"LatitudeRef\":\"N\"") && gps.contains("\"LongitudeRef\":\"W\""), "{gps}");
+        assert!(gps.contains("40.416") && gps.contains("3.703"), "{gps}");
+        assert_eq!(image_size(&o[0]), Some((1024, 1024)), "image data intact");
+        assert!(!tags(&o[0]).contains("TestCam"), "old camera replaced");
+        // PNG cannot carry these tags: a clear error, no file
+        let (o, e) = run_image_op(
+            std::slice::from_ref(&wide[0]),
+            &ImageOp::SetMeta(ferrocast_core::convert::MetaEdit { make: "X".into(), model: String::new(), gps: None }),
+        );
+        assert!(e.is_empty() || o.is_empty());
         // annotate makes a byte-identical copy (Preview is not opened under test)
         std::env::set_var("FERROCAST_NO_OPEN", "1");
         let (o, e) = run_image_op(one, &ImageOp::Annotate);
@@ -1905,10 +2392,193 @@ mod convert_tests {
             // PDF → DOCX needs the Writer PDF import filter
             let pdf = d.join("doc.pdf");
             assert!(pdf.exists());
+            // PDF text layer → TXT and Markdown
+            let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "txt"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read_to_string(&o[0]).unwrap().contains("Hello from Ferrocast"));
+            let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "md"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read_to_string(&o[0]).unwrap().contains("Hello from Ferrocast"));
             let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "docx"), &tools);
             assert!(e.is_empty(), "{e:?}");
             assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"));
+            // new targets: EPUB, PPTX from a PDF, ODS, TSV (tabs, not commas)
+            let (o, e) = run_conversion(std::slice::from_ref(&txt), &pick(&txt, "epub"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"), "epub is a zip");
+            let (o, e) = run_conversion(std::slice::from_ref(&pdf), &pick(&pdf, "pptx"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"), "pptx is a zip");
+            let (o, e) = run_conversion(std::slice::from_ref(&csv), &pick(&csv, "ods"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(b"PK"));
+            let (o, e) = run_conversion(std::slice::from_ref(&csv), &pick(&csv, "tsv"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert_eq!(o[0].extension().unwrap(), "tsv");
+            assert!(std::fs::read_to_string(&o[0]).unwrap().contains("1\t2"), "tab separated");
+            // soffice writes into a scratch folder: an existing <stem>.<ext> is never overwritten
+            let keep = d.join("t.pdf");
+            std::fs::write(&keep, "precious").unwrap();
+            let (o, e) = run_conversion(std::slice::from_ref(&csv), &pick(&csv, "pdf"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert_eq!(std::fs::read_to_string(&keep).unwrap(), "precious");
+            assert!(o[0].to_string_lossy().ends_with("t 2.pdf"), "{o:?}");
         }
+        // PDF pages: every page, 300 DPI (a 1024 pt page is 4267 px), JPEG too
+        let (p1, p2) = (d.join("one.pdf"), d.join("two.pdf"));
+        for p in [&p1, &p2] {
+            sips(&["-s", "format", "pdf", icon, "--out", &p.to_string_lossy()]).unwrap();
+        }
+        let two = d.join("both.pdf");
+        let (mm, e) = run_file_tool(&[p1.clone(), p2.clone()], &ferrocast_core::convert::FileTool::Merge, None);
+        assert!(e.is_empty(), "{e:?}");
+        std::fs::rename(&mm[0], &two).unwrap();
+        let (o, e) = run_conversion(std::slice::from_ref(&two), &pick(&two, "png"), &tools);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(o.len(), 2, "one image per page: {o:?}");
+        assert_eq!(image_size(&o[0]), Some((4267, 4267)));
+        assert!(o[1].to_string_lossy().contains("page 2"));
+        let (o, e) = run_conversion(std::slice::from_ref(&p1), &pick(&p1, "jpg"), &tools);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].extension().unwrap(), "jpg", "single page keeps the plain name");
+        // an image-only PDF has no text layer: say so instead of writing an empty file
+        let (o, e) = run_conversion(std::slice::from_ref(&p1), &pick(&p1, "txt"), &tools);
+        assert!(o.is_empty() && e[0].contains("no text layer"), "{e:?}");
+        // subtitles → plain text (no timings, numbers or markup)
+        let srt = d.join("cues.srt");
+        std::fs::write(&srt, "1\n00:00:01,000 --> 00:00:02,000\nHello <i>there</i>\n\n2\n00:00:03,000 --> 00:00:04,500\nSecond line\n")
+            .unwrap();
+        let (o, e) = run_conversion(std::slice::from_ref(&srt), &pick(&srt, "txt"), &tools);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(std::fs::read_to_string(&o[0]).unwrap(), "Hello there\nSecond line\n");
+        // RAR → ZIP (needs unrar; the rar binary builds the fixture)
+        if let (Some(_), true) = (tools.unrar, std::path::Path::new("/Applications/rar/rar").exists()) {
+            let src = d.join("rarsrc");
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::write(src.join("in.txt"), "inside").unwrap();
+            let rar = d.join("pack.rar");
+            // the bundled rar/unrar can be x86-only ("Bad CPU type" without Rosetta): then skip
+            let built =
+                std::process::Command::new("/Applications/rar/rar").args(["a", "-idq", "-ep"]).arg(&rar).arg(src.join("in.txt")).status();
+            if matches!(built, Ok(st) if st.success()) {
+                let (o, e) = run_conversion(std::slice::from_ref(&rar), &pick(&rar, "zip"), &tools);
+                assert!(e.is_empty(), "{e:?}");
+                let listing = std::process::Command::new("/usr/bin/unzip").arg("-l").arg(&o[0]).output().unwrap();
+                assert!(String::from_utf8_lossy(&listing.stdout).contains("in.txt"), "{}", String::from_utf8_lossy(&listing.stdout));
+            }
+        }
+        // slides → one image per slide (LibreOffice renders the deck to PDF first)
+        if tools.soffice.is_some() {
+            let odp_src = d.join("deck.txt");
+            std::fs::write(&odp_src, "Slide text").unwrap();
+            let deck = run_conversion(std::slice::from_ref(&odp_src), &pick(&odp_src, "pdf"), &tools).0.remove(0);
+            let pptx = run_conversion(std::slice::from_ref(&deck), &pick(&deck, "pptx"), &tools).0.remove(0);
+            let (o, e) = run_conversion(std::slice::from_ref(&pptx), &pick(&pptx, "png"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(!o.is_empty() && o.iter().all(|p| p.parent() == pptx.parent() && std::fs::metadata(p).unwrap().len() > 1000), "{o:?}");
+        }
+        // TAR, and SVG input through sips
+        let tarred = run_conversion(std::slice::from_ref(&d), &pick(&d, "tar"), &tools);
+        assert!(tarred.1.is_empty(), "{:?}", tarred.1);
+        assert!(std::fs::metadata(&tarred.0[0]).unwrap().len() > 0);
+        let svg = d.join("a.svg");
+        std::fs::write(
+            &svg,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"><rect width="100" height="60" fill="red"/></svg>"#,
+        )
+        .unwrap();
+        let (o, e) = run_conversion(std::slice::from_ref(&svg), &pick(&svg, "png"), &tools);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((100, 60)));
+        if let Some(ff) = tools.ffmpeg {
+            let wav = d.join("w.wav");
+            assert!(std::process::Command::new(ff)
+                .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=1"])
+                .arg(&wav)
+                .status()
+                .unwrap()
+                .success());
+            let (o, e) = run_conversion(std::slice::from_ref(&wav), &pick(&wav, "wma"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(&[0x30, 0x26, 0xB2, 0x75]), "ASF header");
+            let mov = d.join("v.mov");
+            assert!(std::process::Command::new(ff)
+                .args([
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=size=160x120:rate=10",
+                    "-t",
+                    "1",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p"
+                ])
+                .arg(&mov)
+                .status()
+                .unwrap()
+                .success());
+            let (o, e) = run_conversion(std::slice::from_ref(&mov), &pick(&mov, "wmv"), &tools);
+            assert!(e.is_empty(), "{e:?}");
+            assert!(std::fs::read(&o[0]).unwrap().starts_with(&[0x30, 0x26, 0xB2, 0x75]), "ASF header");
+        }
+    }
+
+    /// Trim, split and merge on real audio and PDF files (ffmpeg part skipped when not installed).
+    #[test]
+    fn file_tools_on_real_files() {
+        use ferrocast_core::convert::FileTool;
+        let tools = Tools::detect();
+        let d = tmp("filetools");
+        let dur = |p: &std::path::Path, ff: &str| -> f64 {
+            let probe = std::path::Path::new(ff).with_file_name("ffprobe");
+            let o = std::process::Command::new(probe)
+                .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
+                .arg(p)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&o.stdout).trim().parse().unwrap()
+        };
+        if let Some(ff) = tools.ffmpeg {
+            let mp3 = d.join("a.mp3");
+            assert!(std::process::Command::new(ff)
+                .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=10"])
+                .arg(&mp3)
+                .status()
+                .unwrap()
+                .success());
+            let (o, e) = run_file_tool(std::slice::from_ref(&mp3), &FileTool::Trim(2.0, 5.0), Some(ff));
+            assert!(e.is_empty(), "{e:?}");
+            assert!((dur(&o[0], ff) - 3.0).abs() < 0.2, "trimmed to ~3 s");
+            let (o, e) = run_file_tool(std::slice::from_ref(&mp3), &FileTool::SplitEvery(4), Some(ff));
+            assert!(e.is_empty(), "{e:?}");
+            assert_eq!(o.len(), 3, "10 s in 4 s pieces: {o:?}");
+            assert!(o[0].to_string_lossy().contains("part 1"));
+            let (m, e) = run_file_tool(&[mp3.clone(), mp3.clone()], &FileTool::Merge, Some(ff));
+            assert!(e.is_empty(), "{e:?}");
+            assert!((dur(&m[0], ff) - 20.0).abs() < 0.5, "merged ~20 s");
+            assert!(mp3.exists(), "original untouched");
+        }
+        // PDF: two one-page PDFs → merge → split back into two pages
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
+        let (p1, p2) = (d.join("one.pdf"), d.join("two.pdf"));
+        for p in [&p1, &p2] {
+            sips(&["-s", "format", "pdf", icon, "--out", &p.to_string_lossy()]).unwrap();
+        }
+        let (m, e) = run_file_tool(&[p1.clone(), p2.clone()], &FileTool::Merge, tools.ffmpeg);
+        assert!(e.is_empty(), "{e:?}");
+        let (pages, e) = run_file_tool(std::slice::from_ref(&m[0]), &FileTool::SplitPages, tools.ffmpeg);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(pages.len(), 2, "{pages:?}");
+        assert!(pages.iter().all(|p| std::fs::read(p).unwrap().starts_with(b"%PDF")));
+        // without ffmpeg an audio tool says how to get it instead of failing silently
+        let (o, e) = run_file_tool(&[d.join("a.mp3")], &FileTool::Trim(0.0, 1.0), None);
+        assert!(o.is_empty() && e[0].contains("brew install ffmpeg"), "{e:?}");
     }
 
     #[test]
@@ -2073,5 +2743,29 @@ mod ai_tests {
     fn unreachable_server_explains_what_to_do() {
         let err = collect("http://127.0.0.1:1/v1", None, &[], "hi").1.unwrap_err();
         assert!(err.contains("Cannot reach"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use ferrocast_core::{convert::targets, matrix};
+
+    /// Which of Tangerine's 275 (input → output) pairs does `targets()` offer today?
+    #[test]
+    fn report_matrix_coverage() {
+        let tools = ferrocast_core::convert::Tools::detect();
+        let (mut have, mut missing) = (0, vec![]);
+        for i in matrix::inputs() {
+            let probe = std::path::PathBuf::from(format!("/nonexistent/x.{i}"));
+            let offered: Vec<String> = targets(&probe, &tools).iter().map(|t| t.ext.replace("tar.gz", "gz")).collect();
+            for o in matrix::outputs_for(i) {
+                if offered.iter().any(|x| x == o) {
+                    have += 1;
+                } else {
+                    missing.push(format!("{i}→{o}"));
+                }
+            }
+        }
+        eprintln!("COVERAGE {have}/275; missing {}: {}", missing.len(), missing.join(" "));
     }
 }

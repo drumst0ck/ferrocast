@@ -141,13 +141,15 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     .filter(|s| !s.is_empty())
                     .map(std::path::PathBuf::from)
                     .collect();
-                let kind = if std::env::var("FERROCAST_WHEEL").as_deref() == Ok("actions") {
+                let kind = if std::env::var("FERROCAST_WHEEL").as_deref() == Ok("tools") {
+                    ferrocast_core::wheel::WheelKind::Tools
+                } else if std::env::var("FERROCAST_WHEEL").as_deref() == Ok("actions") {
                     ferrocast_core::wheel::WheelKind::Actions
                 } else {
                     ferrocast_core::wheel::WheelKind::Convert
                 };
                 let segs = app.wheel_segments(kind, &files);
-                app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs });
+                app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel: None });
             }
             Ok("settings-ai") => {
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 3usize));
@@ -651,8 +653,33 @@ impl App {
                 st.visuals.selection.stroke.color = accent;
             });
         }
-        if let View::Wheel { center, segs, files } = self.view().clone() {
-            self.draw_wheel(ui, &pal, center, &segs, files.len());
+        if let View::Wheel { center, segs, files, sel, .. } = self.view().clone() {
+            // keyboard: arrows choose, Enter applies, Escape cancels
+            let n = segs.len();
+            let (next, prev, enter, esc) = ctx.input_mut(|i| {
+                (
+                    i.consume_key(Modifiers::NONE, Key::ArrowRight) || i.consume_key(Modifiers::NONE, Key::ArrowDown),
+                    i.consume_key(Modifiers::NONE, Key::ArrowLeft) || i.consume_key(Modifiers::NONE, Key::ArrowUp),
+                    i.consume_key(Modifiers::NONE, Key::Enter),
+                    i.consume_key(Modifiers::NONE, Key::Escape),
+                )
+            });
+            if esc {
+                self.apply_wheel(None);
+                return;
+            }
+            if enter {
+                self.apply_wheel(sel);
+                return;
+            }
+            if (next || prev) && n > 0 {
+                let ns = ferrocast_core::wheel::step_sel(sel, n, next);
+                if let Some(View::Wheel { sel, .. }) = self.stack.last_mut() {
+                    *sel = Some(ns);
+                }
+            }
+            let sel = if let Some(View::Wheel { sel, .. }) = self.stack.last() { *sel } else { None };
+            self.draw_wheel(ui, &pal, center, &segs, files.len(), sel);
             return;
         }
         // Fade the launcher in when it appears (opacity only; one multiply per shape).
@@ -1155,11 +1182,11 @@ impl App {
 
     /// The drop wheel: a ring of segments around the window centre; the one under the
     /// pointer (sampled globally, since a drag owns the mouse) is highlighted.
-    fn draw_wheel(&mut self, ui: &mut Ui, pal: &Palette, center: Pos2, segs: &[WheelSeg], nfiles: usize) {
+    fn draw_wheel(&mut self, ui: &mut Ui, pal: &Palette, center: Pos2, segs: &[WheelSeg], nfiles: usize, sel: Option<usize>) {
         let ctx = ui.ctx().clone();
         ctx.request_repaint_after(Duration::from_millis(16));
         let c = ui.max_rect().center();
-        let hover = mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, segs.len()));
+        let hover = mouse_top_left().and_then(|(m, _)| wheel_hit(m - center, segs.len())).or(sel);
         let p = ui.painter();
         let n = segs.len();
         let step = std::f32::consts::TAU / n as f32;
@@ -1831,6 +1858,10 @@ impl App {
                             row(ui, pal, "Convert wheel key", "Tap during a file drag for conversions.", |ui| {
                                 let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
                                 segmented(ui, pal, &mut s.wheel_convert_key, &opts);
+                            });
+                            row(ui, pal, "Tools wheel key", "Tap during a file drag for compress, crop, redact…", |ui| {
+                                let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                segmented(ui, pal, &mut s.wheel_tools_key, &opts);
                             });
                             row(ui, pal, "Actions wheel key", "Tap during a file drag for copy, move, AirDrop…", |ui| {
                                 let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
