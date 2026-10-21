@@ -283,6 +283,8 @@ pub enum Act {
     ClearCalcHistory,
     /// Open the Convert view for these files.
     Convert(Vec<PathBuf>),
+    /// Open the Edit Metadata window for this audio, video, GIF or PDF file.
+    EditMetadata(PathBuf),
     /// Open the video speed window for this file.
     SpeedVideo(PathBuf),
     /// Open the video crop window for this file.
@@ -291,6 +293,8 @@ pub enum Act {
     RedactVideo(PathBuf),
     /// Open the video trim viewer for this file.
     TrimVideo(PathBuf),
+    /// Open the video split window for this file.
+    SplitVideo(PathBuf),
     /// Select a video frame and save a full-resolution PNG.
     SnapshotVideo(PathBuf),
     /// Open the collage editor for these images.
@@ -301,10 +305,16 @@ pub enum Act {
     RedactImage(PathBuf),
     /// Open the crop editor for this image.
     CropImage(PathBuf),
+    /// Open the Compress window for these images.
+    CompressImages(Vec<PathBuf>),
+    /// Open the Compress window for these audio or video files.
+    CompressMedia(Vec<PathBuf>),
     /// Open the live-preview photo editor for this image.
     EditPhoto(PathBuf),
     /// Open the annotation canvas for this image.
     AnnotateCanvas(PathBuf),
+    /// Open the reorder window for these files (merge / join / combine in the chosen order).
+    ReorderFiles(crate::app::ReorderPurpose, Vec<PathBuf>),
     /// Open the visual page organizer for this PDF.
     OrganizePdf(PathBuf),
     /// Open the format wheel for these files, driven by the keyboard.

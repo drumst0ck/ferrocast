@@ -81,7 +81,12 @@ pub struct Tools {
     pub cwebp: Option<&'static str>,
     /// RAR extractor (RAR is input only).
     pub unrar: Option<&'static str>,
+    /// Ghostscript, used only for PDF compression.
+    pub gs: Option<&'static str>,
 }
+
+/// Install hint shown when Ghostscript is missing.
+pub const GS_HINT: &str = "Ghostscript (brew install ghostscript)";
 
 impl Tools {
     /// Probe the usual install locations.
@@ -94,6 +99,7 @@ impl Tools {
             soffice: first(&["/opt/homebrew/bin/soffice", "/Applications/LibreOffice.app/Contents/MacOS/soffice"]),
             cwebp: first(&["/opt/homebrew/bin/cwebp", "/usr/local/bin/cwebp"]),
             unrar: first(&["/opt/homebrew/bin/unrar", "/usr/local/bin/unrar", "/Applications/rar/unrar"]),
+            gs: first(&["/opt/homebrew/bin/gs", "/usr/local/bin/gs", "/usr/bin/gs"]),
         }
     }
 }
@@ -486,7 +492,34 @@ pub fn soffice_written_path(input: &Path, out: &Path, ext: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compress_pdf_label_suffix_and_gs_detection_field() {
+        use crate::compress::Preset;
+        assert_eq!(FileTool::CompressPdf(Preset::Light).label(), "Compress PDF · light");
+        assert_eq!(FileTool::CompressPdf(Preset::Balanced).label(), "Compress PDF · balanced");
+        assert_eq!(FileTool::CompressPdf(Preset::Strong).label(), "Compress PDF · strong");
+        assert_eq!(FileTool::CompressPdf(Preset::Strong).suffix(), "compressed");
+        assert_eq!(Tools { gs: None, ..Default::default() }.gs, None);
+        assert_eq!(Tools { gs: Some("/gs"), ..Default::default() }.gs, Some("/gs"));
+        assert_eq!(GS_HINT, "Ghostscript (brew install ghostscript)");
+    }
+
+    #[test]
+    fn split_points_label_and_suffix() {
+        let t = FileTool::SplitPoints(vec![(0.0, 3.0), (3.0, 7.0), (7.0, 10.0)], true);
+        assert_eq!(t.label(), "Split · 3 parts");
+        assert_eq!(t.suffix(), "part");
+    }
     use super::*;
+
+    #[test]
+    fn edit_metadata_label_and_suffix() {
+        use crate::metaform::{Group, MetaEdit};
+        let e = FileTool::EditMetadata(vec![MetaEdit { group: Group::File, key: "title".into(), value: None }], false);
+        assert_eq!((e.label().as_str(), e.suffix().as_str()), ("Edit metadata", "edited"));
+        let r = FileTool::EditMetadata(vec![], true);
+        assert_eq!((r.label().as_str(), r.suffix().as_str()), ("Remove metadata", "edited"));
+    }
 
     fn none() -> Tools {
         Tools::default()
@@ -592,6 +625,8 @@ pub enum ImageOp {
     CompressToKb(u32),
     /// Re-encode as JPEG so the file is this percent smaller than the original.
     CompressByPercent(u8),
+    /// Compress window: optional resize first, then a size target, percentage or preset (JPEG).
+    CompressWith(crate::compress::Goal, crate::compress::Resize),
     /// Centre crop to exactly this many pixels (clamped to the image).
     CropExact(u32, u32),
     /// Crop to this rectangle: x, y, width, height in pixels.
@@ -651,6 +686,7 @@ impl ImageOp {
             ImageOp::Annotate => "Annotate in Preview".into(),
             ImageOp::CompressToKb(kb) => format!("Compress · under {}", format_kb(*kb)),
             ImageOp::CompressByPercent(p) => format!("Compress · {p}% smaller"),
+            ImageOp::CompressWith(goal, r) => compress_label(goal, r),
             ImageOp::CropExact(w, h) => format!("Crop · exactly {w}×{h} px"),
             ImageOp::CropRect(_, _, w, h) => format!("Crop · {w}×{h} px"),
             ImageOp::SetMeta(m) => {
@@ -686,7 +722,7 @@ impl ImageOp {
             ImageOp::Redact(_) => "redacted".into(),
             ImageOp::Adjust(_) => "edited".into(),
             ImageOp::Annotate => "annotated".into(),
-            ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) => "compressed".into(),
+            ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) | ImageOp::CompressWith(..) => "compressed".into(),
             ImageOp::CropExact(w, h) => format!("{w}x{h}"),
             ImageOp::CropRect(_, _, w, h) => format!("{w}x{h}"),
             ImageOp::SetMeta(_) => "tagged".into(),
@@ -742,6 +778,25 @@ pub fn output_with_suffix(input: &Path, suffix: &str, ext: &str, exists: impl Fn
         }
         n += 1;
     }
+}
+
+/// "Compress · 2 MB", "Compress · 40 % smaller", "Compress · balanced", plus the resize.
+fn compress_label(goal: &crate::compress::Goal, r: &crate::compress::Resize) -> String {
+    use crate::compress::{Goal, Preset};
+    let mut l = match goal {
+        Goal::TargetBytes(b) => format!("Compress · {}", format_kb((*b / 1024).clamp(1, u32::MAX as u64) as u32)),
+        Goal::Percent(p) => format!("Compress · {} % smaller", crate::compress::clamp_percent(*p)),
+        Goal::Preset(Preset::Light) => "Compress · light".into(),
+        Goal::Preset(Preset::Balanced) => "Compress · balanced".into(),
+        Goal::Preset(Preset::Strong) => "Compress · strong".into(),
+    };
+    if let Some(e) = r.max_edge {
+        l.push_str(&format!(" · max {e} px"));
+    }
+    if let Some(p) = r.percent {
+        l.push_str(&format!(" · {p} % size"));
+    }
+    l
 }
 
 fn format_kb(kb: u32) -> String {
@@ -978,6 +1033,9 @@ pub enum FileTool {
     TrimExact(f64, f64),
     /// Cut into pieces of this many seconds.
     SplitEvery(u32),
+    /// Cut into the given contiguous `(start, end)` ranges, all written to one new folder;
+    /// `true` re-encodes so each cut lands on the exact frame, `false` copies streams.
+    SplitPoints(Vec<(f64, f64)>, bool),
     /// Join the selected files, in order, into one.
     Merge,
     /// One PDF per page.
@@ -1010,6 +1068,13 @@ pub enum FileTool {
     OrganizePdf(Vec<(usize, i32)>),
     /// Unpack an archive into a new sibling folder named after it (never merged, never overwritten).
     Extract,
+    /// Re-encode audio or video to a size target, percentage or preset (resize applies to video only).
+    Compress(crate::compress::Goal, crate::compress::Resize),
+    /// Smaller PDF through Ghostscript (optional tool), by preset only.
+    CompressPdf(crate::compress::Preset),
+    /// Rewrite tags without re-encoding (audio, video, GIF through ffmpeg; PDF through PDFKit); `true`
+    /// drops every tag instead. The copy is named "<name> edited".
+    EditMetadata(Vec<crate::metaform::MetaEdit>, bool),
 }
 
 pub fn format_secs(s: f64) -> String {
@@ -1028,6 +1093,7 @@ impl FileTool {
             FileTool::TrimExact(a, b) => format!("Trim (exact frames) · {} to {}", format_secs(*a), format_secs(*b)),
             FileTool::SplitEvery(n) if n % 60 == 0 => format!("Split · every {} min", n / 60),
             FileTool::SplitEvery(n) => format!("Split · every {n} s"),
+            FileTool::SplitPoints(r, _) => format!("Split · {} parts", r.len()),
             FileTool::Merge => "Merge into one file".into(),
             FileTool::SplitPages => "Split into one PDF per page".into(),
             FileTool::Mute => "Remove audio".into(),
@@ -1058,12 +1124,23 @@ impl FileTool {
             FileTool::Join => "Join videos into one MP4".into(),
             FileTool::OrganizePdf(p) => format!("Organize PDF · {} page{}", p.len(), if p.len() == 1 { "" } else { "s" }),
             FileTool::Extract => "Extract".into(),
+            FileTool::Compress(goal, r) => compress_label(goal, r),
+            FileTool::EditMetadata(_, true) => "Remove metadata".into(),
+            FileTool::EditMetadata(_, false) => "Edit metadata".into(),
+            FileTool::CompressPdf(p) => format!(
+                "Compress PDF · {}",
+                match p {
+                    crate::compress::Preset::Light => "light",
+                    crate::compress::Preset::Balanced => "balanced",
+                    crate::compress::Preset::Strong => "strong",
+                }
+            ),
         }
     }
     pub fn suffix(&self) -> String {
         match self {
             FileTool::Trim(..) | FileTool::TrimExact(..) => "trimmed".into(),
-            FileTool::SplitEvery(_) | FileTool::SplitPages => "part".into(),
+            FileTool::SplitEvery(_) | FileTool::SplitPoints(..) | FileTool::SplitPages => "part".into(),
             FileTool::Merge => "merged".into(),
             FileTool::Mute => "muted".into(),
             FileTool::Speed(f) => format!("speed {f}x"),
@@ -1078,6 +1155,8 @@ impl FileTool {
             FileTool::Bleep(..) => "bleeped".into(),
             FileTool::Join => "joined".into(),
             FileTool::OrganizePdf(_) => "organized".into(),
+            FileTool::Compress(..) | FileTool::CompressPdf(_) => "compressed".into(),
+            FileTool::EditMetadata(..) => "edited".into(),
             // it makes a folder named after the archive; no suffix is ever applied
             FileTool::Extract => String::new(),
         }
@@ -1086,8 +1165,15 @@ impl FileTool {
     pub fn offered(family: Family, n: usize) -> Vec<FileTool> {
         match family {
             Family::Video if n > 1 => vec![FileTool::Join, FileTool::Merge],
-            Family::Audio | Family::Pdf if n > 1 => vec![FileTool::Merge],
-            Family::Pdf => vec![FileTool::SplitPages],
+            Family::Pdf if n > 1 => {
+                use crate::compress::Preset::*;
+                vec![FileTool::Merge, FileTool::CompressPdf(Light), FileTool::CompressPdf(Balanced), FileTool::CompressPdf(Strong)]
+            }
+            Family::Audio if n > 1 => vec![FileTool::Merge],
+            Family::Pdf => {
+                use crate::compress::Preset::*;
+                vec![FileTool::SplitPages, FileTool::CompressPdf(Light), FileTool::CompressPdf(Balanced), FileTool::CompressPdf(Strong)]
+            }
             Family::Archive => vec![FileTool::Extract],
             Family::Video => vec![
                 FileTool::Mute,
@@ -1413,7 +1499,10 @@ mod strip_tests {
         assert!(FileTool::offered(Family::Video, 1).contains(&FileTool::Mute));
         assert_eq!(FileTool::offered(Family::Video, 2)[0], FileTool::Join);
         assert_eq!(parse_tool_query("trim"), None);
-        assert_eq!(FileTool::offered(Family::Pdf, 1), vec![FileTool::SplitPages]);
+        use crate::compress::Preset::*;
+        let cp = [FileTool::CompressPdf(Light), FileTool::CompressPdf(Balanced), FileTool::CompressPdf(Strong)];
+        assert_eq!(FileTool::offered(Family::Pdf, 1), [vec![FileTool::SplitPages], cp.to_vec()].concat());
+        assert_eq!(FileTool::offered(Family::Pdf, 2), [vec![FileTool::Merge], cp.to_vec()].concat());
         assert_eq!(FileTool::offered(Family::Audio, 2), vec![FileTool::Merge]);
         assert!(FileTool::offered(Family::Image, 2).is_empty());
         assert_eq!(format_secs(3723.0), "1:02:03");
@@ -1452,5 +1541,22 @@ mod strip_tests {
         let s = strip_png(&p).unwrap();
         assert!(!s.windows(4).any(|w| w == b"tEXt" || w == b"eXIf"));
         assert!(s.windows(4).any(|w| w == b"IDAT"));
+    }
+}
+
+#[cfg(test)]
+mod compress_tool_tests {
+    use super::*;
+    use crate::compress::{Goal, Preset, Resize};
+
+    #[test]
+    fn compress_labels_and_suffix_for_audio_and_video() {
+        let none = Resize::default();
+        assert_eq!(FileTool::Compress(Goal::TargetBytes(2 * 1024 * 1024), none).label(), "Compress · 2 MB");
+        assert_eq!(FileTool::Compress(Goal::Percent(40), none).label(), "Compress · 40 % smaller");
+        assert_eq!(FileTool::Compress(Goal::Preset(Preset::Balanced), none).label(), "Compress · balanced");
+        let r = Resize { max_edge: Some(720), percent: None };
+        assert_eq!(FileTool::Compress(Goal::Preset(Preset::Strong), r).label(), "Compress · strong · max 720 px");
+        assert_eq!(FileTool::Compress(Goal::Percent(40), none).suffix(), "compressed");
     }
 }

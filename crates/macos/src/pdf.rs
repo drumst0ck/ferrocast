@@ -188,6 +188,134 @@ fn publish(src: &str, json: &str, scratch_dir: &Path, dest: &Path) -> Result<(),
     Ok(())
 }
 
+const META_JS: &str = r#"
+ObjC.import('Quartz');
+function run(argv) {
+  var doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
+  if (doc.isNil()) { throw new Error('cannot open PDF'); }
+  if (doc.isLocked) { throw new Error('PDF is locked'); }
+  var attrs = doc.documentAttributes, out = {};
+  var keys = ['Title', 'Author', 'Subject', 'Keywords', 'Creator', 'Producer'];
+  for (var i = 0; i < keys.length; i++) {
+    if (attrs.isNil()) { break; }
+    var v = attrs.objectForKey(keys[i]);
+    if (v.isNil()) { continue; }
+    var u = ObjC.deepUnwrap(v);
+    out[keys[i]] = Array.isArray(u) ? u.join(', ') : String(u);
+  }
+  return Object.keys(out).map(function (k) { return k + '=' + encodeURIComponent(out[k]); }).join('\n');
+}
+"#;
+
+const SET_META_JS: &str = r#"
+ObjC.import('Quartz');
+function run(argv) {
+  var doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
+  if (doc.isNil()) { throw new Error('cannot open PDF'); }
+  if (doc.isLocked) { throw new Error('PDF is locked'); }
+  // each edit arrives as "Key" (remove) or "Key=<percent-encoded value>"
+  var edits = argv.slice(3).map(function (e) {
+    var at = e.indexOf('=');
+    return at < 0 ? [e, null] : [e.slice(0, at), decodeURIComponent(e.slice(at + 1))];
+  });
+  var d = $.NSMutableDictionary.alloc.init;
+  if (argv[2] !== 'all' && !doc.documentAttributes.isNil()) {
+    d = $.NSMutableDictionary.dictionaryWithDictionary(doc.documentAttributes);
+  }
+  for (var i = 0; i < edits.length; i++) {
+    var k = edits[i][0], v = edits[i][1];
+    if (v === null || v === '') { d.removeObjectForKey(k); }
+    else if (k === 'Keywords') {
+      d.setObjectForKey($(v.split(',').map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; })), k);
+    } else { d.setObjectForKey($(v), k); }
+  }
+  doc.documentAttributes = d;
+  if (!doc.writeToFile(argv[1])) { throw new Error('PDFKit failed to write output'); }
+  return 'ok';
+}
+"#;
+
+/// Metadata attributes PDFKit exposes and this tool edits.
+pub const META_KEYS: [&str; 6] = ["Title", "Author", "Subject", "Keywords", "Creator", "Producer"];
+
+/// Title, Author, Subject, Keywords, Creator and Producer of the PDF at `src`, those that are set.
+pub fn metadata(src: &Path) -> Result<Vec<(String, String)>, String> {
+    let json = run_jxa(META_JS, &[path_str(src)?])?;
+    let mut out = vec![];
+    for line in json.lines() {
+        let (k, v) = line.split_once('=').ok_or("unexpected metadata output")?;
+        out.push((k.to_string(), pct_decode(v)?));
+    }
+    Ok(out)
+}
+
+/// Escapes everything but ASCII letters and digits, so a value is one safe argument.
+fn pct_encode(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+fn pct_decode(s: &str) -> Result<String, String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = s.get(i + 1..i + 3).ok_or("bad escape in metadata")?;
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| "bad escape in metadata")?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "metadata is not UTF-8".to_string())
+}
+
+/// Writes a copy of `src` next to it as "<name> edited.pdf" ("... edited 2.pdf" on a collision),
+/// with the given attribute edits (`None` removes a key; names are those of [`META_KEYS`]) or,
+/// with `remove_all`, with every attribute dropped. Never overwrites; the original is untouched.
+pub fn set_metadata(src: &Path, edits: &[(String, Option<String>)], remove_all: bool) -> Result<PathBuf, String> {
+    let src_s = path_str(src)?;
+    if let Some((k, _)) = edits.iter().find(|(k, _)| !META_KEYS.contains(&k.as_str())) {
+        return Err(format!("PDF metadata has no field named {k}"));
+    }
+    let args: Vec<String> = edits.iter().map(|(k, v)| v.as_ref().map_or(k.clone(), |v| format!("{k}={}", pct_encode(v)))).collect();
+    let scratch_dir: PathBuf =
+        std::env::temp_dir().join(format!("pdf-meta-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&scratch_dir).map_err(|e| format!("cannot create scratch dir: {e}"))?;
+    let result = (|| {
+        let scratch = scratch_dir.join("out.pdf");
+        let mut argv = vec![src_s, path_str(&scratch)?, if remove_all { "all" } else { "keep" }];
+        argv.extend(args.iter().map(String::as_str));
+        run_jxa(SET_META_JS, &argv)?;
+        let bytes = std::fs::read(&scratch).map_err(|e| format!("cannot read scratch output: {e}"))?;
+        if bytes.is_empty() {
+            return Err("PDFKit produced an empty file".to_string());
+        }
+        let dir = src.parent().map(Path::to_path_buf).unwrap_or_default();
+        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("document");
+        for n in 1u32.. {
+            let name = if n == 1 { format!("{stem} edited.pdf") } else { format!("{stem} edited {n}.pdf") };
+            let dest = dir.join(name);
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
+                Ok(mut f) => {
+                    if let Err(e) = f.write_all(&bytes).and_then(|_| f.sync_all()) {
+                        drop(f);
+                        let _ = std::fs::remove_file(&dest);
+                        return Err(format!("cannot write destination: {e}"));
+                    }
+                    return Ok(dest);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("cannot create destination: {e}")),
+            }
+        }
+        unreachable!()
+    })();
+    let _ = std::fs::remove_dir_all(&scratch_dir);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +434,73 @@ function run(argv) {
         std::fs::write(&bad, b"not a pdf").unwrap();
         assert!(organize(&bad, &[sel(0, 0)], &d.join("o2.pdf")).is_err());
         assert!(!d.join("o2.pdf").exists());
+    }
+
+    #[test]
+    fn percent_escaping_round_trips_unicode_and_separators() {
+        for v in ["", "plain", "a=b\nc\td", "Título ñ 日本 🎵", "100%"] {
+            assert_eq!(pct_decode(&pct_encode(v)).unwrap(), v);
+        }
+        assert!(pct_encode("a=b").chars().all(|c| c.is_ascii_alphanumeric() || c == '%'));
+        assert!(pct_decode("%zz").is_err());
+        assert!(pct_decode("%4").is_err());
+    }
+
+    fn s(k: &str, v: Option<&str>) -> (String, Option<String>) {
+        (k.to_string(), v.map(String::from))
+    }
+
+    #[test]
+    #[ignore = "requires PDFKit through osascript; creates isolated real PDFs"]
+    fn pdf_metadata_round_trip_real_file() {
+        let d = tmp();
+        let src = fixture(&d);
+        let before = std::fs::read(&src).unwrap();
+        let pages = page_count(&src).unwrap();
+
+        let a =
+            set_metadata(&src, &[s("Title", Some("Título ñ = 日本")), s("Author", Some("Ann")), s("Keywords", Some("uno, dos"))], false)
+                .unwrap();
+        assert_eq!(a, d.join("src edited.pdf"));
+        let m = metadata(&a).unwrap();
+        let get = |k: &str| m.iter().find(|(x, _)| x == k).map(|(_, v)| v.clone());
+        assert_eq!(get("Title").as_deref(), Some("Título ñ = 日本"));
+        assert_eq!(get("Author").as_deref(), Some("Ann"));
+        assert_eq!(get("Keywords").as_deref(), Some("uno, dos"));
+        assert_eq!(page_count(&a).unwrap(), pages);
+        assert_eq!(inspect(&a), inspect(&src), "page text unchanged");
+
+        // second run: ' 2', and removing one key keeps the others
+        let b = set_metadata(&a, &[s("Author", None), s("Subject", Some("S"))], false).unwrap();
+        assert_eq!(b, d.join("src edited edited.pdf"));
+        let mb = metadata(&b).unwrap();
+        assert!(mb.iter().all(|(k, _)| k != "Author"));
+        assert!(mb.iter().any(|(k, v)| k == "Title" && v == "Título ñ = 日本"));
+        assert!(mb.iter().any(|(k, v)| k == "Subject" && v == "S"));
+        let c = set_metadata(&src, &[s("Title", Some("again"))], false).unwrap();
+        assert_eq!(c, d.join("src edited 2.pdf"));
+
+        // remove_all clears what we set
+        let z = set_metadata(&a, &[], true).unwrap();
+        let mz = metadata(&z).unwrap();
+        assert!(mz.iter().all(|(k, _)| !["Title", "Author", "Subject", "Keywords"].contains(&k.as_str())), "{mz:?}");
+        assert_eq!(page_count(&z).unwrap(), pages);
+
+        assert_eq!(std::fs::read(&src).unwrap(), before, "original untouched");
+    }
+
+    #[test]
+    #[ignore = "requires PDFKit through osascript"]
+    fn pdf_metadata_rejects_bad_input_and_leaves_nothing() {
+        let d = tmp();
+        let src = fixture(&d);
+        assert!(set_metadata(&src, &[s("Bogus", Some("x"))], false).unwrap_err().contains("Bogus"));
+        let bad = d.join("bad.pdf");
+        std::fs::write(&bad, b"not a pdf").unwrap();
+        assert!(set_metadata(&bad, &[s("Title", Some("x"))], false).is_err());
+        assert!(metadata(&bad).is_err());
+        assert!(set_metadata(&d.join("missing.pdf"), &[], true).is_err());
+        let names: Vec<_> = std::fs::read_dir(&d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.iter().all(|n| !n.contains("edited")), "{names:?}");
     }
 }

@@ -27,6 +27,12 @@ pub enum Msg {
     EditLoaded(PathBuf, Option<Vec<u8>>),
     /// PNG of the image being cropped, scaled for display (None: unreadable).
     CropLoaded(PathBuf, Option<Vec<u8>>),
+    /// Tags of the file in the Edit Metadata window (Err: message to show).
+    MetadataLoaded(PathBuf, Result<Vec<ferrocast_core::metaform::Field>, String>),
+    /// Pixel size of the first image in the Compress window (None: unreadable).
+    CompressProbed(PathBuf, Option<(u32, u32)>),
+    /// Duration, audio and size of the first file in the media Compress window (None: unreadable).
+    MediaProbed(PathBuf, Option<ferrocast_core::compress::MediaInfo>),
     /// PNG of the image being redacted, scaled for display (None: unreadable).
     RedactLoaded(PathBuf, Option<Vec<u8>>),
     /// PNG of the image being framed, scaled for the live preview (None: unreadable).
@@ -1794,10 +1800,32 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
         | FileTool::VisualizeImage(..)
         | FileTool::TrimSilence
         | FileTool::TrimExact(..)
+        | FileTool::SplitPoints(..)
         | FileTool::Channels(..)
         | FileTool::Bleep(..)
+        | FileTool::Compress(..)
         | FileTool::Join => {
             return crate::media_tools::run(files, tool, ffmpeg);
+        }
+        FileTool::EditMetadata(edits, remove_all) => {
+            for f in files {
+                if ext(f) == "pdf" {
+                    match crate::media_tools::edit_pdf_metadata(f, edits, *remove_all) {
+                        Ok(p) => outs.push(p),
+                        Err(e) => errs.push(format!("{}: {e}", f.display())),
+                    }
+                } else {
+                    // audio, video and GIF need ffmpeg; the executor names the install hint
+                    let (o, e) = crate::media_tools::run(std::slice::from_ref(f), tool, ffmpeg);
+                    outs.extend(o);
+                    errs.extend(e);
+                }
+            }
+        }
+        FileTool::CompressPdf(preset) => {
+            let (o, e) = crate::route::compress_pdf(ferrocast_core::convert::Tools::detect().gs, files, *preset);
+            outs.extend(o);
+            errs.extend(e);
         }
         FileTool::Extract => {
             let tools = ferrocast_core::convert::Tools::detect();
@@ -1923,12 +1951,25 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
     (outs, errs)
 }
 
+/// Result line for a PDF compression: both sizes, or the honest "no gain" note (the output is kept).
+pub(crate) fn pdf_size_report(before: u64, after: u64) -> String {
+    if after < before {
+        format!("{before} B → {after} B")
+    } else {
+        "no smaller: the PDF was already compact".into()
+    }
+}
+
 pub fn file_tool_files(files: Vec<PathBuf>, tool: ferrocast_core::convert::FileTool, ffmpeg: Option<&'static str>, bus: Bus) {
     std::thread::spawn(move || {
         let (outs, errs) = run_file_tool(&files, &tool, ffmpeg);
         // only when one file produced one result, so the pair is certain
         let report = match (&tool, ffmpeg, files.as_slice(), outs.as_slice()) {
             (ferrocast_core::convert::FileTool::Normalize(..), Some(ff), [b], [a]) => crate::media_tools::normalize_report(ff, b, a),
+            (ferrocast_core::convert::FileTool::CompressPdf(_), _, [b], [a]) => {
+                let len = |p: &PathBuf| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+                Some(pdf_size_report(len(b), len(a)))
+            }
             _ => None,
         };
         let msg = match (outs.len(), errs.len()) {
@@ -1951,22 +1992,34 @@ pub fn file_tool_files(files: Vec<PathBuf>, tool: ferrocast_core::convert::FileT
 
 /// JPEG at the highest quality that meets a size target (KB, or percent smaller than the source).
 fn compress_to_size(f: &std::path::Path, op: &ferrocast_core::convert::ImageOp) -> Result<PathBuf, String> {
-    use ferrocast_core::convert::{fit_quality, output_with_suffix, ImageOp};
+    use ferrocast_core::convert::ImageOp;
     let original = std::fs::metadata(f).map_err(|e| e.to_string())?.len();
     let target = match op {
         ImageOp::CompressToKb(kb) => *kb as u64 * 1024,
         ImageOp::CompressByPercent(p) => original * (100 - *p as u64) / 100,
         _ => return Err("not a size target".into()),
     };
-    let tmp = std::env::temp_dir().join(format!("ferrocast-fit-{}.jpg", std::process::id()));
+    fit_jpeg(f, f, target, &op.suffix())
+}
+
+/// Binary search over JPEG quality of `input` for the best one that fits `target` bytes; the copy is
+/// written next to `named_after` (never overwriting) as `<name> <suffix>.jpg`.
+fn fit_jpeg(input: &std::path::Path, named_after: &std::path::Path, target: u64, suffix: &str) -> Result<PathBuf, String> {
+    use ferrocast_core::convert::{fit_quality, output_with_suffix};
+    let tmp = std::env::temp_dir().join(format!(
+        "ferrocast-fit-{}-{}.jpg",
+        std::process::id(),
+        COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let encode = |q: u8| -> Option<u64> {
-        sips(&["-s", "format", "jpeg", "-s", "formatOptions", &q.to_string(), &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])
+        sips(&["-s", "format", "jpeg", "-s", "formatOptions", &q.to_string(), &input.to_string_lossy(), "--out", &tmp.to_string_lossy()])
             .ok()?;
         std::fs::metadata(&tmp).ok().map(|m| m.len())
     };
     let q = fit_quality(target, encode);
-    let out = output_with_suffix(f, &op.suffix(), "jpg", |p| p.exists());
-    let res = sips(&["-s", "format", "jpeg", "-s", "formatOptions", &q.to_string(), &f.to_string_lossy(), "--out", &out.to_string_lossy()]);
+    let out = output_with_suffix(named_after, suffix, "jpg", |p| p.exists());
+    let res =
+        sips(&["-s", "format", "jpeg", "-s", "formatOptions", &q.to_string(), &input.to_string_lossy(), "--out", &out.to_string_lossy()]);
     let _ = std::fs::remove_file(&tmp);
     res?;
     let size = std::fs::metadata(&out).map_err(|e| e.to_string())?.len();
@@ -1975,6 +2028,82 @@ fn compress_to_size(f: &std::path::Path, op: &ferrocast_core::convert::ImageOp) 
         return Err(format!("smallest result is {} KB, above the target; try resizing too", size / 1024));
     }
     Ok(out)
+}
+
+/// Compress window executor: shrink first when asked (aspect kept, never upscaled), then encode a JPEG
+/// for the goal. The original is only read; the copy never overwrites anything.
+fn compress_with(
+    f: &std::path::Path,
+    goal: ferrocast_core::compress::Goal,
+    resize: &ferrocast_core::compress::Resize,
+    suffix: &str,
+) -> Result<PathBuf, String> {
+    use ferrocast_core::compress::{estimate_bytes, resized_dims, Goal, Preset};
+    use ferrocast_core::convert::output_with_suffix;
+    check_source_size(f)?;
+    let original = std::fs::metadata(f).map_err(|e| e.to_string())?.len();
+    let wants_resize = resize.max_edge.is_some() || resize.percent.is_some_and(|p| p < 100);
+    let mut shrunk: Option<PathBuf> = None;
+    if wants_resize {
+        let (w, h) = image_size(f).ok_or("could not read the image size")?;
+        let smaller = resize.max_edge.is_some_and(|e| e < w.max(h)) || resize.percent.is_some_and(|p| p < 100);
+        if smaller {
+            let (nw, nh) = resized_dims(w, h, resize).ok_or("invalid resize")?;
+            if (nw, nh) != (w, h) {
+                let tmp = std::env::temp_dir().join(format!(
+                    "ferrocast-cwr-{}-{}.png",
+                    std::process::id(),
+                    COLLAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                ));
+                let r = sips(&[
+                    "-z",
+                    &nh.to_string(),
+                    &nw.to_string(),
+                    "-s",
+                    "format",
+                    "png",
+                    &f.to_string_lossy(),
+                    "--out",
+                    &tmp.to_string_lossy(),
+                ]);
+                if let Err(e) = r {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(e);
+                }
+                shrunk = Some(tmp);
+            }
+        }
+    }
+    let input = shrunk.as_deref().unwrap_or(f);
+    let res = match goal {
+        Goal::TargetBytes(t) => fit_jpeg(input, f, t, suffix),
+        // a percentage is relative to the original file, not to the resized copy
+        Goal::Percent(p) => fit_jpeg(input, f, estimate_bytes(original, Goal::Percent(p)), suffix),
+        Goal::Preset(p) => {
+            let q = match p {
+                Preset::Light => 85,
+                Preset::Balanced => 65,
+                Preset::Strong => 45,
+            };
+            let out = output_with_suffix(f, suffix, "jpg", |p| p.exists());
+            sips(&[
+                "-s",
+                "format",
+                "jpeg",
+                "-s",
+                "formatOptions",
+                &q.to_string(),
+                &input.to_string_lossy(),
+                "--out",
+                &out.to_string_lossy(),
+            ])
+            .map(|_| out)
+        }
+    };
+    if let Some(t) = shrunk {
+        let _ = std::fs::remove_file(t);
+    }
+    res
 }
 
 /// Apply a one-step adjustment; writes a PNG next to the original.
@@ -2245,6 +2374,15 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
         }
         return (outs, errs);
     }
+    if let ImageOp::CompressWith(goal, resize) = op {
+        for f in files {
+            match compress_with(f, *goal, resize, &op.suffix()) {
+                Ok(o) => outs.push(o),
+                Err(e) => errs.push(format!("{}: {e}", name(f))),
+            }
+        }
+        return (outs, errs);
+    }
     if let ImageOp::EditWith(o) = op {
         for f in files {
             match edit_photo(f, o) {
@@ -2403,7 +2541,8 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
             | ImageOp::Redact(_)
             | ImageOp::Adjust(_)
             | ImageOp::CompressToKb(_)
-            | ImageOp::CompressByPercent(_) => unreachable!(),
+            | ImageOp::CompressByPercent(_)
+            | ImageOp::CompressWith(..) => unreachable!(),
         })();
         match res {
             Ok(o) if o.exists() => outs.push(o),
@@ -2505,6 +2644,94 @@ mod convert_tests {
         let (out, err) = run_conversion(&[folder], &z, &Tools::default());
         assert!(err.is_empty(), "{err:?}");
         assert_eq!(out, vec![d.join("folder.zip")]);
+    }
+
+    /// A photo-like JPEG (smooth gradients plus noise, a few hundred KB) made with sips.
+    fn photo_jpeg(dir: &std::path::Path) -> PathBuf {
+        let (w, h) = (1200u32, 800u32);
+        let mut img = image::RgbImage::new(w, h);
+        let mut seed = 12345u32;
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let n = (seed >> 24) as i32 % 40 - 20;
+            let c = |v: u32| (v as i32 + n).clamp(0, 255) as u8;
+            *px = image::Rgb([c(x * 255 / w), c(y * 255 / h), c((x + y) * 255 / (w + h))]);
+        }
+        let png = dir.join("photo-src.png");
+        img.save(&png).unwrap();
+        let jpg = dir.join("photo.jpg");
+        assert!(std::process::Command::new("/usr/bin/sips")
+            .args(["-s", "format", "jpeg", "-s", "formatOptions", "92"])
+            .arg(&png)
+            .arg("--out")
+            .arg(&jpg)
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::fs::metadata(&jpg).unwrap().len() > 150_000, "the fixture should be photo-like");
+        jpg
+    }
+
+    #[test]
+    fn compress_with_goals_resize_naming_and_missing_file() {
+        use ferrocast_core::compress::{Goal, Preset, Resize};
+        use ferrocast_core::convert::ImageOp;
+        let d = tmp("compress-with");
+        let src = photo_jpeg(&d);
+        let before = std::fs::read(&src).unwrap();
+        let orig = before.len() as u64;
+        let one = std::slice::from_ref(&src);
+        let none = Resize::default();
+        // percent: smaller than the original, and at least that much smaller
+        let (o, e) = run_image_op(one, &ImageOp::CompressWith(Goal::Percent(50), none));
+        assert!(e.is_empty(), "{e:?}");
+        let sz = std::fs::metadata(&o[0]).unwrap().len();
+        assert!(sz < orig && sz <= orig / 2, "50 % smaller: {sz} of {orig}");
+        // a size target is met
+        let target = orig / 3;
+        let (o, e) = run_image_op(one, &ImageOp::CompressWith(Goal::TargetBytes(target), none));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(std::fs::metadata(&o[0]).unwrap().len() <= target, "within the target");
+        // presets get stronger
+        let size_of = |p| {
+            let (o, e) = run_image_op(one, &ImageOp::CompressWith(Goal::Preset(p), none));
+            assert!(e.is_empty(), "{e:?}");
+            std::fs::metadata(&o[0]).unwrap().len()
+        };
+        let (l, s) = (size_of(Preset::Light), size_of(Preset::Strong));
+        assert!(s < l, "strong {s} < light {l}");
+        // resize while compressing: the copy is 400 px wide, aspect kept
+        let (o, e) =
+            run_image_op(one, &ImageOp::CompressWith(Goal::Preset(Preset::Balanced), Resize { max_edge: Some(400), percent: None }));
+        assert!(e.is_empty(), "{e:?}");
+        let (w, h) = image_size(&o[0]).unwrap();
+        assert_eq!(w, 400);
+        assert!((265..=268).contains(&h), "aspect kept: {h}");
+        // never upscales
+        let (o, e) = run_image_op(one, &ImageOp::CompressWith(Goal::Preset(Preset::Light), Resize { max_edge: Some(5000), percent: None }));
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(image_size(&o[0]), Some((1200, 800)));
+        // resize and a size target together
+        let (o, e) = run_image_op(one, &ImageOp::CompressWith(Goal::TargetBytes(40_000), Resize { max_edge: Some(600), percent: None }));
+        assert!(e.is_empty(), "{e:?}");
+        assert!(std::fs::metadata(&o[0]).unwrap().len() <= 40_000);
+        assert_eq!(image_size(&o[0]).unwrap().0, 600);
+        // the original is untouched
+        assert_eq!(std::fs::read(&src).unwrap(), before);
+        // naming: a second run never overwrites
+        let d2 = tmp("compress-names");
+        let src2 = d2.join("pic.jpg");
+        std::fs::copy(&src, &src2).unwrap();
+        let op = ImageOp::CompressWith(Goal::Preset(Preset::Balanced), none);
+        let (a, _) = run_image_op(std::slice::from_ref(&src2), &op);
+        let (b, _) = run_image_op(std::slice::from_ref(&src2), &op);
+        assert_eq!(a[0], d2.join("pic compressed.jpg"));
+        assert_eq!(b[0], d2.join("pic compressed 2.jpg"));
+        // a missing file is reported, nothing panics, nothing is written
+        let gone = d2.join("gone.jpg");
+        let (o, e) = run_image_op(std::slice::from_ref(&gone), &op);
+        assert!(o.is_empty() && e.len() == 1 && e[0].contains("gone.jpg"), "{o:?} {e:?}");
+        assert!(!d2.join("gone compressed.jpg").exists());
     }
 
     /// Vision needs an inference context that virtual CI machines do not have; there the

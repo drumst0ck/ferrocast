@@ -733,6 +733,28 @@ fn rar_extracts_through_tar_when_unrar_is_not_installed() {
     assert!(!d.join("bad").exists(), "no leftover folder");
 }
 
+// L74-style regression test for the split window: Escape while the Equal parts box is edited.
+#[test]
+fn split_equal_parts_box_keeps_escape_while_editing() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join("fc-splitfocus.mp4");
+    let trim = ferrocast_core::videoplan::Trim::new(10.0, 25.0);
+    app.stack = vec![View::Root, View::VideoSplit { file: f, trim, points: vec![], parts: 2 }];
+    render(&mut app, vec![]);
+    let pos = Pos2::new(181.0, 374.0);
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(&mut app, vec![Event::PointerMoved(pos)]);
+    render(&mut app, vec![btn(true)]);
+    render(&mut app, vec![btn(false)]);
+    render(&mut app, vec![]);
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the Equal parts box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::VideoSplit { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape, with nothing being edited, closes it");
+}
+
 #[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
@@ -950,7 +972,7 @@ fn tool_reach_maps_tools_to_windows_and_presets() {
     let p = std::path::PathBuf::from("/nonexistent/a.png");
     assert!(matches!(tool_reach(ToolId::AnnotateImage, std::slice::from_ref(&p)), ToolReach::Act(Act::AnnotateCanvas(_))));
     assert!(matches!(tool_reach(ToolId::EditImage, std::slice::from_ref(&p)), ToolReach::Act(Act::EditPhoto(_))));
-    assert!(matches!(tool_reach(ToolId::Compress, std::slice::from_ref(&p)), ToolReach::Image(ImageOp::Compress(60))));
+    assert!(matches!(tool_reach(ToolId::Compress, std::slice::from_ref(&p)), ToolReach::Act(Act::CompressImages(_))));
     assert!(matches!(tool_reach(ToolId::RemoveMetadata, std::slice::from_ref(&p)), ToolReach::Image(ImageOp::StripMetadata)));
     let two = vec![p.clone(), std::path::PathBuf::from("/nonexistent/b.png")];
     assert!(matches!(tool_reach(ToolId::CropImage, &two), ToolReach::Image(ImageOp::Crop(1, 1))));
@@ -1187,4 +1209,964 @@ fn extract_tool_runs_through_run_file_tool_for_several_archives() {
     assert!(errs[0].contains("unsafe path in archive: ../escape.txt"), "{errs:?}");
     assert!(!d.join("evil").exists());
     let _ = std::fs::remove_dir_all(&d);
+}
+
+// ---- A8b: reorder window
+
+fn reorder_files(n: usize) -> Vec<std::path::PathBuf> {
+    (0..n).map(|i| std::path::PathBuf::from(format!("/nonexistent/clip {i}.mp4"))).collect()
+}
+
+fn reorder_state(app: &App) -> (Vec<std::path::PathBuf>, usize) {
+    match app.view() {
+        View::Reorder { files, cursor, .. } => (files.clone(), *cursor),
+        other => panic!("reorder view closed unexpectedly: {}", other.title()),
+    }
+}
+
+fn open_reorder(app: &mut App, purpose: ReorderPurpose, files: Vec<std::path::PathBuf>) {
+    app.stack = vec![View::Root, View::Reorder { purpose, files, cursor: 0 }];
+}
+
+#[test]
+fn reorder_job_maps_each_purpose_to_its_tool_and_keeps_the_order() {
+    use ferrocast_core::convert::{FileTool, ImageOp};
+    let f = reorder_files(3);
+    let mut rev = f.clone();
+    rev.reverse();
+    assert_eq!(reorder_job(ReorderPurpose::MergePdf, rev.clone()), ReorderJob::Tool(FileTool::Merge, rev.clone()));
+    assert_eq!(reorder_job(ReorderPurpose::MergeAudio, f.clone()), ReorderJob::Tool(FileTool::Merge, f.clone()));
+    assert_eq!(reorder_job(ReorderPurpose::JoinVideos, rev.clone()), ReorderJob::Tool(FileTool::Join, rev.clone()));
+    assert_eq!(reorder_job(ReorderPurpose::CreatePdf, f.clone()), ReorderJob::Image(ImageOp::CombinePdf, f));
+}
+
+#[test]
+fn reorder_view_renders_for_2_3_and_8_files_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for n in [2, 3, 8] {
+            for purpose in [ReorderPurpose::MergePdf, ReorderPurpose::CreatePdf, ReorderPurpose::JoinVideos, ReorderPurpose::MergeAudio] {
+                open_reorder(&mut app, purpose, reorder_files(n));
+                render(&mut app, vec![]);
+                render(&mut app, vec![]);
+            }
+        }
+        let long = (0..3).map(|i| std::path::PathBuf::from(format!("/nonexistent/{}{i}.pdf", "very long file name ".repeat(12)))).collect();
+        open_reorder(&mut app, ReorderPurpose::MergePdf, long);
+        render(&mut app, vec![]);
+    }
+}
+
+#[test]
+fn reorder_arrow_down_moves_only_the_cursor() {
+    let mut app = fixture();
+    open_reorder(&mut app, ReorderPurpose::JoinVideos, reorder_files(3));
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::ArrowDown)]);
+    assert_eq!(reorder_state(&app), (reorder_files(3), 1));
+    render(&mut app, vec![key_event(Key::ArrowUp)]);
+    assert_eq!(reorder_state(&app).1, 0);
+}
+
+#[test]
+fn reorder_cmd_arrows_move_the_row_and_the_cursor_follows() {
+    let mut app = fixture();
+    let f = reorder_files(3);
+    open_reorder(&mut app, ReorderPurpose::MergePdf, f.clone());
+    render(&mut app, vec![]);
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowDown, CMD)], CMD);
+    let (files, cursor) = reorder_state(&app);
+    assert_eq!(files, vec![f[1].clone(), f[0].clone(), f[2].clone()]);
+    assert_eq!(cursor, 1, "the cursor follows the moved row");
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowUp, CMD)], CMD);
+    assert_eq!(reorder_state(&app), (f.clone(), 0));
+    render_mods(&mut app, vec![key_mod_event(Key::ArrowUp, CMD)], CMD);
+    assert_eq!(reorder_state(&app), (f, 0), "Cmd+Up on the first row does nothing");
+}
+
+#[test]
+fn reorder_escape_goes_back_without_starting_a_job() {
+    let mut app = fixture();
+    open_reorder(&mut app, ReorderPurpose::MergePdf, reorder_files(2));
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err(), "Esc must not start a job");
+}
+
+#[test]
+fn reorder_enter_with_one_file_refuses_with_a_toast() {
+    let mut app = fixture();
+    open_reorder(&mut app, ReorderPurpose::MergePdf, reorder_files(1));
+    render(&mut app, vec![]);
+    app.toast = None;
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(app.toast.is_some(), "one file is refused with a toast");
+    assert!(matches!(app.view(), View::Reorder { .. }), "the view stays");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(app.rx.try_recv().is_err(), "no job started");
+}
+
+#[test]
+fn convert_view_offers_choose_order_only_for_two_or_more_files_of_one_family() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-order-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let purposes = |app: &mut App, names: &[&str]| -> Vec<ReorderPurpose> {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.sections()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .filter(|i| i.title == "Choose order…")
+            .map(|i| match &i.kind {
+                Kind::Editor(Act::ReorderFiles(p, files)) => {
+                    assert!(files.len() >= 2);
+                    *p
+                }
+                _ => panic!("wrong kind"),
+            })
+            .collect()
+    };
+    assert_eq!(purposes(&mut app, &["a.pdf", "b.pdf"]), vec![ReorderPurpose::MergePdf]);
+    assert_eq!(purposes(&mut app, &["a.mp4", "b.mp4"]), vec![ReorderPurpose::JoinVideos]);
+    assert_eq!(purposes(&mut app, &["a.mp3", "b.mp3"]), vec![ReorderPurpose::MergeAudio]);
+    assert_eq!(purposes(&mut app, &["a.png", "b.png"]), vec![ReorderPurpose::CreatePdf]);
+    assert!(purposes(&mut app, &["a.pdf"]).is_empty());
+    assert!(purposes(&mut app, &["a.png", "b.mp4"]).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- A9c split window ----
+
+fn split_view(app: &mut App, name: &str, points: Vec<f64>, parts: usize, cursor: f64) {
+    let f = std::env::temp_dir().join(name);
+    let mut t = ferrocast_core::videoplan::Trim::new(10.0, 25.0).unwrap();
+    t.seek(cursor);
+    app.stack = vec![View::Root, View::VideoSplit { file: f, trim: Some(t), points, parts }];
+}
+
+fn split_state(app: &App) -> (Vec<f64>, usize, f64) {
+    match app.view() {
+        View::VideoSplit { points, parts, trim: Some(t), .. } => (points.clone(), *parts, t.cursor),
+        other => panic!("split view closed unexpectedly: {}", other.title()),
+    }
+}
+
+#[test]
+fn split_view_renders_probing_and_ready_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        let f = std::env::temp_dir().join("fc-split-render.mp4");
+        app.stack = vec![View::Root, View::VideoSplit { file: f, trim: None, points: vec![], parts: 2 }];
+        render(&mut app, vec![]);
+        split_view(&mut app, "fc-split-render.mp4", vec![2.0, 6.0], 2, 3.0);
+        render(&mut app, vec![]);
+        assert!(matches!(app.view(), View::VideoSplit { .. }));
+    }
+}
+
+#[test]
+fn split_m_adds_a_point_at_the_cursor_and_dedupes() {
+    let mut app = fixture();
+    split_view(&mut app, "fc-split-m.mp4", vec![], 2, 2.0);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::M)]);
+    assert_eq!(split_state(&app).0, vec![2.0]);
+    render(&mut app, vec![key_event(Key::M)]);
+    assert_eq!(split_state(&app).0, vec![2.0], "a second M on the same frame adds nothing");
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    render(&mut app, vec![key_event(Key::M)]);
+    let (p, _, c) = split_state(&app);
+    assert_eq!(p.len(), 2, "{p:?}");
+    assert!((p[1] - c).abs() < 1e-9 && p[1] > p[0], "{p:?} cursor {c}");
+}
+
+#[test]
+fn split_backspace_removes_the_last_added_point() {
+    let mut app = fixture();
+    split_view(&mut app, "fc-split-bs.mp4", vec![], 2, 2.0);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::M)]);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    render(&mut app, vec![key_event(Key::M)]);
+    render(&mut app, vec![key_event(Key::Backspace)]);
+    assert_eq!(split_state(&app).0, vec![2.0]);
+    render(&mut app, vec![key_event(Key::Backspace)]);
+    render(&mut app, vec![key_event(Key::Backspace)]);
+    assert!(split_state(&app).0.is_empty(), "removing from an empty list is harmless and the view stays");
+}
+
+#[test]
+fn split_escape_goes_back_without_a_job() {
+    let mut app = fixture();
+    split_view(&mut app, "fc-split-esc.mp4", vec![3.0], 2, 2.0);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn split_enter_refuses_fewer_than_two_clips_and_starts_nothing() {
+    let mut app = fixture();
+    // a lone point that would leave a tiny piece leaves one clip (the equal-parts box cannot go
+    // below 2, so a count of 1 is covered by the pure split_job test)
+    split_view(&mut app, "fc-split-enter.mp4", vec![0.01], 2, 2.0);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::VideoSplit { .. }), "one clip is refused and the view stays");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Nothing to split")), "{:?}", app.toast);
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn split_job_builds_the_exact_ranges() {
+    use ferrocast_core::convert::FileTool;
+    match split_job(10.0, &[], 2) {
+        Ok(FileTool::SplitPoints(r, true)) => assert_eq!(r, vec![(0.0, 5.0), (5.0, 10.0)]),
+        other => panic!("{other:?}"),
+    }
+    match split_job(10.0, &[3.0, 7.0], 2) {
+        Ok(FileTool::SplitPoints(r, true)) => assert_eq!(r.len(), 3, "points override parts"),
+        other => panic!("{other:?}"),
+    }
+    assert!(split_job(10.0, &[], 1).is_err());
+    assert!(split_job(f64::NAN, &[], 2).is_err());
+}
+
+#[test]
+fn split_enter_with_ready_ranges_does_not_run_without_ffmpeg() {
+    let mut app = fixture();
+    app.tools = Default::default();
+    split_view(&mut app, "fc-split-noff.mp4", vec![], 2, 2.0);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::VideoSplit { .. }), "without ffmpeg the view stays");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
+}
+
+#[test]
+fn convert_view_offers_split_video_for_one_mp4_and_not_for_two() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-splitoffer-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let has = |app: &mut App, names: &[&str]| -> bool {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.sections()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .any(|i| i.title == "Split Video…" && matches!(i.kind, Kind::Editor(Act::SplitVideo(_))))
+    };
+    assert!(has(&mut app, &["a.mp4"]));
+    assert!(!has(&mut app, &["a.mp4", "b.mp4"]));
+    assert!(!has(&mut app, &["a.png"]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_split_video_opens_the_window_for_one_file_and_keeps_the_preset_for_several() {
+    use ferrocast_core::convert::FileTool;
+    use ferrocast_core::tools::{implemented, Impl, ToolId};
+    let a = std::path::PathBuf::from("/nonexistent/a.mp4");
+    let b = std::path::PathBuf::from("/nonexistent/b.mp4");
+    assert!(matches!(tool_reach(ToolId::SplitVideo, std::slice::from_ref(&a)), ToolReach::Act(Act::SplitVideo(_))));
+    assert!(matches!(tool_reach(ToolId::SplitVideo, &[a, b]), ToolReach::File(FileTool::SplitEvery(60))));
+    assert_eq!(implemented(ToolId::SplitVideo), Impl::Window);
+}
+
+// ---- A6b: image Compress window
+
+fn compress_view(files: Vec<std::path::PathBuf>, size: Option<(u32, u32)>, mode: usize, kb: u32) -> View {
+    View::CompressImage { files, orig_bytes: 2_000_000, size, mode, kb, percent: 40, preset: 1, max_edge: None, resize: false, media: None }
+}
+
+fn compress_app(mode: usize, kb: u32) -> App {
+    let mut app = fixture();
+    let f = std::path::PathBuf::from(format!("/nonexistent/fc-compress-{}.png", uuid::Uuid::new_v4()));
+    app.stack = vec![View::Root, compress_view(vec![f], Some((4000, 3000)), mode, kb)];
+    render(&mut app, vec![]);
+    app
+}
+
+#[test]
+fn compress_view_renders_in_both_themes_with_and_without_size() {
+    let mut app = fixture();
+    let f = vec![std::path::PathBuf::from("/nonexistent/a.png")];
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for size in [None, Some((4000, 3000))] {
+            for mode in 0..3 {
+                app.stack = vec![View::Root, compress_view(f.clone(), size, mode, 500)];
+                render(&mut app, vec![]);
+                render(&mut app, vec![]);
+                assert_eq!(app.view().title(), "Compress Images");
+            }
+        }
+    }
+    // no files at all still draws
+    app.stack = vec![View::Root, compress_view(vec![], None, 0, 500)];
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn compress_escape_goes_back_without_a_job() {
+    let mut app = compress_app(0, 500);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "Escape goes back");
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn compress_enter_with_invalid_input_starts_nothing_and_stays() {
+    // KB 0
+    let mut app = compress_app(0, 0);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }), "an invalid goal keeps the window open");
+    assert!(app.rx.try_recv().is_err(), "no job may start for KB 0");
+    assert!(app.toast.is_some(), "the refusal is explained");
+    // no files
+    let mut app = fixture();
+    app.stack = vec![View::Root, compress_view(vec![], None, 0, 500)];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }));
+    assert!(app.rx.try_recv().is_err());
+    assert!(app.toast.is_some());
+}
+
+#[test]
+fn compress_enter_with_a_valid_goal_starts_the_job_and_goes_back() {
+    let mut app = compress_app(0, 500);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root));
+    // the job runs on a worker and reports through the bus (the file does not exist: a failure toast)
+    let msg = app.rx.recv_timeout(std::time::Duration::from_secs(20)).expect("the job reports");
+    assert!(matches!(msg, Msg::Toast(t) if t.contains("Compress")));
+}
+
+/// Click the KB box of the compress window (position taken from the layout; guarded by an assertion).
+fn click_compress_kb_box(app: &mut App) {
+    let pos = Pos2::new(COMPRESS_KB_BOX.0, COMPRESS_KB_BOX.1);
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(app, vec![Event::PointerMoved(pos)]);
+    render(app, vec![btn(true)]);
+    render(app, vec![btn(false)]);
+    render(app, vec![]);
+}
+
+// centre of the KB box in points (found by probing the layout; breaks if the controls move)
+const COMPRESS_KB_BOX: (f32, f32) = (210.0, 156.0);
+
+// L74 style: Escape while the number box is edited ends the edit but keeps the window.
+#[test]
+fn compress_number_box_keeps_escape_and_enter_while_editing() {
+    let mut app = compress_app(0, 500);
+    click_compress_kb_box(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the KB box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+    let mut app = compress_app(0, 500);
+    click_compress_kb_box(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }), "Enter confirms the number, it must not start the job");
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn convert_view_offers_compress_for_one_or_more_images_only() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-compress-entry-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let rows = |app: &mut App, names: &[&str]| -> Vec<Vec<std::path::PathBuf>> {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.sections()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .filter(|i| i.title == "Compress…")
+            .map(|i| match &i.kind {
+                Kind::Editor(Act::CompressImages(f)) => f.clone(),
+                _ => panic!("wrong kind"),
+            })
+            .collect()
+    };
+    assert_eq!(rows(&mut app, &["a.png"]).len(), 1);
+    assert_eq!(rows(&mut app, &["a.png", "b.png"])[0].len(), 2);
+    assert!(rows(&mut app, &["a.txt"]).is_empty());
+    assert!(rows(&mut app, &["a.png", "b.mp4"]).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_compress_opens_the_window_for_images_and_keeps_other_mappings() {
+    use ferrocast_core::tools::ToolId;
+    let imgs = |n: &[&str]| n.iter().map(std::path::PathBuf::from).collect::<Vec<_>>();
+    match tool_reach(ToolId::Compress, &imgs(&["/x/a.png"])) {
+        ToolReach::Act(Act::CompressImages(f)) => assert_eq!(f.len(), 1),
+        _ => panic!("one image opens the window"),
+    }
+    match tool_reach(ToolId::Compress, &imgs(&["/x/a.png", "/x/b.jpg"])) {
+        ToolReach::Act(Act::CompressImages(f)) => assert_eq!(f.len(), 2),
+        _ => panic!("several images open the window"),
+    }
+    assert!(!matches!(tool_reach(ToolId::Compress, &imgs(&["/x/a.mp4"])), ToolReach::Act(Act::CompressImages(_))));
+    assert!(!matches!(tool_reach(ToolId::Compress, &imgs(&["/x/a.pdf"])), ToolReach::Act(Act::CompressImages(_))));
+}
+
+#[test]
+fn compress_goal_maps_fields_and_rejects_out_of_range() {
+    use ferrocast_core::compress::{Goal, Preset};
+    assert_eq!(compress_goal(0, 500, 40, 1, None, false).unwrap().0, Goal::TargetBytes(500 * 1024));
+    assert_eq!(compress_goal(1, 500, 40, 1, None, false).unwrap().0, Goal::Percent(40));
+    assert_eq!(compress_goal(2, 0, 0, 2, None, false).unwrap().0, Goal::Preset(Preset::Strong));
+    assert_eq!(compress_goal(2, 0, 0, 0, Some(800), true).unwrap().1.max_edge, Some(800));
+    assert_eq!(compress_goal(2, 0, 0, 0, Some(800), false).unwrap().1.max_edge, None);
+    assert_eq!(compress_goal(2, 0, 0, 0, None, true).unwrap().1.max_edge, Some(1600));
+    assert!(compress_goal(0, 0, 40, 1, None, false).is_err());
+    assert!(compress_goal(0, 100_001, 40, 1, None, false).is_err());
+    assert!(compress_goal(1, 500, 0, 1, None, false).is_err());
+    assert!(compress_goal(1, 500, 96, 1, None, false).is_err());
+    assert!(compress_goal(2, 0, 0, 3, None, false).is_err());
+    assert!(compress_goal(2, 0, 0, 0, Some(63), true).is_err());
+    assert!(compress_goal(3, 500, 40, 1, None, false).is_err());
+}
+
+#[test]
+fn compress_with_labels() {
+    use ferrocast_core::compress::{Goal, Preset, Resize};
+    use ferrocast_core::convert::ImageOp;
+    let none = Resize::default();
+    assert_eq!(ImageOp::CompressWith(Goal::TargetBytes(500 * 1024), none).label(), "Compress · 500 KB");
+    assert_eq!(ImageOp::CompressWith(Goal::Percent(40), none).label(), "Compress · 40 % smaller");
+    assert_eq!(
+        ImageOp::CompressWith(Goal::Preset(Preset::Balanced), Resize { max_edge: Some(1600), percent: None }).label(),
+        "Compress · balanced · max 1600 px"
+    );
+    assert_eq!(ImageOp::CompressWith(Goal::Percent(40), none).suffix(), "compressed");
+}
+
+// ---- A6c: audio and video Compress (same window, media mode)
+
+fn media_view(
+    files: Vec<std::path::PathBuf>,
+    video: bool,
+    info: Option<Option<ferrocast_core::compress::MediaInfo>>,
+    mode: usize,
+    kb: u32,
+) -> View {
+    let (loaded, info) = match info {
+        Some(i) => (true, i),
+        None => (false, None),
+    };
+    View::CompressImage {
+        files,
+        orig_bytes: 9_000_000,
+        size: None,
+        mode,
+        kb,
+        percent: 40,
+        preset: 1,
+        max_edge: None,
+        resize: false,
+        media: Some(MediaWin { video, loaded, info }),
+    }
+}
+
+fn some_info(video: bool) -> Option<Option<ferrocast_core::compress::MediaInfo>> {
+    Some(Some(ferrocast_core::compress::MediaInfo { duration: 20.0, has_audio: true, dims: video.then_some((1280, 720)) }))
+}
+
+fn media_app(video: bool, mode: usize, kb: u32) -> App {
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg");
+    let f = std::path::PathBuf::from(format!("/nonexistent/fc-compress-{}.{}", uuid::Uuid::new_v4(), if video { "mp4" } else { "mp3" }));
+    app.stack = vec![View::Root, media_view(vec![f], video, some_info(video), mode, kb)];
+    render(&mut app, vec![]);
+    app
+}
+
+#[test]
+fn compress_media_view_renders_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for video in [false, true] {
+            for info in [None, Some(None), some_info(video)] {
+                for mode in 0..3 {
+                    let f = vec![std::path::PathBuf::from(if video { "/nonexistent/a.mp4" } else { "/nonexistent/a.mp3" })];
+                    // 10 KB over 20 s is an impossible target: the line says so instead of panicking
+                    app.stack = vec![View::Root, media_view(f, video, info, mode, 10)];
+                    render(&mut app, vec![]);
+                    render(&mut app, vec![]);
+                    assert_eq!(app.view().title(), "Compress Audio and Video");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn compress_media_job_maps_goals_and_refuses_the_impossible() {
+    use ferrocast_core::compress::{Goal, MediaInfo, Preset};
+    use ferrocast_core::convert::FileTool;
+    let info = MediaInfo { duration: 20.0, has_audio: true, dims: Some((1280, 720)) };
+    let job = |video, i: Option<&MediaInfo>, mode, kb, resize| compress_media_job(video, 9_000_000, i, mode, kb, 40, 1, Some(320), resize);
+    match job(true, Some(&info), 0, 2048, false) {
+        Ok(FileTool::Compress(Goal::TargetBytes(b), r)) => assert_eq!((b, r.max_edge), (2048 * 1024, None)),
+        other => panic!("{other:?}"),
+    }
+    // resize is passed for video only
+    assert_eq!(
+        job(true, Some(&info), 2, 0, true).map(|t| t
+            == FileTool::Compress(Goal::Preset(Preset::Balanced), ferrocast_core::compress::Resize { max_edge: Some(320), percent: None })),
+        Ok(true)
+    );
+    match job(false, Some(&info), 2, 0, true) {
+        Ok(FileTool::Compress(_, r)) => assert_eq!(r.max_edge, None, "audio ignores resize"),
+        other => panic!("{other:?}"),
+    }
+    // media targets may exceed the 100000 KB of the image window
+    assert!(job(true, Some(&info), 0, 500_000, false).is_ok());
+    assert!(job(true, Some(&info), 0, 5_000_000, false).is_err());
+    assert!(job(true, Some(&info), 0, 0, false).is_err());
+    assert!(job(true, Some(&info), 0, 10, false).unwrap_err().contains("too small"));
+    assert!(job(true, None, 0, 2048, false).is_err(), "not probed yet");
+}
+
+#[test]
+fn compress_media_escape_goes_back_without_a_job() {
+    let mut app = media_app(true, 0, 500);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn compress_media_enter_invalid_starts_nothing() {
+    for (mode, kb) in [(0, 0), (0, 10)] {
+        let mut app = media_app(true, mode, kb);
+        render(&mut app, vec![key_event(Key::Enter)]);
+        assert!(matches!(app.view(), View::CompressImage { .. }), "kb {kb}");
+        assert!(app.rx.try_recv().is_err(), "no job may start for kb {kb}");
+        assert!(app.toast.is_some());
+    }
+    // not probed yet
+    let mut app = fixture();
+    app.tools.ffmpeg = Some("/nonexistent/ffmpeg");
+    app.stack = vec![View::Root, media_view(vec!["/nonexistent/a.mp4".into()], true, None, 2, 0)];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }));
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn compress_media_enter_valid_starts_the_job_and_goes_back() {
+    let mut app = media_app(true, 2, 0);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root));
+    let msg = app.rx.recv_timeout(std::time::Duration::from_secs(20)).expect("the job reports");
+    assert!(matches!(msg, Msg::Toast(t) if t.contains("Compress")));
+}
+
+#[test]
+fn media_probe_result_reaches_the_window() {
+    let mut app = fixture();
+    let f = std::path::PathBuf::from("/nonexistent/a.mp4");
+    app.stack = vec![View::Root, media_view(vec![f.clone()], true, None, 0, 500)];
+    let info = ferrocast_core::compress::MediaInfo { duration: 5.0, has_audio: false, dims: Some((640, 360)) };
+    app.bus.send(Msg::MediaProbed(f, Some(info)));
+    app.drain();
+    match app.view() {
+        View::CompressImage { media: Some(m), .. } => assert_eq!((m.loaded, m.info), (true, Some(info))),
+        _ => panic!("window gone"),
+    }
+}
+
+const COMPRESS_MEDIA_KB_BOX: (f32, f32) = (210.0, 156.0);
+
+// L74 style: Escape and Enter inside the number box of the media window keep it open.
+#[test]
+fn compress_media_number_box_keeps_escape_and_enter_while_editing() {
+    let click = |app: &mut App| {
+        let pos = Pos2::new(COMPRESS_MEDIA_KB_BOX.0, COMPRESS_MEDIA_KB_BOX.1);
+        let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        render(app, vec![Event::PointerMoved(pos)]);
+        render(app, vec![btn(true)]);
+        render(app, vec![btn(false)]);
+        render(app, vec![]);
+    };
+    let mut app = media_app(true, 0, 500);
+    click(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the KB box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+    let mut app = media_app(true, 0, 500);
+    click(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CompressImage { .. }), "Enter confirms the number, it must not start the job");
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn convert_view_offers_compress_for_audio_and_video_and_keeps_images() {
+    let mut app = fixture();
+    let dir = std::env::temp_dir().join(format!("fc-compress-media-entry-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // (media files, image files) offered by the "Compress…" rows
+    let rows = |app: &mut App, names: &[&str]| -> (Vec<usize>, Vec<usize>) {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        let (mut media, mut images) = (vec![], vec![]);
+        for i in app.sections().iter().flat_map(|s| s.items.iter()).filter(|i| i.title == "Compress…") {
+            match &i.kind {
+                Kind::Editor(Act::CompressMedia(f)) => media.push(f.len()),
+                Kind::Editor(Act::CompressImages(f)) => images.push(f.len()),
+                _ => panic!("wrong kind"),
+            }
+        }
+        (media, images)
+    };
+    assert_eq!(rows(&mut app, &["a.mp4"]), (vec![1], vec![]));
+    assert_eq!(rows(&mut app, &["a.mp4", "b.mp4"]), (vec![2], vec![]));
+    assert_eq!(rows(&mut app, &["a.mp3"]), (vec![1], vec![]));
+    assert_eq!(rows(&mut app, &["a.mp3", "b.mp3"]), (vec![2], vec![]));
+    assert_eq!(rows(&mut app, &["a.png", "b.png"]), (vec![], vec![2]));
+    assert_eq!(rows(&mut app, &["a.png"]), (vec![], vec![1]));
+    assert_eq!(rows(&mut app, &["a.mp3", "b.mp4"]), (vec![], vec![]), "mixed families get no Compress row");
+    assert_eq!(rows(&mut app, &["a.txt"]), (vec![], vec![]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_compress_opens_the_media_window_for_audio_and_video() {
+    use ferrocast_core::tools::ToolId;
+    let f = |n: &[&str]| n.iter().map(std::path::PathBuf::from).collect::<Vec<_>>();
+    for names in [&["/x/a.mp4"][..], &["/x/a.mp4", "/x/b.mov"], &["/x/a.mp3"], &["/x/a.wav", "/x/b.flac"]] {
+        assert!(
+            matches!(tool_reach(ToolId::Compress, &f(names)), ToolReach::Act(Act::CompressMedia(v)) if v.len() == names.len()),
+            "{names:?}"
+        );
+    }
+    assert!(!matches!(tool_reach(ToolId::Compress, &f(&["/x/a.mp3", "/x/b.mp4"])), ToolReach::Act(Act::CompressMedia(_))));
+    assert!(!matches!(tool_reach(ToolId::Compress, &f(&["/x/a.pdf"])), ToolReach::Act(Act::CompressMedia(_))), "PDF keeps its mapping");
+    assert!(matches!(tool_reach(ToolId::Compress, &f(&["/x/a.png"])), ToolReach::Act(Act::CompressImages(_))));
+}
+
+#[test]
+fn compress_media_without_ffmpeg_toasts_the_hint_and_opens_nothing() {
+    let mut app = fixture();
+    app.stack = vec![View::Root];
+    app.perform(Act::CompressMedia(vec!["/x/a.mp4".into()]), false);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
+}
+
+// ---- A6d: PDF compress rows and mapping
+#[test]
+fn convert_view_offers_three_compress_pdf_rows_for_one_or_two_pdfs() {
+    use ferrocast_core::convert::FileTool;
+    let mut app = fixture();
+    let dir = tmp_dir("pdfc");
+    let (a, b, t) = (dir.join("a.pdf"), dir.join("b.pdf"), dir.join("a.txt"));
+    for f in [&a, &b, &t] {
+        std::fs::write(f, b"x").unwrap();
+    }
+    for files in [vec![a.clone()], vec![a.clone(), b.clone()]] {
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.invalidate_sections();
+        let items: Vec<_> = app.sections_cached().into_iter().flat_map(|s| s.items).collect();
+        let rows: Vec<_> = items.iter().filter(|i| i.title.starts_with("Compress PDF")).collect();
+        let titles: Vec<_> = rows.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(titles, ["Compress PDF · light", "Compress PDF · balanced", "Compress PDF · strong"]);
+        assert!(rows.iter().all(|r| matches!(&r.kind, Kind::FileTool(_, FileTool::CompressPdf(_)))));
+    }
+    app.stack = vec![View::Root, View::Convert(vec![t])];
+    app.invalidate_sections();
+    assert!(!app.sections_cached().into_iter().flat_map(|s| s.items).any(|i| i.title.starts_with("Compress PDF")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn compress_pdf_rows_say_when_ghostscript_is_missing() {
+    let mut app = fixture();
+    let dir = tmp_dir("pdfg");
+    let a = dir.join("a.pdf");
+    std::fs::write(&a, b"x").unwrap();
+    app.stack = vec![View::Root, View::Convert(vec![a])];
+    app.tools.gs = None;
+    app.invalidate_sections();
+    let items: Vec<_> = app.sections_cached().into_iter().flat_map(|s| s.items).collect();
+    assert!(items.iter().filter(|i| i.title.starts_with("Compress PDF")).all(|i| i.accessory == "Needs Ghostscript"));
+    app.tools.gs = Some("/gs");
+    app.invalidate_sections();
+    let items: Vec<_> = app.sections_cached().into_iter().flat_map(|s| s.items).collect();
+    assert!(items.iter().filter(|i| i.title.starts_with("Compress PDF")).all(|i| i.accessory == "File tool"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_compress_for_pdf_is_balanced_compress_pdf() {
+    use ferrocast_core::compress::Preset;
+    use ferrocast_core::convert::FileTool;
+    use ferrocast_core::tools::ToolId;
+    let p = vec![std::path::PathBuf::from("/nonexistent/a.pdf")];
+    assert!(matches!(tool_reach(ToolId::Compress, &p), ToolReach::File(FileTool::CompressPdf(Preset::Balanced))));
+    let two = vec![p[0].clone(), std::path::PathBuf::from("/nonexistent/b.pdf")];
+    assert!(matches!(tool_reach(ToolId::Compress, &two), ToolReach::File(FileTool::CompressPdf(Preset::Balanced))));
+}
+
+#[test]
+fn pdf_size_report_names_the_outcome() {
+    assert_eq!(crate::services::pdf_size_report(1000, 400), "1000 B → 400 B");
+    assert_eq!(crate::services::pdf_size_report(1000, 1000), "no smaller: the PDF was already compact");
+    assert_eq!(crate::services::pdf_size_report(1000, 1200), "no smaller: the PDF was already compact");
+}
+
+// ---- A7d: Edit metadata window
+fn meta_field(group: ferrocast_core::metaform::Group, key: &str, value: &str, editable: bool) -> ferrocast_core::metaform::Field {
+    ferrocast_core::metaform::Field { group, key: key.into(), value: value.into(), editable }
+}
+
+fn meta_fields() -> Vec<ferrocast_core::metaform::Field> {
+    use ferrocast_core::metaform::Group;
+    vec![
+        meta_field(Group::File, "title", "Hello", true),
+        meta_field(Group::File, "artist", "Me", true),
+        meta_field(Group::File, "major_brand", "isom", false),
+        meta_field(Group::Track { index: 0, kind: "video".into() }, "language", "und", true),
+        meta_field(Group::Track { index: 0, kind: "video".into() }, "handler_name", "VideoHandler", false),
+        meta_field(Group::Track { index: 1, kind: "audio".into() }, "language", "eng", true),
+        meta_field(Group::Chapter(0), "title", "Intro", false),
+    ]
+}
+
+fn meta_view(file: &str, fields: Option<Vec<ferrocast_core::metaform::Field>>, error: Option<&str>) -> View {
+    let kind = if file.ends_with(".pdf") { MetaKind::Pdf } else { MetaKind::Media };
+    View::EditMetadata {
+        file: file.into(),
+        kind,
+        working: fields.clone().unwrap_or_default(),
+        original: fields,
+        remove_all: false,
+        error: error.map(String::from),
+    }
+}
+
+#[test]
+fn edit_metadata_view_renders_every_state_in_both_themes() {
+    let long = "x".repeat(600);
+    let mut many = meta_fields();
+    many[0].value = long;
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        let mut app = fixture();
+        app.ctx.set_theme(theme);
+        for v in [
+            meta_view("/x/a.mp4", None, None),
+            meta_view("/x/a.mp4", Some(meta_fields()), None),
+            meta_view("/x/a.mp4", Some(many.clone()), None),
+            meta_view("/x/a.mp4", None, Some("media inspection timed out or failed")),
+            meta_view("/x/a.gif", Some(meta_fields()), None),
+            meta_view("/x/a.pdf", Some(ferrocast_core::metaform::pdf_fields(&[])), None),
+        ] {
+            app.stack = vec![View::Root, v];
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert!(matches!(app.view(), View::EditMetadata { .. }));
+        }
+    }
+}
+
+#[test]
+fn metadata_loaded_reaches_the_window_and_other_files_are_ignored() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", None, None)];
+    app.bus.send(Msg::MetadataLoaded("/x/other.mp4".into(), Ok(meta_fields())));
+    app.drain();
+    assert!(matches!(app.view(), View::EditMetadata { original: None, error: None, .. }), "a reply for another file is ignored");
+    app.bus.send(Msg::MetadataLoaded("/x/a.mp4".into(), Ok(meta_fields())));
+    app.drain();
+    match app.view() {
+        View::EditMetadata { original: Some(o), working, .. } => assert_eq!((o.len(), working.len()), (7, 7)),
+        _ => panic!("window gone"),
+    }
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", None, None)];
+    app.bus.send(Msg::MetadataLoaded("/x/a.mp4".into(), Err("boom".into())));
+    app.drain();
+    assert!(matches!(app.view(), View::EditMetadata { original: None, error: Some(e), .. } if e == "boom"));
+}
+
+#[test]
+fn edit_metadata_escape_goes_back_without_a_job() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", Some(meta_fields()), None)];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn edit_metadata_enter_without_changes_stays_and_starts_nothing() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", Some(meta_fields()), None)];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::EditMetadata { .. }));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Nothing changed")), "{:?}", app.toast);
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn edit_metadata_enter_with_a_change_saves_and_closes() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", Some(meta_fields()), None)];
+    if let Some(View::EditMetadata { working, .. }) = app.stack.last_mut() {
+        working[0].value = "Changed".into();
+    }
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root), "the save pops the window");
+}
+
+#[test]
+fn edit_metadata_remove_all_counts_as_a_change_for_enter() {
+    let mut app = fixture();
+    let mut v = meta_view("/x/a.mp4", Some(meta_fields()), None);
+    if let View::EditMetadata { remove_all, .. } = &mut v {
+        *remove_all = true;
+    }
+    app.stack = vec![View::Root, v];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root));
+}
+
+fn meta_click_first_box(app: &mut App) {
+    app.stack = vec![View::Root, meta_view("/x/a.mp4", Some(meta_fields()), None)];
+    render(app, vec![]);
+    render(app, vec![]);
+    let r = app.ctx.data(|d| d.get_temp::<Rect>(egui::Id::new("meta-first-edit"))).expect("the window records its first text box");
+    let pos = r.center();
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(app, vec![Event::PointerMoved(pos)]);
+    render(app, vec![btn(true)]);
+    render(app, vec![btn(false)]);
+    render(app, vec![]);
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the first row (layout moved?)");
+}
+
+#[test]
+fn edit_metadata_escape_while_editing_a_box_keeps_the_view() {
+    let mut app = fixture();
+    meta_click_first_box(&mut app);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::EditMetadata { .. }), "Escape ends the edit, it must not close the window");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape closes it");
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn edit_metadata_enter_while_editing_a_box_does_not_save() {
+    let mut app = fixture();
+    meta_click_first_box(&mut app);
+    if let Some(View::EditMetadata { working, .. }) = app.stack.last_mut() {
+        working[0].value = "Changed".into();
+    }
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::EditMetadata { .. }), "Enter belongs to the text box");
+    assert!(app.rx.try_recv().is_err());
+}
+
+#[test]
+fn convert_view_offers_edit_metadata_for_one_audio_video_gif_or_pdf() {
+    let mut app = fixture();
+    let dir = tmp_dir("meta");
+    let mut has = |names: &[&str]| {
+        let files: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        app.stack = vec![View::Root, View::Convert(files)];
+        app.invalidate_sections();
+        app.sections_cached()
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .any(|i| i.title == "Edit metadata…" && matches!(i.kind, Kind::Editor(Act::EditMetadata(_))))
+    };
+    for one in ["a.mp4", "a.mp3", "a.gif", "a.pdf"] {
+        assert!(has(&[one]), "{one}");
+    }
+    assert!(!has(&["a.mp4", "b.mp4"]));
+    assert!(!has(&["a.pdf", "b.pdf"]));
+    assert!(!has(&["a.png"]));
+    assert!(!has(&["a.txt"]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tool_reach_remove_metadata_opens_the_window_for_one_non_image_file() {
+    use ferrocast_core::tools::ToolId;
+    let f = |n: &[&str]| n.iter().map(std::path::PathBuf::from).collect::<Vec<_>>();
+    for one in ["/x/a.mp4", "/x/a.mp3", "/x/a.gif", "/x/a.pdf"] {
+        assert!(matches!(tool_reach(ToolId::RemoveMetadata, &f(&[one])), ToolReach::Act(Act::EditMetadata(_))), "{one}");
+    }
+    assert!(matches!(tool_reach(ToolId::RemoveMetadata, &f(&["/x/a.png"])), ToolReach::Image(_)), "images keep StripMetadata");
+    assert!(!matches!(tool_reach(ToolId::RemoveMetadata, &f(&["/x/a.mp4", "/x/b.mp4"])), ToolReach::Act(Act::EditMetadata(_))));
+    assert!(!matches!(tool_reach(ToolId::RemoveMetadata, &f(&["/x/a.txt"])), ToolReach::Act(Act::EditMetadata(_))));
+}
+
+#[test]
+fn edit_metadata_media_without_ffmpeg_toasts_the_hint_and_opens_nothing() {
+    let mut app = fixture();
+    app.tools.ffmpeg = None;
+    app.perform(Act::EditMetadata("/x/a.mp4".into()), false);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("ffmpeg")), "{:?}", app.toast);
 }

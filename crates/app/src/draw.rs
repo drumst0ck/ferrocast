@@ -112,6 +112,51 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            Ok("compress") => {
+                let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
+                    .unwrap_or_default()
+                    .split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .filter(|p| p.exists())
+                    .collect();
+                let orig_bytes = files.first().and_then(|f| std::fs::metadata(f).ok()).map(|m| m.len()).unwrap_or(0);
+                // audio and video files open the media mode (by file type, or FERROCAST_COMPRESS=media)
+                let family = files.first().map(|f| ferrocast_core::convert::family_of(f));
+                let media_mode = std::env::var("FERROCAST_COMPRESS").as_deref() == Ok("media")
+                    || matches!(family, Some(ferrocast_core::convert::Family::Audio | ferrocast_core::convert::Family::Video));
+                if media_mode {
+                    let info = app.tools.ffmpeg.zip(files.first()).and_then(|(ff, f)| crate::media_tools::media_info(ff, f));
+                    let video = family == Some(ferrocast_core::convert::Family::Video);
+                    let kb = std::env::var("FERROCAST_KB").ok().and_then(|v| v.parse().ok()).unwrap_or(2048);
+                    app.push(View::CompressImage {
+                        files,
+                        orig_bytes,
+                        size: None,
+                        mode: std::env::var("FERROCAST_MODE").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+                        kb,
+                        percent: 40,
+                        preset: 1,
+                        max_edge: None,
+                        resize: false,
+                        media: Some(MediaWin { video, loaded: true, info }),
+                    });
+                } else {
+                    let size = files.first().and_then(|f| services::image_size(f));
+                    app.push(View::CompressImage {
+                        files,
+                        orig_bytes,
+                        size,
+                        mode: 0,
+                        kb: 500,
+                        percent: 40,
+                        preset: 1,
+                        max_edge: None,
+                        resize: false,
+                        media: None,
+                    });
+                }
+            }
             Ok("vspeed") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
@@ -145,7 +190,32 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     }
                 }
             }
-            Ok("vtrim") | Ok("vsnapshot") => {
+            Ok("meta") => {
+                // the tags are read synchronously here (screenshot mode only)
+                let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
+                if let Some(kind) = crate::app::meta_kind(&file) {
+                    let fields = match kind {
+                        crate::app::MetaKind::Media => app.tools.ffmpeg.map(|ff| crate::media_tools::inspect_metadata(ff, &file)),
+                        crate::app::MetaKind::Pdf => {
+                            Some(ferrocast_macos::pdf::metadata(&file).map(|p| ferrocast_core::metaform::pdf_fields(&p)))
+                        }
+                    };
+                    let (original, error) = match fields {
+                        Some(Ok(f)) => (Some(f), None),
+                        Some(Err(e)) => (None, Some(e)),
+                        None => (None, Some("ffmpeg is not installed".to_string())),
+                    };
+                    app.push(View::EditMetadata {
+                        file,
+                        kind,
+                        working: original.clone().unwrap_or_default(),
+                        original,
+                        remove_all: false,
+                        error,
+                    });
+                }
+            }
+            Ok("vtrim") | Ok("vsnapshot") | Ok("vsplit") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
                 if let Some(ff) = app.tools.ffmpeg {
                     if let Some((d, r)) = crate::media_tools::video_info(ff, &file) {
@@ -162,10 +232,18 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                                 d.insert_temp(Id::new("vt-asked"), t.cursor);
                             });
                         }
-                        app.push(if std::env::var("FERROCAST_VIEW").as_deref() == Ok("vsnapshot") {
-                            View::VideoSnapshot { file, trim: Some(t) }
-                        } else {
-                            View::VideoTrim { file, trim: Some(t) }
+                        app.push(match std::env::var("FERROCAST_VIEW").as_deref() {
+                            Ok("vsnapshot") => View::VideoSnapshot { file, trim: Some(t) },
+                            Ok("vsplit") => {
+                                let mut points = vec![];
+                                for at in [0.3, 0.7] {
+                                    let mut c = t;
+                                    c.seek(d * at);
+                                    c.add_cut(&mut points);
+                                }
+                                View::VideoSplit { file, trim: Some(t), points, parts: 2 }
+                            }
+                            _ => View::VideoTrim { file, trim: Some(t) },
                         });
                     }
                 }
@@ -273,6 +351,21 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     );
                     app.push(View::Annotate { file, size, doc, tool: Tool::Arrow, color: 0, sel: Some(1) });
                 }
+            }
+            Ok("reorder") => {
+                let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
+                    .unwrap_or_default()
+                    .split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                let purpose = match std::env::var("FERROCAST_REORDER").as_deref() {
+                    Ok("audio") => ReorderPurpose::MergeAudio,
+                    Ok("video") => ReorderPurpose::JoinVideos,
+                    Ok("images") => ReorderPurpose::CreatePdf,
+                    _ => ReorderPurpose::MergePdf,
+                };
+                app.push(View::Reorder { purpose, files, cursor: 0 });
             }
             Ok("organize") => {
                 let file = std::path::PathBuf::from(std::env::var("FERROCAST_FILES").unwrap_or_default());
@@ -450,7 +543,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
-            || (matches!(view, View::CropImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. }) && kbd_edit);
+            || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
@@ -563,6 +656,47 @@ impl App {
             return true;
         }
         match self.view().clone() {
+            View::CompressImage { files, orig_bytes, mode, kb, percent, preset, max_edge, resize, media: Some(m), .. } if k.enter => {
+                match compress_media_job(m.video, orig_bytes, m.info.as_ref(), mode, kb, percent, preset, max_edge, resize) {
+                    _ if files.is_empty() => self.toast("Compress: no files selected"),
+                    Err(e) => self.toast(e),
+                    Ok(tool) => match self.tools.ffmpeg {
+                        None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                        Some(_) => {
+                            self.toast(format!("{}…", tool.label()));
+                            services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
+                            self.pop();
+                        }
+                    },
+                }
+                true
+            }
+            View::CompressImage { files, mode, kb, percent, preset, max_edge, resize, .. } if k.enter => {
+                match compress_goal(mode, kb, percent, preset, max_edge, resize) {
+                    _ if files.is_empty() => self.toast("Compress: no images selected"),
+                    Err(e) => self.toast(e),
+                    Ok((goal, r)) => {
+                        let op = ferrocast_core::convert::ImageOp::CompressWith(goal, r);
+                        self.toast(format!("{}…", op.label()));
+                        services::image_op_files(files, op, self.bus.clone());
+                        self.pop();
+                    }
+                }
+                true
+            }
+            View::Reorder { purpose, files, .. } if k.enter => {
+                if files.len() < 2 {
+                    self.toast("Choose order: at least two files are needed");
+                } else {
+                    self.toast("Working…");
+                    match reorder_job(purpose, files) {
+                        ReorderJob::Tool(tool, files) => services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone()),
+                        ReorderJob::Image(op, files) => services::image_op_files(files, op, self.bus.clone()),
+                    }
+                    self.pop();
+                }
+                true
+            }
             View::PdfOrganize { file, n, plan } if k.enter => {
                 if plan.is_identity(n) {
                     self.toast("Nothing changed: reorder, rotate, duplicate or remove a page first");
@@ -572,6 +706,24 @@ impl App {
                         vec![file],
                         ferrocast_core::convert::FileTool::OrganizePdf(plan.selection()),
                         None,
+                        self.bus.clone(),
+                    );
+                    self.pop();
+                }
+                true
+            }
+            View::EditMetadata { file, original: Some(orig), working, remove_all, .. } if k.enter => {
+                // GIFs cannot store tags: the executor refuses edits, so only "remove all" is offered
+                let gif = ferrocast_core::convert::ext(&file) == "gif";
+                let edits = if gif { vec![] } else { ferrocast_core::metaform::build_edits(&orig, &working) };
+                if edits.is_empty() && !remove_all {
+                    self.toast("Nothing changed");
+                } else {
+                    self.toast(if remove_all { "Removing metadata…" } else { "Saving metadata…" });
+                    services::file_tool_files(
+                        vec![file],
+                        ferrocast_core::convert::FileTool::EditMetadata(edits, remove_all),
+                        self.tools.ffmpeg,
                         self.bus.clone(),
                     );
                     self.pop();
@@ -634,6 +786,18 @@ impl App {
                     self.tools.ffmpeg,
                     self.bus.clone(),
                 );
+                true
+            }
+            View::VideoSplit { file, trim: Some(t), points, parts } if k.enter => {
+                match split_job(t.duration, &points, parts) {
+                    Err(m) => self.toast(m),
+                    Ok(_) if self.tools.ffmpeg.is_none() => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
+                    Ok(tool) => {
+                        self.toast("Splitting…");
+                        services::file_tool_files(vec![file], tool, self.tools.ffmpeg, self.bus.clone());
+                        self.pop();
+                    }
+                }
                 true
             }
             View::VideoTrim { file, trim: Some(t) } if k.enter => {
@@ -1693,6 +1857,256 @@ impl App {
             );
         }
     }
+    /// Compress window: goal (size, percent or preset), optional resize and a rough size estimate.
+    /// `state` is (mode, kb, percent, preset, max edge, resize).
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn draw_compress(
+        &mut self,
+        ui: &mut Ui,
+        area_in: Rect,
+        pal: &Palette,
+        files: &[PathBuf],
+        orig_bytes: u64,
+        size: Option<(u32, u32)>,
+        state: (usize, u32, u8, usize, Option<u32>, bool),
+        media: Option<&MediaWin>,
+    ) {
+        use ferrocast_core::compress::estimate_bytes;
+        let ctx = ui.ctx().clone();
+        let (mut mode, mut kb, mut percent, mut preset, max_edge, mut resize) = state;
+        let mut edge = max_edge.unwrap_or(1600);
+        ui.scope_builder(UiBuilder::new().max_rect(Rect::from_center_size(area_in.center(), Vec2::new(520.0, 300.0))), |ui| {
+            ui.spacing_mut().item_spacing.y = 12.0;
+            let first = files.first().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let dims = match media {
+                None => size.map(|(w, h)| format!(" · {w}×{h} px")).unwrap_or_else(|| " · reading size…".into()),
+                Some(m) if !m.loaded => " · reading the file…".into(),
+                Some(MediaWin { info: None, .. }) => " · could not read the file".into(),
+                Some(MediaWin { info: Some(i), video, .. }) => {
+                    let px = i.dims.filter(|_| *video).map(|(w, h)| format!(" · {w}×{h} px")).unwrap_or_default();
+                    format!(
+                        " · {}{px}{}",
+                        ferrocast_core::convert::format_secs(i.duration),
+                        if i.has_audio || !*video { "" } else { " · no sound" }
+                    )
+                }
+            };
+            let more = if files.len() > 1 { format!(" and {} more", files.len() - 1) } else { String::new() };
+            ui.label(RichText::new(format!("{first}{more}{dims}")).size(12.5).color(pal.sub));
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut mode, 0, "Size");
+                ui.selectable_value(&mut mode, 1, "Percent");
+                ui.selectable_value(&mut mode, 2, "Preset");
+            });
+            ui.horizontal(|ui| match mode {
+                0 => {
+                    ui.label("Target size");
+                    let max_kb = if media.is_some() { crate::app::MEDIA_MAX_KB } else { 100_000 };
+                    ui.add(egui::DragValue::new(&mut kb).range(10..=max_kb).clamp_existing_to_range(false).speed(10.0).suffix(" KB"));
+                }
+                1 => {
+                    ui.label("Make it");
+                    ui.add(egui::DragValue::new(&mut percent).range(1..=95).clamp_existing_to_range(false).speed(0.5).suffix(" % smaller"));
+                }
+                _ => {
+                    for (i, n) in ["Light", "Balanced", "Strong"].into_iter().enumerate() {
+                        ui.selectable_value(&mut preset, i, n);
+                    }
+                }
+            });
+            // an audio file has nothing to resize
+            if media.is_none_or(|m| m.video) {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut resize, "Resize while compressing");
+                    ui.add_enabled(
+                        resize,
+                        egui::DragValue::new(&mut edge)
+                            .range(64..=16_000)
+                            .clamp_existing_to_range(false)
+                            .speed(10.0)
+                            .prefix("longest edge ")
+                            .suffix(" px"),
+                    );
+                });
+            }
+            let line = if let Some(m) = media {
+                // bitrate arithmetic only (no encoding): what Enter would use, or why it cannot run
+                match (&m.info, compress_media_job(m.video, orig_bytes, m.info.as_ref(), mode, kb, percent, preset, Some(edge), resize)) {
+                    (None, _) => {
+                        if m.loaded {
+                            "The file could not be read".to_string()
+                        } else {
+                            "Reading the file…".to_string()
+                        }
+                    }
+                    (Some(_), Err(e)) => e.trim_start_matches("Compress: ").to_string(),
+                    (Some(i), Ok(ferrocast_core::convert::FileTool::Compress(goal, r))) => {
+                        ferrocast_core::compress::plan(m.video, orig_bytes, i, goal, &r)
+                            .map(|p| ferrocast_core::compress::describe(&p))
+                            .unwrap_or_default()
+                    }
+                    _ => String::new(),
+                }
+            } else {
+                match compress_goal(mode, kb, percent, preset, Some(edge), resize) {
+                    Ok((goal, _)) if orig_bytes > 0 => {
+                        let est = estimate_bytes(orig_bytes, goal);
+                        let kbs = |b: u64| b.div_ceil(1024);
+                        let share = est * 100 / orig_bytes;
+                        let note = if resize { " · resizing may make it smaller" } else { "" };
+                        format!("≈ about {} KB ({share} % of {} KB) · rough estimate, not measured{note}", kbs(est), kbs(orig_bytes))
+                    }
+                    Ok(_) => "Size of the original unknown".to_string(),
+                    Err(_) => "Enter a value in range to see an estimate".to_string(),
+                }
+            };
+            ui.label(RichText::new(line).size(18.0).color(pal.text));
+            let note = match media {
+                None => "The copy is a JPEG next to the original; the original is never changed.",
+                Some(m) if m.video => "The copy is an MP4 next to the original; the original is never changed.",
+                Some(_) => "The copy keeps mp3, m4a, ogg or opus and is an m4a otherwise; the original is never changed.",
+            };
+            ui.label(RichText::new(note).size(12.0).color(pal.sub));
+        });
+        let edge_changed = edge != max_edge.unwrap_or(1600);
+        if (mode, kb, percent, preset, resize) != (state.0, state.1, state.2, state.3, state.5) || edge_changed {
+            if let Some(View::CompressImage { mode: m, kb: k, percent: p, preset: pr, max_edge: e, resize: r, .. }) = self.stack.last_mut()
+            {
+                (*m, *k, *p, *pr, *r) = (mode, kb, percent, preset, resize);
+                if edge_changed {
+                    *e = Some(edge);
+                }
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "pick a goal · ↵ save compressed copies · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
+    /// Edit Metadata window: rows grouped by file, track and chapter, a text box per editable row
+    /// with a "clear" button, and a "Remove all metadata" switch that dims the rows.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_edit_metadata(
+        &mut self,
+        ui: &mut Ui,
+        area: Rect,
+        pal: &Palette,
+        file: &std::path::Path,
+        kind: crate::app::MetaKind,
+        original: Option<Vec<ferrocast_core::metaform::Field>>,
+        mut working: Vec<ferrocast_core::metaform::Field>,
+        mut remove_all: bool,
+        error: Option<String>,
+    ) {
+        use ferrocast_core::metaform::{build_edits, Group};
+        let ctx = ui.ctx().clone();
+        let Some(original) = original else {
+            let (msg, col) = match &error {
+                Some(e) => (format!("Could not read the metadata: {e}"), pal.danger),
+                None => ("Reading the metadata…".to_string(), pal.sub),
+            };
+            ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, msg, FontId::proportional(15.0), col);
+            return;
+        };
+        let gif = ferrocast_core::convert::ext(file) == "gif";
+        let edits = if gif { vec![] } else { build_edits(&original, &working) };
+        let (before, before_all) = (working.clone(), remove_all);
+        let inner = area.shrink2(Vec2::new(26.0, 14.0));
+        ui.scope_builder(UiBuilder::new().max_rect(inner), |ui| {
+            ui.set_clip_rect(inner.expand(2.0));
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut remove_all, "Remove all metadata");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let summary = if remove_all {
+                        "all tags and chapters will be removed".to_string()
+                    } else {
+                        match edits.len() {
+                            1 => "1 change".to_string(),
+                            n => format!("{n} changes"),
+                        }
+                    };
+                    ui.label(RichText::new(summary).size(12.5).color(if edits.is_empty() && !remove_all { pal.sub } else { pal.text }));
+                });
+            });
+            if remove_all {
+                ui.label(
+                    RichText::new("Container brands and some muxer tags stay: the format itself writes them.").size(11.5).color(pal.sub),
+                );
+            }
+            if gif {
+                ui.label(RichText::new("GIF files cannot store tags: you can only remove all metadata.").size(11.5).color(pal.sub));
+            }
+            if kind == crate::app::MetaKind::Pdf {
+                ui.label(RichText::new("Creator and Producer are shown but not written back.").size(11.5).color(pal.sub));
+            }
+            ui.add_space(4.0);
+            let list_h = (inner.max.y - ui.cursor().min.y - 22.0).max(40.0);
+            let mut first_edit = true;
+            egui::ScrollArea::vertical().id_salt("meta-rows").max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
+                ui.add_enabled_ui(!remove_all, |ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    let mut last: Option<Group> = None;
+                    if working.is_empty() {
+                        ui.label(RichText::new("This file has no metadata.").size(13.0).color(pal.sub));
+                    }
+                    for f in working.iter_mut() {
+                        if last.as_ref() != Some(&f.group) {
+                            let head = match &f.group {
+                                Group::File => "File".to_string(),
+                                Group::Track { index, kind } => format!("Track {} · {kind}", index + 1),
+                                Group::Chapter(i) => format!("Chapter {}", i + 1),
+                            };
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(head).size(13.0).strong().color(pal.text));
+                            last = Some(f.group.clone());
+                        }
+                        ui.horizontal(|ui| {
+                            let (kr, _) = ui.allocate_exact_size(Vec2::new(130.0, 22.0), egui::Sense::hover());
+                            ui.painter().text(
+                                kr.left_center(),
+                                egui::Align2::LEFT_CENTER,
+                                elide(ui.painter(), &f.key, FontId::proportional(12.5), 124.0),
+                                FontId::proportional(12.5),
+                                pal.sub,
+                            );
+                            if f.editable && !gif {
+                                let r = ui.add(TextEdit::singleline(&mut f.value).desired_width(300.0).font(FontId::proportional(13.0)));
+                                if first_edit {
+                                    first_edit = false;
+                                    ctx.data_mut(|d| d.insert_temp(Id::new("meta-first-edit"), r.rect));
+                                }
+                                if small_btn(ui, pal, "clear") {
+                                    f.value.clear();
+                                }
+                            } else {
+                                let shown = elide(ui.painter(), &f.value, FontId::proportional(13.0), 380.0);
+                                ui.label(RichText::new(shown).size(13.0).color(pal.sub));
+                            }
+                        });
+                    }
+                });
+            });
+        });
+        if working != before || remove_all != before_all {
+            if let Some(View::EditMetadata { working: w, remove_all: r, .. }) = self.stack.last_mut() {
+                (*w, *r) = (working, remove_all);
+            }
+            ctx.request_repaint();
+        }
+        ui.painter().text(
+            Pos2::new(area.center().x, area.max.y - 14.0),
+            egui::Align2::CENTER_CENTER,
+            "edit a value or clear it · ↵ save a copy · esc cancel",
+            FontId::proportional(11.5),
+            pal.sub,
+        );
+    }
+
     /// Speed window: presets, a logarithmic slider and the resulting length. Pitch is preserved.
     fn draw_video_speed(&mut self, ui: &mut Ui, area_in: Rect, pal: &Palette, duration: Option<f64>, factor: f64) {
         use ferrocast_core::videoplan::{sped_duration, SPEED_MAX, SPEED_MIN};
@@ -1749,9 +2163,27 @@ impl App {
             return;
         };
         let snapshot = matches!(self.view(), View::VideoSnapshot { .. });
+        let (split, points0, parts0) = match self.view() {
+            View::VideoSplit { points, parts, .. } => (true, points.clone(), *parts),
+            _ => (false, vec![], 2),
+        };
+        let (mut points, mut parts) = (points0.clone(), parts0);
         let mut t = before;
+        // a number box being edited keeps the letters, arrows and Backspace
+        let editing = split && ctx.egui_wants_keyboard_input();
         ctx.input_mut(|i| {
             let none = Modifiers::NONE;
+            if editing {
+                return;
+            }
+            if split {
+                if i.consume_key(none, Key::M) {
+                    t.add_cut(&mut points);
+                }
+                if i.consume_key(none, Key::Backspace) {
+                    points.pop();
+                }
+            }
             for (key, frames) in [(Key::ArrowLeft, -1i64), (Key::ArrowRight, 1)] {
                 if i.consume_key(Modifiers::SHIFT, key) {
                     t.step_secs(frames as f64);
@@ -1779,10 +2211,20 @@ impl App {
         }
         let x_of = |s: f64| bar.min.x + (s / t.duration) as f32 * bar.width();
         ui.painter().rect_filled(bar, 6.0, pal.field);
-        let sel = Rect::from_min_max(Pos2::new(x_of(t.start), bar.min.y), Pos2::new(x_of(t.end), bar.max.y));
-        ui.painter().rect_filled(sel, 6.0, pal.accent.gamma_multiply(0.45));
-        for m in [t.start, t.end] {
-            ui.painter().rect_filled(Rect::from_center_size(Pos2::new(x_of(m), bar.center().y), Vec2::new(4.0, 34.0)), 2.0, pal.accent);
+        if split {
+            for p in &points {
+                ui.painter().rect_filled(
+                    Rect::from_center_size(Pos2::new(x_of(*p), bar.center().y), Vec2::new(3.0, 34.0)),
+                    1.5,
+                    pal.accent,
+                );
+            }
+        } else {
+            let sel = Rect::from_min_max(Pos2::new(x_of(t.start), bar.min.y), Pos2::new(x_of(t.end), bar.max.y));
+            ui.painter().rect_filled(sel, 6.0, pal.accent.gamma_multiply(0.45));
+            for m in [t.start, t.end] {
+                ui.painter().rect_filled(Rect::from_center_size(Pos2::new(x_of(m), bar.center().y), Vec2::new(4.0, 34.0)), 2.0, pal.accent);
+            }
         }
         ui.painter().rect_filled(Rect::from_center_size(Pos2::new(x_of(t.cursor), bar.center().y), Vec2::new(2.0, 34.0)), 1.0, pal.text);
         // newest frame wanted: ask for it unless one is still being extracted
@@ -1814,6 +2256,8 @@ impl App {
             egui::Align2::LEFT_CENTER,
             if snapshot {
                 format!("at {} · PNG saves at original resolution", t.label(t.cursor))
+            } else if split {
+                format!("at {}   ·   {} cut{}", t.label(t.cursor), points.len(), if points.len() == 1 { "" } else { "s" })
             } else {
                 format!(
                     "at {}   ·   start {}   ·   end {}   ·   clip {:.2} s",
@@ -1831,15 +2275,41 @@ impl App {
             egui::Align2::CENTER_CENTER,
             if snapshot {
                 "←/→ frame · ⇧←/→ second · click to jump · ↵ save full-resolution PNG · esc cancel"
+            } else if split {
+                "←/→ frame · ⇧←/→ second · click the bar to jump · M cut here · ⌫ remove last · ↵ split · esc cancel"
             } else {
                 "←/→ frame · ⇧←/→ second · click the bar to jump · I start · O end · ↵ save the exact cut · esc cancel"
             },
             FontId::proportional(11.5),
             pal.sub,
         );
-        if t != before {
-            if let Some(View::VideoTrim { trim, .. } | View::VideoSnapshot { trim, .. }) = self.stack.last_mut() {
+        if split {
+            let clips = ferrocast_core::videoplan::split_ranges(t.duration, &points, parts).len();
+            let row = Rect::from_min_size(Pos2::new(bar.min.x, bar.max.y + 8.0), Vec2::new(bar.width(), 24.0));
+            ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{clips} clip{}", if clips == 1 { "" } else { "s" })).size(13.0).color(pal.text));
+                    ui.label(RichText::new("·  Equal parts").size(12.5).color(pal.sub));
+                    ui.add(egui::DragValue::new(&mut parts).range(2..=50));
+                    ui.label(
+                        RichText::new(if points.is_empty() { "(used while there are no cuts)" } else { "(ignored: cuts are set)" })
+                            .size(11.5)
+                            .color(pal.sub),
+                    );
+                    if ui.add_enabled(!points.is_empty(), egui::Button::new("Clear")).clicked() {
+                        points.clear();
+                    }
+                });
+            });
+        }
+        if t != before || points != points0 || parts != parts0 {
+            if let Some(View::VideoTrim { trim, .. } | View::VideoSnapshot { trim, .. } | View::VideoSplit { trim, .. }) =
+                self.stack.last_mut()
+            {
                 *trim = Some(t);
+            }
+            if let Some(View::VideoSplit { points: p, parts: n, .. }) = self.stack.last_mut() {
+                (*p, *n) = (points, parts.clamp(2, 50));
             }
             ctx.request_repaint();
         }
@@ -2648,6 +3118,120 @@ impl App {
         }
     }
 
+    /// Ordered list of files: ↑/↓ choose, ⌘↑/⌘↓ (or the row buttons) move, ↵ runs.
+    fn draw_reorder(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, purpose: ReorderPurpose, files: Vec<PathBuf>, cursor: usize) {
+        use ferrocast_core::reorder::{move_down, move_up};
+        let ctx = ui.ctx().clone();
+        let (mut files, mut cursor) = (files, cursor);
+        let before = (files.clone(), cursor);
+        let last = files.len().saturating_sub(1);
+        cursor = cursor.min(last);
+        ctx.input_mut(|i| {
+            // ⌘ variants first: egui matches Modifiers::NONE even when other modifiers are held
+            if i.consume_key(CMD, Key::ArrowUp) {
+                if let Some(n) = move_up(&mut files, cursor) {
+                    cursor = n;
+                }
+            } else if i.consume_key(CMD, Key::ArrowDown) {
+                if let Some(n) = move_down(&mut files, cursor) {
+                    cursor = n;
+                }
+            } else if i.consume_key(Modifiers::NONE, Key::ArrowUp) {
+                cursor = cursor.saturating_sub(1);
+            } else if i.consume_key(Modifiers::NONE, Key::ArrowDown) {
+                cursor = (cursor + 1).min(last);
+            }
+        });
+        let mut click: Option<(usize, i8)> = None; // (row, 0 select / -1 up / 1 down)
+        ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(Vec2::new(16.0, 12.0))), |ui| {
+            ui.label(RichText::new(format!("{} files · first to last", files.len())).size(13.0).color(pal.text));
+            let hint = match purpose {
+                ReorderPurpose::JoinVideos => "First clip sets the canvas · ⌘↑/⌘↓ move · ↵ join",
+                ReorderPurpose::CreatePdf => "One page per picture · ⌘↑/⌘↓ move · ↵ create PDF",
+                _ => "⌘↑/⌘↓ move · ↵ merge",
+            };
+            ui.label(RichText::new(hint).size(12.0).color(pal.sub));
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical().id_salt("reorder-list").auto_shrink([false, false]).show(ui, |ui| {
+                for (pos, f) in files.iter().enumerate() {
+                    let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 44.0), egui::Sense::click());
+                    let on = pos == cursor;
+                    ui.painter().rect_filled(r, 8.0, if on { pal.sel } else { pal.field });
+                    if on {
+                        ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+                        ui.scroll_to_rect(r, None);
+                    }
+                    if resp.clicked() {
+                        click = Some((pos, 0));
+                    }
+                    ui.painter().text(
+                        Pos2::new(r.min.x + 22.0, r.center().y),
+                        egui::Align2::CENTER_CENTER,
+                        (pos + 1).to_string(),
+                        FontId::proportional(14.0),
+                        pal.sub,
+                    );
+                    let text_rect = Rect::from_min_max(Pos2::new(r.min.x + 42.0, r.min.y), Pos2::new(r.max.x - 76.0, r.max.y));
+                    let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.display().to_string());
+                    let kind = f.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
+                    let p = ui.painter().with_clip_rect(text_rect);
+                    p.text(
+                        Pos2::new(text_rect.min.x, r.center().y - 8.0),
+                        egui::Align2::LEFT_CENTER,
+                        name,
+                        FontId::proportional(14.0),
+                        pal.text,
+                    );
+                    p.text(
+                        Pos2::new(text_rect.min.x, r.center().y + 10.0),
+                        egui::Align2::LEFT_CENTER,
+                        kind,
+                        FontId::proportional(11.5),
+                        pal.sub,
+                    );
+                    for (b, (glyph, dir)) in [("↑", -1i8), ("↓", 1i8)].into_iter().enumerate() {
+                        let br = Rect::from_center_size(Pos2::new(r.max.x - 50.0 + b as f32 * 32.0, r.center().y), Vec2::new(28.0, 28.0));
+                        let enabled = if dir < 0 { pos > 0 } else { pos < last };
+                        let bresp = ui.interact(br, Id::new(("reorder-btn", pos, dir)), egui::Sense::click());
+                        let fill = if bresp.hovered() && enabled { pal.sel } else { pal.bg };
+                        ui.painter().rect_filled(br, 6.0, fill);
+                        ui.painter().text(
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            glyph,
+                            FontId::proportional(14.0),
+                            if enabled { pal.text } else { pal.sub.gamma_multiply(0.4) },
+                        );
+                        if bresp.clicked() && enabled {
+                            click = Some((pos, dir));
+                        }
+                    }
+                }
+            });
+        });
+        match click {
+            Some((pos, 0)) => cursor = pos,
+            Some((pos, -1)) => {
+                if let Some(n) = move_up(&mut files, pos) {
+                    cursor = n;
+                }
+            }
+            Some((pos, _)) => {
+                if let Some(n) = move_down(&mut files, pos) {
+                    cursor = n;
+                }
+            }
+            None => {}
+        }
+        if (&files, cursor) != (&before.0, before.1) {
+            if let Some(View::Reorder { files: f, cursor: c, .. }) = self.stack.last_mut() {
+                *f = files;
+                *c = cursor;
+            }
+            ctx.request_repaint();
+        }
+    }
+
     /// Strip of page thumbnails with keyboard editing; the plan lives in the view on the stack.
     fn draw_pdf_organizer(
         &mut self,
@@ -2815,13 +3399,16 @@ impl App {
             View::VideoSpeed { duration, factor, .. } => {
                 self.draw_video_speed(ui, rect, pal, duration, factor);
             }
+            View::EditMetadata { file, kind, original, working, remove_all, error } => {
+                self.draw_edit_metadata(ui, rect, pal, &file, kind, original, working, remove_all, error);
+            }
             View::VideoCrop { size: Some(size), rect: crop, aspect, .. } => {
                 self.draw_crop(ui, rect, pal, size, crop, aspect);
             }
             View::VideoCrop { .. } => {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Reading the video…", FontId::proportional(16.0), pal.sub);
             }
-            View::VideoTrim { file, trim } | View::VideoSnapshot { file, trim } => {
+            View::VideoTrim { file, trim } | View::VideoSnapshot { file, trim } | View::VideoSplit { file, trim, .. } => {
                 self.draw_video_trim(ui, rect, pal, &file, trim);
             }
             View::CollageImage { files, opts, color } => {
@@ -2836,6 +3423,9 @@ impl App {
             View::CropImage { size, rect: crop, aspect, .. } => {
                 self.draw_crop(ui, rect, pal, size, crop, aspect);
             }
+            View::CompressImage { files, orig_bytes, size, mode, kb, percent, preset, max_edge, resize, media } => {
+                self.draw_compress(ui, rect, pal, &files, orig_bytes, size, (mode, kb, percent, preset, max_edge, resize), media.as_ref());
+            }
             View::EditPhoto { size, opts, .. } => {
                 self.draw_edit_photo(ui, rect, pal, size, opts);
             }
@@ -2844,6 +3434,9 @@ impl App {
             }
             View::PdfOrganize { file, n, plan } => {
                 self.draw_pdf_organizer(ui, rect, pal, &file, n, plan);
+            }
+            View::Reorder { purpose, files, cursor } => {
+                self.draw_reorder(ui, rect, pal, purpose, files, cursor);
             }
             _ => {
                 let trusted = windows::accessibility_trusted(false);

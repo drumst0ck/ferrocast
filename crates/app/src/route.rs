@@ -482,3 +482,60 @@ fn gunzip_into(f: &Path, dir: &Path) -> Result<(), String> {
     let out = std::fs::File::create(dir.join(name)).map_err(|e| e.to_string())?;
     run_io(Command::new("/usr/bin/gunzip").arg("-c").arg(f), EXTRACT_SECS, Stdio::from(out), false).map(|_| ())
 }
+
+/// Compress each PDF with Ghostscript at the preset's `-dPDFSETTINGS`. Output goes next to the
+/// original (`name compressed.pdf`, ` 2` on collision, never overwritten); the original is untouched.
+/// A result that is not smaller is still kept (the caller reports it). Nothing is left behind on failure.
+pub(crate) fn compress_pdf(gs: Option<&str>, files: &[PathBuf], preset: ferrocast_core::compress::Preset) -> (Vec<PathBuf>, Vec<String>) {
+    let (mut outs, mut errs) = (vec![], vec![]);
+    let Some(gs) = gs else { return (outs, vec![ferrocast_core::convert::GS_HINT.to_string()]) };
+    for f in files.iter().filter(|f| ext(f) == "pdf") {
+        match compress_one_pdf(gs, f, preset) {
+            Ok(p) => outs.push(p),
+            Err(e) => errs.push(format!("{}: {e}", f.display())),
+        }
+    }
+    if files.iter().all(|f| ext(f) != "pdf") {
+        errs.push("this tool requires PDF files".into());
+    }
+    (outs, errs)
+}
+
+fn compress_one_pdf(gs: &str, f: &Path, preset: ferrocast_core::compress::Preset) -> Result<PathBuf, String> {
+    let sc = scratch()?;
+    let result = (|| {
+        let staged = sc.join("out.pdf");
+        run_limited(
+            Command::new(gs)
+                .args(["-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=pdfwrite"])
+                .arg(format!("-dPDFSETTINGS={}", preset.pdf_setting()))
+                .arg(format!("-sOutputFile={}", staged.display()))
+                .arg("-f")
+                .arg(f),
+            300,
+        )?;
+        let bytes = std::fs::read(&staged).map_err(|e| e.to_string())?;
+        if !bytes.starts_with(b"%PDF") {
+            return Err("Ghostscript did not produce a PDF".into());
+        }
+        use std::io::Write;
+        let suffix = ferrocast_core::convert::FileTool::CompressPdf(preset).suffix();
+        let mut tries = 0;
+        loop {
+            let dest = ferrocast_core::convert::output_with_suffix(f, &suffix, "pdf", |p| p.exists());
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
+                Ok(mut d) => {
+                    if let Err(e) = d.write_all(&bytes).and_then(|_| d.flush()) {
+                        let _ = std::fs::remove_file(&dest);
+                        return Err(e.to_string());
+                    }
+                    return Ok(dest);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries < 20 => tries += 1,
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    })();
+    let _ = std::fs::remove_dir_all(&sc);
+    result
+}
