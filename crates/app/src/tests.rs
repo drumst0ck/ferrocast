@@ -384,6 +384,331 @@ fn convert_view_offers_the_editors_for_one_video_pdf_and_image() {
 }
 
 #[test]
+fn wheel_renders_for_any_segment_count_in_both_themes() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    let files = vec![std::path::PathBuf::from("/nonexistent/a.png")];
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for kind in [WheelKind::Convert, WheelKind::Tools, WheelKind::Actions] {
+            for n in [0usize, 1, 8, 9, 12] {
+                let segs: Vec<WheelSeg> = (0..n)
+                    .map(|i| WheelSeg { label: format!("Option {i}"), symbol: "sf:photo", needs: None, pick: WheelPick::Act(Act::Run) })
+                    .collect();
+                for sel in [None, n.checked_sub(1)] {
+                    app.stack = vec![
+                        View::Root,
+                        View::Wheel { files: files.clone(), center: Pos2::new(-9999.0, -9999.0), segs: segs.clone(), kind, sel },
+                    ];
+                    render(&mut app, vec![]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn actions_wheel_has_exactly_the_six_actions_in_order() {
+    use ferrocast_core::wheel::WheelKind;
+    let app = fixture();
+    let one = vec![std::path::PathBuf::from("/nonexistent/a.png")];
+    let many = vec![one[0].clone(), std::path::PathBuf::from("/nonexistent/b.png")];
+    let folder = vec![std::env::temp_dir()];
+    for files in [one, many, folder] {
+        let labels: Vec<String> = app.wheel_segments(WheelKind::Actions, &files).into_iter().map(|s| s.label).collect();
+        assert_eq!(labels, ["AirDrop", "Float", "Copy", "Move to…", "Copy Path", "Terminal"], "{files:?}");
+    }
+    assert!(app.wheel_segments(WheelKind::Actions, &[]).is_empty());
+}
+
+#[test]
+fn convert_wheel_shows_every_output_and_marks_missing_tools() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    app.tools = Default::default(); // no ffmpeg, LibreOffice, cwebp or unrar
+    let dir = std::env::temp_dir().join(format!("fc-cw-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mk = |name: &str| {
+        let p = dir.join(name);
+        std::fs::write(&p, b"x").unwrap();
+        vec![p]
+    };
+    // a PDF has nine outputs: none may be dropped
+    let pdf = app.wheel_segments(WheelKind::Convert, &mk("a.pdf"));
+    assert_eq!(pdf.len(), 9, "{:?}", pdf.iter().map(|s| s.label.clone()).collect::<Vec<_>>());
+    // without ffmpeg every video output is still on the ring, marked as needing it
+    let mp4 = app.wheel_segments(WheelKind::Convert, &mk("a.mp4"));
+    assert!(mp4.len() >= 7, "{}", mp4.len());
+    // MOV is converted with a built-in macOS tool; every other video output needs ffmpeg
+    assert!(mp4.iter().filter(|s| s.label != "MOV").all(|s| s.needs.is_some_and(|n| n.contains("ffmpeg"))));
+    assert!(mp4.iter().any(|s| s.label == "MOV" && s.needs.is_none()));
+    // an image to PNG needs nothing
+    let png = app.wheel_segments(WheelKind::Convert, &mk("a.jpg"));
+    assert!(png.iter().any(|s| s.label.contains("PNG") && s.needs.is_none()));
+    // symbols follow the output, not the input family
+    let sym = |segs: &[WheelSeg], label: &str| segs.iter().find(|s| s.label.contains(label)).map(|s| s.symbol);
+    assert_ne!(sym(&pdf, "Word"), sym(&pdf, "Markdown"));
+    assert_eq!(sym(&mp4, "GIF"), Some("sf:livephoto"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn render_mods(app: &mut App, mut events: Vec<Event>, modifiers: Modifiers) {
+    // egui 0.36 takes the held modifiers from a ModifiersChanged event, not from RawInput
+    events.insert(0, Event::ModifiersChanged(modifiers));
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))),
+        events,
+        ..Default::default()
+    };
+    let ctx = app.ctx.clone();
+    let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+    output.textures_delta.clear();
+}
+
+fn key_event(key: Key) -> Event {
+    Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }
+}
+
+fn open_wheel(app: &mut App, kind: ferrocast_core::wheel::WheelKind, n_files: usize) {
+    let files: Vec<std::path::PathBuf> = (0..n_files).map(|i| std::path::PathBuf::from(format!("/nonexistent/f{i}.png"))).collect();
+    let segs = app.wheel_segments(kind, &files);
+    app.stack = vec![View::Root, View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel: None }];
+}
+
+fn wheel_state(app: &App) -> Option<(ferrocast_core::wheel::WheelKind, Option<usize>, usize)> {
+    match app.view() {
+        View::Wheel { kind, sel, segs, .. } => Some((*kind, *sel, segs.len())),
+        _ => None,
+    }
+}
+
+// Characterisation tests of the wheel's key handling (the behaviour already existed; no RED).
+#[test]
+fn wheel_arrows_step_and_wrap_around() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    open_wheel(&mut app, WheelKind::Convert, 1);
+    let n = wheel_state(&app).unwrap().2;
+    assert!(n >= 3);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert_eq!(wheel_state(&app).unwrap().1, Some(0));
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert_eq!(wheel_state(&app).unwrap().1, Some(1));
+    render(&mut app, vec![key_event(Key::ArrowLeft)]);
+    render(&mut app, vec![key_event(Key::ArrowLeft)]);
+    assert_eq!(wheel_state(&app).unwrap().1, Some(n - 1), "left from the first segment wraps to the last");
+    render(&mut app, vec![key_event(Key::ArrowDown)]);
+    assert_eq!(wheel_state(&app).unwrap().1, Some(0), "down steps forward like right");
+}
+
+#[test]
+fn wheel_escape_cancels_and_returns_to_the_root() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    open_wheel(&mut app, WheelKind::Tools, 1);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(wheel_state(&app).is_none(), "wheel must be gone");
+    assert!(matches!(app.view(), View::Root));
+}
+
+#[test]
+fn tapping_shift_command_or_control_switches_the_open_wheel() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    open_wheel(&mut app, WheelKind::Convert, 1);
+    // first frame with no key held records the idle state; the very first frame never switches
+    render_mods(&mut app, vec![], Modifiers::NONE);
+    assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Convert);
+    render_mods(&mut app, vec![], Modifiers::COMMAND);
+    assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Tools, "Command opens the tools wheel");
+    render_mods(&mut app, vec![], Modifiers::NONE);
+    render_mods(&mut app, vec![], Modifiers::CTRL);
+    assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Actions, "Control opens the actions wheel");
+    assert_eq!(wheel_state(&app).unwrap().2, 6);
+    render_mods(&mut app, vec![], Modifiers::NONE);
+    render_mods(&mut app, vec![], Modifiers::SHIFT);
+    assert_eq!(wheel_state(&app).unwrap().0, WheelKind::Convert, "Shift goes back to conversions");
+    // holding the key does not switch again, and a selection is cleared only by a real switch
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    let sel = wheel_state(&app).unwrap().1;
+    assert_eq!(sel, Some(0));
+    render_mods(&mut app, vec![], Modifiers::SHIFT);
+    assert_eq!(wheel_state(&app).unwrap().1, sel, "a held Shift keeps the selection");
+}
+
+fn key_mod_event(key: Key, modifiers: Modifiers) -> Event {
+    Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+}
+
+fn organizer_plan(app: &App) -> ferrocast_core::pdfplan::PdfPlan {
+    match app.view() {
+        View::PdfOrganize { plan, .. } => plan.clone(),
+        other => panic!("organizer closed unexpectedly: {}", other.title()),
+    }
+}
+
+// Characterisation tests of the organizer's keys (behaviour already existed; no RED).
+#[test]
+fn pdf_organizer_keys_edit_the_plan() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-orgkeys-{}.pdf", std::process::id()));
+    app.stack = vec![View::Root, View::PdfOrganize { file: f, n: 4, plan: ferrocast_core::pdfplan::PdfPlan::new(4) }];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert_eq!(organizer_plan(&app).cursor, 1);
+    render(&mut app, vec![key_event(Key::R)]);
+    assert_eq!(organizer_plan(&app).pages[1].turns, 1, "R turns the page clockwise");
+    render(&mut app, vec![key_mod_event(Key::R, Modifiers::SHIFT)]);
+    assert_eq!(organizer_plan(&app).pages[1].turns, 0, "Shift+R turns it back");
+    render(&mut app, vec![key_event(Key::D)]);
+    let p = organizer_plan(&app);
+    assert_eq!(p.pages.len(), 5, "D duplicates the page");
+    assert_eq!(p.pages[1].src, p.pages[2].src);
+    render(&mut app, vec![key_event(Key::Delete)]);
+    assert_eq!(organizer_plan(&app).pages.len(), 4, "Delete removes the page at the cursor");
+    let before: Vec<usize> = organizer_plan(&app).pages.iter().map(|p| p.src).collect();
+    render(&mut app, vec![key_mod_event(Key::ArrowRight, Modifiers::COMMAND)]);
+    let after: Vec<usize> = organizer_plan(&app).pages.iter().map(|p| p.src).collect();
+    assert_ne!(before, after, "Cmd+Right moves the page");
+    let mut a = after.clone();
+    let mut b = before.clone();
+    a.sort();
+    b.sort();
+    assert_eq!(a, b, "moving never loses or invents a page");
+}
+
+#[test]
+fn pdf_organizer_enter_without_edits_stays_open_and_starts_nothing() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-orgenter-{}.pdf", std::process::id()));
+    app.stack = vec![View::Root, View::PdfOrganize { file: f, n: 3, plan: ferrocast_core::pdfplan::PdfPlan::new(3) }];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::PdfOrganize { .. }), "an unchanged plan is not written and the view stays");
+    assert!(app.rx.try_recv().is_err(), "no job may start");
+}
+
+#[test]
+fn pdf_organizer_escape_goes_back_without_a_job() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-orgesc-{}.pdf", std::process::id()));
+    app.stack = vec![View::Root, View::PdfOrganize { file: f, n: 3, plan: ferrocast_core::pdfplan::PdfPlan::new(3) }];
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::D)]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "Escape leaves the organizer");
+    assert!(app.rx.try_recv().is_err(), "Escape starts no job even after edits");
+}
+
+fn crop_app() -> App {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join(format!("fc-cropfocus-{}.png", uuid::Uuid::new_v4()));
+    let rect = ferrocast_core::croprect::Rect { x: 0, y: 0, w: 100, h: 100 };
+    app.stack = vec![View::Root, View::CropImage { file: f, size: (1000, 600), rect, aspect: None }];
+    render(&mut app, vec![]);
+    app
+}
+
+/// Click the W box of the crop view (position taken from the layout; guarded by an assertion).
+fn click_crop_width_box(app: &mut App) {
+    let pos = Pos2::new(300.0, 89.0);
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(app, vec![Event::PointerMoved(pos)]);
+    render(app, vec![btn(true)]);
+    render(app, vec![btn(false)]);
+    render(app, vec![]);
+}
+
+// Regression test for L41 B1 (Enter and Escape were taken while a number box was being edited).
+#[test]
+fn crop_number_box_keeps_enter_and_escape_while_editing() {
+    let mut app = crop_app();
+    click_crop_width_box(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click must have started editing the W box (layout moved?)");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::CropImage { .. }), "Escape ends the edit, it must not close the crop view");
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape, with nothing being edited, closes the view");
+    let mut app = crop_app();
+    click_crop_width_box(&mut app);
+    assert!(app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::CropImage { .. }), "Enter confirms the number, it must not save");
+    assert!(app.rx.try_recv().is_err(), "no crop job may start while editing");
+}
+
+#[test]
+fn crop_enter_without_a_focused_field_saves_and_leaves() {
+    let mut app = crop_app();
+    assert!(!app.ctx.egui_wants_keyboard_input());
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert!(matches!(app.view(), View::Root), "Enter on the crop view starts the crop and goes back");
+}
+
+fn pointer_events(from: Pos2, to: Pos2) -> Vec<Vec<Event>> {
+    let btn = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let steps = 6;
+    let mut frames = vec![vec![Event::PointerMoved(from)], vec![btn(from, true)]];
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        frames.push(vec![Event::PointerMoved(from + (to - from) * t)]);
+    }
+    frames.push(vec![btn(to, false)]);
+    frames
+}
+
+fn drag(app: &mut App, from: Pos2, to: Pos2) {
+    for f in pointer_events(from, to) {
+        render(app, f);
+    }
+    render(app, vec![]);
+}
+
+fn crop_rect_of(app: &App) -> ferrocast_core::croprect::Rect {
+    match app.view() {
+        View::CropImage { rect, .. } => *rect,
+        other => panic!("crop view closed unexpectedly: {}", other.title()),
+    }
+}
+
+// A-T2: pointer drags through render(); positions follow the layout (header 58 pt, footer 38 pt)
+// and the assertions are relative, so a small layout change does not break them.
+#[test]
+fn dragging_inside_the_crop_rectangle_moves_it_without_resizing() {
+    let mut app = fixture();
+    let rect = ferrocast_core::croprect::Rect { x: 100, y: 100, w: 300, h: 200 };
+    let f = std::env::temp_dir().join("fc-dragmove.png");
+    app.stack = vec![View::Root, View::CropImage { file: f, size: (1000, 600), rect, aspect: None }];
+    render(&mut app, vec![]);
+    drag(&mut app, Pos2::new(250.0, 204.0), Pos2::new(310.0, 234.0));
+    let after = crop_rect_of(&app);
+    assert_eq!((after.w, after.h), (300, 200), "moving keeps the size");
+    assert!(after.x > 100 + 40 && after.y > 100 + 20, "the rectangle followed the pointer: {after:?}");
+}
+
+#[test]
+fn clicking_the_trim_bar_seeks_proportionally() {
+    let mut app = fixture();
+    let f = std::env::temp_dir().join("fc-trimbar.mp4");
+    let trim = ferrocast_core::videoplan::Trim::new(10.0, 25.0);
+    app.stack = vec![View::Root, View::VideoTrim { file: f, trim }];
+    render(&mut app, vec![]);
+    let pos = Pos2::new(375.0, 358.0);
+    let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(&mut app, vec![Event::PointerMoved(pos)]);
+    render(&mut app, vec![btn(true)]);
+    render(&mut app, vec![btn(false)]);
+    render(&mut app, vec![]);
+    match app.view() {
+        View::VideoTrim { trim: Some(t), .. } => assert!((t.cursor - 5.0).abs() < 0.8, "cursor {} should be near the middle", t.cursor),
+        _ => panic!("trim view closed"),
+    }
+}
+
+#[test]
 fn video_speed_view_renders_while_probing_and_after() {
     let mut app = fixture();
     let f = std::env::temp_dir().join(format!("fc-vspeed-{}.mp4", std::process::id()));
@@ -565,4 +890,78 @@ fn video_redact_rejects_reversed_range_without_closing() {
     render(&mut app, vec![Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
     assert!(matches!(app.view(), View::VideoRedact { .. }));
     assert!(app.rx.try_recv().is_err(), "invalid range must not start work");
+}
+
+fn tools_wheel_titles(app: &App, names: &[&str]) -> Vec<(String, Option<&'static str>)> {
+    let files: Vec<std::path::PathBuf> = names.iter().map(|n| std::path::PathBuf::from(format!("/nonexistent/{n}"))).collect();
+    app.wheel_segments(ferrocast_core::wheel::WheelKind::Tools, &files).into_iter().map(|s| (s.label, s.needs)).collect()
+}
+
+#[test]
+fn tools_wheel_follows_tools_for_per_format() {
+    let app = fixture();
+    let labels = |names: &[&str]| -> Vec<String> { tools_wheel_titles(&app, names).into_iter().map(|(l, _)| l).collect() };
+    assert_eq!(labels(&["a.mp4"]), ["Compress", "Metadata", "Mute", "Trim", "Crop Video", "Speed", "Snapshots", "Split", "Redact Video"]);
+    assert_eq!(labels(&["a.png"]), ["Compress", "Metadata", "Edit Photo", "Annotate", "Background", "Crop", "Redact"]);
+    assert_eq!(labels(&["a.png", "b.jpeg"]), ["Compress", "Metadata", "Crop", "Create PDF", "Collage"]);
+    assert_eq!(labels(&["a.pdf"]), ["Compress", "Metadata", "Split PDF", "Organize"]);
+    assert_eq!(labels(&["a.gif"]), ["Metadata"]);
+    // an archive's only tool is not available yet and says so
+    assert_eq!(tools_wheel_titles(&app, &["a.zip"]), [("Extract".to_string(), Some("Not available yet"))]);
+    // no tools for text: the single fallback segment, not marked missing
+    assert_eq!(tools_wheel_titles(&app, &["a.txt"]), [("Open tools…".to_string(), None)]);
+    // mixed families fall back too
+    assert_eq!(labels(&["a.png", "b.mp4"]), ["Open tools…"]);
+}
+
+#[test]
+fn tool_reach_maps_tools_to_windows_and_presets() {
+    use ferrocast_core::convert::{FileTool, ImageOp};
+    use ferrocast_core::tools::ToolId;
+    let p = std::path::PathBuf::from("/nonexistent/a.png");
+    assert!(matches!(tool_reach(ToolId::AnnotateImage, std::slice::from_ref(&p)), ToolReach::Act(Act::AnnotateCanvas(_))));
+    assert!(matches!(tool_reach(ToolId::EditImage, std::slice::from_ref(&p)), ToolReach::Act(Act::EditPhoto(_))));
+    assert!(matches!(tool_reach(ToolId::Compress, std::slice::from_ref(&p)), ToolReach::Image(ImageOp::Compress(60))));
+    assert!(matches!(tool_reach(ToolId::RemoveMetadata, std::slice::from_ref(&p)), ToolReach::Image(ImageOp::StripMetadata)));
+    let two = vec![p.clone(), std::path::PathBuf::from("/nonexistent/b.png")];
+    assert!(matches!(tool_reach(ToolId::CropImage, &two), ToolReach::Image(ImageOp::Crop(1, 1))));
+    assert!(matches!(tool_reach(ToolId::CreatePdf, &two), ToolReach::Image(ImageOp::CombinePdf)));
+    assert!(matches!(tool_reach(ToolId::CreateCollage, &two), ToolReach::Act(Act::CollageImages(_))));
+    let v = std::path::PathBuf::from("/nonexistent/a.mp4");
+    assert!(matches!(tool_reach(ToolId::RedactAudio, std::slice::from_ref(&v)), ToolReach::Open));
+    assert!(matches!(tool_reach(ToolId::MuteVideo, std::slice::from_ref(&v)), ToolReach::File(FileTool::Mute)));
+    assert!(matches!(tool_reach(ToolId::TrimVideo, std::slice::from_ref(&v)), ToolReach::Act(Act::TrimVideo(_))));
+    assert!(matches!(tool_reach(ToolId::ExtractArchive, &[]), ToolReach::Open));
+}
+
+#[test]
+fn nine_segment_tools_wheel_renders_in_both_themes() {
+    use ferrocast_core::wheel::WheelKind;
+    let mut app = fixture();
+    let files = vec![std::path::PathBuf::from("/nonexistent/a.mp4")];
+    let segs = app.wheel_segments(WheelKind::Tools, &files);
+    assert_eq!(segs.len(), 9);
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for sel in [None, Some(0), Some(8)] {
+            app.stack = vec![
+                View::Root,
+                View::Wheel { files: files.clone(), center: Pos2::new(-9999.0, -9999.0), segs: segs.clone(), kind: WheelKind::Tools, sel },
+            ];
+            render(&mut app, vec![]);
+        }
+    }
+}
+
+#[test]
+fn convert_view_lists_a_missing_tool_instead_of_hiding_it() {
+    let mut app = fixture();
+    let titles = |app: &mut App, f: &str| -> Vec<(String, String)> {
+        app.stack = vec![View::Root, View::Convert(vec![std::path::PathBuf::from(format!("/nonexistent/{f}"))])];
+        app.invalidate_sections();
+        app.sections_cached().into_iter().flat_map(|s| s.items).map(|i| (i.title, i.accessory)).collect()
+    };
+    assert!(titles(&mut app, "a.zip").contains(&("Extract".to_string(), "Not available yet".to_string())));
+    // a format whose tools are all implemented gets no such row
+    assert!(!titles(&mut app, "a.mp4").iter().any(|(_, a)| a == "Not available yet"));
 }
