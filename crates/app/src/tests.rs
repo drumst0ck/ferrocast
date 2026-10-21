@@ -1654,7 +1654,7 @@ fn click_compress_kb_box(app: &mut App) {
 }
 
 // centre of the KB box in points (found by probing the layout; breaks if the controls move)
-const COMPRESS_KB_BOX: (f32, f32) = (210.0, 165.0);
+const COMPRESS_KB_BOX: (f32, f32) = (616.0, 180.0);
 
 // L74 style: Escape while the number box is edited ends the edit but keeps the window.
 #[test]
@@ -1893,7 +1893,7 @@ fn media_probe_result_reaches_the_window() {
     }
 }
 
-const COMPRESS_MEDIA_KB_BOX: (f32, f32) = (210.0, 165.0);
+const COMPRESS_MEDIA_KB_BOX: (f32, f32) = (616.0, 180.0);
 
 // L74 style: Escape and Enter inside the number box of the media window keep it open.
 #[test]
@@ -2530,8 +2530,8 @@ fn achan_view(app: &mut App, in_channels: Option<u32>, stereo: bool) {
     app.stack = vec![View::Root, View::ChannelsAudio { file: anorm_file(), in_channels, stereo, left_db: 0.0, right_db: 0.0 }];
 }
 
-const ANORM_TARGET_BOX: (f32, f32) = (249.0, 173.0);
-const ACHAN_LEFT_BOX: (f32, f32) = (214.0, 168.0);
+const ANORM_TARGET_BOX: (f32, f32) = (607.0, 105.0);
+const ACHAN_LEFT_BOX: (f32, f32) = (619.0, 158.0);
 
 #[test]
 fn normalize_and_channels_views_render_in_both_themes() {
@@ -3576,7 +3576,7 @@ fn deleting_an_area_during_a_drag_does_not_move_another_one() {
 /// Click the blur slider's value box by scanning the strip from the right (guarded by an assertion).
 fn click_redact_blur_box(app: &mut App) {
     for x in (200..600).rev().step_by(6) {
-        click_at(app, Pos2::new(x as f32, 81.0));
+        click_at(app, Pos2::new(x as f32, 103.0));
         if app.ctx.egui_wants_keyboard_input() {
             return;
         }
@@ -4625,4 +4625,151 @@ fn wheel_pick_log_line_names_the_segment_and_the_resulting_view_but_no_paths() {
     assert_eq!(line, "wheel pick Tools \"Crop\" -> view \"Crop Image\" launcher_visible=true");
     let hidden = wheel_pick_log_line(WheelKind::Actions, "Copy Path", "Ferrocast", false);
     assert!(hidden.contains("launcher_visible=false") && !hidden.contains('/'), "{hidden}");
+}
+
+// ---- U3: form windows draw their controls as rows of a Settings-style card
+
+/// The cards (with their rows) and the segmented bars `view` drew in its second frame.
+fn form_cards(view: View) -> (Vec<FormCard>, Vec<Rect>) {
+    let mut app = fixture();
+    app.ctx.data_mut(|d| {
+        d.remove::<Vec<FormCard>>(Id::new("form-cards"));
+        d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count"));
+    });
+    app.stack = vec![View::Root, view];
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    let cards: Vec<FormCard> = app.ctx.data(|d| d.get_temp(Id::new("form-cards"))).unwrap_or_default();
+    let bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+    (cards, bars.into_iter().map(|b| b.0).collect())
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum FormPlace {
+    /// the card is centred in the window
+    Centred,
+    /// preview on the left, the card is a side panel on the right half
+    SidePanel,
+}
+
+fn u3_windows() -> Vec<(&'static str, FormPlace, View)> {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    use FormPlace::*;
+    let png = std::path::PathBuf::from("/nonexistent/u3.png");
+    let mp4 = std::path::PathBuf::from("/nonexistent/u3.mp4");
+    let few = {
+        use ferrocast_core::metaform::Group;
+        vec![
+            meta_field(Group::File, "title", "Hello", true),
+            meta_field(Group::File, "major_brand", "isom", false),
+            meta_field(Group::Track { index: 0, kind: "audio".into() }, "language", "eng", true),
+        ]
+    };
+    vec![
+        (
+            "audio to video",
+            Centred,
+            View::VisualizeAudio { file: avis_file(), orient: Canvas::Landscape, style: VisStyle::Waveform, image: None, picking: false },
+        ),
+        (
+            "audio to video, still",
+            Centred,
+            View::VisualizeAudio { file: avis_file(), orient: Canvas::Square, style: VisStyle::Still, image: None, picking: false },
+        ),
+        ("normalize", Centred, View::NormalizeAudio { file: anorm_file(), loudness: Some(-20.0), target: -16.0, range: 11.0, peak: -1.5 }),
+        ("channels", Centred, View::ChannelsAudio { file: anorm_file(), in_channels: Some(2), stereo: true, left_db: 0.0, right_db: 0.0 }),
+        ("compress image, size", Centred, compress_view(vec![png.clone()], Some((400, 300)), 0, 500)),
+        ("compress image, preset", Centred, compress_view(vec![png.clone()], Some((400, 300)), 2, 500)),
+        ("compress video", Centred, media_view(vec![mp4.clone()], true, some_info(true), 1, 500)),
+        ("compress audio", Centred, media_view(vec!["/nonexistent/u3.mp3".into()], false, some_info(false), 0, 500)),
+        ("metadata", Centred, meta_view("/x/a.mp4", Some(few), None)),
+        ("video speed", Centred, View::VideoSpeed { file: mp4.clone(), duration: Some(8.0), factor: 2.0 }),
+        (
+            "redact image options",
+            Centred,
+            View::RedactImage { file: png.clone(), size: (100, 80), areas: vec![], sel: None, blur: false, radius: 24, color: 5 },
+        ),
+        (
+            "add background",
+            SidePanel,
+            View::FrameImage { file: png.clone(), size: (100, 80), opts: Default::default(), color: 4, picking: false },
+        ),
+        ("collage", SidePanel, View::CollageImage { files: vec![png.clone(), png.clone()], opts: Default::default(), color: 0 }),
+        ("edit photo", SidePanel, View::EditPhoto { file: png, size: (100, 80), opts: Default::default() }),
+    ]
+}
+
+#[test]
+fn form_windows_group_their_controls_in_a_card_inside_the_window() {
+    let mut bad = vec![];
+    for (name, place, view) in u3_windows() {
+        let (cards, bars) = form_cards(view);
+        if cards.is_empty() {
+            bad.push(format!("{name}: drew no card (want at least one)"));
+            continue;
+        }
+        let content = Rect::from_min_max(Pos2::new(0.0, ui::SEARCH_H), Pos2::new(ui::WIDTH, ui::HEIGHT - ui::FOOTER_H));
+        for (i, c) in cards.iter().enumerate() {
+            if !content.contains_rect(c.rect) {
+                bad.push(format!("{name}: card {i} {:?} is not inside the window content {content:?}", c.rect));
+            }
+            if c.rect.width() > 600.0 {
+                bad.push(format!("{name}: card {i} is {} pt wide (max 600)", c.rect.width()));
+            }
+            match place {
+                FormPlace::Centred if (c.rect.center().x - ui::WIDTH / 2.0).abs() >= 4.0 => {
+                    bad.push(format!("{name}: card {i} is centred at {} not {}", c.rect.center().x, ui::WIDTH / 2.0))
+                }
+                FormPlace::SidePanel if c.rect.min.x < ui::WIDTH / 2.0 => {
+                    bad.push(format!("{name}: side card {i} starts at {}", c.rect.min.x))
+                }
+                _ => {}
+            }
+            if c.rows.is_empty() {
+                bad.push(format!("{name}: card {i} has no row"));
+            }
+            for (title, row, control) in &c.rows {
+                if title.trim().is_empty() {
+                    bad.push(format!("{name}: card {i} has a row without a title"));
+                }
+                if !c.rect.contains_rect(*row) {
+                    bad.push(format!("{name}: row {title:?} {row:?} sticks out of its card {:?}", c.rect));
+                }
+                if !c.rect.contains_rect(*control) {
+                    bad.push(format!("{name}: the control of {title:?} {control:?} sticks out of its card {:?}", c.rect));
+                }
+            }
+        }
+        for b in bars {
+            if !cards.iter().any(|c| c.rect.contains_rect(b)) {
+                bad.push(format!("{name}: a segmented bar {b:?} lies outside every card"));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "form windows must use cards:\n{}", bad.join("\n"));
+}
+
+#[test]
+fn annotate_tool_strip_fits_the_window_width() {
+    let mut app = fixture();
+    app.ctx.data_mut(|d| d.remove::<Vec<Rect>>(Id::new("annot-strip")));
+    app.stack = vec![
+        View::Root,
+        View::Annotate {
+            file: "/nonexistent/u3.png".into(),
+            size: (100, 80),
+            doc: Default::default(),
+            tool: ferrocast_core::annotate::Tool::Arrow,
+            color: 0,
+            sel: None,
+        },
+    ];
+    render(&mut app, vec![]);
+    app.ctx.data_mut(|d| d.remove::<Vec<Rect>>(Id::new("annot-strip")));
+    render(&mut app, vec![]);
+    let strip: Vec<Rect> = app.ctx.data(|d| d.get_temp(Id::new("annot-strip"))).unwrap_or_default();
+    assert!(strip.len() >= 18, "12 tools and 6 colours, got {}", strip.len());
+    let right = strip.iter().map(|r| r.max.x).fold(0.0, f32::max);
+    assert!(right <= ui::WIDTH - 12.0, "the tool strip ends at x={right}, the window is {} wide", ui::WIDTH);
 }
