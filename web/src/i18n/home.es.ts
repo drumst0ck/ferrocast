@@ -126,7 +126,7 @@ export const es: HomeCopy = {
   },
   video: {
     title: 'Sin maquetas. Esta es la app.',
-    lead: 'No lo simulamos en una herramienta de diseño. Cada fotograma es una captura que la app hizo de sí misma mientras se escribía una consulta.',
+    lead: 'Cada fotograma es una captura que la app hizo de sí misma mientras se escribía una consulta.',
     aria: 'Ferrocast respondiendo a una conversión de divisas, una pregunta de husos horarios, un porcentaje y un comando de ventanas',
   },
   bench: {
@@ -144,7 +144,7 @@ export const es: HomeCopy = {
     lead: 'De fábrica habla con Ollama en tu propio Mac. Apúntala a otro proveedor si lo prefieres; las claves se guardan en el Llavero.',
     chipsAria: 'Proveedores',
     chips: ['Ollama (por defecto)', 'LM Studio', 'Servidor compatible con OpenAI', 'API de Anthropic', 'Claude Code', 'Inicio de sesión con ChatGPT'],
-    caveat: 'El inicio de sesión con ChatGPT sigue el flujo de la CLI Codex de OpenAI; funciona, pero OpenAI no ha respaldado que apps de terceros lo hagan, por lo que la API con clave es la vía reglamentaria.',
+    caveat: 'El inicio de sesión con ChatGPT sigue el flujo de la CLI Codex de OpenAI; funciona, pero OpenAI no ha respaldado que apps de terceros lo hagan, por lo que la API con clave es la vía correcta.',
     support: 'Se admiten el proveedor compatible con OpenAI, Claude Code y la API de Anthropic (con tu propia clave).',
     link: 'Más sobre Ask AI',
   },
@@ -210,9 +210,9 @@ export const es: HomeCopy = {
       ['¿Por qué pide acceso de Accesibilidad?', 'Porque mover ventanas, pegar por ti y expandir snippets lo necesitan. La búsqueda, la calculadora y la IA funcionan sin él. Una pantalla de bienvenida te guía.'],
       ['¿Es privado mi historial del portapapeles?', 'Nunca sale de tu Mac. Está en un archivo JSON en Application Support, y todo lo copiado desde un gestor de contraseñas como 1Password se omite a propósito.'],
       ['¿Ask AI envía mi texto a la nube?', 'Solo si tú se lo indicas. De fábrica habla con Ollama en tu propio Mac. Apúntala a LM Studio, OpenAI o la API de Anthropic si lo prefieres; las claves se guardan en el Llavero.'],
-      ['¿Puedo usar mi suscripción de ChatGPT o de Claude?', 'Sí, con matices que explicamos en la app. Claude: si Claude Code está instalado y con sesión iniciada, Ferrocast lo usa como proveedor, ya que es la herramienta oficial de Anthropic. ChatGPT: Ferrocast puede iniciar sesión con tu cuenta como lo hace la CLI Codex de OpenAI; funciona, pero OpenAI no ha respaldado que apps de terceros lo hagan, por lo que la API con clave es la vía reglamentaria.'],
+      ['¿Puedo usar mi suscripción de ChatGPT o de Claude?', 'Sí, con matices que explicamos en la app. Claude: si Claude Code está instalado y con sesión iniciada, Ferrocast lo usa como proveedor, ya que es la herramienta oficial de Anthropic. ChatGPT: Ferrocast puede iniciar sesión con tu cuenta como lo hace la CLI Codex de OpenAI; funciona, pero OpenAI no ha respaldado que apps de terceros lo hagan, por lo que la API con clave es la vía correcta.'],
       ['Vengo de Raycast. ¿Funcionará lo mío?', 'Tus Script Commands se ejecutan tal cual y los snippets se importan desde una exportación JSON. Los quicklinks los recreas en un minuto.'],
-      ['¿Qué falta hoy?', 'Con franqueza: una tienda de extensiones y la sincronización entre Macs.'],
+      ['¿Qué falta hoy?', 'Una tienda de extensiones y la sincronización entre Macs.'],
     ],
   },
   changelog: {

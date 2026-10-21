@@ -127,7 +127,7 @@ export const en = {
   },
   video: {
     title: 'No mock-ups. This is the app.',
-    lead: 'We did not fake this in a design tool. Every frame is a screenshot the app took of itself while a query was typed.',
+    lead: 'Every frame is a screenshot the app took of itself while a query was typed.',
     aria: 'Ferrocast answering a currency conversion, a time zone question, a percentage and a window command',
   },
   bench: {
@@ -213,7 +213,7 @@ export const en = {
       ['Does Ask AI send my text to the cloud?', 'Only if you tell it to. Out of the box it talks to Ollama on your own Mac. Point it at LM Studio, OpenAI or the Anthropic API if you prefer; keys go in the Keychain.'],
       ['Can I use my ChatGPT or Claude subscription?', 'Yes, with caveats we spell out in the app. Claude: if Claude Code is installed and signed in, Ferrocast uses it as a provider, since it is Anthropic’s own tool. ChatGPT: Ferrocast can sign in with your account the way OpenAI’s Codex CLI does; it works, but OpenAI has not blessed third-party apps doing that, so the API with a key is the by-the-book route.'],
       ['Coming from Raycast. Will my stuff work?', 'Your Script Commands run as they are, and snippets import from a JSON export. Quicklinks you recreate in a minute.'],
-      ['What is missing today?', 'Honestly: an extension store and sync between Macs.'],
+      ['What is missing today?', 'An extension store and sync between Macs.'],
     ],
   },
   changelog: {

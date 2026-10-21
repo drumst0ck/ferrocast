@@ -20,7 +20,7 @@ open /Applications/Ferrocast.app            # grant Accessibility when asked
 brew upgrade ferrocast                      # to update
 ```
 
-**Why a formula and not a cask.** Homebrew's official cask requires signed, notarized apps (a paid Apple Developer account). Building from source on your own Mac means the app carries no quarantine flag and Gatekeeper does not step in: no paid account and no protection bypassed. The first install takes a few minutes because it compiles, and the signature is ad-hoc, for local use.
+**Why a formula and not a cask.** Homebrew's official cask requires signed, notarized apps (a paid Apple Developer account). Building from source on your own Mac means the app carries no quarantine flag and Gatekeeper does not step in. It needs no paid account and bypasses no protection. The first install takes a few minutes because it compiles, and the signature is ad-hoc, for local use.
 
 Always use the full `brew tap` with the URL: the short form `brew install drumst0ck/ferrocast/ferrocast` tries to clone `homebrew-ferrocast`, which does not exist. Apple Silicon only. More in the [install guide](https://ferrocast.app/docs/getting-started/install/).
 

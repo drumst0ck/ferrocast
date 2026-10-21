@@ -28,7 +28,7 @@ const actionCopy: Record<string, [string, string]> = {
   move: ['Move to…', 'Pick a destination folder and move the files there. An existing file is never overwritten.'],
   copyPath: ['Copy Path', 'Copy the path of each selected item, one per line.'],
   openTerminal: ['Terminal / iTerm2', 'Open a folder, or the folder that holds a file, in Terminal or iTerm2.'],
-  zip: ['Zip', 'Compress each selected file or folder into its own ZIP next to it. An existing ZIP is never overwritten. This one is an addition to the six actions of the app this project is measured against.'],
+  zip: ['Zip', 'Compress each selected file or folder into its own ZIP next to it. An existing ZIP is never overwritten.'],
 };
 const actions = tools.actions.map((id) => {
   if (!actionCopy[id]) throw new Error(`no copy for action ${id}`);

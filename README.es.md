@@ -20,14 +20,14 @@ open /Applications/Ferrocast.app            # concede Accesibilidad cuando lo pi
 brew upgrade ferrocast                      # para actualizar
 ```
 
-**Por qué una fórmula y no un cask.** El cask oficial de Homebrew exige apps firmadas y notarizadas (cuenta de Apple Developer de pago). Al compilar desde el código fuente en tu propia máquina, la app no lleva marca de cuarentena y Gatekeeper no interviene: no hace falta cuenta de pago ni saltarse ninguna protección. La primera instalación tarda unos minutos porque compila, y la firma es ad-hoc, de uso local.
+**Por qué una fórmula y no un cask.** El cask oficial de Homebrew exige apps firmadas y notarizadas (cuenta de Apple Developer de pago). Al compilar desde el código fuente en tu propia máquina, la app no lleva marca de cuarentena y Gatekeeper no interviene. No hace falta cuenta de pago y no se salta ninguna protección. La primera instalación tarda unos minutos porque compila, y la firma es ad-hoc, de uso local.
 
 Usa siempre el `brew tap` con la URL: la forma corta `brew install drumst0ck/ferrocast/ferrocast` intenta clonar `homebrew-ferrocast`, que no existe. Solo Apple Silicon. Más en la [guía de instalación](https://ferrocast.app/es/docs/getting-started/install/).
 
 ## Qué hace
 
 - **Buscar** apps, comandos y archivos con frecency, alias, favoritos y un atajo por comando.
-- **Calcular** en la caja de búsqueda: mates, porcentajes, unidades, divisas (tasas del BCE) y husos horarios.
+- **Calcular** en la caja de búsqueda: operaciones, porcentajes, unidades, divisas (tasas del BCE) y husos horarios.
 - **Historial del portapapeles** de texto, archivos e imágenes; ignora las entradas de gestores de contraseñas.
 - **Snippets** con placeholders y auto-expansión, y **quicklinks** con argumentos.
 - **Script Commands** compatibles con los metadatos de Raycast (full, compact, silent, inline).
