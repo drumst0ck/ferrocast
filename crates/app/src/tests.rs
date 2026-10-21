@@ -4197,6 +4197,223 @@ fn organizer_click_still_selects_a_page_next_to_the_drag_source() {
     assert_eq!(page_srcs(&app), [0, 1, 2, 3]);
 }
 
+// ---- U2: key hints live in the footer chips, not in a grey sentence in the body
+
+const BACK: (&str, &str) = ("Back", "esc");
+
+/// Every tool window with its expected footer chips (reading order) and the information-only notes
+/// its body may still draw.
+type Chips = Vec<(&'static str, &'static str)>;
+
+fn u2_windows() -> Vec<(&'static str, View, Chips, Vec<String>)> {
+    use crate::media_tools::VisStyle;
+    use ferrocast_core::media::Canvas;
+    let png = std::path::PathBuf::from("/nonexistent/u2.png");
+    let mp4 = std::path::PathBuf::from("/nonexistent/u2.mp4");
+    let r = ferrocast_core::croprect::Rect { x: 5, y: 5, w: 20, h: 20 };
+    let area = Area { rect: ferrocast_core::croprect::full(64, 36), start: 0.0, end: 2.0, blur: false };
+    let trim = ferrocast_core::videoplan::Trim::new(12.0, 25.0);
+    let jump_bar = || vec!["click the bar to jump".to_string()];
+    let s = |t: &str| vec![t.to_string()];
+    let save = ("Save copy", "↵");
+    let trim_chips = vec![("Trim", "↵"), ("Start", "I"), ("End", "O"), BACK];
+    vec![
+        ("compress images", compress_view(vec![png.clone()], Some((400, 300)), 0, 500), vec![("Compress", "↵"), BACK], vec![]),
+        ("compress media", media_view(vec![mp4.clone()], true, some_info(true), 2, 500), vec![("Compress", "↵"), BACK], vec![]),
+        ("metadata", meta_view("/nonexistent/u2.mp4", Some(vec![]), None), vec![save, BACK], s("edit a value or clear it")),
+        (
+            "speed",
+            View::VideoSpeed { file: mp4.clone(), duration: Some(8.0), factor: 2.0 },
+            vec![save, BACK],
+            s("pick a preset or drag the slider"),
+        ),
+        (
+            "normalize",
+            View::NormalizeAudio { file: anorm_file(), loudness: None, target: -16.0, range: 11.0, peak: -1.5 },
+            vec![("Normalize", "↵"), BACK],
+            s("pick a target or type one"),
+        ),
+        (
+            "channels",
+            View::ChannelsAudio { file: anorm_file(), in_channels: Some(2), stereo: true, left_db: 0.0, right_db: 0.0 },
+            vec![save, BACK],
+            s("pick Mono or Stereo, set the volumes"),
+        ),
+        (
+            "audio to video",
+            View::VisualizeAudio { file: avis_file(), orient: Canvas::Landscape, style: VisStyle::Waveform, image: None, picking: false },
+            vec![("Make video", "↵"), BACK],
+            s("pick the picture and the shape"),
+        ),
+        ("trim video", View::VideoTrim { file: mp4.clone(), trim }, trim_chips.clone(), jump_bar()),
+        (
+            "trim audio",
+            View::AudioTrim {
+                file: atrim_file(),
+                trim: ferrocast_core::videoplan::Trim::new(6.0, 100.0),
+                audio: Some(synth_audio(6.0, 1.0, 3.0)),
+            },
+            trim_chips,
+            s("click the waveform to jump"),
+        ),
+        ("snapshot", View::VideoSnapshot { file: mp4.clone(), trim }, vec![("Save PNG", "↵"), ("Frame", "←/→"), BACK], jump_bar()),
+        (
+            "split",
+            View::VideoSplit { file: mp4.clone(), trim, points: vec![], parts: 2 },
+            vec![("Split", "↵"), ("Cut here", "M"), ("Remove last", "⌫"), BACK],
+            jump_bar(),
+        ),
+        ("bleep", bleep_view(bleep_ranges3(), 0), vec![save, BACK], s("click a shaded range to select it · overlapping ranges are merged")),
+        (
+            "collage",
+            View::CollageImage { files: vec![png.clone(), png.clone()], opts: Default::default(), color: 0 },
+            vec![("Save collage", "↵"), BACK],
+            s("2 pictures · the preview is a reduced copy"),
+        ),
+        (
+            "frame",
+            View::FrameImage { file: png.clone(), size: (100, 80), opts: Default::default(), color: 4, picking: false },
+            vec![save, BACK],
+            s("drag a slider · the preview is a reduced copy"),
+        ),
+        (
+            "photo",
+            View::EditPhoto { file: png.clone(), size: (100, 80), opts: Default::default() },
+            vec![save, BACK],
+            s("drag a slider · the preview is a reduced copy"),
+        ),
+        (
+            "redact image",
+            View::RedactImage { file: png.clone(), size: (100, 80), areas: vec![r], sel: Some(0), blur: true, radius: 24, color: 5 },
+            vec![save, ("Remove", "⌫"), BACK],
+            s("drag to add an area · drag an area to move, corners to resize · the preview only marks areas; the cover is applied on save"),
+        ),
+        (
+            "redact video",
+            redact_view("/nonexistent/u2.mp4", 6.0, vec![area], 0),
+            vec![save, BACK],
+            s("drag to move/resize the selected area · the preview only marks it"),
+        ),
+        (
+            "crop image",
+            View::CropImage { file: png.clone(), size: (1000, 600), rect: r, aspect: None },
+            vec![("Crop", "↵"), BACK],
+            s("drag inside to move · drag an edge or corner to resize · presets lock the ratio"),
+        ),
+        (
+            "crop video",
+            View::VideoCrop { file: mp4.clone(), size: Some((640, 360)), rect: r, aspect: None, duration: 6.0, ref_t: 0.6 },
+            vec![("Crop", "↵"), BACK],
+            s("drag inside to move · drag an edge or corner to resize · presets lock the ratio"),
+        ),
+        (
+            "annotate",
+            View::Annotate {
+                file: png.clone(),
+                size: (100, 80),
+                doc: Default::default(),
+                tool: ferrocast_core::annotate::Tool::Arrow,
+                color: 0,
+                sel: None,
+            },
+            vec![save, ("Undo", "⌘Z"), ("Delete", "⌫"), BACK],
+            s("drag to draw · click a Number to place · Select: click and drag to move"),
+        ),
+        (
+            "reorder join",
+            View::Reorder { purpose: ReorderPurpose::JoinVideos, files: reorder_files(3), cursor: 0 },
+            vec![("Join", "↵"), ("Move", "⌘↑/↓"), BACK],
+            s("First clip sets the canvas · drag a row to move"),
+        ),
+        (
+            "reorder pdf from pictures",
+            View::Reorder { purpose: ReorderPurpose::CreatePdf, files: reorder_files(3), cursor: 0 },
+            vec![("Create PDF", "↵"), ("Move", "⌘↑/↓"), BACK],
+            s("One page per picture · drag a row to move"),
+        ),
+        (
+            "reorder merge pdf",
+            View::Reorder { purpose: ReorderPurpose::MergePdf, files: reorder_files(3), cursor: 0 },
+            vec![("Merge", "↵"), ("Move", "⌘↑/↓"), BACK],
+            s("Drag a row to move"),
+        ),
+        (
+            "reorder merge audio",
+            View::Reorder { purpose: ReorderPurpose::MergeAudio, files: reorder_files(3), cursor: 0 },
+            vec![("Merge", "↵"), ("Move", "⌘↑/↓"), BACK],
+            s("Drag a row to move"),
+        ),
+        (
+            "organize pdf",
+            View::PdfOrganize { file: std::env::temp_dir().join("fc-u2.pdf"), n: 3, plan: ferrocast_core::pdfplan::PdfPlan::new(3) },
+            vec![save, ("Rotate", "R"), ("Remove", "⌫"), BACK],
+            vec![],
+        ),
+    ]
+}
+
+/// What the footer drew (chips left to right) and the body notes of `view` after two frames.
+fn footer_and_notes(view: View) -> (Vec<(String, String)>, Vec<String>) {
+    let mut app = fixture();
+    app.ctx.data_mut(|d| d.remove::<Vec<String>>(Id::new("body-notes")));
+    app.stack = vec![View::Root, view];
+    render(&mut app, vec![]);
+    app.ctx.data_mut(|d| d.remove::<Vec<String>>(Id::new("body-notes")));
+    render(&mut app, vec![]);
+    let chips = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
+    let notes = app.ctx.data(|d| d.get_temp(Id::new("body-notes"))).unwrap_or_default();
+    (chips, notes)
+}
+
+#[test]
+fn tool_windows_show_their_keys_in_the_footer_and_only_information_in_the_body() {
+    let mut bad = vec![];
+    for (name, view, chips, notes) in u2_windows() {
+        let (got_chips, got_notes) = footer_and_notes(view);
+        let want: Vec<(String, String)> = chips.iter().map(|(l, k)| (l.to_string(), k.to_string())).collect();
+        if got_chips != want {
+            bad.push(format!("{name}: footer chips {got_chips:?}, want {want:?}"));
+        }
+        if got_notes != notes {
+            bad.push(format!("{name}: body notes {got_notes:?}, want {notes:?}"));
+        }
+        let glyphs = ["↵", "esc", "⌘", "⇧", "⌫", "←", "→", "↑", "↓"];
+        if let Some(n) = got_notes.iter().find(|n| glyphs.iter().any(|g| n.contains(g))) {
+            bad.push(format!("{name}: the body still prints key names: {n:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "footer chips / body notes are wrong:\n{}", bad.join("\n"));
+}
+
+#[test]
+fn footer_hints_are_pure_per_view_and_at_most_four_chips_with_back_last() {
+    let windows = u2_windows();
+    for (name, view, chips, _) in &windows {
+        assert_eq!(&view.footer_hints(), chips, "{name}");
+        assert!(chips.len() <= 4, "{name}: at most four chips");
+        assert_eq!(chips.last(), Some(&BACK), "{name}: Back esc is last");
+        assert_eq!(chips[0].1, "↵", "{name}: the primary action comes first");
+    }
+    for v in [View::Root, View::Clipboard, View::Snippets, View::Settings, View::Files, View::Notes, View::Welcome] {
+        assert!(v.footer_hints().is_empty(), "{} keeps the footer it had", v.title());
+    }
+}
+
+/// Views whose footer already drew hints keep drawing exactly them.
+#[test]
+fn list_and_settings_footers_are_unchanged() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::Settings];
+    render(&mut app, vec![]);
+    let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
+    assert_eq!(chips, vec![("Back".to_string(), "esc".to_string())]);
+    app.stack = vec![View::Root, View::Snippets];
+    render(&mut app, vec![]);
+    let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
+    assert!(chips.iter().any(|(l, k)| l == "Actions" && k == "⌘K"), "{chips:?}");
+    assert!(!chips.iter().any(|(l, _)| l == "Back"), "list views have no Back chip");
+}
+
 // ---- U1: exclusive choices use the Settings segmented control
 
 /// Every segmented bar drawn by `view` after two frames, top to bottom then left to right, as

@@ -1589,8 +1589,25 @@ impl App {
             }
         }
         let mut x = rect.max.x - 16.0;
+        let mut window_chips = self.view().footer_hints();
+        // The left text (title or toast) wins: drop the least important chips until both fit.
+        let left_w = match &self.toast {
+            Some((t, _)) => p.layout_no_wrap(t.clone(), FontId::proportional(12.5), pal.accent).size().x,
+            None => p.layout_no_wrap(self.view().title().into(), FontId::proportional(12.5), pal.sub).size().x,
+        };
+        let chip_w = |(l, k): &(&str, &str)| {
+            let kw = (p.layout_no_wrap(k.to_string(), FontId::proportional(11.5), pal.text).size().x + 12.0).max(22.0);
+            kw + 8.0 + p.layout_no_wrap(l.to_string(), FontId::proportional(12.5), pal.sub).size().x + 18.0
+        };
+        while window_chips.len() > 1 && tx + left_w + 16.0 + window_chips.iter().map(chip_w).sum::<f32>() > rect.max.x - 16.0 {
+            window_chips.remove(if window_chips.len() > 2 { window_chips.len() - 2 } else { window_chips.len() - 1 });
+        }
         let mut first = true;
+        #[cfg(test)]
+        let mut drawn: Vec<(String, String)> = vec![];
         let mut hint = |label: &str, key: &str| {
+            #[cfg(test)]
+            drawn.insert(0, (label.to_string(), key.to_string()));
             if !first {
                 // thin separator between hint groups, as in the original launcher footers
                 p.vline(x + 9.0, (cy - 9.0)..=(cy + 9.0), Stroke::new(1.0, pal.sep));
@@ -1606,15 +1623,24 @@ impl App {
             p.galley(Pos2::new(lx, cy - lg.size().y / 2.0), lg, pal.text);
             x = lx - 18.0;
         };
-        if list {
-            hint("Actions", "⌘K");
+        if !window_chips.is_empty() {
+            // tool windows: chips in reading order, so the primary action ends up leftmost
+            for (label, key) in window_chips.iter().rev() {
+                hint(label, key);
+            }
+        } else {
+            if list {
+                hint("Actions", "⌘K");
+            }
+            if let Some(pl) = primary {
+                hint(&pl, "↵");
+            }
+            if !list && self.stack.len() > 1 {
+                hint("Back", "esc");
+            }
         }
-        if let Some(pl) = primary {
-            hint(&pl, "↵");
-        }
-        if !list && self.stack.len() > 1 {
-            hint("Back", "esc");
-        }
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-chips"), drawn));
     }
 
     fn draw_list(&mut self, ui: &mut Ui, rect: Rect, sections: &[Section], pal: &Palette) -> (Option<usize>, Option<usize>) {
@@ -2128,13 +2154,6 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "pick a goal · ↵ save compressed copies · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
     }
 
     /// Edit Metadata window: rows grouped by file, track and chapter, a text box per editable row
@@ -2247,13 +2266,7 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area.center().x, area.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "edit a value or clear it · ↵ save a copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area.center().x, area.max.y - 14.0), "edit a value or clear it", pal);
     }
 
     /// Speed window: presets, a logarithmic slider and the resulting length. Pitch is preserved.
@@ -2289,13 +2302,7 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "pick a preset or drag the slider · ↵ save a copy at this speed · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "pick a preset or drag the slider", pal);
     }
 
     /// Normalize window: measured loudness versus the target, with loudness, range and true-peak controls.
@@ -2352,13 +2359,7 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area.center().x, area.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "pick a target or type one · ↵ save a normalized copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area.center().x, area.max.y - 14.0), "pick a target or type one", pal);
     }
 
     /// Channels window: mono or stereo output and the volume of each side in dB.
@@ -2419,13 +2420,7 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area.center().x, area.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "pick Mono or Stereo, set the volumes · ↵ save a copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area.center().x, area.max.y - 14.0), "pick Mono or Stereo, set the volumes", pal);
     }
 
     /// Audio to video window: waveform or still picture, and the canvas shape. No number or text
@@ -2498,13 +2493,7 @@ impl App {
             }
             ctx.request_repaint();
         }
-        ui.painter().text(
-            Pos2::new(area.center().x, area.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "pick the picture and the shape · ↵ make the video · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area.center().x, area.max.y - 14.0), "pick the picture and the shape", pal);
     }
 
     /// Video trim viewer: the frame at the cursor, a timeline with start and end markers, and
@@ -2630,19 +2619,7 @@ impl App {
             FontId::proportional(12.5),
             pal.text,
         );
-        ui.painter().text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            if snapshot {
-                "←/→ frame · ⇧←/→ second · click to jump · ↵ save full-resolution PNG · esc cancel"
-            } else if split {
-                "←/→ frame · ⇧←/→ second · click the bar to jump · M cut here · ⌫ remove last · ↵ split · esc cancel"
-            } else {
-                "←/→ frame · ⇧←/→ second · click the bar to jump · I start · O end · ↵ save the exact cut · esc cancel"
-            },
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "click the bar to jump", pal);
         if split {
             let clips = ferrocast_core::videoplan::split_ranges(t.duration, &points, parts).len();
             let row = Rect::from_min_size(Pos2::new(bar.min.x, bar.max.y + 8.0), Vec2::new(bar.width(), 24.0));
@@ -2785,13 +2762,7 @@ impl App {
             FontId::proportional(12.5),
             pal.text,
         );
-        painter.text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "←/→ 10 ms · ⇧←/→ second · click the waveform to jump · I start · O end · ↵ save the cut · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "click the waveform to jump", pal);
         let (mut start, mut end, mut silence) = (t.start, t.end, false);
         let row = Rect::from_min_size(Pos2::new(wave.min.x, wave.max.y + 30.0), Vec2::new(wave.width(), 26.0));
         ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
@@ -2966,12 +2937,11 @@ impl App {
                 pal.text,
             );
         }
-        ui.painter().text(
+        note_line(
+            ui,
             Pos2::new(right.center().x, rect.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "click a shaded range to select it · overlapping ranges are merged · ↵ save bleeped copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
+            "click a shaded range to select it · overlapping ranges are merged",
+            pal,
         );
         if ranges_new != ranges || sel_new != sel {
             if let Some(View::BleepAudio { ranges, sel, .. }) = self.stack.last_mut() {
@@ -3178,13 +3148,7 @@ impl App {
                 ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
             }
         }
-        ui.painter().text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            format!("{n} pictures · the preview is a reduced copy · ↵ save the collage · esc cancel"),
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), format!("{n} pictures · the preview is a reduced copy"), pal);
     }
 
     /// Background editor: sliders for padding, corners and shadow, a colour or blurred backdrop;
@@ -3349,13 +3313,7 @@ impl App {
                 ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
             }
         }
-        ui.painter().text(
-            Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "drag a slider · the preview is a reduced copy · ↵ save a full-size copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "drag a slider · the preview is a reduced copy", pal);
     }
 
     /// Redaction editor: drag on the picture to add an area, drag an area to move or resize it,
@@ -3493,12 +3451,11 @@ impl App {
                 }
             }
         }
-        ui.painter().text(
+        note_line(
+            ui,
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "drag to add an area · drag an area to move, corners to resize · ⌫ remove · the preview only marks areas; the cover is applied on save · ↵ save · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
+            "drag to add an area · drag an area to move, corners to resize · the preview only marks areas; the cover is applied on save",
+            pal,
         );
         if (areas.clone(), sel, (blur, radius), color) != before {
             if let Some(View::RedactImage { areas: a, sel: s, blur: b, radius: r, color: c, .. }) = self.stack.last_mut() {
@@ -3768,16 +3725,15 @@ impl App {
         ] {
             ui.painter().rect_filled(Rect::from_center_size(p, Vec2::splat(8.0)), 1.0, pal.accent);
         }
-        ui.painter().text(
+        note_line(
+            ui,
             Pos2::new(area_in.center().x, area_in.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
             if matches!(self.view(), View::VideoRedact { .. }) {
-                "drag to move/resize the selected area · the preview only marks it · ↵ save redacted copy · esc cancel"
+                "drag to move/resize the selected area · the preview only marks it"
             } else {
-                "drag inside to move · drag an edge or corner to resize · presets lock the ratio · ↵ save a cropped copy · esc cancel"
+                "drag inside to move · drag an edge or corner to resize · presets lock the ratio"
             },
-            FontId::proportional(11.5),
-            pal.sub,
+            pal,
         );
         if (rect, aspect) != before {
             match self.stack.last_mut() {
@@ -3855,13 +3811,7 @@ impl App {
                 ui.painter().text(img_rect.center(), egui::Align2::CENTER_CENTER, "Loading…", FontId::proportional(16.0), pal.sub);
             }
         }
-        ui.painter().text(
-            Pos2::new(rect.center().x, rect.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "drag a slider · the preview is a reduced copy · ↵ save a full-size copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
-        );
+        note_line(ui, Pos2::new(rect.center().x, rect.max.y - 14.0), "drag a slider · the preview is a reduced copy", pal);
     }
 
     /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.
@@ -4075,12 +4025,11 @@ impl App {
             );
             ui.painter().rect_stroke(r, 2.0, Stroke::new(1.5, pal.accent), StrokeKind::Outside);
         }
-        ui.painter().text(
+        note_line(
+            ui,
             Pos2::new(rect.center().x, rect.max.y - 14.0),
-            egui::Align2::CENTER_CENTER,
-            "drag to draw · click a Number to place · Select: click and drag to move · ⌘Z undo · ⌫ delete · ↵ save a copy · esc cancel",
-            FontId::proportional(11.5),
-            pal.sub,
+            "drag to draw · click a Number to place · Select: click and drag to move",
+            pal,
         );
         if (doc.clone(), tool, color, sel) != before {
             if let Some(View::Annotate { doc: d, tool: t, color: c, sel: s, .. }) = self.stack.last_mut() {
@@ -4119,10 +4068,11 @@ impl App {
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(Vec2::new(16.0, 12.0))), |ui| {
             ui.label(RichText::new(format!("{} files · first to last", files.len())).size(13.0).color(pal.text));
             let hint = match purpose {
-                ReorderPurpose::JoinVideos => "First clip sets the canvas · drag a row or ⌘↑/⌘↓ to move · ↵ join",
-                ReorderPurpose::CreatePdf => "One page per picture · drag a row or ⌘↑/⌘↓ to move · ↵ create PDF",
-                _ => "Drag a row or ⌘↑/⌘↓ to move · ↵ merge",
+                ReorderPurpose::JoinVideos => "First clip sets the canvas · drag a row to move",
+                ReorderPurpose::CreatePdf => "One page per picture · drag a row to move",
+                _ => "Drag a row to move",
             };
+            record_note(ui.ctx(), hint);
             ui.label(RichText::new(hint).size(12.0).color(pal.sub));
             ui.add_space(6.0);
             egui::ScrollArea::vertical().id_salt("reorder-list").auto_shrink([false, false]).show(ui, |ui| {
@@ -4345,12 +4295,6 @@ impl App {
                 }
                 ctx.request_repaint();
             }
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("←/→ choose · drag or ⌘←/→ move · R rotate (⇧R back) · D duplicate · ⌫ remove · ↵ save a copy · esc cancel")
-                    .size(11.5)
-                    .color(pal.sub),
-            );
         });
     }
 
@@ -5720,6 +5664,20 @@ fn segmented_bar(ui: &mut Ui, pal: &Palette, sel: Option<usize>, labels: &[&str]
         });
     }
     (clicked, cells)
+}
+
+/// The grey one-line note under a tool window (information only; keys live in the footer).
+fn note_line(ui: &Ui, at: Pos2, text: impl AsRef<str>, pal: &Palette) {
+    record_note(ui.ctx(), text.as_ref());
+    ui.painter().text(at, Align2::CENTER_CENTER, text.as_ref(), FontId::proportional(11.5), pal.sub);
+}
+
+/// Tests read every note a window drew (cleared by the test before rendering).
+fn record_note(ctx: &egui::Context, text: &str) {
+    #[cfg(test)]
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<String>>(Id::new("body-notes")).push(text.to_string()));
+    #[cfg(not(test))]
+    let _ = (ctx, text);
 }
 
 fn keycap(ui: &mut Ui, pal: &Palette, label: &str) {

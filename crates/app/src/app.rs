@@ -596,6 +596,43 @@ impl View {
             _ => Shape::Single,
         }
     }
+    /// Footer key chips (label, key), left to right, for the tool windows; empty for every other view.
+    /// The primary action (what Enter does in that window) comes first, then the most useful other
+    /// keys, and Back last; at most four chips so the footer fits next to the title.
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        const BACK: (&str, &str) = ("Back", "esc");
+        const SAVE: (&str, &str) = ("Save copy", "↵");
+        let trim = vec![("Trim", "↵"), ("Start", "I"), ("End", "O"), BACK];
+        match self {
+            View::CompressImage { .. } => vec![("Compress", "↵"), BACK],
+            View::EditMetadata { .. }
+            | View::VideoSpeed { .. }
+            | View::ChannelsAudio { .. }
+            | View::BleepAudio { .. }
+            | View::FrameImage { .. }
+            | View::EditPhoto { .. }
+            | View::VideoRedact { .. } => vec![SAVE, BACK],
+            View::NormalizeAudio { .. } => vec![("Normalize", "↵"), BACK],
+            View::VisualizeAudio { .. } => vec![("Make video", "↵"), BACK],
+            View::VideoTrim { .. } | View::AudioTrim { .. } => trim,
+            View::VideoSnapshot { .. } => vec![("Save PNG", "↵"), ("Frame", "←/→"), BACK],
+            View::VideoSplit { .. } => vec![("Split", "↵"), ("Cut here", "M"), ("Remove last", "⌫"), BACK],
+            View::CollageImage { .. } => vec![("Save collage", "↵"), BACK],
+            View::RedactImage { .. } => vec![SAVE, ("Remove", "⌫"), BACK],
+            View::CropImage { .. } | View::VideoCrop { .. } => vec![("Crop", "↵"), BACK],
+            View::Annotate { .. } => vec![SAVE, ("Undo", "⌘Z"), ("Delete", "⌫"), BACK],
+            View::Reorder { purpose, .. } => {
+                let primary = match purpose {
+                    ReorderPurpose::JoinVideos => "Join",
+                    ReorderPurpose::CreatePdf => "Create PDF",
+                    ReorderPurpose::MergePdf | ReorderPurpose::MergeAudio => "Merge",
+                };
+                vec![(primary, "↵"), ("Move", "⌘↑/↓"), BACK]
+            }
+            View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
+            _ => vec![],
+        }
+    }
     fn title(&self) -> &'static str {
         match self {
             View::Root => "Ferrocast",
