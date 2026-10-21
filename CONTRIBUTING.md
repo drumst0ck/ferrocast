@@ -21,6 +21,22 @@ Supported inputs: `FERROCAST_VIEW` (clipboard, snippets, quicklinks, emoji, sett
 welcome, shortcuts, about), `FERROCAST_QUERY`, `FERROCAST_PANEL=1`. Use a throwaway
 `FERROCAST_DATA_DIR` so real data is never touched.
 
+## Branches and pull requests
+
+- Work on a topic branch and open small, chained pull requests (`chain/NN-topic`), about 400 changed lines each, with the tests and docs that belong to the behavior in the same slice.
+- Use Conventional Commit messages (`feat(web): …`, `fix(tools): …`).
+- Never upgrade a status (Built to Tested) without checking it on real files or in a real session; the record is `docs/STATUS.es.md`.
+
+## Website, docs and changelog
+
+The site lives in `web/` (Astro, Starlight docs, PostgreSQL changelog) and deploys to ferrocast.app through Coolify.
+
+- `cd web && npm ci && npm run dev` starts it. `npm run build` also checks that the generated data still holds 275 conversion pairs over 46 inputs.
+- `docker compose up -d db` in `web/` starts PostgreSQL for the changelog (copy `.env.example` to `.env`). `npm test` runs the unit tests; set `TEST_DATABASE_URL=postgres://ferrocast:ferrocast@localhost:5432/ferrocast` to include the database tests.
+- After changing conversions or tools in Rust, regenerate the site data with `cargo run -p ferrocast-core --example site_data` and commit `web/src/data/*.json`.
+- Every user-visible change needs an entry in `CHANGELOG.md` under `[Unreleased]`: one bullet per change in a `###` category (`Added`, `Changed`, `Fixed`, `Removed`, `Security`, `Known limitations`), an optional `**Title**:` prefix, optional trailing `#tags` and `(docs: /docs/…)`. Check it with `cd web && npm run changelog:push -- --dry-run`. A push to `master` that touches `CHANGELOG.md` publishes it.
+- A new feature also needs its documentation page under `web/src/content/docs/`.
+
 ## Rules of thumb
 
 - Put logic in `core` with tests; keep `app` thin.
@@ -31,7 +47,7 @@ welcome, shortcuts, about), `FERROCAST_QUERY`, `FERROCAST_PANEL=1`. Use a throwa
 
 ## Releasing (Homebrew, no paid Apple account)
 
-1. Bump `version` in the root `Cargo.toml`, update `CHANGELOG.md`, make sure CI is green.
+1. Bump `version` in the root `Cargo.toml`, move `[Unreleased]` in `CHANGELOG.md` to a dated `## [X.Y.Z] - YYYY-MM-DD` section, make sure CI is green.
 2. `git tag vX.Y.Z && git push --tags`.
 3. `scripts/update_formula.sh drumst0ck/ferrocast` rewrites `Formula/ferrocast.rb` (url + sha256) from the pushed tag; commit and push it.
 4. Users run `brew upgrade ferrocast`.

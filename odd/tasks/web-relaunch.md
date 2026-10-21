@@ -18,8 +18,9 @@ Plans: odd/plans/web-relaunch-master-plan.md (read first) + five sibling plans.
 - T3 (S4) chain/18-docs-site: Starlight, IA, generated pages. Route: inline/worker. Commit: pending
 - T4 (S5) chain/19-home-redesign. Route: inline. Commit: pending
 - T5 (S6) chain/20-seo. Route: inline. Commit: chain/20-seo (data layer, merge of 19, pages). Verified locally: build, 29 tests, 0 broken links, 0 duplicate meta over 311 pages. Not done: ES pages for /convert and /tools, per-page OG images, analytics, Search Console, Lighthouse CI
-- T6 (S7) chain/21-project-info. Route: inline. Commit: pending
+- T6 (S7) chain/21-project-info. Route: inline. Commit: chain/21-project-info (README EN/ES, STATUS, templates, About link). Repo metadata via gh pending consent (T7)
 - T7 External (S1) Coolify app+DB, DNS, GitHub repo metadata: needs owner credentials/consent. Status: pending
 
 ## Log
 - L1 owner: see odd/plans/web-relaunch-master-plan.md Log L1 (verbatim). "ejecutalo"
+- L3 (T5 prep): conversions.json exposes only {ext,label,needs} per pair (159/275 need an optional tool); engine, lossy and notes are NOT in the data. /convert pages must use `needs` plus family-level facts from README/CHANGELOG, never invented per-pair engine claims. Extending site_data.rs is optional and out of the first slice.

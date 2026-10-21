@@ -1,0 +1,19 @@
+name: Conversion or file tool problem
+description: A conversion fails, looks wrong or a file tool misbehaves
+labels: [files]
+body:
+  - type: input
+    id: input
+    attributes: { label: Input format, placeholder: heic }
+    validations: { required: true }
+  - type: input
+    id: output
+    attributes: { label: Output format or tool, placeholder: jpg, or “Trim Video” }
+    validations: { required: true }
+  - type: textarea
+    id: tools
+    attributes: { label: Optional tools installed, description: "Output of `ffmpeg -version | head -1`, `soffice --version`, `gs --version` if they apply" }
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: "Include the toast or error text. Do not attach private files." }
+    validations: { required: true }
