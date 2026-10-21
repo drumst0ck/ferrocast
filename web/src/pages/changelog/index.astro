@@ -1,0 +1,49 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../../components/SiteHeader.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
+import ChangelogEntries from '../../components/ChangelogEntries.astro';
+import { loadReleases, versionLabel } from '../../lib/changelog/load';
+
+export const prerender = false;
+
+const repo = 'https://github.com/drumst0ck/ferrocast';
+const releases = await loadReleases();
+const tag = Astro.url.searchParams.get('tag')?.toLowerCase().replace(/[^a-z0-9-]/g, '') || null;
+const allTags = releases ? [...new Set(releases.flatMap((r) => r.entries.flatMap((e) => e.tags)))].sort() : [];
+const canonical = new URL('/changelog/', Astro.site).href;
+if (!releases) Astro.response.status = 503;
+---
+<Base title="Changelog · Ferrocast" description="What changed in Ferrocast, release by release: new tools, fixes and known limitations, with a feed you can subscribe to." canonical={canonical}>
+  <SiteHeader />
+  <main class="wrap prose" id="main">
+    <h1>Changelog</h1>
+    <p class="muted">Every change to Ferrocast, newest first. <a class="tl" href="/changelog/rss.xml">RSS</a> · <a class="tl" href="/changelog.json">JSON Feed</a> · <a class="tl" href={`${repo}/releases`}>GitHub releases</a></p>
+    {!releases && (
+      <p class="cl-note">The changelog is temporarily unavailable. You can read it on <a class="tl" href={`${repo}/blob/master/CHANGELOG.md`}>GitHub</a>.</p>
+    )}
+    {releases && allTags.length > 0 && (
+      <nav aria-label="Filter by tag" class="cl-tags">
+        <a href="/changelog/" aria-current={tag ? undefined : 'true'}>all</a>
+        {allTags.map((t) => <a href={`/changelog/?tag=${t}`} aria-current={tag === t ? 'true' : undefined}>#{t}</a>)}
+      </nav>
+    )}
+    {releases?.map((r) => (
+      <section class="cl-release" id={r.version}>
+        <h2><a href={`/changelog/${r.version}/`} style="text-decoration:none">{versionLabel(r.version)}</a>{r.releasedOn && <time datetime={r.releasedOn}>{r.releasedOn}</time>}</h2>
+        {r.summary && <p class="muted">{r.summary}</p>}
+        <ChangelogEntries entries={r.entries} tag={tag} />
+      </section>
+    ))}
+  </main>
+  <SiteFooter />
+</Base>
+<style is:global>
+  .prose { max-width: 760px; margin: clamp(40px, 6vw, 80px) auto 0; display: grid; gap: 18px; }
+  .prose h1 { font-size: var(--step-head); line-height: 1; margin-bottom: 12px; }
+  .prose h2 { font-size: var(--step-lead); margin: 0; }
+  .prose p { color: var(--muted); }
+  .prose code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: .92em; background: var(--surface); padding: 2px 6px; border-radius: 6px; }
+  .prose .cl-tags { margin: 0; flex-wrap: wrap; }
+  .prose .cl-tags a[aria-current] { color: var(--accent); }
+</style>

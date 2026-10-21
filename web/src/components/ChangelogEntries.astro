@@ -1,0 +1,42 @@
+---
+import { CATEGORY_LABEL, CATEGORY_ORDER } from '../lib/changelog/load';
+import type { EntryView } from '../lib/changelog/query';
+interface Props { entries: EntryView[]; tag?: string | null }
+const { entries, tag = null } = Astro.props;
+const shown = tag ? entries.filter((e) => e.tags.includes(tag)) : entries;
+const groups = CATEGORY_ORDER.map((c) => [c, shown.filter((e) => e.category === c)] as const).filter(([, es]) => es.length);
+---
+{groups.map(([c, es]) => (
+  <section class="cl-group">
+    <h3><span class={`chip chip-${c}`}>{CATEGORY_LABEL[c]}</span></h3>
+    <ul>
+      {es.map((e) => (
+        <li id={e.slug}>
+          {e.title && <strong>{e.title}</strong>}{e.title && ': '}<span set:html={e.bodyHtml} />
+          {e.docsUrl && <> <a class="tl" href={e.docsUrl}>Docs</a></>}
+          {e.tags.length > 0 && <span class="cl-tags">{e.tags.map((t) => <a href={`/changelog/?tag=${t}`}>#{t}</a>)}</span>}
+        </li>
+      ))}
+    </ul>
+  </section>
+))}
+{groups.length === 0 && <p class="muted">No entries{tag ? ` tagged #${tag}` : ''}.</p>}
+<style is:global>
+  .cl-group { margin-top: 20px; }
+  .cl-group h3 { margin: 0 0 10px; }
+  .cl-group ul { margin: 0; padding-left: 1.1em; display: grid; gap: 10px; }
+  .cl-group li::marker { color: var(--accent); }
+  .cl-group p, .cl-group li { max-width: 72ch; }
+  .chip { display: inline-block; font-family: var(--font-text); font-size: .8125rem; font-weight: 500; padding: 3px 10px; border-radius: 999px; background: var(--surface); color: var(--muted); letter-spacing: 0; }
+  .chip-added { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); }
+  .chip-fixed { background: color-mix(in srgb, #3fb97f 22%, transparent); color: var(--ink); }
+  .chip-changed { background: color-mix(in srgb, #4c8dff 22%, transparent); color: var(--ink); }
+  .chip-security { background: color-mix(in srgb, #e5a93c 24%, transparent); color: var(--ink); }
+  .cl-tags { display: inline-flex; gap: 8px; margin-left: 10px; font-size: .8125rem; }
+  .cl-tags a { color: var(--muted); text-decoration: none; }
+  @media (hover:hover) { .cl-tags a:hover { color: var(--accent); } }
+  .cl-release { margin-top: clamp(40px, 6vw, 72px); scroll-margin-top: 24px; }
+  .cl-release h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px; }
+  .cl-release time { font-family: var(--font-text); font-size: 1rem; color: var(--muted); }
+  .cl-note { padding: 16px 20px; background: var(--surface); border-radius: var(--radius); }
+</style>

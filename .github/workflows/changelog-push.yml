@@ -1,0 +1,25 @@
+name: Push changelog
+on:
+  push:
+    branches: [master]
+    paths: ['CHANGELOG.md']
+  workflow_dispatch:
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run changelog:push -- --dry-run > /dev/null
+      - run: npm run changelog:push
+        env:
+          CHANGELOG_ADMIN_TOKEN: ${{ secrets.CHANGELOG_ADMIN_TOKEN }}
+          CHANGELOG_URL: ${{ vars.CHANGELOG_URL }}

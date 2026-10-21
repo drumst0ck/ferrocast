@@ -15,6 +15,8 @@ WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=4321
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY drizzle ./drizzle
+COPY scripts/migrate.mjs ./scripts/migrate.mjs
 COPY package.json ./
 USER node
 EXPOSE 4321
