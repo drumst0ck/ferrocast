@@ -946,7 +946,7 @@ impl App {
             services::refresh_rates(bus.clone());
         }
         let mut app = App {
-            icons: IconCache::new(store.images_dir()),
+            icons: IconCache::new(store.images_dir()).with_bus(bus.clone()),
             ctx,
             shared,
             bus,

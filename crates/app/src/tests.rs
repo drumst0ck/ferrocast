@@ -5640,3 +5640,113 @@ fn only_messages_that_can_change_the_list_mark_the_sections_dirty() {
         let _ = app.sections_cached();
     }
 }
+
+/// Steady-state frame cost of a long list, for odd/plans/performance-plan.md (P4):
+/// `cargo test --release -p ferrocast list_frame_timing -- --ignored --nocapture`
+#[test]
+#[ignore = "timing probe; prints milliseconds per frame"]
+fn list_frame_timing_clipboard_1000_and_emoji() {
+    let mut app = fixture();
+    let now = now_secs();
+    *app.shared.clipboard.lock().unwrap() = (0..1000)
+        .map(|i| ClipEntry {
+            id: format!("clip-{i}"),
+            kind: ClipKind::Text,
+            content: format!("line {i} of a fairly typical clipboard text entry with some words ").repeat(4),
+            title: None,
+            copied_at: now - i * 60,
+            pinned: false,
+            source_app: Some("Safari".into()),
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        })
+        .collect();
+    for (name, view) in [("clipboard 1000", View::Clipboard), ("emoji", View::Emoji), ("root", View::Root)] {
+        app.stack = vec![View::Root, view];
+        if name == "root" {
+            app.stack = vec![View::Root];
+        }
+        for _ in 0..5 {
+            render(&mut app, vec![]);
+        }
+        let n = 30;
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            render(&mut app, vec![]);
+        }
+        eprintln!("{name}: {:?} per frame (mean of {n}, after warm-up)", t.elapsed() / n);
+    }
+}
+
+fn write_png(dir: &std::path::Path, name: &str, w: u32, h: u32) {
+    std::fs::create_dir_all(dir).unwrap();
+    image::RgbaImage::from_pixel(w, h, image::Rgba([200, 80, 40, 255])).save(dir.join(name)).unwrap();
+}
+
+#[test]
+fn a_big_clipboard_image_is_decoded_off_the_ui_thread_and_downscaled() {
+    let mut app = fixture();
+    write_png(&app.store.images_dir(), "big.png", 2400, 1800);
+    app.icons = IconCache::new(app.store.images_dir()).with_bus(app.bus.clone());
+    let ctx = app.ctx.clone();
+    let icon = Icon::ClipImage("big.png".into());
+    app.icons.new_frame();
+    assert!(app.icons.texture(&ctx, &icon).is_none(), "the UI thread shows a placeholder, it does not decode the file");
+    // the worker answers with PNG bytes through the bus; drain() hands them to the cache
+    let t = Instant::now();
+    let tex = loop {
+        app.drain();
+        app.icons.new_frame();
+        if let Some(t) = app.icons.texture(&ctx, &icon) {
+            break t;
+        }
+        assert!(t.elapsed() < Duration::from_secs(20), "the image never arrived");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let [w, h] = tex.size();
+    assert!(w.max(h) <= ui::CLIP_IMAGE_PX as usize, "{w}x{h} must be at most {} px", ui::CLIP_IMAGE_PX);
+    assert_eq!(w * 3, h * 4, "the aspect ratio is kept: {w}x{h}");
+    // a file that cannot be read settles as "no picture" instead of retrying every frame
+    let bad = Icon::ClipImage("missing.png".into());
+    let t = Instant::now();
+    while {
+        app.drain();
+        app.icons.new_frame();
+        app.icons.texture(&ctx, &bad);
+        !app.icons.map.contains_key("clip:missing.png")
+    } {
+        assert!(t.elapsed() < Duration::from_secs(20), "a missing file never settled");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(app.icons.map["clip:missing.png"].is_none());
+}
+
+#[test]
+fn clipboard_image_textures_are_capped_least_recently_used_first() {
+    let mut app = fixture();
+    let dir = app.store.images_dir();
+    let total = ui::CLIP_TEXTURES + 8;
+    for i in 0..total {
+        write_png(&dir, &format!("i{i}.png"), 8, 8);
+    }
+    let ctx = app.ctx.clone();
+    for i in 0..total {
+        app.icons.new_frame();
+        assert!(app.icons.texture(&ctx, &Icon::ClipImage(format!("i{i}.png"))).is_some(), "i{i}");
+        // keep image 0 in use: it must survive the eviction of older, untouched ones
+        app.icons.texture(&ctx, &Icon::ClipImage("i0.png".into()));
+    }
+    let clip_keys = app.icons.map.keys().filter(|k| k.starts_with("clip:")).count();
+    assert_eq!(clip_keys, ui::CLIP_TEXTURES, "the cache never holds more than the cap");
+    assert!(app.icons.map.contains_key("clip:i0.png"), "the recently used image stays");
+    assert!(!app.icons.map.contains_key("clip:i1.png"), "the least recently used one was dropped");
+    assert!(app.icons.map.contains_key(&format!("clip:i{}.png", total - 1)), "the newest stays");
+    // an evicted image loads again when it is shown again
+    app.icons.new_frame();
+    assert!(app.icons.texture(&ctx, &Icon::ClipImage("i1.png".into())).is_some());
+    // other icon kinds are never evicted
+    app.icons.new_frame();
+    assert!(app.icons.texture(&ctx, &Icon::Glyph("sf:command", [1, 2, 3])).is_some());
+    assert!(app.icons.map.keys().any(|k| k.starts_with("glyph:")));
+}
