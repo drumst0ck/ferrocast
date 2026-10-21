@@ -73,6 +73,17 @@ impl PdfPlan {
         self.cursor = to as usize;
     }
 
+    /// Move the page at `from` so it ends up at `to` (a drag and drop); the cursor follows it.
+    /// The whole entry moves, so its rotation travels with it. `false` and no change when either
+    /// index is out of range. The same result as shifting that page one place at a time.
+    pub fn move_page(&mut self, from: usize, to: usize) -> bool {
+        if !crate::reorder::move_item(&mut self.pages, from, to) {
+            return false;
+        }
+        self.cursor = to;
+        true
+    }
+
     /// Selection for the writer: (source index, quarter turns).
     pub fn selection(&self) -> Vec<(usize, i32)> {
         self.pages.iter().map(|p| (p.src, p.turns)).collect()
@@ -154,6 +165,43 @@ mod tests {
         p.shift(1);
         assert_eq!(srcs(&p), [1, 2, 0]);
         assert!(!p.is_identity(3));
+    }
+
+    #[test]
+    fn move_page_carries_the_entry_and_the_cursor() {
+        let mut p = PdfPlan::new(4);
+        p.pages[0].turns = 1;
+        p.move_cursor(2);
+        assert!(p.move_page(0, 2));
+        assert_eq!(srcs(&p), [1, 2, 0, 3]);
+        assert_eq!(p.pages[2], Page { src: 0, turns: 1 }, "the rotation travels with the page");
+        assert_eq!(p.cursor, 2, "the cursor lands on the moved page");
+        assert!(p.move_page(2, 0));
+        assert_eq!(srcs(&p), [0, 1, 2, 3]);
+        assert_eq!(p.cursor, 0);
+        assert!(p.move_page(1, 1), "onto itself is allowed");
+        assert_eq!(srcs(&p), [0, 1, 2, 3]);
+        assert!(!p.move_page(4, 0), "out of range changes nothing");
+        assert!(!p.move_page(0, 4));
+        assert_eq!(srcs(&p), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn move_page_equals_repeated_keyboard_shifts() {
+        for from in 0..5 {
+            for to in 0..5 {
+                let mut kb = PdfPlan::new(5);
+                kb.pages[from].turns = 2;
+                let mut drag = kb.clone();
+                kb.cursor = from;
+                let step = if to > from { 1 } else { -1 };
+                for _ in 0..from.abs_diff(to) {
+                    kb.shift(step);
+                }
+                assert!(drag.move_page(from, to));
+                assert_eq!(drag, kb, "from {from} to {to}");
+            }
+        }
     }
 
     #[test]

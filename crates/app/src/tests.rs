@@ -3973,3 +3973,164 @@ fn collage_thumbnails_that_arrive_after_a_reorder_follow_the_current_order() {
     assert_eq!(align_to_current(&[p("a"), p("x")], &[p("a"), p("b")], vec![1, 2]), None, "a different set of files is stale");
     assert_eq!(align_to_current(&now, &loaded, vec![1, 2]), None, "an image missing");
 }
+
+// ---- A8c part 2: drag to reorder the PDF organizer's thumbnails
+
+fn open_organizer(app: &mut App, plan: ferrocast_core::pdfplan::PdfPlan) -> Vec<Rect> {
+    let f = std::env::temp_dir().join(format!("fc-orgdrag-{}.pdf", std::process::id()));
+    let n = plan.pages.iter().map(|p| p.src + 1).max().unwrap_or(0);
+    let want = plan.pages.len();
+    app.ctx.data_mut(|d| d.remove::<Vec<Rect>>(Id::new(("dnd-rects", "pdf-strip"))));
+    app.stack = vec![View::Root, View::PdfOrganize { file: f, n, plan }];
+    render(app, vec![]);
+    render(app, vec![]);
+    let rects = dnd_rects(app, "pdf-strip");
+    assert_eq!(rects.len(), want, "one draggable cell per page entry");
+    rects
+}
+
+fn page_srcs(app: &App) -> Vec<usize> {
+    organizer_plan(app).pages.iter().map(|p| p.src).collect()
+}
+
+/// Where to release to drop the page at `from` on top of the one at `to`: the half of the target
+/// that makes the gap after it (moving right) or before it (moving left).
+fn drop_on(rects: &[Rect], from: usize, to: usize) -> Pos2 {
+    rects[to].center() + Vec2::new(if to > from { 30.0 } else { -30.0 }, 0.0)
+}
+
+#[test]
+fn pdf_organizer_renders_with_marks_in_both_themes_for_1_3_and_9_pages() {
+    use ferrocast_core::pdfplan::PdfPlan;
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for n in [1, 3, 9] {
+            let mut plan = PdfPlan::new(n);
+            plan.pages[0].turns = 1; // a rotated mark
+            if n > 1 {
+                plan.pages[n - 1].turns = 3;
+                plan.cursor = 1;
+                plan.remove(); // a removed page leaves a gap in the source numbers
+                plan.cursor = 0;
+            }
+            let want = plan.pages.len();
+            let rects = open_organizer(&mut app, plan);
+            assert_eq!(rects.len(), want, "{n} pages: one draggable cell per page entry");
+            assert!(rects.iter().all(|r| r.width() > 50.0 && r.height() > 50.0));
+            assert!(matches!(app.view(), View::PdfOrganize { .. }));
+        }
+    }
+}
+
+#[test]
+fn dragging_a_thumbnail_to_the_front_middle_and_end_moves_the_page() {
+    use ferrocast_core::pdfplan::PdfPlan;
+    let mut app = fixture();
+    // to the end
+    let rects = open_organizer(&mut app, PdfPlan::new(4));
+    let to = drop_on(&rects, 0, 3);
+    drag_begin(&mut app, rects[0].center(), to);
+    assert_eq!(page_srcs(&app), [0, 1, 2, 3], "nothing moves until the release");
+    drag_release(&mut app, to);
+    assert_eq!(page_srcs(&app), [1, 2, 3, 0], "first page dropped on the end");
+    assert_eq!(organizer_plan(&app).cursor, 3, "the selection follows the moved page");
+    // to the front
+    let rects = open_organizer(&mut app, PdfPlan::new(4));
+    let to = drop_on(&rects, 3, 0);
+    drag_begin(&mut app, rects[3].center(), to);
+    drag_release(&mut app, to);
+    assert_eq!(page_srcs(&app), [3, 0, 1, 2], "last page dropped on the front");
+    assert_eq!(organizer_plan(&app).cursor, 0);
+    // to the middle
+    let rects = open_organizer(&mut app, PdfPlan::new(4));
+    let to = drop_on(&rects, 0, 2);
+    drag_begin(&mut app, rects[0].center(), to);
+    drag_release(&mut app, to);
+    assert_eq!(page_srcs(&app), [1, 2, 0, 3], "page 1 dropped after page 3");
+    assert_eq!(organizer_plan(&app).cursor, 2);
+}
+
+#[test]
+fn dragging_a_thumbnail_gives_the_same_plan_as_the_keyboard_move() {
+    use ferrocast_core::pdfplan::PdfPlan;
+    let mut app = fixture();
+    let rects = open_organizer(&mut app, PdfPlan::new(4));
+    let to = drop_on(&rects, 0, 2);
+    drag_begin(&mut app, rects[0].center(), to);
+    drag_release(&mut app, to);
+    let dragged = organizer_plan(&app);
+    let mut kb = open_organizer(&mut app, PdfPlan::new(4));
+    kb.clear();
+    render(&mut app, vec![key_mod_event(Key::ArrowRight, Modifiers::COMMAND)]);
+    render(&mut app, vec![key_mod_event(Key::ArrowRight, Modifiers::COMMAND)]);
+    let keyed = organizer_plan(&app);
+    assert_eq!(dragged, keyed, "two ⌘→ presses and a two-place drag are the same edit");
+    assert_eq!(dragged.selection(), [(1, 0), (2, 0), (0, 0), (3, 0)], "what the writer gets");
+}
+
+#[test]
+fn rotation_and_removal_marks_travel_with_the_dragged_page() {
+    use ferrocast_core::pdfplan::{Page, PdfPlan};
+    let mut app = fixture();
+    let mut plan = PdfPlan::new(5);
+    plan.pages[1].turns = 1;
+    plan.pages[3].turns = 2;
+    plan.cursor = 2;
+    plan.remove(); // source page 3 is gone: entries are 0,1,3,4
+    plan.cursor = 0;
+    assert_eq!(plan.selection(), [(0, 0), (1, 1), (3, 2), (4, 0)]);
+    let rects = open_organizer(&mut app, plan);
+    let to = drop_on(&rects, 1, 3);
+    drag_begin(&mut app, rects[1].center(), to);
+    drag_release(&mut app, to);
+    let p = organizer_plan(&app);
+    assert_eq!(p.selection(), [(0, 0), (3, 2), (4, 0), (1, 1)], "each entry keeps its own rotation");
+    assert_eq!(p.pages[3], Page { src: 1, turns: 1 });
+    assert_eq!(p.pages.len(), 4, "the removed page stays removed");
+    assert_eq!(p.cursor, 3);
+}
+
+#[test]
+fn organizer_release_where_it_was_or_outside_or_after_escape_changes_nothing() {
+    use ferrocast_core::pdfplan::PdfPlan;
+    let mut app = fixture();
+    let rects = open_organizer(&mut app, PdfPlan::new(4));
+    let at = rects[1].center();
+    // released where it was
+    drag_begin(&mut app, at, at + Vec2::new(12.0, 0.0));
+    drag_release(&mut app, at + Vec2::new(6.0, 0.0));
+    assert_eq!(page_srcs(&app), [0, 1, 2, 3]);
+    // released outside the strip
+    for outside in [Pos2::new(ui::WIDTH + 60.0, 200.0), Pos2::new(60.0, 8.0), Pos2::new(60.0, ui::HEIGHT - 2.0)] {
+        let rects = open_organizer(&mut app, PdfPlan::new(4));
+        drag_begin(&mut app, rects[0].center(), outside);
+        drag_release(&mut app, outside);
+        assert_eq!(page_srcs(&app), [0, 1, 2, 3], "released at {outside:?}");
+        assert_eq!(organizer_plan(&app).cursor, 0);
+    }
+    // Escape mid-drag: the first Escape only cancels the drag, the second leaves
+    let rects = open_organizer(&mut app, PdfPlan::new(4));
+    let to = drop_on(&rects, 0, 3);
+    drag_begin(&mut app, rects[0].center(), to);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::PdfOrganize { .. }), "the first Escape only cancels the drag");
+    render(&mut app, vec![Event::PointerMoved(to + Vec2::new(0.0, 3.0))]);
+    drag_release(&mut app, to);
+    assert_eq!(page_srcs(&app), [0, 1, 2, 3], "the plan is unchanged after the cancelled drag");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root), "a second Escape leaves as before");
+}
+
+#[test]
+fn organizer_click_still_selects_a_page_next_to_the_drag_source() {
+    use ferrocast_core::pdfplan::PdfPlan;
+    let mut app = fixture();
+    let rects = open_organizer(&mut app, PdfPlan::new(4));
+    let at = rects[2].center();
+    render(&mut app, vec![Event::PointerMoved(at)]);
+    render(&mut app, vec![pointer_button(at, true)]);
+    render(&mut app, vec![pointer_button(at, false)]);
+    assert_eq!(organizer_plan(&app).cursor, 2, "a plain click selects the page");
+    assert_eq!(page_srcs(&app), [0, 1, 2, 3]);
+}

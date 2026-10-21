@@ -3093,13 +3093,14 @@ impl App {
                                         p.text(r.center(), egui::Align2::CENTER_CENTER, name, FontId::proportional(10.5), pal.sub);
                                     }
                                 }
-                                ui.painter().text(
-                                    r.left_bottom() + Vec2::new(6.0, -4.0),
-                                    egui::Align2::LEFT_BOTTOM,
-                                    (i + 1).to_string(),
-                                    FontId::proportional(11.0),
-                                    pal.text,
+                                // the index sits on a small dark pill fully inside the chip
+                                let galley = ui.painter().layout_no_wrap((i + 1).to_string(), FontId::proportional(10.5), Color32::WHITE);
+                                let pill = Rect::from_min_size(
+                                    Pos2::new(r.min.x + 4.0, r.max.y - 4.0 - (galley.size().y + 2.0)),
+                                    galley.size() + Vec2::new(8.0, 2.0),
                                 );
+                                ui.painter().rect_filled(pill, pill.height() / 2.0, Color32::from_black_alpha(190));
+                                ui.painter().galley(pill.center() - galley.size() / 2.0, galley, Color32::WHITE);
                                 if lifted {
                                     ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
                                 }
@@ -4116,9 +4117,9 @@ impl App {
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(Vec2::new(16.0, 12.0))), |ui| {
             ui.label(RichText::new(format!("{} files · first to last", files.len())).size(13.0).color(pal.text));
             let hint = match purpose {
-                ReorderPurpose::JoinVideos => "First clip sets the canvas · ⌘↑/⌘↓ move · ↵ join",
-                ReorderPurpose::CreatePdf => "One page per picture · ⌘↑/⌘↓ move · ↵ create PDF",
-                _ => "⌘↑/⌘↓ move · ↵ merge",
+                ReorderPurpose::JoinVideos => "First clip sets the canvas · drag a row or ⌘↑/⌘↓ to move · ↵ join",
+                ReorderPurpose::CreatePdf => "One page per picture · drag a row or ⌘↑/⌘↓ to move · ↵ create PDF",
+                _ => "Drag a row or ⌘↑/⌘↓ to move · ↵ merge",
             };
             ui.label(RichText::new(hint).size(12.0).color(pal.sub));
             ui.add_space(6.0);
@@ -4278,52 +4279,73 @@ impl App {
                     .color(pal.sub),
             );
             ui.add_space(8.0);
+            let mut res = CellDrag::default();
             egui::ScrollArea::horizontal().id_salt("pdf-strip").auto_shrink([false, true]).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for (pos, page) in plan.pages.iter().enumerate() {
-                        let (r, resp) = ui.allocate_exact_size(Vec2::new(116.0, 168.0), egui::Sense::click());
-                        if resp.clicked() {
-                            if let Some(View::PdfOrganize { plan: p, .. }) = self.stack.last_mut() {
-                                p.cursor = pos;
+                    // each cell is one page entry (rotation included) and can be dragged to a new place
+                    res = drag_reorder_cells(
+                        ui,
+                        "pdf-strip",
+                        plan.pages.len(),
+                        true,
+                        pal,
+                        |ui, pos, lifted| {
+                            let page = &plan.pages[pos];
+                            let (r, _) = ui.allocate_exact_size(Vec2::new(116.0, 168.0), egui::Sense::hover());
+                            let on = pos == plan.cursor;
+                            ui.painter().rect_filled(r, 8.0, if on || lifted { pal.sel } else { pal.field });
+                            if on || lifted {
+                                ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
                             }
-                        }
-                        let on = pos == plan.cursor;
-                        ui.painter().rect_filled(r, 8.0, if on { pal.sel } else { pal.field });
-                        if on {
-                            ui.painter().rect_stroke(r, 8.0, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
-                            ui.scroll_to_rect(r, None);
-                        }
-                        let boxr = Rect::from_min_size(r.min + Vec2::new(8.0, 8.0), Vec2::new(100.0, 128.0));
-                        match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new(("pdfthumb", page.src)))) {
-                            Some(tex) => {
-                                let odd = page.turns % 2 == 1;
-                                let t = tex.size_vec2();
-                                // the page as shown: swapped sides when turned a quarter
-                                let shown = if odd { Vec2::new(t.y, t.x) } else { t };
-                                let k = (boxr.width() / shown.x).min(boxr.height() / shown.y);
-                                let size = t * k;
-                                let img = egui::Image::new(&tex)
-                                    .fit_to_exact_size(size)
-                                    .rotate(page.turns as f32 * std::f32::consts::FRAC_PI_2, Vec2::splat(0.5));
-                                img.paint_at(ui, Rect::from_center_size(boxr.center(), size));
+                            if on && !lifted {
+                                ui.scroll_to_rect(r, None);
                             }
-                            None => {
-                                ui.painter().text(boxr.center(), egui::Align2::CENTER_CENTER, "…", FontId::proportional(18.0), pal.sub);
+                            let boxr = Rect::from_min_size(r.min + Vec2::new(8.0, 8.0), Vec2::new(100.0, 128.0));
+                            match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new(("pdfthumb", page.src)))) {
+                                Some(tex) => {
+                                    let odd = page.turns % 2 == 1;
+                                    let t = tex.size_vec2();
+                                    // the page as shown: swapped sides when turned a quarter
+                                    let shown = if odd { Vec2::new(t.y, t.x) } else { t };
+                                    let k = (boxr.width() / shown.x).min(boxr.height() / shown.y);
+                                    let size = t * k;
+                                    let img = egui::Image::new(&tex)
+                                        .fit_to_exact_size(size)
+                                        .rotate(page.turns as f32 * std::f32::consts::FRAC_PI_2, Vec2::splat(0.5));
+                                    img.paint_at(ui, Rect::from_center_size(boxr.center(), size));
+                                }
+                                None => {
+                                    ui.painter().text(boxr.center(), egui::Align2::CENTER_CENTER, "…", FontId::proportional(18.0), pal.sub);
+                                }
                             }
-                        }
-                        ui.painter().text(
-                            Pos2::new(r.center().x, r.max.y - 14.0),
-                            egui::Align2::CENTER_CENTER,
-                            PdfPlan::label(page),
-                            FontId::proportional(12.0),
-                            if on { pal.text } else { pal.sub },
-                        );
-                    }
+                            ui.painter().text(
+                                Pos2::new(r.center().x, r.max.y - 14.0),
+                                egui::Align2::CENTER_CENTER,
+                                PdfPlan::label(page),
+                                FontId::proportional(12.0),
+                                if on { pal.text } else { pal.sub },
+                            );
+                        },
+                        |_, _, _| {},
+                    );
                 });
             });
+            let mut edited = plan.clone();
+            if let Some(c) = res.clicked {
+                edited.cursor = c;
+            }
+            if let Some((from, to)) = res.moved {
+                edited.move_page(from, to);
+            }
+            if edited != plan {
+                if let Some(View::PdfOrganize { plan: p, .. }) = self.stack.last_mut() {
+                    *p = edited;
+                }
+                ctx.request_repaint();
+            }
             ui.add_space(8.0);
             ui.label(
-                RichText::new("←/→ choose · R rotate (⇧R back) · D duplicate · ⌫ remove · ⌘←/→ move · ↵ save a copy · esc cancel")
+                RichText::new("←/→ choose · drag or ⌘←/→ move · R rotate (⇧R back) · D duplicate · ⌫ remove · ↵ save a copy · esc cancel")
                     .size(11.5)
                     .color(pal.sub),
             );
