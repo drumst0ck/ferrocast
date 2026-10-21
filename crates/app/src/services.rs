@@ -1688,7 +1688,7 @@ mod convert_tests {
     /// real-file tool test is skipped (it still runs in full on a real Mac).
     fn vision_cannot_run() -> bool {
         let fixture = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../macos/fixtures/text.png"));
-        matches!(ferrocast_macos::vision::detect(fixture, false, true), Err(e) if e.to_string().contains("inference context"))
+        matches!(ferrocast_macos::vision::detect(fixture, true, false), Err(e) if e.to_string().contains("inference context"))
     }
 
     #[test]
