@@ -172,7 +172,24 @@ pub enum Msg {
         append: bool,
         result: Result<ferrocast_core::notion::SearchPage, NotionViewError>,
     },
+    /// Result of Add to Notion / Add Clipboard to Notion.
+    NotionAdded(Result<NotionAddDone, NotionAddError>),
     Wake,
+}
+
+/// A capture that reached Notion: the title of the target it was added to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NotionAddDone {
+    pub target_title: String,
+}
+
+/// Why a capture did not (fully) reach Notion.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NotionAddError {
+    /// The Keychain holds no token: nothing was sent.
+    NoToken,
+    /// The exact toast text (a mapped `NotionError`, plus how many parts went through when a long text stopped midway).
+    Failed(String),
 }
 
 /// Why a Search Notion request produced no page.

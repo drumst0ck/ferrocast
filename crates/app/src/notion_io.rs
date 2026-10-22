@@ -80,6 +80,42 @@ pub fn write_clipboard(text: &str) {
     ferrocast_macos::clipboard::write_text(text);
 }
 
+/// Plain text on the clipboard (`None`: empty or not text). Tests set it with `set_test_clipboard`.
+pub fn read_clipboard() -> Option<String> {
+    #[cfg(test)]
+    let t = CLIP.with(|c| c.borrow().clone());
+    #[cfg(not(test))]
+    let t = ferrocast_macos::clipboard::read_text();
+    t
+}
+
+#[cfg(test)]
+thread_local! {
+    static CLIP: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_test_clipboard(v: Option<&str>) {
+    CLIP.with(|c| *c.borrow_mut() = v.map(str::to_string));
+}
+
+/// Maps an API URL like [`url`] does, but can move to a worker thread (it carries the test base URL).
+pub type UrlMapper = Box<dyn Fn(String) -> String + Send>;
+
+pub fn url_mapper() -> UrlMapper {
+    #[cfg(test)]
+    let m: UrlMapper = {
+        let base = BASE.with(|b| b.borrow().clone());
+        Box::new(move |full| match &base {
+            Some(b) => full.replacen("https://api.notion.com/v1", b, 1),
+            None => full,
+        })
+    };
+    #[cfg(not(test))]
+    let m: UrlMapper = Box::new(|full| full);
+    m
+}
+
 #[cfg(test)]
 pub fn take_opened() -> Vec<String> {
     OPENED.with(|o| std::mem::take(&mut *o.borrow_mut()))
@@ -88,6 +124,217 @@ pub fn take_opened() -> Vec<String> {
 #[cfg(test)]
 pub fn take_copied() -> Vec<String> {
     COPIED.with(|o| std::mem::take(&mut *o.borrow_mut()))
+}
+
+// ---------------------------------------------------------------- capture (Add to Notion)
+
+/// Most characters of markdown sent in one request (the API accepts more; this keeps every call small).
+pub const MAX_PART: usize = 100_000;
+/// Longest page title taken from the first line of the text.
+const TITLE_MAX: usize = 100;
+
+/// What to send and where.
+#[derive(Clone, Debug)]
+pub struct Capture {
+    pub target: ferrocast_core::models::NotionTarget,
+    pub title: String,
+    pub text: String,
+}
+
+/// Title and markdown body of a database page: the given title, else the first non-empty line cut at
+/// 100 characters. The line leaves the body only when it fit whole in the title, so a cut never loses text.
+pub fn database_title_and_body(title: &str, text: &str) -> (String, String) {
+    let title = title.trim();
+    if !title.is_empty() {
+        return (title.to_string(), text.to_string());
+    }
+    let mut rest = text;
+    loop {
+        let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
+        if line.trim().is_empty() {
+            if after.is_empty() {
+                return (String::new(), String::new());
+            }
+            rest = after;
+            continue;
+        }
+        let line = line.trim();
+        return if line.chars().count() <= TITLE_MAX {
+            (line.to_string(), after.trim_start_matches('\n').to_string())
+        } else {
+            (line.chars().take(TITLE_MAX).collect(), text.to_string())
+        };
+    }
+}
+
+fn is_fence(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("```") || t.starts_with("~~~")
+}
+
+/// Split markdown into parts of at most `max` characters, cutting only at blank lines outside fenced
+/// code blocks. A block longer than `max` is cut by lines (then characters); a cut fence is closed and
+/// reopened so every part stays balanced. Concatenating the parts gives back the text (plus fences added).
+pub fn split_markdown(text: &str, max: usize) -> Vec<String> {
+    let mut blocks: Vec<String> = vec![];
+    let (mut cur, mut in_fence, mut prev_blank) = (String::new(), false, false);
+    for line in text.split_inclusive('\n') {
+        let blank = line.trim().is_empty();
+        // a block ends after its trailing blank lines: the next non-blank line outside a fence starts a new one
+        if prev_blank && !blank && !in_fence && !cur.is_empty() {
+            blocks.push(std::mem::take(&mut cur));
+        }
+        if is_fence(line) {
+            in_fence = !in_fence;
+        }
+        cur.push_str(line);
+        prev_blank = blank && !in_fence;
+    }
+    if !cur.is_empty() {
+        blocks.push(cur);
+    }
+    let len = |s: &str| s.chars().count();
+    let mut parts: Vec<String> = vec![];
+    let mut acc = String::new();
+    for b in blocks {
+        if len(&b) > max {
+            if !acc.is_empty() {
+                parts.push(std::mem::take(&mut acc));
+            }
+            parts.extend(cut_block(&b, max));
+        } else if !acc.is_empty() && len(&acc) + len(&b) > max {
+            parts.push(std::mem::replace(&mut acc, b));
+        } else {
+            acc.push_str(&b);
+        }
+    }
+    if !acc.is_empty() {
+        parts.push(acc);
+    }
+    parts
+}
+
+/// Cut one block longer than `max` by lines; a fence open at the cut is closed and reopened.
+fn cut_block(block: &str, max: usize) -> Vec<String> {
+    const CLOSE: &str = "```\n";
+    let budget = max.saturating_sub(CLOSE.len() + 16).max(1);
+    let len = |s: &str| s.chars().count();
+    let mut out: Vec<String> = vec![];
+    let (mut cur, mut opener): (String, Option<String>) = (String::new(), None);
+    let flush = |cur: &mut String, opener: &Option<String>, out: &mut Vec<String>| {
+        if cur.is_empty() {
+            return;
+        }
+        let mut piece = std::mem::take(cur);
+        if opener.is_some() {
+            if !piece.ends_with('\n') {
+                piece.push('\n');
+            }
+            piece.push_str(CLOSE);
+        }
+        out.push(piece);
+        if let Some(o) = opener {
+            cur.push_str(o);
+        }
+    };
+    for line in block.split_inclusive('\n') {
+        // very long lines are chunked by characters
+        let chunks: Vec<String> = if len(line) > budget {
+            line.chars().collect::<Vec<_>>().chunks(budget).map(|c| c.iter().collect()).collect()
+        } else {
+            vec![line.to_string()]
+        };
+        for piece in chunks {
+            if !cur.is_empty() && len(&cur) + len(&piece) > budget {
+                flush(&mut cur, &opener, &mut out);
+            }
+            cur.push_str(&piece);
+        }
+        if is_fence(line) {
+            opener = match opener {
+                Some(_) => None,
+                None => Some(line.trim_end_matches('\n').to_string() + "\n"),
+            };
+        }
+    }
+    if !cur.is_empty() && cur != opener.clone().unwrap_or_default() {
+        out.push(cur);
+    }
+    out
+}
+
+/// A request that waits and retries once on 429 (`Retry-After` when known, else 1 s; at most 10 s).
+fn request_retry(token: &str, method: &str, url: &str, body: Option<&str>) -> Result<String, NotionError> {
+    match request(token, method, url, body) {
+        Err(NotionError::RateLimited { retry_after_secs }) => {
+            std::thread::sleep(std::time::Duration::from_secs(retry_after_secs.unwrap_or(1).min(10)));
+            request(token, method, url, body)
+        }
+        r => r,
+    }
+}
+
+/// Add the capture to Notion, sequentially. `Err` is the exact toast text. A database target caches the
+/// name of its title property in `schema` (per target id) so only the first send reads it.
+pub fn send_capture(
+    token: &str,
+    c: &Capture,
+    map: &dyn Fn(String) -> String,
+    schema: &std::sync::Mutex<std::collections::HashMap<String, String>>,
+) -> Result<(), String> {
+    let is_page = c.target.kind != "data_source";
+    let (title, markdown) = if is_page {
+        let md = match (c.title.trim(), c.text.is_empty()) {
+            ("", _) => c.text.clone(),
+            (t, true) => format!("## {t}"),
+            (t, false) => format!("## {t}\n\n{}", c.text),
+        };
+        (String::new(), md)
+    } else {
+        database_title_and_body(&c.title, &c.text)
+    };
+    let parts = split_markdown(&markdown, MAX_PART);
+    let total = if is_page { parts.len() } else { parts.len().max(1) };
+    let fail = |done: usize, e: NotionError| {
+        if done == 0 {
+            e.user_message()
+        } else {
+            format!("Added {done} of {total} parts to {}; the rest were not sent. {}", c.target.title, e.user_message())
+        }
+    };
+    let mut done = 0;
+    let mut page_id = c.target.id.clone();
+    let mut rest = &parts[..];
+    if !is_page {
+        let cached = schema.lock().ok().and_then(|m| m.get(&c.target.id).cloned());
+        let prop = match cached {
+            Some(p) => p,
+            None => {
+                let body = request_retry(token, "GET", &map(notion::data_source_url(&c.target.id)), None).map_err(|e| fail(0, e))?;
+                let p = notion::parse_data_source_title_property(&body).unwrap_or_else(|| "Name".into());
+                if let Ok(mut m) = schema.lock() {
+                    m.insert(c.target.id.clone(), p.clone());
+                }
+                p
+            }
+        };
+        let first = parts.first().map(String::as_str).unwrap_or("");
+        let body = notion::create_page_body(&notion::Parent::DataSource(c.target.id.clone()), &prop, &title, first);
+        let out = request_retry(token, "POST", &map(notion::pages_url()), Some(&body)).map_err(|e| fail(0, e))?;
+        // the page exists once the POST answered 2xx, even if the answer could not be read
+        page_id = match notion::parse_created_page(&out) {
+            Ok((id, _)) => id,
+            Err(e) => return if total == 1 { Ok(()) } else { Err(fail(1, e)) },
+        };
+        done = 1;
+        rest = parts.get(1..).unwrap_or(&[]);
+    }
+    for part in rest {
+        let body = notion::append_markdown_body(part);
+        request_retry(token, "PATCH", &map(notion::page_markdown_url(&page_id)), Some(&body)).map_err(|e| fail(done, e))?;
+        done += 1;
+    }
+    Ok(())
 }
 
 /// "just now", "5m ago", "2h ago", "yesterday", then the date ("Mar 11", with the year when it is not this one).
@@ -363,5 +610,67 @@ mod tests {
         set_test_base(Some("http://127.0.0.1:9/v1".into()));
         assert_eq!(url(notion::search_url()), "http://127.0.0.1:9/v1/search");
         set_test_base(None);
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    fn paras(n: usize, len: usize) -> String {
+        (0..n).map(|i| format!("{i:04}{}", "z".repeat(len))).collect::<Vec<_>>().join("\n\n")
+    }
+
+    #[test]
+    fn short_text_is_one_part_and_empty_text_is_none() {
+        assert_eq!(split_markdown("hello\n\nworld", 100), ["hello\n\nworld"]);
+        assert!(split_markdown("", 100).is_empty());
+    }
+
+    #[test]
+    fn parts_split_at_blank_lines_and_rejoin_to_the_original() {
+        let text = paras(30, 40);
+        let parts = split_markdown(&text, 500);
+        assert!(parts.len() > 2);
+        assert!(parts.iter().all(|p| p.chars().count() <= 500));
+        assert_eq!(parts.concat(), text);
+        assert!(parts.iter().all(|p| p.starts_with(|c: char| c.is_ascii_digit())), "cuts fall between paragraphs");
+    }
+
+    #[test]
+    fn a_fenced_block_with_blank_lines_is_never_split_when_it_fits() {
+        let fence = format!("```rust\nfn a() {{}}\n\n\nfn b() {{}}\n{}\n```", "// c\n".repeat(20));
+        let text = format!("{}\n\n{}\n\n{}", paras(5, 60), fence, paras(5, 60));
+        let parts = split_markdown(&text, 600);
+        assert_eq!(parts.concat(), text);
+        for p in &parts {
+            assert_eq!(p.matches("```").count() % 2, 0, "every part has balanced fences:\n{p}");
+        }
+    }
+
+    #[test]
+    fn a_single_block_over_the_limit_is_cut_by_lines_and_keeps_fences_balanced() {
+        let body = "line of code\n".repeat(200);
+        let text = format!("```\n{body}```");
+        let parts = split_markdown(&text, 500);
+        assert!(parts.len() > 3);
+        assert!(parts.iter().all(|p| p.chars().count() <= 500), "{:?}", parts.iter().map(|p| p.chars().count()).collect::<Vec<_>>());
+        for p in &parts {
+            assert_eq!(p.matches("```").count() % 2, 0, "{p}");
+        }
+        // a long line without breaks is cut on a character boundary
+        let long = "é".repeat(1200);
+        let parts = split_markdown(&long, 500);
+        assert_eq!(parts.concat(), long);
+    }
+
+    #[test]
+    fn database_title_rules() {
+        let (t, b) = database_title_and_body("", "One\ntwo");
+        assert_eq!((t.as_str(), b.as_str()), ("One", "two"));
+        let (t, b) = database_title_and_body("Given", "One\ntwo");
+        assert_eq!((t.as_str(), b.as_str()), ("Given", "One\ntwo"));
+        let (t, b) = database_title_and_body("", "   ");
+        assert_eq!((t.as_str(), b.as_str()), ("", ""));
     }
 }

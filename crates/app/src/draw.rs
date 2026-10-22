@@ -212,6 +212,12 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             // design-review shots of Search Notion: `notion` reads the real Keychain (no token: the connect
             // state), `notion-list` shows a fixed list without any request
             Ok("notion") => app.run_builtin(Builtin::SearchNotion),
+            // the Add to Notion form with a fixed database target, no Keychain read and no request
+            Ok("notion-add") => app.push(View::NotionAdd {
+                title: "Call Ana about the offer".into(),
+                text: "Ask for the revised numbers.\n\n- budget\n- start date".into(),
+                target: ferrocast_core::models::NotionTarget { id: "d1".into(), kind: "data_source".into(), title: "Tasks".into() },
+            }),
             Ok("notion-list") => {
                 app.run_builtin(Builtin::SearchNotion);
                 let ago = |h: i64| (chrono::Utc::now() - chrono::Duration::hours(h)).to_rfc3339();
@@ -1247,6 +1253,10 @@ impl App {
             }
             View::SnippetForm { .. } | View::QuicklinkForm { .. } if k.cmd_enter => {
                 self.save_form();
+                true
+            }
+            View::NotionAdd { .. } if k.cmd_enter => {
+                self.notion_add_submit();
                 true
             }
             _ => false,
@@ -4920,6 +4930,7 @@ impl App {
                 let mut translation_act: u8 = 0;
                 // The match below borrows the view stack mutably; take the icon cache out so these
                 // screens can still draw cached symbols.
+                let na_sending = self.na.sending;
                 let mut icons = std::mem::replace(&mut self.icons, IconCache::new(self.store.images_dir()));
                 let mut clear_hotkey = false;
                 let mut set_hotkey = false;
@@ -4943,6 +4954,34 @@ impl App {
                             lbl(ui, "Keyword (type it anywhere to expand)");
                             ui.add(TextEdit::singleline(keyword).desired_width(300.0).hint_text("e.g. !sig"));
                             lbl(ui, "Save with ⌘↵ · esc to cancel");
+                        }
+                        View::NotionAdd { title, text, target } => {
+                            let (title_id, text_id) = (Id::new("na_title"), Id::new("na_text"));
+                            lbl(
+                                ui,
+                                &format!("Adds to {} ({})", target.title, if target.kind == "data_source" { "database" } else { "page" }),
+                            );
+                            lbl(ui, "Title (optional)");
+                            let r =
+                                ui.add(TextEdit::singleline(title).id(title_id).desired_width(f32::INFINITY).hint_text(
+                                    if target.kind == "data_source" { "Defaults to the first line" } else { "Added as a heading" },
+                                ));
+                            // Enter in the title moves on to the text
+                            if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                                ui.memory_mut(|m| m.request_focus(text_id));
+                            }
+                            lbl(ui, "Text");
+                            let r = ui.add(
+                                TextEdit::multiline(text)
+                                    .id(text_id)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(9)
+                                    .hint_text("Type or paste. Markdown is supported."),
+                            );
+                            if ff {
+                                r.request_focus();
+                            }
+                            lbl(ui, if na_sending { "Sending…" } else { "Send with ⌘↵ · esc to go back" });
                         }
                         View::QuicklinkForm { name, link, open_with, .. } => {
                             lbl(ui, "Name");

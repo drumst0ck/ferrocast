@@ -485,6 +485,12 @@ pub enum View {
     },
     Notes,
     NotionSearch,
+    /// Add to Notion form: optional title, the text, and where it goes (the capture target or a one-off).
+    NotionAdd {
+        title: String,
+        text: String,
+        target: ferrocast_core::models::NotionTarget,
+    },
     Colors(Rgba),
     SnippetForm {
         id: Option<String>,
@@ -606,7 +612,9 @@ impl View {
             | View::Notes
             | View::NotionSearch
             | View::Colors(_) => Shape::List,
-            View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::Settings => Shape::Form,
+            View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::NotionAdd { .. } | View::Settings => {
+                Shape::Form
+            }
             _ => Shape::Single,
         }
     }
@@ -644,6 +652,7 @@ impl View {
                 vec![(primary, "↵"), ("Move", "⌘↑/↓"), BACK]
             }
             View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
+            View::NotionAdd { .. } => vec![("Send", "⌘↵"), BACK],
             View::Settings => vec![("Tabs", "⌘1–8"), ("Find", "⌘F"), BACK],
             _ => vec![],
         }
@@ -686,6 +695,7 @@ impl View {
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::NotionSearch => "Search Notion",
+            View::NotionAdd { .. } => "Add to Notion",
             View::Colors(_) => "Copy Color as…",
             View::SnippetForm { .. } => "Snippet",
             View::QuicklinkForm { .. } => "Quicklink",
@@ -791,6 +801,14 @@ pub struct NotionView {
     pub connected: Option<bool>,
 }
 
+/// State of Add to Notion: a send in flight and the title property name of each database target
+/// (read once per target id and kept for the session).
+#[derive(Default)]
+pub struct NotionAdd {
+    pub sending: bool,
+    pub schema: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+}
+
 /// Wait after the last keystroke before Search Notion asks the API (seconds of egui time).
 const NOTION_DEBOUNCE: f64 = 0.25;
 const NOTION_PAGE: u32 = 20;
@@ -886,6 +904,8 @@ pub struct App {
     notion: NotionUi,
     /// Search Notion command view.
     nv: NotionView,
+    /// Add to Notion commands.
+    na: NotionAdd,
     rates: ferrocast_core::currency::Rates,
     rates_checked_at: Instant,
     /// Result list for the current query/view, reused across frames until something changes.
@@ -1108,6 +1128,7 @@ impl App {
             key_scratch: String::new(),
             notion: NotionUi::default(),
             nv: NotionView::default(),
+            na: NotionAdd::default(),
             rates: store_rates,
             rates_checked_at: Instant::now(),
             sec_cache: None,
@@ -1754,6 +1775,91 @@ impl App {
         vec![Section { title: if self.nv.shown.is_empty() { "Recently edited" } else { "Results" }.into(), items }]
     }
 
+    // ------------------------------------------------------------ Add to Notion (commands)
+
+    fn notion_open_settings_tab(&mut self) {
+        self.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), draw::INTEGRATIONS_TAB));
+        self.push(View::Settings);
+    }
+
+    /// Token and target checks shared by both commands: the target to write to, or a toast and
+    /// Settings → Integrations when something is missing. `one_off` replaces the stored capture target.
+    fn notion_add_target(&mut self, one_off: Option<ferrocast_core::models::NotionTarget>) -> Option<ferrocast_core::models::NotionTarget> {
+        if !notion_io::has_token() {
+            self.toast("Connect Notion first: Settings → Integrations.");
+            self.notion_open_settings_tab();
+            return None;
+        }
+        let target = one_off.or_else(|| self.settings.notion_target.clone()).filter(|t| !t.id.is_empty());
+        if target.is_none() {
+            self.toast("Choose a capture target in Settings → Integrations.");
+            self.notion_open_settings_tab();
+        }
+        target
+    }
+
+    fn notion_add_open(&mut self, one_off: Option<ferrocast_core::models::NotionTarget>) {
+        if let Some(target) = self.notion_add_target(one_off) {
+            self.push(View::NotionAdd { title: String::new(), text: String::new(), target });
+        }
+    }
+
+    fn notion_add_clipboard(&mut self) {
+        let Some(target) = self.notion_add_target(None) else { return };
+        match notion_io::read_clipboard().filter(|t| !t.trim().is_empty()) {
+            Some(text) => self.notion_add_start(notion_io::Capture { target, title: String::new(), text }),
+            None => self.toast("The clipboard has no text."),
+        }
+    }
+
+    /// Send the form (⌘↵). The text stays in the form until Notion accepted it.
+    pub(crate) fn notion_add_submit(&mut self) {
+        let View::NotionAdd { title, text, target } = self.view().clone() else { return };
+        if self.na.sending {
+            return;
+        }
+        if title.trim().is_empty() && text.trim().is_empty() {
+            self.toast("Write something to send first.");
+            return;
+        }
+        self.notion_add_start(notion_io::Capture { target, title, text });
+    }
+
+    /// Send on a thread; the answer comes back as `Msg::NotionAdded`.
+    fn notion_add_start(&mut self, capture: notion_io::Capture) {
+        self.na.sending = true;
+        self.toast(format!("Adding to {}…", capture.target.title));
+        let (read, map, schema, bus) = (notion_io::token_reader(), notion_io::url_mapper(), self.na.schema.clone(), self.bus.clone());
+        std::thread::spawn(move || {
+            let result = match read() {
+                None => Err(services::NotionAddError::NoToken),
+                Some(t) => notion_io::send_capture(&t, &capture, &*map, &schema)
+                    .map(|()| services::NotionAddDone { target_title: capture.target.title.clone() })
+                    .map_err(services::NotionAddError::Failed),
+            };
+            bus.send(Msg::NotionAdded(result));
+        });
+    }
+
+    fn handle_notion_added(&mut self, result: Result<services::NotionAddDone, services::NotionAddError>) {
+        self.na.sending = false;
+        match result {
+            Ok(done) => {
+                // the toast has no action button, so there is no "Open" link here
+                self.toast(format!("Added to {}", done.target_title));
+                if let View::NotionAdd { title, text, .. } = self.stack.last_mut().unwrap() {
+                    title.clear();
+                    text.clear();
+                }
+            }
+            Err(services::NotionAddError::NoToken) => {
+                self.toast("Connect Notion first: Settings → Integrations.");
+                self.notion_open_settings_tab();
+            }
+            Err(services::NotionAddError::Failed(msg)) => self.toast(msg),
+        }
+    }
+
     fn notion_clear_target(&mut self) {
         let mut s = self.settings.clone();
         s.notion_target = None;
@@ -2106,6 +2212,7 @@ impl App {
                 Msg::NotionTested(r) => self.handle_notion_tested(r),
                 Msg::NotionSearched { request, result } => self.handle_notion_searched(request, result),
                 Msg::NotionViewSearched { request, append, result } => self.handle_notion_view_searched(request, append, result),
+                Msg::NotionAdded(r) => self.handle_notion_added(r),
                 Msg::Toast(t) => {
                     // A sign-in or sign-out may just have finished; let Settings re-read the Keychain.
                     self.ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));
@@ -3778,6 +3885,7 @@ impl App {
                 a.push(Action::new("Open", Act::Run));
                 a.push(Action::new("Copy Link", Act::CopyText(n.url.clone())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Set as Capture Target", Act::NotionTarget(n.clone())));
+                a.push(Action::new("Add Text Here…", Act::NotionAddHere(n.clone())));
             }
             Kind::NotionLoadMore => a.push(Action::new("Load More", Act::Run)),
             Kind::NotionConnect => a.push(Action::new("Open Settings → Integrations", Act::Run)),
@@ -3989,10 +4097,7 @@ impl App {
             Kind::Builtin(b) => self.run_builtin(*b),
             Kind::Notion(n) => self.notion_open_url(&n.url.clone()),
             Kind::NotionLoadMore => self.notion_load_more(),
-            Kind::NotionConnect => {
-                self.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), draw::INTEGRATIONS_TAB));
-                self.push(View::Settings);
-            }
+            Kind::NotionConnect => self.notion_open_settings_tab(),
             Kind::Prefilled(b, q) => {
                 self.run_builtin(*b);
                 if let View::Ai { prompt, .. } = self.stack.last_mut().unwrap() {
@@ -4448,6 +4553,8 @@ impl App {
                 self.push(View::NotionSearch);
                 self.notion_view_open();
             }
+            Builtin::AddToNotion => self.notion_add_open(None),
+            Builtin::AddClipboardToNotion => self.notion_add_clipboard(),
             Builtin::CreateNote => self.new_note(),
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
             Builtin::OpenScriptsFolder => {
@@ -4680,6 +4787,10 @@ impl App {
             Act::Run => {}
             Act::CopyText(t) => self.copy_text(&t),
             Act::NotionTarget(n) => self.notion_set_target(n),
+            Act::NotionAddHere(n) => {
+                let kind = if n.kind == ferrocast_core::notion::ItemKind::Page { "page" } else { "data_source" };
+                self.notion_add_open(Some(ferrocast_core::models::NotionTarget { id: n.id, kind: kind.into(), title: n.title }));
+            }
             Act::PasteText(t) => self.paste_text(&t),
             Act::Reveal(p) => {
                 let _ = apps::reveal(&p);

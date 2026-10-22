@@ -91,6 +91,7 @@ fn fixture() -> App {
         key_scratch: String::new(),
         notion: Default::default(),
         nv: Default::default(),
+        na: Default::default(),
         rates: Default::default(),
         rates_checked_at: Instant::now(),
         sec_cache: None,
@@ -8912,7 +8913,7 @@ fn enter_opens_the_url_and_the_actions_panel_offers_open_copy_link_and_capture_t
     let page = app.sections()[0].items[0].clone();
     let acts = app.actions_for(&page);
     let labels: Vec<_> = acts.iter().map(|a| a.title.as_str()).collect();
-    assert_eq!(labels, ["Open", "Copy Link", "Set as Capture Target"]);
+    assert_eq!(labels, ["Open", "Copy Link", "Set as Capture Target", "Add Text Here…"]);
     assert_eq!(app.primary_label(&page), "Open");
     // Enter in the list
     app.nav_at = Instant::now() - Duration::from_secs(1);
@@ -8957,4 +8958,342 @@ fn typing_is_not_blocked_while_a_request_is_in_flight() {
     render(&mut app, vec![Event::Text("a".into())]);
     assert_eq!(app.query, "a", "typing is not blocked by the request");
     drain_until(&mut app, |a| !a.nv.searching);
+}
+
+// ---- Add to Notion / Add Clipboard to Notion
+
+const OK_JSON: &str = r#"{"object":"page_markdown","id":"p1"}"#;
+const CREATED_JSON: &str = r#"{"object":"page","id":"new1","url":"https://app.notion.com/p/new1"}"#;
+const SCHEMA_JSON: &str = r#"{"object":"data_source","id":"d1","properties":{"Tag":{"type":"select"},"Task name":{"type":"title"}}}"#;
+const RATE_JSON: &str = r#"{"object":"error","status":429,"code":"rate_limited","message":"slow down"}"#;
+const FORBIDDEN_JSON: &str = r#"{"object":"error","status":403,"code":"restricted_resource","message":"no"}"#;
+const NOT_FOUND_JSON: &str = r#"{"object":"error","status":404,"code":"object_not_found","message":"gone"}"#;
+
+fn target_of(kind: &str) -> Option<ferrocast_core::models::NotionTarget> {
+    let (id, title) = if kind == "page" { ("p1", "Inbox") } else { ("d1", "Tasks") };
+    Some(ferrocast_core::models::NotionTarget { id: id.into(), kind: kind.into(), title: title.into() })
+}
+
+/// The launcher with the fake Keychain, loopback base URL, fake clipboard and capture target of this test thread.
+fn nadd(token: Option<&str>, lb: Option<&Loopback>, kind: Option<&str>) -> App {
+    notion_io::set_test_token(token);
+    notion_io::set_test_base(lb.map(|l| l.base.clone()));
+    notion_io::set_test_clipboard(None);
+    let _ = notion_io::take_opened();
+    let mut app = fixture();
+    app.settings.notion_target = kind.and_then(target_of);
+    app
+}
+
+fn fill(app: &mut App, title: &str, text: &str) {
+    match app.stack.last_mut().unwrap() {
+        View::NotionAdd { title: t, text: x, .. } => {
+            *t = title.into();
+            *x = text.into();
+        }
+        _ => panic!("not on the Add to Notion form"),
+    }
+}
+
+fn form(app: &App) -> (String, String) {
+    match app.view() {
+        View::NotionAdd { title, text, .. } => (title.clone(), text.clone()),
+        _ => panic!("not on the Add to Notion form"),
+    }
+}
+
+/// Open the form, type, send with the form action and wait for the worker.
+fn send_form(app: &mut App, title: &str, text: &str) {
+    app.run_builtin(Builtin::AddToNotion);
+    fill(app, title, text);
+    app.notion_add_submit();
+    assert!(app.na.sending, "the request is in flight");
+    drain_until(app, |a| !a.na.sending);
+}
+
+fn md_of(req: &str) -> String {
+    body_of(req)["insert_content"]["content"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn the_two_commands_exist_with_their_keywords() {
+    let add = Builtin::ALL.iter().find(|b| b.title() == "Add to Notion").expect("registered");
+    for k in ["notion", "capture", "save", "note", "clip"] {
+        assert!(add.keywords().iter().any(|w| w == k), "{k}");
+    }
+    let clip = Builtin::ALL.iter().find(|b| b.title() == "Add Clipboard to Notion").expect("registered");
+    for k in ["notion", "clipboard", "save"] {
+        assert!(clip.keywords().iter().any(|w| w == k), "{k}");
+    }
+    assert_ne!(add.id(), clip.id());
+}
+
+#[test]
+fn without_a_token_both_commands_toast_open_settings_integrations_and_send_nothing() {
+    for b in [Builtin::AddToNotion, Builtin::AddClipboardToNotion] {
+        let lb = serve_seq(vec![(200, OK_JSON)]);
+        let mut app = nadd(None, Some(&lb), Some("page"));
+        notion_io::set_test_clipboard(Some("hello"));
+        app.run_builtin(b);
+        assert_eq!(toast_text(&app), "Connect Notion first: Settings → Integrations.");
+        assert!(matches!(app.view(), View::Settings), "{b:?}");
+        assert_eq!(app.ctx.data(|d| d.get_temp::<usize>(Id::new("settings_tab"))), Some(NOTION_TAB));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(lb.requests().is_empty(), "no token, no request");
+    }
+}
+
+#[test]
+fn with_a_token_but_no_target_both_commands_toast_open_settings_integrations_and_send_nothing() {
+    for b in [Builtin::AddToNotion, Builtin::AddClipboardToNotion] {
+        let lb = serve_seq(vec![(200, OK_JSON)]);
+        let mut app = nadd(Some("ntn_tok"), Some(&lb), None);
+        notion_io::set_test_clipboard(Some("hello"));
+        app.run_builtin(b);
+        assert_eq!(toast_text(&app), "Choose a capture target in Settings → Integrations.");
+        assert!(matches!(app.view(), View::Settings), "{b:?}");
+        assert_eq!(app.ctx.data(|d| d.get_temp::<usize>(Id::new("settings_tab"))), Some(NOTION_TAB));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(lb.requests().is_empty(), "no target, no request");
+    }
+}
+
+#[test]
+fn the_form_opens_with_two_empty_fields_a_send_hint_and_renders() {
+    let mut app = nadd(Some("ntn_tok"), None, Some("page"));
+    app.run_builtin(Builtin::AddToNotion);
+    assert!(matches!(app.view(), View::NotionAdd { .. }));
+    assert_eq!(app.view().title(), "Add to Notion");
+    assert!(app.view().shape() == Shape::Form);
+    assert_eq!(form(&app), (String::new(), String::new()));
+    assert!(app.view().footer_hints().contains(&("Send", "⌘↵")));
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn a_page_target_sends_exactly_one_patch_that_inserts_the_text_at_the_end() {
+    let lb = serve_seq(vec![(200, OK_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+    send_form(&mut app, "", "Buy milk\n- eggs");
+    let reqs = lb.requests();
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    assert!(reqs[0].starts_with("PATCH /v1/pages/p1/markdown"), "{}", reqs[0]);
+    let want: serde_json::Value = serde_json::from_str(&ferrocast_core::notion::append_markdown_body("Buy milk\n- eggs")).unwrap();
+    assert_eq!(body_of(&reqs[0]), want);
+    assert_eq!(body_of(&reqs[0])["insert_content"]["position"]["type"], "end");
+    assert_eq!(toast_text(&app), "Added to Inbox");
+    assert_eq!(form(&app), (String::new(), String::new()), "success clears the form");
+}
+
+#[test]
+fn a_title_becomes_a_heading_before_the_text_on_a_page_target() {
+    let lb = serve_seq(vec![(200, OK_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+    send_form(&mut app, "Groceries", "milk");
+    assert_eq!(md_of(&lb.requests()[0]), "## Groceries\n\nmilk");
+}
+
+#[test]
+fn a_data_source_target_reads_the_schema_once_then_creates_pages_with_the_title_property() {
+    let lb = serve_seq(vec![(200, SCHEMA_JSON), (200, CREATED_JSON), (200, CREATED_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("data_source"));
+    send_form(&mut app, "Call Ana", "about the offer");
+    let reqs = lb.requests();
+    assert_eq!(reqs.len(), 2, "{reqs:?}");
+    assert!(reqs[0].starts_with("GET /v1/data_sources/d1"), "{}", reqs[0]);
+    assert!(reqs[1].starts_with("POST /v1/pages"), "{}", reqs[1]);
+    let b = body_of(&reqs[1]);
+    assert_eq!(b["parent"], serde_json::json!({"data_source_id":"d1"}));
+    assert_eq!(b["properties"], serde_json::json!({"Task name":{"title":[{"text":{"content":"Call Ana"}}]}}));
+    assert_eq!(b["markdown"], "about the offer");
+    assert_eq!(toast_text(&app), "Added to Tasks");
+    // the second send reuses the cached schema
+    send_form(&mut app, "Second", "x");
+    let reqs = lb.requests();
+    assert_eq!(reqs.len(), 3, "no second schema request: {reqs:?}");
+    assert!(reqs[2].starts_with("POST /v1/pages"));
+    assert!(body_of(&reqs[2])["properties"].get("Task name").is_some());
+}
+
+#[test]
+fn without_a_title_a_database_page_takes_the_first_line_and_the_body_is_the_rest() {
+    let lb = serve_seq(vec![(200, SCHEMA_JSON), (200, CREATED_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("data_source"));
+    send_form(&mut app, "  ", "\n\nFirst line\nsecond\nthird");
+    let b = body_of(&lb.requests()[1]);
+    assert_eq!(b["properties"]["Task name"]["title"][0]["text"]["content"], "First line");
+    assert_eq!(b["markdown"], "second\nthird");
+}
+
+#[test]
+fn a_long_unicode_first_line_is_cut_at_100_characters_and_stays_whole_in_the_body() {
+    let line = "é日".repeat(60); // 120 chars, 240 bytes: a byte cut would split a character
+    let lb = serve_seq(vec![(200, SCHEMA_JSON), (200, CREATED_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("data_source"));
+    send_form(&mut app, "", &format!("{line}\nrest"));
+    let b = body_of(&lb.requests()[1]);
+    let title = b["properties"]["Task name"]["title"][0]["text"]["content"].as_str().unwrap();
+    assert_eq!(title.chars().count(), 100);
+    assert!(line.starts_with(title));
+    assert_eq!(b["markdown"], format!("{line}\nrest"), "nothing the user typed is lost to the cut");
+}
+
+#[test]
+fn the_clipboard_command_sends_the_clipboard_text_without_a_form() {
+    let lb = serve_seq(vec![(200, OK_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+    notion_io::set_test_clipboard(Some("copied words"));
+    app.run_builtin(Builtin::AddClipboardToNotion);
+    assert!(!matches!(app.view(), View::NotionAdd { .. }), "no form");
+    drain_until(&mut app, |a| !a.na.sending);
+    let reqs = lb.requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(md_of(&reqs[0]), "copied words");
+    assert_eq!(toast_text(&app), "Added to Inbox");
+}
+
+#[test]
+fn an_empty_or_non_text_clipboard_toasts_and_sends_nothing() {
+    for clip in [None, Some(""), Some("  \n ")] {
+        let lb = serve_seq(vec![(200, OK_JSON)]);
+        let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+        notion_io::set_test_clipboard(clip);
+        app.run_builtin(Builtin::AddClipboardToNotion);
+        assert_eq!(toast_text(&app), "The clipboard has no text.");
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(lb.requests().is_empty());
+    }
+}
+
+#[test]
+fn rejections_toast_the_exact_message_and_keep_the_typed_text() {
+    use ferrocast_core::notion::NotionError as E;
+    for (status, body, err) in
+        [(401, UNAUTH_JSON, E::Unauthorized), (403, FORBIDDEN_JSON, E::Forbidden), (404, NOT_FOUND_JSON, E::NotFound)]
+    {
+        let lb = serve_seq(vec![(status, body)]);
+        let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+        send_form(&mut app, "T", "typed words");
+        assert_eq!(toast_text(&app), err.user_message(), "{status}");
+        assert_eq!(form(&app), ("T".into(), "typed words".into()), "the form keeps the text on {status}");
+        assert_eq!(lb.requests().len(), 1);
+    }
+}
+
+#[test]
+fn text_of_250000_chars_is_sent_as_three_sequential_appends_split_at_blank_lines() {
+    let para = "x".repeat(998);
+    let text = (0..250).map(|i| format!("{i:03}{para}")).collect::<Vec<_>>().join("\n\n");
+    assert!(text.chars().count() > 250_000);
+    let lb = serve_seq(vec![(200, OK_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+    send_form(&mut app, "", &text);
+    let reqs = lb.requests();
+    assert_eq!(reqs.len(), 3, "3 calls");
+    let parts: Vec<String> = reqs.iter().map(|r| md_of(r)).collect();
+    assert!(parts.iter().all(|p| p.chars().count() <= 100_000));
+    assert!(parts.iter().all(|p| p.starts_with(|c: char| c.is_ascii_digit())), "each part starts on a paragraph");
+    assert_eq!(parts.concat(), text, "nothing lost, nothing added");
+    assert_eq!(toast_text(&app), "Added to Inbox");
+}
+
+#[test]
+fn a_failure_on_part_two_says_one_of_three_were_added_and_keeps_the_text() {
+    let para = "y".repeat(998);
+    let text = (0..250).map(|i| format!("{i:03}{para}")).collect::<Vec<_>>().join("\n\n");
+    let lb = serve_seq(vec![(200, OK_JSON), (500, "{}"), (200, OK_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+    send_form(&mut app, "", &text);
+    let t = toast_text(&app);
+    assert!(t.contains("1 of 3"), "{t}");
+    assert!(t.contains("the rest were not sent"), "{t}");
+    assert!(t.contains(&ferrocast_core::notion::NotionError::Server(500).user_message()), "{t}");
+    assert_eq!(lb.requests().len(), 2, "stops at the failure");
+    assert_eq!(form(&app).1, text, "the typed text stays in the form");
+}
+
+#[test]
+fn a_429_is_retried_once_after_one_second_and_then_succeeds() {
+    let lb = serve_seq(vec![(429, RATE_JSON), (200, OK_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+    let t0 = Instant::now();
+    send_form(&mut app, "", "retry me");
+    assert!(t0.elapsed() >= Duration::from_millis(1000), "waited for the retry: {:?}", t0.elapsed());
+    let reqs = lb.requests();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(md_of(&reqs[0]), md_of(&reqs[1]));
+    assert_eq!(toast_text(&app), "Added to Inbox");
+}
+
+#[test]
+fn a_second_429_is_not_retried_again_and_reports_the_rate_limit() {
+    let lb = serve_seq(vec![(429, RATE_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+    send_form(&mut app, "", "keep me");
+    assert_eq!(lb.requests().len(), 2, "one retry only");
+    assert_eq!(toast_text(&app), ferrocast_core::notion::NotionError::RateLimited { retry_after_secs: None }.user_message());
+    assert_eq!(form(&app).1, "keep me");
+}
+
+#[test]
+fn command_enter_in_the_form_sends() {
+    let lb = serve_seq(vec![(200, OK_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+    app.run_builtin(Builtin::AddToNotion);
+    fill(&mut app, "", "via keys");
+    render(&mut app, vec![]);
+    let ev = Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND };
+    render(&mut app, vec![ev]);
+    drain_until(&mut app, |a| !a.na.sending);
+    assert_eq!(md_of(&lb.requests()[0]), "via keys");
+}
+
+#[test]
+fn an_empty_form_sends_nothing() {
+    let lb = serve_seq(vec![(200, OK_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+    app.run_builtin(Builtin::AddToNotion);
+    app.notion_add_submit();
+    assert_eq!(toast_text(&app), "Write something to send first.");
+    assert!(!app.na.sending);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(lb.requests().is_empty());
+}
+
+#[test]
+fn add_text_here_opens_the_form_for_that_result_without_changing_the_stored_target() {
+    let lb = serve_seq(vec![(200, MORE_JSON), (200, SCHEMA_JSON), (200, CREATED_JSON)]);
+    let mut app = nadd(Some("ntn_tok"), Some(&lb), Some("page"));
+    app.run_builtin(Builtin::SearchNotion);
+    app.tick_notion_view(0.0);
+    drain_until(&mut app, |a| !a.nv.searching);
+    let db = app.sections()[0].items[1].clone();
+    let act = app.actions_for(&db).into_iter().find(|a| a.title == "Add Text Here…").expect("in the actions panel");
+    app.perform(act.kind, false);
+    match app.view() {
+        View::NotionAdd { target, .. } => {
+            assert_eq!((target.id.as_str(), target.kind.as_str(), target.title.as_str()), ("d1", "data_source", "Tasks"))
+        }
+        _ => panic!("the form did not open"),
+    }
+    assert_eq!(app.settings.notion_target, target_of("page"), "stored target untouched");
+    let saved: Settings = app.store.load("settings.json");
+    assert_eq!(saved.notion_target, None, "nothing was written to settings.json");
+    fill(&mut app, "One-off", "text");
+    app.notion_add_submit();
+    drain_until(&mut app, |a| !a.na.sending);
+    let reqs = lb.requests();
+    assert!(reqs[1].starts_with("GET /v1/data_sources/d1"), "{}", reqs[1]);
+    assert!(reqs[2].starts_with("POST /v1/pages"), "{}", reqs[2]);
+    assert_eq!(app.settings.notion_target, target_of("page"));
+}
+
+#[test]
+fn add_text_here_without_a_token_opens_settings_instead() {
+    let mut app = nadd(None, None, Some("page"));
+    let item = ferrocast_core::notion::parse_search(MORE_JSON).unwrap().items.remove(0);
+    app.perform(Act::NotionAddHere(item), false);
+    assert_eq!(toast_text(&app), "Connect Notion first: Settings → Integrations.");
+    assert!(matches!(app.view(), View::Settings));
 }
