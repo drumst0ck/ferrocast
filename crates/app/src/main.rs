@@ -10,6 +10,7 @@ mod media_tools_tests;
 mod notes_ctl;
 mod perf;
 mod route;
+mod secrets;
 mod services;
 mod ui;
 
