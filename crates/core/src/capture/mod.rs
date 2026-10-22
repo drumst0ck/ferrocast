@@ -1,6 +1,7 @@
 //! Screen capture and recording: pure, platform-independent logic.
 
 pub mod protocol;
+pub mod region;
 pub mod settings;
 
 pub use settings::{AfterCapture, CaptureSettings, ScreenshotFormat};
