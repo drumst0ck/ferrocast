@@ -15,7 +15,7 @@ Branch: feat/notes-design (worktree target/wt-notes-design), from origin/master 
 ## Tasks
 - T1 S2,S4,S5,S8 `crates/macos/src/notes_theme.rs`: the palette as dynamic NSColors (light and dark), an appearance setter (System, Dark, Light), the window chrome (background, toolbar, title, hairline, toolbar buttons tint) in notes.rs; a test that pins the palette values — commit: ec00109
 - T2 S4,S6,S7 editor styling in notes_editor.rs: text, headings, quote bar, code block, inline code, links, checkboxes, caret and selection, list markers, rule — commit: 0d4b1c0
-- T3 S4,S7,S8 overlays: notes_popups.rs (pop-up rows, Format Bar) and notes_palette.rs (card, rows, search field) — commit: pending
+- T3 S4,S7,S8 overlays: notes_popups.rs (pop-up rows, Format Bar) and notes_palette.rs (card, rows, search field) — commit: 4f4086c
 - T4 S5 app wiring in crates/app: apply the Settings.theme to the Notes window at startup and when it changes; a test that the app palette and the notes palette have the same values — commit: 4ab40dc
 - T5 S9 side-by-side screenshots of launcher and Notes in both themes, demos re-run, changelog line — commit: pending
 
@@ -29,3 +29,4 @@ Branch: feat/notes-design (worktree target/wt-notes-design), from origin/master 
 - D4 see L2.
 - L3 T4 (4ab40dc) reviewed: diff read, the four new tests re-run by me (mapping, startup, change in Settings fires once in order, palette drift pin). The startup test calls set_theme directly because App::new needs an eframe context. Full suite to be re-run on the merged result of T2 and T3.
 - L4 T2 (0d4b1c0) reviewed from the worker's output: dark and light PNGs inspected (coral caret, quote bar, links and checked boxes with dark ink; code fill and inline pill from the palette; headings light/regular/medium with -0.022em kerning). Selection contrast 10.59:1 dark and 10.75:1 light. The worker could not see the workspace clippy pass (an error in the other worker's popups demo at the time); demos and clippy to be re-run by me once T3 lands.
+- L5 T3 (4f4086c) reviewed. Re-run by me on the whole branch (T1 to T4): fmt, clippy, workspace tests with a fake HOME (app 529, core 468, macos 133) and the three macos demos all pass. Contrast: accent ink on coral 5.66 dark and 4.69 light; Text on Bg 15.4 and 16.0; Sub on Bg is 4.23 in light (used only for hints, shortcuts, icons and the placeholder, asserted at 3:1 or more); the 70% ink of the shortcut on the selected row is 3.71 and 3.31. Pixel checks in the demos depend on the monitor color profile (snapshots are stored in the display profile, the worker converts expected values), so they are dev checks, not CI. Shadows are drawn by the system and do not appear in snapshots: not verified on screen.
