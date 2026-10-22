@@ -153,6 +153,8 @@ pub enum Msg {
     },
     /// The floating shelf panel's items changed (drop in, remove, clear).
     ShelfChanged(Vec<PathBuf>),
+    /// The Notes window or its palette reported something (see `notes_ctl`).
+    Notes(crate::notes_ctl::NMsg),
     /// Another wheel key was tapped while the wheel was open.
     WheelSwitch(ferrocast_core::wheel::WheelKind),
     /// The mouse was released while the wheel was open.

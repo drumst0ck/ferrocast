@@ -806,7 +806,7 @@ impl App {
                 match self.view() {
                     View::Snippets => self.new_snippet(String::new()),
                     View::Quicklinks => self.run_builtin(Builtin::CreateQuicklink),
-                    View::Notes => self.new_note(),
+                    View::Notes => self.open_notes_window(|c, d| c.create_note(d)),
                     _ => return false,
                 }
                 return true;
@@ -847,12 +847,6 @@ impl App {
                 if ctx.data(|d| d.get_temp::<String>(id)).is_some_and(|q| !q.is_empty()) {
                     ctx.data_mut(|d| d.insert_temp(id, String::new()));
                     return true;
-                }
-            }
-            if let View::NoteEdit(id) = self.view().clone() {
-                if self.notes.iter().any(|n| n.id == id && n.text.trim().is_empty()) {
-                    self.notes.retain(|n| n.id != id);
-                    self.save_notes();
                 }
             }
             self.pop();
@@ -4663,33 +4657,6 @@ impl App {
         match view {
             View::Settings => {
                 ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| self.draw_settings(ui, pal));
-            }
-            View::NoteEdit(id) => {
-                ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                    let mut changed = false;
-                    if let Some(n) = self.notes.iter_mut().find(|n| n.id == id) {
-                        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                            let r = ui.add(
-                                TextEdit::multiline(&mut n.text)
-                                    .hint_text("Start typing… (markdown supported)")
-                                    .frame(EFrame::NONE)
-                                    .font(FontId::proportional(14.5))
-                                    .desired_width(f32::INFINITY)
-                                    .desired_rows(14),
-                            );
-                            if ff {
-                                r.request_focus();
-                            }
-                            if r.changed() {
-                                n.modified = now_secs();
-                                changed = true;
-                            }
-                        });
-                    }
-                    if changed {
-                        self.save_notes();
-                    }
-                });
             }
             View::VideoRedact { size: Some(_), .. } => {
                 self.draw_video_redact(ui, rect, pal);

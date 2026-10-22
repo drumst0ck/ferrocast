@@ -39,6 +39,7 @@ fn fixture() -> App {
         snippets: vec![],
         quicklinks: vec![],
         notes: vec![],
+        notes_ctl: crate::notes_ctl::NotesCtl::new(Box::new(crate::notes_ctl::fake::FakeFx::new().0)),
         frecency: Frecency::default(),
         update_available: None,
         apps: vec![],
@@ -8239,4 +8240,179 @@ fn h_the_translating_effect_row_renders_and_its_toggle_updates_the_setting() {
     assert!(!app.settings.translate_effect);
     click_at(&mut app, pos);
     assert!(app.settings.translate_effect);
+}
+
+// ---- Notes: launcher commands, Search Notes and the controller wiring (T6)
+
+fn notes_note(id: &str, text: &str, modified: i64) -> Note {
+    Note { id: id.into(), text: text.into(), created: 0, modified, pinned_at: None, deleted_at: None }
+}
+
+/// The app with a fake Notes window; the handle shows what the controller asked of it.
+fn notes_app(notes: Vec<Note>) -> (App, std::rc::Rc<std::cell::RefCell<crate::notes_ctl::fake::St>>) {
+    let mut app = fixture();
+    let (fx, st) = crate::notes_ctl::fake::FakeFx::new();
+    app.notes_ctl = crate::notes_ctl::NotesCtl::new(Box::new(fx));
+    app.notes = notes;
+    (app, st)
+}
+
+#[test]
+fn notes_commands_exist_and_share_the_notes_icon() {
+    let app = fixture();
+    let find = |id: &str| app.base.iter().find(|i| i.id == id).unwrap_or_else(|| panic!("{id} missing"));
+    let notes = find("builtin:notes");
+    assert_eq!((notes.title.as_str(), notes.subtitle.as_str()), ("Notes", ""));
+    assert!(matches!(notes.kind, Kind::Builtin(Builtin::Notes)));
+    for id in ["builtin:search-notes", "builtin:create-note"] {
+        assert_eq!(find(id).icon, notes.icon, "{id}");
+    }
+    assert!(notes.keywords.iter().any(|k| k == "floating notes") && notes.keywords.iter().any(|k| k == "raycast notes"));
+}
+
+#[test]
+fn floating_notes_alias_finds_the_notes_command() {
+    let mut app = fixture();
+    for q in ["floating notes", "raycast notes"] {
+        app.query = q.into();
+        let results = app.root_sections();
+        let first = results.iter().flat_map(|s| &s.items).next().unwrap_or_else(|| panic!("no result for {q}"));
+        assert_eq!(first.id, "builtin:notes", "{q}");
+    }
+}
+
+#[test]
+fn notes_commands_take_a_hotkey_like_other_builtins_and_have_none_by_default() {
+    let mut app = fixture();
+    for id in ["builtin:notes", "builtin:create-note", "builtin:search-notes"] {
+        let item = app.base.iter().find(|i| i.id == id).unwrap();
+        assert!(item.is_command(), "{id} is configurable in Root Search");
+        assert_eq!(app.settings.hotkey(id), None, "no default hotkey for {id}");
+        assert!(!ferrocast_core::models::DEFAULT_HOTKEYS.iter().any(|(c, _)| *c == id));
+        app.settings.command_mut(id).hotkey = Some("Alt+KeyN".into());
+        app.settings.command_mut(id).alias = Some("nn".into());
+        assert_eq!(app.settings.hotkey(id), Some("Alt+KeyN"));
+        assert_eq!(app.settings.alias(id), Some("nn"));
+    }
+}
+
+#[test]
+fn search_notes_lists_pinned_first_with_pin_glyph_and_slot() {
+    let (mut app, _) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta apple", 9), notes_note("c", "Gamma", 5)]);
+    ferrocast_core::notes::set_pinned(&mut app.notes, "a", true, 10);
+    app.stack = vec![View::Root, View::Notes];
+    let s = app.sections();
+    let titles: Vec<(&str, Vec<&str>)> = s.iter().map(|x| (x.title.as_str(), x.items.iter().map(|i| i.title.as_str()).collect())).collect();
+    assert_eq!(titles, vec![("Pinned", vec!["Alpha"]), ("Notes", vec!["Beta apple", "Gamma"])]);
+    let pinned = &s[0].items[0];
+    assert_eq!(pinned.icon, Icon::Glyph("sf:pin.fill", [255, 197, 49]));
+    assert_eq!(pinned.accessory, "⌘1");
+    assert_ne!(s[1].items[0].icon, pinned.icon);
+    app.query = "apple".into();
+    let s = app.sections();
+    assert_eq!(s.iter().flat_map(|x| &x.items).map(|i| i.title.as_str()).collect::<Vec<_>>(), ["Beta apple"], "content is searched");
+    app.notes[1].deleted_at = Some(3);
+    assert!(app.sections().iter().all(|x| x.items.is_empty()), "deleted notes are not listed");
+}
+
+#[test]
+fn search_notes_actions_pin_delete_and_create() {
+    let (mut app, _) = notes_app(vec![notes_note("a", "Alpha", 1)]);
+    let item = Item {
+        id: "note:a".into(),
+        title: "Alpha".into(),
+        subtitle: String::new(),
+        icon: Icon::Emoji(String::new()),
+        accessory: String::new(),
+        keywords: vec![],
+        kind: Kind::Note("a".into()),
+    };
+    let acts = app.actions_for(&item);
+    let by = |t: &str| {
+        acts.iter().find(|a| a.title == t).unwrap_or_else(|| panic!("{t} in {:?}", acts.iter().map(|a| &a.title).collect::<Vec<_>>()))
+    };
+    assert!(matches!(by("Open Note").kind, Act::Run));
+    assert_eq!(by("Pin Note").shortcut, Some((CMD, Key::Period)));
+    assert_eq!(shortcut_label(CMD, Key::Period), "⌘.");
+    assert_eq!(by("Create Note").shortcut, Some((CMD, Key::N)));
+    assert!(by("Delete Note").destructive);
+    ferrocast_core::notes::set_pinned(&mut app.notes, "a", true, 1);
+    assert!(app.actions_for(&item).iter().any(|a| a.title == "Unpin Note"));
+}
+
+#[test]
+fn enter_on_a_note_opens_it_in_the_floating_window_and_hides_the_launcher() {
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.stack = vec![View::Root, View::Notes];
+    app.visible = true;
+    app.run_item(&Item {
+        id: "note:b".into(),
+        title: "Beta".into(),
+        subtitle: String::new(),
+        icon: Icon::Emoji(String::new()),
+        accessory: String::new(),
+        keywords: vec![],
+        kind: Kind::Note("b".into()),
+    });
+    assert!(!app.visible, "the launcher steps aside first");
+    assert!(matches!(app.view(), View::Root), "and goes back to the root");
+    assert_eq!(app.notes_ctl.current.as_deref(), Some("b"));
+    assert!(st.borrow().visible);
+    assert_eq!(st.borrow().markdown, "Beta");
+    assert_eq!(app.settings.notes_last.as_deref(), Some("b"));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn create_note_command_opens_the_window_instead_of_a_form() {
+    let (mut app, st) = notes_app(vec![]);
+    app.run_builtin(Builtin::CreateNote);
+    assert_eq!(app.notes.len(), 1);
+    assert!(matches!(app.view(), View::Root), "no note form is pushed");
+    assert!(st.borrow().visible);
+    assert_eq!(app.notes_ctl.current.as_deref(), Some(app.notes[0].id.as_str()));
+    let saved: Vec<Note> = app.store.load("notes.json");
+    assert_eq!(saved.len(), 1, "persisted");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn notes_command_toggles_the_window() {
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1)]);
+    app.run_builtin(Builtin::Notes);
+    assert!(st.borrow().visible);
+    assert_eq!(app.notes_ctl.current.as_deref(), Some("a"));
+    app.run_builtin(Builtin::Notes);
+    assert!(!st.borrow().visible);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn note_pin_and_delete_from_search_notes_need_no_confirmation() {
+    let (mut app, _) = notes_app(vec![notes_note("a", "Alpha", 1)]);
+    app.stack = vec![View::Root, View::Notes];
+    app.perform(Act::NotePin("a".into()), false);
+    assert!(app.notes[0].pinned_at.is_some());
+    app.perform(Act::NoteDelete("a".into()), false);
+    assert!(!matches!(app.view(), View::Confirm { .. }), "it is recoverable from Recently Deleted");
+    assert!(app.notes[0].deleted_at.is_some() && app.notes[0].pinned_at.is_none());
+    let saved: Vec<Note> = app.store.load("notes.json");
+    assert!(saved[0].deleted_at.is_some());
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn native_notes_messages_are_applied_by_drain() {
+    use crate::notes_ctl::NMsg;
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1)]);
+    app.run_builtin(Builtin::Notes);
+    app.bus.send(Msg::Notes(NMsg::Changed("Alpha edited".into())));
+    app.bus.send(Msg::Notes(NMsg::Zoom(1.3)));
+    app.drain();
+    assert_eq!(app.notes[0].text, "Alpha edited");
+    assert_eq!(app.settings.notes_zoom, 1.3);
+    let saved: Vec<Note> = app.store.load("notes.json");
+    assert_eq!(saved[0].text, "Alpha edited", "the first change after a quiet period is written at once");
+    assert!(st.borrow().visible);
+    let _ = std::fs::remove_dir_all(&app.store.root);
 }
