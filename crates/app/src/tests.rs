@@ -95,6 +95,8 @@ fn fixture() -> App {
         rates_checked_at: Instant::now(),
         sec_cache: None,
         sec_dirty: true,
+        tour: tour::Tour::new(),
+        intro: None,
         fx: Effects::recording(),
         translate_run: 0,
         translated_run: None,
@@ -8629,6 +8631,90 @@ fn the_notes_tab_switches_are_large_hit_targets_in_both_themes() {
     }
 }
 
+// ---- onboarding tour
+
+fn tour_app(slide: usize) -> App {
+    let mut app = fixture();
+    app.settings.onboarded = true;
+    app.stack = vec![View::Root, View::Welcome];
+    app.tour = tour::Tour::new();
+    app.tour.slide = slide;
+    app.tour.injected = Some(tour::Perms { accessibility: false, input_monitoring: false });
+    app
+}
+
+fn on_tour(app: &App) -> bool {
+    matches!(app.view(), View::Welcome)
+}
+
+#[test]
+fn tour_navigation_is_bounded() {
+    let mut t = tour::Tour::new();
+    assert_eq!(t.slide, 0);
+    assert!(!t.prev(), "no slide before the first");
+    for want in 1..tour::SLIDES {
+        assert!(t.next());
+        assert_eq!(t.slide, want);
+    }
+    assert!(!t.next(), "no slide after the last");
+    assert_eq!(t.slide, tour::SLIDES - 1);
+    assert!(t.go(2));
+    assert_eq!(t.slide, 2);
+    assert!(!t.go(2), "going to the current slide is not a move");
+    assert!(!t.go(tour::SLIDES), "out of range is ignored");
+    assert_eq!(t.slide, 2);
+}
+
+fn release(key: Key) -> Event {
+    Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE }
+}
+
+/// A full key tap: egui ignores a second press of a key it still sees held.
+fn tap(app: &mut App, key: Key) {
+    render(app, vec![key_event(key)]);
+    render(app, vec![release(key)]);
+}
+
+#[test]
+fn tour_arrow_keys_enter_and_escape() {
+    let mut app = tour_app(0);
+    tap(&mut app, Key::ArrowRight);
+    assert_eq!(app.tour.slide, 1);
+    tap(&mut app, Key::ArrowLeft);
+    tap(&mut app, Key::ArrowLeft);
+    assert_eq!(app.tour.slide, 0, "left stops at the first slide");
+    assert!(on_tour(&app));
+    tap(&mut app, Key::Enter);
+    assert_eq!(app.tour.slide, 1, "Enter goes to the next slide");
+    // a held Enter must not run through the deck
+    let held = Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: true, modifiers: Modifiers::NONE };
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert_eq!(app.tour.slide, 2, "the first press moves");
+    render(&mut app, vec![held.clone(), held]);
+    assert_eq!(app.tour.slide, 2, "its auto-repeats do not");
+    render(&mut app, vec![release(Key::Enter)]);
+    // Enter on the permissions slide only moves on (the grant is a button)
+    app.tour.slide = tour::PERMS_SLIDE;
+    tap(&mut app, Key::Enter);
+    assert_eq!(app.tour.slide, tour::PERMS_SLIDE + 1);
+    // right at the last slide stays; Enter there finishes
+    tap(&mut app, Key::ArrowRight);
+    assert_eq!(app.tour.slide, tour::SLIDES - 1);
+    assert!(on_tour(&app));
+    tap(&mut app, Key::Enter);
+    assert!(!on_tour(&app), "Enter on the last slide closes the tour");
+}
+
+#[test]
+fn tour_escape_closes_from_any_slide_and_stays_onboarded() {
+    for slide in 0..tour::SLIDES {
+        let mut app = tour_app(slide);
+        render(&mut app, vec![key_event(Key::Escape)]);
+        assert!(!on_tour(&app), "Esc closes slide {slide}");
+        assert!(app.settings.onboarded);
+    }
+}
+
 #[test]
 fn the_menu_bar_item_follows_the_saved_setting_at_startup_and_every_change() {
     let (mut app, _) = notes_app(vec![]);
@@ -8722,4 +8808,209 @@ fn keyboard_shortcuts_screen_has_a_notes_group_with_the_window_shortcuts() {
     for keys in ["N", "P", "K", "[", "]"] {
         assert!(seen.iter().any(|t| t == keys), "missing key cap {keys:?}");
     }
+}
+
+#[test]
+fn first_run_opens_the_tour_once_and_hidden_does_not() {
+    let mut s = Settings::default();
+    assert!(!s.onboarded);
+    assert!(!tour::first_run(&mut s, true), "--hidden never opens it");
+    assert!(!s.onboarded, "and does not use up the first run");
+    assert!(tour::first_run(&mut s, false), "first visible launch opens it");
+    assert!(s.onboarded);
+    assert!(!tour::first_run(&mut s, false), "only once");
+}
+
+#[test]
+fn reopening_the_tour_starts_on_slide_zero() {
+    let mut app = tour_app(4);
+    app.stack = vec![View::Root];
+    app.push(View::Welcome);
+    assert_eq!(app.tour.slide, 0);
+}
+
+#[test]
+fn every_tour_slide_renders_at_the_window_size() {
+    for dark in [true, false] {
+        for slide in 0..tour::SLIDES {
+            let mut app = tour_app(slide);
+            app.dark = dark;
+            for _ in 0..3 {
+                render(&mut app, vec![]);
+            }
+            // mid-transition too
+            app.tour.go((slide + 1) % tour::SLIDES);
+            render(&mut app, vec![]);
+        }
+    }
+}
+
+#[test]
+fn tour_footer_matches_the_deck() {
+    let mut app = tour_app(0);
+    assert_eq!(app.view().footer_hints().len(), 0, "the tour state lives in App, not in the view");
+    render(&mut app, vec![]);
+    let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
+    let has = |l: &str, k: &str| chips.iter().any(|(a, b)| a == l && b == k);
+    assert!(has("Next", "↵") && has("Skip", "esc"), "{chips:?}");
+    let mut app = tour_app(tour::SLIDES - 1);
+    render(&mut app, vec![]);
+    let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
+    assert!(chips.iter().any(|(l, k)| l == "Start" && k == "↵"), "{chips:?}");
+}
+
+fn perm_lines(app: &App) -> Vec<String> {
+    app.ctx.data(|d| d.get_temp(Id::new("tour-perm-status"))).unwrap_or_default()
+}
+
+#[test]
+fn permissions_slide_status_follows_the_checked_value() {
+    let mut app = tour_app(tour::PERMS_SLIDE);
+    app.tour.injected = Some(tour::Perms { accessibility: true, input_monitoring: false });
+    render(&mut app, vec![]);
+    let l = perm_lines(&app);
+    assert!(l.contains(&"Accessibility: Granted".to_string()), "{l:?}");
+    assert!(l.contains(&"Input Monitoring: Not granted".to_string()), "{l:?}");
+    app.tour.injected = Some(tour::Perms { accessibility: false, input_monitoring: true });
+    render(&mut app, vec![]);
+    let l = perm_lines(&app);
+    assert!(l.contains(&"Accessibility: Not granted".to_string()), "{l:?}");
+    assert!(l.contains(&"Input Monitoring: Granted".to_string()), "{l:?}");
+    // Automation cannot be checked silently: it is never reported as granted
+    assert!(l.iter().any(|s| s.starts_with("Automation") && !s.contains("Granted")), "{l:?}");
+}
+
+#[test]
+fn progress_dots_jump_to_a_slide() {
+    let mut app = tour_app(0);
+    render(&mut app, vec![]);
+    let dots: Vec<Rect> = app.ctx.data(|d| d.get_temp(Id::new("tour-dots"))).unwrap_or_default();
+    assert_eq!(dots.len(), tour::SLIDES);
+    let at = dots[3].center();
+    render(&mut app, vec![Event::PointerMoved(at)]);
+    let click = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(&mut app, vec![click(true)]);
+    render(&mut app, vec![click(false)]);
+    assert_eq!(app.tour.slide, 3);
+}
+
+// ---- first-launch intro (sunrise)
+
+fn intro_app() -> App {
+    let mut app = tour_app(0);
+    app.begin_intro(false);
+    app.intro.as_mut().unwrap().clock = Some(0.0);
+    app
+}
+
+fn at(app: &mut App, t: f64) {
+    app.intro.as_mut().unwrap().clock = Some(t);
+    render(app, vec![]);
+}
+
+#[test]
+fn intro_timeline_is_ordered_and_bounded() {
+    let p0 = intro::phase(0.0);
+    assert!(p0.rise < 0.01 && p0.logo == 0.0 && p0.word == 0.0 && p0.alpha == 1.0 && !p0.done);
+    let mid = intro::phase(1.4);
+    assert!(mid.rise > 0.3 && mid.logo > 0.0 && mid.word == 0.0, "the logo comes before the wordmark");
+    let late = intro::phase(2.4);
+    assert!(late.logo == 1.0 && late.word > 0.0 && late.word < 1.0, "the wordmark arrives after the logo settles");
+    let held = intro::phase(intro::HANDOFF_AT - 0.01);
+    assert!(held.rise == 1.0 && held.logo == 1.0 && held.word == 1.0 && held.alpha == 1.0);
+    let fading = intro::phase(intro::HANDOFF_AT + intro::HANDOFF / 2.0);
+    assert!(fading.alpha > 0.0 && fading.alpha < 1.0 && !fading.done);
+    assert!(intro::phase(intro::DURATION).done);
+    let total = std::hint::black_box(intro::DURATION);
+    assert!((3.0..=4.5).contains(&total), "about 3-4 s");
+}
+
+#[test]
+fn first_launch_plays_the_intro_over_the_tour_then_ends_by_itself() {
+    let mut app = intro_app();
+    at(&mut app, 0.0);
+    assert!(on_tour(&app) && app.intro.is_some());
+    assert!(app.intro.as_ref().unwrap().covers(), "the intro covers the tour");
+    at(&mut app, intro::DURATION as f64 - 0.1);
+    assert!(app.intro.is_some(), "still playing just before the end");
+    at(&mut app, intro::DURATION as f64 + 0.05);
+    assert!(app.intro.is_none(), "it ends by itself");
+    assert!(on_tour(&app) && app.tour.slide == 0, "and leaves the tour on slide 0");
+}
+
+#[test]
+fn a_key_press_or_click_skips_the_intro_without_driving_the_tour() {
+    for ev in [key_event(Key::ArrowRight), key_event(Key::Escape), key_event(Key::Enter), key_event(Key::A)] {
+        let mut app = intro_app();
+        at(&mut app, 0.5);
+        app.intro.as_mut().unwrap().clock = Some(0.6);
+        render(&mut app, vec![ev]);
+        let i = app.intro.as_ref().expect("hand-off still fading");
+        assert!(!i.covers(), "the key skips to the hand-off");
+        assert_eq!(app.tour.slide, 0, "and is not also a tour key");
+        assert!(on_tour(&app), "Esc does not close the tour either");
+        at(&mut app, 0.6 + intro::HANDOFF as f64 + 0.05);
+        assert!(app.intro.is_none());
+    }
+    let mut app = intro_app();
+    at(&mut app, 0.5);
+    click_at(&mut app, Pos2::new(300.0, 200.0));
+    assert!(app.intro.as_ref().is_none_or(|i| !i.covers()), "a click skips too");
+}
+
+#[test]
+fn reduce_motion_shows_the_settled_frame_briefly() {
+    let mut app = tour_app(0);
+    app.begin_intro(true);
+    let i = app.intro.as_mut().unwrap();
+    i.clock = Some(0.0);
+    let p = intro::phase(i.elapsed(0.0));
+    assert!(p.rise == 1.0 && p.logo == 1.0 && p.word == 1.0 && p.alpha == 1.0, "static final frame, no motion");
+    let hold = std::hint::black_box(intro::DURATION - intro::REDUCED_START);
+    assert!(hold < 2.0, "and short");
+}
+
+#[test]
+fn reopening_the_tour_does_not_replay_the_intro() {
+    let mut app = tour_app(0);
+    app.pop();
+    app.push(View::Welcome);
+    assert!(app.intro.is_none());
+    render(&mut app, vec![]);
+    assert!(app.intro.is_none() && on_tour(&app));
+    // after a played intro, closing and reopening does not bring it back either
+    let mut app = intro_app();
+    at(&mut app, 0.0);
+    at(&mut app, 20.0);
+    app.pop();
+    app.push(View::Welcome);
+    render(&mut app, vec![]);
+    assert!(app.intro.is_none());
+}
+
+#[test]
+fn intro_renders_every_frame_of_its_timeline_and_then_requests_nothing() {
+    let mut app = intro_app();
+    for n in 0..=40 {
+        if app.intro.is_none() {
+            break;
+        }
+        at(&mut app, n as f64 * 0.1);
+    }
+    assert!(app.intro.is_none());
+    let ctx = app.ctx.clone();
+    render(&mut app, vec![]);
+    let again = ctx.run_ui(egui::RawInput::default(), |_| {});
+    assert!(again.viewport_output.values().all(|v| v.repaint_delay == std::time::Duration::MAX), "no repaints once the intro is over");
+}
+
+#[test]
+fn intro_sound_plays_once_and_only_on_the_real_animated_intro() {
+    let mut live = intro::Intro::new(false);
+    assert!(live.take_sound(), "the animated intro plays its sound");
+    assert!(!live.take_sound(), "only once");
+    assert!(!intro::Intro::new(true).take_sound(), "Reduce Motion starts at the settled frame: no sound out of sync");
+    let mut tested = intro::Intro::new(false);
+    tested.clock = Some(0.0);
+    assert!(!tested.take_sound(), "tests drive the clock and must stay silent");
 }

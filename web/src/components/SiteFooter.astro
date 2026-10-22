@@ -3,9 +3,9 @@ import FootMark from './FootMark.astro';
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const repo = 'https://github.com/drumst0ck/ferrocast';
 ---
+<FootMark />
 <footer class="foot">
   <span>A fast launcher for macOS</span>
   <nav aria-label="Links"><a href={`${base}/`}>Home</a><a href={`${base}/files/`}>Convert &amp; file tools</a><a href={`${base}/docs/`}>Docs</a><a href={`${base}/changelog/`}>Changelog</a><a href={repo}>GitHub</a><a href={`${repo}/blob/main/LICENSE`}>License</a></nav>
   <span class="r">2026 · MIT</span>
 </footer>
-<FootMark />

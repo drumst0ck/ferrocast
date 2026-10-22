@@ -4,19 +4,42 @@ const { current = '', switchHref, switchLabel = 'ES', switchAria, lang = 'en' } 
 const home = lang === 'es' ? `${import.meta.env.BASE_URL.replace(/\/$/, '')}/es/` : `${import.meta.env.BASE_URL.replace(/\/$/, '')}/`;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const repo = 'https://github.com/drumst0ck/ferrocast';
+const menuLabel = lang === 'es' ? 'Menú' : 'Menu';
 ---
 <header class="top">
   <a class="mark" href={home}><img src={`${base}/icon.png`} alt="" width="30" height="30" />Ferrocast</a>
-  <nav class="nav" aria-label="Main">
-    <slot name="nav">
-    <a href={`${base}/#features`}>Features</a>
-    <a href={`${base}/files/`} class:list={{ on: current === 'files' }} aria-current={current === 'files' ? 'page' : undefined}>Files</a>
-    <a href={`${base}/#install`}>Install</a>
-    <a href={`${base}/docs/`} class:list={{ on: current === 'docs' }} aria-current={current === 'docs' ? 'page' : undefined}>Docs</a>
-    <a href={`${base}/changelog/`}>Changelog</a>
-    <a href={repo}>GitHub</a>
-    </slot>
-  </nav>
-  {switchHref && <a class="lang" href={switchHref} hreflang={lang === 'es' ? 'en' : 'es'} lang={lang === 'es' ? 'en' : 'es'} aria-label={switchAria}>{switchLabel}</a>}
+  <div class="menu" id="site-menu">
+    <nav class="nav" aria-label="Main">
+      <slot name="nav">
+      <a href={`${base}/#features`}>Features</a>
+      <a href={`${base}/files/`} class:list={{ on: current === 'files' }} aria-current={current === 'files' ? 'page' : undefined}>Files</a>
+      <a href={`${base}/#install`}>Install</a>
+      <a href={`${base}/docs/`} class:list={{ on: current === 'docs' }} aria-current={current === 'docs' ? 'page' : undefined}>Docs</a>
+      <a href={`${base}/changelog/`}>Changelog</a>
+      <a href={repo}>GitHub</a>
+      </slot>
+    </nav>
+    {switchHref && <a class="lang" href={switchHref} hreflang={lang === 'es' ? 'en' : 'es'} lang={lang === 'es' ? 'en' : 'es'} aria-label={switchAria}>{switchLabel}</a>}
+  </div>
+  <button class="burger" type="button" aria-expanded="false" aria-controls="site-menu" aria-label={menuLabel}><span aria-hidden="true"></span></button>
   <a class="btn" href={`${home}#install`}><slot name="cta">Install</slot></a>
 </header>
+<script is:inline>
+(function () {
+  var top = document.currentScript.previousElementSibling;
+  var btn = top && top.querySelector('.burger');
+  var menu = top && top.querySelector('.menu');
+  if (!btn || !menu) return;
+  var mq = matchMedia('(max-width: 62em)');
+  function set(open) {
+    top.classList.toggle('open', open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    document.documentElement.classList.toggle('menu-open', open);
+  }
+  btn.addEventListener('click', function () { set(!top.classList.contains('open')); });
+  menu.addEventListener('click', function (e) { if (e.target.closest('a')) set(false); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && top.classList.contains('open')) { set(false); btn.focus(); } });
+  document.addEventListener('pointerdown', function (e) { if (top.classList.contains('open') && !top.contains(e.target)) set(false); }, true);
+  mq.addEventListener('change', function (e) { if (!e.matches) set(false); });
+})();
+</script>
