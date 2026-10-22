@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Metal
 import ScreenCaptureKit
@@ -6,6 +7,10 @@ import ScreenCaptureKit
 // No text or paths in argv. Exits on stdin EOF.
 
 setvbuf(stdout, nil, _IOLBF, 0)
+// Initialise CoreGraphics before any ScreenCaptureKit call: `SCContentFilter(desktopIndependentWindow:)` in a
+// process that never touched CoreGraphics aborts with `CGS_REQUIRE_INIT` (seen live: Capture Window saved
+// nothing and the helper logged the assertion). Window recording uses the same filter.
+_ = CGMainDisplayID()
 
 func sckAvailable() -> Bool {
     if #available(macOS 14, *) { return true }
@@ -21,7 +26,7 @@ func handle(_ req: [String: Any]) {
     if cmd == "hello" {
         reply(id, ["protocol": protocolVersion, "os": osVersionString(), "version": helperVersion,
                    "sck": sckAvailable(), "metal": MTLCreateSystemDefaultDevice() != nil,
-                   "capabilities": sckAvailable() ? ["shareable"] : []])
+                   "capabilities": sckAvailable() ? ["shareable", "screenshot"] : []])
         return
     }
     guard #available(macOS 14, *) else {
@@ -30,6 +35,7 @@ func handle(_ req: [String: Any]) {
     }
     switch cmd {
     case "shareable": handleShareable(id)
+    case "screenshot": handleScreenshot(id, req)
     default: fail(id, "invalid", "unknown command: \(cmd)")
     }
 }

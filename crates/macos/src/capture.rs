@@ -2,7 +2,7 @@
 //! `ferrocast_core::capture::protocol`). Text and paths never travel in argv.
 
 use anyhow::{anyhow, bail, Result};
-use ferrocast_core::capture::protocol::{self, Command, ErrorCode, Hello, Line, Request, Shareable};
+use ferrocast_core::capture::protocol::{self, Command, ErrorCode, Hello, Line, Request, Scale, ScreenshotDone, Shareable, Target};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
@@ -32,6 +32,7 @@ pub fn timeout_for(cmd: &Command) -> Duration {
     Duration::from_secs(match cmd {
         Command::Hello => 5,
         Command::Shareable => 10,
+        Command::Screenshot { .. } => 20,
     })
 }
 
@@ -53,6 +54,65 @@ impl std::fmt::Display for CallError {
     }
 }
 impl std::error::Error for CallError {}
+
+/// Why a screenshot failed. `PermissionDenied` is the S4 case: the app shows the
+/// Screen Recording toast and opens the Settings pane.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ScreenshotError {
+    PermissionDenied,
+    NotFound(String),
+    Unsupported,
+    Timeout,
+    Other(String),
+}
+
+impl From<CallError> for ScreenshotError {
+    fn from(e: CallError) -> Self {
+        match e {
+            CallError::Helper { code: ErrorCode::PermissionScreen, .. } => Self::PermissionDenied,
+            CallError::Helper { code: ErrorCode::NotFound, message } => Self::NotFound(message),
+            CallError::Helper { code: ErrorCode::UnsupportedOs, .. } => Self::Unsupported,
+            CallError::Helper { code, message } => Self::Other(format!("{code:?}: {message}")),
+            CallError::Timeout => Self::Timeout,
+            CallError::Closed => Self::Other("capture helper closed".into()),
+        }
+    }
+}
+
+impl std::fmt::Display for ScreenshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PermissionDenied => write!(f, "Screen Recording is not granted"),
+            Self::NotFound(m) => write!(f, "capture target not found: {m}"),
+            Self::Unsupported => write!(f, "screen capture needs macOS 14"),
+            Self::Timeout => write!(f, "screenshot timed out"),
+            Self::Other(m) => write!(f, "screenshot failed: {m}"),
+        }
+    }
+}
+impl std::error::Error for ScreenshotError {}
+
+/// Temp file the helper writes before renaming to the final path.
+fn partial_path(out: &Path) -> PathBuf {
+    let mut s = out.as_os_str().to_owned();
+    s.push(".partial");
+    PathBuf::from(s)
+}
+
+/// Take one screenshot with a short-lived helper (see [`Helper::screenshot`]).
+pub fn screenshot(
+    exe: &Path,
+    log: impl Fn(&str) + Send + 'static,
+    target: Target,
+    out: &Path,
+    cursor: bool,
+) -> std::result::Result<ScreenshotDone, ScreenshotError> {
+    if !available(exe) {
+        return Err(ScreenshotError::Unsupported);
+    }
+    let mut h = Helper::spawn(&helper_path(exe), log).map_err(|e| ScreenshotError::Other(e.to_string()))?;
+    h.screenshot(target, out, cursor)
+}
 
 pub struct Helper {
     child: Child,
@@ -125,6 +185,20 @@ impl Helper {
         protocol::parse_body(&body).map_err(|e| anyhow!(e))
     }
 
+    /// Capture `target` into the PNG at `out`. On any failure no file (nor partial) is left at `out`.
+    pub fn screenshot(&mut self, target: Target, out: &Path, cursor: bool) -> std::result::Result<ScreenshotDone, ScreenshotError> {
+        let command =
+            Command::Screenshot { target, out: out.to_string_lossy().into_owned(), cursor, window_shadow: false, scale: Scale::Native };
+        let timeout = timeout_for(&command);
+        let result = self.call(command, timeout).map_err(ScreenshotError::from).and_then(|body| {
+            protocol::parse_body::<ScreenshotDone>(&body).map_err(|e| ScreenshotError::Other(format!("bad screenshot reply: {e}")))
+        });
+        if result.is_err() {
+            let _ = std::fs::remove_file(partial_path(out));
+        }
+        result
+    }
+
     pub fn kill(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -192,6 +266,30 @@ mod tests {
             Err(CallError::Helper { code, message }) => assert_eq!((code, message.as_str()), (ErrorCode::PermissionScreen, "off")),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn screenshot_permission_denied_maps_and_leaves_no_file() {
+        let p = fake("shot-perm", r#"read l; echo '{"id":1,"error":"permission-screen","message":"off"}'; exit 1"#);
+        let out = p.with_file_name("a.png");
+        std::fs::write(partial_path(&out), b"half").unwrap();
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let r = h.screenshot(Target::Display { display: 1 }, &out, false);
+        assert_eq!(r.unwrap_err(), ScreenshotError::PermissionDenied);
+        assert!(!out.exists() && !partial_path(&out).exists());
+    }
+
+    #[test]
+    fn screenshot_ok_and_other_errors_map() {
+        let p = fake("shot-ok", r#"read l; echo '{"id":1,"ok":true,"path":"/x.png","size":[1280,800],"scale":2.0}'"#);
+        let d = Helper::spawn(&p, |_| {}).unwrap().screenshot(Target::Window { window: 9 }, Path::new("/x.png"), false).unwrap();
+        assert_eq!((d.size, d.scale), ([1280, 800], 2.0));
+        let p = fake("shot-nf", r#"read l; echo '{"id":1,"error":"not-found","message":"window 9"}'"#);
+        let e = Helper::spawn(&p, |_| {}).unwrap().screenshot(Target::Window { window: 9 }, Path::new("/x.png"), false).unwrap_err();
+        assert_eq!(e, ScreenshotError::NotFound("window 9".into()));
+        let p = fake("shot-int", r#"read l; echo '{"id":1,"error":"internal","message":"boom"}'"#);
+        let e = Helper::spawn(&p, |_| {}).unwrap().screenshot(Target::Window { window: 9 }, Path::new("/x.png"), false).unwrap_err();
+        assert!(matches!(e, ScreenshotError::Other(m) if m.contains("boom")));
     }
 
     #[test]

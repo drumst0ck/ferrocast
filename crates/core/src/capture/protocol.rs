@@ -14,6 +14,46 @@ pub enum Command {
     Hello,
     #[serde(rename = "shareable")]
     Shareable,
+    #[serde(rename = "screenshot")]
+    Screenshot {
+        target: Target,
+        /// Absolute PNG path the helper writes (atomically).
+        out: String,
+        #[serde(default)]
+        cursor: bool,
+        #[serde(default)]
+        window_shadow: bool,
+        #[serde(default)]
+        scale: Scale,
+    },
+}
+
+/// What a screenshot captures, tagged by `kind`. `rect` is display-local points, top-left origin.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum Target {
+    #[serde(rename = "display")]
+    Display { display: u32 },
+    #[serde(rename = "window")]
+    Window { window: u32 },
+    #[serde(rename = "rect")]
+    Rect { display: u32, rect: [f64; 4] },
+}
+
+/// Output scale of a screenshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Scale {
+    #[default]
+    #[serde(rename = "native")]
+    Native,
+}
+
+/// Payload of a successful `screenshot`: pixel size of the written PNG and the display scale.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScreenshotDone {
+    pub path: String,
+    pub size: [u32; 2],
+    pub scale: f64,
 }
 
 /// One request line: the id chosen by Rust plus the command.
@@ -185,5 +225,44 @@ mod tests {
         assert!(decode_line("not json").is_err());
         assert!(decode_line("[1]").is_err());
         assert!(decode_line(r#"{"id":1}"#).is_err());
+    }
+
+    #[test]
+    fn screenshot_request_encodes_each_target() {
+        let c = |target| Command::Screenshot {
+            target,
+            out: "/tmp/a b/é.png".into(),
+            cursor: false,
+            window_shadow: false,
+            scale: Scale::Native,
+        };
+        let s = encode_request(&Request { id: 3, command: c(Target::Rect { display: 1, rect: [100.0, 100.0, 640.0, 400.0] }) });
+        assert_eq!(
+            s,
+            r#"{"id":3,"cmd":"screenshot","target":{"kind":"rect","display":1,"rect":[100.0,100.0,640.0,400.0]},"out":"/tmp/a b/é.png","cursor":false,"window_shadow":false,"scale":"native"}"#
+        );
+        let s = encode_request(&Request { id: 4, command: c(Target::Window { window: 4231 }) });
+        assert!(s.contains(r#""target":{"kind":"window","window":4231}"#), "{s}");
+        let r = Request { id: 5, command: c(Target::Display { display: 2 }) };
+        assert_eq!(serde_json::from_str::<Request>(&encode_request(&r)).unwrap(), r);
+    }
+
+    #[test]
+    fn screenshot_request_defaults_optional_fields() {
+        let r: Request =
+            serde_json::from_str(r#"{"id":1,"cmd":"screenshot","target":{"kind":"display","display":1},"out":"/x.png"}"#).unwrap();
+        let Command::Screenshot { cursor, window_shadow, scale, .. } = r.command else { panic!() };
+        assert_eq!((cursor, window_shadow, scale), (false, false, Scale::Native));
+    }
+
+    #[test]
+    fn screenshot_reply_parses_and_ignores_unknown_fields() {
+        let Line::Ok { body, .. } = decode_line(r#"{"id":3,"ok":true,"path":"/x.png","size":[1280,800],"scale":2.0,"extra":1}"#).unwrap()
+        else {
+            panic!()
+        };
+        let d: ScreenshotDone = parse_body(&body).unwrap();
+        assert_eq!((d.path.as_str(), d.size, d.scale), ("/x.png", [1280, 800], 2.0));
+        assert!(parse_body::<ScreenshotDone>(&serde_json::json!({"ok":true})).is_err());
     }
 }
