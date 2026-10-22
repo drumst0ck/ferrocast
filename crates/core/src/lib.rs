@@ -25,6 +25,8 @@ pub mod matrix;
 pub mod media;
 pub mod metaform;
 pub mod models;
+pub mod notion;
+pub mod obsidian;
 pub mod pages;
 pub mod pdfplan;
 pub mod photo;
