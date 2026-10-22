@@ -612,7 +612,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 app.push(View::Settings);
             }
             Ok("settings-advanced") => {
-                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 5usize));
+                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 6usize));
                 app.push(View::Settings);
             }
             Ok("timers") => {
@@ -5263,8 +5263,15 @@ impl App {
     }
 
     fn draw_settings(&mut self, ui: &mut Ui, pal: &Palette) {
-        const TABS: [(&str, &str); 6] =
-            [("General", "⌘"), ("Clipboard", "⎘"), ("Snippets", "{ }"), ("AI", "AI"), ("Scripts", "›_"), ("Advanced", "···")];
+        const TABS: [(&str, &str); 7] = [
+            ("General", "⌘"),
+            ("Clipboard", "⎘"),
+            ("Snippets", "{ }"),
+            ("AI", "AI"),
+            ("Translate", "Tr"),
+            ("Scripts", "›_"),
+            ("Advanced", "···"),
+        ];
         let ctx = ui.ctx().clone();
         let tab_id = Id::new("settings_tab");
         let mut tab: usize = ctx.data(|d| d.get_temp(tab_id)).unwrap_or(0);
@@ -5288,6 +5295,10 @@ impl App {
         let update_available = self.update_available.clone();
         let models_key = services::models_key(&self.settings);
         let models_state = self.ai_models.get(&models_key).cloned();
+        // The Translate tab lists the models of ITS provider, with the chat's server address and key.
+        let translate_models_state =
+            fetched_translate_settings(&self.settings).and_then(|ts| self.ai_models.get(&services::models_key(&ts)).cloned());
+        let mut fetch_translate_models = false;
         let mut remove_dir = None;
         let mut enable = None;
         let mut scratch = std::mem::take(&mut self.scratch);
@@ -5371,47 +5382,6 @@ impl App {
                                 let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
                                 segmented(ui, pal, &mut s.wheel_actions_key, &opts);
                             });
-                            row(ui, pal, "Translate wheel key", "Tap during a text drag for the Translate wheel. Not Shift: it extends the selection.", |ui| {
-                                let opts: Vec<(String, &str)> = ["Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
-                                segmented(ui, pal, &mut s.wheel_translate_key, &opts);
-                            });
-                            row(ui, pal, "Translate languages", "Drag selected text and tap the Convert key. Comma-separated, up to 12.", |ui| {
-                                let id = Id::new("translate_langs_buf");
-                                let mut buf: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| s.translate_languages.join(", "));
-                                let edit = TextEdit::singleline(&mut buf).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("English, Spanish, French…");
-                                if ui.add(edit).changed() {
-                                    s.translate_languages = ferrocast_core::translate::parse_list(&buf);
-                                }
-                                ui.ctx().data_mut(|d| d.insert_temp(id, buf));
-                            });
-                            row(
-                                ui,
-                                pal,
-                                "After translating",
-                                "Auto replaces the selection where the app allows it (text fields, and Safari/Chrome pages through JavaScript) and shows a window otherwise. Paste ⌘V only presses Cmd-V, which does nothing on a page you cannot edit.",
-                                |ui| {
-                                    use ferrocast_core::models::TranslateOutput as T;
-                                    segmented(
-                                        ui,
-                                        pal,
-                                        &mut s.translate_output,
-                                        &[(T::Auto, "Auto"), (T::Show, "Window"), (T::Replace, "Paste ⌘V"), (T::Copy, "Copy only")],
-                                    );
-                                },
-                            );
-                            let auto = s.translate_output == ferrocast_core::models::TranslateOutput::Auto;
-                            #[cfg(test)]
-                            ui.ctx().data_mut(|d| {
-                                if auto {
-                                    d.insert_temp(Id::new("auto-js-note"), true);
-                                } else {
-                                    d.remove::<bool>(Id::new("auto-js-note"));
-                                }
-                            });
-                            if auto {
-                                ui.add_space(4.0);
-                                note(ui, pal, AUTO_JS_NOTE);
-                            }
                             row(
                                 ui,
                                 pal,
@@ -5525,27 +5495,6 @@ impl App {
                             });
                         });
                         ui.add_space(14.0);
-                        section(ui, pal, "Translation");
-                        group(ui, pal, |ui| {
-                            let engine = s.translate_provider;
-                            let desc = match engine {
-                                None => "Translating dragged text uses the provider chosen above.".to_string(),
-                                Some(p) => {
-                                    let name = ferrocast_core::translate::provider_name(p);
-                                    let ready = if p == P::ClaudeCode && services::claude_code_path().is_none() { " Claude Code is not installed." } else { "" };
-                                    format!("Translations use {name} with the model and sign-in set for it. Choose it as the provider above to configure it.{ready}")
-                                }
-                            };
-                            row_stacked(ui, pal, "Translation engine", &desc, |ui| {
-                                segmented(
-                                    ui,
-                                    pal,
-                                    &mut s.translate_provider,
-                                    &[(None, "Same as chat"), (Some(P::OpenAiCompatible), "OpenAI API"), (Some(P::ChatGpt), "ChatGPT"), (Some(P::Anthropic), "Anthropic"), (Some(P::ClaudeCode), "Claude Code")],
-                                );
-                            });
-                        });
-                        ui.add_space(14.0);
                         match prov {
                             P::OpenAiCompatible => {
                                 section(ui, pal, "Server");
@@ -5655,7 +5604,107 @@ impl App {
                         ui.add_space(10.0);
                         note(ui, pal, "Ask AI streams answers and keeps the conversation while the window is open. With Ollama or Claude Code nothing goes through Ferrocast's servers: there are none.");
                     }
-                    4 => {
+                    TRANSLATE_TAB => {
+                        use ferrocast_core::models::{AiProvider as P, TranslateOutput as T};
+                        section(ui, pal, "Wheel");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Translate wheel key", "Tap during a text drag for the Translate wheel. Not Shift: it extends the selection.", |ui| {
+                                let opts: Vec<(String, &str)> = ["Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                segmented(ui, pal, &mut s.wheel_translate_key, &opts);
+                            });
+                            row(ui, pal, "Languages", "Drag selected text and tap the translate key. Comma-separated, up to 12.", |ui| {
+                                let id = Id::new("translate_langs_buf");
+                                let mut buf: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| s.translate_languages.join(", "));
+                                let edit = TextEdit::singleline(&mut buf).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("English, Spanish, French…");
+                                if ui.add(edit).changed() {
+                                    s.translate_languages = ferrocast_core::translate::parse_list(&buf);
+                                }
+                                ui.ctx().data_mut(|d| d.insert_temp(id, buf));
+                            });
+                        });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Result");
+                        group(ui, pal, |ui| {
+                            row(
+                                ui,
+                                pal,
+                                "After translating",
+                                "Auto replaces the selection where the app allows it (text fields, and Safari/Chrome pages through JavaScript) and shows a window otherwise. Paste ⌘V only presses Cmd-V, which does nothing on a page you cannot edit.",
+                                |ui| {
+                                    segmented(
+                                        ui,
+                                        pal,
+                                        &mut s.translate_output,
+                                        &[(T::Auto, "Auto"), (T::Show, "Window"), (T::Replace, "Paste ⌘V"), (T::Copy, "Copy only")],
+                                    );
+                                },
+                            );
+                            let auto = s.translate_output == T::Auto;
+                            #[cfg(test)]
+                            ui.ctx().data_mut(|d| {
+                                if auto {
+                                    d.insert_temp(Id::new("auto-js-note"), true);
+                                } else {
+                                    d.remove::<bool>(Id::new("auto-js-note"));
+                                }
+                            });
+                            if auto {
+                                ui.add_space(4.0);
+                                note(ui, pal, AUTO_JS_NOTE);
+                            }
+                        });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Engine");
+                        group(ui, pal, |ui| {
+                            let desc = match s.translate_provider {
+                                None => "Translating dragged text uses the chat provider and its model.".to_string(),
+                                Some(p) => {
+                                    let name = ferrocast_core::translate::provider_name(p);
+                                    let ready = if p == P::ClaudeCode && services::claude_code_path().is_none() { " Claude Code is not installed." } else { "" };
+                                    format!("Translations use {name} with the model and sign-in set for it.{ready}")
+                                }
+                            };
+                            let before = s.translate_provider;
+                            row_stacked(ui, pal, "Provider", &desc, |ui| {
+                                segmented(
+                                    ui,
+                                    pal,
+                                    &mut s.translate_provider,
+                                    &[(None, "Same as chat"), (Some(P::OpenAiCompatible), "OpenAI API"), (Some(P::ChatGpt), "ChatGPT"), (Some(P::Anthropic), "Anthropic"), (Some(P::ClaudeCode), "Claude Code")],
+                                );
+                            });
+                            if s.translate_provider != before {
+                                // a model name of one provider is never sent to another
+                                s.translate_model.clear();
+                                ui.ctx().data_mut(|d| d.remove::<bool>(Id::new(("model_custom", "translate"))));
+                            }
+                            if let Some(p) = s.translate_provider {
+                                let listed: Option<Option<Result<Vec<String>, String>>> = match p {
+                                    P::ChatGpt => Some(Some(Ok(services::CHATGPT_MODELS.iter().map(|m| m.to_string()).collect()))),
+                                    P::ClaudeCode => Some(Some(Ok(services::CLAUDE_CODE_MODELS.iter().map(|m| m.to_string()).collect()))),
+                                    P::OpenAiCompatible | P::Anthropic => translate_models_state.clone(),
+                                };
+                                let hint = match p {
+                                    P::OpenAiCompatible => ferrocast_core::ai::DEFAULT_MODEL,
+                                    P::Anthropic => ferrocast_core::ai::DEFAULT_ANTHROPIC_MODEL,
+                                    P::ChatGpt => ferrocast_core::chatgpt::DEFAULT_MODEL,
+                                    P::ClaudeCode => "Claude Code default",
+                                };
+                                row(ui, pal, "Model", "Provider default uses the model set for it in the AI tab. Or pick one, or Custom… to type a name.", |ui| {
+                                    if model_picker_with(ui, pal, "translate", &mut s.translate_model, hint, "Provider default", listed.as_ref()) {
+                                        fetch_translate_models = true;
+                                    }
+                                });
+                            }
+                        });
+                        if s.translate_provider.is_none() {
+                            ui.add_space(10.0);
+                            note(ui, pal, &format!("Uses the chat provider and model: {}", ferrocast_core::translate::engine_label(&s)));
+                        }
+                        ui.add_space(10.0);
+                        note(ui, pal, "Credentials and server address come from the AI tab; this tab only picks which provider and model translate.");
+                    }
+                    5 => {
                         group(ui, pal, |ui| {
                             row(ui, pal, "Default folder", "Scripts with Raycast metadata here become commands.", |ui| {
                                 ui.label(RichText::new(self.store.scripts_dir().display().to_string()).size(12.0).color(pal.sub));
@@ -5751,6 +5800,15 @@ impl App {
         if fetch_models || need_models {
             self.ai_models.insert(models_key.clone(), None);
             services::fetch_models(&s, self.bus.clone());
+        }
+        if tab == TRANSLATE_TAB {
+            if let Some(ts) = fetched_translate_settings(&s) {
+                let k = services::models_key(&ts);
+                if fetch_translate_models || !self.ai_models.contains_key(&k) {
+                    self.ai_models.insert(k, None);
+                    services::fetch_models(&ts, self.bus.clone());
+                }
+            }
         }
         if chatgpt_in {
             ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));
@@ -6016,6 +6074,19 @@ fn row_body(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, 
 
 /// Model dropdown: Default, every model the provider lists, and Custom… (a free text field).
 /// Returns true when the list should be (re)fetched.
+/// Index of the Translate tab in `draw_settings`.
+const TRANSLATE_TAB: usize = 4;
+
+/// For a translation provider whose model list is fetched (OpenAI-compatible, Anthropic): the
+/// settings that list ITS models, i.e. the chat configuration with that provider selected.
+fn fetched_translate_settings(s: &Settings) -> Option<Settings> {
+    use ferrocast_core::models::AiProvider as P;
+    match s.translate_provider {
+        Some(p @ (P::OpenAiCompatible | P::Anthropic)) => Some(Settings { ai_provider: p, ..s.clone() }),
+        _ => None,
+    }
+}
+
 fn model_picker(
     ui: &mut Ui,
     pal: &Palette,
@@ -6024,6 +6095,22 @@ fn model_picker(
     default_label: &str,
     state: Option<&Option<Result<Vec<String>, String>>>,
 ) -> bool {
+    model_picker_with(ui, pal, id, value, default_label, &format!("Default ({default_label})"), state)
+}
+
+/// `model_picker` with its own text for the "empty value" entry (`default_text`); `default_label`
+/// stays the hint of the custom field.
+fn model_picker_with(
+    ui: &mut Ui,
+    pal: &Palette,
+    id: &str,
+    value: &mut String,
+    default_label: &str,
+    default_text: &str,
+    state: Option<&Option<Result<Vec<String>, String>>>,
+) -> bool {
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| d.insert_temp(Id::new("model-items"), Vec::<(String, Rect)>::new()));
     let custom_id = Id::new(("model_custom", id));
     let mut custom: bool = ui.ctx().data(|d| d.get_temp(custom_id)).unwrap_or(false);
     let models: &[String] = match state {
@@ -6047,23 +6134,31 @@ fn model_picker(
             if custom {
                 "Custom".to_string()
             } else if value.is_empty() {
-                format!("Default ({default_label})")
+                default_text.to_string()
             } else {
                 value.clone()
             }
         }
     };
-    egui::ComboBox::from_id_salt(("model_combo", id))
+    let combo = egui::ComboBox::from_id_salt(("model_combo", id))
         .selected_text(RichText::new(shown).size(12.5))
         .width(if custom { 110.0 } else { 220.0 })
         .show_ui(ui, |ui| {
             ui.set_min_width(240.0);
-            if ui.selectable_label(!custom && value.is_empty(), format!("Default ({default_label})")).clicked() {
+            let r = ui.selectable_label(!custom && value.is_empty(), default_text);
+            #[cfg(test)]
+            ui.ctx().data_mut(|d| {
+                d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-items")).push((default_text.to_string(), r.rect))
+            });
+            if r.clicked() {
                 value.clear();
                 custom = false;
             }
             for m in models {
-                if ui.selectable_label(!custom && value == m, m).clicked() {
+                let r = ui.selectable_label(!custom && value == m, m);
+                #[cfg(test)]
+                ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-items")).push((m.clone(), r.rect)));
+                if r.clicked() {
                     *value = m.clone();
                     custom = false;
                 }
@@ -6071,10 +6166,23 @@ fn model_picker(
             if let Some(Some(Err(e))) = state {
                 ui.label(RichText::new(format!("List unavailable: {e}")).size(11.5).color(pal.sub));
             }
-            if ui.selectable_label(custom, "Custom…").clicked() {
+            let r = ui.selectable_label(custom, "Custom…");
+            #[cfg(test)]
+            ui.ctx().data_mut(|d| {
+                d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-items")).push(("Custom…".to_string(), r.rect))
+            });
+            if r.clicked() {
                 custom = true;
             }
         });
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| {
+        let v = d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-combos"));
+        v.retain(|(i, _)| i != id);
+        v.push((id.to_string(), combo.response.rect));
+    });
+    #[cfg(not(test))]
+    let _ = combo;
     ui.ctx().data_mut(|d| d.insert_temp(custom_id, custom));
     refresh
 }

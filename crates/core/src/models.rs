@@ -249,6 +249,9 @@ pub struct Settings {
     pub translate_output: TranslateOutput,
     /// Provider that translates; `None` follows the chat provider.
     pub translate_provider: Option<AiProvider>,
+    /// Model of `translate_provider` used to translate; empty = the model configured for it.
+    /// Ignored while `translate_provider` is `None`.
+    pub translate_model: String,
     /// Check GitHub for new stable releases (off = never touch the network).
     pub update_check: bool,
     pub update_install: UpdateInstall,
@@ -323,6 +326,7 @@ impl Default for Settings {
             translate_languages: crate::translate::DEFAULT_LANGUAGES.iter().map(|s| s.to_string()).collect(),
             translate_output: TranslateOutput::default(),
             translate_provider: None,
+            translate_model: String::new(),
             update_check: true,
             update_install: UpdateInstall::default(),
             update_skipped: None,

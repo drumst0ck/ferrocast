@@ -72,7 +72,19 @@ pub fn hub_text(text: &str) -> (String, String) {
 /// The settings a translation runs with: the chat's, with the provider replaced when the user chose one.
 pub fn engine_settings(s: &Settings) -> Settings {
     match s.translate_provider {
-        Some(p) => Settings { ai_provider: p, ..s.clone() },
+        Some(p) => {
+            let mut e = Settings { ai_provider: p, ..s.clone() };
+            if !s.translate_model.is_empty() {
+                let m = s.translate_model.clone();
+                match p {
+                    AiProvider::OpenAiCompatible => e.ai_model = m,
+                    AiProvider::Anthropic => e.anthropic_model = m,
+                    AiProvider::ChatGpt => e.chatgpt_model = m,
+                    AiProvider::ClaudeCode => e.claude_code_model = m,
+                }
+            }
+            e
+        }
         None => s.clone(),
     }
 }
@@ -132,6 +144,7 @@ pub fn provider_name(p: AiProvider) -> &'static str {
 /// Which engine translates, for the toast: "Same as chat (ChatGPT)" or the chosen provider.
 pub fn engine_label(s: &Settings) -> String {
     match s.translate_provider {
+        Some(p) if !s.translate_model.is_empty() => format!("{} · {}", provider_name(p), s.translate_model),
         Some(p) => provider_name(p).to_string(),
         None => format!("Same as chat ({})", provider_name(s.ai_provider)),
     }
@@ -306,6 +319,50 @@ mod tests {
     }
 
     #[test]
+    fn engine_settings_overrides_only_the_matching_model_field() {
+        let chat = Settings {
+            ai_provider: AiProvider::OpenAiCompatible,
+            ai_model: "chat-m".into(),
+            anthropic_model: "ant-m".into(),
+            chatgpt_model: "gpt-m".into(),
+            claude_code_model: "cc-m".into(),
+            ..Default::default()
+        };
+        for (p, field) in
+            [(AiProvider::OpenAiCompatible, 0), (AiProvider::Anthropic, 1), (AiProvider::ChatGpt, 2), (AiProvider::ClaudeCode, 3)]
+        {
+            let t = Settings { translate_provider: Some(p), translate_model: "picked".into(), ..chat.clone() };
+            let e = engine_settings(&t);
+            assert_eq!(e.ai_provider, p);
+            let mut want = Settings { ai_provider: p, ..t.clone() };
+            match field {
+                0 => want.ai_model = "picked".into(),
+                1 => want.anthropic_model = "picked".into(),
+                2 => want.chatgpt_model = "picked".into(),
+                _ => want.claude_code_model = "picked".into(),
+            }
+            assert_eq!(e, want, "{p:?}: only provider and its model change");
+            // an empty translate_model keeps the configured model
+            let t = Settings { translate_model: String::new(), ..t };
+            assert_eq!(engine_settings(&t), Settings { ai_provider: p, ..t.clone() }, "{p:?} empty");
+        }
+        // Same as chat ignores translate_model
+        let t = Settings { translate_model: "picked".into(), ..chat.clone() };
+        assert_eq!(engine_settings(&t), t);
+    }
+
+    #[test]
+    fn engine_label_includes_an_explicit_model() {
+        let mut s = Settings { translate_provider: Some(AiProvider::ChatGpt), translate_model: "gpt-6.1-sol".into(), ..Default::default() };
+        assert_eq!(engine_label(&s), "ChatGPT · gpt-6.1-sol");
+        s.translate_model.clear();
+        assert_eq!(engine_label(&s), "ChatGPT");
+        let s =
+            Settings { translate_provider: None, translate_model: "x".into(), ai_provider: AiProvider::ClaudeCode, ..Default::default() };
+        assert_eq!(engine_label(&s), "Same as chat (Claude Code)");
+    }
+
+    #[test]
     fn outcome_follows_the_output_setting_and_the_reply() {
         use crate::models::TranslateOutput::{Copy, Replace};
         assert_eq!(outcome(Ok("\"Hola\"".into()), "Spanish", Replace), Outcome::Paste("Hola".into()));
@@ -362,6 +419,7 @@ mod tests {
         assert_eq!(s.translate_output, TranslateOutput::Auto);
         assert_eq!(s.translate_languages.len(), 8);
         assert_eq!(s.translate_provider, None);
+        assert_eq!(s.translate_model, "");
     }
 
     #[test]

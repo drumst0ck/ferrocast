@@ -6010,6 +6010,7 @@ fn the_after_translating_row_renders_with_and_without_the_javascript_note() {
         for out in [O::Auto, O::Show] {
             app.settings.translate_output = out;
             app.stack = vec![View::Root, View::Settings];
+            app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 4usize));
             render(&mut app, vec![]);
             render(&mut app, vec![]);
             assert!(matches!(app.view(), View::Settings));
@@ -6063,7 +6064,7 @@ fn the_log_line_of_a_translate_wheel_has_no_text() {
 fn settings_show_the_translation_controls_and_keep_other_settings_untouched() {
     let mut app = fixture();
     app.stack = vec![View::Root, View::Settings];
-    for tab in [0usize, 3] {
+    for tab in [0usize, 3, 4] {
         app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), tab));
         for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
             app.ctx.set_theme(theme);
@@ -6252,25 +6253,33 @@ fn update_checks_record_the_available_release() {
     assert!(app.update_available.is_none());
 }
 
-/// The four-cell "After translating" bar is the last four-cell bar of the General tab; bring it
-/// on screen by scrolling the pane the way a user would.
-fn after_translating_cells(app: &mut App) -> Option<Vec<Rect>> {
+/// Scroll the settings pane the way a user would until the segmented bar with `n` cells (the
+/// lowest one when several) sits on screen, and return its cells.
+fn reach_bar(app: &mut App, n: usize) -> Option<Vec<Rect>> {
     let find = |app: &App| -> Option<Vec<Rect>> {
         let bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
-        bars.into_iter().filter(|(_, c)| c.len() == 4).max_by(|a, b| a.0.min.y.total_cmp(&b.0.min.y)).map(|(_, c)| c)
+        bars.into_iter().filter(|(_, c)| c.len() == n).max_by(|a, b| a.0.min.y.total_cmp(&b.0.min.y)).map(|(_, c)| c)
     };
-    render(app, vec![Event::PointerMoved(Pos2::new(500.0, 200.0))]);
-    for _ in 0..12 {
+    scroll_until(app, |app| {
         app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
         render(app, vec![]);
-        let cells = find(app)?;
-        if cells[0].center().y < ui::HEIGHT - 60.0 && cells[0].center().y > 80.0 {
-            for _ in 0..30 {
-                render(app, vec![]);
-            }
-            app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
-            render(app, vec![]);
-            return find(app);
+        find(app).map(|c| c[0].center())
+    })?;
+    for _ in 0..30 {
+        render(app, vec![]);
+    }
+    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+    render(app, vec![]);
+    find(app)
+}
+
+/// Scroll down in steps until `probe` reports a point inside the visible pane.
+fn scroll_until(app: &mut App, mut probe: impl FnMut(&mut App) -> Option<Pos2>) -> Option<Pos2> {
+    render(app, vec![Event::PointerMoved(Pos2::new(500.0, 200.0))]);
+    for _ in 0..14 {
+        let p = probe(app)?;
+        if p.y < ui::HEIGHT - 60.0 && p.y > 80.0 {
+            return Some(p);
         }
         render(
             app,
@@ -6286,13 +6295,18 @@ fn after_translating_cells(app: &mut App) -> Option<Vec<Rect>> {
     None
 }
 
+/// The four-cell "After translating" bar is the only four-cell bar of the Translate tab.
+fn after_translating_cells(app: &mut App) -> Option<Vec<Rect>> {
+    reach_bar(app, 4)
+}
+
 #[test]
 fn clicking_each_after_translating_cell_selects_that_option() {
     use ferrocast_core::models::TranslateOutput as T;
     for (cell, want) in [(0usize, T::Auto), (1, T::Show), (2, T::Replace), (3, T::Copy)] {
         let mut app = fixture();
         app.stack = vec![View::Root, View::Settings];
-        app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 0usize));
+        app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 4usize));
         // start from a different value than the one clicked
         app.settings.translate_output = if want == T::Copy { T::Auto } else { T::Copy };
         let cells = after_translating_cells(&mut app).expect("the After translating bar is reachable");
@@ -6300,4 +6314,181 @@ fn clicking_each_after_translating_cell_selects_that_option() {
         render(&mut app, vec![]);
         assert_eq!(app.settings.translate_output, want, "cell {cell}");
     }
+}
+
+// ---- Translate settings tab (provider and model)
+
+const TRANSLATE_TAB: usize = 4;
+
+/// Cache an empty model list for every provider so drawing never starts a fetch (no network).
+fn seed_model_lists(app: &mut App) {
+    use ferrocast_core::models::AiProvider as P;
+    for p in [P::OpenAiCompatible, P::Anthropic, P::ChatGpt, P::ClaudeCode] {
+        let key = services::models_key(&Settings { ai_provider: p, ..app.settings.clone() });
+        app.ai_models.insert(key, Some(Ok(vec![])));
+    }
+}
+
+fn translate_tab_app() -> App {
+    let mut app = fixture();
+    seed_model_lists(&mut app);
+    app.stack = vec![View::Root, View::Settings];
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), TRANSLATE_TAB));
+    app
+}
+
+fn tab_bars(tab: usize) -> Vec<usize> {
+    let mut app = fixture();
+    seed_model_lists(&mut app);
+    app.settings.translate_output = ferrocast_core::models::TranslateOutput::Auto;
+    app.stack = vec![View::Root, View::Settings];
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), tab));
+    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    let mut bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+    bars.sort_by(|a, b| (a.0.min.y, a.0.min.x).partial_cmp(&(b.0.min.y, b.0.min.x)).unwrap());
+    bars.iter().map(|(_, c)| c.len()).collect()
+}
+
+fn auto_js_note_shown(app: &App) -> bool {
+    app.ctx.data(|d| d.get_temp::<bool>(Id::new("auto-js-note"))).unwrap_or(false)
+}
+
+#[test]
+fn the_translate_tab_renders_with_every_provider_in_both_themes_and_changes_nothing() {
+    use ferrocast_core::models::AiProvider as P;
+    for provider in [None, Some(P::OpenAiCompatible), Some(P::ChatGpt), Some(P::Anthropic), Some(P::ClaudeCode)] {
+        for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+            let mut app = translate_tab_app();
+            app.ctx.set_theme(theme);
+            app.settings.translate_provider = provider;
+            app.settings.translate_model = if provider.is_some() { "some-model".into() } else { String::new() };
+            let before = app.settings.clone();
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert!(matches!(app.view(), View::Settings));
+            assert!(auto_js_note_shown(&app), "the Translate tab draws the Auto note ({provider:?})");
+            assert_eq!(app.settings, before, "drawing alone changes no setting ({provider:?} {theme:?})");
+        }
+    }
+}
+
+#[test]
+fn general_and_ai_tabs_no_longer_draw_the_translation_rows() {
+    // The Auto note only exists on the Translate tab now.
+    for tab in [0usize, 3, 5, 6] {
+        let mut app = translate_tab_app();
+        app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), tab));
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        assert!(!auto_js_note_shown(&app), "tab {tab} must not draw After translating");
+    }
+    // Segmented bars, top to bottom. General lost the 3-cell Translate key and the 4-cell After
+    // translating bars; AI lost the 5-cell Translation engine bar.
+    assert_eq!(tab_bars(0), vec![3, 4, 4, 4, 2, 3], "General: theme, convert, tools, actions, update install, sensitivity");
+    assert_eq!(tab_bars(3), vec![4], "AI: only the chat provider bar");
+    assert_eq!(tab_bars(4), vec![3, 4, 5], "Translate: wheel key, after translating, provider");
+}
+
+#[test]
+fn scripts_and_advanced_tabs_keep_rendering_at_their_new_numbers() {
+    for tab in [5usize, 6] {
+        for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+            let mut app = translate_tab_app();
+            app.ctx.set_theme(theme);
+            app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), tab));
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert!(matches!(app.view(), View::Settings));
+        }
+    }
+    // Scripts body has the "Add directory" row, Advanced the units: they are on different tabs
+    assert_eq!(tab_bars(5), Vec::<usize>::new());
+    assert_eq!(tab_bars(6), Vec::<usize>::new());
+}
+
+#[test]
+fn clicking_each_provider_cell_selects_it() {
+    use ferrocast_core::models::AiProvider as P;
+    let want = [None, Some(P::OpenAiCompatible), Some(P::ChatGpt), Some(P::Anthropic), Some(P::ClaudeCode)];
+    for (cell, want) in want.into_iter().enumerate() {
+        let mut app = translate_tab_app();
+        app.settings.translate_provider = if want == Some(P::ChatGpt) { None } else { Some(P::ChatGpt) };
+        let cells = reach_bar(&mut app, 5).expect("the provider bar is reachable");
+        click_at(&mut app, cells[cell].center());
+        assert_eq!(app.settings.translate_provider, want, "cell {cell}");
+    }
+}
+
+/// Open the combo `id` on the Translate tab and return the recorded (label, rect) of its entries.
+fn open_model_combo(app: &mut App, id: &str) -> Vec<(String, Rect)> {
+    let probe_id = id.to_string();
+    let p = scroll_until(app, |app| {
+        render(app, vec![]);
+        let combos: Vec<(String, Rect)> = app.ctx.data(|d| d.get_temp(Id::new("model-combos"))).unwrap_or_default();
+        combos.into_iter().find(|(i, _)| *i == probe_id).map(|(_, r)| r.center())
+    })
+    .expect("the model combo is reachable");
+    click_at(app, p);
+    render(app, vec![]);
+    app.ctx.data(|d| d.get_temp(Id::new("model-items"))).unwrap_or_default()
+}
+
+#[test]
+fn clicking_a_model_sets_translate_model_and_provider_default_clears_it() {
+    use ferrocast_core::models::AiProvider as P;
+    let cases = [(P::ChatGpt, services::CHATGPT_MODELS[2]), (P::ClaudeCode, services::CLAUDE_CODE_MODELS[1])];
+    for (provider, model) in cases {
+        let mut app = translate_tab_app();
+        app.settings.translate_provider = Some(provider);
+        app.settings.translate_model = String::new();
+        let items = open_model_combo(&mut app, "translate");
+        assert_eq!(items.first().map(|(l, _)| l.as_str()), Some("Provider default"), "{provider:?}: {items:?}");
+        assert!(items.iter().any(|(l, _)| l == "Custom…"), "{items:?}");
+        let (_, r) = items.iter().find(|(l, _)| l == model).unwrap_or_else(|| panic!("{model} listed: {items:?}"));
+        click_at(&mut app, r.center());
+        assert_eq!(app.settings.translate_model, model, "{provider:?}");
+        assert_eq!(app.settings.translate_provider, Some(provider));
+        assert_eq!(app.settings.ai_model, Settings::default().ai_model, "the chat model is untouched");
+        // back to the provider default
+        let items = open_model_combo(&mut app, "translate");
+        let (_, r) = items.iter().find(|(l, _)| l == "Provider default").unwrap();
+        click_at(&mut app, r.center());
+        assert_eq!(app.settings.translate_model, "", "{provider:?}");
+    }
+}
+
+#[test]
+fn model_lists_of_fetched_providers_come_from_that_providers_cache() {
+    use ferrocast_core::models::AiProvider as P;
+    let mut app = translate_tab_app();
+    app.settings.ai_provider = P::ChatGpt; // chat uses another provider than the translation
+    app.settings.translate_provider = Some(P::Anthropic);
+    let key = services::models_key(&Settings { ai_provider: P::Anthropic, ..app.settings.clone() });
+    app.ai_models.insert(key, Some(Ok(vec!["claude-a".into(), "claude-b".into()])));
+    let items = open_model_combo(&mut app, "translate");
+    let labels: Vec<&str> = items.iter().map(|(l, _)| l.as_str()).collect();
+    assert_eq!(labels, vec!["Provider default", "claude-a", "claude-b", "Custom…"]);
+    let (_, r) = items.iter().find(|(l, _)| l == "claude-b").unwrap();
+    click_at(&mut app, r.center());
+    assert_eq!(app.settings.translate_model, "claude-b");
+    assert_eq!(app.settings.anthropic_model, "", "the chat configuration is not edited");
+}
+
+#[test]
+fn switching_the_translation_provider_resets_the_model() {
+    use ferrocast_core::models::AiProvider as P;
+    let mut app = translate_tab_app();
+    app.settings.translate_provider = Some(P::ChatGpt);
+    app.settings.translate_model = "gpt-6-sol".into();
+    let cells = reach_bar(&mut app, 5).unwrap();
+    click_at(&mut app, cells[4].center()); // Claude Code
+    assert_eq!(app.settings.translate_provider, Some(P::ClaudeCode));
+    assert_eq!(app.settings.translate_model, "", "a stale model name is never sent to another provider");
+    // clicking the already selected provider keeps a chosen model
+    app.settings.translate_model = "opus".into();
+    let cells = reach_bar(&mut app, 5).unwrap();
+    click_at(&mut app, cells[4].center());
+    assert_eq!(app.settings.translate_model, "opus");
 }
