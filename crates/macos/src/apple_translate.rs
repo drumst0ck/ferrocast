@@ -142,6 +142,27 @@ mod tests {
         assert!(run_process(Path::new("/nonexistent/ferrocast-translate"), "x", 1).is_err());
     }
 
+    /// Against the real helper: `FERROCAST_HELPER=dist/Ferrocast.app/Contents/MacOS/ferrocast-translate
+    /// cargo test -p ferrocast-macos -- --ignored real_helper`. Needs macOS 26 and the English and
+    /// Spanish packs. A pack that is not downloaded must be checked by hand: the answer is
+    /// `needs-download` and the app shows the System Settings instructions.
+    #[test]
+    #[ignore = "needs macOS 26, the built helper (FERROCAST_HELPER) and the English and Spanish packs"]
+    fn real_helper_answers_the_protocol() {
+        let helper = PathBuf::from(std::env::var("FERROCAST_HELPER").expect("set FERROCAST_HELPER to the built helper"));
+        let ask = |req: String| run_process(&helper, &req, 60).unwrap();
+        assert_eq!(proto::parse_status(&ask(proto::status_request(Some("en"), "es"))), Ok(Status::Installed));
+        assert_eq!(proto::parse_status(&ask(proto::status_request(Some("en"), "xx"))), Ok(Status::Unsupported));
+        let es = proto::parse_translation(&ask(proto::translate_request(Some("en"), "es", "Good morning"))).unwrap();
+        assert!(es.to_lowercase().contains("buenos"), "{es}");
+        let multi = proto::parse_translation(&ask(proto::translate_request(None, "de", "Line one.\n\"Line two\""))).unwrap();
+        assert!(multi.contains('\n') && multi.contains('"'), "line breaks and quotes survive: {multi:?}");
+        assert_eq!(
+            proto::parse_translation(&ask(proto::translate_request(Some("en"), "xx", "Hello"))),
+            Err(TranslateError::Unsupported("xx".into()))
+        );
+    }
+
     #[test]
     fn this_mac_reports_its_version() {
         assert!(os_at_least(1));
