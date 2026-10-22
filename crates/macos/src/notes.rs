@@ -108,6 +108,12 @@ pub(crate) fn text_view() -> Option<Retained<NSTextView>> {
     UI.with(|u| u.borrow().as_ref().map(|u| u.text_view.clone()))
 }
 
+/// The window content view (the overlay host), creating the hidden window on first use.
+pub(crate) fn content_view() -> Option<Retained<NSView>> {
+    let (panel, _) = parts()?;
+    panel.contentView()
+}
+
 // ---------------------------------------------------------------- key handling
 
 /// Esc in "loses focus" mode: give key status to another app window or the previous app.
@@ -184,6 +190,23 @@ fn edit_action(event: &NSEvent) -> Option<objc2::runtime::Sel> {
 }
 
 fn key_equivalent(panel: &NotesPanel, event: &NSEvent) -> bool {
+    if crate::notes_palette::is_visible() {
+        // The palette owns the keyboard: only its own keys and the edit shortcuts of its
+        // search field act; every other command shortcut is swallowed, never edits the note.
+        if crate::notes_palette::handle_key(event) {
+            return true;
+        }
+        if event.r#type() != NSEventType::KeyDown || !event.modifierFlags().contains(NSEventModifierFlags::Command) {
+            return false;
+        }
+        let handled: bool = unsafe { msg_send![super(panel), performKeyEquivalent: event] };
+        if !handled {
+            if let (Some(action), Some(mtm)) = (edit_action(event), MainThreadMarker::new()) {
+                unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(action, None, None) };
+            }
+        }
+        return true;
+    }
     if handle_shortcut(panel, event) {
         return true;
     }
@@ -225,7 +248,11 @@ define_class!(
         // Esc is not a key equivalent for AppKit: intercept it before it reaches the text view.
         #[unsafe(method(sendEvent:))]
         fn send_event(&self, event: &NSEvent) {
-            if event.r#type() == NSEventType::KeyDown {
+            if event.r#type() == NSEventType::KeyDown && crate::notes_palette::is_visible() {
+                if crate::notes_palette::handle_key(event) {
+                    return;
+                }
+            } else if event.r#type() == NSEventType::KeyDown {
                 if editor_has_focus(self) && crate::notes_editor::handle_popup_key(event) {
                     return;
                 }
