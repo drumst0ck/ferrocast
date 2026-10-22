@@ -265,6 +265,42 @@ pub fn web_replace_js(text: &str) -> String {
     )
 }
 
+/// Id of the overlay container the translating effect adds to a page.
+pub const FX_ID: &str = "ferrocast-tx-fx";
+/// Id of the style element the translating effect adds to a page.
+pub const STYLE_ID: &str = "ferrocast-tx-style";
+
+const FX_CSS: &str = "#__FX__{position:absolute;left:0;top:0;width:0;height:0;pointer-events:none;z-index:2147483647}.ferrocast-tx-box{position:absolute;border-radius:7px;pointer-events:none;overflow:hidden;box-shadow:0 0 0 2px hsl(var(--ferrocast-h) 95% 64%),0 0 12px 2px hsl(var(--ferrocast-h) 95% 64% / .6),0 0 26px 6px hsl(calc(var(--ferrocast-h) + 45) 95% 68% / .34);animation:ferrocast-tx-hue 2.6s ease-in-out infinite alternate}.ferrocast-tx-shimmer{position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,hsl(var(--ferrocast-h) 95% 70% / .22) 50%,transparent 70%);background-size:260% 100%;animation:ferrocast-tx-sweep 1.4s ease-in-out infinite}@property --ferrocast-h{syntax:\"<number>\";inherits:true;initial-value:205}@keyframes ferrocast-tx-hue{from{--ferrocast-h:205}to{--ferrocast-h:390}}@keyframes ferrocast-tx-sweep{from{background-position:150% 0}to{background-position:-110% 0}}@keyframes ferrocast-tx-in{from{background-color:rgba(125,122,255,.30)}to{background-color:transparent}}.ferrocast-tx-new{border-radius:4px;animation:ferrocast-tx-in .9s ease-out}@media (prefers-reduced-motion:reduce){.ferrocast-tx-box,.ferrocast-tx-shimmer,.ferrocast-tx-new{animation:none}}";
+const MARK_JS: &str = "(function(){var s=window.getSelection();if(!s||s.rangeCount===0||s.isCollapsed){return \"nosel\";}var r=s.getRangeAt(0);window.__ferrocastTxRange=r.cloneRange();var old=document.getElementById(\"__FX__\");if(old){old.remove();}if(!document.getElementById(\"__ST__\")){var st=document.createElement(\"style\");st.id=\"__ST__\";st.textContent=__CSS__;(document.head||document.documentElement).appendChild(st);}var fx=document.createElement(\"div\");fx.id=\"__FX__\";fx.setAttribute(\"aria-hidden\",\"true\");fx.style.cssText=\"pointer-events:none\";var rs=r.getClientRects();var lines=[];for(var i=0;i<rs.length;i++){var q=rs[i];if(q.width<1||q.height<1){continue;}var hit=null;for(var j=0;j<lines.length;j++){var L=lines[j];var ov=Math.min(L.b,q.bottom)-Math.max(L.t,q.top);if(ov>Math.min(L.b-L.t,q.height)*0.5){hit=L;break;}}if(hit){hit.l=Math.min(hit.l,q.left);hit.r=Math.max(hit.r,q.right);hit.t=Math.min(hit.t,q.top);hit.b=Math.max(hit.b,q.bottom);}else if(lines.length<40){lines.push({l:q.left,r:q.right,t:q.top,b:q.bottom});}}for(var k=0;k<lines.length;k++){var L2=lines[k];var b=document.createElement(\"div\");b.className=\"ferrocast-tx-box\";b.style.left=(L2.l+window.scrollX-4)+\"px\";b.style.top=(L2.t+window.scrollY-2)+\"px\";b.style.width=(L2.r-L2.l+8)+\"px\";b.style.height=(L2.b-L2.t+4)+\"px\";var sh=document.createElement(\"div\");sh.className=\"ferrocast-tx-shimmer\";b.appendChild(sh);fx.appendChild(b);}(document.body||document.documentElement).appendChild(fx);return lines.length>0?\"ok\":\"nosel\";})()";
+const REPLACE_MARKED_JS: &str = "(function(t){var r=window.__ferrocastTxRange;var s=window.getSelection();if(!r&&s&&s.rangeCount>0&&!s.isCollapsed){r=s.getRangeAt(0);}var fx=document.getElementById(\"__FX__\");if(fx){fx.remove();}window.__ferrocastTxRange=null;if(!r||r.collapsed){var st0=document.getElementById(\"__ST__\");if(st0){st0.remove();}return \"nosel\";}r.deleteContents();var tn=document.createTextNode(t);var sp=document.createElement(\"span\");sp.className=\"ferrocast-tx-new\";sp.appendChild(tn);r.insertNode(sp);if(s){s.removeAllRanges();}setTimeout(function(){if(sp.parentNode){sp.parentNode.replaceChild(tn,sp);}var st=document.getElementById(\"__ST__\");if(st&&!document.getElementById(\"__FX__\")){st.remove();}},950);return \"ok\";})(__LIT__)";
+const UNMARK_JS: &str = "(function(){var fx=document.getElementById(\"__FX__\");if(fx){fx.remove();}var st=document.getElementById(\"__ST__\");if(st){st.remove();}window.__ferrocastTxRange=null;return \"ok\";})()";
+
+fn with_ids(js: &str) -> String {
+    js.replace("__FX__", FX_ID).replace("__ST__", STYLE_ID)
+}
+
+/// JavaScript that shows the translating effect on the page's selected text: one absolutely
+/// positioned box per line of the selection (a glow whose hue cycles, and a light sweep),
+/// click-through and outside the text, so the page text is never rewritten while translating. It
+/// remembers the range for `web_replace_marked_js`. Returns "ok", or "nosel" without a selection.
+pub fn web_mark_js() -> String {
+    let css = serde_json::to_string(&with_ids(FX_CSS)).unwrap_or_else(|_| "\"\"".into());
+    with_ids(MARK_JS).replace("__CSS__", &css)
+}
+
+/// JavaScript that removes the effect and replaces the remembered range (or, if none, the current
+/// selection) with `text`; the new text fades in for a moment. Returns "ok" or "nosel".
+pub fn web_replace_marked_js(text: &str) -> String {
+    let lit = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+    with_ids(REPLACE_MARKED_JS).replace("__LIT__", &lit)
+}
+
+/// JavaScript that removes only what the effect added (overlays, style, remembered range); the page
+/// text is untouched. Used when the translation fails or is shown in the window instead.
+pub fn web_unmark_js() -> String {
+    with_ids(UNMARK_JS)
+}
+
 /// The AppleScript running `js` in the front window's active tab of `browser`.
 pub fn applescript_for(browser: Browser, js: &str) -> String {
     let lit = format!("\"{}\"", js.replace('\\', "\\\\").replace('"', "\\\""));
@@ -296,6 +332,40 @@ pub const JS_PERMISSION_HINT: &str = "Allow JavaScript from Apple Events is off:
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_mark_script_draws_overlays_and_never_rewrites_the_page_text() {
+        let js = web_mark_js();
+        assert!(js.starts_with("(function(){"), "{js}");
+        // remembers the range so the replacement still works if the page selection is lost
+        assert!(js.contains("__ferrocastTxRange"), "{js}");
+        // overlays over the selection rectangles, not a wrapper around the text
+        assert!(js.contains("getClientRects"), "{js}");
+        assert!(!js.contains("extractContents") && !js.contains("surroundContents"), "{js}");
+        assert!(js.contains("pointer-events:none"), "{js}");
+        // static glow when the user asks for less motion
+        assert!(js.contains("prefers-reduced-motion"), "{js}");
+        assert!(js.contains("\"nosel\""), "{js}");
+        assert!(!js.contains('\n'), "single line for AppleScript");
+    }
+
+    #[test]
+    fn the_replace_marked_script_uses_the_remembered_range_and_cleans_up() {
+        let js = web_replace_marked_js("Hola \"mundo\"\n</script>");
+        assert!(js.contains("__ferrocastTxRange"), "{js}");
+        assert!(js.contains(&serde_json::to_string("Hola \"mundo\"\n</script>").unwrap()), "{js}");
+        assert!(js.contains(FX_ID), "removes the overlays: {js}");
+        assert!(js.contains("\"ok\"") && js.contains("\"nosel\""), "{js}");
+        assert!(!js.contains('\n'), "single line for AppleScript");
+    }
+
+    #[test]
+    fn the_unmark_script_only_removes_what_ferrocast_added() {
+        let js = web_unmark_js();
+        assert!(js.contains(FX_ID) && js.contains(STYLE_ID), "{js}");
+        assert!(js.contains("__ferrocastTxRange"), "{js}");
+        assert!(!js.contains("deleteContents") && !js.contains("insertNode"), "never touches the text: {js}");
+    }
     use super::*;
     use crate::models::{AiProvider, Settings};
 
