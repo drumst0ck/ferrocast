@@ -19,6 +19,7 @@ export const es: HomeCopy = {
     line2: 'que además convierte tus archivos.',
     sub: 'Busca, calcula, pega y consulta a una IA desde el teclado. Arrastra cualquier archivo, pulsa una tecla y conviértelo, comprímelo, recórtalo, córtalo u oculta partes en tu Mac. Código abierto, 8,5 MB y nada sale de tu disco.',
     ctaInstall: 'Instalar con Homebrew',
+    ctaDmg: 'Descargar el DMG',
     ctaFiles: 'Ver las herramientas de archivos',
     proof: 'MIT · Apple Silicon · sin cuenta · {pairs} conversiones',
   },
@@ -193,6 +194,8 @@ export const es: HomeCopy = {
     step2Alt: 'Ferrocast recién abierto, mostrando la lista de comandos',
     step3: 'Después, empieza a escribir.',
     step3Alt: 'Ferrocast responde que las 5 PM en Londres son las 9:00 AM en San Francisco',
+    dmg: 'Descargar el DMG',
+    dmgNote: '¿Prefieres no usar Terminal? Abre el DMG, arrastra Ferrocast a Aplicaciones y elige «Abrir de todos modos» en Ajustes del Sistema la primera vez.',
     docs: 'Guía de instalación',
   },
   faq: {

@@ -102,3 +102,4 @@
 }
 @media (prefers-reduced-motion: reduce) { .fh-thumbs img { transition: none; } }
 .hero h1 .line > span { text-wrap: balance; }
+.how .dmgrow { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 14px 0 0; } .how .dmgrow span { color: var(--muted, inherit); font-size: .92rem; }

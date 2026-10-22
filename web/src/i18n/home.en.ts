@@ -20,6 +20,7 @@ export const en = {
     line2: 'that also converts your files.',
     sub: 'Search, calculate, paste and ask AI from the keyboard. Drag any file, tap a key, and convert, compress, crop, trim or redact it on your Mac. Open source, 8.5 MB, nothing leaves your disk.',
     ctaInstall: 'Install with Homebrew',
+    ctaDmg: 'Download the DMG',
     ctaFiles: 'See the file tools',
     proof: 'MIT · Apple Silicon · no account · {pairs} conversions',
   },
@@ -194,6 +195,8 @@ export const en = {
     step2Alt: 'Ferrocast just opened, showing the command list',
     step3: 'Then just start typing.',
     step3Alt: 'Ferrocast answers that 5 PM in London is 9:00 AM in San Francisco',
+    dmg: 'Download the DMG',
+    dmgNote: 'Prefer no Terminal? Open the DMG, drag Ferrocast to Applications, and choose “Open Anyway” in System Settings the first time.',
     docs: 'Installation guide',
   },
   faq: {

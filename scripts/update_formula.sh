@@ -1,5 +1,6 @@
 #!/bin/bash
 # Point Formula/ferrocast.rb at a published tag and refresh its sha256.
+# The tap repo drumst0ck/homebrew-ferrocast syncs itself; this copy serves taps added from the old URL.
 #   scripts/update_formula.sh OWNER/REPO [version]     (version defaults to Cargo.toml's)
 # Run it after pushing the tag vX.Y.Z; it downloads GitHub's source archive to hash it.
 set -euo pipefail

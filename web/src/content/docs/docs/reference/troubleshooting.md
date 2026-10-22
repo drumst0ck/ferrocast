@@ -10,7 +10,7 @@ The ad-hoc signature is anchored to the identifier `dev.ferrocast.launcher` so m
 
 ## `brew install drumst0ck/ferrocast/ferrocast` fails
 
-The short form tries to clone `homebrew-ferrocast`, which does not exist. Use the long form with the URL: `brew tap drumst0ck/ferrocast https://github.com/drumst0ck/ferrocast`, then `brew install ferrocast`. See [Install](/docs/getting-started/install/).
+Add the tap first: `brew tap drumst0ck/ferrocast`, then `brew install drumst0ck/ferrocast/ferrocast`. Recent Homebrew refuses a bare `brew install ferrocast` from a tap you have not trusted, and the full name trusts it for you. See [Install](/docs/getting-started/install/).
 
 ## Gatekeeper blocks the DMG
 

@@ -9,18 +9,18 @@ Ferrocast installs through a Homebrew formula that compiles the app from source 
 Run these commands in Terminal:
 
 ```bash
-brew tap drumst0ck/ferrocast https://github.com/drumst0ck/ferrocast
-brew install ferrocast                      # compiles on your Mac (needs Rust, brew installs it)
+brew tap drumst0ck/ferrocast
+brew install drumst0ck/ferrocast/ferrocast  # compiles on your Mac (needs Rust, brew installs it)
 ln -sfn "$(brew --prefix)/opt/ferrocast/Ferrocast.app" /Applications/Ferrocast.app
 open /Applications/Ferrocast.app            # grant Accessibility when it asks
 brew upgrade ferrocast                      # to update
 ```
 
-Always use the `brew tap` form with the URL. The short form `brew install drumst0ck/ferrocast/ferrocast` tries to clone `homebrew-ferrocast`, which does not exist, and fails.
+Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not added. The formula lives in [drumst0ck/homebrew-ferrocast](https://github.com/drumst0ck/homebrew-ferrocast) and follows each stable release automatically.
 
 ## Download the DMG
 
-Every stable release is also published on the [GitHub Releases page](https://github.com/drumst0ck/ferrocast/releases) as `Ferrocast-X.Y.Z.dmg` with a `SHA256SUMS.txt`. Open the DMG, drag Ferrocast to Applications and open it. The app is signed ad-hoc, not notarized, so macOS blocks the first launch of a browser download: open System Settings → Privacy & Security and choose “Open Anyway”. Apple Silicon only.
+[Download the latest DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg). Every stable release is also published on the [GitHub Releases page](https://github.com/drumst0ck/ferrocast/releases) as `Ferrocast-X.Y.Z.dmg` with a `SHA256SUMS.txt`. Open the DMG, drag Ferrocast to Applications and open it. The app is signed ad-hoc, not notarized, so macOS blocks the first launch of a browser download: open System Settings → Privacy & Security and choose “Open Anyway”. Apple Silicon only.
 
 ## Updates
 

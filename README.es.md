@@ -13,18 +13,18 @@ Lanzador de código abierto para macOS, escrito en Rust. Busca, calcula, pega y 
 ## Instalar
 
 ```bash
-brew tap drumst0ck/ferrocast https://github.com/drumst0ck/ferrocast
-brew install ferrocast                      # compila en tu Mac (necesita Rust, lo instala brew)
+brew tap drumst0ck/ferrocast
+brew install drumst0ck/ferrocast/ferrocast  # compila en tu Mac (necesita Rust, lo instala brew)
 ln -sfn "$(brew --prefix)/opt/ferrocast/Ferrocast.app" /Applications/Ferrocast.app
 open /Applications/Ferrocast.app            # concede Accesibilidad cuando lo pida
 brew upgrade ferrocast                      # para actualizar
 ```
 
-¿Prefieres una descarga? Cada versión estable está en la [página de Releases](https://github.com/drumst0ck/ferrocast/releases) como DMG (firma ad-hoc: macOS pide «Abrir igualmente» la primera vez). Las copias descargadas se actualizan solas: Ajustes → General → Updates.
+¿Prefieres una descarga? [Descarga el último DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg) (todas las versiones están en la [página de Releases](https://github.com/drumst0ck/ferrocast/releases)) (firma ad-hoc: macOS pide «Abrir igualmente» la primera vez). Las copias descargadas se actualizan solas: Ajustes → General → Updates.
 
 **Por qué una fórmula y no un cask.** El cask oficial de Homebrew exige apps firmadas y notarizadas (cuenta de Apple Developer de pago). Al compilar desde el código fuente en tu propia máquina, la app no lleva marca de cuarentena y Gatekeeper no interviene. No hace falta cuenta de pago y no se salta ninguna protección. La primera instalación tarda unos minutos porque compila, y la firma es ad-hoc, de uso local.
 
-Usa siempre el `brew tap` con la URL: la forma corta `brew install drumst0ck/ferrocast/ferrocast` intenta clonar `homebrew-ferrocast`, que no existe. Solo Apple Silicon. Más en la [guía de instalación](https://ferrocast.app/es/docs/getting-started/install/).
+Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no has añadido. La fórmula vive en [drumst0ck/homebrew-ferrocast](https://github.com/drumst0ck/homebrew-ferrocast) y sigue cada versión estable de forma automática. Solo Apple Silicon. Más en la [guía de instalación](https://ferrocast.app/es/docs/getting-started/install/).
 
 ## Qué hace
 
