@@ -7626,7 +7626,18 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
         ],
     ),
     (1, &["clipboard_enabled", "clipboard_retention"]),
-    (4, &["wheel_translate_key", "translate_languages", "translate_output", "translate_effect", "translate_provider", "translate_model", "translate_apple"]),
+    (
+        4,
+        &[
+            "wheel_translate_key",
+            "translate_languages",
+            "translate_output",
+            "translate_effect",
+            "translate_provider",
+            "translate_model",
+            "translate_apple",
+        ],
+    ),
     (6, &["rem_px", "window_gap"]),
 ];
 

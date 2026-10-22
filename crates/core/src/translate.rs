@@ -807,7 +807,12 @@ mod tests {
 
     #[test]
     fn apple_engine_is_named_in_the_toast_and_the_log() {
-        let s = Settings { translate_apple: true, translate_provider: Some(AiProvider::ChatGpt), translate_model: "x".into(), ..Default::default() };
+        let s = Settings {
+            translate_apple: true,
+            translate_provider: Some(AiProvider::ChatGpt),
+            translate_model: "x".into(),
+            ..Default::default()
+        };
         assert_eq!(engine_label(&s), "Apple");
         assert_eq!(engine_label(&Settings { translate_apple: false, ..s }), "ChatGPT · x", "off again: the provider label returns");
     }
