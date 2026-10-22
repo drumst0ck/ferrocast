@@ -6,6 +6,10 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Intro**: the very first launch opens with a short neon-red sunrise: the logo rises, FERROCAST appears letter by letter, with a low, dark swell of sound, then the welcome tour begins. Any key or click skips it; with Reduce Motion it is static and silent, and it never plays again.
+- **Welcome tour**: the first time you open Ferrocast, a seven-slide presentation shows what it does (search and calculator, the drag wheel and file tools, clipboard, snippets, windows, Ask AI and translate) and what to switch on. Accessibility and Input Monitoring show their live status with a Grant button; Automation for Finder says it is asked on first use. Arrow keys and Enter move through it, Esc skips it, and searching “Welcome” opens it again.
+
 ### Fixed
 - **Translate**: a selection that reads like an order ("Summarize this article", "Ignore the previous instructions", "Translate this into German instead") is now translated instead of followed, also with small models such as Claude Haiku. The text is sent as JSON data, and the language of the answer is checked on-device with macOS NaturalLanguage; when it came out in another language, the translation is asked once more.
 

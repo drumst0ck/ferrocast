@@ -570,7 +570,13 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     app.push(View::PdfOrganize { file, n, plan });
                 }
             }
-            Ok("welcome") => app.push(View::Welcome),
+            Ok("welcome") => {
+                app.push(View::Welcome);
+                // dev aid: FERROCAST_TOUR_SLIDE=<0..6> renders that slide
+                if let Some(n) = std::env::var("FERROCAST_TOUR_SLIDE").ok().and_then(|v| v.parse().ok()) {
+                    app.tour.go(n);
+                }
+            }
             Ok("shortcuts") => app.push(View::Shortcuts),
             Ok("about") => app.push(View::About),
             Ok("processes") => app.push(View::Processes),
@@ -727,6 +733,7 @@ impl App {
         let view = self.view();
         let shape = view.shape();
         let hotkey = matches!(view, View::Hotkey { .. });
+        let tour = matches!(view, View::Welcome);
         let query_empty = self.query.is_empty();
         let panel = self.panel.is_some();
         // egui drops the focus of a text field at the start of the frame in which Escape arrives,
@@ -750,6 +757,10 @@ impl App {
                 k.down = i.consume_key(Modifiers::NONE, Key::ArrowDown);
             }
             k.cmd_enter = i.consume_key(CMD, Key::Enter);
+            if tour {
+                k.left = i.consume_key(Modifiers::NONE, Key::ArrowLeft);
+                k.right = i.consume_key(Modifiers::NONE, Key::ArrowRight);
+            }
             if (shape != Shape::Form || panel) && !typing {
                 k.repeat = i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, repeat: true, .. }));
                 k.enter = i.consume_key(Modifiers::NONE, Key::Enter);
@@ -1154,8 +1165,19 @@ impl App {
                 self.start_update(release, ferrocast_core::update::channel_of(&exe), services::parent_writable_cached());
                 true
             }
+            // the grant is a button: Enter only moves through the deck, and a held key does not run through it
             View::Welcome if k.enter => {
-                windows::accessibility_trusted(true);
+                if !k.repeat {
+                    self.tour_enter();
+                }
+                true
+            }
+            View::Welcome if k.left || k.right => {
+                if k.left {
+                    self.tour.prev();
+                } else {
+                    self.tour.next();
+                }
                 true
             }
             View::Ai { .. } if k.enter => {
@@ -1439,6 +1461,12 @@ impl App {
     // ---------------------------------------------------------------- drawing
 
     fn draw(&mut self, ui: &mut Ui) {
+        self.intro_input(ui.ctx());
+        self.draw_main(ui);
+        self.intro_paint(ui);
+    }
+
+    fn draw_main(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.icons.new_frame();
         self.dark = ctx.theme() == egui::Theme::Dark;
@@ -1564,7 +1592,9 @@ impl App {
         }
 
         let compact = self.settings.compact_mode && matches!(self.view(), View::Root) && self.query.is_empty() && self.panel.is_none();
-        let search_rect = Rect::from_min_size(full.min, Vec2::new(full.width(), ui::SEARCH_H));
+        // the tour is a full-bleed deck: it has no search bar
+        let tour_view = matches!(self.view(), View::Welcome);
+        let search_rect = Rect::from_min_size(full.min, Vec2::new(full.width(), if tour_view { 0.0 } else { ui::SEARCH_H }));
         let footer_rect = Rect::from_min_max(Pos2::new(full.min.x, full.max.y - ui::FOOTER_H), full.max);
         let content = Rect::from_min_max(Pos2::new(full.min.x, search_rect.max.y), Pos2::new(full.max.x, footer_rect.min.y));
 
@@ -1573,52 +1603,55 @@ impl App {
         let placeholder = self.view().placeholder();
         let nested = self.stack.len() > 1;
         let mut back = false;
-        ui.scope_builder(UiBuilder::new().max_rect(search_rect.shrink2(Vec2::new(18.0, 0.0)).translate(Vec2::new(0.0, 3.0))), |ui| {
-            ui.horizontal_centered(|ui| {
-                if nested && matches!(self.view(), View::Settings) {
-                    // a 28 pt hit target for the back arrow
-                    let (br, bresp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
-                    record_ctl(&ctx, "back", bresp.id, br, true);
-                    record_text(&ctx, &pal, "back-arrow", pal.sub_strong, &[], 1.0);
-                    let col = if bresp.hovered() { pal.text } else { pal.sub_strong };
-                    ui.painter().text(br.center(), Align2::CENTER_CENTER, "←", FontId::proportional(18.0), col);
-                    focus_ring(ui, &pal, &bresp, br);
-                    if bresp.clicked() {
+        if !tour_view {
+            ui.scope_builder(UiBuilder::new().max_rect(search_rect.shrink2(Vec2::new(18.0, 0.0)).translate(Vec2::new(0.0, 3.0))), |ui| {
+                ui.horizontal_centered(|ui| {
+                    if nested && matches!(self.view(), View::Settings) {
+                        // a 28 pt hit target for the back arrow
+                        let (br, bresp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
+                        record_ctl(&ctx, "back", bresp.id, br, true);
+                        record_text(&ctx, &pal, "back-arrow", pal.sub_strong, &[], 1.0);
+                        let col = if bresp.hovered() { pal.text } else { pal.sub_strong };
+                        ui.painter().text(br.center(), Align2::CENTER_CENTER, "←", FontId::proportional(18.0), col);
+                        focus_ring(ui, &pal, &bresp, br);
+                        if bresp.clicked() {
+                            back = true;
+                        }
+                    } else if nested
+                        && ui.add(egui::Label::new(RichText::new("←").size(18.0).color(pal.sub)).sense(Sense::click())).clicked()
+                    {
                         back = true;
                     }
-                } else if nested && ui.add(egui::Label::new(RichText::new("←").size(18.0).color(pal.sub)).sense(Sense::click())).clicked()
-                {
-                    back = true;
-                }
-                if shape == Shape::List {
-                    let te = TextEdit::singleline(&mut self.query)
-                        .hint_text(RichText::new(placeholder).color(pal.sub))
-                        .font(FontId::proportional(18.0))
-                        .frame(EFrame::NONE)
-                        .text_color(pal.text)
-                        .desired_width(f32::INFINITY)
-                        .id(Id::new("search"));
-                    let r = ui.add(te);
-                    if self.panel.is_none() {
-                        r.request_focus();
+                    if shape == Shape::List {
+                        let te = TextEdit::singleline(&mut self.query)
+                            .hint_text(RichText::new(placeholder).color(pal.sub))
+                            .font(FontId::proportional(18.0))
+                            .frame(EFrame::NONE)
+                            .text_color(pal.text)
+                            .desired_width(f32::INFINITY)
+                            .id(Id::new("search"));
+                        let r = ui.add(te);
+                        if self.panel.is_none() {
+                            r.request_focus();
+                        }
+                    } else if matches!(self.view(), View::Settings) {
+                        // breadcrumb: "Settings /" muted, the current tab in the normal colour
+                        let tab: usize = ctx.data(|d| d.get_temp(Id::new("settings_tab"))).unwrap_or(0);
+                        let searching = ctx.data(|d| d.get_temp::<String>(Id::new("settings_query"))).is_some_and(|q| !q.trim().is_empty());
+                        let name = if searching { "Search" } else { SETTINGS_TABS[tab.min(SETTINGS_TABS.len() - 1)].0 };
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        record_text(&ctx, &pal, "crumb-parent", pal.sub_strong, &[], 1.0);
+                        record_text(&ctx, &pal, "crumb-current", pal.text, &[], 1.0);
+                        ui.label(RichText::new("Settings /").size(16.0).color(pal.sub_strong));
+                        ui.label(RichText::new(name).size(16.0).strong().color(pal.text));
+                        #[cfg(test)]
+                        ctx.data_mut(|d| d.insert_temp(Id::new("settings-breadcrumb"), format!("Settings / {name}")));
+                    } else {
+                        ui.label(RichText::new(title).size(16.0).strong().color(pal.text));
                     }
-                } else if matches!(self.view(), View::Settings) {
-                    // breadcrumb: "Settings /" muted, the current tab in the normal colour
-                    let tab: usize = ctx.data(|d| d.get_temp(Id::new("settings_tab"))).unwrap_or(0);
-                    let searching = ctx.data(|d| d.get_temp::<String>(Id::new("settings_query"))).is_some_and(|q| !q.trim().is_empty());
-                    let name = if searching { "Search" } else { SETTINGS_TABS[tab.min(SETTINGS_TABS.len() - 1)].0 };
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    record_text(&ctx, &pal, "crumb-parent", pal.sub_strong, &[], 1.0);
-                    record_text(&ctx, &pal, "crumb-current", pal.text, &[], 1.0);
-                    ui.label(RichText::new("Settings /").size(16.0).color(pal.sub_strong));
-                    ui.label(RichText::new(name).size(16.0).strong().color(pal.text));
-                    #[cfg(test)]
-                    ctx.data_mut(|d| d.insert_temp(Id::new("settings-breadcrumb"), format!("Settings / {name}")));
-                } else {
-                    ui.label(RichText::new(title).size(16.0).strong().color(pal.text));
-                }
+                });
             });
-        });
+        }
         if back {
             self.pop();
             ctx.request_repaint();
@@ -1630,7 +1663,9 @@ impl App {
         let line = |y: f32| {
             ui.painter().hline(full.min.x..=full.max.x, y, Stroke::new(1.0, pal.sep));
         };
-        line(search_rect.max.y);
+        if !tour_view {
+            line(search_rect.max.y);
+        }
         line(footer_rect.min.y);
 
         // ---- content
@@ -1666,6 +1701,9 @@ impl App {
                     ui.painter().text(content.center(), Align2::CENTER_CENTER, "No results", FontId::proportional(14.0), pal.sub);
                 }
             }
+            // under the intro the deck waits, so its entrance plays at the hand-off
+            _ if tour_view && self.intro_covers() => {}
+            _ if tour_view => self.draw_tour(ui, content, &pal),
             _ => self.draw_single(ui, content.shrink2(Vec2::new(20.0, 14.0)), &pal),
         }
         self.scroll_to_sel = false;
@@ -1678,7 +1716,6 @@ impl App {
                 View::Output { .. } => Some("Copy Output".into()),
                 View::Confirm { .. } => Some("Confirm".into()),
                 View::Ai { .. } => Some("Ask".into()),
-                View::Welcome => Some("Grant Accessibility".into()),
                 View::Update { .. } => Some("Install and relaunch".into()),
                 View::SnippetForm { .. } | View::QuicklinkForm { .. } => Some("Save".into()),
                 View::Alias { .. } | View::CreateScript { .. } => Some("Save".into()),
@@ -1782,7 +1819,7 @@ impl App {
             }
         }
         let mut x = rect.max.x - 16.0;
-        let mut window_chips = self.view().footer_hints();
+        let mut window_chips = if matches!(self.view(), View::Welcome) { self.tour.hints() } else { self.view().footer_hints() };
         // The left text (title or toast) wins: drop the least important chips until both fit.
         let left_w = match &self.toast {
             Some((t, _)) => p.layout_no_wrap(t.clone(), FontId::proportional(12.5), pal.accent).size().x,
@@ -4760,10 +4797,7 @@ impl App {
                 self.draw_reorder(ui, rect, pal, purpose, files, cursor);
             }
             _ => {
-                let trusted = windows::accessibility_trusted(false);
-                let launcher_hotkey = services::hotkey_label(&self.settings.launcher_hotkey);
                 let data_dir = self.store.root.display().to_string();
-                let (mut grant, mut open_privacy) = (false, false);
                 let app_icon = self.app_icon.clone();
                 let provider_label = {
                     use ferrocast_core::models::AiProvider as P;
@@ -4930,21 +4964,46 @@ impl App {
                             let w = ui.available_width();
                             ui.horizontal(|ui| {
                                 let chip_w = 150.0;
-                                egui::Frame::new().fill(pal.field).corner_radius(10.0).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
-                                    ui.set_width(w - chip_w - 36.0);
-                                    let r = ui.add(TextEdit::singleline(prompt).hint_text("Ask anything…").font(FontId::proportional(15.0)).frame(EFrame::NONE).desired_width(f32::INFINITY));
-                                    if ff {
-                                        r.request_focus();
-                                    }
-                                });
+                                egui::Frame::new().fill(pal.field).corner_radius(10.0).inner_margin(egui::Margin::symmetric(12, 8)).show(
+                                    ui,
+                                    |ui| {
+                                        ui.set_width(w - chip_w - 36.0);
+                                        let r = ui.add(
+                                            TextEdit::singleline(prompt)
+                                                .hint_text("Ask anything…")
+                                                .font(FontId::proportional(15.0))
+                                                .frame(EFrame::NONE)
+                                                .desired_width(f32::INFINITY),
+                                        );
+                                        if ff {
+                                            r.request_focus();
+                                        }
+                                    },
+                                );
                                 ui.add_space(8.0);
                                 let (r, resp) = ui.allocate_exact_size(Vec2::new(chip_w, 34.0), Sense::click());
                                 let p = ui.painter();
                                 p.rect_filled(r, 10.0, if resp.hovered() { pal.sel } else { pal.field });
                                 let g = p.layout_no_wrap(provider_label.clone(), FontId::proportional(11.5), pal.sub);
-                                let shown = if g.size().x > chip_w - 34.0 { elide(p, &provider_label, FontId::proportional(11.5), chip_w - 34.0) } else { provider_label.clone() };
-                                p.text(Pos2::new(r.min.x + 12.0, r.center().y), Align2::LEFT_CENTER, shown, FontId::proportional(11.5), pal.text);
-                                p.text(Pos2::new(r.max.x - 12.0, r.center().y), Align2::RIGHT_CENTER, "⌄", FontId::proportional(12.0), pal.sub);
+                                let shown = if g.size().x > chip_w - 34.0 {
+                                    elide(p, &provider_label, FontId::proportional(11.5), chip_w - 34.0)
+                                } else {
+                                    provider_label.clone()
+                                };
+                                p.text(
+                                    Pos2::new(r.min.x + 12.0, r.center().y),
+                                    Align2::LEFT_CENTER,
+                                    shown,
+                                    FontId::proportional(11.5),
+                                    pal.text,
+                                );
+                                p.text(
+                                    Pos2::new(r.max.x - 12.0, r.center().y),
+                                    Align2::RIGHT_CENTER,
+                                    "⌄",
+                                    FontId::proportional(12.0),
+                                    pal.sub,
+                                );
                                 let mut menu = egui::Popup::menu(&resp);
                                 if std::env::var_os("FERROCAST_AI_MENU").is_some() {
                                     menu = menu.open(true); // dev aid for screenshots
@@ -4995,11 +5054,20 @@ impl App {
                                     ui::paint_icon(&mut icons, ui, r, &Icon::Glyph("sf:sparkles", [168, 110, 255]), pal);
                                     ui.add_space(12.0);
                                     ui.label(RichText::new("Ask anything").size(20.0).color(pal.text));
-                                    ui.label(RichText::new("Short answers, in a conversation that lasts while this window is open.").size(12.5).color(pal.sub));
+                                    ui.label(
+                                        RichText::new("Short answers, in a conversation that lasts while this window is open.")
+                                            .size(12.5)
+                                            .color(pal.sub),
+                                    );
                                     ui.add_space(16.0);
                                     ui.horizontal_wrapped(|ui| {
                                         ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
-                                        for ex in ["Explain this regex: ^\\d{3}-\\d{4}$", "Write a git commit message for a bug fix", "What is 18% of 240, step by step?", "Translate “see you tomorrow” to Spanish"] {
+                                        for ex in [
+                                            "Explain this regex: ^\\d{3}-\\d{4}$",
+                                            "Write a git commit message for a bug fix",
+                                            "What is 18% of 240, step by step?",
+                                            "Translate “see you tomorrow” to Spanish",
+                                        ] {
                                             if pill(ui, pal, ex, false) {
                                                 *prompt = ex.to_string();
                                             }
@@ -5013,10 +5081,14 @@ impl App {
                                     let mut turn = |ui: &mut Ui, q: &str, a: &str, thinking: bool| {
                                         // question: right-aligned card
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                                            egui::Frame::new().fill(pal.field).corner_radius(12.0).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
-                                                ui.set_max_width(ui.available_width() * 0.72);
-                                                ui.add(egui::Label::new(RichText::new(q).size(13.5).color(pal.text)).wrap());
-                                            });
+                                            egui::Frame::new()
+                                                .fill(pal.field)
+                                                .corner_radius(12.0)
+                                                .inner_margin(egui::Margin::symmetric(12, 8))
+                                                .show(ui, |ui| {
+                                                    ui.set_max_width(ui.available_width() * 0.72);
+                                                    ui.add(egui::Label::new(RichText::new(q).size(13.5).color(pal.text)).wrap());
+                                                });
                                         });
                                         // answer: sparkles tile + text
                                         ui.horizontal_top(|ui| {
@@ -5030,11 +5102,19 @@ impl App {
                                                     let (r, _) = ui.allocate_exact_size(Vec2::new(40.0, 18.0), Sense::hover());
                                                     for k in 0..3 {
                                                         let al = (((t * 3.0 - k as f64 * 0.6).sin() * 0.5 + 0.5) * 255.0) as u8;
-                                                        ui.painter().circle_filled(Pos2::new(r.min.x + 6.0 + k as f32 * 10.0, r.center().y), 3.0, Color32::from_rgba_unmultiplied(pal.sub.r(), pal.sub.g(), pal.sub.b(), al));
+                                                        ui.painter().circle_filled(
+                                                            Pos2::new(r.min.x + 6.0 + k as f32 * 10.0, r.center().y),
+                                                            3.0,
+                                                            Color32::from_rgba_unmultiplied(pal.sub.r(), pal.sub.g(), pal.sub.b(), al),
+                                                        );
                                                     }
                                                     ui.ctx().request_repaint_after(Duration::from_millis(60));
                                                 } else {
-                                                    ui.add(egui::Label::new(RichText::new(a).size(14.0).color(pal.text)).wrap().selectable(true));
+                                                    ui.add(
+                                                        egui::Label::new(RichText::new(a).size(14.0).color(pal.text))
+                                                            .wrap()
+                                                            .selectable(true),
+                                                    );
                                                 }
                                             });
                                         });
@@ -5049,57 +5129,38 @@ impl App {
                                 });
                             }
                         }
-                        View::Welcome => {
-                            egui::ScrollArea::vertical().id_salt("welcome").auto_shrink([false; 2]).show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.y = 6.0;
-                            ui.vertical_centered(|ui| {
-                                if let Some(t) = &app_icon {
-                                    let (r, _) = ui.allocate_exact_size(Vec2::splat(56.0), Sense::hover());
-                                    ui.painter().image(t.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
-                                }
-                                ui.add_space(6.0);
-                                ui.label(RichText::new("Welcome to Ferrocast").size(22.0).color(pal.text));
-                                ui.label(RichText::new(format!("Press {launcher_hotkey} anywhere. Type to launch, calculate, paste or ask.")).size(13.0).color(pal.sub));
-                            });
-                            ui.add_space(14.0);
-                            group(ui, pal, |ui| {
-                                row(ui, pal, "Accessibility", if trusted { "Granted. Window management, pasting and snippet expansion are ready." } else { "Needed to move windows, paste for you and expand snippets. Search, the calculator and AI work without it." }, |ui| {
-                                    if trusted {
-                                        ui.label(RichText::new("Granted ✓").size(13.0).color(Color32::from_rgb(89, 212, 153)));
-                                    } else {
-                                        if small_btn(ui, pal, "System Settings") {
-                                            open_privacy = true;
-                                        }
-                                        if accent_btn(ui, pal, "Grant…") {
-                                            grant = true;
-                                        }
-                                    }
-                                });
-                            });
-                            ui.add_space(14.0);
-                            section(ui, pal, "Three things to try");
-                            let tips: [(&str, &str, &str); 3] = [
-                                ("sf:command", "Press ⌘ K on anything", "Every item has more actions: copy, reveal, set an alias or a hotkey."),
-                                ("sf:equal", "Type a sum or a conversion", "100 usd in eur · 5pm ldn in sf · 18% of 240 · timer 10m"),
-                                ("sf:doc.on.clipboard", "Open Clipboard History", "Everything you copy, searchable, with pins. Password managers are skipped."),
-                            ];
-                            group(ui, pal, |ui| {
-                                for (sym, title, desc) in tips {
-                                    row(ui, pal, title, desc, |ui| {
-                                        let (r, _) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::hover());
-                                        ui::paint_icon(&mut icons, ui, r, &Icon::Glyph(sym, [90, 90, 105]), pal);
-                                    });
-                                }
-                            });
-                            ui.add_space(8.0);
-                            lbl(ui, "esc closes this screen · it is always one search away as “Welcome & Permissions”");
-                            });
-                        }
                         View::Shortcuts => {
                             let groups: [(&str, &[(&str, &str)]); 3] = [
-                                ("Navigate", &[("⌥ Space", "Open or close Ferrocast"), ("↑ ↓", "Move the selection"), ("esc", "Clear the search, go back, or close"), ("⌫", "Go back when the search is empty")]),
-                                ("Act", &[("↵", "Run the primary action"), ("⌘ ↵", "Run the secondary action"), ("⌘ K", "Open the action panel"), ("⌘ Y", "Quick Look the selected file")]),
-                                ("Manage", &[("⌘ ,", "Open Settings"), ("⌘ N", "New snippet, quicklink or note"), ("⌘ E", "Edit the selected snippet or quicklink"), ("⇧ ⌘ F", "Add or remove a favorite"), ("⇧ ⌘ ,", "Set a hotkey for a command"), ("⌘ .", "Pin or unpin a clipboard entry"), ("⌃ X", "Delete the selected entry")]),
+                                (
+                                    "Navigate",
+                                    &[
+                                        ("⌥ Space", "Open or close Ferrocast"),
+                                        ("↑ ↓", "Move the selection"),
+                                        ("esc", "Clear the search, go back, or close"),
+                                        ("⌫", "Go back when the search is empty"),
+                                    ],
+                                ),
+                                (
+                                    "Act",
+                                    &[
+                                        ("↵", "Run the primary action"),
+                                        ("⌘ ↵", "Run the secondary action"),
+                                        ("⌘ K", "Open the action panel"),
+                                        ("⌘ Y", "Quick Look the selected file"),
+                                    ],
+                                ),
+                                (
+                                    "Manage",
+                                    &[
+                                        ("⌘ ,", "Open Settings"),
+                                        ("⌘ N", "New snippet, quicklink or note"),
+                                        ("⌘ E", "Edit the selected snippet or quicklink"),
+                                        ("⇧ ⌘ F", "Add or remove a favorite"),
+                                        ("⇧ ⌘ ,", "Set a hotkey for a command"),
+                                        ("⌘ .", "Pin or unpin a clipboard entry"),
+                                        ("⌃ X", "Delete the selected entry"),
+                                    ],
+                                ),
                             ];
                             egui::ScrollArea::vertical().id_salt("shortcuts").auto_shrink([false; 2]).show(ui, |ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -5130,7 +5191,11 @@ impl App {
                             egui::ScrollArea::vertical().id_salt("update").auto_shrink([false; 2]).show(ui, |ui| {
                                 ui.spacing_mut().item_spacing.y = 6.0;
                                 ui.add_space(4.0);
-                                ui.label(RichText::new(format!("Ferrocast {} is available", release.tag.trim_start_matches('v'))).size(20.0).color(pal.text));
+                                ui.label(
+                                    RichText::new(format!("Ferrocast {} is available", release.tag.trim_start_matches('v')))
+                                        .size(20.0)
+                                        .color(pal.text),
+                                );
                                 ui.label(RichText::new(format!("You have {}.", env!("CARGO_PKG_VERSION"))).size(13.0).color(pal.sub));
                                 ui.add_space(8.0);
                                 let notes: String = release.notes.lines().take(40).collect::<Vec<_>>().join("\n");
@@ -5156,9 +5221,13 @@ impl App {
                         View::Translation { lang, text } => {
                             ui.label(RichText::new(format!("Translated to {lang}")).size(15.0).strong().color(pal.text));
                             ui.add_space(6.0);
-                            egui::ScrollArea::vertical().id_salt("translation").auto_shrink([false; 2]).max_height((ui.available_height() - 44.0).max(60.0)).show(ui, |ui| {
-                                ui.add(egui::Label::new(RichText::new(text.as_str()).size(14.0).color(pal.text)).selectable(true));
-                            });
+                            egui::ScrollArea::vertical()
+                                .id_salt("translation")
+                                .auto_shrink([false; 2])
+                                .max_height((ui.available_height() - 44.0).max(60.0))
+                                .show(ui, |ui| {
+                                    ui.add(egui::Label::new(RichText::new(text.as_str()).size(14.0).color(pal.text)).selectable(true));
+                                });
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 8.0;
@@ -5175,43 +5244,61 @@ impl App {
                         }
                         View::About => {
                             egui::ScrollArea::vertical().id_salt("about").auto_shrink([false; 2]).show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.y = 6.0;
-                            ui.add_space(4.0);
-                            ui.vertical_centered(|ui| {
-                                if let Some(t) = &app_icon {
-                                    let (r, _) = ui.allocate_exact_size(Vec2::splat(72.0), Sense::hover());
-                                    ui.painter().image(t.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
-                                }
-                                ui.add_space(8.0);
-                                ui.label(RichText::new("Ferrocast").size(26.0).color(pal.text));
-                                ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(13.0).color(pal.sub));
-                                ui.add_space(10.0);
-                                ui.label(RichText::new("A small, fast launcher for the Mac. Open source, no account, your data in files you can read.").size(13.5).color(pal.text));
-                                ui.add_space(12.0);
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 8.0;
-                                    let total = 4.0 * 96.0 + 3.0 * 8.0;
-                                    ui.add_space((ui.available_width() - total).max(0.0) / 2.0);
-                                    if small_btn(ui, pal, "GitHub") {
-                                        open_url = Some("https://github.com/drumst0ck/ferrocast".into());
+                                ui.spacing_mut().item_spacing.y = 6.0;
+                                ui.add_space(4.0);
+                                ui.vertical_centered(|ui| {
+                                    if let Some(t) = &app_icon {
+                                        let (r, _) = ui.allocate_exact_size(Vec2::splat(72.0), Sense::hover());
+                                        ui.painter().image(t.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
                                     }
-                                    if small_btn(ui, pal, "Changelog") {
-                                        open_url = Some("https://ferrocast.app/changelog/".into());
-                                    }
-                                    if small_btn(ui, pal, "Data folder") {
-                                        open_url = Some(data_dir.clone());
-                                    }
-                                    if small_btn(ui, pal, "Check for Updates…") {
-                                        check_now = true;
-                                    }
+                                    ui.add_space(8.0);
+                                    ui.label(RichText::new("Ferrocast").size(26.0).color(pal.text));
+                                    ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(13.0).color(pal.sub));
+                                    ui.add_space(10.0);
+                                    ui.label(
+                                        RichText::new(
+                                            "A small, fast launcher for the Mac. Open source, no account, your data in files you can read.",
+                                        )
+                                        .size(13.5)
+                                        .color(pal.text),
+                                    );
+                                    ui.add_space(12.0);
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 8.0;
+                                        let total = 4.0 * 96.0 + 3.0 * 8.0;
+                                        ui.add_space((ui.available_width() - total).max(0.0) / 2.0);
+                                        if small_btn(ui, pal, "GitHub") {
+                                            open_url = Some("https://github.com/drumst0ck/ferrocast".into());
+                                        }
+                                        if small_btn(ui, pal, "Changelog") {
+                                            open_url = Some("https://ferrocast.app/changelog/".into());
+                                        }
+                                        if small_btn(ui, pal, "Data folder") {
+                                            open_url = Some(data_dir.clone());
+                                        }
+                                        if small_btn(ui, pal, "Check for Updates…") {
+                                            check_now = true;
+                                        }
+                                    });
                                 });
-                            });
-                            ui.add_space(18.0);
-                            group(ui, pal, |ui| {
-                                row(ui, pal, "Licence", "MIT. Fork it, fix it, ship it.", |ui| keycap(ui, pal, "MIT"));
-                                row(ui, pal, "Currency rates", "European Central Bank, through frankfurter.dev, cached for 12 hours.", |_ui| {});
-                                row(ui, pal, "Trademarks", "Raycast is a trademark of its owner. Ferrocast is an independent project.", |_ui| {});
-                            });
+                                ui.add_space(18.0);
+                                group(ui, pal, |ui| {
+                                    row(ui, pal, "Licence", "MIT. Fork it, fix it, ship it.", |ui| keycap(ui, pal, "MIT"));
+                                    row(
+                                        ui,
+                                        pal,
+                                        "Currency rates",
+                                        "European Central Bank, through frankfurter.dev, cached for 12 hours.",
+                                        |_ui| {},
+                                    );
+                                    row(
+                                        ui,
+                                        pal,
+                                        "Trademarks",
+                                        "Raycast is a trademark of its owner. Ferrocast is an independent project.",
+                                        |_ui| {},
+                                    );
+                                });
                             });
                         }
                         View::Confirm { msg, .. } => {
@@ -5336,14 +5423,6 @@ impl App {
                             _ => {}
                         }
                     }
-                }
-                if grant {
-                    windows::accessibility_trusted(true);
-                }
-                if open_privacy {
-                    let _ = std::process::Command::new("/usr/bin/open")
-                        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-                        .status();
                 }
                 if clear_hotkey {
                     if let View::Hotkey { id, .. } = self.view().clone() {

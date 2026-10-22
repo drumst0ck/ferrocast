@@ -4,7 +4,7 @@ description: "What Ferrocast asks for the first time you open it, why it needs A
 sidebar:
   order: 2
 ---
-The first time you open Ferrocast it shows a **Welcome & Permissions** screen that walks you through the permissions it can use. Permissions are granted by you in System Settings; Ferrocast cannot grant them itself.
+The first time you open Ferrocast it shows a seven-slide **welcome tour**: what the app does, then a slide that walks you through the permissions it can use. Use <kbd>←</kbd> <kbd>→</kbd> or <kbd>↵</kbd> to move, <kbd>esc</kbd> to skip. Search for “Welcome” to see it again. Permissions are granted by you in System Settings; Ferrocast cannot grant them itself.
 
 Open the launcher with <kbd>⌥</kbd> <kbd>Space</kbd> (change it in Settings).
 

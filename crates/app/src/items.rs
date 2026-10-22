@@ -87,7 +87,7 @@ impl Builtin {
     pub fn title(&self) -> &'static str {
         match self {
             Builtin::AskAi => "Ask AI",
-            Builtin::Welcome => "Welcome & Permissions",
+            Builtin::Welcome => "Welcome tour & Permissions",
             Builtin::KeyboardShortcuts => "Keyboard Shortcuts",
             Builtin::About => "About Ferrocast",
             Builtin::ExportData => "Export Backup",
@@ -171,7 +171,9 @@ impl Builtin {
     pub fn keywords(&self) -> Vec<String> {
         let k: &[&str] = match self {
             Builtin::AskAi => &["chatgpt", "llm", "ollama", "assistant", "question"],
-            Builtin::Welcome => &["permissions", "accessibility", "setup", "onboarding", "help"],
+            Builtin::Welcome => {
+                &["welcome", "permissions", "accessibility", "setup", "onboarding", "help", "tour", "presentation", "intro"]
+            }
             Builtin::KeyboardShortcuts => &["help", "keys", "cheat sheet"],
             Builtin::About => &["version", "license"],
             Builtin::ExportData => &["backup", "save"],
