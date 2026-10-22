@@ -14,7 +14,7 @@ Un anillo «halo»: un acento por rueda, sector resaltado con degradado y brillo
 
 ## Traducir texto arrastrado
 
-Arrastra texto seleccionado (desde cualquier app que permita arrastrar una selección) y toca la tecla Convert (<kbd>⇧</kbd> por defecto). Se abre una cuarta rueda, morada, con tus idiomas; suelta sobre uno para traducir. La selección se reemplaza en la app de origen o solo se copia, según Ajustes > General > «After translating».
+Arrastra texto seleccionado (desde cualquier app que permita arrastrar una selección) y toca la tecla de traducción (<kbd>⌘</kbd> por defecto; <kbd>⇧</kbd> ampliaría la selección, por eso no se usa). Se abre una cuarta rueda, morada, con tus idiomas; suelta sobre uno para traducir. La selección se reemplaza en la app de origen o solo se copia, según Ajustes > General > «After translating».
 
 La traducción usa los mismos proveedores de IA que Ask AI: un servidor compatible con OpenAI (Ollama lo mantiene en tu Mac), Anthropic, Sign in with ChatGPT o Claude Code (tus propias suscripciones). Elige el motor en Ajustes > AI > Translation, o déjalo en «Same as chat». El texto seleccionado se envía a ese proveedor y a nadie más. Los idiomas son una lista separada por comas en Ajustes > General (hasta 12). Las selecciones de más de 20.000 caracteres se rechazan.
 

@@ -238,6 +238,8 @@ pub struct Settings {
     pub wheel_convert_key: String,
     pub wheel_actions_key: String,
     pub wheel_tools_key: String,
+    /// Key tapped during a TEXT drag to open the Translate wheel. Not Shift: Shift extends the selection.
+    pub wheel_translate_key: String,
     /// Opt-in: Return on a Finder selection opens the Convert wheel (needs Accessibility).
     pub enter_on_finder: bool,
     /// Target languages on the Translate wheel (names the model understands).
@@ -308,6 +310,7 @@ impl Default for Settings {
             wheel_convert_key: "Shift".into(),
             wheel_actions_key: "Control".into(),
             wheel_tools_key: "Command".into(),
+            wheel_translate_key: "Command".into(),
             enter_on_finder: false,
             translate_languages: crate::translate::DEFAULT_LANGUAGES.iter().map(|s| s.to_string()).collect(),
             translate_output: TranslateOutput::default(),

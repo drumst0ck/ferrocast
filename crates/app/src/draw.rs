@@ -5334,6 +5334,10 @@ impl App {
                                 let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
                                 segmented(ui, pal, &mut s.wheel_actions_key, &opts);
                             });
+                            row(ui, pal, "Translate wheel key", "Tap during a text drag for the Translate wheel. Not Shift: it extends the selection.", |ui| {
+                                let opts: Vec<(String, &str)> = ["Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                segmented(ui, pal, &mut s.wheel_translate_key, &opts);
+                            });
                             row(ui, pal, "Translate languages", "Drag selected text and tap the Convert key. Comma-separated, up to 12.", |ui| {
                                 let id = Id::new("translate_langs_buf");
                                 let mut buf: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| s.translate_languages.join(", "));

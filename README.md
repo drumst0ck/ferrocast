@@ -44,7 +44,7 @@ Not included: React extensions, sync, Search Menu Bar Items and AI context from 
 - **275 conversions** across 46 input formats (images, audio, video, documents, spreadsheets, PDF, slides, subtitles, archives).
 - **26 file tools**: compress, crop, trim, split, merge, redact, annotate, edit metadata, organize PDF pages and more.
 - **7 file actions**: AirDrop, shelf, copy, move, copy path, Terminal and Zip.
-- **Translate wheel**: drag selected text, tap <kbd>⇧</kbd>, and drop on a language. It runs through your Ask AI provider (Ollama stays local; ChatGPT and Claude subscriptions work too).
+- **Translate wheel**: drag selected text, tap <kbd>⌘</kbd>, and drop on a language. It runs through your Ask AI provider (Ollama stays local; ChatGPT and Claude subscriptions work too).
 - Local only. macOS tools come first; ffmpeg, LibreOffice, cwebp, unrar and Ghostscript are optional. Results go next to the original and never overwrite it.
 
 Browse every pair at <https://ferrocast.app/files/>.

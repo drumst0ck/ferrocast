@@ -298,9 +298,15 @@ pub fn start_wheel(shared: Arc<Shared>, bus: Bus) {
         .spawn(move || {
             let mut tracker = Tracker::default();
             loop {
-                let (on, ck, ak, tk) = {
+                let (on, ck, ak, tk, xk) = {
                     let s = shared.settings.read().unwrap();
-                    (s.drop_wheel, key_mask(&s.wheel_convert_key), key_mask(&s.wheel_actions_key), key_mask(&s.wheel_tools_key))
+                    (
+                        s.drop_wheel,
+                        key_mask(&s.wheel_convert_key),
+                        key_mask(&s.wheel_actions_key),
+                        key_mask(&s.wheel_tools_key),
+                        key_mask(&s.wheel_translate_key),
+                    )
                 };
                 if !on {
                     tracker = Tracker::default();
@@ -315,14 +321,16 @@ pub fn start_wheel(shared: Arc<Shared>, bus: Bus) {
                         (ck != 0 && bits & ck != 0, ak != 0 && bits & ak != 0, tk != 0 && bits & tk != 0);
                     // reading the pasteboard items only matters at the moment a key is tapped
                     let files = if left && (convert_key || actions_key || tools_key) { drag::drag_files() } else { vec![] };
-                    // a text drag only matters for the Convert key (the Translate wheel)
-                    let text = if left && convert_key && files.is_empty() { drag::drag_text() } else { None };
+                    // a text drag only matters for the translate key (the Translate wheel)
+                    let translate_key = xk != 0 && bits & xk != 0;
+                    let text = if left && translate_key && files.is_empty() { drag::drag_text() } else { None };
                     let sample = Sample {
                         left_down: left,
                         drag_count: if left { drag::drag_count() } else { 0 },
                         has_files: !files.is_empty(),
                         has_text: text.is_some(),
                         convert_key,
+                        translate_key,
                         actions_key,
                         tools_key,
                     };

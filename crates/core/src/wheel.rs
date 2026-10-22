@@ -25,6 +25,8 @@ pub struct Sample {
     /// The drag pasteboard holds plain text (and no files).
     pub has_text: bool,
     pub convert_key: bool,
+    /// The translate key: only meaningful during a text drag (Shift would extend the selection).
+    pub translate_key: bool,
     pub actions_key: bool,
     pub tools_key: bool,
 }
@@ -46,6 +48,7 @@ pub struct Tracker {
     convert_was: bool,
     actions_was: bool,
     tools_was: bool,
+    translate_was: bool,
     open: Option<WheelKind>,
 }
 
@@ -58,6 +61,7 @@ impl Tracker {
             let base = *self.down_count.get_or_insert(s.drag_count);
             let dragging_files = s.drag_count != base && s.has_files;
             let dragging_text = s.drag_count != base && !s.has_files && s.has_text;
+            let translate_tapped = s.translate_key && !self.translate_was;
             let tapped = if s.convert_key && !self.convert_was {
                 Some(WheelKind::Convert)
             } else if s.tools_key && !self.tools_was {
@@ -76,12 +80,13 @@ impl Tracker {
                         ev = Some(WheelEvent::Open(k));
                         self.open = Some(k);
                     }
-                    None if dragging_text && k == WheelKind::Convert => {
-                        ev = Some(WheelEvent::Open(WheelKind::Translate));
-                        self.open = Some(WheelKind::Translate);
-                    }
                     None => {}
                 }
+            }
+            // text drags have their own key: Shift would extend the selection being dragged
+            if self.open.is_none() && dragging_text && translate_tapped {
+                ev = Some(WheelEvent::Open(WheelKind::Translate));
+                self.open = Some(WheelKind::Translate);
             }
         } else {
             if self.open.is_some() {
@@ -93,6 +98,7 @@ impl Tracker {
         self.convert_was = s.convert_key;
         self.actions_was = s.actions_key;
         self.tools_was = s.tools_key;
+        self.translate_was = s.translate_key;
         ev
     }
 }
@@ -271,7 +277,16 @@ mod tests {
     use super::*;
 
     fn s(left: bool, count: i64, files: bool, ck: bool, ak: bool) -> Sample {
-        Sample { left_down: left, drag_count: count, has_files: files, has_text: false, convert_key: ck, actions_key: ak, tools_key: false }
+        Sample {
+            left_down: left,
+            drag_count: count,
+            has_files: files,
+            has_text: false,
+            translate_key: false,
+            convert_key: ck,
+            actions_key: ak,
+            tools_key: false,
+        }
     }
 
     #[test]
@@ -289,12 +304,13 @@ mod tests {
         assert_eq!(t.step(s(false, 2, true, false, false)), Some(WheelEvent::Release));
     }
 
-    fn text(left: bool, count: i64, convert: bool, tools: bool, actions: bool) -> Sample {
+    /// A text drag; `translate` is the translate key (Command by default), the others are the file-wheel keys.
+    fn text(left: bool, count: i64, translate: bool, tools: bool, actions: bool) -> Sample {
         Sample {
             left_down: left,
             drag_count: count,
             has_text: true,
-            convert_key: convert,
+            translate_key: translate,
             tools_key: tools,
             actions_key: actions,
             ..Default::default()
@@ -311,6 +327,25 @@ mod tests {
         assert_eq!(t.step(text(true, 6, true, false, false)), Some(WheelEvent::Open(WheelKind::Translate)));
         assert_eq!(t.step(text(true, 6, true, false, false)), None, "held, not re-opened");
         assert_eq!(t.step(text(false, 6, false, false, false)), Some(WheelEvent::Release));
+    }
+
+    #[test]
+    fn text_drag_ignores_the_convert_key_because_shift_extends_the_selection() {
+        let mut t = Tracker::default();
+        let shift = |count, on| Sample { left_down: true, drag_count: count, has_text: true, convert_key: on, ..Default::default() };
+        t.step(shift(1, false));
+        t.step(shift(2, false));
+        assert_eq!(t.step(shift(2, true)), None, "Convert key during a text drag does nothing");
+        assert_eq!(t.step(Sample { left_down: false, drag_count: 2, ..Default::default() }), None, "no wheel was open");
+    }
+
+    #[test]
+    fn the_translate_key_does_not_open_a_file_wheel() {
+        let mut t = Tracker::default();
+        let f = |count, on| Sample { left_down: true, drag_count: count, has_files: true, translate_key: on, ..Default::default() };
+        t.step(f(1, false));
+        t.step(f(2, false));
+        assert_eq!(t.step(f(2, true)), None, "the translate key means nothing for files");
     }
 
     #[test]

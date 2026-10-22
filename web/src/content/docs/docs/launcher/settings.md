@@ -14,7 +14,7 @@ Open it with <kbd>⌘</kbd> <kbd>,</kbd>. There is also a menu bar icon.
 - Launch at login through a LaunchAgent; it applies at the next login.
 - The drag-wheel keys and on/off in Settings → General (see [Drag wheel](/docs/files/drag-wheel/)).
 - Updates (Settings → General): check automatically, ask first or install automatically, and Check now (see [Install](/docs/getting-started/install/#updates)).
-- Translate languages and what happens after translating in Settings → General, and the translation engine in Settings → AI (see [Translate dragged text](/docs/files/drag-wheel/#translate-dragged-text)).
+- Translate languages and what happens after translating in Settings → General, and the translate key (Command by default) in Settings → General, and the translation engine in Settings → AI (see [Translate dragged text](/docs/files/drag-wheel/#translate-dragged-text)).
 - The AI provider, model and keys (see [Ask AI](/docs/launcher/ask-ai/)).
 - Backup: export your data (clipboard history is not included) and import snippets from a Raycast JSON export.
 
