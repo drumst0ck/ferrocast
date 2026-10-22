@@ -6,8 +6,8 @@
 //! main thread; the selection / layout helpers are pure and unit-tested below.
 //!
 //! Look (T3, S2/S4/S8): colours are `notes_theme` dynamic tokens; the overlay is a subview of the
-//! Notes window, so it follows the window's appearance. Text on the coral selection uses the
-//! accent ink #1a0709 (D4).
+//! Notes window, so it follows the window's appearance. The selected row is the launcher's neutral
+//! `Sel` fill with the normal text colors (D5).
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -24,7 +24,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSAttributedString, NSDictionary, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
-use crate::notes_popups::{accent_ink, token_fill, CardView, TokenFill, INK_SOFT_ALPHA};
+use crate::notes_popups::{token_fill, CardView, TokenFill};
 use crate::notes_theme::{self as theme, Token};
 
 /// One row of the palette.
@@ -314,7 +314,7 @@ define_class!(
             });
             if let Some((y, h)) = rect_sel {
                 let w = self.bounds().size.width;
-                theme::color(Token::Accent).setFill();
+                theme::color(Token::Sel).setFill();
                 NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect(ROW_INSET, y, w - 2.0 * ROW_INSET, h), ROW_RADIUS, ROW_RADIUS)
                     .fill();
             }
@@ -607,24 +607,16 @@ fn refresh() {
     scroll_to_selected();
 }
 
-/// Theme token colors. The selected row is a coral `Accent` fill with the accent ink (the
-/// shortcut and the chevron at 70%), also for a danger row; other danger rows use `Danger`.
+/// Theme token colors. The selected row keeps the normal colors (its `Sel` fill is drawn by the
+/// rows view): `Text`, `Danger` for danger rows, `SubStrong` subtitles, `Sub` hints.
 fn restyle() {
     let Some(ui) = ui() else { return };
-    let selected = st(|s| s.selected);
-    for (i, l) in ui.labels.borrow().iter().enumerate() {
-        let on = selected == Some(i);
-        let main = if on {
-            accent_ink(1.0)
-        } else if l.danger {
-            theme::color(Token::Danger)
-        } else {
-            theme::color(Token::Text)
-        };
+    for l in ui.labels.borrow().iter() {
+        let main = if l.danger { theme::color(Token::Danger) } else { theme::color(Token::Text) };
         // Accessories (shortcuts) and chevrons are hints: `Sub`. The subtitle carries meaning, so
-        // it is `SubStrong` (4.5:1) and the full ink on the selected row.
-        let soft = if on { accent_ink(INK_SOFT_ALPHA) } else { theme::color(Token::Sub) };
-        let subtitle = if on { accent_ink(1.0) } else { theme::color(Token::SubStrong) };
+        // it is `SubStrong` (4.5:1).
+        let soft = theme::color(Token::Sub);
+        let subtitle = theme::color(Token::SubStrong);
         if let Some(g) = &l.glyph {
             g.set_color(&main);
         }

@@ -4,7 +4,8 @@
 //! unit-tested below.
 //!
 //! Look (T3, S2/S4/S8): every colour comes from `notes_theme` dynamic tokens, never from system
-//! semantic colours. Text on a coral (`Accent`) fill uses the accent ink #1a0709 (D4).
+//! semantic colours. The selected row is the launcher's neutral `Sel` fill with the normal text
+//! colours (D5); coral stays on the Format Bar's active buttons.
 
 use std::cell::{Cell, RefCell};
 use std::path::Path;
@@ -30,8 +31,6 @@ pub(crate) const CARD_RADIUS: f64 = 14.0;
 const ROW_RADIUS: f64 = 8.0;
 /// Alpha of the active Format Bar button's accent tint.
 const ACTIVE_TINT_ALPHA: f64 = 0.18;
-/// Alpha of the accent ink on the secondary text of a selected row.
-pub(crate) const INK_SOFT_ALPHA: f64 = 0.7;
 
 /// A rectangle in AppKit screen coordinates (bottom-up): the caret the popup hangs from.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -203,11 +202,6 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
 
 // ---------------------------------------------------------------- shared look
 
-/// The accent ink #1a0709 (the web's `--accent-ink`) at `alpha`: text on a coral fill (D4).
-pub(crate) fn accent_ink(alpha: f64) -> Retained<NSColor> {
-    NSColor::colorWithSRGBRed_green_blue_alpha(26.0 / 255.0, 7.0 / 255.0, 9.0 / 255.0, alpha)
-}
-
 /// `token` resolved for `appearance`, its alpha multiplied by `alpha` (a plain, non-dynamic colour).
 pub(crate) fn token_alpha(token: Token, alpha: f64, appearance: &NSAppearance) -> Retained<NSColor> {
     let c = theme::resolve(token, theme::is_dark_appearance(appearance));
@@ -338,7 +332,7 @@ define_class!(
                 theme::color(Token::Field).setFill();
                 NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(row(h), ROW_RADIUS, ROW_RADIUS).fill();
             }
-            theme::color(Token::Accent).setFill();
+            theme::color(Token::Sel).setFill();
             NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(row(selected), ROW_RADIUS, ROW_RADIUS).fill();
         }
 
@@ -608,16 +602,11 @@ impl SuggestionPopup {
         self.rows.setNeedsDisplay(true);
     }
 
-    /// Theme token colors; the selected row sits on the accent fill with the accent ink (the
-    /// shortcut at 70%), like the web's coral buttons.
+    /// Theme token colors; the selected row keeps the normal text colors (its `Sel` fill is
+    /// drawn by the rows view), like the launcher.
     fn restyle(&self) {
-        let sel = self.shared.selected.get();
-        for (i, l) in self.labels.borrow().iter().enumerate() {
-            let (main, soft) = if i == sel {
-                (accent_ink(1.0), accent_ink(INK_SOFT_ALPHA))
-            } else {
-                (theme::color(Token::Text), theme::color(Token::Sub))
-            };
+        for l in self.labels.borrow().iter() {
+            let (main, soft) = (theme::color(Token::Text), theme::color(Token::Sub));
             l.glyph.setTextColor(Some(&main));
             l.title.setTextColor(Some(&main));
             if let Some(d) = &l.detail {

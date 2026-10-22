@@ -181,25 +181,40 @@ fn rgb(c: Rgba) -> (u8, u8, u8) {
     (c.0, c.1, c.2)
 }
 
+/// The selected row fill: `Sel` composited over the card `Bg` (D5), as an opaque colour.
+fn sel_row(dark: bool) -> (u8, u8, u8) {
+    let t = if dark { theme::DARK } else { theme::LIGHT };
+    let bg = theme::window_bg(dark);
+    theme::composite_over(t.sel, Rgba(bg.0, bg.1, bg.2, 255))
+}
+
 /// T3 (S7): contrast of the combinations the overlays use, printed and asserted.
 fn contrast_report() {
     println!("contrast (WCAG 2, ratio : 1)");
     println!("  {:<44} {:>6} {:>6}", "combination", "dark", "light");
     type Row = (&'static str, fn(bool) -> f64, f64);
-    let rows: [Row; 8] = [
+    let rows: [Row; 9] = [
         (
-            "accent ink #1a0709 on Accent fill",
+            "Text on Sel over Bg (selected row title)",
             |d| {
                 let t = if d { theme::DARK } else { theme::LIGHT };
-                theme::contrast_ratio((26, 7, 9), rgb(t.accent))
+                theme::contrast_ratio(rgb(t.text), sel_row(d))
             },
             4.5,
         ),
         (
-            "accent ink at 70% on Accent fill (shortcut)",
+            "SubStrong on Sel over Bg (subtitle)",
             |d| {
                 let t = if d { theme::DARK } else { theme::LIGHT };
-                theme::contrast_ratio(theme::composite_over(Rgba(26, 7, 9, 179), t.accent), rgb(t.accent))
+                theme::contrast_ratio(rgb(t.sub_strong), sel_row(d))
+            },
+            4.5,
+        ),
+        (
+            "Sub on Sel over Bg (shortcut)",
+            |d| {
+                let t = if d { theme::DARK } else { theme::LIGHT };
+                theme::contrast_ratio(rgb(t.sub), sel_row(d))
             },
             3.0,
         ),
@@ -301,9 +316,9 @@ fn theme_checks(app: &NSApplication, window: &NSWindow, popup: &SuggestionPopup,
                 );
                 let got_sel = at(6.0, POPUP_PAD + 1.5 * ROW_HEIGHT);
                 check(
-                    &format!("theme {name}: selected pop-up row is the Accent token"),
-                    close(got_sel, in_rep(&rep, rgb(t.accent)), 6),
-                    &format!("got {got_sel:?} want {:?}", rgb(t.accent)),
+                    &format!("theme {name}: selected pop-up row is the Sel token over the card"),
+                    close(got_sel, in_rep(&rep, sel_row(dark)), 6),
+                    &format!("got {got_sel:?} want {:?}", sel_row(dark)),
                 );
                 let got_row0 = at(6.0, POPUP_PAD + 0.5 * ROW_HEIGHT);
                 check(

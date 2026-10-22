@@ -199,18 +199,43 @@ fn theme_checks(app: &NSApplication, out: &std::path::Path) {
             close(got_dim, in_rep(&rep, want_dim), 6),
             &format!("got {got_dim:?} want {:?}", in_rep(&rep, want_dim)),
         );
-        // selected row: left of the glyph, inside the coral fill
-        match (palette::selected_item_id().and_then(|id| palette::row_window_point(&id)), palette::selected_item_id()) {
+        // selected row: left of the glyph, inside the Sel fill composited over the card (D5)
+        let sel_fill = theme::composite_over(t.sel, Rgba(bg.0, bg.1, bg.2, 255));
+        let sel_id = palette::selected_item_id();
+        match (sel_id.as_deref().and_then(palette::row_window_point), sel_id.clone()) {
             (Some((px, py)), Some(id)) => {
                 let got_sel = at(px - 58.0, content.height - py);
                 check(
-                    &format!("theme {name}: selected row ({id}) is the Accent token"),
-                    close(got_sel, in_rep(&rep, (t.accent.0, t.accent.1, t.accent.2)), 6),
-                    &format!("got {got_sel:?} want {:?}", in_rep(&rep, (t.accent.0, t.accent.1, t.accent.2))),
+                    &format!("theme {name}: selected row ({id}) is the Sel token over the card"),
+                    close(got_sel, in_rep(&rep, sel_fill), 6),
+                    &format!("got {got_sel:?} want {:?}", in_rep(&rep, sel_fill)),
                 );
             }
             _ => check(&format!("theme {name}: selected row has a position"), false, "none"),
         }
+        // an unselected row stays on the card colour
+        let other = if sel_id.as_deref() == Some("p3") { "p2" } else { "p3" };
+        match palette::row_window_point(other) {
+            Some((px, py)) => {
+                let got_row = at(px - 58.0, content.height - py);
+                check(
+                    &format!("theme {name}: unselected row ({other}) stays on the card"),
+                    close(got_row, in_rep(&rep, bg), 3),
+                    &format!("got {got_row:?} want {:?}", in_rep(&rep, bg)),
+                );
+            }
+            None => check(&format!("theme {name}: unselected row has a position"), false, "none"),
+        }
+        // text on the selected row keeps its contrast (S7): Text 4.5:1, SubStrong 4.5:1, Sub 3:1
+        let (r_text, r_strong, r_sub) = (
+            theme::contrast_ratio((t.text.0, t.text.1, t.text.2), sel_fill),
+            theme::contrast_ratio((t.sub_strong.0, t.sub_strong.1, t.sub_strong.2), sel_fill),
+            theme::contrast_ratio((t.sub.0, t.sub.1, t.sub.2), sel_fill),
+        );
+        println!("      contrast on selected row ({name}): Text {r_text:.2}, SubStrong {r_strong:.2}, Sub {r_sub:.2}");
+        check(&format!("theme {name}: Text on the selected row >= 4.5"), r_text >= 4.5, &format!("{r_text:.2}"));
+        check(&format!("theme {name}: SubStrong on the selected row >= 4.5"), r_strong >= 4.5, &format!("{r_strong:.2}"));
+        check(&format!("theme {name}: Sub (shortcut) on the selected row >= 3"), r_sub >= 3.0, &format!("{r_sub:.2}"));
         // the Sep line is the last point row of the 44 pt search area (top-origin: 52 pt margin + 43.5)
         let want_sep = theme::composite_over(t.sep, Rgba(bg.0, bg.1, bg.2, 255));
         let got_sep = at(card_x + cw - 6.0, 52.0 + 43.5);
