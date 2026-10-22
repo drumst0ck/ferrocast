@@ -7,7 +7,6 @@ on:
     tags: ['v*']
 permissions:
   contents: write
-  pull-requests: write
 concurrency:
   group: release-${{ github.ref_name }}
   cancel-in-progress: false
@@ -102,16 +101,20 @@ jobs:
             dist/SHA256SUMS.txt
 
       # The formula builds from the tag's source tarball, which exists now. Prereleases skip it.
-      - name: Refresh the Homebrew formula
+      # Committed straight to master: GitHub Actions may not be allowed to open pull requests in this
+      # repository (that setting is off), and the tap reads the formula from master.
+      - name: Commit the Homebrew formula bump to master
         if: env.PRERELEASE == 'false'
-        run: scripts/update_formula.sh "$GITHUB_REPOSITORY" "$VERSION"
-      - name: Open a PR with the formula bump
-        if: env.PRERELEASE == 'false'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          branch: chore/brew-${{ env.VERSION }}
-          base: master
-          add-paths: Formula/ferrocast.rb
-          commit-message: "chore(brew): ferrocast ${{ env.VERSION }}"
-          title: "chore(brew): ferrocast ${{ env.VERSION }}"
-          body: "Points Formula/ferrocast.rb at the v${{ env.VERSION }} source tarball. Merge to make `brew upgrade ferrocast` see it."
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin master
+          git checkout -B formula-bump origin/master
+          scripts/update_formula.sh "$GITHUB_REPOSITORY" "$VERSION"
+          if git diff --quiet -- Formula/ferrocast.rb; then
+            echo "Formula already points at $VERSION"
+            exit 0
+          fi
+          git add Formula/ferrocast.rb
+          git commit -m "chore(brew): ferrocast $VERSION"
+          git push origin HEAD:master

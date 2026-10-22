@@ -18,7 +18,7 @@ scripts/release.sh 0.2.0-rc.1          # a prerelease: published, but the app ig
 2. Builds `Ferrocast.app` with `scripts/bundle.sh`.
 3. Packages `Ferrocast-X.Y.Z.dmg` (for people), `Ferrocast-X.Y.Z.zip` (what the in-app updater downloads) and `SHA256SUMS.txt` (the updater checks the ZIP against it).
 4. Publishes a GitHub Release with the changelog section as notes. A tag with a suffix is a prerelease.
-5. For stable releases, opens a pull request that points `Formula/ferrocast.rb` at the new source tarball. Merge it so `brew upgrade ferrocast` sees the version.
+5. For stable releases, commits the update of `Formula/ferrocast.rb` (new source tarball and sha256) straight to `master`, so `brew upgrade ferrocast` sees the version right away.
 
 ## Signing
 
