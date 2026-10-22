@@ -28,6 +28,8 @@ pub mod models;
 pub mod note_actions;
 pub mod note_ai;
 pub mod notes;
+pub mod notion;
+pub mod obsidian;
 pub mod pages;
 pub mod pdfplan;
 pub mod photo;

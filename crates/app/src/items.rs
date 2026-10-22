@@ -45,6 +45,9 @@ pub enum Builtin {
     Notes,
     SearchNotes,
     CreateNote,
+    SearchNotion,
+    AddToNotion,
+    AddClipboardToNotion,
     CreateDictatedNote,
     CreateScript,
     OpenScriptsFolder,
@@ -80,6 +83,9 @@ impl Builtin {
         Builtin::Notes,
         Builtin::SearchNotes,
         Builtin::CreateNote,
+        Builtin::SearchNotion,
+        Builtin::AddToNotion,
+        Builtin::AddClipboardToNotion,
         Builtin::CreateDictatedNote,
         Builtin::CreateScript,
         Builtin::OpenScriptsFolder,
@@ -115,6 +121,9 @@ impl Builtin {
             Builtin::Notes => "Notes",
             Builtin::SearchNotes => "Search Notes",
             Builtin::CreateNote => "Create Note",
+            Builtin::SearchNotion => "Search Notion",
+            Builtin::AddToNotion => "Add to Notion",
+            Builtin::AddClipboardToNotion => "Add Clipboard to Notion",
             Builtin::CreateDictatedNote => "Create Dictated Note",
             Builtin::CreateScript => "Create Script Command",
             Builtin::OpenScriptsFolder => "Open Script Commands Folder",
@@ -142,6 +151,7 @@ impl Builtin {
             Builtin::ConvertFiles | Builtin::ConvertFinderSelection => "Files",
             Builtin::Shelf => "Files",
             Builtin::Notes | Builtin::SearchNotes | Builtin::CreateNote | Builtin::CreateDictatedNote => "Notes",
+            Builtin::SearchNotion | Builtin::AddToNotion | Builtin::AddClipboardToNotion => "Notion",
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
             Builtin::Settings | Builtin::Quit => "Ferrocast",
         }
@@ -168,6 +178,9 @@ impl Builtin {
             Builtin::ConvertFiles | Builtin::ConvertFinderSelection => ("sf:arrow.triangle.2.circlepath.doc.on.clipboard", [255, 140, 60]),
             Builtin::Shelf => ("sf:tray.full", [255, 140, 60]),
             Builtin::Notes | Builtin::SearchNotes | Builtin::CreateNote | Builtin::CreateDictatedNote => ("sf:pencil", [255, 197, 49]),
+            Builtin::SearchNotion => ("sf:doc.text.magnifyingglass", [60, 60, 70]),
+            Builtin::AddToNotion => ("sf:square.and.pencil", [60, 60, 70]),
+            Builtin::AddClipboardToNotion => ("sf:doc.on.clipboard", [60, 60, 70]),
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => ("sf:terminal", [60, 60, 70]),
             Builtin::Settings => ("sf:gearshape", [120, 120, 130]),
             Builtin::Quit => ("sf:power", [177, 36, 36]),
@@ -196,6 +209,9 @@ impl Builtin {
             Builtin::Shelf => &["shelf", "float", "stash", "drop", "files", "keep"],
             Builtin::ConvertFiles => &["convert", "converter", "format", "png", "jpg", "mp4", "mp3", "pdf", "compress", "zip"],
             Builtin::ConvertFinderSelection => &["finder", "selection", "convert", "wheel", "format"],
+            Builtin::SearchNotion => &["notion", "pages", "wiki", "docs", "notes"],
+            Builtin::AddToNotion => &["notion", "capture", "save", "note", "clip"],
+            Builtin::AddClipboardToNotion => &["notion", "clipboard", "save"],
             Builtin::Notes => &["floating notes", "raycast notes"],
             Builtin::CreateDictatedNote => &["dictate", "voice note"],
             Builtin::Settings => &["preferences", "config"],
@@ -234,6 +250,12 @@ pub enum Kind {
     Clip(String),
     Emoji(&'static str),
     Note(String),
+    /// A Notion page or database found by Search Notion.
+    Notion(ferrocast_core::notion::NotionItem),
+    /// The last row of Search Notion when more results exist.
+    NotionLoadMore,
+    /// The only row of Search Notion without a token: opens Settings → Integrations.
+    NotionConnect,
     OpenWindow(WindowInfo),
     Process(ferrocast_macos::process::ProcInfo),
     /// Start a countdown of this many seconds with an optional label.
@@ -282,6 +304,10 @@ pub struct Section {
 pub enum Act {
     Run,
     CopyText(String),
+    /// Store this Notion page or database as the capture target.
+    NotionTarget(ferrocast_core::notion::NotionItem),
+    /// Open the Add to Notion form aimed at this page or database (one time; the stored target stays).
+    NotionAddHere(ferrocast_core::notion::NotionItem),
     PasteText(String),
     Reveal(PathBuf),
     QuitApp(i32),

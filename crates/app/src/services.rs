@@ -161,7 +161,46 @@ pub enum Msg {
     WheelRelease,
     /// Model list for the Settings picker, keyed by `models_key`.
     AiModels(String, Result<Vec<String>, String>),
+    /// Result of "Test connection" in Settings → Integrations (Err: the exact toast text).
+    NotionTested(Result<ferrocast_core::notion::BotInfo, String>),
+    /// Result of a Notion search; `request` identifies the search so a stale answer is dropped.
+    NotionSearched {
+        request: u64,
+        result: Result<ferrocast_core::notion::SearchPage, String>,
+    },
+    /// Result of a Search Notion request (`append`: a "Load more" page); `request` drops stale answers.
+    NotionViewSearched {
+        request: u64,
+        append: bool,
+        result: Result<ferrocast_core::notion::SearchPage, NotionViewError>,
+    },
+    /// Result of Add to Notion / Add Clipboard to Notion.
+    NotionAdded(Result<NotionAddDone, NotionAddError>),
     Wake,
+}
+
+/// A capture that reached Notion: the title of the target it was added to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NotionAddDone {
+    pub target_title: String,
+}
+
+/// Why a capture did not (fully) reach Notion.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NotionAddError {
+    /// The Keychain holds no token: nothing was sent.
+    NoToken,
+    /// The exact toast text (a mapped `NotionError`, plus how many parts went through when a long text stopped midway).
+    Failed(String),
+}
+
+/// Why a Search Notion request produced no page.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NotionViewError {
+    /// The Keychain holds no token: nothing was sent.
+    NoToken,
+    /// The exact toast text of the mapped `NotionError`.
+    Failed(String),
 }
 
 #[derive(Clone)]

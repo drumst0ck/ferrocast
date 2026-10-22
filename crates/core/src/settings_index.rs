@@ -1,7 +1,7 @@
 //! Static index of every row of the Settings window, for the Settings search field.
 //!
 //! `ENTRIES` lists the rows by tab (0 General, 1 Clipboard, 2 Snippets, 3 AI, 4 Translate,
-//! 5 Notes, 6 Scripts, 7 Advanced) in the order they are drawn. The title is the exact title of the row;
+//! 5 Notes, 6 Scripts, 7 Integrations, 8 Advanced) in the order they are drawn. The title is the exact title of the row;
 //! a test in the app walks every tab and fails when a drawn row is missing here or an entry is
 //! never drawn.
 
@@ -67,11 +67,17 @@ pub const ENTRIES: &[Entry] = &[
     // 6 Scripts
     e(6, "Default folder", &["scripts", "directory", "path", "raycast", "commands"]),
     e(6, "Add directory", &["scripts", "folder", "path", "extra", "home"]),
-    // 7 Advanced
-    e(7, "Accessibility", &["permission", "privacy", "grant", "window management", "security", "access"]),
-    e(7, "1 rem", &["px", "pixels", "css", "calculator", "em", "units"]),
-    e(7, "Window gap", &["spacing", "margin", "snap", "tiling", "edges", "pt"]),
-    e(7, "Data folder", &["storage", "files", "open", "settings.json", "backup", "location", "path"]),
+    // 7 Integrations
+    e(7, "Notion token", &["notion", "integration", "secret", "keychain", "api", "password", "credential", "connect"]),
+    e(7, "Test connection", &["notion", "check", "verify", "token", "integration", "connected", "workspace"]),
+    e(7, "Capture target", &["notion", "page", "database", "data source", "quick capture", "target", "clear", "save to"]),
+    e(7, "Find a page or database", &["notion", "search", "capture", "target", "choose", "pick", "shared"]),
+    e(7, "Setup guide", &["notion", "integration", "my-integrations", "connections", "share pages", "help", "token"]),
+    // 8 Advanced
+    e(8, "Accessibility", &["permission", "privacy", "grant", "window management", "security", "access"]),
+    e(8, "1 rem", &["px", "pixels", "css", "calculator", "em", "units"]),
+    e(8, "Window gap", &["spacing", "margin", "snap", "tiling", "edges", "pt"]),
+    e(8, "Data folder", &["storage", "files", "open", "settings.json", "backup", "location", "path"]),
 ];
 
 /// Lower-cases and strips the basic Latin accents, one char to one char (so a match position in
@@ -225,9 +231,10 @@ mod tests {
             "the Format Bar toggle stays in the action panel"
         );
         assert_eq!(ENTRIES.iter().filter(|e| e.tab == 5).count(), 3);
-        // the tabs after Notes moved by one
+        // the tabs after Notes moved by one, and Advanced by one more for Integrations
         assert_eq!(titles("default folder"), vec![(6, "Default folder")]);
-        assert_eq!(titles("window gap")[0], (7, "Window gap"));
+        assert_eq!(titles("window gap")[0], (8, "Window gap"), "Advanced moved again when Integrations was added");
+        assert_eq!(titles("notion token")[0], (7, "Notion token"));
     }
 
     #[test]
@@ -242,14 +249,14 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for en in ENTRIES {
             assert!(!en.title.trim().is_empty());
-            assert!(en.tab <= 7, "{} has tab {}", en.title, en.tab);
+            assert!(en.tab <= 8, "{} has tab {}", en.title, en.tab);
             assert!(seen.insert((en.tab, en.title)), "duplicate {} in tab {}", en.title, en.tab);
         }
         let tabs: Vec<usize> = ENTRIES.iter().map(|e| e.tab).collect();
         let mut sorted = tabs.clone();
         sorted.sort();
         assert_eq!(tabs, sorted, "entries are listed by tab");
-        for t in 0..=7 {
+        for t in 0..=8 {
             assert!(ENTRIES.iter().any(|e| e.tab == t), "tab {t} has entries");
         }
     }
