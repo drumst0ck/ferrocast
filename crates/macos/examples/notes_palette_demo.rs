@@ -9,13 +9,14 @@ use std::rc::Rc;
 
 use ferrocast_macos::notes::{self, Event};
 use ferrocast_macos::notes_palette::{self as palette, PaletteItem};
+use ferrocast_macos::notes_theme::{self as theme, Appearance, Rgba};
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, Message};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy, NSEvent,
-    NSEventModifierFlags, NSEventType, NSTextView,
+    NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy, NSBitmapImageRep, NSColor,
+    NSEvent, NSEventModifierFlags, NSEventType, NSTextView,
 };
-use objc2_foundation::{NSDate, NSPoint, NSProcessInfo, NSRange, NSRunLoop, NSString};
+use objc2_foundation::{NSData, NSDate, NSPoint, NSProcessInfo, NSRange, NSRunLoop, NSString};
 
 const NOTE: &str = "# Weekly notes\n\nBuy oat milk and bread.\nCall the dentist on Tuesday.\n\n- ship the palette\n- review the PR";
 
@@ -120,6 +121,110 @@ fn relaunch_in_bundle(args: &[String]) -> ! {
     let ok = status.map(|s| s.success()).unwrap_or(false) && out.contains("notes_palette_demo: all checks passed");
     let _ = std::fs::remove_file(&log);
     std::process::exit(if ok { 0 } else { 1 });
+}
+
+/// Read pixel `(x, y)` (top-left origin) raw, in the snapshot's own colour space.
+fn pixel(rep: &NSBitmapImageRep, x: isize, y: isize) -> (u8, u8, u8) {
+    let c = rep.colorAtX_y(x, y).expect("pixel colour");
+    let f = |v: f64| (v * 255.0).round() as u8;
+    (f(c.redComponent()), f(c.greenComponent()), f(c.blueComponent()))
+}
+
+/// The sRGB colour `c` as stored in `rep`. A snapshot holds what AppKit drew in this Mac's
+/// display profile: grays are unchanged by it but a saturated coral moves by about 10 per
+/// channel, so the expected value is converted into the rep's space before comparing.
+fn in_rep(rep: &NSBitmapImageRep, c: (u8, u8, u8)) -> (u8, u8, u8) {
+    let f = |v: u8| v as f64 / 255.0;
+    let want = NSColor::colorWithSRGBRed_green_blue_alpha(f(c.0), f(c.1), f(c.2), 1.0);
+    let g = |v: f64| (v * 255.0).round() as u8;
+    match want.colorUsingColorSpace(&rep.colorSpace()) {
+        Some(w) => (g(w.redComponent()), g(w.greenComponent()), g(w.blueComponent())),
+        None => c,
+    }
+}
+
+fn close(a: (u8, u8, u8), b: (u8, u8, u8), tol: i32) -> bool {
+    [(a.0, b.0), (a.1, b.1), (a.2, b.2)].iter().all(|&(x, y)| (x as i32 - y as i32).abs() <= tol)
+}
+
+/// T3 (S2, S4, S5, S8): with the palette open, the card, the Sep line, the dimmed backdrop and the
+/// selected row use the chosen appearance whatever the macOS appearance is (the app is forced to
+/// the opposite one).
+fn theme_checks(app: &NSApplication, out: &std::path::Path) {
+    for (name, setting, dark, opposite) in [
+        ("dark", Appearance::Dark, true, unsafe { NSAppearanceNameAqua }),
+        ("light", Appearance::Light, false, unsafe { NSAppearanceNameDarkAqua }),
+    ] {
+        theme::set_appearance(setting);
+        app.setAppearance(NSAppearance::appearanceNamed(opposite).as_deref());
+        palette::set_items(sample());
+        plain(app, "\u{f701}", 125);
+        plain(app, "\u{f701}", 125);
+        pump(300);
+        let t = if dark { theme::DARK } else { theme::LIGHT };
+        let bg = theme::window_bg(dark);
+        let path = out.join(format!("palette-theme-{name}.png"));
+        check(&format!("theme {name}: palette snapshot written"), palette::snapshot_png(&path), "failed");
+        let rep = std::fs::read(&path).ok().and_then(|d| NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(&d)));
+        let Some(rep) = rep else {
+            check(&format!("theme {name}: palette snapshot readable"), false, "no image");
+            continue;
+        };
+        let content =
+            app.keyWindow().and_then(|w| w.contentView()).map(|v| v.bounds().size).unwrap_or(objc2_foundation::NSSize::new(560.0, 420.0));
+        let scale = rep.pixelsWide() as f64 / content.width;
+        let at = |x: f64, y: f64| pixel(&rep, (x * scale) as isize, (y * scale) as isize);
+        let (cw, _) = palette::card_size().unwrap_or((420.0, 0.0));
+        let card_x = (content.width - cw) / 2.0;
+        // search row, right of the field text: card background (top-origin: 52 pt margin + 22)
+        let got_bg = at(card_x + cw - 6.0, 52.0 + 22.0);
+        check(
+            &format!("theme {name}: palette card is the opaque Bg token"),
+            close(got_bg, in_rep(&rep, bg), 3),
+            &format!("got {got_bg:?} want {:?}", in_rep(&rep, bg)),
+        );
+        // the search field has no fill or border of its own: the same pixel row left of the caret area
+        let got_field = at(card_x + 200.0, 52.0 + 8.0);
+        check(
+            &format!("theme {name}: search field has no fill (card Bg shows)"),
+            close(got_field, in_rep(&rep, bg), 3),
+            &format!("got {got_field:?}"),
+        );
+        // dimmed backdrop outside the card: window bg under black at 35% (dark) / 18% (light)
+        let dim = if dark { 89 } else { 46 };
+        let want_dim = theme::composite_over(Rgba(0, 0, 0, dim), Rgba(bg.0, bg.1, bg.2, 255));
+        let got_dim = at(8.0, content.height - 120.0);
+        check(
+            &format!("theme {name}: backdrop is Bg dimmed by black ({}%)", if dark { 35 } else { 18 }),
+            close(got_dim, in_rep(&rep, want_dim), 6),
+            &format!("got {got_dim:?} want {:?}", in_rep(&rep, want_dim)),
+        );
+        // selected row: left of the glyph, inside the coral fill
+        match (palette::selected_item_id().and_then(|id| palette::row_window_point(&id)), palette::selected_item_id()) {
+            (Some((px, py)), Some(id)) => {
+                let got_sel = at(px - 58.0, content.height - py);
+                check(
+                    &format!("theme {name}: selected row ({id}) is the Accent token"),
+                    close(got_sel, in_rep(&rep, (t.accent.0, t.accent.1, t.accent.2)), 6),
+                    &format!("got {got_sel:?} want {:?}", in_rep(&rep, (t.accent.0, t.accent.1, t.accent.2))),
+                );
+            }
+            _ => check(&format!("theme {name}: selected row has a position"), false, "none"),
+        }
+        // the Sep line is the last point row of the 44 pt search area (top-origin: 52 pt margin + 43.5)
+        let want_sep = theme::composite_over(t.sep, Rgba(bg.0, bg.1, bg.2, 255));
+        let got_sep = at(card_x + cw - 6.0, 52.0 + 43.5);
+        check(
+            &format!("theme {name}: Sep line under the search field"),
+            !close(got_sep, got_bg, 1) && close(got_sep, in_rep(&rep, want_sep), 6),
+            &format!("got {got_sep:?} want {:?}", in_rep(&rep, want_sep)),
+        );
+        println!("      {}", path.display());
+    }
+    theme::set_appearance(Appearance::System);
+    app.setAppearance(None);
+    check("theme: restored to System", theme::appearance() == Appearance::System, "");
+    pump(100);
 }
 
 fn editor(app: &NSApplication) -> Option<Retained<NSTextView>> {
@@ -430,6 +535,7 @@ fn main() {
     }
     app.setAppearance(None);
     pump(100);
+    theme_checks(&app, &out);
 
     // --- Esc at the root closes the palette, not the window
     palette::set_items(sample());

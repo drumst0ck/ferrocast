@@ -9,8 +9,9 @@ use std::rc::Rc;
 
 use ferrocast_macos::notes_format::Format;
 use ferrocast_macos::notes_popups::{
-    emoji_items, slash_items, FormatBar, Item, Rect, SuggestionPopup, MAX_VISIBLE_ROWS, POPUP_PAD, ROW_HEIGHT,
+    emoji_items, slash_items, FormatBar, Item, Rect, SuggestionPopup, MAX_VISIBLE_ROWS, POPUP_PAD, POPUP_WIDTH, ROW_HEIGHT,
 };
+use ferrocast_macos::notes_theme::{self as theme, Appearance, Rgba};
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, Message};
 use objc2_app_kit::{
@@ -18,7 +19,7 @@ use objc2_app_kit::{
     NSBackingStoreType, NSBitmapImageFileType, NSBitmapImageRep, NSButton, NSColor, NSControlStateValueOn, NSEvent, NSEventModifierFlags,
     NSEventType, NSFont, NSImage, NSScrollView, NSTextView, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSDate, NSDictionary, NSPoint, NSProcessInfo, NSRect, NSRunLoop, NSSize, NSString};
+use objc2_foundation::{NSData, NSDate, NSDictionary, NSPoint, NSProcessInfo, NSRect, NSRunLoop, NSSize, NSString};
 
 const WIN_W: f64 = 560.0;
 const WIN_H: f64 = 420.0;
@@ -150,6 +151,226 @@ fn snapshot(window: &NSWindow, popup: Option<&SuggestionPopup>, path: &Path) -> 
         return false;
     };
     data.writeToFile_atomically(&NSString::from_str(&path.to_string_lossy()), true)
+}
+
+/// Read pixel `(x, y)` (top-left origin) raw, in the snapshot's own colour space.
+fn pixel(rep: &NSBitmapImageRep, x: isize, y: isize) -> (u8, u8, u8) {
+    let c = rep.colorAtX_y(x, y).expect("pixel colour");
+    let f = |v: f64| (v * 255.0).round() as u8;
+    (f(c.redComponent()), f(c.greenComponent()), f(c.blueComponent()))
+}
+
+/// The sRGB colour `c` as stored in `rep`. A snapshot holds what AppKit drew in this Mac's
+/// display profile: grays are unchanged by it but a saturated coral moves by about 10 per
+/// channel, so the expected value is converted into the rep's space before comparing.
+fn in_rep(rep: &NSBitmapImageRep, c: (u8, u8, u8)) -> (u8, u8, u8) {
+    let f = |v: u8| v as f64 / 255.0;
+    let want = NSColor::colorWithSRGBRed_green_blue_alpha(f(c.0), f(c.1), f(c.2), 1.0);
+    let g = |v: f64| (v * 255.0).round() as u8;
+    match want.colorUsingColorSpace(&rep.colorSpace()) {
+        Some(w) => (g(w.redComponent()), g(w.greenComponent()), g(w.blueComponent())),
+        None => c,
+    }
+}
+
+fn close(a: (u8, u8, u8), b: (u8, u8, u8), tol: i32) -> bool {
+    [(a.0, b.0), (a.1, b.1), (a.2, b.2)].iter().all(|&(x, y)| (x as i32 - y as i32).abs() <= tol)
+}
+
+fn rgb(c: Rgba) -> (u8, u8, u8) {
+    (c.0, c.1, c.2)
+}
+
+/// T3 (S7): contrast of the combinations the overlays use, printed and asserted.
+fn contrast_report() {
+    println!("contrast (WCAG 2, ratio : 1)");
+    println!("  {:<44} {:>6} {:>6}", "combination", "dark", "light");
+    type Row = (&'static str, fn(bool) -> f64, f64);
+    let rows: [Row; 8] = [
+        (
+            "accent ink #1a0709 on Accent fill",
+            |d| {
+                let t = if d { theme::DARK } else { theme::LIGHT };
+                theme::contrast_ratio((26, 7, 9), rgb(t.accent))
+            },
+            4.5,
+        ),
+        (
+            "accent ink at 70% on Accent fill (shortcut)",
+            |d| {
+                let t = if d { theme::DARK } else { theme::LIGHT };
+                theme::contrast_ratio(theme::composite_over(Rgba(26, 7, 9, 179), t.accent), rgb(t.accent))
+            },
+            3.0,
+        ),
+        (
+            "Text on Bg",
+            |d| {
+                let t = if d { theme::DARK } else { theme::LIGHT };
+                let bg = theme::window_bg(d);
+                theme::contrast_ratio(rgb(t.text), bg)
+            },
+            4.5,
+        ),
+        (
+            "SubStrong on Bg",
+            |d| {
+                let t = if d { theme::DARK } else { theme::LIGHT };
+                theme::contrast_ratio(rgb(t.sub_strong), theme::window_bg(d))
+            },
+            4.5,
+        ),
+        (
+            "Sub on Bg (hints, icons, placeholder)",
+            |d| {
+                let t = if d { theme::DARK } else { theme::LIGHT };
+                theme::contrast_ratio(rgb(t.sub), theme::window_bg(d))
+            },
+            3.0,
+        ),
+        (
+            "AccentText over 18% Accent tint on Bg",
+            |d| {
+                let t = if d { theme::DARK } else { theme::LIGHT };
+                let bg = theme::window_bg(d);
+                let tint = theme::composite_over(Rgba(t.accent.0, t.accent.1, t.accent.2, 46), Rgba(bg.0, bg.1, bg.2, 255));
+                theme::contrast_ratio(rgb(t.accent_text), tint)
+            },
+            4.5,
+        ),
+        (
+            "AccentText on Bg",
+            |d| {
+                let t = if d { theme::DARK } else { theme::LIGHT };
+                theme::contrast_ratio(rgb(t.accent_text), theme::window_bg(d))
+            },
+            4.5,
+        ),
+        (
+            "Danger on Bg",
+            |d| {
+                let t = if d { theme::DARK } else { theme::LIGHT };
+                theme::contrast_ratio(rgb(t.danger), theme::window_bg(d))
+            },
+            4.5,
+        ),
+    ];
+    for (name, f, min) in rows {
+        let (d, l) = (f(true), f(false));
+        println!("  {name:<44} {d:>6.2} {l:>6.2}");
+        check(&format!("contrast: {name} >= {min}"), d >= min && l >= min, &format!("dark {d:.2} light {l:.2}"));
+    }
+}
+
+/// T3 (S2, S4, S5, S8): the pop-up card, the selected row and the Format Bar follow the chosen
+/// appearance whatever the macOS appearance is (the app is forced to the opposite one).
+fn theme_checks(app: &NSApplication, window: &NSWindow, popup: &SuggestionPopup, bar: &FormatBar, out: &Path) {
+    let menu = slash_items("");
+    let items: Vec<Item> = menu.iter().map(|(_, i)| i.clone()).collect();
+    let wf = window.frame();
+    let anchor = Rect { x: wf.origin.x + 40.0, y: wf.origin.y + wf.size.height - 120.0, w: 2.0, h: 16.0 };
+    for (name, setting, dark, opposite) in [
+        ("dark", Appearance::Dark, true, unsafe { NSAppearanceNameAqua }),
+        ("light", Appearance::Light, false, unsafe { NSAppearanceNameDarkAqua }),
+    ] {
+        theme::set_appearance(setting);
+        app.setAppearance(NSAppearance::appearanceNamed(opposite).as_deref());
+        theme::apply_to(window);
+        bar.set_active(&[Format::Bold]);
+        pump(300);
+        let t = if dark { theme::DARK } else { theme::LIGHT };
+        let bg = theme::window_bg(dark);
+        let bg4 = Rgba(bg.0, bg.1, bg.2, 255);
+
+        // pop-up: card background in the top padding, selected row at its left edge
+        popup.show(anchor, items.clone());
+        popup.move_selection(1);
+        pump(300);
+        let path = out.join(format!("popup-theme-{name}.png"));
+        let ok = popup.snapshot_png(&path);
+        let rep = std::fs::read(&path).ok().and_then(|d| NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(&d)));
+        match (ok, rep) {
+            (true, Some(rep)) => {
+                let scale = rep.pixelsWide() as f64 / POPUP_WIDTH;
+                let at = |x: f64, y: f64| pixel(&rep, (x * scale) as isize, (y * scale) as isize);
+                let got_bg = at(POPUP_WIDTH / 2.0, 2.5);
+                check(
+                    &format!("theme {name}: pop-up card is the opaque Bg token"),
+                    close(got_bg, in_rep(&rep, bg), 3),
+                    &format!("got {got_bg:?} want {bg:?}"),
+                );
+                let got_sel = at(6.0, POPUP_PAD + 1.5 * ROW_HEIGHT);
+                check(
+                    &format!("theme {name}: selected pop-up row is the Accent token"),
+                    close(got_sel, in_rep(&rep, rgb(t.accent)), 6),
+                    &format!("got {got_sel:?} want {:?}", rgb(t.accent)),
+                );
+                let got_row0 = at(6.0, POPUP_PAD + 0.5 * ROW_HEIGHT);
+                check(
+                    &format!("theme {name}: an unselected row stays on the card"),
+                    close(got_row0, in_rep(&rep, bg), 3),
+                    &format!("got {got_row0:?}"),
+                );
+                let want_border = theme::composite_over(t.border, bg4);
+                let got_border = at(POPUP_WIDTH / 2.0, 0.25);
+                check(
+                    &format!("theme {name}: pop-up has the 1 pt Border token"),
+                    close(got_border, in_rep(&rep, want_border), 6),
+                    &format!("got {got_border:?} want {want_border:?}"),
+                );
+            }
+            _ => check(&format!("theme {name}: pop-up snapshot readable"), false, "no image"),
+        }
+        println!("      {}", path.display());
+        popup.hide();
+
+        // Format Bar: background, hairline, active tint
+        let view = bar.view();
+        let b = view.bounds();
+        let Some(rep) = view.bitmapImageRepForCachingDisplayInRect(b) else {
+            check(&format!("theme {name}: bar snapshot readable"), false, "no rep");
+            continue;
+        };
+        view.cacheDisplayInRect_toBitmapImageRep(b, &rep);
+        let scale = rep.pixelsWide() as f64 / b.size.width;
+        let at = |x: f64, y: f64| pixel(&rep, (x * scale) as isize, (y * scale) as isize);
+        let got_bg = at(b.size.width - 6.0, 18.0);
+        check(
+            &format!("theme {name}: Format Bar is the opaque Bg token"),
+            close(got_bg, in_rep(&rep, bg), 3),
+            &format!("got {got_bg:?} want {bg:?}"),
+        );
+        let want_sep = theme::composite_over(t.sep, bg4);
+        let got_sep = at(b.size.width - 6.0, 0.25);
+        check(
+            &format!("theme {name}: Format Bar top hairline is the Sep token"),
+            close(got_sep, in_rep(&rep, want_sep), 6),
+            &format!("got {got_sep:?} want {want_sep:?}"),
+        );
+        // Blend in the rep's space (the display profile is not linear against sRGB for a coral).
+        let (ar, ag, ab) = in_rep(&rep, rgb(t.accent));
+        let (br, bgc, bb) = in_rep(&rep, bg);
+        let want_tint = theme::composite_over(Rgba(ar, ag, ab, 46), Rgba(br, bgc, bb, 255));
+        let got_tint = at(15.0, 18.0);
+        check(
+            &format!("theme {name}: active button is the Accent token at 18%"),
+            close(got_tint, want_tint, 6),
+            &format!("got {got_tint:?} want {want_tint:?}"),
+        );
+        let got_idle = at(15.0 + 28.0 + 2.0, 18.0);
+        check(&format!("theme {name}: idle button stays on the bar"), close(got_idle, in_rep(&rep, bg), 3), &format!("got {got_idle:?}"));
+        if let Some(png) = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) } {
+            let p = out.join(format!("bar-theme-{name}.png"));
+            png.writeToFile_atomically(&NSString::from_str(&p.to_string_lossy()), true);
+            println!("      {}", p.display());
+        }
+    }
+    bar.set_active(&[]);
+    theme::set_appearance(Appearance::System);
+    app.setAppearance(None);
+    theme::apply_to(window);
+    check("theme: restored to System", theme::appearance() == Appearance::System, "");
+    pump(100);
 }
 
 fn main() {
@@ -408,6 +629,8 @@ fn main() {
         println!("      {}", p.display());
         popup.hide();
     }
+    contrast_report();
+    theme_checks(&app, &window, &popup, &bar, &out);
     window.orderOut(None);
 
     let failures = FAILURES.with(|f| f.borrow().clone());

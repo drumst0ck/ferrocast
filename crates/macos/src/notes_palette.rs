@@ -4,6 +4,10 @@
 //! on top and a list below. The controller owns the data and the decisions: the palette only
 //! reports query edits, picks and closes through callbacks. All AppKit calls happen on the
 //! main thread; the selection / layout helpers are pure and unit-tested below.
+//!
+//! Look (T3, S2/S4/S8): colours are `notes_theme` dynamic tokens; the overlay is a subview of the
+//! Notes window, so it follows the window's appearance. Text on the coral selection uses the
+//! accent ink #1a0709 (D4).
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -11,14 +15,17 @@ use std::rc::Rc;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, AllocAnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBezierPath, NSBox, NSBoxType, NSColor, NSControlTextEditingDelegate, NSEvent, NSEventModifierFlags,
-    NSEventType, NSFocusRingType, NSFont, NSFontWeightSemibold, NSImage, NSImageScaling, NSImageView, NSLineBreakMode, NSScrollView,
-    NSTextAlignment, NSTextField, NSTextFieldDelegate, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
-    NSVisualEffectView,
+    NSAppearanceCustomization, NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSControlTextEditingDelegate, NSEvent,
+    NSEventModifierFlags, NSEventType, NSFocusRingType, NSFont, NSFontAttributeName, NSFontWeightMedium, NSForegroundColorAttributeName,
+    NSImage, NSImageScaling, NSImageView, NSLineBreakMode, NSScrollView, NSTextAlignment, NSTextField, NSTextFieldDelegate, NSTextView,
+    NSView,
 };
-use objc2_foundation::{NSNotification, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSAttributedString, NSDictionary, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+
+use crate::notes_popups::{accent_ink, token_fill, CardView, TokenFill, INK_SOFT_ALPHA};
+use crate::notes_theme::{self as theme, Token};
 
 /// One row of the palette.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -32,7 +39,7 @@ pub struct PaletteItem {
     pub accessory: Option<String>,
     /// Consecutive rows with the same section sit under one small grey header.
     pub section: Option<String>,
-    /// Title and glyph in the system red.
+    /// Title and glyph in the `Danger` color.
     pub danger: bool,
     /// Draws a chevron (opens a submenu).
     pub has_children: bool,
@@ -49,6 +56,8 @@ const ROW_H_COMPACT: f64 = 28.0;
 const HEADER_ROW_H: f64 = 26.0;
 const LIST_PAD: f64 = 4.0;
 const ROW_INSET: f64 = 6.0;
+/// Corner radius of the selected row.
+const ROW_RADIUS: f64 = 8.0;
 const EMPTY_H: f64 = 64.0;
 const ACCESSORY_W: f64 = 80.0;
 const CHEVRON_W: f64 = 18.0;
@@ -231,11 +240,10 @@ struct RowViews {
 
 struct Ui {
     root: Retained<RootView>,
-    card: Retained<NSVisualEffectView>,
-    backing: Retained<BackingView>,
+    card: Retained<CardView>,
     icon: Retained<NSImageView>,
     field: Retained<NSTextField>,
-    sep: Retained<NSBox>,
+    sep: Retained<TokenFill>,
     scroll: Retained<NSScrollView>,
     rows_view: Retained<RowsView>,
     empty: Retained<NSTextField>,
@@ -306,8 +314,9 @@ define_class!(
             });
             if let Some((y, h)) = rect_sel {
                 let w = self.bounds().size.width;
-                NSColor::controlAccentColor().setFill();
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect(ROW_INSET, y, w - 2.0 * ROW_INSET, h), 6.0, 6.0).fill();
+                theme::color(Token::Accent).setFill();
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect(ROW_INSET, y, w - 2.0 * ROW_INSET, h), ROW_RADIUS, ROW_RADIUS)
+                    .fill();
             }
         }
 
@@ -351,7 +360,9 @@ define_class!(
 
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
-            NSColor::blackColor().colorWithAlphaComponent(0.28).setFill();
+            // Backdrop dim: black at 35% in dark, 18% in light.
+            let alpha = if theme::is_dark_appearance(&self.effectiveAppearance()) { 0.35 } else { 0.18 };
+            NSColor::blackColor().colorWithAlphaComponent(alpha).setFill();
             NSBezierPath::fillRect(self.bounds());
         }
 
@@ -377,24 +388,6 @@ define_class!(
     }
 
     unsafe impl NSObjectProtocol for RootView {}
-);
-
-define_class!(
-    /// Near-opaque card base drawn with a semantic color (resolved per appearance at draw time).
-    #[unsafe(super(NSView))]
-    #[thread_kind = MainThreadOnly]
-    #[name = "FerrocastPaletteBacking"]
-    struct BackingView;
-
-    impl BackingView {
-        #[unsafe(method(drawRect:))]
-        fn draw_rect(&self, _dirty: NSRect) {
-            NSColor::windowBackgroundColor().colorWithAlphaComponent(0.94).setFill();
-            NSBezierPath::fillRect(self.bounds());
-        }
-    }
-
-    unsafe impl NSObjectProtocol for BackingView {}
 );
 
 define_class!(
@@ -428,6 +421,14 @@ fn label(mtm: MainThreadMarker, text: &str, size: f64, align: NSTextAlignment) -
     l
 }
 
+/// Attributed string with a font and a (dynamic) colour, for the placeholder.
+fn attributed(text: &str, font: &NSFont, color: &NSColor) -> Retained<NSAttributedString> {
+    let (k1, k2) = unsafe { (NSFontAttributeName, NSForegroundColorAttributeName) };
+    let attrs: Retained<NSDictionary<NSString, AnyObject>> =
+        NSDictionary::from_slices(&[k1, k2], &[font as &AnyObject, color as &AnyObject]);
+    unsafe { NSAttributedString::initWithString_attributes(NSAttributedString::alloc(), &NSString::from_str(text), Some(&attrs)) }
+}
+
 fn symbol(name: &str) -> Option<Retained<NSImage>> {
     NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
 }
@@ -444,33 +445,28 @@ fn build(mtm: MainThreadMarker) -> Rc<Ui> {
     let root: Retained<RootView> = unsafe { msg_send![mtm.alloc::<RootView>(), initWithFrame: frame] };
     root.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
 
-    let card = NSVisualEffectView::initWithFrame(mtm.alloc::<NSVisualEffectView>(), rect(0.0, 0.0, CARD_W, 200.0));
-    card.setMaterial(NSVisualEffectMaterial::Popover);
-    card.setBlendingMode(NSVisualEffectBlendingMode::WithinWindow);
-    card.setState(NSVisualEffectState::Active);
+    // Opaque `Bg` card with a 1 pt `Border` (drawn by the view, no vibrancy) and a soft shadow;
+    // the shadow follows the card's rounded alpha, and the root does not clip it.
+    let card: Retained<CardView> = unsafe { msg_send![mtm.alloc::<CardView>(), initWithFrame: rect(0.0, 0.0, CARD_W, 200.0)] };
     card.setWantsLayer(true);
     unsafe {
         let layer: Option<Retained<AnyObject>> = msg_send![&*card, layer];
         if let Some(layer) = layer {
-            let _: () = msg_send![&*layer, setCornerRadius: 12.0f64];
-            let _: () = msg_send![&*layer, setMasksToBounds: true];
-            let _: () = msg_send![&*layer, setBorderWidth: 1.0f64];
-            // Hairline in the semantic separator color (resolved for the current appearance).
-            let color = NSColor::separatorColor().CGColor();
-            let _: () = msg_send![&*layer, setBorderColor: &*color];
+            let black = NSColor::blackColor().CGColor();
+            let _: () = msg_send![&*layer, setShadowColor: &*black];
+            let _: () = msg_send![&*layer, setShadowOpacity: 0.3f32];
+            let _: () = msg_send![&*layer, setShadowRadius: 18.0f64];
+            let _: () = msg_send![&*layer, setShadowOffset: NSSize::new(0.0, -6.0)];
+            let _: () = msg_send![&*layer, setMasksToBounds: false];
         }
     }
     root.addSubview(&card);
-
-    // Near-opaque base under the vibrancy so the note behind never competes with the rows.
-    let backing: Retained<BackingView> = unsafe { msg_send![mtm.alloc::<BackingView>(), initWithFrame: rect(0.0, 0.0, CARD_W, 200.0)] };
-    card.addSubview(&backing);
 
     let target: Retained<PaletteTarget> = unsafe { msg_send![mtm.alloc::<PaletteTarget>(), init] };
 
     let icon = symbol_view(mtm, "magnifyingglass")
         .unwrap_or_else(|| NSImageView::initWithFrame(mtm.alloc::<NSImageView>(), rect(0.0, 0.0, 16.0, 16.0)));
-    icon.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+    icon.setContentTintColor(Some(&theme::color(Token::Sub)));
     card.addSubview(&icon);
 
     let field = NSTextField::initWithFrame(mtm.alloc::<NSTextField>(), rect(0.0, 0.0, 300.0, 22.0));
@@ -481,13 +477,12 @@ fn build(mtm: MainThreadMarker) -> Rc<Ui> {
     field.setEditable(true);
     field.setSelectable(true);
     field.setFont(Some(&NSFont::systemFontOfSize(16.0)));
-    field.setTextColor(Some(&NSColor::labelColor()));
+    field.setTextColor(Some(&theme::color(Token::Text)));
     let delegate: &ProtocolObject<dyn NSTextFieldDelegate> = ProtocolObject::from_ref(&*target);
     unsafe { field.setDelegate(Some(delegate)) };
     card.addSubview(&field);
 
-    let sep = NSBox::initWithFrame(mtm.alloc::<NSBox>(), rect(0.0, 0.0, CARD_W, 1.0));
-    sep.setBoxType(NSBoxType::Separator);
+    let sep = token_fill(mtm, rect(0.0, 0.0, CARD_W, 1.0), Token::Sep);
     card.addSubview(&sep);
 
     let scroll = NSScrollView::initWithFrame(mtm.alloc::<NSScrollView>(), rect(0.0, 0.0, CARD_W, 100.0));
@@ -500,11 +495,12 @@ fn build(mtm: MainThreadMarker) -> Rc<Ui> {
     card.addSubview(&scroll);
 
     let empty = label(mtm, "", 13.0, NSTextAlignment::Center);
-    empty.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    // The empty-state message carries meaning: `SubStrong` keeps 4.5:1 in both themes.
+    empty.setTextColor(Some(&theme::color(Token::SubStrong)));
     empty.setHidden(true);
     card.addSubview(&empty);
 
-    Rc::new(Ui { root, card, backing, icon, field, sep, scroll, rows_view, empty, labels: RefCell::new(Vec::new()), _target: target })
+    Rc::new(Ui { root, card, icon, field, sep, scroll, rows_view, empty, labels: RefCell::new(Vec::new()), _target: target })
 }
 
 fn ensure_ui(mtm: MainThreadMarker) -> Rc<Ui> {
@@ -529,10 +525,10 @@ fn refresh() {
     let h = SEARCH_H + lh;
     ui.card.setFrame(rect((size.width - w) / 2.0, TOP_MARGIN, w, h));
     // Card coordinates are bottom-up: the list sits at the bottom, the search row on top.
-    ui.backing.setFrame(rect(0.0, 0.0, w, h));
     ui.icon.setFrame(rect(14.0, lh + (SEARCH_H - 16.0) / 2.0, 16.0, 16.0));
     ui.field.setFrame(rect(40.0, lh + (SEARCH_H - 22.0) / 2.0, w - 40.0 - 14.0, 22.0));
-    ui.field.setPlaceholderString(Some(&NSString::from_str(&placeholder)));
+    let placeholder = attributed(&placeholder, &NSFont::systemFontOfSize(16.0), &theme::color(Token::Sub));
+    ui.field.setPlaceholderAttributedString(Some(&placeholder));
     ui.sep.setFrame(rect(0.0, lh, w, 1.0));
     ui.scroll.setFrame(rect(0.0, 0.0, w, lh));
     ui.rows_view.setFrame(rect(0.0, 0.0, w, ch.max(lh)));
@@ -551,8 +547,8 @@ fn refresh() {
         match row {
             RowKind::Header(text) => {
                 let l = label(mtm, text, 11.0, NSTextAlignment::Left);
-                l.setFont(Some(&NSFont::systemFontOfSize_weight(11.0, unsafe { NSFontWeightSemibold })));
-                l.setTextColor(Some(&NSColor::secondaryLabelColor()));
+                l.setFont(Some(&NSFont::systemFontOfSize_weight(11.0, unsafe { NSFontWeightMedium })));
+                l.setTextColor(Some(&theme::color(Token::SubStrong)));
                 l.setFrame(rect(16.0, y + rh - 18.0, w - 32.0, 14.0));
                 ui.rows_view.addSubview(&l);
                 labels.push(RowViews { glyph: None, title: None, subtitle: None, accessory: None, chevron: None, danger: false });
@@ -611,21 +607,24 @@ fn refresh() {
     scroll_to_selected();
 }
 
-/// Semantic colors; the selected row sits on the accent color with white text.
+/// Theme token colors. The selected row is a coral `Accent` fill with the accent ink (the
+/// shortcut and the chevron at 70%), also for a danger row; other danger rows use `Danger`.
 fn restyle() {
     let Some(ui) = ui() else { return };
     let selected = st(|s| s.selected);
     for (i, l) in ui.labels.borrow().iter().enumerate() {
         let on = selected == Some(i);
-        let white = NSColor::alternateSelectedControlTextColor();
         let main = if on {
-            white.clone()
+            accent_ink(1.0)
         } else if l.danger {
-            NSColor::systemRedColor()
+            theme::color(Token::Danger)
         } else {
-            NSColor::labelColor()
+            theme::color(Token::Text)
         };
-        let soft = if on { white.colorWithAlphaComponent(0.8) } else { NSColor::secondaryLabelColor() };
+        // Accessories (shortcuts) and chevrons are hints: `Sub`. The subtitle carries meaning, so
+        // it is `SubStrong` (4.5:1) and the full ink on the selected row.
+        let soft = if on { accent_ink(INK_SOFT_ALPHA) } else { theme::color(Token::Sub) };
+        let subtitle = if on { accent_ink(1.0) } else { theme::color(Token::SubStrong) };
         if let Some(g) = &l.glyph {
             g.set_color(&main);
         }
@@ -633,7 +632,7 @@ fn restyle() {
             t.setTextColor(Some(&main));
         }
         if let Some(t) = &l.subtitle {
-            t.setTextColor(Some(&soft));
+            t.setTextColor(Some(&subtitle));
         }
         if let Some(t) = &l.accessory {
             t.setTextColor(Some(&soft));
@@ -776,6 +775,12 @@ pub fn show(placeholder: &str, items: Vec<PaletteItem>) {
     set_level(placeholder, items, None);
     if let Some(window) = ui.root.window() {
         let _ = window.makeFirstResponder(Some(&ui.field));
+    }
+    // Caret in the accent (S4): the field editor is the window's shared text view.
+    if let Some(editor) = ui.field.currentEditor() {
+        if let Some(tv) = editor.downcast_ref::<NSTextView>() {
+            tv.setInsertionPointColor(Some(&theme::color(Token::Accent)));
+        }
     }
 }
 

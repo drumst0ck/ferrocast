@@ -642,6 +642,11 @@ pub(crate) fn apply_theme_to_window() {
             c.setNeedsDisplay(true);
         }
     }
+    // The pop-up panels are separate windows: they follow the setting too.
+    let popups = POPUPS.with(|p| p.try_borrow().ok().map(|p| [p.slash.clone(), p.emoji.clone()]));
+    for popup in popups.into_iter().flatten().flatten() {
+        popup.apply_theme();
+    }
 }
 
 /// Retained handles to the window parts, creating the window on first use.
@@ -820,6 +825,7 @@ fn to_popup_rect(a: Anchor) -> PopupRect {
 
 fn make_popup(on_pick: fn(usize)) -> Rc<SuggestionPopup> {
     let p = Rc::new(SuggestionPopup::new());
+    p.apply_theme();
     p.set_on_pick(Box::new(on_pick));
     p
 }
