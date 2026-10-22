@@ -716,13 +716,18 @@ impl App {
                     self.tour.go(n);
                 }
                 Action::Finish => self.pop(),
+                // The launcher floats above every window, so hide it before macOS opens its
+                // prompt or System Settings; the hotkey brings the tour back where it was.
                 Action::GrantAccessibility => {
+                    self.hide();
                     windows::accessibility_trusted(true);
                 }
                 Action::GrantInputMonitoring => {
+                    self.hide();
                     windows::request_input_monitoring();
                 }
                 Action::OpenPane(pane) => {
+                    self.hide();
                     let _ = std::process::Command::new("/usr/bin/open")
                         .arg(format!("x-apple.systempreferences:com.apple.preference.security?{pane}"))
                         .status();
