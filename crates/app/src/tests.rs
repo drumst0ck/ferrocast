@@ -8388,6 +8388,44 @@ fn notes_command_toggles_the_window() {
 }
 
 #[test]
+fn create_dictated_note_command_exists_with_its_keywords_and_the_notes_icon() {
+    let app = fixture();
+    let item = app.base.iter().find(|i| i.id == "builtin:create-dictated-note").expect("command");
+    assert_eq!(item.title, "Create Dictated Note");
+    assert!(item.keywords.iter().any(|k| k == "dictate") && item.keywords.iter().any(|k| k == "voice note"));
+    assert_eq!(item.icon, app.base.iter().find(|i| i.id == "builtin:notes").unwrap().icon);
+    assert!(item.is_command(), "it takes a hotkey like the other Notes commands");
+}
+
+#[test]
+fn create_dictated_note_command_opens_a_note_and_starts_dictation_through_the_fake_window() {
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1)]);
+    app.run_builtin(Builtin::CreateDictatedNote);
+    assert_eq!(app.notes.len(), 2);
+    assert!(st.borrow().visible && st.borrow().dict_active);
+    assert!(matches!(app.view(), View::Root));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_ferrocast_url_message_hides_the_launcher_and_opens_the_note() {
+    use crate::notes_ctl::NMsg;
+    use ferrocast_macos::url_scheme::Route;
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.visible = true;
+    app.bus.send(Msg::Notes(NMsg::Url(Route::Note("b".into()))));
+    app.drain();
+    assert!(!app.visible, "the launcher steps aside first");
+    assert_eq!(app.notes_ctl.current.as_deref(), Some("b"));
+    assert!(st.borrow().visible);
+    app.bus.send(Msg::Notes(NMsg::Url(Route::Note("zzz".into()))));
+    app.drain();
+    assert_eq!(app.notes.len(), 2, "an unknown id creates nothing");
+    assert_eq!(app.notes_ctl.current.as_deref(), Some("b"));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
 fn note_pin_and_delete_from_search_notes_need_no_confirmation() {
     let (mut app, _) = notes_app(vec![notes_note("a", "Alpha", 1)]);
     app.stack = vec![View::Root, View::Notes];

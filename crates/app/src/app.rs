@@ -987,7 +987,7 @@ impl App {
         if store_rates.is_stale(now_secs()) {
             services::refresh_rates(bus.clone());
         }
-        let notes_ctl = crate::notes_ctl::NotesCtl::new(Box::new(crate::notes_ctl::MacFx { bus: bus.clone(), shared: shared.clone() }));
+        let notes_ctl = crate::notes_ctl::NotesCtl::new(Box::new(crate::notes_ctl::MacFx::new(bus.clone(), shared.clone())));
         let mut app = App {
             update_poller,
             icons: IconCache::new(store.images_dir()).with_bus(bus.clone()),
@@ -1796,6 +1796,8 @@ impl App {
             }
             match m {
                 Msg::Wake => {}
+                // a URL comes from outside: the launcher steps aside like for any Notes command
+                Msg::Notes(m @ crate::notes_ctl::NMsg::Url(_)) => self.open_notes_window(|c, d| c.handle(m, d)),
                 Msg::Notes(m) => self.notes_do(|c, d| c.handle(m, d)),
                 Msg::UpdateChecked { manual, result } => {
                     let exe = instance::running_exe().unwrap_or_default();
@@ -2470,7 +2472,8 @@ impl App {
                             if let Some(item) = self.base.iter().find(|i| i.id == cmd).cloned() {
                                 self.prev_pid = running::frontmost().map(|f| f.pid).filter(|p| *p != std::process::id() as i32);
                                 // the Notes commands open their own floating window, not the launcher
-                                let own_window = matches!(item.kind, Kind::Builtin(Builtin::Notes | Builtin::CreateNote));
+                                let own_window =
+                                    matches!(item.kind, Kind::Builtin(Builtin::Notes | Builtin::CreateNote | Builtin::CreateDictatedNote));
                                 let needs_ui =
                                     !own_window && matches!(item.kind, Kind::Builtin(_) | Kind::Quicklink { .. } | Kind::Script(_));
                                 if needs_ui && !self.visible {
@@ -4163,6 +4166,7 @@ impl App {
             Builtin::SearchNotes => self.push(View::Notes),
             Builtin::Notes => self.open_notes_window(|c, d| c.toggle(d)),
             Builtin::CreateNote => self.open_notes_window(|c, d| c.create_note(d)),
+            Builtin::CreateDictatedNote => self.open_notes_window(|c, d| c.create_dictated_note(d)),
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
             Builtin::OpenScriptsFolder => {
                 let d = self.store.scripts_dir();
