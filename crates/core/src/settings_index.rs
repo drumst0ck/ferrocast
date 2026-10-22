@@ -1,13 +1,13 @@
 //! Static index of every row of the Settings window, for the Settings search field.
 //!
 //! `ENTRIES` lists the rows by tab (0 General, 1 Clipboard, 2 Snippets, 3 AI, 4 Translate,
-//! 5 Scripts, 6 Advanced) in the order they are drawn. The title is the exact title of the row;
+//! 5 Scripts, 6 Integrations, 7 Advanced) in the order they are drawn. The title is the exact title of the row;
 //! a test in the app walks every tab and fails when a drawn row is missing here or an entry is
 //! never drawn.
 
 /// One Settings row.
 pub struct Entry {
-    /// Tab the row lives on (0..=6).
+    /// Tab the row lives on (0..=7).
     pub tab: usize,
     /// Exact title of the row.
     pub title: &'static str,
@@ -63,11 +63,17 @@ pub const ENTRIES: &[Entry] = &[
     // 5 Scripts
     e(5, "Default folder", &["scripts", "directory", "path", "raycast", "commands"]),
     e(5, "Add directory", &["scripts", "folder", "path", "extra", "home"]),
-    // 6 Advanced
-    e(6, "Accessibility", &["permission", "privacy", "grant", "window management", "security", "access"]),
-    e(6, "1 rem", &["px", "pixels", "css", "calculator", "em", "units"]),
-    e(6, "Window gap", &["spacing", "margin", "snap", "tiling", "edges", "pt"]),
-    e(6, "Data folder", &["storage", "files", "open", "settings.json", "backup", "location", "path"]),
+    // 6 Integrations
+    e(6, "Notion token", &["notion", "integration", "secret", "keychain", "api", "password", "credential", "connect"]),
+    e(6, "Test connection", &["notion", "check", "verify", "token", "integration", "connected", "workspace"]),
+    e(6, "Capture target", &["notion", "page", "database", "data source", "quick capture", "target", "clear", "save to"]),
+    e(6, "Find a page or database", &["notion", "search", "capture", "target", "choose", "pick", "shared"]),
+    e(6, "Setup guide", &["notion", "integration", "my-integrations", "connections", "share pages", "help", "token"]),
+    // 7 Advanced
+    e(7, "Accessibility", &["permission", "privacy", "grant", "window management", "security", "access"]),
+    e(7, "1 rem", &["px", "pixels", "css", "calculator", "em", "units"]),
+    e(7, "Window gap", &["spacing", "margin", "snap", "tiling", "edges", "pt"]),
+    e(7, "Data folder", &["storage", "files", "open", "settings.json", "backup", "location", "path"]),
 ];
 
 /// Lower-cases and strips the basic Latin accents, one char to one char (so a match position in
@@ -215,14 +221,14 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for en in ENTRIES {
             assert!(!en.title.trim().is_empty());
-            assert!(en.tab <= 6, "{} has tab {}", en.title, en.tab);
+            assert!(en.tab <= 7, "{} has tab {}", en.title, en.tab);
             assert!(seen.insert((en.tab, en.title)), "duplicate {} in tab {}", en.title, en.tab);
         }
         let tabs: Vec<usize> = ENTRIES.iter().map(|e| e.tab).collect();
         let mut sorted = tabs.clone();
         sorted.sort();
         assert_eq!(tabs, sorted, "entries are listed by tab");
-        for t in 0..=6 {
+        for t in 0..=7 {
             assert!(ENTRIES.iter().any(|e| e.tab == t), "tab {t} has entries");
         }
     }

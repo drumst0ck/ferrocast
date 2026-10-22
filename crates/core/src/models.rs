@@ -202,6 +202,16 @@ pub enum AiProvider {
     ChatGpt,
 }
 
+/// Where quick capture writes in Notion. The integration token is never part of the settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct NotionTarget {
+    pub id: String,
+    /// `"page"` or `"data_source"`.
+    pub kind: String,
+    pub title: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
@@ -261,6 +271,9 @@ pub struct Settings {
     pub update_skipped: Option<String>,
     /// Unix seconds of the last automatic check.
     pub update_last_check: Option<i64>,
+    /// Page or data source Notion quick capture writes to.
+    #[serde(default)]
+    pub notion_target: Option<NotionTarget>,
 }
 
 /// What happens with a finished translation.
@@ -334,6 +347,7 @@ impl Default for Settings {
             update_install: UpdateInstall::default(),
             update_skipped: None,
             update_last_check: None,
+            notion_target: None,
         }
     }
 }
@@ -402,6 +416,19 @@ mod tests {
         assert!(on.enter_on_finder);
         let round: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
         assert!(round.enter_on_finder);
+    }
+
+    #[test]
+    fn notion_target_is_optional_in_old_files_and_survives_a_round_trip() {
+        let old = r#"{"launcher_hotkey":"Alt+Space","compact_mode":true}"#;
+        let s: Settings = serde_json::from_str(old).expect("a settings.json without notion_target loads");
+        assert_eq!(s.notion_target, None);
+        let t = NotionTarget { id: "abc".into(), kind: "data_source".into(), title: "Inbox".into() };
+        let with = Settings { notion_target: Some(t.clone()), ..Default::default() };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(!json.contains("token"), "no token field in settings.json");
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.notion_target, Some(t));
     }
 
     #[test]

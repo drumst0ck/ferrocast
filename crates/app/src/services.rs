@@ -159,6 +159,13 @@ pub enum Msg {
     WheelRelease,
     /// Model list for the Settings picker, keyed by `models_key`.
     AiModels(String, Result<Vec<String>, String>),
+    /// Result of "Test connection" in Settings → Integrations (Err: the exact toast text).
+    NotionTested(Result<ferrocast_core::notion::BotInfo, String>),
+    /// Result of a Notion search; `request` identifies the search so a stale answer is dropped.
+    NotionSearched {
+        request: u64,
+        result: Result<ferrocast_core::notion::SearchPage, String>,
+    },
     Wake,
 }
 

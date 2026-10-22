@@ -2,6 +2,7 @@
 
 use crate::instance;
 use crate::items::*;
+use crate::notion_io;
 use crate::services::{self, now_secs, Bus, EffectKind, Hotkeys, Msg, Shared};
 use crate::ui::{self, palette, IconCache, Palette};
 use egui::{Align2, Color32, Context, FontId, Id, Key, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2};
@@ -641,7 +642,7 @@ impl View {
                 vec![(primary, "↵"), ("Move", "⌘↑/↓"), BACK]
             }
             View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
-            View::Settings => vec![("Tabs", "⌘1–7"), ("Find", "⌘F"), BACK],
+            View::Settings => vec![("Tabs", "⌘1–8"), ("Find", "⌘F"), BACK],
             _ => vec![],
         }
     }
@@ -752,6 +753,20 @@ struct Keys {
     right: bool,
 }
 
+const NOTION_NO_TOKEN: &str = "Paste your Notion token first.";
+
+/// Notion search box and results shown in Settings → Integrations.
+#[derive(Default)]
+pub struct NotionUi {
+    pub query: String,
+    /// The token being typed; cleared once saved (never shared with the AI key field).
+    pub token: String,
+    /// Id of the latest search; an answer carrying an older id is dropped.
+    pub request: u64,
+    pub searching: bool,
+    pub results: Vec<ferrocast_core::notion::NotionItem>,
+}
+
 pub struct App {
     /// The update poller thread once started (never more than one).
     pub(crate) update_poller: Option<std::thread::JoinHandle<()>>,
@@ -839,6 +854,8 @@ pub struct App {
     act_item: Option<Item>,
     scratch: String,
     key_scratch: String,
+    /// Settings → Integrations: Notion search box, latest request id and its results.
+    notion: NotionUi,
     rates: ferrocast_core::currency::Rates,
     rates_checked_at: Instant,
     /// Result list for the current query/view, reused across frames until something changes.
@@ -1059,6 +1076,7 @@ impl App {
             act_item: None,
             scratch: String::new(),
             key_scratch: String::new(),
+            notion: NotionUi::default(),
             rates: store_rates,
             rates_checked_at: Instant::now(),
             sec_cache: None,
@@ -1456,6 +1474,97 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ Notion (Settings → Integrations)
+
+    /// Save the token typed in Settings (trimmed; empty removes it). The token only ever goes to the Keychain.
+    fn notion_save_token(&mut self, raw: &str) {
+        let token = raw.trim();
+        let ok = notion_io::set_token(token);
+        self.ctx.data_mut(|d| d.insert_temp(Id::new("notion_has_token"), !token.is_empty() && ok));
+        self.toast(if !ok {
+            "Could not update Keychain"
+        } else if token.is_empty() {
+            "Notion token removed"
+        } else {
+            "Notion token saved to Keychain"
+        });
+    }
+
+    /// GET users/me on a thread; the answer comes back as `Msg::NotionTested`.
+    fn notion_test(&mut self) {
+        let (read, url, bus) = (notion_io::token_reader(), notion_io::url(ferrocast_core::notion::me_url()), self.bus.clone());
+        std::thread::spawn(move || {
+            let r = match read() {
+                None => Err(NOTION_NO_TOKEN.to_string()),
+                Some(t) => notion_io::request(&t, "GET", &url, None)
+                    .and_then(|b| ferrocast_core::notion::parse_me(&b))
+                    .map_err(|e| e.user_message()),
+            };
+            bus.send(Msg::NotionTested(r));
+        });
+    }
+
+    fn handle_notion_tested(&mut self, r: Result<ferrocast_core::notion::BotInfo, String>) {
+        self.toast(match r {
+            Ok(b) => match b.workspace.filter(|w| !w.is_empty()) {
+                Some(w) => format!("Connected to Notion as {} · {w}", b.name),
+                None => format!("Connected to Notion as {}", b.name),
+            },
+            Err(e) => e,
+        });
+    }
+
+    /// POST search (8 results) on a thread; the answer comes back as `Msg::NotionSearched`.
+    fn notion_search(&mut self) {
+        self.notion.request += 1;
+        self.notion.searching = true;
+        let request = self.notion.request;
+        let body = ferrocast_core::notion::search_body(self.notion.query.trim(), None, 8);
+        let (read, url, bus) = (notion_io::token_reader(), notion_io::url(ferrocast_core::notion::search_url()), self.bus.clone());
+        std::thread::spawn(move || {
+            let result = match read() {
+                None => Err(NOTION_NO_TOKEN.to_string()),
+                Some(t) => notion_io::request(&t, "POST", &url, Some(&body))
+                    .and_then(|b| ferrocast_core::notion::parse_search(&b))
+                    .map_err(|e| e.user_message()),
+            };
+            bus.send(Msg::NotionSearched { request, result });
+        });
+    }
+
+    fn handle_notion_searched(&mut self, request: u64, result: Result<ferrocast_core::notion::SearchPage, String>) {
+        if request != self.notion.request {
+            return; // a newer search is in flight
+        }
+        self.notion.searching = false;
+        match result {
+            Ok(page) => {
+                self.notion.results = page.items.into_iter().take(8).collect();
+                if self.notion.results.is_empty() {
+                    self.toast("Nothing found. Share the page with your integration: ••• → Connections.");
+                }
+            }
+            Err(e) => self.toast(e),
+        }
+    }
+
+    /// Make result `i` the capture target.
+    fn notion_pick(&mut self, i: usize) {
+        let Some(item) = self.notion.results.get(i).cloned() else { return };
+        let kind = if item.kind == ferrocast_core::notion::ItemKind::Page { "page" } else { "data_source" };
+        let mut s = self.settings.clone();
+        s.notion_target = Some(ferrocast_core::models::NotionTarget { id: item.id, kind: kind.into(), title: item.title.clone() });
+        self.commit_settings(s);
+        self.toast(format!("Capture target set to {}", item.title));
+    }
+
+    fn notion_clear_target(&mut self) {
+        let mut s = self.settings.clone();
+        s.notion_target = None;
+        self.commit_settings(s);
+        self.toast("Capture target cleared");
+    }
+
     fn toast(&mut self, s: impl Into<String>) {
         self.toast = Some((s.into(), Instant::now()));
         self.ctx.request_repaint_after(Duration::from_millis(2600));
@@ -1798,6 +1907,8 @@ impl App {
                     instance::log(&self.store.root, &format!("update failed: {e}"));
                     self.toast(format!("Update failed: {e}"));
                 }
+                Msg::NotionTested(r) => self.handle_notion_tested(r),
+                Msg::NotionSearched { request, result } => self.handle_notion_searched(request, result),
                 Msg::Toast(t) => {
                     // A sign-in or sign-out may just have finished; let Settings re-read the Keychain.
                     self.ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));

@@ -630,7 +630,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 }
                 app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel });
             }
-            // `settings-tab-N`: open Settings on tab N (0 General … 6 Advanced), for design review shots
+            // `settings-tab-N`: open Settings on tab N (0 General … 6 Integrations, 7 Advanced), for design review shots
             Ok(v) if v.starts_with("settings-tab-") => {
                 let n = v.trim_start_matches("settings-tab-").parse::<usize>().unwrap_or(0);
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), n));
@@ -645,7 +645,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 app.push(View::Settings);
             }
             Ok("settings-advanced") => {
-                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 6usize));
+                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 7usize));
                 app.push(View::Settings);
             }
             Ok("timers") => {
@@ -5569,6 +5569,30 @@ impl App {
         let mut enable = None;
         let mut scratch = std::mem::take(&mut self.scratch);
         let mut key_scratch = std::mem::take(&mut self.key_scratch);
+        let mut ntoken = std::mem::take(&mut self.notion.token);
+        let mut nquery = std::mem::take(&mut self.notion.query);
+        let (mut notion_save, mut notion_test, mut notion_search, mut notion_clear, mut notion_open) = (false, false, false, false, false);
+        let mut notion_pick: Option<usize> = None;
+        let has_notion = if tab == INTEGRATIONS_TAB {
+            match ctx.data(|d| d.get_temp::<bool>(Id::new("notion_has_token"))) {
+                Some(v) => v,
+                None => {
+                    let v = notion_io::has_token();
+                    ctx.data_mut(|d| d.insert_temp(Id::new("notion_has_token"), v));
+                    v
+                }
+            }
+        } else {
+            false
+        };
+        let notion_rows: Vec<(String, &'static str)> = self
+            .notion
+            .results
+            .iter()
+            .map(|i| (i.title.clone(), if i.kind == ferrocast_core::notion::ItemKind::Page { "page" } else { "database" }))
+            .collect();
+        let notion_busy = self.notion.searching;
+        let notion_target = self.settings.notion_target.clone();
         let has_key = ctx.data(|d| d.get_temp::<bool>(Id::new("ai_has_key")));
         let has_key = match has_key {
             Some(v) => v,
@@ -5640,7 +5664,7 @@ impl App {
             }
         }
 
-        // ---- sidebar keyboard: ⌘1…⌘7 anywhere in Settings; ↑/↓ only when the pointer is over the
+        // ---- sidebar keyboard: ⌘1…⌘8 anywhere in Settings; ↑/↓ only when the pointer is over the
         // sidebar (and no text field is being edited) or a sidebar item has the keyboard focus
         let item_id = |i: usize| Id::new(("settings-tab-item", i));
         for (i, key) in SETTINGS_NUM_KEYS.iter().enumerate() {
@@ -6209,6 +6233,72 @@ impl App {
                             }
                         }
                     }
+                    INTEGRATIONS_TAB => {
+                        section(ui, pal, "Notion");
+                        group(ui, pal, |ui| {
+                            let desc = if has_notion {
+                                "A token is stored in the Keychain. Enter a new one to replace it, or save empty to remove it."
+                            } else {
+                                "From notion.so/my-integrations. Stored in the macOS Keychain, never in a file."
+                            };
+                            row(ui, pal, "Notion token", desc, |ui| {
+                                if small_btn(ui, pal, "Save") {
+                                    notion_save = true;
+                                }
+                                let r = field(ui, pal, &mut ntoken, 220.0, if has_notion { "••••••••" } else { "ntn_…" }, true);
+                                if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                                    notion_save = true;
+                                }
+                            });
+                            row(ui, pal, "Test connection", "Asks Notion who this token belongs to.", |ui| {
+                                if small_btn(ui, pal, "Test") {
+                                    notion_test = true;
+                                }
+                            });
+                            row_disabled_if(ui, !has_notion, |ui| {
+                                let shown = match &notion_target {
+                                    Some(t) => format!("{} ({})", t.title, if t.kind == "page" { "page" } else { "database" }),
+                                    None => "Not set".to_string(),
+                                };
+                                row(ui, pal, "Capture target", "Where Add to Notion writes. Search below to choose.", |ui| {
+                                    if notion_target.is_some() && small_btn(ui, pal, "Clear") {
+                                        notion_clear = true;
+                                    }
+                                    ui.add(egui::Label::new(RichText::new(shown).size(12.5).color(pal.sub_strong)).truncate());
+                                });
+                                row(ui, pal, "Find a page or database", "Only items shared with the integration show up.", |ui| {
+                                    if small_btn(ui, pal, if notion_busy { "Searching…" } else { "Search" }) {
+                                        notion_search = true;
+                                    }
+                                    let r = field(ui, pal, &mut nquery, 180.0, "Search Notion…", false);
+                                    if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                                        notion_search = true;
+                                    }
+                                });
+                                for (i, (title, kind)) in notion_rows.iter().enumerate() {
+                                    let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.0), Sense::click());
+                                    record_ctl(ui.ctx(), "notion_result", resp.id, r, ui.is_enabled());
+                                    if resp.hovered() {
+                                        ui.painter().rect_filled(r.shrink2(Vec2::new(6.0, 0.0)), 6.0, pal.sub.gamma_multiply(0.15));
+                                    }
+                                    let inner = r.shrink2(Vec2::new(14.0, 0.0));
+                                    ui.painter().text(Pos2::new(inner.max.x, r.center().y), Align2::RIGHT_CENTER, *kind, FontId::proportional(11.5), pal.sub);
+                                    let clip = Rect::from_min_max(inner.min, Pos2::new(inner.max.x - 70.0, inner.max.y));
+                                    ui.painter().with_clip_rect(clip).text(Pos2::new(inner.min.x, r.center().y), Align2::LEFT_CENTER, title, FontId::proportional(13.0), pal.text);
+                                    if resp.clicked() {
+                                        notion_pick = Some(i);
+                                    }
+                                }
+                            });
+                            row(ui, pal, "Setup guide", "Opens notion.so/my-integrations to create an integration.", |ui| {
+                                if small_btn(ui, pal, "Open notion.so/my-integrations") {
+                                    notion_open = true;
+                                }
+                            });
+                        });
+                        ui.add_space(10.0);
+                        note(ui, pal, "Create an internal integration at notion.so/my-integrations, paste its token here, then share pages with it: ••• → Connections.");
+                    }
                     _ => {
                         section(ui, pal, "Permissions");
                         group(ui, pal, |ui| {
@@ -6278,22 +6368,40 @@ impl App {
             });
         });
         let _ = acc;
+        if notion_pick.is_some() || notion_clear {
+            // choosing or clearing the target commits on its own: restore the scratch fields first
+            self.scratch = scratch;
+            self.key_scratch = key_scratch;
+            self.notion.token = ntoken;
+            self.notion.query = nquery;
+            match notion_pick {
+                Some(i) => self.notion_pick(i),
+                None => self.notion_clear_target(),
+            }
+            return;
+        }
         if let Some(t) = reset_req {
             // a reset replaces whatever else was edited in this frame
             self.scratch = scratch;
             self.key_scratch = key_scratch;
+            self.notion.token = ntoken;
+            self.notion.query = nquery;
             self.reset_settings_tab(t);
             return;
         }
         if new_snippet {
             self.scratch = scratch;
             self.key_scratch = key_scratch;
+            self.notion.token = ntoken;
+            self.notion.query = nquery;
             self.new_snippet(String::new());
             return;
         }
         if create_script {
             self.scratch = scratch;
             self.key_scratch = key_scratch;
+            self.notion.token = ntoken;
+            self.notion.query = nquery;
             self.push(View::CreateScript { title: String::new(), mode: 0 });
             return;
         }
@@ -6330,6 +6438,21 @@ impl App {
             });
         }
         self.key_scratch = key_scratch;
+        self.notion.query = nquery;
+        if notion_save {
+            let typed = std::mem::take(&mut ntoken);
+            self.notion_save_token(&typed);
+        }
+        self.notion.token = ntoken;
+        if notion_test {
+            self.notion_test();
+        }
+        if notion_search && has_notion {
+            self.notion_search();
+        }
+        if notion_open {
+            let _ = std::process::Command::new("/usr/bin/open").arg("https://www.notion.so/my-integrations").spawn();
+        }
         let need_models = tab == 3 && !self.ai_models.contains_key(&models_key);
         if fetch_models || need_models {
             self.ai_models.insert(models_key.clone(), None);
@@ -6543,19 +6666,22 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
     }
 }
 
-/// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Power = 5..7.
-const SETTINGS_TABS: [(&str, &str); 7] = [
+/// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Power = 5..8.
+const SETTINGS_TABS: [(&str, &str); 8] = [
     ("General", "sf:gearshape"),
     ("Clipboard", "sf:doc.on.clipboard"),
     ("Snippets", "sf:curlybraces"),
     ("AI", "sf:sparkles"),
     ("Translate", "sf:character.bubble"),
     ("Scripts", "sf:terminal"),
+    ("Integrations", "sf:link"),
     ("Advanced", "sf:slider.horizontal.3"),
 ];
 /// Indices of the first tab of the second and third group: a divider is drawn before each.
 const SETTINGS_GROUP_STARTS: [usize; 2] = [3, 5];
-const SETTINGS_NUM_KEYS: [Key; 7] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7];
+const SETTINGS_NUM_KEYS: [Key; 8] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8];
+/// Index of the Integrations tab in `draw_settings`.
+const INTEGRATIONS_TAB: usize = 6;
 
 fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     record_text(ui.ctx(), pal, "section", pal.sub_strong, &[], ui.opacity());
@@ -7627,7 +7753,7 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
     ),
     (1, &["clipboard_enabled", "clipboard_retention"]),
     (4, &["wheel_translate_key", "translate_languages", "translate_output", "translate_effect", "translate_provider", "translate_model"]),
-    (6, &["rem_px", "window_gap"]),
+    (7, &["rem_px", "window_gap"]),
 ];
 
 /// `s` with the fields of `tab` (see `RESET_FIELDS`) copied from `from`; a tab without an entry,
@@ -7660,7 +7786,7 @@ fn reset_tab(s: &Settings, tab: usize) -> Settings {
 impl App {
     /// Apply an edited copy of the settings: persist it and run what a changed value needs (login
     /// item, Finder tap, theme, hotkey, script folders).
-    fn commit_settings(&mut self, mut s: Settings) {
+    pub(crate) fn commit_settings(&mut self, mut s: Settings) {
         if s == self.settings {
             return;
         }
