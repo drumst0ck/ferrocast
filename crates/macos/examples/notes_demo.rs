@@ -1099,6 +1099,9 @@ fn editor_checks(app: &NSApplication, out: &std::path::Path) {
         ("light", unsafe { NSAppearanceNameAqua }, 1.0),
         ("dark", unsafe { NSAppearanceNameDarkAqua }, 1.0),
         ("light-zoom150", unsafe { NSAppearanceNameAqua }, 1.5),
+        ("dark-zoom150", unsafe { NSAppearanceNameDarkAqua }, 1.5),
+        ("light-zoom50", unsafe { NSAppearanceNameAqua }, 0.5),
+        ("dark-zoom50", unsafe { NSAppearanceNameDarkAqua }, 0.5),
     ] {
         app.setAppearance(NSAppearance::appearanceNamed(appearance).as_deref());
         notes::set_zoom(z);
@@ -1119,7 +1122,51 @@ fn editor_checks(app: &NSApplication, out: &std::path::Path) {
     app.setAppearance(None);
     check("snapshot note round-trips", md() == md_of(note), &md());
     theme_checks(app, out);
+    style_checks(app);
     reset(app, note);
+}
+
+/// T2 (S4, S6, S7): heading hierarchy at every zoom level, and the selection stays readable.
+fn style_checks(app: &NSApplication) {
+    use ferrocast_macos::notes_theme::{self as theme, Rgba};
+    use objc2_foundation::NSObjectProtocol as _;
+    reset(app, "# Alpha\n\n## Beta\n\n### Gamma\n\nDelta body");
+    let text = tv_of(app).string().to_string();
+    let at = |w: &str| text.find(w).expect("word in text");
+    for z in [0.5, 1.0, 1.5, 3.0] {
+        notes::set_zoom(z);
+        let tv = tv_of(app);
+        let (h1, h2, h3, body) =
+            (font_size_at(&tv, at("Alpha")), font_size_at(&tv, at("Beta")), font_size_at(&tv, at("Gamma")), font_size_at(&tv, at("Delta")));
+        check(
+            &format!("zoom {z}: headings are larger than the body and strictly ordered 1 > 2 > 3"),
+            body > 0.0 && h3 > body && h2 > h3 && h1 > h2,
+            &format!("h1 {h1} h2 {h2} h3 {h3} body {body}"),
+        );
+    }
+    notes::set_zoom(1.0);
+    let alpha = ferrocast_macos::notes_editor::SELECTION_ALPHA;
+    for (name, t, dark) in [("dark", theme::DARK, true), ("light", theme::LIGHT, false)] {
+        let bg = theme::window_bg(dark);
+        let sel_bg =
+            theme::composite_over(Rgba(t.accent.0, t.accent.1, t.accent.2, (alpha * 255.0).round() as u8), Rgba(bg.0, bg.1, bg.2, 255));
+        let ratio = theme::contrast_ratio(theme::composite_over(t.text, Rgba(sel_bg.0, sel_bg.1, sel_bg.2, 255)), sel_bg);
+        check(
+            &format!("selection {name}: Text over the composited Accent at {:.0}% reaches 4.5:1", alpha * 100.0),
+            ratio >= 4.5,
+            &format!("selection bg {sel_bg:?}, ratio {ratio:.2}"),
+        );
+    }
+    let tv = tv_of(app);
+    let caret = tv.insertionPointColor();
+    let sel_attrs = tv.selectedTextAttributes();
+    check(
+        "caret and selection use the accent, the selection keeps the text colour",
+        !caret.isEqual(Some(&objc2_app_kit::NSColor::controlAccentColor()))
+            && sel_attrs.count() == 1
+            && unsafe { sel_attrs.objectForKey(objc2_app_kit::NSBackgroundColorAttributeName) }.is_some(),
+        &format!("attrs {}", sel_attrs.count()),
+    );
 }
 
 /// Read pixel `(x, y)` (top-left origin) of a snapshot image as 0 to 255 per channel.
@@ -1141,6 +1188,7 @@ fn close(a: (u8, u8, u8), b: (u8, u8, u8), tol: i32) -> bool {
 fn theme_checks(app: &NSApplication, out: &std::path::Path) {
     use ferrocast_macos::notes_theme::{self as theme, Appearance, Rgba};
     reset(app, "# Theme\n\nShort note.");
+    let mut heading_ink: Vec<(u8, u8, u8)> = Vec::new();
     for (name, setting, dark) in [("dark", Appearance::Dark, true), ("light", Appearance::Light, false)] {
         theme::set_appearance(setting);
         check(
@@ -1182,7 +1230,34 @@ fn theme_checks(app: &NSApplication, out: &std::path::Path) {
             close(got_sep, want_sep, 6),
             &format!("got {got_sep:?} want {want_sep:?}"),
         );
+        // The heading glyph pixels (the pixel farthest from the background in the heading band):
+        // the text was laid out once and only the appearance changed, so a dynamic colour is
+        // what recolours it.
+        let mut ink = (got_bg, 0i32);
+        for y in (46.0 * scale) as isize..(100.0 * scale) as isize {
+            for x in 0..w / 2 {
+                let p = pixel(&rep, x, y);
+                let d = (p.0 as i32 - got_bg.0 as i32).abs() + (p.1 as i32 - got_bg.1 as i32).abs() + (p.2 as i32 - got_bg.2 as i32).abs();
+                if d > ink.1 {
+                    ink = (p, d);
+                }
+            }
+        }
+        let want = (t.text.0, t.text.1, t.text.2);
+        check(
+            &format!("theme {name}: heading text pixels are nearer the Text token than the background"),
+            ink.1 > 150 && close(ink.0, want, 70),
+            &format!("ink {:?} want {want:?} bg {got_bg:?}", ink.0),
+        );
+        heading_ink.push(ink.0);
         println!("      {}", path.display());
+    }
+    if let [dark_ink, light_ink] = heading_ink[..] {
+        check(
+            "theme: heading pixels differ between Dark and Light without set_markdown",
+            !close(dark_ink, light_ink, 60) && dark_ink.0 > light_ink.0,
+            &format!("dark {dark_ink:?} light {light_ink:?}"),
+        );
     }
     theme::set_appearance(Appearance::System);
     check("theme: restored to System", theme::appearance() == Appearance::System, "");
