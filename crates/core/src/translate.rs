@@ -116,6 +116,20 @@ fn language_name(code: &str) -> String {
     }
 }
 
+/// The language code Apple's Translation framework wants for a wheel language name, or `None`
+/// when the name is unknown (then Apple cannot be asked). Chinese needs a script and Portuguese a
+/// region; every other code is the plain ISO one.
+pub fn apple_code(name: &str) -> Option<String> {
+    let code = language_code(name)?;
+    let n = name.trim().to_lowercase();
+    Some(match code {
+        "zh" if n.contains("traditional") || n.contains("tradicional") => "zh-Hant".to_string(),
+        "zh" => "zh-Hans".to_string(),
+        "pt" => "pt-BR".to_string(),
+        other => other.to_string(),
+    })
+}
+
 /// Lowest confidence of the detected language that triggers a retry: short words give weak
 /// guesses ("OK" reads as Polish at 0.29) and are never retried.
 const RETRY_CONFIDENCE: f64 = 0.8;
@@ -291,8 +305,11 @@ pub fn provider_name(p: AiProvider) -> &'static str {
     }
 }
 
-/// Which engine translates, for the toast: "Same as chat (ChatGPT)" or the chosen provider.
+/// Which engine translates, for the toast and the log: "Apple", "Same as chat (ChatGPT)" or the chosen provider.
 pub fn engine_label(s: &Settings) -> String {
+    if s.translate_apple {
+        return "Apple".to_string();
+    }
     match s.translate_provider {
         Some(p) if !s.translate_model.is_empty() => format!("{} · {}", provider_name(p), s.translate_model),
         Some(p) => provider_name(p).to_string(),
@@ -789,12 +806,34 @@ mod tests {
     }
 
     #[test]
+    fn apple_engine_is_named_in_the_toast_and_the_log() {
+        let s = Settings { translate_apple: true, translate_provider: Some(AiProvider::ChatGpt), translate_model: "x".into(), ..Default::default() };
+        assert_eq!(engine_label(&s), "Apple");
+        assert_eq!(engine_label(&Settings { translate_apple: false, ..s }), "ChatGPT · x", "off again: the provider label returns");
+    }
+
+    #[test]
+    fn apple_language_codes_cover_the_default_wheel_and_pick_a_script_or_region_where_apple_needs_one() {
+        for name in DEFAULT_LANGUAGES {
+            assert!(apple_code(name).is_some(), "{name} has an Apple code");
+        }
+        assert_eq!(apple_code("German").as_deref(), Some("de"));
+        assert_eq!(apple_code("español").as_deref(), Some("es"));
+        assert_eq!(apple_code("Chinese").as_deref(), Some("zh-Hans"));
+        assert_eq!(apple_code("Simplified Chinese").as_deref(), Some("zh-Hans"));
+        assert_eq!(apple_code("Traditional Chinese").as_deref(), Some("zh-Hant"));
+        assert_eq!(apple_code("Portuguese").as_deref(), Some("pt-BR"));
+        assert_eq!(apple_code("Klingon"), None);
+    }
+
+    #[test]
     fn old_settings_files_load_with_translate_defaults() {
         let s: Settings = serde_json::from_str("{\"theme\":\"Dark\"}").unwrap();
         assert_eq!(s.translate_output, TranslateOutput::Auto);
         assert_eq!(s.translate_languages.len(), 8);
         assert_eq!(s.translate_provider, None);
         assert_eq!(s.translate_model, "");
+        assert!(!s.translate_apple, "old files keep the engine they had");
     }
 
     #[test]

@@ -254,6 +254,8 @@ pub struct Settings {
     /// Model of `translate_provider` used to translate; empty = the model configured for it.
     /// Ignored while `translate_provider` is `None`.
     pub translate_model: String,
+    /// Translate with Apple's on-device Translation framework (macOS 26+) instead of an AI provider.
+    pub translate_apple: bool,
     /// Check GitHub for new stable releases (off = never touch the network).
     pub update_check: bool,
     pub update_install: UpdateInstall,
@@ -330,6 +332,7 @@ impl Default for Settings {
             translate_effect: true,
             translate_provider: None,
             translate_model: String::new(),
+            translate_apple: false,
             update_check: true,
             update_install: UpdateInstall::default(),
             update_skipped: None,
