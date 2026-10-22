@@ -11,6 +11,7 @@ pub mod finder_enter;
 pub mod glow;
 pub mod keyboard;
 pub mod language;
+pub mod notes;
 pub mod pdf;
 pub mod process;
 pub mod running;
