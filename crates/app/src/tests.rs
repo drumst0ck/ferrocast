@@ -179,6 +179,7 @@ impl Effects {
                 FX_LOG.with(|l| l.borrow_mut().push("notes_tray on".into()));
                 Some(Box::new(FakeNotesTray))
             },
+            notes_appearance: |a| FX_LOG.with(|l| l.borrow_mut().push(format!("appearance {a:?}"))),
             web_script: |_b, js| FX_SCRIPTS.with(|l| l.borrow_mut().push(js.to_string())),
             apple_available: || APPLE_AVAILABLE.with(|a| a.get()),
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
@@ -12273,4 +12274,67 @@ fn a_failed_export_keeps_the_sheet_open_with_the_helpers_message_and_success_toa
     });
     assert!(!app.editor.as_ref().unwrap().export.open);
     assert!(app.toast.as_ref().is_some_and(|(t, _)| t == "Exported Done.mp4"), "{:?}", app.toast);
+}
+
+#[test]
+fn notes_appearance_maps_each_theme() {
+    use ferrocast_macos::notes_theme::Appearance;
+    assert_eq!(notes_appearance(Theme::System), Appearance::System);
+    assert_eq!(notes_appearance(Theme::Dark), Appearance::Dark);
+    assert_eq!(notes_appearance(Theme::Light), Appearance::Light);
+}
+
+#[test]
+fn startup_theme_reaches_the_notes_windows() {
+    let (mut app, _) = notes_tab_app(egui::ThemePreference::Dark);
+    fx_taken();
+    // App::new loads the saved settings and then calls set_theme
+    app.settings.theme = Theme::Light;
+    app.set_theme();
+    assert_eq!(fx_taken(), vec!["appearance Light".to_string()]);
+}
+
+#[test]
+fn a_theme_change_in_settings_reaches_the_notes_windows_once() {
+    let (mut app, _) = notes_tab_app(egui::ThemePreference::Dark);
+    fx_taken();
+    for (theme, want) in [(Theme::Dark, "appearance Dark"), (Theme::Light, "appearance Light"), (Theme::System, "appearance System")] {
+        let mut s = app.settings.clone();
+        s.theme = theme;
+        app.commit_settings(s);
+        assert_eq!(fx_taken(), vec![want.to_string()], "{theme:?}");
+        // the same theme again changes nothing
+        let mut s = app.settings.clone();
+        s.theme = theme;
+        app.commit_settings(s);
+        assert!(fx_taken().is_empty(), "unchanged {theme:?}");
+    }
+}
+
+#[test]
+fn notes_and_app_palettes_have_the_same_values() {
+    use ferrocast_macos::notes_theme::{Rgba, DARK, LIGHT};
+    for (dark, name, notes) in [(true, "dark", &DARK), (false, "light", &LIGHT)] {
+        let p = ui::palette(dark);
+        let tokens: [(&str, egui::Color32, Rgba); 11] = [
+            ("bg", p.bg, notes.bg),
+            ("border", p.border, notes.border),
+            ("text", p.text, notes.text),
+            ("sub", p.sub, notes.sub),
+            ("sub_strong", p.sub_strong, notes.sub_strong),
+            ("accent_text", p.accent_text, notes.accent_text),
+            ("sel", p.sel, notes.sel),
+            ("accent", p.accent, notes.accent),
+            ("field", p.field, notes.field),
+            ("sep", p.sep, notes.sep),
+            ("danger", p.danger, notes.danger),
+        ];
+        for (token, c, n) in tokens {
+            let a = c.to_srgba_unmultiplied();
+            let b = [n.0, n.1, n.2, n.3];
+            for i in 0..4 {
+                assert!(a[i].abs_diff(b[i]) <= 1, "{name} token {token}: app {a:?} vs notes {b:?}");
+            }
+        }
+    }
 }
