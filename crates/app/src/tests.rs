@@ -5815,10 +5815,53 @@ fn modifier_taps_do_not_switch_a_translate_wheel() {
 #[test]
 fn a_failed_translation_toasts_and_does_not_touch_the_view() {
     let mut app = fixture();
-    app.bus.send(Msg::Translated { lang: "Spanish".into(), source_pid: None, result: Err("Claude Code is not installed.".into()) });
+    app.bus.send(Msg::Translated { lang: "Spanish".into(), source_pid: None, result: Err("Claude Code is not installed.".into()), ms: 0 });
     app.drain();
     assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Claude Code is not installed")), "{:?}", app.toast);
     assert!(matches!(app.view(), View::Root));
+}
+
+#[test]
+fn a_shown_translation_opens_the_translation_view() {
+    let mut app = fixture();
+    app.settings.translate_output = ferrocast_core::models::TranslateOutput::Show;
+    app.bus.send(Msg::Translated { lang: "Spanish".into(), source_pid: None, result: Ok("Hola".into()), ms: 5 });
+    app.drain();
+    match app.view() {
+        View::Translation { lang, text } => assert_eq!((lang.as_str(), text.as_str()), ("Spanish", "Hola")),
+        _ => panic!("expected View::Translation"),
+    }
+}
+
+#[test]
+fn show_is_the_default_and_old_settings_load_as_show() {
+    use ferrocast_core::models::TranslateOutput;
+    assert_eq!(Settings::default().translate_output, TranslateOutput::Show);
+    let s: Settings = serde_json::from_str("{\"theme\":\"Dark\"}").unwrap();
+    assert_eq!(s.translate_output, TranslateOutput::Show);
+}
+
+#[test]
+fn translation_view_renders_in_both_themes() {
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        app.stack = vec![View::Root, View::Translation { lang: "Spanish".into(), text: "Hola\nmundo ".repeat(200) }];
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        assert!(matches!(app.view(), View::Translation { .. }));
+        render(&mut app, vec![key_event(Key::Escape)]);
+        assert!(matches!(app.view(), View::Root), "escape closes");
+    }
+}
+
+#[test]
+fn the_translate_log_line_has_language_and_count_but_not_the_text() {
+    let ok = translate_log_line("Spanish", "Claude Code", &Ok("zanahoria secreta".into()), 3700);
+    assert!(ok.contains("Spanish") && ok.contains("chars=17") && ok.contains("ms=3700") && ok.contains("Claude Code"), "{ok}");
+    assert!(!ok.contains("zanahoria"), "{ok}");
+    let bad = translate_log_line("Spanish", "Claude Code", &Err("boom\nsecond line zanahoria".into()), 10);
+    assert!(bad.contains("failed: boom") && !bad.contains("zanahoria"), "{bad}");
 }
 
 #[test]

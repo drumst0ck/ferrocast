@@ -259,8 +259,10 @@ pub struct Settings {
 /// What happens with a finished translation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum TranslateOutput {
-    /// Paste it over the selection in the app the text came from.
+    /// Show it in a Ferrocast window (and keep it on the clipboard).
     #[default]
+    Show,
+    /// Paste it over the selection in the app the text came from.
     Replace,
     /// Only put it on the clipboard.
     Copy,

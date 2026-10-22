@@ -531,6 +531,11 @@ pub enum View {
     Welcome,
     Shortcuts,
     About,
+    /// A finished translation shown to the user.
+    Translation {
+        lang: String,
+        text: String,
+    },
     Ai {
         prompt: String,
         asked: String,
@@ -691,6 +696,7 @@ impl View {
             View::Welcome => "Welcome to Ferrocast",
             View::Shortcuts => "Keyboard Shortcuts",
             View::About => "About Ferrocast",
+            View::Translation { .. } => "Translation",
             View::Wheel { .. } => "Wheel",
             View::Update { .. } => "Update available",
         }
@@ -2128,11 +2134,21 @@ impl App {
                         self.show_wheel(ferrocast_core::wheel::WheelKind::Translate, vec![]);
                     }
                 }
-                Msg::Translated { lang, source_pid, result } => {
+                Msg::Translated { lang, source_pid, result, ms } => {
                     use ferrocast_core::translate::{focus_guard, outcome, Outcome};
+                    let engine = ferrocast_core::translate::engine_label(&self.settings);
+                    instance::log(&self.store.root, &translate_log_line(&lang, &engine, &result, ms));
                     // the translation can arrive seconds later: never paste into an app the user moved to
                     let front = running::frontmost().map(|f| f.pid);
                     match focus_guard(outcome(result, &lang, self.settings.translate_output), &lang, source_pid, front) {
+                        Outcome::Show { text, lang } => {
+                            // on the clipboard too, so the translation is never lost
+                            clipboard::write_text(&text);
+                            self.shared.mark_clipboard_write();
+                            self.show();
+                            self.reset_to_root();
+                            self.push(View::Translation { lang, text });
+                        }
                         Outcome::Paste(t) => self.paste_text(&t),
                         Outcome::Copy(t, toast) => {
                             self.copy_text(&t);
@@ -4982,6 +4998,15 @@ pub(crate) fn wheel_pick_log_line(kind: ferrocast_core::wheel::WheelKind, label:
 
 /// A file drop that arrives within this long of a wheel gesture ending is the end of that same drag.
 pub(crate) const WHEEL_DROP_GRACE: Duration = Duration::from_millis(1500);
+
+/// One log line per finished translation: language, engine, outcome and the character COUNT.
+/// Never any part of the source or translated text.
+pub(crate) fn translate_log_line(lang: &str, engine: &str, result: &Result<String, String>, ms: u64) -> String {
+    match result {
+        Ok(t) => format!("translate {lang} via {engine} ok chars={} ms={ms}", t.chars().count()),
+        Err(e) => format!("translate {lang} failed: {}", e.lines().next().unwrap_or("").trim()),
+    }
+}
 
 /// One diagnostic line for the log when a wheel opens or switches: the kind, how many segments and
 /// the first three labels. Never a path.

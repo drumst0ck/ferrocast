@@ -4753,6 +4753,8 @@ impl App {
                 let mut check_now = false;
                 // 1 install, 2 later, 3 skip (View::Update buttons)
                 let mut update_act: u8 = 0;
+                // 1 copy, 2 paste into the app, 3 close (View::Translation buttons)
+                let mut translation_act: u8 = 0;
                 // The match below borrows the view stack mutably; take the icon cache out so these
                 // screens can still draw cached symbols.
                 let mut icons = std::mem::replace(&mut self.icons, IconCache::new(self.store.images_dir()));
@@ -5054,6 +5056,26 @@ impl App {
                                 });
                             });
                         }
+                        View::Translation { lang, text } => {
+                            ui.label(RichText::new(format!("Translated to {lang}")).size(15.0).strong().color(pal.text));
+                            ui.add_space(6.0);
+                            egui::ScrollArea::vertical().id_salt("translation").auto_shrink([false; 2]).max_height((ui.available_height() - 44.0).max(60.0)).show(ui, |ui| {
+                                ui.add(egui::Label::new(RichText::new(text.as_str()).size(14.0).color(pal.text)).selectable(true));
+                            });
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                if accent_btn(ui, pal, "Copy") {
+                                    translation_act = 1;
+                                }
+                                if small_btn(ui, pal, "Paste into app") {
+                                    translation_act = 2;
+                                }
+                                if small_btn(ui, pal, "Close") {
+                                    translation_act = 3;
+                                }
+                            });
+                        }
                         View::About => {
                             egui::ScrollArea::vertical().id_salt("about").auto_shrink([false; 2]).show(ui, |ui| {
                             ui.spacing_mut().item_spacing.y = 6.0;
@@ -5190,6 +5212,19 @@ impl App {
                 }
                 if check_now {
                     self.check_updates();
+                }
+                if translation_act != 0 {
+                    if let View::Translation { text, .. } = self.view().clone() {
+                        match translation_act {
+                            1 => {
+                                clipboard::write_text(&text);
+                                self.shared.mark_clipboard_write();
+                                self.toast("Copied");
+                            }
+                            2 => self.paste_text(&text),
+                            _ => self.reset_to_root(),
+                        }
+                    }
                 }
                 if update_act != 0 {
                     if let View::Update { release } = self.view().clone() {
@@ -5347,9 +5382,9 @@ impl App {
                                 }
                                 ui.ctx().data_mut(|d| d.insert_temp(id, buf));
                             });
-                            row(ui, pal, "After translating", "Paste over the selection, or only copy the translation.", |ui| {
+                            row(ui, pal, "After translating", "Show the translation in a window, paste it over the selection, or only copy it.", |ui| {
                                 use ferrocast_core::models::TranslateOutput as T;
-                                segmented(ui, pal, &mut s.translate_output, &[(T::Replace, "Replace selection"), (T::Copy, "Copy only")]);
+                                segmented(ui, pal, &mut s.translate_output, &[(T::Show, "Show"), (T::Replace, "Replace selection"), (T::Copy, "Copy only")]);
                             });
                             row(
                                 ui,

@@ -80,6 +80,8 @@ pub fn engine_settings(s: &Settings) -> Settings {
 /// What the app does with a finished translation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
+    /// Show it in the launcher (the text is also left on the clipboard).
+    Show { text: String, lang: String },
     /// Paste over the selection (the text is also left on the clipboard).
     Paste(String),
     /// Clipboard only: the text and the toast.
@@ -98,6 +100,7 @@ pub fn outcome(result: Result<String, String>, lang: &str, output: TranslateOutp
                 return Outcome::Fail("Translation failed: empty reply".into());
             }
             match output {
+                TranslateOutput::Show => Outcome::Show { text, lang: lang.to_string() },
                 TranslateOutput::Replace => Outcome::Paste(text),
                 TranslateOutput::Copy => Outcome::Copy(text, format!("Translated to {lang}, copied")),
             }
@@ -205,6 +208,21 @@ mod tests {
     }
 
     #[test]
+    fn show_returns_the_cleaned_text_and_still_fails_on_an_empty_reply() {
+        use crate::models::TranslateOutput::Show;
+        assert_eq!(outcome(Ok("\"Hola\"".into()), "Spanish", Show), Outcome::Show { text: "Hola".into(), lang: "Spanish".into() });
+        assert_eq!(outcome(Ok("  ".into()), "Spanish", Show), Outcome::Fail("Translation failed: empty reply".into()));
+        assert_eq!(outcome(Err("no key".into()), "Spanish", Show), Outcome::Fail("Translation failed: no key".into()));
+    }
+
+    #[test]
+    fn focus_guard_leaves_show_unchanged() {
+        let show = || Outcome::Show { text: "Hola".into(), lang: "Spanish".into() };
+        assert_eq!(focus_guard(show(), "Spanish", Some(10), Some(20)), show());
+        assert_eq!(focus_guard(show(), "Spanish", Some(10), Some(10)), show());
+    }
+
+    #[test]
     fn a_translation_is_pasted_only_into_the_app_it_came_from() {
         let paste = || Outcome::Paste("Hola".into());
         assert_eq!(focus_guard(paste(), "Spanish", Some(10), Some(10)), paste(), "same app: paste");
@@ -234,6 +252,7 @@ mod tests {
     #[test]
     fn old_settings_files_load_with_translate_defaults() {
         let s: Settings = serde_json::from_str("{\"theme\":\"Dark\"}").unwrap();
+        assert_eq!(s.translate_output, TranslateOutput::Show);
         assert_eq!(s.translate_languages.len(), 8);
         assert_eq!(s.translate_provider, None);
     }

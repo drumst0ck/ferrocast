@@ -116,6 +116,8 @@ pub enum Msg {
         /// pid of the app the text came from: a Replace pastes only while it is still in front.
         source_pid: Option<i32>,
         result: Result<String, String>,
+        /// How long the model call took, in milliseconds.
+        ms: u64,
     },
     /// The floating shelf panel's items changed (drop in, remove, clear).
     ShelfChanged(Vec<PathBuf>),
@@ -1665,9 +1667,11 @@ pub fn ai_stream_with_key(
 pub fn translate_text(settings: &Settings, text: String, lang: String, source_pid: Option<i32>, bus: Bus) {
     let settings = settings.clone();
     std::thread::spawn(move || {
+        let started = std::time::Instant::now();
         let mut out = String::new();
         let result = ai_stream(&settings, &[], &ferrocast_core::translate::prompt(&text, &lang), |t| out.push_str(t)).map(|()| out);
-        bus.send(Msg::Translated { lang, source_pid, result });
+        let ms = started.elapsed().as_millis() as u64;
+        bus.send(Msg::Translated { lang, source_pid, result, ms });
     });
 }
 
