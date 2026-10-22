@@ -174,6 +174,8 @@ pub enum Msg {
     },
     /// Result of Add to Notion / Add Clipboard to Notion.
     NotionAdded(Result<NotionAddDone, NotionAddError>),
+    /// Preconditions checked for New Obsidian Note / daily note: the link to open or the refusal.
+    ObsidianSent(ObsidianPrepared),
     /// Result of the background Obsidian scan: vaults, the open one, and whether the app is installed.
     ObsidianScanned(ObsidianScan),
     /// The folder picker closed (None: cancelled).
@@ -216,6 +218,124 @@ pub fn scan_obsidian_config(config: &std::path::Path) -> (Vec<ferrocast_core::ob
         .and_then(|v| v.get("vaults")?.as_object().cloned())
         .and_then(|m| m.values().find(|e| e.get("open").and_then(|o| o.as_bool()) == Some(true))?.get("path")?.as_str().map(PathBuf::from));
     (vaults, open)
+}
+
+/// What a New Obsidian Note / daily note send is about.
+pub enum ObsidianJob {
+    New { title: String, text: String },
+    Daily { text: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ObsidianKind {
+    New,
+    Daily,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ObsidianRefusal {
+    FolderMissing,
+    NotInstalled,
+    DailyPluginOff,
+    TooLong,
+}
+
+impl ObsidianRefusal {
+    pub fn message(&self) -> &'static str {
+        match self {
+            Self::FolderMissing => "The vault folder was not found. Choose it again in Settings → Integrations.",
+            Self::NotInstalled => "Obsidian is not installed. Download it from obsidian.md.",
+            Self::DailyPluginOff => "Turn on the Daily notes plugin in Obsidian (Settings → Core plugins).",
+            Self::TooLong => "That is too long to send through Obsidian. Shorten it or paste it in Obsidian directly.",
+        }
+    }
+}
+
+pub struct ObsidianPrepared {
+    pub kind: ObsidianKind,
+    pub result: Result<String, ObsidianRefusal>,
+}
+
+/// Characters that cannot go in a file name (and `#^[]`, which break Obsidian links).
+const ILLEGAL_NAME_CHARS: &str = "/\\:*?\"<>|#^[]";
+
+fn clean_name(s: &str) -> String {
+    let spaced: String = s.chars().map(|c| if ILLEGAL_NAME_CHARS.contains(c) { ' ' } else { c }).collect();
+    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// File name (no extension) for a new note: the trimmed title, else the first non-empty line of the
+/// text (cut at 80 characters), else `yyyy-MM-dd HH.mm`; illegal characters become spaces.
+pub fn note_title(title: &str, text: &str, now: chrono::NaiveDateTime) -> String {
+    let raw = if title.trim().is_empty() {
+        text.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| l.chars().take(80).collect::<String>()).unwrap_or_default()
+    } else {
+        title.trim().to_string()
+    };
+    let cleaned = clean_name(&raw);
+    if cleaned.is_empty() {
+        now.format("%Y-%m-%d %H.%M").to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// `append=true` adds the content verbatim, so the next append must start on a new line.
+pub fn ensure_newline(text: &str) -> String {
+    if text.ends_with('\n') {
+        text.to_string()
+    } else {
+        format!("{text}\n")
+    }
+}
+
+/// Is the Daily notes core plugin on in this vault? `core-plugins.json` is an array of enabled ids or
+/// an object of id → bool. None: missing, unreadable or an unknown shape (let Obsidian answer).
+pub fn daily_plugin_enabled(vault: &std::path::Path) -> Option<bool> {
+    let raw = std::fs::read_to_string(vault.join(".obsidian/core-plugins.json")).ok()?;
+    match serde_json::from_str::<serde_json::Value>(&raw).ok()? {
+        serde_json::Value::Array(a) => Some(a.iter().any(|v| v.as_str() == Some("daily-notes"))),
+        serde_json::Value::Object(o) => Some(o.get("daily-notes").and_then(|v| v.as_bool()) == Some(true)),
+        _ => None,
+    }
+}
+
+/// Run the preconditions in order (folder, installed, daily plugin, length) and build the link.
+/// Blocking disk reads: call it from a worker thread only.
+pub fn obsidian_prepare(
+    job: &ObsidianJob,
+    vault: &std::path::Path,
+    name: &str,
+    installed: Option<bool>,
+    now: chrono::NaiveDateTime,
+) -> ObsidianPrepared {
+    let kind = match job {
+        ObsidianJob::New { .. } => ObsidianKind::New,
+        ObsidianJob::Daily { .. } => ObsidianKind::Daily,
+    };
+    let result = (|| {
+        if !vault.is_dir() {
+            return Err(ObsidianRefusal::FolderMissing);
+        }
+        if installed == Some(false) {
+            return Err(ObsidianRefusal::NotInstalled);
+        }
+        let uri = match job {
+            ObsidianJob::New { title, text } => ferrocast_core::obsidian::uri_new(name, &note_title(title, text, now), text, false),
+            ObsidianJob::Daily { text } => {
+                if daily_plugin_enabled(vault) == Some(false) {
+                    return Err(ObsidianRefusal::DailyPluginOff);
+                }
+                ferrocast_core::obsidian::uri_daily(name, &ensure_newline(text), true, true)
+            }
+        };
+        if ferrocast_core::obsidian::uri_len_ok(&uri) {
+            Ok(uri)
+        } else {
+            Err(ObsidianRefusal::TooLong)
+        }
+    })();
+    ObsidianPrepared { kind, result }
 }
 
 /// Is Obsidian installed? Blocking (spawns `mdfind`): call it from a worker thread only.

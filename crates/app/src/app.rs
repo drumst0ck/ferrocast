@@ -493,6 +493,15 @@ pub enum View {
         text: String,
         target: ferrocast_core::models::NotionTarget,
     },
+    /// New Obsidian Note form: optional title and the text.
+    ObsidianNew {
+        title: String,
+        text: String,
+    },
+    /// Append to Daily Note form: only the text.
+    ObsidianDaily {
+        text: String,
+    },
     Colors(Rgba),
     SnippetForm {
         id: Option<String>,
@@ -615,9 +624,13 @@ impl View {
             | View::NotionSearch
             | View::ObsidianSearch
             | View::Colors(_) => Shape::List,
-            View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::NotionAdd { .. } | View::Settings => {
-                Shape::Form
-            }
+            View::SnippetForm { .. }
+            | View::QuicklinkForm { .. }
+            | View::NoteEdit(_)
+            | View::NotionAdd { .. }
+            | View::ObsidianNew { .. }
+            | View::ObsidianDaily { .. }
+            | View::Settings => Shape::Form,
             _ => Shape::Single,
         }
     }
@@ -655,7 +668,7 @@ impl View {
                 vec![(primary, "↵"), ("Move", "⌘↑/↓"), BACK]
             }
             View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
-            View::NotionAdd { .. } => vec![("Send", "⌘↵"), BACK],
+            View::NotionAdd { .. } | View::ObsidianNew { .. } | View::ObsidianDaily { .. } => vec![("Send", "⌘↵"), BACK],
             View::Settings => vec![("Tabs", "⌘1–8"), ("Find", "⌘F"), BACK],
             _ => vec![],
         }
@@ -700,6 +713,8 @@ impl View {
             View::NotionSearch => "Search Notion",
             View::ObsidianSearch => "Search Obsidian",
             View::NotionAdd { .. } => "Add to Notion",
+            View::ObsidianNew { .. } => "New Obsidian Note",
+            View::ObsidianDaily { .. } => "Append to Daily Note",
             View::Colors(_) => "Copy Color as…",
             View::SnippetForm { .. } => "Snippet",
             View::QuicklinkForm { .. } => "Quicklink",
@@ -813,6 +828,15 @@ pub struct NotionAdd {
     pub sending: bool,
     pub schema: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
 }
+
+/// State of the New Obsidian Note / Append to Daily Note commands.
+#[derive(Default)]
+pub struct ObsidianCompose {
+    /// The precondition check of a send is running on a thread.
+    pub sending: bool,
+}
+
+const OBSIDIAN_NO_VAULT: &str = "Choose your Obsidian vault in Settings → Integrations.";
 
 /// Settings → Integrations → Obsidian: what the background scan found (None = still looking).
 #[derive(Default)]
@@ -992,6 +1016,8 @@ pub struct App {
     pub(crate) ov: ObsidianView,
     /// Add to Notion commands.
     na: NotionAdd,
+    /// New Obsidian Note / daily note commands.
+    pub(crate) oc: ObsidianCompose,
     /// Settings → Integrations → Obsidian.
     pub(crate) obsidian: ObsidianUi,
     rates: ferrocast_core::currency::Rates,
@@ -1218,6 +1244,7 @@ impl App {
             nv: NotionView::default(),
             ov: ObsidianView::default(),
             na: NotionAdd::default(),
+            oc: ObsidianCompose::default(),
             obsidian: ObsidianUi::default(),
             rates: store_rates,
             rates_checked_at: Instant::now(),
@@ -2198,6 +2225,79 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ New note / daily note (commands)
+
+    /// The chosen vault, or a toast and Settings → Integrations (first precondition, no I/O).
+    fn obsidian_compose_vault(&mut self) -> Option<ferrocast_core::obsidian::Vault> {
+        let vault = self.obsidian_vault();
+        if vault.is_none() {
+            self.toast(OBSIDIAN_NO_VAULT);
+            self.notion_open_settings_tab();
+        }
+        vault
+    }
+
+    /// ⌘↵ on the New Obsidian Note form.
+    pub(crate) fn obsidian_new_submit(&mut self) {
+        let View::ObsidianNew { title, text } = self.view().clone() else { return };
+        if title.trim().is_empty() && text.trim().is_empty() {
+            self.toast("Write something to send first.");
+            return;
+        }
+        self.obsidian_send(services::ObsidianJob::New { title, text });
+    }
+
+    /// ⌘↵ on the Append to Daily Note form.
+    pub(crate) fn obsidian_daily_submit(&mut self) {
+        let View::ObsidianDaily { text } = self.view().clone() else { return };
+        if text.trim().is_empty() {
+            self.toast("Write something to send first.");
+            return;
+        }
+        self.obsidian_send(services::ObsidianJob::Daily { text });
+    }
+
+    /// Check the preconditions on a thread (disk reads) and answer with `Msg::ObsidianSent`; the link is
+    /// opened (and the form cleared) only from the answer, on the UI thread.
+    fn obsidian_send(&mut self, job: services::ObsidianJob) {
+        if self.oc.sending {
+            return;
+        }
+        let Some(vault) = self.obsidian_compose_vault() else { return };
+        self.oc.sending = true;
+        let installed = self.obsidian_installed();
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            let now = chrono::Local::now().naive_local();
+            bus.send(Msg::ObsidianSent(services::obsidian_prepare(&job, &vault.path, &vault.name, installed, now)));
+        });
+    }
+
+    fn handle_obsidian_sent(&mut self, r: services::ObsidianPrepared) {
+        self.oc.sending = false;
+        let uri = match r.result {
+            Ok(uri) => uri,
+            Err(refusal) => {
+                self.toast(refusal.message());
+                if matches!(refusal, services::ObsidianRefusal::FolderMissing) {
+                    self.notion_open_settings_tab();
+                }
+                return;
+            }
+        };
+        notion_io::open_url(&uri);
+        let was_new = r.kind == services::ObsidianKind::New;
+        self.toast(if was_new { "Sent to Obsidian" } else { "Added to today's daily note" });
+        match self.stack.last_mut() {
+            Some(View::ObsidianNew { title, text }) if was_new => {
+                title.clear();
+                text.clear();
+            }
+            Some(View::ObsidianDaily { text }) if !was_new => text.clear(),
+            _ => {}
+        }
+    }
+
     // ------------------------------------------------------------ Obsidian (Settings → Integrations)
 
     /// Vaults found by the last scan (None while it has not answered).
@@ -2639,6 +2739,7 @@ impl App {
                 Msg::NotionSearched { request, result } => self.handle_notion_searched(request, result),
                 Msg::NotionViewSearched { request, append, result } => self.handle_notion_view_searched(request, append, result),
                 Msg::NotionAdded(r) => self.handle_notion_added(r),
+                Msg::ObsidianSent(r) => self.handle_obsidian_sent(r),
                 Msg::ObsidianIndexed { request, vault, notes } => self.handle_obsidian_indexed(request, vault, notes),
                 Msg::ObsidianContent { request, query, hits } => self.handle_obsidian_content(request, query, hits),
                 Msg::ObsidianPreview { request, result } => self.handle_obsidian_preview(request, result),
@@ -5006,6 +5107,24 @@ impl App {
             Builtin::AddToNotion => self.notion_add_open(None),
             Builtin::AddClipboardToNotion => self.notion_add_clipboard(),
             Builtin::CreateNote => self.new_note(),
+            Builtin::NewObsidianNote => {
+                if self.obsidian_compose_vault().is_some() {
+                    self.push(View::ObsidianNew { title: String::new(), text: String::new() });
+                }
+            }
+            Builtin::AppendToDailyNote => {
+                if self.obsidian_compose_vault().is_some() {
+                    self.push(View::ObsidianDaily { text: String::new() });
+                }
+            }
+            Builtin::AddClipboardToDailyNote => {
+                if self.obsidian_compose_vault().is_some() {
+                    match notion_io::read_clipboard().filter(|t| !t.trim().is_empty()) {
+                        Some(text) => self.obsidian_send(services::ObsidianJob::Daily { text }),
+                        None => self.toast("The clipboard has no text."),
+                    }
+                }
+            }
             Builtin::SearchObsidian => {
                 self.push(View::ObsidianSearch);
                 self.obsidian_view_open();

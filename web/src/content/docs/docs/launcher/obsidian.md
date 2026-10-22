@@ -1,6 +1,6 @@
 ---
-title: "Obsidian: search your vault"
-description: "Search the notes in your Obsidian vault from the launcher, preview them beside the list, open them in Obsidian and copy wikilinks. Files are read locally."
+title: "Obsidian: search and create"
+description: "Search your Obsidian vault from the launcher with a live preview, and create notes or add to your daily note without leaving Ferrocast."
 sidebar:
   order: 15
 ---
@@ -47,6 +47,20 @@ Press <kbd>↵</kbd> to open the selected note in Obsidian, or <kbd>⌘</kbd> <k
 
 Links longer than 8,000 characters are refused with a toast instead of being cut. If Ferrocast has found that Obsidian is not installed, **Open in Obsidian** and **Search in Obsidian** show "Obsidian is not installed. Download it from obsidian.md." and open nothing. Until that check has finished, Ferrocast tries to open the link anyway and lets macOS answer.
 
+## Create notes
+
+Three more commands send text to your vault. Ferrocast never writes the file itself: it asks Obsidian through an `obsidian://` link, so your vault's own settings (default folder, templates, date format) apply.
+
+| Command | What it does |
+|---|---|
+| **New Obsidian Note** | A form with a title and the text. <kbd>⌘</kbd> <kbd>↵</kbd> creates the note and opens it in Obsidian. It lands where your vault's "Default location for new notes" says. |
+| **Append to Daily Note** | A form with the text. <kbd>⌘</kbd> <kbd>↵</kbd> adds it to the end of today's daily note and Obsidian stays in the background. A line break is added after your text. |
+| **Add Clipboard to Daily Note** | Adds the text on the clipboard to today's daily note, with no form. |
+
+If the title is empty, Ferrocast uses the first line of the text (up to 80 characters), or the date and time (`2026-10-22 18.30`) when there is no text. Characters that cannot go in a file name (`/ \ : * ? " < > |` and `# ^ [ ]`) are replaced by a space. In the form, <kbd>↵</kbd> in the title moves to the text and <kbd>esc</kbd> goes back.
+
+The daily note needs Obsidian's **Daily notes** core plugin (Settings → Core plugins). If Ferrocast can read that the plugin is off, it tells you and sends nothing. Each command checks, in this order: a vault is chosen, the folder exists, Obsidian is installed and, for the daily note, the plugin is on. When a check fails, you get a message, nothing is opened and the text you typed stays in the form. A link over 8,000 characters is refused instead of being cut.
+
 ## What is read
 
 - Ferrocast reads your vault on your Mac. Nothing is uploaded and no network request is made.
@@ -66,3 +80,7 @@ Links longer than 8,000 characters are refused with a toast instead of being cut
 | A word inside a note is not found | Searching inside notes starts at 3 characters, skips notes that are still cloud placeholders and stops after reading a fixed amount of text. Search by title, or use **Search in Obsidian**. |
 | **That link is too long for Obsidian (over 8,000 characters).** | Shorten the text you are searching for. |
 | **Could not read this note.** | The file was deleted, moved or is not readable. Reopen the command to refresh the index. |
+| **Choose your Obsidian vault in Settings → Integrations.** | You used a create command before choosing a vault. The tab opens; pick the vault and send again. |
+| **Turn on the Daily notes plugin in Obsidian (Settings → Core plugins).** | Enable the core plugin in Obsidian and send again. Your text is still in the form. |
+| **That is too long to send through Obsidian.** | New notes and daily entries travel inside a link. Shorten the text or paste it into Obsidian directly. |
+| **The clipboard has no text.** | **Add Clipboard to Daily Note** only sends text. Copy some text first. |

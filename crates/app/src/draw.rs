@@ -219,6 +219,14 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 text: "Ask for the revised numbers.\n\n- budget\n- start date".into(),
                 target: ferrocast_core::models::NotionTarget { id: "d1".into(), kind: "data_source".into(), title: "Tasks".into() },
             }),
+            // the New Obsidian Note form with a fixed vault and text
+            Ok("obsidian-new") => {
+                app.settings.obsidian_vault = Some(std::path::PathBuf::from("/Users/me/Work Notes"));
+                app.push(View::ObsidianNew {
+                    title: "Call Ana about the offer".into(),
+                    text: "Ask for the revised numbers.\n\n- budget\n- start date".into(),
+                })
+            }
             Ok("notion-list") => {
                 app.run_builtin(Builtin::SearchNotion);
                 let ago = |h: i64| (chrono::Utc::now() - chrono::Duration::hours(h)).to_rfc3339();
@@ -1310,6 +1318,14 @@ impl App {
             }
             View::NotionAdd { .. } if k.cmd_enter => {
                 self.notion_add_submit();
+                true
+            }
+            View::ObsidianNew { .. } if k.cmd_enter => {
+                self.obsidian_new_submit();
+                true
+            }
+            View::ObsidianDaily { .. } if k.cmd_enter => {
+                self.obsidian_daily_submit();
                 true
             }
             _ => false,
@@ -5037,6 +5053,8 @@ impl App {
                 // The match below borrows the view stack mutably; take the icon cache out so these
                 // screens can still draw cached symbols.
                 let na_sending = self.na.sending;
+                let oc_sending = self.oc.sending;
+                let oc_vault = self.obsidian_vault().map(|v| v.name).unwrap_or_default();
                 let mut icons = std::mem::replace(&mut self.icons, IconCache::new(self.store.images_dir()));
                 let mut clear_hotkey = false;
                 let mut set_hotkey = false;
@@ -5088,6 +5106,47 @@ impl App {
                                 r.request_focus();
                             }
                             lbl(ui, if na_sending { "Sending…" } else { "Send with ⌘↵ · esc to go back" });
+                        }
+                        View::ObsidianNew { title, text } => {
+                            let text_id = Id::new("on_text");
+                            lbl(ui, &format!("Creates a note in {oc_vault}"));
+                            lbl(ui, "Title (optional)");
+                            let r = ui.add(
+                                TextEdit::singleline(title)
+                                    .id(Id::new("on_title"))
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text("Defaults to the first line"),
+                            );
+                            if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                                ui.memory_mut(|m| m.request_focus(text_id));
+                            }
+                            lbl(ui, "Text");
+                            let r = ui.add(
+                                TextEdit::multiline(text)
+                                    .id(text_id)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(9)
+                                    .hint_text("Type or paste. Markdown is supported."),
+                            );
+                            if ff {
+                                r.request_focus();
+                            }
+                            lbl(ui, if oc_sending { "Sending…" } else { "Send with ⌘↵ · esc to go back" });
+                        }
+                        View::ObsidianDaily { text } => {
+                            lbl(ui, &format!("Adds to today's daily note in {oc_vault}"));
+                            lbl(ui, "Text");
+                            let r = ui.add(
+                                TextEdit::multiline(text)
+                                    .id(Id::new("od_text"))
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(11)
+                                    .hint_text("Type or paste. Markdown is supported."),
+                            );
+                            if ff {
+                                r.request_focus();
+                            }
+                            lbl(ui, if oc_sending { "Sending…" } else { "Send with ⌘↵ · esc to go back" });
                         }
                         View::QuicklinkForm { name, link, open_with, .. } => {
                             lbl(ui, "Name");

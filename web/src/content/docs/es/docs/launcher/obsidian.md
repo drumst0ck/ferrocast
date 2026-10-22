@@ -1,6 +1,6 @@
 ---
-title: "Obsidian: buscar en tu vault"
-description: "Busca las notas de tu vault de Obsidian desde el lanzador, previsualízalas, ábrelas en Obsidian y copia wikilinks. Los archivos se leen en local."
+title: "Obsidian: buscar y crear notas"
+description: "Busca en tu vault de Obsidian desde el lanzador con vista previa, y crea notas o añade a la nota diaria sin salir de Ferrocast. Todo se lee en local."
 sidebar:
   order: 15
 ---
@@ -47,6 +47,20 @@ Pulsa <kbd>↵</kbd> para abrir la nota seleccionada en Obsidian, o <kbd>⌘</kb
 
 Los enlaces de más de 8.000 caracteres se rechazan con un aviso en lugar de recortarse. Si Ferrocast ha comprobado que Obsidian no está instalado, **Open in Obsidian** y **Search in Obsidian** muestran «Obsidian is not installed. Download it from obsidian.md.» y no abren nada. Mientras esa comprobación no haya terminado, Ferrocast intenta abrir el enlace de todos modos y deja que responda macOS.
 
+## Crear notas
+
+Tres comandos más envían texto a tu vault. Ferrocast nunca escribe el archivo por su cuenta: se lo pide a Obsidian mediante un enlace `obsidian://`, así que se aplican los ajustes de tu vault (carpeta por defecto, plantillas, formato de fecha).
+
+| Comando | Qué hace |
+|---|---|
+| **New Obsidian Note** | Un formulario con título y texto. <kbd>⌘</kbd> <kbd>↵</kbd> crea la nota y la abre en Obsidian. Se guarda donde indique «Default location for new notes» de tu vault. |
+| **Append to Daily Note** | Un formulario con el texto. <kbd>⌘</kbd> <kbd>↵</kbd> lo añade al final de la nota diaria de hoy y Obsidian sigue en segundo plano. Se añade un salto de línea tras tu texto. |
+| **Add Clipboard to Daily Note** | Añade el texto del portapapeles a la nota diaria de hoy, sin formulario. |
+
+Si el título está vacío, Ferrocast usa la primera línea del texto (hasta 80 caracteres) o, si no hay texto, la fecha y la hora (`2026-10-22 18.30`). Los caracteres que no pueden ir en un nombre de archivo (`/ \ : * ? " < > |` y `# ^ [ ]`) se sustituyen por un espacio. En el formulario, <kbd>↵</kbd> en el título pasa al texto y <kbd>esc</kbd> vuelve atrás.
+
+La nota diaria necesita el complemento básico **Daily notes** de Obsidian (Ajustes → Core plugins). Si Ferrocast puede leer que está desactivado, te lo dice y no envía nada. Cada comando comprueba, por este orden: que hay un vault elegido, que la carpeta existe, que Obsidian está instalado y, en la nota diaria, que el complemento está activo. Si falla una comprobación, recibes un mensaje, no se abre nada y el texto que escribiste se queda en el formulario. Un enlace de más de 8.000 caracteres se rechaza en lugar de recortarse.
+
 ## Qué se lee
 
 - Ferrocast lee tu vault en tu Mac. No se sube nada y no se hace ninguna petición de red.
@@ -66,3 +80,7 @@ Los enlaces de más de 8.000 caracteres se rechazan con un aviso en lugar de rec
 | No se encuentra una palabra dentro de una nota | La búsqueda dentro de las notas empieza a los 3 caracteres, omite las notas que aún son marcadores de la nube y se detiene tras leer una cantidad fija de texto. Busca por título o usa **Search in Obsidian**. |
 | **That link is too long for Obsidian (over 8,000 characters).** | Acorta el texto que estás buscando. |
 | **Could not read this note.** | El archivo se borró, se movió o no se puede leer. Vuelve a abrir el comando para actualizar el índice. |
+| **Choose your Obsidian vault in Settings → Integrations.** | Usaste un comando de creación antes de elegir un vault. Se abre la pestaña; elige el vault y vuelve a enviar. |
+| **Turn on the Daily notes plugin in Obsidian (Settings → Core plugins).** | Activa el complemento básico en Obsidian y vuelve a enviar. Tu texto sigue en el formulario. |
+| **That is too long to send through Obsidian.** | Las notas nuevas y las entradas diarias viajan dentro de un enlace. Acorta el texto o pégalo directamente en Obsidian. |
+| **The clipboard has no text.** | **Add Clipboard to Daily Note** solo envía texto. Copia primero algo de texto. |

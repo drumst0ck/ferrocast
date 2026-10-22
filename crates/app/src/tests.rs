@@ -93,6 +93,7 @@ fn fixture() -> App {
         nv: Default::default(),
         ov: Default::default(),
         na: Default::default(),
+        oc: Default::default(),
         obsidian: Default::default(),
         rates: Default::default(),
         rates_checked_at: Instant::now(),
@@ -9954,4 +9955,390 @@ fn every_preview_block_renders_without_panicking_and_the_title_sits_above() {
     app.ov.hide_preview = true;
     let text = painted(&mut app);
     assert!(!text.contains("Heading one"), "{text}");
+}
+
+// ---------------------------------------------------------------- New Obsidian Note / Append to Daily Note (T9)
+
+fn oc_app(vault: Option<&std::path::Path>) -> App {
+    let _ = notion_io::take_opened();
+    notion_io::set_test_clipboard(None);
+    let mut app = fixture();
+    app.settings.obsidian_vault = vault.map(|p| p.to_path_buf());
+    app.obsidian.installed = Some(true);
+    app
+}
+
+fn oc_vault_with_plugins(json: Option<&str>) -> PathBuf {
+    let v = ov_vault(&[("Alpha.md", "x")]);
+    if let Some(j) = json {
+        std::fs::create_dir_all(v.join(".obsidian")).unwrap();
+        std::fs::write(v.join(".obsidian/core-plugins.json"), j).unwrap();
+    }
+    v
+}
+
+fn oc_new_form(app: &mut App, title: &str, text: &str) {
+    app.run_builtin(Builtin::NewObsidianNote);
+    match app.stack.last_mut().unwrap() {
+        View::ObsidianNew { title: t, text: x } => {
+            *t = title.into();
+            *x = text.into();
+        }
+        _ => panic!("not on the New Obsidian Note form"),
+    }
+}
+
+fn oc_new_fields(app: &App) -> (String, String) {
+    match app.view() {
+        View::ObsidianNew { title, text } => (title.clone(), text.clone()),
+        _ => panic!("not on the New Obsidian Note form"),
+    }
+}
+
+fn oc_daily_form(app: &mut App, text: &str) {
+    app.run_builtin(Builtin::AppendToDailyNote);
+    match app.stack.last_mut().unwrap() {
+        View::ObsidianDaily { text: x } => *x = text.into(),
+        _ => panic!("not on the Append to Daily Note form"),
+    }
+}
+
+fn oc_daily_text(app: &App) -> String {
+    match app.view() {
+        View::ObsidianDaily { text } => text.clone(),
+        _ => panic!("not on the Append to Daily Note form"),
+    }
+}
+
+fn oc_send_new(app: &mut App) {
+    app.obsidian_new_submit();
+    drain_until(app, |a| !a.oc.sending);
+}
+
+fn oc_send_daily(app: &mut App) {
+    app.obsidian_daily_submit();
+    drain_until(app, |a| !a.oc.sending);
+}
+
+fn settings_tab_of(app: &App) -> Option<usize> {
+    app.ctx.data(|d| d.get_temp(Id::new("settings_tab")))
+}
+
+fn clock(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> chrono::NaiveDateTime {
+    chrono::NaiveDate::from_ymd_opt(y, mo, d).unwrap().and_hms_opt(h, mi, 7).unwrap()
+}
+
+#[test]
+fn the_new_command_builds_the_exact_uri_with_unicode_spaces_amp_hash_and_newlines() {
+    let vault = oc_vault_with_plugins(None);
+    let mut app = oc_app(Some(&vault));
+    oc_new_form(&mut app, "Café plan", "a & b #tag\nline 2 é");
+    oc_send_new(&mut app);
+    assert_eq!(
+        notion_io::take_opened(),
+        vec!["obsidian://new?vault=My%20Vault&name=Caf%C3%A9%20plan&content=a%20%26%20b%20%23tag%0Aline%202%20%C3%A9".to_string()],
+        "no silent flag: Obsidian opens the new note"
+    );
+    assert_eq!(toast_text(&app), "Sent to Obsidian");
+    assert_eq!(oc_new_fields(&app), (String::new(), String::new()), "the form is cleared after a send");
+}
+
+#[test]
+fn titles_are_trimmed_cleaned_and_fall_back_to_the_first_line_then_the_clock() {
+    let now = clock(2026, 3, 9, 14, 5);
+    assert_eq!(services::note_title("  Plan  ", "body", now), "Plan");
+    assert_eq!(services::note_title("a/b\\c:d*e?f\"g<h>i|j", "", now), "a b c d e f g h i j");
+    assert_eq!(services::note_title("x #y ^z [w] ]", "", now), "x y z w");
+    assert_eq!(services::note_title("a  /  b", "", now), "a b", "runs of spaces collapse");
+    assert_eq!(services::note_title("", "\n\n  First line here \nsecond", now), "First line here");
+    assert_eq!(services::note_title("   ", "A/B", now), "A B");
+    assert_eq!(services::note_title("", "", now), "2026-03-09 14.05");
+    assert_eq!(services::note_title("", "  \n ", now), "2026-03-09 14.05");
+    assert_eq!(services::note_title("///", "body", now), "2026-03-09 14.05", "empty after cleaning: the date-time");
+    assert_eq!(services::note_title("", "#^[]", now), "2026-03-09 14.05");
+}
+
+#[test]
+fn the_first_line_fallback_is_cut_at_80_characters_on_a_character_boundary() {
+    let now = clock(2026, 1, 2, 3, 4);
+    let line = "é日".repeat(60); // 120 chars
+    let t = services::note_title("", &format!("{line}\nrest"), now);
+    assert_eq!(t.chars().count(), 80);
+    assert!(line.starts_with(&t));
+    // an explicit title is not cut
+    assert_eq!(services::note_title(&line, "", now).chars().count(), 120);
+}
+
+#[test]
+fn an_empty_title_in_the_form_uses_the_first_line_and_with_nothing_the_date_time_shape() {
+    let vault = oc_vault_with_plugins(None);
+    let mut app = oc_app(Some(&vault));
+    oc_new_form(&mut app, "", "Meeting: notes\nmore");
+    oc_send_new(&mut app);
+    let u = notion_io::take_opened().remove(0);
+    assert!(u.starts_with("obsidian://new?vault=My%20Vault&name=Meeting%20notes&content="), "{u}");
+    oc_new_form(&mut app, "", "");
+    app.obsidian_new_submit();
+    assert_eq!(toast_text(&app), "Write something to send first.");
+    assert!(notion_io::take_opened().is_empty(), "nothing at all to send");
+    // text of only a character that cleans away: the date-time (yyyy-MM-dd HH.mm)
+    oc_new_form(&mut app, "", "***");
+    oc_send_new(&mut app);
+    let u = notion_io::take_opened().remove(0);
+    let name = u.split("&name=").nth(1).unwrap().split('&').next().unwrap().replace("%20", " ");
+    assert!(chrono::NaiveDateTime::parse_from_str(&format!("{name}.00"), "%Y-%m-%d %H.%M.%S").is_ok(), "{name}");
+}
+
+#[test]
+fn the_daily_command_appends_silently_and_adds_the_missing_trailing_newline() {
+    let vault = oc_vault_with_plugins(None);
+    let mut app = oc_app(Some(&vault));
+    oc_daily_form(&mut app, "buy milk & eggs");
+    oc_send_daily(&mut app);
+    assert_eq!(
+        notion_io::take_opened(),
+        vec!["obsidian://daily?vault=My%20Vault&content=buy%20milk%20%26%20eggs%0A&append=true&silent=true".to_string()]
+    );
+    assert_eq!(toast_text(&app), "Added to today's daily note");
+    assert_eq!(oc_daily_text(&app), "", "cleared after the send");
+    // text that already ends in a newline is sent as is
+    oc_daily_form(&mut app, "line\n");
+    oc_send_daily(&mut app);
+    assert_eq!(notion_io::take_opened(), vec![obsidian::uri_daily("My Vault", "line\n", true, true)]);
+    assert_eq!(services::ensure_newline("a"), "a\n");
+    assert_eq!(services::ensure_newline("a\n"), "a\n");
+    assert_eq!(services::ensure_newline("a\r\n"), "a\r\n");
+}
+
+#[test]
+fn the_daily_form_refuses_empty_text() {
+    let vault = oc_vault_with_plugins(None);
+    let mut app = oc_app(Some(&vault));
+    oc_daily_form(&mut app, " \n ");
+    app.obsidian_daily_submit();
+    assert_eq!(toast_text(&app), "Write something to send first.");
+    assert!(notion_io::take_opened().is_empty());
+}
+
+#[test]
+fn the_clipboard_command_sends_the_clipboard_text_with_no_form() {
+    let vault = oc_vault_with_plugins(None);
+    let mut app = oc_app(Some(&vault));
+    notion_io::set_test_clipboard(Some("copied é"));
+    app.run_builtin(Builtin::AddClipboardToDailyNote);
+    assert!(matches!(app.view(), View::Root), "no form");
+    drain_until(&mut app, |a| !a.oc.sending);
+    assert_eq!(notion_io::take_opened(), vec![obsidian::uri_daily("My Vault", "copied é\n", true, true)]);
+    assert_eq!(toast_text(&app), "Added to today's daily note");
+}
+
+#[test]
+fn an_empty_clipboard_toasts_and_opens_nothing() {
+    let vault = oc_vault_with_plugins(None);
+    for clip in [None, Some(""), Some(" \n ")] {
+        let mut app = oc_app(Some(&vault));
+        notion_io::set_test_clipboard(clip);
+        app.run_builtin(Builtin::AddClipboardToDailyNote);
+        assert_eq!(toast_text(&app), "The clipboard has no text.");
+        std::thread::sleep(Duration::from_millis(50));
+        app.drain();
+        assert!(notion_io::take_opened().is_empty());
+    }
+}
+
+const NO_VAULT: &str = "Choose your Obsidian vault in Settings → Integrations.";
+const GONE_VAULT: &str = "The vault folder was not found. Choose it again in Settings → Integrations.";
+const NOT_INSTALLED: &str = "Obsidian is not installed. Download it from obsidian.md.";
+const PLUGIN_OFF: &str = "Turn on the Daily notes plugin in Obsidian (Settings → Core plugins).";
+
+#[test]
+fn no_vault_toasts_opens_the_integrations_tab_and_opens_nothing_for_all_three_commands() {
+    for b in [Builtin::NewObsidianNote, Builtin::AppendToDailyNote, Builtin::AddClipboardToDailyNote] {
+        let mut app = oc_app(None);
+        notion_io::set_test_clipboard(Some("text"));
+        app.run_builtin(b);
+        std::thread::sleep(Duration::from_millis(50));
+        app.drain();
+        assert_eq!(toast_text(&app), NO_VAULT, "{b:?}");
+        assert!(matches!(app.view(), View::Settings), "{b:?}");
+        assert_eq!(settings_tab_of(&app), Some(draw::INTEGRATIONS_TAB));
+        assert!(notion_io::take_opened().is_empty());
+    }
+}
+
+#[test]
+fn a_vault_folder_gone_from_disk_toasts_jumps_to_settings_keeps_the_form_and_opens_nothing() {
+    let gone = std::env::temp_dir().join(format!("ferrocast-oc-gone-{}", uuid::Uuid::new_v4()));
+    let mut app = oc_app(Some(&gone));
+    oc_new_form(&mut app, "T", "typed");
+    oc_send_new(&mut app);
+    assert_eq!(toast_text(&app), GONE_VAULT);
+    assert!(matches!(app.view(), View::Settings));
+    assert_eq!(settings_tab_of(&app), Some(draw::INTEGRATIONS_TAB));
+    app.pop();
+    assert_eq!(oc_new_fields(&app), ("T".into(), "typed".into()), "the typed text is kept");
+    app.pop();
+    // the daily form and the clipboard command check it too
+    oc_daily_form(&mut app, "typed");
+    oc_send_daily(&mut app);
+    assert_eq!(toast_text(&app), GONE_VAULT);
+    let mut app = oc_app(Some(&gone));
+    notion_io::set_test_clipboard(Some("c"));
+    app.run_builtin(Builtin::AddClipboardToDailyNote);
+    drain_until(&mut app, |a| !a.oc.sending);
+    assert_eq!(toast_text(&app), GONE_VAULT);
+    assert!(matches!(app.view(), View::Settings));
+    assert!(notion_io::take_opened().is_empty());
+}
+
+#[test]
+fn obsidian_known_missing_toasts_and_opens_nothing_while_unknown_proceeds() {
+    let vault = oc_vault_with_plugins(None);
+    let mut app = oc_app(Some(&vault));
+    app.obsidian.installed = Some(false);
+    oc_new_form(&mut app, "T", "typed");
+    oc_send_new(&mut app);
+    assert_eq!(toast_text(&app), NOT_INSTALLED);
+    assert!(notion_io::take_opened().is_empty());
+    assert!(matches!(app.view(), View::ObsidianNew { .. }), "stays on the form");
+    assert_eq!(oc_new_fields(&app).1, "typed");
+    app.pop();
+    oc_daily_form(&mut app, "x");
+    oc_send_daily(&mut app);
+    assert_eq!(toast_text(&app), NOT_INSTALLED);
+    assert!(notion_io::take_opened().is_empty());
+    app.obsidian.installed = None;
+    oc_send_daily(&mut app);
+    assert_eq!(notion_io::take_opened().len(), 1, "not scanned yet: let the system answer");
+}
+
+#[test]
+fn the_precondition_order_is_vault_then_folder_then_installed_then_plugin() {
+    let gone = std::env::temp_dir().join(format!("ferrocast-oc-gone-{}", uuid::Uuid::new_v4()));
+    let mut app = oc_app(Some(&gone));
+    app.obsidian.installed = Some(false);
+    oc_new_form(&mut app, "T", "x");
+    oc_send_new(&mut app);
+    assert_eq!(toast_text(&app), GONE_VAULT, "folder before installed");
+    let vault = oc_vault_with_plugins(Some(r#"["file-explorer"]"#));
+    let mut app = oc_app(Some(&vault));
+    app.obsidian.installed = Some(false);
+    oc_daily_form(&mut app, "x");
+    oc_send_daily(&mut app);
+    assert_eq!(toast_text(&app), NOT_INSTALLED, "installed before the plugin");
+}
+
+#[test]
+fn the_daily_plugin_is_read_from_core_plugins_in_array_and_object_forms() {
+    let off_array = oc_vault_with_plugins(Some(r#"["file-explorer","graph"]"#));
+    let on_array = oc_vault_with_plugins(Some(r#"["file-explorer","daily-notes"]"#));
+    let off_obj = oc_vault_with_plugins(Some(r#"{"file-explorer":true,"daily-notes":false}"#));
+    let absent_obj = oc_vault_with_plugins(Some(r#"{"file-explorer":true}"#));
+    let on_obj = oc_vault_with_plugins(Some(r#"{"daily-notes":true}"#));
+    assert_eq!(services::daily_plugin_enabled(&off_array), Some(false));
+    assert_eq!(services::daily_plugin_enabled(&on_array), Some(true));
+    assert_eq!(services::daily_plugin_enabled(&off_obj), Some(false));
+    assert_eq!(services::daily_plugin_enabled(&absent_obj), Some(false));
+    assert_eq!(services::daily_plugin_enabled(&on_obj), Some(true));
+    // missing, unreadable (a directory in its place) and malformed: unknown, so Obsidian answers
+    assert_eq!(services::daily_plugin_enabled(&oc_vault_with_plugins(None)), None);
+    assert_eq!(services::daily_plugin_enabled(&oc_vault_with_plugins(Some("not json"))), None);
+    assert_eq!(services::daily_plugin_enabled(&oc_vault_with_plugins(Some("42"))), None);
+    let dir = oc_vault_with_plugins(None);
+    std::fs::create_dir_all(dir.join(".obsidian/core-plugins.json")).unwrap();
+    assert_eq!(services::daily_plugin_enabled(&dir), None);
+}
+
+#[test]
+fn the_daily_plugin_off_toasts_and_opens_nothing_but_the_new_note_does_not_care() {
+    let vault = oc_vault_with_plugins(Some(r#"["file-explorer"]"#));
+    let mut app = oc_app(Some(&vault));
+    oc_daily_form(&mut app, "typed");
+    oc_send_daily(&mut app);
+    assert_eq!(toast_text(&app), PLUGIN_OFF);
+    assert!(notion_io::take_opened().is_empty());
+    assert_eq!(oc_daily_text(&app), "typed", "kept");
+    let mut app = oc_app(Some(&vault));
+    notion_io::set_test_clipboard(Some("clip"));
+    app.run_builtin(Builtin::AddClipboardToDailyNote);
+    drain_until(&mut app, |a| !a.oc.sending);
+    assert_eq!(toast_text(&app), PLUGIN_OFF);
+    assert!(notion_io::take_opened().is_empty());
+    let mut app = oc_app(Some(&vault));
+    oc_new_form(&mut app, "T", "x");
+    oc_send_new(&mut app);
+    assert_eq!(notion_io::take_opened().len(), 1);
+}
+
+#[test]
+fn a_missing_or_unreadable_plugin_file_lets_the_daily_note_through() {
+    let vault = oc_vault_with_plugins(None);
+    let mut app = oc_app(Some(&vault));
+    oc_daily_form(&mut app, "x");
+    oc_send_daily(&mut app);
+    assert_eq!(notion_io::take_opened().len(), 1);
+    let on = oc_vault_with_plugins(Some(r#"{"daily-notes":true}"#));
+    let mut app = oc_app(Some(&on));
+    oc_daily_form(&mut app, "x");
+    oc_send_daily(&mut app);
+    assert_eq!(notion_io::take_opened().len(), 1);
+}
+
+#[test]
+fn a_uri_over_8000_characters_is_refused_with_the_form_kept_and_never_truncated() {
+    let vault = oc_vault_with_plugins(None);
+    let mut app = oc_app(Some(&vault));
+    let big = "é".repeat(2_000); // 12,000 encoded characters
+    oc_new_form(&mut app, "T", &big);
+    oc_send_new(&mut app);
+    let msg = "That is too long to send through Obsidian. Shorten it or paste it in Obsidian directly.";
+    assert_eq!(toast_text(&app), msg);
+    assert!(notion_io::take_opened().is_empty());
+    assert_eq!(oc_new_fields(&app).1, big);
+    app.pop();
+    oc_daily_form(&mut app, &big);
+    oc_send_daily(&mut app);
+    assert_eq!(toast_text(&app), msg);
+    assert_eq!(oc_daily_text(&app), big);
+    // clipboard too
+    notion_io::set_test_clipboard(Some(&big));
+    app.run_builtin(Builtin::AddClipboardToDailyNote);
+    drain_until(&mut app, |a| !a.oc.sending);
+    assert_eq!(toast_text(&app), msg);
+    assert!(notion_io::take_opened().is_empty());
+    // just under the limit goes through
+    let ok = "a".repeat(7_900);
+    oc_daily_form(&mut app, &ok);
+    oc_send_daily(&mut app);
+    assert_eq!(notion_io::take_opened().len(), 1);
+}
+
+#[test]
+fn the_form_commands_with_no_vault_do_not_open_a_form_and_the_commands_are_listed() {
+    let mut app = oc_app(None);
+    app.run_builtin(Builtin::NewObsidianNote);
+    assert!(matches!(app.view(), View::Settings));
+    assert_eq!(Builtin::NewObsidianNote.title(), "New Obsidian Note");
+    assert_eq!(Builtin::AppendToDailyNote.title(), "Append to Daily Note");
+    assert_eq!(Builtin::AddClipboardToDailyNote.title(), "Add Clipboard to Daily Note");
+    for b in [Builtin::NewObsidianNote, Builtin::AppendToDailyNote, Builtin::AddClipboardToDailyNote] {
+        assert!(Builtin::ALL.contains(&b));
+        assert!(b.keywords().contains(&"obsidian".to_string()));
+    }
+    assert!(Builtin::NewObsidianNote.keywords().iter().any(|k| k == "capture"));
+    assert!(Builtin::AppendToDailyNote.keywords().iter().any(|k| k == "journal"));
+}
+
+#[test]
+fn the_forms_paint_and_send_with_cmd_enter() {
+    let vault = oc_vault_with_plugins(None);
+    let mut app = oc_app(Some(&vault));
+    oc_new_form(&mut app, "Hi", "body");
+    let text = painted(&mut app);
+    assert!(text.contains("Title") && text.contains("Text") && text.contains("Send"), "{text}");
+    assert_eq!(app.view().footer_hints().first().copied(), Some(("Send", "⌘↵")));
+    app.pop();
+    oc_daily_form(&mut app, "x");
+    let text = painted(&mut app);
+    assert!(!text.contains("Title"), "the daily form has only the text: {text}");
 }
