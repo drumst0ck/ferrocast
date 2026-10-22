@@ -92,6 +92,7 @@ fn fixture() -> App {
         notion: Default::default(),
         nv: Default::default(),
         na: Default::default(),
+        obsidian: Default::default(),
         rates: Default::default(),
         rates_checked_at: Instant::now(),
         sec_cache: None,
@@ -6764,7 +6765,7 @@ fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
         (3, P::ClaudeCode, None, 0, 1, 0),
         (4, P::OpenAiCompatible, Some(P::ChatGpt), 1, 1, 0),
         (5, P::OpenAiCompatible, None, 1, 0, 0),
-        (6, P::OpenAiCompatible, None, 2, 0, 0),
+        (6, P::OpenAiCompatible, None, 2, 1, 0),
         (7, P::OpenAiCompatible, None, 0, 0, 2),
     ];
     for (tab, chat, tr, texts, combos, drags) in cases {
@@ -8696,7 +8697,7 @@ fn without_a_token_the_target_and_search_rows_are_inert_but_visible() {
     let hits: Vec<(String, Id, Rect, bool)> = app.ctx.data(|d| d.get_temp(Id::new("ctl-hits"))).unwrap_or_default();
     let small: Vec<bool> = hits.iter().filter(|h| h.0 == "small_btn").map(|h| h.3).collect();
     // Save, Test, Search, Setup: only Search is inert
-    assert_eq!(small, [true, true, false, true], "{small:?}");
+    assert_eq!(small[..4], [true, true, false, true], "{small:?}");
 }
 
 #[test]
@@ -9296,4 +9297,145 @@ fn add_text_here_without_a_token_opens_settings_instead() {
     app.perform(Act::NotionAddHere(item), false);
     assert_eq!(toast_text(&app), "Connect Notion first: Settings → Integrations.");
     assert!(matches!(app.view(), View::Settings));
+}
+
+// ---- Settings → Integrations → Obsidian
+
+use std::path::{Path, PathBuf};
+
+const OBS_CONFIG: &str = r#"{"vaults":{
+  "a1":{"path":"/tmp/fc-vaults/Work Notes","ts":100},
+  "b2":{"path":"/tmp/fc-vaults/Personal","ts":200,"open":true}
+}}"#;
+
+fn obs_dir(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("ferrocast-obs-{tag}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn obs_app() -> App {
+    settings_app(NOTION_TAB, egui::ThemePreference::Dark)
+}
+
+/// Scan a fixture `obsidian.json` (never the user's) with an injected app detection.
+fn obs_scan(app: &mut App, json: Option<&str>, installed: bool) {
+    let dir = obs_dir("cfg");
+    let cfg = dir.join("obsidian.json");
+    if let Some(j) = json {
+        std::fs::write(&cfg, j).unwrap();
+    }
+    app.obsidian_scan_with(cfg, move || installed);
+}
+
+#[test]
+fn scanning_goes_through_the_bus_and_fills_the_vault_list_and_the_open_vault() {
+    let mut app = obs_app();
+    assert_eq!(app.obsidian_vaults(), None, "nothing known before the scan");
+    obs_scan(&mut app, Some(OBS_CONFIG), true);
+    // the scan was queued on a thread: only draining the bus applies the result
+    assert!(app.obsidian.scanning, "scanning flag set synchronously");
+    drain_until(&mut app, |a| !a.obsidian.scanning);
+    let names: Vec<String> = app.obsidian_vaults().unwrap().iter().map(|v| v.name.clone()).collect();
+    assert_eq!(names, ["Personal", "Work Notes"], "open vault first");
+    assert_eq!(app.obsidian.open, Some(PathBuf::from("/tmp/fc-vaults/Personal")));
+    assert_eq!(app.obsidian_installed(), Some(true));
+}
+
+#[test]
+fn a_missing_obsidian_json_means_no_vaults_not_an_error() {
+    let mut app = obs_app();
+    obs_scan(&mut app, None, false);
+    drain_until(&mut app, |a| !a.obsidian.scanning);
+    assert_eq!(app.obsidian_vaults(), Some(vec![]));
+    assert_eq!(app.obsidian_installed(), Some(false));
+}
+
+#[test]
+fn picking_a_vault_stores_its_path_in_settings_json_and_toasts() {
+    let mut app = obs_app();
+    obs_scan(&mut app, Some(OBS_CONFIG), true);
+    drain_until(&mut app, |a| !a.obsidian.scanning);
+    app.obsidian_pick(1);
+    assert_eq!(toast_text(&app), "Obsidian vault set to Work Notes");
+    let saved: Settings = app.store.load("settings.json");
+    assert_eq!(saved.obsidian_vault, Some(PathBuf::from("/tmp/fc-vaults/Work Notes")));
+    let v = app.obsidian_vault().expect("selected vault");
+    assert_eq!((v.name.as_str(), v.path.as_path()), ("Work Notes", Path::new("/tmp/fc-vaults/Work Notes")));
+    // an index past the list changes nothing
+    app.obsidian_pick(9);
+    assert_eq!(app.obsidian_vault().unwrap().name, "Work Notes");
+}
+
+#[test]
+fn choose_folder_stores_an_existing_directory_and_strips_the_trailing_slash() {
+    let mut app = obs_app();
+    let dir = obs_dir("pick");
+    let vault = dir.join("My Vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    let picked = PathBuf::from(format!("{}/", vault.display()));
+    app.obsidian_choose_folder_with(move || Some(picked));
+    assert!(app.obsidian.picking, "the picker runs on a thread");
+    drain_until(&mut app, |a| !a.obsidian.picking);
+    assert_eq!(toast_text(&app), "Obsidian vault set to My Vault");
+    assert_eq!(app.settings.obsidian_vault, Some(vault.clone()));
+    let saved: Settings = app.store.load("settings.json");
+    assert_eq!(saved.obsidian_vault, Some(vault));
+}
+
+#[test]
+fn choose_folder_rejects_a_missing_path_and_a_file_and_stores_nothing() {
+    let mut app = obs_app();
+    let dir = obs_dir("bad");
+    let file = dir.join("note.md");
+    std::fs::write(&file, "x").unwrap();
+    for bad in [dir.join("nope"), file] {
+        app.toast = None;
+        let b = bad.clone();
+        app.obsidian_choose_folder_with(move || Some(b));
+        drain_until(&mut app, |a| !a.obsidian.picking);
+        assert_eq!(toast_text(&app), "That is not a folder. Choose your Obsidian vault folder.", "{bad:?}");
+        assert_eq!(app.settings.obsidian_vault, None);
+        let saved: Settings = app.store.load("settings.json");
+        assert_eq!(saved.obsidian_vault, None);
+    }
+    // cancelling the dialog is silent
+    app.toast = None;
+    app.obsidian_choose_folder_with(|| None);
+    drain_until(&mut app, |a| !a.obsidian.picking);
+    assert_eq!(toast_text(&app), "");
+}
+
+#[test]
+fn clear_unsets_the_vault() {
+    let mut app = obs_app();
+    app.settings.obsidian_vault = Some(PathBuf::from("/tmp/fc-vaults/Personal"));
+    app.obsidian_clear();
+    assert_eq!(toast_text(&app), "Obsidian vault cleared");
+    assert_eq!(app.obsidian_vault(), None);
+    let saved: Settings = app.store.load("settings.json");
+    assert_eq!(saved.obsidian_vault, None);
+}
+
+#[test]
+fn the_status_line_follows_the_detection_result() {
+    assert_eq!(obsidian_status(None), "Checking for Obsidian…");
+    assert_eq!(obsidian_status(Some(true)), "Obsidian is installed");
+    assert_eq!(obsidian_status(Some(false)), "Obsidian is not installed. Download it from obsidian.md.");
+    let mut app = obs_app();
+    assert_eq!(app.obsidian_installed(), None);
+    obs_scan(&mut app, None, false);
+    drain_until(&mut app, |a| !a.obsidian.scanning);
+    assert_eq!(app.obsidian_installed(), Some(false));
+}
+
+#[test]
+fn the_obsidian_rows_are_drawn_and_a_bare_render_never_scans() {
+    let mut app = obs_app();
+    settle(&mut app);
+    let rows: Vec<String> = drawn_rows(&app).into_iter().filter(|(t, _)| *t == NOTION_TAB).map(|r| r.1).collect();
+    for want in ["Vault", "Vault folder", "Obsidian app"] {
+        assert!(rows.iter().any(|r| r == want), "{want} is drawn: {rows:?}");
+    }
+    assert!(!app.obsidian.scanning, "tests never touch the real obsidian.json or mdfind");
 }

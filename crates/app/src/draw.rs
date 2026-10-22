@@ -680,6 +680,24 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 3usize));
                 app.push(View::Settings);
             }
+            // Settings → Integrations scrolled to the Obsidian group, with fixed scan results (no scan)
+            Ok("settings-obsidian") => {
+                ctx.data_mut(|d| {
+                    d.insert_temp(Id::new("settings_tab"), INTEGRATIONS_TAB);
+                    d.insert_temp(Id::new("dev-settings-scroll"), 330.0f32);
+                });
+                let mk = |n: &str| ferrocast_core::obsidian::Vault {
+                    id: String::new(),
+                    name: n.into(),
+                    path: std::path::PathBuf::from("/Users/me").join(n),
+                };
+                app.obsidian.started = true;
+                app.obsidian.vaults = Some(vec![mk("Personal"), mk("Work Notes")]);
+                app.obsidian.open = Some(std::path::PathBuf::from("/Users/me/Personal"));
+                app.obsidian.installed = Some(false);
+                app.settings.obsidian_vault = Some(std::path::PathBuf::from("/Users/me/Work Notes"));
+                app.push(View::Settings);
+            }
             Ok("settings-advanced") => {
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 7usize));
                 app.push(View::Settings);
@@ -5664,6 +5682,16 @@ impl App {
             .collect();
         let notion_busy = self.notion.searching;
         let notion_target = self.settings.notion_target.clone();
+        // the first time the tab is drawn the vaults and the app are looked up on a thread (tests start it by hand)
+        if tab == INTEGRATIONS_TAB && !self.obsidian.started && !cfg!(test) {
+            self.obsidian_scan();
+        }
+        let obs_vaults = self.obsidian.vaults.clone();
+        let obs_open = self.obsidian.open.clone();
+        let obs_installed = self.obsidian.installed;
+        let obs_picking = self.obsidian.picking;
+        let obs_vault = self.obsidian_vault();
+        let (mut obs_pick, mut obs_choose, mut obs_clear): (Option<usize>, bool, bool) = (None, false, false);
         let has_key = ctx.data(|d| d.get_temp::<bool>(Id::new("ai_has_key")));
         let has_key = match has_key {
             Some(v) => v,
@@ -5895,7 +5923,12 @@ impl App {
         // ---- pane
         let acc = pal.accent;
         ui.scope_builder(UiBuilder::new().max_rect(pane), |ui| {
-            egui::ScrollArea::vertical().id_salt("settings_pane").auto_shrink([false; 2]).show(ui, |ui| {
+            let mut area = egui::ScrollArea::vertical().id_salt("settings_pane").auto_shrink([false; 2]);
+            // dev aid: the screenshot hook scrolls the pane to a group
+            if let Some(y) = ui.ctx().data(|d| d.get_temp::<f32>(Id::new("dev-settings-scroll"))) {
+                area = area.vertical_scroll_offset(y);
+            }
+            area.show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.add_space(2.0);
                 if searching {
@@ -6369,6 +6402,52 @@ impl App {
                         });
                         ui.add_space(10.0);
                         note(ui, pal, "Create an internal integration at notion.so/my-integrations, paste its token here, then share pages with it: ••• → Connections.");
+                        ui.add_space(18.0);
+                        section(ui, pal, "Obsidian");
+                        group(ui, pal, |ui| {
+                            let shown = match (&obs_vault, &obs_vaults) {
+                                (Some(v), _) => v.name.clone(),
+                                (None, None) => "Looking for vaults…".to_string(),
+                                (None, Some(l)) if l.is_empty() => "No vaults found".to_string(),
+                                (None, Some(_)) => "Choose a vault".to_string(),
+                            };
+                            row(ui, pal, "Vault", "The vault Search Obsidian, New Obsidian Note and Daily Note use.", |ui| {
+                                if obs_vault.is_some() && small_btn(ui, pal, "Clear") {
+                                    obs_clear = true;
+                                }
+                                field_combo(ui, pal, "obsidian_vault", &shown, 200.0, |ui| match &obs_vaults {
+                                    None => {
+                                        ui.label(RichText::new("Looking for vaults…").size(12.5).color(pal.sub));
+                                    }
+                                    Some(l) if l.is_empty() => {
+                                        ui.label(RichText::new("No vaults found").size(12.5).color(pal.sub));
+                                    }
+                                    Some(l) => {
+                                        for (i, v) in l.iter().enumerate() {
+                                            let open = obs_open.as_deref() == Some(v.path.as_path());
+                                            let label = if open { format!("{} · open", v.name) } else { v.name.clone() };
+                                            let on = obs_vault.as_ref().is_some_and(|c| c.path == v.path);
+                                            if ui.selectable_label(on, label).clicked() {
+                                                obs_pick = Some(i);
+                                            }
+                                        }
+                                    }
+                                });
+                            });
+                            row(ui, pal, "Vault folder", "Not in the list? Pick the vault's folder yourself.", |ui| {
+                                if small_btn(ui, pal, if obs_picking { "Choosing…" } else { "Choose Folder…" }) && !obs_picking {
+                                    obs_choose = true;
+                                }
+                            });
+                            let chip = match obs_installed {
+                                None => None,
+                                Some(true) => Some((StatusKind::Ok, "Installed")),
+                                Some(false) => Some((StatusKind::Warn, "Not installed")),
+                            };
+                            row_chip(ui, pal, "Obsidian app", obsidian_status(obs_installed), chip, |_| {});
+                        });
+                        ui.add_space(10.0);
+                        note(ui, pal, "Reading a vault happens on this Mac and nothing is uploaded. Creating notes and the daily note go through Obsidian.");
                     }
                     _ => {
                         section(ui, pal, "Permissions");
@@ -6439,6 +6518,21 @@ impl App {
             });
         });
         let _ = acc;
+        if obs_pick.is_some() || obs_choose || obs_clear {
+            // choosing a vault commits on its own, like the Notion target
+            self.scratch = scratch;
+            self.key_scratch = key_scratch;
+            self.notion.token = ntoken;
+            self.notion.query = nquery;
+            if let Some(i) = obs_pick {
+                self.obsidian_pick(i);
+            } else if obs_choose {
+                self.obsidian_choose_folder();
+            } else {
+                self.obsidian_clear();
+            }
+            return;
+        }
         if notion_pick.is_some() || notion_clear {
             // choosing or clearing the target commits on its own: restore the scratch fields first
             self.scratch = scratch;

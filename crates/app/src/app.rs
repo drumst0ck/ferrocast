@@ -809,6 +809,34 @@ pub struct NotionAdd {
     pub schema: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
 }
 
+/// Settings → Integrations → Obsidian: what the background scan found (None = still looking).
+#[derive(Default)]
+pub struct ObsidianUi {
+    /// A scan was started this session (the tab starts one the first time it is drawn).
+    pub started: bool,
+    pub scanning: bool,
+    pub vaults: Option<Vec<ferrocast_core::obsidian::Vault>>,
+    /// Vault Obsidian reports as open.
+    pub open: Option<std::path::PathBuf>,
+    pub installed: Option<bool>,
+    /// The folder picker is open (one at a time).
+    pub picking: bool,
+}
+
+/// Status line of the Obsidian app row.
+pub fn obsidian_status(installed: Option<bool>) -> &'static str {
+    match installed {
+        None => "Checking for Obsidian…",
+        Some(true) => "Obsidian is installed",
+        Some(false) => "Obsidian is not installed. Download it from obsidian.md.",
+    }
+}
+
+/// Folder name of a vault path: the name Obsidian and `obsidian://` URIs use.
+fn vault_name(path: &std::path::Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
 /// Wait after the last keystroke before Search Notion asks the API (seconds of egui time).
 const NOTION_DEBOUNCE: f64 = 0.25;
 const NOTION_PAGE: u32 = 20;
@@ -906,6 +934,8 @@ pub struct App {
     nv: NotionView,
     /// Add to Notion commands.
     na: NotionAdd,
+    /// Settings → Integrations → Obsidian.
+    pub(crate) obsidian: ObsidianUi,
     rates: ferrocast_core::currency::Rates,
     rates_checked_at: Instant,
     /// Result list for the current query/view, reused across frames until something changes.
@@ -1129,6 +1159,7 @@ impl App {
             notion: NotionUi::default(),
             nv: NotionView::default(),
             na: NotionAdd::default(),
+            obsidian: ObsidianUi::default(),
             rates: store_rates,
             rates_checked_at: Instant::now(),
             sec_cache: None,
@@ -1860,6 +1891,95 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ Obsidian (Settings → Integrations)
+
+    /// Vaults found by the last scan (None while it has not answered).
+    #[cfg(test)]
+    pub fn obsidian_vaults(&self) -> Option<Vec<ferrocast_core::obsidian::Vault>> {
+        self.obsidian.vaults.clone()
+    }
+
+    /// The selected vault (by path; the name is the folder name). T8 and T9 use this.
+    pub fn obsidian_vault(&self) -> Option<ferrocast_core::obsidian::Vault> {
+        let path = self.settings.obsidian_vault.clone()?;
+        Some(ferrocast_core::obsidian::Vault { id: String::new(), name: vault_name(&path), path })
+    }
+
+    /// Whether the Obsidian app was found by the last scan (None: not scanned yet). Blocking detection
+    /// for worker threads is `services::obsidian_installed_now`.
+    #[allow(dead_code)] // used by Search Obsidian and the New/Daily note commands (T8, T9)
+    pub fn obsidian_installed(&self) -> Option<bool> {
+        self.obsidian.installed
+    }
+
+    /// Scan `obsidian.json` and look for the app on a thread; the answer is `Msg::ObsidianScanned`.
+    fn obsidian_scan_with(&mut self, config: std::path::PathBuf, detect: impl FnOnce() -> bool + Send + 'static) {
+        self.obsidian.started = true;
+        self.obsidian.scanning = true;
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            let (vaults, open) = services::scan_obsidian_config(&config);
+            bus.send(Msg::ObsidianScanned(services::ObsidianScan { vaults, open, installed: detect() }));
+        });
+    }
+
+    pub(crate) fn obsidian_scan(&mut self) {
+        let config = ferrocast_core::obsidian::config_path(&dirs::home_dir().unwrap_or_default());
+        self.obsidian_scan_with(config, services::obsidian_installed_now);
+    }
+
+    fn handle_obsidian_scanned(&mut self, r: services::ObsidianScan) {
+        self.obsidian.scanning = false;
+        self.obsidian.vaults = Some(r.vaults);
+        self.obsidian.open = r.open;
+        self.obsidian.installed = Some(r.installed);
+    }
+
+    fn obsidian_set(&mut self, path: std::path::PathBuf) {
+        let name = vault_name(&path);
+        let mut s = self.settings.clone();
+        s.obsidian_vault = Some(path);
+        self.commit_settings(s);
+        self.toast(format!("Obsidian vault set to {name}"));
+    }
+
+    fn obsidian_pick(&mut self, i: usize) {
+        let Some(v) = self.obsidian.vaults.as_ref().and_then(|v| v.get(i)).cloned() else { return };
+        self.obsidian_set(v.path);
+    }
+
+    /// Open the folder picker on a thread (it is modal and slow); the answer is `Msg::ObsidianFolder`.
+    fn obsidian_choose_folder_with(&mut self, picker: impl FnOnce() -> Option<std::path::PathBuf> + Send + 'static) {
+        if self.obsidian.picking {
+            return;
+        }
+        self.obsidian.picking = true;
+        let bus = self.bus.clone();
+        std::thread::spawn(move || bus.send(Msg::ObsidianFolder(picker())));
+    }
+
+    pub(crate) fn obsidian_choose_folder(&mut self) {
+        self.obsidian_choose_folder_with(|| apps::choose_folder("Choose your Obsidian vault folder"));
+    }
+
+    fn handle_obsidian_folder(&mut self, p: Option<std::path::PathBuf>) {
+        self.obsidian.picking = false;
+        let Some(p) = p else { return };
+        if !p.is_dir() {
+            self.toast("That is not a folder. Choose your Obsidian vault folder.");
+            return;
+        }
+        // "/a/b/" and "/a/b" are the same vault
+        self.obsidian_set(p.components().collect());
+    }
+
+    fn obsidian_clear(&mut self) {
+        let mut s = self.settings.clone();
+        s.obsidian_vault = None;
+        self.commit_settings(s);
+        self.toast("Obsidian vault cleared");
+    }
+
     fn notion_clear_target(&mut self) {
         let mut s = self.settings.clone();
         s.notion_target = None;
@@ -2213,6 +2333,8 @@ impl App {
                 Msg::NotionSearched { request, result } => self.handle_notion_searched(request, result),
                 Msg::NotionViewSearched { request, append, result } => self.handle_notion_view_searched(request, append, result),
                 Msg::NotionAdded(r) => self.handle_notion_added(r),
+                Msg::ObsidianScanned(r) => self.handle_obsidian_scanned(r),
+                Msg::ObsidianFolder(p) => self.handle_obsidian_folder(p),
                 Msg::Toast(t) => {
                     // A sign-in or sign-out may just have finished; let Settings re-read the Keychain.
                     self.ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));

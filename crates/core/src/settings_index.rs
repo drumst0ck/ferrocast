@@ -69,6 +69,9 @@ pub const ENTRIES: &[Entry] = &[
     e(6, "Capture target", &["notion", "page", "database", "data source", "quick capture", "target", "clear", "save to"]),
     e(6, "Find a page or database", &["notion", "search", "capture", "target", "choose", "pick", "shared"]),
     e(6, "Setup guide", &["notion", "integration", "my-integrations", "connections", "share pages", "help", "token"]),
+    e(6, "Vault", &["obsidian", "vault", "notes", "markdown", "daily", "pick", "clear", "open"]),
+    e(6, "Vault folder", &["obsidian", "vault", "notes", "markdown", "daily", "choose", "folder", "finder"]),
+    e(6, "Obsidian app", &["obsidian", "vault", "notes", "markdown", "daily", "installed", "download", "status"]),
     // 7 Advanced
     e(7, "Accessibility", &["permission", "privacy", "grant", "window management", "security", "access"]),
     e(7, "1 rem", &["px", "pixels", "css", "calculator", "em", "units"]),

@@ -174,7 +174,46 @@ pub enum Msg {
     },
     /// Result of Add to Notion / Add Clipboard to Notion.
     NotionAdded(Result<NotionAddDone, NotionAddError>),
+    /// Result of the background Obsidian scan: vaults, the open one, and whether the app is installed.
+    ObsidianScanned(ObsidianScan),
+    /// The folder picker closed (None: cancelled).
+    ObsidianFolder(Option<PathBuf>),
     Wake,
+}
+
+/// What the Obsidian scan found.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObsidianScan {
+    pub vaults: Vec<ferrocast_core::obsidian::Vault>,
+    /// Path of the vault Obsidian reports as open.
+    pub open: Option<PathBuf>,
+    pub installed: bool,
+}
+
+/// Read vault list from an `obsidian.json` (missing or unreadable file: no vaults).
+pub fn scan_obsidian_config(config: &std::path::Path) -> (Vec<ferrocast_core::obsidian::Vault>, Option<PathBuf>) {
+    let Ok(json) = std::fs::read_to_string(config) else { return (Vec::new(), None) };
+    let vaults = ferrocast_core::obsidian::parse_vault_config(&json);
+    let open = serde_json::from_str::<serde_json::Value>(&json)
+        .ok()
+        .and_then(|v| v.get("vaults")?.as_object().cloned())
+        .and_then(|m| m.values().find(|e| e.get("open").and_then(|o| o.as_bool()) == Some(true))?.get("path")?.as_str().map(PathBuf::from));
+    (vaults, open)
+}
+
+/// Is Obsidian installed? Blocking (spawns `mdfind`): call it from a worker thread only.
+pub fn obsidian_installed_now() -> bool {
+    let home = dirs::home_dir().unwrap_or_default();
+    if std::path::Path::new("/Applications/Obsidian.app").exists() || home.join("Applications/Obsidian.app").exists() {
+        return true;
+    }
+    std::process::Command::new("/usr/bin/mdfind")
+        .arg("kMDItemCFBundleIdentifier == 'md.obsidian'")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false)
 }
 
 /// A capture that reached Notion: the title of the target it was added to.
