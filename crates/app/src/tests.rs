@@ -91,6 +91,7 @@ fn fixture() -> App {
         key_scratch: String::new(),
         notion: Default::default(),
         nv: Default::default(),
+        ov: Default::default(),
         na: Default::default(),
         obsidian: Default::default(),
         rates: Default::default(),
@@ -9438,4 +9439,519 @@ fn the_obsidian_rows_are_drawn_and_a_bare_render_never_scans() {
         assert!(rows.iter().any(|r| r == want), "{want} is drawn: {rows:?}");
     }
     assert!(!app.obsidian.scanning, "tests never touch the real obsidian.json or mdfind");
+}
+
+// ---- Search Obsidian (command)
+
+use ferrocast_core::obsidian::{self, Block};
+
+/// A throwaway vault on disk: `(relative path, content)`; the returned path is the vault folder.
+fn ov_vault(files: &[(&str, &str)]) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("ferrocast-ov-{}", uuid::Uuid::new_v4())).join("My Vault");
+    for (rel, body) in files {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+    std::fs::create_dir_all(&root).unwrap();
+    root
+}
+
+fn ov_set_mtime(vault: &std::path::Path, rel: &str, secs_ago: u64) {
+    let t = std::time::SystemTime::now() - Duration::from_secs(secs_ago);
+    std::fs::File::options().write(true).open(vault.join(rel)).unwrap().set_modified(t).unwrap();
+}
+
+/// The launcher on Search Obsidian; `vault` is stored in the settings (no obsidian.json is read).
+fn ov_app(vault: Option<&std::path::Path>) -> App {
+    let _ = notion_io::take_opened();
+    let _ = notion_io::take_copied();
+    let mut app = fixture();
+    app.settings.obsidian_vault = vault.map(|p| p.to_path_buf());
+    app.run_builtin(Builtin::SearchObsidian);
+    app
+}
+
+/// Open the view and wait until the index is in.
+fn ov_ready(vault: &std::path::Path) -> App {
+    let mut app = ov_app(Some(vault));
+    drain_until(&mut app, |a| !a.ov.indexing);
+    app
+}
+
+/// Run a ⌘K action the way the panel does.
+fn ov_perform(app: &mut App, item: &Item, act: Act) {
+    app.act_item = Some(item.clone());
+    app.perform(act, false);
+}
+
+fn ov_titles(app: &App) -> Vec<String> {
+    app.sections().iter().flat_map(|s| s.items.iter().map(|i| i.title.clone())).collect()
+}
+
+fn ov_sections(app: &App) -> Vec<(String, Vec<String>)> {
+    app.sections().into_iter().map(|s| (s.title, s.items.into_iter().map(|i| i.title).collect())).collect()
+}
+
+/// Every text the last frame painted, joined by newlines.
+fn painted(app: &mut App) -> String {
+    fn walk(s: &egui::Shape, out: &mut Vec<String>) {
+        match s {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let input =
+        egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))), ..Default::default() };
+    let ctx = app.ctx.clone();
+    let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+    output.textures_delta.clear();
+    let mut out = vec![];
+    for c in &output.shapes {
+        walk(&c.shape, &mut out);
+    }
+    out.join("\n")
+}
+
+#[test]
+fn search_obsidian_is_a_command_with_its_keywords_and_its_own_view() {
+    let b = Builtin::ALL.iter().find(|b| b.title() == "Search Obsidian").expect("registered");
+    for k in ["obsidian", "vault", "notes", "markdown", "zettelkasten", "second brain"] {
+        assert!(b.keywords().iter().any(|w| w == k), "{k}");
+    }
+    assert_eq!(b.id(), "builtin:search-obsidian");
+    let app = ov_app(None);
+    assert!(matches!(app.view(), View::ObsidianSearch));
+    assert_eq!(app.view().placeholder(), "Search your vault…");
+    assert_eq!(app.view().title(), "Search Obsidian");
+    assert!(app.view().shape() == Shape::List);
+}
+
+#[test]
+fn without_a_vault_the_only_row_opens_settings_on_integrations_and_nothing_is_indexed() {
+    let mut app = ov_app(None);
+    let secs = app.sections();
+    assert_eq!(secs.len(), 1);
+    assert_eq!(secs[0].title, "Choose your Obsidian vault");
+    assert_eq!(secs[0].items.len(), 1);
+    assert_eq!(secs[0].items[0].title, "Open Settings → Integrations");
+    assert!(!app.ov.indexing && app.ov.index_request == 0, "no vault, no walk");
+    let item = secs[0].items[0].clone();
+    app.run_item(&item);
+    assert!(matches!(app.view(), View::Settings));
+    let tab: usize = app.ctx.data(|d| d.get_temp(Id::new("settings_tab"))).unwrap();
+    assert_eq!(tab, draw::INTEGRATIONS_TAB);
+}
+
+#[test]
+fn a_vault_missing_on_disk_says_so_with_the_same_row() {
+    let gone = std::env::temp_dir().join(format!("ferrocast-ov-gone-{}", uuid::Uuid::new_v4()));
+    let mut app = ov_app(Some(&gone));
+    drain_until(&mut app, |a| !a.ov.indexing);
+    let secs = app.sections();
+    assert_eq!(secs.len(), 1);
+    assert_eq!(secs[0].title, "The vault folder was not found");
+    assert_eq!(secs[0].items[0].title, "Open Settings → Integrations");
+    let item = secs[0].items[0].clone();
+    app.run_item(&item);
+    assert!(matches!(app.view(), View::Settings));
+}
+
+#[test]
+fn the_index_arrives_through_the_bus_never_during_the_draw() {
+    let vault = ov_vault(&[("Alpha.md", "# Alpha\n")]);
+    let mut app = ov_app(Some(&vault));
+    assert!(app.ov.indexing, "the walk runs on a thread");
+    assert!(app.sections().is_empty(), "nothing is listed before the Bus delivers");
+    let text = painted(&mut app);
+    assert!(text.contains("Indexing your vault…"), "{text}");
+    // frames alone never fill the list; only draining the Bus does
+    assert!(app.ov.cache.is_none() || !app.ov.indexing);
+    drain_until(&mut app, |a| !a.ov.indexing);
+    assert_eq!(ov_titles(&app), vec!["Alpha"]);
+    let text = painted(&mut app);
+    assert!(!text.contains("Indexing your vault…"), "{text}");
+}
+
+#[test]
+fn a_stale_index_answer_is_dropped_after_reopening_the_view() {
+    let vault = ov_vault(&[("Alpha.md", "x")]);
+    let mut app = ov_ready(&vault);
+    let first = app.ov.index_request;
+    app.pop();
+    app.run_builtin(Builtin::SearchObsidian);
+    assert_eq!(app.ov.index_request, first + 1, "each open has a higher id");
+    app.bus.send(Msg::ObsidianIndexed {
+        request: first,
+        vault: vault.clone(),
+        notes: Some(vec![obsidian::NoteEntry {
+            rel_path: "Stale.md".into(),
+            title: "Stale".into(),
+            aliases: vec![],
+            modified: 1,
+            size: 1,
+        }]),
+    });
+    app.drain();
+    assert!(app.ov.indexing, "the stale answer did not end the newest request");
+    assert!(!ov_titles(&app).contains(&"Stale".to_string()));
+    drain_until(&mut app, |a| !a.ov.indexing);
+    assert_eq!(ov_titles(&app), vec!["Alpha"]);
+}
+
+#[test]
+fn reopening_shows_the_cached_index_at_once_while_a_refresh_runs() {
+    let vault = ov_vault(&[("Alpha.md", "x")]);
+    let mut app = ov_ready(&vault);
+    app.pop();
+    std::fs::write(vault.join("Beta.md"), "y").unwrap();
+    app.run_builtin(Builtin::SearchObsidian);
+    assert!(app.ov.indexing, "the refresh is in flight");
+    assert_eq!(ov_titles(&app), vec!["Alpha"], "the last index shows immediately");
+    drain_until(&mut app, |a| !a.ov.indexing);
+    let mut t = ov_titles(&app);
+    t.sort();
+    assert_eq!(t, vec!["Alpha", "Beta"], "the refresh adds the new note");
+}
+
+#[test]
+fn an_empty_query_lists_the_30_most_recent_notes_newest_first() {
+    let names: Vec<String> = (0..35).map(|i| format!("Note {i:02}.md")).collect();
+    let files: Vec<(&str, &str)> = names.iter().map(|n| (n.as_str(), "body")).collect();
+    let vault = ov_vault(&files);
+    for (i, n) in names.iter().enumerate() {
+        ov_set_mtime(&vault, n, 1000 + (35 - i as u64) * 60); // Note 34 is the newest
+    }
+    let app = ov_ready(&vault);
+    let secs = ov_sections(&app);
+    assert_eq!(secs.len(), 1);
+    assert_eq!(secs[0].0, "Recent");
+    assert_eq!(secs[0].1.len(), 30);
+    assert_eq!(secs[0].1[0], "Note 34");
+    assert_eq!(secs[0].1[29], "Note 05");
+}
+
+#[test]
+fn a_query_lists_what_obsidian_search_returns_in_the_same_order() {
+    let vault = ov_vault(&[
+        ("Meeting notes.md", "x"),
+        ("Projects/Meeting plan.md", "x"),
+        ("Recipes/Pasta.md", "x"),
+        ("Daily/2026-01-02.md", "# Standup meeting\n"),
+    ]);
+    let mut app = ov_ready(&vault);
+    app.query = "meet".into();
+    let entries = obsidian::index_vault(&vault);
+    let want: Vec<String> = obsidian::search(&entries, "meet", 30).into_iter().map(|i| entries[i].title.clone()).collect();
+    assert!(want.len() >= 2, "{want:?}");
+    let secs = ov_sections(&app);
+    assert_eq!(secs[0].0, "Notes");
+    assert_eq!(secs[0].1, want);
+}
+
+#[test]
+fn rows_show_the_title_the_folder_and_the_relative_modified_time() {
+    let vault = ov_vault(&[("Projects/Deep/Kickoff.md", "# Project kickoff\n"), ("Root.md", "x")]);
+    ov_set_mtime(&vault, "Projects/Deep/Kickoff.md", 2 * 3600 + 30);
+    let app = ov_ready(&vault);
+    let items: Vec<Item> = app.sections().into_iter().flat_map(|s| s.items).collect();
+    let k = items.iter().find(|i| i.title == "Project kickoff").unwrap();
+    assert_eq!(k.subtitle, "Projects/Deep");
+    assert_eq!(k.accessory, "2h ago");
+    let r = items.iter().find(|i| i.title == "Root").unwrap();
+    assert_eq!(r.subtitle, "", "a note at the vault root has no folder");
+}
+
+#[test]
+fn content_hits_are_appended_under_in_notes_without_repeating_title_matches() {
+    let vault =
+        ov_vault(&[("Zebra.md", "stripes"), ("Budget plan.md", "the quarterly zebra review is on Friday"), ("Other.md", "nothing here")]);
+    let mut app = ov_ready(&vault);
+    app.query = "zebra".into();
+    app.tick_obsidian_view(0.0);
+    assert_eq!(ov_sections(&app), vec![("Notes".to_string(), vec!["Zebra".to_string()])], "title matches first, content not asked yet");
+    app.tick_obsidian_view(0.3);
+    drain_until(&mut app, |a| a.ov.content.is_some());
+    assert_eq!(
+        ov_sections(&app),
+        vec![("Notes".to_string(), vec!["Zebra".to_string()]), ("In notes".to_string(), vec!["Budget plan".to_string()])]
+    );
+}
+
+#[test]
+fn the_content_scan_waits_250_ms_and_skips_queries_under_three_characters() {
+    let vault = ov_vault(&[("Budget plan.md", "the quarterly zebra review")]);
+    let mut app = ov_ready(&vault);
+    let base = app.ov.content_request;
+    app.query = "ze".into();
+    app.tick_obsidian_view(0.0);
+    app.tick_obsidian_view(5.0);
+    assert_eq!(app.ov.content_request, base, "two characters never scan contents");
+    app.query = "zeb".into();
+    app.tick_obsidian_view(10.0);
+    app.tick_obsidian_view(10.2);
+    assert_eq!(app.ov.content_request, base, "inside the debounce window");
+    app.tick_obsidian_view(10.26);
+    assert_eq!(app.ov.content_request, base + 1, "250 ms after the last keystroke");
+    drain_until(&mut app, |a| a.ov.content.is_some());
+    // typing again restarts the wait
+    app.query = "zebr".into();
+    app.tick_obsidian_view(20.0);
+    app.tick_obsidian_view(20.2);
+    assert_eq!(app.ov.content_request, base + 1);
+    app.tick_obsidian_view(20.3);
+    assert_eq!(app.ov.content_request, base + 2);
+}
+
+#[test]
+fn a_stale_content_answer_is_dropped() {
+    let vault = ov_vault(&[("Budget plan.md", "the quarterly zebra review"), ("Other.md", "zebra too")]);
+    let mut app = ov_ready(&vault);
+    app.query = "zebra".into();
+    app.tick_obsidian_view(0.0);
+    app.tick_obsidian_view(0.3);
+    let id = app.ov.content_request;
+    app.bus.send(Msg::ObsidianContent { request: id - 1, query: "zebra".into(), hits: vec!["Other.md".into()] });
+    app.drain();
+    assert!(app.ov.content.is_none(), "an older id is ignored");
+    drain_until(&mut app, |a| a.ov.content.is_some());
+    let (_, hits) = app.ov.content.clone().unwrap();
+    assert_eq!(hits.len(), 2, "the newest answer stands: {hits:?}");
+}
+
+#[test]
+fn clearing_the_query_below_three_characters_drops_in_flight_content_answers() {
+    let vault = ov_vault(&[("Budget plan.md", "the quarterly zebra review")]);
+    let mut app = ov_ready(&vault);
+    app.query = "zebra".into();
+    app.tick_obsidian_view(0.0);
+    app.tick_obsidian_view(0.3);
+    app.query = "ze".into();
+    app.tick_obsidian_view(0.4);
+    std::thread::sleep(Duration::from_millis(200));
+    app.drain();
+    assert!(app.ov.content.is_none());
+}
+
+#[test]
+fn the_content_scan_skips_cloud_placeholders_through_the_injected_predicate() {
+    let vault = ov_vault(&[("Local.md", "a zebra here"), ("Cloud.md", "a zebra there"), ("Plain.md", "nothing")]);
+    let entries = obsidian::index_vault(&vault);
+    let none = |_: &std::path::Path| false;
+    let mut all = services::content_scan(&vault, &entries, "zebra", 30, &none);
+    all.sort();
+    assert_eq!(all, vec!["Cloud.md", "Local.md"]);
+    let cloud = |p: &std::path::Path| p.file_name().is_some_and(|n| n == "Cloud.md");
+    assert_eq!(services::content_scan(&vault, &entries, "zebra", 30, &cloud), vec!["Local.md"]);
+    // the real predicate: ordinary files are not placeholders, a missing file is not one either
+    assert!(!services::is_dataless(&vault.join("Local.md")));
+    assert!(!services::is_dataless(&vault.join("nope.md")));
+}
+
+#[test]
+fn enter_opens_the_exact_obsidian_uri_for_unicode_and_spaces() {
+    let vault = ov_vault(&[("Café/Ünï note.md", "# Ünï note\n")]);
+    let mut app = ov_ready(&vault);
+    let item = app.sections().remove(0).items.remove(0);
+    assert_eq!(app.actions_for(&item)[0].title, "Open in Obsidian");
+    app.run_item(&item);
+    assert_eq!(notion_io::take_opened(), vec!["obsidian://open?vault=My%20Vault&file=Caf%C3%A9%2F%C3%9Cn%C3%AF%20note.md".to_string()]);
+    assert_eq!(notion_io::take_opened().len(), 0);
+}
+
+#[test]
+fn obsidian_not_installed_toasts_and_opens_nothing_while_unknown_lets_the_os_answer() {
+    let vault = ov_vault(&[("Alpha.md", "x")]);
+    let mut app = ov_ready(&vault);
+    let item = app.sections().remove(0).items.remove(0);
+    app.obsidian.installed = Some(false);
+    app.run_item(&item);
+    assert_eq!(toast_text(&app), "Obsidian is not installed. Download it from obsidian.md.");
+    assert!(notion_io::take_opened().is_empty());
+    assert!(matches!(app.view(), View::ObsidianSearch), "the launcher stays where it was");
+    app.obsidian.installed = None;
+    app.run_item(&item);
+    assert_eq!(notion_io::take_opened(), vec!["obsidian://open?vault=My%20Vault&file=Alpha.md".to_string()]);
+    app.obsidian.installed = Some(true);
+    app.run_item(&item);
+    assert_eq!(notion_io::take_opened().len(), 1);
+}
+
+#[test]
+fn the_actions_panel_lists_open_reveal_wikilink_path_quick_look_and_search() {
+    let vault = ov_vault(&[("Alpha.md", "x")]);
+    let app = ov_ready(&vault);
+    let item = app.sections().remove(0).items.remove(0);
+    let labels: Vec<String> = app.actions_for(&item).into_iter().map(|a| a.title.to_string()).collect();
+    assert_eq!(labels, ["Open in Obsidian", "Reveal in Finder", "Copy Wikilink", "Copy Path", "Quick Look", "Search in Obsidian"]);
+}
+
+#[test]
+fn copy_wikilink_and_copy_path_put_the_exact_text_on_the_clipboard() {
+    let vault = ov_vault(&[("Plain.md", "x"), ("Projects/Deep/Heading note.md", "# A different title\n")]);
+    let mut app = ov_ready(&vault);
+    let items: Vec<Item> = app.sections().into_iter().flat_map(|s| s.items).collect();
+    let by = |t: &str| items.iter().find(|i| i.title == t).unwrap().clone();
+    let act = |app: &App, item: &Item, label: &str| app.actions_for(item).into_iter().find(|a| a.title == label).unwrap().kind;
+    // title equals the file stem
+    let plain = by("Plain");
+    let a = act(&app, &plain, "Copy Wikilink");
+    ov_perform(&mut app, &plain, a);
+    assert_eq!(notion_io::take_copied(), vec!["[[Plain]]".to_string()]);
+    // a note in a subfolder whose title differs: the link must still resolve by file name
+    let deep = by("A different title");
+    let a = act(&app, &deep, "Copy Wikilink");
+    ov_perform(&mut app, &deep, a);
+    assert_eq!(notion_io::take_copied(), vec!["[[Heading note|A different title]]".to_string()]);
+    let a = act(&app, &deep, "Copy Path");
+    ov_perform(&mut app, &deep, a);
+    assert_eq!(notion_io::take_copied(), vec![vault.join("Projects/Deep/Heading note.md").to_string_lossy().into_owned()]);
+}
+
+#[test]
+fn search_in_obsidian_opens_the_search_uri_with_the_typed_query() {
+    let vault = ov_vault(&[("Alpha.md", "x")]);
+    let mut app = ov_ready(&vault);
+    let item = app.sections().remove(0).items.remove(0);
+    app.query = "Alpha plan/2".into();
+    let a = app.actions_for(&item).into_iter().find(|a| a.title == "Search in Obsidian").unwrap().kind;
+    ov_perform(&mut app, &item, a);
+    assert_eq!(notion_io::take_opened(), vec![obsidian::uri_search("My Vault", "Alpha plan/2")]);
+    assert_eq!(notion_io::take_opened().len(), 0);
+}
+
+#[test]
+fn a_uri_over_8000_characters_is_refused_with_a_toast_instead_of_truncated() {
+    let vault = ov_vault(&[("Alpha.md", "x")]);
+    let mut app = ov_ready(&vault);
+    let item = app.sections().remove(0).items.remove(0);
+    app.query = "x".repeat(9000);
+    let q = app.query.clone();
+    ov_perform(&mut app, &item, Act::ObsidianSearch(q));
+    assert_eq!(toast_text(&app), "That link is too long for Obsidian (over 8,000 characters).");
+    assert!(notion_io::take_opened().is_empty());
+    // and a long note path through Enter
+    let long = Item { kind: Kind::ObsidianNote("a".repeat(9000) + ".md"), ..item.clone() };
+    app.run_item(&long);
+    assert_eq!(toast_text(&app), "That link is too long for Obsidian (over 8,000 characters).");
+    assert!(notion_io::take_opened().is_empty());
+}
+
+#[test]
+fn command_y_toggles_the_preview_pane() {
+    let vault = ov_vault(&[("Alpha.md", "# Alpha\n")]);
+    let mut app = ov_ready(&vault);
+    assert!(!app.ov.hide_preview, "the pane is shown by default");
+    render_mods(&mut app, vec![key_mod_event(Key::Y, Modifiers::COMMAND)], Modifiers::COMMAND);
+    assert!(app.ov.hide_preview);
+    render_mods(&mut app, vec![key_mod_event(Key::Y, Modifiers::COMMAND)], Modifiers::COMMAND);
+    assert!(!app.ov.hide_preview);
+}
+
+#[test]
+fn the_preview_is_read_on_a_thread_after_a_short_pause_and_matches_parse_preview() {
+    let body = "---\ntitle: Hidden\n---\n# Heading\n\n- bullet\n- [ ] todo\n> quote\n";
+    let vault = ov_vault(&[("Alpha.md", body)]);
+    let mut app = ov_ready(&vault);
+    app.tick_obsidian_view(0.0);
+    assert_eq!(app.ov.preview_request, 0, "the selection must rest before the file is read");
+    app.tick_obsidian_view(0.2);
+    assert_eq!(app.ov.preview_request, 1);
+    assert!(app.ov.preview.is_none(), "the answer comes through the Bus");
+    drain_until(&mut app, |a| a.ov.preview.is_some());
+    let (rel, result) = app.ov.preview.clone().unwrap();
+    assert_eq!(rel, "Alpha.md");
+    assert_eq!(result, Ok(obsidian::parse_preview(body)));
+    // no new read while the selection stays
+    app.tick_obsidian_view(5.0);
+    assert_eq!(app.ov.preview_request, 1);
+}
+
+#[test]
+fn the_preview_reads_nothing_while_the_pane_is_hidden() {
+    let vault = ov_vault(&[("Alpha.md", "x")]);
+    let mut app = ov_ready(&vault);
+    app.ov.hide_preview = true;
+    app.tick_obsidian_view(0.0);
+    app.tick_obsidian_view(1.0);
+    assert_eq!(app.ov.preview_request, 0);
+}
+
+#[test]
+fn a_preview_answer_for_an_older_selection_is_dropped() {
+    let vault = ov_vault(&[("A.md", "# A\n"), ("B.md", "# B\n")]);
+    ov_set_mtime(&vault, "A.md", 10);
+    ov_set_mtime(&vault, "B.md", 1000);
+    let mut app = ov_ready(&vault);
+    app.tick_obsidian_view(0.0);
+    app.tick_obsidian_view(0.2);
+    let first = app.ov.preview_request;
+    app.selected = 1;
+    app.tick_obsidian_view(1.0);
+    app.tick_obsidian_view(1.2);
+    assert_eq!(app.ov.preview_request, first + 1);
+    app.bus.send(Msg::ObsidianPreview { request: first, result: Ok(vec![Block::Paragraph("stale".into())]) });
+    app.drain();
+    assert!(!matches!(&app.ov.preview, Some((_, Ok(b))) if b == &vec![Block::Paragraph("stale".into())]), "the old answer must not show");
+    drain_until(&mut app, |a| a.ov.preview.is_some());
+    assert_eq!(app.ov.preview.clone().unwrap().0, "B.md");
+}
+
+#[test]
+fn an_unreadable_note_shows_could_not_read_this_note_in_the_pane() {
+    let vault = ov_vault(&[("Alpha.md", "# Alpha\n")]);
+    let mut app = ov_ready(&vault);
+    std::fs::remove_file(vault.join("Alpha.md")).unwrap();
+    app.tick_obsidian_view(0.0);
+    app.tick_obsidian_view(0.2);
+    drain_until(&mut app, |a| a.ov.preview.is_some());
+    assert_eq!(app.ov.preview.clone().unwrap().1, Err(()));
+    let text = painted(&mut app);
+    assert!(text.contains("Could not read this note."), "{text}");
+}
+
+#[test]
+fn every_preview_block_renders_without_panicking_and_the_title_sits_above() {
+    let vault = ov_vault(&[("Alpha.md", "x")]);
+    let mut app = ov_ready(&vault);
+    let blocks = vec![
+        Block::Heading(1, "Heading one".into()),
+        Block::Heading(6, "Heading six".into()),
+        Block::Paragraph("A plain paragraph".into()),
+        Block::Bullet(0, "bullet zero".into()),
+        Block::Bullet(3, "bullet deep".into()),
+        Block::Ordered(1, 12, "ordered twelve".into()),
+        Block::Task(0, false, "open task".into()),
+        Block::Task(2, true, "done task".into()),
+        Block::Quote("a quote".into()),
+        Block::Code(Some("rust".into()), "fn main() {}".into()),
+        Block::Code(None, "".into()),
+        Block::Rule,
+    ];
+    app.ov.preview_for = Some("Alpha.md".into());
+    app.ov.preview = Some(("Alpha.md".into(), Ok(blocks)));
+    render(&mut app, vec![]);
+    let text = painted(&mut app);
+    for want in [
+        "Alpha",
+        "Heading one",
+        "Heading six",
+        "A plain paragraph",
+        "bullet zero",
+        "bullet deep",
+        "ordered twelve",
+        "open task",
+        "done task",
+        "a quote",
+        "fn main() {}",
+    ] {
+        assert!(text.contains(want), "{want} is drawn: {text}");
+    }
+    // the title comes before the first block
+    assert!(text.find("Alpha").unwrap() < text.find("Heading one").unwrap());
+    // hidden pane: the blocks are not drawn
+    app.ov.hide_preview = true;
+    let text = painted(&mut app);
+    assert!(!text.contains("Heading one"), "{text}");
 }

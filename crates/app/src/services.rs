@@ -178,6 +178,23 @@ pub enum Msg {
     ObsidianScanned(ObsidianScan),
     /// The folder picker closed (None: cancelled).
     ObsidianFolder(Option<PathBuf>),
+    /// The vault index of Search Obsidian (`None`: the vault folder does not exist). `request` drops stale answers.
+    ObsidianIndexed {
+        request: u64,
+        vault: PathBuf,
+        notes: Option<Vec<ferrocast_core::obsidian::NoteEntry>>,
+    },
+    /// Relative paths of the notes whose content matched `query` (newest `request` only).
+    ObsidianContent {
+        request: u64,
+        query: String,
+        hits: Vec<String>,
+    },
+    /// The preview blocks of the selected note (`Err`: the file could not be read).
+    ObsidianPreview {
+        request: u64,
+        result: Result<Vec<ferrocast_core::obsidian::Block>, ()>,
+    },
     Wake,
 }
 
@@ -214,6 +231,44 @@ pub fn obsidian_installed_now() -> bool {
         .output()
         .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
         .unwrap_or(false)
+}
+
+/// Is this file a cloud placeholder that is not downloaded yet (macOS `SF_DATALESS`)? Reading it would
+/// make the provider download it, so the content scan skips these. Unreadable or missing: `false`.
+pub fn is_dataless(path: &std::path::Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        const SF_DATALESS: u32 = 0x4000_0000;
+        std::fs::metadata(path).map(|m| m.st_flags() & SF_DATALESS != 0).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Content scan for Search Obsidian: relative paths of notes containing `query`, leaving out the files
+/// `dataless` flags (so a search never makes a cloud provider download the whole vault). Blocking.
+pub fn content_scan(
+    root: &std::path::Path,
+    entries: &[ferrocast_core::obsidian::NoteEntry],
+    query: &str,
+    limit: usize,
+    dataless: &dyn Fn(&std::path::Path) -> bool,
+) -> Vec<String> {
+    let local: Vec<ferrocast_core::obsidian::NoteEntry> = entries.iter().filter(|e| !dataless(&root.join(&e.rel_path))).cloned().collect();
+    ferrocast_core::obsidian::content_hits(root, &local, query, limit).into_iter().map(|i| local[i].rel_path.clone()).collect()
+}
+
+/// Read at most the first 200 KB of a note and parse it for the preview pane. Blocking.
+pub fn read_preview(path: &std::path::Path) -> Result<Vec<ferrocast_core::obsidian::Block>, ()> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|_| ())?;
+    let mut bytes = Vec::new();
+    file.take(200 * 1024).read_to_end(&mut bytes).map_err(|_| ())?;
+    Ok(ferrocast_core::obsidian::parse_preview(&String::from_utf8_lossy(&bytes)))
 }
 
 /// A capture that reached Notion: the title of the target it was added to.

@@ -131,6 +131,7 @@ impl eframe::App for App {
         }
         let now = ctx.input(|i| i.time);
         self.tick_notion_view(now);
+        self.tick_obsidian_view(now);
         // debounced file search
         let q = self.query.trim().to_string();
         let wants = self.visible
@@ -242,6 +243,36 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                     app.nv.connected = Some(true);
                     app.nv.asked = Some(String::new());
                 }
+            }
+            // design-review shots of Search Obsidian: `obsidian` has no vault chosen (the choose-vault state),
+            // `obsidian-list` builds a throwaway vault in the temp folder and fills the list and the preview
+            // without any thread
+            Ok("obsidian") => app.run_builtin(Builtin::SearchObsidian),
+            Ok("obsidian-list") => {
+                let root = std::env::temp_dir().join("ferrocast-shot-vault").join("Notes");
+                let notes: [(&str, &str, u64); 5] = [
+                    ("Project kickoff.md", "---\ntags: [work]\n---\n# Project kickoff\n\nAgenda for the first week, see [[Roadmap|the roadmap]].\n\n## Goals\n\n- Ship the preview pane\n- Write the docs\n  - English first\n- [x] Pick the vault\n- [ ] Index the notes\n\n> Notes are plain files. Nothing leaves this Mac.\n\n```rust\nlet entries = index_vault(&root);\n```\n\n---\n\nSee you Monday.\n", 600),
+                    ("Daily/2026-10-22.md", "# Thursday\n\nStandup at 10.\n", 3 * 3600),
+                    ("Recipes/Pasta al limón.md", "# Pasta al limón\n\n- 200 g spaghetti\n", 30 * 3600),
+                    ("Roadmap.md", "# Roadmap\n\nQ3 plan.\n", 9 * 86_400),
+                    ("Reading list.md", "# Reading list\n", 400 * 86_400),
+                ];
+                for (rel, body, ago) in notes {
+                    let p = root.join(rel);
+                    let _ = std::fs::create_dir_all(p.parent().unwrap());
+                    let _ = std::fs::write(&p, body);
+                    if let Ok(f) = std::fs::File::options().write(true).open(&p) {
+                        let _ = f.set_modified(std::time::SystemTime::now() - Duration::from_secs(ago));
+                    }
+                }
+                app.settings.obsidian_vault = Some(root.clone());
+                app.obsidian.installed = Some(true);
+                app.run_builtin(Builtin::SearchObsidian);
+                app.ov.indexing = false;
+                app.ov.cache = Some((root.clone(), Arc::new(ferrocast_core::obsidian::index_vault(&root))));
+                app.ov.preview_for = Some("Project kickoff.md".into());
+                app.ov.preview = Some(("Project kickoff.md".into(), crate::services::read_preview(&root.join("Project kickoff.md"))));
+                app.invalidate_sections();
             }
             Ok("compress") => {
                 let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
@@ -874,6 +905,10 @@ impl App {
                     View::Notes => self.new_note(),
                     _ => return false,
                 }
+                return true;
+            }
+            if matches!(self.view(), View::ObsidianSearch) && ctx.input_mut(|i| i.consume_key(CMD, Key::Y)) {
+                self.obsidian_toggle_preview();
                 return true;
             }
             let Some(item) = cur else { return false };
@@ -1736,12 +1771,24 @@ impl App {
                 } else {
                     None
                 };
+                // Search Obsidian: the selected note's preview on the right (⌘Y hides it)
+                let note = match (self.view(), &cur) {
+                    (View::ObsidianSearch, Some(Item { kind: Kind::ObsidianNote(rel), .. })) if !self.ov.hide_preview => Some(rel.clone()),
+                    _ => None,
+                };
                 let list_rect = if detail.is_some() {
                     Rect::from_min_max(content.min, Pos2::new(content.min.x + content.width() * 0.42, content.max.y))
+                } else if note.is_some() {
+                    Rect::from_min_max(content.min, Pos2::new(content.min.x + OBSIDIAN_LIST_W, content.max.y))
                 } else {
                     content
                 };
                 (clicked, double) = self.draw_list(ui, list_rect, &sections, &pal);
+                if let Some(rel) = note {
+                    let r = Rect::from_min_max(Pos2::new(list_rect.max.x, content.min.y), content.max);
+                    ui.painter().vline(r.min.x, r.y_range(), Stroke::new(1.0, pal.sep));
+                    self.draw_obsidian_preview(ui, r, &rel, &pal);
+                }
                 if let Some(d) = detail {
                     let r = Rect::from_min_max(Pos2::new(list_rect.max.x, content.min.y), content.max);
                     ui.painter().vline(r.min.x, r.y_range(), Stroke::new(1.0, pal.sep));
@@ -1755,6 +1802,8 @@ impl App {
                         FontId::proportional(14.0),
                         pal.sub,
                     );
+                } else if sections.is_empty() && matches!(self.view(), View::ObsidianSearch) && self.ov.indexing {
+                    ui.painter().text(content.center(), Align2::CENTER_CENTER, "Indexing your vault…", FontId::proportional(14.0), pal.sub);
                 } else if sections.is_empty() && !(matches!(self.view(), View::NotionSearch) && self.nv.searching) {
                     ui.painter().text(content.center(), Align2::CENTER_CENTER, "No results", FontId::proportional(14.0), pal.sub);
                 }
@@ -1826,8 +1875,15 @@ impl App {
                 View::Files => true,
                 _ => false,
             };
-        let notion_busy = matches!(self.view(), View::NotionSearch) && self.nv.searching;
-        let busy_label = if notion_busy { "Searching Notion" } else { "Searching files" };
+        let obsidian_busy = matches!(self.view(), View::ObsidianSearch) && self.ov.indexing;
+        let notion_busy = (matches!(self.view(), View::NotionSearch) && self.nv.searching) || obsidian_busy;
+        let busy_label = if obsidian_busy {
+            "Indexing vault"
+        } else if notion_busy {
+            "Searching Notion"
+        } else {
+            "Searching files"
+        };
         #[cfg(test)]
         ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("settings-undo-rect")));
         let mut undo_clicked = false;
@@ -2079,6 +2135,38 @@ impl App {
             self.selected = i;
         }
         (clicked, double)
+    }
+
+    /// Search Obsidian's right pane: the note title and path, then the parsed blocks of its first 200 KB.
+    fn draw_obsidian_preview(&self, ui: &mut Ui, rect: Rect, rel: &str, pal: &Palette) {
+        let title = self.obsidian_entry(rel).map(|e| e.title).unwrap_or_else(|| rel.to_string());
+        let title_text = title.clone();
+        let inner = rect.shrink2(Vec2::new(18.0, 14.0));
+        ui.scope_builder(UiBuilder::new().max_rect(inner), |ui| {
+            egui::ScrollArea::vertical().id_salt("obsidian-preview").auto_shrink([false; 2]).show(ui, |ui| {
+                ui.set_width(inner.width());
+                ui.spacing_mut().item_spacing.y = 6.0;
+                let label = |t: RichText| egui::Label::new(t).wrap().selectable(false);
+                ui.add(label(RichText::new(title).size(20.0).strong().color(pal.text)));
+                ui.add(label(RichText::new(rel).size(11.5).color(pal.sub)));
+                ui.add_space(4.0);
+                ui.painter().hline(inner.x_range(), ui.cursor().min.y, Stroke::new(1.0, pal.sep));
+                ui.add_space(6.0);
+                match &self.ov.preview {
+                    Some((r, Ok(blocks))) if r == rel => {
+                        // the title is already shown above: a leading heading with the same text would repeat it
+                        let skip = matches!(blocks.first(), Some(ferrocast_core::obsidian::Block::Heading(_, h)) if *h == title_text);
+                        draw_blocks(ui, pal, &blocks[skip as usize..]);
+                    }
+                    Some((r, Err(()))) if r == rel => {
+                        ui.add(label(RichText::new("Could not read this note.").size(13.5).color(pal.sub)));
+                    }
+                    _ => {
+                        ui.add(label(RichText::new("Loading…").size(13.5).color(pal.sub)));
+                    }
+                }
+            });
+        });
     }
 
     /// Preview on top (in a tone-stepped card), facts underneath as label/value rows.
@@ -6847,6 +6935,106 @@ const SETTINGS_GROUP_STARTS: [usize; 2] = [3, 5];
 const SETTINGS_NUM_KEYS: [Key; 8] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8];
 /// Index of the Integrations tab in `draw_settings`.
 pub(crate) const INTEGRATIONS_TAB: usize = 6;
+
+/// Width of Search Obsidian's list when the preview pane is shown (the pane takes the rest of the 750 pt).
+const OBSIDIAN_LIST_W: f32 = 310.0;
+/// Blocks drawn per frame; a note longer than this ends with a hint to open it in Obsidian.
+const OBSIDIAN_MAX_BLOCKS: usize = 400;
+
+/// Paint preview blocks: headings larger, bullets, ordered items, task boxes, quotes with a bar, code on a
+/// dark block in the monospace font, and rules as lines.
+fn draw_blocks(ui: &mut Ui, pal: &Palette, blocks: &[ferrocast_core::obsidian::Block]) {
+    use ferrocast_core::obsidian::Block;
+    let text = |t: &str, size: f32, color: Color32| egui::Label::new(RichText::new(t).size(size).color(color)).wrap().selectable(false);
+    let indent = |ui: &mut Ui, level: u8| ui.add_space(level.min(8) as f32 * 16.0);
+    // a fixed-width gutter (bullet, number, checkbox) with the item text wrapping next to it
+    let gutter = |ui: &mut Ui| ui.allocate_exact_size(Vec2::new(20.0, 18.0), Sense::hover()).0;
+    for b in blocks.iter().take(OBSIDIAN_MAX_BLOCKS) {
+        match b {
+            Block::Heading(level, t) => {
+                let size = [22.0, 19.0, 17.0, 15.5, 14.5, 14.0][(*level as usize).clamp(1, 6) - 1];
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(RichText::new(t).size(size).strong().color(pal.text)).wrap().selectable(false));
+            }
+            Block::Paragraph(t) => {
+                ui.add(text(t, 13.5, pal.text));
+            }
+            Block::Bullet(level, t) => {
+                ui.horizontal_top(|ui| {
+                    indent(ui, *level);
+                    let g = gutter(ui);
+                    ui.painter().circle_filled(Pos2::new(g.center().x, g.min.y + 9.0), 2.2, pal.sub_strong);
+                    ui.add(text(t, 13.5, pal.text));
+                });
+            }
+            Block::Ordered(level, n, t) => {
+                ui.horizontal_top(|ui| {
+                    indent(ui, *level);
+                    let g = gutter(ui);
+                    ui.painter().text(
+                        Pos2::new(g.max.x - 4.0, g.min.y + 8.0),
+                        Align2::RIGHT_CENTER,
+                        format!("{n}."),
+                        FontId::proportional(13.0),
+                        pal.sub_strong,
+                    );
+                    ui.add(text(t, 13.5, pal.text));
+                });
+            }
+            Block::Task(level, done, t) => {
+                ui.horizontal_top(|ui| {
+                    indent(ui, *level);
+                    let g = gutter(ui);
+                    let bx = Rect::from_center_size(Pos2::new(g.center().x - 1.0, g.min.y + 9.0), Vec2::splat(13.0));
+                    let p = ui.painter();
+                    if *done {
+                        p.rect_filled(bx, 3.0, pal.accent);
+                        let c = bx.center();
+                        p.line_segment([c + Vec2::new(-3.5, 0.5), c + Vec2::new(-1.0, 3.0)], Stroke::new(1.8, Color32::WHITE));
+                        p.line_segment([c + Vec2::new(-1.0, 3.0), c + Vec2::new(3.8, -3.2)], Stroke::new(1.8, Color32::WHITE));
+                    } else {
+                        p.rect_stroke(bx, 3.0, Stroke::new(1.3, pal.sub_strong), StrokeKind::Inside);
+                    }
+                    ui.add(text(t, 13.5, if *done { pal.sub } else { pal.text }));
+                });
+            }
+            Block::Quote(t) => {
+                let r = egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 0, top: 1, bottom: 1 }).show(ui, |ui| {
+                    ui.add(egui::Label::new(RichText::new(t).size(13.5).italics().color(pal.sub_strong)).wrap().selectable(false));
+                });
+                let rr = r.response.rect;
+                ui.painter().rect_filled(Rect::from_min_max(rr.min, Pos2::new(rr.min.x + 3.0, rr.max.y)), 1.5, pal.accent);
+            }
+            Block::Code(_, t) => {
+                egui::Frame::NONE
+                    .fill(Color32::from_rgb(12, 12, 15))
+                    .stroke(Stroke::new(1.0, pal.sep))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(if t.is_empty() { " " } else { t.as_str() })
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(Color32::from_gray(225)),
+                            )
+                            .wrap()
+                            .selectable(false),
+                        );
+                    });
+            }
+            Block::Rule => {
+                let (r, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 10.0), Sense::hover());
+                ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, pal.sep));
+            }
+        }
+    }
+    if blocks.len() > OBSIDIAN_MAX_BLOCKS {
+        ui.add(text("Open the note in Obsidian to read the rest.", 12.0, pal.sub));
+    }
+}
 
 fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     record_text(ui.ctx(), pal, "section", pal.sub_strong, &[], ui.opacity());
