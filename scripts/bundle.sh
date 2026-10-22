@@ -31,6 +31,10 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>MIT licensed. Not affiliated with Raycast.</string>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>dev.ferrocast.url</string>
+    <key>CFBundleURLSchemes</key><array><string>ferrocast</string></array>
+  </dict></array>
   <key>NSAppleEventsUsageDescription</key><string>Ferrocast uses Automation for system commands you explicitly run.</string>
 </dict></plist>
 PLIST
