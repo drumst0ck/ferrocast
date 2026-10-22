@@ -166,7 +166,22 @@ pub enum Msg {
         request: u64,
         result: Result<ferrocast_core::notion::SearchPage, String>,
     },
+    /// Result of a Search Notion request (`append`: a "Load more" page); `request` drops stale answers.
+    NotionViewSearched {
+        request: u64,
+        append: bool,
+        result: Result<ferrocast_core::notion::SearchPage, NotionViewError>,
+    },
     Wake,
+}
+
+/// Why a Search Notion request produced no page.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NotionViewError {
+    /// The Keychain holds no token: nothing was sent.
+    NoToken,
+    /// The exact toast text of the mapped `NotionError`.
+    Failed(String),
 }
 
 #[derive(Clone)]

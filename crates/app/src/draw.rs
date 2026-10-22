@@ -129,6 +129,8 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(ui::WIDTH, want)));
             }
         }
+        let now = ctx.input(|i| i.time);
+        self.tick_notion_view(now);
         // debounced file search
         let q = self.query.trim().to_string();
         let wants = self.visible
@@ -207,6 +209,34 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            // design-review shots of Search Notion: `notion` reads the real Keychain (no token: the connect
+            // state), `notion-list` shows a fixed list without any request
+            Ok("notion") => app.run_builtin(Builtin::SearchNotion),
+            Ok("notion-list") => {
+                app.run_builtin(Builtin::SearchNotion);
+                let ago = |h: i64| (chrono::Utc::now() - chrono::Duration::hours(h)).to_rfc3339();
+                let json = format!(
+                    r#"{{"results":[
+                    {{"object":"page","id":"a","url":"https://www.notion.so/a","last_edited_time":"{}","icon":{{"type":"emoji","emoji":"🚀"}},"properties":{{"title":{{"type":"title","title":[{{"plain_text":"Product roadmap Q3"}}]}}}}}},
+                    {{"object":"data_source","id":"b","url":"https://www.notion.so/b","last_edited_time":"{}","icon":{{"type":"emoji","emoji":"✅"}},"title":[{{"plain_text":"Tasks"}}]}},
+                    {{"object":"page","id":"c","url":"https://www.notion.so/c","last_edited_time":"{}","properties":{{"title":{{"type":"title","title":[{{"plain_text":"Meeting notes: design review"}}]}}}}}},
+                    {{"object":"data_source","id":"d","url":"https://www.notion.so/d","last_edited_time":"{}","title":[{{"plain_text":"Reading list"}}]}},
+                    {{"object":"page","id":"e","url":"https://www.notion.so/e","last_edited_time":"{}","icon":{{"type":"emoji","emoji":"🏠"}},"properties":{{"title":{{"type":"title","title":[{{"plain_text":"Home"}}]}}}}}}
+                    ],"has_more":true,"next_cursor":"c"}}"#,
+                    ago(0),
+                    ago(2),
+                    ago(30),
+                    ago(24 * 9),
+                    ago(24 * 400)
+                );
+                if let Ok(page) = ferrocast_core::notion::parse_search(&json) {
+                    app.nv.items = page.items;
+                    app.nv.has_more = true;
+                    app.nv.next_cursor = page.next_cursor;
+                    app.nv.connected = Some(true);
+                    app.nv.asked = Some(String::new());
+                }
+            }
             Ok("compress") => {
                 let files: Vec<std::path::PathBuf> = std::env::var("FERROCAST_FILES")
                     .unwrap_or_default()
@@ -1697,7 +1727,7 @@ impl App {
                         FontId::proportional(14.0),
                         pal.sub,
                     );
-                } else if sections.is_empty() {
+                } else if sections.is_empty() && !(matches!(self.view(), View::NotionSearch) && self.nv.searching) {
                     ui.painter().text(content.center(), Align2::CENTER_CENTER, "No results", FontId::proportional(14.0), pal.sub);
                 }
             }
@@ -1768,6 +1798,8 @@ impl App {
                 View::Files => true,
                 _ => false,
             };
+        let notion_busy = matches!(self.view(), View::NotionSearch) && self.nv.searching;
+        let busy_label = if notion_busy { "Searching Notion" } else { "Searching files" };
         #[cfg(test)]
         ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("settings-undo-rect")));
         let mut undo_clicked = false;
@@ -1793,11 +1825,11 @@ impl App {
                 p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, t, FontId::proportional(12.5), facc);
                 record_text(ui.ctx(), pal, "footer-toast", facc, &[], 1.0);
             }
-            None if searching => {
+            None if searching || notion_busy => {
                 // Three dots that pulse while Spotlight answers; cheap, and it stops on its own.
                 let t = ui.ctx().input(|i| i.time);
-                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, "Searching files", FontId::proportional(12.5), pal.sub);
-                let w = p.layout_no_wrap("Searching files".into(), FontId::proportional(12.5), pal.sub).size().x;
+                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, busy_label, FontId::proportional(12.5), pal.sub);
+                let w = p.layout_no_wrap(busy_label.into(), FontId::proportional(12.5), pal.sub).size().x;
                 for k in 0..3 {
                     let a = (((t * 3.0 - k as f64 * 0.6).sin() * 0.5 + 0.5) * 255.0) as u8;
                     p.circle_filled(
@@ -6681,7 +6713,7 @@ const SETTINGS_TABS: [(&str, &str); 8] = [
 const SETTINGS_GROUP_STARTS: [usize; 2] = [3, 5];
 const SETTINGS_NUM_KEYS: [Key; 8] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8];
 /// Index of the Integrations tab in `draw_settings`.
-const INTEGRATIONS_TAB: usize = 6;
+pub(crate) const INTEGRATIONS_TAB: usize = 6;
 
 fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     record_text(ui.ctx(), pal, "section", pal.sub_strong, &[], ui.opacity());

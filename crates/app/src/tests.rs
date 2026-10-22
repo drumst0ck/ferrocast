@@ -90,6 +90,7 @@ fn fixture() -> App {
         scratch: String::new(),
         key_scratch: String::new(),
         notion: Default::default(),
+        nv: Default::default(),
         rates: Default::default(),
         rates_checked_at: Instant::now(),
         sec_cache: None,
@@ -8725,4 +8726,235 @@ fn every_index_entry_is_drawn_on_the_tab_it_names() {
     assert_eq!(tab_of_title("Accessibility"), Some("Advanced"));
     assert_eq!(tab_of_title("Data folder"), Some("Advanced"));
     assert_eq!(tab_of_title("Default folder"), Some("Scripts"));
+}
+
+// ---- Search Notion (command)
+
+use crate::notion_io::testing::{serve_seq, Loopback};
+
+const PAGE2_JSON: &str = r#"{"object":"list","results":[
+  {"object":"page","id":"p9","url":"https://app.notion.com/p/p9","properties":{"title":{"type":"title","title":[{"plain_text":"Roadmap"}]}}}
+],"has_more":false,"next_cursor":null}"#;
+const MORE_JSON: &str = r#"{"object":"list","results":[
+  {"object":"page","id":"p1","url":"https://app.notion.com/p/p1","last_edited_time":"2026-03-11T10:00:00.000Z","icon":{"type":"emoji","emoji":"📥"},"properties":{"title":{"type":"title","title":[{"plain_text":"Inbox"}]}}},
+  {"object":"data_source","id":"d1","url":"https://app.notion.com/d1","title":[{"plain_text":"Tasks"}]}
+],"has_more":true,"next_cursor":"cur-1"}"#;
+const UNAUTH_JSON: &str = r#"{"object":"error","status":401,"code":"unauthorized","message":"API token is invalid."}"#;
+
+/// The launcher on Search Notion with the fake Keychain and loopback base URL of this test thread.
+fn nview(token: Option<&str>, lb: Option<&Loopback>) -> App {
+    notion_io::set_test_token(token);
+    notion_io::set_test_base(lb.map(|l| l.base.clone()));
+    let _ = notion_io::take_opened();
+    let _ = notion_io::take_copied();
+    let mut app = fixture();
+    app.run_builtin(Builtin::SearchNotion);
+    app
+}
+
+fn nv_titles(app: &App) -> Vec<String> {
+    app.sections().iter().flat_map(|s| s.items.iter().map(|i| i.title.clone())).collect()
+}
+
+/// The JSON body of a raw request captured by the loopback server.
+fn body_of(req: &str) -> serde_json::Value {
+    serde_json::from_str(req.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+}
+
+#[test]
+fn the_command_exists_with_its_keywords_and_opens_its_own_view() {
+    let item = Builtin::ALL.iter().find(|b| b.title() == "Search Notion").expect("registered");
+    for k in ["notion", "pages", "wiki", "docs", "notes"] {
+        assert!(item.keywords().iter().any(|w| w == k), "{k}");
+    }
+    assert_eq!(item.id(), "builtin:search-notion");
+    let app = nview(None, None);
+    assert!(matches!(app.view(), View::NotionSearch));
+    assert_eq!(app.view().placeholder(), "Search Notion…");
+    assert_eq!(app.view().title(), "Search Notion");
+    assert!(app.view().shape() == Shape::List);
+}
+
+#[test]
+fn without_a_token_nothing_is_sent_and_the_only_row_opens_settings_on_integrations() {
+    let lb = serve_seq(vec![(200, MORE_JSON)]);
+    let mut app = nview(None, Some(&lb));
+    app.tick_notion_view(0.0);
+    drain_until(&mut app, |a| a.nv.connected == Some(false));
+    // typing does not start requests either
+    app.query = "plan".into();
+    app.tick_notion_view(1.0);
+    app.tick_notion_view(2.0);
+    std::thread::sleep(Duration::from_millis(150));
+    app.drain();
+    assert!(lb.requests().is_empty(), "no token, no request: {:?}", lb.requests());
+    let secs = app.sections();
+    assert_eq!(secs.len(), 1);
+    assert_eq!(secs[0].title, "Connect Notion to search your pages");
+    assert_eq!(secs[0].items.len(), 1);
+    assert_eq!(secs[0].items[0].title, "Open Settings → Integrations");
+    let item = secs[0].items[0].clone();
+    app.run_item(&item);
+    assert!(matches!(app.view(), View::Settings));
+    assert_eq!(app.ctx.data(|d| d.get_temp::<usize>(Id::new("settings_tab"))), Some(NOTION_TAB));
+}
+
+#[test]
+fn opening_the_view_lists_the_twenty_latest_pages_and_shows_kind_icon_and_time() {
+    let lb = serve_seq(vec![(200, MORE_JSON)]);
+    let mut app = nview(Some("ntn_tok"), Some(&lb));
+    app.tick_notion_view(0.0);
+    assert!(app.nv.searching, "the request is in flight");
+    drain_until(&mut app, |a| !a.nv.searching);
+    let reqs = lb.requests();
+    assert_eq!(reqs.len(), 1);
+    assert!(reqs[0].starts_with("POST /v1/search"), "{}", reqs[0]);
+    let want: serde_json::Value = serde_json::from_str(&ferrocast_core::notion::search_body("", None, 20)).unwrap();
+    assert_eq!(body_of(&reqs[0]), want);
+    assert_eq!(want["page_size"], 20);
+    assert_eq!(want["sort"]["timestamp"], "last_edited_time");
+    let secs = app.sections();
+    assert_eq!(secs[0].title, "Recently edited");
+    let rows = &secs[0].items;
+    assert_eq!((rows[0].title.as_str(), rows[0].subtitle.as_str(), &rows[0].icon), ("Inbox", "Page", &Icon::Emoji("📥".into())));
+    assert_eq!((rows[1].title.as_str(), rows[1].subtitle.as_str()), ("Tasks", "Database"));
+    assert!(matches!(rows[1].icon, Icon::Glyph(..)), "no emoji: a generic glyph");
+    assert!(!rows[0].accessory.is_empty(), "relative edit time on rows that have one");
+    assert_eq!(rows[1].accessory, "", "none when the API gave no time");
+    // a render with the results does not panic and the footer shows no busy state any more
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn typing_waits_250_ms_after_the_last_key_then_sends_exactly_one_request() {
+    let lb = serve_seq(vec![(200, MORE_JSON), (200, PAGE2_JSON)]);
+    let mut app = nview(Some("ntn_tok"), Some(&lb));
+    app.tick_notion_view(0.0);
+    drain_until(&mut app, |a| !a.nv.searching);
+    app.query = "r".into();
+    app.tick_notion_view(10.0);
+    app.query = "road".into();
+    app.tick_notion_view(10.2);
+    app.tick_notion_view(10.3);
+    app.tick_notion_view(10.44);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(lb.requests().len(), 1, "still inside the debounce window of the last key");
+    app.tick_notion_view(10.46);
+    drain_until(&mut app, |a| !a.nv.searching);
+    for t in [10.5, 11.0, 12.0] {
+        app.tick_notion_view(t);
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    let reqs = lb.requests();
+    assert_eq!(reqs.len(), 2, "exactly one request for the typed word: {reqs:?}");
+    assert_eq!(body_of(&reqs[1])["query"], "road");
+    assert!(body_of(&reqs[1]).get("sort").is_none());
+    assert_eq!(nv_titles(&app), ["Roadmap"]);
+    assert_eq!(app.sections()[0].title, "Results");
+}
+
+#[test]
+fn an_answer_from_an_older_request_is_dropped() {
+    let lb = serve_seq(vec![(200, MORE_JSON)]);
+    let mut app = nview(Some("ntn_tok"), Some(&lb));
+    app.tick_notion_view(0.0);
+    drain_until(&mut app, |a| !a.nv.searching);
+    let first = app.nv.request;
+    app.query = "x".into();
+    app.tick_notion_view(5.0);
+    app.tick_notion_view(5.3);
+    assert_eq!(app.nv.request, first + 1, "each request has a higher id");
+    let stale = ferrocast_core::notion::parse_search(PAGE2_JSON).unwrap();
+    app.bus.send(Msg::NotionViewSearched { request: first, append: false, result: Ok(stale) });
+    app.drain();
+    assert_eq!(nv_titles(&app).first().map(String::as_str), Some("Inbox"), "stale rows ignored");
+    assert!(app.nv.searching, "still waiting for the newest answer");
+}
+
+#[test]
+fn has_more_adds_a_load_more_row_that_appends_the_next_page_with_the_cursor() {
+    let lb = serve_seq(vec![(200, MORE_JSON), (200, PAGE2_JSON)]);
+    let mut app = nview(Some("ntn_tok"), Some(&lb));
+    app.tick_notion_view(0.0);
+    drain_until(&mut app, |a| !a.nv.searching);
+    assert_eq!(nv_titles(&app), ["Inbox", "Tasks", "Load more"]);
+    let more = app.sections()[0].items[2].clone();
+    assert!(matches!(more.kind, Kind::NotionLoadMore));
+    app.run_item(&more);
+    assert!(app.nv.searching);
+    drain_until(&mut app, |a| !a.nv.searching);
+    let reqs = lb.requests();
+    assert_eq!(body_of(&reqs[1])["start_cursor"], "cur-1");
+    assert_eq!(body_of(&reqs[1])["page_size"], 20);
+    assert_eq!(nv_titles(&app), ["Inbox", "Tasks", "Roadmap"], "appended, and no Load more once has_more is false");
+}
+
+#[test]
+fn a_401_toasts_the_exact_message_and_keeps_the_previous_rows() {
+    let lb = serve_seq(vec![(200, MORE_JSON), (401, UNAUTH_JSON)]);
+    let mut app = nview(Some("ntn_tok"), Some(&lb));
+    app.tick_notion_view(0.0);
+    drain_until(&mut app, |a| !a.nv.searching);
+    app.query = "zzz".into();
+    app.tick_notion_view(3.0);
+    app.tick_notion_view(3.3);
+    drain_until(&mut app, |a| !a.nv.searching);
+    assert_eq!(toast_text(&app), ferrocast_core::notion::NotionError::Unauthorized.user_message());
+    assert_eq!(nv_titles(&app), ["Inbox", "Tasks", "Load more"], "the list stays as it was");
+}
+
+#[test]
+fn enter_opens_the_url_and_the_actions_panel_offers_open_copy_link_and_capture_target() {
+    let lb = serve_seq(vec![(200, MORE_JSON)]);
+    let mut app = nview(Some("ntn_tok"), Some(&lb));
+    app.tick_notion_view(0.0);
+    drain_until(&mut app, |a| !a.nv.searching);
+    let page = app.sections()[0].items[0].clone();
+    let acts = app.actions_for(&page);
+    let labels: Vec<_> = acts.iter().map(|a| a.title.as_str()).collect();
+    assert_eq!(labels, ["Open", "Copy Link", "Set as Capture Target"]);
+    assert_eq!(app.primary_label(&page), "Open");
+    // Enter in the list
+    app.nav_at = Instant::now() - Duration::from_secs(1);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert_eq!(notion_io::take_opened(), ["https://app.notion.com/p/p1"]);
+    // Copy Link
+    let mut app = nview(Some("ntn_tok"), Some(&lb));
+    app.perform(Act::CopyText("https://app.notion.com/p/p1".into()), false);
+    assert_eq!(notion_io::take_copied(), ["https://app.notion.com/p/p1"]);
+    // a link that is not http(s) is never handed to `open`
+    app.notion_open_url("-a Calculator");
+    assert!(notion_io::take_opened().is_empty());
+    assert_eq!(toast_text(&app), "This Notion result has no link to open.");
+}
+
+#[test]
+fn set_as_capture_target_persists_to_settings_json_and_toasts() {
+    let lb = serve_seq(vec![(200, MORE_JSON)]);
+    let mut app = nview(Some("ntn_tok"), Some(&lb));
+    app.tick_notion_view(0.0);
+    drain_until(&mut app, |a| !a.nv.searching);
+    let db = app.sections()[0].items[1].clone();
+    let act = app.actions_for(&db).into_iter().find(|a| a.title == "Set as Capture Target").unwrap();
+    app.perform(act.kind, false);
+    assert_eq!(toast_text(&app), "Capture target set to Tasks");
+    let saved: Settings = app.store.load("settings.json");
+    let t = saved.notion_target.expect("saved");
+    assert_eq!((t.id.as_str(), t.kind.as_str(), t.title.as_str()), ("d1", "data_source", "Tasks"));
+    let file = std::fs::read_to_string(app.store.root.join("settings.json")).unwrap();
+    assert!(!file.contains("ntn_tok"));
+}
+
+#[test]
+fn typing_is_not_blocked_while_a_request_is_in_flight() {
+    let lb = serve_seq(vec![(200, MORE_JSON)]);
+    let mut app = nview(Some("ntn_tok"), Some(&lb));
+    app.tick_notion_view(0.0);
+    assert!(app.nv.searching);
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    render(&mut app, vec![Event::Text("a".into())]);
+    assert_eq!(app.query, "a", "typing is not blocked by the request");
+    drain_until(&mut app, |a| !a.nv.searching);
 }

@@ -44,6 +44,7 @@ pub enum Builtin {
     Shelf,
     SearchNotes,
     CreateNote,
+    SearchNotion,
     CreateScript,
     OpenScriptsFolder,
     ReloadScripts,
@@ -77,6 +78,7 @@ impl Builtin {
         Builtin::ConvertFinderSelection,
         Builtin::SearchNotes,
         Builtin::CreateNote,
+        Builtin::SearchNotion,
         Builtin::CreateScript,
         Builtin::OpenScriptsFolder,
         Builtin::ReloadScripts,
@@ -110,6 +112,7 @@ impl Builtin {
             Builtin::Shelf => "File Shelf",
             Builtin::SearchNotes => "Search Notes",
             Builtin::CreateNote => "Create Note",
+            Builtin::SearchNotion => "Search Notion",
             Builtin::CreateScript => "Create Script Command",
             Builtin::OpenScriptsFolder => "Open Script Commands Folder",
             Builtin::ReloadScripts => "Reload Script Directories",
@@ -136,6 +139,7 @@ impl Builtin {
             Builtin::ConvertFiles | Builtin::ConvertFinderSelection => "Files",
             Builtin::Shelf => "Files",
             Builtin::SearchNotes | Builtin::CreateNote => "Notes",
+            Builtin::SearchNotion => "Notion",
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
             Builtin::Settings | Builtin::Quit => "Ferrocast",
         }
@@ -162,6 +166,7 @@ impl Builtin {
             Builtin::ConvertFiles | Builtin::ConvertFinderSelection => ("sf:arrow.triangle.2.circlepath.doc.on.clipboard", [255, 140, 60]),
             Builtin::Shelf => ("sf:tray.full", [255, 140, 60]),
             Builtin::SearchNotes | Builtin::CreateNote => ("sf:pencil", [255, 197, 49]),
+            Builtin::SearchNotion => ("sf:doc.text.magnifyingglass", [60, 60, 70]),
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => ("sf:terminal", [60, 60, 70]),
             Builtin::Settings => ("sf:gearshape", [120, 120, 130]),
             Builtin::Quit => ("sf:power", [177, 36, 36]),
@@ -190,6 +195,7 @@ impl Builtin {
             Builtin::Shelf => &["shelf", "float", "stash", "drop", "files", "keep"],
             Builtin::ConvertFiles => &["convert", "converter", "format", "png", "jpg", "mp4", "mp3", "pdf", "compress", "zip"],
             Builtin::ConvertFinderSelection => &["finder", "selection", "convert", "wheel", "format"],
+            Builtin::SearchNotion => &["notion", "pages", "wiki", "docs", "notes"],
             Builtin::Settings => &["preferences", "config"],
             _ => &[],
         };
@@ -226,6 +232,12 @@ pub enum Kind {
     Clip(String),
     Emoji(&'static str),
     Note(String),
+    /// A Notion page or database found by Search Notion.
+    Notion(ferrocast_core::notion::NotionItem),
+    /// The last row of Search Notion when more results exist.
+    NotionLoadMore,
+    /// The only row of Search Notion without a token: opens Settings → Integrations.
+    NotionConnect,
     OpenWindow(WindowInfo),
     Process(ferrocast_macos::process::ProcInfo),
     /// Start a countdown of this many seconds with an optional label.
@@ -274,6 +286,8 @@ pub struct Section {
 pub enum Act {
     Run,
     CopyText(String),
+    /// Store this Notion page or database as the capture target.
+    NotionTarget(ferrocast_core::notion::NotionItem),
     PasteText(String),
     Reveal(PathBuf),
     QuitApp(i32),
