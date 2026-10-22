@@ -68,6 +68,24 @@ fn wheel_reduce_motion(ctx: &Context) -> bool {
     }
 }
 
+impl App {
+    /// Drop the toast after 2.5 s (the "Tab reset · Undo" toast lives as long as Undo works), and
+    /// the undo state with it.
+    fn expire_toasts(&mut self) {
+        // the "Tab reset · Undo" toast stays as long as Undo works
+        let life = if self.toast.as_ref().is_some_and(|(t, _)| t == RESET_TOAST) { UNDO_SECS * 1000 } else { 2500 };
+        if self.toast.as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_millis(life)) {
+            if life > 2500 {
+                self.settings_undo = None;
+            }
+            self.toast = None;
+        }
+        if self.settings_undo.as_ref().is_some_and(|(_, _, t)| t.elapsed() > Duration::from_secs(UNDO_SECS)) {
+            self.settings_undo = None;
+        }
+    }
+}
+
 impl eframe::App for App {
     fn clear_color(&self, _v: &egui::Visuals) -> [f32; 4] {
         [0.0; 4]
@@ -94,9 +112,7 @@ impl eframe::App for App {
                 services::refresh_rates(self.bus.clone());
             }
         }
-        if self.toast.as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_millis(2500)) {
-            self.toast = None;
-        }
+        self.expire_toasts();
         if self.visible {
             let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
             if focused {
@@ -1576,7 +1592,8 @@ impl App {
                 } else if matches!(self.view(), View::Settings) {
                     // breadcrumb: "Settings /" muted, the current tab in the normal colour
                     let tab: usize = ctx.data(|d| d.get_temp(Id::new("settings_tab"))).unwrap_or(0);
-                    let name = SETTINGS_TABS[tab.min(SETTINGS_TABS.len() - 1)].0;
+                    let searching = ctx.data(|d| d.get_temp::<String>(Id::new("settings_query"))).is_some_and(|q| !q.trim().is_empty());
+                    let name = if searching { "Search" } else { SETTINGS_TABS[tab.min(SETTINGS_TABS.len() - 1)].0 };
                     ui.spacing_mut().item_spacing.x = 6.0;
                     ui.label(RichText::new("Settings /").size(16.0).color(pal.sub));
                     ui.label(RichText::new(name).size(16.0).strong().color(pal.text));
@@ -1695,7 +1712,25 @@ impl App {
                 View::Files => true,
                 _ => false,
             };
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("settings-undo-rect")));
+        let mut undo_clicked = false;
         match &self.toast {
+            Some((t, _)) if t == RESET_TOAST && self.settings_undo.is_some() => {
+                // "Tab reset ·" then a clickable "Undo"
+                let head = p.layout_no_wrap("Tab reset · ".into(), FontId::proportional(12.5), pal.accent);
+                let hw = head.size().x;
+                p.galley(Pos2::new(tx, cy - head.size().y / 2.0), head, pal.accent);
+                let ug = p.layout_no_wrap("Undo".into(), FontId::proportional(12.5), pal.text);
+                let ur = Rect::from_min_size(Pos2::new(tx + hw - 4.0, cy - 11.0), Vec2::new(ug.size().x + 8.0, 22.0));
+                let resp = ui.interact(ur, Id::new("settings-undo"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                let col = if resp.hovered() { pal.accent } else { pal.text };
+                p.text(Pos2::new(ur.min.x + 4.0, cy), Align2::LEFT_CENTER, "Undo", FontId::proportional(12.5), col);
+                p.hline((ur.min.x + 4.0)..=(ur.max.x - 4.0), cy + 7.0, Stroke::new(1.0, col));
+                #[cfg(test)]
+                ui.ctx().data_mut(|d| d.insert_temp(Id::new("settings-undo-rect"), ur));
+                undo_clicked = resp.clicked();
+            }
             Some((t, _)) => {
                 p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, t, FontId::proportional(12.5), pal.accent);
             }
@@ -1775,6 +1810,9 @@ impl App {
         }
         #[cfg(test)]
         ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-chips"), drawn));
+        if undo_clicked {
+            self.undo_settings_reset();
+        }
     }
 
     fn draw_list(&mut self, ui: &mut Ui, rect: Rect, sections: &[Section], pal: &Palette) -> (Option<usize>, Option<usize>) {
@@ -5349,7 +5387,17 @@ impl App {
             let mut job = egui::text::LayoutJob::default();
             let chars: Vec<char> = en.title.chars().collect();
             let (ms, ml) = ferrocast_core::settings_index::match_range(en.title, query).unwrap_or((0, 0));
-            for (from, to, color) in [(0, ms, pal.text), (ms, ms + ml, pal.accent), (ms + ml, chars.len(), pal.text)] {
+            // the match is accented only when it is a proper part of the title: a title that is
+            // the whole match stays in the normal colour
+            let whole = ms == 0 && ml == chars.len();
+            let hl = if whole { pal.text } else { pal.accent };
+            #[cfg(test)]
+            ctx.data_mut(|d| {
+                let part = (!whole && ml > 0).then(|| chars[ms..ms + ml].iter().collect::<String>());
+                d.get_temp_mut_or_default::<Vec<(String, Option<String>)>>(Id::new("settings-result-accent"))
+                    .push((en.title.to_string(), part))
+            });
+            for (from, to, color) in [(0, ms, pal.text), (ms, ms + ml, hl), (ms + ml, chars.len(), pal.text)] {
                 if from < to {
                     let part: String = chars[from..to].iter().collect();
                     job.append(&part, 0.0, egui::text::TextFormat::simple(font.clone(), color));
@@ -5378,6 +5426,8 @@ impl App {
         let (mut chatgpt_in, mut chatgpt_out, mut chatgpt_device) = (false, false, false);
         let mut fetch_models = false;
         let (mut check_now, mut install_now) = (false, false);
+        let (mut new_snippet, mut create_script) = (false, false);
+        let mut reset_req: Option<usize> = None;
         let update_channel = {
             let id = Id::new("update_channel");
             match ctx.data(|d| d.get_temp::<ferrocast_core::update::Channel>(id)) {
@@ -5427,6 +5477,13 @@ impl App {
             d.remove::<Vec<String>>(Id::new("settings-results"));
             d.remove::<Vec<(String, Rect)>>(Id::new("settings-result-rects"));
             d.remove::<String>(Id::new("settings-empty-state"));
+            d.remove::<Vec<(String, String)>>(Id::new("status-chips"));
+            d.remove::<Vec<String>>(Id::new("settings-row-disabled"));
+            d.remove::<Vec<String>>(Id::new("settings-sidebar-active"));
+            d.remove::<Vec<(String, Option<String>)>>(Id::new("settings-result-accent"));
+            d.remove::<Vec<(usize, String)>>(Id::new("settings-pane-empty"));
+            d.remove::<Rect>(Id::new("settings-empty-button"));
+            d.remove::<Rect>(Id::new("settings-reset-button"));
         });
         // an unused jump (its row is not on the tab) does not wait for ever
         if let Some(j) = ctx.data(|d| d.get_temp::<SettingsJump>(Id::new("settings-jump"))) {
@@ -5496,6 +5553,8 @@ impl App {
         // ---- sidebar
         #[cfg(test)]
         let mut marks: (Vec<(String, Rect)>, Vec<Rect>) = (vec![], vec![]);
+        #[cfg(test)]
+        let mut active_names: Vec<String> = vec![];
         ui.scope_builder(UiBuilder::new().max_rect(side), |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             // search field: the Settings field look, a magnifier on the left, a clear button on the right
@@ -5545,7 +5604,12 @@ impl App {
                 let resp = ui.interact(r, id, Sense::click()).on_hover_text(format!("{name}  ⌘{}", i + 1));
                 #[cfg(test)]
                 marks.0.push((name.to_string(), r));
-                let on = i == tab;
+                // while a search shows its results no tab is the current one
+                let on = i == tab && query.trim().is_empty();
+                #[cfg(test)]
+                if on {
+                    active_names.push(name.to_string());
+                }
                 if on {
                     ui.painter().rect_filled(r, 8.0, pal.sel);
                 } else if resp.hovered() {
@@ -5579,7 +5643,10 @@ impl App {
             }
         });
         #[cfg(test)]
-        ctx.data_mut(|d| d.insert_temp(Id::new("settings-sidebar"), marks));
+        ctx.data_mut(|d| {
+            d.insert_temp(Id::new("settings-sidebar"), marks);
+            d.insert_temp(Id::new("settings-sidebar-active"), active_names);
+        });
         if tab != tab_before {
             if !opened {
                 // choosing a tab (click, Cmd+N, arrows) leaves the search
@@ -5589,6 +5656,10 @@ impl App {
         }
         if query != query_before {
             sel = 0;
+            if query.trim().is_empty() != query_before.trim().is_empty() {
+                // the header's breadcrumb reads the query from the previous frame
+                ctx.request_repaint();
+            }
         }
         let searching = !query.trim().is_empty();
         let hits = if searching { ferrocast_core::settings_index::search(&query) } else { vec![] };
@@ -5610,6 +5681,8 @@ impl App {
                 ui.add_space(14.0);
                 match tab {
                     0 => {
+                        // the three wheel keys only matter while the drop wheel is on
+                        let wheel_off = !s.drop_wheel;
                         group(ui, pal, |ui| {
                             row(ui, pal, "Launcher hotkey", "Press it from any app to open or close Ferrocast.", |ui| {
                                 if small_btn(ui, pal, "Record…") {
@@ -5623,17 +5696,23 @@ impl App {
                             row(ui, pal, "Compact mode", "Show only the search bar until you type.", |ui| toggle(ui, pal, &mut s.compact_mode));
                             row(ui, pal, "Launch at login", "Start Ferrocast when you sign in to your Mac.", |ui| toggle(ui, pal, &mut s.launch_at_login));
                             row(ui, pal, "Drop wheel", "While dragging files, tap a key to open a wheel of conversions or actions.", |ui| toggle(ui, pal, &mut s.drop_wheel));
-                            row(ui, pal, "Convert wheel key", "Tap during a file drag for conversions.", |ui| {
-                                let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
-                                segmented(ui, pal, &mut s.wheel_convert_key, &opts);
+                            row_disabled_if(ui, wheel_off, |ui| {
+                                row(ui, pal, "Convert wheel key", "Tap during a file drag for conversions.", |ui| {
+                                    let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                    segmented(ui, pal, &mut s.wheel_convert_key, &opts);
+                                });
                             });
-                            row(ui, pal, "Tools wheel key", "Tap during a file drag for compress, crop, redact…", |ui| {
-                                let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
-                                segmented(ui, pal, &mut s.wheel_tools_key, &opts);
+                            row_disabled_if(ui, wheel_off, |ui| {
+                                row(ui, pal, "Tools wheel key", "Tap during a file drag for compress, crop, redact…", |ui| {
+                                    let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                    segmented(ui, pal, &mut s.wheel_tools_key, &opts);
+                                });
                             });
-                            row(ui, pal, "Actions wheel key", "Tap during a file drag for copy, move, AirDrop…", |ui| {
-                                let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
-                                segmented(ui, pal, &mut s.wheel_actions_key, &opts);
+                            row_disabled_if(ui, wheel_off, |ui| {
+                                row(ui, pal, "Actions wheel key", "Tap during a file drag for copy, move, AirDrop…", |ui| {
+                                    let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                    segmented(ui, pal, &mut s.wheel_actions_key, &opts);
+                                });
                             });
                             row(
                                 ui,
@@ -5658,16 +5737,19 @@ impl App {
                                 "Checks GitHub once a day. Off means Ferrocast never contacts GitHub by itself.",
                                 |ui| toggle(ui, pal, &mut s.update_check),
                             );
-                            row(
-                                ui,
-                                pal,
-                                "Install updates",
-                                "Ask first shows the release notes and lets you skip a version. Automatically installs and relaunches.",
-                                |ui| {
-                                    use ferrocast_core::models::UpdateInstall as U;
-                                    segmented(ui, pal, &mut s.update_install, &[(U::AskFirst, "Ask first"), (U::Automatic, "Automatically")]);
-                                },
-                            );
+                            let updates_off = !s.update_check;
+                            row_disabled_if(ui, updates_off, |ui| {
+                                row(
+                                    ui,
+                                    pal,
+                                    "Install updates",
+                                    "Ask first shows the release notes and lets you skip a version. Automatically installs and relaunches.",
+                                    |ui| {
+                                        use ferrocast_core::models::UpdateInstall as U;
+                                        segmented(ui, pal, &mut s.update_install, &[(U::AskFirst, "Ask first"), (U::Automatic, "Automatically")]);
+                                    },
+                                );
+                            });
                             let checked = match s.update_last_check {
                                 Some(t) => format!("Checked {}", services::ago(services::now_secs() - t)),
                                 None => "Checked never".to_string(),
@@ -5716,11 +5798,14 @@ impl App {
                     1 => {
                         group(ui, pal, |ui| {
                             row(ui, pal, "Record history", "Keep what you copy so you can paste it later. Password managers are skipped.", |ui| toggle(ui, pal, &mut s.clipboard_enabled));
-                            row(ui, pal, "Keep history for", "Older entries are removed automatically. Pinned entries stay.", |ui| {
-                                field_combo(ui, pal, "retention", s.clipboard_retention.label(), 120.0, |ui| {
-                                    for r in Retention::ALL {
-                                        ui.selectable_value(&mut s.clipboard_retention, r, r.label());
-                                    }
+                            let history_off = !s.clipboard_enabled;
+                            row_disabled_if(ui, history_off, |ui| {
+                                row(ui, pal, "Keep history for", "Older entries are removed automatically. Pinned entries stay.", |ui| {
+                                    field_combo(ui, pal, "retention", s.clipboard_retention.label(), 120.0, |ui| {
+                                        for r in Retention::ALL {
+                                            ui.selectable_value(&mut s.clipboard_retention, r, r.label());
+                                        }
+                                    });
                                 });
                             });
                         });
@@ -5733,17 +5818,25 @@ impl App {
                         });
                         ui.add_space(10.0);
                         note(ui, pal, if trusted { "Expansion is ready: Accessibility is granted." } else { "Expansion needs Accessibility. Grant it under Advanced." });
+                        if self.snippets.is_empty() {
+                            ui.add_space(14.0);
+                            let line = "A snippet is text you reuse: type its keyword anywhere and it expands.";
+                            if empty_state(ui, pal, 2, "No snippets yet", line, "New snippet") {
+                                new_snippet = true;
+                            }
+                        }
                     }
                     3 => {
                         use ferrocast_core::models::AiProvider as P;
                         let prov = s.ai_provider;
+                        let ready = ai_readiness(prov, has_key, prov == P::ChatGpt && cached_chatgpt_signed(&ctx), prov == P::ClaudeCode && services::claude_code_path().is_some());
                         group(ui, pal, |ui| {
-                            row_stacked(ui, pal, "Provider", match prov {
+                            row_stacked_chip(ui, pal, "Provider", match prov {
                                 P::OpenAiCompatible => "Any server speaking the OpenAI API: Ollama on this Mac, LM Studio, OpenAI, OpenRouter…",
                                 P::Anthropic => "Claude through Anthropic's API, billed to your API key. A ChatGPT or Claude subscription does not include API access.",
                                 P::ClaudeCode => "Runs the official Claude Code command-line tool, signed in with your own Claude subscription. Slower to start (a few seconds) but no API key.",
                                 P::ChatGpt => "Signs in with your ChatGPT account the way OpenAI's Codex CLI does and uses your ChatGPT plan. No API key.",
-                            }, |ui| {
+                            }, Some((ready.0, ready.1)), |ui| {
                                 segmented(ui, pal, &mut s.ai_provider, &[(P::OpenAiCompatible, "OpenAI API"), (P::ChatGpt, "ChatGPT"), (P::Anthropic, "Anthropic"), (P::ClaudeCode, "Claude Code")]);
                             });
                         });
@@ -5761,7 +5854,7 @@ impl App {
                                             }
                                         }
                                     });
-                                    row(ui, pal, "Server", "Base URL ending in /v1.", |ui| {
+                                    row_chip(ui, pal, "Server", "Base URL ending in /v1.", url_problem(&s.ai_base_url).map(|m| (StatusKind::Warn, m)), |ui| {
                                         field(ui, pal, &mut s.ai_base_url, 470.0, "http://localhost:11434/v1", false);
                                     });
                                     row(ui, pal, "Model", "Listed by the server. Pick one, or Custom… to type a name.", |ui| {
@@ -5795,22 +5888,13 @@ impl App {
                             }
                             P::ChatGpt => {
                                 section(ui, pal, "ChatGPT account");
-                                let signed = ctx.data(|d| d.get_temp::<bool>(Id::new("chatgpt_signed")));
-                                let signed = match signed {
-                                    Some(v) => v,
-                                    None => {
-                                        let v = services::chatgpt_credentials().is_some();
-                                        ctx.data_mut(|d| d.insert_temp(Id::new("chatgpt_signed"), v));
-                                        v
-                                    }
-                                };
+                                let signed = cached_chatgpt_signed(&ctx);
                                 group(ui, pal, |ui| {
                                     row(ui, pal, "Account", if signed { "Signed in. The session is stored in the macOS Keychain and refreshed automatically." } else { "Sign in opens your browser and listens on port 1455 for the redirect. If that port is taken (Codex, Pi), it switches to a one-time code you type on openai.com." }, |ui| {
                                         if signed {
                                             if small_btn(ui, pal, "Sign out") {
                                                 chatgpt_out = true;
                                             }
-                                            ui.label(RichText::new("Signed in ✓").size(13.0).color(Color32::from_rgb(89, 212, 153)));
                                         } else {
                                             if small_btn(ui, pal, "Use a code instead") {
                                                 chatgpt_device = true;
@@ -5833,9 +5917,7 @@ impl App {
                                 section(ui, pal, "Claude Code");
                                 let path = services::claude_code_path();
                                 group(ui, pal, |ui| {
-                                    row(ui, pal, "Command-line tool", &path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Not found. Install from claude.ai/code, then run `claude` once in Terminal to sign in.".into()), |ui| {
-                                        ui.label(RichText::new(if path.is_some() { "Installed ✓" } else { "Missing" }).size(13.0).color(if path.is_some() { Color32::from_rgb(89, 212, 153) } else { pal.accent }));
-                                    });
+                                    row(ui, pal, "Command-line tool", &path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Not found. Install from claude.ai/code, then run `claude` once in Terminal to sign in.".into()), |_ui| {});
                                     row(ui, pal, "Model", "Claude Code's default, one of its aliases, or Custom… for a full model id.", |ui| {
                                         if model_picker(ui, pal, "claudecode", &mut s.claude_code_model, "Claude Code default", models_state.as_ref()) {
                                             fetch_models = true;
@@ -5861,13 +5943,19 @@ impl App {
                         use ferrocast_core::models::{AiProvider as P, TranslateOutput as T};
                         section(ui, pal, "Wheel");
                         group(ui, pal, |ui| {
-                            row(ui, pal, "Translate wheel key", "Tap during a text drag for the Translate wheel. Not Shift: it extends the selection.", |ui| {
-                                let opts: Vec<(String, &str)> = ["Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
-                                segmented(ui, pal, &mut s.wheel_translate_key, &opts);
+                            let wheel_off = !s.drop_wheel;
+                            row_disabled_if(ui, wheel_off, |ui| {
+                                row(ui, pal, "Translate wheel key", "Tap during a text drag for the Translate wheel. Not Shift: it extends the selection.", |ui| {
+                                    let opts: Vec<(String, &str)> = ["Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                    segmented(ui, pal, &mut s.wheel_translate_key, &opts);
+                                });
                             });
-                            row(ui, pal, "Languages", "Drag selected text and tap the translate key. Comma-separated, up to 12.", |ui| {
-                                let id = Id::new("translate_langs_buf");
-                                let mut buf: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| s.translate_languages.join(", "));
+                            let id = Id::new("translate_langs_buf");
+                            let typed: String = ctx.data(|d| d.get_temp(id)).unwrap_or_else(|| s.translate_languages.join(", "));
+                            let lang_note = ferrocast_core::translate::language_note(&typed);
+                            let lang_kind = if lang_note.warn { StatusKind::Warn } else { StatusKind::Neutral };
+                            row_chip(ui, pal, "Languages", "Drag selected text and tap the translate key. Comma-separated, up to 12.", Some((lang_kind, &lang_note.text)), |ui| {
+                                let mut buf = typed.clone();
                                 if field(ui, pal, &mut buf, 470.0, "English, Spanish, French…", false).changed() {
                                     s.translate_languages = ferrocast_core::translate::parse_list(&buf);
                                 }
@@ -5877,11 +5965,12 @@ impl App {
                         ui.add_space(14.0);
                         section(ui, pal, "Result");
                         group(ui, pal, |ui| {
-                            row(
+                            row_stacked_chip(
                                 ui,
                                 pal,
                                 "After translating",
-                                "Auto replaces the selection where the app allows it (text fields, and Safari/Chrome pages through JavaScript) and shows a window otherwise. Paste ⌘V only presses Cmd-V, which does nothing on a page you cannot edit.",
+                                "Auto replaces the selection where the app allows it and shows a window otherwise.",
+                                None,
                                 |ui| {
                                     segmented(
                                         ui,
@@ -5891,6 +5980,7 @@ impl App {
                                     );
                                 },
                             );
+                            card_note(ui, pal, PASTE_NOTE);
                             let auto = s.translate_output == T::Auto;
                             #[cfg(test)]
                             ui.ctx().data_mut(|d| {
@@ -5901,8 +5991,7 @@ impl App {
                                 }
                             });
                             if auto {
-                                ui.add_space(4.0);
-                                note(ui, pal, AUTO_JS_NOTE);
+                                card_note(ui, pal, AUTO_JS_NOTE);
                             }
                         });
                         ui.add_space(14.0);
@@ -5910,14 +5999,19 @@ impl App {
                         group(ui, pal, |ui| {
                             let desc = match s.translate_provider {
                                 None => "Translating dragged text uses the chat provider and its model.".to_string(),
-                                Some(p) => {
-                                    let name = ferrocast_core::translate::provider_name(p);
-                                    let ready = if p == P::ClaudeCode && services::claude_code_path().is_none() { " Claude Code is not installed." } else { "" };
-                                    format!("Translations use {name} with the model and sign-in set for it.{ready}")
-                                }
+                                Some(p) => format!("Translations use {} with the model and sign-in set for it.", ferrocast_core::translate::provider_name(p)),
                             };
+                            // readiness of the engine that will translate (the chat's when "Same as chat")
+                            let eff = s.translate_provider.unwrap_or(s.ai_provider);
+                            let eff_key = if eff == s.ai_provider { has_key } else { cached_has_key(&ctx, eff) };
+                            let eff_ready = ai_readiness(
+                                eff,
+                                eff_key,
+                                eff == P::ChatGpt && cached_chatgpt_signed(&ctx),
+                                eff == P::ClaudeCode && services::claude_code_path().is_some(),
+                            );
                             let before = s.translate_provider;
-                            row_stacked(ui, pal, "Provider", &desc, |ui| {
+                            row_stacked_chip(ui, pal, "Provider", &desc, Some((eff_ready.0, eff_ready.1)), |ui| {
                                 segmented(
                                     ui,
                                     pal,
@@ -5977,15 +6071,25 @@ impl App {
                         });
                         ui.add_space(10.0);
                         note(ui, pal, "Supported modes: fullOutput, compact, silent and inline. Scripts marked needsConfirmation ask before running.");
+                        if self.scripts.is_empty() && s.script_directories.is_empty() {
+                            ui.add_space(14.0);
+                            let line = "Scripts with Raycast metadata become commands you can run from the launcher.";
+                            if empty_state(ui, pal, 5, "No script commands yet", line, "Create script") {
+                                create_script = true;
+                            }
+                        }
                     }
                     _ => {
                         section(ui, pal, "Permissions");
                         group(ui, pal, |ui| {
-                            row(ui, pal, "Accessibility", if trusted { "Granted. Window management, pasting and snippet expansion work." } else { "Needed for window management, pasting and snippet expansion." }, |ui| {
+                            row(ui, pal, "Accessibility", "Needed for window management, pasting and snippet expansion.", |ui| {
                                 if trusted {
-                                    ui.label(RichText::new("Granted ✓").size(13.0).color(Color32::from_rgb(89, 212, 153)));
-                                } else if accent_btn(ui, pal, "Grant…") {
-                                    req_acc = true;
+                                    status_chip(ui, pal, StatusKind::Ok, "Granted");
+                                } else {
+                                    if accent_btn(ui, pal, "Grant…") {
+                                        req_acc = true;
+                                    }
+                                    status_chip(ui, pal, StatusKind::Warn, "Not granted");
                                 }
                             });
                         });
@@ -6024,11 +6128,39 @@ impl App {
                         }
                     }
                 }
+                if RESET_FIELDS.iter().any(|(t, _)| *t == tab) {
+                    ui.add_space(14.0);
+                    let r = text_btn(ui, pal, "Reset this tab").on_hover_text("Restore this tab's settings to their defaults");
+                    #[cfg(test)]
+                    ctx.data_mut(|d| d.insert_temp(Id::new("settings-reset-button"), r.rect));
+                    if r.clicked() {
+                        reset_req = Some(tab);
+                    }
+                }
                 }
                 ui.add_space(16.0);
             });
         });
         let _ = acc;
+        if let Some(t) = reset_req {
+            // a reset replaces whatever else was edited in this frame
+            self.scratch = scratch;
+            self.key_scratch = key_scratch;
+            self.reset_settings_tab(t);
+            return;
+        }
+        if new_snippet {
+            self.scratch = scratch;
+            self.key_scratch = key_scratch;
+            self.new_snippet(String::new());
+            return;
+        }
+        if create_script {
+            self.scratch = scratch;
+            self.key_scratch = key_scratch;
+            self.push(View::CreateScript { title: String::new(), mode: 0 });
+            return;
+        }
         if let Some(en) = clicked_result {
             open_settings_result(&ctx, en, &mut tab, &mut query);
             ctx.memory_mut(|m| m.surrender_focus(search_id));
@@ -6049,7 +6181,10 @@ impl App {
             let ok = services::set_ai_key_for(s.ai_provider, &key_scratch);
             let now_has = !key_scratch.trim().is_empty();
             key_scratch.clear();
-            ctx.data_mut(|d| d.insert_temp(Id::new("ai_has_key"), now_has));
+            ctx.data_mut(|d| {
+                d.insert_temp(Id::new("ai_has_key"), now_has);
+                d.remove::<bool>(has_key_cache_id(s.ai_provider));
+            });
             self.toast(if !ok {
                 "Could not update Keychain"
             } else if now_has {
@@ -6118,33 +6253,7 @@ impl App {
         if s.ai_provider != self.settings.ai_provider {
             ctx.data_mut(|d| d.remove::<bool>(Id::new("ai_has_key")));
         }
-        if s != self.settings {
-            if s.launch_at_login != self.settings.launch_at_login {
-                match services::set_launch_at_login(s.launch_at_login) {
-                    Ok(()) => self.toast(if s.launch_at_login { "Will launch at login" } else { "Login item removed" }),
-                    Err(e) => {
-                        s.launch_at_login = self.settings.launch_at_login;
-                        self.toast(format!("Could not change login item: {e}"));
-                    }
-                }
-            }
-            let finder_enter_changed = s.enter_on_finder != self.settings.enter_on_finder;
-            let enter_on_finder = s.enter_on_finder;
-            let theme_changed = s.theme != self.settings.theme;
-            let dirs_changed = s.script_directories != self.settings.script_directories;
-            self.settings = s;
-            self.save_settings();
-            if finder_enter_changed {
-                // on: ask for Accessibility once and create the tap; off: remove it. No restart.
-                self.set_finder_enter(enter_on_finder, true);
-            }
-            if theme_changed {
-                self.set_theme();
-            }
-            if dirs_changed {
-                self.reload_scripts();
-            }
-        }
+        self.commit_settings(s);
     }
 }
 
@@ -6317,8 +6426,19 @@ fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     ui.add_space(6.0);
 }
 
+/// Shown under the "After translating" bar.
+pub(crate) const PASTE_NOTE: &str = "Paste ⌘V only presses Cmd-V, which does nothing on a page you cannot edit.";
+
 /// Shown under "After translating" while Auto is selected.
 pub(crate) const AUTO_JS_NOTE: &str = "To replace text in web pages, turn on \u{201c}Allow JavaScript from Apple Events\u{201d} in your browser (Safari: Develop > Developer Settings; Chrome: View > Developer), and allow Ferrocast to control it when macOS asks.";
+
+/// A grey note inside a card, under a row, inset like the row text.
+fn card_note(ui: &mut Ui, pal: &Palette, text: &str) {
+    egui::Frame::new().inner_margin(egui::Margin { left: 14, right: 14, top: 0, bottom: 10 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(text).size(12.0).color(pal.sub));
+    });
+}
 
 fn note(ui: &mut Ui, pal: &Palette, text: &str) {
     ui.label(RichText::new(text).size(12.0).color(pal.sub));
@@ -6355,7 +6475,12 @@ fn group_rect(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) -> Rect {
 }
 
 fn row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
-    let (r, c) = row_impl(ui, pal, RowLook::PANE, title, desc, control);
+    row_chip(ui, pal, title, desc, None, control);
+}
+
+/// `row` with a status chip after the title.
+fn row_chip(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, chip: Option<(StatusKind, &str)>, control: impl FnOnce(&mut Ui)) {
+    let (r, c) = row_flow(ui, pal, RowLook::PANE, false, title, chip, desc, control);
     form_sep(ui, pal, r);
     record_row(ui.ctx(), title, r, c);
 }
@@ -6385,21 +6510,36 @@ const MIN_TEXT_W: f32 = 170.0;
 /// Height of a stacked control line (fields are 28 pt).
 const CONTROL_H: f32 = 28.0;
 
-/// One adaptive Settings row. The text column takes what the control leaves (up to
-/// `TEXT_MAX_W`); a control that leaves less than `MIN_TEXT_W` for the text goes under it instead. The
-/// control's width is learnt from the previous frame (a control cannot be measured before it is
-/// drawn), so the first frame of a new row lays it out beside the text and repaints once.
-/// Returns (the row's rect, the rect the control used). No separator is drawn here.
-fn row_impl(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) -> (Rect, Rect) {
-    row_flow(ui, pal, look, false, title, desc, control)
+/// The title line of a row: the title, and a status chip right after it when there is one.
+fn row_title(ui: &mut Ui, pal: &Palette, title: &str, chip: Option<(StatusKind, &str)>) {
+    match chip {
+        None => {
+            ui.label(RichText::new(title).size(13.5).color(pal.text));
+        }
+        Some((kind, text)) => {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(RichText::new(title).size(13.5).color(pal.text));
+                status_chip(ui, pal, kind, text);
+            });
+        }
+    }
 }
 
+/// One adaptive Settings row. The text column takes what the control leaves (up to
+/// `TEXT_MAX_W`); a control that leaves less than `MIN_TEXT_W` for the text goes under it instead
+/// (`force_stack` always does). The control's width is learnt from the previous frame (a control
+/// cannot be measured before it is drawn), so the first frame of a new row lays it out beside the
+/// text and repaints once. Returns (the row's rect, the rect the control used). No separator is
+/// drawn here.
+#[allow(clippy::too_many_arguments)]
 fn row_flow(
     ui: &mut Ui,
     pal: &Palette,
     look: RowLook,
     force_stack: bool,
     title: &str,
+    chip: Option<(StatusKind, &str)>,
     desc: &str,
     control: impl FnOnce(&mut Ui),
 ) -> (Rect, Rect) {
@@ -6419,7 +6559,7 @@ fn row_flow(
         ui.set_width(inner_w);
         ui.spacing_mut().item_spacing.y = 2.0;
         if stacked {
-            ui.label(RichText::new(title).size(13.5).color(pal.text));
+            row_title(ui, pal, title, chip);
             if look.desc {
                 ui.label(RichText::new(desc).size(12.0).color(pal.sub));
             }
@@ -6442,7 +6582,7 @@ fn row_flow(
                     ui.set_min_width(text_w);
                     ui.set_max_width(text_w);
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.label(RichText::new(title).size(13.5).color(pal.text));
+                    row_title(ui, pal, title, chip);
                     if look.desc {
                         ui.label(RichText::new(desc).size(12.0).color(pal.sub));
                     }
@@ -6455,8 +6595,16 @@ fn row_flow(
             });
         }
     });
-    if known.is_none_or(|k| (k - used.width()).abs() > 0.5) {
-        ui.ctx().data_mut(|d| d.insert_temp(key, used.width()));
+    #[cfg(test)]
+    if !ui.is_enabled() {
+        ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<Vec<String>>(Id::new("settings-row-disabled")).push(title.to_string()));
+    }
+    // a text field asks for a fixed width that the first side-by-side frame may have clamped: learn the
+    // width it asked for, so the stacked layout gives it the room it wants
+    let wanted: f32 = ui.ctx().data_mut(|d| d.remove_temp::<f32>(Id::new("field-wanted-w"))).unwrap_or(0.0);
+    let learnt = used.width().max(wanted.min(inner_w));
+    if known.is_none_or(|k| (k - learnt).abs() > 0.5) {
+        ui.ctx().data_mut(|d| d.insert_temp(key, learnt));
         ui.ctx().request_repaint();
     }
     #[cfg(test)]
@@ -6612,9 +6760,9 @@ fn model_picker_with(
     refresh
 }
 
-/// Like `row`, but the control always sits on its own line under the text.
-fn row_stacked(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
-    let (r, c) = row_flow(ui, pal, RowLook::PANE, true, title, desc, control);
+/// A row whose control always sits on its own line under the text, with a status chip after the title.
+fn row_stacked_chip(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, chip: Option<(StatusKind, &str)>, control: impl FnOnce(&mut Ui)) {
+    let (r, c) = row_flow(ui, pal, RowLook::PANE, true, title, chip, desc, control);
     form_sep(ui, pal, r);
     record_row(ui.ctx(), title, r, c);
 }
@@ -6837,6 +6985,7 @@ fn field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, 
         })
         .inner;
     record_field(ui.ctx(), "text", r.rect);
+    ui.ctx().data_mut(|d| d.insert_temp(Id::new("field-wanted-w"), width));
     r
 }
 
@@ -6914,12 +7063,17 @@ fn small_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
 }
 
 fn accent_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
+    accent_btn_r(ui, pal, label).0
+}
+
+/// `accent_btn`, also returning the button's rect.
+fn accent_btn_r(ui: &mut Ui, pal: &Palette, label: &str) -> (bool, Rect) {
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), Color32::WHITE);
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 24.0, 28.0), Sense::click());
     let p = ui.painter();
     p.rect_filled(r, 7.0, if resp.hovered() { pal.accent.gamma_multiply(1.15) } else { pal.accent });
     p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
-    resp.clicked()
+    (resp.clicked(), r)
 }
 
 fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
@@ -7028,6 +7182,297 @@ fn keycap(ui: &mut Ui, pal: &Palette, label: &str) {
     let p = ui.painter();
     p.rect_filled(r, 6.0, pal.field.gamma_multiply(1.6));
     p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.text);
+}
+
+// ---- SD4: status chips, validation and per-tab reset
+
+/// How a status chip reads: green, amber, red or grey.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatusKind {
+    Ok,
+    Warn,
+    Error,
+    Neutral,
+}
+
+impl StatusKind {
+    #[cfg(test)]
+    fn name(self) -> &'static str {
+        match self {
+            StatusKind::Ok => "ok",
+            StatusKind::Warn => "warn",
+            StatusKind::Error => "error",
+            StatusKind::Neutral => "neutral",
+        }
+    }
+}
+
+/// Readiness of an AI provider as one status chip.
+fn ai_readiness(
+    provider: ferrocast_core::models::AiProvider,
+    has_key: bool,
+    signed_in: bool,
+    claude_found: bool,
+) -> (StatusKind, &'static str) {
+    use ferrocast_core::models::AiProvider as P;
+    match provider {
+        // a local server (Ollama, LM Studio) needs no key, so its absence is not a warning
+        P::OpenAiCompatible if has_key => (StatusKind::Ok, "Key stored"),
+        P::OpenAiCompatible => (StatusKind::Neutral, "No key set"),
+        P::Anthropic if has_key => (StatusKind::Ok, "Key stored"),
+        P::Anthropic => (StatusKind::Warn, "Not configured"),
+        P::ChatGpt if signed_in => (StatusKind::Ok, "Signed in"),
+        P::ChatGpt => (StatusKind::Warn, "Not signed in"),
+        P::ClaudeCode if claude_found => (StatusKind::Ok, "Claude Code found"),
+        P::ClaudeCode => (StatusKind::Error, "Claude Code not found"),
+    }
+}
+
+/// Is the ChatGPT session in the Keychain? Read once, then cached in egui temp data (the AI tab
+/// and the Translate tab both ask on every frame; sign-in and sign-out update the cache).
+fn cached_chatgpt_signed(ctx: &Context) -> bool {
+    let id = Id::new("chatgpt_signed");
+    match ctx.data(|d| d.get_temp::<bool>(id)) {
+        Some(v) => v,
+        None => {
+            let v = services::chatgpt_credentials().is_some();
+            ctx.data_mut(|d| d.insert_temp(id, v));
+            v
+        }
+    }
+}
+
+/// Cache key of "is an API key stored for provider `p`" (see `cached_has_key`).
+fn has_key_cache_id(p: ferrocast_core::models::AiProvider) -> Id {
+    Id::new(("ai_has_key_for", format!("{p:?}")))
+}
+
+/// Is a key stored for `p`? One Keychain read per provider, then cached in egui temp data.
+fn cached_has_key(ctx: &Context, p: ferrocast_core::models::AiProvider) -> bool {
+    let id = has_key_cache_id(p);
+    match ctx.data(|d| d.get_temp::<bool>(id)) {
+        Some(v) => v,
+        None => {
+            let v = services::ai_key_for(p).is_some();
+            ctx.data_mut(|d| d.insert_temp(id, v));
+            v
+        }
+    }
+}
+
+/// Why a server address cannot work, or `None` when it has the shape of an http(s) URL.
+fn url_problem(url: &str) -> Option<&'static str> {
+    let u = url.trim().to_ascii_lowercase();
+    let host = u.strip_prefix("https://").or_else(|| u.strip_prefix("http://"));
+    match host {
+        Some(h) if !h.trim_start_matches('/').is_empty() => None,
+        _ => Some("Should start with http:// or https://"),
+    }
+}
+
+/// Colour of a status chip: readable on the card fill in both themes.
+fn status_color(pal: &Palette, kind: StatusKind) -> Color32 {
+    let dark = pal.text.r() > 128;
+    match (kind, dark) {
+        (StatusKind::Ok, true) => Color32::from_rgb(89, 212, 153),
+        (StatusKind::Ok, false) => Color32::from_rgb(16, 122, 72),
+        (StatusKind::Warn, true) => Color32::from_rgb(240, 184, 76),
+        (StatusKind::Warn, false) => Color32::from_rgb(150, 92, 0),
+        (StatusKind::Error, true) => Color32::from_rgb(246, 116, 116),
+        (StatusKind::Error, false) => Color32::from_rgb(190, 36, 36),
+        (StatusKind::Neutral, _) => pal.sub,
+    }
+}
+
+/// A small status pill: a dot and a short sentence-case text, tinted by `kind`.
+fn status_chip(ui: &mut Ui, pal: &Palette, kind: StatusKind, text: &str) {
+    let c = status_color(pal, kind);
+    let g = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(11.5), c);
+    let (r, _) = ui.allocate_exact_size(Vec2::new(g.size().x + 26.0, 20.0), Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(r, 10.0, c.gamma_multiply(0.16));
+    p.circle_filled(Pos2::new(r.min.x + 10.0, r.center().y), 3.0, c);
+    p.galley(Pos2::new(r.min.x + 18.0, r.center().y - g.size().y / 2.0), g, c);
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<(String, String)>>(Id::new("status-chips")).push((kind.name().to_string(), text.to_string()))
+    });
+}
+
+/// A row whose controls are dimmed and inert while `off` (its parent switch is off). The row stays
+/// in place so the setting is still discoverable; `row_flow` records disabled titles for tests.
+fn row_disabled_if(ui: &mut Ui, off: bool, add: impl FnOnce(&mut Ui)) {
+    ui.add_enabled_ui(!off, |ui| {
+        if off {
+            ui.set_opacity(0.45);
+        }
+        add(ui);
+    });
+}
+
+/// A quiet text button (no fill): sub colour, text colour and an underline on hover.
+fn text_btn(ui: &mut Ui, pal: &Palette, label: &str) -> egui::Response {
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.sub);
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 8.0, FIELD_H), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let col = if resp.hovered() { pal.text } else { pal.sub };
+    let at = Pos2::new(r.min.x, r.center().y - g.size().y / 2.0);
+    ui.painter().text(at, Align2::LEFT_TOP, label, FontId::proportional(12.5), col);
+    if resp.hovered() {
+        ui.painter().hline((at.x)..=(at.x + g.size().x), at.y + g.size().y, Stroke::new(1.0, col));
+    }
+    resp
+}
+
+/// A composed empty state inside the Settings pane: a title, one line about what the thing is and
+/// one primary button. Returns true when the button was clicked.
+fn empty_state(ui: &mut Ui, pal: &Palette, tab: usize, title: &str, line: &str, button: &str) -> bool {
+    let mut clicked = false;
+    egui::Frame::new().fill(pal.field).corner_radius(CARD_RADIUS).inner_margin(egui::Margin::symmetric(20, 22)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.label(RichText::new(title).size(14.5).color(pal.text));
+            ui.label(RichText::new(line).size(12.0).color(pal.sub));
+            ui.add_space(10.0);
+            let (c, r) = accent_btn_r(ui, pal, button);
+            clicked = c;
+            #[cfg(test)]
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(Id::new("settings-empty-button"), r);
+                d.get_temp_mut_or_default::<Vec<(usize, String)>>(Id::new("settings-pane-empty")).push((tab, title.to_string()));
+            });
+            #[cfg(not(test))]
+            let _ = (r, tab);
+        });
+    });
+    clicked
+}
+
+/// Toast shown after "Reset this tab"; the footer turns its "Undo" into a link.
+const RESET_TOAST: &str = "Tab reset · Undo";
+/// How long Undo stays available.
+const UNDO_SECS: u64 = 8;
+
+/// The settings each tab's "Reset this tab" restores, by their stored (serde) names. Only tabs
+/// that hold no user data have an entry; commands, hotkeys per command, scripts and snippets stay.
+const RESET_FIELDS: [(usize, &[&str]); 4] = [
+    (
+        0,
+        &[
+            "launcher_hotkey",
+            "theme",
+            "compact_mode",
+            "launch_at_login",
+            "drop_wheel",
+            "wheel_convert_key",
+            "wheel_tools_key",
+            "wheel_actions_key",
+            "enter_on_finder",
+            "show_menu_bar_icon",
+            "update_check",
+            "update_install",
+            "sensitivity",
+            "file_search_in_root",
+            "fallback_search_url",
+        ],
+    ),
+    (1, &["clipboard_enabled", "clipboard_retention"]),
+    (4, &["wheel_translate_key", "translate_languages", "translate_output", "translate_provider", "translate_model"]),
+    (6, &["rem_px", "window_gap"]),
+];
+
+/// `s` with the fields of `tab` (see `RESET_FIELDS`) copied from `from`; a tab without an entry,
+/// or a value that cannot round-trip, leaves `s` as it is. Works on the stored (serde) form, so
+/// the table's names are the single source of truth.
+fn with_tab_fields_from(s: &Settings, from: &Settings, tab: usize) -> Settings {
+    use serde_json::Value;
+    let Some((_, fields)) = RESET_FIELDS.iter().find(|(t, _)| *t == tab) else { return s.clone() };
+    let (Ok(Value::Object(mut cur)), Ok(Value::Object(src))) = (serde_json::to_value(s), serde_json::to_value(from)) else {
+        return s.clone();
+    };
+    for f in *fields {
+        match src.get(*f) {
+            Some(v) => {
+                cur.insert((*f).to_string(), v.clone());
+            }
+            None => {
+                cur.remove(*f);
+            }
+        }
+    }
+    serde_json::from_value(Value::Object(cur)).unwrap_or_else(|_| s.clone())
+}
+
+/// `s` with the fields of `tab` set to their defaults.
+fn reset_tab(s: &Settings, tab: usize) -> Settings {
+    with_tab_fields_from(s, &Settings::default(), tab)
+}
+
+impl App {
+    /// Apply an edited copy of the settings: persist it and run what a changed value needs (login
+    /// item, Finder tap, theme, hotkey, script folders).
+    fn commit_settings(&mut self, mut s: Settings) {
+        if s == self.settings {
+            return;
+        }
+        if s.launch_at_login != self.settings.launch_at_login {
+            match services::set_launch_at_login(s.launch_at_login) {
+                Ok(()) => self.toast(if s.launch_at_login { "Will launch at login" } else { "Login item removed" }),
+                Err(e) => {
+                    s.launch_at_login = self.settings.launch_at_login;
+                    self.toast(format!("Could not change login item: {e}"));
+                }
+            }
+        }
+        let finder_enter_changed = s.enter_on_finder != self.settings.enter_on_finder;
+        let enter_on_finder = s.enter_on_finder;
+        let theme_changed = s.theme != self.settings.theme;
+        let hotkey_changed = s.launcher_hotkey != self.settings.launcher_hotkey;
+        let dirs_changed = s.script_directories != self.settings.script_directories;
+        self.settings = s;
+        self.save_settings();
+        if finder_enter_changed {
+            // on: ask for Accessibility once and create the tap; off: remove it. No restart.
+            self.set_finder_enter(enter_on_finder, true);
+        }
+        if theme_changed {
+            self.set_theme();
+        }
+        if hotkey_changed {
+            self.apply_hotkeys();
+        }
+        if dirs_changed {
+            self.reload_scripts();
+        }
+    }
+
+    /// "Reset this tab": restore the tab's settings to their defaults and offer Undo for 8 seconds.
+    /// Returns false (and changes nothing) when the tab already has its defaults.
+    fn reset_settings_tab(&mut self, tab: usize) -> bool {
+        let new = reset_tab(&self.settings, tab);
+        if new == self.settings {
+            self.toast("Already at the defaults");
+            return false;
+        }
+        self.settings_undo = Some((tab, self.settings.clone(), Instant::now()));
+        self.commit_settings(new);
+        // the Languages field keeps what was typed in egui temp data: show the restored value
+        self.ctx.data_mut(|d| d.remove::<String>(Id::new("translate_langs_buf")));
+        self.toast(RESET_TOAST);
+        self.ctx.request_repaint_after(Duration::from_secs(UNDO_SECS));
+        true
+    }
+
+    /// Undo the last reset: only that tab's fields go back; later changes elsewhere stay.
+    fn undo_settings_reset(&mut self) -> bool {
+        let Some((tab, old, _)) = self.settings_undo.take() else { return false };
+        let back = with_tab_fields_from(&self.settings, &old, tab);
+        self.commit_settings(back);
+        self.ctx.data_mut(|d| d.remove::<String>(Id::new("translate_langs_buf")));
+        self.toast("Previous settings restored");
+        true
+    }
 }
 
 #[cfg(test)]

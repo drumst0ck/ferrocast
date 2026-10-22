@@ -641,7 +641,7 @@ impl View {
                 vec![(primary, "↵"), ("Move", "⌘↑/↓"), BACK]
             }
             View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
-            View::Settings => vec![("Tabs", "⌘1–7"), BACK],
+            View::Settings => vec![("Tabs", "⌘1–7"), ("Find", "⌘F"), BACK],
             _ => vec![],
         }
     }
@@ -778,6 +778,8 @@ pub struct App {
     scroll_to_sel: bool,
     panel: Option<ActionPanel>,
     toast: Option<(String, Instant)>,
+    /// The last "Reset this tab": (tab, the settings before it, when); Undo restores that tab's fields.
+    settings_undo: Option<(usize, Settings, Instant)>,
     prev_pid: Option<i32>,
     /// Side effects of delivering a translation; replaced by a recorder in tests.
     fx: Effects,
@@ -998,6 +1000,7 @@ impl App {
             scroll_to_sel: false,
             panel: None,
             toast,
+            settings_undo: None,
             prev_pid: None,
             fx: Effects::real(),
             visible: !hidden,

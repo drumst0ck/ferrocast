@@ -28,6 +28,34 @@ pub fn languages(setting: &[String]) -> Vec<String> {
     out
 }
 
+/// What the Settings languages field says about what was typed (a status chip under the field).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListNote {
+    /// true = a warning (something typed is ignored), false = information
+    pub warn: bool,
+    pub text: String,
+}
+
+/// The note for the languages field: how many languages the wheel will show, and what is dropped.
+pub fn language_note(typed: &str) -> ListNote {
+    let mut unique: Vec<String> = vec![];
+    for l in parse_list(typed) {
+        if !unique.iter().any(|u| u.eq_ignore_ascii_case(&l)) {
+            unique.push(l);
+        }
+    }
+    let typed_n = parse_list(typed).len();
+    let note = |warn: bool, text: &str| ListNote { warn, text: text.to_string() };
+    match unique.len() {
+        0 => note(false, "Default languages"),
+        n if n > MAX_LANGUAGES => note(true, &format!("Using the first {MAX_LANGUAGES}")),
+        _ if typed_n > unique.len() => note(true, "Duplicates removed"),
+        n if n == MAX_LANGUAGES => note(false, &format!("{n} languages (maximum)")),
+        1 => note(false, "1 language"),
+        n => note(false, &format!("{n} languages")),
+    }
+}
+
 /// A comma- or newline-separated list typed in Settings.
 pub fn parse_list(text: &str) -> Vec<String> {
     text.split([',', '\n']).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
@@ -275,6 +303,27 @@ mod tests {
         assert_eq!(l(&["", "  "]).len(), 8, "blank list falls back to the defaults");
         let many: Vec<String> = (0..15).map(|i| format!("Lang{i}")).collect();
         assert_eq!(languages(&many).len(), 12);
+    }
+
+    #[test]
+    fn language_note_counts_and_warns() {
+        let n = |t: &str| language_note(t);
+        let info = |text: &str| ListNote { warn: false, text: text.into() };
+        let warn = |text: &str| ListNote { warn: true, text: text.into() };
+        assert_eq!(n(""), info("Default languages"));
+        assert_eq!(n(" , ,\n"), info("Default languages"));
+        assert_eq!(n("English"), info("1 language"));
+        assert_eq!(n("English, Spanish, French"), info("3 languages"));
+        assert_eq!(n("English, english"), warn("Duplicates removed"), "duplicates ignore case, like the wheel");
+        assert_eq!(n("A, B, A, C"), warn("Duplicates removed"));
+        let twelve: Vec<String> = (0..12).map(|i| format!("L{i}")).collect();
+        assert_eq!(n(&twelve.join(", ")), info("12 languages (maximum)"));
+        let thirteen: Vec<String> = (0..13).map(|i| format!("L{i}")).collect();
+        assert_eq!(n(&thirteen.join(", ")), warn("Using the first 12"));
+        // more than twelve outranks a duplicate
+        assert_eq!(n(&format!("{}, L0", thirteen.join(", "))), warn("Using the first 12"));
+        // twelve distinct plus a duplicate: the duplicate is the news
+        assert_eq!(n(&format!("{}, L0", twelve.join(", "))), warn("Duplicates removed"));
     }
 
     #[test]

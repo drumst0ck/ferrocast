@@ -55,6 +55,7 @@ fn fixture() -> App {
         scroll_to_sel: false,
         panel: None,
         toast: None,
+        settings_undo: None,
         prev_pid: None,
         visible: true,
         had_focus: false,
@@ -4541,7 +4542,7 @@ fn footer_hints_are_pure_per_view_and_at_most_four_chips_with_back_last() {
     for v in [View::Root, View::Clipboard, View::Snippets, View::Files, View::Notes, View::Welcome] {
         assert!(v.footer_hints().is_empty(), "{} keeps the footer it had", v.title());
     }
-    assert_eq!(View::Settings.footer_hints(), vec![("Tabs", "⌘1–7"), BACK], "Settings hints (SD2)");
+    assert_eq!(View::Settings.footer_hints(), vec![("Tabs", "⌘1–7"), ("Find", "⌘F"), BACK], "Settings hints (SD2, SD4 adds Find)");
 }
 
 /// Views whose footer already drew hints keep drawing exactly them.
@@ -4552,7 +4553,7 @@ fn list_and_settings_footers_are_unchanged() {
     render(&mut app, vec![]);
     let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
     // SD2: Settings now shows its own hint chips instead of only Back
-    assert_eq!(chips, vec![("Tabs".to_string(), "⌘1–7".to_string()), ("Back".to_string(), "esc".to_string())]);
+    assert_eq!(SETTINGS_CHIPS.map(|(a, b)| (a.to_string(), b.to_string())).to_vec(), chips);
     app.stack = vec![View::Root, View::Snippets];
     render(&mut app, vec![]);
     let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
@@ -6776,7 +6777,7 @@ fn sd2_breadcrumb_and_footer_chips() {
     }
     let app = sd2_app(0);
     let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
-    assert_eq!(chips, vec![("Tabs".to_string(), "⌘1–7".to_string()), ("Back".to_string(), "esc".to_string())]);
+    assert_eq!(SETTINGS_CHIPS.map(|(a, b)| (a.to_string(), b.to_string())).to_vec(), chips);
 }
 
 #[test]
@@ -6996,6 +6997,544 @@ fn sd3_all_tabs_render_in_both_themes_with_and_without_a_query() {
             render(&mut app, vec![key_event(Key::Escape)]);
             render(&mut app, vec![]);
             assert!(!drawn_rows(&app).is_empty(), "tab {tab} {theme:?} back on the tab");
+        }
+    }
+}
+
+// ---- SD4: per-tab polish
+
+/// Footer chips of Settings: Tabs, Find (SD4) and Back, in reading order.
+const SETTINGS_CHIPS: [(&str, &str); 3] = [("Tabs", "⌘1–7"), ("Find", "⌘F"), ("Back", "esc")];
+
+fn sd4_render(app: &mut App) {
+    for _ in 0..3 {
+        render(app, vec![]);
+    }
+}
+
+fn sd4_app(tab: usize, theme: egui::ThemePreference) -> App {
+    let mut app = settings_app(tab, theme);
+    sd4_render(&mut app);
+    app
+}
+
+fn sd4_chips(app: &App) -> Vec<(String, String)> {
+    app.ctx.data(|d| d.get_temp(Id::new("status-chips"))).unwrap_or_default()
+}
+
+fn sd4_chip(kind: &str, text: &str) -> (String, String) {
+    (kind.to_string(), text.to_string())
+}
+
+fn sd4_disabled(app: &App) -> Vec<String> {
+    app.ctx.data(|d| d.get_temp(Id::new("settings-row-disabled"))).unwrap_or_default()
+}
+
+fn sd4_active(app: &App) -> Vec<String> {
+    app.ctx.data(|d| d.get_temp(Id::new("settings-sidebar-active"))).unwrap_or_default()
+}
+
+fn sd4_rect(app: &App, key: &str) -> Option<Rect> {
+    app.ctx.data(|d| d.get_temp(Id::new(key)))
+}
+
+// (a) search follow-ups
+
+#[test]
+fn sd4_no_tab_is_active_while_searching_and_the_breadcrumb_says_search() {
+    let app = sd2_app(2);
+    assert_eq!(sd4_active(&app), vec!["Snippets".to_string()]);
+    let mut app = searching(2, "hot");
+    assert!(sd4_active(&app).is_empty(), "no tab is highlighted while results show: {:?}", sd4_active(&app));
+    let crumb: String = app.ctx.data(|d| d.get_temp(Id::new("settings-breadcrumb"))).unwrap_or_default();
+    assert_eq!(crumb, "Settings / Search");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    assert_eq!(sd4_active(&app), vec!["Snippets".to_string()], "the tab is active again once the query is cleared");
+    let crumb: String = app.ctx.data(|d| d.get_temp(Id::new("settings-breadcrumb"))).unwrap_or_default();
+    assert_eq!(crumb, "Settings / Snippets");
+}
+
+#[test]
+fn sd4_a_result_accents_only_a_proper_substring_of_its_title() {
+    let accents = |app: &App| -> Vec<(String, Option<String>)> {
+        app.ctx.data(|d| d.get_temp(Id::new("settings-result-accent"))).unwrap_or_default()
+    };
+    let app = searching(0, "hot");
+    assert!(accents(&app).contains(&("Launcher hotkey".to_string(), Some("hot".to_string()))), "{:?}", accents(&app));
+    // the whole title typed: normal colour, nothing accented
+    let app = searching(0, "appearance");
+    assert!(accents(&app).contains(&("Appearance".to_string(), None)), "{:?}", accents(&app));
+    let app = searching(0, "Model");
+    assert!(accents(&app).contains(&("Model".to_string(), None)), "{:?}", accents(&app));
+    // a longer query accents its first word, a proper part of the title
+    let app = searching(0, "compact mode");
+    assert!(accents(&app).contains(&("Compact mode".to_string(), Some("Compact".to_string()))), "{:?}", accents(&app));
+}
+
+// (b) dependent rows
+
+const WHEEL_ROWS: [&str; 3] = ["Convert wheel key", "Tools wheel key", "Actions wheel key"];
+
+#[test]
+fn sd4_wheel_rows_are_disabled_while_drop_wheel_is_off() {
+    let mut app = settings_app(0, egui::ThemePreference::Dark);
+    app.settings.drop_wheel = false;
+    sd4_render(&mut app);
+    let off = sd4_disabled(&app);
+    for t in WHEEL_ROWS {
+        assert!(off.iter().any(|d| d == t), "{t} is disabled: {off:?}");
+    }
+    assert_eq!(off.len(), 3, "only the dependents: {off:?}");
+    // the rows are still drawn (dimmed, not hidden)
+    let drawn = drawn_rows(&app);
+    for t in WHEEL_ROWS {
+        assert!(drawn.iter().any(|(_, n)| n == t), "{t} is drawn");
+    }
+    app.settings.drop_wheel = true;
+    sd4_render(&mut app);
+    assert!(sd4_disabled(&app).is_empty(), "{:?}", sd4_disabled(&app));
+}
+
+#[test]
+fn sd4_the_translate_key_row_follows_drop_wheel() {
+    let mut app = settings_app(TRANSLATE_TAB, egui::ThemePreference::Dark);
+    app.settings.drop_wheel = false;
+    sd4_render(&mut app);
+    assert_eq!(sd4_disabled(&app), vec!["Translate wheel key".to_string()]);
+    app.settings.drop_wheel = true;
+    sd4_render(&mut app);
+    assert!(sd4_disabled(&app).is_empty());
+}
+
+#[test]
+fn sd4_install_updates_follows_the_automatic_check() {
+    let mut app = settings_app(0, egui::ThemePreference::Dark);
+    app.settings.update_check = false;
+    sd4_render(&mut app);
+    assert!(sd4_disabled(&app).iter().any(|d| d == "Install updates"), "{:?}", sd4_disabled(&app));
+    assert!(!sd4_disabled(&app).iter().any(|d| d == "Version" || d == "Launcher hotkey"), "unrelated rows stay enabled");
+    app.settings.update_check = true;
+    sd4_render(&mut app);
+    assert!(!sd4_disabled(&app).iter().any(|d| d == "Install updates"));
+}
+
+#[test]
+fn sd4_history_retention_follows_record_history() {
+    let mut app = settings_app(1, egui::ThemePreference::Dark);
+    app.settings.clipboard_enabled = false;
+    sd4_render(&mut app);
+    assert_eq!(sd4_disabled(&app), vec!["Keep history for".to_string()]);
+    app.settings.clipboard_enabled = true;
+    sd4_render(&mut app);
+    assert!(sd4_disabled(&app).is_empty());
+}
+
+/// The centre of cell `i` of the segmented control inside the row `title`, as of the last frame.
+fn sd4_cell_now(app: &App, title: &str, i: usize) -> Option<Pos2> {
+    let row = settings_cards(app).iter().flat_map(|c| c.rows.iter().filter(|r| r.0 == title).map(|r| r.1)).next()?;
+    let bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+    bars.iter().find(|(c, _)| row.contains_rect(*c)).map(|(_, cells)| cells[i].center())
+}
+
+/// Scroll the pane like a user until that cell is on screen; return where it is.
+fn sd4_reach_cell(app: &mut App, title: &str, i: usize) -> Pos2 {
+    scroll_until(app, |app| {
+        app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+        render(app, vec![]);
+        sd4_cell_now(app, title, i)
+    })
+    .unwrap_or_else(|| panic!("{title} could not be scrolled into view"));
+    for _ in 0..30 {
+        render(app, vec![]);
+    }
+    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+    render(app, vec![]);
+    sd4_cell_now(app, title, i).expect("cell")
+}
+
+#[test]
+fn sd4_a_disabled_row_ignores_clicks_and_an_enabled_one_does_not() {
+    let mut app = settings_app(0, egui::ThemePreference::Dark);
+    app.settings.drop_wheel = false;
+    sd4_render(&mut app);
+    let p = sd4_reach_cell(&mut app, "Convert wheel key", 2);
+    click_at(&mut app, p);
+    assert_eq!(app.settings.wheel_convert_key, "Shift", "disabled: the click does nothing");
+    app.settings.drop_wheel = true;
+    sd4_render(&mut app);
+    click_at(&mut app, p);
+    assert_eq!(app.settings.wheel_convert_key, "Option", "enabled: the click works");
+}
+
+// (c) status chips
+
+#[test]
+fn sd4_ai_readiness_texts() {
+    use ferrocast_core::models::AiProvider as P;
+    use StatusKind as K;
+    assert_eq!(ai_readiness(P::OpenAiCompatible, true, false, false), (K::Ok, "Key stored"));
+    assert_eq!(ai_readiness(P::OpenAiCompatible, false, false, false), (K::Neutral, "No key set"));
+    assert_eq!(ai_readiness(P::Anthropic, true, false, false), (K::Ok, "Key stored"));
+    assert_eq!(ai_readiness(P::Anthropic, false, true, true), (K::Warn, "Not configured"));
+    assert_eq!(ai_readiness(P::ChatGpt, false, true, false), (K::Ok, "Signed in"));
+    assert_eq!(ai_readiness(P::ChatGpt, true, false, true), (K::Warn, "Not signed in"));
+    assert_eq!(ai_readiness(P::ClaudeCode, false, false, true), (K::Ok, "Claude Code found"));
+    assert_eq!(ai_readiness(P::ClaudeCode, true, true, false), (K::Error, "Claude Code not found"));
+    assert_eq!(StatusKind::Ok.name(), "ok");
+}
+
+fn sd4_ai_chips(provider: ferrocast_core::models::AiProvider, has_key: bool, signed: bool) -> Vec<(String, String)> {
+    let mut app = settings_app(3, egui::ThemePreference::Dark);
+    app.settings.ai_provider = provider;
+    app.ctx.data_mut(|d| {
+        d.insert_temp(Id::new("ai_has_key"), has_key);
+        d.insert_temp(Id::new("chatgpt_signed"), signed);
+    });
+    sd4_render(&mut app);
+    sd4_chips(&app)
+}
+
+#[test]
+fn sd4_the_ai_tab_shows_one_readiness_chip_per_provider() {
+    use ferrocast_core::models::AiProvider as P;
+    assert_eq!(sd4_ai_chips(P::OpenAiCompatible, true, false), vec![sd4_chip("ok", "Key stored")]);
+    assert_eq!(sd4_ai_chips(P::OpenAiCompatible, false, false), vec![sd4_chip("neutral", "No key set")]);
+    assert_eq!(sd4_ai_chips(P::Anthropic, true, false), vec![sd4_chip("ok", "Key stored")]);
+    assert_eq!(sd4_ai_chips(P::Anthropic, false, false), vec![sd4_chip("warn", "Not configured")]);
+    assert_eq!(sd4_ai_chips(P::ChatGpt, false, true), vec![sd4_chip("ok", "Signed in")]);
+    assert_eq!(sd4_ai_chips(P::ChatGpt, false, false), vec![sd4_chip("warn", "Not signed in")]);
+    let claude = if services::claude_code_path().is_some() {
+        sd4_chip("ok", "Claude Code found")
+    } else {
+        sd4_chip("error", "Claude Code not found")
+    };
+    assert_eq!(sd4_ai_chips(P::ClaudeCode, false, false), vec![claude]);
+}
+
+#[test]
+fn sd4_the_translate_engine_shows_readiness_as_a_chip() {
+    use ferrocast_core::models::AiProvider as P;
+    let chips = |tp: Option<P>, seed: &dyn Fn(&mut App)| {
+        let mut app = settings_app(TRANSLATE_TAB, egui::ThemePreference::Dark);
+        app.settings.translate_provider = tp;
+        seed(&mut app);
+        sd4_render(&mut app);
+        sd4_chips(&app).into_iter().filter(|(_, t)| !t.contains("language") && t != "Default languages").collect::<Vec<_>>()
+    };
+    let signed = |a: &mut App| {
+        a.ctx.data_mut(|d| {
+            d.insert_temp(Id::new("chatgpt_signed"), true);
+        })
+    };
+    assert_eq!(chips(Some(P::ChatGpt), &signed), vec![sd4_chip("ok", "Signed in")]);
+    let claude = if services::claude_code_path().is_some() {
+        sd4_chip("ok", "Claude Code found")
+    } else {
+        sd4_chip("error", "Claude Code not found")
+    };
+    assert_eq!(chips(Some(P::ClaudeCode), &|_| {}), vec![claude]);
+    // "Same as chat" reports the chat provider
+    let key = |a: &mut App| {
+        a.ctx.data_mut(|d| {
+            d.insert_temp(Id::new("ai_has_key"), true);
+        })
+    };
+    assert_eq!(chips(None, &key), vec![sd4_chip("ok", "Key stored")]);
+    // another provider than the chat's: its own cached key flag
+    let other = |a: &mut App| {
+        a.ctx.data_mut(|d| {
+            d.insert_temp(Id::new(("ai_has_key_for", "Anthropic")), false);
+        })
+    };
+    assert_eq!(chips(Some(P::Anthropic), &other), vec![sd4_chip("warn", "Not configured")]);
+}
+
+#[test]
+fn sd4_accessibility_shows_granted_or_not_granted() {
+    let app = sd4_app(6, egui::ThemePreference::Dark);
+    let want = if windows::accessibility_trusted(false) { sd4_chip("ok", "Granted") } else { sd4_chip("warn", "Not granted") };
+    assert_eq!(sd4_chips(&app), vec![want]);
+}
+
+// (d) validation
+
+#[test]
+fn sd4_server_url_problems() {
+    for ok in ["http://localhost:11434/v1", "https://api.openai.com/v1", "  https://x.y/v1/  ", "HTTP://LOCALHOST:1/v1"] {
+        assert_eq!(url_problem(ok), None, "{ok}");
+    }
+    for bad in ["", "   ", "localhost:11434", "ftp://x.y", "http://", "https://", "api.openai.com/v1", "http:/x"] {
+        assert_eq!(url_problem(bad), Some("Should start with http:// or https://"), "{bad:?}");
+    }
+}
+
+#[test]
+fn sd4_the_server_chip_shows_only_for_a_bad_address() {
+    let chips = |url: &str| {
+        let mut app = settings_app(3, egui::ThemePreference::Dark);
+        app.settings.ai_base_url = url.into();
+        app.ctx.data_mut(|d| d.insert_temp(Id::new("ai_has_key"), true));
+        sd4_render(&mut app);
+        sd4_chips(&app)
+    };
+    assert!(chips("localhost:11434").contains(&sd4_chip("warn", "Should start with http:// or https://")));
+    assert!(!chips("http://localhost:11434/v1").iter().any(|(k, _)| k == "warn"));
+}
+
+#[test]
+fn sd4_the_languages_chip_follows_what_is_typed() {
+    let chips = |typed: Option<String>| {
+        let mut app = settings_app(TRANSLATE_TAB, egui::ThemePreference::Dark);
+        if let Some(t) = typed {
+            app.ctx.data_mut(|d| d.insert_temp(Id::new("translate_langs_buf"), t));
+        }
+        sd4_render(&mut app);
+        sd4_chips(&app)
+    };
+    let many = |n: usize| (0..n).map(|i| format!("L{i}")).collect::<Vec<_>>().join(", ");
+    assert!(chips(None).contains(&sd4_chip("neutral", "8 languages")));
+    assert!(chips(Some(String::new())).contains(&sd4_chip("neutral", "Default languages")));
+    assert!(chips(Some("A, B, a".into())).contains(&sd4_chip("warn", "Duplicates removed")));
+    assert!(chips(Some(many(12))).contains(&sd4_chip("neutral", "12 languages (maximum)")));
+    assert!(chips(Some(many(14))).contains(&sd4_chip("warn", "Using the first 12")));
+}
+
+// (e) reset and undo
+
+fn sd4_json(s: &Settings) -> serde_json::Map<String, serde_json::Value> {
+    match serde_json::to_value(s).unwrap() {
+        serde_json::Value::Object(m) => m,
+        _ => unreachable!(),
+    }
+}
+
+/// Every setting of the four resettable tabs changed, and some of the others too.
+#[allow(clippy::field_reassign_with_default)]
+fn sd4_scrambled() -> Settings {
+    use ferrocast_core::models::{Retention, Theme, TranslateOutput, UpdateInstall};
+    let mut s = Settings::default();
+    s.launcher_hotkey = "Ctrl+Shift+K".into();
+    s.theme = Theme::Dark;
+    s.compact_mode = true;
+    s.launch_at_login = true;
+    s.drop_wheel = false;
+    s.wheel_convert_key = "Option".into();
+    s.wheel_tools_key = "Shift".into();
+    s.wheel_actions_key = "Command".into();
+    s.enter_on_finder = true;
+    s.show_menu_bar_icon = false;
+    s.update_check = false;
+    s.update_install = UpdateInstall::Automatic;
+    s.sensitivity = ferrocast_core::fuzzy::Sensitivity::High;
+    s.file_search_in_root = false;
+    s.fallback_search_url = "https://example.invalid/?q={query}".into();
+    s.clipboard_enabled = false;
+    s.clipboard_retention = Retention::Week;
+    s.wheel_translate_key = "Control".into();
+    s.translate_languages = vec!["Latin".into()];
+    s.translate_output = TranslateOutput::Copy;
+    s.translate_provider = Some(ferrocast_core::models::AiProvider::Anthropic);
+    s.translate_model = "some-model".into();
+    s.rem_px = 20.0;
+    s.window_gap = 5.0;
+    // not on any resettable tab
+    s.ai_model = "other-model".into();
+    s.script_directories = vec!["~/scripts".into()];
+    s.snippet_expansion = false;
+    s.favorites = vec!["app:x".into()];
+    s.clipboard_ignored_apps.clear();
+    s.onboarded = true;
+    s.update_last_check = Some(5);
+    s.command_mut("calc").disabled = true;
+    s
+}
+
+/// `sd4_scrambled` without the two settings whose change touches the system (login item, Finder tap).
+fn sd4_scrambled_quiet() -> Settings {
+    Settings { launch_at_login: false, enter_on_finder: false, ..sd4_scrambled() }
+}
+
+#[test]
+fn sd4_the_reset_table_names_exact_stored_fields() {
+    let d = sd4_json(&Settings::default());
+    let sc = sd4_json(&sd4_scrambled());
+    let mut seen = std::collections::HashSet::new();
+    assert_eq!(RESET_FIELDS.iter().map(|(t, _)| *t).collect::<Vec<_>>(), vec![0, 1, 4, 6], "General, Clipboard, Translate, Advanced");
+    for (tab, fields) in RESET_FIELDS {
+        for f in fields {
+            assert!(d.contains_key(*f), "tab {tab}: {f} is not a stored setting");
+            assert_ne!(d[*f], sc[*f], "tab {tab}: the scrambled settings must change {f}");
+            assert!(seen.insert(*f), "{f} is listed twice");
+        }
+    }
+    // user data is never reset
+    for keep in ["commands", "favorites", "script_directories", "snippet_expansion", "ai_model", "onboarded", "update_last_check"] {
+        assert!(!seen.contains(keep), "{keep} must not be in the reset table");
+    }
+}
+
+#[test]
+fn sd4_reset_tab_restores_exactly_that_tabs_fields() {
+    let d = sd4_json(&Settings::default());
+    let sc = sd4_json(&sd4_scrambled());
+    for (tab, fields) in RESET_FIELDS {
+        let out = sd4_json(&reset_tab(&sd4_scrambled(), tab));
+        for (k, v) in &out {
+            if fields.contains(&k.as_str()) {
+                assert_eq!(v, &d[k], "tab {tab}: {k} is back to its default");
+            } else {
+                assert_eq!(v, &sc[k], "tab {tab}: {k} is untouched");
+            }
+        }
+        assert_eq!(reset_tab(&Settings::default(), tab), Settings::default(), "tab {tab}: resetting defaults changes nothing");
+    }
+    for tab in [2usize, 3, 5] {
+        assert_eq!(reset_tab(&sd4_scrambled(), tab), sd4_scrambled(), "tab {tab} holds user data: no reset");
+    }
+}
+
+#[test]
+fn sd4_reset_and_undo_on_the_app() {
+    let mut app = fixture();
+    app.settings = sd4_scrambled_quiet();
+    let before = app.settings.clone();
+    assert!(app.reset_settings_tab(4));
+    assert_eq!(app.settings.translate_languages, Settings::default().translate_languages);
+    assert_eq!(app.settings.translate_provider, None);
+    assert_eq!(app.settings.translate_output, Settings::default().translate_output);
+    assert_eq!(app.settings.compact_mode, before.compact_mode, "other tabs stay");
+    assert_eq!(app.settings.rem_px, before.rem_px);
+    assert_eq!(app.settings.translate_provider, None);
+    assert_eq!(toast_text(&app), "Tab reset · Undo");
+    assert!(app.settings_undo.is_some());
+    // a change elsewhere after the reset survives the Undo
+    app.settings.window_gap = 9.0;
+    assert!(app.undo_settings_reset());
+    assert_eq!(app.settings.translate_languages, before.translate_languages);
+    assert_eq!(app.settings.translate_provider, before.translate_provider);
+    assert_eq!(app.settings.translate_model, before.translate_model);
+    assert_eq!(app.settings.window_gap, 9.0, "the later change stays");
+    assert!(app.settings_undo.is_none());
+    assert!(!app.undo_settings_reset(), "nothing left to undo");
+    // the file on disk follows
+    let saved: Settings = app.store.load("settings.json");
+    assert_eq!(saved.translate_languages, before.translate_languages);
+}
+
+#[test]
+fn sd4_resetting_a_default_tab_changes_nothing() {
+    let mut app = fixture();
+    app.settings = Settings { compact_mode: true, ..Settings::default() };
+    let before = app.settings.clone();
+    assert!(!app.reset_settings_tab(6), "Advanced already has its defaults");
+    assert_eq!(app.settings, before);
+    assert!(app.settings_undo.is_none(), "no undo for a no-op");
+    assert_ne!(toast_text(&app), "Tab reset · Undo");
+    // a tab with no reset at all
+    assert!(!app.reset_settings_tab(5));
+    assert_eq!(app.settings, before);
+}
+
+#[test]
+fn sd4_the_reset_button_exists_on_four_tabs_and_undo_is_clickable() {
+    for tab in 0..7usize {
+        let app = sd4_app(tab, egui::ThemePreference::Dark);
+        assert_eq!(sd4_rect(&app, "settings-reset-button").is_some(), [0, 1, 4, 6].contains(&tab), "tab {tab}");
+    }
+    let mut app = settings_app(1, egui::ThemePreference::Dark);
+    app.settings.clipboard_enabled = false;
+    app.settings.clipboard_retention = ferrocast_core::models::Retention::Week;
+    sd4_render(&mut app);
+    let r = sd4_rect(&app, "settings-reset-button").expect("reset button");
+    assert!(r.max.y < ui::HEIGHT - ui::FOOTER_H, "reachable without scrolling on the short tab: {r:?}");
+    click_at(&mut app, r.center());
+    assert!(app.settings.clipboard_enabled);
+    assert_eq!(app.settings.clipboard_retention, ferrocast_core::models::Retention::Month);
+    assert_eq!(toast_text(&app), "Tab reset · Undo");
+    sd4_render(&mut app);
+    let u = sd4_rect(&app, "settings-undo-rect").expect("the footer offers Undo");
+    click_at(&mut app, u.center());
+    assert!(!app.settings.clipboard_enabled);
+    assert_eq!(app.settings.clipboard_retention, ferrocast_core::models::Retention::Week);
+    assert!(app.settings_undo.is_none());
+}
+
+#[test]
+fn sd4_the_reset_toast_stays_for_eight_seconds() {
+    let mut app = fixture();
+    app.settings = sd4_scrambled_quiet();
+    app.reset_settings_tab(1);
+    app.toast = app.toast.take().map(|(t, _)| (t, Instant::now() - Duration::from_secs(5)));
+    app.expire_toasts();
+    assert_eq!(toast_text(&app), "Tab reset · Undo", "still offered after 5 s");
+    app.toast = app.toast.take().map(|(t, _)| (t, Instant::now() - Duration::from_secs(9)));
+    app.expire_toasts();
+    assert_eq!(toast_text(&app), "", "gone after 9 s");
+    assert!(app.settings_undo.is_none(), "and the undo state with it");
+}
+
+// (f) empty states
+
+fn sd4_empty(app: &App) -> Vec<(usize, String)> {
+    app.ctx.data(|d| d.get_temp(Id::new("settings-pane-empty"))).unwrap_or_default()
+}
+
+#[test]
+fn sd4_snippets_and_scripts_tabs_compose_an_empty_state() {
+    let app = sd4_app(2, egui::ThemePreference::Dark);
+    assert_eq!(sd4_empty(&app), vec![(2, "No snippets yet".to_string())]);
+    let app = sd4_app(5, egui::ThemePreference::Dark);
+    assert_eq!(sd4_empty(&app), vec![(5, "No script commands yet".to_string())]);
+    for tab in [0usize, 1, 3, 4, 6] {
+        assert!(sd4_empty(&sd4_app(tab, egui::ThemePreference::Dark)).is_empty(), "tab {tab}");
+    }
+    // data hides the empty state
+    let mut app = settings_app(2, egui::ThemePreference::Dark);
+    app.snippets.push(ferrocast_core::models::Snippet::new("Sig", "Best", "!sig"));
+    sd4_render(&mut app);
+    assert!(sd4_empty(&app).is_empty());
+    let mut app = settings_app(5, egui::ThemePreference::Dark);
+    app.settings.script_directories.push("~/scripts".into());
+    sd4_render(&mut app);
+    assert!(sd4_empty(&app).is_empty());
+}
+
+#[test]
+fn sd4_empty_state_buttons_use_the_existing_actions() {
+    let mut app = sd4_app(2, egui::ThemePreference::Dark);
+    let r = sd4_rect(&app, "settings-empty-button").expect("a button");
+    assert!(r.max.y < ui::HEIGHT - ui::FOOTER_H, "{r:?}");
+    click_at(&mut app, r.center());
+    assert!(matches!(app.view(), View::SnippetForm { id: None, .. }), "New snippet opens the snippet form");
+    let mut app = sd4_app(5, egui::ThemePreference::Dark);
+    let r = sd4_rect(&app, "settings-empty-button").expect("a button");
+    assert!(r.max.y < ui::HEIGHT - ui::FOOTER_H, "{r:?}");
+    click_at(&mut app, r.center());
+    assert!(matches!(app.view(), View::CreateScript { .. }), "Create script opens the script form");
+}
+
+// (g) everything renders
+
+#[test]
+fn sd4_every_tab_renders_in_both_themes_in_every_state() {
+    use ferrocast_core::models::AiProvider as P;
+    for theme in BOTH_THEMES {
+        for tab in 0..7usize {
+            for dep_off in [false, true] {
+                let mut app = settings_app(tab, theme);
+                seed_model_lists(&mut app);
+                app.settings.drop_wheel = !dep_off;
+                app.settings.update_check = !dep_off;
+                app.settings.clipboard_enabled = !dep_off;
+                app.settings.translate_provider = if dep_off { Some(P::ClaudeCode) } else { None };
+                app.settings.ai_provider = if dep_off { P::ChatGpt } else { P::OpenAiCompatible };
+                let before = app.settings.clone();
+                sd4_render(&mut app);
+                assert!(matches!(app.view(), View::Settings), "tab {tab} {theme:?}");
+                assert_eq!(app.settings, before, "drawing alone changes nothing (tab {tab} {theme:?})");
+            }
         }
     }
 }

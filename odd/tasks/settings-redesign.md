@@ -11,7 +11,7 @@ Branch: feat/settings-redesign · Plan: odd/plans/settings-redesign-plan.md · S
 - T1 S1,S4 SD1 row and control system — commit: see git log (SD1)
 - T2 S1,S3 SD2 sidebar, header, footer — commit: see git log (SD2)
 - T3 S3 SD3 settings search — commit: see git log (SD3)
-- T4 S3 SD4 per-tab polish — commit: pending
+- T4 S3 SD4 per-tab polish — commit: see git log (SD4)
 - T5 S3 SD5 visual QA — commit: pending
 
 ## Log
@@ -22,3 +22,5 @@ Branch: feat/settings-redesign · Plan: odd/plans/settings-redesign-plan.md · S
 - L3 SD2 done (worker, parent re-checked): SF Symbol icons, two group dividers, Cmd+1..7 and Up/Down tab navigation, focus ring and tooltips, 34 pt items, breadcrumb 'Settings / <Tab>', footer chips 'Tabs Cmd+1-7' and 'Back esc'. RED 101 (7 of 8 tests), workspace 345 app / 356 core / 54 macos green, fmt/clippy 0. Not verifiable headlessly: tooltip, focus ring look, real keyboard focus. Open: inactive icon contrast (SD5), divider narrower than items, bare footer left (only app icon).
 
 - L4 SD3 done (worker, parent re-checked): core settings_index (39 entries, ranked search, cap 8) + search field above the sidebar (Cmd+F), results pane with Up/Down/Enter/click, Escape clears the query first, open-result = switch tab + scroll + 1 s flash, empty state, coverage test that every drawn row title is in the index and vice versa. RED 101 (core 7/8, app 9/9); workspace 354 app / 364 core / 54 macos green, fmt/clippy 0. Open: active tab stays highlighted while results show, whole-title match is all red, no Cmd+F hint, scroll/flash only asserted by records (not visible headlessly).
+
+- L5 SD4 done (worker, parent re-checked and tuned): no active tab while searching + 'Settings / Search', dependent rows dimmed and disabled (drop wheel -> wheel keys + translate key, update check -> install mode, clipboard history -> retention), status chips (AI/Translate provider readiness, Accessibility), inline validation (languages note, server URL), Reset this tab with 8 s Undo for General/Clipboard/Translate/Advanced, empty states for Snippets/Scripts, After translating copy shortened, Find Cmd+F footer chip. Parent fix: a text field's wanted width is learnt by row_flow so a stacked Languages field is no longer cut off. RED 101 (app 20/23, core 1); workspace 377 app / 365 core / 54 macos green, fmt/clippy 0. Not verifiable headlessly: Reset link on long tabs, footer Undo link, Translate engine chip, real side effects of a reset.
