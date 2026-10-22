@@ -8520,3 +8520,14 @@ fn intro_renders_every_frame_of_its_timeline_and_then_requests_nothing() {
     let again = ctx.run_ui(egui::RawInput::default(), |_| {});
     assert!(again.viewport_output.values().all(|v| v.repaint_delay == std::time::Duration::MAX), "no repaints once the intro is over");
 }
+
+#[test]
+fn intro_sound_plays_once_and_only_on_the_real_animated_intro() {
+    let mut live = intro::Intro::new(false);
+    assert!(live.take_sound(), "the animated intro plays its sound");
+    assert!(!live.take_sound(), "only once");
+    assert!(!intro::Intro::new(true).take_sound(), "Reduce Motion starts at the settled frame: no sound out of sync");
+    let mut tested = intro::Intro::new(false);
+    tested.clock = Some(0.0);
+    assert!(!tested.take_sound(), "tests drive the clock and must stay silent");
+}

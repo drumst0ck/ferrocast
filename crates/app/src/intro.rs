@@ -75,12 +75,21 @@ pub(super) struct Intro {
     pub clock: Option<f64>,
     /// Timeline position of the last frame.
     last_t: f32,
+    /// The sound still has to start (with the first frame).
+    sound_pending: bool,
 }
 
 impl Intro {
     pub(super) fn new(reduce: bool) -> Self {
         let frozen = std::env::var("FERROCAST_INTRO_T").ok().and_then(|v| v.parse().ok());
-        Intro { start: None, bump: if reduce { REDUCED_START as f64 } else { 0.0 }, frozen, clock: None, last_t: 0.0 }
+        Intro {
+            start: None,
+            bump: if reduce { REDUCED_START as f64 } else { 0.0 },
+            frozen,
+            clock: None,
+            last_t: 0.0,
+            sound_pending: !reduce,
+        }
     }
 
     fn raw(&mut self, now: f64) -> f64 {
@@ -102,6 +111,15 @@ impl Intro {
             self.bump += HANDOFF_AT as f64 - raw;
             self.last_t = HANDOFF_AT;
         }
+    }
+
+    /// Whether to start the sound now: once, on the animated intro only. Reduce Motion starts at
+    /// the settled frame, where the sound would be out of step; frozen dev frames and tests
+    /// (which inject the clock) stay silent.
+    pub(super) fn take_sound(&mut self) -> bool {
+        let play = self.sound_pending && self.frozen.is_none() && self.clock.is_none();
+        self.sound_pending = false;
+        play
     }
 
     /// True while the intro is fully opaque (the tour underneath is not drawn yet).
@@ -188,6 +206,9 @@ impl App {
         let Some(intro) = self.intro.as_mut() else { return };
         let now = ctx.input(|i| i.time);
         intro.elapsed(now);
+        if intro.take_sound() && !cfg!(test) {
+            play_sound();
+        }
         if !intro.covers() {
             return;
         }
@@ -286,4 +307,17 @@ impl App {
         }
         self.intro = Some(intro);
     }
+}
+
+/// The intro sound, made by scripts/make_intro_sound.py and timed to the animation.
+const SOUND: &[u8] = include_bytes!("../../../resources/intro.m4a");
+
+/// Play the intro sound with the system player, off the UI thread; it follows the system volume.
+fn play_sound() {
+    std::thread::spawn(|| {
+        let path = std::env::temp_dir().join("ferrocast-intro.m4a");
+        if std::fs::write(&path, SOUND).is_ok() {
+            let _ = std::process::Command::new("/usr/bin/afplay").arg("-v").arg("0.7").arg(&path).status();
+        }
+    });
 }
