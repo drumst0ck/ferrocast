@@ -1,7 +1,8 @@
-//! Notes window shell (S2, S5, S19): a floating native `NSPanel` holding an `NSTextView`
-//! in a scroll view, with a slim toolbar (live title, Browse Notes, New Note).
-//! Plain text only for now. All AppKit calls happen on the main thread; the title logic
-//! is a plain function with unit tests below.
+//! Notes window shell (S2, S5, S19): a floating native `NSPanel` holding the rich-text editor
+//! (`notes_editor`) in a scroll view, with a slim toolbar (live title, Browse Notes, New Note).
+//! The text is Markdown (`set_text` / `text` are aliases of `set_markdown` / `markdown`).
+//! All AppKit calls happen on the main thread; the title logic is a plain function with unit
+//! tests below.
 
 use std::cell::{Cell, RefCell};
 use std::path::Path;
@@ -10,13 +11,20 @@ use std::rc::Rc;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
+
+pub use crate::notes_editor::{
+    active_formats, apply_format, emoji_commit, insert_at_cursor, link_prompt_cancel, link_prompt_open, link_prompt_submit,
+    link_prompt_value, markdown, markdown_of_selection, paragraph_start, replace_range, selection, set_markdown, set_on_emoji,
+    set_on_slash, set_on_zoom_change, set_popup_key_handler, set_zoom, slash_commit, toggle_task_at_cursor, window_point_for_char, zoom,
+    Anchor, EmojiEvent, PopupKey, SlashEvent,
+};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSBitmapImageFileType, NSButton, NSColor, NSEvent, NSEventModifierFlags,
     NSEventType, NSFloatingWindowLevel, NSFont, NSFontWeightSemibold, NSImage, NSLineBreakMode, NSPanel, NSScrollView, NSTextAlignment,
     NSTextDelegate, NSTextField, NSTextView, NSTextViewDelegate, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
     NSVisualEffectState, NSVisualEffectView, NSWindowButton, NSWindowCollectionBehavior, NSWindowStyleMask, NSWindowTitleVisibility,
 };
-use objc2_foundation::{NSDictionary, NSEdgeInsets, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSDictionary, NSEdgeInsets, NSNotification, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString};
 
 /// Toolbar actions the host reacts to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,7 +39,6 @@ const DEFAULT_H: f64 = 420.0;
 const MIN_W: f64 = 320.0;
 const MIN_H: f64 = 220.0;
 const INSET: f64 = 16.0;
-const FONT_SIZE: f64 = 14.0;
 const MAX_TITLE_CHARS: usize = 60;
 const FRAME_NAME: &str = "FerrocastNotesWindow";
 const KEY_ESCAPE: u16 = 53;
@@ -68,8 +75,6 @@ thread_local! {
     static ON_CHANGE: RefCell<Option<ChangeCb>> = const { RefCell::new(None) };
     static ON_EVENT: RefCell<Option<EventCb>> = const { RefCell::new(None) };
     static ESC_LOSES_FOCUS: Cell<bool> = const { Cell::new(false) };
-    /// True while `set_text` writes into the text view, so no change callback fires.
-    static SUPPRESS: Cell<bool> = const { Cell::new(false) };
 }
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
@@ -83,11 +88,24 @@ fn fire_event(e: Event) {
     }
 }
 
-fn refresh_title(text: &str) {
+pub(crate) fn refresh_title(title: &str) {
     let label = UI.with(|u| u.borrow().as_ref().map(|u| u.title.clone()));
     if let Some(label) = label {
-        label.setStringValue(&NSString::from_str(&title_from_text(text)));
+        label.setStringValue(&NSString::from_str(title));
     }
+}
+
+/// Forward a user edit (full Markdown) to the host callback.
+pub(crate) fn notify_change(text: String) {
+    let cb = ON_CHANGE.with(|c| c.borrow().clone());
+    if let Some(cb) = cb {
+        cb(text);
+    }
+}
+
+/// The editor view, when the window exists.
+pub(crate) fn text_view() -> Option<Retained<NSTextView>> {
+    UI.with(|u| u.borrow().as_ref().map(|u| u.text_view.clone()))
 }
 
 // ---------------------------------------------------------------- key handling
@@ -107,6 +125,11 @@ fn resign_key(panel: &NotesPanel) {
     }
 }
 
+fn editor_has_focus(panel: &NotesPanel) -> bool {
+    let Some(tv) = text_view() else { return false };
+    crate::notes_editor::is_editor(panel.firstResponder().as_deref(), &tv)
+}
+
 /// Handle the window-level shortcuts; true when the event was consumed.
 fn handle_shortcut(panel: &NotesPanel, event: &NSEvent) -> bool {
     if event.r#type() != NSEventType::KeyDown {
@@ -114,6 +137,9 @@ fn handle_shortcut(panel: &NotesPanel, event: &NSEvent) -> bool {
     }
     let mods = event.modifierFlags()
         & (NSEventModifierFlags::Command | NSEventModifierFlags::Shift | NSEventModifierFlags::Option | NSEventModifierFlags::Control);
+    if mods.contains(NSEventModifierFlags::Command) && editor_has_focus(panel) && crate::notes_editor::handle_key(event) {
+        return true;
+    }
     if mods.is_empty() && event.keyCode() == KEY_ESCAPE {
         if ESC_LOSES_FOCUS.get() {
             resign_key(panel);
@@ -199,8 +225,13 @@ define_class!(
         // Esc is not a key equivalent for AppKit: intercept it before it reaches the text view.
         #[unsafe(method(sendEvent:))]
         fn send_event(&self, event: &NSEvent) {
-            if event.r#type() == NSEventType::KeyDown && event.keyCode() == KEY_ESCAPE && handle_shortcut(self, event) {
-                return;
+            if event.r#type() == NSEventType::KeyDown {
+                if editor_has_focus(self) && crate::notes_editor::handle_popup_key(event) {
+                    return;
+                }
+                if event.keyCode() == KEY_ESCAPE && handle_shortcut(self, event) {
+                    return;
+                }
             }
             unsafe {
                 let _: () = msg_send![super(self), sendEvent: event];
@@ -233,19 +264,31 @@ define_class!(
     unsafe impl NSTextDelegate for NotesTarget {
         #[unsafe(method(textDidChange:))]
         fn text_did_change(&self, _n: &NSNotification) {
-            if SUPPRESS.get() {
-                return;
-            }
-            let text = text();
-            refresh_title(&text);
-            let cb = ON_CHANGE.with(|c| c.borrow().clone());
-            if let Some(cb) = cb {
-                cb(text);
-            }
+            crate::notes_editor::did_change();
         }
     }
 
-    unsafe impl NSTextViewDelegate for NotesTarget {}
+    unsafe impl NSTextViewDelegate for NotesTarget {
+        #[unsafe(method(textView:shouldChangeTextInRange:replacementString:))]
+        fn text_view_should_change(&self, _tv: &NSTextView, range: NSRange, replacement: Option<&NSString>) -> bool {
+            crate::notes_editor::should_change(range, replacement)
+        }
+
+        #[unsafe(method(textView:doCommandBySelector:))]
+        unsafe fn text_view_do_command(&self, _tv: &NSTextView, command: objc2::runtime::Sel) -> bool {
+            crate::notes_editor::do_command(command)
+        }
+
+        #[unsafe(method(textView:willChangeSelectionFromCharacterRange:toCharacterRange:))]
+        fn text_view_will_change_selection(&self, _tv: &NSTextView, old: NSRange, new: NSRange) -> NSRange {
+            crate::notes_editor::will_change_selection(old, new)
+        }
+
+        #[unsafe(method(textViewDidChangeSelection:))]
+        fn text_view_did_change_selection(&self, _n: &NSNotification) {
+            crate::notes_editor::did_change_selection();
+        }
+    }
 );
 
 // ---------------------------------------------------------------- build
@@ -316,7 +359,7 @@ fn build(mtm: MainThreadMarker) -> Ui {
     scroll.setContentInsets(NSEdgeInsets { top: TOOLBAR_H, left: 0.0, bottom: 0.0, right: 0.0 });
     scroll.setScrollerInsets(NSEdgeInsets { top: 0.0, left: 0.0, bottom: 0.0, right: 0.0 });
 
-    let text_view = NSTextView::initWithFrame(mtm.alloc::<NSTextView>(), rect(0.0, 0.0, DEFAULT_W, DEFAULT_H));
+    let text_view = crate::notes_editor::new_text_view(mtm, rect(0.0, 0.0, DEFAULT_W, DEFAULT_H));
     text_view.setMinSize(NSSize::new(0.0, 0.0));
     text_view.setMaxSize(NSSize::new(f64::MAX, f64::MAX));
     text_view.setVerticallyResizable(true);
@@ -329,8 +372,6 @@ fn build(mtm: MainThreadMarker) -> Ui {
     text_view.setRichText(true);
     text_view.setAllowsUndo(true);
     text_view.setDrawsBackground(false);
-    text_view.setFont(Some(&NSFont::systemFontOfSize(FONT_SIZE)));
-    text_view.setTextColor(Some(&NSColor::textColor()));
     text_view.setTextContainerInset(NSSize::new(INSET, INSET));
     text_view.setAutomaticQuoteSubstitutionEnabled(false);
     text_view.setAutomaticDashSubstitutionEnabled(false);
@@ -432,29 +473,20 @@ pub fn focus_editor() {
     let _ = panel.makeFirstResponder(Some(&tv));
 }
 
-/// Replace the text without firing the change callback; resets undo.
+/// Alias of [`set_markdown`]: replace the note with Markdown without firing the change
+/// callback; resets undo.
 pub fn set_text(text: &str) {
-    let Some((_, tv)) = parts() else { return };
-    SUPPRESS.set(true);
-    tv.setString(&NSString::from_str(text));
-    // setString on a rich-text view falls back to the default attributes
-    tv.setFont(Some(&NSFont::systemFontOfSize(FONT_SIZE)));
-    tv.setTextColor(Some(&NSColor::textColor()));
-    if let Some(um) = tv.undoManager() {
-        um.removeAllActions();
-    }
-    SUPPRESS.set(false);
-    refresh_title(text);
+    set_markdown(text);
 }
 
-/// Current editor text.
+/// Alias of [`markdown`]: the note serialized as Markdown.
 pub fn text() -> String {
-    UI.with(|u| u.borrow().as_ref().map(|u| u.text_view.string().to_string())).unwrap_or_default()
+    markdown()
 }
 
-/// Title as shown in the toolbar (S5).
+/// Title as shown in the toolbar (S5): `Doc::title()` of the note, "Untitled" when empty.
 pub fn title() -> String {
-    title_from_text(&text())
+    crate::notes_editor::title()
 }
 
 /// Called on every user edit with the full text.
