@@ -100,6 +100,7 @@ fn fixture() -> App {
         translated_run: None,
         translating_effect: None,
         translate_started: Instant::now(),
+        apple_fallback_told: false,
         web_pending: None,
     };
     app.rebuild();
@@ -112,6 +113,8 @@ type ProbeCall = (Option<i32>, Option<[f64; 2]>, u64);
 thread_local! {
     /// Side effects the translate delivery asked for in this test thread.
     static FX_LOG: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// What `apple_available` answers in this test thread.
+    static APPLE_AVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FX_FRONT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
     /// Scripts the web effect asked a browser to run (replace and unmark), in order.
     static FX_SCRIPTS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -149,6 +152,7 @@ impl Effects {
             glow_show: |_t| FX_LOG.with(|l| l.borrow_mut().push("glow_show".into())),
             glow_hide: || FX_LOG.with(|l| l.borrow_mut().push("glow_hide".into())),
             web_script: |_b, js| FX_SCRIPTS.with(|l| l.borrow_mut().push(js.to_string())),
+            apple_available: || APPLE_AVAILABLE.with(|a| a.get()),
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
         }
@@ -7520,6 +7524,7 @@ fn sd4_scrambled() -> Settings {
     s.translate_effect = false;
     s.translate_provider = Some(ferrocast_core::models::AiProvider::Anthropic);
     s.translate_model = "some-model".into();
+    s.translate_apple = true;
     s.rem_px = 20.0;
     s.window_gap = 5.0;
     // not on any resettable tab
@@ -8085,6 +8090,32 @@ fn translated_run(app: &mut App, run: u64, result: Result<String, String>, targe
 
 fn overlay_point() -> EffectKind {
     EffectKind::Overlay(ferrocast_macos::glow::Target::Point([1.0, 2.0]))
+}
+
+#[test]
+fn apple_engine_translates_with_apple_when_it_is_available() {
+    APPLE_AVAILABLE.with(|a| a.set(true));
+    let mut app = effect_app();
+    app.settings.translate_apple = true;
+    app.settings.translate_provider = Some(ferrocast_core::models::AiProvider::Anthropic);
+    pick_first_language(&mut app, false);
+    assert_eq!(fx_taken(), vec!["translate 1".to_string()]);
+    assert_eq!(toast_text(&app), "Translating to English with Apple…");
+    assert!(!app.apple_fallback_told);
+}
+
+#[test]
+fn apple_engine_falls_back_to_the_chat_provider_and_says_so_once_per_session() {
+    APPLE_AVAILABLE.with(|a| a.set(false));
+    let mut app = effect_app();
+    app.settings.translate_apple = true;
+    pick_first_language(&mut app, false);
+    assert_eq!(fx_taken(), vec!["translate 1".to_string()], "the translation still starts");
+    assert_eq!(toast_text(&app), "Apple Translation needs macOS 26; using the chat provider.");
+    assert!(app.settings.translate_apple, "the stored choice is kept for a Mac that can use it");
+    open_translate_wheel(&mut app);
+    app.apply_wheel(Some(0));
+    assert_eq!(toast_text(&app), "Translating to English with Same as chat (OpenAI API)…", "the notice is not repeated");
 }
 
 #[test]

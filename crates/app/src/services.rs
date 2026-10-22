@@ -1834,14 +1834,22 @@ pub fn translate_text(
     let settings = settings.clone();
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
-        // ask, check the language of the answer on-device, and ask once more if it came out in
-        // another language (the selection itself may ask for one)
-        let mut ask = |prompt: &str| {
-            let mut out = String::new();
-            ai_stream_system(&settings, ferrocast_core::translate::SYSTEM, &[], prompt, |t| out.push_str(t)).map(|()| out)
+        let result = if settings.translate_apple {
+            // Apple's on-device translation: no prompt, no retry; the helper detects the source language
+            match ferrocast_core::translate::apple_code(&lang) {
+                None => Err(ferrocast_core::apple_translate::TranslateError::Unsupported(lang.clone())),
+                Some(code) => ferrocast_macos::apple_translate::translate(None, &code, &text),
+            }
+            .map_err(|e| ferrocast_core::translate::apple_error_text(&e, &lang))
+        } else {
+            // ask, check the language of the answer on-device, and ask once more if it came out in
+            // another language (the selection itself may ask for one)
+            let mut ask = |prompt: &str| {
+                let mut out = String::new();
+                ai_stream_system(&settings, ferrocast_core::translate::SYSTEM, &[], prompt, |t| out.push_str(t)).map(|()| out)
+            };
+            ferrocast_core::translate::run_translation(&text, &lang, &ferrocast_macos::language::detect, &mut ask).0
         };
-        let (result, _retried_from) =
-            ferrocast_core::translate::run_translation(&text, &lang, &ferrocast_macos::language::detect, &mut ask);
         let ms = started.elapsed().as_millis() as u64;
         let target = match (&result, output) {
             (Ok(_), TranslateOutput::Auto) => probe_target(source_pid),

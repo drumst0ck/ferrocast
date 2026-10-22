@@ -20,7 +20,7 @@ S12 Docs (EN/ES), settings docs, settings index and CHANGELOG describe the engin
 ## Tasks
 - [x] T1 S7 S9 core: `translate_apple` field, engine_label, Apple code mapping (2 commits)
 - [x] T2 S11 helper source + core protocol + macOS runner (1 commit; helper exercised by hand: status, translate, unsupported, empty, bad JSON)
-- [ ] T3 S3 S4 S5 S6 S8 translate_text Apple branch + outcome mapping + fallback
+- [x] T3 S3 S4 S5 S6 S8 translate_text Apple branch + outcome mapping + fallback (workspace tests + clippy green)
 - [ ] T4 S1 S2 Settings tab UI + statuses + settings index
 - [ ] T5 S10 bundle.sh, CI/release runner, formula caveat (Risk: item 5, own commit)
 - [ ] T6 S12 docs EN/ES, CHANGELOG
@@ -29,4 +29,5 @@ S12 Docs (EN/ES), settings docs, settings index and CHANGELOG describe the engin
 After T2 the branch holds ~690 authored lines (about 260 of them this feature document and the plan). T3 onward continues on the same branch; T5 gets its own commit (Risk: item 5). Push, PR and merge stay the user's decision.
 
 ## Log
+L2 (agent correction to S4/S5): the failure toast keeps its usual `Translation failed: ` prefix so Apple errors read like every other engine's; the rest of the text is exactly as specified.
 L1 (user): "realiza el plan" (odd/plans/apple-translation-plan.md)
