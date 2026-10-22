@@ -13,7 +13,7 @@ Branch: feat/notes-design (worktree target/wt-notes-design), from origin/master 
 - S9 No behavior change: every existing test and demo assertion keeps passing; only colors, fonts, spacing and radii change.
 
 ## Tasks
-- T1 S2,S4,S5,S8 `crates/macos/src/notes_theme.rs`: the palette as dynamic NSColors (light and dark), an appearance setter (System, Dark, Light), the window chrome (background, toolbar, title, hairline, toolbar buttons tint) in notes.rs; a test that pins the palette values — commit: pending
+- T1 S2,S4,S5,S8 `crates/macos/src/notes_theme.rs`: the palette as dynamic NSColors (light and dark), an appearance setter (System, Dark, Light), the window chrome (background, toolbar, title, hairline, toolbar buttons tint) in notes.rs; a test that pins the palette values — commit: ec00109
 - T2 S4,S6,S7 editor styling in notes_editor.rs: text, headings, quote bar, code block, inline code, links, checkboxes, caret and selection, list markers, rule — commit: pending
 - T3 S4,S7,S8 overlays: notes_popups.rs (pop-up rows, Format Bar) and notes_palette.rs (card, rows, search field) — commit: pending
 - T4 S5 app wiring in crates/app: apply the Settings.theme to the Notes window at startup and when it changes; a test that the app palette and the notes palette have the same values — commit: pending
@@ -25,3 +25,5 @@ Branch: feat/notes-design (worktree target/wt-notes-design), from origin/master 
 - D2 The app palette is the source for colors (the notes sit next to the launcher); the web contributes the accent, the radius and the heading style (S3, S6).
 - D3 Font: the system font, as the launcher. Stack Sans is a web font (woff2) and is not bundled in the app.
 - E1 Current state seen in the demo PNGs: system window background (pure white or near-black), system accent (orange on this Mac) for caret, selection, checkboxes and selected rows, blue links, plain toolbar.
+- L2 T1 (ec00109) reviewed: fmt, clippy, 133 macos tests, the three macos demos re-run by me, dark PNG inspected (matches the launcher dark). Finding: white on the accent fill is below 4.5:1 (3.44 dark, 4.15 light), pinned by an ignored test. Decision D4: text on a coral fill uses the web's accent ink #1a0709 (4.5:1 or better), as the web's buttons do; accent_text is the accent as text on bg.
+- D4 see L2.
