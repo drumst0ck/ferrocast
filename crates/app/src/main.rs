@@ -9,6 +9,7 @@ mod media_tools;
 mod media_tools_tests;
 mod perf;
 mod route;
+mod secrets;
 mod services;
 mod ui;
 

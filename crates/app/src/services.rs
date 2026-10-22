@@ -1101,48 +1101,24 @@ pub fn ai_key() -> Option<String> {
 }
 
 pub fn ai_key_for(p: AiProvider) -> Option<String> {
-    let out =
-        std::process::Command::new("/usr/bin/security").args(["find-generic-password", "-s", keychain_service(p), "-w"]).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|k| !k.is_empty())
+    crate::secrets::secret_get(keychain_service(p)).map(|k| k.trim().to_string()).filter(|k| !k.is_empty())
 }
 
 pub fn set_ai_key_for(p: AiProvider, key: &str) -> bool {
-    let key = key.trim();
-    let mut cmd = std::process::Command::new("/usr/bin/security");
-    if key.is_empty() {
-        cmd.args(["delete-generic-password", "-s", keychain_service(p)]);
-    } else {
-        cmd.args(["add-generic-password", "-U", "-s", keychain_service(p), "-a", "ferrocast", "-w", key]);
-    }
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+    crate::secrets::secret_set(keychain_service(p), key.trim())
 }
 
 // ---- Sign in with ChatGPT
 
 pub fn chatgpt_credentials() -> Option<ferrocast_core::chatgpt::Credentials> {
-    let out = std::process::Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", KEYCHAIN_SERVICE_CHATGPT, "-w"])
-        .output()
-        .ok()?;
-    out.status.success().then(|| serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).ok()).flatten()
+    serde_json::from_str(crate::secrets::secret_get(KEYCHAIN_SERVICE_CHATGPT)?.trim()).ok()
 }
 
 fn save_chatgpt_credentials(c: Option<&ferrocast_core::chatgpt::Credentials>) -> bool {
-    let mut cmd = std::process::Command::new("/usr/bin/security");
     match c {
-        None => cmd.args(["delete-generic-password", "-s", KEYCHAIN_SERVICE_CHATGPT]),
-        Some(c) => cmd.args([
-            "add-generic-password",
-            "-U",
-            "-s",
-            KEYCHAIN_SERVICE_CHATGPT,
-            "-a",
-            "ferrocast",
-            "-w",
-            &serde_json::to_string(c).unwrap_or_default(),
-        ]),
-    };
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+        None => crate::secrets::secret_set(KEYCHAIN_SERVICE_CHATGPT, ""),
+        Some(c) => serde_json::to_string(c).is_ok_and(|j| crate::secrets::secret_set(KEYCHAIN_SERVICE_CHATGPT, &j)),
+    }
 }
 
 pub fn chatgpt_sign_out() -> bool {
