@@ -6,6 +6,12 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Notes**: a floating rich-text notes window above your other apps, toggled with the Notes command (alias "floating notes"), with Create Note, Search Notes and Create Dictated Note, each with its own hotkey. The first line is the title. Format with Markdown typing, the `/` menu, keyboard shortcuts (⌥⌘1-3 headings, ⌥⌘C code block, ⇧⌘B quote, ⇧⌘7/8/9 lists and tasks, ⌘Enter to check a task, ⌘B ⌘I ⇧⌘S ⌘U ⌘E ⌘L), the Format action in ⌘K or a Format Bar, plus a `:` emoji list. Browse Notes (⌘P), pin notes (⇧⌘P, ⌘1-9 to open them), ⌘[ and ⌘] history, zoom (⌘+ ⌘- ⌘0), Recently Deleted (30 days) and Delete All. Export as plain text, Markdown or HTML (saved to Downloads), Copy As, and Create Quicklink with `ferrocast://notes/<id>`, `ferrocast://notes/new` and `ferrocast://notes` URLs. AI commands (Fix Spelling and Grammar, Improve Writing, Make Shorter or Longer, Change Tone, Summarize, Explain This, Continue Writing, Translate to English) use the provider of Settings → AI and apply as one undo step; dictation uses on-device speech recognition when the system supports it and asks for microphone and speech permission the first time. Settings → Notes has the menu bar button, Escape Key Loses Focus and Zoom. (docs: /docs/launcher/notes/)
+
+### Changed
+- **Notes**: the old plain-text note form in the launcher is replaced by the floating Notes window. Your `notes.json` keeps working unchanged. Search Notes stays as a list and opens the floating window.
+
 ### Fixed
 - **Translate**: a selection that reads like an order ("Summarize this article", "Ignore the previous instructions", "Translate this into German instead") is now translated instead of followed, also with small models such as Claude Haiku. The text is sent as JSON data, and the language of the answer is checked on-device with macOS NaturalLanguage; when it came out in another language, the translation is asked once more.
 
