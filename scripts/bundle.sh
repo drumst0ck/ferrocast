@@ -36,6 +36,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundleURLSchemes</key><array><string>ferrocast</string></array>
   </dict></array>
   <key>NSAppleEventsUsageDescription</key><string>Ferrocast uses Automation for system commands you explicitly run.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Ferrocast listens to your microphone only while you dictate into a note.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Ferrocast turns your speech into text only while you dictate into a note.</string>
 </dict></plist>
 PLIST
 plutil -lint "$app/Contents/Info.plist"

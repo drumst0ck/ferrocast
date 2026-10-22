@@ -3,4 +3,6 @@
 <plist version="1.0"><dict>
   <!-- System commands and window helpers drive other apps through AppleScript. -->
   <key>com.apple.security.automation.apple-events</key><true/>
+  <!-- Notes dictation records the microphone; the hardened runtime of a Developer ID build denies it silently without this. -->
+  <key>com.apple.security.device.audio-input</key><true/>
 </dict></plist>
