@@ -6790,3 +6790,212 @@ fn sd2_every_tab_renders_in_both_themes() {
         }
     }
 }
+
+// ---- SD3: Settings search
+
+fn text_event(s: &str) -> Event {
+    Event::Text(s.to_string())
+}
+
+fn search_id() -> Id {
+    Id::new("settings-search")
+}
+
+fn search_has_focus(app: &App) -> bool {
+    app.ctx.memory(|m| m.has_focus(search_id()))
+}
+
+fn settings_query(app: &App) -> String {
+    app.ctx.data(|d| d.get_temp(Id::new("settings_query"))).unwrap_or_default()
+}
+
+/// Titles of the result rows drawn by the last frame.
+fn result_titles(app: &App) -> Vec<String> {
+    app.ctx.data(|d| d.get_temp(Id::new("settings-results"))).unwrap_or_default()
+}
+
+/// Titles of the tab rows drawn by the last frame.
+fn drawn_rows(app: &App) -> Vec<(usize, String)> {
+    app.ctx.data(|d| d.get_temp(Id::new("settings-row-titles"))).unwrap_or_default()
+}
+
+fn flash_of(app: &App) -> Option<String> {
+    app.ctx.data(|d| d.get_temp(Id::new("settings-flash")))
+}
+
+fn empty_state(app: &App) -> Option<String> {
+    app.ctx.data(|d| d.get_temp(Id::new("settings-empty-state")))
+}
+
+/// A Settings view on `tab` with `q` typed into the search field (focused through Cmd+F).
+fn searching(tab: usize, q: &str) -> App {
+    let mut app = sd2_app(tab);
+    render(&mut app, vec![cmd_key(Key::F)]);
+    render(&mut app, vec![]);
+    render(&mut app, vec![text_event(q)]);
+    render(&mut app, vec![]);
+    app
+}
+
+#[test]
+fn sd3_typing_a_query_shows_results_and_hides_the_tab() {
+    let app = sd2_app(0);
+    assert!(!drawn_rows(&app).is_empty(), "without a query the tab rows are drawn");
+    assert!(result_titles(&app).is_empty());
+    let app = searching(0, "hot");
+    assert_eq!(settings_query(&app), "hot");
+    let titles = result_titles(&app);
+    assert_eq!(titles.first().map(String::as_str), Some("Launcher hotkey"), "{titles:?}");
+    assert!(titles.len() <= 8);
+    assert!(drawn_rows(&app).is_empty(), "the tab content is hidden while results show");
+    assert!(matches!(app.view(), View::Settings));
+}
+
+#[test]
+fn sd3_enter_opens_the_first_result_clears_the_query_and_flashes_the_row() {
+    let mut app = searching(0, "model");
+    assert_eq!(result_titles(&app).first().map(String::as_str), Some("Model"));
+    render(&mut app, vec![key_event(Key::Enter)]);
+    render(&mut app, vec![]);
+    assert_eq!(tab_of(&app), Some(3), "the AI tab");
+    assert_eq!(settings_query(&app), "");
+    assert_eq!(flash_of(&app).as_deref(), Some("Model"));
+    assert!(drawn_rows(&app).iter().any(|(t, n)| *t == 3 && n == "Model"), "the tab shows again");
+    assert!(matches!(app.view(), View::Settings));
+}
+
+#[test]
+fn sd3_arrows_move_the_selection_and_a_click_opens_a_result() {
+    let mut app = searching(0, "wheel");
+    let n = result_titles(&app).len();
+    assert!(n >= 3, "wheel matches several rows");
+    let sel = |app: &App| app.ctx.data(|d| d.get_temp::<usize>(Id::new("settings-selected"))).unwrap_or(99);
+    assert_eq!(sel(&app), 0);
+    render(&mut app, vec![key_event(Key::ArrowDown)]);
+    assert_eq!(sel(&app), 1);
+    render(&mut app, vec![key_event(Key::ArrowUp)]);
+    render(&mut app, vec![key_event(Key::ArrowUp)]);
+    assert_eq!(sel(&app), 0, "no wrap at the top");
+    for _ in 0..12 {
+        render(&mut app, vec![key_event(Key::ArrowDown)]);
+    }
+    assert_eq!(sel(&app), n - 1, "no wrap at the bottom");
+    // click the second result
+    let rects: Vec<(String, Rect)> = app.ctx.data(|d| d.get_temp(Id::new("settings-result-rects"))).unwrap_or_default();
+    assert_eq!(rects.len(), n);
+    let (title, r) = rects[1].clone();
+    let want = ferrocast_core::settings_index::search("wheel")[1];
+    assert_eq!(title, want.title);
+    click_at(&mut app, r.center());
+    assert_eq!(tab_of(&app), Some(want.tab));
+    assert_eq!(settings_query(&app), "");
+    assert_eq!(flash_of(&app).as_deref(), Some(want.title));
+}
+
+#[test]
+fn sd3_clicking_a_tab_clears_the_query() {
+    let mut app = searching(0, "hot");
+    let (items, _) = sidebar_marks(&app);
+    click_at(&mut app, items[5].1.center());
+    assert_eq!(tab_of(&app), Some(5));
+    assert_eq!(settings_query(&app), "");
+    assert!(result_titles(&app).is_empty());
+    assert!(!drawn_rows(&app).is_empty());
+}
+
+#[test]
+fn sd3_escape_clears_the_query_first_and_then_leaves_settings() {
+    let mut app = searching(0, "hot");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    render(&mut app, vec![]);
+    assert_eq!(settings_query(&app), "");
+    assert!(matches!(app.view(), View::Settings), "the first Escape only clears");
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(!matches!(app.view(), View::Settings), "the second Escape leaves Settings");
+}
+
+#[test]
+fn sd3_cmd_f_focuses_the_search_field_only_inside_settings() {
+    let mut app = sd2_app(2);
+    assert!(!search_has_focus(&app));
+    render(&mut app, vec![cmd_key(Key::F)]);
+    render(&mut app, vec![]);
+    assert!(search_has_focus(&app));
+    for view in [View::Root, View::Clipboard, View::Snippets] {
+        let mut app = fixture();
+        app.stack = vec![View::Root];
+        if !matches!(view, View::Root) {
+            app.stack.push(view);
+        }
+        let query = app.query.clone();
+        render(&mut app, vec![cmd_key(Key::F)]);
+        render(&mut app, vec![]);
+        assert!(!search_has_focus(&app));
+        assert_eq!(app.query, query);
+        assert_eq!(settings_query(&app), "");
+    }
+}
+
+#[test]
+fn sd3_an_unknown_query_shows_the_empty_state() {
+    let app = searching(0, "zzzqq");
+    assert!(result_titles(&app).is_empty());
+    assert_eq!(empty_state(&app).as_deref(), Some("No setting matches \u{201c}zzzqq\u{201d}"));
+    assert!(drawn_rows(&app).is_empty());
+    // a query that matches shows no empty state
+    let app = searching(0, "hot");
+    assert_eq!(empty_state(&app), None);
+}
+
+#[test]
+fn sd3_every_drawn_row_is_indexed_and_every_entry_is_drawn() {
+    use ferrocast_core::models::AiProvider as P;
+    use ferrocast_core::settings_index::ENTRIES;
+    let all = [P::OpenAiCompatible, P::ChatGpt, P::Anthropic, P::ClaudeCode];
+    let mut drawn: Vec<(usize, String)> = vec![];
+    let mut collect = |app: &mut App| {
+        seed_model_lists(app);
+        render(app, vec![]);
+        render(app, vec![]);
+        drawn.extend(drawn_rows(app));
+    };
+    for tab in [0usize, 1, 2, 5, 6] {
+        collect(&mut settings_app(tab, egui::ThemePreference::Dark));
+    }
+    for p in all {
+        let mut app = settings_app(3, egui::ThemePreference::Dark);
+        app.settings.ai_provider = p;
+        collect(&mut app);
+    }
+    for tp in [None, Some(P::OpenAiCompatible), Some(P::ChatGpt), Some(P::Anthropic), Some(P::ClaudeCode)] {
+        let mut app = settings_app(4, egui::ThemePreference::Dark);
+        app.settings.translate_provider = tp;
+        collect(&mut app);
+    }
+    assert!(drawn.len() > 20, "rows were recorded: {drawn:?}");
+    for (tab, title) in &drawn {
+        assert!(ENTRIES.iter().any(|e| e.tab == *tab && e.title == title), "tab {tab} draws {title:?} but the index has no entry");
+    }
+    for e in ENTRIES {
+        assert!(drawn.iter().any(|(t, n)| *t == e.tab && n == e.title), "index entry {:?} (tab {}) is never drawn", e.title, e.tab);
+    }
+}
+
+#[test]
+fn sd3_all_tabs_render_in_both_themes_with_and_without_a_query() {
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        for tab in 0..7 {
+            let mut app = settings_app(tab, theme);
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert_eq!(sidebar_marks(&app).0.len(), 7, "tab {tab}");
+            render(&mut app, vec![cmd_key(Key::F)]);
+            render(&mut app, vec![text_event("model")]);
+            render(&mut app, vec![]);
+            assert!(!result_titles(&app).is_empty(), "tab {tab} {theme:?}");
+            render(&mut app, vec![key_event(Key::Escape)]);
+            render(&mut app, vec![]);
+            assert!(!drawn_rows(&app).is_empty(), "tab {tab} {theme:?} back on the tab");
+        }
+    }
+}

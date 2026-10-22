@@ -611,6 +611,10 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok(v) if v.starts_with("settings-tab-") => {
                 let n = v.trim_start_matches("settings-tab-").parse::<usize>().unwrap_or(0);
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), n));
+                // `FERROCAST_SETTINGS_QUERY=text` shows the search results state
+                if let Ok(q) = std::env::var("FERROCAST_SETTINGS_QUERY") {
+                    ctx.data_mut(|d| d.insert_temp(Id::new("settings_query"), q));
+                }
                 app.push(View::Settings);
             }
             Ok("settings-ai") => {
@@ -820,6 +824,14 @@ impl App {
         }
         // forms / single views
         if k.esc {
+            if matches!(self.view(), View::Settings) {
+                // the first Escape of a Settings search only clears the query
+                let id = Id::new("settings_query");
+                if ctx.data(|d| d.get_temp::<String>(id)).is_some_and(|q| !q.is_empty()) {
+                    ctx.data_mut(|d| d.insert_temp(id, String::new()));
+                    return true;
+                }
+            }
             if let View::NoteEdit(id) = self.view().clone() {
                 if self.notes.iter().any(|n| n.id == id && n.text.trim().is_empty()) {
                     self.notes.retain(|n| n.id != id);
@@ -5281,6 +5293,80 @@ impl App {
         }
     }
 
+    /// The content pane while the Settings search has a query: up to 8 result rows (tab chip,
+    /// title with the match in the accent colour), or the empty state. Returns the clicked result.
+    fn draw_settings_results(
+        &mut self,
+        ui: &mut Ui,
+        pal: &Palette,
+        query: &str,
+        hits: &[&'static ferrocast_core::settings_index::Entry],
+        sel: &mut usize,
+    ) -> Option<&'static ferrocast_core::settings_index::Entry> {
+        let ctx = ui.ctx().clone();
+        ui.label(RichText::new("Search results").size(20.0).strong().color(pal.text));
+        ui.add_space(14.0);
+        if hits.is_empty() {
+            let text = format!("No setting matches \u{201c}{}\u{201d}", query.trim());
+            ui.add_space(26.0);
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new(&text).size(14.5).color(pal.text));
+                ui.add_space(6.0);
+                ui.label(RichText::new("Try a shorter word, for example hotkey, model or clipboard.").size(12.0).color(pal.sub));
+            });
+            #[cfg(test)]
+            ctx.data_mut(|d| d.insert_temp(Id::new("settings-empty-state"), text));
+            return None;
+        }
+        #[cfg(test)]
+        ctx.data_mut(|d| {
+            d.insert_temp(Id::new("settings-results"), hits.iter().map(|e| e.title.to_string()).collect::<Vec<_>>());
+            d.insert_temp(Id::new("settings-result-rects"), Vec::<(String, Rect)>::new());
+        });
+        let moved = ctx.input(|i| i.pointer.delta() != Vec2::ZERO);
+        let mut clicked = None;
+        ui.spacing_mut().item_spacing.y = 4.0;
+        for (i, en) in hits.iter().enumerate() {
+            let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 40.0), Sense::click());
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            #[cfg(test)]
+            ctx.data_mut(|d| {
+                d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("settings-result-rects")).push((en.title.to_string(), r))
+            });
+            if resp.hovered() && moved {
+                *sel = i;
+            }
+            let on = i == *sel;
+            ui.painter().rect_filled(r, 10.0, if on { pal.sel } else { pal.field });
+            if on {
+                ui.painter().rect_stroke(r.shrink(0.5), 10.0, Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), egui::StrokeKind::Inside);
+            }
+            let chip = Rect::from_min_size(Pos2::new(r.min.x + 12.0, r.center().y - 10.0), Vec2::new(74.0, 20.0));
+            ui.painter().rect_filled(chip, 6.0, pal.bg.gamma_multiply(0.55));
+            ui.painter().text(chip.center(), Align2::CENTER_CENTER, SETTINGS_TABS[en.tab].0, FontId::proportional(11.0), pal.sub);
+            // the title, its match in the accent colour
+            let font = FontId::proportional(13.5);
+            let mut job = egui::text::LayoutJob::default();
+            let chars: Vec<char> = en.title.chars().collect();
+            let (ms, ml) = ferrocast_core::settings_index::match_range(en.title, query).unwrap_or((0, 0));
+            for (from, to, color) in [(0, ms, pal.text), (ms, ms + ml, pal.accent), (ms + ml, chars.len(), pal.text)] {
+                if from < to {
+                    let part: String = chars[from..to].iter().collect();
+                    job.append(&part, 0.0, egui::text::TextFormat::simple(font.clone(), color));
+                }
+            }
+            let galley = ui.painter().layout_job(job);
+            ui.painter().galley(Pos2::new(chip.max.x + 12.0, r.center().y - galley.size().y / 2.0), galley, pal.text);
+            if on {
+                ui.painter().text(Pos2::new(r.max.x - 14.0, r.center().y), Align2::RIGHT_CENTER, "↵", FontId::proportional(13.0), pal.sub);
+            }
+            if resp.clicked() {
+                clicked = Some(*en);
+            }
+        }
+        clicked
+    }
+
     fn draw_settings(&mut self, ui: &mut Ui, pal: &Palette) {
         let ctx = ui.ctx().clone();
         let tab_id = Id::new("settings_tab");
@@ -5328,6 +5414,56 @@ impl App {
         let side = Rect::from_min_max(full.min, Pos2::new(full.min.x + 168.0, full.max.y));
         let pane = Rect::from_min_max(Pos2::new(side.max.x + 18.0, full.min.y), full.max);
 
+        // ---- search state: the query and the selected result live in egui temp data
+        let query_id = Id::new("settings_query");
+        let sel_id = Id::new("settings-selected");
+        let search_id = Id::new("settings-search");
+        let mut query: String = ctx.data(|d| d.get_temp(query_id)).unwrap_or_default();
+        let query_before = query.clone();
+        let mut sel: usize = ctx.data(|d| d.get_temp(sel_id)).unwrap_or(0);
+        #[cfg(test)]
+        ctx.data_mut(|d| {
+            d.remove::<Vec<(usize, String)>>(Id::new("settings-row-titles"));
+            d.remove::<Vec<String>>(Id::new("settings-results"));
+            d.remove::<Vec<(String, Rect)>>(Id::new("settings-result-rects"));
+            d.remove::<String>(Id::new("settings-empty-state"));
+        });
+        // an unused jump (its row is not on the tab) does not wait for ever
+        if let Some(j) = ctx.data(|d| d.get_temp::<SettingsJump>(Id::new("settings-jump"))) {
+            if j.t0.is_none() && ctx.cumulative_pass_nr().saturating_sub(j.pass0) > 60 {
+                ctx.data_mut(|d| d.remove::<SettingsJump>(Id::new("settings-jump")));
+            }
+        }
+        if ctx.input_mut(|inp| inp.consume_key(CMD, Key::F)) {
+            ctx.memory_mut(|m| m.request_focus(search_id));
+        }
+        let mut opened = false;
+        {
+            // Up/Down/Enter act on the results of the query as of the last frame
+            let shown = if query.trim().is_empty() { vec![] } else { ferrocast_core::settings_index::search(&query) };
+            sel = sel.min(shown.len().saturating_sub(1));
+            if !shown.is_empty() && ctx.memory(|m| m.has_focus(search_id)) {
+                let (up, down, enter) = ctx.input_mut(|inp| {
+                    (
+                        inp.consume_key(Modifiers::NONE, Key::ArrowUp),
+                        inp.consume_key(Modifiers::NONE, Key::ArrowDown),
+                        inp.consume_key(Modifiers::NONE, Key::Enter),
+                    )
+                });
+                if up {
+                    sel = sel.saturating_sub(1);
+                }
+                if down {
+                    sel = (sel + 1).min(shown.len() - 1);
+                }
+                if enter {
+                    open_settings_result(&ctx, shown[sel], &mut tab, &mut query);
+                    ctx.memory_mut(|m| m.surrender_focus(search_id));
+                    opened = true;
+                }
+            }
+        }
+
         // ---- sidebar keyboard: ⌘1…⌘7 anywhere in Settings; ↑/↓ only when the pointer is over the
         // sidebar (and no text field is being edited) or a sidebar item has the keyboard focus
         let item_id = |i: usize| Id::new(("settings-tab-item", i));
@@ -5362,6 +5498,35 @@ impl App {
         let mut marks: (Vec<(String, Rect)>, Vec<Rect>) = (vec![], vec![]);
         ui.scope_builder(UiBuilder::new().max_rect(side), |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
+            // search field: the Settings field look, a magnifier on the left, a clear button on the right
+            let sr = search_field(ui, pal, &mut query, side.width(), "Search settings", search_id);
+            #[cfg(test)]
+            ctx.data_mut(|d| d.insert_temp(Id::new("settings-search-rect"), sr.rect));
+            let mg = Rect::from_center_size(Pos2::new(sr.rect.min.x + 14.0, sr.rect.center().y), Vec2::splat(13.0));
+            match self.icons.texture(&ctx, &Icon::Glyph("sf:magnifyingglass", [0, 0, 0])) {
+                Some(t) => {
+                    ui.painter().image(t.id(), mg, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), pal.sub);
+                }
+                None => {
+                    ui.painter().text(mg.center(), Align2::CENTER_CENTER, "⌕", FontId::proportional(13.0), pal.sub);
+                }
+            }
+            if !query.is_empty() {
+                let xr = Rect::from_center_size(Pos2::new(sr.rect.max.x - 13.0, sr.rect.center().y), Vec2::splat(20.0));
+                let xe = ui.interact(xr, Id::new("settings-search-clear"), Sense::click()).on_hover_text("Clear search");
+                ui.painter().text(
+                    xr.center(),
+                    Align2::CENTER_CENTER,
+                    "×",
+                    FontId::proportional(16.0),
+                    if xe.hovered() { pal.text } else { pal.sub },
+                );
+                if xe.clicked() {
+                    query.clear();
+                    ctx.memory_mut(|m| m.request_focus(search_id));
+                }
+            }
+            ui.add_space(6.0);
             for (i, (name, symbol)) in SETTINGS_TABS.iter().enumerate() {
                 if SETTINGS_GROUP_STARTS.contains(&i) {
                     // thin divider between the Everyday / Intelligence / Power groups
@@ -5416,8 +5581,19 @@ impl App {
         #[cfg(test)]
         ctx.data_mut(|d| d.insert_temp(Id::new("settings-sidebar"), marks));
         if tab != tab_before {
+            if !opened {
+                // choosing a tab (click, Cmd+N, arrows) leaves the search
+                query.clear();
+            }
             ctx.request_repaint();
         }
+        if query != query_before {
+            sel = 0;
+        }
+        let searching = !query.trim().is_empty();
+        let hits = if searching { ferrocast_core::settings_index::search(&query) } else { vec![] };
+        sel = sel.min(hits.len().saturating_sub(1));
+        let mut clicked_result: Option<&'static ferrocast_core::settings_index::Entry> = None;
         ctx.data_mut(|d| d.insert_temp(tab_id, tab));
         ui.painter().vline(side.max.x + 9.0, pane.y_range(), Stroke::new(1.0, pal.sep));
 
@@ -5427,6 +5603,9 @@ impl App {
             egui::ScrollArea::vertical().id_salt("settings_pane").auto_shrink([false; 2]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.add_space(2.0);
+                if searching {
+                    clicked_result = self.draw_settings_results(ui, pal, &query, &hits, &mut sel);
+                } else {
                 ui.label(RichText::new(SETTINGS_TABS[tab].0).size(20.0).strong().color(pal.text));
                 ui.add_space(14.0);
                 match tab {
@@ -5845,10 +6024,21 @@ impl App {
                         }
                     }
                 }
+                }
                 ui.add_space(16.0);
             });
         });
         let _ = acc;
+        if let Some(en) = clicked_result {
+            open_settings_result(&ctx, en, &mut tab, &mut query);
+            ctx.memory_mut(|m| m.surrender_focus(search_id));
+            ctx.data_mut(|d| d.insert_temp(tab_id, tab));
+            ctx.request_repaint();
+        }
+        ctx.data_mut(|d| {
+            d.insert_temp(query_id, query.clone());
+            d.insert_temp(sel_id, sel);
+        });
 
         if add_dir && !scratch.trim().is_empty() {
             s.script_directories.push(scratch.trim().to_string());
@@ -6058,6 +6248,56 @@ fn drag_reorder_cells(
     out
 }
 
+/// A search result being opened: the row `title` of the current tab is scrolled into view for a
+/// few frames and flashes for one second from the first frame it is drawn.
+#[derive(Clone)]
+struct SettingsJump {
+    title: &'static str,
+    /// time the flash started (set when the row is first drawn)
+    t0: Option<f64>,
+    frames: u8,
+    /// pass the jump was requested in, to drop a jump whose row never shows
+    pass0: u64,
+}
+
+/// Open a search result: switch to its tab, clear the query, and arm the scroll and flash.
+fn open_settings_result(ctx: &Context, en: &'static ferrocast_core::settings_index::Entry, tab: &mut usize, query: &mut String) {
+    *tab = en.tab;
+    query.clear();
+    let pass0 = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(Id::new("settings-jump"), SettingsJump { title: en.title, t0: None, frames: 0, pass0 }));
+    #[cfg(test)]
+    ctx.data_mut(|d| d.insert_temp(Id::new("settings-flash"), en.title.to_string()));
+    ctx.request_repaint();
+}
+
+/// Called by every settings row after it is drawn: when it is the row of a pending search result,
+/// scroll it to the middle of the pane and tint it with the accent, fading out over one second.
+fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
+    let ctx = ui.ctx();
+    let id = Id::new("settings-jump");
+    let Some(mut j) = ctx.data(|d| d.get_temp::<SettingsJump>(id)) else { return };
+    if j.title != title {
+        return;
+    }
+    let now = ctx.input(|i| i.time);
+    let t0 = *j.t0.get_or_insert(now);
+    if j.frames < 4 {
+        // the rows settle over the first frames, so ask again for a few
+        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+        j.frames += 1;
+    }
+    let age = (now - t0) as f32;
+    if age < 1.0 {
+        let a = 0.25 * (1.0 - age);
+        ui.painter().rect_filled(rect.shrink2(Vec2::new(3.0, 1.0)), 6.0, pal.accent.gamma_multiply(a));
+        ctx.request_repaint();
+        ctx.data_mut(|d| d.insert_temp(id, j));
+    } else {
+        ctx.data_mut(|d| d.remove::<SettingsJump>(id));
+    }
+}
+
 /// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Power = 5..7.
 const SETTINGS_TABS: [(&str, &str); 7] = [
     ("General", "sf:gearshape"),
@@ -6219,6 +6459,12 @@ fn row_flow(
         ui.ctx().data_mut(|d| d.insert_temp(key, used.width()));
         ui.ctx().request_repaint();
     }
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| {
+        let tab: usize = d.get_temp(Id::new("settings_tab")).unwrap_or(0);
+        d.get_temp_mut_or_default::<Vec<(usize, String)>>(Id::new("settings-row-titles")).push((tab, title.to_string()));
+    });
+    settings_row_jump(ui, pal, title, inner.response.rect);
     #[cfg(test)]
     ui.ctx().data_mut(|d| {
         let v = d.get_temp_mut_or_default::<Vec<(String, bool)>>(Id::new("row-stacked"));
@@ -6552,6 +6798,25 @@ fn record_field(ctx: &egui::Context, kind: &str, r: Rect) {
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("field-count")).push((kind.to_string(), r)));
     #[cfg(not(test))]
     let _ = (ctx, kind, r);
+}
+
+/// The Settings search box: the field look with room for a magnifier on the left and a clear
+/// button on the right (the caller paints both). Not counted in `field-count`.
+fn search_field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, id: Id) -> egui::Response {
+    ui.scope(|ui| {
+        field_style(ui, pal);
+        ui.add(
+            TextEdit::singleline(text)
+                .id(id)
+                .desired_width(width)
+                .font(FontId::proportional(12.5))
+                .hint_text(RichText::new(hint).color(pal.sub))
+                .margin(egui::Margin { left: 28, right: 24, top: 5, bottom: 5 })
+                .min_size(Vec2::new(0.0, FIELD_H))
+                .vertical_align(egui::Align::Center),
+        )
+    })
+    .inner
 }
 
 /// A single-line text field in the Settings look; `hint` shows in the sub colour while empty.

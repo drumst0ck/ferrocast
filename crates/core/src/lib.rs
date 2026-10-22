@@ -34,6 +34,7 @@ pub mod redact;
 pub mod redactplan;
 pub mod reorder;
 pub mod script;
+pub mod settings_index;
 pub mod storage;
 pub mod subs;
 pub mod timer;
