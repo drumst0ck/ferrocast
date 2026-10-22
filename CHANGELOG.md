@@ -6,13 +6,15 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Welcome tour**: the first time you open Ferrocast, a seven-slide presentation shows what it does (search and calculator, the drag wheel and file tools, clipboard, snippets, windows, Ask AI and translate) and what to switch on. Accessibility and Input Monitoring show their live status with a Grant button; Automation for Finder says it is asked on first use. Arrow keys and Enter move through it, Esc skips it, and searching “Welcome” opens it again.
+
 ### Fixed
 - **Translate**: a selection that reads like an order ("Summarize this article", "Ignore the previous instructions", "Translate this into German instead") is now translated instead of followed, also with small models such as Claude Haiku. The text is sent as JSON data, and the language of the answer is checked on-device with macOS NaturalLanguage; when it came out in another language, the translation is asked once more.
 
 ## [0.1.2] - 2026-10-22
 
 ### Added
-- **Welcome tour**: the first time you open Ferrocast, a seven-slide presentation shows what it does (search and calculator, the drag wheel and file tools, clipboard, snippets, windows, Ask AI and translate) and what to switch on. Accessibility and Input Monitoring show their live status with a Grant button; Automation for Finder says it is asked on first use. Arrow keys and Enter move through it, Esc skips it, and searching “Welcome” opens it again.
 - **Translating effect**: while a translation runs, the selected text glows so you can see something is happening. In Safari and Chromium pages the text itself gets an animated multicolour glow and is replaced in place (the page is restored if the translation fails); in other apps that expose the selection a glowing outline surrounds it; otherwise a small “Translating…” pill appears where you dropped. It is static with Reduce Motion and ends on every outcome (a 60 s safety timeout included). Settings → Translate → Translating effect turns it off.
 
 ### Fixed
