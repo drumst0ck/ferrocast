@@ -9,6 +9,21 @@ pub fn reduce_motion() -> bool {
     objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
 }
 
+/// Major macOS version from `sw_vers -productVersion` output (`"14.5"` -> 14).
+pub fn parse_major(version: &str) -> Option<u32> {
+    version.trim().split('.').next()?.parse().ok()
+}
+
+/// True when this Mac runs macOS `major` or newer. Cached; false when the version is unknown.
+pub fn os_at_least(major: u32) -> bool {
+    static MAJOR: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    let cur = *MAJOR.get_or_init(|| {
+        let out = Command::new("/usr/bin/sw_vers").arg("-productVersion").output().ok()?;
+        parse_major(&String::from_utf8_lossy(&out.stdout))
+    });
+    cur.is_some_and(|c| c >= major)
+}
+
 /// Run AppleScript, returning trimmed stdout.
 pub fn osascript(script: &str) -> anyhow::Result<String> {
     let out = Command::new("/usr/bin/osascript").arg("-e").arg(script).output()?;
@@ -364,5 +379,16 @@ mod timeout_tests {
     #[test]
     fn a_quick_script_returns_its_output() {
         assert_eq!(osascript_timeout("return \"ok\"", 10).unwrap(), "ok");
+    }
+}
+
+#[cfg(test)]
+mod os_version_tests {
+    #[test]
+    fn parses_major() {
+        assert_eq!(super::parse_major("14.5\n"), Some(14));
+        assert_eq!(super::parse_major("27.0.1"), Some(27));
+        assert_eq!(super::parse_major(""), None);
+        assert!(super::os_at_least(1));
     }
 }

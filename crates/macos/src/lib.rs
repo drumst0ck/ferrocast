@@ -4,6 +4,7 @@
 pub mod apple_translate;
 pub mod apps;
 pub mod ax_text;
+pub mod capture;
 pub mod clipboard;
 pub mod drag;
 pub mod expansion;
