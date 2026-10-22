@@ -267,6 +267,16 @@ pub struct Settings {
     pub update_skipped: Option<String>,
     /// Unix seconds of the last automatic check.
     pub update_last_check: Option<i64>,
+    /// Zoom of the Notes window text (1.0 = actual size).
+    pub notes_zoom: f64,
+    /// Notes: Esc only gives up the keyboard focus instead of closing the window.
+    pub notes_escape_loses_focus: bool,
+    /// Notes: show a toggle button for the Notes window in the menu bar.
+    pub notes_menu_bar_button: bool,
+    /// Notes: show the Format Bar at the bottom of the window.
+    pub notes_format_bar: bool,
+    /// Id of the note that was open last; the window reopens on it.
+    pub notes_last: Option<String>,
 }
 
 /// What happens with a finished translation.
@@ -340,6 +350,11 @@ impl Default for Settings {
             update_install: UpdateInstall::default(),
             update_skipped: None,
             update_last_check: None,
+            notes_zoom: 1.0,
+            notes_escape_loses_focus: false,
+            notes_menu_bar_button: false,
+            notes_format_bar: false,
+            notes_last: None,
         }
     }
 }
@@ -445,6 +460,23 @@ mod tests {
         s.command_mut(id).hotkey = Some(String::new());
         assert_eq!(s.hotkey(id), None);
         assert_eq!(s.hotkey("builtin:other"), None);
+    }
+
+    #[test]
+    fn notes_settings_default_and_load_from_an_old_file() {
+        let d = Settings::default();
+        assert_eq!(d.notes_zoom, 1.0);
+        assert!(!d.notes_escape_loses_focus && !d.notes_menu_bar_button && !d.notes_format_bar);
+        assert_eq!(d.notes_last, None);
+        let old: Settings = serde_json::from_str(r#"{"launcher_hotkey":"Alt+Space","compact_mode":true}"#).unwrap();
+        assert!(old.compact_mode);
+        assert_eq!((old.notes_zoom, old.notes_last.clone()), (1.0, None));
+        assert!(!old.notes_escape_loses_focus && !old.notes_menu_bar_button && !old.notes_format_bar);
+        let mut s = Settings { notes_zoom: 1.5, notes_escape_loses_focus: true, notes_last: Some("n1".into()), ..Settings::default() };
+        s.notes_format_bar = true;
+        s.notes_menu_bar_button = true;
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
     }
 
     #[test]

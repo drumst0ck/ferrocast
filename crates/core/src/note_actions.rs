@@ -73,6 +73,8 @@ pub enum NoteAction {
     BrowseNotes,
     /// Submenu: every editor format.
     FormatMenu,
+    /// Shows or hides the Format Bar at the bottom of the window.
+    ToggleFormatBar,
     PinNote,
     UnpinNote,
     NavigateBack,
@@ -111,6 +113,7 @@ impl NoteAction {
             NewNote,
             BrowseNotes,
             FormatMenu,
+            ToggleFormatBar,
             PinNote,
             UnpinNote,
             NavigateBack,
@@ -142,6 +145,7 @@ impl NoteAction {
             NewNote => "new".into(),
             BrowseNotes => "browse".into(),
             FormatMenu => "format".into(),
+            ToggleFormatBar => "format-bar".into(),
             PinNote => "pin".into(),
             UnpinNote => "unpin".into(),
             NavigateBack => "back".into(),
@@ -172,6 +176,7 @@ impl NoteAction {
             "new" => NewNote,
             "browse" => BrowseNotes,
             "format" => FormatMenu,
+            "format-bar" => ToggleFormatBar,
             "pin" => PinNote,
             "unpin" => UnpinNote,
             "back" => NavigateBack,
@@ -218,6 +223,8 @@ pub struct Context {
     pub dictating: bool,
     pub ai_available: bool,
     pub quicklinks_available: bool,
+    /// The Format Bar is showing (flips the title of `ToggleFormatBar`).
+    pub format_bar: bool,
 }
 
 /// One row of the panel.
@@ -270,6 +277,8 @@ pub fn top_level(ctx: &Context) -> Vec<Entry> {
     }
     if ctx.has_note {
         v.push(menu(entry(FormatMenu, "Format", None, "Edit")));
+        let t = if ctx.format_bar { "Hide Format Bar" } else { "Show Format Bar" };
+        v.push(entry(ToggleFormatBar, t, None, "Edit"));
         let t = if ctx.dictating { "Stop Dictation" } else { "Start Dictation" };
         v.push(entry(Dictate, t, None, "Edit"));
         v.push(menu(entry(CopyNoteAs, "Copy As", None, "Share")));
@@ -549,13 +558,14 @@ mod tests {
             dictating: false,
             ai_available: true,
             quicklinks_available: true,
+            format_bar: false,
         }
     }
 
     #[test]
     fn ids_round_trip_and_are_unique() {
         let all = NoteAction::all();
-        assert_eq!(all.len(), 19 + 3 + 3 + note_ai::commands().len() + 15);
+        assert_eq!(all.len(), 20 + 3 + 3 + note_ai::commands().len() + 15);
         let mut seen = HashSet::new();
         for a in &all {
             assert!(seen.insert(a.id()), "duplicate id {}", a.id());
@@ -573,6 +583,18 @@ mod tests {
         assert_eq!(NoteAction::CopyAs(Format3::PlainText).id(), "copy-as:plain");
         assert_eq!(NoteAction::Ai("fix-grammar").id(), "ai:fix-grammar");
         assert_eq!(NoteAction::Format("bold").id(), "format:bold");
+        assert_eq!(NoteAction::ToggleFormatBar.id(), "format-bar");
+    }
+
+    #[test]
+    fn format_bar_toggle_title_follows_the_context() {
+        let hidden = top_level(&full());
+        let e = hidden.iter().find(|e| e.action == NoteAction::ToggleFormatBar).unwrap();
+        assert_eq!((e.title.as_str(), e.section, e.shortcut, e.has_children), ("Show Format Bar", "Edit", None, false));
+        let shown = top_level(&Context { format_bar: true, ..full() });
+        let e = shown.iter().find(|e| e.action == NoteAction::ToggleFormatBar).unwrap();
+        assert_eq!(e.title, "Hide Format Bar");
+        assert!(!top_level(&Context::default()).iter().any(|e| e.action == NoteAction::ToggleFormatBar), "needs a note");
     }
 
     #[test]
@@ -630,6 +652,7 @@ mod tests {
                 "Navigate Back",
                 "Navigate Forward",
                 "Format",
+                "Show Format Bar",
                 "Start Dictation",
                 "Copy As",
                 "Export",
@@ -647,13 +670,13 @@ mod tests {
         assert_eq!(
             sections,
             [
-                "Note", "Note", "Note", "Note", "Note", "Edit", "Edit", "Share", "Share", "Share", "AI", "View", "View", "View", "Danger",
-                "Danger", "Danger"
+                "Note", "Note", "Note", "Note", "Note", "Edit", "Edit", "Edit", "Share", "Share", "Share", "AI", "View", "View", "View",
+                "Danger", "Danger", "Danger"
             ]
         );
         let shortcuts: Vec<Option<&str>> = v.iter().map(|e| e.shortcut).collect();
         assert_eq!(&shortcuts[..5], [Some("⌘N"), Some("⌘P"), Some("⇧⌘P"), Some("⌘["), Some("⌘]")]);
-        assert_eq!(&shortcuts[11..14], [Some("⌘+"), Some("⌘-"), Some("⌘0")]);
+        assert_eq!(&shortcuts[12..15], [Some("⌘+"), Some("⌘-"), Some("⌘0")]);
         let menus: Vec<&str> = v.iter().filter(|e| e.has_children).map(|e| e.title.as_str()).collect();
         assert_eq!(menus, ["Format", "Copy As", "Export", "AI Commands"]);
         let dangers: Vec<&str> = v.iter().filter(|e| e.danger).map(|e| e.title.as_str()).collect();
@@ -682,6 +705,7 @@ mod tests {
                 "Unpin Note",
                 "Navigate Back",
                 "Format",
+                "Show Format Bar",
                 "Stop Dictation",
                 "Copy As",
                 "Export",
