@@ -912,6 +912,9 @@ pub fn start_update_poller(shared: Arc<Shared>, bus: Bus) -> Option<std::thread:
     std::thread::Builder::new()
         .name("update-poller".into())
         .spawn(move || {
+            if cfg!(test) {
+                return; // tests only assert that the poller starts; they never reach the network
+            }
             std::thread::sleep(Duration::from_secs(30));
             // a failed check (offline, rate limit) waits an hour, instead of retrying every 10 minutes
             let mut last_failure: Option<i64> = None;
@@ -922,7 +925,7 @@ pub fn start_update_poller(shared: Arc<Shared>, bus: Bus) -> Option<std::thread:
                 };
                 let now = now_secs();
                 if on && ferrocast_core::update::due(last, now) && ferrocast_core::update::retry_due(last_failure, now) {
-                    if let Ok(exe) = std::env::current_exe() {
+                    if let Some(exe) = crate::instance::running_exe() {
                         last_failure = if check_blocking(&bus, false, &exe) { None } else { Some(now) };
                     }
                 }
@@ -934,7 +937,7 @@ pub fn start_update_poller(shared: Arc<Shared>, bus: Bus) -> Option<std::thread:
 
 fn install_blocking(release: &ferrocast_core::update::Release, store_root: &std::path::Path) -> Result<PathBuf, String> {
     use ferrocast_core::update::{sum_for, verify_sha256};
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = crate::instance::running_exe().ok_or("Could not locate the running app")?;
     let bundle = crate::instance::bundle_of(&exe).ok_or("The running app is not inside an .app bundle")?;
     let ver = release.tag.trim_start_matches('v');
     let zip_name = format!("Ferrocast-{ver}.zip");
@@ -962,28 +965,66 @@ fn install_blocking(release: &ferrocast_core::update::Release, store_root: &std:
     cs.args(["--verify", "--deep", "--strict"]).arg(&new_app);
     run_deadline(cs, 60).map_err(|e| format!("Signature check failed ({e})"))?;
     // 2. swap: keep the old bundle as .previous (removed on the next launch)
-    let previous = bundle.with_file_name(format!("{}.previous", bundle.file_name().unwrap_or_default().to_string_lossy()));
-    let _ = std::fs::remove_dir_all(&previous); // stale leftover of an earlier update, never this run's
-    std::fs::rename(&bundle, &previous).map_err(|e| format!("Could not move the current app aside: {e}"))?;
-    // rename fails across volumes (support folder vs /Applications): fall back to a copy
-    let placed = std::fs::rename(&new_app, &bundle).map_err(|e| e.to_string()).or_else(|_| {
-        let mut c = std::process::Command::new("/usr/bin/ditto");
-        c.arg(&new_app).arg(&bundle);
-        run_deadline(c, 120).map(|_| ())
-    });
-    if let Err(e) = placed {
-        let _ = std::fs::remove_dir_all(&bundle); // our own partial copy
-        let _ = std::fs::rename(&previous, &bundle);
-        return Err(format!("Could not install the update, the old version was restored ({e})"));
-    }
+    swap_bundle(&new_app, &bundle)?;
     Ok(bundle)
 }
 
+/// Move `bundle` aside as `<name>.previous` and put `new_app` in its place; any failure while
+/// placing restores the original bundle.
+pub(crate) fn swap_bundle(new_app: &std::path::Path, bundle: &std::path::Path) -> Result<(), String> {
+    let previous = bundle.with_file_name(format!("{}.previous", bundle.file_name().unwrap_or_default().to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&previous); // stale leftover of an earlier update, never this run's
+    std::fs::rename(bundle, &previous).map_err(|e| format!("Could not move the current app aside: {e}"))?;
+    // rename fails across volumes (support folder vs /Applications): fall back to a copy
+    let placed = std::fs::rename(new_app, bundle).map_err(|e| e.to_string()).or_else(|_| {
+        let mut c = std::process::Command::new("/usr/bin/ditto");
+        c.arg(new_app).arg(bundle);
+        run_deadline(c, 120).map(|_| ())
+    });
+    if let Err(e) = placed {
+        let _ = std::fs::remove_dir_all(bundle); // our own partial copy
+        let _ = std::fs::rename(&previous, bundle);
+        return Err(format!("Could not install the update, the old version was restored ({e})"));
+    }
+    Ok(())
+}
+
+/// Only one install (download+swap or brew upgrade) at a time.
+static INSTALLING: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn install_flag() -> &'static AtomicBool {
+    &INSTALLING
+}
+
+/// Holds the "installing" flag; releases it on drop, so every exit path (also a panic) frees it.
+pub(crate) struct InstallGuard<'a>(&'a AtomicBool);
+
+impl<'a> InstallGuard<'a> {
+    pub(crate) fn take(flag: &'a AtomicBool) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).ok().map(|_| Self(flag))
+    }
+}
+
+impl Drop for InstallGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+const ALREADY_INSTALLING: &str = "An update is already being installed";
+
 /// Download, verify and swap the bundle; ends with `UpdateInstalled` or `UpdateFailed`.
 pub fn update_install(release: ferrocast_core::update::Release, store_root: PathBuf, bus: Bus) {
-    std::thread::spawn(move || match install_blocking(&release, &store_root) {
-        Ok(path) => bus.send(Msg::UpdateInstalled { path }),
-        Err(e) => bus.send(Msg::UpdateFailed(e)),
+    let Some(guard) = InstallGuard::take(install_flag()) else {
+        bus.send(Msg::UpdateFailed(ALREADY_INSTALLING.into()));
+        return;
+    };
+    std::thread::spawn(move || {
+        let _guard = guard;
+        match install_blocking(&release, &store_root) {
+            Ok(path) => bus.send(Msg::UpdateInstalled { path }),
+            Err(e) => bus.send(Msg::UpdateFailed(e)),
+        }
     });
 }
 
@@ -1009,7 +1050,12 @@ fn brew_version_changed(before: Option<&str>, after: Option<&str>) -> bool {
 /// Refresh the tap, `brew upgrade ferrocast`, and relaunch the stable `opt` symlink only when the
 /// installed version really changed; otherwise report that no newer formula exists yet.
 pub fn brew_upgrade(bus: Bus) {
+    let Some(guard) = InstallGuard::take(install_flag()) else {
+        bus.send(Msg::UpdateFailed(ALREADY_INSTALLING.into()));
+        return;
+    };
     std::thread::spawn(move || {
+        let _guard = guard;
         let Some(brew) = brew_path() else {
             bus.send(Msg::UpdateFailed("Homebrew not found".into()));
             return;

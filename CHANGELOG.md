@@ -10,6 +10,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Translating effect**: while a translation runs, the selected text glows so you can see something is happening. In Safari and Chromium pages the text itself gets an animated multicolour glow and is replaced in place (the page is restored if the translation fails); in other apps that expose the selection a glowing outline surrounds it; otherwise a small “Translating…” pill appears where you dropped. It is static with Reduce Motion and ends on every outcome (a 60 s safety timeout included). Settings → Translate → Translating effect turns it off.
 
 ### Fixed
+- **Updates**: turning on "Check for updates automatically" after launch now starts checking without a restart; a second install while one is running is refused instead of racing; and the running app's real path is used to tell Homebrew, downloaded and development copies apart, so a /Applications link into Homebrew is updated with `brew upgrade` and never replaced.
 - **Translate**: a selection that is a single word, a heading or a question (for example "FRENCH" or "What is 2+2?") is now translated instead of answered or refused. The text is sent delimited and with a translator system prompt of its own; the chat prompt is unchanged. Small models can still follow an instruction written inside the selected text.
 
 ## [0.1.1] - 2026-10-22

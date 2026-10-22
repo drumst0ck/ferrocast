@@ -1150,7 +1150,7 @@ impl App {
             }
             View::Update { release } if k.enter => {
                 self.pop();
-                let exe = std::env::current_exe().unwrap_or_default();
+                let exe = instance::running_exe().unwrap_or_default();
                 self.start_update(release, ferrocast_core::update::channel_of(&exe), services::parent_writable_cached());
                 true
             }
@@ -5329,7 +5329,7 @@ impl App {
                         self.pop();
                         match update_act {
                             1 => {
-                                let exe = std::env::current_exe().unwrap_or_default();
+                                let exe = instance::running_exe().unwrap_or_default();
                                 self.start_update(release, ferrocast_core::update::channel_of(&exe), services::parent_writable_cached());
                             }
                             3 => self.skip_update(&release),
@@ -5473,7 +5473,7 @@ impl App {
             match ctx.data(|d| d.get_temp::<ferrocast_core::update::Channel>(id)) {
                 Some(c) => c,
                 None => {
-                    let c = ferrocast_core::update::channel_of(&std::env::current_exe().unwrap_or_default());
+                    let c = ferrocast_core::update::channel_of(&crate::instance::running_exe().unwrap_or_default());
                     ctx.data_mut(|d| d.insert_temp(id, c));
                     c
                 }
@@ -7599,8 +7599,13 @@ impl App {
         let theme_changed = s.theme != self.settings.theme;
         let hotkey_changed = s.launcher_hotkey != self.settings.launcher_hotkey;
         let dirs_changed = s.script_directories != self.settings.script_directories;
+        let start_poller = s.update_check && self.update_poller.is_none();
         self.settings = s;
         self.save_settings();
+        if start_poller {
+            // the poller only exists once the check was on: turning it on later starts it now
+            self.update_poller = services::start_update_poller(self.shared.clone(), self.bus.clone());
+        }
         if finder_enter_changed {
             // on: ask for Accessibility once and create the tap; off: remove it. No restart.
             self.set_finder_enter(enter_on_finder, true);

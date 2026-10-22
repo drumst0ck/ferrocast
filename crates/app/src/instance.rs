@@ -33,6 +33,22 @@ pub fn log(dir: &Path, msg: &str) {
     }
 }
 
+/// The resolved path when there is one, else the raw one.
+pub fn pick_exe(raw: PathBuf, resolved: Option<PathBuf>) -> PathBuf {
+    resolved.unwrap_or(raw)
+}
+
+/// Follow symlinks (e.g. `/Applications/Ferrocast.app` -> the Homebrew Cellar); the raw path when that fails.
+pub fn resolve_exe(raw: PathBuf) -> PathBuf {
+    let resolved = std::fs::canonicalize(&raw).ok();
+    pick_exe(raw, resolved)
+}
+
+/// The real path of the running executable: the one place the updater derives channel and bundle from.
+pub fn running_exe() -> Option<PathBuf> {
+    std::env::current_exe().ok().map(resolve_exe)
+}
+
 /// The `.app` directory that contains the running executable (`…/Ferrocast.app/Contents/MacOS/ferrocast`).
 pub fn bundle_of(exe: &Path) -> Option<PathBuf> {
     exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(Path::to_path_buf)

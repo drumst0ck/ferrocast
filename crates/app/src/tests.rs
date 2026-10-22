@@ -29,6 +29,7 @@ fn fixture() -> App {
         keywords: Default::default(),
     });
     let mut app = App {
+        update_poller: None,
         ctx,
         shared,
         bus,
@@ -6201,6 +6202,147 @@ fn poller_is_not_started_when_update_check_is_off() {
     app.settings.update_check = false;
     *app.shared.settings.write().unwrap() = app.settings.clone();
     assert!(services::start_update_poller(app.shared.clone(), app.bus.clone()).is_none());
+}
+
+// ---- update advisories (L20)
+
+#[test]
+fn poller_starts_once_when_the_toggle_is_turned_on() {
+    let mut app = fixture();
+    app.settings.update_check = false;
+    *app.shared.settings.write().unwrap() = app.settings.clone();
+    assert!(app.update_poller.is_none());
+    // an unrelated change while off starts nothing
+    let mut s = app.settings.clone();
+    s.compact_mode = !s.compact_mode;
+    app.commit_settings(s);
+    assert!(app.update_poller.is_none());
+    // off -> on through the settings commit path starts the poller
+    let mut s = app.settings.clone();
+    s.update_check = true;
+    app.commit_settings(s);
+    assert!(app.update_poller.is_some());
+    let id = app.update_poller.as_ref().unwrap().thread().id();
+    // off and on again keeps the same single poller
+    let mut s = app.settings.clone();
+    s.update_check = false;
+    app.commit_settings(s);
+    let mut s = app.settings.clone();
+    s.update_check = true;
+    app.commit_settings(s);
+    assert_eq!(app.update_poller.as_ref().unwrap().thread().id(), id);
+}
+
+static INSTALL_GUARD_TESTS: Mutex<()> = Mutex::new(());
+
+#[test]
+fn install_guard_is_exclusive_and_released_on_drop() {
+    let _l = INSTALL_GUARD_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let flag = std::sync::atomic::AtomicBool::new(false);
+    let first = services::InstallGuard::take(&flag).expect("free");
+    assert!(services::InstallGuard::take(&flag).is_none());
+    drop(first);
+    assert!(services::InstallGuard::take(&flag).is_some());
+    // released on panic as well
+    let r = std::panic::catch_unwind(|| {
+        let f = std::sync::atomic::AtomicBool::new(false);
+        let _g = services::InstallGuard::take(&f).unwrap();
+        panic!("boom");
+    });
+    assert!(r.is_err());
+}
+
+#[test]
+fn second_install_or_brew_upgrade_is_refused_while_one_runs() {
+    let _l = INSTALL_GUARD_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let app = fixture();
+    let held = services::InstallGuard::take(services::install_flag()).expect("free");
+    services::update_install(fake_release("99.0.0"), app.store.root.clone(), app.bus.clone());
+    services::brew_upgrade(app.bus.clone());
+    for _ in 0..2 {
+        match app.rx.recv_timeout(std::time::Duration::from_secs(5)).expect("a message") {
+            Msg::UpdateFailed(m) => assert_eq!(m, "An update is already being installed"),
+            _ => panic!("expected UpdateFailed"),
+        }
+    }
+    assert!(app.rx.try_recv().is_err());
+    drop(held);
+}
+
+#[test]
+fn pick_exe_prefers_the_resolved_path() {
+    let raw = PathBuf::from("/Applications/Ferrocast.app/Contents/MacOS/ferrocast");
+    let real = PathBuf::from("/opt/homebrew/Cellar/ferrocast/0.1.0/Ferrocast.app/Contents/MacOS/ferrocast");
+    assert_eq!(instance::pick_exe(raw.clone(), Some(real.clone())), real);
+    assert_eq!(instance::pick_exe(raw.clone(), None), raw);
+}
+
+#[test]
+fn symlinked_applications_bundle_into_the_cellar_is_brew() {
+    use ferrocast_core::update::{channel_of, Channel};
+    let root = std::env::temp_dir().join(format!("ferrocast-sym-{}", uuid::Uuid::new_v4()));
+    let macos = root.join("Cellar/ferrocast/0.1.0/Ferrocast.app/Contents/MacOS");
+    std::fs::create_dir_all(&macos).unwrap();
+    std::fs::write(macos.join("ferrocast"), b"bin").unwrap();
+    let apps = root.join("Applications");
+    std::fs::create_dir_all(&apps).unwrap();
+    std::os::unix::fs::symlink(root.join("Cellar/ferrocast/0.1.0/Ferrocast.app"), apps.join("Ferrocast.app")).unwrap();
+    let raw = apps.join("Ferrocast.app/Contents/MacOS/ferrocast");
+    assert_ne!(channel_of(&raw), Channel::Brew, "the raw path hides the Cellar");
+    let resolved = instance::resolve_exe(raw);
+    assert_eq!(channel_of(&resolved), Channel::Brew);
+    assert!(instance::bundle_of(&resolved).unwrap().to_string_lossy().contains("/Cellar/"));
+    // a path that does not exist falls back to itself
+    let ghost = root.join("nope/Ferrocast.app/Contents/MacOS/ferrocast");
+    assert_eq!(instance::resolve_exe(ghost.clone()), ghost);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn swap_dirs(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let root = std::env::temp_dir().join(format!("ferrocast-swap-{tag}-{}", uuid::Uuid::new_v4()));
+    let (bundle, new_app) = (root.join("apps/Ferrocast.app"), root.join("extract/Ferrocast.app"));
+    std::fs::create_dir_all(bundle.join("Contents")).unwrap();
+    std::fs::write(bundle.join("Contents/v"), "old").unwrap();
+    (root, bundle, new_app)
+}
+
+#[test]
+fn swap_bundle_places_the_new_app_and_keeps_the_old_as_previous() {
+    let (root, bundle, new_app) = swap_dirs("ok");
+    std::fs::create_dir_all(new_app.join("Contents")).unwrap();
+    std::fs::write(new_app.join("Contents/v"), "new").unwrap();
+    services::swap_bundle(&new_app, &bundle).unwrap();
+    assert_eq!(std::fs::read_to_string(bundle.join("Contents/v")).unwrap(), "new");
+    let previous = root.join("apps/Ferrocast.app.previous");
+    assert_eq!(std::fs::read_to_string(previous.join("Contents/v")).unwrap(), "old");
+    assert!(!new_app.exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn swap_bundle_replaces_a_stale_previous() {
+    let (root, bundle, new_app) = swap_dirs("stale");
+    let previous = root.join("apps/Ferrocast.app.previous");
+    std::fs::create_dir_all(&previous).unwrap();
+    std::fs::write(previous.join("stale.txt"), "stale").unwrap();
+    std::fs::create_dir_all(new_app.join("Contents")).unwrap();
+    std::fs::write(new_app.join("Contents/v"), "new").unwrap();
+    services::swap_bundle(&new_app, &bundle).unwrap();
+    assert!(!previous.join("stale.txt").exists());
+    assert_eq!(std::fs::read_to_string(previous.join("Contents/v")).unwrap(), "old");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn swap_bundle_rolls_back_when_placing_fails() {
+    let (root, bundle, new_app) = swap_dirs("fail"); // new_app was never created
+    let err = services::swap_bundle(&new_app, &bundle).unwrap_err();
+    assert!(err.contains("old version was restored"), "{err}");
+    assert_eq!(std::fs::read_to_string(bundle.join("Contents/v")).unwrap(), "old");
+    assert!(!root.join("apps/Ferrocast.app.previous").exists());
+    let entries: Vec<_> = std::fs::read_dir(root.join("apps")).unwrap().flatten().collect();
+    assert_eq!(entries.len(), 1, "no partial copy left behind");
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]

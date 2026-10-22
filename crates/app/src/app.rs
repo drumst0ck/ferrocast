@@ -750,6 +750,8 @@ struct Keys {
 }
 
 pub struct App {
+    /// The update poller thread once started (never more than one).
+    pub(crate) update_poller: Option<std::thread::JoinHandle<()>>,
     ctx: Context,
     shared: Arc<Shared>,
     bus: Bus,
@@ -942,8 +944,8 @@ impl App {
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_expansion(shared.clone());
         services::start_wheel(shared.clone(), bus.clone());
-        let _ = services::start_update_poller(shared.clone(), bus.clone());
-        if let Ok(exe) = std::env::current_exe() {
+        let update_poller = services::start_update_poller(shared.clone(), bus.clone());
+        if let Some(exe) = instance::running_exe() {
             // leftovers of a previous self-update; file removal off the startup path
             let root = store.root.clone();
             std::thread::spawn(move || instance::cleanup_update_leftovers(&root, &exe));
@@ -984,6 +986,7 @@ impl App {
             services::refresh_rates(bus.clone());
         }
         let mut app = App {
+            update_poller,
             icons: IconCache::new(store.images_dir()).with_bus(bus.clone()),
             ctx,
             shared,
@@ -1749,7 +1752,7 @@ impl App {
             match m {
                 Msg::Wake => {}
                 Msg::UpdateChecked { manual, result } => {
-                    let exe = std::env::current_exe().unwrap_or_default();
+                    let exe = instance::running_exe().unwrap_or_default();
                     self.handle_update_checked(
                         manual,
                         result,
@@ -3848,7 +3851,7 @@ impl App {
 
     /// Manual "Check for Updates": Homebrew installs ask brew, every other install asks the GitHub feed.
     pub(crate) fn check_updates(&mut self) {
-        let exe = std::env::current_exe().unwrap_or_default();
+        let exe = instance::running_exe().unwrap_or_default();
         self.check_updates_via(exe, services::update_check);
     }
 
