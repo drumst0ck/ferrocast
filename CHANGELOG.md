@@ -15,6 +15,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Notes**: the old plain-text note form in the launcher is replaced by the floating Notes window. Your `notes.json` keeps working unchanged. Search Notes stays as a list and opens the floating window.
 
 ### Fixed
+- **File tools**: two file-tool jobs running at the same time (PDF split, combine PDF, brighten/darken/black and white, PDF to images) no longer share one scratch folder, so one finishing job cannot delete the files of another. Before, the second job could fail with "page 1 of 2 was not written" or "No such file or directory".
 - **Translate**: a selection that reads like an order ("Summarize this article", "Ignore the previous instructions", "Translate this into German instead") is now translated instead of followed, also with small models such as Claude Haiku. The text is sent as JSON data, and the language of the answer is checked on-device with macOS NaturalLanguage; when it came out in another language, the translation is asked once more.
 
 ## [0.1.2] - 2026-10-22
