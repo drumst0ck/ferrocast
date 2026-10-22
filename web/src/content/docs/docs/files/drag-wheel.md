@@ -14,7 +14,9 @@ A halo ring: one accent per wheel, a gradient sector with an edge glow, a centre
 
 ## Translate dragged text
 
-Drag selected text (from any app that lets you drag a selection) and tap the translate key (<kbd>⌘</kbd> by default; <kbd>⇧</kbd> would extend the selection, so it is not used). A fourth, purple wheel opens with your languages; release over one to translate. By default a Ferrocast window shows the translation (it is also copied to the clipboard) with Copy and “Paste into app” buttons, so it works on pages you can only read. Settings > General > “After translating” can instead paste it over the selection or only copy it.
+Drag selected text (from any app that lets you drag a selection) and tap the translate key (<kbd>⌘</kbd> by default; <kbd>⇧</kbd> would extend the selection, so it is not used). A fourth, purple wheel opens with your languages; release over one to translate. By default (“Auto”) the translation replaces the selection where the app allows it: in text fields through Accessibility, and in Safari and Chromium browsers (Chrome, Brave, Edge, Arc, Vivaldi, Opera) on ordinary pages by changing the selected text in the page with JavaScript. Everywhere else, or if that fails, a Ferrocast window shows it (it is also copied) with Copy and “Paste into app” buttons. Settings > General > “After translating” can force Show, Replace selection (Cmd-V) or Copy only.
+
+For in-page replacement turn on “Allow JavaScript from Apple Events” in the browser (Safari: Develop > Developer Settings; Chrome: View > Developer) and allow Ferrocast to control it when macOS asks. Firefox is not supported. The replacement lasts until you reload the page.
 
 Translation uses the same AI providers as Ask AI: an OpenAI-compatible server (Ollama keeps it on your Mac), Anthropic, Sign in with ChatGPT or Claude Code (your own subscriptions). Pick the engine in Settings > AI > Translation, or leave it on “Same as chat”. The selected text is sent to that provider and to no one else. Languages are a comma-separated list in Settings > General (up to 12). Selections over 20,000 characters are refused.
 

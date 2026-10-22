@@ -91,9 +91,52 @@ fn fixture() -> App {
         rates_checked_at: Instant::now(),
         sec_cache: None,
         sec_dirty: true,
+        fx: Effects::recording(),
     };
     app.rebuild();
     app
+}
+
+thread_local! {
+    /// Side effects the translate delivery asked for in this test thread.
+    static FX_LOG: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static FX_FRONT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
+
+fn fx_taken() -> Vec<String> {
+    FX_LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
+}
+
+impl Effects {
+    /// No process, AX or keyboard: every side effect is only recorded in `FX_LOG`.
+    fn recording() -> Effects {
+        FX_LOG.with(|l| l.borrow_mut().clear());
+        FX_FRONT.with(|f| f.set(None));
+        Effects {
+            frontmost: || FX_FRONT.with(|f| f.get()),
+            ax_replace: |pid, _lang, _text, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("ax {pid}"))),
+            web_replace: |b, _lang, _text, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("web {b:?}"))),
+            paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
+        }
+    }
+}
+
+fn translated(
+    app: &mut App,
+    output: ferrocast_core::models::TranslateOutput,
+    target: ferrocast_core::translate::Target,
+    source_pid: Option<i32>,
+) {
+    app.settings.translate_output = output;
+    app.bus.send(Msg::Translated { lang: "Spanish".into(), source_pid, result: Ok("Hola".into()), ms: 5, target });
+    app.drain();
+}
+
+fn assert_shows_hola(app: &App) {
+    match app.view() {
+        View::Translation { lang, text } => assert_eq!((lang.as_str(), text.as_str()), ("Spanish", "Hola")),
+        _ => panic!("expected View::Translation"),
+    }
 }
 
 fn render(app: &mut App, events: Vec<Event>) {
@@ -5815,7 +5858,13 @@ fn modifier_taps_do_not_switch_a_translate_wheel() {
 #[test]
 fn a_failed_translation_toasts_and_does_not_touch_the_view() {
     let mut app = fixture();
-    app.bus.send(Msg::Translated { lang: "Spanish".into(), source_pid: None, result: Err("Claude Code is not installed.".into()), ms: 0 });
+    app.bus.send(Msg::Translated {
+        lang: "Spanish".into(),
+        source_pid: None,
+        result: Err("Claude Code is not installed.".into()),
+        ms: 0,
+        target: ferrocast_core::translate::Target::Other,
+    });
     app.drain();
     assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Claude Code is not installed")), "{:?}", app.toast);
     assert!(matches!(app.view(), View::Root));
@@ -5825,20 +5874,155 @@ fn a_failed_translation_toasts_and_does_not_touch_the_view() {
 fn a_shown_translation_opens_the_translation_view() {
     let mut app = fixture();
     app.settings.translate_output = ferrocast_core::models::TranslateOutput::Show;
-    app.bus.send(Msg::Translated { lang: "Spanish".into(), source_pid: None, result: Ok("Hola".into()), ms: 5 });
+    app.bus.send(Msg::Translated {
+        lang: "Spanish".into(),
+        source_pid: None,
+        result: Ok("Hola".into()),
+        ms: 5,
+        target: ferrocast_core::translate::Target::Other,
+    });
     app.drain();
-    match app.view() {
-        View::Translation { lang, text } => assert_eq!((lang.as_str(), text.as_str()), ("Spanish", "Hola")),
-        _ => panic!("expected View::Translation"),
+    assert_shows_hola(&app);
+}
+
+#[test]
+fn auto_is_the_default_and_old_settings_load_as_auto() {
+    use ferrocast_core::models::TranslateOutput;
+    assert_eq!(Settings::default().translate_output, TranslateOutput::Auto);
+    let s: Settings = serde_json::from_str("{\"theme\":\"Dark\"}").unwrap();
+    assert_eq!(s.translate_output, TranslateOutput::Auto);
+    let s: Settings = serde_json::from_str("{\"translate_output\":\"Show\"}").unwrap();
+    assert_eq!(s.translate_output, TranslateOutput::Show, "an explicit choice is kept");
+}
+
+#[test]
+fn auto_with_an_unscriptable_app_shows_the_window() {
+    use ferrocast_core::{models::TranslateOutput::Auto, translate::Target};
+    let mut app = fixture();
+    translated(&mut app, Auto, Target::Other, Some(7));
+    assert_shows_hola(&app);
+    assert!(fx_taken().is_empty(), "no side effect");
+}
+
+#[test]
+fn auto_in_a_text_field_replaces_through_accessibility_and_does_not_open_the_window() {
+    use ferrocast_core::{models::TranslateOutput::Auto, translate::Target};
+    let mut app = fixture();
+    FX_FRONT.with(|f| f.set(Some(7)));
+    translated(&mut app, Auto, Target::Editable, Some(7));
+    assert_eq!(fx_taken(), vec!["ax 7".to_string()]);
+    assert!(matches!(app.view(), View::Root));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Replacing")), "{:?}", app.toast);
+}
+
+#[test]
+fn auto_in_a_browser_page_goes_to_the_web_replace_not_the_window() {
+    use ferrocast_core::translate::{Browser, Target};
+    let mut app = fixture();
+    FX_FRONT.with(|f| f.set(Some(7)));
+    translated(&mut app, ferrocast_core::models::TranslateOutput::Auto, Target::Browser(Browser::Safari), Some(7));
+    assert_eq!(fx_taken(), vec!["web Safari".to_string()]);
+    assert!(matches!(app.view(), View::Root), "the window waits for the result");
+}
+
+#[test]
+fn auto_downgrades_to_show_when_another_app_is_in_front() {
+    use ferrocast_core::translate::{Browser, Target};
+    for target in [Target::Editable, Target::Browser(Browser::Safari)] {
+        let mut app = fixture();
+        FX_FRONT.with(|f| f.set(Some(99)));
+        translated(&mut app, ferrocast_core::models::TranslateOutput::Auto, target, Some(7));
+        assert_shows_hola(&app);
+        assert!(fx_taken().is_empty(), "never write into another app");
     }
 }
 
 #[test]
-fn show_is_the_default_and_old_settings_load_as_show() {
-    use ferrocast_core::models::TranslateOutput;
-    assert_eq!(Settings::default().translate_output, TranslateOutput::Show);
-    let s: Settings = serde_json::from_str("{\"theme\":\"Dark\"}").unwrap();
-    assert_eq!(s.translate_output, TranslateOutput::Show);
+fn the_other_output_settings_do_not_use_the_auto_path() {
+    use ferrocast_core::{models::TranslateOutput as O, translate::Target};
+    let mut app = fixture();
+    translated(&mut app, O::Show, Target::Editable, Some(7));
+    assert_shows_hola(&app);
+    assert!(fx_taken().is_empty());
+}
+
+#[test]
+fn a_web_replace_that_worked_toasts_and_leaves_the_view() {
+    use ferrocast_core::translate::WebResult;
+    let mut app = fixture();
+    app.bus.send(Msg::WebReplaced { lang: "Spanish".into(), text: "Hola".into(), result: WebResult::Replaced });
+    app.drain();
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Replaced in the page")), "{:?}", app.toast);
+    assert!(matches!(app.view(), View::Root));
+}
+
+#[test]
+fn a_web_replace_without_selection_falls_back_to_the_window() {
+    use ferrocast_core::translate::WebResult;
+    let mut app = fixture();
+    app.bus.send(Msg::WebReplaced { lang: "Spanish".into(), text: "Hola".into(), result: WebResult::NoSelection });
+    app.drain();
+    assert_shows_hola(&app);
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("selection was lost")), "{:?}", app.toast);
+}
+
+#[test]
+fn a_refused_web_replace_shows_the_window_and_explains_the_permission() {
+    use ferrocast_core::translate::{WebResult, JS_PERMISSION_HINT};
+    let mut app = fixture();
+    let err = "execution error: Safari got an error: You must enable 'Allow JavaScript from Apple Events' in the Developer section. (8)";
+    app.bus.send(Msg::WebReplaced { lang: "Spanish".into(), text: "Hola".into(), result: WebResult::Failed(err.into()) });
+    app.drain();
+    assert_shows_hola(&app);
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(JS_PERMISSION_HINT));
+}
+
+#[test]
+fn another_web_failure_shows_the_window_and_the_first_error_line() {
+    use ferrocast_core::translate::WebResult;
+    let mut app = fixture();
+    app.bus.send(Msg::WebReplaced { lang: "Spanish".into(), text: "Hola".into(), result: WebResult::Failed("weird\nsecond".into()) });
+    app.drain();
+    assert_shows_hola(&app);
+    let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("weird") && !toast.contains("second"), "{toast}");
+}
+
+#[test]
+fn a_failed_ax_replace_pastes_once_and_a_good_one_does_not() {
+    let mut app = fixture();
+    app.bus.send(Msg::AxReplaced { lang: "Spanish".into(), text: "Hola".into(), ok: true });
+    app.drain();
+    assert!(fx_taken().is_empty());
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Replaced")), "{:?}", app.toast);
+    app.bus.send(Msg::AxReplaced { lang: "Spanish".into(), text: "Hola".into(), ok: false });
+    app.drain();
+    assert_eq!(fx_taken(), vec!["paste".to_string()]);
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Pasted")), "{:?}", app.toast);
+}
+
+#[test]
+fn the_after_translating_row_renders_with_and_without_the_javascript_note() {
+    use ferrocast_core::models::TranslateOutput as O;
+    let mut app = fixture();
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        app.ctx.set_theme(theme);
+        for out in [O::Auto, O::Show] {
+            app.settings.translate_output = out;
+            app.stack = vec![View::Root, View::Settings];
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert!(matches!(app.view(), View::Settings));
+            let shown = app.ctx.data(|d| d.get_temp::<bool>(Id::new("auto-js-note"))).unwrap_or(false);
+            assert_eq!(shown, out == O::Auto, "{out:?} {theme:?}");
+        }
+    }
+}
+
+#[test]
+fn the_javascript_note_text_is_defined_once_and_names_both_browsers() {
+    let n = draw::AUTO_JS_NOTE;
+    assert!(n.contains("Allow JavaScript from Apple Events") && n.contains("Safari") && n.contains("Chrome"), "{n}");
 }
 
 #[test]

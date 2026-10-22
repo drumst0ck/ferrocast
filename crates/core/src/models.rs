@@ -228,6 +228,8 @@ pub struct Settings {
     pub ai_model: String,
     /// Model for the Anthropic API (the OpenAI-compatible model name lives in `ai_model`).
     pub anthropic_model: String,
+    /// Model alias for Claude Code (kept apart from `anthropic_model`, whose names are different).
+    pub claude_code_model: String,
     /// Model for Sign in with ChatGPT; empty means the default.
     pub chatgpt_model: String,
     pub launch_at_login: bool,
@@ -261,9 +263,9 @@ pub struct Settings {
 pub enum TranslateOutput {
     /// Replace the selection in place where possible (editable field, Safari/Chromium page),
     /// otherwise show the Ferrocast window.
+    #[default]
     Auto,
     /// Show it in a Ferrocast window (and keep it on the clipboard).
-    #[default]
     Show,
     /// Paste it over the selection in the app the text came from.
     Replace,
@@ -308,6 +310,7 @@ impl Default for Settings {
             ai_base_url: crate::ai::DEFAULT_BASE_URL.into(),
             ai_model: crate::ai::DEFAULT_MODEL.into(),
             anthropic_model: String::new(),
+            claude_code_model: String::new(),
             chatgpt_model: String::new(),
             launch_at_login: false,
             onboarded: false,

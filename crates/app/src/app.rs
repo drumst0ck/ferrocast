@@ -778,6 +778,8 @@ pub struct App {
     panel: Option<ActionPanel>,
     toast: Option<(String, Instant)>,
     prev_pid: Option<i32>,
+    /// Side effects of delivering a translation; replaced by a recorder in tests.
+    fx: Effects,
     visible: bool,
     had_focus: bool,
     shown_at: Instant,
@@ -996,6 +998,7 @@ impl App {
             panel: None,
             toast,
             prev_pid: None,
+            fx: Effects::real(),
             visible: !hidden,
             had_focus: false,
             shown_at: Instant::now(),
@@ -1660,7 +1663,7 @@ impl App {
                 if let Some(text) = self.wheel_text.take() {
                     let engine = ferrocast_core::translate::engine_settings(&self.settings);
                     self.toast(format!("Translating to {lang} with {}…", ferrocast_core::translate::engine_label(&self.settings)));
-                    services::translate_text(&engine, text, lang, self.prev_pid, self.bus.clone());
+                    services::translate_text(&engine, text, lang, self.prev_pid, self.settings.translate_output, self.bus.clone());
                 }
             }
             WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(format!("{label}: not available yet")),
@@ -2134,28 +2137,69 @@ impl App {
                         self.show_wheel(ferrocast_core::wheel::WheelKind::Translate, vec![]);
                     }
                 }
-                Msg::Translated { lang, source_pid, result, ms } => {
-                    use ferrocast_core::translate::{focus_guard, outcome, Outcome};
+                Msg::Translated { lang, source_pid, result, ms, target } => {
+                    use ferrocast_core::models::TranslateOutput;
+                    use ferrocast_core::translate::{focus_guard, outcome, plan, Delivery, Outcome};
                     let engine = ferrocast_core::translate::engine_label(&self.settings);
                     instance::log(&self.store.root, &translate_log_line(&lang, &engine, &result, ms));
-                    // the translation can arrive seconds later: never paste into an app the user moved to
-                    let front = running::frontmost().map(|f| f.pid);
-                    match focus_guard(outcome(result, &lang, self.settings.translate_output), &lang, source_pid, front) {
-                        Outcome::Show { text, lang } => {
-                            // on the clipboard too, so the translation is never lost
-                            clipboard::write_text(&text);
-                            self.shared.mark_clipboard_write();
-                            self.show();
-                            self.reset_to_root();
-                            self.push(View::Translation { lang, text });
+                    // the translation can arrive seconds later: never write into an app the user moved to
+                    let front = (self.fx.frontmost)();
+                    let output = self.settings.translate_output;
+                    match outcome(result, &lang, output) {
+                        Outcome::Show { text, lang } if output == TranslateOutput::Auto => {
+                            let delivery = plan(output, target, front, source_pid);
+                            instance::log(&self.store.root, &translate_deliver_line(&lang, delivery, ""));
+                            match (delivery, source_pid) {
+                                (Delivery::SetSelection, Some(pid)) => {
+                                    self.toast("Replacing\u{2026}");
+                                    (self.fx.ax_replace)(pid, &lang, &text, &self.bus);
+                                }
+                                (Delivery::WebReplace(b), _) => (self.fx.web_replace)(b, &lang, &text, &self.bus),
+                                _ => self.show_translation(lang, text),
+                            }
                         }
-                        Outcome::Paste(t) => self.paste_text(&t),
-                        Outcome::Copy(t, toast) => {
-                            self.copy_text(&t);
-                            self.toast(toast);
-                        }
-                        Outcome::Fail(toast) => self.toast(toast),
+                        other => match focus_guard(other, &lang, source_pid, front) {
+                            Outcome::Show { text, lang } => self.show_translation(lang, text),
+                            Outcome::Paste(t) => self.paste_text(&t),
+                            Outcome::Copy(t, toast) => {
+                                self.copy_text(&t);
+                                self.toast(toast);
+                            }
+                            Outcome::Fail(toast) => self.toast(toast),
+                        },
                     }
+                }
+                Msg::AxReplaced { lang, text, ok } => {
+                    if ok {
+                        instance::log(&self.store.root, &format!("translate deliver {lang} -> set-selection ok"));
+                        self.toast("Replaced");
+                    } else {
+                        instance::log(&self.store.root, &format!("translate deliver {lang} -> set-selection fallback-paste"));
+                        (self.fx.paste)(self, &text);
+                        self.toast("Pasted");
+                    }
+                }
+                Msg::WebReplaced { lang, text, result } => {
+                    use ferrocast_core::translate::{WebResult, JS_PERMISSION_HINT};
+                    let (toast, reason) = match result {
+                        WebResult::Replaced => {
+                            instance::log(&self.store.root, &format!("translate deliver {lang} -> web-replace ok"));
+                            self.toast("Replaced in the page");
+                            return;
+                        }
+                        WebResult::NoSelection => ("The page selection was lost; translation shown instead".to_string(), "no-selection"),
+                        WebResult::Failed(e) => {
+                            let l = e.to_lowercase();
+                            if l.contains("javascript") || l.contains("apple events") || l.contains("not allowed") {
+                                (JS_PERMISSION_HINT.to_string(), "js-permission")
+                            } else {
+                                (e.lines().next().unwrap_or("").trim().to_string(), "error")
+                            }
+                        }
+                    };
+                    instance::log(&self.store.root, &format!("translate deliver {lang} -> web-replace fallback-show: {reason}"));
+                    self.show_translation(lang, text);
+                    self.toast(toast);
                 }
                 Msg::WheelRelease => self.release_wheel(),
                 Msg::WheelSwitch(k) => self.switch_wheel(k),
@@ -3410,6 +3454,16 @@ impl App {
     }
 
     // ------------------------------------------------------------ execution
+
+    /// The Show delivery: the translation on the clipboard and in the launcher.
+    fn show_translation(&mut self, lang: String, text: String) {
+        // on the clipboard too, so the translation is never lost
+        clipboard::write_text(&text);
+        self.shared.mark_clipboard_write();
+        self.show();
+        self.reset_to_root();
+        self.push(View::Translation { lang, text });
+    }
 
     fn paste_text(&mut self, text: &str) {
         clipboard::write_text(text);
@@ -5006,6 +5060,40 @@ pub(crate) fn translate_log_line(lang: &str, engine: &str, result: &Result<Strin
         Ok(t) => format!("translate {lang} via {engine} ok chars={} ms={ms}", t.chars().count()),
         Err(e) => format!("translate {lang} failed: {}", e.lines().next().unwrap_or("").trim()),
     }
+}
+
+/// Side effects of delivering a translation, behind function pointers so tests never spawn a
+/// process or touch Accessibility.
+pub(crate) struct Effects {
+    /// pid of the app in front now.
+    pub(crate) frontmost: fn() -> Option<i32>,
+    pub(crate) ax_replace: fn(i32, &str, &str, &Bus),
+    pub(crate) web_replace: fn(ferrocast_core::translate::Browser, &str, &str, &Bus),
+    pub(crate) paste: fn(&mut App, &str),
+}
+
+impl Effects {
+    pub(crate) fn real() -> Effects {
+        Effects {
+            frontmost: || running::frontmost().map(|f| f.pid),
+            ax_replace: |pid, lang, text, bus| services::ax_replace(pid, lang.to_string(), text.to_string(), bus.clone()),
+            web_replace: |b, lang, text, bus| services::web_replace(b, lang.to_string(), text.to_string(), bus.clone()),
+            paste: |app, text| app.paste_text(text),
+        }
+    }
+}
+
+/// The log line for a delivery decision: language and route, never the text.
+pub(crate) fn translate_deliver_line(lang: &str, d: ferrocast_core::translate::Delivery, suffix: &str) -> String {
+    use ferrocast_core::translate::Delivery;
+    let route = match d {
+        Delivery::SetSelection => "set-selection".to_string(),
+        Delivery::WebReplace(b) => format!("web-replace {b:?}"),
+        Delivery::Paste => "paste".into(),
+        Delivery::Show => "show".into(),
+        Delivery::Copy => "copy".into(),
+    };
+    format!("translate deliver {lang} -> {route}{suffix}")
 }
 
 /// One diagnostic line for the log when a wheel opens or switches: the kind, how many segments and

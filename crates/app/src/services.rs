@@ -118,6 +118,20 @@ pub enum Msg {
         result: Result<String, String>,
         /// How long the model call took, in milliseconds.
         ms: u64,
+        /// What the source app offers for replacing in place (`Other` unless the output is Auto).
+        target: ferrocast_core::translate::Target,
+    },
+    /// The page replacement through JavaScript finished.
+    WebReplaced {
+        lang: String,
+        text: String,
+        result: ferrocast_core::translate::WebResult,
+    },
+    /// The Accessibility replacement finished (`ok` false: nothing was replaced).
+    AxReplaced {
+        lang: String,
+        text: String,
+        ok: bool,
     },
     /// The floating shelf panel's items changed (drop in, remove, clear).
     ShelfChanged(Vec<PathBuf>),
@@ -1279,8 +1293,8 @@ impl ClaudeSession {
             "--tools",
             "",
         ]);
-        if !settings.anthropic_model.trim().is_empty() {
-            cmd.args(["--model", settings.anthropic_model.trim()]);
+        if !settings.claude_code_model.trim().is_empty() {
+            cmd.args(["--model", settings.claude_code_model.trim()]);
         }
         let mut child = cmd
             .current_dir(std::env::temp_dir())
@@ -1379,6 +1393,31 @@ pub const CHATGPT_MODELS: &[&str] = &[
 /// Claude Code model aliases.
 pub const CLAUDE_CODE_MODELS: &[&str] = &["sonnet", "opus", "haiku"];
 
+/// Models the signed-in ChatGPT account can use right now, straight from the backend.
+fn chatgpt_live_models() -> Result<Vec<String>, String> {
+    use std::process::{Command, Stdio};
+    let creds = chatgpt_fresh_credentials()?;
+    let cfg = ferrocast_core::chatgpt::models_curl_config(&creds);
+    let mut c = Command::new("/usr/bin/curl")
+        .args(["-sS", "-m", "8", "-K", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    {
+        use std::io::Write;
+        if let Some(mut i) = c.stdin.take() {
+            let _ = i.write_all(cfg.as_bytes());
+        }
+    }
+    let o = c.wait_with_output().map_err(|e| e.to_string())?;
+    if !o.status.success() {
+        return Err(String::from_utf8_lossy(&o.stderr).trim().to_string());
+    }
+    ferrocast_core::chatgpt::parse_models(&String::from_utf8_lossy(&o.stdout))
+}
+
 /// Fetch the model list for the configured provider and post it to the bus.
 pub fn fetch_models(settings: &Settings, bus: Bus) {
     use ferrocast_core::ai;
@@ -1388,7 +1427,8 @@ pub fn fetch_models(settings: &Settings, bus: Bus) {
     let base = settings.ai_base_url.trim().trim_end_matches('/').to_string();
     std::thread::spawn(move || {
         let result: Result<Vec<String>, String> = match provider {
-            AiProvider::ChatGpt => Ok(CHATGPT_MODELS.iter().map(|s| s.to_string()).collect()),
+            // Live list for the signed-in account; the built-in catalogue when offline or signed out.
+            AiProvider::ChatGpt => Ok(chatgpt_live_models().unwrap_or_else(|_| CHATGPT_MODELS.iter().map(|s| s.to_string()).collect())),
             AiProvider::ClaudeCode => Ok(CLAUDE_CODE_MODELS.iter().map(|s| s.to_string()).collect()),
             _ => {
                 let (url, key_header) = match provider {
@@ -1558,8 +1598,8 @@ pub fn ai_stream_with_key(
                 "--tools",
                 "",
             ]);
-            if !settings.anthropic_model.trim().is_empty() {
-                cmd.args(["--model", settings.anthropic_model.trim()]);
+            if !settings.claude_code_model.trim().is_empty() {
+                cmd.args(["--model", settings.claude_code_model.trim()]);
             }
             let child = cmd
                 .current_dir(std::env::temp_dir())
@@ -1664,14 +1704,56 @@ pub fn ai_stream_with_key(
 
 /// Translate `text` into `lang` with the translation engine's provider, off the UI thread.
 /// `settings` already carries the engine (see `translate::engine_settings`).
-pub fn translate_text(settings: &Settings, text: String, lang: String, source_pid: Option<i32>, bus: Bus) {
+/// With the Auto output the source app is probed (off the UI thread) for what it can replace in place.
+pub fn translate_text(settings: &Settings, text: String, lang: String, source_pid: Option<i32>, output: TranslateOutput, bus: Bus) {
     let settings = settings.clone();
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
         let mut out = String::new();
         let result = ai_stream(&settings, &[], &ferrocast_core::translate::prompt(&text, &lang), |t| out.push_str(t)).map(|()| out);
         let ms = started.elapsed().as_millis() as u64;
-        bus.send(Msg::Translated { lang, source_pid, result, ms });
+        let target = match (&result, output) {
+            (Ok(_), TranslateOutput::Auto) => probe_target(source_pid),
+            _ => ferrocast_core::translate::Target::Other,
+        };
+        bus.send(Msg::Translated { lang, source_pid, result, ms, target });
+    });
+}
+
+/// What the app the text came from offers: an editable focused element wins over a browser page.
+/// Runs AX and process calls: only call it off the UI thread.
+fn probe_target(source_pid: Option<i32>) -> ferrocast_core::translate::Target {
+    use ferrocast_core::translate::{browser_for, Target};
+    let Some(pid) = source_pid else { return Target::Other };
+    if ferrocast_macos::ax_text::focused_accepts_text(pid) == Some(true) {
+        return Target::Editable;
+    }
+    if running::frontmost().map(|f| f.pid) == Some(pid) {
+        if let Some(b) = ferrocast_macos::ax_text::frontmost_bundle_id().as_deref().and_then(browser_for) {
+            return Target::Browser(b);
+        }
+    }
+    Target::Other
+}
+
+/// Replace the selected text of the page in `browser` with `text` through JavaScript, off the UI thread.
+pub fn web_replace(browser: ferrocast_core::translate::Browser, lang: String, text: String, bus: Bus) {
+    std::thread::spawn(move || {
+        use ferrocast_core::translate::{applescript_for, parse_web_result, web_replace_js, WebResult};
+        let script = applescript_for(browser, &web_replace_js(&text));
+        let result = match ferrocast_macos::system::osascript_timeout(&script, 10) {
+            Ok(out) => parse_web_result(&out),
+            Err(e) => WebResult::Failed(e.to_string().chars().take(120).collect()),
+        };
+        bus.send(Msg::WebReplaced { lang, text, result });
+    });
+}
+
+/// Set the selected text of the focused element of `pid` through Accessibility, off the UI thread.
+pub fn ax_replace(pid: i32, lang: String, text: String, bus: Bus) {
+    std::thread::spawn(move || {
+        let ok = ferrocast_macos::ax_text::set_selected_text(pid, &text);
+        bus.send(Msg::AxReplaced { lang, text, ok });
     });
 }
 

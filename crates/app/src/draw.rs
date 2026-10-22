@@ -4744,6 +4744,7 @@ impl App {
                 let cur_model = match cur_provider {
                     ferrocast_core::models::AiProvider::OpenAiCompatible => self.settings.ai_model.clone(),
                     ferrocast_core::models::AiProvider::ChatGpt => self.settings.chatgpt_model.clone(),
+                    ferrocast_core::models::AiProvider::ClaudeCode => self.settings.claude_code_model.clone(),
                     _ => self.settings.anthropic_model.clone(),
                 };
                 let mut pick_provider: Option<ferrocast_core::models::AiProvider> = None;
@@ -5197,6 +5198,7 @@ impl App {
                     match self.settings.ai_provider {
                         P::OpenAiCompatible => self.settings.ai_model = m,
                         P::ChatGpt => self.settings.chatgpt_model = m,
+                        P::ClaudeCode => self.settings.claude_code_model = m,
                         _ => self.settings.anthropic_model = m,
                     }
                     self.save_settings();
@@ -5382,10 +5384,34 @@ impl App {
                                 }
                                 ui.ctx().data_mut(|d| d.insert_temp(id, buf));
                             });
-                            row(ui, pal, "After translating", "Show the translation in a window, paste it over the selection, or only copy it.", |ui| {
-                                use ferrocast_core::models::TranslateOutput as T;
-                                segmented(ui, pal, &mut s.translate_output, &[(T::Show, "Show"), (T::Replace, "Replace selection"), (T::Copy, "Copy only")]);
+                            row(
+                                ui,
+                                pal,
+                                "After translating",
+                                "Auto replaces the selection where the app allows it (text fields, and Safari/Chrome pages through JavaScript) and shows a window otherwise.",
+                                |ui| {
+                                    use ferrocast_core::models::TranslateOutput as T;
+                                    segmented(
+                                        ui,
+                                        pal,
+                                        &mut s.translate_output,
+                                        &[(T::Auto, "Auto"), (T::Show, "Show"), (T::Replace, "Replace selection"), (T::Copy, "Copy only")],
+                                    );
+                                },
+                            );
+                            let auto = s.translate_output == ferrocast_core::models::TranslateOutput::Auto;
+                            #[cfg(test)]
+                            ui.ctx().data_mut(|d| {
+                                if auto {
+                                    d.insert_temp(Id::new("auto-js-note"), true);
+                                } else {
+                                    d.remove::<bool>(Id::new("auto-js-note"));
+                                }
                             });
+                            if auto {
+                                ui.add_space(4.0);
+                                note(ui, pal, AUTO_JS_NOTE);
+                            }
                             row(
                                 ui,
                                 pal,
@@ -5609,7 +5635,7 @@ impl App {
                                         ui.label(RichText::new(if path.is_some() { "Installed ✓" } else { "Missing" }).size(13.0).color(if path.is_some() { Color32::from_rgb(89, 212, 153) } else { pal.accent }));
                                     });
                                     row(ui, pal, "Model", "Claude Code's default, one of its aliases, or Custom… for a full model id.", |ui| {
-                                        if model_picker(ui, pal, "claudecode", &mut s.anthropic_model, "Claude Code default", models_state.as_ref()) {
+                                        if model_picker(ui, pal, "claudecode", &mut s.claude_code_model, "Claude Code default", models_state.as_ref()) {
                                             fetch_models = true;
                                         }
                                     });
@@ -5905,6 +5931,9 @@ fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     ui.label(RichText::new(title).size(12.5).color(pal.sub));
     ui.add_space(6.0);
 }
+
+/// Shown under "After translating" while Auto is selected.
+pub(crate) const AUTO_JS_NOTE: &str = "To replace text in web pages, turn on \u{201c}Allow JavaScript from Apple Events\u{201d} in your browser (Safari: Develop > Developer Settings; Chrome: View > Developer), and allow Ferrocast to control it when macOS asks.";
 
 fn note(ui: &mut Ui, pal: &Palette, text: &str) {
     ui.label(RichText::new(text).size(12.0).color(pal.sub));

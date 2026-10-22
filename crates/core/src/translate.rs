@@ -195,6 +195,17 @@ pub fn delivery(output: TranslateOutput, target: Target) -> Delivery {
     }
 }
 
+/// `delivery`, but never acting on the source app once the user is in another one: when both pids
+/// are known and differ, a SetSelection, WebReplace or Paste becomes Show. Copy and Show never change.
+pub fn plan(output: TranslateOutput, target: Target, frontmost_pid: Option<i32>, source_pid: Option<i32>) -> Delivery {
+    let d = delivery(output, target);
+    let moved = matches!((frontmost_pid, source_pid), (Some(f), Some(s)) if f != s);
+    match d {
+        Delivery::SetSelection | Delivery::WebReplace(_) | Delivery::Paste if moved => Delivery::Show,
+        other => other,
+    }
+}
+
 /// JavaScript replacing the current DOM selection with `text`; returns "ok" or "nosel".
 /// The text is embedded as a serde_json string literal, never escaped by hand.
 pub fn web_replace_js(text: &str) -> String {
@@ -348,7 +359,7 @@ mod tests {
     #[test]
     fn old_settings_files_load_with_translate_defaults() {
         let s: Settings = serde_json::from_str("{\"theme\":\"Dark\"}").unwrap();
-        assert_eq!(s.translate_output, TranslateOutput::Show);
+        assert_eq!(s.translate_output, TranslateOutput::Auto);
         assert_eq!(s.translate_languages.len(), 8);
         assert_eq!(s.translate_provider, None);
     }
@@ -387,8 +398,37 @@ mod tests {
     }
 
     #[test]
-    fn default_output_is_still_show() {
-        assert_eq!(TranslateOutput::default(), TranslateOutput::Show);
+    fn default_output_is_auto() {
+        assert_eq!(TranslateOutput::default(), TranslateOutput::Auto);
+    }
+
+    #[test]
+    fn auto_outcome_shows_and_the_app_picks_the_delivery() {
+        assert_eq!(
+            outcome(Ok("Hola".into()), "Spanish", TranslateOutput::Auto),
+            Outcome::Show { text: "Hola".into(), lang: "Spanish".into() }
+        );
+    }
+
+    #[test]
+    fn plan_never_acts_on_another_app() {
+        let b = Browser::Safari;
+        let acting = [Target::Editable, Target::Browser(b)];
+        for t in acting {
+            let want = delivery(TranslateOutput::Auto, t);
+            assert_eq!(plan(TranslateOutput::Auto, t, Some(5), Some(5)), want, "same pid");
+            assert_eq!(plan(TranslateOutput::Auto, t, Some(9), Some(5)), Delivery::Show, "moved to another app");
+            assert_eq!(plan(TranslateOutput::Auto, t, None, Some(5)), want, "unknown frontmost");
+            assert_eq!(plan(TranslateOutput::Auto, t, Some(5), None), want, "unknown source");
+            assert_eq!(plan(TranslateOutput::Auto, t, None, None), want, "both unknown");
+        }
+        assert_eq!(plan(TranslateOutput::Replace, Target::Other, Some(9), Some(5)), Delivery::Show, "paste is downgraded too");
+        assert_eq!(plan(TranslateOutput::Replace, Target::Other, Some(5), Some(5)), Delivery::Paste);
+        for (front, src) in [(Some(9), Some(5)), (Some(5), Some(5)), (None, None)] {
+            assert_eq!(plan(TranslateOutput::Copy, Target::Editable, front, src), Delivery::Copy);
+            assert_eq!(plan(TranslateOutput::Show, Target::Editable, front, src), Delivery::Show);
+            assert_eq!(plan(TranslateOutput::Auto, Target::Other, front, src), Delivery::Show);
+        }
     }
 
     #[test]

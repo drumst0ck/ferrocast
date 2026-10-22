@@ -15,6 +15,7 @@ pub const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 pub const CALLBACK_PORT: u16 = 1455;
 pub const SCOPE: &str = "openid profile email offline_access";
 pub const RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+pub const MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0";
 pub const DEFAULT_MODEL: &str = "gpt-5.5";
 pub const DEVICE_USER_CODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
 pub const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
@@ -253,6 +254,38 @@ pub fn curl_config(creds: &Credentials, body: &str) -> String {
     )
 }
 
+/// curl config for the list of models this account can use.
+pub fn models_curl_config(creds: &Credentials) -> String {
+    use crate::ai::curl_config_quote as q;
+    format!(
+        "url = {}\nheader = \"originator: ferrocast\"\nheader = {}\nheader = {}\n",
+        q(MODELS_URL),
+        q(&format!("Authorization: Bearer {}", creds.access)),
+        q(&format!("chatgpt-account-id: {}", creds.account_id))
+    )
+}
+
+/// Model ids from the models endpoint, hidden ones left out. Err carries the server's message.
+pub fn parse_models(body: &str) -> Result<Vec<String>, String> {
+    let v: serde_json::Value = serde_json::from_str(body).map_err(|_| "unexpected response".to_string())?;
+    if let Some(e) = v.get("error").or_else(|| v.get("detail")) {
+        let msg = e.get("message").and_then(|m| m.as_str()).or_else(|| e.as_str()).unwrap_or("server error");
+        return Err(msg.to_string());
+    }
+    let list = v.get("models").or_else(|| v.get("data")).and_then(|m| m.as_array()).ok_or("no model list in the response")?;
+    let mut out: Vec<String> = list
+        .iter()
+        .filter(|m| !matches!(m["visibility"].as_str(), Some("hide") | Some("none")))
+        .filter_map(|m| m["slug"].as_str().or_else(|| m["id"].as_str()).map(str::to_string))
+        .collect();
+    out.sort();
+    out.dedup();
+    if out.is_empty() {
+        return Err("the account lists no models".into());
+    }
+    Ok(out)
+}
+
 /// One SSE line of a Responses stream.
 pub fn parse_sse_line(line: &str) -> crate::ai::Sse {
     use crate::ai::Sse;
@@ -278,6 +311,15 @@ pub fn parse_sse_line(line: &str) -> crate::ai::Sse {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn parse_models_keeps_listed_slugs_and_drops_hidden_ones() {
+        let body = r#"{"models":[{"slug":"gpt-b","visibility":"list"},{"slug":"gpt-a"},{"slug":"old","visibility":"hide"}]}"#;
+        assert_eq!(super::parse_models(body).unwrap(), vec!["gpt-a", "gpt-b"]);
+        assert_eq!(super::parse_models(r#"{"detail":"nope"}"#).unwrap_err(), "nope");
+        assert!(super::parse_models(r#"{"models":[]}"#).is_err());
+        assert!(super::parse_models("<html>").is_err());
+    }
+
     use super::*;
     use crate::ai::Sse;
 
