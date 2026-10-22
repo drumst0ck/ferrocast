@@ -55,6 +55,12 @@ pub struct Note {
     pub text: String,
     pub created: i64,
     pub modified: i64,
+    /// Pin time; `None` = not pinned. Pin order is ascending `pinned_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_at: Option<i64>,
+    /// Deletion time; `Some` = in Recently Deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<i64>,
 }
 
 impl Note {
@@ -443,7 +449,7 @@ mod tests {
 
     #[test]
     fn note_title() {
-        let n = Note { id: "1".into(), text: "\n# Groceries\n- milk".into(), created: 0, modified: 0 };
+        let n = Note { id: "1".into(), text: "\n# Groceries\n- milk".into(), created: 0, modified: 0, pinned_at: None, deleted_at: None };
         assert_eq!(n.title(), "Groceries");
     }
 }

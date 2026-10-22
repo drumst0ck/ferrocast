@@ -4127,7 +4127,14 @@ impl App {
 
     fn new_note(&mut self) {
         let now = now_secs();
-        let n = Note { id: uuid::Uuid::new_v4().to_string(), text: String::new(), created: now, modified: now };
+        let n = Note {
+            id: uuid::Uuid::new_v4().to_string(),
+            text: String::new(),
+            created: now,
+            modified: now,
+            pinned_at: None,
+            deleted_at: None,
+        };
         let id = n.id.clone();
         self.notes.push(n);
         self.save_notes();
