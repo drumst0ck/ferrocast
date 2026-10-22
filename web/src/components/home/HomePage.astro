@@ -3,6 +3,7 @@
  * The home page, shared by / (English) and /es/ (Spanish). All copy comes from the `t` object
  * (web/src/i18n/home.{en,es}.ts); numbers come from counts() and the generated data.
  */
+import FootMark from '../FootMark.astro';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import Base from '../../layouts/Base.astro';
@@ -287,6 +288,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
     <nav aria-label={t.footer.linksAria}><a href="#install">{t.nav.install}</a><a href={docs('/')}>{t.nav.docs}</a><a href={`${base}/changelog/`}>{t.nav.changelog}</a><a href={repo}>{t.nav.github}</a><a href={`${repo}/blob/main/LICENSE`}>{t.footer.license}</a></nav>
     <span class="r">{t.footer.copyright}</span>
   </footer>
+  <FootMark />
 
   <script is:inline define:vars={{ faq: faq.map((f) => f[1]), T: clientT, fileOuts }}>
     (function () {
