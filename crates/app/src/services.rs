@@ -153,6 +153,8 @@ pub enum Msg {
     },
     /// The floating shelf panel's items changed (drop in, remove, clear).
     ShelfChanged(Vec<PathBuf>),
+    /// The Notes window or its palette reported something (see `notes_ctl`).
+    Notes(crate::notes_ctl::NMsg),
     /// Another wheel key was tapped while the wheel was open.
     WheelSwitch(ferrocast_core::wheel::WheelKind),
     /// The mouse was released while the wheel was open.
@@ -930,6 +932,53 @@ pub fn make_tray(bus: Bus) -> Option<tray_icon::TrayIcon> {
     }
     let icon = tray_icon::Icon::from_rgba(rgba, n as u32, n as u32).ok()?;
     tray_icon::TrayIconBuilder::new().with_menu(Box::new(menu)).with_icon_templated(icon).with_tooltip("Ferrocast").build().ok()
+}
+
+/// The Notes toggle in the menu bar: a second status item, without a menu, whose click toggles the
+/// Notes window. Dropping the returned icon removes it. Main thread only.
+pub fn make_notes_tray(bus: Bus) -> Option<tray_icon::TrayIcon> {
+    use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+    const ID: &str = "ferrocast-notes";
+    // The event handler is process-wide; this is the only item without a menu, and it only reacts
+    // to its own id. The click is acted on when the button goes up.
+    TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
+        if let TrayIconEvent::Click { id, button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+            if id.0 == ID {
+                bus.send(Msg::Tray("notes_toggle".into()));
+            }
+        }
+    }));
+    let icon = tray_icon::Icon::from_rgba(notes_icon_rgba(32), 32, 32).ok()?;
+    tray_icon::TrayIconBuilder::new().with_id(ID).with_icon_templated(icon).with_tooltip("Ferrocast Notes").build().ok()
+}
+
+/// A `n`x`n` template glyph of a note: a rounded sheet outline with three text lines (black on
+/// transparent; macOS tints a template icon for the menu bar).
+fn notes_icon_rgba(n: usize) -> Vec<u8> {
+    let mut rgba = vec![0u8; n * n * 4];
+    let f = n as f32 / 32.0;
+    let (x0, x1, y0, y1, r, w) = (8.0 * f, 24.0 * f, 5.0 * f, 27.0 * f, 4.0 * f, 2.2 * f);
+    // distance to the rounded rectangle's edge, negative inside
+    let sdf = |x: f32, y: f32| {
+        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let (hx, hy) = ((x1 - x0) / 2.0 - r, (y1 - y0) / 2.0 - r);
+        let (dx, dy) = ((x - cx).abs() - hx, (y - cy).abs() - hy);
+        (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() + dx.max(dy).min(0.0) - r
+    };
+    for py in 0..n {
+        for px in 0..n {
+            let (x, y) = (px as f32 + 0.5, py as f32 + 0.5);
+            let outline = sdf(x, y).abs() < w / 2.0;
+            let line = [12.0, 16.0, 20.0]
+                .iter()
+                .any(|ly| (y - ly * f).abs() < 1.0 * f && x > 11.5 * f && x < (if *ly > 19.0 { 17.0 } else { 20.5 }) * f);
+            if outline || line {
+                let i = (py * n + px) * 4;
+                rgba[i..i + 4].copy_from_slice(&[0, 0, 0, 255]);
+            }
+        }
+    }
+    rgba
 }
 
 // ---------------------------------------------------------------------------
@@ -2439,7 +2488,7 @@ fn special_convert(
 /// PDF → page images (300 DPI, every page) or its text layer, through PDFKit/AppKit.
 pub(crate) fn pdfkit_convert(f: &std::path::Path, ext: &str) -> Result<Vec<PathBuf>, String> {
     use ferrocast_core::convert::{output_path, output_with_suffix};
-    let tmp = std::env::temp_dir().join(format!("ferrocast-pdfkit-{}", std::process::id()));
+    let tmp = scratch_dir("ferrocast-pdfkit");
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let run = |script: &str, args: &[&str]| {
@@ -2629,7 +2678,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
     let Some(first) = files.first() else { return (outs, errs) };
     let e0 = ext(first);
     let is_pdf = e0 == "pdf";
-    let tmp = std::env::temp_dir().join(format!("ferrocast-ft-{}", std::process::id()));
+    let tmp = scratch_dir("ferrocast-ft");
     let _ = std::fs::create_dir_all(&tmp);
     let need_ff = |errs: &mut Vec<String>| {
         if ffmpeg.is_none() {
@@ -2968,7 +3017,7 @@ fn compress_with(
 /// Apply a one-step adjustment; writes a PNG next to the original.
 fn adjust(f: &std::path::Path, a: ferrocast_core::convert::Adjust) -> Result<PathBuf, String> {
     use ferrocast_core::convert::{output_with_suffix, Adjust};
-    let tmp = std::env::temp_dir().join(format!("ferrocast-adjust-{}.png", std::process::id()));
+    let tmp = scratch_dir("ferrocast-adjust").with_extension("png");
     sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])?;
     let img = image::open(&tmp).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&tmp);
@@ -3004,6 +3053,15 @@ fn edit_photo(f: &std::path::Path, o: &ferrocast_core::photo::PhotoOpts) -> Resu
 
 /// Lay the images out in a grid of 600 px cells on white, as one PNG next to the first.
 static COLLAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A scratch directory path of its own for one run of a tool. Runs can overlap (two jobs, or tests
+/// on threads of one process) and each removes its directory when it ends, so the path carries a
+/// sequence number besides the process id; sharing one by pid alone let a finishing run delete the
+/// files of another.
+fn scratch_dir(prefix: &str) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    std::env::temp_dir().join(format!("{prefix}-{}-{}", std::process::id(), SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)))
+}
 
 /// Lay decoded pictures out per `o` (each fills its cell, centred, with rounded corners). Pure
 /// pixel work so the editor can preview it on small copies.
@@ -3194,7 +3252,7 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
     if *op == ImageOp::CombinePdf {
         let Some(first) = files.first() else { return (outs, errs) };
         let out = output_with_suffix(first, &op.suffix(), "pdf", |p| p.exists());
-        let tmp = std::env::temp_dir().join(format!("ferrocast-pdf-{}", std::process::id()));
+        let tmp = scratch_dir("ferrocast-pdf");
         let _ = std::fs::create_dir_all(&tmp);
         let mut pages = vec![];
         for (i, f) in files.iter().enumerate() {
@@ -4244,6 +4302,70 @@ mod convert_tests {
         // without ffmpeg an audio tool says how to get it instead of failing silently
         let (o, e) = run_file_tool(&[d.join("a.mp3")], &FileTool::Trim(0.0, 1.0), None);
         assert!(o.is_empty() && e[0].contains("brew install ffmpeg"), "{e:?}");
+    }
+
+    /// `run_file_tool` calls running at the same time (two jobs, or tests on threads of one process)
+    /// must not share or delete each other's scratch files.
+    #[test]
+    fn concurrent_pdf_splits_do_not_trip_over_each_other() {
+        use ferrocast_core::convert::FileTool;
+        let d = tmp("concurrent-split");
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
+        let (p1, p2) = (d.join("one.pdf"), d.join("two.pdf"));
+        for p in [&p1, &p2] {
+            sips(&["-s", "format", "pdf", icon, "--out", &p.to_string_lossy()]).unwrap();
+        }
+        let (m, e) = run_file_tool(&[p1, p2], &FileTool::Merge, None);
+        assert!(e.is_empty(), "{e:?}");
+        // each worker splits its own copy, so only the scratch directory could be shared
+        let workers: Vec<_> = (0..6)
+            .map(|w| {
+                let copy = d.join(format!("w{w}.pdf"));
+                std::fs::copy(&m[0], &copy).unwrap();
+                std::thread::spawn(move || {
+                    (0..4).map(|_| run_file_tool(std::slice::from_ref(&copy), &FileTool::SplitPages, None)).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for (w, h) in workers.into_iter().enumerate() {
+            for (round, (pages, errs)) in h.join().unwrap().into_iter().enumerate() {
+                assert!(errs.is_empty(), "worker {w} round {round}: {errs:?}");
+                assert_eq!(pages.len(), 2, "worker {w} round {round}: {pages:?}");
+            }
+        }
+    }
+
+    /// The image tools that stage files in a scratch place (combine into a PDF, adjust) share the
+    /// same rule: overlapping runs must not clobber each other.
+    #[test]
+    fn concurrent_image_tools_do_not_trip_over_each_other() {
+        use ferrocast_core::convert::{Adjust, ImageOp};
+        let d = tmp("concurrent-image");
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
+        let workers: Vec<_> = (0..6)
+            .map(|w| {
+                let (a, b) = (d.join(format!("a{w}.png")), d.join(format!("b{w}.png")));
+                std::fs::copy(icon, &a).unwrap();
+                std::fs::copy(icon, &b).unwrap();
+                std::thread::spawn(move || {
+                    (0..4)
+                        .map(|_| {
+                            (
+                                run_image_op(&[a.clone(), b.clone()], &ImageOp::CombinePdf),
+                                run_image_op(std::slice::from_ref(&a), &ImageOp::Adjust(Adjust::Darker)),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for (w, h) in workers.into_iter().enumerate() {
+            for (round, ((pdf, e1), (png, e2))) in h.join().unwrap().into_iter().enumerate() {
+                assert!(e1.is_empty() && e2.is_empty(), "worker {w} round {round}: {e1:?} {e2:?}");
+                assert!(std::fs::read(&pdf[0]).unwrap().starts_with(b"%PDF"), "worker {w} round {round}: combined PDF");
+                assert!(std::fs::read(&png[0]).unwrap().starts_with(b"\x89PNG"), "worker {w} round {round}: adjusted PNG");
+            }
+        }
     }
 
     #[test]
