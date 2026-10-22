@@ -607,6 +607,12 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 }
                 app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel });
             }
+            // `settings-tab-N`: open Settings on tab N (0 General … 6 Advanced), for design review shots
+            Ok(v) if v.starts_with("settings-tab-") => {
+                let n = v.trim_start_matches("settings-tab-").parse::<usize>().unwrap_or(0);
+                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), n));
+                app.push(View::Settings);
+            }
             Ok("settings-ai") => {
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 3usize));
                 app.push(View::Settings);
