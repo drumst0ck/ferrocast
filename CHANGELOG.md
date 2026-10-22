@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Fixed
+- **Translate**: a selection that reads like an order ("Summarize this article", "Ignore the previous instructions", "Translate this into German instead") is now translated instead of followed, also with small models such as Claude Haiku. The text is sent as JSON data, and the language of the answer is checked on-device with macOS NaturalLanguage; when it came out in another language, the translation is asked once more.
+
 ## [0.1.2] - 2026-10-22
 
 ### Added
