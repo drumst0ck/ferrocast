@@ -1,0 +1,117 @@
+name: Release
+# Push a tag made by scripts/release.sh (vX.Y.Z, or vX.Y.Z-rc.1 for a prerelease the app ignores).
+# Works with no secrets: the app is then signed ad-hoc. To switch to Developer ID later, add the
+# secrets listed under "Optional signing" and nothing else changes.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag matches Cargo.toml
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          case "$version" in *-*) echo "PRERELEASE=true" >> "$GITHUB_ENV" ;; *) echo "PRERELEASE=false" >> "$GITHUB_ENV" ;; esac
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: bash scripts/tests/release_dry_run.sh
+
+      # Optional signing. Secrets: APPLE_CERT_P12 (base64 of the Developer ID Application .p12),
+      # APPLE_CERT_PASSWORD, APPLE_SIGN_IDENTITY ("Developer ID Application: Name (TEAMID)").
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+        run: |
+          if [ -z "$APPLE_CERT_P12" ] || [ -z "$APPLE_SIGN_IDENTITY" ]; then
+            echo "No Developer ID secrets: the app will be signed ad-hoc."
+            exit 0
+          fi
+          kc="$RUNNER_TEMP/release.keychain-db"
+          kcpass=$(uuidgen)
+          echo "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kcpass" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$kcpass" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpass" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "FERROCAST_SIGN_IDENTITY=$APPLE_SIGN_IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Build bundle
+        run: scripts/bundle.sh
+
+      # Optional notarization. Secrets: APPLE_NOTARY_KEY (base64 of the App Store Connect .p8),
+      # APPLE_NOTARY_KEY_ID, APPLE_NOTARY_ISSUER. Only runs together with a Developer ID identity.
+      - name: Notarize and staple the app
+        env:
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+        run: |
+          if [ -z "${FERROCAST_SIGN_IDENTITY:-}" ] || [ -z "$APPLE_NOTARY_KEY" ]; then
+            echo "Not notarizing (needs a Developer ID identity and notary secrets)."
+            exit 0
+          fi
+          echo "$APPLE_NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --keepParent dist/Ferrocast.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait
+          xcrun stapler staple dist/Ferrocast.app
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/notarize.zip"
+
+      - name: Package DMG, update ZIP and checksums
+        run: |
+          scripts/dmg.sh
+          ditto -c -k --keepParent dist/Ferrocast.app "dist/Ferrocast-${VERSION}.zip"
+          (cd dist && shasum -a 256 "Ferrocast-${VERSION}.dmg" "Ferrocast-${VERSION}.zip" > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Release notes
+        run: scripts/release_notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Ferrocast ${{ env.VERSION }}
+          body_path: ${{ runner.temp }}/notes.md
+          prerelease: ${{ env.PRERELEASE == 'true' }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/Ferrocast-${{ env.VERSION }}.dmg
+            dist/Ferrocast-${{ env.VERSION }}.zip
+            dist/SHA256SUMS.txt
+
+      # The formula builds from the tag's source tarball, which exists now. Prereleases skip it.
+      - name: Refresh the Homebrew formula
+        if: env.PRERELEASE == 'false'
+        run: scripts/update_formula.sh "$GITHUB_REPOSITORY" "$VERSION"
+      - name: Open a PR with the formula bump
+        if: env.PRERELEASE == 'false'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/brew-${{ env.VERSION }}
+          base: master
+          add-paths: Formula/ferrocast.rb
+          commit-message: "chore(brew): ferrocast ${{ env.VERSION }}"
+          title: "chore(brew): ferrocast ${{ env.VERSION }}"
+          body: "Points Formula/ferrocast.rb at the v${{ env.VERSION }} source tarball. Merge to make `brew upgrade ferrocast` see it."

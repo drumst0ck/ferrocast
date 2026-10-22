@@ -18,3 +18,5 @@ jobs:
       - run: cargo test --workspace --locked
       - name: Bundle builds and signs
         run: scripts/bundle.sh
+      - name: Release scripts
+        run: bash scripts/tests/release_dry_run.sh
