@@ -25,7 +25,7 @@ Reference for "same functions": https://manual.raycast.com/notes, https://www.ra
 - S20 Assumptions (see Log D1-D3): no note-count limit (Raycast's 5-note free cap is a Pro tier, Ferrocast has no tiers); existing `notes.json` notes keep working and appear in the new window; the old plain-text launcher views are replaced by the new commands.
 
 ## Tasks
-- T1 S5,S10,S11,S12,S13,S16,S20 core notes model and store logic in `crates/core/src/notes.rs`: extra optional Note fields (pinned, deleted_at), title, search, pinned order, history stack, Recently Deleted + purge, export txt/md/html — worker (independent, pure) — commit: pending
+- T1 S5,S10,S11,S12,S13,S16,S20 core notes model and store logic in `crates/core/src/notes.rs`: extra optional Note fields (pinned, deleted_at), title, search, pinned order, history stack, Recently Deleted + purge, export txt/md/html — worker (independent, pure) — commit: 3d7014f
 - T2 S6-S9 core rich-text document in `crates/core/src/richtext.rs`: Markdown ⇄ block/inline model (headings, quote, bullet/ordered/task lists with levels, code block, rule, bold/italic/strike/underline `<u>`/code/link), lossless round trip — worker (independent, pure) — commit: pending
 - T3 S2,S19,S5 macos window shell `crates/macos/src/notes.rs`: floating NSPanel + NSTextView in a scroll view, toolbar (title, browse, plus), toggle/focus/open, frame memory, plain text sync, PNG dump of the window for checks — inline — commit: pending
 - T4 S6-S9,S14 editor behavior: Doc ⇄ NSTextStorage, Markdown typing shortcuts, key shortcuts, list continue/indent, task toggle, links, `/` menu, `:` emoji, Format Bar, zoom — inline (after T2,T3) — commit: pending
