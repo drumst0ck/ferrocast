@@ -24,17 +24,22 @@ use objc2_quartz_core::{CABasicAnimation, CAGradientLayer, CALayer, CAMediaTimin
 /// Gap between the selection rectangle and the glow outline, in points.
 const PAD: f64 = 6.0;
 /// Room around the outline inside the panel, for the halo.
-const MARGIN: f64 = 24.0;
+const MARGIN: f64 = 36.0;
 const OUTLINE_RADIUS: f64 = 8.0;
 const PILL_W: f64 = 150.0;
 const PILL_H: f64 = 36.0;
 const PILL_RADIUS: f64 = 18.0;
 const PILL_OFFSET: f64 = 28.0;
 const CORE_WIDTH: f64 = 3.0;
-const HALO_WIDTH: f64 = 10.0;
-const HALO_BLUR: f64 = 7.0;
-const SPIN_SECONDS: f64 = 2.2;
-const BREATH_SECONDS: f64 = 1.6;
+const HALO_WIDTH: f64 = 16.0;
+const HALO_BLUR: f64 = 14.0;
+/// A tighter second halo, so the neon reads bright close to the tube and soft far away.
+const HALO2_WIDTH: f64 = 8.0;
+const HALO2_BLUR: f64 = 5.0;
+/// The near-white core inside the coloured tube (the bright centre of a neon light).
+const HOT_CORE_WIDTH: f64 = 1.2;
+const SPIN_SECONDS: f64 = 1.6;
+const BREATH_SECONDS: f64 = 1.2;
 const FADE_IN: f64 = 0.25;
 const FADE_OUT: f64 = 0.2;
 
@@ -160,9 +165,9 @@ fn srgb(r: f64, g: f64, b: f64) -> Retained<NSColor> {
 /// Soft Apple-Intelligence palette, closing back on the first colour.
 fn palette() -> Vec<Retained<NSColor>> {
     let c = |hex: u32| srgb(((hex >> 16) & 255) as f64 / 255.0, ((hex >> 8) & 255) as f64 / 255.0, (hex & 255) as f64 / 255.0);
-    // Ferrocast neon red (the website accent #f0535f), a deeper neon and a light hot spot that sweeps
-    // around as the gradient turns
-    vec![c(0xF0535F), c(0xFF2D46), c(0xFF9AA2), c(0xFF2D46), c(0xF0535F)]
+    // Ferrocast neon reds around the website accent #f0535f, far enough apart (crimson, orange-red,
+    // hot pink-red, a near-white hot spot and a dark red) that the turning gradient visibly moves
+    vec![c(0xFF1A3D), c(0xFF6A2A), c(0xFF2D6F), c(0xFFD0D8), c(0xF0535F), c(0xB30028), c(0xFF1A3D)]
 }
 
 fn rounded_path(r: [f64; 4], radius: f64) -> objc2_core_foundation::CFRetained<CGPath> {
@@ -234,7 +239,7 @@ fn ring(bounds: [f64; 4], outline: [f64; 4], radius: f64, width: f64, blur: f64,
         if !reduce_motion {
             let breath = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str("opacity")));
             unsafe {
-                breath.setFromValue(Some(&number(0.55)));
+                breath.setFromValue(Some(&number(0.6)));
                 breath.setToValue(Some(&number(1.0)));
             }
             breath.setDuration(BREATH_SECONDS);
@@ -245,6 +250,17 @@ fn ring(bounds: [f64; 4], outline: [f64; 4], radius: f64, width: f64, blur: f64,
         }
     }
     outer
+}
+
+/// The thin near-white line in the middle of the tube that makes the ring read as neon.
+fn hot_core(bounds: [f64; 4], outline: [f64; 4], radius: f64) -> Retained<CAShapeLayer> {
+    let core = CAShapeLayer::new();
+    core.setFrame(rect(bounds));
+    core.setPath(Some(&rounded_path(outline, radius)));
+    core.setFillColor(None);
+    core.setStrokeColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.9, 0.92, 0.85).CGColor()));
+    core.setLineWidth(HOT_CORE_WIDTH);
+    core
 }
 
 fn set_alpha(panel: &GlowPanel, alpha: f64, seconds: f64, done: Option<RcBlock<dyn Fn()>>) {
@@ -298,7 +314,9 @@ pub fn show(mtm: MainThreadMarker, target: Target, reduce_motion: bool) {
     if let Some(root) = content.layer() {
         // halo first (under), crisp ring on top
         root.addSublayer(&ring(bounds, layout.outline, layout.radius, HALO_WIDTH, HALO_BLUR, reduce_motion));
+        root.addSublayer(&ring(bounds, layout.outline, layout.radius, HALO2_WIDTH, HALO2_BLUR, reduce_motion));
         root.addSublayer(&ring(bounds, layout.outline, layout.radius, CORE_WIDTH, 0.0, reduce_motion));
+        root.addSublayer(&hot_core(bounds, layout.outline, layout.radius));
     }
     panel.setContentView(Some(&content));
     panel.setFrame_display(rect(layout.frame), true);
