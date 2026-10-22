@@ -5815,7 +5815,7 @@ fn modifier_taps_do_not_switch_a_translate_wheel() {
 #[test]
 fn a_failed_translation_toasts_and_does_not_touch_the_view() {
     let mut app = fixture();
-    app.bus.send(Msg::Translated { lang: "Spanish".into(), result: Err("Claude Code is not installed.".into()) });
+    app.bus.send(Msg::Translated { lang: "Spanish".into(), source_pid: None, result: Err("Claude Code is not installed.".into()) });
     app.drain();
     assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("Claude Code is not installed")), "{:?}", app.toast);
     assert!(matches!(app.view(), View::Root));

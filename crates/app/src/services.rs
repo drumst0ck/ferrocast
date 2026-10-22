@@ -113,6 +113,8 @@ pub enum Msg {
     /// A translation finished (`lang` is the target language).
     Translated {
         lang: String,
+        /// pid of the app the text came from: a Replace pastes only while it is still in front.
+        source_pid: Option<i32>,
         result: Result<String, String>,
     },
     /// The floating shelf panel's items changed (drop in, remove, clear).
@@ -1652,12 +1654,12 @@ pub fn ai_stream_with_key(
 
 /// Translate `text` into `lang` with the translation engine's provider, off the UI thread.
 /// `settings` already carries the engine (see `translate::engine_settings`).
-pub fn translate_text(settings: &Settings, text: String, lang: String, bus: Bus) {
+pub fn translate_text(settings: &Settings, text: String, lang: String, source_pid: Option<i32>, bus: Bus) {
     let settings = settings.clone();
     std::thread::spawn(move || {
         let mut out = String::new();
         let result = ai_stream(&settings, &[], &ferrocast_core::translate::prompt(&text, &lang), |t| out.push_str(t)).map(|()| out);
-        bus.send(Msg::Translated { lang, result });
+        bus.send(Msg::Translated { lang, source_pid, result });
     });
 }
 

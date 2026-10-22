@@ -1654,7 +1654,7 @@ impl App {
                 if let Some(text) = self.wheel_text.take() {
                     let engine = ferrocast_core::translate::engine_settings(&self.settings);
                     self.toast(format!("Translating to {lang} with {}…", ferrocast_core::translate::engine_label(&self.settings)));
-                    services::translate_text(&engine, text, lang, self.bus.clone());
+                    services::translate_text(&engine, text, lang, self.prev_pid, self.bus.clone());
                 }
             }
             WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(format!("{label}: not available yet")),
@@ -2128,9 +2128,11 @@ impl App {
                         self.show_wheel(ferrocast_core::wheel::WheelKind::Translate, vec![]);
                     }
                 }
-                Msg::Translated { lang, result } => {
-                    use ferrocast_core::translate::{outcome, Outcome};
-                    match outcome(result, &lang, self.settings.translate_output) {
+                Msg::Translated { lang, source_pid, result } => {
+                    use ferrocast_core::translate::{focus_guard, outcome, Outcome};
+                    // the translation can arrive seconds later: never paste into an app the user moved to
+                    let front = running::frontmost().map(|f| f.pid);
+                    match focus_guard(outcome(result, &lang, self.settings.translate_output), &lang, source_pid, front) {
                         Outcome::Paste(t) => self.paste_text(&t),
                         Outcome::Copy(t, toast) => {
                             self.copy_text(&t);

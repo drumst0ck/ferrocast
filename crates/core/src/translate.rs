@@ -105,6 +105,17 @@ pub fn outcome(result: Result<String, String>, lang: &str, output: TranslateOutp
     }
 }
 
+/// A translation can take seconds; if another app is in front by then, pasting would put the text
+/// somewhere the user never chose. Downgrade such a paste to copy-only. Unknown pids change nothing.
+pub fn focus_guard(outcome: Outcome, lang: &str, source_pid: Option<i32>, frontmost_pid: Option<i32>) -> Outcome {
+    match (outcome, source_pid, frontmost_pid) {
+        (Outcome::Paste(t), Some(src), Some(front)) if src != front => {
+            Outcome::Copy(t, format!("Translated to {lang}, copied: the app changed, so it was not pasted"))
+        }
+        (o, _, _) => o,
+    }
+}
+
 /// Provider name as shown to the user.
 pub fn provider_name(p: AiProvider) -> &'static str {
     match p {
@@ -191,6 +202,23 @@ mod tests {
         assert_eq!(outcome(Ok("Hola".into()), "Spanish", Copy), Outcome::Copy("Hola".into(), "Translated to Spanish, copied".into()));
         assert_eq!(outcome(Err("no key".into()), "Spanish", Replace), Outcome::Fail("Translation failed: no key".into()));
         assert_eq!(outcome(Ok("  ".into()), "Spanish", Replace), Outcome::Fail("Translation failed: empty reply".into()));
+    }
+
+    #[test]
+    fn a_translation_is_pasted_only_into_the_app_it_came_from() {
+        let paste = || Outcome::Paste("Hola".into());
+        assert_eq!(focus_guard(paste(), "Spanish", Some(10), Some(10)), paste(), "same app: paste");
+        assert_eq!(
+            focus_guard(paste(), "Spanish", Some(10), Some(20)),
+            Outcome::Copy("Hola".into(), "Translated to Spanish, copied: the app changed, so it was not pasted".into()),
+            "another app in front: copy only"
+        );
+        assert_eq!(focus_guard(paste(), "Spanish", None, Some(20)), paste(), "unknown source: unchanged behaviour");
+        assert_eq!(focus_guard(paste(), "Spanish", Some(10), None), paste(), "unknown focus: unchanged behaviour");
+        let copy = Outcome::Copy("Hola".into(), "t".into());
+        assert_eq!(focus_guard(copy.clone(), "Spanish", Some(10), Some(20)), copy, "only a paste is guarded");
+        let fail = Outcome::Fail("x".into());
+        assert_eq!(focus_guard(fail.clone(), "Spanish", Some(10), Some(20)), fail);
     }
 
     #[test]
