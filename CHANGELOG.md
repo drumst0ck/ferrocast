@@ -6,8 +6,6 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
-## [0.1.1-rc.1] - 2026-10-22
-
 ### Added
 - **Settings redesign**: adaptive rows that fit more settings per screen, one consistent field style, a sidebar with icons, groups, Cmd+1–7 and arrow-key navigation, a breadcrumb header, search across every setting (Cmd+F, opens the setting and highlights it), dimmed dependent rows, status chips, inline validation, a per-tab Reset with Undo, empty states for Snippets and Scripts, higher text contrast (WCAG AA), 28 pt hit targets and a visible keyboard focus ring.
 - **Releases and in-app updates**: `scripts/release.sh X.Y.Z` tags a version and a GitHub Actions workflow publishes the DMG, an update ZIP and checksums as a GitHub Release (ad-hoc signed; Developer ID signing and notarization switch on with repository secrets) and opens a PR bumping the Homebrew formula. The app checks GitHub once a day for a new stable release (prereleases are ignored), shows the notes and lets you install, postpone or skip, or installs automatically. Settings → General → Updates turns the check off, picks the install mode and has Check now; About and the tray menu also check. Homebrew installs run `brew upgrade` instead of replacing themselves; development builds only check.
