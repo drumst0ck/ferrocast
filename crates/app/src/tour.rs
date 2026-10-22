@@ -16,9 +16,9 @@ const LAST: usize = SLIDES - 1;
 /// Time the old slide takes to leave and the new one to arrive.
 const TRANSITION: f64 = 0.38;
 /// Staggered reveal of the elements of the slide that just arrived.
-const REVEAL_DELAY: f64 = 0.10;
-const REVEAL_STEP: f64 = 0.07;
-const REVEAL_TIME: f64 = 0.45;
+const REVEAL_DELAY: f64 = 0.05;
+const REVEAL_STEP: f64 = 0.045;
+const REVEAL_TIME: f64 = 0.32;
 /// How often the permission status is read while its slide is on screen.
 const POLL_EVERY: f64 = 0.5;
 
@@ -202,6 +202,17 @@ impl Scene<'_> {
         (e, 14.0 * (1.0 - e))
     }
 
+    /// Opacity of element `i`. The outgoing slide fades as a whole; the incoming one is driven
+    /// by its own staggered reveal alone, so the two never fade through each other (that
+    /// left the window empty for the first half second).
+    fn a(&self, i: usize) -> f32 {
+        if self.still {
+            self.alpha
+        } else {
+            self.reveal(i).0
+        }
+    }
+
     /// Absolute point of a content-relative one, with the element's reveal offset applied.
     fn at(&self, x: f32, y: f32, i: usize) -> Pos2 {
         Pos2::new(self.c.min.x + x + self.dx, self.c.min.y + y + self.reveal(i).1)
@@ -212,7 +223,7 @@ impl Scene<'_> {
     }
 
     fn ink(&self, col: Color32, i: usize) -> Color32 {
-        col.gamma_multiply(self.alpha * self.reveal(i).0)
+        col.gamma_multiply(self.a(i))
     }
 
     fn txt(&self, i: usize, x: f32, y: f32, s: &str, size: f32, col: Color32) -> Rect {
@@ -281,7 +292,7 @@ impl Scene<'_> {
             Tone::Normal => (Color32::WHITE, Color32::from_gray(190), self.pal.text),
             Tone::OnAccent => (Color32::from_rgb(30, 22, 24), Color32::from_rgb(116, 30, 40), Color32::WHITE),
         };
-        let a = self.alpha * self.reveal(i).0;
+        let a = self.a(i);
         let lip = (h * 0.07).max(2.0);
         // the lower edge shows as a lip under the face
         self.p.rect_filled(Rect::from_min_max(r.min + Vec2::new(0.0, h * 0.4), r.max + Vec2::new(0.0, lip)), rad, edge.gamma_multiply(a));
@@ -302,7 +313,7 @@ impl Scene<'_> {
 
     fn image(&self, i: usize, which: usize, r: Rect) {
         let Some(id) = self.shots[which] else { return };
-        let a = self.alpha * self.reveal(i).0;
+        let a = self.a(i);
         // a thin edge so the screenshot's dark frame does not dissolve into the field
         self.p.add(
             RectShape::filled(r, 11.0, Color32::WHITE.gamma_multiply(a))
@@ -314,7 +325,7 @@ impl Scene<'_> {
     fn pill(&self, i: usize, x: f32, y: f32, label: &str, size: f32) -> f32 {
         let w = self.text_w(label, size) + 20.0;
         let r = self.rect(x, y, w, size + 12.0, i);
-        let a = self.alpha * self.reveal(i).0;
+        let a = self.a(i);
         self.p.rect_filled(r, r.height() / 2.0, self.pal.field.gamma_multiply(2.0 * a));
         self.p.text(r.center(), Align2::CENTER_CENTER, label, FontId::proportional(size), self.pal.text.gamma_multiply(a));
         w
@@ -338,7 +349,7 @@ impl Scene<'_> {
         let size = 12.5;
         let w = self.text_w(label, size) + 24.0;
         let r = self.rect(x, y, w, 30.0, i);
-        let a = self.alpha * self.reveal(i).0;
+        let a = self.a(i);
         let (hover, down) = if self.interactive && a > 0.99 {
             let resp = self
                 .ui
@@ -371,7 +382,7 @@ impl Scene<'_> {
 
     fn hairline(&self, i: usize, x: f32, y: f32, w: f32) {
         let r = self.rect(x, y, w, 1.0, i);
-        self.p.hline(r.x_range(), r.min.y, Stroke::new(1.0, self.pal.sep.gamma_multiply(self.alpha * self.reveal(i).0)));
+        self.p.hline(r.x_range(), r.min.y, Stroke::new(1.0, self.pal.sep.gamma_multiply(self.a(i))));
     }
 }
 
@@ -407,7 +418,7 @@ fn slide_type(s: &Scene) {
     for (n, q) in ["18% of 240", "100 usd in eur", "5pm ldn in sf"].iter().enumerate() {
         let w = s.p.layout_no_wrap(q.to_string(), FontId::new(12.5, FontFamily::Monospace), Color32::WHITE).size().x + 24.0;
         let r = s.rect(x, 296.0, w, 30.0, 3 + n);
-        let a = s.alpha * s.reveal(3 + n).0;
+        let a = s.a(3 + n);
         s.p.rect_filled(r, 8.0, pal.bg.gamma_multiply(a));
         s.p.rect_stroke(r, 8.0, Stroke::new(1.0, pal.border.gamma_multiply(a)), StrokeKind::Inside);
         s.p.text(r.center(), Align2::CENTER_CENTER, q, FontId::new(12.5, FontFamily::Monospace), pal.text.gamma_multiply(a));
