@@ -12,6 +12,10 @@ Lanzador de código abierto para macOS, escrito en Rust. Busca, calcula, pega y 
 
 ## Instalar
 
+**[Descarga el último DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg)**, arrastra Ferrocast a Aplicaciones y ábrela. Lleva firma ad-hoc, así que macOS pide «Abrir igualmente» la primera vez. Las copias descargadas se actualizan solas: Ajustes → General → Updates. Todas las versiones están en la [página de Releases](https://github.com/drumst0ck/ferrocast/releases).
+
+**Alternativa: Homebrew.**
+
 ```bash
 brew tap drumst0ck/ferrocast
 brew install drumst0ck/ferrocast/ferrocast  # compila en tu Mac (necesita Rust, lo instala brew)
@@ -19,8 +23,6 @@ ln -sfn "$(brew --prefix)/opt/ferrocast/Ferrocast.app" /Applications/Ferrocast.a
 open /Applications/Ferrocast.app            # concede Accesibilidad cuando lo pida
 brew upgrade ferrocast                      # para actualizar
 ```
-
-¿Prefieres una descarga? [Descarga el último DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg) (todas las versiones están en la [página de Releases](https://github.com/drumst0ck/ferrocast/releases)) (firma ad-hoc: macOS pide «Abrir igualmente» la primera vez). Las copias descargadas se actualizan solas: Ajustes → General → Updates.
 
 **Por qué una fórmula y no un cask.** El cask oficial de Homebrew exige apps firmadas y notarizadas (cuenta de Apple Developer de pago). Al compilar desde el código fuente en tu propia máquina, la app no lleva marca de cuarentena y Gatekeeper no interviene. No hace falta cuenta de pago y no se salta ninguna protección. La primera instalación tarda unos minutos porque compila, y la firma es ad-hoc, de uso local.
 

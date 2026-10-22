@@ -1,12 +1,16 @@
 ---
-title: "Install with Homebrew"
-description: "Install Ferrocast on Apple Silicon with Homebrew. The formula compiles the app on your Mac, so there is no quarantine flag and no paid developer account."
+title: "Install Ferrocast"
+description: "Download the Ferrocast DMG for Apple Silicon, or install with Homebrew as an alternative."
 sidebar:
   order: 1
 ---
-Ferrocast installs through a Homebrew formula that compiles the app from source on your own Mac. Homebrew installs Rust for you if you do not have it. The first install takes a few minutes.
+## Download the DMG
 
-Run these commands in Terminal:
+[Download the latest DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg), open it, drag Ferrocast to Applications and open it. The app is signed ad-hoc, not notarized, so macOS blocks the first launch of a browser download: open System Settings → Privacy & Security and choose “Open Anyway”. Every release, with a `SHA256SUMS.txt`, is on the [GitHub Releases page](https://github.com/drumst0ck/ferrocast/releases). Apple Silicon only.
+
+## Alternative: install with Homebrew
+
+The Homebrew formula compiles the app from source on your own Mac, so the app carries no quarantine flag and macOS shows no warning. Homebrew installs Rust for you if you do not have it, and the first install takes a few minutes. Run these commands in Terminal:
 
 ```bash
 brew tap drumst0ck/ferrocast
@@ -17,10 +21,6 @@ brew upgrade ferrocast                      # to update
 ```
 
 Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not added. The formula lives in [drumst0ck/homebrew-ferrocast](https://github.com/drumst0ck/homebrew-ferrocast) and follows each stable release automatically.
-
-## Download the DMG
-
-[Download the latest DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg). Every stable release is also published on the [GitHub Releases page](https://github.com/drumst0ck/ferrocast/releases) as `Ferrocast-X.Y.Z.dmg` with a `SHA256SUMS.txt`. Open the DMG, drag Ferrocast to Applications and open it. The app is signed ad-hoc, not notarized, so macOS blocks the first launch of a browser download: open System Settings → Privacy & Security and choose “Open Anyway”. Apple Silicon only.
 
 ## Updates
 

@@ -12,6 +12,10 @@ Fast, open-source launcher for macOS, written in Rust. Search, calculate, paste 
 
 ## Install
 
+**[Download the latest DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg)**, drag Ferrocast to Applications and open it. It is ad-hoc signed, so macOS asks for “Open Anyway” the first time. Downloaded copies update themselves: Settings → General → Updates. All releases are on the [Releases page](https://github.com/drumst0ck/ferrocast/releases).
+
+**Alternative: Homebrew.**
+
 ```bash
 brew tap drumst0ck/ferrocast
 brew install drumst0ck/ferrocast/ferrocast  # builds on your Mac (needs Rust, Homebrew installs it)
@@ -19,8 +23,6 @@ ln -sfn "$(brew --prefix)/opt/ferrocast/Ferrocast.app" /Applications/Ferrocast.a
 open /Applications/Ferrocast.app            # grant Accessibility when asked
 brew upgrade ferrocast                      # to update
 ```
-
-Prefer a download? [Download the latest DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg) (all releases are on the [Releases page](https://github.com/drumst0ck/ferrocast/releases)) (ad-hoc signed: macOS asks for “Open Anyway” the first time). Downloaded copies update themselves: Settings → General → Updates.
 
 **Why a formula and not a cask.** Homebrew's official cask requires signed, notarized apps (a paid Apple Developer account). Building from source on your own Mac means the app carries no quarantine flag and Gatekeeper does not step in. It needs no paid account and bypasses no protection. The first install takes a few minutes because it compiles, and the signature is ad-hoc, for local use.
 

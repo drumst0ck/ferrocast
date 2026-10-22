@@ -27,5 +27,5 @@ El script de notarización es opcional. Los Mac Intel no son compatibles.
 
 ## Relacionado
 
-- [Instalar con Homebrew](/es/docs/getting-started/install/)
+- [Instalar Ferrocast](/es/docs/getting-started/install/)
 - [Contribuir](/es/docs/contributing/)
