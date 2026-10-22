@@ -251,6 +251,18 @@ pub fn accessibility_trusted(prompt: bool) -> bool {
     }
 }
 
+/// Is this process allowed to listen to keystrokes (Input Monitoring, used by snippet
+/// auto-expansion)? Read-only preflight: it never shows the system prompt.
+pub fn input_monitoring_granted() -> bool {
+    objc2_core_graphics::CGPreflightListenEventAccess()
+}
+
+/// Ask for Input Monitoring: shows the system prompt the first time and adds Ferrocast to the list
+/// in System Settings. Returns whether access is already granted.
+pub fn request_input_monitoring() -> bool {
+    objc2_core_graphics::CGRequestListenEventAccess()
+}
+
 struct AxElement(AXUIElementRef);
 impl Drop for AxElement {
     fn drop(&mut self) {
@@ -450,6 +462,12 @@ pub fn raise_window(pid: i32, title: &str) -> bool {
 mod tests {
     use super::*;
     const S: Rect = Rect { x: 0.0, y: 25.0, w: 1000.0, h: 800.0 };
+
+    #[test]
+    fn input_monitoring_preflight_is_silent_and_stable() {
+        // read-only: must neither prompt nor panic, and two reads agree
+        assert_eq!(input_monitoring_granted(), input_monitoring_granted());
+    }
 
     #[test]
     fn halves() {
