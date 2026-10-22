@@ -83,6 +83,36 @@ struct RawRelease {
 }
 
 /// Parse the GitHub `/releases/latest` JSON into a stable, installable release.
+/// The outcome of asking GitHub for the latest release. `curl_ok` is false when curl itself failed
+/// (no network, DNS, timeout); `status` is the HTTP code. A 404 means the repository has no
+/// published release yet, which is "nothing to update to", not an error.
+pub fn feed_result(curl_ok: bool, status: u16, body: &str) -> Result<Option<Release>, String> {
+    if !curl_ok {
+        return Err("No connection to GitHub. Check your network and try again.".into());
+    }
+    match status {
+        200 => Ok(parse_latest(body)),
+        404 => Ok(None),
+        403 | 429 => Err("GitHub rate limit reached. Try again in an hour.".into()),
+        s => Err(format!("GitHub answered HTTP {s}. Try again later.")),
+    }
+}
+
+/// Split curl output produced with `-w "\n%{http_code}"` into the body and the status code
+/// (0 when the last line is not a number).
+pub fn split_status(out: &str) -> (&str, u16) {
+    let (body, code) = out.rsplit_once('\n').unwrap_or(("", out));
+    match code.trim().parse::<u16>() {
+        Ok(c) => (body, c),
+        Err(_) => (out, 0),
+    }
+}
+
+/// After a failed automatic check, wait an hour before trying again (never every few minutes).
+pub fn retry_due(last_failure: Option<i64>, now: i64) -> bool {
+    last_failure.is_none_or(|f| now - f >= 3_600)
+}
+
 pub fn parse_latest(json: &str) -> Option<Release> {
     let raw: RawRelease = serde_json::from_str(json).ok()?;
     if raw.draft || raw.prerelease {
@@ -182,6 +212,35 @@ pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn feed_result_tells_no_release_rate_limit_and_offline_apart() {
+        // GitHub answers 404 when the repository has no published release yet: nothing to update to
+        assert_eq!(feed_result(true, 404, "{\"message\":\"Not Found\"}"), Ok(None));
+        let e = feed_result(true, 403, "{}").unwrap_err();
+        assert!(e.contains("rate limit"), "{e}");
+        assert!(feed_result(true, 429, "").unwrap_err().contains("rate limit"));
+        let e = feed_result(true, 500, "").unwrap_err();
+        assert!(e.contains("500"), "{e}");
+        let e = feed_result(false, 0, "").unwrap_err();
+        assert!(e.contains("No connection"), "{e}");
+        // 200 with an unusable body (no assets yet) is "no release to offer", not an error
+        assert_eq!(feed_result(true, 200, "{}"), Ok(None));
+    }
+
+    #[test]
+    fn split_status_reads_the_code_curl_appends() {
+        assert_eq!(split_status("{\"a\":1}\n200"), ("{\"a\":1}", 200));
+        assert_eq!(split_status("404"), ("", 404));
+        assert_eq!(split_status("garbage"), ("garbage", 0));
+    }
+
+    #[test]
+    fn retry_waits_an_hour_after_a_failed_check() {
+        assert!(retry_due(None, 1_000));
+        assert!(!retry_due(Some(1_000), 1_000 + 3_599));
+        assert!(retry_due(Some(1_000), 1_000 + 3_600));
+    }
     use super::*;
     use std::path::Path;
 

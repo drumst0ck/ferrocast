@@ -851,23 +851,37 @@ fn curl_to_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
 }
 
 fn fetch_feed() -> Result<Option<ferrocast_core::update::Release>, String> {
+    use ferrocast_core::update::{feed_result, split_status};
+    // no `-f`: a 404 (no release published yet) or a rate limit must be told apart from no network
     let mut c = std::process::Command::new("/usr/bin/curl");
-    c.args(["-sf", "-m", "15", "-H", "Accept: application/vnd.github+json", "-H"])
+    c.args(["-sS", "-m", "15", "-w", "\n%{http_code}", "-H", "Accept: application/vnd.github+json", "-H"])
         .arg(format!("User-Agent: Ferrocast/{}", env!("CARGO_PKG_VERSION")))
         .arg(FEED_URL);
-    let out = run_deadline(c, 20).map_err(|e| format!("Could not check for updates ({e})"))?;
-    Ok(ferrocast_core::update::parse_latest(&String::from_utf8_lossy(&out)))
+    match run_deadline(c, 20) {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out);
+            let (body, status) = split_status(&text);
+            feed_result(true, status, body)
+        }
+        Err(_) => feed_result(false, 0, ""),
+    }
 }
 
-/// Blocking check; sends the result to the app. Also refreshes the cached "bundle folder writable" flag.
-fn check_blocking(bus: &Bus, manual: bool, exe: &std::path::Path) {
+/// Blocking check; sends the result to the app and returns whether it succeeded. Also refreshes the
+/// cached "bundle folder writable" flag.
+fn check_blocking(bus: &Bus, manual: bool, exe: &std::path::Path) -> bool {
     PARENT_WRITABLE.store(probe_parent_writable(exe), Ordering::Relaxed);
-    bus.send(Msg::UpdateChecked { manual, result: fetch_feed() });
+    let result = fetch_feed();
+    let ok = result.is_ok();
+    bus.send(Msg::UpdateChecked { manual, result });
+    ok
 }
 
 /// One-shot check on its own thread.
 pub fn update_check(bus: Bus, manual: bool, current_exe: PathBuf) {
-    std::thread::spawn(move || check_blocking(&bus, manual, &current_exe));
+    std::thread::spawn(move || {
+        check_blocking(&bus, manual, &current_exe);
+    });
 }
 
 /// Background poller: first check 30 s after launch, then whenever the 24 h cadence is due,
@@ -881,14 +895,17 @@ pub fn start_update_poller(shared: Arc<Shared>, bus: Bus) -> Option<std::thread:
         .name("update-poller".into())
         .spawn(move || {
             std::thread::sleep(Duration::from_secs(30));
+            // a failed check (offline, rate limit) waits an hour, instead of retrying every 10 minutes
+            let mut last_failure: Option<i64> = None;
             loop {
                 let (on, last) = {
                     let s = shared.settings.read().unwrap();
                     (s.update_check, s.update_last_check)
                 };
-                if on && ferrocast_core::update::due(last, now_secs()) {
+                let now = now_secs();
+                if on && ferrocast_core::update::due(last, now) && ferrocast_core::update::retry_due(last_failure, now) {
                     if let Ok(exe) = std::env::current_exe() {
-                        check_blocking(&bus, false, &exe);
+                        last_failure = if check_blocking(&bus, false, &exe) { None } else { Some(now) };
                     }
                 }
                 std::thread::sleep(Duration::from_secs(600));
