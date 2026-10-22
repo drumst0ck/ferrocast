@@ -22,8 +22,8 @@ S12 Docs (EN/ES), settings docs, settings index and CHANGELOG describe the engin
 - [x] T2 S11 helper source + core protocol + macOS runner (1 commit; helper exercised by hand: status, translate, unsupported, empty, bad JSON)
 - [x] T3 S3 S4 S5 S6 S8 translate_text Apple branch + outcome mapping + fallback (workspace tests + clippy green)
 - [x] T4 S1 S2 Settings tab UI + statuses + settings index (4 render tests; workspace tests, clippy, fmt green)
-- [ ] T5 S10 bundle.sh, CI/release runner, formula caveat (Risk: item 5, own commit)
-- [ ] T6 S12 docs EN/ES, CHANGELOG
+- [x] T5 S10 bundle.sh, CI/release runner (macos-26), formula caveat (Risk: item 5). Verified locally: bundle.sh builds and ad-hoc signs the helper (identifier dev.ferrocast.launcher.translate), app bundle verifies --strict --deep, helper answers status and translate from inside the bundle, release_dry_run.sh ok. NOT verified: the macos-26 runner itself (only runs on GitHub) and Developer ID signing/notarization of the helper
+- [x] T6 S12 docs EN/ES, CHANGELOG (astro build, vitest 33 passed, changelog dry-run parses the entry with title, docs link and tags)
 
 ## Slice boundary
 After T2 the branch holds ~690 authored lines (about 260 of them this feature document and the plan). T3 onward continues on the same branch; T5 gets its own commit (Risk: item 5). Push, PR and merge stay the user's decision.

@@ -5,7 +5,7 @@ on:
   pull_request:
 jobs:
   check:
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -18,6 +18,11 @@ jobs:
       - run: cargo test --workspace --locked
       - name: Bundle builds and signs
         run: scripts/bundle.sh
+      - name: Apple Translation helper is in the bundle and signed
+        run: |
+          test -x dist/Ferrocast.app/Contents/MacOS/ferrocast-translate
+          codesign --verify --strict dist/Ferrocast.app/Contents/MacOS/ferrocast-translate
+          echo '{"cmd":"status","source":"en","target":"es"}' | dist/Ferrocast.app/Contents/MacOS/ferrocast-translate | grep -q '"status"'
       - name: Install dmgbuild (designed DMG window)
         run: |
           python3 -m venv "$RUNNER_TEMP/dmgvenv"
