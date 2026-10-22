@@ -159,15 +159,19 @@ fn premul(c: [f32; 4], fade: f32) -> Color32 {
 
 /// A radial glow as one mesh: concentric rings (denser near the core, where the colour changes
 /// fastest) with a colour per vertex, so the GPU interpolates a smooth gradient.
-fn glow(p: &Painter, center: Pos2, rx: f32, ry: f32, strength: f32, fade: f32) {
+/// `core` is the weight of the tight hot centre; 0 for wide, flat glows, where a bright centre
+/// stretched into a visible streak. As it fades out the glow also cools down the ramp, so the
+/// near-white core turns red instead of grey over the darker tour behind it.
+fn glow(p: &Painter, center: Pos2, rx: f32, ry: f32, strength: f32, core: f32, fade: f32) {
     if strength <= 0.002 || fade <= 0.0 {
         return;
     }
+    let strength = strength * fade.sqrt();
     const RINGS: usize = 56;
     const SEGS: usize = 72;
     let intensity = |s: f32| {
         let q = 1.0 - s;
-        strength * (0.84 * q.powf(2.3) + 0.16 * q.powi(9))
+        strength * ((1.0 - core) * q.powf(2.3) + core * q.powi(9))
     };
     let mut mesh = Mesh::default();
     let uv = egui::epaint::WHITE_UV;
@@ -246,15 +250,15 @@ impl App {
         let sun = Pos2::new(cx, full.max.y + 120.0 - 205.0 * ph.rise);
         let grow = 0.55 + 0.45 * ph.rise;
         let strength = ph.rise.powf(0.8) * (1.0 + 0.025 * (t * 1.7).sin());
-        glow(p, Pos2::new(cx, full.max.y + 30.0), 440.0, 120.0, 0.34 * strength, a);
-        glow(p, sun, 520.0 * grow, 360.0 * grow, strength * 0.92, a);
+        glow(p, Pos2::new(cx, full.max.y + 30.0), 440.0, 120.0, 0.34 * strength, 0.0, a);
+        glow(p, sun, 520.0 * grow, 360.0 * grow, strength * 0.92, 0.16, a);
 
         // logo: fades in and rises out of the glow, settling a little above the middle
         let e = ease_out_cubic(ph.logo);
         let settled_y = full.center().y - 52.0;
         let logo_c = Pos2::new(cx, settled_y + LOGO_RISE_PX * (1.0 - e));
         if e > 0.0 {
-            glow(p, logo_c, 150.0, 150.0, 0.5 * e, a);
+            glow(p, logo_c, 150.0, 150.0, 0.5 * e, 0.16, a);
             let icon = self.app_icon.get_or_insert_with(|| {
                 let img = services::decode_png(include_bytes!("../../../resources/icon-1024.png"))
                     .unwrap_or_else(|| egui::ColorImage::filled([1, 1], Color32::TRANSPARENT));
@@ -277,7 +281,7 @@ impl App {
             let tracking = 11.0 + 18.0 * (1.0 - ease_out_cubic(ph.word));
             let width: f32 = widths.iter().sum::<f32>() + tracking * (chars.len() - 1) as f32;
             let y = settled_y + LOGO_SIZE / 2.0 + 52.0;
-            glow(p, Pos2::new(cx, y), width * 0.62, 52.0, 0.34 * ph.word, a);
+            glow(p, Pos2::new(cx, y), width * 0.62, 52.0, 0.34 * ph.word, 0.0, a);
             let mut x = cx - width / 2.0;
             for (n, c) in chars.iter().enumerate() {
                 let from = WORD_AT + n as f32 * LETTER_STEP;
