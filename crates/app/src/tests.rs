@@ -94,6 +94,7 @@ fn fixture() -> App {
         sec_cache: None,
         sec_dirty: true,
         tour: tour::Tour::new(),
+        intro: None,
         fx: Effects::recording(),
         translate_run: 0,
         translated_run: None,
@@ -8408,4 +8409,125 @@ fn progress_dots_jump_to_a_slide() {
     render(&mut app, vec![click(true)]);
     render(&mut app, vec![click(false)]);
     assert_eq!(app.tour.slide, 3);
+}
+
+// ---- first-launch intro (sunrise)
+
+fn intro_app() -> App {
+    let mut app = tour_app(0);
+    app.begin_intro(false);
+    app.intro.as_mut().unwrap().clock = Some(0.0);
+    app
+}
+
+fn at(app: &mut App, t: f64) {
+    app.intro.as_mut().unwrap().clock = Some(t);
+    render(app, vec![]);
+}
+
+#[test]
+fn intro_timeline_is_ordered_and_bounded() {
+    let p0 = intro::phase(0.0);
+    assert!(p0.rise < 0.01 && p0.logo == 0.0 && p0.word == 0.0 && p0.alpha == 1.0 && !p0.done);
+    let mid = intro::phase(1.4);
+    assert!(mid.rise > 0.3 && mid.logo > 0.0 && mid.word == 0.0, "the logo comes before the wordmark");
+    let late = intro::phase(2.4);
+    assert!(late.logo == 1.0 && late.word > 0.0 && late.word < 1.0, "the wordmark arrives after the logo settles");
+    let held = intro::phase(intro::HANDOFF_AT - 0.01);
+    assert!(held.rise == 1.0 && held.logo == 1.0 && held.word == 1.0 && held.alpha == 1.0);
+    let fading = intro::phase(intro::HANDOFF_AT + intro::HANDOFF / 2.0);
+    assert!(fading.alpha > 0.0 && fading.alpha < 1.0 && !fading.done);
+    assert!(intro::phase(intro::DURATION).done);
+    let total = std::hint::black_box(intro::DURATION);
+    assert!((3.0..=4.5).contains(&total), "about 3-4 s");
+}
+
+#[test]
+fn first_launch_plays_the_intro_over_the_tour_then_ends_by_itself() {
+    let mut app = intro_app();
+    at(&mut app, 0.0);
+    assert!(on_tour(&app) && app.intro.is_some());
+    assert!(app.intro.as_ref().unwrap().covers(), "the intro covers the tour");
+    at(&mut app, intro::DURATION as f64 - 0.1);
+    assert!(app.intro.is_some(), "still playing just before the end");
+    at(&mut app, intro::DURATION as f64 + 0.05);
+    assert!(app.intro.is_none(), "it ends by itself");
+    assert!(on_tour(&app) && app.tour.slide == 0, "and leaves the tour on slide 0");
+}
+
+#[test]
+fn a_key_press_or_click_skips_the_intro_without_driving_the_tour() {
+    for ev in [key_event(Key::ArrowRight), key_event(Key::Escape), key_event(Key::Enter), key_event(Key::A)] {
+        let mut app = intro_app();
+        at(&mut app, 0.5);
+        app.intro.as_mut().unwrap().clock = Some(0.6);
+        render(&mut app, vec![ev]);
+        let i = app.intro.as_ref().expect("hand-off still fading");
+        assert!(!i.covers(), "the key skips to the hand-off");
+        assert_eq!(app.tour.slide, 0, "and is not also a tour key");
+        assert!(on_tour(&app), "Esc does not close the tour either");
+        at(&mut app, 0.6 + intro::HANDOFF as f64 + 0.05);
+        assert!(app.intro.is_none());
+    }
+    let mut app = intro_app();
+    at(&mut app, 0.5);
+    click_at(&mut app, Pos2::new(300.0, 200.0));
+    assert!(app.intro.as_ref().is_none_or(|i| !i.covers()), "a click skips too");
+}
+
+#[test]
+fn reduce_motion_shows_the_settled_frame_briefly() {
+    let mut app = tour_app(0);
+    app.begin_intro(true);
+    let i = app.intro.as_mut().unwrap();
+    i.clock = Some(0.0);
+    let p = intro::phase(i.elapsed(0.0));
+    assert!(p.rise == 1.0 && p.logo == 1.0 && p.word == 1.0 && p.alpha == 1.0, "static final frame, no motion");
+    let hold = std::hint::black_box(intro::DURATION - intro::REDUCED_START);
+    assert!(hold < 2.0, "and short");
+}
+
+#[test]
+fn reopening_the_tour_does_not_replay_the_intro() {
+    let mut app = tour_app(0);
+    app.pop();
+    app.push(View::Welcome);
+    assert!(app.intro.is_none());
+    render(&mut app, vec![]);
+    assert!(app.intro.is_none() && on_tour(&app));
+    // after a played intro, closing and reopening does not bring it back either
+    let mut app = intro_app();
+    at(&mut app, 0.0);
+    at(&mut app, 20.0);
+    app.pop();
+    app.push(View::Welcome);
+    render(&mut app, vec![]);
+    assert!(app.intro.is_none());
+}
+
+#[test]
+fn intro_renders_every_frame_of_its_timeline_and_then_requests_nothing() {
+    let mut app = intro_app();
+    for n in 0..=40 {
+        if app.intro.is_none() {
+            break;
+        }
+        at(&mut app, n as f64 * 0.1);
+    }
+    assert!(app.intro.is_none());
+    let ctx = app.ctx.clone();
+    render(&mut app, vec![]);
+    let again = ctx.run_ui(egui::RawInput::default(), |_| {});
+    assert!(again.viewport_output.values().all(|v| v.repaint_delay == std::time::Duration::MAX), "no repaints once the intro is over");
+}
+
+#[test]
+fn intro_sound_plays_once_and_only_on_the_real_animated_intro() {
+    let mut live = intro::Intro::new(false);
+    assert!(live.take_sound(), "the animated intro plays its sound");
+    assert!(!live.take_sound(), "only once");
+    assert!(!intro::Intro::new(true).take_sound(), "Reduce Motion starts at the settled frame: no sound out of sync");
+    let mut tested = intro::Intro::new(false);
+    tested.clock = Some(0.0);
+    assert!(!tested.take_sound(), "tests drive the clock and must stay silent");
 }

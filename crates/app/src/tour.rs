@@ -47,6 +47,15 @@ pub(super) fn first_run(settings: &mut Settings, hidden: bool) -> bool {
     true
 }
 
+/// `FERROCAST_REDUCE_MOTION=1|0`, then the system setting.
+pub(super) fn reduce_pref() -> bool {
+    match std::env::var("FERROCAST_REDUCE_MOTION").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => system::reduce_motion(),
+    }
+}
+
 pub(super) struct Tour {
     pub slide: usize,
     from: usize,
@@ -106,11 +115,7 @@ impl Tour {
     }
 
     fn reduce_motion(&mut self) -> bool {
-        *self.reduce.get_or_insert_with(|| match std::env::var("FERROCAST_REDUCE_MOTION").as_deref() {
-            Ok("1") => true,
-            Ok("0") => false,
-            _ => system::reduce_motion(),
-        })
+        *self.reduce.get_or_insert_with(reduce_pref)
     }
 }
 

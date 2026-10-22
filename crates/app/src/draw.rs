@@ -1461,6 +1461,12 @@ impl App {
     // ---------------------------------------------------------------- drawing
 
     fn draw(&mut self, ui: &mut Ui) {
+        self.intro_input(ui.ctx());
+        self.draw_main(ui);
+        self.intro_paint(ui);
+    }
+
+    fn draw_main(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.icons.new_frame();
         self.dark = ctx.theme() == egui::Theme::Dark;
@@ -1695,6 +1701,8 @@ impl App {
                     ui.painter().text(content.center(), Align2::CENTER_CENTER, "No results", FontId::proportional(14.0), pal.sub);
                 }
             }
+            // under the intro the deck waits, so its entrance plays at the hand-off
+            _ if tour_view && self.intro_covers() => {}
             _ if tour_view => self.draw_tour(ui, content, &pal),
             _ => self.draw_single(ui, content.shrink2(Vec2::new(20.0, 14.0)), &pal),
         }
