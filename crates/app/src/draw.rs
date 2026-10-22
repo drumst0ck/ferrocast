@@ -7445,7 +7445,9 @@ fn status_chip(ui: &mut Ui, pal: &Palette, kind: StatusKind, text: &str) {
     p.rect_filled(r, 10.0, c.gamma_multiply(0.16));
     p.circle_filled(Pos2::new(r.min.x + 10.0, r.center().y), 3.0, c);
     p.galley(Pos2::new(r.min.x + 18.0, r.center().y - g.size().y / 2.0), g, c);
-    record_text(ui.ctx(), pal, &format!("chip-{}", kind.name()), c, &[pal.field, c.gamma_multiply(0.16)], ui.opacity());
+    // a chip inside a dimmed (disabled) row is held to the disabled floor, like the row's other text
+    let role = if ui.opacity() < 1.0 { format!("chip-{}-disabled", kind.name()) } else { format!("chip-{}", kind.name()) };
+    record_text(ui.ctx(), pal, &role, c, &[pal.field, c.gamma_multiply(0.16)], ui.opacity());
     #[cfg(test)]
     ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_default::<Vec<(String, String)>>(Id::new("status-chips")).push((kind.name().to_string(), text.to_string()))
