@@ -4538,9 +4538,10 @@ fn footer_hints_are_pure_per_view_and_at_most_four_chips_with_back_last() {
         assert_eq!(chips.last(), Some(&BACK), "{name}: Back esc is last");
         assert_eq!(chips[0].1, "↵", "{name}: the primary action comes first");
     }
-    for v in [View::Root, View::Clipboard, View::Snippets, View::Settings, View::Files, View::Notes, View::Welcome] {
+    for v in [View::Root, View::Clipboard, View::Snippets, View::Files, View::Notes, View::Welcome] {
         assert!(v.footer_hints().is_empty(), "{} keeps the footer it had", v.title());
     }
+    assert_eq!(View::Settings.footer_hints(), vec![("Tabs", "⌘1–7"), BACK], "Settings hints (SD2)");
 }
 
 /// Views whose footer already drew hints keep drawing exactly them.
@@ -4550,7 +4551,8 @@ fn list_and_settings_footers_are_unchanged() {
     app.stack = vec![View::Root, View::Settings];
     render(&mut app, vec![]);
     let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
-    assert_eq!(chips, vec![("Back".to_string(), "esc".to_string())]);
+    // SD2: Settings now shows its own hint chips instead of only Back
+    assert_eq!(chips, vec![("Tabs".to_string(), "⌘1–7".to_string()), ("Back".to_string(), "esc".to_string())]);
     app.stack = vec![View::Root, View::Snippets];
     render(&mut app, vec![]);
     let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
@@ -6638,4 +6640,153 @@ fn rows_with_wide_controls_stack_and_toggle_rows_do_not() {
     let t0 = stacked(0);
     assert_eq!(get(&t0, "Compact mode"), Some(false));
     assert_eq!(get(&t0, "Launch at login"), Some(false));
+}
+
+// ---- SD2: Settings sidebar, header and footer
+
+const TAB_NAMES: [&str; 7] = ["General", "Clipboard", "Snippets", "AI", "Translate", "Scripts", "Advanced"];
+const NUM_KEYS: [Key; 7] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7];
+
+fn cmd_key(key: Key) -> Event {
+    Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: CMD }
+}
+
+fn tab_of(app: &App) -> Option<usize> {
+    app.ctx.data(|d| d.get_temp(Id::new("settings_tab")))
+}
+
+/// A Settings view on `tab`, rendered until the sidebar markers are those of the last frame.
+fn sd2_app(tab: usize) -> App {
+    let mut app = settings_app(tab, egui::ThemePreference::Dark);
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    app
+}
+
+type SidebarMarks = (Vec<(String, Rect)>, Vec<Rect>);
+
+fn sidebar_marks(app: &App) -> SidebarMarks {
+    app.ctx.data(|d| d.get_temp(Id::new("settings-sidebar"))).unwrap_or_default()
+}
+
+#[test]
+fn sd2_cmd_number_jumps_to_that_tab_in_settings() {
+    for n in 1..=7usize {
+        let mut app = sd2_app((n + 2) % 7);
+        render(&mut app, vec![cmd_key(NUM_KEYS[n - 1])]);
+        assert_eq!(tab_of(&app), Some(n - 1), "Cmd+{n}");
+        render(&mut app, vec![]);
+        assert!(matches!(app.view(), View::Settings));
+    }
+}
+
+#[test]
+fn sd2_cmd_number_does_nothing_outside_settings() {
+    for view in [View::Root, View::Clipboard, View::Snippets, View::Notes] {
+        let mut app = fixture();
+        app.stack = vec![View::Root];
+        if !matches!(view, View::Root) {
+            app.stack.push(view);
+        }
+        let depth = app.stack.len();
+        let query = app.query.clone();
+        for key in NUM_KEYS {
+            render(&mut app, vec![cmd_key(key)]);
+        }
+        assert_eq!(app.stack.len(), depth);
+        assert_eq!(app.query, query);
+        assert_eq!(tab_of(&app), None, "no Settings state is touched");
+    }
+}
+
+fn press_over(app: &mut App, pos: Pos2, key: Key) {
+    render(app, vec![Event::PointerMoved(pos)]);
+    render(app, vec![Event::PointerMoved(pos), key_event(key)]);
+}
+
+#[test]
+fn sd2_arrows_move_tabs_only_over_the_sidebar() {
+    let mut app = sd2_app(2);
+    let (items, _) = sidebar_marks(&app);
+    let over = items[2].1.center();
+    press_over(&mut app, over, Key::ArrowDown);
+    assert_eq!(tab_of(&app), Some(3), "Down over the sidebar");
+    press_over(&mut app, over, Key::ArrowUp);
+    press_over(&mut app, over, Key::ArrowUp);
+    assert_eq!(tab_of(&app), Some(1), "Up over the sidebar");
+    // over the content pane the arrows belong to the pane
+    let pane = Pos2::new(500.0, 250.0);
+    press_over(&mut app, pane, Key::ArrowDown);
+    press_over(&mut app, pane, Key::ArrowUp);
+    assert_eq!(tab_of(&app), Some(1), "arrows over the pane do not switch tabs");
+    // the ends do not wrap
+    let mut app = sd2_app(0);
+    press_over(&mut app, over, Key::ArrowUp);
+    assert_eq!(tab_of(&app), Some(0));
+}
+
+#[test]
+fn sd2_arrows_do_not_steal_from_a_focused_text_field() {
+    let mut app = sd2_app(3);
+    let fields: Vec<(String, Rect)> = app.ctx.data(|d| d.get_temp(Id::new("field-count"))).unwrap_or_default();
+    let field = fields.first().expect("the AI tab has a text field").1;
+    click_at(&mut app, field.center());
+    assert!(app.ctx.egui_wants_keyboard_input(), "the click focused the field");
+    let (items, _) = sidebar_marks(&app);
+    press_over(&mut app, items[3].1.center(), Key::ArrowDown);
+    assert_eq!(tab_of(&app), Some(3), "a focused text field keeps the arrows");
+}
+
+#[test]
+fn sd2_sidebar_has_seven_items_in_three_groups_with_two_dividers() {
+    let app = sd2_app(0);
+    let (items, dividers) = sidebar_marks(&app);
+    let names: Vec<&str> = items.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, TAB_NAMES);
+    assert_eq!(dividers.len(), 2);
+    // dividers sit after Snippets and after Translate, between the neighbouring items
+    for (d, after) in dividers.iter().zip([2usize, 4]) {
+        assert!(d.center().y > items[after].1.max.y && d.center().y < items[after + 1].1.min.y, "{d:?} after {}", names[after]);
+        assert!(d.height() <= 1.5, "a thin line");
+        assert!(items[after + 1].1.min.y - items[after].1.max.y >= 8.0, "room around the divider");
+    }
+}
+
+#[test]
+fn sd2_sidebar_items_are_large_hit_targets() {
+    let app = sd2_app(0);
+    let (items, _) = sidebar_marks(&app);
+    assert_eq!(items.len(), 7);
+    for (name, r) in &items {
+        assert!(r.height() >= 32.0, "{name}: {r:?} is shorter than 32 pt");
+        assert!(r.width() >= 38.0 + 7.0 * name.chars().count() as f32, "{name}: {r:?} is too narrow for its label");
+    }
+}
+
+#[test]
+fn sd2_breadcrumb_and_footer_chips() {
+    for (i, name) in TAB_NAMES.iter().enumerate() {
+        let mut app = sd2_app(i);
+        let crumb: String = app.ctx.data(|d| d.get_temp(Id::new("settings-breadcrumb"))).unwrap_or_default();
+        assert_eq!(crumb, format!("Settings / {name}"));
+        render(&mut app, vec![cmd_key(NUM_KEYS[(i + 1) % 7])]);
+        render(&mut app, vec![]);
+        let crumb: String = app.ctx.data(|d| d.get_temp(Id::new("settings-breadcrumb"))).unwrap_or_default();
+        assert_eq!(crumb, format!("Settings / {}", TAB_NAMES[(i + 1) % 7]), "the header follows a shortcut");
+    }
+    let app = sd2_app(0);
+    let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
+    assert_eq!(chips, vec![("Tabs".to_string(), "⌘1–7".to_string()), ("Back".to_string(), "esc".to_string())]);
+}
+
+#[test]
+fn sd2_every_tab_renders_in_both_themes() {
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        for tab in 0..7 {
+            let mut app = settings_app(tab, theme);
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+            assert_eq!(sidebar_marks(&app).0.len(), 7, "tab {tab}");
+        }
+    }
 }

@@ -1561,6 +1561,15 @@ impl App {
                     if self.panel.is_none() {
                         r.request_focus();
                     }
+                } else if matches!(self.view(), View::Settings) {
+                    // breadcrumb: "Settings /" muted, the current tab in the normal colour
+                    let tab: usize = ctx.data(|d| d.get_temp(Id::new("settings_tab"))).unwrap_or(0);
+                    let name = SETTINGS_TABS[tab.min(SETTINGS_TABS.len() - 1)].0;
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(RichText::new("Settings /").size(16.0).color(pal.sub));
+                    ui.label(RichText::new(name).size(16.0).strong().color(pal.text));
+                    #[cfg(test)]
+                    ctx.data_mut(|d| d.insert_temp(Id::new("settings-breadcrumb"), format!("Settings / {name}")));
                 } else {
                     ui.label(RichText::new(title).size(16.0).strong().color(pal.text));
                 }
@@ -1694,7 +1703,10 @@ impl App {
                 ui.ctx().request_repaint_after(Duration::from_millis(60));
             }
             None => {
-                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, self.view().title(), FontId::proportional(12.5), pal.sub);
+                // Settings drops the title (the header's breadcrumb already says it)
+                if !matches!(self.view(), View::Settings) {
+                    p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, self.view().title(), FontId::proportional(12.5), pal.sub);
+                }
             }
         }
         let mut x = rect.max.x - 16.0;
@@ -1702,6 +1714,7 @@ impl App {
         // The left text (title or toast) wins: drop the least important chips until both fit.
         let left_w = match &self.toast {
             Some((t, _)) => p.layout_no_wrap(t.clone(), FontId::proportional(12.5), pal.accent).size().x,
+            None if matches!(self.view(), View::Settings) => 0.0,
             None => p.layout_no_wrap(self.view().title().into(), FontId::proportional(12.5), pal.sub).size().x,
         };
         let chip_w = |(l, k): &(&str, &str)| {
@@ -5269,18 +5282,10 @@ impl App {
     }
 
     fn draw_settings(&mut self, ui: &mut Ui, pal: &Palette) {
-        const TABS: [(&str, &str); 7] = [
-            ("General", "⌘"),
-            ("Clipboard", "⎘"),
-            ("Snippets", "{ }"),
-            ("AI", "AI"),
-            ("Translate", "Tr"),
-            ("Scripts", "›_"),
-            ("Advanced", "···"),
-        ];
         let ctx = ui.ctx().clone();
         let tab_id = Id::new("settings_tab");
         let mut tab: usize = ctx.data(|d| d.get_temp(tab_id)).unwrap_or(0);
+        let tab_before = tab;
         let mut s = self.settings.clone();
         let trusted = windows::accessibility_trusted(false);
         let (mut rec, mut req_acc, mut open_data, mut add_dir, mut save_key, mut test_ai) = (false, false, false, false, false, false);
@@ -5323,33 +5328,96 @@ impl App {
         let side = Rect::from_min_max(full.min, Pos2::new(full.min.x + 168.0, full.max.y));
         let pane = Rect::from_min_max(Pos2::new(side.max.x + 18.0, full.min.y), full.max);
 
+        // ---- sidebar keyboard: ⌘1…⌘7 anywhere in Settings; ↑/↓ only when the pointer is over the
+        // sidebar (and no text field is being edited) or a sidebar item has the keyboard focus
+        let item_id = |i: usize| Id::new(("settings-tab-item", i));
+        for (i, key) in SETTINGS_NUM_KEYS.iter().enumerate() {
+            if ctx.input_mut(|inp| inp.consume_key(CMD, *key)) {
+                tab = i;
+            }
+        }
+        let focused_item = (0..SETTINGS_TABS.len()).find(|i| ctx.memory(|m| m.has_focus(item_id(*i))));
+        let over_side = ctx.input(|inp| inp.pointer.hover_pos()).is_some_and(|p| side.contains(p));
+        if focused_item.is_some() || (over_side && !ctx.egui_wants_keyboard_input()) {
+            let (up, down) =
+                ctx.input_mut(|inp| (inp.consume_key(Modifiers::NONE, Key::ArrowUp), inp.consume_key(Modifiers::NONE, Key::ArrowDown)));
+            let from = focused_item.unwrap_or(tab);
+            let to = if up {
+                from.saturating_sub(1)
+            } else if down {
+                (from + 1).min(SETTINGS_TABS.len() - 1)
+            } else {
+                from
+            };
+            if up || down {
+                tab = to;
+                if focused_item.is_some() {
+                    ctx.memory_mut(|m| m.request_focus(item_id(to)));
+                }
+            }
+        }
+
         // ---- sidebar
+        #[cfg(test)]
+        let mut marks: (Vec<(String, Rect)>, Vec<Rect>) = (vec![], vec![]);
         ui.scope_builder(UiBuilder::new().max_rect(side), |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for (i, (name, glyph)) in TABS.iter().enumerate() {
-                let (r, resp) = ui.allocate_exact_size(Vec2::new(side.width(), 34.0), Sense::click());
+            for (i, (name, symbol)) in SETTINGS_TABS.iter().enumerate() {
+                if SETTINGS_GROUP_STARTS.contains(&i) {
+                    // thin divider between the Everyday / Intelligence / Power groups
+                    ui.add_space(8.0);
+                    let (dr, _) = ui.allocate_exact_size(Vec2::new(side.width(), 1.0), Sense::hover());
+                    ui.painter().hline(dr.x_range(), dr.center().y, Stroke::new(1.0, pal.sep));
+                    ui.add_space(8.0);
+                    #[cfg(test)]
+                    marks.1.push(dr);
+                }
+                let id = item_id(i);
+                ui.ctx().memory_mut(|m| {
+                    m.set_focus_lock_filter(id, egui::EventFilter { vertical_arrows: true, ..Default::default() });
+                });
+                let (r, _) = ui.allocate_exact_size(Vec2::new(side.width(), 34.0), Sense::hover());
+                let resp = ui.interact(r, id, Sense::click()).on_hover_text(format!("{name}  ⌘{}", i + 1));
+                #[cfg(test)]
+                marks.0.push((name.to_string(), r));
                 let on = i == tab;
-                let p = ui.painter();
                 if on {
-                    p.rect_filled(r, 8.0, pal.sel);
+                    ui.painter().rect_filled(r, 8.0, pal.sel);
                 } else if resp.hovered() {
-                    p.rect_filled(r, 8.0, pal.field);
+                    ui.painter().rect_filled(r, 8.0, pal.field);
                 }
                 let gr = Rect::from_center_size(Pos2::new(r.min.x + 20.0, r.center().y), Vec2::splat(20.0));
-                p.rect_filled(gr, 5.0, if on { pal.accent } else { pal.field });
-                p.text(gr.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(10.5), if on { Color32::WHITE } else { pal.sub });
-                p.text(
+                ui.painter().rect_filled(gr, 5.0, if on { pal.accent } else { pal.field });
+                let tint = if on { Color32::WHITE } else { pal.sub };
+                match self.icons.texture(&ctx, &Icon::Glyph(symbol, [0, 0, 0])) {
+                    Some(t) => {
+                        ui.painter().image(t.id(), gr, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+                    }
+                    None => {
+                        ui.painter().circle_filled(gr.center(), 2.0, tint);
+                    }
+                }
+                ui.painter().text(
                     Pos2::new(r.min.x + 38.0, r.center().y),
                     Align2::LEFT_CENTER,
                     name,
                     FontId::proportional(13.5),
                     if on { pal.text } else { pal.sub },
                 );
+                if resp.has_focus() {
+                    // visible keyboard focus ring
+                    ui.painter().rect_stroke(r.shrink(0.5), 8.0, Stroke::new(2.0, pal.accent), egui::StrokeKind::Inside);
+                }
                 if resp.clicked() {
                     tab = i;
                 }
             }
         });
+        #[cfg(test)]
+        ctx.data_mut(|d| d.insert_temp(Id::new("settings-sidebar"), marks));
+        if tab != tab_before {
+            ctx.request_repaint();
+        }
         ctx.data_mut(|d| d.insert_temp(tab_id, tab));
         ui.painter().vline(side.max.x + 9.0, pane.y_range(), Stroke::new(1.0, pal.sep));
 
@@ -5359,7 +5427,7 @@ impl App {
             egui::ScrollArea::vertical().id_salt("settings_pane").auto_shrink([false; 2]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.add_space(2.0);
-                ui.label(RichText::new(TABS[tab].0).size(20.0).strong().color(pal.text));
+                ui.label(RichText::new(SETTINGS_TABS[tab].0).size(20.0).strong().color(pal.text));
                 ui.add_space(14.0);
                 match tab {
                     0 => {
@@ -5989,6 +6057,20 @@ fn drag_reorder_cells(
     ui.painter().circle_filled(b, 3.5, pal.accent);
     out
 }
+
+/// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Power = 5..7.
+const SETTINGS_TABS: [(&str, &str); 7] = [
+    ("General", "sf:gearshape"),
+    ("Clipboard", "sf:doc.on.clipboard"),
+    ("Snippets", "sf:curlybraces"),
+    ("AI", "sf:sparkles"),
+    ("Translate", "sf:character.bubble"),
+    ("Scripts", "sf:terminal"),
+    ("Advanced", "sf:slider.horizontal.3"),
+];
+/// Indices of the first tab of the second and third group: a divider is drawn before each.
+const SETTINGS_GROUP_STARTS: [usize; 2] = [3, 5];
+const SETTINGS_NUM_KEYS: [Key; 7] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7];
 
 fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     ui.label(RichText::new(title).size(12.5).color(pal.sub));

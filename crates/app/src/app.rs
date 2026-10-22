@@ -641,6 +641,7 @@ impl View {
                 vec![(primary, "↵"), ("Move", "⌘↑/↓"), BACK]
             }
             View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
+            View::Settings => vec![("Tabs", "⌘1–7"), BACK],
             _ => vec![],
         }
     }
