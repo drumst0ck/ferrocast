@@ -1,0 +1,120 @@
+<!doctype html>
+<!--
+  Source of the DMG window background (resources/dmg/background.png and background@2x.png).
+  The window is 660x400 pt; Finder draws the app icon centred at (180, 170) and the Applications
+  link at (480, 170), 128 pt icons, with their names under them in black (Light appearance) or
+  white (Dark). Render: serve the repository root over http and screenshot this page at 660x400
+  with device scale 1 and 2 (see scripts/dmg_background.sh). Add ?preview=light or ?preview=dark to
+  see the icons and labels Finder will add on top, for checking legibility only.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: 'Stack Sans Headline'; font-weight: 300; src: url('../../web/src/assets/fonts/stack-sans-headline-latin.woff2') format('woff2'); }
+  @font-face { font-family: 'Stack Sans Text'; font-weight: 400 500; src: url('../../web/src/assets/fonts/stack-sans-text-latin.woff2') format('woff2'); }
+  html, body { margin: 0; width: 660px; height: 400px; overflow: hidden; }
+  body {
+    position: relative;
+    background: #0f0f11;
+    font-family: 'Stack Sans Text', 'Helvetica Neue', sans-serif;
+    color: #f4f4f6;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* the website's dot grid, fading out towards the edges */
+  .dots {
+    position: absolute; inset: 0;
+    background-image: radial-gradient(circle at center, rgba(255,255,255,.085) 1px, transparent 1.3px);
+    background-size: 18px 18px;
+    background-position: 9px 7px;
+    -webkit-mask-image: radial-gradient(ellipse 75% 85% at 50% 45%, #000 40%, transparent 100%);
+  }
+  /* warm coral glow behind the app, a fainter one behind Applications */
+  .glow {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(circle 170px at 180px 170px, rgba(240,83,95,.30), rgba(240,83,95,.08) 55%, transparent 72%),
+      radial-gradient(circle 150px at 480px 170px, rgba(255,140,90,.12), transparent 70%),
+      radial-gradient(ellipse 60% 40% at 50% 100%, rgba(240,83,95,.10), transparent 70%);
+  }
+  /* a soft stage under each icon */
+  .pad {
+    position: absolute; width: 168px; height: 184px; top: 84px; border-radius: 34px;
+    background: linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,.05));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+  }
+  .pad.app { left: 96px; }
+  .pad.apps { left: 396px; }
+  /* the name chip: a mid grey (luminance about 0.18) that keeps both Finder label colours,
+     black in Light appearance and white in Dark, near 4.5:1 */
+  .chip {
+    position: absolute; width: 104px; height: 22px; top: 239px; border-radius: 11px;
+    background: #77767c;
+  }
+  .chip.app { left: 128px; }
+  .chip.apps { left: 428px; }
+  svg.arrow { position: absolute; left: 0; top: 0; width: 660px; height: 400px; overflow: visible; }
+  .caption {
+    position: absolute; left: 0; right: 0; top: 304px; text-align: center;
+    font-size: 15px; font-weight: 500; letter-spacing: .01em; color: #f4f4f6;
+  }
+  .caption b { color: #f0535f; font-weight: 500; }
+  .sub {
+    position: absolute; left: 0; right: 0; top: 328px; text-align: center;
+    font-size: 12px; color: #a8a6ad;
+  }
+  /* preview only: what Finder adds */
+  .icon { position: absolute; width: 128px; height: 128px; top: 106px; }
+  .icon.app { left: 116px; }
+  .icon.apps { left: 416px; }
+  .label { position: absolute; width: 168px; text-align: center; top: 244px; font: 12px -apple-system, 'Helvetica Neue', sans-serif; }
+  .label.app { left: 96px; }
+  .label.apps { left: 396px; }
+</style>
+</head>
+<body>
+  <div class="dots"></div>
+  <div class="glow"></div>
+  <div class="pad app"></div>
+  <div class="pad apps"></div>
+  <div class="chip app"></div>
+  <div class="chip apps"></div>
+  <svg class="arrow" viewBox="0 0 660 400" aria-hidden="true">
+    <defs>
+      <filter id="neon" x="-50%" y="-200%" width="200%" height="500%">
+        <feGaussianBlur stdDeviation="5" result="b1"/>
+        <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="b2"/>
+        <feMerge><feMergeNode in="b1"/><feMergeNode in="b2"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <linearGradient id="tube" x1="270" y1="0" x2="392" y2="0" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#f0535f" stop-opacity=".35"/>
+        <stop offset=".55" stop-color="#ff2d46"/>
+        <stop offset="1" stop-color="#ff6a2a"/>
+      </linearGradient>
+    </defs>
+    <!-- neon tube: coloured glow, then a near-white core -->
+    <g filter="url(#neon)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 272 164 Q 330 140 388 164" stroke="url(#tube)" stroke-width="4"/>
+      <path d="M 374 150 L 390 165 L 370 172" stroke="#ff6a2a" stroke-width="4"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="rgba(255,232,236,.9)" stroke-width="1.3">
+      <path d="M 280 160.5 Q 330 141 386 163"/>
+      <path d="M 376 152.5 L 388 164.5 L 372 170.5"/>
+    </g>
+  </svg>
+  <div class="caption">Drag <b>Ferrocast</b> into Applications</div>
+  <div class="sub">Then open it from Applications or Spotlight.</div>
+
+  <script>
+    const mode = new URLSearchParams(location.search).get('preview');
+    if (mode) {
+      const color = mode === 'dark' ? '#ffffff' : '#000000';
+      document.body.insertAdjacentHTML('beforeend',
+        '<img class="icon app" src="../icon-1024.png">' +
+        '<img class="icon apps" src="/tmp-appsfolder.png">' +
+        `<div class="label app" style="color:${color}">Ferrocast</div>` +
+        `<div class="label apps" style="color:${color}">Applications</div>`);
+    }
+  </script>
+</body>
+</html>

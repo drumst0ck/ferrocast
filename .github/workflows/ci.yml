@@ -18,5 +18,14 @@ jobs:
       - run: cargo test --workspace --locked
       - name: Bundle builds and signs
         run: scripts/bundle.sh
+      - name: Install dmgbuild (designed DMG window)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dmgvenv"
+          "$RUNNER_TEMP/dmgvenv/bin/pip" install --quiet dmgbuild==1.6.7
+          echo "DMGBUILD=$RUNNER_TEMP/dmgvenv/bin/dmgbuild" >> "$GITHUB_ENV"
+      - name: Designed DMG builds headless
+        env:
+          REQUIRE_DESIGNED_DMG: "1"
+        run: scripts/dmg.sh
       - name: Release scripts
         run: bash scripts/tests/release_dry_run.sh
