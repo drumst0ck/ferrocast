@@ -846,6 +846,8 @@ pub struct App {
     sec_dirty: bool,
     /// First-run tour: current slide and its animation.
     tour: tour::Tour,
+    /// First-launch sunrise over the tour's first slide; `None` once played (or never started).
+    intro: Option<intro::Intro>,
 }
 
 /// San Francisco (the system face) first, Apple Symbols for ⌘⌥⇧ glyphs. Arial Unicode, the
@@ -1062,11 +1064,14 @@ impl App {
             sec_cache: None,
             sec_dirty: true,
             tour: tour::Tour::new(),
+            intro: None,
         };
         app.shared.visible.store(app.visible, Ordering::Relaxed);
         if tour::first_run(&mut app.settings, hidden) {
             let _ = app.store.save("settings.json", &app.settings);
             app.stack.push(View::Welcome);
+            // only this first-run path plays the intro; reopening "Welcome" from search does not
+            app.begin_intro(tour::reduce_pref());
         }
         app.reload_scripts();
         app.set_theme();
@@ -5357,5 +5362,7 @@ fn launcher_origin() -> Option<Pos2> {
 
 #[path = "draw.rs"]
 mod draw;
+#[path = "intro.rs"]
+mod intro;
 #[path = "tour.rs"]
 mod tour;
