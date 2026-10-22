@@ -5565,6 +5565,10 @@ impl App {
         let translate_models_state =
             fetched_translate_settings(&self.settings).and_then(|ts| self.ai_models.get(&services::models_key(&ts)).cloned());
         let mut fetch_translate_models = false;
+        let apple_ok = cached_apple_available(&ctx, self.fx.apple_available);
+        let mut open_language_settings = false;
+        let mut recheck_apple = false;
+        let apple_states = self.apple_langs.clone();
         let mut remove_dir = None;
         let mut enable = None;
         let mut scratch = std::mem::take(&mut self.scratch);
@@ -6127,7 +6131,10 @@ impl App {
                         ui.add_space(14.0);
                         section(ui, pal, "Engine");
                         group(ui, pal, |ui| {
+                            let apple = s.translate_apple && apple_ok;
                             let desc = match s.translate_provider {
+                                _ if apple => "Translations run on this Mac with Apple Translation: offline once the languages are downloaded.".to_string(),
+                                _ if s.translate_apple => "Apple Translation needs macOS 26, so the chat provider translates here.".to_string(),
                                 None => "Translating dragged text uses the chat provider and its model.".to_string(),
                                 Some(p) => format!("Translations use {} with the model and sign-in set for it.", ferrocast_core::translate::provider_name(p)),
                             };
@@ -6140,21 +6147,35 @@ impl App {
                                 eff == P::ChatGpt && cached_chatgpt_signed(&ctx),
                                 eff == P::ClaudeCode && services::claude_code_path().is_some(),
                             );
-                            let before = s.translate_provider;
-                            row_stacked_chip(ui, pal, "Provider", &desc, Some((eff_ready.0, eff_ready.1)), |ui| {
-                                segmented(
-                                    ui,
-                                    pal,
-                                    &mut s.translate_provider,
-                                    &[(None, "Same as chat"), (Some(P::OpenAiCompatible), "OpenAI API"), (Some(P::ChatGpt), "ChatGPT"), (Some(P::Anthropic), "Anthropic"), (Some(P::ClaudeCode), "Claude Code")],
-                                );
+                            let before = (apple, s.translate_provider);
+                            let chip = if apple { (StatusKind::Ok, "On this Mac") } else { (eff_ready.0, eff_ready.1) };
+                            row_stacked_chip(ui, pal, "Provider", &desc, Some(chip), |ui| {
+                                // (Apple engine, AI provider): Apple is its own choice and leaves the provider as it was
+                                let mut choice = (apple, if apple { None } else { s.translate_provider });
+                                let mut options = vec![((false, None), "Same as chat")];
+                                if apple_ok {
+                                    options.push(((true, None), "Apple"));
+                                }
+                                options.extend([
+                                    ((false, Some(P::OpenAiCompatible)), "OpenAI API"),
+                                    ((false, Some(P::ChatGpt)), "ChatGPT"),
+                                    ((false, Some(P::Anthropic)), "Anthropic"),
+                                    ((false, Some(P::ClaudeCode)), "Claude Code"),
+                                ]);
+                                segmented(ui, pal, &mut choice, &options);
+                                if choice.0 {
+                                    s.translate_apple = true;
+                                } else if choice != (apple, if apple { None } else { s.translate_provider }) {
+                                    s.translate_apple = false;
+                                    s.translate_provider = choice.1;
+                                }
                             });
-                            if s.translate_provider != before {
+                            if (s.translate_apple && apple_ok, s.translate_provider) != before {
                                 // a model name of one provider is never sent to another
                                 s.translate_model.clear();
                                 ui.ctx().data_mut(|d| d.remove::<bool>(Id::new(("model_custom", "translate"))));
                             }
-                            if let Some(p) = s.translate_provider {
+                            if let Some(p) = s.translate_provider.filter(|_| !apple) {
                                 let listed: Option<Option<Result<Vec<String>, String>>> = match p {
                                     P::ChatGpt => Some(Some(Ok(services::CHATGPT_MODELS.iter().map(|m| m.to_string()).collect()))),
                                     P::ClaudeCode => Some(Some(Ok(services::CLAUDE_CODE_MODELS.iter().map(|m| m.to_string()).collect()))),
@@ -6173,7 +6194,41 @@ impl App {
                                 });
                             }
                         });
-                        if s.translate_provider.is_none() {
+                        if s.translate_apple && apple_ok {
+                            ui.add_space(14.0);
+                            section(ui, pal, "Apple languages");
+                            group(ui, pal, |ui| {
+                                for lang in ferrocast_core::translate::languages(&s.translate_languages) {
+                                    let state = apple_states.get(&lang).copied().unwrap_or(ferrocast_core::translate::AppleLang::Checking);
+                                    let kind = match state {
+                                        ferrocast_core::translate::AppleLang::Installed => StatusKind::Ok,
+                                        ferrocast_core::translate::AppleLang::NeedsDownload => StatusKind::Warn,
+                                        ferrocast_core::translate::AppleLang::Unsupported | ferrocast_core::translate::AppleLang::Unavailable => StatusKind::Error,
+                                        ferrocast_core::translate::AppleLang::Checking => StatusKind::Neutral,
+                                    };
+                                    // one line per language: a status, not a setting, so it is not a searchable row
+                                    let w = ui.available_width();
+                                    let frame = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 9)).show(ui, |ui| {
+                                        ui.set_width(w - 28.0);
+                                        ui.horizontal(|ui| {
+                                            ui.label(RichText::new(&lang).size(13.5).color(pal.text));
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| status_chip(ui, pal, kind, state.chip()));
+                                        });
+                                    });
+                                    form_sep(ui, pal, frame.response.rect);
+                                }
+                                row(ui, pal, "Download languages", "Apple downloads each language once in System Settings → General → Language & Region → Translation Languages. After that, translating works offline.", |ui| {
+                                    if small_btn(ui, pal, "Check again") {
+                                        recheck_apple = true;
+                                    }
+                                    if small_btn(ui, pal, "Open Language settings") {
+                                        open_language_settings = true;
+                                    }
+                                });
+                            });
+                            ui.add_space(10.0);
+                            note(ui, pal, "A language is checked against your Mac's system language. Translating from another language needs that one downloaded too.");
+                        } else if s.translate_provider.is_none() && !s.translate_apple {
                             ui.add_space(10.0);
                             note(ui, pal, &format!("Uses the chat provider and model: {}", ferrocast_core::translate::engine_label(&s)));
                         }
@@ -6334,6 +6389,24 @@ impl App {
         if fetch_models || need_models {
             self.ai_models.insert(models_key.clone(), None);
             services::fetch_models(&s, self.bus.clone());
+        }
+        if open_language_settings {
+            services::open_language_settings();
+        }
+        if recheck_apple {
+            self.apple_langs.clear();
+        }
+        if tab == TRANSLATE_TAB && s.translate_apple && apple_ok {
+            let missing: Vec<String> = ferrocast_core::translate::languages(&s.translate_languages)
+                .into_iter()
+                .filter(|l| !self.apple_langs.contains_key(l))
+                .collect();
+            if !missing.is_empty() {
+                for l in &missing {
+                    self.apple_langs.insert(l.clone(), ferrocast_core::translate::AppleLang::Checking);
+                }
+                services::apple_language_status(missing, self.bus.clone());
+            }
         }
         if tab == TRANSLATE_TAB {
             if let Some(ts) = fetched_translate_settings(&s) {
@@ -7458,6 +7531,20 @@ fn ai_readiness(
         P::ChatGpt => (StatusKind::Warn, "Not signed in"),
         P::ClaudeCode if claude_found => (StatusKind::Ok, "Claude Code found"),
         P::ClaudeCode => (StatusKind::Error, "Claude Code not found"),
+    }
+}
+
+/// Can Apple Translation run here (macOS 26+ and the helper in the bundle)? Asked once per session
+/// and cached in egui temp data, like the Keychain lookups.
+fn cached_apple_available(ctx: &Context, check: fn() -> bool) -> bool {
+    let id = Id::new("apple_translate_available");
+    match ctx.data(|d| d.get_temp::<bool>(id)) {
+        Some(v) => v,
+        None => {
+            let v = check();
+            ctx.data_mut(|d| d.insert_temp(id, v));
+            v
+        }
     }
 }
 

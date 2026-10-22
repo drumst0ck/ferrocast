@@ -798,6 +798,8 @@ pub struct App {
     translate_started: Instant,
     /// The "Apple Translation needs macOS 26" notice was shown this session.
     apple_fallback_told: bool,
+    /// What Settings → Translate shows per wheel language for the Apple engine.
+    pub(crate) apple_langs: std::collections::HashMap<String, ferrocast_core::translate::AppleLang>,
     /// Browser whose page a marked replace is running in: cleaned if the replace fails.
     web_pending: Option<ferrocast_core::translate::Browser>,
     visible: bool,
@@ -1030,6 +1032,7 @@ impl App {
             translating_effect: None,
             translate_started: Instant::now(),
             apple_fallback_told: false,
+            apple_langs: Default::default(),
             web_pending: None,
             visible: !hidden,
             had_focus: false,
@@ -2358,6 +2361,9 @@ impl App {
                 }
                 Msg::AiModels(k, r) => {
                     self.ai_models.insert(k, Some(r));
+                }
+                Msg::AppleLanguage(lang, state) => {
+                    self.apple_langs.insert(lang, state);
                 }
                 Msg::ChatGptDeviceCode(code) => {
                     self.show();

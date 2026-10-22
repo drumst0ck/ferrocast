@@ -21,7 +21,7 @@ S12 Docs (EN/ES), settings docs, settings index and CHANGELOG describe the engin
 - [x] T1 S7 S9 core: `translate_apple` field, engine_label, Apple code mapping (2 commits)
 - [x] T2 S11 helper source + core protocol + macOS runner (1 commit; helper exercised by hand: status, translate, unsupported, empty, bad JSON)
 - [x] T3 S3 S4 S5 S6 S8 translate_text Apple branch + outcome mapping + fallback (workspace tests + clippy green)
-- [ ] T4 S1 S2 Settings tab UI + statuses + settings index
+- [x] T4 S1 S2 Settings tab UI + statuses + settings index (4 render tests; workspace tests, clippy, fmt green)
 - [ ] T5 S10 bundle.sh, CI/release runner, formula caveat (Risk: item 5, own commit)
 - [ ] T6 S12 docs EN/ES, CHANGELOG
 

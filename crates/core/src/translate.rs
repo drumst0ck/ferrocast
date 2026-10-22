@@ -319,6 +319,42 @@ pub fn apple_error_text(e: &crate::apple_translate::TranslateError, lang: &str) 
     }
 }
 
+/// What the Languages card shows for one wheel language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppleLang {
+    /// The helper has not answered yet.
+    Checking,
+    Installed,
+    /// Apple supports it but the pack is not downloaded.
+    NeedsDownload,
+    Unsupported,
+    /// The check itself failed (helper missing, timeout).
+    Unavailable,
+}
+
+impl AppleLang {
+    pub fn from_status(r: Result<crate::apple_translate::Status, crate::apple_translate::TranslateError>) -> AppleLang {
+        use crate::apple_translate::{Status, TranslateError as E};
+        match r {
+            Ok(Status::Installed) => AppleLang::Installed,
+            Ok(Status::Supported) => AppleLang::NeedsDownload,
+            Ok(Status::Unsupported) | Err(E::Unsupported(_)) => AppleLang::Unsupported,
+            Err(_) => AppleLang::Unavailable,
+        }
+    }
+
+    /// The chip text.
+    pub fn chip(self) -> &'static str {
+        match self {
+            AppleLang::Checking => "Checking…",
+            AppleLang::Installed => "Installed",
+            AppleLang::NeedsDownload => "Needs download",
+            AppleLang::Unsupported => "Not supported by Apple",
+            AppleLang::Unavailable => "Could not check",
+        }
+    }
+}
+
 /// What a translation does about the Apple engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplePlan {
@@ -884,6 +920,23 @@ mod tests {
         // the user sees these through the usual failure toast
         let out = outcome(Err(apple_error_text(&E::Unsupported("tlh".into()), "Klingon")), "Klingon", TranslateOutput::Auto);
         assert_eq!(out, Outcome::Fail(format!("Translation failed: {unsupported}")));
+    }
+
+    #[test]
+    fn apple_language_chips_say_what_the_user_can_do() {
+        use crate::apple_translate::{Status, TranslateError as E};
+        assert_eq!(AppleLang::from_status(Ok(Status::Installed)), AppleLang::Installed);
+        assert_eq!(AppleLang::from_status(Ok(Status::Supported)), AppleLang::NeedsDownload);
+        assert_eq!(AppleLang::from_status(Ok(Status::Unsupported)), AppleLang::Unsupported);
+        assert_eq!(AppleLang::from_status(Err(E::Unsupported("x".into()))), AppleLang::Unsupported);
+        assert_eq!(AppleLang::from_status(Err(E::UnsupportedOs)), AppleLang::Unavailable);
+        assert_eq!(AppleLang::from_status(Err(E::Other("boom".into()))), AppleLang::Unavailable);
+        let texts: Vec<_> =
+            [AppleLang::Checking, AppleLang::Installed, AppleLang::NeedsDownload, AppleLang::Unsupported, AppleLang::Unavailable]
+                .iter()
+                .map(|l| l.chip())
+                .collect();
+        assert_eq!(texts, ["Checking…", "Installed", "Needs download", "Not supported by Apple", "Could not check"]);
     }
 
     #[test]

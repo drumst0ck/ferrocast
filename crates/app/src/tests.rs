@@ -101,6 +101,7 @@ fn fixture() -> App {
         translating_effect: None,
         translate_started: Instant::now(),
         apple_fallback_told: false,
+        apple_langs: Default::default(),
         web_pending: None,
     };
     app.rebuild();
@@ -7159,6 +7160,15 @@ fn sd3_every_drawn_row_is_indexed_and_every_entry_is_drawn() {
         app.settings.translate_provider = tp;
         collect(&mut app);
     }
+    // the Apple engine adds a row, only while it is chosen and can run
+    APPLE_AVAILABLE.with(|a| a.set(true));
+    let mut app = settings_app(4, egui::ThemePreference::Dark);
+    app.settings.translate_apple = true;
+    for l in ferrocast_core::translate::DEFAULT_LANGUAGES {
+        app.apple_langs.insert(l.to_string(), ferrocast_core::translate::AppleLang::Installed);
+    }
+    collect(&mut app);
+    APPLE_AVAILABLE.with(|a| a.set(false));
     assert!(drawn.len() > 20, "rows were recorded: {drawn:?}");
     for (tab, title) in &drawn {
         assert!(ENTRIES.iter().any(|e| e.tab == *tab && e.title == title), "tab {tab} draws {title:?} but the index has no entry");
@@ -7352,6 +7362,85 @@ fn sd4_a_disabled_row_ignores_clicks_and_an_enabled_one_does_not() {
     sd4_render(&mut app);
     click_at(&mut app, p);
     assert_eq!(app.settings.wheel_convert_key, "Option", "enabled: the click works");
+}
+
+// Apple engine in Settings → Translate
+
+fn apple_tab(available: bool) -> App {
+    APPLE_AVAILABLE.with(|a| a.set(available));
+    let mut app = settings_app(TRANSLATE_TAB, egui::ThemePreference::Dark);
+    // answers the helper would give, so no test starts it
+    for l in ferrocast_core::translate::DEFAULT_LANGUAGES {
+        app.apple_langs.insert(l.to_string(), ferrocast_core::translate::AppleLang::Installed);
+    }
+    app.apple_langs.insert("Chinese".into(), ferrocast_core::translate::AppleLang::NeedsDownload);
+    app.apple_langs.insert("Japanese".into(), ferrocast_core::translate::AppleLang::Unsupported);
+    app
+}
+
+#[test]
+fn the_apple_segment_exists_only_where_apple_translation_can_run() {
+    let provider_bar = |bars: &[usize]| bars.iter().copied().filter(|n| *n >= 5).collect::<Vec<_>>();
+    APPLE_AVAILABLE.with(|a| a.set(false));
+    assert_eq!(provider_bar(&tab_bars(TRANSLATE_TAB)), vec![5], "Same as chat plus four providers");
+    APPLE_AVAILABLE.with(|a| a.set(true));
+    assert_eq!(provider_bar(&tab_bars(TRANSLATE_TAB)), vec![6], "Apple joins them");
+}
+
+#[test]
+fn choosing_apple_keeps_the_provider_and_choosing_another_engine_replaces_it() {
+    use ferrocast_core::models::AiProvider as P;
+    let mut app = apple_tab(true);
+    app.settings.translate_provider = Some(P::Anthropic);
+    app.settings.translate_model = "claude-x".into();
+    sd4_render(&mut app);
+    // cells: Same as chat, Apple, OpenAI API, ChatGPT, Anthropic, Claude Code
+    let apple = sd4_reach_cell(&mut app, "Provider", 1);
+    click_at(&mut app, apple);
+    assert!(app.settings.translate_apple);
+    assert_eq!(app.settings.translate_provider, Some(P::Anthropic), "the provider is remembered while Apple translates");
+    let chatgpt = sd4_reach_cell(&mut app, "Provider", 3);
+    click_at(&mut app, chatgpt);
+    assert!(!app.settings.translate_apple);
+    assert_eq!(app.settings.translate_provider, Some(P::ChatGpt));
+    assert_eq!(app.settings.translate_model, "", "a model name of one engine is never sent to another");
+    let apple = sd4_reach_cell(&mut app, "Provider", 1);
+    click_at(&mut app, apple);
+    let same = sd4_reach_cell(&mut app, "Provider", 0);
+    click_at(&mut app, same);
+    assert!(!app.settings.translate_apple);
+    assert_eq!(app.settings.translate_provider, None);
+}
+
+#[test]
+fn the_languages_card_shows_one_chip_per_wheel_language_and_the_model_row_goes_away() {
+    let mut app = apple_tab(true);
+    app.settings.translate_apple = true;
+    app.settings.translate_provider = Some(ferrocast_core::models::AiProvider::Anthropic);
+    sd4_render(&mut app);
+    let chips = sd4_chips(&app);
+    assert!(chips.contains(&sd4_chip("ok", "On this Mac")), "the engine chip: {chips:?}");
+    let languages: Vec<_> = chips
+        .iter()
+        .filter(|(_, t)| ["Installed", "Needs download", "Not supported by Apple", "Checking…"].contains(&t.as_str()))
+        .cloned()
+        .collect();
+    assert_eq!(languages.len(), 8, "one per default wheel language: {chips:?}");
+    assert_eq!(languages[0], sd4_chip("ok", "Installed"));
+    assert!(languages.contains(&sd4_chip("warn", "Needs download")), "Chinese");
+    assert!(languages.contains(&sd4_chip("error", "Not supported by Apple")), "Japanese");
+    let rows = app.ctx.data(|d| d.get_temp::<Vec<(String, bool)>>(Id::new("row-stacked"))).unwrap_or_default();
+    assert!(!rows.iter().any(|(t, _)| t == "Model"), "no model for the on-device engine");
+}
+
+#[test]
+fn a_stored_apple_choice_on_a_mac_that_cannot_run_it_shows_the_chat_provider_note() {
+    let mut app = apple_tab(false);
+    app.settings.translate_apple = true;
+    sd4_render(&mut app);
+    let chips = sd4_chips(&app);
+    assert!(!chips.contains(&sd4_chip("ok", "On this Mac")));
+    assert!(!chips.iter().any(|(_, t)| t == "Installed"), "no languages card without Apple");
 }
 
 // (c) status chips

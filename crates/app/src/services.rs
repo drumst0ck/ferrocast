@@ -159,6 +159,8 @@ pub enum Msg {
     WheelRelease,
     /// Model list for the Settings picker, keyed by `models_key`.
     AiModels(String, Result<Vec<String>, String>),
+    /// Whether a wheel language is ready for Apple Translation (Settings → Translate).
+    AppleLanguage(String, ferrocast_core::translate::AppleLang),
     Wake,
 }
 
@@ -1817,6 +1819,26 @@ fn ai_stream_with_key_system(
     } else {
         err.trim().lines().last().unwrap_or("").to_string()
     })
+}
+
+/// Ask the Apple helper, off the UI thread, whether each wheel language is ready; one
+/// `Msg::AppleLanguage` per language as the answers arrive.
+pub fn apple_language_status(languages: Vec<String>, bus: Bus) {
+    std::thread::spawn(move || {
+        use ferrocast_core::translate::AppleLang;
+        for lang in languages {
+            let state = match ferrocast_core::translate::apple_code(&lang) {
+                None => AppleLang::Unsupported,
+                Some(code) => AppleLang::from_status(ferrocast_macos::apple_translate::status(None, &code)),
+            };
+            bus.send(Msg::AppleLanguage(lang, state));
+        }
+    });
+}
+
+/// Open System Settings on Language & Region, where Apple's translation languages are downloaded.
+pub fn open_language_settings() {
+    let _ = std::process::Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.Localization-Settings.extension").status();
 }
 
 /// Translate `text` into `lang` with the translation engine's provider, off the UI thread.
