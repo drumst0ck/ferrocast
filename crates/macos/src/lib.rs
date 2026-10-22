@@ -20,6 +20,7 @@ pub mod notes_editor;
 pub mod notes_format;
 pub mod notes_palette;
 pub mod notes_popups;
+pub mod notes_theme;
 pub mod pdf;
 pub mod pin;
 pub mod process;

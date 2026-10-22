@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 
 pub use crate::notes_editor::{
     active_formats, append_markdown, apply_format, emoji_commit, insert_at_cursor, insert_markdown_after_selection_line,
@@ -21,12 +21,12 @@ pub use crate::notes_editor::{
 };
 use crate::notes_format::Format;
 use crate::notes_popups::{emoji_items, slash_items, FormatBar, Item, Rect as PopupRect, SuggestionPopup};
+use crate::notes_theme::{self as theme, Token};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSBitmapImageFileType, NSButton, NSColor, NSEvent, NSEventModifierFlags,
-    NSEventType, NSFloatingWindowLevel, NSFont, NSFontWeightSemibold, NSImage, NSLineBreakMode, NSPanel, NSScrollView, NSTextAlignment,
-    NSTextDelegate, NSTextField, NSTextView, NSTextViewDelegate, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindowButton, NSWindowCollectionBehavior, NSWindowDelegate, NSWindowStyleMask,
-    NSWindowTitleVisibility,
+    NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSBitmapImageFileType, NSButton, NSEvent, NSEventModifierFlags,
+    NSEventType, NSFloatingWindowLevel, NSFont, NSFontWeightMedium, NSImage, NSLineBreakMode, NSPanel, NSScrollView, NSTextAlignment,
+    NSTextDelegate, NSTextField, NSTextView, NSTextViewDelegate, NSView, NSWindowButton, NSWindowCollectionBehavior, NSWindowDelegate,
+    NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_foundation::{NSDictionary, NSEdgeInsets, NSNotification, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString};
 
@@ -57,6 +57,7 @@ const DEFAULT_H: f64 = 420.0;
 const MIN_W: f64 = 320.0;
 const MIN_H: f64 = 220.0;
 const INSET: f64 = 16.0;
+const BUTTON_RADIUS: f64 = 8.0;
 const MAX_TITLE_CHARS: usize = 60;
 const FRAME_NAME: &str = "FerrocastNotesWindow";
 const KEY_ESCAPE: u16 = 53;
@@ -340,6 +341,66 @@ define_class!(
 );
 
 define_class!(
+    /// Plain view that fills itself with a theme token (dynamic colour, so it follows the
+    /// appearance of its window). Used for the opaque window background, the toolbar and the hairline.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FerrocastNotesFill"]
+    #[ivars = Cell<Token>]
+    struct FillView;
+
+    impl FillView {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            // The view's own bounds, not the dirty rect: a cached snapshot passes a dirty rect
+            // larger than the view, which would paint over the siblings.
+            theme::color(self.ivars().get()).setFill();
+            objc2_app_kit::NSBezierPath::fillRect(self.bounds());
+        }
+    }
+);
+
+define_class!(
+    /// Toolbar icon button: tinted `sub`; on hover `text` over a rounded `field` background.
+    #[unsafe(super(NSButton))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FerrocastNotesToolButton"]
+    #[ivars = Cell<bool>]
+    struct ToolButton;
+
+    impl ToolButton {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, dirty: NSRect) {
+            if self.ivars().get() {
+                theme::color(Token::Field).setFill();
+                objc2_app_kit::NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.bounds(), BUTTON_RADIUS, BUTTON_RADIUS).fill();
+            }
+            unsafe {
+                let _: () = msg_send![super(self), drawRect: dirty];
+            }
+        }
+
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, _e: &NSEvent) {
+            set_hover(self, true);
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _e: &NSEvent) {
+            set_hover(self, false);
+        }
+    }
+);
+
+fn set_hover(b: &ToolButton, on: bool) {
+    b.ivars().set(on);
+    b.setContentTintColor(Some(&theme::color(if on { Token::Text } else { Token::Sub })));
+    unsafe {
+        let _: () = msg_send![b, setNeedsDisplay: true];
+    }
+}
+
+define_class!(
     /// Text view delegate and toolbar button target.
     #[unsafe(super(objc2_foundation::NSObject))]
     #[thread_kind = MainThreadOnly]
@@ -413,13 +474,35 @@ fn icon_button(
     x: f64,
 ) -> Retained<NSButton> {
     let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(symbol), Some(&NSString::from_str(tip)));
-    let b = unsafe { NSButton::buttonWithImage_target_action(image.as_deref().expect("SF Symbol"), Some(target), Some(action), mtm) };
+    let b: Retained<ToolButton> = unsafe { msg_send![super(mtm.alloc::<ToolButton>().set_ivars(Cell::new(false))), init] };
+    b.setImage(image.as_deref());
+    b.setImagePosition(objc2_app_kit::NSCellImagePosition::ImageOnly);
+    unsafe {
+        b.setTarget(Some(target));
+        b.setAction(Some(action));
+    }
     b.setBordered(false);
     b.setToolTip(Some(&NSString::from_str(tip)));
-    b.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+    b.setContentTintColor(Some(&theme::color(Token::Sub)));
     b.setFrame(rect(x, (TOOLBAR_H - 28.0) / 2.0, 28.0, 28.0));
+    let area = unsafe {
+        objc2_app_kit::NSTrackingArea::initWithRect_options_owner_userInfo(
+            mtm.alloc(),
+            NSRect::ZERO,
+            objc2_app_kit::NSTrackingAreaOptions::MouseEnteredAndExited
+                | objc2_app_kit::NSTrackingAreaOptions::ActiveAlways
+                | objc2_app_kit::NSTrackingAreaOptions::InVisibleRect,
+            Some(&b),
+            None,
+        )
+    };
+    b.addTrackingArea(&area);
     b.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
-    b
+    Retained::into_super(b)
+}
+
+fn fill_view(mtm: MainThreadMarker, frame: NSRect, token: Token) -> Retained<FillView> {
+    unsafe { msg_send![super(mtm.alloc::<FillView>().set_ivars(Cell::new(token))), initWithFrame: frame] }
 }
 
 fn build(mtm: MainThreadMarker) -> Ui {
@@ -452,11 +535,11 @@ fn build(mtm: MainThreadMarker) -> Ui {
 
     let target: Retained<NotesTarget> = unsafe { msg_send![mtm.alloc::<NotesTarget>(), init] };
 
-    // Content: translucent window background, scroll view, toolbar on top.
-    let content = NSVisualEffectView::initWithFrame(mtm.alloc::<NSVisualEffectView>(), frame);
-    content.setMaterial(NSVisualEffectMaterial::WindowBackground);
-    content.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-    content.setState(NSVisualEffectState::FollowsWindowActiveState);
+    // Content: opaque `bg` background (no visual-effect view), scroll view, toolbar on top.
+    theme::apply_to(&panel);
+    panel.setOpaque(true);
+    panel.setBackgroundColor(Some(&theme::color(Token::Bg)));
+    let content = fill_view(mtm, frame, Token::Bg);
     panel.setContentView(Some(&content));
     let all = NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable;
 
@@ -515,22 +598,21 @@ fn build(mtm: MainThreadMarker) -> Ui {
     bar_scroll.setHidden(true);
     content.addSubview(&bar_scroll);
 
-    // Toolbar strip (blurs the text scrolling under it).
-    let toolbar =
-        NSVisualEffectView::initWithFrame(mtm.alloc::<NSVisualEffectView>(), rect(0.0, DEFAULT_H - TOOLBAR_H, DEFAULT_W, TOOLBAR_H));
-    toolbar.setMaterial(NSVisualEffectMaterial::WindowBackground);
-    toolbar.setBlendingMode(NSVisualEffectBlendingMode::WithinWindow);
-    toolbar.setState(NSVisualEffectState::FollowsWindowActiveState);
+    // Toolbar strip: opaque `bg`, hides the text scrolling under it; 1 pt `sep` hairline at its bottom edge.
+    let toolbar = fill_view(mtm, rect(0.0, DEFAULT_H - TOOLBAR_H, DEFAULT_W, TOOLBAR_H), Token::Bg);
     toolbar.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin);
 
     let title = NSTextField::labelWithString(&NSString::from_str("Untitled"), mtm);
-    title.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, unsafe { NSFontWeightSemibold })));
-    title.setTextColor(Some(&NSColor::textColor()));
+    title.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, unsafe { NSFontWeightMedium })));
+    title.setTextColor(Some(&theme::color(Token::Text)));
     title.setAlignment(NSTextAlignment::Center);
     title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     title.setFrame(rect(80.0, (TOOLBAR_H - 17.0) / 2.0, DEFAULT_W - 160.0, 17.0));
     title.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     toolbar.addSubview(&title);
+    let hairline = fill_view(mtm, rect(0.0, 0.0, DEFAULT_W, 1.0), Token::Sep);
+    hairline.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+    toolbar.addSubview(&hairline);
 
     let browse = icon_button(mtm, "list.bullet", "Browse Notes ⌘P", &target, sel!(notesBrowse:), DEFAULT_W - 76.0);
     let new = icon_button(mtm, "plus", "New Note ⌘N", &target, sel!(notesNew:), DEFAULT_W - 44.0);
@@ -549,6 +631,17 @@ fn build(mtm: MainThreadMarker) -> Ui {
     install_key_monitor();
 
     Ui { panel, text_view, title, scroll, bar, bar_scroll, _target: target }
+}
+
+/// Apply the stored theme appearance to the Notes window when it exists (see `notes_theme::set_appearance`).
+pub(crate) fn apply_theme_to_window() {
+    let panel = UI.with(|u| u.try_borrow().ok().and_then(|u| u.as_ref().map(|ui| ui.panel.clone())));
+    if let Some(panel) = panel {
+        theme::apply_to(&panel);
+        if let Some(c) = panel.contentView() {
+            c.setNeedsDisplay(true);
+        }
+    }
 }
 
 /// Retained handles to the window parts, creating the window on first use.

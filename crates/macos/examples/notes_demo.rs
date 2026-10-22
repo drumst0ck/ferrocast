@@ -1118,6 +1118,75 @@ fn editor_checks(app: &NSApplication, out: &std::path::Path) {
     }
     app.setAppearance(None);
     check("snapshot note round-trips", md() == md_of(note), &md());
+    theme_checks(app, out);
+    reset(app, note);
+}
+
+/// Read pixel `(x, y)` (top-left origin) of a snapshot image as 0 to 255 per channel.
+fn pixel(rep: &objc2_app_kit::NSBitmapImageRep, x: isize, y: isize) -> (u8, u8, u8) {
+    // Raw stored components, no colour-space conversion: the snapshot is tagged with this Mac's
+    // display profile but holds the values AppKit drew, so converting would make the check
+    // depend on the monitor.
+    let c = rep.colorAtX_y(x, y).expect("pixel colour");
+    let f = |v: f64| (v * 255.0).round() as u8;
+    (f(c.redComponent()), f(c.greenComponent()), f(c.blueComponent()))
+}
+
+fn close(a: (u8, u8, u8), b: (u8, u8, u8), tol: i32) -> bool {
+    [(a.0, b.0), (a.1, b.1), (a.2, b.2)].iter().all(|&(x, y)| (x as i32 - y as i32).abs() <= tol)
+}
+
+/// T1 (S2, S5, S8): the window chrome uses the app palette in both themes, whatever the macOS
+/// appearance of this Mac is, and the setting round-trips.
+fn theme_checks(app: &NSApplication, out: &std::path::Path) {
+    use ferrocast_macos::notes_theme::{self as theme, Appearance, Rgba};
+    reset(app, "# Theme\n\nShort note.");
+    for (name, setting, dark) in [("dark", Appearance::Dark, true), ("light", Appearance::Light, false)] {
+        theme::set_appearance(setting);
+        check(
+            &format!("theme {name}: appearance() returns what was set"),
+            theme::appearance() == setting,
+            &format!("{:?}", theme::appearance()),
+        );
+        pump(300);
+        let path = out.join(format!("notes-theme-{name}.png"));
+        let ok = notes::snapshot_png(&path);
+        check(&format!("theme {name}: snapshot written"), ok, "failed");
+        let rep = std::fs::read(&path)
+            .ok()
+            .and_then(|d| objc2_app_kit::NSBitmapImageRep::imageRepWithData(&objc2_foundation::NSData::with_bytes(&d)));
+        let Some(rep) = rep else {
+            check(&format!("theme {name}: snapshot readable"), false, "no image");
+            continue;
+        };
+        let (w, h) = (rep.pixelsWide(), rep.pixelsHigh());
+        let t = if dark { theme::DARK } else { theme::LIGHT };
+        let bg = theme::window_bg(dark);
+        let got_bg = pixel(&rep, w / 2, h * 4 / 5);
+        check(
+            &format!("theme {name}: window background is the opaque bg token"),
+            close(got_bg, bg, 2),
+            &format!("got {got_bg:?} want {bg:?}"),
+        );
+        let scale = w as f64 / app.keyWindow().map_or(560.0, |win| win.contentView().map_or(560.0, |v| v.bounds().size.width));
+        let row = (43.5 * scale).round() as isize;
+        let got_sep = pixel(&rep, w / 4, row);
+        let want_sep = theme::composite_over(t.sep, Rgba(bg.0, bg.1, bg.2, 255));
+        check(
+            &format!("theme {name}: hairline row differs from the background"),
+            !close(got_sep, got_bg, 1),
+            &format!("sep {got_sep:?} bg {got_bg:?}"),
+        );
+        check(
+            &format!("theme {name}: hairline is the composited sep token"),
+            close(got_sep, want_sep, 6),
+            &format!("got {got_sep:?} want {want_sep:?}"),
+        );
+        println!("      {}", path.display());
+    }
+    theme::set_appearance(Appearance::System);
+    check("theme: restored to System", theme::appearance() == Appearance::System, "");
+    pump(100);
 }
 
 // ------------------------------------------------------------------ window integration checks
