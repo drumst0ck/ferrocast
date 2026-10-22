@@ -8668,3 +8668,58 @@ fn the_notes_tab_has_no_reset_and_the_format_bar_has_no_switch() {
     let (app, _) = notes_tab_app(egui::ThemePreference::Dark);
     assert!(!drawn_rows(&app).iter().any(|(_, n)| n.to_lowercase().contains("format bar")), "the Format Bar toggle stays in the ⌘K panel");
 }
+
+/// Every text painted by one frame (the Keyboard Shortcuts screen is a scroll area, so callers scroll between frames).
+fn painted_texts(app: &mut App, events: Vec<Event>) -> Vec<String> {
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))),
+        events,
+        ..Default::default()
+    };
+    let ctx = app.ctx.clone();
+    let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+    output.textures_delta.clear();
+    output
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::epaint::Shape::Text(t) => Some(t.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn keyboard_shortcuts_screen_has_a_notes_group_with_the_window_shortcuts() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::Shortcuts];
+    let mut seen: Vec<String> = vec![];
+    let centre = Pos2::new(ui::WIDTH / 2.0, ui::HEIGHT / 2.0);
+    for i in 0..14 {
+        let mut events = vec![Event::PointerMoved(centre)];
+        if i > 0 {
+            events.push(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -120.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            });
+        }
+        seen.extend(painted_texts(&mut app, events));
+    }
+    assert!(seen.iter().any(|t| t == "NOTES" || t == "Notes"), "no Notes group heading, saw {seen:?}");
+    for what in [
+        "New note",
+        "Browse Notes",
+        "Open the action panel",
+        "Pin or unpin the note",
+        "Go back to the previous note",
+        "Go forward to the next note",
+    ] {
+        assert!(seen.iter().any(|t| t == what), "missing Notes row {what:?}");
+    }
+    // the key caps of the six rows
+    for keys in ["N", "P", "K", "[", "]"] {
+        assert!(seen.iter().any(|t| t == keys), "missing key cap {keys:?}");
+    }
+}

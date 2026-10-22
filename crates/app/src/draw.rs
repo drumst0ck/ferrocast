@@ -5063,10 +5063,11 @@ impl App {
                             });
                         }
                         View::Shortcuts => {
-                            let groups: [(&str, &[(&str, &str)]); 3] = [
+                            let groups: [(&str, &[(&str, &str)]); 4] = [
                                 ("Navigate", &[("⌥ Space", "Open or close Ferrocast"), ("↑ ↓", "Move the selection"), ("esc", "Clear the search, go back, or close"), ("⌫", "Go back when the search is empty")]),
                                 ("Act", &[("↵", "Run the primary action"), ("⌘ ↵", "Run the secondary action"), ("⌘ K", "Open the action panel"), ("⌘ Y", "Quick Look the selected file")]),
                                 ("Manage", &[("⌘ ,", "Open Settings"), ("⌘ N", "New snippet, quicklink or note"), ("⌘ E", "Edit the selected snippet or quicklink"), ("⇧ ⌘ F", "Add or remove a favorite"), ("⇧ ⌘ ,", "Set a hotkey for a command"), ("⌘ .", "Pin or unpin a clipboard entry"), ("⌃ X", "Delete the selected entry")]),
+                                ("Notes", &[("⌘ N", "New note"), ("⌘ P", "Browse Notes"), ("⌘ K", "Open the action panel"), ("⇧ ⌘ P", "Pin or unpin the note"), ("⌘ [", "Go back to the previous note"), ("⌘ ]", "Go forward to the next note")]),
                             ];
                             egui::ScrollArea::vertical().id_salt("shortcuts").auto_shrink([false; 2]).show(ui, |ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
