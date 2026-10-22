@@ -93,15 +93,35 @@ fn fixture() -> App {
         sec_cache: None,
         sec_dirty: true,
         fx: Effects::recording(),
+        translate_run: 0,
+        translated_run: None,
+        translating_effect: None,
+        translate_started: Instant::now(),
+        web_pending: None,
     };
     app.rebuild();
     app
 }
 
+/// (source pid, drop point, run) of an `effect_probe` call.
+type ProbeCall = (Option<i32>, Option<[f64; 2]>, u64);
+
 thread_local! {
     /// Side effects the translate delivery asked for in this test thread.
     static FX_LOG: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     static FX_FRONT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+    /// Scripts the web effect asked a browser to run (replace and unmark), in order.
+    static FX_SCRIPTS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Arguments of every `effect_probe` call: (source pid, drop point, run).
+    static FX_PROBE: std::cell::RefCell<Vec<ProbeCall>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn fx_scripts() -> Vec<String> {
+    FX_SCRIPTS.with(|l| std::mem::take(&mut *l.borrow_mut()))
+}
+
+fn fx_probes() -> Vec<ProbeCall> {
+    FX_PROBE.with(|l| std::mem::take(&mut *l.borrow_mut()))
 }
 
 fn fx_taken() -> Vec<String> {
@@ -113,10 +133,20 @@ impl Effects {
     fn recording() -> Effects {
         FX_LOG.with(|l| l.borrow_mut().clear());
         FX_FRONT.with(|f| f.set(None));
+        FX_SCRIPTS.with(|l| l.borrow_mut().clear());
+        FX_PROBE.with(|l| l.borrow_mut().clear());
         Effects {
             frontmost: || FX_FRONT.with(|f| f.get()),
             ax_replace: |pid, _lang, _text, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("ax {pid}"))),
-            web_replace: |b, _lang, _text, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("web {b:?}"))),
+            web_replace: |b, _lang, _text, script, _bus| {
+                FX_SCRIPTS.with(|l| l.borrow_mut().push(script.to_string()));
+                FX_LOG.with(|l| l.borrow_mut().push(format!("web {b:?}")))
+            },
+            effect_probe: |pid, drop, run, _bus| FX_PROBE.with(|l| l.borrow_mut().push((pid, drop, run))),
+            glow_show: |_t| FX_LOG.with(|l| l.borrow_mut().push("glow_show".into())),
+            glow_hide: || FX_LOG.with(|l| l.borrow_mut().push("glow_hide".into())),
+            web_script: |_b, js| FX_SCRIPTS.with(|l| l.borrow_mut().push(js.to_string())),
+            translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
         }
     }
@@ -129,7 +159,7 @@ fn translated(
     source_pid: Option<i32>,
 ) {
     app.settings.translate_output = output;
-    app.bus.send(Msg::Translated { lang: "Spanish".into(), source_pid, result: Ok("Hola".into()), ms: 5, target });
+    app.bus.send(Msg::Translated { run: 0, lang: "Spanish".into(), source_pid, result: Ok("Hola".into()), ms: 5, target });
     app.drain();
 }
 
@@ -5862,6 +5892,7 @@ fn modifier_taps_do_not_switch_a_translate_wheel() {
 fn a_failed_translation_toasts_and_does_not_touch_the_view() {
     let mut app = fixture();
     app.bus.send(Msg::Translated {
+        run: 0,
         lang: "Spanish".into(),
         source_pid: None,
         result: Err("Claude Code is not installed.".into()),
@@ -5878,6 +5909,7 @@ fn a_shown_translation_opens_the_translation_view() {
     let mut app = fixture();
     app.settings.translate_output = ferrocast_core::models::TranslateOutput::Show;
     app.bus.send(Msg::Translated {
+        run: 0,
         lang: "Spanish".into(),
         source_pid: None,
         result: Ok("Hola".into()),
@@ -6436,6 +6468,12 @@ fn open_model_combo(app: &mut App, id: &str) -> Vec<(String, Rect)> {
         combos.into_iter().find(|(i, _)| *i == probe_id).map(|(_, r)| r.center())
     })
     .expect("the model combo is reachable");
+    // let the scroll settle, then read the combo again: its place moves while the pane scrolls
+    for _ in 0..30 {
+        render(app, vec![]);
+    }
+    let combos: Vec<(String, Rect)> = app.ctx.data(|d| d.get_temp(Id::new("model-combos"))).unwrap_or_default();
+    let p = combos.into_iter().find(|(i, _)| *i == id).map(|(_, r)| r.center()).unwrap_or(p);
     click_at(app, p);
     render(app, vec![]);
     app.ctx.data(|d| d.get_temp(Id::new("model-items"))).unwrap_or_default()
@@ -7335,6 +7373,7 @@ fn sd4_scrambled() -> Settings {
     s.wheel_translate_key = "Control".into();
     s.translate_languages = vec!["Latin".into()];
     s.translate_output = TranslateOutput::Copy;
+    s.translate_effect = false;
     s.translate_provider = Some(ferrocast_core::models::AiProvider::Anthropic);
     s.translate_model = "some-model".into();
     s.rem_px = 20.0;
@@ -7861,4 +7900,201 @@ fn sd5_state_tab(tab: usize) -> App {
     let mut app = settings_app(tab, egui::ThemePreference::Dark);
     sd5_frame(&mut app);
     app
+}
+
+// ---- translating effect (T3) ------------------------------------------------------------------
+
+use ferrocast_core::models::TranslateOutput as Out;
+use ferrocast_core::translate::{web_replace_marked_js, web_unmark_js, Browser, Target as WebTarget, WebResult, FX_ID};
+use services::EffectKind;
+
+/// A fixture whose data directory exists, so the log lines can be read back.
+fn effect_app() -> App {
+    let app = fixture();
+    let _ = std::fs::create_dir_all(&app.store.root);
+    app
+}
+
+fn effect_log(app: &App) -> String {
+    std::fs::read_to_string(instance::log_path(&app.store.root)).unwrap_or_default()
+}
+
+fn pick_first_language(app: &mut App, effect: bool) {
+    app.settings.translate_effect = effect;
+    open_translate_wheel(app);
+    app.prev_pid = Some(2_000_000_000);
+    if let Some(View::Wheel { center, .. }) = app.stack.last_mut() {
+        *center = Pos2::new(300.0, 200.0);
+    }
+    app.apply_wheel(Some(0));
+}
+
+fn started(app: &mut App, run: u64, kind: EffectKind) {
+    app.bus.send(Msg::EffectStarted { run, kind });
+    app.drain();
+}
+
+fn translated_run(app: &mut App, run: u64, result: Result<String, String>, target: WebTarget) {
+    app.bus.send(Msg::Translated { run, lang: "Spanish".into(), source_pid: Some(7), result, ms: 5, target });
+    app.drain();
+}
+
+fn overlay_point() -> EffectKind {
+    EffectKind::Overlay(ferrocast_macos::glow::Target::Point([1.0, 2.0]))
+}
+
+#[test]
+fn a_effect_probe_runs_at_pick_time_only_when_the_setting_is_on() {
+    let mut app = effect_app();
+    pick_first_language(&mut app, true);
+    assert_eq!(fx_probes(), vec![(Some(2_000_000_000), Some([300.0, 200.0]), 1)]);
+    assert_eq!(fx_taken(), vec!["translate 1".to_string()]);
+    let mut app = effect_app();
+    pick_first_language(&mut app, false);
+    assert!(fx_probes().is_empty(), "no probe with the effect off");
+    assert_eq!(fx_taken(), vec!["translate 1".to_string()], "the translation still starts");
+}
+
+#[test]
+fn b_overlay_is_shown_then_hidden_once_before_the_window() {
+    let mut app = effect_app();
+    app.settings.translate_output = Out::Show;
+    started(&mut app, 0, overlay_point());
+    assert_eq!(fx_taken(), vec!["glow_show".to_string()]);
+    assert!(app.translating_effect.is_some());
+    translated_run(&mut app, 0, Ok("Hola".into()), WebTarget::Other);
+    assert_eq!(fx_taken(), vec!["glow_hide".to_string()]);
+    assert_shows_hola(&app);
+    assert!(app.translating_effect.is_none());
+    assert!(effect_log(&app).contains("translate effect overlay point -> ended: hidden"));
+}
+
+#[test]
+fn c_web_effect_replaces_through_the_marked_script_without_unmarking() {
+    let mut app = effect_app();
+    FX_FRONT.with(|f| f.set(Some(7)));
+    app.settings.translate_output = Out::Auto;
+    started(&mut app, 0, EffectKind::Web(Browser::Safari));
+    assert!(fx_taken().is_empty() && fx_scripts().is_empty(), "starting a web effect only records it");
+    translated_run(&mut app, 0, Ok("Hola".into()), WebTarget::Browser(Browser::Safari));
+    let scripts = fx_scripts();
+    assert_eq!(scripts, vec![web_replace_marked_js("Hola")]);
+    assert!(scripts[0].contains(FX_ID) && scripts[0].contains("\"Hola\""));
+    assert!(!scripts.contains(&web_unmark_js()));
+    assert!(app.translating_effect.is_none());
+    assert!(effect_log(&app).contains("translate effect web Safari -> ended: replaced"));
+}
+
+#[test]
+fn d_web_effect_with_a_failed_translation_unmarks_and_toasts() {
+    let mut app = effect_app();
+    app.settings.translate_output = Out::Auto;
+    started(&mut app, 0, EffectKind::Web(Browser::Safari));
+    translated_run(&mut app, 0, Err("boom".into()), WebTarget::Other);
+    assert_eq!(fx_scripts(), vec![web_unmark_js()]);
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("boom")), "{:?}", app.toast);
+    assert!(fx_taken().is_empty(), "nothing is replaced");
+    assert!(effect_log(&app).contains("-> ended: unmarked"));
+    assert!(!effect_log(&app).contains("Hola"));
+}
+
+#[test]
+fn e_web_effect_whose_replace_finds_no_selection_shows_the_window_and_unmarks() {
+    let mut app = effect_app();
+    FX_FRONT.with(|f| f.set(Some(7)));
+    app.settings.translate_output = Out::Auto;
+    started(&mut app, 0, EffectKind::Web(Browser::Safari));
+    translated_run(&mut app, 0, Ok("Hola".into()), WebTarget::Browser(Browser::Safari));
+    fx_scripts();
+    app.bus.send(Msg::WebReplaced { lang: "Spanish".into(), text: "Hola".into(), result: WebResult::NoSelection });
+    app.drain();
+    assert_shows_hola(&app);
+    assert_eq!(fx_scripts(), vec![web_unmark_js()]);
+}
+
+#[test]
+fn e2_web_effect_shown_in_the_window_is_unmarked() {
+    let mut app = effect_app();
+    app.settings.translate_output = Out::Show;
+    started(&mut app, 0, EffectKind::Web(Browser::Safari));
+    translated_run(&mut app, 0, Ok("Hola".into()), WebTarget::Other);
+    assert_shows_hola(&app);
+    assert_eq!(fx_scripts(), vec![web_unmark_js()]);
+}
+
+#[test]
+fn f_a_late_effect_start_is_ended_at_once_and_an_old_run_is_ignored() {
+    let mut app = effect_app();
+    app.settings.translate_output = Out::Show;
+    app.translate_run = 3;
+    translated_run(&mut app, 3, Ok("Hola".into()), WebTarget::Other);
+    fx_taken();
+    started(&mut app, 3, overlay_point());
+    assert_eq!(fx_taken(), vec!["glow_hide".to_string()], "never shown, ended at once");
+    assert!(app.translating_effect.is_none());
+    started(&mut app, 3, EffectKind::Web(Browser::Safari));
+    assert_eq!(fx_scripts(), vec![web_unmark_js()]);
+    // an old run
+    let mut app = effect_app();
+    app.translate_run = 5;
+    started(&mut app, 4, overlay_point());
+    started(&mut app, 4, EffectKind::Web(Browser::Safari));
+    assert!(fx_taken().is_empty() && fx_scripts().is_empty());
+    assert!(app.translating_effect.is_none());
+}
+
+#[test]
+fn g_the_effect_ends_after_sixty_seconds_without_a_translation() {
+    let mut app = effect_app();
+    started(&mut app, 0, overlay_point());
+    fx_taken();
+    let t0 = app.translate_started;
+    app.effect_tick(t0 + Duration::from_secs(59));
+    assert!(fx_taken().is_empty() && app.translating_effect.is_some());
+    app.effect_tick(t0 + Duration::from_secs(61));
+    assert_eq!(fx_taken(), vec!["glow_hide".to_string()]);
+    assert!(app.translating_effect.is_none());
+    assert!(effect_log(&app).contains("translate effect overlay point -> ended: timeout"));
+    app.effect_tick(t0 + Duration::from_secs(120));
+    assert!(fx_taken().is_empty(), "ends exactly once");
+}
+
+#[test]
+fn a_new_translation_ends_a_running_effect_first() {
+    let mut app = effect_app();
+    started(&mut app, 0, overlay_point());
+    fx_taken();
+    pick_first_language(&mut app, true);
+    assert_eq!(fx_taken(), vec!["glow_hide".to_string(), "translate 1".to_string()]);
+}
+
+#[test]
+fn h_the_translating_effect_row_renders_and_its_toggle_updates_the_setting() {
+    assert!(Settings::default().translate_effect);
+    let old: Settings = serde_json::from_str("{}").unwrap();
+    assert!(old.translate_effect, "missing in old files means on");
+    for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+        let mut app = translate_tab_app();
+        app.ctx.set_theme(theme);
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        assert!(drawn_rows(&app).contains(&(4, "Translating effect".to_string())), "{theme:?}");
+    }
+    let mut app = translate_tab_app();
+    let pos = scroll_until(&mut app, |app| {
+        app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
+        render(app, vec![]);
+        sd5_hits(app).into_iter().find(|h| h.0 == "toggle").map(|h| h.2.center())
+    })
+    .expect("the toggle is reachable");
+    for _ in 0..30 {
+        render(&mut app, vec![]);
+    }
+    app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
+    render(&mut app, vec![]);
+    let pos = sd5_hits(&app).into_iter().find(|h| h.0 == "toggle").map(|h| h.2.center()).unwrap_or(pos);
+    click_at(&mut app, pos);
+    assert!(!app.settings.translate_effect);
+    click_at(&mut app, pos);
+    assert!(app.settings.translate_effect);
 }

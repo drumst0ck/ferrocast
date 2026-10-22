@@ -247,6 +247,8 @@ pub struct Settings {
     /// Target languages on the Translate wheel (names the model understands).
     pub translate_languages: Vec<String>,
     pub translate_output: TranslateOutput,
+    /// Show a glow on the text while it is being translated.
+    pub translate_effect: bool,
     /// Provider that translates; `None` follows the chat provider.
     pub translate_provider: Option<AiProvider>,
     /// Model of `translate_provider` used to translate; empty = the model configured for it.
@@ -325,6 +327,7 @@ impl Default for Settings {
             enter_on_finder: false,
             translate_languages: crate::translate::DEFAULT_LANGUAGES.iter().map(|s| s.to_string()).collect(),
             translate_output: TranslateOutput::default(),
+            translate_effect: true,
             translate_provider: None,
             translate_model: String::new(),
             update_check: true,

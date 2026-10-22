@@ -57,6 +57,7 @@ pub const ENTRIES: &[Entry] = &[
     e(4, "Translate wheel key", &["modifier", "control", "drag", "text", "wheel"]),
     e(4, "Languages", &["translate", "locale", "language", "target", "list", "spanish", "english"]),
     e(4, "After translating", &["output", "replace", "paste", "copy", "window", "auto", "javascript"]),
+    e(4, "Translating effect", &["glow", "animation", "effect", "shimmer", "translating", "blur", "reduce motion"]),
     e(4, "Provider", &["engine", "translation", "same as chat", "openai", "anthropic", "claude", "chatgpt"]),
     e(4, "Model", &["llm", "translation", "default", "custom", "gpt"]),
     // 5 Scripts

@@ -101,6 +101,7 @@ impl eframe::App for App {
         dev_screenshot(ctx, self);
         self.drain();
         self.tick_inline();
+        self.effect_tick(Instant::now());
         self.sweep_timers();
         if matches!(self.view(), View::Timers) && !self.timers.is_empty() {
             self.invalidate_sections();
@@ -6042,6 +6043,7 @@ impl App {
                             if auto {
                                 card_note(ui, pal, AUTO_JS_NOTE);
                             }
+                            row(ui, pal, "Translating effect", "Show a glow on the text while it is being translated.", |ui| toggle(ui, pal, &mut s.translate_effect));
                         });
                         ui.add_space(14.0);
                         section(ui, pal, "Engine");
@@ -7545,7 +7547,7 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
         ],
     ),
     (1, &["clipboard_enabled", "clipboard_retention"]),
-    (4, &["wheel_translate_key", "translate_languages", "translate_output", "translate_provider", "translate_model"]),
+    (4, &["wheel_translate_key", "translate_languages", "translate_output", "translate_effect", "translate_provider", "translate_model"]),
     (6, &["rem_px", "window_gap"]),
 ];
 

@@ -14,6 +14,17 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+/// What the translating effect is drawn with.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EffectKind {
+    /// Nothing could be shown (no selection bounds and no pointer position).
+    None,
+    /// Glow on the text inside a page of this browser (needs a clean-up script afterwards).
+    Web(ferrocast_core::translate::Browser),
+    /// Click-through overlay panel on screen (must be hidden on the main thread).
+    Overlay(ferrocast_macos::glow::Target),
+}
+
 pub enum Msg {
     Hotkey(u32),
     Tray(String),
@@ -112,6 +123,8 @@ pub enum Msg {
     WheelOpenText(String),
     /// A translation finished (`lang` is the target language).
     Translated {
+        /// Which translation this is (see `App::translate_run`).
+        run: u64,
         lang: String,
         /// pid of the app the text came from: a Replace pastes only while it is still in front.
         source_pid: Option<i32>,
@@ -120,6 +133,11 @@ pub enum Msg {
         ms: u64,
         /// What the source app offers for replacing in place (`Other` unless the output is Auto).
         target: ferrocast_core::translate::Target,
+    },
+    /// The effect probe of translation `run` finished: what is shown for it.
+    EffectStarted {
+        run: u64,
+        kind: EffectKind,
     },
     /// The page replacement through JavaScript finished.
     WebReplaced {
@@ -1758,7 +1776,15 @@ fn ai_stream_with_key_system(
 /// Translate `text` into `lang` with the translation engine's provider, off the UI thread.
 /// `settings` already carries the engine (see `translate::engine_settings`).
 /// With the Auto output the source app is probed (off the UI thread) for what it can replace in place.
-pub fn translate_text(settings: &Settings, text: String, lang: String, source_pid: Option<i32>, output: TranslateOutput, bus: Bus) {
+pub fn translate_text(
+    settings: &Settings,
+    text: String,
+    lang: String,
+    source_pid: Option<i32>,
+    output: TranslateOutput,
+    run: u64,
+    bus: Bus,
+) {
     let settings = settings.clone();
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
@@ -1773,7 +1799,7 @@ pub fn translate_text(settings: &Settings, text: String, lang: String, source_pi
             (Ok(_), TranslateOutput::Auto) => probe_target(source_pid),
             _ => ferrocast_core::translate::Target::Other,
         };
-        bus.send(Msg::Translated { lang, source_pid, result, ms, target });
+        bus.send(Msg::Translated { run, lang, source_pid, result, ms, target });
     });
 }
 
@@ -1793,16 +1819,50 @@ fn probe_target(source_pid: Option<i32>) -> ferrocast_core::translate::Target {
     Target::Other
 }
 
-/// Replace the selected text of the page in `browser` with `text` through JavaScript, off the UI thread.
-pub fn web_replace(browser: ferrocast_core::translate::Browser, lang: String, text: String, bus: Bus) {
+/// Replace the selected text of the page in `browser` with `text` by running `js` (the plain or the
+/// effect-aware replace script, built from `text`), off the UI thread.
+pub fn web_replace(browser: ferrocast_core::translate::Browser, lang: String, text: String, js: String, bus: Bus) {
     std::thread::spawn(move || {
-        use ferrocast_core::translate::{applescript_for, parse_web_result, web_replace_js, WebResult};
-        let script = applescript_for(browser, &web_replace_js(&text));
+        use ferrocast_core::translate::{applescript_for, parse_web_result, WebResult};
+        let script = applescript_for(browser, &js);
         let result = match ferrocast_macos::system::osascript_timeout(&script, 10) {
             Ok(out) => parse_web_result(&out),
             Err(e) => WebResult::Failed(e.to_string().chars().take(120).collect()),
         };
         bus.send(Msg::WebReplaced { lang, text, result });
+    });
+}
+
+/// Run `js` in the page of `browser` and ignore the result (clean-up of the translating effect),
+/// off the UI thread.
+pub fn web_script(browser: ferrocast_core::translate::Browser, js: String) {
+    std::thread::spawn(move || {
+        let _ = ferrocast_macos::system::osascript_timeout(&ferrocast_core::translate::applescript_for(browser, &js), 5);
+    });
+}
+
+/// Decide and start the translating effect for translation `run`, off the UI thread: the selected
+/// text of a supported browser page, else an outline around the selection bounds Accessibility
+/// reports, else a pill at `drop_point`. Always answers with `Msg::EffectStarted`.
+pub fn effect_start(source_pid: Option<i32>, drop_point: Option<[f64; 2]>, run: u64, bus: Bus) {
+    std::thread::spawn(move || {
+        use ferrocast_core::translate::{applescript_for, browser_for, web_mark_js};
+        let kind = (|| {
+            let pid = source_pid?;
+            if running::frontmost().map(|f| f.pid) == Some(pid) {
+                if let Some(b) = ferrocast_macos::ax_text::frontmost_bundle_id().as_deref().and_then(browser_for) {
+                    let out = ferrocast_macos::system::osascript_timeout(&applescript_for(b, &web_mark_js()), 5);
+                    if out.is_ok_and(|o| o.trim() == "ok") {
+                        return Some(EffectKind::Web(b));
+                    }
+                }
+            }
+            let rects = ferrocast_macos::ax_text::selection_bounds(pid).filter(|r| !r.is_empty())?;
+            Some(EffectKind::Overlay(ferrocast_macos::glow::Target::Rects(rects)))
+        })()
+        .or_else(|| drop_point.map(|p| EffectKind::Overlay(ferrocast_macos::glow::Target::Point(p))))
+        .unwrap_or(EffectKind::None);
+        bus.send(Msg::EffectStarted { run, kind });
     });
 }
 

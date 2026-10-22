@@ -2,7 +2,7 @@
 
 use crate::instance;
 use crate::items::*;
-use crate::services::{self, now_secs, Bus, Hotkeys, Msg, Shared};
+use crate::services::{self, now_secs, Bus, EffectKind, Hotkeys, Msg, Shared};
 use crate::ui::{self, palette, IconCache, Palette};
 use egui::{Align2, Color32, Context, FontId, Id, Key, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2};
 use ferrocast_core::calc;
@@ -783,6 +783,16 @@ pub struct App {
     prev_pid: Option<i32>,
     /// Side effects of delivering a translation; replaced by a recorder in tests.
     fx: Effects,
+    /// Counter of translations started from the wheel; carried by `Msg::Translated` and `Msg::EffectStarted`.
+    translate_run: u64,
+    /// The run whose translation has already arrived (a late `EffectStarted` for it is ended at once).
+    translated_run: Option<u64>,
+    /// The translating effect currently on screen or in a page.
+    translating_effect: Option<ActiveEffect>,
+    /// When the current translation started (the safety timeout counts from here).
+    translate_started: Instant,
+    /// Browser whose page a marked replace is running in: cleaned if the replace fails.
+    web_pending: Option<ferrocast_core::translate::Browser>,
     visible: bool,
     had_focus: bool,
     shown_at: Instant,
@@ -1003,6 +1013,11 @@ impl App {
             settings_undo: None,
             prev_pid: None,
             fx: Effects::real(),
+            translate_run: 0,
+            translated_run: None,
+            translating_effect: None,
+            translate_started: Instant::now(),
+            web_pending: None,
             visible: !hidden,
             had_focus: false,
             shown_at: Instant::now(),
@@ -1504,6 +1519,8 @@ impl App {
     }
 
     fn pop(&mut self) {
+        // Escape (or going back) also ends a running translating effect
+        self.end_effect(false);
         self.sec_dirty = true;
         self.nav_at = Instant::now();
         if self.stack.len() > 1 {
@@ -1653,7 +1670,7 @@ impl App {
 
     /// Close the wheel and run segment `picked` (None cancels).
     pub(crate) fn apply_wheel(&mut self, picked: Option<usize>) {
-        let Some(View::Wheel { files, segs, kind, .. }) = self.stack.last().cloned() else { return };
+        let Some(View::Wheel { files, segs, kind, center, .. }) = self.stack.last().cloned() else { return };
         // The release that picks a segment also ends the drag: macOS delivers the file DROP to the
         // launcher right after. Remember when the gesture ended so that drop can be ignored.
         self.ctx.data_mut(|d| d.insert_temp(Id::new("wheel_end"), Instant::now()));
@@ -1666,8 +1683,18 @@ impl App {
             WheelPick::Translate(lang) => {
                 if let Some(text) = self.wheel_text.take() {
                     let engine = ferrocast_core::translate::engine_settings(&self.settings);
+                    // a new translation ends a running effect first
+                    self.end_effect(false);
+                    self.translate_run += 1;
+                    let run = self.translate_run;
+                    self.translated_run = None;
+                    self.translate_started = Instant::now();
+                    if self.settings.translate_effect {
+                        let drop = effect_drop_point(center);
+                        (self.fx.effect_probe)(self.prev_pid, drop, run, &self.bus);
+                    }
                     self.toast(format!("Translating to {lang} with {}…", ferrocast_core::translate::engine_label(&self.settings)));
-                    services::translate_text(&engine, text, lang, self.prev_pid, self.settings.translate_output, self.bus.clone());
+                    (self.fx.translate_start)(&engine, text, lang, self.prev_pid, self.settings.translate_output, run, &self.bus);
                 }
             }
             WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(format!("{label}: not available yet")),
@@ -2141,11 +2168,25 @@ impl App {
                         self.show_wheel(ferrocast_core::wheel::WheelKind::Translate, vec![]);
                     }
                 }
-                Msg::Translated { lang, source_pid, result, ms, target } => {
+                Msg::Translated { run, lang, source_pid, result, ms, target } => {
                     use ferrocast_core::models::TranslateOutput;
                     use ferrocast_core::translate::{focus_guard, outcome, plan, Delivery, Outcome};
                     let engine = ferrocast_core::translate::engine_label(&self.settings);
                     instance::log(&self.store.root, &translate_log_line(&lang, &engine, &result, ms));
+                    if run == self.translate_run {
+                        self.translated_run = Some(run);
+                    }
+                    // the effect of THIS translation: an overlay goes before any delivery, a page effect
+                    // is ended by the route below (replaced by the marked script, or unmarked)
+                    let mine = self.translating_effect.as_ref().is_some_and(|e| e.run == run);
+                    let web_fx = match self.translating_effect.as_ref().map(|e| &e.kind) {
+                        Some(EffectKind::Web(b)) if mine => Some(*b),
+                        _ => None,
+                    };
+                    if mine && web_fx.is_none() {
+                        self.end_effect(false);
+                    }
+                    let mut replaced = false;
                     // the translation can arrive seconds later: never write into an app the user moved to
                     let front = (self.fx.frontmost)();
                     let output = self.settings.translate_output;
@@ -2165,7 +2206,20 @@ impl App {
                                     self.toast("Replacing\u{2026}");
                                     (self.fx.ax_replace)(pid, &lang, &text, &self.bus);
                                 }
-                                (Delivery::WebReplace(b), _) => (self.fx.web_replace)(b, &lang, &text, &self.bus),
+                                (Delivery::WebReplace(b), _) => {
+                                    let js = match web_fx {
+                                        Some(fxb) => {
+                                            if fxb != b {
+                                                (self.fx.web_script)(fxb, &ferrocast_core::translate::web_unmark_js());
+                                            }
+                                            replaced = true;
+                                            self.web_pending = Some(b);
+                                            ferrocast_core::translate::web_replace_marked_js(&text)
+                                        }
+                                        None => ferrocast_core::translate::web_replace_js(&text),
+                                    };
+                                    (self.fx.web_replace)(b, &lang, &text, &js, &self.bus)
+                                }
                                 _ => self.show_translation(lang, text),
                             }
                         }
@@ -2178,6 +2232,31 @@ impl App {
                             }
                             Outcome::Fail(toast) => self.toast(toast),
                         },
+                    }
+                    if web_fx.is_some() {
+                        self.end_effect(replaced);
+                    }
+                }
+                Msg::EffectStarted { run, kind } => {
+                    if run != self.translate_run {
+                        continue; // an older translation's probe
+                    }
+                    if self.translated_run == Some(run) {
+                        // the translation won the race: end it before it is ever shown
+                        self.finish_effect(kind, "hidden");
+                        continue;
+                    }
+                    self.end_effect(false);
+                    match kind {
+                        EffectKind::None => self.finish_effect(kind, "hidden"),
+                        kind => {
+                            if let EffectKind::Overlay(t) = &kind {
+                                (self.fx.glow_show)(t);
+                            }
+                            self.translating_effect = Some(ActiveEffect { run, kind });
+                            let left = EFFECT_TIMEOUT.saturating_sub(self.translate_started.elapsed());
+                            self.ctx.request_repaint_after(left + Duration::from_secs(1));
+                        }
                     }
                 }
                 Msg::AxReplaced { lang, text, ok } => {
@@ -2192,6 +2271,11 @@ impl App {
                 }
                 Msg::WebReplaced { lang, text, result } => {
                     use ferrocast_core::translate::{WebResult, JS_PERMISSION_HINT};
+                    let pending = self.web_pending.take();
+                    if let (Some(b), false) = (pending, matches!(result, WebResult::Replaced)) {
+                        // the page must be left clean when the window is shown instead
+                        (self.fx.web_script)(b, &ferrocast_core::translate::web_unmark_js());
+                    }
                     let (toast, reason) = match result {
                         WebResult::Replaced => {
                             instance::log(&self.store.root, &format!("translate deliver {lang} -> web-replace ok"));
@@ -3465,6 +3549,38 @@ impl App {
     }
 
     // ------------------------------------------------------------ execution
+
+    /// End the translating effect, exactly once (a no-op when none runs). `success_web`: the page
+    /// text was replaced by the marked script, which already removed the effect.
+    fn end_effect(&mut self, success_web: bool) {
+        if let Some(e) = self.translating_effect.take() {
+            let why = match (&e.kind, success_web) {
+                (EffectKind::Web(_), true) => "replaced",
+                (EffectKind::Web(_), false) => "unmarked",
+                _ => "hidden",
+            };
+            self.finish_effect(e.kind, why);
+        }
+    }
+
+    /// Undo `kind` and log the one line of its life. `why`: replaced | unmarked | hidden | timeout.
+    fn finish_effect(&mut self, kind: EffectKind, why: &str) {
+        match &kind {
+            EffectKind::Overlay(_) => (self.fx.glow_hide)(),
+            EffectKind::Web(b) if why != "replaced" => (self.fx.web_script)(*b, &ferrocast_core::translate::web_unmark_js()),
+            _ => {}
+        }
+        instance::log(&self.store.root, &format!("translate effect {} -> ended: {why}", effect_label(&kind)));
+    }
+
+    /// Safety net: end an effect whose translation never arrived.
+    pub(crate) fn effect_tick(&mut self, now: Instant) {
+        if self.translating_effect.is_some() && now.saturating_duration_since(self.translate_started) > EFFECT_TIMEOUT {
+            if let Some(e) = self.translating_effect.take() {
+                self.finish_effect(e.kind, "timeout");
+            }
+        }
+    }
 
     /// The Show delivery: the translation on the clipboard and in the launcher.
     fn show_translation(&mut self, lang: String, text: String) {
@@ -5079,8 +5195,19 @@ pub(crate) struct Effects {
     /// pid of the app in front now.
     pub(crate) frontmost: fn() -> Option<i32>,
     pub(crate) ax_replace: fn(i32, &str, &str, &Bus),
-    pub(crate) web_replace: fn(ferrocast_core::translate::Browser, &str, &str, &Bus),
+    /// (browser, language, text, the script to run)
+    pub(crate) web_replace: fn(ferrocast_core::translate::Browser, &str, &str, &str, &Bus),
     pub(crate) paste: fn(&mut App, &str),
+    /// Probe (off the UI thread) what the effect of translation `run` is drawn with.
+    pub(crate) effect_probe: fn(Option<i32>, Option<[f64; 2]>, u64, &Bus),
+    /// Show the overlay (main thread only).
+    pub(crate) glow_show: fn(&ferrocast_macos::glow::Target),
+    /// Hide the overlay (main thread only).
+    pub(crate) glow_hide: fn(),
+    /// Run a script in a browser page, ignoring the result (clean-up).
+    pub(crate) web_script: fn(ferrocast_core::translate::Browser, &str),
+    /// Start the translation request.
+    pub(crate) translate_start: fn(&Settings, String, String, Option<i32>, ferrocast_core::models::TranslateOutput, u64, &Bus),
 }
 
 impl Effects {
@@ -5088,9 +5215,51 @@ impl Effects {
         Effects {
             frontmost: || running::frontmost().map(|f| f.pid),
             ax_replace: |pid, lang, text, bus| services::ax_replace(pid, lang.to_string(), text.to_string(), bus.clone()),
-            web_replace: |b, lang, text, bus| services::web_replace(b, lang.to_string(), text.to_string(), bus.clone()),
+            web_replace: |b, lang, text, js, bus| services::web_replace(b, lang.to_string(), text.to_string(), js.to_string(), bus.clone()),
             paste: |app, text| app.paste_text(text),
+            effect_probe: |pid, drop, run, bus| services::effect_start(pid, drop, run, bus.clone()),
+            glow_show: |t| {
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    ferrocast_macos::glow::show(mtm, t.clone(), ferrocast_macos::system::reduce_motion());
+                }
+            },
+            glow_hide: || {
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    ferrocast_macos::glow::hide(mtm);
+                }
+            },
+            web_script: |b, js| services::web_script(b, js.to_string()),
+            translate_start: |s, text, lang, pid, out, run, bus| services::translate_text(s, text, lang, pid, out, run, bus.clone()),
         }
+    }
+}
+
+/// Longest a translating effect may run without its translation arriving.
+pub(crate) const EFFECT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A translating effect that is on screen or in a page.
+pub(crate) struct ActiveEffect {
+    pub(crate) run: u64,
+    pub(crate) kind: EffectKind,
+}
+
+/// Where the pill goes when nothing better is known: the wheel center, or the pointer when the wheel
+/// was parked off screen (or never placed). `None` when neither is known.
+pub(crate) fn effect_drop_point(center: Pos2) -> Option<[f64; 2]> {
+    if center.x > -5000.0 && center != Pos2::ZERO {
+        return Some([center.x as f64, center.y as f64]);
+    }
+    mouse_top_left().map(|(m, _)| [m.x as f64, m.y as f64])
+}
+
+/// The effect part of its log line: never any text.
+pub(crate) fn effect_label(kind: &EffectKind) -> String {
+    use ferrocast_macos::glow::Target;
+    match kind {
+        EffectKind::None => "none".into(),
+        EffectKind::Web(b) => format!("web {b:?}"),
+        EffectKind::Overlay(Target::Rects(r)) => format!("overlay rects={}", r.len()),
+        EffectKind::Overlay(Target::Point(_)) => "overlay point".into(),
     }
 }
 
