@@ -8,6 +8,7 @@ pub mod drag;
 pub mod expansion;
 pub mod files;
 pub mod finder_enter;
+pub mod glow;
 pub mod keyboard;
 pub mod pdf;
 pub mod process;
