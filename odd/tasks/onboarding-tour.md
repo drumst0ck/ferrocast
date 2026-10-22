@@ -9,11 +9,15 @@ A first-run presentation inside the app (egui, fixed 750×475 window) that shows
 - S4 User (verbatim, L1): "debe tener un diseño chulo y atractivo como la web"
 - S5 User (verbatim, L1): "usa la skill de frontend para hacerlo"
 
+- S6 User (verbatim, L9): "me falta algo para la primera vez que iniciamos la app antes de que salga el onboard, me gustaria hacer una animacion como la que hacia arc browser, me gustaria que simulase como un amanecer con el rojo neon del color de nuestra app que el logo salga hacia arriba un poco y salga FERROCAST"
+
 ## Tasks
 - T1 S1,S4,S5 deck framework: View for the tour (slide index, eased slide transition, staggered reveal), keys ←/→/Enter/Esc, clickable dots, first-launch trigger replaces the old auto-open of Welcome (`settings.onboarded`, `--hidden` still suppresses), re-openable from search — route: gentle-ai-worker — commit:
 - T2 S3,S4,S5 slides: what the app does (search + calculator, drag wheel and file tools, clipboard/snippets/quicklinks/scripts, windows, Ask AI + translate) with real product imagery, keycaps, large type; one claim per slide — route: same worker — commit:
 - T3 S2 permissions slide: Accessibility (live status, grant button), Input Monitoring and Automation for Finder (what each unlocks, what works without it, open the System Settings pane), and the ⌥ Space hotkey — route: same worker — commit:
 - T4 S1-S4 tests (render each slide, navigation, first launch opens it once, `--hidden`), docs (first-run.md en/es, CHANGELOG), screenshots checked with scripts/shot.sh — route: inline verify — commit:
+
+- T5 S6 intro before the tour on first launch: neon-red sunrise, logo rises a little, FERROCAST appears; then the tour — route: gentle-ai-worker — commit:
 
 ## Design notes (not specs)
 - design-taste-frontend is a website skill (its scripts need a browser); its principles are applied by hand: one claim per slide, an idea taken from the subject (iron + cast, the red accent, keycaps), type set large, whole fields of colour, real screenshots of the app instead of icon-card rows.
@@ -27,3 +31,5 @@ A first-run presentation inside the app (egui, fixed 750×475 window) that shows
 - Images: resources/tour/{home,files-wheel-convert,ai}.png (~156 KB), converted from web/public/img with sips. Dev hook: `FERROCAST_VIEW=welcome FERROCAST_TOUR_SLIDE=<0-6>` (use `FERROCAST_REDUCE_MOTION=1` so the screenshot is the settled frame).
 - Existing test untouched: `View::Welcome.footer_hints()` stays empty; the tour chips come from `Tour::hints()` in the footer.
 - Verified numbers against README.md: 275 conversions, 26 file tools, ~40 window layouts. Open for T4: docs/CHANGELOG, first-run.md en/es.
+- L9 User (verbatim): "ya funciona, pero me falta algo para la primera vez que iniciamos la app antes de que salga el onboard, me gustaria hacer una animacion como la que hacia arc browser, me gustaria que simulase como un amanecer con el rojo neon del color de nuestra app que el logo salga hacia arriba un poco y salga FERROCAST"
+- L10 Evidence: the half-second blank between slides was unoptimized font rasterization in debug builds (300-860 ms on the first frame of each slide); fixed by [profile.dev.package."*"] opt-level = 2 (3b41d04), max frame gap 25 ms after.
