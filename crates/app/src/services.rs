@@ -1418,10 +1418,58 @@ fn chatgpt_live_models() -> Result<Vec<String>, String> {
     ferrocast_core::chatgpt::parse_models(&String::from_utf8_lossy(&o.stdout))
 }
 
-/// Fetch the model list for the configured provider and post it to the bus.
-pub fn fetch_models(settings: &Settings, bus: Bus) {
+/// Ask an OpenAI-compatible server or the Anthropic API which models it offers.
+fn list_provider_models(provider: AiProvider, base: &str) -> Result<Vec<String>, String> {
     use ferrocast_core::ai;
     use std::process::{Command, Stdio};
+    let (url, key_header) = match provider {
+        AiProvider::Anthropic => {
+            (ai::ANTHROPIC_MODELS_URL.to_string(), ai_key_for(AiProvider::Anthropic).map(|k| format!("x-api-key: {k}")))
+        }
+        _ => (format!("{base}/models"), ai_key().map(|k| format!("Authorization: Bearer {k}"))),
+    };
+    let mut cfg = format!("url = {}\n", ai::curl_config_quote(&url));
+    if provider == AiProvider::Anthropic {
+        cfg.push_str("header = \"anthropic-version: 2023-06-01\"\n");
+    }
+    if let Some(h) = key_header {
+        cfg.push_str(&format!("header = {}\n", ai::curl_config_quote(&h)));
+    }
+    let out = Command::new("/usr/bin/curl")
+        .args(["-sS", "-m", "8", "-K", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            use std::io::Write;
+            if let Some(mut i) = c.stdin.take() {
+                let _ = i.write_all(cfg.as_bytes());
+            }
+            c.wait_with_output()
+        });
+    match out {
+        Ok(o) if o.status.success() => match serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+            Ok(v) if v.get("error").is_some() => {
+                Err(v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("server error").to_string())
+            }
+            Ok(v) => {
+                let mut m: Vec<String> = v["data"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                m.sort();
+                Ok(m)
+            }
+            Err(_) => Err("not a model list".into()),
+        },
+        Ok(o) => Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("could not connect").trim().to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Fetch the model list for the configured provider and post it to the bus.
+pub fn fetch_models(settings: &Settings, bus: Bus) {
     let key = models_key(settings);
     let provider = settings.ai_provider;
     let base = settings.ai_base_url.trim().trim_end_matches('/').to_string();
@@ -1429,53 +1477,18 @@ pub fn fetch_models(settings: &Settings, bus: Bus) {
         let result: Result<Vec<String>, String> = match provider {
             // Live list for the signed-in account; the built-in catalogue when offline or signed out.
             AiProvider::ChatGpt => Ok(chatgpt_live_models().unwrap_or_else(|_| CHATGPT_MODELS.iter().map(|s| s.to_string()).collect())),
-            AiProvider::ClaudeCode => Ok(CLAUDE_CODE_MODELS.iter().map(|s| s.to_string()).collect()),
-            _ => {
-                let (url, key_header) = match provider {
-                    AiProvider::Anthropic => {
-                        (ai::ANTHROPIC_MODELS_URL.to_string(), ai_key_for(AiProvider::Anthropic).map(|k| format!("x-api-key: {k}")))
+            // `claude --model` takes aliases or full model ids: aliases first, then the API's
+            // list when an Anthropic key is stored (listing needs one).
+            AiProvider::ClaudeCode => {
+                let mut m: Vec<String> = CLAUDE_CODE_MODELS.iter().map(|s| s.to_string()).collect();
+                if ai_key_for(AiProvider::Anthropic).is_some() {
+                    if let Ok(api) = list_provider_models(AiProvider::Anthropic, &base) {
+                        m.extend(api.into_iter().filter(|x| !m.contains(x)).collect::<Vec<_>>());
                     }
-                    _ => (format!("{base}/models"), ai_key().map(|k| format!("Authorization: Bearer {k}"))),
-                };
-                let mut cfg = format!("url = {}\n", ai::curl_config_quote(&url));
-                if provider == AiProvider::Anthropic {
-                    cfg.push_str("header = \"anthropic-version: 2023-06-01\"\n");
                 }
-                if let Some(h) = key_header {
-                    cfg.push_str(&format!("header = {}\n", ai::curl_config_quote(&h)));
-                }
-                let out = Command::new("/usr/bin/curl")
-                    .args(["-sS", "-m", "8", "-K", "-"])
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .and_then(|mut c| {
-                        use std::io::Write;
-                        if let Some(mut i) = c.stdin.take() {
-                            let _ = i.write_all(cfg.as_bytes());
-                        }
-                        c.wait_with_output()
-                    });
-                match out {
-                    Ok(o) if o.status.success() => match serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                        Ok(v) if v.get("error").is_some() => {
-                            Err(v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("server error").to_string())
-                        }
-                        Ok(v) => {
-                            let mut m: Vec<String> = v["data"]
-                                .as_array()
-                                .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
-                                .unwrap_or_default();
-                            m.sort();
-                            Ok(m)
-                        }
-                        Err(_) => Err("not a model list".into()),
-                    },
-                    Ok(o) => Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("could not connect").trim().to_string()),
-                    Err(e) => Err(e.to_string()),
-                }
+                Ok(m)
             }
+            _ => list_provider_models(provider, &base),
         };
         bus.send(Msg::AiModels(key, result));
     });

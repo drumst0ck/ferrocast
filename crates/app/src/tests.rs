@@ -6251,3 +6251,19 @@ fn update_checks_record_the_available_release() {
     app.handle_update_checked(true, Ok(None), Channel::Direct, true);
     assert!(app.update_available.is_none());
 }
+
+#[test]
+fn tmp_probe_after_translating_bar() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::Settings];
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 0usize));
+    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+    for _ in 0..3 {
+        render(&mut app, vec![]);
+    }
+    let bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+    for (c, cells) in &bars {
+        println!("BAR {:?} cells={} first={:?} last={:?}", c, cells.len(), cells[0], cells[cells.len() - 1]);
+    }
+    println!("WIDTH {}", ui::WIDTH);
+}
