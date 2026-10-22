@@ -5454,7 +5454,7 @@ impl App {
                             ferrocast_core::update::Channel::Direct => {}
                         }
                         ui.add_space(14.0);
-                        section(ui, pal, "Root Search");
+                        section(ui, pal, "Root search");
                         group(ui, pal, |ui| {
                             row(ui, pal, "Sensitivity", "Low matches loosely; High needs every letter to start a word.", |ui| {
                                 use ferrocast_core::fuzzy::Sensitivity as S;
@@ -5462,7 +5462,7 @@ impl App {
                             });
                             row(ui, pal, "Include files", "Show Spotlight file results after apps and commands.", |ui| toggle(ui, pal, &mut s.file_search_in_root));
                             row(ui, pal, "Web search fallback", "Used by “Search the web for …”. {query} is replaced.", |ui| {
-                                ui.add(TextEdit::singleline(&mut s.fallback_search_url).desired_width(280.0).font(FontId::proportional(12.5)));
+                                field(ui, pal, &mut s.fallback_search_url, 470.0, "https://…?q={query}", false);
                             });
                         });
                     }
@@ -5470,7 +5470,7 @@ impl App {
                         group(ui, pal, |ui| {
                             row(ui, pal, "Record history", "Keep what you copy so you can paste it later. Password managers are skipped.", |ui| toggle(ui, pal, &mut s.clipboard_enabled));
                             row(ui, pal, "Keep history for", "Older entries are removed automatically. Pinned entries stay.", |ui| {
-                                egui::ComboBox::from_id_salt("retention").selected_text(s.clipboard_retention.label()).width(120.0).show_ui(ui, |ui| {
+                                field_combo(ui, pal, "retention", s.clipboard_retention.label(), 120.0, |ui| {
                                     for r in Retention::ALL {
                                         ui.selectable_value(&mut s.clipboard_retention, r, r.label());
                                     }
@@ -5515,7 +5515,7 @@ impl App {
                                         }
                                     });
                                     row(ui, pal, "Server", "Base URL ending in /v1.", |ui| {
-                                        ui.add(TextEdit::singleline(&mut s.ai_base_url).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("http://localhost:11434/v1"));
+                                        field(ui, pal, &mut s.ai_base_url, 470.0, "http://localhost:11434/v1", false);
                                     });
                                     row(ui, pal, "Model", "Listed by the server. Pick one, or Custom… to type a name.", |ui| {
                                         if model_picker(ui, pal, "openai", &mut s.ai_model, ferrocast_core::ai::DEFAULT_MODEL, models_state.as_ref()) {
@@ -5526,7 +5526,7 @@ impl App {
                                         if small_btn(ui, pal, "Save") {
                                             save_key = true;
                                         }
-                                        ui.add(TextEdit::singleline(&mut key_scratch).password(true).desired_width(180.0).font(FontId::proportional(12.5)).hint_text(if has_key { "••••••••" } else { "sk-…" }));
+                                        field(ui, pal, &mut key_scratch, 220.0, if has_key { "••••••••" } else { "sk-…" }, true);
                                     });
                                 });
                             }
@@ -5542,7 +5542,7 @@ impl App {
                                         if small_btn(ui, pal, "Save") {
                                             save_key = true;
                                         }
-                                        ui.add(TextEdit::singleline(&mut key_scratch).password(true).desired_width(180.0).font(FontId::proportional(12.5)).hint_text(if has_key { "••••••••" } else { "sk-ant-…" }));
+                                        field(ui, pal, &mut key_scratch, 220.0, if has_key { "••••••••" } else { "sk-ant-…" }, true);
                                     });
                                 });
                             }
@@ -5621,8 +5621,7 @@ impl App {
                             row(ui, pal, "Languages", "Drag selected text and tap the translate key. Comma-separated, up to 12.", |ui| {
                                 let id = Id::new("translate_langs_buf");
                                 let mut buf: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| s.translate_languages.join(", "));
-                                let edit = TextEdit::singleline(&mut buf).desired_width(280.0).font(FontId::proportional(12.5)).hint_text("English, Spanish, French…");
-                                if ui.add(edit).changed() {
+                                if field(ui, pal, &mut buf, 470.0, "English, Spanish, French…", false).changed() {
                                     s.translate_languages = ferrocast_core::translate::parse_list(&buf);
                                 }
                                 ui.ctx().data_mut(|d| d.insert_temp(id, buf));
@@ -5726,7 +5725,7 @@ impl App {
                                 if small_btn(ui, pal, "Add") {
                                     add_dir = true;
                                 }
-                                ui.add(TextEdit::singleline(&mut scratch).desired_width(220.0).font(FontId::proportional(12.5)).hint_text("~/scripts"));
+                                field(ui, pal, &mut scratch, 220.0, "~/scripts", false);
                             });
                         });
                         ui.add_space(10.0);
@@ -5747,10 +5746,10 @@ impl App {
                         section(ui, pal, "Units");
                         group(ui, pal, |ui| {
                             row(ui, pal, "1 rem", "Used by the calculator for rem and em conversions.", |ui| {
-                                ui.add(egui::DragValue::new(&mut s.rem_px).range(8.0..=64.0).suffix(" px"));
+                                field_drag(ui, pal, &mut s.rem_px, 8.0..=64.0, " px");
                             });
                             row(ui, pal, "Window gap", "Space left between windows and screen edges by window commands.", |ui| {
-                                ui.add(egui::DragValue::new(&mut s.window_gap).range(0.0..=64.0).suffix(" pt"));
+                                field_drag(ui, pal, &mut s.window_gap, 0.0..=64.0, " pt");
                             });
                         });
                         ui.add_space(14.0);
@@ -6004,15 +6003,23 @@ fn note(ui: &mut Ui, pal: &Palette, text: &str) {
 }
 
 fn group(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) {
-    group_rect(ui, pal, add);
+    let idx = record_card_start(ui.ctx());
+    let r = group_rect(ui, pal, add);
+    record_card_end(ui.ctx(), idx, r);
 }
 
-/// `group`, returning the rect of the card it drew.
+/// Radius of every Settings card.
+const CARD_RADIUS: u8 = 12;
+
+/// `group`, returning the rect of the card it drew. A row's separator is drawn by the row below
+/// it, so the card forgets the pending line when it starts and when it ends: the last row of a
+/// card never has a line under it.
 fn group_rect(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) -> Rect {
     let fill = pal.field;
-    egui::Frame::new()
+    ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("form-sep-pending")));
+    let r = egui::Frame::new()
         .fill(fill)
-        .corner_radius(10.0)
+        .corner_radius(CARD_RADIUS)
         .inner_margin(egui::Margin::symmetric(0, 2))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -6020,11 +6027,15 @@ fn group_rect(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) -> Rect {
             add(ui);
         })
         .response
-        .rect
+        .rect;
+    ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("form-sep-pending")));
+    r
 }
 
 fn row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
-    row_impl(ui, pal, RowLook::SETTINGS, title, desc, control);
+    let (r, c) = row_impl(ui, pal, RowLook::PANE, title, desc, control);
+    form_sep(ui, pal, r);
+    record_row(ui.ctx(), title, r, c);
 }
 
 /// How a settings-style row is laid out. `SETTINGS` is the look of the Settings pane.
@@ -6040,18 +6051,102 @@ struct RowLook {
 
 impl RowLook {
     const SETTINGS: RowLook = RowLook { pad_y: 11, text_w: None, desc: true };
+    /// The Settings pane: trimmed padding (a one-line row is about 48 pt).
+    const PANE: RowLook = RowLook { pad_y: 8, text_w: None, desc: true };
 }
 
-/// One row: title and description on the left, the control on the right, a hairline underneath.
-/// Returns (the row's rect, the rect the control used).
+/// Longest line of a Settings description: about 62 characters at 12 pt.
+const TEXT_MAX_W: f32 = 372.0;
+/// A control wider than this share of the row moves under the text.
+/// A row stacks its control under the text only when less than this much width is left for the text.
+const MIN_TEXT_W: f32 = 170.0;
+/// Height of a stacked control line (fields are 28 pt).
+const CONTROL_H: f32 = 28.0;
+
+/// One adaptive Settings row. The text column takes what the control leaves (up to
+/// `TEXT_MAX_W`); a control that leaves less than `MIN_TEXT_W` for the text goes under it instead. The
+/// control's width is learnt from the previous frame (a control cannot be measured before it is
+/// drawn), so the first frame of a new row lays it out beside the text and repaints once.
+/// Returns (the row's rect, the rect the control used). No separator is drawn here.
 fn row_impl(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) -> (Rect, Rect) {
-    let (r, used) = row_body(ui, pal, look, title, desc, control);
-    // hairline between rows, inset like the original launcher's settings
-    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
-    (r, used)
+    row_flow(ui, pal, look, false, title, desc, control)
 }
 
-/// `row_impl` without the hairline underneath (the cards of the form windows place their own).
+fn row_flow(
+    ui: &mut Ui,
+    pal: &Palette,
+    look: RowLook,
+    force_stack: bool,
+    title: &str,
+    desc: &str,
+    control: impl FnOnce(&mut Ui),
+) -> (Rect, Rect) {
+    let w = ui.available_width();
+    let inner_w = w - 28.0;
+    let key = Id::new(("row-control-w", ui.next_auto_id(), title));
+    let known: Option<f32> = ui.ctx().data(|d| d.get_temp(key));
+    // also stack when the description would wrap to more than three lines beside the control
+    // (about 6 pt per character at 12 pt)
+    let stacked = force_stack
+        || known.is_some_and(|cw| {
+            let text_w = inner_w - cw - 16.0;
+            text_w < MIN_TEXT_W || (desc.chars().count() as f32 * 6.0 / text_w).ceil() > 3.0
+        });
+    let mut used = Rect::NOTHING;
+    let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, look.pad_y)).show(ui, |ui| {
+        ui.set_width(inner_w);
+        ui.spacing_mut().item_spacing.y = 2.0;
+        if stacked {
+            ui.label(RichText::new(title).size(13.5).color(pal.text));
+            if look.desc {
+                ui.label(RichText::new(desc).size(12.0).color(pal.sub));
+            }
+            ui.add_space(6.0);
+            // the control keeps the right-to-left order of a side-by-side row, packed to the left
+            let cw = known.map_or(inner_w, |k| (k + 1.0).min(inner_w));
+            ui.allocate_ui_with_layout(Vec2::new(cw, CONTROL_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                control(ui);
+                used = ui.min_rect();
+            });
+        } else {
+            // an unknown control gets nearly the whole row, so it is measured at its natural width
+            let text_w = look.text_w.unwrap_or_else(|| match known {
+                Some(cw) => (inner_w - cw - 16.0).clamp(150.0, TEXT_MAX_W),
+                None => 60.0,
+            });
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_min_width(text_w);
+                    ui.set_max_width(text_w);
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(RichText::new(title).size(13.5).color(pal.text));
+                    if look.desc {
+                        ui.label(RichText::new(desc).size(12.0).color(pal.sub));
+                    }
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    control(ui);
+                    used = ui.min_rect();
+                });
+            });
+        }
+    });
+    if known.is_none_or(|k| (k - used.width()).abs() > 0.5) {
+        ui.ctx().data_mut(|d| d.insert_temp(key, used.width()));
+        ui.ctx().request_repaint();
+    }
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| {
+        let v = d.get_temp_mut_or_default::<Vec<(String, bool)>>(Id::new("row-stacked"));
+        v.retain(|(t, _)| t != title);
+        v.push((title.to_string(), stacked));
+    });
+    (inner.response.rect, used)
+}
+
+/// The fixed two-column row of the form windows' cards (they place their own hairlines).
 fn row_body(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) -> (Rect, Rect) {
     let w = ui.available_width();
     let text_w = look.text_w.unwrap_or_else(|| (w * 0.46).min(w - 340.0).max(150.0));
@@ -6132,7 +6227,7 @@ fn model_picker_with(
         refresh = true;
     }
     if custom {
-        ui.add(TextEdit::singleline(value).desired_width(170.0).font(FontId::proportional(12.5)).hint_text(default_label));
+        field(ui, pal, value, 170.0, default_label, false);
     }
     let shown = match state {
         None | Some(None) => "Loading…".to_string(),
@@ -6146,46 +6241,42 @@ fn model_picker_with(
             }
         }
     };
-    let combo = egui::ComboBox::from_id_salt(("model_combo", id))
-        .selected_text(RichText::new(shown).size(12.5))
-        .width(if custom { 110.0 } else { 220.0 })
-        .show_ui(ui, |ui| {
-            ui.set_min_width(240.0);
-            let r = ui.selectable_label(!custom && value.is_empty(), default_text);
+    let combo = field_combo(ui, pal, ("model_combo", id), &shown, if custom { 110.0 } else { 220.0 }, |ui| {
+        ui.set_min_width(240.0);
+        let r = ui.selectable_label(!custom && value.is_empty(), default_text);
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| {
+            d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-items")).push((default_text.to_string(), r.rect))
+        });
+        if r.clicked() {
+            value.clear();
+            custom = false;
+        }
+        for m in models {
+            let r = ui.selectable_label(!custom && value == m, m);
             #[cfg(test)]
-            ui.ctx().data_mut(|d| {
-                d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-items")).push((default_text.to_string(), r.rect))
-            });
+            ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-items")).push((m.clone(), r.rect)));
             if r.clicked() {
-                value.clear();
+                *value = m.clone();
                 custom = false;
             }
-            for m in models {
-                let r = ui.selectable_label(!custom && value == m, m);
-                #[cfg(test)]
-                ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-items")).push((m.clone(), r.rect)));
-                if r.clicked() {
-                    *value = m.clone();
-                    custom = false;
-                }
-            }
-            if let Some(Some(Err(e))) = state {
-                ui.label(RichText::new(format!("List unavailable: {e}")).size(11.5).color(pal.sub));
-            }
-            let r = ui.selectable_label(custom, "Custom…");
-            #[cfg(test)]
-            ui.ctx().data_mut(|d| {
-                d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-items")).push(("Custom…".to_string(), r.rect))
-            });
-            if r.clicked() {
-                custom = true;
-            }
-        });
+        }
+        if let Some(Some(Err(e))) = state {
+            ui.label(RichText::new(format!("List unavailable: {e}")).size(11.5).color(pal.sub));
+        }
+        let r = ui.selectable_label(custom, "Custom…");
+        #[cfg(test)]
+        ui.ctx()
+            .data_mut(|d| d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-items")).push(("Custom…".to_string(), r.rect)));
+        if r.clicked() {
+            custom = true;
+        }
+    });
     #[cfg(test)]
     ui.ctx().data_mut(|d| {
         let v = d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-combos"));
         v.retain(|(i, _)| i != id);
-        v.push((id.to_string(), combo.response.rect));
+        v.push((id.to_string(), combo.rect));
     });
     #[cfg(not(test))]
     let _ = combo;
@@ -6193,10 +6284,11 @@ fn model_picker_with(
     refresh
 }
 
-/// Like `row`, but the control sits on its own line under the text, for wide controls.
+/// Like `row`, but the control always sits on its own line under the text.
 fn row_stacked(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
-    let (r, _) = row_stacked_impl(ui, pal, title, desc, control);
-    ui.painter().hline((r.min.x + 14.0)..=(r.max.x - 14.0), r.max.y, Stroke::new(1.0, pal.sep));
+    let (r, c) = row_flow(ui, pal, RowLook::PANE, true, title, desc, control);
+    form_sep(ui, pal, r);
+    record_row(ui.ctx(), title, r, c);
 }
 
 fn row_stacked_impl(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) -> (Rect, Rect) {
@@ -6342,6 +6434,96 @@ fn record_card_end(_: &egui::Context, _: usize, _: Rect) {}
 #[cfg(not(test))]
 fn record_row(_: &egui::Context, _: &str, _: Rect, _: Rect) {}
 
+// ---- field helpers: one look for every Settings text field, combo and number box
+
+/// Minimum height of every field.
+const FIELD_H: f32 = 28.0;
+
+/// The Settings field look, applied to the widgets of `ui` (call it inside a scope): the card
+/// field fill, a 1 px border that brightens on hover and turns accent on focus, 8 pt corners.
+fn field_style(ui: &mut Ui, pal: &Palette) {
+    let fill = pal.field.gamma_multiply(1.6);
+    let radius = egui::CornerRadius::same(8);
+    ui.spacing_mut().interact_size.y = FIELD_H;
+    ui.spacing_mut().button_padding = Vec2::new(8.0, 4.0);
+    let v = ui.visuals_mut();
+    v.text_edit_bg_color = Some(fill);
+    v.selection.stroke = Stroke::new(1.0, pal.accent);
+    for (w, f, line) in [
+        (&mut v.widgets.inactive, fill, pal.border),
+        (&mut v.widgets.hovered, pal.field.gamma_multiply(2.4), pal.border.gamma_multiply(2.2)),
+        (&mut v.widgets.active, pal.field.gamma_multiply(2.4), pal.accent),
+        (&mut v.widgets.open, pal.field.gamma_multiply(2.4), pal.border.gamma_multiply(2.2)),
+    ] {
+        w.weak_bg_fill = f;
+        w.bg_fill = f;
+        w.bg_stroke = Stroke::new(1.0, line);
+        w.corner_radius = radius;
+        w.expansion = 0.0;
+        w.fg_stroke.color = pal.text;
+    }
+}
+
+/// Tests read every field the Settings code drew: (kind, rect).
+fn record_field(ctx: &egui::Context, kind: &str, r: Rect) {
+    #[cfg(test)]
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("field-count")).push((kind.to_string(), r)));
+    #[cfg(not(test))]
+    let _ = (ctx, kind, r);
+}
+
+/// A single-line text field in the Settings look; `hint` shows in the sub colour while empty.
+fn field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, password: bool) -> egui::Response {
+    let r = ui
+        .scope(|ui| {
+            field_style(ui, pal);
+            ui.add(
+                TextEdit::singleline(text)
+                    .desired_width(width)
+                    .font(FontId::proportional(12.5))
+                    .hint_text(RichText::new(hint).color(pal.sub))
+                    .password(password)
+                    .margin(egui::Margin::symmetric(8, 5))
+                    .min_size(Vec2::new(0.0, FIELD_H))
+                    .vertical_align(egui::Align::Center),
+            )
+        })
+        .inner;
+    record_field(ui.ctx(), "text", r.rect);
+    r
+}
+
+/// A drop-down in the Settings look; `add` draws its entries.
+fn field_combo(
+    ui: &mut Ui,
+    pal: &Palette,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    shown: &str,
+    width: f32,
+    add: impl FnOnce(&mut Ui),
+) -> egui::Response {
+    let r = ui
+        .scope(|ui| {
+            field_style(ui, pal);
+            egui::ComboBox::from_id_salt(id).selected_text(RichText::new(shown).size(12.5)).width(width).show_ui(ui, add).response
+        })
+        .inner;
+    record_field(ui.ctx(), "combo", r.rect);
+    r
+}
+
+/// A number box (drag or type) in the Settings look.
+fn field_drag(ui: &mut Ui, pal: &Palette, value: &mut f64, range: std::ops::RangeInclusive<f64>, suffix: &str) {
+    let r = ui
+        .scope(|ui| {
+            field_style(ui, pal);
+            ui.spacing_mut().interact_size.x = 76.0;
+            ui.add(egui::DragValue::new(value).range(range).suffix(suffix))
+        })
+        .inner;
+    record_field(ui.ctx(), "drag", r.rect);
+}
+
 /// A pill switch that slides in 120 ms.
 fn toggle(ui: &mut Ui, pal: &Palette, on: &mut bool) {
     let (r, resp) = ui.allocate_exact_size(Vec2::new(40.0, 24.0), Sense::click());
@@ -6394,7 +6576,7 @@ fn accent_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
 }
 
 fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
-    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), pal.text);
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), if on { Color32::WHITE } else { pal.text });
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 18.0, 24.0), Sense::click());
     let p = ui.painter();
     p.rect_filled(

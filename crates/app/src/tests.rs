@@ -6343,8 +6343,11 @@ fn tab_bars(tab: usize) -> Vec<usize> {
     app.settings.translate_output = ferrocast_core::models::TranslateOutput::Auto;
     app.stack = vec![View::Root, View::Settings];
     app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), tab));
-    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+    // rows learn their control width in the first frames (a wide control moves under its text):
+    // read the bars of the settled frame only
     render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
     render(&mut app, vec![]);
     let mut bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
     bars.sort_by(|a, b| (a.0.min.y, a.0.min.x).partial_cmp(&(b.0.min.y, b.0.min.x)).unwrap());
@@ -6491,4 +6494,148 @@ fn switching_the_translation_provider_resets_the_model() {
     let cells = reach_bar(&mut app, 5).unwrap();
     click_at(&mut app, cells[4].center());
     assert_eq!(app.settings.translate_model, "opus");
+}
+
+// ---- SD1: Settings row and control system
+
+fn settings_app(tab: usize, theme: egui::ThemePreference) -> App {
+    let app = translate_tab_app();
+    app.ctx.set_theme(theme);
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), tab));
+    app
+}
+
+/// Render three frames: the rows learn their control width in the first one.
+fn settle(app: &mut App) {
+    for _ in 0..2 {
+        render(app, vec![]);
+    }
+    // the markers of the last frame only
+    app.ctx.data_mut(|d| {
+        d.remove::<Vec<FormCard>>(Id::new("form-cards"));
+        d.remove::<Vec<(String, Rect)>>(Id::new("field-count"));
+        d.remove::<Vec<(String, bool)>>(Id::new("row-stacked"));
+    });
+    render(app, vec![]);
+}
+
+fn settings_cards(app: &App) -> Vec<FormCard> {
+    app.ctx.data(|d| d.get_temp(Id::new("form-cards"))).unwrap_or_default()
+}
+
+fn drawn_fields(app: &App) -> Vec<(String, Rect)> {
+    app.ctx.data(|d| d.get_temp(Id::new("field-count"))).unwrap_or_default()
+}
+
+const BOTH_THEMES: [egui::ThemePreference; 2] = [egui::ThemePreference::Dark, egui::ThemePreference::Light];
+
+#[test]
+fn every_settings_tab_renders_in_both_themes() {
+    for tab in 0..=6usize {
+        for theme in BOTH_THEMES {
+            let mut app = settings_app(tab, theme);
+            let before = app.settings.clone();
+            settle(&mut app);
+            assert!(matches!(app.view(), View::Settings), "tab {tab} {theme:?}");
+            assert_eq!(app.settings, before, "drawing alone changes nothing (tab {tab})");
+            assert!(!settings_cards(&app).is_empty() || tab == 6 || tab == 0, "tab {tab} drew no card");
+        }
+    }
+}
+
+#[test]
+fn the_last_row_of_a_settings_card_has_no_separator_under_it() {
+    for tab in 0..=6usize {
+        let mut app = settings_app(tab, egui::ThemePreference::Dark);
+        settle(&mut app);
+        let cards = settings_cards(&app);
+        assert!(!cards.is_empty(), "tab {tab} records its cards");
+        for c in cards {
+            assert!(!c.rows.is_empty(), "tab {tab}: a card without rows");
+            assert_eq!(c.seps.len(), c.rows.len() - 1, "tab {tab}: one line between rows, none after the last: {:?}", c.seps);
+            let last = &c.rows.last().unwrap().1;
+            assert!(c.seps.iter().all(|y| *y < last.min.y + 0.5), "tab {tab}: a line at or under the last row");
+            // (the Translate result card ends with a note under its row)
+            assert!(tab == 4 || c.rect.max.y - last.max.y < 6.0, "tab {tab}: the card ends right under its last row");
+        }
+    }
+}
+
+#[test]
+fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
+    use ferrocast_core::models::AiProvider as P;
+    // (tab, chat provider, translate provider) -> expected (text fields, combos, drag fields)
+    let cases: [(usize, P, Option<P>, usize, usize, usize); 10] = [
+        (0, P::OpenAiCompatible, None, 1, 0, 0),
+        (1, P::OpenAiCompatible, None, 0, 1, 0),
+        (2, P::OpenAiCompatible, None, 0, 0, 0),
+        (3, P::OpenAiCompatible, None, 2, 1, 0),
+        (3, P::Anthropic, None, 1, 1, 0),
+        (3, P::ChatGpt, None, 0, 1, 0),
+        (3, P::ClaudeCode, None, 0, 1, 0),
+        (4, P::OpenAiCompatible, Some(P::ChatGpt), 1, 1, 0),
+        (5, P::OpenAiCompatible, None, 1, 0, 0),
+        (6, P::OpenAiCompatible, None, 0, 0, 2),
+    ];
+    for (tab, chat, tr, texts, combos, drags) in cases {
+        for theme in BOTH_THEMES {
+            let mut app = settings_app(tab, theme);
+            app.settings.ai_provider = chat;
+            app.settings.translate_provider = tr;
+            settle(&mut app);
+            let f = drawn_fields(&app);
+            let n = |k: &str| f.iter().filter(|(kind, _)| kind == k).count();
+            assert_eq!((n("text"), n("combo"), n("drag")), (texts, combos, drags), "tab {tab} {chat:?} {tr:?}");
+            for (_, r) in &f {
+                assert!(r.height() >= 28.0 - 0.5, "tab {tab}: a field is at least 28 pt tall: {r:?}");
+            }
+        }
+    }
+    // no raw TextEdit / ComboBox / DragValue in the Settings drawing code
+    let src = include_str!("draw.rs");
+    let start = src.find("    fn draw_settings(").expect("draw_settings");
+    let end = src.find("// ---- field helpers").expect("field helpers marker");
+    let body = &src[start..end];
+    for raw in ["TextEdit::", "ComboBox::", "DragValue::"] {
+        assert!(!body.contains(raw), "Settings code draws a raw {raw}: use the field helpers");
+    }
+}
+
+#[test]
+fn settings_rows_are_dense_enough_for_five_rows_on_the_first_screen() {
+    let mut app = settings_app(0, egui::ThemePreference::Dark);
+    settle(&mut app);
+    let rows: Vec<Rect> = settings_cards(&app).iter().flat_map(|c| c.rows.iter().map(|r| r.1)).collect();
+    let bottom = ui::HEIGHT - ui::FOOTER_H;
+    let visible = rows.iter().filter(|r| r.max.y <= bottom).count();
+    assert!(visible >= 5, "{visible} rows fully visible above y={bottom}: {rows:?}");
+    // a one-line description row is about 48 pt
+    let h: Vec<f32> = rows.iter().map(|r| r.height()).collect();
+    assert!(h.iter().any(|h| *h < 56.0), "rows are trimmed: {h:?}");
+}
+
+#[test]
+fn rows_with_wide_controls_stack_and_toggle_rows_do_not() {
+    let stacked = |tab: usize| -> Vec<(String, bool)> {
+        let mut app = settings_app(tab, egui::ThemePreference::Dark);
+        settle(&mut app);
+        let flags: Vec<(String, bool)> = app.ctx.data(|d| d.get_temp(Id::new("row-stacked"))).unwrap_or_default();
+        let cards = settings_cards(&app);
+        for (title, row, ctl) in cards.iter().flat_map(|c| c.rows.iter()) {
+            let is_stacked = flags.iter().find(|(t, _)| t == title).map(|f| f.1).unwrap_or(false);
+            if is_stacked {
+                assert!(ctl.min.y > row.min.y + 34.0, "{title}: control sits below the text ({ctl:?} in {row:?})");
+            } else {
+                assert!(ctl.center().y < row.max.y && ctl.center().y > row.min.y, "{title}: control beside the text");
+            }
+        }
+        flags
+    };
+    let t4 = stacked(4);
+    let get = |v: &Vec<(String, bool)>, t: &str| v.iter().find(|(n, _)| n == t).map(|f| f.1);
+    assert_eq!(get(&t4, "After translating"), Some(true));
+    assert_eq!(get(&t4, "Languages"), Some(true));
+    let t0 = stacked(0);
+    assert_eq!(get(&t0, "Compact mode"), Some(false));
+    assert_eq!(get(&t0, "Launch at login"), Some(false));
 }
