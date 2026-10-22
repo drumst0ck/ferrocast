@@ -49,6 +49,7 @@ fn fixture() -> App {
         hotkeys: None,
         finder: services::FinderEnterState { hooks: inert_finder_hooks(), ..Default::default() },
         _tray: None,
+        notes_tray: None,
         icons: IconCache::new(store.images_dir()),
         stack: vec![View::Root],
         query: String::new(),
@@ -130,6 +131,15 @@ fn fx_taken() -> Vec<String> {
     FX_LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
 }
 
+/// The Notes menu-bar item of the tests: only records that it was created and removed.
+struct FakeNotesTray;
+
+impl Drop for FakeNotesTray {
+    fn drop(&mut self) {
+        FX_LOG.with(|l| l.borrow_mut().push("notes_tray off".into()));
+    }
+}
+
 impl Effects {
     /// No process, AX or keyboard: every side effect is only recorded in `FX_LOG`.
     fn recording() -> Effects {
@@ -147,6 +157,10 @@ impl Effects {
             effect_probe: |pid, drop, run, _bus| FX_PROBE.with(|l| l.borrow_mut().push((pid, drop, run))),
             glow_show: |_t| FX_LOG.with(|l| l.borrow_mut().push("glow_show".into())),
             glow_hide: || FX_LOG.with(|l| l.borrow_mut().push("glow_hide".into())),
+            notes_tray: |_bus| {
+                FX_LOG.with(|l| l.borrow_mut().push("notes_tray on".into()));
+                Some(Box::new(FakeNotesTray))
+            },
             web_script: |_b, js| FX_SCRIPTS.with(|l| l.borrow_mut().push(js.to_string())),
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
@@ -4574,7 +4588,7 @@ fn footer_hints_are_pure_per_view_and_at_most_four_chips_with_back_last() {
     for v in [View::Root, View::Clipboard, View::Snippets, View::Files, View::Notes, View::Welcome] {
         assert!(v.footer_hints().is_empty(), "{} keeps the footer it had", v.title());
     }
-    assert_eq!(View::Settings.footer_hints(), vec![("Tabs", "⌘1–7"), ("Find", "⌘F"), BACK], "Settings hints (SD2, SD4 adds Find)");
+    assert_eq!(View::Settings.footer_hints(), vec![("Tabs", "⌘1–8"), ("Find", "⌘F"), BACK], "Settings hints (SD2, SD4 adds Find)");
 }
 
 /// Views whose footer already drew hints keep drawing exactly them.
@@ -6715,21 +6729,21 @@ const BOTH_THEMES: [egui::ThemePreference; 2] = [egui::ThemePreference::Dark, eg
 
 #[test]
 fn every_settings_tab_renders_in_both_themes() {
-    for tab in 0..=6usize {
+    for tab in 0..=7usize {
         for theme in BOTH_THEMES {
             let mut app = settings_app(tab, theme);
             let before = app.settings.clone();
             settle(&mut app);
             assert!(matches!(app.view(), View::Settings), "tab {tab} {theme:?}");
             assert_eq!(app.settings, before, "drawing alone changes nothing (tab {tab})");
-            assert!(!settings_cards(&app).is_empty() || tab == 6 || tab == 0, "tab {tab} drew no card");
+            assert!(!settings_cards(&app).is_empty() || tab == 7 || tab == 0, "tab {tab} drew no card");
         }
     }
 }
 
 #[test]
 fn the_last_row_of_a_settings_card_has_no_separator_under_it() {
-    for tab in 0..=6usize {
+    for tab in 0..=7usize {
         let mut app = settings_app(tab, egui::ThemePreference::Dark);
         settle(&mut app);
         let cards = settings_cards(&app);
@@ -6749,7 +6763,7 @@ fn the_last_row_of_a_settings_card_has_no_separator_under_it() {
 fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
     use ferrocast_core::models::AiProvider as P;
     // (tab, chat provider, translate provider) -> expected (text fields, combos, drag fields)
-    let cases: [(usize, P, Option<P>, usize, usize, usize); 10] = [
+    let cases: [(usize, P, Option<P>, usize, usize, usize); 11] = [
         (0, P::OpenAiCompatible, None, 1, 0, 0),
         (1, P::OpenAiCompatible, None, 0, 1, 0),
         (2, P::OpenAiCompatible, None, 0, 0, 0),
@@ -6758,8 +6772,9 @@ fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
         (3, P::ChatGpt, None, 0, 1, 0),
         (3, P::ClaudeCode, None, 0, 1, 0),
         (4, P::OpenAiCompatible, Some(P::ChatGpt), 1, 1, 0),
-        (5, P::OpenAiCompatible, None, 1, 0, 0),
-        (6, P::OpenAiCompatible, None, 0, 0, 2),
+        (5, P::OpenAiCompatible, None, 0, 1, 0),
+        (6, P::OpenAiCompatible, None, 1, 0, 0),
+        (7, P::OpenAiCompatible, None, 0, 0, 2),
     ];
     for (tab, chat, tr, texts, combos, drags) in cases {
         for theme in BOTH_THEMES {
@@ -6826,8 +6841,8 @@ fn rows_with_wide_controls_stack_and_toggle_rows_do_not() {
 
 // ---- SD2: Settings sidebar, header and footer
 
-const TAB_NAMES: [&str; 7] = ["General", "Clipboard", "Snippets", "AI", "Translate", "Scripts", "Advanced"];
-const NUM_KEYS: [Key; 7] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7];
+const TAB_NAMES: [&str; 8] = ["General", "Clipboard", "Snippets", "AI", "Translate", "Notes", "Scripts", "Advanced"];
+const NUM_KEYS: [Key; 8] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8];
 
 fn cmd_key(key: Key) -> Event {
     Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: CMD }
@@ -6853,8 +6868,8 @@ fn sidebar_marks(app: &App) -> SidebarMarks {
 
 #[test]
 fn sd2_cmd_number_jumps_to_that_tab_in_settings() {
-    for n in 1..=7usize {
-        let mut app = sd2_app((n + 2) % 7);
+    for n in 1..=8usize {
+        let mut app = sd2_app((n + 2) % 8);
         render(&mut app, vec![cmd_key(NUM_KEYS[n - 1])]);
         assert_eq!(tab_of(&app), Some(n - 1), "Cmd+{n}");
         render(&mut app, vec![]);
@@ -6920,7 +6935,7 @@ fn sd2_arrows_do_not_steal_from_a_focused_text_field() {
 }
 
 #[test]
-fn sd2_sidebar_has_seven_items_in_three_groups_with_two_dividers() {
+fn sd2_sidebar_has_eight_items_in_three_groups_with_two_dividers() {
     let app = sd2_app(0);
     let (items, dividers) = sidebar_marks(&app);
     let names: Vec<&str> = items.iter().map(|(n, _)| n.as_str()).collect();
@@ -6938,7 +6953,7 @@ fn sd2_sidebar_has_seven_items_in_three_groups_with_two_dividers() {
 fn sd2_sidebar_items_are_large_hit_targets() {
     let app = sd2_app(0);
     let (items, _) = sidebar_marks(&app);
-    assert_eq!(items.len(), 7);
+    assert_eq!(items.len(), 8);
     for (name, r) in &items {
         assert!(r.height() >= 32.0, "{name}: {r:?} is shorter than 32 pt");
         assert!(r.width() >= 38.0 + 7.0 * name.chars().count() as f32, "{name}: {r:?} is too narrow for its label");
@@ -6951,10 +6966,10 @@ fn sd2_breadcrumb_and_footer_chips() {
         let mut app = sd2_app(i);
         let crumb: String = app.ctx.data(|d| d.get_temp(Id::new("settings-breadcrumb"))).unwrap_or_default();
         assert_eq!(crumb, format!("Settings / {name}"));
-        render(&mut app, vec![cmd_key(NUM_KEYS[(i + 1) % 7])]);
+        render(&mut app, vec![cmd_key(NUM_KEYS[(i + 1) % 8])]);
         render(&mut app, vec![]);
         let crumb: String = app.ctx.data(|d| d.get_temp(Id::new("settings-breadcrumb"))).unwrap_or_default();
-        assert_eq!(crumb, format!("Settings / {}", TAB_NAMES[(i + 1) % 7]), "the header follows a shortcut");
+        assert_eq!(crumb, format!("Settings / {}", TAB_NAMES[(i + 1) % 8]), "the header follows a shortcut");
     }
     let app = sd2_app(0);
     let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
@@ -6964,11 +6979,11 @@ fn sd2_breadcrumb_and_footer_chips() {
 #[test]
 fn sd2_every_tab_renders_in_both_themes() {
     for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
-        for tab in 0..7 {
+        for tab in 0..8 {
             let mut app = settings_app(tab, theme);
             render(&mut app, vec![]);
             render(&mut app, vec![]);
-            assert_eq!(sidebar_marks(&app).0.len(), 7, "tab {tab}");
+            assert_eq!(sidebar_marks(&app).0.len(), 8, "tab {tab}");
         }
     }
 }
@@ -7141,7 +7156,7 @@ fn sd3_every_drawn_row_is_indexed_and_every_entry_is_drawn() {
         render(app, vec![]);
         drawn.extend(drawn_rows(app));
     };
-    for tab in [0usize, 1, 2, 5, 6] {
+    for tab in [0usize, 1, 2, 5, 6, 7] {
         collect(&mut settings_app(tab, egui::ThemePreference::Dark));
     }
     for p in all {
@@ -7166,11 +7181,11 @@ fn sd3_every_drawn_row_is_indexed_and_every_entry_is_drawn() {
 #[test]
 fn sd3_all_tabs_render_in_both_themes_with_and_without_a_query() {
     for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
-        for tab in 0..7 {
+        for tab in 0..8 {
             let mut app = settings_app(tab, theme);
             render(&mut app, vec![]);
             render(&mut app, vec![]);
-            assert_eq!(sidebar_marks(&app).0.len(), 7, "tab {tab}");
+            assert_eq!(sidebar_marks(&app).0.len(), 8, "tab {tab}");
             render(&mut app, vec![cmd_key(Key::F)]);
             render(&mut app, vec![text_event("model")]);
             render(&mut app, vec![]);
@@ -7185,7 +7200,7 @@ fn sd3_all_tabs_render_in_both_themes_with_and_without_a_query() {
 // ---- SD4: per-tab polish
 
 /// Footer chips of Settings: Tabs, Find (SD4) and Back, in reading order.
-const SETTINGS_CHIPS: [(&str, &str); 3] = [("Tabs", "⌘1–7"), ("Find", "⌘F"), ("Back", "esc")];
+const SETTINGS_CHIPS: [(&str, &str); 3] = [("Tabs", "⌘1–8"), ("Find", "⌘F"), ("Back", "esc")];
 
 fn sd4_render(app: &mut App) {
     for _ in 0..3 {
@@ -7434,7 +7449,7 @@ fn sd4_the_translate_engine_shows_readiness_as_a_chip() {
 
 #[test]
 fn sd4_accessibility_shows_granted_or_not_granted() {
-    let app = sd4_app(6, egui::ThemePreference::Dark);
+    let app = sd4_app(7, egui::ThemePreference::Dark);
     let want = if windows::accessibility_trusted(false) { sd4_chip("ok", "Granted") } else { sd4_chip("warn", "Not granted") };
     assert_eq!(sd4_chips(&app), vec![want]);
 }
@@ -7543,7 +7558,7 @@ fn sd4_the_reset_table_names_exact_stored_fields() {
     let d = sd4_json(&Settings::default());
     let sc = sd4_json(&sd4_scrambled());
     let mut seen = std::collections::HashSet::new();
-    assert_eq!(RESET_FIELDS.iter().map(|(t, _)| *t).collect::<Vec<_>>(), vec![0, 1, 4, 6], "General, Clipboard, Translate, Advanced");
+    assert_eq!(RESET_FIELDS.iter().map(|(t, _)| *t).collect::<Vec<_>>(), vec![0, 1, 4, 7], "General, Clipboard, Translate, Advanced");
     for (tab, fields) in RESET_FIELDS {
         for f in fields {
             assert!(d.contains_key(*f), "tab {tab}: {f} is not a stored setting");
@@ -7572,7 +7587,7 @@ fn sd4_reset_tab_restores_exactly_that_tabs_fields() {
         }
         assert_eq!(reset_tab(&Settings::default(), tab), Settings::default(), "tab {tab}: resetting defaults changes nothing");
     }
-    for tab in [2usize, 3, 5] {
+    for tab in [2usize, 3, 5, 6] {
         assert_eq!(reset_tab(&sd4_scrambled(), tab), sd4_scrambled(), "tab {tab} holds user data: no reset");
     }
 }
@@ -7610,20 +7625,20 @@ fn sd4_resetting_a_default_tab_changes_nothing() {
     let mut app = fixture();
     app.settings = Settings { compact_mode: true, ..Settings::default() };
     let before = app.settings.clone();
-    assert!(!app.reset_settings_tab(6), "Advanced already has its defaults");
+    assert!(!app.reset_settings_tab(7), "Advanced already has its defaults");
     assert_eq!(app.settings, before);
     assert!(app.settings_undo.is_none(), "no undo for a no-op");
     assert_ne!(toast_text(&app), "Tab reset · Undo");
     // a tab with no reset at all
-    assert!(!app.reset_settings_tab(5));
+    assert!(!app.reset_settings_tab(6));
     assert_eq!(app.settings, before);
 }
 
 #[test]
 fn sd4_the_reset_button_exists_on_four_tabs_and_undo_is_clickable() {
-    for tab in 0..7usize {
+    for tab in 0..8usize {
         let app = sd4_app(tab, egui::ThemePreference::Dark);
-        assert_eq!(sd4_rect(&app, "settings-reset-button").is_some(), [0, 1, 4, 6].contains(&tab), "tab {tab}");
+        assert_eq!(sd4_rect(&app, "settings-reset-button").is_some(), [0, 1, 4, 7].contains(&tab), "tab {tab}");
     }
     let mut app = settings_app(1, egui::ThemePreference::Dark);
     app.settings.clipboard_enabled = false;
@@ -7667,9 +7682,9 @@ fn sd4_empty(app: &App) -> Vec<(usize, String)> {
 fn sd4_snippets_and_scripts_tabs_compose_an_empty_state() {
     let app = sd4_app(2, egui::ThemePreference::Dark);
     assert_eq!(sd4_empty(&app), vec![(2, "No snippets yet".to_string())]);
-    let app = sd4_app(5, egui::ThemePreference::Dark);
-    assert_eq!(sd4_empty(&app), vec![(5, "No script commands yet".to_string())]);
-    for tab in [0usize, 1, 3, 4, 6] {
+    let app = sd4_app(6, egui::ThemePreference::Dark);
+    assert_eq!(sd4_empty(&app), vec![(6, "No script commands yet".to_string())]);
+    for tab in [0usize, 1, 3, 4, 5, 7] {
         assert!(sd4_empty(&sd4_app(tab, egui::ThemePreference::Dark)).is_empty(), "tab {tab}");
     }
     // data hides the empty state
@@ -7677,7 +7692,7 @@ fn sd4_snippets_and_scripts_tabs_compose_an_empty_state() {
     app.snippets.push(ferrocast_core::models::Snippet::new("Sig", "Best", "!sig"));
     sd4_render(&mut app);
     assert!(sd4_empty(&app).is_empty());
-    let mut app = settings_app(5, egui::ThemePreference::Dark);
+    let mut app = settings_app(6, egui::ThemePreference::Dark);
     app.settings.script_directories.push("~/scripts".into());
     sd4_render(&mut app);
     assert!(sd4_empty(&app).is_empty());
@@ -7690,7 +7705,7 @@ fn sd4_empty_state_buttons_use_the_existing_actions() {
     assert!(r.max.y < ui::HEIGHT - ui::FOOTER_H, "{r:?}");
     click_at(&mut app, r.center());
     assert!(matches!(app.view(), View::SnippetForm { id: None, .. }), "New snippet opens the snippet form");
-    let mut app = sd4_app(5, egui::ThemePreference::Dark);
+    let mut app = sd4_app(6, egui::ThemePreference::Dark);
     let r = sd4_rect(&app, "settings-empty-button").expect("a button");
     assert!(r.max.y < ui::HEIGHT - ui::FOOTER_H, "{r:?}");
     click_at(&mut app, r.center());
@@ -7703,7 +7718,7 @@ fn sd4_empty_state_buttons_use_the_existing_actions() {
 fn sd4_every_tab_renders_in_both_themes_in_every_state() {
     use ferrocast_core::models::AiProvider as P;
     for theme in BOTH_THEMES {
-        for tab in 0..7usize {
+        for tab in 0..8usize {
             for dep_off in [false, true] {
                 let mut app = settings_app(tab, theme);
                 seed_model_lists(&mut app);
@@ -7818,7 +7833,7 @@ fn sd5_states() -> Vec<(String, bool, App)> {
     let mut out = vec![];
     for theme in BOTH_THEMES {
         let dark = theme == egui::ThemePreference::Dark;
-        for tab in 0..7usize {
+        for tab in 0..8usize {
             for dep_off in [false, true] {
                 let mut app = settings_app(tab, theme);
                 seed_model_lists(&mut app);
@@ -7962,7 +7977,7 @@ fn sd5_every_interactive_settings_rect_is_at_least_28_pt() {
 fn sd5_every_focusable_settings_control_draws_a_focus_ring() {
     let mut checked = std::collections::BTreeSet::new();
     let mut failures = vec![];
-    for tab in 0..7usize {
+    for tab in 0..8usize {
         let mut app = settings_app(tab, egui::ThemePreference::Dark);
         seed_model_lists(&mut app);
         sd5_frame(&mut app);
@@ -8453,4 +8468,203 @@ fn native_notes_messages_are_applied_by_drain() {
     assert_eq!(saved[0].text, "Alpha edited", "the first change after a quiet period is written at once");
     assert!(st.borrow().visible);
     let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+// ---- Notes settings tab and the menu-bar item (S14, S15)
+
+const NOTES_TAB_TITLES: [&str; 3] = ["Show Notes Toggle Button in Menu Bar", "Escape Key Loses Focus", "Zoom"];
+
+/// The app on the Notes tab with a fake Notes window; the menu-bar log is cleared.
+fn notes_tab_app(theme: egui::ThemePreference) -> (App, std::rc::Rc<std::cell::RefCell<crate::notes_ctl::fake::St>>) {
+    let (mut app, st) = notes_app(vec![]);
+    seed_model_lists(&mut app);
+    app.stack = vec![View::Root, View::Settings];
+    app.ctx.set_theme(theme);
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), NOTES_TAB));
+    fx_taken();
+    for _ in 0..3 {
+        render(&mut app, vec![]);
+    }
+    (app, st)
+}
+
+fn notes_tab_hits(app: &mut App, kind: &str) -> Vec<Rect> {
+    app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
+    render(app, vec![]);
+    let mut hits: Vec<Rect> = sd5_hits(app).into_iter().filter(|h| h.0 == kind).map(|h| h.2).collect();
+    hits.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+    hits
+}
+
+#[test]
+fn notes_tab_sits_after_translate_and_lists_the_three_controls() {
+    assert_eq!(SETTINGS_TABS[TRANSLATE_TAB].0, "Translate");
+    assert_eq!(SETTINGS_TABS[NOTES_TAB].0, "Notes");
+    assert_eq!(NOTES_TAB, TRANSLATE_TAB + 1);
+    for theme in BOTH_THEMES {
+        let (app, _) = notes_tab_app(theme);
+        let rows: Vec<String> = drawn_rows(&app).into_iter().filter(|(t, _)| *t == NOTES_TAB).map(|(_, n)| n).collect();
+        assert_eq!(rows, NOTES_TAB_TITLES.map(String::from).to_vec(), "{theme:?}");
+        assert_eq!(notes_tab_hits(&mut { app }, "toggle").len(), 2, "two switches");
+    }
+}
+
+#[test]
+fn notes_settings_are_found_by_the_settings_search() {
+    use ferrocast_core::settings_index::search;
+    for (q, title) in [
+        ("menu bar button", NOTES_TAB_TITLES[0]),
+        ("toggle button", NOTES_TAB_TITLES[0]),
+        ("floating notes", NOTES_TAB_TITLES[0]),
+        ("escape", NOTES_TAB_TITLES[1]),
+        ("focus", NOTES_TAB_TITLES[1]),
+        ("zoom", NOTES_TAB_TITLES[2]),
+        ("text size", NOTES_TAB_TITLES[2]),
+    ] {
+        assert!(search(q).iter().any(|e| e.tab == NOTES_TAB && e.title == title), "{q:?} finds {title:?}");
+    }
+    // and the UI jumps to the row
+    let (mut app, _) = notes_tab_app(egui::ThemePreference::Dark);
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 0usize));
+    render(&mut app, vec![cmd_key(Key::F)]);
+    render(&mut app, vec![text_event("escape key")]);
+    render(&mut app, vec![]);
+    assert!(result_titles(&app).contains(&"Escape Key Loses Focus".to_string()));
+    render(&mut app, vec![key_event(Key::Enter)]);
+    render(&mut app, vec![]);
+    assert_eq!(tab_of(&app), Some(NOTES_TAB));
+    assert_eq!(flash_of(&app).as_deref(), Some("Escape Key Loses Focus"));
+}
+
+#[test]
+fn the_menu_bar_switch_updates_the_setting_and_the_menu_bar_item() {
+    let (mut app, _) = notes_tab_app(egui::ThemePreference::Dark);
+    assert!(!app.settings.notes_menu_bar_button && app.notes_tray.is_none());
+    let sw = notes_tab_hits(&mut app, "toggle")[0].center();
+    click_at(&mut app, sw);
+    assert!(app.settings.notes_menu_bar_button);
+    assert!(app.notes_tray.is_some());
+    assert_eq!(fx_taken(), vec!["notes_tray on".to_string()]);
+    let saved: Settings = app.store.load("settings.json");
+    assert!(saved.notes_menu_bar_button, "saved with the other settings");
+    let sw = notes_tab_hits(&mut app, "toggle")[0].center();
+    click_at(&mut app, sw);
+    assert!(!app.settings.notes_menu_bar_button && app.notes_tray.is_none());
+    assert_eq!(fx_taken(), vec!["notes_tray off".to_string()]);
+}
+
+#[test]
+fn the_escape_switch_updates_the_setting_and_the_window() {
+    let (mut app, st) = notes_tab_app(egui::ThemePreference::Light);
+    let sw = notes_tab_hits(&mut app, "toggle")[1].center();
+    click_at(&mut app, sw);
+    assert!(app.settings.notes_escape_loses_focus);
+    assert!(st.borrow().log.contains(&"esc:true".to_string()), "the controller hook ran: {:?}", st.borrow().log);
+    let saved: Settings = app.store.load("settings.json");
+    assert!(saved.notes_escape_loses_focus);
+    let sw = notes_tab_hits(&mut app, "toggle")[1].center();
+    click_at(&mut app, sw);
+    assert!(!app.settings.notes_escape_loses_focus);
+    assert_eq!(st.borrow().log.iter().rev().find(|l| l.starts_with("esc:")).map(String::as_str), Some("esc:false"));
+}
+
+#[test]
+fn zoom_steps_are_fifty_to_three_hundred_percent_like_the_editor() {
+    let steps = notes_zoom_steps();
+    assert_eq!(steps.len(), 26);
+    assert_eq!((steps[0], steps[25]), (0.5, 3.0));
+    assert!(steps.windows(2).all(|w| ((w[1] - w[0]) - 0.1).abs() < 1e-9), "10 % apart");
+    for w in steps.windows(2) {
+        assert_eq!(ferrocast_macos::notes_editor::step_zoom(w[0], 1), w[1], "same as the editor's step from {}", w[0]);
+    }
+    assert_eq!(notes_zoom_label(1.0), "100%");
+    assert_eq!(notes_zoom_label(0.5), "50%");
+    assert_eq!(notes_zoom_label(3.0), "300%");
+    assert_eq!(notes_zoom_label(1.5), "150%");
+    assert_eq!(notes_zoom_label(1.1 + 0.2), "130%", "float noise is rounded away");
+}
+
+fn notes_zoom_shown(app: &App) -> String {
+    app.ctx.data(|d| d.get_temp(Id::new("notes-zoom-shown"))).unwrap_or_default()
+}
+
+#[test]
+fn the_zoom_control_follows_the_window_and_changes_it() {
+    let (mut app, st) = notes_tab_app(egui::ThemePreference::Dark);
+    assert_eq!(notes_zoom_shown(&app), "100%");
+    // ⌘+ inside the Notes window: the controller persists it, the tab shows the live value
+    app.bus.send(Msg::Notes(crate::notes_ctl::NMsg::Zoom(1.3)));
+    app.drain();
+    render(&mut app, vec![]);
+    assert_eq!(notes_zoom_shown(&app), "130%");
+    // choose 60 % in the drop-down (the list scrolls: later entries start out of view)
+    let combo = notes_tab_hits(&mut app, "combo")[0].center();
+    click_at(&mut app, combo);
+    for _ in 0..30 {
+        render(&mut app, vec![]);
+    }
+    let items: Vec<(String, Rect)> = app.ctx.data(|d| d.get_temp(Id::new("notes-zoom-items"))).unwrap_or_default();
+    assert_eq!(items.len(), 26);
+    let (_, r) = items.iter().find(|(l, _)| l == "60%").cloned().expect("a 60% entry");
+    click_at(&mut app, r.center());
+    assert_eq!(app.settings.notes_zoom, 0.6);
+    assert_eq!(st.borrow().zoom, 0.6, "the open window follows");
+    let saved: Settings = app.store.load("settings.json");
+    assert_eq!(saved.notes_zoom, 0.6);
+    render(&mut app, vec![]);
+    assert_eq!(notes_zoom_shown(&app), "60%");
+    // Reset goes back to 100 %
+    let reset = notes_tab_hits(&mut app, "small_btn")[0].center();
+    click_at(&mut app, reset);
+    assert_eq!(app.settings.notes_zoom, 1.0);
+    assert_eq!(st.borrow().zoom, 1.0);
+}
+
+#[test]
+fn the_notes_tab_switches_are_large_hit_targets_in_both_themes() {
+    for theme in BOTH_THEMES {
+        let (mut app, _) = notes_tab_app(theme);
+        let toggles = notes_tab_hits(&mut app, "toggle");
+        assert!(toggles.iter().all(|r| r.height() >= 24.0 && r.width() >= 36.0), "{toggles:?}");
+    }
+}
+
+#[test]
+fn the_menu_bar_item_follows_the_saved_setting_at_startup_and_every_change() {
+    let (mut app, _) = notes_app(vec![]);
+    fx_taken();
+    app.settings.notes_menu_bar_button = true;
+    app.sync_notes_tray();
+    app.sync_notes_tray();
+    assert_eq!(fx_taken(), vec!["notes_tray on".to_string()], "created once, not per call");
+    // commit_settings (the Settings screen) turns it off again
+    let mut s = app.settings.clone();
+    s.notes_menu_bar_button = false;
+    app.commit_settings(s);
+    assert!(app.notes_tray.is_none());
+    assert_eq!(fx_taken(), vec!["notes_tray off".to_string()]);
+    // reset/undo paths go through commit_settings too
+    let mut s = app.settings.clone();
+    s.notes_menu_bar_button = true;
+    app.commit_settings(s);
+    assert!(app.notes_tray.is_some());
+}
+
+#[test]
+fn a_menu_bar_click_toggles_the_notes_window() {
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1)]);
+    app.bus.send(Msg::Tray("notes_toggle".into()));
+    app.drain();
+    assert!(st.borrow().visible, "first click shows");
+    app.bus.send(Msg::Tray("notes_toggle".into()));
+    app.drain();
+    assert!(!st.borrow().visible, "second click hides");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn the_notes_tab_has_no_reset_and_the_format_bar_has_no_switch() {
+    assert!(!RESET_FIELDS.iter().any(|(t, _)| *t == NOTES_TAB));
+    let (app, _) = notes_tab_app(egui::ThemePreference::Dark);
+    assert!(!drawn_rows(&app).iter().any(|(_, n)| n.to_lowercase().contains("format bar")), "the Format Bar toggle stays in the ⌘K panel");
 }

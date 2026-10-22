@@ -640,7 +640,7 @@ impl View {
                 vec![(primary, "↵"), ("Move", "⌘↑/↓"), BACK]
             }
             View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
-            View::Settings => vec![("Tabs", "⌘1–7"), ("Find", "⌘F"), BACK],
+            View::Settings => vec![("Tabs", "⌘1–8"), ("Find", "⌘F"), BACK],
             _ => vec![],
         }
     }
@@ -772,6 +772,9 @@ pub struct App {
     /// Opt-in Enter on a Finder selection (tap, in-flight guard, injectable system hooks).
     finder: services::FinderEnterState,
     _tray: Option<tray_icon::TrayIcon>,
+    /// The second menu-bar item that toggles Notes; present while `notes_menu_bar_button` is on.
+    /// Dropping it removes the item.
+    notes_tray: Option<Box<dyn std::any::Any>>,
     icons: IconCache,
     stack: Vec<View>,
     query: String,
@@ -1010,6 +1013,7 @@ impl App {
             hotkeys,
             finder: Default::default(),
             _tray: tray,
+            notes_tray: None,
             stack: vec![View::Root],
             query: String::new(),
             prev_query: String::new(),
@@ -1071,6 +1075,7 @@ impl App {
         app.set_theme();
         // Recently Deleted notes past their retention go once per start
         app.notes_do(|c, d| c.startup(d));
+        app.sync_notes_tray();
         app.rebuild();
         if app.settings.enter_on_finder {
             // at startup never show the system prompt again; the user can toggle the setting
@@ -1487,6 +1492,26 @@ impl App {
             } else {
                 services::notify("Notes", &t);
             }
+        }
+    }
+
+    /// Pushes the Notes settings (zoom, Esc behavior, Format Bar) to the window and brings the
+    /// menu-bar item in line with `notes_menu_bar_button`.
+    pub(crate) fn apply_notes_settings(&mut self) {
+        self.notes_do(|c, d| {
+            c.apply_settings(d);
+            crate::notes_ctl::Out::default()
+        });
+        self.sync_notes_tray();
+    }
+
+    /// Creates the Notes toggle in the menu bar when the setting is on and none exists, removes it
+    /// (by dropping it) when the setting is off. Main thread only.
+    pub(crate) fn sync_notes_tray(&mut self) {
+        match (self.settings.notes_menu_bar_button, self.notes_tray.is_some()) {
+            (true, false) => self.notes_tray = (self.fx.notes_tray)(&self.bus),
+            (false, true) => self.notes_tray = None,
+            _ => {}
         }
     }
 
@@ -2461,6 +2486,7 @@ impl App {
                         self.push(View::Settings);
                     }
                     "check_updates" => self.check_updates(),
+                    "notes_toggle" => self.open_notes_window(|c, d| c.toggle(d)),
                     "quit" => self.quit(),
                     _ => {}
                 },
@@ -5263,6 +5289,8 @@ pub(crate) struct Effects {
     pub(crate) glow_show: fn(&ferrocast_macos::glow::Target),
     /// Hide the overlay (main thread only).
     pub(crate) glow_hide: fn(),
+    /// Create the Notes toggle item in the menu bar (main thread only); dropping it removes it.
+    pub(crate) notes_tray: fn(&Bus) -> Option<Box<dyn std::any::Any>>,
     /// Run a script in a browser page, ignoring the result (clean-up).
     pub(crate) web_script: fn(ferrocast_core::translate::Browser, &str),
     /// Start the translation request.
@@ -5287,6 +5315,7 @@ impl Effects {
                     ferrocast_macos::glow::hide(mtm);
                 }
             },
+            notes_tray: |bus| services::make_notes_tray(bus.clone()).map(|t| Box::new(t) as Box<dyn std::any::Any>),
             web_script: |b, js| services::web_script(b, js.to_string()),
             translate_start: |s, text, lang, pid, out, run, bus| services::translate_text(s, text, lang, pid, out, run, bus.clone()),
         }

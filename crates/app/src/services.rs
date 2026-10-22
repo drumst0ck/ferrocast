@@ -681,6 +681,53 @@ pub fn make_tray(bus: Bus) -> Option<tray_icon::TrayIcon> {
     tray_icon::TrayIconBuilder::new().with_menu(Box::new(menu)).with_icon_templated(icon).with_tooltip("Ferrocast").build().ok()
 }
 
+/// The Notes toggle in the menu bar: a second status item, without a menu, whose click toggles the
+/// Notes window. Dropping the returned icon removes it. Main thread only.
+pub fn make_notes_tray(bus: Bus) -> Option<tray_icon::TrayIcon> {
+    use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+    const ID: &str = "ferrocast-notes";
+    // The event handler is process-wide; this is the only item without a menu, and it only reacts
+    // to its own id. The click is acted on when the button goes up.
+    TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
+        if let TrayIconEvent::Click { id, button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+            if id.0 == ID {
+                bus.send(Msg::Tray("notes_toggle".into()));
+            }
+        }
+    }));
+    let icon = tray_icon::Icon::from_rgba(notes_icon_rgba(32), 32, 32).ok()?;
+    tray_icon::TrayIconBuilder::new().with_id(ID).with_icon_templated(icon).with_tooltip("Ferrocast Notes").build().ok()
+}
+
+/// A `n`x`n` template glyph of a note: a rounded sheet outline with three text lines (black on
+/// transparent; macOS tints a template icon for the menu bar).
+fn notes_icon_rgba(n: usize) -> Vec<u8> {
+    let mut rgba = vec![0u8; n * n * 4];
+    let f = n as f32 / 32.0;
+    let (x0, x1, y0, y1, r, w) = (8.0 * f, 24.0 * f, 5.0 * f, 27.0 * f, 4.0 * f, 2.2 * f);
+    // distance to the rounded rectangle's edge, negative inside
+    let sdf = |x: f32, y: f32| {
+        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let (hx, hy) = ((x1 - x0) / 2.0 - r, (y1 - y0) / 2.0 - r);
+        let (dx, dy) = ((x - cx).abs() - hx, (y - cy).abs() - hy);
+        (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() + dx.max(dy).min(0.0) - r
+    };
+    for py in 0..n {
+        for px in 0..n {
+            let (x, y) = (px as f32 + 0.5, py as f32 + 0.5);
+            let outline = sdf(x, y).abs() < w / 2.0;
+            let line = [12.0, 16.0, 20.0]
+                .iter()
+                .any(|ly| (y - ly * f).abs() < 1.0 * f && x > 11.5 * f && x < (if *ly > 19.0 { 17.0 } else { 20.5 }) * f);
+            if outline || line {
+                let i = (py * n + px) * 4;
+                rgba[i..i + 4].copy_from_slice(&[0, 0, 0, 255]);
+            }
+        }
+    }
+    rgba
+}
+
 // ---------------------------------------------------------------------------
 // Scripts
 

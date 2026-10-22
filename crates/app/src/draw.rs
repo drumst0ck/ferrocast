@@ -624,7 +624,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 }
                 app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel });
             }
-            // `settings-tab-N`: open Settings on tab N (0 General … 6 Advanced), for design review shots
+            // `settings-tab-N`: open Settings on tab N (0 General … 7 Advanced), for design review shots
             Ok(v) if v.starts_with("settings-tab-") => {
                 let n = v.trim_start_matches("settings-tab-").parse::<usize>().unwrap_or(0);
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), n));
@@ -639,7 +639,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 app.push(View::Settings);
             }
             Ok("settings-advanced") => {
-                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 6usize));
+                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 7usize));
                 app.push(View::Settings);
             }
             Ok("timers") => {
@@ -5528,7 +5528,7 @@ impl App {
             }
         }
 
-        // ---- sidebar keyboard: ⌘1…⌘7 anywhere in Settings; ↑/↓ only when the pointer is over the
+        // ---- sidebar keyboard: ⌘1…⌘8 anywhere in Settings; ↑/↓ only when the pointer is over the
         // sidebar (and no text field is being edited) or a sidebar item has the keyboard focus
         let item_id = |i: usize| Id::new(("settings-tab-item", i));
         for (i, key) in SETTINGS_NUM_KEYS.iter().enumerate() {
@@ -6068,7 +6068,42 @@ impl App {
                         ui.add_space(10.0);
                         note(ui, pal, "Credentials and server address come from the AI tab; this tab only picks which provider and model translate.");
                     }
-                    5 => {
+                    NOTES_TAB => {
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Show Notes Toggle Button in Menu Bar", "Adds a button to the menu bar that shows or hides the Notes window.", |ui| {
+                                toggle(ui, pal, &mut s.notes_menu_bar_button)
+                            });
+                            row(ui, pal, "Escape Key Loses Focus", "Esc moves focus away from the Notes window instead of closing it.", |ui| {
+                                toggle(ui, pal, &mut s.notes_escape_loses_focus)
+                            });
+                            row(ui, pal, "Zoom", "Text size in Notes. Also set with ⌘+, ⌘- and ⌘0.", |ui| {
+                                // right to left: the drop-down is the rightmost control
+                                let shown = notes_zoom_label(s.notes_zoom);
+                                #[cfg(test)]
+                                ctx.data_mut(|d| {
+                                    d.insert_temp(Id::new("notes-zoom-shown"), shown.clone());
+                                    d.insert_temp(Id::new("notes-zoom-items"), Vec::<(String, Rect)>::new());
+                                });
+                                field_combo(ui, pal, "notes_zoom", &shown, 84.0, |ui| {
+                                    for z in notes_zoom_steps() {
+                                        let label = notes_zoom_label(z);
+                                        let r = ui.selectable_label((s.notes_zoom - z).abs() < 1e-6, &label);
+                                        #[cfg(test)]
+                                        ctx.data_mut(|d| {
+                                            d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("notes-zoom-items")).push((label.clone(), r.rect))
+                                        });
+                                        if r.clicked() {
+                                            s.notes_zoom = z;
+                                        }
+                                    }
+                                });
+                                if small_btn(ui, pal, "Reset") {
+                                    s.notes_zoom = 1.0;
+                                }
+                            });
+                        });
+                    }
+                    6 => {
                         group(ui, pal, |ui| {
                             row(ui, pal, "Default folder", "Scripts with Raycast metadata here become commands.", |ui| {
                                 ui.label(RichText::new(self.store.scripts_dir().display().to_string()).size(12.0).color(pal.sub));
@@ -6092,7 +6127,7 @@ impl App {
                         if self.scripts.is_empty() && s.script_directories.is_empty() {
                             ui.add_space(14.0);
                             let line = "Scripts with Raycast metadata become commands you can run from the launcher.";
-                            if empty_state(ui, pal, 5, "No script commands yet", line, "Create script") {
+                            if empty_state(ui, pal, 6, "No script commands yet", line, "Create script") {
                                 create_script = true;
                             }
                         }
@@ -6431,19 +6466,20 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
     }
 }
 
-/// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Power = 5..7.
-const SETTINGS_TABS: [(&str, &str); 7] = [
+/// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Power = 5..8.
+const SETTINGS_TABS: [(&str, &str); 8] = [
     ("General", "sf:gearshape"),
     ("Clipboard", "sf:doc.on.clipboard"),
     ("Snippets", "sf:curlybraces"),
     ("AI", "sf:sparkles"),
     ("Translate", "sf:character.bubble"),
+    ("Notes", "sf:note.text"),
     ("Scripts", "sf:terminal"),
     ("Advanced", "sf:slider.horizontal.3"),
 ];
 /// Indices of the first tab of the second and third group: a divider is drawn before each.
 const SETTINGS_GROUP_STARTS: [usize; 2] = [3, 5];
-const SETTINGS_NUM_KEYS: [Key; 7] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7];
+const SETTINGS_NUM_KEYS: [Key; 8] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8];
 
 fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     record_text(ui.ctx(), pal, "section", pal.sub_strong, &[], ui.opacity());
@@ -6687,6 +6723,18 @@ fn row_body(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, 
 /// Returns true when the list should be (re)fetched.
 /// Index of the Translate tab in `draw_settings`.
 const TRANSLATE_TAB: usize = 4;
+/// Index of the Notes tab.
+const NOTES_TAB: usize = 5;
+
+/// The zoom levels of the Notes tab: 50 %, 60 % … 300 %, the steps of the editor's ⌘+ and ⌘-.
+fn notes_zoom_steps() -> Vec<f64> {
+    (5..=30).map(|n| f64::from(n) / 10.0).collect()
+}
+
+/// "150%" for 1.5.
+fn notes_zoom_label(zoom: f64) -> String {
+    format!("{}%", (zoom * 100.0).round() as i64)
+}
 
 /// For a translation provider whose model list is fetched (OpenAI-compatible, Anthropic): the
 /// settings that list ITS models, i.e. the chat configuration with that provider selected.
@@ -7515,7 +7563,7 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
     ),
     (1, &["clipboard_enabled", "clipboard_retention"]),
     (4, &["wheel_translate_key", "translate_languages", "translate_output", "translate_effect", "translate_provider", "translate_model"]),
-    (6, &["rem_px", "window_gap"]),
+    (7, &["rem_px", "window_gap"]),
 ];
 
 /// `s` with the fields of `tab` (see `RESET_FIELDS`) copied from `from`; a tab without an entry,
@@ -7567,8 +7615,14 @@ impl App {
         let hotkey_changed = s.launcher_hotkey != self.settings.launcher_hotkey;
         let dirs_changed = s.script_directories != self.settings.script_directories;
         let start_poller = s.update_check && self.update_poller.is_none();
+        let notes_changed = s.notes_zoom != self.settings.notes_zoom
+            || s.notes_escape_loses_focus != self.settings.notes_escape_loses_focus
+            || s.notes_menu_bar_button != self.settings.notes_menu_bar_button;
         self.settings = s;
         self.save_settings();
+        if notes_changed {
+            self.apply_notes_settings();
+        }
         if start_poller {
             // the poller only exists once the check was on: turning it on later starts it now
             self.update_poller = services::start_update_poller(self.shared.clone(), self.bus.clone());
