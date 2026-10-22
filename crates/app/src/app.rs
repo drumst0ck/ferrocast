@@ -747,6 +747,9 @@ struct Keys {
     esc: bool,
     backspace: bool,
     cmd_k: bool,
+    /// Tour navigation.
+    left: bool,
+    right: bool,
 }
 
 pub struct App {
@@ -841,6 +844,8 @@ pub struct App {
     /// Result list for the current query/view, reused across frames until something changes.
     sec_cache: Option<(String, Vec<Section>)>,
     sec_dirty: bool,
+    /// First-run tour: current slide and its animation.
+    tour: tour::Tour,
 }
 
 /// San Francisco (the system face) first, Apple Symbols for ⌘⌥⇧ glyphs. Arial Unicode, the
@@ -1056,10 +1061,10 @@ impl App {
             rates_checked_at: Instant::now(),
             sec_cache: None,
             sec_dirty: true,
+            tour: tour::Tour::new(),
         };
         app.shared.visible.store(app.visible, Ordering::Relaxed);
-        if !app.settings.onboarded && !hidden {
-            app.settings.onboarded = true;
+        if tour::first_run(&mut app.settings, hidden) {
             let _ = app.store.save("settings.json", &app.settings);
             app.stack.push(View::Welcome);
         }
@@ -1468,6 +1473,9 @@ impl App {
         }
         if matches!(v, View::Ai { .. }) {
             self.warm_claude();
+        }
+        if matches!(v, View::Welcome) {
+            self.tour_opened();
         }
         self.stack.push(v);
         self.query.clear();
@@ -5349,3 +5357,5 @@ fn launcher_origin() -> Option<Pos2> {
 
 #[path = "draw.rs"]
 mod draw;
+#[path = "tour.rs"]
+mod tour;
