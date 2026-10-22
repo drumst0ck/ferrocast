@@ -329,6 +329,111 @@ fn main() {
 
 // ------------------------------------------------------------------ editor checks
 
+/// `replace_selection_markdown`, `append_markdown` and `insert_markdown_after_selection_line`:
+/// formatting kept, one undo step, one change callback, blank results refused.
+fn markdown_result_checks(app: &NSApplication) {
+    let md = notes::markdown;
+    let fired: Rc<RefCell<Vec<String>>> = Rc::default();
+    let f = fired.clone();
+    notes::set_on_change(Box::new(move |t| f.borrow_mut().push(t)));
+    let undo = |app: &NSApplication| key(app, "z", 6, CMD);
+
+    // replace a selection inside a paragraph with styled spans
+    reset(app, "Say hello to the **world** today");
+    let before = md();
+    tv_of(app).setSelectedRange(NSRange::new(4, 5));
+    fired.borrow_mut().clear();
+    let ok = notes::replace_selection_markdown("*hi* there **you**");
+    check(
+        "replace_selection_markdown replaces the selection with styled spans",
+        ok && md() == md_of("Say *hi* there **you** to the **world** today"),
+        &md(),
+    );
+    check("replace_selection_markdown fires the change callback once", fired.borrow().len() == 1, &format!("{}", fired.borrow().len()));
+    undo(app);
+    check("one undo restores the Markdown exactly after a span replacement", md() == before, &md());
+
+    // keeps the host paragraph kind (heading) for an inline result
+    reset(app, "## Big title here");
+    tv_of(app).setSelectedRange(NSRange::new(4, 5));
+    notes::replace_selection_markdown("small");
+    check("an inline result keeps the heading it lands in", md() == md_of("## Big small here"), &md());
+
+    // no selection: the whole note, with blocks
+    reset(app, "one\n\ntwo");
+    let before = md();
+    tv_of(app).setSelectedRange(NSRange::new(1, 0));
+    fired.borrow_mut().clear();
+    let ok = notes::replace_selection_markdown("# Title\n\n- a\n- **b**\n\n```\ncode\n```");
+    check(
+        "replace_selection_markdown without a selection replaces the whole note with blocks",
+        ok && md() == md_of("# Title\n\n- a\n- **b**\n\n```\ncode\n```"),
+        &md(),
+    );
+    check("whole-note replacement fires the change callback once", fired.borrow().len() == 1, &format!("{}", fired.borrow().len()));
+    undo(app);
+    check("one undo restores the whole note exactly", md() == before, &md());
+
+    // multi-block result over a selection that starts and ends mid-paragraph
+    reset(app, "alpha beta\ngamma!");
+    let before = md();
+    tv_of(app).setSelectedRange(NSRange::new(6, 10));
+    notes::replace_selection_markdown("X\n\n- y\n- z");
+    check("a multi-block result keeps the unselected rest around it", md() == md_of("alpha X\n\n- y\n- z\n\n!"), &md());
+    undo(app);
+    check("one undo restores a multi-paragraph replacement", md() == before, &md());
+
+    // the helpers dictation and the AI apply step rely on
+    reset(app, "hello world");
+    notes::select_range(6, 11);
+    check(
+        "select_range and selection_range agree and text_in_range reads storage text",
+        notes::selection_range() == (6, 11)
+            && notes::text_in_range(0, 5).as_deref() == Some("hello")
+            && notes::text_in_range(6, 99).is_none(),
+        &format!("{:?}", notes::selection_range()),
+    );
+
+    // blank results are refused and change nothing
+    reset(app, "keep me");
+    let before = md();
+    fired.borrow_mut().clear();
+    let refused = !notes::replace_selection_markdown("")
+        && !notes::replace_selection_markdown(" \n ")
+        && !notes::append_markdown("\n")
+        && !notes::insert_markdown_after_selection_line("  ");
+    check("blank replacements are refused", refused && md() == before && fired.borrow().is_empty(), &md());
+
+    // append
+    reset(app, "first **line**");
+    let before = md();
+    fired.borrow_mut().clear();
+    let ok = notes::append_markdown("## Summary\n\n- one\n- *two*");
+    check("append_markdown adds blocks after the last block", ok && md() == md_of("first **line**\n\n## Summary\n\n- one\n- *two*"), &md());
+    check("append_markdown fires the change callback once", fired.borrow().len() == 1, &format!("{}", fired.borrow().len()));
+    undo(app);
+    check("one undo restores the note after append_markdown", md() == before, &md());
+    reset(app, "");
+    notes::append_markdown("only **this**");
+    check("append_markdown on an empty note just adds the blocks", md() == md_of("only **this**"), &md());
+
+    // insert after the selection line
+    reset(app, "line one\nline two\nline three");
+    let before = md();
+    tv_of(app).setSelectedRange(NSRange::new(2, 3));
+    fired.borrow_mut().clear();
+    let ok = notes::insert_markdown_after_selection_line("It means **one**.");
+    check(
+        "insert_markdown_after_selection_line inserts below the line of the selection",
+        ok && md() == md_of("line one\n\nIt means **one**.\nline two\nline three"),
+        &md(),
+    );
+    check("insert after the line fires the change callback once", fired.borrow().len() == 1, &format!("{}", fired.borrow().len()));
+    undo(app);
+    check("one undo restores the note after the line insert", md() == before, &md());
+    notes::set_on_change(Box::new(|_| {}));
+}
+
 fn md_of(src: &str) -> String {
     richtext::to_markdown(&richtext::parse(src))
 }
@@ -935,6 +1040,8 @@ fn editor_checks(app: &NSApplication, out: &std::path::Path) {
     reset(app, "- a");
     notes::insert_at_cursor("\nline2");
     check("multi-line insert becomes paragraphs", md().contains("line2") && kinds(&md()).len() == 2, &md());
+
+    markdown_result_checks(app);
 
     let pb = NSPasteboard::generalPasteboard();
     let saved = pb.stringForType(unsafe { NSPasteboardTypeString });

@@ -1017,6 +1017,135 @@ pub fn insert_at_cursor(text: &str) {
     }
 }
 
+/// The selection as storage UTF-16 offsets `(start, end)`; equal when there is none (the cursor).
+pub fn selection_range() -> (usize, usize) {
+    selection_bounds().map_or((0, 0), |(_, _, a, b)| (a, b))
+}
+
+/// Select storage range `start..end` (clamped to the text; `start == end` puts the cursor there).
+pub fn select_range(start: usize, end: usize) {
+    if let Some((tv, st)) = handles() {
+        let len = st.length();
+        let s = start.min(end).min(len);
+        tv.setSelectedRange(range(s, end.max(start).min(len) - s));
+    }
+}
+
+/// The raw storage text of `start..end` (UTF-16 offsets); `None` when the range is outside the text.
+pub fn text_in_range(start: usize, end: usize) -> Option<String> {
+    let (_, st) = handles()?;
+    let (u, _) = read_paras(&st, false);
+    (start <= end && end <= u.len()).then(|| String::from_utf16_lossy(&u[start..end]))
+}
+
+/// Blocks of a Markdown result; `None` for a blank one.
+fn result_blocks(md: &str) -> Option<Vec<Block>> {
+    let md = md.trim_matches(['\n', '\r']);
+    if md.trim().is_empty() {
+        return None;
+    }
+    let blocks = richtext::parse(md).blocks;
+    (!blocks.is_empty()).then_some(blocks)
+}
+
+fn spans_len(spans: &[Span]) -> usize {
+    spans.iter().map(|s| utf16_len(&s.text)).sum()
+}
+
+/// Replace the selection (the whole note when nothing is selected) with a Markdown result, as ONE
+/// undoable edit that fires the change callback once. A single-paragraph result becomes styled
+/// spans inside the paragraph it lands in (that paragraph keeps its kind); a longer one becomes
+/// whole blocks, with the unselected rest of the first and last paragraph kept around it.
+/// Returns false (nothing changes) for a blank result or without an editor.
+pub fn replace_selection_markdown(md: &str) -> bool {
+    let Some(mut blocks) = result_blocks(md) else { return false };
+    let Some((tv, st)) = handles() else { return false };
+    let (u, paras) = read_paras(&st, true);
+    let sel = tv.selectedRange();
+    let (lo, hi, a, b) = if sel.length == 0 {
+        (0, paras.len() - 1, 0, u.len())
+    } else {
+        let (a, b) = (sel.location, sel.location + sel.length);
+        let (lo, hi) = sel_paras(&paras, a, b);
+        (lo, hi, a, b)
+    };
+    let (lp, hp) = (&paras[lo], &paras[hi]);
+    let left = spans_of(&u, lp, lp.cs, a.clamp(lp.cs, lp.end));
+    let right = spans_of(&u, hp, b.clamp(hp.cs, hp.end), hp.end);
+    let host = |p: &Para| if p.kind == BlockKind::Rule { (BlockKind::Paragraph, 0) } else { (p.kind.clone(), p.level) };
+    let one_paragraph = blocks.len() == 1 && blocks[0].kind == BlockKind::Paragraph;
+    if one_paragraph {
+        let (kind, level) = host(lp);
+        let mut spans = left;
+        spans.append(&mut blocks[0].spans);
+        spans.extend(right.iter().cloned());
+        blocks = vec![Block { kind, level, spans }];
+    } else {
+        if !left.is_empty() {
+            if blocks[0].kind == BlockKind::Paragraph {
+                let (kind, level) = host(lp);
+                let mut spans = left;
+                spans.append(&mut blocks[0].spans);
+                blocks[0] = Block { kind, level, spans };
+            } else {
+                let (kind, level) = host(lp);
+                blocks.insert(0, Block { kind, level, spans: left });
+            }
+        }
+        if !right.is_empty() {
+            let last = blocks.len() - 1;
+            if blocks[last].kind == BlockKind::Paragraph {
+                blocks[last].spans.extend(right.iter().cloned());
+            } else {
+                let (kind, level) = host(hp);
+                blocks.push(Block { kind, level, spans: right.clone() });
+            }
+        }
+    }
+    let last = blocks.len() - 1;
+    let caret = spans_len(&blocks[last].spans) - spans_len(&right);
+    replace_blocks(lo, hi, &blocks, Some((last, caret)));
+    true
+}
+
+/// Insert `new` as blocks right after paragraph `at` (Markdown separates blocks by a blank line,
+/// so no empty paragraph is added). An empty paragraph at `at` is replaced by them. One undoable edit.
+fn insert_blocks_after(at: usize, mut new: Vec<Block>) {
+    let Some((_, st)) = handles() else { return };
+    let (u, paras) = read_paras(&st, true);
+    let p = &paras[at];
+    let mut blocks = Vec::new();
+    if p.cs != p.end {
+        blocks.push(block_of(&u, p));
+    }
+    blocks.append(&mut new);
+    let last = blocks.len() - 1;
+    let caret = spans_len(&blocks[last].spans);
+    replace_blocks(at, at, &blocks, Some((last, caret)));
+}
+
+/// Add Markdown blocks at the end of the note, after a blank line in its Markdown (an empty note
+/// or an empty last line just gets them). One undoable edit that fires the change callback once; false for a blank result.
+pub fn append_markdown(md: &str) -> bool {
+    let Some(blocks) = result_blocks(md) else { return false };
+    let Some((_, st)) = handles() else { return false };
+    let (_, paras) = read_paras(&st, false);
+    insert_blocks_after(paras.len() - 1, blocks);
+    true
+}
+
+/// Insert Markdown blocks after the line that ends the selection (at the end of the note
+/// without a selection). One undoable edit; false for a blank result.
+pub fn insert_markdown_after_selection_line(md: &str) -> bool {
+    let Some(blocks) = result_blocks(md) else { return false };
+    let Some((tv, st)) = handles() else { return false };
+    let (_, paras) = read_paras(&st, false);
+    let sel = tv.selectedRange();
+    let at = if sel.length == 0 { paras.len() - 1 } else { sel_paras(&paras, sel.location, sel.location + sel.length).1 };
+    insert_blocks_after(at, blocks);
+    true
+}
+
 // ------------------------------------------------------------------ normalization
 
 fn from_units(u: &[u16]) -> String {
