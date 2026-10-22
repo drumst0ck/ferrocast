@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Fixed
+- **Translate**: a selection that is a single word, a heading or a question (for example "FRENCH" or "What is 2+2?") is now translated instead of answered or refused. The text is sent delimited and with a translator system prompt of its own; the chat prompt is unchanged. Small models can still follow an instruction written inside the selected text.
+
 ## [0.1.1] - 2026-10-22
 
 ### Added

@@ -1591,17 +1591,40 @@ pub fn test_ai_connection(settings: &Settings, bus: Bus) {
 /// Streaming answer from the configured provider; `on_delta` receives text as it arrives.
 /// Requests (including keys) go to curl or Claude Code via stdin, never argv.
 pub fn ai_stream(settings: &Settings, history: &[(String, String)], question: &str, on_delta: impl FnMut(&str)) -> Result<(), String> {
+    ai_stream_system(settings, ferrocast_core::ai::SYSTEM_PROMPT, history, question, on_delta)
+}
+
+/// `ai_stream` with its own system prompt (translations use a translator prompt, not the chat one).
+pub fn ai_stream_system(
+    settings: &Settings,
+    system: &str,
+    history: &[(String, String)],
+    question: &str,
+    on_delta: impl FnMut(&str),
+) -> Result<(), String> {
     let key = match settings.ai_provider {
         AiProvider::ClaudeCode | AiProvider::ChatGpt => None,
         p => ai_key_for(p),
     };
-    ai_stream_with_key(settings, key, history, question, on_delta)
+    ai_stream_with_key_system(settings, key, system, history, question, on_delta)
 }
 
 /// `ai_stream` with the API key supplied by the caller (tests use a mock server and a fixed key).
+#[cfg(test)]
 pub fn ai_stream_with_key(
     settings: &Settings,
     key: Option<String>,
+    history: &[(String, String)],
+    question: &str,
+    on_delta: impl FnMut(&str),
+) -> Result<(), String> {
+    ai_stream_with_key_system(settings, key, ferrocast_core::ai::SYSTEM_PROMPT, history, question, on_delta)
+}
+
+fn ai_stream_with_key_system(
+    settings: &Settings,
+    key: Option<String>,
+    system: &str,
     history: &[(String, String)],
     question: &str,
     mut on_delta: impl FnMut(&str),
@@ -1624,7 +1647,7 @@ pub fn ai_stream_with_key(
                 "--no-session-persistence",
                 "--strict-mcp-config",
                 "--system-prompt",
-                ai::SYSTEM_PROMPT,
+                system,
                 "--tools",
                 "",
             ]);
@@ -1644,7 +1667,7 @@ pub fn ai_stream_with_key(
             use ferrocast_core::chatgpt;
             let creds = chatgpt_fresh_credentials()?;
             let model = if settings.chatgpt_model.trim().is_empty() { chatgpt::DEFAULT_MODEL } else { settings.chatgpt_model.trim() };
-            let cfg = chatgpt::curl_config(&creds, &chatgpt::build_request(model, history, question));
+            let cfg = chatgpt::curl_config(&creds, &chatgpt::build_request_with(system, model, history, question));
             let child = Command::new("/usr/bin/curl")
                 .args(["-sS", "-N", "-m", "300", "-K", "-"])
                 .stdin(Stdio::piped())
@@ -1658,7 +1681,7 @@ pub fn ai_stream_with_key(
             let key = key.clone().ok_or("No Anthropic API key yet. Add one in Settings → AI.")?;
             let model =
                 if settings.anthropic_model.trim().is_empty() { ai::DEFAULT_ANTHROPIC_MODEL } else { settings.anthropic_model.trim() };
-            let cfg = ai::anthropic_curl_config(&key, &ai::build_anthropic_request(model, history, question));
+            let cfg = ai::anthropic_curl_config(&key, &ai::build_anthropic_request_with(system, model, history, question));
             let child = Command::new("/usr/bin/curl")
                 .args(["-sS", "-N", "-m", "300", "-K", "-"])
                 .stdin(Stdio::piped())
@@ -1670,7 +1693,7 @@ pub fn ai_stream_with_key(
         }
         AiProvider::OpenAiCompatible => {
             let url = ai::endpoint(&settings.ai_base_url);
-            let cfg = ai::curl_config(&url, key.as_deref(), &ai::build_chat_request(&settings.ai_model, history, question));
+            let cfg = ai::curl_config(&url, key.as_deref(), &ai::build_chat_request_with(system, &settings.ai_model, history, question));
             let child = Command::new("/usr/bin/curl")
                 .args(["-sS", "-N", "-m", "300", "-K", "-"])
                 .stdin(Stdio::piped())
@@ -1740,7 +1763,11 @@ pub fn translate_text(settings: &Settings, text: String, lang: String, source_pi
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
         let mut out = String::new();
-        let result = ai_stream(&settings, &[], &ferrocast_core::translate::prompt(&text, &lang), |t| out.push_str(t)).map(|()| out);
+        let result =
+            ai_stream_system(&settings, ferrocast_core::translate::SYSTEM, &[], &ferrocast_core::translate::prompt(&text, &lang), |t| {
+                out.push_str(t)
+            })
+            .map(|()| out);
         let ms = started.elapsed().as_millis() as u64;
         let target = match (&result, output) {
             (Ok(_), TranslateOutput::Auto) => probe_target(source_pid),

@@ -225,6 +225,11 @@ pub fn account_id(jwt: &str) -> Option<String> {
 
 /// Responses API body (streaming, nothing stored server-side).
 pub fn build_request(model: &str, history: &[(String, String)], question: &str) -> String {
+    build_request_with(crate::ai::SYSTEM_PROMPT, model, history, question)
+}
+
+/// `build_request` with its own instructions (translations use a translator prompt).
+pub fn build_request_with(system: &str, model: &str, history: &[(String, String)], question: &str) -> String {
     let mut input = vec![];
     for (q, a) in history {
         input.push(serde_json::json!({"role": "user", "content": [{"type": "input_text", "text": q}]}));
@@ -235,7 +240,7 @@ pub fn build_request(model: &str, history: &[(String, String)], question: &str) 
         "model": model,
         "store": false,
         "stream": true,
-        "instructions": crate::ai::SYSTEM_PROMPT,
+        "instructions": system,
         "input": input,
         "text": {"verbosity": "low"},
     })
@@ -311,6 +316,14 @@ pub fn parse_sse_line(line: &str) -> crate::ai::Sse {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_custom_instruction_replaces_only_the_instructions() {
+        let h = vec![("q".to_string(), "a".to_string())];
+        assert_eq!(build_request("m", &h, "x"), build_request_with(crate::ai::SYSTEM_PROMPT, "m", &h, "x"));
+        let v: serde_json::Value = serde_json::from_str(&build_request_with("SYS", "m", &h, "x")).unwrap();
+        assert_eq!(v["instructions"], "SYS");
+    }
     #[test]
     fn parse_models_keeps_listed_slugs_and_drops_hidden_ones() {
         let body = r#"{"models":[{"slug":"gpt-b","visibility":"list"},{"slug":"gpt-a"},{"slug":"old","visibility":"hide"}]}"#;

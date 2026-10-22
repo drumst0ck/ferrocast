@@ -25,7 +25,12 @@ pub fn build_request(model: &str, prompt: &str) -> String {
 
 /// Streaming request carrying earlier `(question, answer)` turns plus the new question.
 pub fn build_chat_request(model: &str, history: &[(String, String)], question: &str) -> String {
-    let mut messages = vec![serde_json::json!({"role": "system", "content": SYSTEM_PROMPT})];
+    build_chat_request_with(SYSTEM_PROMPT, model, history, question)
+}
+
+/// `build_chat_request` with its own system prompt (translations use a translator prompt).
+pub fn build_chat_request_with(system: &str, model: &str, history: &[(String, String)], question: &str) -> String {
+    let mut messages = vec![serde_json::json!({"role": "system", "content": system})];
     for (q, a) in history {
         messages.push(serde_json::json!({"role": "user", "content": q}));
         messages.push(serde_json::json!({"role": "assistant", "content": a}));
@@ -36,13 +41,18 @@ pub fn build_chat_request(model: &str, history: &[(String, String)], question: &
 
 /// Anthropic Messages API request (streaming). The system prompt is a top-level field there.
 pub fn build_anthropic_request(model: &str, history: &[(String, String)], question: &str) -> String {
+    build_anthropic_request_with(SYSTEM_PROMPT, model, history, question)
+}
+
+/// `build_anthropic_request` with its own system prompt.
+pub fn build_anthropic_request_with(system: &str, model: &str, history: &[(String, String)], question: &str) -> String {
     let mut messages = vec![];
     for (q, a) in history {
         messages.push(serde_json::json!({"role": "user", "content": q}));
         messages.push(serde_json::json!({"role": "assistant", "content": a}));
     }
     messages.push(serde_json::json!({"role": "user", "content": question}));
-    serde_json::json!({"model": model, "max_tokens": 1024, "stream": true, "system": SYSTEM_PROMPT, "messages": messages}).to_string()
+    serde_json::json!({"model": model, "max_tokens": 1024, "stream": true, "system": system, "messages": messages}).to_string()
 }
 
 /// curl config for the Anthropic API: key and version go in headers, body via stdin.
@@ -189,6 +199,18 @@ pub fn curl_config(url: &str, api_key: Option<&str>, body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_custom_system_prompt_replaces_only_the_system_text() {
+        // the chat builders stay byte-identical; the _with variants only swap the system prompt
+        let h = vec![("q".to_string(), "a".to_string())];
+        assert_eq!(build_chat_request("m", &h, "x"), build_chat_request_with(SYSTEM_PROMPT, "m", &h, "x"));
+        assert_eq!(build_anthropic_request("m", &h, "x"), build_anthropic_request_with(SYSTEM_PROMPT, "m", &h, "x"));
+        let v: serde_json::Value = serde_json::from_str(&build_chat_request_with("SYS", "m", &h, "x")).unwrap();
+        assert_eq!(v["messages"][0]["content"], "SYS");
+        let v: serde_json::Value = serde_json::from_str(&build_anthropic_request_with("SYS", "m", &h, "x")).unwrap();
+        assert_eq!(v["system"], "SYS");
+    }
     use super::*;
 
     #[test]
