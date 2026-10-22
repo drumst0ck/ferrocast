@@ -100,7 +100,7 @@ pub fn outcome(result: Result<String, String>, lang: &str, output: TranslateOutp
                 return Outcome::Fail("Translation failed: empty reply".into());
             }
             match output {
-                TranslateOutput::Show => Outcome::Show { text, lang: lang.to_string() },
+                TranslateOutput::Auto | TranslateOutput::Show => Outcome::Show { text, lang: lang.to_string() },
                 TranslateOutput::Replace => Outcome::Paste(text),
                 TranslateOutput::Copy => Outcome::Copy(text, format!("Translated to {lang}, copied")),
             }
@@ -136,6 +136,102 @@ pub fn engine_label(s: &Settings) -> String {
         None => format!("Same as chat ({})", provider_name(s.ai_provider)),
     }
 }
+
+/// Chat-less browser families we can script.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Browser {
+    Safari,
+    /// Chromium family; carries the AppleScript application name.
+    Chromium(&'static str),
+}
+
+/// What the source app offers for in-place replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Editable,
+    Browser(Browser),
+    Other,
+}
+
+/// How a finished translation reaches the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// Set the Accessibility selected text (Cmd-V as fallback).
+    SetSelection,
+    /// Replace the selected text in the page DOM through AppleScript + JavaScript.
+    WebReplace(Browser),
+    Paste,
+    Show,
+    Copy,
+}
+
+/// The scriptable browser for a bundle id (`None` for Firefox and everything else).
+pub fn browser_for(bundle_id: &str) -> Option<Browser> {
+    Some(match bundle_id {
+        "com.apple.Safari" => Browser::Safari,
+        "com.google.Chrome" => Browser::Chromium("Google Chrome"),
+        "com.google.Chrome.canary" => Browser::Chromium("Google Chrome Canary"),
+        "com.brave.Browser" => Browser::Chromium("Brave Browser"),
+        "com.microsoft.edgemac" => Browser::Chromium("Microsoft Edge"),
+        "company.thebrowser.Browser" => Browser::Chromium("Arc"),
+        "org.chromium.Chromium" => Browser::Chromium("Chromium"),
+        "com.vivaldi.Vivaldi" => Browser::Chromium("Vivaldi"),
+        "com.operasoftware.Opera" => Browser::Chromium("Opera"),
+        _ => return None,
+    })
+}
+
+/// Pick the delivery for the setting and the source app.
+pub fn delivery(output: TranslateOutput, target: Target) -> Delivery {
+    match output {
+        TranslateOutput::Auto => match target {
+            Target::Editable => Delivery::SetSelection,
+            Target::Browser(b) => Delivery::WebReplace(b),
+            Target::Other => Delivery::Show,
+        },
+        TranslateOutput::Show => Delivery::Show,
+        TranslateOutput::Replace => Delivery::Paste,
+        TranslateOutput::Copy => Delivery::Copy,
+    }
+}
+
+/// JavaScript replacing the current DOM selection with `text`; returns "ok" or "nosel".
+/// The text is embedded as a serde_json string literal, never escaped by hand.
+pub fn web_replace_js(text: &str) -> String {
+    let lit = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        "(function(t){{var s=window.getSelection();if(!s||s.rangeCount===0||s.isCollapsed){{return \"nosel\";}}var r=s.getRangeAt(0);r.deleteContents();r.insertNode(document.createTextNode(t));s.removeAllRanges();return \"ok\";}})({lit})"
+    )
+}
+
+/// The AppleScript running `js` in the front window's active tab of `browser`.
+pub fn applescript_for(browser: Browser, js: &str) -> String {
+    let lit = format!("\"{}\"", js.replace('\\', "\\\\").replace('"', "\\\""));
+    match browser {
+        Browser::Safari => format!("tell application \"Safari\" to do JavaScript {lit} in current tab of front window"),
+        Browser::Chromium(name) => format!("tell application \"{name}\" to execute active tab of front window javascript {lit}"),
+    }
+}
+
+/// Result of the JavaScript replacement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebResult {
+    Replaced,
+    NoSelection,
+    Failed(String),
+}
+
+/// Read osascript's stdout: "ok", "nosel", anything else is a failure (text capped at 120 chars).
+pub fn parse_web_result(osascript_stdout: &str) -> WebResult {
+    match osascript_stdout.trim() {
+        "ok" => WebResult::Replaced,
+        "nosel" => WebResult::NoSelection,
+        other => WebResult::Failed(other.chars().take(120).collect()),
+    }
+}
+
+/// Shown when the browser refuses AppleScript JavaScript.
+pub const JS_PERMISSION_HINT: &str = "Allow JavaScript from Apple Events is off: enable it in the browser's Develop/Developer menu (Safari: Develop > Developer Settings; Chrome: View > Developer).";
 
 #[cfg(test)]
 mod tests {
@@ -255,5 +351,79 @@ mod tests {
         assert_eq!(s.translate_output, TranslateOutput::Show);
         assert_eq!(s.translate_languages.len(), 8);
         assert_eq!(s.translate_provider, None);
+    }
+
+    #[test]
+    fn browser_table() {
+        let chromium = [
+            ("com.google.Chrome", "Google Chrome"),
+            ("com.google.Chrome.canary", "Google Chrome Canary"),
+            ("com.brave.Browser", "Brave Browser"),
+            ("com.microsoft.edgemac", "Microsoft Edge"),
+            ("company.thebrowser.Browser", "Arc"),
+            ("org.chromium.Chromium", "Chromium"),
+            ("com.vivaldi.Vivaldi", "Vivaldi"),
+            ("com.operasoftware.Opera", "Opera"),
+        ];
+        assert_eq!(browser_for("com.apple.Safari"), Some(Browser::Safari));
+        for (id, name) in chromium {
+            assert_eq!(browser_for(id), Some(Browser::Chromium(name)), "{id}");
+        }
+        assert_eq!(browser_for("org.mozilla.firefox"), None);
+        assert_eq!(browser_for(""), None);
+    }
+
+    #[test]
+    fn delivery_matrix() {
+        let b = Browser::Safari;
+        assert_eq!(delivery(TranslateOutput::Auto, Target::Editable), Delivery::SetSelection);
+        assert_eq!(delivery(TranslateOutput::Auto, Target::Browser(b)), Delivery::WebReplace(b));
+        assert_eq!(delivery(TranslateOutput::Auto, Target::Other), Delivery::Show);
+        for t in [Target::Editable, Target::Browser(b), Target::Other] {
+            assert_eq!(delivery(TranslateOutput::Show, t), Delivery::Show);
+            assert_eq!(delivery(TranslateOutput::Replace, t), Delivery::Paste);
+            assert_eq!(delivery(TranslateOutput::Copy, t), Delivery::Copy);
+        }
+    }
+
+    #[test]
+    fn default_output_is_still_show() {
+        assert_eq!(TranslateOutput::default(), TranslateOutput::Show);
+    }
+
+    #[test]
+    fn web_js_embeds_json_literal() {
+        let text = "he said \"hi\" \\ back\nline2 </script> \u{2028}\u{2029} ñ日本";
+        let js = web_replace_js(text);
+        let lit = serde_json::to_string(text).unwrap();
+        assert!(js.starts_with("(function(t){"));
+        assert!(js.ends_with(&format!("}})({lit})")));
+        assert!(!js.contains('\n'));
+        assert!(js.contains("\"nosel\"") && js.contains("\"ok\""));
+    }
+
+    #[test]
+    fn applescript_wrappers() {
+        let js = r#"a("b\n")"#;
+        assert_eq!(
+            applescript_for(Browser::Safari, js),
+            r#"tell application "Safari" to do JavaScript "a(\"b\\n\")" in current tab of front window"#
+        );
+        assert_eq!(
+            applescript_for(Browser::Chromium("Google Chrome"), js),
+            r#"tell application "Google Chrome" to execute active tab of front window javascript "a(\"b\\n\")""#
+        );
+    }
+
+    #[test]
+    fn web_result_parsing() {
+        assert_eq!(parse_web_result("ok\n"), WebResult::Replaced);
+        assert_eq!(parse_web_result(" nosel "), WebResult::NoSelection);
+        assert_eq!(parse_web_result(""), WebResult::Failed(String::new()));
+        assert_eq!(parse_web_result("boom\n"), WebResult::Failed("boom".into()));
+        match parse_web_result(&"x".repeat(500)) {
+            WebResult::Failed(m) => assert_eq!(m.chars().count(), 120),
+            other => panic!("{other:?}"),
+        }
     }
 }

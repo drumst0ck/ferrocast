@@ -2,6 +2,7 @@
 //! system commands, file search and snippet expansion.
 
 pub mod apps;
+pub mod ax_text;
 pub mod clipboard;
 pub mod drag;
 pub mod expansion;

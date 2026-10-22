@@ -259,6 +259,9 @@ pub struct Settings {
 /// What happens with a finished translation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum TranslateOutput {
+    /// Replace the selection in place where possible (editable field, Safari/Chromium page),
+    /// otherwise show the Ferrocast window.
+    Auto,
     /// Show it in a Ferrocast window (and keep it on the clipboard).
     #[default]
     Show,
