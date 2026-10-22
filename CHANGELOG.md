@@ -66,6 +66,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Speed**: icon decoding on the main thread is capped at 4 ms per frame (an emoji takes 5–30 ms to render), app icons are fetched on a background thread before the list asks for them, and rows scrolled out of view are no longer painted or fetched (the emoji list went from 80 icon loads to 7). Hotkey to drawn frame measures about 2 ms, a keystroke to new results 0.1–0.3 ms. The result list is cached across frames; release builds use fat LTO; the 22 MB Unicode fallback font loads only when non-Latin text appears (about 40 MB less memory at idle, 146 MB in one process on an M3).
 
 ### Fixed
+- **Update check**: a repository with no published release no longer shows "curl: exit status 56"; the check now tells "no release yet", a GitHub rate limit and no connection apart, and a failed automatic check waits an hour instead of retrying every 10 minutes.
 - **Calculator**: `200 * 10%`, `pi/2`, `2 x 3`, `1,000 * 2`, small currency amounts (`1 jpy in usd`).
 - **Time zones**: `est`/`pst`/`cet` are fixed offsets; clocks inside a DST gap still resolve.
 - `{date offset=…}` no longer panics on absurd values; `{snippet name=…}` resolves in pastes and quicklinks.
