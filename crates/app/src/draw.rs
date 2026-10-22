@@ -666,7 +666,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 }
                 app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel });
             }
-            // `settings-tab-N`: open Settings on tab N (0 General … 6 Integrations, 7 Advanced), for design review shots
+            // `settings-tab-N`: open Settings on tab N (0 General … 8 Advanced), for design review shots
             Ok(v) if v.starts_with("settings-tab-") => {
                 let n = v.trim_start_matches("settings-tab-").parse::<usize>().unwrap_or(0);
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), n));
@@ -681,7 +681,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 app.push(View::Settings);
             }
             Ok("settings-advanced") => {
-                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 7usize));
+                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 8usize));
                 app.push(View::Settings);
             }
             Ok("timers") => {
@@ -853,7 +853,7 @@ impl App {
                 match self.view() {
                     View::Snippets => self.new_snippet(String::new()),
                     View::Quicklinks => self.run_builtin(Builtin::CreateQuicklink),
-                    View::Notes => self.new_note(),
+                    View::Notes => self.open_notes_window(|c, d| c.create_note(d)),
                     _ => return false,
                 }
                 return true;
@@ -894,12 +894,6 @@ impl App {
                 if ctx.data(|d| d.get_temp::<String>(id)).is_some_and(|q| !q.is_empty()) {
                     ctx.data_mut(|d| d.insert_temp(id, String::new()));
                     return true;
-                }
-            }
-            if let View::NoteEdit(id) = self.view().clone() {
-                if self.notes.iter().any(|n| n.id == id && n.text.trim().is_empty()) {
-                    self.notes.retain(|n| n.id != id);
-                    self.save_notes();
                 }
             }
             self.pop();
@@ -4743,33 +4737,6 @@ impl App {
             View::Settings => {
                 ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| self.draw_settings(ui, pal));
             }
-            View::NoteEdit(id) => {
-                ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                    let mut changed = false;
-                    if let Some(n) = self.notes.iter_mut().find(|n| n.id == id) {
-                        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                            let r = ui.add(
-                                TextEdit::multiline(&mut n.text)
-                                    .hint_text("Start typing… (markdown supported)")
-                                    .frame(EFrame::NONE)
-                                    .font(FontId::proportional(14.5))
-                                    .desired_width(f32::INFINITY)
-                                    .desired_rows(14),
-                            );
-                            if ff {
-                                r.request_focus();
-                            }
-                            if r.changed() {
-                                n.modified = now_secs();
-                                changed = true;
-                            }
-                        });
-                    }
-                    if changed {
-                        self.save_notes();
-                    }
-                });
-            }
             View::VideoRedact { size: Some(_), .. } => {
                 self.draw_video_redact(ui, rect, pal);
             }
@@ -5201,7 +5168,7 @@ impl App {
                             }
                         }
                         View::Shortcuts => {
-                            let groups: [(&str, &[(&str, &str)]); 3] = [
+                            let groups: [(&str, &[(&str, &str)]); 4] = [
                                 (
                                     "Navigate",
                                     &[
@@ -5230,6 +5197,17 @@ impl App {
                                         ("⇧ ⌘ ,", "Set a hotkey for a command"),
                                         ("⌘ .", "Pin or unpin a clipboard entry"),
                                         ("⌃ X", "Delete the selected entry"),
+                                    ],
+                                ),
+                                (
+                                    "Notes",
+                                    &[
+                                        ("⌘ N", "New note"),
+                                        ("⌘ P", "Browse Notes"),
+                                        ("⌘ K", "Open the action panel"),
+                                        ("⇧ ⌘ P", "Pin or unpin the note"),
+                                        ("⌘ [", "Go back to the previous note"),
+                                        ("⌘ ]", "Go forward to the next note"),
                                     ],
                                 ),
                             ];
@@ -5735,7 +5713,7 @@ impl App {
             }
         }
 
-        // ---- sidebar keyboard: ⌘1…⌘8 anywhere in Settings; ↑/↓ only when the pointer is over the
+        // ---- sidebar keyboard: ⌘1…⌘9 anywhere in Settings; ↑/↓ only when the pointer is over the
         // sidebar (and no text field is being edited) or a sidebar item has the keyboard focus
         let item_id = |i: usize| Id::new(("settings-tab-item", i));
         for (i, key) in SETTINGS_NUM_KEYS.iter().enumerate() {
@@ -5804,67 +5782,78 @@ impl App {
                 }
             }
             ui.add_space(6.0);
-            for (i, (name, symbol)) in SETTINGS_TABS.iter().enumerate() {
-                if SETTINGS_GROUP_STARTS.contains(&i) {
-                    // thin divider between the Everyday / Intelligence / Power groups
-                    ui.add_space(8.0);
-                    let (dr, _) = ui.allocate_exact_size(Vec2::new(side.width(), 1.0), Sense::hover());
-                    ui.painter().hline(dr.x_range(), dr.center().y, Stroke::new(1.0, pal.sep));
-                    ui.add_space(8.0);
+            // the tabs scroll when they do not fit (nine tabs need more than the window's height)
+            egui::ScrollArea::vertical().id_salt("settings-sidebar-scroll").auto_shrink([false; 2]).show(ui, |ui| {
+                for (i, (name, symbol)) in SETTINGS_TABS.iter().enumerate() {
+                    if SETTINGS_GROUP_STARTS.contains(&i) {
+                        // thin divider between the Everyday / Intelligence / Power groups
+                        ui.add_space(8.0);
+                        let (dr, _) = ui.allocate_exact_size(Vec2::new(side.width(), 1.0), Sense::hover());
+                        ui.painter().hline(dr.x_range(), dr.center().y, Stroke::new(1.0, pal.sep));
+                        ui.add_space(8.0);
+                        #[cfg(test)]
+                        marks.1.push(dr);
+                    }
+                    let id = item_id(i);
+                    ui.ctx().memory_mut(|m| {
+                        m.set_focus_lock_filter(id, egui::EventFilter { vertical_arrows: true, ..Default::default() });
+                    });
+                    let (r, _) = ui.allocate_exact_size(Vec2::new(side.width(), 34.0), Sense::hover());
+                    let resp = ui.interact(r, id, Sense::click()).on_hover_text(format!("{name}  ⌘{}", i + 1));
+                    record_ctl(&ctx, "sidebar", resp.id, r, true);
                     #[cfg(test)]
-                    marks.1.push(dr);
-                }
-                let id = item_id(i);
-                ui.ctx().memory_mut(|m| {
-                    m.set_focus_lock_filter(id, egui::EventFilter { vertical_arrows: true, ..Default::default() });
-                });
-                let (r, _) = ui.allocate_exact_size(Vec2::new(side.width(), 34.0), Sense::hover());
-                let resp = ui.interact(r, id, Sense::click()).on_hover_text(format!("{name}  ⌘{}", i + 1));
-                record_ctl(&ctx, "sidebar", resp.id, r, true);
-                #[cfg(test)]
-                marks.0.push((name.to_string(), r));
-                // while a search shows its results no tab is the current one
-                let on = i == tab && query.trim().is_empty();
-                #[cfg(test)]
-                if on {
-                    active_names.push(name.to_string());
-                }
-                if on {
-                    ui.painter().rect_filled(r, 8.0, pal.sel);
-                } else if resp.hovered() {
-                    ui.painter().rect_filled(r, 8.0, pal.field);
-                }
-                let gr = Rect::from_center_size(Pos2::new(r.min.x + 20.0, r.center().y), Vec2::splat(20.0));
-                ui.painter().rect_filled(gr, 5.0, if on { pal.accent } else { pal.field });
-                let tint = if on { Color32::WHITE } else { pal.sub_strong };
-                if on {
-                    record_text(&ctx, pal, "side-icon-active", tint, &[pal.sel, pal.accent], 1.0);
-                    record_text(&ctx, pal, "side-label-active", pal.text, &[pal.sel], 1.0);
-                } else {
-                    record_text(&ctx, pal, "side-icon", tint, &[pal.field], 1.0);
-                    record_text(&ctx, pal, "side-label", pal.sub_strong, &[], 1.0);
-                    record_text(&ctx, pal, "side-label-hover", pal.sub_strong, &[pal.field], 1.0);
-                }
-                match self.icons.texture(&ctx, &Icon::Glyph(symbol, [0, 0, 0])) {
-                    Some(t) => {
-                        ui.painter().image(t.id(), gr, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+                    marks.0.push((name.to_string(), r));
+                    // while a search shows its results no tab is the current one
+                    let on = i == tab && query.trim().is_empty();
+                    #[cfg(test)]
+                    if on {
+                        active_names.push(name.to_string());
                     }
-                    None => {
-                        ui.painter().circle_filled(gr.center(), 2.0, tint);
+                    if on {
+                        ui.painter().rect_filled(r, 8.0, pal.sel);
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(r, 8.0, pal.field);
+                    }
+                    let gr = Rect::from_center_size(Pos2::new(r.min.x + 20.0, r.center().y), Vec2::splat(20.0));
+                    ui.painter().rect_filled(gr, 5.0, if on { pal.accent } else { pal.field });
+                    let tint = if on { Color32::WHITE } else { pal.sub_strong };
+                    if on {
+                        record_text(&ctx, pal, "side-icon-active", tint, &[pal.sel, pal.accent], 1.0);
+                        record_text(&ctx, pal, "side-label-active", pal.text, &[pal.sel], 1.0);
+                    } else {
+                        record_text(&ctx, pal, "side-icon", tint, &[pal.field], 1.0);
+                        record_text(&ctx, pal, "side-label", pal.sub_strong, &[], 1.0);
+                        record_text(&ctx, pal, "side-label-hover", pal.sub_strong, &[pal.field], 1.0);
+                    }
+                    match self.icons.texture(&ctx, &Icon::Glyph(symbol, [0, 0, 0])) {
+                        Some(t) => {
+                            ui.painter().image(t.id(), gr, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+                        }
+                        None => {
+                            ui.painter().circle_filled(gr.center(), 2.0, tint);
+                        }
+                    }
+                    ui.painter().text(
+                        Pos2::new(r.min.x + 38.0, r.center().y),
+                        Align2::LEFT_CENTER,
+                        name,
+                        FontId::proportional(13.5),
+                        if on { pal.text } else { pal.sub_strong },
+                    );
+                    focus_ring(ui, pal, &resp, r.shrink(1.0));
+                    if on {
+                        // bring the current tab into view when it changes (and when Settings opens on it)
+                        let seen = Id::new("settings-sidebar-seen-tab");
+                        if ctx.data(|d| d.get_temp::<usize>(seen)) != Some(i) {
+                            ui.scroll_to_rect(r, None);
+                            ctx.data_mut(|d| d.insert_temp(seen, i));
+                        }
+                    }
+                    if resp.clicked() {
+                        tab = i;
                     }
                 }
-                ui.painter().text(
-                    Pos2::new(r.min.x + 38.0, r.center().y),
-                    Align2::LEFT_CENTER,
-                    name,
-                    FontId::proportional(13.5),
-                    if on { pal.text } else { pal.sub_strong },
-                );
-                focus_ring(ui, pal, &resp, r.shrink(1.0));
-                if resp.clicked() {
-                    tab = i;
-                }
-            }
+            });
         });
         #[cfg(test)]
         ctx.data_mut(|d| {
@@ -6275,7 +6264,42 @@ impl App {
                         ui.add_space(10.0);
                         note(ui, pal, "Credentials and server address come from the AI tab; this tab only picks which provider and model translate.");
                     }
-                    5 => {
+                    NOTES_TAB => {
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Show Notes Toggle Button in Menu Bar", "Adds a button to the menu bar that shows or hides the Notes window.", |ui| {
+                                toggle(ui, pal, &mut s.notes_menu_bar_button)
+                            });
+                            row(ui, pal, "Escape Key Loses Focus", "Esc moves focus away from the Notes window instead of closing it.", |ui| {
+                                toggle(ui, pal, &mut s.notes_escape_loses_focus)
+                            });
+                            row(ui, pal, "Zoom", "Text size in Notes. Also set with ⌘+, ⌘- and ⌘0.", |ui| {
+                                // right to left: the drop-down is the rightmost control
+                                let shown = notes_zoom_label(s.notes_zoom);
+                                #[cfg(test)]
+                                ctx.data_mut(|d| {
+                                    d.insert_temp(Id::new("notes-zoom-shown"), shown.clone());
+                                    d.insert_temp(Id::new("notes-zoom-items"), Vec::<(String, Rect)>::new());
+                                });
+                                field_combo(ui, pal, "notes_zoom", &shown, 84.0, |ui| {
+                                    for z in notes_zoom_steps() {
+                                        let label = notes_zoom_label(z);
+                                        let r = ui.selectable_label((s.notes_zoom - z).abs() < 1e-6, &label);
+                                        #[cfg(test)]
+                                        ctx.data_mut(|d| {
+                                            d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("notes-zoom-items")).push((label.clone(), r.rect))
+                                        });
+                                        if r.clicked() {
+                                            s.notes_zoom = z;
+                                        }
+                                    }
+                                });
+                                if small_btn(ui, pal, "Reset") {
+                                    s.notes_zoom = 1.0;
+                                }
+                            });
+                        });
+                    }
+                    6 => {
                         group(ui, pal, |ui| {
                             row(ui, pal, "Default folder", "Scripts with Raycast metadata here become commands.", |ui| {
                                 ui.label(RichText::new(self.store.scripts_dir().display().to_string()).size(12.0).color(pal.sub));
@@ -6299,7 +6323,7 @@ impl App {
                         if self.scripts.is_empty() && s.script_directories.is_empty() {
                             ui.add_space(14.0);
                             let line = "Scripts with Raycast metadata become commands you can run from the launcher.";
-                            if empty_state(ui, pal, 5, "No script commands yet", line, "Create script") {
+                            if empty_state(ui, pal, 6, "No script commands yet", line, "Create script") {
                                 create_script = true;
                             }
                         }
@@ -6738,21 +6762,22 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
 }
 
 /// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Power = 5..8.
-const SETTINGS_TABS: [(&str, &str); 8] = [
+const SETTINGS_TABS: [(&str, &str); 9] = [
     ("General", "sf:gearshape"),
     ("Clipboard", "sf:doc.on.clipboard"),
     ("Snippets", "sf:curlybraces"),
     ("AI", "sf:sparkles"),
     ("Translate", "sf:character.bubble"),
+    ("Notes", "sf:note.text"),
     ("Scripts", "sf:terminal"),
     ("Integrations", "sf:link"),
     ("Advanced", "sf:slider.horizontal.3"),
 ];
 /// Indices of the first tab of the second and third group: a divider is drawn before each.
 const SETTINGS_GROUP_STARTS: [usize; 2] = [3, 5];
-const SETTINGS_NUM_KEYS: [Key; 8] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8];
-/// Index of the Integrations tab in `draw_settings`.
-pub(crate) const INTEGRATIONS_TAB: usize = 6;
+const SETTINGS_NUM_KEYS: [Key; 9] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
+/// Index of the Integrations tab in `draw_settings` (after Notes and Scripts).
+pub(crate) const INTEGRATIONS_TAB: usize = 7;
 
 fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     record_text(ui.ctx(), pal, "section", pal.sub_strong, &[], ui.opacity());
@@ -6996,6 +7021,18 @@ fn row_body(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, 
 /// Returns true when the list should be (re)fetched.
 /// Index of the Translate tab in `draw_settings`.
 const TRANSLATE_TAB: usize = 4;
+/// Index of the Notes tab.
+const NOTES_TAB: usize = 5;
+
+/// The zoom levels of the Notes tab: 50 %, 60 % … 300 %, the steps of the editor's ⌘+ and ⌘-.
+fn notes_zoom_steps() -> Vec<f64> {
+    (5..=30).map(|n| f64::from(n) / 10.0).collect()
+}
+
+/// "150%" for 1.5.
+fn notes_zoom_label(zoom: f64) -> String {
+    format!("{}%", (zoom * 100.0).round() as i64)
+}
 
 /// For a translation provider whose model list is fetched (OpenAI-compatible, Anthropic): the
 /// settings that list ITS models, i.e. the chat configuration with that provider selected.
@@ -7824,7 +7861,7 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
     ),
     (1, &["clipboard_enabled", "clipboard_retention"]),
     (4, &["wheel_translate_key", "translate_languages", "translate_output", "translate_effect", "translate_provider", "translate_model"]),
-    (7, &["rem_px", "window_gap"]),
+    (8, &["rem_px", "window_gap"]),
 ];
 
 /// `s` with the fields of `tab` (see `RESET_FIELDS`) copied from `from`; a tab without an entry,
@@ -7876,8 +7913,14 @@ impl App {
         let hotkey_changed = s.launcher_hotkey != self.settings.launcher_hotkey;
         let dirs_changed = s.script_directories != self.settings.script_directories;
         let start_poller = s.update_check && self.update_poller.is_none();
+        let notes_changed = s.notes_zoom != self.settings.notes_zoom
+            || s.notes_escape_loses_focus != self.settings.notes_escape_loses_focus
+            || s.notes_menu_bar_button != self.settings.notes_menu_bar_button;
         self.settings = s;
         self.save_settings();
+        if notes_changed {
+            self.apply_notes_settings();
+        }
         if start_poller {
             // the poller only exists once the check was on: turning it on later starts it now
             self.update_poller = services::start_update_poller(self.shared.clone(), self.bus.clone());

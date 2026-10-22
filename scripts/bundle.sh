@@ -31,7 +31,13 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>MIT licensed. Not affiliated with Raycast.</string>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>dev.ferrocast.url</string>
+    <key>CFBundleURLSchemes</key><array><string>ferrocast</string></array>
+  </dict></array>
   <key>NSAppleEventsUsageDescription</key><string>Ferrocast uses Automation for system commands you explicitly run.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Ferrocast listens to your microphone only while you dictate into a note.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Ferrocast turns your speech into text only while you dictate into a note.</string>
 </dict></plist>
 PLIST
 plutil -lint "$app/Contents/Info.plist"

@@ -1,10 +1,10 @@
 ---
 title: "Keyboard shortcuts"
-description: "Every Ferrocast keyboard shortcut in one table: launcher keys, the editor windows for photos, video and PDF, and the keys inside each tool window."
+description: "Every Ferrocast keyboard shortcut in one table: launcher keys, the Notes window, the editors for photos, video and PDF, and the tool windows."
 sidebar:
   order: 13
 ---
-This page lists the shortcuts in the launcher and in the file tool windows. Shortcuts are written with macOS glyphs.
+This page lists the shortcuts in the launcher, in the Notes window and in the file tool windows. Shortcuts are written with macOS glyphs.
 
 ## Launcher
 
@@ -25,6 +25,27 @@ This page lists the shortcuts in the launcher and in the file tool windows. Shor
 | <kbd>⌘</kbd> <kbd>.</kbd> | Pin or unpin a clipboard entry. |
 | <kbd>⌘</kbd> <kbd>E</kbd> | Edit the selected snippet or quicklink. |
 | <kbd>⌫</kbd> | Go back when the search is empty. |
+
+## Notes window
+
+These work while the [Notes](/docs/launcher/notes/) window is open.
+
+| Keys | Action |
+|---|---|
+| <kbd>⌘</kbd> <kbd>N</kbd> | New note. |
+| <kbd>⌘</kbd> <kbd>P</kbd> | Browse Notes. |
+| <kbd>⌘</kbd> <kbd>K</kbd> | Open the action panel. |
+| <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>P</kbd> | Pin or unpin the note (<kbd>⌘</kbd> <kbd>.</kbd> in the Search Notes list). |
+| <kbd>⌘</kbd> <kbd>1</kbd> to <kbd>⌘</kbd> <kbd>9</kbd> | Open the first to the ninth pinned note. |
+| <kbd>⌘</kbd> <kbd>[</kbd> <kbd>⌘</kbd> <kbd>]</kbd> | Go back or forward through the notes you opened. |
+| <kbd>⌘</kbd> <kbd>+</kbd> <kbd>⌘</kbd> <kbd>-</kbd> <kbd>⌘</kbd> <kbd>0</kbd> | Zoom in, zoom out, actual size. |
+| <kbd>⌘</kbd> <kbd>↵</kbd> | Check or uncheck the task on the cursor line. |
+| <kbd>⌘</kbd> <kbd>B</kbd> <kbd>⌘</kbd> <kbd>I</kbd> <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>S</kbd> <kbd>⌘</kbd> <kbd>U</kbd> <kbd>⌘</kbd> <kbd>E</kbd> <kbd>⌘</kbd> <kbd>L</kbd> | Bold, italic, strikethrough, underline, code, link. |
+| <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>1</kbd> <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>2</kbd> <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>3</kbd> | Heading 1, 2, 3. |
+| <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>C</kbd> | Code block. |
+| <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>B</kbd> | Blockquote. |
+| <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>7</kbd> <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>8</kbd> <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>9</kbd> | Ordered, bullet and task list. |
+| <kbd>esc</kbd> | Close the window (or move focus away, if Settings → Notes → Escape Key Loses Focus is on). |
 
 ## File tools
 
@@ -59,5 +80,6 @@ This page lists the shortcuts in the launcher and in the file tool windows. Shor
 
 ## Related
 
+- [Notes](/docs/launcher/notes/)
 - [Drag wheel](/docs/files/drag-wheel/)
 - [Settings](/docs/launcher/settings/)

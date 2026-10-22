@@ -1,0 +1,148 @@
+---
+title: "Notes"
+description: "A floating rich-text notes window above your other apps: Markdown, a slash menu, pinning, export, AI commands and dictation, toggled with a hotkey."
+sidebar:
+  order: 14
+---
+Notes is a rich-text window that floats above your other apps. Open it with a hotkey, write, and close it again. Notes are stored as Markdown in `notes.json` in the data folder.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| **Notes** | Shows or hides the Notes window. Searching “floating notes” finds it too. |
+| **Create Note** | Creates a new note and opens the window. |
+| **Search Notes** | A list of all your notes, searched by title and content. Opening one shows it in the floating window. |
+| **Create Dictated Note** | Creates a new note and starts dictation. |
+
+Each command takes its own hotkey: select it in the launcher and press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>,</kbd>, or choose **Set Hotkey…** in the action panel (<kbd>⌘</kbd> <kbd>K</kbd>).
+
+## Write a note
+
+Press <kbd>⌘</kbd> <kbd>N</kbd> in the window, or use the plus button in the toolbar, to start a new note. The first line is the title, and it is shown in the toolbar. Only one note is visible at a time.
+
+An empty note is discarded when you hide the window, unless it is your only note. Changes are saved a moment after you stop typing, and also when the window hides.
+
+## Format text
+
+There are five ways to format:
+
+1. Keyboard shortcuts (tables below).
+2. Markdown typing: type the Markdown and it turns into formatting.
+3. The `/` menu: type `/` to pick a format from a list.
+4. **Format** in the action panel (<kbd>⌘</kbd> <kbd>K</kbd>).
+5. The Format Bar at the bottom of the window. Show or hide it with **Show Format Bar** or **Hide Format Bar** in the action panel.
+
+### Paragraph formats
+
+| Format | Shortcut | Markdown |
+|---|---|---|
+| Heading 1 | <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>1</kbd> | `#` and a space |
+| Heading 2 | <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>2</kbd> | `##` and a space |
+| Heading 3 | <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>3</kbd> | `###` and a space |
+| Code block | <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>C</kbd> | three backticks and a space, or `~~~` |
+| Blockquote | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>B</kbd> | `>` and a space |
+| Ordered list | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>7</kbd> | `1.` and a space |
+| Bullet list | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>8</kbd> | `*` or `-` and a space |
+| Task list | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>9</kbd> | `[]` or `[x]` and a space |
+| Horizontal rule | none | `---` or `___` and a space |
+
+To check or uncheck a task, put the cursor on its line and press <kbd>⌘</kbd> <kbd>↵</kbd>. Lists can be indented.
+
+### Text formats
+
+| Format | Shortcut | Markdown |
+|---|---|---|
+| Bold | <kbd>⌘</kbd> <kbd>B</kbd> | `**text**` or `__text__` |
+| Italic | <kbd>⌘</kbd> <kbd>I</kbd> | `*text*` or `_text_` |
+| Strikethrough | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>S</kbd> | `~~text~~` |
+| Underline | <kbd>⌘</kbd> <kbd>U</kbd> | none (saved as `<u>text</u>`) |
+| Code | <kbd>⌘</kbd> <kbd>E</kbd> | `` `text` `` |
+| Link | <kbd>⌘</kbd> <kbd>L</kbd> | `[text](url)` |
+
+Links are not in the `/` menu. Links open with <kbd>⌘</kbd>-click.
+
+### The `/` menu and emoji
+
+Type `/` to open a menu of formats and filter it by typing. Type `:` to open an emoji list and filter it the same way.
+
+## Organize notes
+
+- **Browse Notes**: <kbd>⌘</kbd> <kbd>P</kbd> or the toolbar button lists every note.
+- **Pin**: <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>P</kbd> pins or unpins the open note (<kbd>⌘</kbd> <kbd>.</kbd> in the Search Notes list). Pinned notes sit at the top of Browse Notes and Search Notes.
+- **Pinned notes**: while the window is open, <kbd>⌘</kbd> <kbd>1</kbd> to <kbd>⌘</kbd> <kbd>9</kbd> open the first to the ninth pinned note.
+- **History**: <kbd>⌘</kbd> <kbd>[</kbd> and <kbd>⌘</kbd> <kbd>]</kbd> go back and forward between the notes you opened, like a browser.
+
+## Delete notes
+
+In the action panel, **Delete Note** and **Delete All Notes** move notes to **Recently Deleted**. Open Recently Deleted from the same panel and choose a note to restore it. Deleted notes are kept for 30 days and then removed for good.
+
+## Zoom
+
+<kbd>⌘</kbd> <kbd>+</kbd> zooms in, <kbd>⌘</kbd> <kbd>-</kbd> zooms out and <kbd>⌘</kbd> <kbd>0</kbd> goes back to actual size. The zoom also lives in Settings → Notes.
+
+## The action panel
+
+<kbd>⌘</kbd> <kbd>K</kbd> opens the action panel for the open note. Type to search it, including the items inside its submenus (for example Format › Bold or Export › Markdown). It holds:
+
+- New Note, Browse Notes, Pin or Unpin Note, Navigate Back and Navigate Forward.
+- Format, Show or Hide Format Bar and Start or Stop Dictation.
+- Copy As, Export, Create Quicklink and AI Commands.
+- Zoom In, Zoom Out and Actual Size.
+- Delete Note, Delete All Notes and Recently Deleted.
+
+Actions that do not apply are left out of the list.
+
+## Export and copy
+
+**Export** writes the note as **Plain Text**, **Markdown** or **HTML**. The file goes to your Downloads folder and is revealed in Finder; there is no save dialog. **Copy As** puts the note on the clipboard in the same three formats.
+
+## Quicklink and URLs
+
+**Create Quicklink** adds a [quicklink](/docs/launcher/quicklinks/) that opens that note from anywhere. It uses these URLs, which you can also use from other apps:
+
+| URL | What it does |
+|---|---|
+| `ferrocast://notes/<id>` | Opens that note. An unknown or deleted note only shows a message. |
+| `ferrocast://notes/new` | Creates a note and opens it. |
+| `ferrocast://notes` | Shows or hides the Notes window. |
+
+## AI commands
+
+**AI Commands** in the action panel runs one of these on the selected text, or on the whole note when nothing is selected:
+
+- Fix Spelling and Grammar, Improve Writing, Make Shorter, Make Longer.
+- Change Tone: Professional, Casual, Friendly, Confident or Straightforward.
+- Explain This and Translate to English.
+
+**Summarize** and **Continue Writing** always work on the whole note.
+
+They use the provider you set in Settings → AI (see [Ask AI](/docs/launcher/ask-ai/)) and send the text to it. Summarize and Continue Writing add their result at the end of the note, and Explain This adds it below the selection. They never replace your text. The other commands replace the text they worked on. Each result is applied as one undo step (<kbd>⌘</kbd> <kbd>Z</kbd>), and Markdown formatting is kept. One command runs at a time. If you edit the note while it runs, the result is discarded.
+
+## Dictation
+
+Choose **Start Dictation** in the action panel, or run **Create Dictated Note**, and speak. The first time, macOS asks for microphone and speech recognition access. Ferrocast uses on-device recognition when your system supports it. Dictation stops when you hide the window, switch notes, delete the note, edit the dictated text or choose **Stop Dictation**.
+
+## Settings
+
+Settings → Notes has three options:
+
+| Option | What it does |
+|---|---|
+| **Show Notes Toggle Button in Menu Bar** | Adds a button to the menu bar that shows or hides the Notes window. Off by default. |
+| **Escape Key Loses Focus** | Esc moves focus away from the Notes window instead of closing it. Off by default. |
+| **Zoom** | Text size, from 50% to 300%. Default 100%. |
+
+:::caution[Limits]
+- There is no limit on the number of notes.
+- <kbd>esc</kbd> closes the window unless you turn on **Escape Key Loses Focus**.
+- <kbd>⌘</kbd> <kbd>0</kbd> means actual size, so pinned notes use <kbd>⌘</kbd> <kbd>1</kbd> to <kbd>⌘</kbd> <kbd>9</kbd>.
+- AI commands and dictation depend on your provider and on macOS permissions.
+:::
+
+## Related
+
+- [Keyboard shortcuts](/docs/launcher/keyboard-shortcuts/)
+- [Settings](/docs/launcher/settings/)
+- [Quicklinks](/docs/launcher/quicklinks/)
+- [Data and privacy](/docs/reference/data-and-privacy/)
