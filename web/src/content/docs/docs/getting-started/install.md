@@ -1,6 +1,6 @@
 ---
 title: "Install Ferrocast"
-description: "Download the Ferrocast DMG for Apple Silicon, or install with Homebrew as an alternative."
+description: "Download the Ferrocast DMG for Apple Silicon and drag it to Applications, or install it with Homebrew as an alternative that builds on your Mac."
 sidebar:
   order: 1
 ---
