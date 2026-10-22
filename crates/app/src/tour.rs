@@ -718,23 +718,31 @@ impl App {
                 Action::Finish => self.pop(),
                 // The launcher floats above every window, so hide it before macOS opens its
                 // prompt or System Settings; the hotkey brings the tour back where it was.
+                // macOS shows its own prompt only the first time, so a grant also opens the
+                // pane: otherwise a second click would do nothing visible.
                 Action::GrantAccessibility => {
                     self.hide();
                     windows::accessibility_trusted(true);
+                    open_pane(PANE_ACCESSIBILITY);
                 }
                 Action::GrantInputMonitoring => {
                     self.hide();
                     windows::request_input_monitoring();
+                    open_pane(PANE_INPUT);
                 }
                 Action::OpenPane(pane) => {
                     self.hide();
-                    let _ = std::process::Command::new("/usr/bin/open")
-                        .arg(format!("x-apple.systempreferences:com.apple.preference.security?{pane}"))
-                        .status();
+                    open_pane(pane);
                 }
             }
         }
     }
+}
+
+/// Opens a Privacy & Security pane in System Settings.
+fn open_pane(pane: &str) {
+    let _ =
+        std::process::Command::new("/usr/bin/open").arg(format!("x-apple.systempreferences:com.apple.preference.security?{pane}")).status();
 }
 
 #[cfg(test)]
