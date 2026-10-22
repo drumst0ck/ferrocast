@@ -271,17 +271,18 @@ pub const FX_ID: &str = "ferrocast-tx-fx";
 pub const STYLE_ID: &str = "ferrocast-tx-style";
 
 const FX_CSS: &str = "#__FX__{position:absolute;left:0;top:0;width:0;height:0;pointer-events:none;z-index:2147483647}.ferrocast-tx-box{position:absolute;border-radius:8px;pointer-events:none;box-shadow:0 0 10px 2px rgba(255,26,61,.55),0 0 26px 7px rgba(240,83,95,.38),0 0 52px 16px rgba(255,45,85,.2);animation:ferrocast-tx-breathe 1.2s ease-in-out infinite alternate}.ferrocast-tx-box svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}.ferrocast-tx-box rect{fill:none;vector-effect:non-scaling-stroke}.ferrocast-tx-glow{stroke:#ff1a3d;stroke-width:5;filter:blur(4px);opacity:.9}.ferrocast-tx-tube{stroke:#f0535f;stroke-width:2}.ferrocast-tx-core{stroke:rgba(255,230,235,.9);stroke-width:.8}.ferrocast-tx-comet{stroke:#ffd0d8;stroke-width:2.6;stroke-linecap:round;stroke-dasharray:18 82;filter:drop-shadow(0 0 4px #ff2d55) drop-shadow(0 0 9px #ff1a3d);animation:ferrocast-tx-run 1.6s linear infinite}.ferrocast-tx-comet2{stroke:#ff6a2a;stroke-width:2.2;stroke-linecap:round;stroke-dasharray:10 90;stroke-dashoffset:50;filter:drop-shadow(0 0 5px #ff4a1a);animation:ferrocast-tx-run2 2.3s linear infinite}@keyframes ferrocast-tx-run{from{stroke-dashoffset:0}to{stroke-dashoffset:-100}}@keyframes ferrocast-tx-run2{from{stroke-dashoffset:50}to{stroke-dashoffset:150}}@keyframes ferrocast-tx-breathe{from{opacity:.78}to{opacity:1}}@keyframes ferrocast-tx-in{from{background-color:rgba(240,83,95,.32)}to{background-color:transparent}}.ferrocast-tx-new{border-radius:4px;animation:ferrocast-tx-in .9s ease-out}@media (prefers-reduced-motion:reduce){.ferrocast-tx-box,.ferrocast-tx-comet,.ferrocast-tx-comet2,.ferrocast-tx-new{animation:none}}";
-const MARK_JS: &str = "(function(){var s=window.getSelection();if(!s||s.rangeCount===0||s.isCollapsed){return \"nosel\";}var r=s.getRangeAt(0);window.__ferrocastTxRange=r.cloneRange();var old=document.getElementById(\"__FX__\");if(old){old.remove();}if(!document.getElementById(\"__ST__\")){var st=document.createElement(\"style\");st.id=\"__ST__\";st.textContent=__CSS__;(document.head||document.documentElement).appendChild(st);}var fx=document.createElement(\"div\");fx.id=\"__FX__\";fx.setAttribute(\"aria-hidden\",\"true\");fx.style.cssText=\"pointer-events:none\";var rs=r.getClientRects();var lines=[];for(var i=0;i<rs.length;i++){var q=rs[i];if(q.width<1||q.height<1){continue;}var hit=null;for(var j=0;j<lines.length;j++){var L=lines[j];var ov=Math.min(L.b,q.bottom)-Math.max(L.t,q.top);if(ov>Math.min(L.b-L.t,q.height)*0.5){hit=L;break;}}if(hit){hit.l=Math.min(hit.l,q.left);hit.r=Math.max(hit.r,q.right);hit.t=Math.min(hit.t,q.top);hit.b=Math.max(hit.b,q.bottom);}else if(lines.length<40){lines.push({l:q.left,r:q.right,t:q.top,b:q.bottom});}}var NS=\"http://www.w3.org/2000/svg\";for(var k=0;k<lines.length;k++){var L2=lines[k];var w=L2.r-L2.l+10,h=L2.b-L2.t+6;var b=document.createElement(\"div\");b.className=\"ferrocast-tx-box\";b.style.left=(L2.l+window.scrollX-5)+\"px\";b.style.top=(L2.t+window.scrollY-3)+\"px\";b.style.width=w+\"px\";b.style.height=h+\"px\";var sv=document.createElementNS(NS,\"svg\");sv.setAttribute(\"viewBox\",\"0 0 \"+w+\" \"+h);var cls=[\"ferrocast-tx-glow\",\"ferrocast-tx-tube\",\"ferrocast-tx-core\",\"ferrocast-tx-comet\",\"ferrocast-tx-comet2\"];for(var c=0;c<cls.length;c++){var re=document.createElementNS(NS,\"rect\");re.setAttribute(\"x\",\"1\");re.setAttribute(\"y\",\"1\");re.setAttribute(\"width\",String(Math.max(w-2,1)));re.setAttribute(\"height\",String(Math.max(h-2,1)));re.setAttribute(\"rx\",\"7\");re.setAttribute(\"pathLength\",\"100\");re.setAttribute(\"class\",cls[c]);sv.appendChild(re);}b.appendChild(sv);fx.appendChild(b);}(document.body||document.documentElement).appendChild(fx);return lines.length>0?\"ok\":\"nosel\";})()";
+const MARK_JS: &str = "(function(){var s=window.getSelection();if(!s||s.rangeCount===0||s.isCollapsed){return \"nosel\";}var r=s.getRangeAt(0);var u=r.getBoundingClientRect();if(u.width<1||u.height<1){return \"nosel\";}window.__ferrocastTxRange=r.cloneRange();var old=document.getElementById(\"__FX__\");if(old){old.remove();}if(!document.getElementById(\"__ST__\")){var st=document.createElement(\"style\");st.id=\"__ST__\";st.textContent=__CSS__;(document.head||document.documentElement).appendChild(st);}var fx=document.createElement(\"div\");fx.id=\"__FX__\";fx.setAttribute(\"aria-hidden\",\"true\");fx.style.cssText=\"pointer-events:none\";var w=u.width+14,h=u.height+10;var b=document.createElement(\"div\");b.className=\"ferrocast-tx-box\";b.style.left=(u.left+window.scrollX-7)+\"px\";b.style.top=(u.top+window.scrollY-5)+\"px\";b.style.width=w+\"px\";b.style.height=h+\"px\";var NS=\"http://www.w3.org/2000/svg\";var sv=document.createElementNS(NS,\"svg\");sv.setAttribute(\"viewBox\",\"0 0 \"+w+\" \"+h);var cls=[\"ferrocast-tx-glow\",\"ferrocast-tx-tube\",\"ferrocast-tx-core\",\"ferrocast-tx-comet\",\"ferrocast-tx-comet2\"];var rad=String(Math.min(10,h/2));for(var c=0;c<cls.length;c++){var re=document.createElementNS(NS,\"rect\");re.setAttribute(\"x\",\"1\");re.setAttribute(\"y\",\"1\");re.setAttribute(\"width\",String(Math.max(w-2,1)));re.setAttribute(\"height\",String(Math.max(h-2,1)));re.setAttribute(\"rx\",rad);re.setAttribute(\"pathLength\",\"100\");re.setAttribute(\"class\",cls[c]);sv.appendChild(re);}b.appendChild(sv);fx.appendChild(b);(document.body||document.documentElement).appendChild(fx);s.removeAllRanges();return \"ok\";})()";
 const REPLACE_MARKED_JS: &str = "(function(t){var r=window.__ferrocastTxRange;var s=window.getSelection();if(!r&&s&&s.rangeCount>0&&!s.isCollapsed){r=s.getRangeAt(0);}var fx=document.getElementById(\"__FX__\");if(fx){fx.remove();}window.__ferrocastTxRange=null;if(!r||r.collapsed){var st0=document.getElementById(\"__ST__\");if(st0){st0.remove();}return \"nosel\";}r.deleteContents();var tn=document.createTextNode(t);var sp=document.createElement(\"span\");sp.className=\"ferrocast-tx-new\";sp.appendChild(tn);r.insertNode(sp);if(s){s.removeAllRanges();}setTimeout(function(){if(sp.parentNode){sp.parentNode.replaceChild(tn,sp);}var st=document.getElementById(\"__ST__\");if(st&&!document.getElementById(\"__FX__\")){st.remove();}},950);return \"ok\";})(__LIT__)";
-const UNMARK_JS: &str = "(function(){var fx=document.getElementById(\"__FX__\");if(fx){fx.remove();}var st=document.getElementById(\"__ST__\");if(st){st.remove();}window.__ferrocastTxRange=null;return \"ok\";})()";
+const UNMARK_JS: &str = "(function(){var fx=document.getElementById(\"__FX__\");if(fx){fx.remove();}var st=document.getElementById(\"__ST__\");if(st){st.remove();}var r=window.__ferrocastTxRange;window.__ferrocastTxRange=null;if(r&&!r.collapsed){var s=window.getSelection();if(s&&s.rangeCount===0){s.addRange(r);}}return \"ok\";})()";
 
 fn with_ids(js: &str) -> String {
     js.replace("__FX__", FX_ID).replace("__ST__", STYLE_ID)
 }
 
 /// JavaScript that shows the translating effect on the page's selected text: one absolutely
-/// positioned box per line of the selection (a neon-red tube with a blurred halo and two lights
-/// running around its border, drawn as SVG strokes),
+/// positioned box around the whole selected block (a neon-red tube with a blurred halo and two
+/// lights running around its border, drawn as SVG strokes); the page's own selection fill is hidden
+/// while it runs,
 /// click-through and outside the text, so the page text is never rewritten while translating. It
 /// remembers the range for `web_replace_marked_js`. Returns "ok", or "nosel" without a selection.
 pub fn web_mark_js() -> String {
@@ -296,8 +297,8 @@ pub fn web_replace_marked_js(text: &str) -> String {
     with_ids(REPLACE_MARKED_JS).replace("__LIT__", &lit)
 }
 
-/// JavaScript that removes only what the effect added (overlays, style, remembered range); the page
-/// text is untouched. Used when the translation fails or is shown in the window instead.
+/// JavaScript that removes only what the effect added (overlays, style, remembered range) and gives
+/// the user their selection back; the page text is untouched. Used when the translation fails or is shown in the window instead.
 pub fn web_unmark_js() -> String {
     with_ids(UNMARK_JS)
 }
@@ -340,8 +341,10 @@ mod tests {
         assert!(js.starts_with("(function(){"), "{js}");
         // remembers the range so the replacement still works if the page selection is lost
         assert!(js.contains("__ferrocastTxRange"), "{js}");
-        // overlays over the selection rectangles, not a wrapper around the text
-        assert!(js.contains("getClientRects"), "{js}");
+        // ONE overlay around the whole selected block (per-line boxes overlapped on tight headings),
+        // not a wrapper around the text
+        assert!(js.contains("getBoundingClientRect"), "{js}");
+        assert!(!js.contains("getClientRects"), "{js}");
         assert!(!js.contains("extractContents") && !js.contains("surroundContents"), "{js}");
         assert!(js.contains("pointer-events:none"), "{js}");
         // static glow when the user asks for less motion
