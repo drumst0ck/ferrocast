@@ -27,7 +27,7 @@ Reference for "same functions": https://manual.raycast.com/notes, https://www.ra
 ## Tasks
 - T1 S5,S10,S11,S12,S13,S16,S20 core notes model and store logic in `crates/core/src/notes.rs`: extra optional Note fields (pinned, deleted_at), title, search, pinned order, history stack, Recently Deleted + purge, export txt/md/html — worker (independent, pure) — commit: 3d7014f
 - T2 S6-S9 core rich-text document in `crates/core/src/richtext.rs`: Markdown ⇄ block/inline model (headings, quote, bullet/ordered/task lists with levels, code block, rule, bold/italic/strike/underline `<u>`/code/link), lossless round trip — worker (independent, pure) — commit: pending
-- T3 S2,S19,S5 macos window shell `crates/macos/src/notes.rs`: floating NSPanel + NSTextView in a scroll view, toolbar (title, browse, plus), toggle/focus/open, frame memory, plain text sync, PNG dump of the window for checks — inline — commit: pending
+- T3 S2,S19,S5 macos window shell `crates/macos/src/notes.rs`: floating NSPanel + NSTextView in a scroll view, toolbar (title, browse, plus), toggle/focus/open, frame memory, plain text sync, PNG dump of the window for checks — inline — commit: fa19f00
 - T4 S6-S9,S14 editor behavior: Doc ⇄ NSTextStorage, Markdown typing shortcuts, key shortcuts, list continue/indent, task toggle, links, `/` menu, `:` emoji, Format Bar, zoom — inline (after T2,T3) — commit: pending
 - T5 S10-S13,S16 navigation and actions: Browse Notes ⌘P, new ⌘N, pin ⇧⌘P and ⌘0-9, history ⌘[ ⌘], ⌘K action panel, delete / delete all / Recently Deleted, export, copy — inline (after T1,T3) — commit: pending
 - T6 S4,S15,S20 integration: Notes / Create Note / Search Notes commands + alias + hotkeys, menu bar toggle, settings (Escape loses focus, zoom, menu bar), replace the old launcher note views, settings index, shortcuts list — inline — commit: pending
@@ -43,3 +43,4 @@ Reference for "same functions": https://manual.raycast.com/notes, https://www.ra
 - D1 The manual lists ⌘0 both as "actual size" (zoom) and as the first pinned slot. Chosen: ⌘0 resets zoom, ⌘1-⌘9 open pinned notes 1-9. Reversible; confirm with the user when the window can be shown.
 - D2 Free tier cap of 5 notes not copied (S20).
 - D3 Underline has no Markdown syntax in Raycast ("N/A"); stored as `<u>text</u>` so it survives a round trip.
+- L4 T1 (3d7014f) and T3 (fa19f00) reviewed and re-run inline: macos tests, clippy and the notes_demo --check pass; light and dark PNGs inspected. The demo re-runs inside a temporary .app via open -W when the bare process cannot activate. Unverified: dragging the toolbar, frame restore after relaunch, real blur, spaces and full-screen.
