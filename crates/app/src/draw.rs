@@ -183,6 +183,7 @@ impl App {
 
 /// Dev aid: `FERROCAST_SCREENSHOT=/tmp/x.png` saves the window contents after a few frames
 /// and exits. `FERROCAST_QUERY` / `FERROCAST_VIEW` preselect what is drawn. Needs no TCC permission.
+/// With `FERROCAST_VIEW=settings-tab-N`, `FERROCAST_SETTINGS_OPEN=<row title>` scrolls to and flashes that row.
 fn dev_screenshot(ctx: &Context, app: &mut App) {
     use std::sync::atomic::{AtomicU32, Ordering};
     static FRAME: AtomicU32 = AtomicU32::new(0);
@@ -634,6 +635,12 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok(v) if v.starts_with("settings-tab-") => {
                 let n = v.trim_start_matches("settings-tab-").parse::<usize>().unwrap_or(0);
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), n));
+                if let Ok(t) = std::env::var("FERROCAST_SETTINGS_OPEN") {
+                    if let Some(en) = ferrocast_core::settings_index::ENTRIES.iter().find(|e| e.title == t) {
+                        let (mut tab, mut q) = (n, String::new());
+                        open_settings_result(ctx, en, &mut tab, &mut q);
+                    }
+                }
                 // `FERROCAST_SETTINGS_QUERY=text` shows the search results state
                 if let Ok(q) = std::env::var("FERROCAST_SETTINGS_QUERY") {
                     ctx.data_mut(|d| d.insert_temp(Id::new("settings_query"), q));
@@ -6162,7 +6169,12 @@ impl App {
                                     ((false, Some(P::Anthropic)), "Anthropic"),
                                     ((false, Some(P::ClaudeCode)), "Claude Code"),
                                 ]);
-                                segmented(ui, pal, &mut choice, &options);
+                                // six cells with the Apple engine: tighter than the usual 22 px padding so the bar fits the card
+                                let labels: Vec<&str> = options.iter().map(|(_, l)| *l).collect();
+                                let current = options.iter().position(|(v, _)| *v == choice);
+                                if let (Some(i), _) = segmented_bar(ui, pal, current, &labels, 56.0, 10.0) {
+                                    choice = options[i].0;
+                                }
                                 if choice.0 {
                                     s.translate_apple = true;
                                 } else if choice != (apple, if apple { None } else { s.translate_provider }) {
@@ -6227,7 +6239,7 @@ impl App {
                                 });
                             });
                             ui.add_space(10.0);
-                            note(ui, pal, "A language is checked against your Mac's system language. Translating from another language needs that one downloaded too.");
+                            note(ui, pal, "Each language is checked as a pair with your Mac's system language (with English for the system language itself). Translating from another language needs that one downloaded too.");
                         } else if s.translate_provider.is_none() && !s.translate_apple {
                             ui.add_space(10.0);
                             note(ui, pal, &format!("Uses the chat provider and model: {}", ferrocast_core::translate::engine_label(&s)));

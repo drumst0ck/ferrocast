@@ -29,5 +29,7 @@ S12 Docs (EN/ES), settings docs, settings index and CHANGELOG describe the engin
 After T2 the branch holds ~690 authored lines (about 260 of them this feature document and the plan). T3 onward continues on the same branch; T5 gets its own commit (Risk: item 5). Push, PR and merge stay the user's decision.
 
 ## Log
+L3 (found on screen, fixed): on an es-ES Mac the Languages card showed Spanish as `Not supported by Apple` because the helper compared es with es; the helper now pairs the system language with English. And the six-segment Provider bar widened its card over the sidebar; its segments are tighter and `every_card_of_the_translate_tab_has_the_same_width...` pins it.
+L4 (not verified here): the macos-26 runner, Developer ID signing/notarization of the helper, and the missing-pack path (`Needs download` chip and its toast: unit and render tests only).
 L2 (agent correction to S4/S5): the failure toast keeps its usual `Translation failed: ` prefix so Apple errors read like every other engine's; the rest of the text is exactly as specified.
 L1 (user): "realiza el plan" (odd/plans/apple-translation-plan.md)

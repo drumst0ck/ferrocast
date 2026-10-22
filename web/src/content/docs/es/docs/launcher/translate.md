@@ -75,7 +75,7 @@ Apple Translation forma parte de macOS. Traduce cada par de idiomas con un model
 3. Para un idioma que necesita descarga, pulsa **Open Language settings**. En Ajustes del Sistema → General → Idioma y región → **Idiomas de traducción**, descárgalo una vez. De vuelta en Ferrocast, pulsa **Check again**.
 4. Arrastra texto y suéltalo sobre ese idioma como siempre. La primera traducción tras abrir la app puede tardar unos segundos mientras carga el modelo.
 
-El estado se comprueba contra el idioma del sistema de tu Mac. Para traducir desde otro idioma, por ejemplo del francés al alemán, ambos idiomas deben estar descargados. Si sueltas texto sobre un idioma sin descargar, Ferrocast lo dice y dónde conseguirlo; si Apple no admite el idioma, sugiere otro idioma o un motor de IA.
+Cada estado es un par de idiomas: el idioma con el idioma del sistema de tu Mac, o con el inglés cuando es el propio idioma del sistema. Para traducir desde otro idioma, por ejemplo del francés al alemán, ambos idiomas deben estar descargados. Si sueltas texto sobre un idioma sin descargar, Ferrocast lo dice y dónde conseguirlo; si Apple no admite el idioma, sugiere otro idioma o un motor de IA.
 
 En macOS anterior a la 26, una elección guardada de Apple vuelve al proveedor del chat, con un aviso la primera vez. Apple Translation no obedece instrucciones y el idioma de origen se detecta en tu Mac.
 

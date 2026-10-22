@@ -3,7 +3,8 @@
 // One JSON object on stdin, one JSON object on stdout (see crates/core/src/apple_translate.rs).
 //   {"cmd":"status","source":"en","target":"de"}          -> {"status":"installed|supported|unsupported"}
 //   {"cmd":"translate","source":"en","target":"de","text":"..."} -> {"text":"..."} or {"error":"..."}
-// "source" may be missing: the system language is used for status, the text's language for translate.
+// "source" may be missing: the system language is used for status (English when that is the target
+// itself), the text's language for translate.
 // Exit codes: 0 answered, 1 error, 2 macOS older than 26 (headless sessions need it).
 // The Translation framework is weak-linked, so this binary also starts on older macOS.
 
@@ -38,7 +39,14 @@ func run(_ request: [String: Any]) async -> Never {
       if let l = recognizer.dominantLanguage { return Locale.Language(identifier: l.rawValue) }
       return nil
     }
-    return Locale.current.language
+    // No source given (the Settings check): the system language. When that is the target itself
+    // there is no pair to look at, so ask about the pair with English (or Spanish for English),
+    // which says whether the target language's pack is there.
+    let system = Locale.current.language
+    if system.languageCode == target.languageCode {
+      return Locale.Language(identifier: target.languageCode?.identifier == "en" ? "es" : "en")
+    }
+    return system
   }
 
   switch cmd {

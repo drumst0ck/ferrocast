@@ -153,6 +153,10 @@ mod tests {
         let ask = |req: String| run_process(&helper, &req, 60).unwrap();
         assert_eq!(proto::parse_status(&ask(proto::status_request(Some("en"), "es"))), Ok(Status::Installed));
         assert_eq!(proto::parse_status(&ask(proto::status_request(Some("en"), "xx"))), Ok(Status::Unsupported));
+        // the Settings card asks without a source: a language is never "unsupported" for being the system language
+        for target in ["en", "es"] {
+            assert_eq!(proto::parse_status(&ask(proto::status_request(None, target))), Ok(Status::Installed), "{target}");
+        }
         let es = proto::parse_translation(&ask(proto::translate_request(Some("en"), "es", "Good morning"))).unwrap();
         assert!(es.to_lowercase().contains("buenos"), "{es}");
         let multi = proto::parse_translation(&ask(proto::translate_request(None, "de", "Line one.\n\"Line two\""))).unwrap();

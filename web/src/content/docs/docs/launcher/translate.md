@@ -75,7 +75,7 @@ Apple Translation is part of macOS. It translates each language pair with a mode
 3. For a language that needs a download, press **Open Language settings**. In System Settings → General → Language & Region → **Translation Languages**, download it once. Back in Ferrocast, press **Check again**.
 4. Drag text and drop it on that language as usual. The first translation after launch can take a few seconds while the model loads.
 
-The status is checked against your Mac's system language. To translate from another language, such as French into German, both of those languages must be downloaded. If you drop text on a language that is not downloaded, Ferrocast says so and where to get it; if Apple does not support the language, it suggests another language or an AI engine.
+Each status is one language pair: the language with your Mac's system language, or with English for the system language itself. To translate from another language, such as French into German, both of those languages must be downloaded. If you drop text on a language that is not downloaded, Ferrocast says so and where to get it; if Apple does not support the language, it suggests another language or an AI engine.
 
 On macOS older than 26 a stored Apple choice falls back to the chat provider, with a notice the first time. Apple Translation does not follow instructions and does not need the language of the text to be detected by a model: the source language is detected on your Mac.
 

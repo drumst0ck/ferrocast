@@ -7434,6 +7434,26 @@ fn the_languages_card_shows_one_chip_per_wheel_language_and_the_model_row_goes_a
 }
 
 #[test]
+fn every_card_of_the_translate_tab_has_the_same_width_with_the_apple_engine_on() {
+    for chosen in [false, true] {
+        let mut app = apple_tab(true);
+        app.settings.translate_apple = chosen;
+        settle(&mut app);
+        let cards: Vec<FormCard> = app.ctx.data(|d| d.get_temp(Id::new("form-cards"))).unwrap_or_default();
+        assert!(cards.len() >= 3, "the tab draws its cards ({chosen})");
+        let (l, r) = (cards[0].rect.min.x, cards[0].rect.max.x);
+        for c in &cards {
+            let rows: Vec<_> = c.rows.iter().map(|r| r.0.as_str()).collect();
+            assert!(
+                (c.rect.min.x - l).abs() < 0.5 && (c.rect.max.x - r).abs() < 0.5,
+                "card {rows:?} is {:?}, the others {l}..{r} (apple {chosen})",
+                c.rect
+            );
+        }
+    }
+}
+
+#[test]
 fn a_stored_apple_choice_on_a_mac_that_cannot_run_it_shows_the_chat_provider_note() {
     let mut app = apple_tab(false);
     app.settings.translate_apple = true;
