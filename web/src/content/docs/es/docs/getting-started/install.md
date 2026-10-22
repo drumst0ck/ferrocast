@@ -1,26 +1,26 @@
 ---
-title: "Instalar con Homebrew"
-description: "Instala Ferrocast en Apple Silicon con Homebrew. La fórmula compila la app en tu Mac, así que no hay cuarentena ni hace falta cuenta de desarrollador."
+title: "Instalar Ferrocast"
+description: "Descarga el DMG de Ferrocast para Apple Silicon y arrástralo a Aplicaciones, o instálalo con Homebrew como alternativa que compila en tu Mac."
 sidebar:
   order: 1
 ---
-Ferrocast se instala con una fórmula de Homebrew que compila la app desde el código fuente en tu propio Mac. Homebrew instala Rust si no lo tienes. La primera instalación tarda unos minutos.
+## Descargar el DMG
 
-Ejecuta esto en Terminal:
+[Descarga el último DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg), ábrelo, arrastra Ferrocast a Aplicaciones y ábrela. La app lleva firma ad-hoc y no está notarizada, así que macOS bloquea el primer arranque de una descarga del navegador: abre Ajustes del Sistema → Privacidad y seguridad y elige «Abrir igualmente». Todas las versiones, con un `SHA256SUMS.txt`, están en la [página de Releases de GitHub](https://github.com/drumst0ck/ferrocast/releases). Solo Apple Silicon.
+
+## Alternativa: instalar con Homebrew
+
+La fórmula de Homebrew compila la app desde el código fuente en tu propio Mac, así que la app no lleva marca de cuarentena y macOS no muestra ningún aviso. Homebrew instala Rust si no lo tienes y la primera instalación tarda unos minutos. Ejecuta esto en Terminal:
 
 ```bash
-brew tap drumst0ck/ferrocast https://github.com/drumst0ck/ferrocast
-brew install ferrocast                      # compila en tu Mac (necesita Rust, lo instala brew)
+brew tap drumst0ck/ferrocast
+brew install drumst0ck/ferrocast/ferrocast  # compila en tu Mac (necesita Rust, lo instala brew)
 ln -sfn "$(brew --prefix)/opt/ferrocast/Ferrocast.app" /Applications/Ferrocast.app
 open /Applications/Ferrocast.app            # concede Accesibilidad cuando lo pida
 brew upgrade ferrocast                      # para actualizar
 ```
 
-Usa siempre el `brew tap` con la URL: la forma corta `brew install drumst0ck/ferrocast/ferrocast` intenta clonar `homebrew-ferrocast`, que no existe, y falla.
-
-## Descargar el DMG
-
-Cada versión estable se publica también en la [página de Releases de GitHub](https://github.com/drumst0ck/ferrocast/releases) como `Ferrocast-X.Y.Z.dmg`, con un `SHA256SUMS.txt`. Abre el DMG, arrastra Ferrocast a Aplicaciones y ábrela. La app lleva firma ad-hoc y no está notarizada, así que macOS bloquea el primer arranque de una descarga del navegador: abre Ajustes del Sistema → Privacidad y seguridad y elige «Abrir igualmente». Solo Apple Silicon.
+Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no has añadido. La fórmula vive en [drumst0ck/homebrew-ferrocast](https://github.com/drumst0ck/homebrew-ferrocast) y sigue cada versión estable de forma automática.
 
 ## Actualizaciones
 

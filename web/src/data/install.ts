@@ -4,9 +4,11 @@
  */
 export const repo = 'https://github.com/drumst0ck/ferrocast';
 
-export const installCommand = `brew tap drumst0ck/ferrocast \\
-  ${repo}
-brew install ferrocast
+/** Always points at the newest stable release: the release workflow uploads a versionless copy. */
+export const dmgUrl = `${repo}/releases/latest/download/Ferrocast.dmg`;
+
+export const installCommand = `brew tap drumst0ck/ferrocast
+brew install drumst0ck/ferrocast/ferrocast
 ln -sfn "$(brew --prefix)/opt/ferrocast/Ferrocast.app" \\
   /Applications/Ferrocast.app
 open /Applications/Ferrocast.app`;

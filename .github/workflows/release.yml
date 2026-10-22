@@ -82,6 +82,8 @@ jobs:
       - name: Package DMG, update ZIP and checksums
         run: |
           scripts/dmg.sh
+          # Versionless copy so the website can link a stable "latest" download URL.
+          cp "dist/Ferrocast-${VERSION}.dmg" dist/Ferrocast.dmg
           ditto -c -k --keepParent dist/Ferrocast.app "dist/Ferrocast-${VERSION}.zip"
           (cd dist && shasum -a 256 "Ferrocast-${VERSION}.dmg" "Ferrocast-${VERSION}.zip" > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
@@ -97,6 +99,7 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/Ferrocast-${{ env.VERSION }}.dmg
+            dist/Ferrocast.dmg
             dist/Ferrocast-${{ env.VERSION }}.zip
             dist/SHA256SUMS.txt
 

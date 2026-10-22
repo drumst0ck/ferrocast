@@ -12,7 +12,7 @@ import '../../styles/files.css';
 import '../../styles/home.css';
 import conversions from '../../data/conversions.json';
 import { counts } from '../../data/status';
-import { repo, installCommand as install, sourceCommand as source } from '../../data/install';
+import { repo, dmgUrl } from '../../data/install';
 import type { HomeCopy } from '../../i18n/home.en';
 
 interface Props { t: HomeCopy; lang: 'en' | 'es' }
@@ -103,7 +103,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
       <div class="copy">
         <h1 class="lines"><span class="line"><span data-line style="--i:0">{t.hero.line1}</span></span><span class="line"><span data-line style="--i:1">{t.hero.line2}</span></span></h1>
         <p class="sub" data-rise style="--i:3">{t.hero.sub}</p>
-        <div class="acts" data-rise style="--i:4"><a class="btn big" href="#install">{t.hero.ctaInstall}</a><a class="btn alt big" href="#files">{t.hero.ctaFiles}</a></div>
+        <div class="acts" data-rise style="--i:4"><a class="btn big" href={dmgUrl} data-dmg>{t.hero.ctaInstall}</a><a class="btn alt big" href="#files">{t.hero.ctaFiles}</a></div>
         <p class="proof" data-rise style="--i:5">{fill(t.hero.proof, vars)}</p>
       </div>
       <div class="hero-3d" data-rise style="--i:2">
@@ -234,7 +234,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
       <h2 id="h-how" data-reveal>{t.install.title}</h2>
       <div class="ex" data-reveal>
         <h3>{t.install.step1}</h3>
-        <div class="call"><pre><code id="inst">{install}</code></pre><button class="cp" type="button" data-copy="inst">{t.install.copy}</button></div>
+        <p class="dmgrow"><a class="btn" href={dmgUrl} data-dmg>{t.install.dmg}</a> <span>{t.install.dmgNote}</span></p>
         <p class="note">{t.install.note} <a class="tl" href={docs('/getting-started/install/')}>{t.install.docs} →</a></p>
       </div>
       <div class="ex" data-reveal>
@@ -276,9 +276,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
       </div>
       <div class="dlg" data-ui data-reveal>
         <h3>{t.cta.dialogTitle}</h3>
-        <div class="seg" role="group" aria-label={t.cta.methodAria}><button type="button" aria-pressed="true" data-m="brew">{t.cta.homebrew}</button><button type="button" aria-pressed="false" data-m="src">{t.cta.source}</button></div>
-        <pre><code id="dlgcode">{install}</code></pre>
-        <button class="btn" type="button" id="dlgcp">{t.cta.copyAll}</button>
+        <a class="btn" href={dmgUrl} data-dmg>{t.install.dmg}</a>
         <small>{t.cta.small}</small>
       </div>
     </section>
@@ -290,16 +288,11 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
     <span class="r">{t.footer.copyright}</span>
   </footer>
 
-  <script is:inline define:vars={{ install, source, faq: faq.map((f) => f[1]), T: clientT, fileOuts }}>
+  <script is:inline define:vars={{ faq: faq.map((f) => f[1]), T: clientT, fileOuts }}>
     (function () {
       var $ = function (s, r) { return (r || document).querySelector(s); }, $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
-      /* copy buttons */
+      /* copy helper (used by the launcher demo) */
       function copy(text, btn, done) { var ok = function () { var o = btn.textContent; btn.textContent = done; setTimeout(function () { btn.textContent = o; }, 1600); }; if (navigator.clipboard) navigator.clipboard.writeText(text).then(ok, ok); else ok(); }
-      $$('[data-copy]').forEach(function (b) { b.addEventListener('click', function () { copy($('#' + b.dataset.copy).textContent, b, T.copied); }); });
-      /* cta dialog */
-      var code = $('#dlgcode'), mode = 'brew';
-      $$('.seg button').forEach(function (b) { b.addEventListener('click', function () { mode = b.dataset.m; code.textContent = mode === 'brew' ? install : source; $$('.seg button').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); }); }); });
-      $('#dlgcp').addEventListener('click', function () { copy(code.textContent, $('#dlgcp'), T.copied); });
       /* pinned story: scroll chooses the screen, 3D card sweeps */
       var story = $('.story'), steps = $$('.step'), svs = $$('.sv'), dots = $$('.dots button'), scard = $('#scard'), n = steps.length, cur = -1, sp = 0, sx = 0, sy = 0, stx = 0, sty = 0;
       function setStep(i) { if (i === cur) return; cur = i; steps.forEach(function (e, k) { e.classList.toggle('on', k === i); }); svs.forEach(function (e, k) { e.classList.toggle('on', k === i); }); dots.forEach(function (e, k) { e.classList.toggle('on', k === i); }); }
