@@ -7,6 +7,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 ## [Unreleased]
 
 ### Added
+- **Translate with Apple**: Settings → Translate → Engine has a new **Apple** choice that translates selected text on your Mac with Apple Translation, offline once the languages are downloaded and with no AI provider. A card lists each wheel language as Installed, Needs download or Not supported, with a button to the System Settings page where Apple downloads them. It needs macOS 26 (older versions keep using the chat provider) and builds made with the macOS 26 SDK; the release and CI runners moved to `macos-26` for that. (docs: /docs/launcher/translate/) #translate #offline
 - **Intro**: the very first launch opens with a short neon-red sunrise: the logo rises, FERROCAST appears letter by letter, with a low, dark swell of sound, then the welcome tour begins. Any key or click skips it; with Reduce Motion it is static and silent, and it never plays again.
 - **Welcome tour**: the first time you open Ferrocast, a seven-slide presentation shows what it does (search and calculator, the drag wheel and file tools, clipboard, snippets, windows, Ask AI and translate) and what to switch on. Accessibility and Input Monitoring show their live status with a Grant button; Automation for Finder says it is asked on first use. Arrow keys and Enter move through it, Esc skips it, and searching “Welcome” opens it again.
 
