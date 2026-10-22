@@ -14,7 +14,10 @@ const TIMEOUT: f32 = 1.0;
 struct Owned(CFTypeRef);
 impl Drop for Owned {
     fn drop(&mut self) {
-        unsafe { CFRelease(self.0) }
+        // never CFRelease(NULL): it aborts the process
+        if !self.0.is_null() {
+            unsafe { CFRelease(self.0) }
+        }
     }
 }
 
@@ -29,7 +32,12 @@ fn focused_element(pid: i32) -> Option<Owned> {
         let name = CFString::new("AXFocusedUIElement");
         let mut v: CFTypeRef = std::ptr::null();
         let err = AXUIElementCopyAttributeValue(app.0 as AXUIElementRef, name.as_concrete_TypeRef(), &mut v);
-        (err == kAXErrorSuccess && !v.is_null()).then_some(Owned(v))
+        // not `then_some(Owned(v))`: that builds (and drops) the value even when the read failed
+        if err == kAXErrorSuccess && !v.is_null() {
+            Some(Owned(v))
+        } else {
+            None
+        }
     }
 }
 
@@ -63,9 +71,21 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn dropping_a_null_owned_is_safe() {
+        // AXUIElementCopyAttributeValue leaves the out pointer NULL on failure; the helper must never
+        // CFRelease(NULL) (that aborts the whole app)
+        drop(Owned(std::ptr::null()));
+    }
+
+    #[test]
     fn missing_pid_is_none_false_and_does_not_block() {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
+            // pids that AXUIElementCreateApplication may refuse (it can return NULL) must not crash
+            for pid in [0, -1, i32::MIN] {
+                assert_eq!(focused_accepts_text(pid), None, "pid {pid}");
+                assert!(!set_selected_text(pid, "x"), "pid {pid}");
+            }
             let r = (focused_accepts_text(i32::MAX), set_selected_text(i32::MAX, "x"));
             let _ = tx.send(r);
         });

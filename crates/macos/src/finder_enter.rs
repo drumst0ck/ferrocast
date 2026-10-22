@@ -268,7 +268,11 @@ unsafe impl Send for SystemWide {}
 struct Owned(CFTypeRef);
 impl Drop for Owned {
     fn drop(&mut self) {
-        unsafe { CFRelease(self.0) }
+        // `then_some(Owned(v))` below builds the value even when the read failed (v is NULL):
+        // CFRelease(NULL) aborts the process
+        if !self.0.is_null() {
+            unsafe { CFRelease(self.0) }
+        }
     }
 }
 
