@@ -930,21 +930,46 @@ pub fn brew_path() -> Option<&'static str> {
     ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].into_iter().find(|p| std::path::Path::new(p).exists())
 }
 
-/// `brew upgrade ferrocast`, then relaunch the stable `opt` symlink of the formula.
+/// `brew list --versions ferrocast` output, or `None` when the formula is not installed.
+fn brew_installed_version(brew: &str) -> Option<String> {
+    let mut c = std::process::Command::new(brew);
+    c.env("HOMEBREW_NO_AUTO_UPDATE", "1").args(["list", "--versions", "ferrocast"]);
+    let out = run_deadline(c, 60).ok()?;
+    let text = String::from_utf8_lossy(&out).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Did `brew upgrade` change what is installed? `brew upgrade` exits 0 when nothing newer exists
+/// (a stale tap, or a release whose formula PR is not merged yet), so the exit code proves nothing.
+fn brew_version_changed(before: Option<&str>, after: Option<&str>) -> bool {
+    matches!((before, after), (b, Some(a)) if b != Some(a))
+}
+
+/// Refresh the tap, `brew upgrade ferrocast`, and relaunch the stable `opt` symlink only when the
+/// installed version really changed; otherwise report that no newer formula exists yet.
 pub fn brew_upgrade(bus: Bus) {
     std::thread::spawn(move || {
         let Some(brew) = brew_path() else {
             bus.send(Msg::UpdateFailed("Homebrew not found".into()));
             return;
         };
+        let before = brew_installed_version(brew);
+        // the GitHub release can precede the formula bump: refresh the tap first (a failure here is
+        // not fatal, the version check below decides)
+        let mut update = std::process::Command::new(brew);
+        update.env("HOMEBREW_NO_AUTO_UPDATE", "1").arg("update");
+        let _ = run_deadline(update, 300);
         let mut c = std::process::Command::new(brew);
         c.env("HOMEBREW_NO_AUTO_UPDATE", "1").args(["upgrade", "ferrocast"]);
         match run_deadline(c, 1200) {
-            Ok(_) => {
+            Ok(_) if brew_version_changed(before.as_deref(), brew_installed_version(brew).as_deref()) => {
                 // <prefix>/bin/brew -> <prefix>/opt/ferrocast/Ferrocast.app
                 let prefix = std::path::Path::new(brew).parent().and_then(|p| p.parent()).unwrap_or(std::path::Path::new("/opt/homebrew"));
                 bus.send(Msg::UpdateInstalled { path: prefix.join("opt/ferrocast/Ferrocast.app") });
             }
+            Ok(_) => bus.send(Msg::UpdateFailed(
+                "Homebrew has no newer Ferrocast yet: the formula update is not published. Try again later.".into(),
+            )),
             Err(e) => bus.send(Msg::UpdateFailed(e)),
         }
     });
@@ -3752,6 +3777,24 @@ mod hotkey_tests {
         assert_eq!(hotkey_label("Alt+Space"), "⌥ Space");
         assert_eq!(hotkey_label("Shift+Super+KeyK"), "⇧⌘K");
         assert_eq!(hotkey_label("Control+F3"), "⌃ F3");
+    }
+}
+
+#[cfg(test)]
+mod brew_upgrade_tests {
+    use super::*;
+
+    #[test]
+    fn an_unchanged_formula_version_is_not_an_update() {
+        assert!(!brew_version_changed(Some("ferrocast 0.1.0"), Some("ferrocast 0.1.0")));
+        assert!(!brew_version_changed(None, None), "unknown before and after: nothing proves an update");
+        assert!(!brew_version_changed(Some("ferrocast 0.1.0"), None), "a vanished formula is not an update either");
+        assert!(brew_version_changed(Some("ferrocast 0.1.0"), Some("ferrocast 0.2.0")));
+        assert!(
+            brew_version_changed(Some("ferrocast 0.1.0"), Some("ferrocast 0.1.0 0.2.0")),
+            "brew lists old and new while cleanup is pending"
+        );
+        assert!(brew_version_changed(None, Some("ferrocast 0.2.0")));
     }
 }
 
