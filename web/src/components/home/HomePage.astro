@@ -80,6 +80,7 @@ const jsonLd = [
 const steps = t.tour.steps;
 const shotSize = (f: string) => (f.startsWith('files-') ? [1500, 950] : [1300, 823]);
 const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.demo.open, fileHeading: t.demo.fileHeading, fileKind: t.demo.fileKind, fileNeeds: t.demo.fileNeeds, fileAction: t.demo.fileAction, fileNote: t.demo.fileNote };
+import FootMark from '../FootMark.astro';
 ---
 <Base title={title} description={description} canonical={canonical} jsonLd={jsonLd} lang={lang} alternates={alternates}>
   <a class="skip" href="#main">{t.skip}</a>
@@ -287,6 +288,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
     <nav aria-label={t.footer.linksAria}><a href="#install">{t.nav.install}</a><a href={docs('/')}>{t.nav.docs}</a><a href={`${base}/changelog/`}>{t.nav.changelog}</a><a href={repo}>{t.nav.github}</a><a href={`${repo}/blob/main/LICENSE`}>{t.footer.license}</a></nav>
     <span class="r">{t.footer.copyright}</span>
   </footer>
+  <FootMark />
 
   <script is:inline define:vars={{ faq: faq.map((f) => f[1]), T: clientT, fileOuts }}>
     (function () {

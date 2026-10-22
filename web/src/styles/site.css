@@ -123,6 +123,8 @@ html:not(.js) .fl .ans { display: block; } html:not(.js) .fp { display: none; }
 .foot { margin-top: clamp(160px, 22vw, 320px); padding: 0 var(--margin) 30px; display: grid; grid-template-columns: 1fr auto 1fr; gap: 20px; align-items: center; font-size: var(--step-small); color: var(--muted); }
 .foot nav { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; } .foot nav a { color: var(--ink); text-decoration: none; }
 .foot .r { text-align: right; }
+.foot-mark { --mx: -9999px; --my: -9999px; margin: clamp(24px, 4vw, 56px) 0 0; padding: 0 var(--margin) .06em; text-align: center; font-family: 'Stack Sans Headline', var(--font-display, inherit); font-weight: 300; font-size: clamp(3rem, 19vw, 20rem); line-height: .85; letter-spacing: -.03em; user-select: none; overflow: hidden; color: transparent; background-image: radial-gradient(circle 300px at var(--mx) var(--my), var(--accent), transparent 70%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+@media (hover: none), (pointer: coarse) { .foot-mark { display: none; } }
 @media (hover:hover) { .foot nav a:hover { color: var(--accent); } }
 
 /* masked headline helper tweak + hero reveal for non-line items */
