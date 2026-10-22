@@ -3,15 +3,19 @@
 #   FERROCAST_SIGN_IDENTITY  codesign identity; default "-" (ad-hoc, local use only).
 #                            With a "Developer ID Application: …" identity the hardened runtime
 #                            and a secure timestamp are enabled, as notarization requires.
+#   FERROCAST_DIST           output directory; default dist/ in the repository.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 identity=${FERROCAST_SIGN_IDENTITY:--}
 cargo build --release --locked -p ferrocast
-app="$PWD/dist/Ferrocast.app"
+dist=${FERROCAST_DIST:-$PWD/dist}
+app="$dist/Ferrocast.app"
+bin_src="${CARGO_TARGET_DIR:-$PWD/target}/release/ferrocast"
+helper_built=()
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/release/ferrocast "$app/Contents/MacOS/ferrocast"
+cp "$bin_src" "$app/Contents/MacOS/ferrocast"
 chmod 755 "$app/Contents/MacOS/ferrocast"
 # Apple Translation helper (Swift; the Translation framework needs the macOS 26 SDK). With an older
 # SDK it is skipped and the app hides the Apple engine, so every build still works.
@@ -25,6 +29,29 @@ if [ "${sdk_major:-0}" -ge 26 ] 2>/dev/null; then
 else
   echo "NOTE: macOS SDK ${sdk_major:-unknown} has no Translation framework; the Apple translation engine will be hidden."
 fi
+
+# build_swift_helper <name> <src_dir> [weak framework…]
+# Compiles every .swift file in <src_dir> to Contents/MacOS/<name> for arm64, macOS 13 minimum,
+# linking the listed frameworks weakly so the helper still launches on older systems. Skips with a
+# NOTE (never a failure) when swiftc is missing. Signing happens later, with the app's flags.
+# Records built helpers in helper_built so one signing loop covers every helper.
+build_swift_helper() {
+  local name=$1 src=$2; shift 2
+  if ! command -v swiftc >/dev/null 2>&1 || ! xcrun --find swiftc >/dev/null 2>&1; then
+    echo "NOTE: swiftc not found; $name is not built and its feature is disabled"
+    return 0
+  fi
+  local files=("$src"/*.swift)
+  [ -e "${files[0]}" ] || { echo "NOTE: no Swift sources in $src; $name is not built"; return 0; }
+  local weak=() fw
+  for fw in "$@"; do weak+=(-Xlinker -weak_framework -Xlinker "$fw"); done
+  swiftc -O -target arm64-apple-macos13.0 "${weak[@]}" "${files[@]}" -o "$app/Contents/MacOS/$name"
+  chmod 755 "$app/Contents/MacOS/$name"
+  helper_built+=("$name")
+}
+
+build_swift_helper ferrocast-capture crates/macos/swift/capture ScreenCaptureKit
+
 [ -f resources/Ferrocast.icns ] || python3 scripts/make_icon.py
 cp resources/Ferrocast.icns "$app/Contents/Resources/Ferrocast.icns"
 cat > "$app/Contents/Info.plist" <<PLIST
@@ -48,7 +75,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundleURLSchemes</key><array><string>ferrocast</string></array>
   </dict></array>
   <key>NSAppleEventsUsageDescription</key><string>Ferrocast uses Automation for system commands you explicitly run.</string>
-  <key>NSMicrophoneUsageDescription</key><string>Ferrocast listens to your microphone only while you dictate into a note.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Ferrocast listens to your microphone only while you dictate into a note or when you turn it on in a recording.</string>
+  <key>NSCameraUsageDescription</key><string>Ferrocast records your camera only when you turn it on in a recording.</string>
+  <key>NSScreenCaptureUsageDescription</key><string>Ferrocast captures your screen only when you run a capture or recording command.</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>Ferrocast turns your speech into text only while you dictate into a note.</string>
 </dict></plist>
 PLIST
@@ -68,8 +97,12 @@ if [ -x "$helper" ]; then
   [ "$identity" != "-" ] && helper_flags+=(--options runtime --timestamp)
   codesign "${helper_flags[@]}" "$helper"
 fi
+# Helpers first, with the app's flags but their own identifier, then the bundle.
+for h in ${helper_built[@]+"${helper_built[@]}"}; do
+  codesign "${flags[@]/dev.ferrocast.launcher/dev.ferrocast.launcher.${h#ferrocast-}}" "$app/Contents/MacOS/$h"
+done
 codesign "${flags[@]}" "$app"
-codesign --verify --strict --verbose=1 "$app"
+codesign --verify --deep --strict --verbose=1 "$app"
 if [ "$identity" = "-" ]; then
   echo "NOTE: ad-hoc signature. Fine for local use; macOS may re-ask for permissions after each rebuild."
 fi

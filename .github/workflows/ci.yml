@@ -23,6 +23,10 @@ jobs:
           test -x dist/Ferrocast.app/Contents/MacOS/ferrocast-translate
           codesign --verify --strict dist/Ferrocast.app/Contents/MacOS/ferrocast-translate
           echo '{"cmd":"status","source":"en","target":"es"}' | dist/Ferrocast.app/Contents/MacOS/ferrocast-translate | grep -q '"status"'
+      - name: Capture helper is bundled and speaks the protocol
+        run: |
+          test -x dist/Ferrocast.app/Contents/MacOS/ferrocast-capture
+          scripts/capture-smoke.sh dist/Ferrocast.app/Contents/MacOS/ferrocast-capture
       - name: Install dmgbuild (designed DMG window)
         run: |
           python3 -m venv "$RUNNER_TEMP/dmgvenv"
