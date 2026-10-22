@@ -31,6 +31,20 @@ use objc2_foundation::{NSDictionary, NSEdgeInsets, NSNotification, NSObjectProto
 pub enum Event {
     New,
     Browse,
+    /// ⌘K: open the action panel.
+    Actions,
+    /// ⌘[: back to the previously opened note.
+    Back,
+    /// ⌘]: forward again.
+    Forward,
+    /// ⇧⌘P: pin or unpin the current note.
+    TogglePin,
+    /// ⌘1 to ⌘9: open the nth pinned note.
+    Pinned(u8),
+    /// The window became visible.
+    Shown,
+    /// The window was hidden (⌘W, Esc, toggle, `hide()`).
+    Hidden,
 }
 
 const TOOLBAR_H: f64 = 44.0;
