@@ -3,13 +3,14 @@
 //! Opens a real window for a couple of seconds, drives it programmatically, asserts the
 //! behavior and writes light/dark PNG snapshots. Exit code 0 only when every assertion holds.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
 use ferrocast_core::richtext::{self, BlockKind};
 use ferrocast_macos::notes::{self, Anchor, EmojiEvent, Event, PopupKey, SlashEvent};
 use ferrocast_macos::notes_format::Format;
+use ferrocast_macos::notes_palette::{self, PaletteItem};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{msg_send, MainThreadMarker, Message};
@@ -17,7 +18,7 @@ use objc2_app_kit::{
     NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy, NSButton, NSEvent,
     NSEventModifierFlags, NSEventType, NSPasteboard, NSPasteboardTypeString, NSTextView, NSView,
 };
-use objc2_app_kit::{NSFontAttributeName, NSTextStorage};
+use objc2_app_kit::{NSBackingStoreType, NSFontAttributeName, NSTextField, NSTextStorage, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSDate, NSPoint, NSProcessInfo, NSRange, NSRunLoop, NSString};
 
 thread_local! {
@@ -110,6 +111,20 @@ fn find_button(view: &NSView, tip: &str) -> Option<Retained<NSButton>> {
     None
 }
 
+fn find_label(view: &NSView, text: &str) -> Option<Retained<NSTextField>> {
+    for sub in view.subviews().iter() {
+        if let Some(f) = sub.downcast_ref::<NSTextField>() {
+            if f.stringValue().to_string() == text {
+                return Some(f.retain());
+            }
+        }
+        if let Some(found) = find_label(&sub, text) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 fn first_responder_text_view(app: &NSApplication) -> Option<Retained<NSTextView>> {
     let fr = app.keyWindow()?.firstResponder()?;
     fr.downcast_ref::<NSTextView>().map(|t| t.retain())
@@ -146,6 +161,12 @@ fn main() {
     // API is safe before the window exists
     check("not visible before show", !notes::is_visible() && !notes::is_key(), "visible before show");
 
+    let want = |md: &str| richtext::to_markdown(&richtext::parse(md));
+    // Regression: content set before the window is first shown must reach the toolbar title.
+    notes::set_text("# Early title\nbody");
+    check("set_text before the window exists keeps the text", notes::text() == want("# Early title\nbody"), &notes::text());
+    check("creating the window by set_text does not show it", !notes::is_visible(), "visible");
+
     notes::show();
     if !wait_key(1500) && !args.iter().any(|a| a == "--bundled") {
         println!("note: this process cannot take focus (not started by LaunchServices); re-running inside an app bundle");
@@ -155,11 +176,20 @@ fn main() {
     check("is_visible after show", notes::is_visible(), "window not visible");
     check("is_key after show (accessory app activated)", notes::is_key(), "window did not become key");
     check("editor is first responder", first_responder_text_view(&app).is_some(), "first responder is not the NSTextView");
+    check("show() fires Shown once", *events.borrow() == vec![Event::Shown], &format!("{:?}", events.borrow()));
+    events.borrow_mut().clear();
+    {
+        let label = app.keyWindow().and_then(|w| w.contentView()).and_then(|c| find_label(&c, "Early title"));
+        check(
+            "toolbar title shows the text set before the window existed",
+            label.is_some() && notes::title() == "Early title",
+            &format!("title {:?}, label found {}", notes::title(), label.is_some()),
+        );
+    }
 
     // set_text: title, round trip, no callback
     notes::set_text("# Groceries\nmilk");
     check("title after set_text", notes::title() == "Groceries", &notes::title());
-    let want = |md: &str| richtext::to_markdown(&richtext::parse(md));
     check("text round trip", notes::text() == want("# Groceries\nmilk"), &notes::text());
     check("set_text does not fire on_change", changes.borrow().is_empty(), "callback fired");
 
@@ -284,6 +314,7 @@ fn main() {
     pump(200);
 
     editor_checks(&app, &out);
+    window_checks(&app, &out, &events);
 
     notes::hide();
 
@@ -980,4 +1011,552 @@ fn editor_checks(app: &NSApplication, out: &std::path::Path) {
     }
     app.setAppearance(None);
     check("snapshot note round-trips", md() == md_of(note), &md());
+}
+
+// ------------------------------------------------------------------ window integration checks
+
+fn mouse_event(ty: NSEventType, window_number: isize, x: f64, y: f64, n: isize) -> Retained<NSEvent> {
+    NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        ty,
+        NSPoint::new(x, y),
+        NONE,
+        NSProcessInfo::processInfo().systemUptime(),
+        window_number,
+        None,
+        n,
+        1,
+        1.0,
+    )
+    .expect("mouse event")
+}
+
+/// Click an `NSButton`: its tracking loop waits for the mouse-up, so queue it first.
+fn click_button(app: &NSApplication, x: f64, y: f64) {
+    let win = app.keyWindow().map(|w| w.windowNumber()).unwrap_or(0);
+    let up = mouse_event(NSEventType::LeftMouseUp, win, x, y, 1);
+    app.postEvent_atStart(&up, true);
+    app.sendEvent(&mouse_event(NSEventType::LeftMouseDown, win, x, y, 0));
+    pump(80);
+}
+
+/// Window-coordinate rectangle `(x, y, w, h)` of the button with this tooltip.
+fn button_rect(app: &NSApplication, tip: &str) -> Option<(f64, f64, f64, f64)> {
+    let content = app.keyWindow()?.contentView()?;
+    let b = find_button(&content, tip)?;
+    let r = b.convertRect_toView(b.bounds(), None);
+    Some((r.origin.x, r.origin.y, r.size.width, r.size.height))
+}
+
+fn click_tip(app: &NSApplication, tip: &str) -> bool {
+    match button_rect(app, tip) {
+        Some((x, y, w, h)) => {
+            click_button(app, x + w / 2.0, y + h / 2.0);
+            true
+        }
+        None => false,
+    }
+}
+
+fn bar_button_on(app: &NSApplication, tip: &str) -> Option<bool> {
+    let content = app.keyWindow()?.contentView()?;
+    find_button(&content, tip).map(|b| b.state() == 1)
+}
+
+fn set_window_size(app: &NSApplication, w: f64, h: f64) {
+    if let Some(win) = app.keyWindow() {
+        win.setContentSize(objc2_foundation::NSSize::new(w, h));
+    }
+    pump(150);
+}
+
+fn editor_scroll_bottom(app: &NSApplication) -> f64 {
+    tv_of(app).enclosingScrollView().map(|s| s.frame().origin.y).unwrap_or(-1.0)
+}
+
+/// Click row `row` of a popup with a real mouse event addressed to the popup window.
+fn click_popup_row(app: &NSApplication, popup: &ferrocast_macos::notes_popups::SuggestionPopup, row: usize) {
+    let f = popup.frame();
+    let y = f.h - ferrocast_macos::notes_popups::POPUP_PAD - (row as f64 + 0.5) * ferrocast_macos::notes_popups::ROW_HEIGHT;
+    let win = popup.window_number();
+    app.sendEvent(&mouse_event(NSEventType::LeftMouseDown, win, 100.0, y, 0));
+    app.sendEvent(&mouse_event(NSEventType::LeftMouseUp, win, 100.0, y, 1));
+    pump(80);
+}
+
+fn slash_visible() -> bool {
+    notes::slash_popup().is_some_and(|p| p.is_visible())
+}
+
+fn emoji_visible() -> bool {
+    notes::emoji_popup().is_some_and(|p| p.is_visible())
+}
+
+fn fake_emoji(q: &str) -> Vec<(String, String)> {
+    if q.starts_with("smi") {
+        vec![("😀".into(), "grinning face".into()), ("😄".into(), "smile".into())]
+    } else {
+        Vec::new()
+    }
+}
+
+fn reload(app: &NSApplication, md: &str) {
+    reset(app, md);
+    notes::install_popup_hooks();
+}
+
+#[allow(clippy::too_many_lines)]
+fn window_checks(app: &NSApplication, out: &std::path::Path, events: &Rc<RefCell<Vec<Event>>>) {
+    let md = notes::markdown;
+    let changes: Rc<RefCell<Vec<String>>> = Rc::default();
+    {
+        let c = changes.clone();
+        notes::set_on_change(Box::new(move |t| c.borrow_mut().push(t)));
+    }
+    notes::set_escape_loses_focus(false);
+    notes::set_zoom(1.0);
+    notes::install_popup_hooks();
+    notes::show();
+    wait_key(1500);
+    set_window_size(app, 560.0, 420.0);
+
+    // ---- window shortcuts fire their events once and never edit the note
+    reset(app, "keep me");
+    select_all(app);
+    events.borrow_mut().clear();
+    changes.borrow_mut().clear();
+    let digit_codes: [u16; 9] = [18, 19, 20, 21, 23, 22, 26, 28, 25];
+    key(app, "k", 40, CMD);
+    check("⌘K fires Actions once", *events.borrow() == vec![Event::Actions], &format!("{:?}", events.borrow()));
+    events.borrow_mut().clear();
+    key(app, "[", 33, CMD);
+    check("⌘[ fires Back once", *events.borrow() == vec![Event::Back], &format!("{:?}", events.borrow()));
+    events.borrow_mut().clear();
+    key(app, "]", 30, CMD);
+    check("⌘] fires Forward once", *events.borrow() == vec![Event::Forward], &format!("{:?}", events.borrow()));
+    events.borrow_mut().clear();
+    key(app, "p", 35, CMD | SHIFT);
+    check("⇧⌘P fires TogglePin once (not Browse)", *events.borrow() == vec![Event::TogglePin], &format!("{:?}", events.borrow()));
+    events.borrow_mut().clear();
+    for (i, code) in digit_codes.iter().enumerate() {
+        key(app, &(i + 1).to_string(), *code, CMD);
+    }
+    check(
+        "⌘1 to ⌘9 fire Pinned(1..=9) once each",
+        *events.borrow() == (1..=9).map(Event::Pinned).collect::<Vec<_>>(),
+        &format!("{:?}", events.borrow()),
+    );
+    events.borrow_mut().clear();
+    key(app, "0", 29, CMD);
+    check(
+        "⌘0 stays zoom reset and fires nothing",
+        events.borrow().is_empty() && (notes::zoom() - 1.0).abs() < 1e-9,
+        &format!("{:?}", events.borrow()),
+    );
+    check(
+        "none of the shortcuts edited or replaced the note",
+        md() == "keep me" && changes.borrow().is_empty() && tv_of(app).selectedRange().length == 7 && notes::is_key(),
+        &format!("{:?} {:?} key={}", md(), changes.borrow(), notes::is_key()),
+    );
+
+    // ---- palette open: shortcuts are swallowed, ⌘[ goes up one level
+    let item = |id: &str| PaletteItem { id: id.into(), title: id.into(), ..PaletteItem::default() };
+    notes_palette::show("Search", vec![item("a"), item("b")]);
+    notes_palette::push_level("Sub", vec![item("c")]);
+    events.borrow_mut().clear();
+    key(app, "[", 33, CMD);
+    let up = notes_palette::depth() == 1;
+    for (chars, code, mods) in [("k", 40u16, CMD), ("]", 30, CMD), ("p", 35, CMD | SHIFT), ("1", 18, CMD), ("[", 33, CMD)] {
+        key(app, chars, code, mods);
+    }
+    check(
+        "palette open: ⌘[ goes up one level, no shortcut fires, the note is untouched",
+        up && events.borrow().is_empty() && md() == "keep me" && notes_palette::is_visible(),
+        &format!("up={up} {:?} {:?}", events.borrow(), md()),
+    );
+    notes_palette::hide();
+    pump(100);
+
+    // ---- ⌘K closes an open popup first
+    reload(app, "");
+    typ(app, "/h");
+    let was_open = slash_visible();
+    events.borrow_mut().clear();
+    key(app, "k", 40, CMD);
+    check(
+        "⌘K with the `/` popup open closes it and fires Actions once",
+        was_open && !slash_visible() && *events.borrow() == vec![Event::Actions] && md() == md_of("/h"),
+        &format!("open={was_open} {:?} {:?}", events.borrow(), md()),
+    );
+    reload(app, "hello");
+    select_all(app);
+    key(app, "l", 37, CMD);
+    let prompt = notes::link_prompt_open();
+    events.borrow_mut().clear();
+    key(app, "k", 40, CMD);
+    pump(200);
+    check(
+        "⌘K with the link prompt open closes it and fires Actions once",
+        prompt && !notes::link_prompt_open() && *events.borrow() == vec![Event::Actions] && md() == "hello",
+        &format!("prompt={prompt} {:?} {:?}", events.borrow(), md()),
+    );
+    wait_key(1500);
+    notes::focus_editor();
+
+    // ---- Shown / Hidden exactly once per transition
+    events.borrow_mut().clear();
+    notes::hide();
+    notes::hide();
+    notes::show();
+    notes::show();
+    wait_key(1500);
+    key(app, "w", 13, CMD);
+    notes::show();
+    wait_key(1500);
+    key(app, "\u{1b}", 53, NONE);
+    notes::show();
+    wait_key(1500);
+    notes::toggle();
+    notes::toggle();
+    wait_key(1500);
+    use Event::{Hidden as H, Shown as S};
+    check(
+        "Shown / Hidden fire once per transition (hide, show, ⌘W, Esc, toggle)",
+        *events.borrow() == vec![H, S, H, S, H, S, H, S],
+        &format!("{:?}", events.borrow()),
+    );
+    events.borrow_mut().clear();
+    notes::set_escape_loses_focus(true);
+    key(app, "\u{1b}", 53, NONE);
+    pump(200);
+    check(
+        "Esc in loses-focus mode fires neither Shown nor Hidden",
+        events.borrow().is_empty() && notes::is_visible(),
+        &format!("{:?}", events.borrow()),
+    );
+    notes::set_escape_loses_focus(false);
+    // the app gave up the focus: a fresh hide + show takes it back
+    notes::hide();
+    notes::show();
+    wait_key(2000);
+    events.borrow_mut().clear();
+
+    // ---- the host calls back into the window from inside the callback
+    let calls = Rc::new(Cell::new(0u32));
+    {
+        let c = calls.clone();
+        let log = events.clone();
+        notes::set_on_event(Box::new(move |ev| {
+            log.borrow_mut().push(ev);
+            if ev == Event::Actions {
+                c.set(c.get() + 1);
+                notes::hide();
+                notes::show();
+                notes::set_markdown("# Reentrant");
+                notes_palette::show("Search", vec![PaletteItem { id: "x".into(), title: "x".into(), ..PaletteItem::default() }]);
+                notes_palette::hide();
+                notes::set_on_event(Box::new(|_| {}));
+            }
+        }));
+    }
+    reset(app, "before");
+    key(app, "k", 40, CMD);
+    pump(200);
+    check(
+        "on_event may call hide, show, set_markdown, the palette and set_on_event (no RefCell panic)",
+        calls.get() == 1 && notes::title() == "Reentrant" && notes::is_visible(),
+        &format!("calls={} title={:?} visible={}", calls.get(), notes::title(), notes::is_visible()),
+    );
+    {
+        let log = events.clone();
+        notes::set_on_event(Box::new(move |ev| {
+            log.borrow_mut().push(ev);
+            if ev == Event::Hidden {
+                notes::show();
+            }
+        }));
+    }
+    events.borrow_mut().clear();
+    notes::hide();
+    pump(100);
+    check(
+        "a Hidden callback may show the window again",
+        *events.borrow() == vec![Event::Hidden, Event::Shown] && notes::is_visible(),
+        &format!("{:?}", events.borrow()),
+    );
+    {
+        let log = events.clone();
+        notes::set_on_event(Box::new(move |ev| log.borrow_mut().push(ev)));
+    }
+    wait_key(1500);
+
+    // ---- Format Bar
+    reset(app, "hello world");
+    check("Format Bar is hidden by default", !notes::format_bar_visible(), "visible");
+    let bottom_hidden = editor_scroll_bottom(app);
+    notes::set_format_bar_visible(true);
+    pump(150);
+    let bold = bar_button_on(app, "Bold ⌘B");
+    check(
+        "set_format_bar_visible(true) shows the bar and shrinks the editor",
+        notes::format_bar_visible() && bold.is_some() && bottom_hidden == 0.0 && (editor_scroll_bottom(app) - 36.0).abs() < 0.5,
+        &format!("bottom {bottom_hidden} -> {}", editor_scroll_bottom(app)),
+    );
+    tv_of(app).setSelectedRange(NSRange::new(0, 5));
+    pump(50);
+    check(
+        "Bold is not pressed on plain text",
+        bar_button_on(app, "Bold ⌘B") == Some(false),
+        &format!("{:?}", bar_button_on(app, "Bold ⌘B")),
+    );
+    let clicked = click_tip(app, "Bold ⌘B");
+    check(
+        "clicking Bold makes the selection bold (Markdown) and keeps the editor focused",
+        clicked && md() == md_of("**hello** world") && first_responder_text_view(app).is_some() && notes::is_key(),
+        &format!("clicked={clicked} {:?}", md()),
+    );
+    check(
+        "active_formats follows and the Bold button is pressed",
+        notes::active_formats() == vec![Format::Bold] && bar_button_on(app, "Bold ⌘B") == Some(true),
+        &format!("{:?} {:?}", notes::active_formats(), bar_button_on(app, "Bold ⌘B")),
+    );
+    tv_of(app).setSelectedRange(NSRange::new(7, 3));
+    pump(50);
+    check(
+        "moving the selection to plain text releases the Bold button",
+        notes::active_formats().is_empty() && bar_button_on(app, "Bold ⌘B") == Some(false),
+        &format!("{:?}", notes::active_formats()),
+    );
+    tv_of(app).setSelectedRange(NSRange::new(0, 5));
+    key(app, "i", 34, CMD);
+    check(
+        "a key shortcut also updates the bar (Italic pressed)",
+        bar_button_on(app, "Italic ⌘I") == Some(true) && bar_button_on(app, "Bold ⌘B") == Some(true),
+        &format!("{:?}", notes::active_formats()),
+    );
+    key(app, "i", 34, CMD);
+    click_tip(app, "Bold ⌘B");
+    check("clicking Bold again removes it", md() == "hello world" && bar_button_on(app, "Bold ⌘B") == Some(false), &md());
+    reset(app, "title");
+    click_tip(app, "Heading 2 ⌥⌘2");
+    check(
+        "clicking Heading 2 formats the paragraph",
+        md() == md_of("## title") && bar_button_on(app, "Heading 2 ⌥⌘2") == Some(true),
+        &md(),
+    );
+
+    // narrow window: the bar scrolls horizontally, every button stays reachable
+    set_window_size(app, 320.0, 420.0);
+    let (content_w, visible_w) = notes::format_bar_metrics().unwrap_or((0.0, 0.0));
+    println!("      bar content {content_w:.0} pt, visible {visible_w:.0} pt");
+    check("bar content is about 500 pt", (440.0..=560.0).contains(&content_w), &content_w.to_string());
+    check(
+        "narrow window: bar content is wider than the window (scrolls)",
+        content_w > visible_w && visible_w <= 321.0,
+        &format!("{content_w} vs {visible_w}"),
+    );
+    let win_w = app.keyWindow().and_then(|w| w.contentView()).map(|c| c.bounds().size.width).unwrap_or(0.0);
+    let rule = button_rect(app, "Horizontal Rule").unwrap_or((0.0, 0.0, 0.0, 0.0));
+    check("before scrolling, the last button is outside the window", rule.0 + rule.2 > win_w + 0.5, &format!("{rule:?} width {win_w}"));
+    snapshot(out, "bar-narrow-start");
+    let reached = notes::format_bar_scroll_to(10_000.0);
+    pump(100);
+    let rule = button_rect(app, "Horizontal Rule").unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let bold_r = button_rect(app, "Bold ⌘B").unwrap_or((0.0, 0.0, 0.0, 0.0));
+    check(
+        "scrolled to the end, the last button is inside the window and the first one is out",
+        reached > 0.0 && rule.0 >= -0.5 && rule.0 + rule.2 <= win_w + 0.5 && bold_r.0 + bold_r.2 < 0.5,
+        &format!("offset {reached} rule {rule:?} bold {bold_r:?}"),
+    );
+    snapshot(out, "bar-narrow-end");
+    reset(app, "text");
+    let ok = click_tip(app, "Horizontal Rule");
+    check("a scrolled-to button can be clicked (Horizontal Rule inserts a rule)", ok && md().contains("---"), &md());
+    notes::format_bar_scroll_to(0.0);
+    set_window_size(app, 560.0, 420.0);
+    let (_, visible_w) = notes::format_bar_metrics().unwrap_or((0.0, 0.0));
+    check("wide window: the whole bar fits again", visible_w >= content_w - 0.5, &format!("{visible_w} vs {content_w}"));
+
+    // ---- slash menu end to end
+    reload(app, "");
+    typ(app, "/");
+    let popup = notes::slash_popup();
+    check(
+        "typing `/` opens the popup (visible, never key, window stays key)",
+        slash_visible() && popup.as_ref().is_some_and(|p| !p.is_key()) && notes::is_key() && first_responder_text_view(app).is_some(),
+        "popup missing or key",
+    );
+    typ(app, "h2");
+    check("the query filters the list (Heading 2 first)", popup.as_ref().and_then(|p| p.selected()) == Some(0) && slash_visible(), "");
+    key(app, "\r", 36, NONE);
+    typ(app, "T");
+    check(
+        "/h2 + Enter turns the paragraph into Heading 2 and the `/h2` text is gone",
+        md() == md_of("## T") && tv_of(app).string().to_string() == "T" && !slash_visible(),
+        &format!("{:?} {:?}", md(), tv_of(app).string().to_string()),
+    );
+    reload(app, "");
+    typ(app, "/he");
+    key(app, "\u{1b}", 53, NONE);
+    check(
+        "Esc closes the popup only: text stays, window stays visible",
+        !slash_visible() && tv_of(app).string().to_string() == "/he" && notes::is_visible() && md() == md_of("/he"),
+        &format!("{:?}", tv_of(app).string().to_string()),
+    );
+    reload(app, "");
+    typ(app, "/");
+    key(app, "\u{f701}", 125, NONE);
+    check("Down moves the selection", popup_selected() == Some(1), &format!("{:?}", popup_selected()));
+    key(app, "\u{f700}", 126, NONE);
+    key(app, "\u{f700}", 126, NONE);
+    check("Up wraps around", popup_selected() == Some(8), &format!("{:?}", popup_selected()));
+    key(app, "\u{f701}", 125, NONE);
+    key(app, "\u{f701}", 125, NONE);
+    key(app, "\u{f701}", 125, NONE);
+    key(app, "\r", 36, NONE);
+    typ(app, "T");
+    check("Up, Up, then Down x3 from the last row lands on row 2 and Enter picks Heading 3", md() == md_of("### T"), &md());
+    reload(app, "");
+    typ(app, "/code");
+    key(app, "\t", 48, NONE);
+    typ(app, "T");
+    check("Tab picks too (Code Block)", md() == md_of("```\nT\n```"), &md());
+    reload(app, "");
+    typ(app, "/quote");
+    if let Some(p) = notes::slash_popup() {
+        click_popup_row(app, &p, 0);
+    }
+    typ(app, "T");
+    check("clicking a row picks it (Blockquote)", md() == md_of("> T") && !slash_visible(), &md());
+    reload(app, "");
+    typ(app, "/zzz");
+    check("an empty result hides the popup", !slash_visible(), "still visible");
+    key(app, "\u{7f}", 51, NONE);
+    key(app, "\u{7f}", 51, NONE);
+    key(app, "\u{7f}", 51, NONE);
+    check("...and a shorter query brings it back", slash_visible(), "not visible");
+    check(
+        "the popup never took key status during the flow",
+        notes::slash_popup().is_some_and(|p| !p.is_key()) && notes::is_key(),
+        "popup key",
+    );
+
+    // ---- emoji flow
+    reload(app, "");
+    typ(app, "hi :smi");
+    check("without an emoji provider the popup never opens", notes::emoji_popup().is_none() && !emoji_visible(), "emoji popup opened");
+    notes::set_emoji_provider(Box::new(fake_emoji));
+    reload(app, "");
+    typ(app, "hi :smi");
+    check(
+        "with a provider `:smi` opens the emoji popup",
+        emoji_visible() && !notes::emoji_popup().is_some_and(|p| p.is_key()),
+        "not visible",
+    );
+    key(app, "\r", 36, NONE);
+    check(
+        "Enter replaces `:smi` with the emoji",
+        md() == "hi 😀" && tv_of(app).string().to_string() == "hi 😀" && !emoji_visible(),
+        &format!("{:?}", md()),
+    );
+    reload(app, "");
+    typ(app, ":smi");
+    key(app, "\u{f701}", 125, NONE);
+    key(app, "\r", 36, NONE);
+    check("Down + Enter picks the second emoji", md() == "😄", &md());
+    reload(app, "");
+    typ(app, ":s");
+    check("one character after `:` lists nothing", !emoji_visible(), "visible");
+    typ(app, "mi");
+    check("...two do", emoji_visible(), "not visible");
+    key(app, "\u{1b}", 53, NONE);
+    check("Esc closes the emoji popup and keeps the text", !emoji_visible() && md() == md_of(":smi") && notes::is_visible(), &md());
+
+    // ---- popups hide with the window, on key loss, palette and set_markdown
+    reload(app, "");
+    typ(app, "/h");
+    notes::hide();
+    check("hide() hides the `/` popup", !slash_visible(), "visible");
+    notes::show();
+    wait_key(1500);
+    reload(app, "");
+    typ(app, "x :smi");
+    key(app, "w", 13, CMD);
+    check("⌘W hides the emoji popup", !emoji_visible() && !notes::is_visible(), "visible");
+    notes::show();
+    wait_key(1500);
+    reload(app, "");
+    typ(app, "/h");
+    notes::toggle();
+    check("toggle() hides the popup", !slash_visible(), "visible");
+    notes::toggle();
+    wait_key(1500);
+    reload(app, "");
+    typ(app, "/h");
+    notes_palette::show("Search", vec![item("a")]);
+    check("opening the palette hides the popup", !slash_visible(), "visible");
+    notes_palette::hide();
+    wait_key(1500);
+    reload(app, "");
+    typ(app, "/h");
+    notes::set_markdown("# Replaced");
+    check("set_markdown hides the popup", !slash_visible() && notes::title() == "Replaced", "visible");
+    reload(app, "");
+    typ(app, "/h");
+    let other = unsafe {
+        NSWindow::initWithContentRect_styleMask_backing_defer(
+            MainThreadMarker::new().expect("main").alloc::<NSWindow>(),
+            objc2_foundation::NSRect::new(NSPoint::new(100.0, 100.0), objc2_foundation::NSSize::new(200.0, 100.0)),
+            NSWindowStyleMask::Titled,
+            NSBackingStoreType::Buffered,
+            false,
+        )
+    };
+    unsafe { other.setReleasedWhenClosed(false) };
+    other.makeKeyAndOrderFront(None);
+    pump(300);
+    if !notes::is_key() {
+        check("losing key status hides the popup", !slash_visible(), "visible");
+    } else {
+        println!("note: could not make another window key; key-loss hiding not verified here");
+    }
+    other.orderOut(None);
+    notes::show();
+    wait_key(1500);
+
+    // ---- snapshots: Format Bar visible, slash popup open
+    app.setAppearance(None);
+    let note = "# Weekly plan\n\nShip the **Notes** window and write the docs for it.\n\n";
+    for (name, appearance) in [("light", unsafe { NSAppearanceNameAqua }), ("dark", unsafe { NSAppearanceNameDarkAqua })] {
+        app.setAppearance(NSAppearance::appearanceNamed(appearance).as_deref());
+        reload(app, note);
+        notes::set_format_bar_visible(true);
+        typ(app, "\n/");
+        pump(400);
+        snapshot(out, &format!("bar-{name}"));
+        if let Some(p) = notes::slash_popup() {
+            let path = out.join(format!("notes-slash-popup-{name}.png"));
+            let ok = p.snapshot_png(&path);
+            check(&format!("slash popup snapshot {name} written"), ok && p.is_visible(), "failed");
+            println!("      {}", path.display());
+            let f = p.frame();
+            println!("      popup frame {:.0},{:.0} {:.0}x{:.0}", f.x, f.y, f.w, f.h);
+        }
+        notes::dismiss_popups();
+    }
+    app.setAppearance(None);
+    notes::set_format_bar_visible(false);
+    check("Format Bar hides again", !notes::format_bar_visible() && editor_scroll_bottom(app) == 0.0, "still visible");
+    notes::set_on_change(Box::new(|_| {}));
+}
+
+fn popup_selected() -> Option<usize> {
+    notes::slash_popup().and_then(|p| p.selected())
+}
+
+fn snapshot(out: &std::path::Path, name: &str) {
+    let path = out.join(format!("notes-{name}.png"));
+    let ok = notes::snapshot_png(&path);
+    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    check(&format!("snapshot {name} written"), ok && size > 1000, &format!("ok={ok} size={size}"));
+    println!("      {}", path.display());
 }

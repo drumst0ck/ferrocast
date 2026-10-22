@@ -18,11 +18,14 @@ pub use crate::notes_editor::{
     set_on_slash, set_on_zoom_change, set_popup_key_handler, set_zoom, slash_commit, toggle_task_at_cursor, window_point_for_char, zoom,
     Anchor, EmojiEvent, PopupKey, SlashEvent,
 };
+use crate::notes_format::Format;
+use crate::notes_popups::{emoji_items, slash_items, FormatBar, Item, Rect as PopupRect, SuggestionPopup};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSBitmapImageFileType, NSButton, NSColor, NSEvent, NSEventModifierFlags,
     NSEventType, NSFloatingWindowLevel, NSFont, NSFontWeightSemibold, NSImage, NSLineBreakMode, NSPanel, NSScrollView, NSTextAlignment,
     NSTextDelegate, NSTextField, NSTextView, NSTextViewDelegate, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindowButton, NSWindowCollectionBehavior, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSVisualEffectState, NSVisualEffectView, NSWindowButton, NSWindowCollectionBehavior, NSWindowDelegate, NSWindowStyleMask,
+    NSWindowTitleVisibility,
 };
 use objc2_foundation::{NSDictionary, NSEdgeInsets, NSNotification, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString};
 
@@ -77,18 +80,46 @@ struct Ui {
     panel: Retained<NotesPanel>,
     text_view: Retained<NSTextView>,
     title: Retained<NSTextField>,
+    /// The editor scroll view; its bottom edge moves up when the Format Bar is visible.
+    scroll: Retained<NSScrollView>,
+    bar: Rc<FormatBar>,
+    /// Horizontal scroller-less container of the Format Bar (the bar is wider than the window minimum).
+    bar_scroll: Retained<NSScrollView>,
     /// Kept alive: the text view delegate and button target are weak references.
     _target: Retained<NotesTarget>,
 }
 
 type ChangeCb = Rc<dyn Fn(String)>;
 type EventCb = Rc<dyn Fn(Event)>;
+/// `(emoji, name)` pairs.
+pub type EmojiPairs = Vec<(String, String)>;
+type EmojiProvider = Rc<dyn Fn(&str) -> EmojiPairs>;
+
+/// The two suggestion popups, created on first use and reused.
+#[derive(Default)]
+struct Popups {
+    slash: Option<Rc<SuggestionPopup>>,
+    /// Format of every row currently listed in the `/` popup.
+    slash_formats: Vec<Format>,
+    slash_anchor: Option<PopupRect>,
+    emoji: Option<Rc<SuggestionPopup>>,
+    /// Emoji of every row currently listed in the `:` popup.
+    emoji_glyphs: Vec<String>,
+    emoji_anchor: Option<PopupRect>,
+}
 
 thread_local! {
     static UI: RefCell<Option<Ui>> = const { RefCell::new(None) };
     static ON_CHANGE: RefCell<Option<ChangeCb>> = const { RefCell::new(None) };
     static ON_EVENT: RefCell<Option<EventCb>> = const { RefCell::new(None) };
     static ESC_LOSES_FOCUS: Cell<bool> = const { Cell::new(false) };
+    static POPUPS: RefCell<Popups> = RefCell::new(Popups::default());
+    static EMOJI_PROVIDER: RefCell<Option<EmojiProvider>> = const { RefCell::new(None) };
+    static BAR_VISIBLE: Cell<bool> = const { Cell::new(false) };
+    /// Last visibility reported to the host, so `Shown` / `Hidden` fire once per transition.
+    static LAST_VISIBLE: Cell<bool> = const { Cell::new(false) };
+    /// Keeps the local key monitor (⌘K while the link prompt owns the keyboard) alive.
+    static KEY_MONITOR: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
 }
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
@@ -117,14 +148,17 @@ pub(crate) fn notify_change(text: String) {
     }
 }
 
-/// The editor view, when the window exists.
+/// The editor view. Creates the hidden window on first use, so content set before the window
+/// is first shown is not lost.
 pub(crate) fn text_view() -> Option<Retained<NSTextView>> {
-    UI.with(|u| u.borrow().as_ref().map(|u| u.text_view.clone()))
+    parts().map(|(_, tv)| tv)
 }
 
 /// The window content view (the overlay host), creating the hidden window on first use.
+/// Only the palette asks for it, when it opens: the suggestion popups give way to it.
 pub(crate) fn content_view() -> Option<Retained<NSView>> {
     let (panel, _) = parts()?;
+    dismiss_popups();
     panel.contentView()
 }
 
@@ -165,20 +199,43 @@ fn handle_shortcut(panel: &NotesPanel, event: &NSEvent) -> bool {
             resign_key(panel);
         } else {
             panel.orderOut(None);
+            sync_visibility();
         }
         return true;
+    }
+    let key = event.charactersIgnoringModifiers().map(|s| s.to_string().to_lowercase()).unwrap_or_default();
+    if mods == NSEventModifierFlags::Command | NSEventModifierFlags::Shift {
+        if key == "p" {
+            fire_event(Event::TogglePin);
+            return true;
+        }
+        return false;
     }
     if mods != NSEventModifierFlags::Command {
         return false;
     }
-    let key = event.charactersIgnoringModifiers().map(|s| s.to_string().to_lowercase()).unwrap_or_default();
     match key.as_str() {
         "n" => fire_event(Event::New),
         "p" => fire_event(Event::Browse),
-        "w" => panel.orderOut(None),
+        "w" => {
+            panel.orderOut(None);
+            sync_visibility();
+        }
+        "k" => action_panel_requested(),
+        "[" => fire_event(Event::Back),
+        "]" => fire_event(Event::Forward),
+        d if d.len() == 1 && matches!(d.as_bytes()[0], b'1'..=b'9') => fire_event(Event::Pinned(d.as_bytes()[0] - b'0')),
         _ => return false,
     }
     true
+}
+
+/// ⌘K: close whatever is open on top of the editor (pop-ups, link prompt), then ask the host
+/// for the action panel.
+fn action_panel_requested() {
+    crate::notes_editor::link_prompt_cancel();
+    dismiss_popups();
+    fire_event(Event::Actions);
 }
 
 /// Standard edit shortcuts. An Accessory app may have no Edit menu, so route them to the
@@ -302,6 +359,18 @@ define_class!(
 
     unsafe impl NSObjectProtocol for NotesTarget {}
 
+    unsafe impl NSWindowDelegate for NotesTarget {
+        #[unsafe(method(windowDidResize:))]
+        fn window_did_resize(&self, _n: &NSNotification) {
+            layout_bar();
+        }
+
+        #[unsafe(method(windowDidResignKey:))]
+        fn window_did_resign_key(&self, _n: &NSNotification) {
+            dismiss_popups();
+        }
+    }
+
     unsafe impl NSTextDelegate for NotesTarget {
         #[unsafe(method(textDidChange:))]
         fn text_did_change(&self, _n: &NSNotification) {
@@ -423,6 +492,28 @@ fn build(mtm: MainThreadMarker) -> Ui {
     scroll.setDocumentView(Some(&text_view));
     content.addSubview(&scroll);
 
+    // Format Bar: a scroller-less horizontal scroll view at the bottom, hidden by default.
+    let bar = Rc::new(FormatBar::new());
+    bar.set_on_format(Box::new(|f| {
+        crate::notes_editor::apply_format(f);
+        if f != Format::Link {
+            focus_editor();
+        }
+    }));
+    let bar_doc = bar.view();
+    bar_doc.setAutoresizingMask(NSAutoresizingMaskOptions::empty());
+    bar_doc.setFrame(rect(0.0, 0.0, bar.content_width().max(DEFAULT_W), FormatBar::HEIGHT));
+    let bar_scroll = NSScrollView::initWithFrame(mtm.alloc::<NSScrollView>(), rect(0.0, 0.0, DEFAULT_W, FormatBar::HEIGHT));
+    bar_scroll.setHasHorizontalScroller(false);
+    bar_scroll.setHasVerticalScroller(false);
+    bar_scroll.setDrawsBackground(false);
+    bar_scroll.setBorderType(objc2_app_kit::NSBorderType::NoBorder);
+    bar_scroll.setVerticalScrollElasticity(objc2_app_kit::NSScrollElasticity::None);
+    bar_scroll.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+    bar_scroll.setDocumentView(Some(&bar_doc));
+    bar_scroll.setHidden(true);
+    content.addSubview(&bar_scroll);
+
     // Toolbar strip (blurs the text scrolling under it).
     let toolbar =
         NSVisualEffectView::initWithFrame(mtm.alloc::<NSVisualEffectView>(), rect(0.0, DEFAULT_H - TOOLBAR_H, DEFAULT_W, TOOLBAR_H));
@@ -451,15 +542,20 @@ fn build(mtm: MainThreadMarker) -> Ui {
         panel.center();
     }
     panel.setFrameAutosaveName(&name);
+    let window_delegate: &ProtocolObject<dyn NSWindowDelegate> = ProtocolObject::from_ref(&*target);
+    panel.setDelegate(Some(window_delegate));
+    install_popup_hooks();
+    install_key_monitor();
 
-    Ui { panel, text_view, title, _target: target }
+    Ui { panel, text_view, title, scroll, bar, bar_scroll, _target: target }
 }
 
 /// Retained handles to the window parts, creating the window on first use.
 fn parts() -> Option<(Retained<NotesPanel>, Retained<NSTextView>)> {
     let mtm = MainThreadMarker::new()?;
     UI.with(|u| {
-        let mut u = u.borrow_mut();
+        // A nested call during the build gets nothing instead of a borrow panic.
+        let mut u = u.try_borrow_mut().ok()?;
         let ui = u.get_or_insert_with(|| build(mtm));
         Some((ui.panel.clone(), ui.text_view.clone()))
     })
@@ -480,15 +576,30 @@ pub fn show() {
     #[allow(deprecated)]
     app.activateIgnoringOtherApps(true);
     focus_editor();
+    sync_visibility();
 }
 
 /// Hide the window (the note text is kept).
 pub fn hide() {
-    UI.with(|u| {
-        if let Some(ui) = u.borrow().as_ref() {
-            ui.panel.orderOut(None);
-        }
-    });
+    let panel = UI.with(|u| u.borrow().as_ref().map(|ui| ui.panel.clone()));
+    if let Some(panel) = panel {
+        panel.orderOut(None);
+        sync_visibility();
+    }
+}
+
+/// Fire `Shown` / `Hidden` when the window visibility changed since the last report. Hiding
+/// also closes the suggestion popups. The state is updated before the callback runs, so the
+/// host may call `show` / `hide` from inside it.
+fn sync_visibility() {
+    let now = is_visible();
+    if LAST_VISIBLE.replace(now) == now {
+        return;
+    }
+    if !now {
+        dismiss_popups();
+    }
+    fire_event(if now { Event::Shown } else { Event::Hidden });
 }
 
 /// Show when hidden or not key-focused-visible, hide when visible.
@@ -535,7 +646,8 @@ pub fn set_on_change(cb: Box<dyn Fn(String)>) {
     ON_CHANGE.with(|c| *c.borrow_mut() = Some(Rc::from(cb)));
 }
 
-/// Called when the New or Browse toolbar items / shortcuts fire.
+/// Called when a toolbar item or window shortcut fires (see [`Event`]). The callback may call
+/// back into this module (`show`, `hide`, `set_markdown`, the palette): no borrow is held while it runs.
 pub fn set_on_event(cb: Box<dyn Fn(Event)>) {
     ON_EVENT.with(|c| *c.borrow_mut() = Some(Rc::from(cb)));
 }
@@ -543,6 +655,277 @@ pub fn set_on_event(cb: Box<dyn Fn(Event)>) {
 /// false: Esc hides the window. true: Esc only gives up key status.
 pub fn set_escape_loses_focus(on: bool) {
     ESC_LOSES_FOCUS.set(on);
+}
+
+// ---------------------------------------------------------------- Format Bar
+
+/// Show or hide the Format Bar at the bottom of the window (hidden by default). The editor
+/// scroll view shrinks by the bar height while it is visible.
+pub fn set_format_bar_visible(visible: bool) {
+    if parts().is_none() {
+        return;
+    }
+    BAR_VISIBLE.set(visible);
+    layout_bar();
+    refresh_format_bar();
+}
+
+pub fn format_bar_visible() -> bool {
+    BAR_VISIBLE.get()
+}
+
+/// Content width of the Format Bar and the width of its visible part. The bar scrolls
+/// horizontally when the first exceeds the second (narrow windows).
+pub fn format_bar_metrics() -> Option<(f64, f64)> {
+    UI.with(|u| u.borrow().as_ref().map(|ui| (ui.bar.content_width(), ui.bar_scroll.contentView().bounds().size.width)))
+}
+
+/// Scroll the Format Bar horizontally to `x` (clamped); returns the offset reached.
+pub fn format_bar_scroll_to(x: f64) -> f64 {
+    let Some(bar_scroll) = UI.with(|u| u.borrow().as_ref().map(|ui| ui.bar_scroll.clone())) else { return 0.0 };
+    let clip = bar_scroll.contentView();
+    let doc_w = bar_scroll.documentView().map_or(0.0, |d| d.frame().size.width);
+    let max = (doc_w - clip.bounds().size.width).max(0.0);
+    clip.scrollToPoint(NSPoint::new(x.clamp(0.0, max), 0.0));
+    bar_scroll.reflectScrolledClipView(&clip);
+    clip.bounds().origin.x
+}
+
+/// Place the bar container and the editor scroll view for the current window size and bar state.
+fn layout_bar() {
+    let parts = UI.with(|u| u.borrow().as_ref().map(|ui| (ui.panel.clone(), ui.scroll.clone(), ui.bar.clone(), ui.bar_scroll.clone())));
+    let Some((panel, scroll, bar, bar_scroll)) = parts else { return };
+    let Some(content) = panel.contentView() else { return };
+    let b = content.bounds();
+    let visible = BAR_VISIBLE.get();
+    let bar_h = if visible { FormatBar::HEIGHT } else { 0.0 };
+    bar_scroll.setHidden(!visible);
+    bar_scroll.setFrame(rect(0.0, 0.0, b.size.width, FormatBar::HEIGHT));
+    if let Some(doc) = bar_scroll.documentView() {
+        doc.setFrame(rect(0.0, 0.0, bar.content_width().max(b.size.width), FormatBar::HEIGHT));
+    }
+    scroll.setFrame(rect(0.0, bar_h, b.size.width, (b.size.height - bar_h).max(0.0)));
+}
+
+/// Push the formats at the cursor / selection to the bar; a no-op while it is hidden.
+pub(crate) fn refresh_format_bar() {
+    if !BAR_VISIBLE.get() {
+        return;
+    }
+    let bar = UI.with(|u| u.try_borrow().ok().and_then(|u| u.as_ref().map(|ui| ui.bar.clone())));
+    if let Some(bar) = bar {
+        bar.set_active(&crate::notes_editor::active_formats());
+    }
+}
+
+// ---------------------------------------------------------------- suggestion popups
+
+fn to_popup_rect(a: Anchor) -> PopupRect {
+    PopupRect { x: a.x, y: a.y, w: a.w, h: a.h }
+}
+
+fn make_popup(on_pick: fn(usize)) -> Rc<SuggestionPopup> {
+    let p = Rc::new(SuggestionPopup::new());
+    p.set_on_pick(Box::new(on_pick));
+    p
+}
+
+/// The `/` menu popup, once it has been opened.
+pub fn slash_popup() -> Option<Rc<SuggestionPopup>> {
+    POPUPS.with(|p| p.borrow().slash.clone())
+}
+
+/// The `:` emoji popup, once it has been opened.
+pub fn emoji_popup() -> Option<Rc<SuggestionPopup>> {
+    POPUPS.with(|p| p.borrow().emoji.clone())
+}
+
+/// Supply the emoji data of the `:` picker: `(emoji, name)` pairs for a query. Without a
+/// provider the emoji popup never opens.
+pub fn set_emoji_provider(provider: Box<dyn Fn(&str) -> EmojiPairs>) {
+    EMOJI_PROVIDER.with(|p| *p.borrow_mut() = Some(Rc::from(provider)));
+}
+
+/// Hide both popups and end the open `/` and `:` sessions (the typed text stays).
+pub fn dismiss_popups() {
+    let (slash, emoji) = POPUPS.with(|p| {
+        let mut p = p.borrow_mut();
+        p.slash_anchor = None;
+        p.emoji_anchor = None;
+        (p.slash.clone(), p.emoji.clone())
+    });
+    let open = slash.as_ref().is_some_and(|p| p.is_visible()) || emoji.as_ref().is_some_and(|p| p.is_visible());
+    for p in slash.iter().chain(emoji.iter()) {
+        p.hide();
+    }
+    if open {
+        crate::notes_editor::end_trigger_sessions();
+    }
+}
+
+fn hide_slash() {
+    let p = POPUPS.with(|p| {
+        let mut p = p.borrow_mut();
+        p.slash_anchor = None;
+        p.slash.clone()
+    });
+    if let Some(p) = p {
+        p.hide();
+    }
+}
+
+fn hide_emoji() {
+    let p = POPUPS.with(|p| {
+        let mut p = p.borrow_mut();
+        p.emoji_anchor = None;
+        p.emoji.clone()
+    });
+    if let Some(p) = p {
+        p.hide();
+    }
+}
+
+fn pick_slash(idx: usize) {
+    let format = POPUPS.with(|p| p.borrow().slash_formats.get(idx).copied());
+    hide_slash();
+    if let Some(f) = format {
+        crate::notes_editor::slash_commit(f);
+    }
+}
+
+fn pick_emoji(idx: usize) {
+    let glyph = POPUPS.with(|p| p.borrow().emoji_glyphs.get(idx).cloned());
+    hide_emoji();
+    if let Some(g) = glyph {
+        crate::notes_editor::emoji_commit(&g);
+    }
+}
+
+fn show_slash(query: &str) {
+    let Some(anchor) = POPUPS.with(|p| p.borrow().slash_anchor) else { return };
+    let rows = slash_items(query);
+    let popup = match slash_popup() {
+        Some(p) => p,
+        None => {
+            let p = make_popup(pick_slash);
+            POPUPS.with(|s| s.borrow_mut().slash = Some(p.clone()));
+            p
+        }
+    };
+    let (formats, items): (Vec<Format>, Vec<Item>) = rows.into_iter().unzip();
+    POPUPS.with(|p| p.borrow_mut().slash_formats = formats);
+    popup.show(anchor, items);
+}
+
+fn show_emoji(query: &str) {
+    let Some(anchor) = POPUPS.with(|p| p.borrow().emoji_anchor) else { return };
+    let Some(provider) = EMOJI_PROVIDER.with(|p| p.borrow().clone()) else { return };
+    let items = emoji_items(query, &*provider);
+    let popup = match emoji_popup() {
+        Some(p) => p,
+        None => {
+            let p = make_popup(pick_emoji);
+            POPUPS.with(|s| s.borrow_mut().emoji = Some(p.clone()));
+            p
+        }
+    };
+    let glyphs = items.iter().map(|i| i.glyph.clone()).collect();
+    POPUPS.with(|p| p.borrow_mut().emoji_glyphs = glyphs);
+    popup.show(anchor, items);
+}
+
+fn popups_allowed() -> bool {
+    is_visible() && !crate::notes_palette::is_visible()
+}
+
+fn on_slash(e: SlashEvent) {
+    match e {
+        SlashEvent::Open { anchor } => {
+            if !popups_allowed() {
+                return;
+            }
+            POPUPS.with(|p| p.borrow_mut().slash_anchor = Some(to_popup_rect(anchor)));
+            show_slash("");
+        }
+        SlashEvent::Query(q) => show_slash(&q),
+        SlashEvent::Close => hide_slash(),
+    }
+}
+
+fn on_emoji(e: EmojiEvent) {
+    match e {
+        EmojiEvent::Open { anchor } => {
+            if !popups_allowed() || EMOJI_PROVIDER.with(|p| p.borrow().is_none()) {
+                return;
+            }
+            POPUPS.with(|p| p.borrow_mut().emoji_anchor = Some(to_popup_rect(anchor)));
+        }
+        EmojiEvent::Query(q) => show_emoji(&q),
+        EmojiEvent::Close => hide_emoji(),
+    }
+}
+
+/// Up / Down / Enter / Tab drive the visible popup; Esc is left to the editor, which closes
+/// the session (and with it the popup) without hiding the window.
+fn on_popup_key(key: PopupKey) -> bool {
+    if crate::notes_palette::is_visible() {
+        dismiss_popups();
+        return false;
+    }
+    let slash = slash_popup().filter(|p| p.is_visible());
+    let (popup, is_slash) = match (slash, emoji_popup().filter(|p| p.is_visible())) {
+        (Some(p), _) => (p, true),
+        (None, Some(p)) => (p, false),
+        (None, None) => return false,
+    };
+    match key {
+        PopupKey::Up => popup.move_selection(-1),
+        PopupKey::Down => popup.move_selection(1),
+        PopupKey::Enter | PopupKey::Tab => {
+            if let Some(i) = popup.selected() {
+                if is_slash {
+                    pick_slash(i);
+                } else {
+                    pick_emoji(i);
+                }
+            }
+        }
+        PopupKey::Esc => return false,
+    }
+    true
+}
+
+/// Route the editor's `/` and `:` sessions and the popup keys to the suggestion popups. Done
+/// when the window is built; call it again after a host replaced the editor hooks.
+pub fn install_popup_hooks() {
+    crate::notes_editor::set_on_slash(Box::new(on_slash));
+    crate::notes_editor::set_on_emoji(Box::new(on_emoji));
+    crate::notes_editor::set_popup_key_handler(Box::new(on_popup_key));
+}
+
+// ---------------------------------------------------------------- key monitor
+
+/// The link prompt is a popover window that takes the keyboard, so ⌘K never reaches the Notes
+/// panel while it is open: a local monitor turns it into the usual `Actions` request.
+fn install_key_monitor() {
+    if KEY_MONITOR.with(|m| m.borrow().is_some()) {
+        return;
+    }
+    let block = block2::RcBlock::new(|ev: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let e = unsafe { ev.as_ref() };
+        let cmd_k = e.modifierFlags()
+            & (NSEventModifierFlags::Command | NSEventModifierFlags::Shift | NSEventModifierFlags::Option | NSEventModifierFlags::Control)
+            == NSEventModifierFlags::Command
+            && e.charactersIgnoringModifiers().is_some_and(|s| s.to_string().eq_ignore_ascii_case("k"));
+        if cmd_k && crate::notes_editor::link_prompt_open() {
+            action_panel_requested();
+            return std::ptr::null_mut();
+        }
+        ev.as_ptr()
+    });
+    // SAFETY: the block only touches main-thread state and returns the event or null.
+    let monitor = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(objc2_app_kit::NSEventMask::KeyDown, &block) };
+    KEY_MONITOR.with(|m| *m.borrow_mut() = monitor);
 }
 
 /// Render the whole window content view to a PNG file; false on any failure.

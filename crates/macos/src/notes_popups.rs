@@ -602,6 +602,19 @@ define_class!(
     struct FormatButton;
 
     impl FormatButton {
+        // The window is movable by its background: a click on a bar button must press it.
+        #[unsafe(method(mouseDownCanMoveWindow))]
+        fn mouse_down_can_move_window(&self) -> bool {
+            false
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            unsafe {
+                let _: () = msg_send![super(self), mouseDown: event];
+            }
+        }
+
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, dirty: NSRect) {
             if self.state() == NSControlStateValueOn {
@@ -625,6 +638,7 @@ const BAR_LEFT: f64 = 12.0;
 /// The Format Bar strip for the bottom of the Notes window. Main thread only.
 pub struct FormatBar {
     root: Retained<NSVisualEffectView>,
+    width: f64,
     target: Retained<FormatTarget>,
     /// One button per `Format::ALL` entry, same order.
     buttons: Vec<Retained<FormatButton>>,
@@ -675,7 +689,16 @@ impl FormatBar {
             buttons.push(b);
             x += BUTTON + BUTTON_GAP;
         }
-        FormatBar { root, target, buttons }
+        // Right edge: the last button plus the left margin, so nothing is clipped.
+        let width = x - BUTTON_GAP + BAR_LEFT;
+        root.setFrame(rect(0.0, 0.0, width, Self::HEIGHT));
+        FormatBar { root, width, target, buttons }
+    }
+
+    /// Width the buttons need (about 500 pt); the window may be narrower, so the host puts
+    /// the strip in a horizontal scroll view.
+    pub fn content_width(&self) -> f64 {
+        self.width
     }
 
     fn make_button(mtm: MainThreadMarker, f: Format, tag: usize, target: &FormatTarget, x: f64) -> Retained<FormatButton> {
@@ -700,6 +723,8 @@ impl FormatBar {
             }
         }
         b.setBordered(false);
+        // Clicking a button must never take the focus away from the editor.
+        b.setRefusesFirstResponder(true);
         b.setTag(tag as isize);
         b.setToolTip(Some(&NSString::from_str(&tip)));
         b.setContentTintColor(Some(&NSColor::secondaryLabelColor()));

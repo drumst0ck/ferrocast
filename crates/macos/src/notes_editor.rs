@@ -939,6 +939,8 @@ pub fn set_markdown(md: &str) {
     SLASH.with(|s| *s.borrow_mut() = None);
     EMOJI.with(|s| *s.borrow_mut() = None);
     crate::notes::refresh_title(&title());
+    crate::notes::dismiss_popups();
+    crate::notes::refresh_format_bar();
     tv.setNeedsDisplay(true);
 }
 
@@ -1105,6 +1107,7 @@ pub(crate) fn did_change() {
     normalize(DIRTY.take());
     update_triggers();
     crate::notes::refresh_title(&title());
+    crate::notes::refresh_format_bar();
     crate::notes::notify_change(markdown());
     if let Some((tv, _)) = handles() {
         tv.setNeedsDisplay(true);
@@ -1146,6 +1149,7 @@ pub(crate) fn did_change_selection() {
         return;
     }
     update_triggers();
+    crate::notes::refresh_format_bar();
     // An empty last paragraph has no character to inherit its kind from.
     if let Some((tv, st)) = handles() {
         let r = tv.selectedRange();
@@ -1526,6 +1530,7 @@ pub fn apply_format(f: Format) {
         Format::Link => open_link_prompt(),
         _ => apply_block_format(f),
     }
+    crate::notes::refresh_format_bar();
 }
 
 /// Formats active at the cursor or on the whole selection, in Format Bar order.
@@ -1700,6 +1705,12 @@ fn update_triggers() {
             _ => {}
         }
     }
+}
+
+/// End the open `/` and `:` sessions without events (the popups were hidden by the window).
+pub(crate) fn end_trigger_sessions() {
+    SLASH.with(|s| *s.borrow_mut() = None);
+    EMOJI.with(|s| *s.borrow_mut() = None);
 }
 
 /// Remove the typed `/query` and apply `f` to the (now empty) line. Ends the session silently.
