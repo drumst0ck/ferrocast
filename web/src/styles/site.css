@@ -31,6 +31,28 @@ p { max-width: 62ch; }
 .nav { display: flex; gap: 28px; font-size: var(--step-small); }
 .nav a { text-decoration: none; color: var(--muted); transition: color 160ms ease; min-height: 44px; display: inline-flex; align-items: center; }
 @media (hover:hover) { .nav a:hover { color: var(--ink); } }
+/* header menu: inline on desktop, a panel behind the burger on small screens */
+.menu { display: contents; }
+.burger { display: none; }
+@media (max-width: 62em) {
+  .top { gap: 12px; }
+  .top .mark { margin-right: auto; }
+  .burger { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: var(--radius); color: var(--ink); box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+  .burger span, .burger span::before, .burger span::after { display: block; width: 18px; height: 2px; border-radius: 2px; background: currentColor; transition: transform 200ms var(--ease-out), opacity 150ms ease; }
+  .burger span { position: relative; }
+  .burger span::before, .burger span::after { content: ''; position: absolute; left: 0; }
+  .burger span::before { top: -6px; } .burger span::after { top: 6px; }
+  .top.open .burger span { background: transparent; }
+  .top.open .burger span::before { transform: translateY(6px) rotate(45deg); background: currentColor; }
+  .top.open .burger span::after { transform: translateY(-6px) rotate(-45deg); background: currentColor; }
+  .menu { display: flex; flex-direction: column; gap: 4px; position: absolute; left: 0; right: 0; top: 100%; padding: 12px var(--margin) 28px; background: var(--bg); box-shadow: 0 24px 48px rgba(0,0,0,.35); max-height: calc(100svh - 100%); overflow-y: auto; opacity: 0; visibility: hidden; transform: translateY(-8px); transition: opacity 180ms ease, transform 220ms var(--ease-out), visibility 0s linear 220ms; }
+  .top.open .menu { opacity: 1; visibility: visible; transform: none; transition: opacity 180ms ease, transform 220ms var(--ease-out), visibility 0s; }
+  .top .menu .nav { display: flex; flex-direction: column; gap: 0; font-size: 1.25rem; margin: 0; align-self: stretch; }
+  .menu .nav a { color: var(--ink); min-height: 52px; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .menu .lang { align-self: flex-start; margin-top: 16px; }
+  html.menu-open { overflow: hidden; }
+}
+@media (max-width: 62em) and (prefers-reduced-motion: reduce) { .menu, .top.open .menu, .burger span, .burger span::before, .burger span::after { transition: none; } }
 .proof { font-size: var(--step-small); color: var(--muted); }
 .mark { display: inline-flex; align-items: center; gap: 12px; font-size: 1rem; font-weight: 500; text-decoration: none; }
 .mark img { width: 30px; height: 30px; border-radius: 7px; }
@@ -136,7 +158,7 @@ html:not(.js) .fl .ans { display: block; } html:not(.js) .fp { display: none; }
 }
 
 @media (max-width: 62em) {
-  .nav { display: none; } .stats dl { grid-template-columns: 1fr 1fr; gap: 40px 24px; }
+  .stats dl { grid-template-columns: 1fr 1fr; gap: 40px 24px; }
   .more-list h2 { grid-column: 1 / -1; position: static; margin-bottom: 40px; } .more-list ul { grid-column: 1 / -1; }
   .feat .more { margin-left: 0; }
   .how h2, .how > .ex { grid-column: 1 / -1; position: static; grid-row: auto; } .how h2 { margin-bottom: 40px; } .resp { margin-left: 0; } .resp img { width: 700px; max-width: none; } .ex { margin-bottom: 64px; }
@@ -333,6 +355,9 @@ html:not(.js) .vwrap { transform: none; }
 @media (prefers-color-scheme: light) {
   :root { --bg: #f6f6f8; --surface: #ebebef; --stage: #e2e2e7; --ink: #111114; --muted: #5a5961; --accent: #e8364b; --accent-ink: #fff5f6; }
   .top { background: rgba(246,246,248,.7); }
+  .burger { box-shadow: inset 0 0 0 1px rgba(0,0,0,.14); }
+  .menu .nav a { border-bottom-color: rgba(0,0,0,.08); }
+  .menu { box-shadow: 0 24px 48px rgba(0,0,0,.12); }
   .hero-bg { background-image: radial-gradient(rgba(0,0,0,.14) 1px, transparent 1.2px); }
   .hero-bg i { opacity: .38; }
   .step h3, .stats dt { background: linear-gradient(180deg, #111114 30%, #5a5961 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
