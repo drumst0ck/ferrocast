@@ -7430,7 +7430,7 @@ fn status_color(pal: &Palette, kind: StatusKind) -> Color32 {
         (StatusKind::Ok, false) => Color32::from_rgb(10, 96, 56),
         (StatusKind::Warn, true) => Color32::from_rgb(240, 184, 76),
         (StatusKind::Warn, false) => Color32::from_rgb(122, 74, 0),
-        (StatusKind::Error, true) => Color32::from_rgb(246, 116, 116),
+        (StatusKind::Error, true) => Color32::from_rgb(255, 140, 140),
         (StatusKind::Error, false) => Color32::from_rgb(164, 26, 26),
         (StatusKind::Neutral, _) => pal.sub_strong,
     }
