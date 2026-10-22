@@ -36,6 +36,7 @@ Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no 
 - **Snippets** con placeholders y auto-expansión, y **quicklinks** con argumentos.
 - **Script Commands** compatibles con los metadatos de Raycast (full, compact, silent, inline).
 - **Gestión de ventanas** con unos 40 diseños, más Kill Process, temporizadores, notas, emoji y Quick Look.
+- **Notas**: una ventana flotante de texto enriquecido con Markdown, menú `/`, notas fijadas, exportación, enlaces `ferrocast://`, comandos de IA y dictado.
 - **Ask AI** con Ollama, cualquier servidor compatible con OpenAI, la API de Anthropic, Claude Code o Sign in with ChatGPT.
 
 No incluido: extensiones React, sincronización, Search Menu Bar Items y contexto de IA desde la selección o la pantalla. Ferrocast es independiente y no está afiliado a Raycast.

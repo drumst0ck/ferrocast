@@ -8,7 +8,7 @@ Ferrocast keeps its data in JSON files in `~/Library/Application Support/Ferroca
 
 ## What lives where
 
-- **JSON files** in the data folder: settings, clipboard history, snippets, quicklinks, notes and the File Shelf list.
+- **JSON files** in the data folder: settings, clipboard history, snippets, quicklinks, notes and the File Shelf list. Notes are in `notes.json`; a deleted note stays there for 30 days (Recently Deleted) before it is removed for good.
 - **Keychain**: AI keys (an Anthropic key, an OpenAI-compatible server key) and the ChatGPT sign-in session, which is refreshed automatically.
 - **Log**: an error log in the data folder; open it with the **Reveal Log File** command.
 - **Backups**: export leaves the clipboard history out.
@@ -19,6 +19,9 @@ Ferrocast keeps its data in JSON files in `~/Library/Application Support/Ferroca
 - The clipboard history never leaves your Mac, and entries copied from a password manager such as 1Password are skipped on purpose.
 - Currency rates come from frankfurter.dev (ECB data, cached 12 hours).
 - Ask AI talks to Ollama on your own Mac by default. It only contacts the cloud if you point it at LM Studio, OpenAI, the Anthropic API, Sign in with ChatGPT or Claude Code.
+- Notes AI commands (Fix Spelling and Grammar, Summarize and the rest) send the selected text, or the whole note, to the provider set in Settings → AI. With Ollama it stays on your Mac.
+- Notes dictation uses the microphone only while you are dictating. The audio goes to Apple's speech recognition, which runs on your Mac when the system supports it, and only while dictation is active.
+- `ferrocast://` URLs (for example `ferrocast://notes/new`) only navigate: they open a note, create one or toggle the Notes window.
 - Script Command arguments are passed on the command line and can be seen with `ps` while the script runs.
 
 :::caution[Limits]
@@ -29,4 +32,5 @@ The JSON files are not encrypted. Deleted clipboard images are removed from disk
 
 - [Clipboard history](/docs/launcher/clipboard/)
 - [Ask AI](/docs/launcher/ask-ai/)
+- [Notes](/docs/launcher/notes/)
 - [Settings](/docs/launcher/settings/)

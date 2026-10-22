@@ -496,7 +496,6 @@ pub enum View {
         link: String,
         open_with: String,
     },
-    NoteEdit(String),
     Args {
         target: ArgTarget,
         title: String,
@@ -603,7 +602,7 @@ impl View {
             | View::Convert(_)
             | View::Notes
             | View::Colors(_) => Shape::List,
-            View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NoteEdit(_) | View::Settings => Shape::Form,
+            View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::Settings => Shape::Form,
             _ => Shape::Single,
         }
     }
@@ -641,7 +640,7 @@ impl View {
                 vec![(primary, "↵"), ("Move", "⌘↑/↓"), BACK]
             }
             View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
-            View::Settings => vec![("Tabs", "⌘1–7"), ("Find", "⌘F"), BACK],
+            View::Settings => vec![("Tabs", "⌘1–8"), ("Find", "⌘F"), BACK],
             _ => vec![],
         }
     }
@@ -685,7 +684,6 @@ impl View {
             View::Colors(_) => "Copy Color as…",
             View::SnippetForm { .. } => "Snippet",
             View::QuicklinkForm { .. } => "Quicklink",
-            View::NoteEdit(_) => "Note",
             View::Args { .. } => "Arguments",
             View::Output { .. } => "Output",
             View::Confirm { .. } => "Confirm",
@@ -764,6 +762,8 @@ pub struct App {
     snippets: Vec<Snippet>,
     quicklinks: Vec<Quicklink>,
     notes: Vec<Note>,
+    /// The floating Notes window: open note, history, palette mode, debounced saving.
+    notes_ctl: crate::notes_ctl::NotesCtl,
     frecency: Frecency,
     /// Newest release found by a check that is newer than the running version (drives Settings).
     update_available: Option<ferrocast_core::update::Release>,
@@ -775,6 +775,9 @@ pub struct App {
     /// Opt-in Enter on a Finder selection (tap, in-flight guard, injectable system hooks).
     finder: services::FinderEnterState,
     _tray: Option<tray_icon::TrayIcon>,
+    /// The second menu-bar item that toggles Notes; present while `notes_menu_bar_button` is on.
+    /// Dropping it removes the item.
+    notes_tray: Option<Box<dyn std::any::Any>>,
     icons: IconCache,
     stack: Vec<View>,
     query: String,
@@ -965,6 +968,8 @@ impl App {
             // the floating panel reports its edits; the app persists them
             let b = bus.clone();
             ferrocast_macos::shelf::set_on_change(Box::new(move |v| b.send(Msg::ShelfChanged(v))));
+            // same for the Notes window and its palette: the callbacks only send a Msg
+            crate::notes_ctl::install_callbacks(&bus);
         }
         if prof {
             eprintln!("services {:?}", t.elapsed());
@@ -996,6 +1001,7 @@ impl App {
         if store_rates.is_stale(now_secs()) {
             services::refresh_rates(bus.clone());
         }
+        let notes_ctl = crate::notes_ctl::NotesCtl::new(Box::new(crate::notes_ctl::MacFx::new(bus.clone(), shared.clone())));
         let mut app = App {
             update_poller,
             icons: IconCache::new(store.images_dir()).with_bus(bus.clone()),
@@ -1008,6 +1014,7 @@ impl App {
             snippets: data.snippets,
             quicklinks: data.quicklinks,
             notes: data.notes,
+            notes_ctl,
             frecency: data.frecency,
             update_available: None,
             apps: vec![],
@@ -1017,6 +1024,7 @@ impl App {
             hotkeys,
             finder: Default::default(),
             _tray: tray,
+            notes_tray: None,
             stack: vec![View::Root],
             query: String::new(),
             prev_query: String::new(),
@@ -1081,6 +1089,9 @@ impl App {
         }
         app.reload_scripts();
         app.set_theme();
+        // Recently Deleted notes past their retention go once per start
+        app.notes_do(|c, d| c.startup(d));
+        app.sync_notes_tray();
         app.rebuild();
         if app.settings.enter_on_finder {
             // at startup never show the system prompt again; the user can toggle the setting
@@ -1437,8 +1448,10 @@ impl App {
         self.hidden_at = Instant::now();
         self.shared.visible.store(false, Ordering::Relaxed);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        // hiding the whole app would also hide the floating shelf panel
-        if let Some(mtm) = objc2::MainThreadMarker::new().filter(|_| !ferrocast_macos::shelf::is_visible()) {
+        // hiding the whole app would also hide the floating shelf and Notes panels
+        if let Some(mtm) =
+            objc2::MainThreadMarker::new().filter(|_| !ferrocast_macos::shelf::is_visible() && !ferrocast_macos::notes::is_visible())
+        {
             objc2_app_kit::NSApplication::sharedApplication(mtm).hide(None);
         }
         if let Some(pid) = self.prev_pid {
@@ -1465,6 +1478,63 @@ impl App {
     fn toast(&mut self, s: impl Into<String>) {
         self.toast = Some((s.into(), Instant::now()));
         self.ctx.request_repaint_after(Duration::from_millis(2600));
+    }
+
+    /// Runs `f` on the Notes controller with the stores it edits, then does what it asks for.
+    fn notes_do(&mut self, f: impl FnOnce(&mut crate::notes_ctl::NotesCtl, &mut crate::notes_ctl::Data) -> crate::notes_ctl::Out) {
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let mut d = crate::notes_ctl::Data {
+            notes: &mut self.notes,
+            settings: &mut self.settings,
+            quicklinks: &mut self.quicklinks,
+            now: now_secs(),
+            now_ms,
+        };
+        let out = f(&mut self.notes_ctl, &mut d);
+        self.sec_dirty = true;
+        if out.save_notes {
+            self.save_notes();
+        }
+        if out.save_quicklinks {
+            self.save_quicklinks();
+        }
+        if out.save_settings {
+            self.save_settings();
+        }
+        if let Some(t) = out.toast {
+            // the launcher is usually hidden while the Notes window is in use
+            if self.visible {
+                self.toast(t);
+            } else {
+                services::notify("Notes", &t);
+            }
+        }
+    }
+
+    /// Pushes the Notes settings (zoom, Esc behavior, Format Bar) to the window and brings the
+    /// menu-bar item in line with `notes_menu_bar_button`.
+    pub(crate) fn apply_notes_settings(&mut self) {
+        self.notes_do(|c, d| {
+            c.apply_settings(d);
+            crate::notes_ctl::Out::default()
+        });
+        self.sync_notes_tray();
+    }
+
+    /// Creates the Notes toggle in the menu bar when the setting is on and none exists, removes it
+    /// (by dropping it) when the setting is off. Main thread only.
+    pub(crate) fn sync_notes_tray(&mut self) {
+        match (self.settings.notes_menu_bar_button, self.notes_tray.is_some()) {
+            (true, false) => self.notes_tray = (self.fx.notes_tray)(&self.bus),
+            (false, true) => self.notes_tray = None,
+            _ => {}
+        }
+    }
+
+    /// Writes pending notes and exits.
+    fn quit(&mut self) -> ! {
+        self.notes_do(|c, d| c.flush(d));
+        std::process::exit(0)
     }
 
     // ------------------------------------------------------------ navigation
@@ -1782,6 +1852,9 @@ impl App {
             }
             match m {
                 Msg::Wake => {}
+                // a URL comes from outside: the launcher steps aside like for any Notes command
+                Msg::Notes(m @ crate::notes_ctl::NMsg::Url(_)) => self.open_notes_window(|c, d| c.handle(m, d)),
+                Msg::Notes(m) => self.notes_do(|c, d| c.handle(m, d)),
                 Msg::UpdateChecked { manual, result } => {
                     let exe = instance::running_exe().unwrap_or_default();
                     self.handle_update_checked(
@@ -1810,7 +1883,7 @@ impl App {
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
                         .spawn();
-                    std::process::exit(0);
+                    self.quit();
                 }
                 Msg::UpdateFailed(e) => {
                     instance::log(&self.store.root, &format!("update failed: {e}"));
@@ -2447,7 +2520,8 @@ impl App {
                         self.push(View::Settings);
                     }
                     "check_updates" => self.check_updates(),
-                    "quit" => std::process::exit(0),
+                    "notes_toggle" => self.open_notes_window(|c, d| c.toggle(d)),
+                    "quit" => self.quit(),
                     _ => {}
                 },
                 Msg::Hotkey(id) => {
@@ -2457,7 +2531,11 @@ impl App {
                         Some(cmd) => {
                             if let Some(item) = self.base.iter().find(|i| i.id == cmd).cloned() {
                                 self.prev_pid = running::frontmost().map(|f| f.pid).filter(|p| *p != std::process::id() as i32);
-                                let needs_ui = matches!(item.kind, Kind::Builtin(_) | Kind::Quicklink { .. } | Kind::Script(_));
+                                // the Notes commands open their own floating window, not the launcher
+                                let own_window =
+                                    matches!(item.kind, Kind::Builtin(Builtin::Notes | Builtin::CreateNote | Builtin::CreateDictatedNote));
+                                let needs_ui =
+                                    !own_window && matches!(item.kind, Kind::Builtin(_) | Kind::Quicklink { .. } | Kind::Script(_));
                                 if needs_ui && !self.visible {
                                     self.show();
                                 }
@@ -3225,24 +3303,26 @@ impl App {
                 self.sorted(v, "Running")
             }
             View::Notes => {
-                let mut notes: Vec<&Note> =
-                    self.notes.iter().filter(|n| q.is_empty() || n.text.to_lowercase().contains(&q.to_lowercase())).collect();
-                notes.sort_by_key(|n| std::cmp::Reverse(n.modified));
-                vec![Section {
-                    title: "Notes".into(),
-                    items: notes
-                        .into_iter()
-                        .map(|n| Item {
-                            id: format!("note:{}", n.id),
-                            title: n.title(),
-                            subtitle: String::new(),
-                            icon: Icon::Glyph("sf:pencil", [255, 197, 49]),
-                            accessory: String::new(),
-                            keywords: vec![],
-                            kind: Kind::Note(n.id.clone()),
-                        })
-                        .collect(),
-                }]
+                // pinned first (with their slot), then recent; title and content are searched
+                let rows = ferrocast_core::note_actions::browse_rows(&self.notes, &q, None, now_secs());
+                let item = |r: &ferrocast_core::note_actions::BrowseRow| Item {
+                    id: format!("note:{}", r.id),
+                    title: r.title.clone(),
+                    subtitle: r.subtitle.clone(),
+                    icon: Icon::Glyph(if r.pinned { "sf:pin.fill" } else { "sf:pencil" }, [255, 197, 49]),
+                    accessory: r.slot.map(|n| format!("⌘{n}")).unwrap_or_default(),
+                    keywords: vec![],
+                    kind: Kind::Note(r.id.clone()),
+                };
+                let (pinned, rest): (Vec<_>, Vec<_>) = rows.iter().partition(|r| r.pinned);
+                let mut out = vec![];
+                if !pinned.is_empty() {
+                    out.push(Section { title: "Pinned".into(), items: pinned.into_iter().map(item).collect() });
+                }
+                if !rest.is_empty() {
+                    out.push(Section { title: "Notes".into(), items: rest.into_iter().map(item).collect() });
+                }
+                out
             }
             View::Colors(c) => vec![Section {
                 title: "Formats".into(),
@@ -3487,8 +3567,11 @@ impl App {
                 );
             }
             Kind::Note(id) => {
+                let pinned = self.notes.iter().any(|n| &n.id == id && n.pinned_at.is_some());
                 a.push(Action::new("Open Note", Act::Run));
+                a.push(Action::new(if pinned { "Unpin Note" } else { "Pin Note" }, Act::NotePin(id.clone())).key(CMD, Key::Period));
                 a.push(Action::new("Create Note", Act::CreateNote).key(CMD, Key::N));
+                // goes to Recently Deleted, so no confirmation
                 a.push(Action::new("Delete Note", Act::NoteDelete(id.clone())).key(CTRL, Key::X).danger());
             }
             Kind::Emoji(e) => {
@@ -3779,7 +3862,8 @@ impl App {
                 self.paste_text(&e)
             }
             Kind::Note(id) => {
-                self.push(View::NoteEdit(id.clone()));
+                let id = id.clone();
+                self.open_notes_window(|c, d| c.open_and_show(d, &id));
             }
             Kind::OpenWindow(w) => {
                 let w = w.clone();
@@ -4140,7 +4224,9 @@ impl App {
                 });
             }
             Builtin::SearchNotes => self.push(View::Notes),
-            Builtin::CreateNote => self.new_note(),
+            Builtin::Notes => self.open_notes_window(|c, d| c.toggle(d)),
+            Builtin::CreateNote => self.open_notes_window(|c, d| c.create_note(d)),
+            Builtin::CreateDictatedNote => self.open_notes_window(|c, d| c.create_dictated_note(d)),
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
             Builtin::OpenScriptsFolder => {
                 let d = self.store.scripts_dir();
@@ -4151,7 +4237,7 @@ impl App {
                 self.toast(format!("{} script commands loaded", self.scripts.len()));
             }
             Builtin::Settings => self.push(View::Settings),
-            Builtin::Quit => std::process::exit(0),
+            Builtin::Quit => self.quit(),
         }
     }
 
@@ -4159,13 +4245,13 @@ impl App {
         self.push(View::SnippetForm { id: None, name: String::new(), text, keyword: String::new() });
     }
 
-    fn new_note(&mut self) {
-        let now = now_secs();
-        let n = Note { id: uuid::Uuid::new_v4().to_string(), text: String::new(), created: now, modified: now };
-        let id = n.id.clone();
-        self.notes.push(n);
-        self.save_notes();
-        self.push(View::NoteEdit(id));
+    /// The Notes window is its own floating panel: the launcher gets out of its way first.
+    fn open_notes_window(&mut self, f: impl FnOnce(&mut crate::notes_ctl::NotesCtl, &mut crate::notes_ctl::Data) -> crate::notes_ctl::Out) {
+        if self.visible {
+            self.hide();
+        }
+        self.reset_to_root();
+        self.notes_do(f);
     }
 
     fn run_system(&mut self, c: system::SystemCommand) {
@@ -4349,7 +4435,6 @@ impl App {
                 | Act::Trash(_)
                 | Act::DeleteSnippet(_)
                 | Act::DeleteQuicklink(_)
-                | Act::NoteDelete(_)
                 | Act::DisableCommand
                 | Act::ForceQuitApp(_)
         );
@@ -4359,7 +4444,6 @@ impl App {
                 Act::Trash(_) => "Move this file to the Trash?",
                 Act::DeleteSnippet(_) => "Delete this snippet?",
                 Act::DeleteQuicklink(_) => "Delete this quicklink?",
-                Act::NoteDelete(_) => "Delete this note?",
                 Act::ForceQuitApp(_) => "Force quit this application? Unsaved changes may be lost.",
                 _ => "Disable this command? (re-enable in Settings)",
             };
@@ -4995,11 +5079,9 @@ impl App {
                     self.new_snippet(t);
                 }
             }
-            Act::NoteDelete(id) => {
-                self.notes.retain(|n| n.id != id);
-                self.save_notes();
-            }
-            Act::CreateNote => self.new_note(),
+            Act::NoteDelete(id) => self.notes_do(|c, d| c.delete_id(d, &id)),
+            Act::NotePin(id) => self.notes_do(|c, d| c.toggle_pin_id(d, &id)),
+            Act::CreateNote => self.open_notes_window(|c, d| c.create_note(d)),
             Act::Trash(p) => {
                 match apps::trash(&p) {
                     Ok(()) => self.toast("Moved to Trash"),
@@ -5241,6 +5323,8 @@ pub(crate) struct Effects {
     pub(crate) glow_show: fn(&ferrocast_macos::glow::Target),
     /// Hide the overlay (main thread only).
     pub(crate) glow_hide: fn(),
+    /// Create the Notes toggle item in the menu bar (main thread only); dropping it removes it.
+    pub(crate) notes_tray: fn(&Bus) -> Option<Box<dyn std::any::Any>>,
     /// Run a script in a browser page, ignoring the result (clean-up).
     pub(crate) web_script: fn(ferrocast_core::translate::Browser, &str),
     /// Start the translation request.
@@ -5266,6 +5350,7 @@ impl Effects {
                     ferrocast_macos::glow::hide(mtm);
                 }
             },
+            notes_tray: |bus| services::make_notes_tray(bus.clone()).map(|t| Box::new(t) as Box<dyn std::any::Any>),
             web_script: |b, js| services::web_script(b, js.to_string()),
             apple_available: ferrocast_macos::apple_translate::available,
             translate_start: |s, text, lang, pid, out, run, bus| services::translate_text(s, text, lang, pid, out, run, bus.clone()),

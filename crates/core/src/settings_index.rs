@@ -1,13 +1,13 @@
 //! Static index of every row of the Settings window, for the Settings search field.
 //!
 //! `ENTRIES` lists the rows by tab (0 General, 1 Clipboard, 2 Snippets, 3 AI, 4 Translate,
-//! 5 Scripts, 6 Advanced) in the order they are drawn. The title is the exact title of the row;
+//! 5 Notes, 6 Scripts, 7 Advanced) in the order they are drawn. The title is the exact title of the row;
 //! a test in the app walks every tab and fails when a drawn row is missing here or an entry is
 //! never drawn.
 
 /// One Settings row.
 pub struct Entry {
-    /// Tab the row lives on (0..=6).
+    /// Tab the row lives on (0..=7).
     pub tab: usize,
     /// Exact title of the row.
     pub title: &'static str,
@@ -65,14 +65,18 @@ pub const ENTRIES: &[Entry] = &[
     ),
     e(4, "Download languages", &["apple", "translation", "offline", "language pack", "download", "installed", "system settings"]),
     e(4, "Model", &["llm", "translation", "default", "custom", "gpt"]),
-    // 5 Scripts
-    e(5, "Default folder", &["scripts", "directory", "path", "raycast", "commands"]),
-    e(5, "Add directory", &["scripts", "folder", "path", "extra", "home"]),
-    // 6 Advanced
-    e(6, "Accessibility", &["permission", "privacy", "grant", "window management", "security", "access"]),
-    e(6, "1 rem", &["px", "pixels", "css", "calculator", "em", "units"]),
-    e(6, "Window gap", &["spacing", "margin", "snap", "tiling", "edges", "pt"]),
-    e(6, "Data folder", &["storage", "files", "open", "settings.json", "backup", "location", "path"]),
+    // 5 Notes
+    e(5, "Show Notes Toggle Button in Menu Bar", &["floating notes", "status bar", "tray", "icon", "button", "show", "hide", "window"]),
+    e(5, "Escape Key Loses Focus", &["esc", "close", "window", "keyboard", "floating notes", "unfocus"]),
+    e(5, "Zoom", &["notes", "size", "text size", "scale", "percent", "reset", "actual size", "floating notes"]),
+    // 6 Scripts
+    e(6, "Default folder", &["scripts", "directory", "path", "raycast", "commands"]),
+    e(6, "Add directory", &["scripts", "folder", "path", "extra", "home"]),
+    // 7 Advanced
+    e(7, "Accessibility", &["permission", "privacy", "grant", "window management", "security", "access"]),
+    e(7, "1 rem", &["px", "pixels", "css", "calculator", "em", "units"]),
+    e(7, "Window gap", &["spacing", "margin", "snap", "tiling", "edges", "pt"]),
+    e(7, "Data folder", &["storage", "files", "open", "settings.json", "backup", "location", "path"]),
 ];
 
 /// Lower-cases and strips the basic Latin accents, one char to one char (so a match position in
@@ -209,6 +213,29 @@ mod tests {
     }
 
     #[test]
+    fn the_notes_settings_are_indexed_on_their_own_tab() {
+        for (q, title) in [
+            ("menu bar", "Show Notes Toggle Button in Menu Bar"),
+            ("floating notes", "Show Notes Toggle Button in Menu Bar"),
+            ("escape", "Escape Key Loses Focus"),
+            ("esc focus", "Escape Key Loses Focus"),
+            ("zoom", "Zoom"),
+            ("notes zoom", "Zoom"),
+        ] {
+            assert!(titles(q).contains(&(5, title)), "{q:?} finds {title:?}: {:?}", titles(q));
+        }
+        assert_eq!(titles("zoom")[0], (5, "Zoom"));
+        assert!(
+            !ENTRIES.iter().any(|e| e.tab == 5 && e.title.to_lowercase().contains("format bar")),
+            "the Format Bar toggle stays in the action panel"
+        );
+        assert_eq!(ENTRIES.iter().filter(|e| e.tab == 5).count(), 3);
+        // the tabs after Notes moved by one
+        assert_eq!(titles("default folder"), vec![(6, "Default folder")]);
+        assert_eq!(titles("window gap")[0], (7, "Window gap"));
+    }
+
+    #[test]
     fn match_range_points_at_the_first_word() {
         assert_eq!(match_range("Launcher hotkey", "hot"), Some((9, 3)));
         assert_eq!(match_range("Launcher hotkey", "zzz"), None);
@@ -220,14 +247,14 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for en in ENTRIES {
             assert!(!en.title.trim().is_empty());
-            assert!(en.tab <= 6, "{} has tab {}", en.title, en.tab);
+            assert!(en.tab <= 7, "{} has tab {}", en.title, en.tab);
             assert!(seen.insert((en.tab, en.title)), "duplicate {} in tab {}", en.title, en.tab);
         }
         let tabs: Vec<usize> = ENTRIES.iter().map(|e| e.tab).collect();
         let mut sorted = tabs.clone();
         sorted.sort();
         assert_eq!(tabs, sorted, "entries are listed by tab");
-        for t in 0..=6 {
+        for t in 0..=7 {
             assert!(ENTRIES.iter().any(|e| e.tab == t), "tab {t} has entries");
         }
     }
