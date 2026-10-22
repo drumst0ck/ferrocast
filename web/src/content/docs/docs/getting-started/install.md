@@ -18,6 +18,16 @@ brew upgrade ferrocast                      # to update
 
 Always use the `brew tap` form with the URL. The short form `brew install drumst0ck/ferrocast/ferrocast` tries to clone `homebrew-ferrocast`, which does not exist, and fails.
 
+## Download the DMG
+
+Every stable release is also published on the [GitHub Releases page](https://github.com/drumst0ck/ferrocast/releases) as `Ferrocast-X.Y.Z.dmg` with a `SHA256SUMS.txt`. Open the DMG, drag Ferrocast to Applications and open it. The app is signed ad-hoc, not notarized, so macOS blocks the first launch of a browser download: open System Settings → Privacy & Security and choose “Open Anyway”. Apple Silicon only.
+
+## Updates
+
+- **Download install**: Ferrocast checks GitHub once a day for a new stable release (prereleases are ignored). By default it shows the release notes and lets you install, postpone or skip that version; you can switch to automatic installs, turn the daily check off, or press “Check now” under Settings → General → Updates. The tray menu and About also have “Check for Updates…”.
+- **Homebrew install**: the app never replaces itself; updates run `brew upgrade ferrocast`.
+- A self-update replaces the app with the new build. Because the signature is ad-hoc, macOS may ask for Accessibility again after it; grant it again.
+
 ## Why a formula and not a cask
 
 The official Homebrew cask requires signed and notarized apps (a paid Apple Developer account) and disables the ones that do not pass Gatekeeper from September 2026. Building from source on your own machine means the app carries no quarantine flag and Gatekeeper does not get involved: no paid account is needed and no protection is bypassed. In exchange, the first install compiles for a few minutes and the signature is ad-hoc, for local use.
@@ -31,7 +41,7 @@ The official Homebrew cask requires signed and notarized apps (a paid Apple Deve
 `brew uninstall ferrocast` removes the formula; delete the `/Applications/Ferrocast.app` symlink created above. Your data lives in `~/Library/Application Support/Ferrocast` (see [Data and privacy](/docs/reference/data-and-privacy/)); delete that folder yourself if you want it gone.
 
 :::caution[Limits]
-Ferrocast needs Apple Silicon; Intel Macs are not supported. There is no notarized download, and the DMG is not a public download.
+Ferrocast needs Apple Silicon; Intel Macs are not supported. The DMG is not notarized.
 :::
 
 ## Related

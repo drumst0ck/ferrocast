@@ -20,6 +20,8 @@ open /Applications/Ferrocast.app            # concede Accesibilidad cuando lo pi
 brew upgrade ferrocast                      # para actualizar
 ```
 
+¿Prefieres una descarga? Cada versión estable está en la [página de Releases](https://github.com/drumst0ck/ferrocast/releases) como DMG (firma ad-hoc: macOS pide «Abrir igualmente» la primera vez). Las copias descargadas se actualizan solas: Ajustes → General → Updates.
+
 **Por qué una fórmula y no un cask.** El cask oficial de Homebrew exige apps firmadas y notarizadas (cuenta de Apple Developer de pago). Al compilar desde el código fuente en tu propia máquina, la app no lleva marca de cuarentena y Gatekeeper no interviene. No hace falta cuenta de pago y no se salta ninguna protección. La primera instalación tarda unos minutos porque compila, y la firma es ad-hoc, de uso local.
 
 Usa siempre el `brew tap` con la URL: la forma corta `brew install drumst0ck/ferrocast/ferrocast` intenta clonar `homebrew-ferrocast`, que no existe. Solo Apple Silicon. Más en la [guía de instalación](https://ferrocast.app/es/docs/getting-started/install/).
