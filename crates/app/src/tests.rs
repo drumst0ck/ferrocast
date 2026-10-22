@@ -6251,3 +6251,53 @@ fn update_checks_record_the_available_release() {
     app.handle_update_checked(true, Ok(None), Channel::Direct, true);
     assert!(app.update_available.is_none());
 }
+
+/// The four-cell "After translating" bar is the last four-cell bar of the General tab; bring it
+/// on screen by scrolling the pane the way a user would.
+fn after_translating_cells(app: &mut App) -> Option<Vec<Rect>> {
+    let find = |app: &App| -> Option<Vec<Rect>> {
+        let bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+        bars.into_iter().filter(|(_, c)| c.len() == 4).max_by(|a, b| a.0.min.y.total_cmp(&b.0.min.y)).map(|(_, c)| c)
+    };
+    render(app, vec![Event::PointerMoved(Pos2::new(500.0, 200.0))]);
+    for _ in 0..12 {
+        app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+        render(app, vec![]);
+        let cells = find(app)?;
+        if cells[0].center().y < ui::HEIGHT - 60.0 && cells[0].center().y > 80.0 {
+            for _ in 0..30 {
+                render(app, vec![]);
+            }
+            app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+            render(app, vec![]);
+            return find(app);
+        }
+        render(
+            app,
+            vec![Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -150.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        render(app, vec![]);
+    }
+    None
+}
+
+#[test]
+fn clicking_each_after_translating_cell_selects_that_option() {
+    use ferrocast_core::models::TranslateOutput as T;
+    for (cell, want) in [(0usize, T::Auto), (1, T::Show), (2, T::Replace), (3, T::Copy)] {
+        let mut app = fixture();
+        app.stack = vec![View::Root, View::Settings];
+        app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 0usize));
+        // start from a different value than the one clicked
+        app.settings.translate_output = if want == T::Copy { T::Auto } else { T::Copy };
+        let cells = after_translating_cells(&mut app).expect("the After translating bar is reachable");
+        click_at(&mut app, cells[cell].center());
+        render(&mut app, vec![]);
+        assert_eq!(app.settings.translate_output, want, "cell {cell}");
+    }
+}

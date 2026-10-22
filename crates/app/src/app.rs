@@ -2145,6 +2145,13 @@ impl App {
                     // the translation can arrive seconds later: never write into an app the user moved to
                     let front = (self.fx.frontmost)();
                     let output = self.settings.translate_output;
+                    if output != TranslateOutput::Auto {
+                        // make a non-Auto setting visible in the log: it never routes in place
+                        instance::log(
+                            &self.store.root,
+                            &format!("translate deliver {lang} -> {output:?} (the setting is not Auto, so nothing is replaced in place)"),
+                        );
+                    }
                     match outcome(result, &lang, output) {
                         Outcome::Show { text, lang } if output == TranslateOutput::Auto => {
                             let delivery = plan(output, target, front, source_pid);
