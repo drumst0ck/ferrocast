@@ -5388,14 +5388,14 @@ impl App {
                                 ui,
                                 pal,
                                 "After translating",
-                                "Auto replaces the selection where the app allows it (text fields, and Safari/Chrome pages through JavaScript) and shows a window otherwise.",
+                                "Auto replaces the selection where the app allows it (text fields, and Safari/Chrome pages through JavaScript) and shows a window otherwise. Paste ⌘V only presses Cmd-V, which does nothing on a page you cannot edit.",
                                 |ui| {
                                     use ferrocast_core::models::TranslateOutput as T;
                                     segmented(
                                         ui,
                                         pal,
                                         &mut s.translate_output,
-                                        &[(T::Auto, "Auto"), (T::Show, "Show"), (T::Replace, "Replace selection"), (T::Copy, "Copy only")],
+                                        &[(T::Auto, "Auto"), (T::Show, "Window"), (T::Replace, "Paste ⌘V"), (T::Copy, "Copy only")],
                                     );
                                 },
                             );
