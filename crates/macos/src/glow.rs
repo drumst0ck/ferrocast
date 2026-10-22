@@ -160,7 +160,9 @@ fn srgb(r: f64, g: f64, b: f64) -> Retained<NSColor> {
 /// Soft Apple-Intelligence palette, closing back on the first colour.
 fn palette() -> Vec<Retained<NSColor>> {
     let c = |hex: u32| srgb(((hex >> 16) & 255) as f64 / 255.0, ((hex >> 8) & 255) as f64 / 255.0, (hex & 255) as f64 / 255.0);
-    vec![c(0x5AC8FA), c(0x7D7AFF), c(0xFF6FD8), c(0xFFB86C), c(0x5AC8FA)]
+    // Ferrocast neon red (the website accent #f0535f), a deeper neon and a light hot spot that sweeps
+    // around as the gradient turns
+    vec![c(0xF0535F), c(0xFF2D46), c(0xFF9AA2), c(0xFF2D46), c(0xF0535F)]
 }
 
 fn rounded_path(r: [f64; 4], radius: f64) -> objc2_core_foundation::CFRetained<CGPath> {
