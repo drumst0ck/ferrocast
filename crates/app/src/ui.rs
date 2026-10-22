@@ -19,6 +19,10 @@ pub struct Palette {
     pub border: Color32,
     pub text: Color32,
     pub sub: Color32,
+    /// Settings-only: `sub` pushed far enough from the card fills to read at 4.5:1 (descriptions, labels, icons).
+    pub sub_strong: Color32,
+    /// Settings-only: the accent as text colour (4.5:1 on the card and row fills in both themes).
+    pub accent_text: Color32,
     pub sel: Color32,
     pub accent: Color32,
     pub field: Color32,
@@ -33,6 +37,8 @@ pub fn palette(dark: bool) -> Palette {
             border: Color32::from_white_alpha(28),
             text: Color32::from_gray(238),
             sub: Color32::from_gray(140),
+            sub_strong: Color32::from_gray(166),
+            accent_text: Color32::from_rgb(255, 112, 122),
             sel: Color32::from_white_alpha(24),
             accent: Color32::from_rgb(240, 83, 95),
             field: Color32::from_white_alpha(14),
@@ -45,6 +51,8 @@ pub fn palette(dark: bool) -> Palette {
             border: Color32::from_black_alpha(36),
             text: Color32::from_gray(30),
             sub: Color32::from_gray(120),
+            sub_strong: Color32::from_gray(88),
+            accent_text: Color32::from_rgb(190, 28, 52),
             sel: Color32::from_black_alpha(18),
             accent: Color32::from_rgb(232, 54, 75),
             field: Color32::from_black_alpha(10),

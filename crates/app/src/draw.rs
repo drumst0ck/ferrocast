@@ -1574,7 +1574,19 @@ impl App {
         let mut back = false;
         ui.scope_builder(UiBuilder::new().max_rect(search_rect.shrink2(Vec2::new(18.0, 0.0)).translate(Vec2::new(0.0, 3.0))), |ui| {
             ui.horizontal_centered(|ui| {
-                if nested && ui.add(egui::Label::new(RichText::new("←").size(18.0).color(pal.sub)).sense(Sense::click())).clicked() {
+                if nested && matches!(self.view(), View::Settings) {
+                    // a 28 pt hit target for the back arrow
+                    let (br, bresp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
+                    record_ctl(&ctx, "back", bresp.id, br, true);
+                    record_text(&ctx, &pal, "back-arrow", pal.sub_strong, &[], 1.0);
+                    let col = if bresp.hovered() { pal.text } else { pal.sub_strong };
+                    ui.painter().text(br.center(), Align2::CENTER_CENTER, "←", FontId::proportional(18.0), col);
+                    focus_ring(ui, &pal, &bresp, br);
+                    if bresp.clicked() {
+                        back = true;
+                    }
+                } else if nested && ui.add(egui::Label::new(RichText::new("←").size(18.0).color(pal.sub)).sense(Sense::click())).clicked()
+                {
                     back = true;
                 }
                 if shape == Shape::List {
@@ -1595,7 +1607,9 @@ impl App {
                     let searching = ctx.data(|d| d.get_temp::<String>(Id::new("settings_query"))).is_some_and(|q| !q.trim().is_empty());
                     let name = if searching { "Search" } else { SETTINGS_TABS[tab.min(SETTINGS_TABS.len() - 1)].0 };
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label(RichText::new("Settings /").size(16.0).color(pal.sub));
+                    record_text(&ctx, &pal, "crumb-parent", pal.sub_strong, &[], 1.0);
+                    record_text(&ctx, &pal, "crumb-current", pal.text, &[], 1.0);
+                    ui.label(RichText::new("Settings /").size(16.0).color(pal.sub_strong));
                     ui.label(RichText::new(name).size(16.0).strong().color(pal.text));
                     #[cfg(test)]
                     ctx.data_mut(|d| d.insert_temp(Id::new("settings-breadcrumb"), format!("Settings / {name}")));
@@ -1703,6 +1717,10 @@ impl App {
         let ir = Rect::from_center_size(Pos2::new(rect.min.x + 26.0, cy), Vec2::splat(18.0));
         p.image(icon.id(), ir, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
         let tx = rect.min.x + 42.0;
+        // Settings only: stronger muted/accent text colours (see Palette::sub_strong)
+        let settings = matches!(self.view(), View::Settings);
+        let fsub = if settings { pal.sub_strong } else { pal.sub };
+        let facc = if settings { pal.accent_text } else { pal.accent };
         let q = self.query.trim();
         let searching = list
             && q.chars().count() >= 2
@@ -1718,13 +1736,15 @@ impl App {
         match &self.toast {
             Some((t, _)) if t == RESET_TOAST && self.settings_undo.is_some() => {
                 // "Tab reset ·" then a clickable "Undo"
-                let head = p.layout_no_wrap("Tab reset · ".into(), FontId::proportional(12.5), pal.accent);
+                let head = p.layout_no_wrap("Tab reset · ".into(), FontId::proportional(12.5), facc);
                 let hw = head.size().x;
-                p.galley(Pos2::new(tx, cy - head.size().y / 2.0), head, pal.accent);
+                p.galley(Pos2::new(tx, cy - head.size().y / 2.0), head, facc);
+                record_text(ui.ctx(), pal, "footer-toast", facc, &[], 1.0);
                 let ug = p.layout_no_wrap("Undo".into(), FontId::proportional(12.5), pal.text);
-                let ur = Rect::from_min_size(Pos2::new(tx + hw - 4.0, cy - 11.0), Vec2::new(ug.size().x + 8.0, 22.0));
+                let ur = Rect::from_min_size(Pos2::new(tx + hw - 4.0, cy - 14.0), Vec2::new(ug.size().x + 8.0, 28.0));
                 let resp = ui.interact(ur, Id::new("settings-undo"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-                let col = if resp.hovered() { pal.accent } else { pal.text };
+                record_ctl(ui.ctx(), "undo", resp.id, ur, true);
+                let col = if resp.hovered() { facc } else { pal.text };
                 p.text(Pos2::new(ur.min.x + 4.0, cy), Align2::LEFT_CENTER, "Undo", FontId::proportional(12.5), col);
                 p.hline((ur.min.x + 4.0)..=(ur.max.x - 4.0), cy + 7.0, Stroke::new(1.0, col));
                 #[cfg(test)]
@@ -1732,7 +1752,8 @@ impl App {
                 undo_clicked = resp.clicked();
             }
             Some((t, _)) => {
-                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, t, FontId::proportional(12.5), pal.accent);
+                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, t, FontId::proportional(12.5), facc);
+                record_text(ui.ctx(), pal, "footer-toast", facc, &[], 1.0);
             }
             None if searching => {
                 // Three dots that pulse while Spotlight answers; cheap, and it stops on its own.
@@ -1750,8 +1771,11 @@ impl App {
                 ui.ctx().request_repaint_after(Duration::from_millis(60));
             }
             None => {
-                // Settings drops the title (the header's breadcrumb already says it)
-                if !matches!(self.view(), View::Settings) {
+                // Settings shows the app name next to the icon (the header's breadcrumb already says "Settings")
+                if settings {
+                    p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, "Ferrocast", FontId::proportional(12.5), fsub);
+                    record_text(ui.ctx(), pal, "footer-left", fsub, &[], 1.0);
+                } else {
                     p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, self.view().title(), FontId::proportional(12.5), pal.sub);
                 }
             }
@@ -1761,7 +1785,7 @@ impl App {
         // The left text (title or toast) wins: drop the least important chips until both fit.
         let left_w = match &self.toast {
             Some((t, _)) => p.layout_no_wrap(t.clone(), FontId::proportional(12.5), pal.accent).size().x,
-            None if matches!(self.view(), View::Settings) => 0.0,
+            None if settings => p.layout_no_wrap("Ferrocast".into(), FontId::proportional(12.5), fsub).size().x,
             None => p.layout_no_wrap(self.view().title().into(), FontId::proportional(12.5), pal.sub).size().x,
         };
         let chip_w = |(l, k): &(&str, &str)| {
@@ -1783,7 +1807,9 @@ impl App {
             }
             first = false;
             let kg = p.layout_no_wrap(key.to_string(), FontId::proportional(11.5), pal.text);
-            let lg = p.layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.sub);
+            let lg = p.layout_no_wrap(label.to_string(), FontId::proportional(12.5), fsub);
+            record_text(ui.ctx(), pal, "footer-label", fsub, &[], 1.0);
+            record_text(ui.ctx(), pal, "footer-key", pal.text, &[pal.field], 1.0);
             let kw = (kg.size().x + 12.0).max(22.0);
             let kr = Rect::from_min_size(Pos2::new(x - kw, cy - 10.0), Vec2::new(kw, 20.0));
             p.rect_filled(kr, 5.0, pal.field);
@@ -5350,7 +5376,8 @@ impl App {
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new(&text).size(14.5).color(pal.text));
                 ui.add_space(6.0);
-                ui.label(RichText::new("Try a shorter word, for example hotkey, model or clipboard.").size(12.0).color(pal.sub));
+                record_text(&ctx, pal, "note", pal.sub_strong, &[], 1.0);
+                ui.label(RichText::new("Try a shorter word, for example hotkey, model or clipboard.").size(12.0).color(pal.sub_strong));
             });
             #[cfg(test)]
             ctx.data_mut(|d| d.insert_temp(Id::new("settings-empty-state"), text));
@@ -5367,6 +5394,7 @@ impl App {
         for (i, en) in hits.iter().enumerate() {
             let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 40.0), Sense::click());
             let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            focus_ring(ui, pal, &resp, r);
             #[cfg(test)]
             ctx.data_mut(|d| {
                 d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("settings-result-rects")).push((en.title.to_string(), r))
@@ -5374,14 +5402,19 @@ impl App {
             if resp.hovered() && moved {
                 *sel = i;
             }
+            record_ctl(&ctx, "result", resp.id, r, true);
             let on = i == *sel;
-            ui.painter().rect_filled(r, 10.0, if on { pal.sel } else { pal.field });
+            let row_fill = if on { pal.sel } else { pal.field };
+            record_text(&ctx, pal, "result-chip", pal.sub_strong, &[row_fill, pal.bg.gamma_multiply(0.55)], 1.0);
+            record_text(&ctx, pal, "result-title", pal.text, &[row_fill], 1.0);
+            record_text(&ctx, pal, "result-accent", pal.accent_text, &[row_fill], 1.0);
+            ui.painter().rect_filled(r, 10.0, row_fill);
             if on {
                 ui.painter().rect_stroke(r.shrink(0.5), 10.0, Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), egui::StrokeKind::Inside);
             }
             let chip = Rect::from_min_size(Pos2::new(r.min.x + 12.0, r.center().y - 10.0), Vec2::new(74.0, 20.0));
             ui.painter().rect_filled(chip, 6.0, pal.bg.gamma_multiply(0.55));
-            ui.painter().text(chip.center(), Align2::CENTER_CENTER, SETTINGS_TABS[en.tab].0, FontId::proportional(11.0), pal.sub);
+            ui.painter().text(chip.center(), Align2::CENTER_CENTER, SETTINGS_TABS[en.tab].0, FontId::proportional(11.0), pal.sub_strong);
             // the title, its match in the accent colour
             let font = FontId::proportional(13.5);
             let mut job = egui::text::LayoutJob::default();
@@ -5390,7 +5423,7 @@ impl App {
             // the match is accented only when it is a proper part of the title: a title that is
             // the whole match stays in the normal colour
             let whole = ms == 0 && ml == chars.len();
-            let hl = if whole { pal.text } else { pal.accent };
+            let hl = if whole { pal.text } else { pal.accent_text };
             #[cfg(test)]
             ctx.data_mut(|d| {
                 let part = (!whole && ml > 0).then(|| chars[ms..ms + ml].iter().collect::<String>());
@@ -5406,7 +5439,13 @@ impl App {
             let galley = ui.painter().layout_job(job);
             ui.painter().galley(Pos2::new(chip.max.x + 12.0, r.center().y - galley.size().y / 2.0), galley, pal.text);
             if on {
-                ui.painter().text(Pos2::new(r.max.x - 14.0, r.center().y), Align2::RIGHT_CENTER, "↵", FontId::proportional(13.0), pal.sub);
+                ui.painter().text(
+                    Pos2::new(r.max.x - 14.0, r.center().y),
+                    Align2::RIGHT_CENTER,
+                    "↵",
+                    FontId::proportional(13.0),
+                    pal.sub_strong,
+                );
             }
             if resp.clicked() {
                 clicked = Some(*en);
@@ -5561,24 +5600,28 @@ impl App {
             let sr = search_field(ui, pal, &mut query, side.width(), "Search settings", search_id);
             #[cfg(test)]
             ctx.data_mut(|d| d.insert_temp(Id::new("settings-search-rect"), sr.rect));
-            let mg = Rect::from_center_size(Pos2::new(sr.rect.min.x + 14.0, sr.rect.center().y), Vec2::splat(13.0));
+            let mg = Rect::from_center_size(Pos2::new(sr.rect.min.x + 16.0, sr.rect.center().y), Vec2::splat(15.0));
+            record_text(&ctx, pal, "search-icon", pal.sub_strong, &[pal.field.gamma_multiply(1.6)], 1.0);
             match self.icons.texture(&ctx, &Icon::Glyph("sf:magnifyingglass", [0, 0, 0])) {
                 Some(t) => {
-                    ui.painter().image(t.id(), mg, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), pal.sub);
+                    ui.painter().image(t.id(), mg, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), pal.sub_strong);
                 }
                 None => {
-                    ui.painter().text(mg.center(), Align2::CENTER_CENTER, "⌕", FontId::proportional(13.0), pal.sub);
+                    ui.painter().text(mg.center(), Align2::CENTER_CENTER, "⌕", FontId::proportional(15.0), pal.sub_strong);
                 }
             }
             if !query.is_empty() {
-                let xr = Rect::from_center_size(Pos2::new(sr.rect.max.x - 13.0, sr.rect.center().y), Vec2::splat(20.0));
+                let xr = Rect::from_center_size(Pos2::new(sr.rect.max.x - 14.0, sr.rect.center().y), Vec2::splat(28.0));
                 let xe = ui.interact(xr, Id::new("settings-search-clear"), Sense::click()).on_hover_text("Clear search");
+                record_ctl(&ctx, "search-clear", xe.id, xr, true);
+                record_text(&ctx, pal, "search-clear", pal.sub_strong, &[pal.field.gamma_multiply(1.6)], 1.0);
+                focus_ring(ui, pal, &xe, xr.shrink(2.0));
                 ui.painter().text(
                     xr.center(),
                     Align2::CENTER_CENTER,
                     "×",
                     FontId::proportional(16.0),
-                    if xe.hovered() { pal.text } else { pal.sub },
+                    if xe.hovered() { pal.text } else { pal.sub_strong },
                 );
                 if xe.clicked() {
                     query.clear();
@@ -5602,6 +5645,7 @@ impl App {
                 });
                 let (r, _) = ui.allocate_exact_size(Vec2::new(side.width(), 34.0), Sense::hover());
                 let resp = ui.interact(r, id, Sense::click()).on_hover_text(format!("{name}  ⌘{}", i + 1));
+                record_ctl(&ctx, "sidebar", resp.id, r, true);
                 #[cfg(test)]
                 marks.0.push((name.to_string(), r));
                 // while a search shows its results no tab is the current one
@@ -5617,7 +5661,15 @@ impl App {
                 }
                 let gr = Rect::from_center_size(Pos2::new(r.min.x + 20.0, r.center().y), Vec2::splat(20.0));
                 ui.painter().rect_filled(gr, 5.0, if on { pal.accent } else { pal.field });
-                let tint = if on { Color32::WHITE } else { pal.sub };
+                let tint = if on { Color32::WHITE } else { pal.sub_strong };
+                if on {
+                    record_text(&ctx, pal, "side-icon-active", tint, &[pal.sel, pal.accent], 1.0);
+                    record_text(&ctx, pal, "side-label-active", pal.text, &[pal.sel], 1.0);
+                } else {
+                    record_text(&ctx, pal, "side-icon", tint, &[pal.field], 1.0);
+                    record_text(&ctx, pal, "side-label", pal.sub_strong, &[], 1.0);
+                    record_text(&ctx, pal, "side-label-hover", pal.sub_strong, &[pal.field], 1.0);
+                }
                 match self.icons.texture(&ctx, &Icon::Glyph(symbol, [0, 0, 0])) {
                     Some(t) => {
                         ui.painter().image(t.id(), gr, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
@@ -5631,12 +5683,9 @@ impl App {
                     Align2::LEFT_CENTER,
                     name,
                     FontId::proportional(13.5),
-                    if on { pal.text } else { pal.sub },
+                    if on { pal.text } else { pal.sub_strong },
                 );
-                if resp.has_focus() {
-                    // visible keyboard focus ring
-                    ui.painter().rect_stroke(r.shrink(0.5), 8.0, Stroke::new(2.0, pal.accent), egui::StrokeKind::Inside);
-                }
+                focus_ring(ui, pal, &resp, r.shrink(1.0));
                 if resp.clicked() {
                     tab = i;
                 }
@@ -6130,7 +6179,13 @@ impl App {
                 }
                 if RESET_FIELDS.iter().any(|(t, _)| *t == tab) {
                     ui.add_space(14.0);
-                    let r = text_btn(ui, pal, "Reset this tab").on_hover_text("Restore this tab's settings to their defaults");
+                    let icon = self.icons.texture(&ctx, &Icon::Glyph("sf:arrow.counterclockwise", [0, 0, 0])).map(|t| t.id());
+                    // right-aligned at the end of the tab content
+                    let r = ui
+                        .allocate_ui_with_layout(Vec2::new(ui.available_width(), FIELD_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            text_btn(ui, pal, "Reset this tab", icon).on_hover_text("Restore this tab's settings to their defaults")
+                        })
+                        .inner;
                     #[cfg(test)]
                     ctx.data_mut(|d| d.insert_temp(Id::new("settings-reset-button"), r.rect));
                     if r.clicked() {
@@ -6422,7 +6477,8 @@ const SETTINGS_GROUP_STARTS: [usize; 2] = [3, 5];
 const SETTINGS_NUM_KEYS: [Key; 7] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7];
 
 fn section(ui: &mut Ui, pal: &Palette, title: &str) {
-    ui.label(RichText::new(title).size(12.5).color(pal.sub));
+    record_text(ui.ctx(), pal, "section", pal.sub_strong, &[], ui.opacity());
+    ui.label(RichText::new(title).size(12.5).color(pal.sub_strong));
     ui.add_space(6.0);
 }
 
@@ -6436,12 +6492,14 @@ pub(crate) const AUTO_JS_NOTE: &str = "To replace text in web pages, turn on \u{
 fn card_note(ui: &mut Ui, pal: &Palette, text: &str) {
     egui::Frame::new().inner_margin(egui::Margin { left: 14, right: 14, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new(text).size(12.0).color(pal.sub));
+        record_text(ui.ctx(), pal, "card-note", pal.sub_strong, &[pal.field], ui.opacity());
+        ui.label(RichText::new(text).size(12.0).color(pal.sub_strong));
     });
 }
 
 fn note(ui: &mut Ui, pal: &Palette, text: &str) {
-    ui.label(RichText::new(text).size(12.0).color(pal.sub));
+    record_text(ui.ctx(), pal, "note", pal.sub_strong, &[], ui.opacity());
+    ui.label(RichText::new(text).size(12.0).color(pal.sub_strong));
 }
 
 fn group(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) {
@@ -6512,6 +6570,7 @@ const CONTROL_H: f32 = 28.0;
 
 /// The title line of a row: the title, and a status chip right after it when there is one.
 fn row_title(ui: &mut Ui, pal: &Palette, title: &str, chip: Option<(StatusKind, &str)>) {
+    record_text(ui.ctx(), pal, if ui.is_enabled() { "title" } else { "title-disabled" }, pal.text, &[pal.field], ui.opacity());
     match chip {
         None => {
             ui.label(RichText::new(title).size(13.5).color(pal.text));
@@ -6524,6 +6583,12 @@ fn row_title(ui: &mut Ui, pal: &Palette, title: &str, chip: Option<(StatusKind, 
             });
         }
     }
+}
+
+/// The description line of a Settings row.
+fn row_desc(ui: &mut Ui, pal: &Palette, desc: &str) {
+    record_text(ui.ctx(), pal, if ui.is_enabled() { "desc" } else { "desc-disabled" }, pal.sub_strong, &[pal.field], ui.opacity());
+    ui.label(RichText::new(desc).size(12.0).color(pal.sub_strong));
 }
 
 /// One adaptive Settings row. The text column takes what the control leaves (up to
@@ -6561,7 +6626,7 @@ fn row_flow(
         if stacked {
             row_title(ui, pal, title, chip);
             if look.desc {
-                ui.label(RichText::new(desc).size(12.0).color(pal.sub));
+                row_desc(ui, pal, desc);
             }
             ui.add_space(6.0);
             // the control keeps the right-to-left order of a side-by-side row, packed to the left
@@ -6584,7 +6649,7 @@ fn row_flow(
                     ui.spacing_mut().item_spacing.y = 2.0;
                     row_title(ui, pal, title, chip);
                     if look.desc {
-                        ui.label(RichText::new(desc).size(12.0).color(pal.sub));
+                        row_desc(ui, pal, desc);
                     }
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -6940,6 +7005,47 @@ fn field_style(ui: &mut Ui, pal: &Palette) {
     }
 }
 
+/// Tests read the text roles Settings drew: (role, text colour, fills it sits on from the window
+/// background up, opacity). A no-op outside tests.
+fn record_text(ctx: &egui::Context, pal: &Palette, role: &str, fg: Color32, over: &[Color32], alpha: f32) {
+    #[cfg(test)]
+    ctx.data_mut(|d| {
+        let mut layers = vec![pal.bg];
+        layers.extend_from_slice(over);
+        d.get_temp_mut_or_default::<Vec<(String, Color32, Vec<Color32>, f32)>>(Id::new("text-roles")).push((
+            role.to_string(),
+            fg,
+            layers,
+            alpha,
+        ))
+    });
+    #[cfg(not(test))]
+    let _ = (ctx, pal, role, fg, over, alpha);
+}
+
+/// Tests read every interactive rect Settings drew: (kind, id, rect, enabled). A no-op outside tests.
+fn record_ctl(ctx: &egui::Context, kind: &str, id: Id, r: Rect, enabled: bool) {
+    #[cfg(test)]
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")).push((kind.to_string(), id, r, enabled))
+    });
+    #[cfg(not(test))]
+    let _ = (ctx, kind, id, r, enabled);
+}
+
+/// The keyboard focus ring of every Settings control: 2 px accent at about 70 %, 6 pt radius,
+/// drawn just outside `rect` while `resp` has the focus.
+fn focus_ring(ui: &Ui, pal: &Palette, resp: &egui::Response, rect: Rect) {
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect.expand(1.0), 6.0, Stroke::new(2.0, pal.accent.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<Vec<Id>>(Id::new("focus-rings")).push(resp.id));
+    }
+}
+
+/// Opacity of a dimmed (disabled) Settings row.
+const DISABLED_OPACITY: f32 = 0.72;
+
 /// Tests read every field the Settings code drew: (kind, rect).
 fn record_field(ctx: &egui::Context, kind: &str, r: Rect) {
     #[cfg(test)]
@@ -6951,24 +7057,32 @@ fn record_field(ctx: &egui::Context, kind: &str, r: Rect) {
 /// The Settings search box: the field look with room for a magnifier on the left and a clear
 /// button on the right (the caller paints both). Not counted in `field-count`.
 fn search_field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, id: Id) -> egui::Response {
-    ui.scope(|ui| {
-        field_style(ui, pal);
-        ui.add(
-            TextEdit::singleline(text)
-                .id(id)
-                .desired_width(width)
-                .font(FontId::proportional(12.5))
-                .hint_text(RichText::new(hint).color(pal.sub))
-                .margin(egui::Margin { left: 28, right: 24, top: 5, bottom: 5 })
-                .min_size(Vec2::new(0.0, FIELD_H))
-                .vertical_align(egui::Align::Center),
-        )
-    })
-    .inner
+    record_text(ui.ctx(), pal, "hint-sidebar", pal.sub_strong, &[pal.field.gamma_multiply(1.6)], 1.0);
+    let r = ui
+        .scope(|ui| {
+            field_style(ui, pal);
+            ui.add(
+                TextEdit::singleline(text)
+                    .id(id)
+                    .desired_width(width)
+                    .font(FontId::proportional(12.5))
+                    .hint_text(RichText::new(hint).color(pal.sub_strong))
+                    .margin(egui::Margin { left: 28, right: 24, top: 5, bottom: 5 })
+                    .min_size(Vec2::new(0.0, FIELD_H))
+                    .vertical_align(egui::Align::Center),
+            )
+        })
+        .inner;
+    record_ctl(ui.ctx(), "search", r.id, r.rect, true);
+    focus_ring(ui, pal, &r, r.rect);
+    r
 }
 
 /// A single-line text field in the Settings look; `hint` shows in the sub colour while empty.
 fn field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, password: bool) -> egui::Response {
+    let fill = pal.field.gamma_multiply(1.6);
+    record_text(ui.ctx(), pal, "hint-card", pal.sub_strong, &[pal.field, fill], ui.opacity());
+    record_text(ui.ctx(), pal, "field-text", pal.text, &[pal.field, fill], ui.opacity());
     let r = ui
         .scope(|ui| {
             field_style(ui, pal);
@@ -6976,7 +7090,7 @@ fn field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, 
                 TextEdit::singleline(text)
                     .desired_width(width)
                     .font(FontId::proportional(12.5))
-                    .hint_text(RichText::new(hint).color(pal.sub))
+                    .hint_text(RichText::new(hint).color(pal.sub_strong))
                     .password(password)
                     .margin(egui::Margin::symmetric(8, 5))
                     .min_size(Vec2::new(0.0, FIELD_H))
@@ -6985,6 +7099,8 @@ fn field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, 
         })
         .inner;
     record_field(ui.ctx(), "text", r.rect);
+    record_ctl(ui.ctx(), "field", r.id, r.rect, ui.is_enabled());
+    focus_ring(ui, pal, &r, r.rect);
     ui.ctx().data_mut(|d| d.insert_temp(Id::new("field-wanted-w"), width));
     r
 }
@@ -7005,6 +7121,8 @@ fn field_combo(
         })
         .inner;
     record_field(ui.ctx(), "combo", r.rect);
+    record_ctl(ui.ctx(), "combo", r.id, r.rect, ui.is_enabled());
+    focus_ring(ui, pal, &r, r.rect);
     r
 }
 
@@ -7018,11 +7136,17 @@ fn field_drag(ui: &mut Ui, pal: &Palette, value: &mut f64, range: std::ops::Rang
         })
         .inner;
     record_field(ui.ctx(), "drag", r.rect);
+    record_ctl(ui.ctx(), "drag", r.id, r.rect, ui.is_enabled());
+    focus_ring(ui, pal, &r, r.rect);
 }
 
 /// A pill switch that slides in 120 ms.
 fn toggle(ui: &mut Ui, pal: &Palette, on: &mut bool) {
-    let (r, resp) = ui.allocate_exact_size(Vec2::new(40.0, 24.0), Sense::click());
+    // the switch is 40x24, its hit rect 28 pt tall
+    let (hit, resp) = ui.allocate_exact_size(Vec2::new(40.0, 28.0), Sense::click());
+    let r = Rect::from_center_size(hit.center(), Vec2::new(40.0, 24.0));
+    record_ctl(ui.ctx(), "toggle", resp.id, hit, ui.is_enabled());
+    focus_ring(ui, pal, &resp, r);
     if resp.clicked() {
         *on = !*on;
     }
@@ -7055,7 +7179,10 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 
 fn small_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.text);
-    let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 20.0, 26.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 20.0, 28.0), Sense::click());
+    record_ctl(ui.ctx(), "small_btn", resp.id, r, ui.is_enabled());
+    focus_ring(ui, pal, &resp, r);
+    record_text(ui.ctx(), pal, "button", pal.text, &[pal.field, pal.field.gamma_multiply(1.6)], ui.opacity());
     let p = ui.painter();
     p.rect_filled(r, 7.0, if resp.hovered() { pal.sel } else { pal.field.gamma_multiply(1.6) });
     p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.text);
@@ -7070,6 +7197,9 @@ fn accent_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
 fn accent_btn_r(ui: &mut Ui, pal: &Palette, label: &str) -> (bool, Rect) {
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), Color32::WHITE);
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 24.0, 28.0), Sense::click());
+    record_ctl(ui.ctx(), "accent_btn", resp.id, r, ui.is_enabled());
+    focus_ring(ui, pal, &resp, r);
+    record_text(ui.ctx(), pal, "accent-button", Color32::WHITE, &[pal.accent], ui.opacity());
     let p = ui.painter();
     p.rect_filled(r, 7.0, if resp.hovered() { pal.accent.gamma_multiply(1.15) } else { pal.accent });
     p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
@@ -7078,11 +7208,13 @@ fn accent_btn_r(ui: &mut Ui, pal: &Palette, label: &str) -> (bool, Rect) {
 
 fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), if on { Color32::WHITE } else { pal.text });
-    let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 18.0, 24.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 18.0, 28.0), Sense::click());
+    record_ctl(ui.ctx(), "pill", resp.id, r, ui.is_enabled());
+    focus_ring(ui, pal, &resp, r);
     let p = ui.painter();
     p.rect_filled(
         r,
-        12.0,
+        14.0,
         if on {
             pal.accent
         } else if resp.hovered() {
@@ -7121,24 +7253,45 @@ fn segmented_bar(ui: &mut Ui, pal: &Palette, sel: Option<usize>, labels: &[&str]
         .iter()
         .map(|l| ui.painter().layout_no_wrap(l.to_string(), FontId::proportional(12.0), pal.text).size().x + pad)
         .fold(min_w, f32::max);
-    let (r, base) = ui.allocate_exact_size(Vec2::new(seg_w * labels.len() as f32 + 4.0, 26.0), Sense::hover());
+    let (r, base) = ui.allocate_exact_size(Vec2::new(seg_w * labels.len() as f32 + 4.0, 28.0), Sense::hover());
     let id = base.id;
     let p = ui.painter().clone();
     p.rect_filled(r, 8.0, pal.field.gamma_multiply(1.3));
     if let Some(idx) = sel {
         let x = ui.ctx().animate_value_with_time(id.with("seg"), idx as f32, 0.14);
-        let sr = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + x * seg_w, r.min.y + 2.0), Vec2::new(seg_w, 22.0));
+        let sr = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + x * seg_w, r.min.y + 2.0), Vec2::new(seg_w, 24.0));
         p.rect_filled(sr, 6.0, pal.sel.gamma_multiply(1.8));
     }
     let mut clicked = None;
     let mut cells = Vec::with_capacity(labels.len());
     for (i, label) in labels.iter().enumerate() {
-        let cell = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + i as f32 * seg_w, r.min.y), Vec2::new(seg_w, 26.0));
+        let cell = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + i as f32 * seg_w, r.min.y), Vec2::new(seg_w, 28.0));
         let resp = ui.interact(cell, id.with(("cell", i)), Sense::click());
+        record_ctl(ui.ctx(), "segment", resp.id, cell, ui.is_enabled());
+        focus_ring(ui, pal, &resp, cell.shrink(2.0));
+        record_text(
+            ui.ctx(),
+            pal,
+            match (sel == Some(i), ui.is_enabled()) {
+                (true, true) => "segment-active",
+                (false, true) => "segment",
+                (true, false) => "segment-active-disabled",
+                (false, false) => "segment-disabled",
+            },
+            if sel == Some(i) { pal.text } else { pal.sub_strong },
+            &[pal.field, pal.field.gamma_multiply(1.3), pal.sel.gamma_multiply(1.8)][..if sel == Some(i) { 3 } else { 2 }],
+            ui.opacity(),
+        );
         if resp.clicked() {
             clicked = Some(i);
         }
-        p.text(cell.center(), Align2::CENTER_CENTER, *label, FontId::proportional(12.0), if sel == Some(i) { pal.text } else { pal.sub });
+        p.text(
+            cell.center(),
+            Align2::CENTER_CENTER,
+            *label,
+            FontId::proportional(12.0),
+            if sel == Some(i) { pal.text } else { pal.sub_strong },
+        );
         cells.push(cell);
     }
     #[cfg(test)]
@@ -7196,7 +7349,6 @@ enum StatusKind {
 }
 
 impl StatusKind {
-    #[cfg(test)]
     fn name(self) -> &'static str {
         match self {
             StatusKind::Ok => "ok",
@@ -7275,12 +7427,12 @@ fn status_color(pal: &Palette, kind: StatusKind) -> Color32 {
     let dark = pal.text.r() > 128;
     match (kind, dark) {
         (StatusKind::Ok, true) => Color32::from_rgb(89, 212, 153),
-        (StatusKind::Ok, false) => Color32::from_rgb(16, 122, 72),
+        (StatusKind::Ok, false) => Color32::from_rgb(10, 96, 56),
         (StatusKind::Warn, true) => Color32::from_rgb(240, 184, 76),
-        (StatusKind::Warn, false) => Color32::from_rgb(150, 92, 0),
+        (StatusKind::Warn, false) => Color32::from_rgb(122, 74, 0),
         (StatusKind::Error, true) => Color32::from_rgb(246, 116, 116),
-        (StatusKind::Error, false) => Color32::from_rgb(190, 36, 36),
-        (StatusKind::Neutral, _) => pal.sub,
+        (StatusKind::Error, false) => Color32::from_rgb(164, 26, 26),
+        (StatusKind::Neutral, _) => pal.sub_strong,
     }
 }
 
@@ -7293,6 +7445,7 @@ fn status_chip(ui: &mut Ui, pal: &Palette, kind: StatusKind, text: &str) {
     p.rect_filled(r, 10.0, c.gamma_multiply(0.16));
     p.circle_filled(Pos2::new(r.min.x + 10.0, r.center().y), 3.0, c);
     p.galley(Pos2::new(r.min.x + 18.0, r.center().y - g.size().y / 2.0), g, c);
+    record_text(ui.ctx(), pal, &format!("chip-{}", kind.name()), c, &[pal.field, c.gamma_multiply(0.16)], ui.opacity());
     #[cfg(test)]
     ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_default::<Vec<(String, String)>>(Id::new("status-chips")).push((kind.name().to_string(), text.to_string()))
@@ -7304,23 +7457,35 @@ fn status_chip(ui: &mut Ui, pal: &Palette, kind: StatusKind, text: &str) {
 fn row_disabled_if(ui: &mut Ui, off: bool, add: impl FnOnce(&mut Ui)) {
     ui.add_enabled_ui(!off, |ui| {
         if off {
-            ui.set_opacity(0.45);
+            ui.set_opacity(DISABLED_OPACITY);
         }
         add(ui);
     });
 }
 
-/// A quiet text button (no fill): sub colour, text colour and an underline on hover.
-fn text_btn(ui: &mut Ui, pal: &Palette, label: &str) -> egui::Response {
-    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.sub);
-    let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 8.0, FIELD_H), Sense::click());
+/// A quiet text button: `sub_strong` text with an optional 12 pt icon; on hover (or keyboard
+/// focus) the text turns accent and is underlined. 28 pt tall, so it is as easy to hit as a field.
+fn text_btn(ui: &mut Ui, pal: &Palette, label: &str, icon: Option<egui::TextureId>) -> egui::Response {
+    let font = FontId::proportional(12.0);
+    let g = ui.painter().layout_no_wrap(label.to_string(), font.clone(), pal.sub_strong);
+    let icon_w = if icon.is_some() { 17.0 } else { 0.0 };
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + icon_w + 16.0, FIELD_H), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let col = if resp.hovered() { pal.text } else { pal.sub };
-    let at = Pos2::new(r.min.x, r.center().y - g.size().y / 2.0);
-    ui.painter().text(at, Align2::LEFT_TOP, label, FontId::proportional(12.5), col);
+    record_ctl(ui.ctx(), "text_btn", resp.id, r, ui.is_enabled());
+    record_text(ui.ctx(), pal, "text-btn", pal.sub_strong, &[], ui.opacity());
+    record_text(ui.ctx(), pal, "text-btn-hover", pal.accent_text, &[], ui.opacity());
+    let col = if resp.hovered() || resp.has_focus() { pal.accent_text } else { pal.sub_strong };
+    let x = r.min.x + 8.0;
+    if let Some(tex) = icon {
+        let ir = Rect::from_center_size(Pos2::new(x + 6.0, r.center().y), Vec2::splat(12.0));
+        ui.painter().image(tex, ir, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), col);
+    }
+    let at = Pos2::new(x + icon_w, r.center().y - g.size().y / 2.0);
+    ui.painter().text(at, Align2::LEFT_TOP, label, font, col);
     if resp.hovered() {
         ui.painter().hline((at.x)..=(at.x + g.size().x), at.y + g.size().y, Stroke::new(1.0, col));
     }
+    focus_ring(ui, pal, &resp, r);
     resp
 }
 

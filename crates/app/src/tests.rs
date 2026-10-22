@@ -7538,3 +7538,327 @@ fn sd4_every_tab_renders_in_both_themes_in_every_state() {
         }
     }
 }
+
+// ---- SD5: contrast, hit targets, keyboard focus
+
+/// WCAG relative luminance of an sRGB colour given as 0..=255 channels.
+fn wcag_luminance(rgb: [f64; 3]) -> f64 {
+    let lin = |c: f64| {
+        let c = c / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2])
+}
+
+/// WCAG contrast ratio of two sRGB colours (0..=255 channels).
+fn wcag_contrast(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let (la, lb) = (wcag_luminance(a), wcag_luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// `fg` (with extra `alpha`) over the opaque colour `under`, in sRGB space like egui does.
+fn over_rgb(fg: Color32, alpha: f32, under: [f64; 3]) -> [f64; 3] {
+    let [r, g, b, a] = fg.to_srgba_unmultiplied();
+    let a = a as f64 / 255.0 * alpha as f64;
+    let c = [r as f64, g as f64, b as f64];
+    [0, 1, 2].map(|i| c[i] * a + under[i] * (1.0 - a))
+}
+
+#[test]
+fn wcag_helpers_match_known_pairs() {
+    assert!((wcag_contrast([0.0; 3], [255.0; 3]) - 21.0).abs() < 1e-9);
+    assert!((wcag_contrast([255.0; 3], [255.0; 3]) - 1.0).abs() < 1e-9);
+    let c = wcag_contrast([119.0; 3], [255.0; 3]);
+    assert!((c - 4.48).abs() < 0.01, "#777 on white is about 4.48, got {c}");
+    // order does not matter
+    assert_eq!(wcag_contrast([10.0; 3], [200.0; 3]), wcag_contrast([200.0; 3], [10.0; 3]));
+}
+
+/// Contrast of a recorded role: the text colour (at `alpha`) over the fills in order, the window
+/// background first (drawn over black in dark, white in light).
+fn role_contrast(fg: Color32, layers: &[Color32], alpha: f32, dark: bool) -> f64 {
+    let mut under = if dark { [0.0; 3] } else { [255.0; 3] };
+    for l in layers {
+        under = over_rgb(*l, 1.0, under);
+    }
+    wcag_contrast(over_rgb(fg, alpha, under), under)
+}
+
+/// Required ratio per role: disabled text and placeholder hints 3:1, icons and the white-on-accent
+/// button label 3:1 (large or non-text), everything else 4.5:1.
+fn required_ratio(role: &str) -> f64 {
+    let relaxed = role.ends_with("-disabled")
+        || role.starts_with("hint")
+        || role.contains("icon")
+        || matches!(role, "search-clear" | "back-arrow" | "accent-button");
+    if relaxed {
+        3.0
+    } else {
+        4.5
+    }
+}
+
+type RoleRec = (String, Color32, Vec<Color32>, f32);
+
+fn sd5_clear(app: &App) {
+    app.ctx.data_mut(|d| {
+        d.remove::<Vec<RoleRec>>(Id::new("text-roles"));
+        d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits"));
+        d.remove::<Vec<Id>>(Id::new("focus-rings"));
+    });
+}
+
+/// Settle the layout, then draw one clean frame whose records are the only ones kept.
+fn sd5_frame(app: &mut App) {
+    for _ in 0..3 {
+        render(app, vec![]);
+    }
+    sd5_clear(app);
+    render(app, vec![]);
+}
+
+fn sd5_roles(app: &App) -> Vec<RoleRec> {
+    app.ctx.data(|d| d.get_temp(Id::new("text-roles"))).unwrap_or_default()
+}
+
+fn sd5_hits(app: &App) -> Vec<(String, Id, Rect, bool)> {
+    app.ctx.data(|d| d.get_temp(Id::new("ctl-hits"))).unwrap_or_default()
+}
+
+/// Every Settings state the SD5 checks walk: all tabs in both themes, dependent rows on and off,
+/// the search results and its empty state, and the footer toast with its Undo link.
+fn sd5_states() -> Vec<(String, bool, App)> {
+    use ferrocast_core::models::AiProvider as P;
+    let mut out = vec![];
+    for theme in BOTH_THEMES {
+        let dark = theme == egui::ThemePreference::Dark;
+        for tab in 0..7usize {
+            for dep_off in [false, true] {
+                let mut app = settings_app(tab, theme);
+                seed_model_lists(&mut app);
+                app.settings.drop_wheel = !dep_off;
+                app.settings.update_check = !dep_off;
+                app.settings.clipboard_enabled = !dep_off;
+                app.settings.translate_provider = if dep_off { Some(P::ClaudeCode) } else { None };
+                app.settings.ai_provider = if dep_off { P::ChatGpt } else { P::OpenAiCompatible };
+                sd5_frame(&mut app);
+                out.push((format!("tab {tab} dep_off={dep_off} dark={dark}"), dark, app));
+            }
+        }
+        for q in ["hot", "zzzzqq"] {
+            let mut app = settings_app(0, theme);
+            render(&mut app, vec![cmd_key(Key::F)]);
+            render(&mut app, vec![]);
+            render(&mut app, vec![text_event(q)]);
+            sd5_frame(&mut app);
+            out.push((format!("search {q} dark={dark}"), dark, app));
+        }
+        let mut app = settings_app(1, theme);
+        app.settings = sd4_scrambled_quiet();
+        app.reset_settings_tab(1);
+        sd5_frame(&mut app);
+        out.push((format!("reset toast dark={dark}"), dark, app));
+    }
+    out
+}
+
+#[test]
+fn sd5_every_settings_text_role_meets_its_contrast() {
+    let mut worst: std::collections::BTreeMap<(String, bool), f64> = Default::default();
+    let mut failures = vec![];
+    for (name, dark, app) in sd5_states() {
+        for (role, fg, layers, alpha) in sd5_roles(&app) {
+            let ratio = role_contrast(fg, &layers, alpha, dark);
+            let w = worst.entry((role.clone(), dark)).or_insert(f64::MAX);
+            *w = w.min(ratio);
+            if ratio + 1e-9 < required_ratio(&role) {
+                failures.push(format!("{name}: {role} {ratio:.2} < {}", required_ratio(&role)));
+            }
+        }
+    }
+    // the four status chip kinds, whether or not a tab shows them now
+    for dark in [true, false] {
+        let pal = ui::palette(dark);
+        for kind in [StatusKind::Ok, StatusKind::Warn, StatusKind::Error, StatusKind::Neutral] {
+            let c = status_color(&pal, kind);
+            let ratio = role_contrast(c, &[pal.field, c.gamma_multiply(0.16)], 1.0, dark);
+            let w = worst.entry((format!("chip-{}", kind.name()), dark)).or_insert(f64::MAX);
+            *w = w.min(ratio);
+            if ratio < 4.5 {
+                failures.push(format!("chip {kind:?} dark={dark}: {ratio:.2} < 4.5"));
+            }
+        }
+    }
+    for ((role, dark), r) in &worst {
+        eprintln!("CONTRAST {} {role:<18} {r:.2} (needs {})", if *dark { "dark " } else { "light" }, required_ratio(role));
+    }
+    for role in [
+        "title",
+        "desc",
+        "title-disabled",
+        "desc-disabled",
+        "hint-card",
+        "hint-sidebar",
+        "side-label",
+        "side-icon",
+        "side-label-active",
+        "side-icon-active",
+        "segment",
+        "segment-active",
+        "button",
+        "text-btn",
+        "text-btn-hover",
+        "footer-label",
+        "footer-key",
+        "footer-left",
+        "footer-toast",
+        "crumb-parent",
+        "crumb-current",
+        "search-icon",
+        "result-chip",
+        "result-title",
+        "section",
+        "back-arrow",
+    ] {
+        assert!(worst.keys().any(|(r, _)| r == role), "role {role} was never recorded");
+    }
+    failures.sort();
+    failures.dedup();
+    assert!(failures.is_empty(), "{} contrast failures:\n{}", failures.len(), failures.join("\n"));
+}
+
+#[test]
+fn sd5_the_title_stays_brighter_than_the_description() {
+    for dark in [true, false] {
+        let pal = ui::palette(dark);
+        let card = [pal.field];
+        let t = role_contrast(pal.text, &card, 1.0, dark);
+        let d = role_contrast(pal.sub_strong, &card, 1.0, dark);
+        assert!(t > d + 1.0, "dark={dark}: title {t:.2} vs description {d:.2}");
+    }
+}
+
+#[test]
+fn sd5_every_interactive_settings_rect_is_at_least_28_pt() {
+    let mut kinds = std::collections::BTreeSet::new();
+    let mut failures = vec![];
+    for (name, _, app) in sd5_states() {
+        for (kind, _, r, _) in sd5_hits(&app) {
+            kinds.insert(kind.clone());
+            if r.width() < 28.0 - 0.01 || r.height() < 28.0 - 0.01 {
+                failures.push(format!("{name}: {kind} {:.1}x{:.1} at {r:?}", r.width(), r.height()));
+            }
+        }
+    }
+    for k in [
+        "sidebar",
+        "search",
+        "search-clear",
+        "toggle",
+        "segment",
+        "small_btn",
+        "text_btn",
+        "result",
+        "field",
+        "combo",
+        "drag",
+        "back",
+        "undo",
+    ] {
+        assert!(kinds.contains(k), "no {k} control was recorded: {kinds:?}");
+    }
+    failures.sort();
+    failures.dedup();
+    assert!(failures.is_empty(), "{} small hit targets:\n{}", failures.len(), failures.join("\n"));
+}
+
+#[test]
+fn sd5_every_focusable_settings_control_draws_a_focus_ring() {
+    let mut checked = std::collections::BTreeSet::new();
+    let mut failures = vec![];
+    for tab in 0..7usize {
+        let mut app = settings_app(tab, egui::ThemePreference::Dark);
+        seed_model_lists(&mut app);
+        sd5_frame(&mut app);
+        let hits: Vec<_> = sd5_hits(&app).into_iter().filter(|h| h.3 && h.0 != "undo" && h.0 != "result").collect();
+        for (kind, id, _, _) in hits {
+            app.ctx.memory_mut(|m| m.request_focus(id));
+            app.ctx.data_mut(|d| d.remove::<Vec<Id>>(Id::new("focus-rings")));
+            render(&mut app, vec![]);
+            let rings: Vec<Id> = app.ctx.data(|d| d.get_temp(Id::new("focus-rings"))).unwrap_or_default();
+            checked.insert(kind.clone());
+            if !rings.contains(&id) {
+                failures.push(format!("tab {tab}: no focus ring on {kind} {id:?}"));
+            }
+            app.ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+    }
+    // result rows (search), and a real Tab key press reaching a control
+    let mut app = settings_app(0, egui::ThemePreference::Dark);
+    render(&mut app, vec![cmd_key(Key::F)]);
+    render(&mut app, vec![text_event("hot")]);
+    sd5_frame(&mut app);
+    let rows: Vec<_> = sd5_hits(&app).into_iter().filter(|h| h.0 == "result").collect();
+    assert!(!rows.is_empty());
+    for (_, id, _, _) in rows {
+        app.ctx.memory_mut(|m| m.request_focus(id));
+        app.ctx.data_mut(|d| d.remove::<Vec<Id>>(Id::new("focus-rings")));
+        render(&mut app, vec![]);
+        let rings: Vec<Id> = app.ctx.data(|d| d.get_temp(Id::new("focus-rings"))).unwrap_or_default();
+        checked.insert("result".to_string());
+        if !rings.contains(&id) {
+            failures.push(format!("no focus ring on a result row {id:?}"));
+        }
+        app.ctx.memory_mut(|m| m.surrender_focus(id));
+    }
+    let mut app = settings_app(0, egui::ThemePreference::Dark);
+    sd5_frame(&mut app);
+    app.ctx.memory_mut(|m| m.surrender_focus(Id::new("search")));
+    app.ctx.data_mut(|d| d.remove::<Vec<Id>>(Id::new("focus-rings")));
+    let tab = Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    render(&mut app, vec![tab]);
+    render(&mut app, vec![]);
+    let rings: Vec<Id> = app.ctx.data(|d| d.get_temp(Id::new("focus-rings"))).unwrap_or_default();
+    assert!(!rings.is_empty(), "pressing Tab focuses a Settings control and draws its ring");
+    for k in ["sidebar", "search", "toggle", "segment", "small_btn", "text_btn", "field"] {
+        assert!(checked.contains(k), "{k} was not exercised: {checked:?}");
+    }
+    failures.sort();
+    failures.dedup();
+    assert!(failures.is_empty(), "{} controls without a ring:\n{}", failures.len(), failures.join("\n"));
+}
+
+#[test]
+fn sd5_reset_link_dividers_and_footer() {
+    let app = sd5_state_tab(0);
+    // "Reset this tab" sits at the right end of the tab content
+    let r = sd4_rect(&app, "settings-reset-button").expect("reset button");
+    assert!(r.max.x > ui::WIDTH - 40.0, "right-aligned: {r:?}");
+    // group dividers are as wide as the sidebar items
+    let (items, dividers) = sidebar_marks(&app);
+    assert_eq!(dividers.len(), 2);
+    for d in &dividers {
+        for (_, it) in &items {
+            assert_eq!((d.min.x, d.max.x), (it.min.x, it.max.x), "divider {d:?} vs item {it:?}");
+        }
+    }
+    // the footer's left side names the app
+    let roles = sd5_roles(&app);
+    assert!(roles.iter().any(|r| r.0 == "footer-left"), "footer shows the app name in Settings");
+    // other views keep their own footer text (no Ferrocast name next to the icon)
+    let mut other = fixture();
+    other.stack = vec![View::Root, View::Snippets];
+    sd5_clear(&other);
+    render(&mut other, vec![]);
+    assert!(!sd5_roles(&other).iter().any(|r| r.0 == "footer-left"));
+}
+
+fn sd5_state_tab(tab: usize) -> App {
+    let mut app = settings_app(tab, egui::ThemePreference::Dark);
+    sd5_frame(&mut app);
+    app
+}
