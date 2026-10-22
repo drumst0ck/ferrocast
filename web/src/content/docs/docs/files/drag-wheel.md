@@ -14,15 +14,7 @@ A halo ring: one accent per wheel, a gradient sector with an edge glow, a centre
 
 ## Translate dragged text
 
-Drag selected text (from any app that lets you drag a selection) and tap the translate key (<kbd>⌘</kbd> by default; <kbd>⇧</kbd> would extend the selection, so it is not used). A fourth, purple wheel opens with your languages; release over one to translate. By default (“Auto”) the translation replaces the selection where the app allows it: in text fields through Accessibility, and in Safari and Chromium browsers (Chrome, Brave, Edge, Arc, Vivaldi, Opera) on ordinary pages by changing the selected text in the page with JavaScript. Everywhere else, or if that fails, a Ferrocast window shows it (it is also copied) with Copy and “Paste into app” buttons. Settings > Translate > “After translating” can force Window, Paste Cmd-V (only useful in editable fields) or Copy only.
-
-While the translation runs, an effect shows where it is happening: in Safari and Chromium pages the selected text glows in place, in other apps that expose the selection a glowing outline surrounds it, and otherwise a small “Translating…” pill appears where you dropped. The glow is static when Reduce Motion is on, and Settings > Translate > “Translating effect” turns it off.
-
-For in-page replacement turn on “Allow JavaScript from Apple Events” in the browser (Safari: Develop > Developer Settings; Chrome: View > Developer) and allow Ferrocast to control it when macOS asks. Firefox is not supported. The replacement lasts until you reload the page.
-
-Translation uses the same AI providers as Ask AI: an OpenAI-compatible server (Ollama keeps it on your Mac), Anthropic, Sign in with ChatGPT or Claude Code (your own subscriptions). Pick the provider and the model in Settings > Translate > Engine, or leave it on “Same as chat” to use the chat provider and model. The server address and the keys or sign-ins come from the AI tab. The selected text is sent to that provider and to no one else. Languages are a comma-separated list in Settings > Translate (up to 12). Selections over 20,000 characters are refused.
-
-This wheel has no other wheel to switch to, so <kbd>⌘</kbd> and <kbd>⌃</kbd> do nothing while it is open.
+Drag selected text instead of files and tap the translate key (<kbd>⌘</kbd> by default) to open a fourth, purple wheel with your languages; release over one to translate. The translation replaces the text where the app allows it, in text fields and in Safari or Chromium pages, and opens in a window otherwise, with a neon glow on the text while the AI answers. See [Translate selected text](/docs/launcher/translate/) for the options, the engine and model, the browser setting and the limits.
 
 ## Tools per format
 

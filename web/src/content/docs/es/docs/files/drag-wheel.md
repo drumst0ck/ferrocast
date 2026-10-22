@@ -14,15 +14,7 @@ Un anillo «halo»: un acento por rueda, sector resaltado con degradado y brillo
 
 ## Traducir texto arrastrado
 
-Arrastra texto seleccionado (desde cualquier app que permita arrastrar una selección) y toca la tecla de traducción (<kbd>⌘</kbd> por defecto; <kbd>⇧</kbd> ampliaría la selección, por eso no se usa). Se abre una cuarta rueda, morada, con tus idiomas; suelta sobre uno para traducir. Por defecto («Auto») la traducción sustituye la selección donde la app lo permite: en campos de texto mediante Accesibilidad, y en Safari y navegadores Chromium (Chrome, Brave, Edge, Arc, Vivaldi, Opera) en páginas normales cambiando el texto seleccionado de la página con JavaScript. En cualquier otro sitio, o si eso falla, una ventana de Ferrocast la muestra (también se copia) con los botones Copy y «Paste into app». Ajustes > Translate > «After translating» permite forzar Window, Paste Cmd-V (solo útil en campos editables) o Copy only.
-
-Mientras se traduce, un efecto muestra dónde ocurre: en páginas de Safari y Chromium el texto seleccionado brilla en su sitio, en otras apps que exponen la selección la rodea un contorno luminoso y, si no, aparece una pequeña píldora «Translating…» donde soltaste. El brillo es estático con Reducir movimiento activado, y Ajustes > Translate > «Translating effect» lo desactiva.
-
-Para sustituir en la página activa «Allow JavaScript from Apple Events» en el navegador (Safari: Desarrollo > Ajustes de desarrollador; Chrome: Visualización > Desarrollador) y permite que Ferrocast lo controle cuando macOS lo pida. Firefox no está soportado. El cambio dura hasta que recargues la página.
-
-La traducción usa los mismos proveedores de IA que Ask AI: un servidor compatible con OpenAI (Ollama lo mantiene en tu Mac), Anthropic, Sign in with ChatGPT o Claude Code (tus propias suscripciones). Elige el proveedor y el modelo en Ajustes > Translate > Engine, o déjalo en «Same as chat» para usar el proveedor y el modelo del chat. La dirección del servidor y las claves o inicios de sesión salen de la pestaña AI. El texto seleccionado se envía a ese proveedor y a nadie más. Los idiomas son una lista separada por comas en Ajustes > Translate (hasta 12). Las selecciones de más de 20.000 caracteres se rechazan.
-
-Esta rueda no tiene otra a la que cambiar, así que <kbd>⌘</kbd> y <kbd>⌃</kbd> no hacen nada mientras está abierta.
+Arrastra texto seleccionado en lugar de archivos y toca la tecla de traducción (<kbd>⌘</kbd> por defecto) para abrir una cuarta rueda, morada, con tus idiomas; suelta sobre uno para traducir. La traducción sustituye el texto donde la app lo permite, en campos de texto y en páginas de Safari o Chromium, y si no se abre en una ventana, con un brillo de neón sobre el texto mientras la IA responde. Consulta [Traducir el texto seleccionado](/es/docs/launcher/translate/) para las opciones, el motor y el modelo, el ajuste del navegador y los límites.
 
 ## Herramientas según el formato
 
