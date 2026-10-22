@@ -17,6 +17,9 @@ mod ui;
 pub static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
 fn main() -> eframe::Result {
+    // First thing, before AppKit finishes launching: a ferrocast:// URL that launches the app is
+    // delivered during that step and is buffered until the Notes callbacks are installed.
+    ferrocast_macos::url_scheme::init();
     let _ = STARTED.set(std::time::Instant::now());
     let prof = std::env::var_os("FERROCAST_PROFILE").is_some();
     let data_dir = ferrocast_core::storage::Store::default_location().root;

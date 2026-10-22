@@ -66,8 +66,52 @@ pub fn parse(url: &str) -> Option<Route> {
 
 type UrlCb = Rc<dyn Fn(Route)>;
 
+/// Most routes kept while nobody listens yet (a cold launch delivers one, maybe two).
+const MAX_BUFFERED: usize = 8;
+
+/// What to do with a valid route that just arrived.
+#[derive(Debug, PartialEq, Eq)]
+enum Delivery {
+    /// A callback is installed: call it now.
+    Now(Route),
+    /// No callback yet: kept for `Inbox::install`.
+    Buffered,
+    /// No callback and the buffer is full: this (newest) route is dropped.
+    Dropped,
+}
+
+/// Pure buffering rules of the handler: routes that arrive before a callback is installed wait
+/// (bounded, in order) and are handed out exactly once when the callback appears.
+#[derive(Default)]
+struct Inbox {
+    pending: Vec<Route>,
+    installed: bool,
+}
+
+impl Inbox {
+    /// A valid route arrived (invalid URLs never get here: they are rejected by `parse`).
+    fn receive(&mut self, route: Route) -> Delivery {
+        if self.installed {
+            Delivery::Now(route)
+        } else if self.pending.len() < MAX_BUFFERED {
+            self.pending.push(route);
+            Delivery::Buffered
+        } else {
+            Delivery::Dropped
+        }
+    }
+
+    /// A callback is now installed: returns the buffered routes in arrival order, once. Calling
+    /// again (the callback is replaced) returns nothing, so old routes are never replayed.
+    fn install(&mut self) -> Vec<Route> {
+        self.installed = true;
+        std::mem::take(&mut self.pending)
+    }
+}
+
 thread_local! {
     static ON_URL: RefCell<Option<UrlCb>> = const { RefCell::new(None) };
+    static INBOX: RefCell<Inbox> = const { RefCell::new(Inbox { pending: Vec::new(), installed: false }) };
     static HANDLER: RefCell<Option<Retained<UrlHandler>>> = const { RefCell::new(None) };
     static WARNED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -101,9 +145,12 @@ fn event_url(event: &AnyObject) -> Option<String> {
 fn dispatch(url: Option<&str>) {
     match url.and_then(parse) {
         Some(route) => {
-            let cb = ON_URL.with(|c| c.borrow().clone());
-            if let Some(cb) = cb {
-                cb(route);
+            let delivery = INBOX.with(|i| i.borrow_mut().receive(route));
+            if let Delivery::Now(route) = delivery {
+                let cb = ON_URL.with(|c| c.borrow().clone());
+                if let Some(cb) = cb {
+                    cb(route);
+                }
             }
         }
         None => {
@@ -114,16 +161,16 @@ fn dispatch(url: Option<&str>) {
     }
 }
 
-/// Register `on_url` for valid `ferrocast://` URLs; runs on the main thread. Safe to call before
-/// the run loop starts (a URL that launched the app is delivered right after launch) and safe to
-/// call again: the new closure replaces the previous one.
-pub fn install(on_url: Box<dyn Fn(Route)>) {
-    ON_URL.with(|c| *c.borrow_mut() = Some(Rc::from(on_url)));
+/// Register the Apple Event handler without a callback. Call it as early as possible on the main
+/// thread (first thing in `main`): a URL that launches the app is delivered by AppKit while it
+/// finishes launching, before any window code runs. Until `install` provides a callback, valid
+/// routes are buffered (at most 8). Safe to call more than once.
+pub fn init() {
     HANDLER.with(|h| {
         if h.borrow().is_some() {
             return;
         }
-        let mtm = MainThreadMarker::new().expect("url_scheme::install must run on the main thread");
+        let mtm = MainThreadMarker::new().expect("url_scheme::init must run on the main thread");
         let handler: Retained<UrlHandler> = unsafe { msg_send![mtm.alloc::<UrlHandler>(), init] };
         // kInternetEventClass = kAEGetURL = 'GURL'
         const GURL: u32 = 0x4755_524C;
@@ -141,6 +188,19 @@ pub fn install(on_url: Box<dyn Fn(Route)>) {
         }
         *h.borrow_mut() = Some(handler);
     });
+}
+
+/// Register `on_url` for valid `ferrocast://` URLs; runs on the main thread. Calls `init` itself if
+/// needed, then delivers (in order, exactly once) the routes buffered so far. Safe to call again:
+/// the new closure replaces the previous one and old routes are not replayed.
+pub fn install(on_url: Box<dyn Fn(Route)>) {
+    init();
+    let cb: UrlCb = Rc::from(on_url);
+    ON_URL.with(|c| *c.borrow_mut() = Some(cb.clone()));
+    let buffered = INBOX.with(|i| i.borrow_mut().install());
+    for route in buffered {
+        cb(route);
+    }
 }
 
 #[cfg(test)]
@@ -252,5 +312,64 @@ mod tests {
     #[test]
     fn rejects_very_long_input() {
         assert_eq!(parse(&format!("ferrocast://notes/{}", "a".repeat(10_000))), None);
+    }
+
+    fn id(n: usize) -> Route {
+        Route::Note(format!("n{n}"))
+    }
+
+    #[test]
+    fn inbox_buffers_until_installed_then_flushes_in_order() {
+        let mut i = Inbox::default();
+        assert_eq!(i.receive(Route::NewNote), Delivery::Buffered);
+        assert_eq!(i.receive(id(1)), Delivery::Buffered);
+        assert_eq!(i.install(), vec![Route::NewNote, id(1)]);
+    }
+
+    #[test]
+    fn inbox_flushes_only_once() {
+        let mut i = Inbox::default();
+        i.receive(Route::Notes);
+        assert_eq!(i.install(), vec![Route::Notes]);
+        assert!(i.install().is_empty());
+    }
+
+    #[test]
+    fn inbox_is_bounded_and_drops_the_newest() {
+        let mut i = Inbox::default();
+        for n in 0..MAX_BUFFERED {
+            assert_eq!(i.receive(id(n)), Delivery::Buffered);
+        }
+        assert_eq!(i.receive(id(99)), Delivery::Dropped);
+        assert_eq!(i.install(), (0..MAX_BUFFERED).map(id).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn inbox_delivers_directly_once_installed() {
+        let mut i = Inbox::default();
+        i.install();
+        assert_eq!(i.receive(Route::NewNote), Delivery::Now(Route::NewNote));
+        assert!(i.install().is_empty());
+    }
+
+    #[test]
+    fn replacing_the_callback_does_not_replay_old_routes() {
+        let mut i = Inbox::default();
+        i.receive(id(1));
+        assert_eq!(i.install().len(), 1);
+        i.receive(id(2));
+        assert!(i.install().is_empty());
+    }
+
+    #[test]
+    fn invalid_urls_are_never_buffered() {
+        // `dispatch` only feeds the inbox with parsed routes, so an invalid URL never reaches it.
+        let mut i = Inbox::default();
+        for url in ["ferrocast://evil/x", "ferrocast://notes/../x", "https://notes/a", ""] {
+            if let Some(r) = parse(url) {
+                i.receive(r);
+            }
+        }
+        assert!(i.install().is_empty());
     }
 }

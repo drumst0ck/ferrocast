@@ -3,29 +3,57 @@
 //!
 //! Builds a throwaway `.app` (this executable plus an Info.plist declaring the `ferrocast` scheme
 //! under a unique bundle identifier) in a temp directory, registers it with LaunchServices, starts
-//! it with `open -W`, then sends URLs from this process with `open -a <demo bundle path> <url>` so the
+//! it with `open -W` and a launch URL (cold launch: the URL is delivered before `install` runs and
+//! must be buffered, then delivered exactly once), then sends URLs from this process with `open -a <demo bundle path> <url>` so the
 //! real Ferrocast install, if any, is never involved. The temp bundle is always unregistered and
 //! deleted at the end, and the check verifies that LaunchServices no longer knows it.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use ferrocast_macos::url_scheme::{self, Route};
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEventMask};
+use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
 
 const BUNDLE_ID: &str = "dev.ferrocast.url-scheme-demo";
 const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 const UUID: &str = "3f2b8c1e-9d4a-4e7b-8a61-0c5d2f9e7b14";
 
-/// Runs inside the temporary bundle: record every delivered route, exit on the `new` sentinel.
-fn run_inside_bundle() -> ! {
+const COLD_UUID: &str = "c01d0000-0000-4000-8000-000000000001";
+static SECOND_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Runs inside the temporary bundle, in cold-launch order: `init` first, the launch URL arrives
+/// while the event loop is pumped and NO callback exists yet, and only then `install` is called.
+/// Every delivered route is recorded; the demo exits on the `new` sentinel.
+fn run_inside_bundle(skip_init: bool) -> ! {
     let mtm = MainThreadMarker::new().expect("main thread");
+    if !skip_init {
+        url_scheme::init();
+    }
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-    // Installed before the run loop starts, like a cold launch through a URL.
-    url_scheme::install(Box::new(|_| println!("REPLACED-CLOSURE-CALLED")));
+    app.finishLaunching();
+    println!("LAUNCHED");
+    // Pump events for a while without any callback: the launch URL is delivered (and buffered) here.
+    let until = NSDate::dateWithTimeIntervalSinceNow(2.5);
+    while let Some(ev) =
+        unsafe { app.nextEventMatchingMask_untilDate_inMode_dequeue(NSEventMask::Any, Some(&until), NSDefaultRunLoopMode, true) }
+    {
+        app.sendEvent(&ev);
+    }
+    println!("INSTALLING");
+    // The first closure receives the buffered launch route; the second replaces it and must not
+    // see it again.
+    url_scheme::install(Box::new(|route| {
+        if SECOND_INSTALLED.load(Ordering::SeqCst) {
+            println!("REPLACED-CLOSURE-CALLED");
+        }
+        println!("ROUTE {route:?}");
+    }));
+    SECOND_INSTALLED.store(true, Ordering::SeqCst);
     url_scheme::install(Box::new(|route| {
         println!("ROUTE {route:?}");
         if route == Route::NewNote {
@@ -102,7 +130,9 @@ fn wait_for(log: &Path, needle: &str, secs: u64) -> bool {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--bundled") {
-        run_inside_bundle();
+        // `--skip-init` reproduces the old behavior (handler registered only at `install`, after
+        // the launch URL was already delivered): by hand only, it is expected to lose the route.
+        run_inside_bundle(args.iter().any(|a| a == "--skip-init"));
     }
     if !args.iter().any(|a| a == "--check") {
         eprintln!("usage: url_scheme_demo --check");
@@ -148,20 +178,24 @@ fn main() {
     lsregister(&["-f", &app.to_string_lossy()]);
 
     let log = dir.join("out.log");
+    let skip_init = std::env::args().any(|a| a == "--skip-init");
     let mut child = Command::new("open")
-        .args(["-W", "--stdout"])
+        .args(["-W", "-n", "--stdout"])
         .arg(&log)
         .arg("--stderr")
         .arg(&log)
+        .arg("-a")
         .arg(&app)
+        .arg(format!("ferrocast://notes/{COLD_UUID}"))
         .arg("--args")
         .arg("--bundled")
+        .args(skip_init.then_some("--skip-init"))
         .stdin(Stdio::null())
         .spawn()
         .expect("spawn open");
 
     let ready = wait_for(&log, "READY", 20);
-    check("demo app started and installed the handler", ready, "no READY in log");
+    check("demo app started and installed the callback", ready, "no READY in log");
     if ready {
         // Invalid URLs: `open` may or may not accept them; what matters is that none is delivered.
         open_url(&app, "ferrocast://notes/../x");
@@ -178,10 +212,13 @@ fn main() {
 
     let out = std::fs::read_to_string(&log).unwrap_or_default();
     print!("--- demo output ---\n{out}-------------------\n");
+    let installing = out.find("INSTALLING").unwrap_or(usize::MAX);
+    let cold = out.find(&format!("ROUTE Note({COLD_UUID:?})")).unwrap_or(0);
+    check("cold-launch URL was delivered only after install, from the buffer", cold > installing, "delivered before install or never");
     let routes: Vec<&str> = out.lines().filter(|l| l.starts_with("ROUTE ")).collect();
-    let expected = [format!("ROUTE Note({UUID:?})"), "ROUTE NewNote".to_string()];
+    let expected = [format!("ROUTE Note({COLD_UUID:?})"), format!("ROUTE Note({UUID:?})"), "ROUTE NewNote".to_string()];
     check(
-        "delivered exactly [Note(<uuid>), NewNote] (traversal and foreign host not delivered)",
+        "delivered exactly [cold Note, Note(<uuid>), NewNote] (cold route once, no replay) (traversal and foreign host not delivered)",
         routes == expected.iter().map(String::as_str).collect::<Vec<_>>(),
         &format!("{routes:?}"),
     );
