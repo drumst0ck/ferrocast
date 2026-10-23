@@ -116,6 +116,20 @@ fn language_name(code: &str) -> String {
     }
 }
 
+/// The language code Apple's Translation framework wants for a wheel language name, or `None`
+/// when the name is unknown (then Apple cannot be asked). Chinese needs a script and Portuguese a
+/// region; every other code is the plain ISO one.
+pub fn apple_code(name: &str) -> Option<String> {
+    let code = language_code(name)?;
+    let n = name.trim().to_lowercase();
+    Some(match code {
+        "zh" if n.contains("traditional") || n.contains("tradicional") => "zh-Hant".to_string(),
+        "zh" => "zh-Hans".to_string(),
+        "pt" => "pt-BR".to_string(),
+        other => other.to_string(),
+    })
+}
+
 /// Lowest confidence of the detected language that triggers a retry: short words give weak
 /// guesses ("OK" reads as Polish at 0.29) and are never retried.
 const RETRY_CONFIDENCE: f64 = 0.8;
@@ -291,8 +305,86 @@ pub fn provider_name(p: AiProvider) -> &'static str {
     }
 }
 
-/// Which engine translates, for the toast: "Same as chat (ChatGPT)" or the chosen provider.
+/// The text of a failed Apple translation, shown through the usual failure toast. `lang` is the
+/// wheel's name for the target language.
+pub fn apple_error_text(e: &crate::apple_translate::TranslateError, lang: &str) -> String {
+    use crate::apple_translate::TranslateError as E;
+    match e {
+        E::NeedsDownload(_) => format!(
+            "{lang} is not downloaded for Apple Translation. Download it in System Settings → General → Language & Region → Translation Languages."
+        ),
+        E::Unsupported(_) => format!("Apple Translation does not support {lang}. Pick another language or an AI engine."),
+        E::UnsupportedOs => "Apple Translation needs macOS 26.".to_string(),
+        E::Other(m) => m.clone(),
+    }
+}
+
+/// What the Languages card shows for one wheel language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppleLang {
+    /// The helper has not answered yet.
+    Checking,
+    Installed,
+    /// Apple supports it but the pack is not downloaded.
+    NeedsDownload,
+    Unsupported,
+    /// The check itself failed (helper missing, timeout).
+    Unavailable,
+}
+
+impl AppleLang {
+    pub fn from_status(r: Result<crate::apple_translate::Status, crate::apple_translate::TranslateError>) -> AppleLang {
+        use crate::apple_translate::{Status, TranslateError as E};
+        match r {
+            Ok(Status::Installed) => AppleLang::Installed,
+            Ok(Status::Supported) => AppleLang::NeedsDownload,
+            Ok(Status::Unsupported) | Err(E::Unsupported(_)) => AppleLang::Unsupported,
+            Err(_) => AppleLang::Unavailable,
+        }
+    }
+
+    /// The chip text.
+    pub fn chip(self) -> &'static str {
+        match self {
+            AppleLang::Checking => "Checking…",
+            AppleLang::Installed => "Installed",
+            AppleLang::NeedsDownload => "Needs download",
+            AppleLang::Unsupported => "Not supported by Apple",
+            AppleLang::Unavailable => "Could not check",
+        }
+    }
+}
+
+/// What a translation does about the Apple engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplePlan {
+    /// Apple is chosen and ready.
+    Apple,
+    /// Apple is chosen but this Mac cannot run it (macOS < 26 or no helper): use the chat provider.
+    FallBackToChat,
+    /// An AI provider translates.
+    NotChosen,
+}
+
+/// Whether to translate with Apple, given whether it can run here.
+pub fn apple_plan(s: &Settings, apple_available: bool) -> ApplePlan {
+    match (s.translate_apple, apple_available) {
+        (false, _) => ApplePlan::NotChosen,
+        (true, true) => ApplePlan::Apple,
+        (true, false) => ApplePlan::FallBackToChat,
+    }
+}
+
+/// `s` with the Apple engine switched off, for the fallback to the AI provider.
+pub fn without_apple(s: &Settings) -> Settings {
+    Settings { translate_apple: false, ..s.clone() }
+}
+
+/// Which engine translates, for the toast and the log: "Apple", "Same as chat (ChatGPT)" or the chosen provider.
 pub fn engine_label(s: &Settings) -> String {
+    if s.translate_apple {
+        return "Apple".to_string();
+    }
     match s.translate_provider {
         Some(p) if !s.translate_model.is_empty() => format!("{} · {}", provider_name(p), s.translate_model),
         Some(p) => provider_name(p).to_string(),
@@ -789,12 +881,85 @@ mod tests {
     }
 
     #[test]
+    fn apple_engine_is_named_in_the_toast_and_the_log() {
+        let s = Settings {
+            translate_apple: true,
+            translate_provider: Some(AiProvider::ChatGpt),
+            translate_model: "x".into(),
+            ..Default::default()
+        };
+        assert_eq!(engine_label(&s), "Apple");
+        assert_eq!(engine_label(&Settings { translate_apple: false, ..s }), "ChatGPT · x", "off again: the provider label returns");
+    }
+
+    #[test]
+    fn apple_language_codes_cover_the_default_wheel_and_pick_a_script_or_region_where_apple_needs_one() {
+        for name in DEFAULT_LANGUAGES {
+            assert!(apple_code(name).is_some(), "{name} has an Apple code");
+        }
+        assert_eq!(apple_code("German").as_deref(), Some("de"));
+        assert_eq!(apple_code("español").as_deref(), Some("es"));
+        assert_eq!(apple_code("Chinese").as_deref(), Some("zh-Hans"));
+        assert_eq!(apple_code("Simplified Chinese").as_deref(), Some("zh-Hans"));
+        assert_eq!(apple_code("Traditional Chinese").as_deref(), Some("zh-Hant"));
+        assert_eq!(apple_code("Portuguese").as_deref(), Some("pt-BR"));
+        assert_eq!(apple_code("Klingon"), None);
+    }
+
+    #[test]
+    fn apple_errors_tell_the_user_what_to_do() {
+        use crate::apple_translate::TranslateError as E;
+        assert_eq!(
+            apple_error_text(&E::NeedsDownload("de".into()), "German"),
+            "German is not downloaded for Apple Translation. Download it in System Settings → General → Language & Region → Translation Languages."
+        );
+        let unsupported = "Apple Translation does not support Klingon. Pick another language or an AI engine.";
+        assert_eq!(apple_error_text(&E::Unsupported("tlh".into()), "Klingon"), unsupported);
+        assert_eq!(apple_error_text(&E::UnsupportedOs, "German"), "Apple Translation needs macOS 26.");
+        assert_eq!(apple_error_text(&E::Other("timed out after 60 s".into()), "German"), "timed out after 60 s");
+        // the user sees these through the usual failure toast
+        let out = outcome(Err(apple_error_text(&E::Unsupported("tlh".into()), "Klingon")), "Klingon", TranslateOutput::Auto);
+        assert_eq!(out, Outcome::Fail(format!("Translation failed: {unsupported}")));
+    }
+
+    #[test]
+    fn apple_language_chips_say_what_the_user_can_do() {
+        use crate::apple_translate::{Status, TranslateError as E};
+        assert_eq!(AppleLang::from_status(Ok(Status::Installed)), AppleLang::Installed);
+        assert_eq!(AppleLang::from_status(Ok(Status::Supported)), AppleLang::NeedsDownload);
+        assert_eq!(AppleLang::from_status(Ok(Status::Unsupported)), AppleLang::Unsupported);
+        assert_eq!(AppleLang::from_status(Err(E::Unsupported("x".into()))), AppleLang::Unsupported);
+        assert_eq!(AppleLang::from_status(Err(E::UnsupportedOs)), AppleLang::Unavailable);
+        assert_eq!(AppleLang::from_status(Err(E::Other("boom".into()))), AppleLang::Unavailable);
+        let texts: Vec<_> =
+            [AppleLang::Checking, AppleLang::Installed, AppleLang::NeedsDownload, AppleLang::Unsupported, AppleLang::Unavailable]
+                .iter()
+                .map(|l| l.chip())
+                .collect();
+        assert_eq!(texts, ["Checking…", "Installed", "Needs download", "Not supported by Apple", "Could not check"]);
+    }
+
+    #[test]
+    fn apple_is_used_only_when_chosen_and_available() {
+        let on = Settings { translate_apple: true, ..Default::default() };
+        let off = Settings::default();
+        assert_eq!(apple_plan(&on, true), ApplePlan::Apple);
+        assert_eq!(apple_plan(&on, false), ApplePlan::FallBackToChat);
+        assert_eq!(apple_plan(&off, true), ApplePlan::NotChosen);
+        assert_eq!(apple_plan(&off, false), ApplePlan::NotChosen);
+        let fell = without_apple(&Settings { translate_provider: Some(AiProvider::Anthropic), ..on });
+        assert!(!fell.translate_apple);
+        assert_eq!(fell.translate_provider, Some(AiProvider::Anthropic), "the provider choice survives the fallback");
+    }
+
+    #[test]
     fn old_settings_files_load_with_translate_defaults() {
         let s: Settings = serde_json::from_str("{\"theme\":\"Dark\"}").unwrap();
         assert_eq!(s.translate_output, TranslateOutput::Auto);
         assert_eq!(s.translate_languages.len(), 8);
         assert_eq!(s.translate_provider, None);
         assert_eq!(s.translate_model, "");
+        assert!(!s.translate_apple, "old files keep the engine they had");
     }
 
     #[test]

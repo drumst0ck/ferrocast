@@ -13,6 +13,18 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/ferrocast "$app/Contents/MacOS/ferrocast"
 chmod 755 "$app/Contents/MacOS/ferrocast"
+# Apple Translation helper (Swift; the Translation framework needs the macOS 26 SDK). With an older
+# SDK it is skipped and the app hides the Apple engine, so every build still works.
+helper="$app/Contents/MacOS/ferrocast-translate"
+sdk_major=$(xcrun --show-sdk-version 2>/dev/null | cut -d. -f1 || true)
+if [ "${sdk_major:-0}" -ge 26 ] 2>/dev/null; then
+  xcrun swiftc -O -target "$(uname -m)-apple-macos13.0" -parse-as-library \
+    -Xlinker -weak_framework -Xlinker Translation \
+    crates/macos/swift/translate/main.swift -o "$helper"
+  chmod 755 "$helper"
+else
+  echo "NOTE: macOS SDK ${sdk_major:-unknown} has no Translation framework; the Apple translation engine will be hidden."
+fi
 [ -f resources/Ferrocast.icns ] || python3 scripts/make_icon.py
 cp resources/Ferrocast.icns "$app/Contents/Resources/Ferrocast.icns"
 cat > "$app/Contents/Info.plist" <<PLIST
@@ -49,6 +61,12 @@ else
   # makes macOS forget Accessibility permission after each upgrade. Pin it to the bundle identifier
   # instead so builds of this app share one requirement.
   flags+=(--requirements '=designated => identifier "dev.ferrocast.launcher"')
+fi
+# the helper is signed first: the app's seal covers it, and notarization wants every binary signed
+if [ -x "$helper" ]; then
+  helper_flags=(--force --sign "$identity" -i dev.ferrocast.launcher.translate)
+  [ "$identity" != "-" ] && helper_flags+=(--options runtime --timestamp)
+  codesign "${helper_flags[@]}" "$helper"
 fi
 codesign "${flags[@]}" "$app"
 codesign --verify --strict --verbose=1 "$app"

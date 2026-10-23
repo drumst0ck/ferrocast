@@ -23,6 +23,10 @@ class Ferrocast < Formula
         ln -sfn "#{opt_prefix}/Ferrocast.app" /Applications/Ferrocast.app
       Then open it and grant Accessibility when asked (System Settings → Privacy & Security).
       Update with `brew upgrade ferrocast`; the symlink keeps working.
+
+      Apple Translation (offline translating of selected text) needs macOS 26 and the Xcode or
+      Command Line Tools 26 SDK at install time. Without them everything else works and the
+      Apple engine stays hidden in Settings → Translate.
     EOS
   end
 

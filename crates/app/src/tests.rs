@@ -108,6 +108,8 @@ fn fixture() -> App {
         translated_run: None,
         translating_effect: None,
         translate_started: Instant::now(),
+        apple_fallback_told: false,
+        apple_langs: Default::default(),
         web_pending: None,
     };
     app.rebuild();
@@ -120,6 +122,8 @@ type ProbeCall = (Option<i32>, Option<[f64; 2]>, u64);
 thread_local! {
     /// Side effects the translate delivery asked for in this test thread.
     static FX_LOG: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// What `apple_available` answers in this test thread.
+    static APPLE_AVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FX_FRONT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
     /// Scripts the web effect asked a browser to run (replace and unmark), in order.
     static FX_SCRIPTS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -170,6 +174,7 @@ impl Effects {
                 Some(Box::new(FakeNotesTray))
             },
             web_script: |_b, js| FX_SCRIPTS.with(|l| l.borrow_mut().push(js.to_string())),
+            apple_available: || APPLE_AVAILABLE.with(|a| a.get()),
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
         }
@@ -7195,6 +7200,15 @@ fn sd3_every_drawn_row_is_indexed_and_every_entry_is_drawn() {
         app.settings.translate_provider = tp;
         collect(&mut app);
     }
+    // the Apple engine adds a row, only while it is chosen and can run
+    APPLE_AVAILABLE.with(|a| a.set(true));
+    let mut app = settings_app(4, egui::ThemePreference::Dark);
+    app.settings.translate_apple = true;
+    for l in ferrocast_core::translate::DEFAULT_LANGUAGES {
+        app.apple_langs.insert(l.to_string(), ferrocast_core::translate::AppleLang::Installed);
+    }
+    collect(&mut app);
+    APPLE_AVAILABLE.with(|a| a.set(false));
     assert!(drawn.len() > 20, "rows were recorded: {drawn:?}");
     for (tab, title) in &drawn {
         assert!(ENTRIES.iter().any(|e| e.tab == *tab && e.title == title), "tab {tab} draws {title:?} but the index has no entry");
@@ -7390,6 +7404,105 @@ fn sd4_a_disabled_row_ignores_clicks_and_an_enabled_one_does_not() {
     assert_eq!(app.settings.wheel_convert_key, "Option", "enabled: the click works");
 }
 
+// Apple engine in Settings → Translate
+
+fn apple_tab(available: bool) -> App {
+    APPLE_AVAILABLE.with(|a| a.set(available));
+    let mut app = settings_app(TRANSLATE_TAB, egui::ThemePreference::Dark);
+    // answers the helper would give, so no test starts it
+    for l in ferrocast_core::translate::DEFAULT_LANGUAGES {
+        app.apple_langs.insert(l.to_string(), ferrocast_core::translate::AppleLang::Installed);
+    }
+    app.apple_langs.insert("Chinese".into(), ferrocast_core::translate::AppleLang::NeedsDownload);
+    app.apple_langs.insert("Japanese".into(), ferrocast_core::translate::AppleLang::Unsupported);
+    app
+}
+
+#[test]
+fn the_apple_segment_exists_only_where_apple_translation_can_run() {
+    let provider_bar = |bars: &[usize]| bars.iter().copied().filter(|n| *n >= 5).collect::<Vec<_>>();
+    APPLE_AVAILABLE.with(|a| a.set(false));
+    assert_eq!(provider_bar(&tab_bars(TRANSLATE_TAB)), vec![5], "Same as chat plus four providers");
+    APPLE_AVAILABLE.with(|a| a.set(true));
+    assert_eq!(provider_bar(&tab_bars(TRANSLATE_TAB)), vec![6], "Apple joins them");
+}
+
+#[test]
+fn choosing_apple_keeps_the_provider_and_choosing_another_engine_replaces_it() {
+    use ferrocast_core::models::AiProvider as P;
+    let mut app = apple_tab(true);
+    app.settings.translate_provider = Some(P::Anthropic);
+    app.settings.translate_model = "claude-x".into();
+    sd4_render(&mut app);
+    // cells: Same as chat, Apple, OpenAI API, ChatGPT, Anthropic, Claude Code
+    let apple = sd4_reach_cell(&mut app, "Provider", 1);
+    click_at(&mut app, apple);
+    assert!(app.settings.translate_apple);
+    assert_eq!(app.settings.translate_provider, Some(P::Anthropic), "the provider is remembered while Apple translates");
+    let chatgpt = sd4_reach_cell(&mut app, "Provider", 3);
+    click_at(&mut app, chatgpt);
+    assert!(!app.settings.translate_apple);
+    assert_eq!(app.settings.translate_provider, Some(P::ChatGpt));
+    assert_eq!(app.settings.translate_model, "", "a model name of one engine is never sent to another");
+    let apple = sd4_reach_cell(&mut app, "Provider", 1);
+    click_at(&mut app, apple);
+    let same = sd4_reach_cell(&mut app, "Provider", 0);
+    click_at(&mut app, same);
+    assert!(!app.settings.translate_apple);
+    assert_eq!(app.settings.translate_provider, None);
+}
+
+#[test]
+fn the_languages_card_shows_one_chip_per_wheel_language_and_the_model_row_goes_away() {
+    let mut app = apple_tab(true);
+    app.settings.translate_apple = true;
+    app.settings.translate_provider = Some(ferrocast_core::models::AiProvider::Anthropic);
+    sd4_render(&mut app);
+    let chips = sd4_chips(&app);
+    assert!(chips.contains(&sd4_chip("ok", "On this Mac")), "the engine chip: {chips:?}");
+    let languages: Vec<_> = chips
+        .iter()
+        .filter(|(_, t)| ["Installed", "Needs download", "Not supported by Apple", "Checking…"].contains(&t.as_str()))
+        .cloned()
+        .collect();
+    assert_eq!(languages.len(), 8, "one per default wheel language: {chips:?}");
+    assert_eq!(languages[0], sd4_chip("ok", "Installed"));
+    assert!(languages.contains(&sd4_chip("warn", "Needs download")), "Chinese");
+    assert!(languages.contains(&sd4_chip("error", "Not supported by Apple")), "Japanese");
+    let rows = app.ctx.data(|d| d.get_temp::<Vec<(String, bool)>>(Id::new("row-stacked"))).unwrap_or_default();
+    assert!(!rows.iter().any(|(t, _)| t == "Model"), "no model for the on-device engine");
+}
+
+#[test]
+fn every_card_of_the_translate_tab_has_the_same_width_with_the_apple_engine_on() {
+    for chosen in [false, true] {
+        let mut app = apple_tab(true);
+        app.settings.translate_apple = chosen;
+        settle(&mut app);
+        let cards: Vec<FormCard> = app.ctx.data(|d| d.get_temp(Id::new("form-cards"))).unwrap_or_default();
+        assert!(cards.len() >= 3, "the tab draws its cards ({chosen})");
+        let (l, r) = (cards[0].rect.min.x, cards[0].rect.max.x);
+        for c in &cards {
+            let rows: Vec<_> = c.rows.iter().map(|r| r.0.as_str()).collect();
+            assert!(
+                (c.rect.min.x - l).abs() < 0.5 && (c.rect.max.x - r).abs() < 0.5,
+                "card {rows:?} is {:?}, the others {l}..{r} (apple {chosen})",
+                c.rect
+            );
+        }
+    }
+}
+
+#[test]
+fn a_stored_apple_choice_on_a_mac_that_cannot_run_it_shows_the_chat_provider_note() {
+    let mut app = apple_tab(false);
+    app.settings.translate_apple = true;
+    sd4_render(&mut app);
+    let chips = sd4_chips(&app);
+    assert!(!chips.contains(&sd4_chip("ok", "On this Mac")));
+    assert!(!chips.iter().any(|(_, t)| t == "Installed"), "no languages card without Apple");
+}
+
 // (c) status chips
 
 #[test]
@@ -7560,6 +7673,7 @@ fn sd4_scrambled() -> Settings {
     s.translate_effect = false;
     s.translate_provider = Some(ferrocast_core::models::AiProvider::Anthropic);
     s.translate_model = "some-model".into();
+    s.translate_apple = true;
     s.rem_px = 20.0;
     s.window_gap = 5.0;
     // not on any resettable tab
@@ -8125,6 +8239,32 @@ fn translated_run(app: &mut App, run: u64, result: Result<String, String>, targe
 
 fn overlay_point() -> EffectKind {
     EffectKind::Overlay(ferrocast_macos::glow::Target::Point([1.0, 2.0]))
+}
+
+#[test]
+fn apple_engine_translates_with_apple_when_it_is_available() {
+    APPLE_AVAILABLE.with(|a| a.set(true));
+    let mut app = effect_app();
+    app.settings.translate_apple = true;
+    app.settings.translate_provider = Some(ferrocast_core::models::AiProvider::Anthropic);
+    pick_first_language(&mut app, false);
+    assert_eq!(fx_taken(), vec!["translate 1".to_string()]);
+    assert_eq!(toast_text(&app), "Translating to English with Apple…");
+    assert!(!app.apple_fallback_told);
+}
+
+#[test]
+fn apple_engine_falls_back_to_the_chat_provider_and_says_so_once_per_session() {
+    APPLE_AVAILABLE.with(|a| a.set(false));
+    let mut app = effect_app();
+    app.settings.translate_apple = true;
+    pick_first_language(&mut app, false);
+    assert_eq!(fx_taken(), vec!["translate 1".to_string()], "the translation still starts");
+    assert_eq!(toast_text(&app), "Apple Translation needs macOS 26; using the chat provider.");
+    assert!(app.settings.translate_apple, "the stored choice is kept for a Mac that can use it");
+    open_translate_wheel(&mut app);
+    app.apply_wheel(Some(0));
+    assert_eq!(toast_text(&app), "Translating to English with Same as chat (OpenAI API)…", "the notice is not repeated");
 }
 
 #[test]
@@ -9208,10 +9348,15 @@ fn every_index_entry_is_drawn_on_the_tab_it_names() {
     for e in ENTRIES {
         let mut found = false;
         'variants: for chat in [P::OpenAiCompatible, P::ChatGpt, P::Anthropic, P::ClaudeCode] {
-            for tr in [None, Some(P::OpenAiCompatible), Some(P::ChatGpt), Some(P::Anthropic)] {
+            // the last variant is the Apple engine (its language card draws a row of its own)
+            for (tr, apple) in
+                [(None, false), (Some(P::OpenAiCompatible), false), (Some(P::ChatGpt), false), (Some(P::Anthropic), false), (None, true)]
+            {
+                APPLE_AVAILABLE.with(|a| a.set(apple));
                 let mut app = settings_app(e.tab, egui::ThemePreference::Dark);
                 app.settings.ai_provider = chat;
                 app.settings.translate_provider = tr;
+                app.settings.translate_apple = apple;
                 seed_model_lists(&mut app);
                 render(&mut app, vec![]);
                 render(&mut app, vec![]);
@@ -9223,6 +9368,7 @@ fn every_index_entry_is_drawn_on_the_tab_it_names() {
         }
         assert!(found, "{:?} is indexed on tab {} ({}) but that tab never draws it", e.title, e.tab, TAB_NAMES[e.tab]);
     }
+    APPLE_AVAILABLE.with(|a| a.set(false));
     let tab_of_title = |t: &str| ENTRIES.iter().find(|e| e.title == t).map(|e| TAB_NAMES[e.tab]);
     assert_eq!(tab_of_title("Notion token"), Some("Integrations"));
     assert_eq!(tab_of_title("Capture target"), Some("Integrations"));

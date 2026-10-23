@@ -62,16 +62,30 @@ En Ajustes → Translate → **Engine**:
 
 - **Same as chat** (por defecto) usa el proveedor y el modelo de Ask AI.
 - Un proveedor fijo te deja elegir su **Model**: la lista del proveedor, **Provider default** o **Custom…** para escribir un nombre. Al cambiar de proveedor el modelo se reinicia.
+- **Apple** traduce en tu Mac con Apple Translation, sin proveedor de IA y sin internet una vez descargados sus idiomas. Requiere macOS 26 o posterior; en versiones anteriores el segmento no aparece. Mira [Traducir sin conexión con Apple](#traducir-sin-conexión-con-apple).
 
 La dirección del servidor, las claves y los inicios de sesión se configuran en Ajustes → AI; la pestaña Translate solo elige quién traduce. El texto seleccionado se envía como dato, separado de las instrucciones, así que una palabra suelta, un título, una pregunta o una frase que parece una orden («Resume esto», «Ignora lo anterior») se traducen en lugar de contestarse o cumplirse. Después tu Mac comprueba en local el idioma de la respuesta y, si salió en otro idioma (por ejemplo cuando el texto dice «traduce esto al alemán»), Ferrocast lo pide una vez más.
 
+## Traducir sin conexión con Apple
+
+Apple Translation forma parte de macOS. Traduce cada par de idiomas con un modelo guardado en tu Mac, así que el texto seleccionado no sale de él y no hace falta cuenta, clave ni servidor.
+
+1. Abre Ajustes → Translate → **Engine** y elige **Apple**.
+2. La tarjeta **Apple languages** lista cada idioma de tu rueda con un estado: **Installed**, **Needs download** o **Not supported by Apple**.
+3. Para un idioma que necesita descarga, pulsa **Open Language settings**. En Ajustes del Sistema → General → Idioma y región → **Idiomas de traducción**, descárgalo una vez. De vuelta en Ferrocast, pulsa **Check again**.
+4. Arrastra texto y suéltalo sobre ese idioma como siempre. La primera traducción tras abrir la app puede tardar unos segundos mientras carga el modelo.
+
+Cada estado es un par de idiomas: el idioma con el idioma del sistema de tu Mac, o con el inglés cuando es el propio idioma del sistema. Para traducir desde otro idioma, por ejemplo del francés al alemán, ambos idiomas deben estar descargados. Si sueltas texto sobre un idioma sin descargar, Ferrocast lo dice y dónde conseguirlo; si Apple no admite el idioma, sugiere otro idioma o un motor de IA.
+
+En macOS anterior a la 26, una elección guardada de Apple vuelve al proveedor del chat, con un aviso la primera vez. Apple Translation no obedece instrucciones y el idioma de origen se detecta en tu Mac.
+
 ## Idiomas
 
-Ajustes → Translate → **Languages** es una lista separada por comas de hasta 12 idiomas, en el orden en que aparecen en la rueda. Por defecto: inglés, español, francés, alemán, portugués, italiano, japonés y chino. Los duplicados se eliminan y una lista vacía recupera los valores por defecto. El idioma de origen lo detecta el modelo.
+Ajustes → Translate → **Languages** es una lista separada por comas de hasta 12 idiomas, en el orden en que aparecen en la rueda. Por defecto: inglés, español, francés, alemán, portugués, italiano, japonés y chino. Los duplicados se eliminan y una lista vacía recupera los valores por defecto. El idioma de origen lo detecta el modelo, o tu Mac con el motor de Apple.
 
 ## Privacidad
 
-El texto seleccionado solo se envía al proveedor que elegiste, y con Ollama no sale de tu Mac. Ferrocast no guarda ni el texto ni la traducción: la traducción solo va al portapapeles, y el propio historial de portapapeles de Ferrocast la ignora. El log registra el idioma, el proveedor, la longitud del texto y cuánto tardó, nunca el texto.
+El texto seleccionado solo se envía al proveedor que elegiste, y con Ollama o con el motor de Apple no sale de tu Mac. Ferrocast no guarda ni el texto ni la traducción: la traducción solo va al portapapeles, y el propio historial de portapapeles de Ferrocast la ignora. El log registra el idioma, el proveedor, la longitud del texto y cuánto tardó, nunca el texto.
 
 :::caution[Límites]
 - Firefox no está soportado para sustituir dentro de la página.
@@ -83,6 +97,8 @@ El texto seleccionado solo se envía al proveedor que elegiste, y con Ollama no 
 ## Si no funciona
 
 `~/Library/Application Support/Ferrocast/ferrocast.log` tiene una línea por traducción (`translate Spanish via Claude Code ok chars=… ms=…`) y otra por entrega, por ejemplo `translate deliver Spanish -> web-replace Chromium("Brave Browser")` seguida de `ok`, o de `fallback-show: js-permission` cuando el ajuste del navegador está desactivado.
+
+Con el motor de Apple la línea dice `translate Spanish via Apple ok chars=… ms=…`. Los fallos muestran un aviso: «… is not downloaded for Apple Translation» significa que falta descargar el idioma en Ajustes del Sistema, y «Apple Translation does not support …» que Apple no tiene modelo para ese idioma.
 
 ## Relacionado
 

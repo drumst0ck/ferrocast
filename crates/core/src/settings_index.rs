@@ -58,7 +58,12 @@ pub const ENTRIES: &[Entry] = &[
     e(4, "Languages", &["translate", "locale", "language", "target", "list", "spanish", "english"]),
     e(4, "After translating", &["output", "replace", "paste", "copy", "window", "auto", "javascript"]),
     e(4, "Translating effect", &["glow", "animation", "effect", "shimmer", "translating", "blur", "reduce motion"]),
-    e(4, "Provider", &["engine", "translation", "same as chat", "openai", "anthropic", "claude", "chatgpt"]),
+    e(
+        4,
+        "Provider",
+        &["engine", "translation", "same as chat", "openai", "anthropic", "claude", "chatgpt", "apple", "offline", "on-device"],
+    ),
+    e(4, "Download languages", &["apple", "translation", "offline", "language pack", "download", "installed", "system settings"]),
     e(4, "Model", &["llm", "translation", "default", "custom", "gpt"]),
     // 5 Notes
     e(5, "Show Notes Toggle Button in Menu Bar", &["floating notes", "status bar", "tray", "icon", "button", "show", "hide", "window"]),

@@ -161,6 +161,8 @@ pub enum Msg {
     WheelRelease,
     /// Model list for the Settings picker, keyed by `models_key`.
     AiModels(String, Result<Vec<String>, String>),
+    /// Whether a wheel language is ready for Apple Translation (Settings → Translate).
+    AppleLanguage(String, ferrocast_core::translate::AppleLang),
     /// Result of "Test connection" in Settings → Integrations (Err: the exact toast text).
     NotionTested(Result<ferrocast_core::notion::BotInfo, String>),
     /// Result of a Notion search; `request` identifies the search so a stale answer is dropped.
@@ -2097,6 +2099,26 @@ fn ai_stream_with_key_system(
     })
 }
 
+/// Ask the Apple helper, off the UI thread, whether each wheel language is ready; one
+/// `Msg::AppleLanguage` per language as the answers arrive.
+pub fn apple_language_status(languages: Vec<String>, bus: Bus) {
+    std::thread::spawn(move || {
+        use ferrocast_core::translate::AppleLang;
+        for lang in languages {
+            let state = match ferrocast_core::translate::apple_code(&lang) {
+                None => AppleLang::Unsupported,
+                Some(code) => AppleLang::from_status(ferrocast_macos::apple_translate::status(None, &code)),
+            };
+            bus.send(Msg::AppleLanguage(lang, state));
+        }
+    });
+}
+
+/// Open System Settings on Language & Region, where Apple's translation languages are downloaded.
+pub fn open_language_settings() {
+    let _ = std::process::Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.Localization-Settings.extension").status();
+}
+
 /// Translate `text` into `lang` with the translation engine's provider, off the UI thread.
 /// `settings` already carries the engine (see `translate::engine_settings`).
 /// With the Auto output the source app is probed (off the UI thread) for what it can replace in place.
@@ -2112,14 +2134,22 @@ pub fn translate_text(
     let settings = settings.clone();
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
-        // ask, check the language of the answer on-device, and ask once more if it came out in
-        // another language (the selection itself may ask for one)
-        let mut ask = |prompt: &str| {
-            let mut out = String::new();
-            ai_stream_system(&settings, ferrocast_core::translate::SYSTEM, &[], prompt, |t| out.push_str(t)).map(|()| out)
+        let result = if settings.translate_apple {
+            // Apple's on-device translation: no prompt, no retry; the helper detects the source language
+            match ferrocast_core::translate::apple_code(&lang) {
+                None => Err(ferrocast_core::apple_translate::TranslateError::Unsupported(lang.clone())),
+                Some(code) => ferrocast_macos::apple_translate::translate(None, &code, &text),
+            }
+            .map_err(|e| ferrocast_core::translate::apple_error_text(&e, &lang))
+        } else {
+            // ask, check the language of the answer on-device, and ask once more if it came out in
+            // another language (the selection itself may ask for one)
+            let mut ask = |prompt: &str| {
+                let mut out = String::new();
+                ai_stream_system(&settings, ferrocast_core::translate::SYSTEM, &[], prompt, |t| out.push_str(t)).map(|()| out)
+            };
+            ferrocast_core::translate::run_translation(&text, &lang, &ferrocast_macos::language::detect, &mut ask).0
         };
-        let (result, _retried_from) =
-            ferrocast_core::translate::run_translation(&text, &lang, &ferrocast_macos::language::detect, &mut ask);
         let ms = started.elapsed().as_millis() as u64;
         let target = match (&result, output) {
             (Ok(_), TranslateOutput::Auto) => probe_target(source_pid),

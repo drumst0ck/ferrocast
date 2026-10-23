@@ -967,6 +967,10 @@ pub struct App {
     translating_effect: Option<ActiveEffect>,
     /// When the current translation started (the safety timeout counts from here).
     translate_started: Instant,
+    /// The "Apple Translation needs macOS 26" notice was shown this session.
+    apple_fallback_told: bool,
+    /// What Settings → Translate shows per wheel language for the Apple engine.
+    pub(crate) apple_langs: std::collections::HashMap<String, ferrocast_core::translate::AppleLang>,
     /// Browser whose page a marked replace is running in: cleaned if the replace fails.
     web_pending: Option<ferrocast_core::translate::Browser>,
     visible: bool,
@@ -1215,6 +1219,8 @@ impl App {
             translated_run: None,
             translating_effect: None,
             translate_started: Instant::now(),
+            apple_fallback_told: false,
+            apple_langs: Default::default(),
             web_pending: None,
             visible: !hidden,
             had_focus: false,
@@ -2704,7 +2710,18 @@ impl App {
         match pick {
             WheelPick::Translate(lang) => {
                 if let Some(text) = self.wheel_text.take() {
-                    let engine = ferrocast_core::translate::engine_settings(&self.settings);
+                    // Apple chosen but unusable here (macOS < 26, no helper): the chat provider translates
+                    let mut chosen = self.settings.clone();
+                    let mut fallback_note = None;
+                    if ferrocast_core::translate::apple_plan(&chosen, (self.fx.apple_available)())
+                        == ferrocast_core::translate::ApplePlan::FallBackToChat
+                    {
+                        chosen = ferrocast_core::translate::without_apple(&chosen);
+                        if !std::mem::replace(&mut self.apple_fallback_told, true) {
+                            fallback_note = Some("Apple Translation needs macOS 26; using the chat provider.".to_string());
+                        }
+                    }
+                    let engine = ferrocast_core::translate::engine_settings(&chosen);
                     // a new translation ends a running effect first
                     self.end_effect(false);
                     self.translate_run += 1;
@@ -2715,7 +2732,8 @@ impl App {
                         let drop = effect_drop_point(center);
                         (self.fx.effect_probe)(self.prev_pid, drop, run, &self.bus);
                     }
-                    self.toast(format!("Translating to {lang} with {}…", ferrocast_core::translate::engine_label(&self.settings)));
+                    let working = format!("Translating to {lang} with {}…", ferrocast_core::translate::engine_label(&chosen));
+                    self.toast(fallback_note.unwrap_or(working));
                     (self.fx.translate_start)(&engine, text, lang, self.prev_pid, self.settings.translate_output, run, &self.bus);
                 }
             }
@@ -3362,6 +3380,9 @@ impl App {
                 }
                 Msg::AiModels(k, r) => {
                     self.ai_models.insert(k, Some(r));
+                }
+                Msg::AppleLanguage(lang, state) => {
+                    self.apple_langs.insert(lang, state);
                 }
                 Msg::ChatGptDeviceCode(code) => {
                     self.show();
@@ -6321,6 +6342,7 @@ pub(crate) struct Effects {
     /// Run a script in a browser page, ignoring the result (clean-up).
     pub(crate) web_script: fn(ferrocast_core::translate::Browser, &str),
     /// Start the translation request.
+    pub(crate) apple_available: fn() -> bool,
     pub(crate) translate_start: fn(&Settings, String, String, Option<i32>, ferrocast_core::models::TranslateOutput, u64, &Bus),
 }
 
@@ -6344,6 +6366,7 @@ impl Effects {
             },
             notes_tray: |bus| services::make_notes_tray(bus.clone()).map(|t| Box::new(t) as Box<dyn std::any::Any>),
             web_script: |b, js| services::web_script(b, js.to_string()),
+            apple_available: ferrocast_macos::apple_translate::available,
             translate_start: |s, text, lang, pid, out, run, bus| services::translate_text(s, text, lang, pid, out, run, bus.clone()),
         }
     }

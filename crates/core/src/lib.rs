@@ -3,6 +3,7 @@
 
 pub mod ai;
 pub mod annotate;
+pub mod apple_translate;
 pub mod calc;
 pub mod chatgpt;
 pub mod clipping;

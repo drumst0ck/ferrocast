@@ -1,6 +1,7 @@
 //! macOS integration for Ferrocast: apps, clipboard, keyboard, windows,
 //! system commands, file search and snippet expansion.
 
+pub mod apple_translate;
 pub mod apps;
 pub mod ax_text;
 pub mod clipboard;
