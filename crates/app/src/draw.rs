@@ -6857,58 +6857,72 @@ impl App {
                             row(ui, pal, "Camera", "Record the camera too, as its own file. The first recording asks macOS for access.", |ui| {
                                 toggle(ui, pal, &mut s.capture.camera)
                             });
-                            row(ui, pal, "Camera device", "Which camera to record. Default uses the one macOS picks.", |ui| {
-                                if small_btn(ui, pal, "Refresh") {
-                                    refresh_devices = true;
-                                }
-                                let shown = crate::record_ctl::device_shown(&cams, &s.capture.camera_id, known);
-                                field_combo(ui, pal, "capture_camera_device", &shown, 190.0, |ui| {
-                                    if ui.selectable_label(s.capture.camera_id.is_empty(), "Default").clicked() {
-                                        s.capture.camera_id.clear();
-                                    }
-                                    for (id, name) in &cams {
-                                        if ui.selectable_label(&s.capture.camera_id == id, name).clicked() {
-                                            s.capture.camera_id = id.clone();
+                            // a device picker follows its switch: dimmed and inert while the source is off
+                            row_disabled_if(ui, !s.capture.camera, |ui| {
+                                row(ui, pal, "Camera device", "Which camera to record. Default uses the one macOS picks.", |ui| {
+                                    let shown = crate::record_ctl::device_shown(&cams, &s.capture.camera_id, known);
+                                    field_combo(ui, pal, "capture_camera_device", &shown, 190.0, |ui| {
+                                        if ui.selectable_label(s.capture.camera_id.is_empty(), "Default").clicked() {
+                                            s.capture.camera_id.clear();
                                         }
-                                    }
+                                        for (id, name) in &cams {
+                                            if ui.selectable_label(&s.capture.camera_id == id, name).clicked() {
+                                                s.capture.camera_id = id.clone();
+                                            }
+                                        }
+                                    });
                                 });
                             });
                             row(ui, pal, "Microphone", "Record the microphone too, as its own file. The first recording asks macOS for access.", |ui| {
                                 toggle(ui, pal, &mut s.capture.microphone)
                             });
-                            row(ui, pal, "Microphone device", "Which microphone to record. Default uses the one macOS picks.", |ui| {
-                                if small_btn(ui, pal, "Refresh") {
-                                    refresh_devices = true;
-                                }
-                                let shown = crate::record_ctl::device_shown(&mics, &s.capture.mic_id, known);
-                                field_combo(ui, pal, "capture_mic_device", &shown, 190.0, |ui| {
-                                    if ui.selectable_label(s.capture.mic_id.is_empty(), "Default").clicked() {
-                                        s.capture.mic_id.clear();
-                                    }
-                                    for (id, name) in &mics {
-                                        if ui.selectable_label(&s.capture.mic_id == id, name).clicked() {
-                                            s.capture.mic_id = id.clone();
+                            row_disabled_if(ui, !s.capture.microphone, |ui| {
+                                row(ui, pal, "Microphone device", "Which microphone to record. Default uses the one macOS picks.", |ui| {
+                                    let shown = crate::record_ctl::device_shown(&mics, &s.capture.mic_id, known);
+                                    field_combo(ui, pal, "capture_mic_device", &shown, 190.0, |ui| {
+                                        if ui.selectable_label(s.capture.mic_id.is_empty(), "Default").clicked() {
+                                            s.capture.mic_id.clear();
                                         }
-                                    }
+                                        for (id, name) in &mics {
+                                            if ui.selectable_label(&s.capture.mic_id == id, name).clicked() {
+                                                s.capture.mic_id = id.clone();
+                                            }
+                                        }
+                                    });
                                 });
                             });
                             row(ui, pal, "System audio", "Record the sound your Mac plays, as its own file.", |ui| toggle(ui, pal, &mut s.capture.system_audio));
                         });
-                        match &devices_state {
-                            crate::record_ctl::DevicesState::Failed(why) => {
-                                ui.add_space(6.0);
-                                note(ui, pal, &format!("Devices are not listed: {why}"));
+                        // one status line for both pickers: what was found, and the single Refresh
+                        ui.add_space(8.0);
+                        // inset like the rows of the card above, so the chip, the button and the reason line up with their text and controls
+                        egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 0)).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                let (kind, chip) = devices_chip(&devices_state);
+                                status_chip(ui, pal, kind, &chip);
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if small_btn(ui, pal, "Refresh") {
+                                        refresh_devices = true;
+                                    }
+                                });
+                            });
+                            match &devices_state {
+                                crate::record_ctl::DevicesState::Failed(why) => {
+                                    ui.add_space(4.0);
+                                    note(ui, pal, &format!("Devices are not listed: {why}"));
+                                }
+                                crate::record_ctl::DevicesState::Loading | crate::record_ctl::DevicesState::Idle => {
+                                    ui.add_space(4.0);
+                                    note(ui, pal, "Looking for cameras and microphones…");
+                                }
+                                crate::record_ctl::DevicesState::Ready(d) if d.cameras.is_empty() && d.microphones.is_empty() => {
+                                    ui.add_space(4.0);
+                                    note(ui, pal, "No camera or microphone was found.");
+                                }
+                                crate::record_ctl::DevicesState::Ready(_) => {}
                             }
-                            crate::record_ctl::DevicesState::Loading | crate::record_ctl::DevicesState::Idle => {
-                                ui.add_space(6.0);
-                                note(ui, pal, "Looking for cameras and microphones…");
-                            }
-                            crate::record_ctl::DevicesState::Ready(d) if d.cameras.is_empty() && d.microphones.is_empty() => {
-                                ui.add_space(6.0);
-                                note(ui, pal, "No camera or microphone was found.");
-                            }
-                            crate::record_ctl::DevicesState::Ready(_) => {}
-                        }
+                        });
                         ui.add_space(14.0);
                         section(ui, pal, "Shortcuts");
                         group(ui, pal, |ui| {
@@ -8368,6 +8382,20 @@ fn toggle_changed(ui: &mut Ui, pal: &Palette, on: &mut bool) -> bool {
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgba_unmultiplied(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()), l(a.a(), b.a()))
+}
+
+/// The status chip under the Sources card: what the last device scan found.
+fn devices_chip(state: &crate::record_ctl::DevicesState) -> (StatusKind, String) {
+    use crate::record_ctl::DevicesState;
+    let plural = |n: usize, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "s" });
+    match state {
+        DevicesState::Idle | DevicesState::Loading => (StatusKind::Neutral, "Checking devices".into()),
+        DevicesState::Failed(_) => (StatusKind::Error, "Devices not listed".into()),
+        DevicesState::Ready(d) if d.cameras.is_empty() && d.microphones.is_empty() => (StatusKind::Warn, "No devices found".into()),
+        DevicesState::Ready(d) => {
+            (StatusKind::Ok, format!("{} · {}", plural(d.cameras.len(), "camera"), plural(d.microphones.len(), "microphone")))
+        }
+    }
 }
 
 fn small_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {

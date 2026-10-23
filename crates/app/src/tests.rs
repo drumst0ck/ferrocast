@@ -11391,14 +11391,14 @@ fn capture_shortcut_rows_follow_the_builtin_ids_and_have_no_default() {
 fn capture_shortcut_record_opens_the_hotkey_view_for_that_command() {
     let mut app = settings_app(CAPTURE_TAB, egui::ThemePreference::Dark);
     settle(&mut app);
-    // the Record… button of the second shortcut row (Capture Window; the Refresh buttons of the Sources rows come first): scroll it into view
+    // the Record… button of the second shortcut row (Capture Window; the Refresh button of the Sources card comes first): scroll it into view
     let p = scroll_until(&mut app, |app| {
         app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
         render(app, vec![]);
         let mut v: Vec<Rect> = sd5_hits(app).into_iter().filter(|h| h.0 == "small_btn").map(|h| h.2).collect();
         v.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
-        assert_eq!(v.len(), 9, "two Refresh buttons (devices) and a Record… button per shortcut");
-        Some(v[3].center())
+        assert_eq!(v.len(), 8, "one Refresh button (devices) and a Record… button per shortcut");
+        Some(v[2].center())
     })
     .expect("reachable");
     for _ in 0..30 {
@@ -11409,7 +11409,7 @@ fn capture_shortcut_record_opens_the_hotkey_view_for_that_command() {
     render(&mut app, vec![]);
     let mut v: Vec<Rect> = sd5_hits(&app).into_iter().filter(|h| h.0 == "small_btn").map(|h| h.2).collect();
     v.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
-    click_at(&mut app, v[3].center());
+    click_at(&mut app, v[2].center());
     render(&mut app, vec![]);
     match app.view() {
         View::Hotkey { id, .. } => assert_eq!(id, "builtin:capture-window"),
@@ -11603,6 +11603,18 @@ fn editor_app_for(
     (app, dir, rx)
 }
 
+/// Every text of the active panel tab: the panel is a small scroll area, so read it top to bottom
+/// in steps and come back to the top.
+fn tab_texts_scrolling(app: &mut App) -> Vec<String> {
+    let mut all = tab_labels(app);
+    for _ in 0..8 {
+        scroll_panel(app, -90.0);
+        all.extend(tab_labels(app));
+    }
+    scroll_panel(app, 2000.0);
+    all
+}
+
 fn tab_labels(app: &mut App) -> Vec<String> {
     render_texts(app, vec![]).into_iter().map(|(t, _)| t).collect()
 }
@@ -11630,10 +11642,8 @@ fn the_camera_tab_draws_its_controls_and_edits_through_the_history() {
     assert!(texts.iter().any(|x| x == "Camera") && texts.iter().any(|x| x == "Audio"), "both tabs: {texts:?}");
     click_label(&mut app, "Camera");
     assert_eq!(app.editor.as_ref().unwrap().st.tab, Tab::Camera);
-    let mut texts = tab_labels(&mut app);
-    // the lower part of the tab is below the fold: the wheel scrolls the panel
-    scroll_panel(&mut app, -400.0);
-    texts.extend(tab_labels(&mut app));
+    // the lower part of the tab is below the fold: the wheel scrolls the panel through it
+    let texts = tab_texts_scrolling(&mut app);
     for want in [
         "Show camera",
         "Shape",
@@ -11652,7 +11662,6 @@ fn the_camera_tab_draws_its_controls_and_edits_through_the_history() {
         assert!(texts.iter().any(|t| t == want), "Camera tab lacks `{want}`: {texts:?}");
     }
     assert!(texts.iter().any(|t| t.starts_with("camera.mov · 0:10") && t.contains("+0.10 s")), "source info: {texts:?}");
-    scroll_panel(&mut app, 400.0);
     assert_eq!(editor_proj(&app).camera.unwrap().shape, CameraShape::Rounded, "the fixture starts rounded");
     click_label(&mut app, "Square");
     click_label(&mut app, "Top left");
@@ -11673,18 +11682,12 @@ fn the_audio_tab_shows_the_mix_and_a_missing_file_never_crashes() {
     use ferrocast_core::capture::project::AudioTrack;
     let (mut app, _dir, _rx) = editor_app_for("p4-audio", p4_project(), &["mic.m4a"]);
     set_tab(&mut app, Tab::Audio);
-    let mut texts = tab_labels(&mut app);
-    scroll_panel(&mut app, -400.0);
-    texts.extend(tab_labels(&mut app));
-    scroll_panel(&mut app, 400.0);
+    let texts = tab_texts_scrolling(&mut app);
     for want in ["Microphone", "System audio", "Gain", "Mute", "Muted", "Master"] {
         assert!(texts.iter().any(|t| t == want), "Audio tab lacks `{want}`: {texts:?}");
     }
     // the fixture's system track is muted; its numeric gain is on screen
-    assert!(
-        texts.iter().any(|t| t == "-6.0") && texts.iter().any(|t| t == "3.0") && texts.iter().any(|t| t == "-1.5"),
-        "gains in dB: {texts:?}"
-    );
+    assert!(["-6", "3", "-1.5"].iter().all(|v| texts.iter().any(|t| t == v || *t == format!("{v}.0"))), "gains in dB: {texts:?}");
     // system.m4a is not on disk: said clearly
     assert!(texts.iter().any(|t| t.starts_with("system.m4a is missing")), "{texts:?}");
     assert!(texts.iter().any(|t| t.starts_with("mic.m4a · 0:10")), "{texts:?}");
@@ -12177,7 +12180,7 @@ fn label_rect(app: &mut App, text: &str) -> Rect {
 
 /// Wheel over the right-hand panel by `dy` points (negative scrolls down).
 fn scroll_panel(app: &mut App, dy: f32) {
-    render(app, vec![Event::PointerMoved(Pos2::new(ui::WIDTH - 100.0, 150.0))]);
+    render(app, vec![Event::PointerMoved(Pos2::new(ui::WIDTH - 100.0, 220.0))]);
     for _ in 0..6 {
         let wheel = Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
@@ -12349,11 +12352,19 @@ fn zoom_tab_adds_rejects_overlaps_and_deletes() {
     click_label(&mut app, "Auto zoom");
     assert!(screen_has(&mut app, "no cursor events"));
     // the new zoom is selected: its fields show below the list, Delete removes it
-    scroll_panel(&mut app, -400.0);
+    let mut steps = 0;
+    while !screen_has(&mut app, "Pick on preview") && steps < 8 {
+        scroll_panel(&mut app, -60.0);
+        steps += 1;
+    }
     assert!(screen_has(&mut app, "Pick on preview"));
+    while !screen_has(&mut app, "Delete zoom") && steps < 16 {
+        scroll_panel(&mut app, -60.0);
+        steps += 1;
+    }
     click_label(&mut app, "Delete zoom");
     assert_eq!(editor_proj(&app).zooms.len(), 1);
-    scroll_panel(&mut app, 400.0);
+    scroll_panel(&mut app, 2000.0);
     app.editor.as_mut().unwrap().apply(ferrocast_core::capture::timeline::EditKind::Zoom, 50.0, |p| {
         p.zooms.clear();
         Ok(())
@@ -12839,7 +12850,11 @@ mod transcript_tab {
         let (mut app, dir) = open("select", Some(speech()));
         let start = editor_proj(&app).to_json();
         click_word(&mut app, "bravo");
-        assert!(screen_has(&mut app, "No selection") && screen_has(&mut app, "Click a word to move the playhead."));
+        assert!(screen_has(&mut app, "No selection"));
+        assert!(
+            tab_texts_scrolling(&mut app).iter().any(|t| t.starts_with("Click a word to move the playhead.")),
+            "the hint sits under the words"
+        );
         shift_click_label(&mut app, "delta");
         assert_eq!(app.editor.as_ref().unwrap().st.tr.sel, Some((2, 4)));
         assert!(screen_has(&mut app, "3 words selected"), "{:?}", texts(&mut app));
@@ -12923,5 +12938,448 @@ mod transcript_tab {
             msg: crate::editor_panels::TranscribeMsg::Failed(TranscribeFailure::Permission),
         });
         assert!(app.editor.as_ref().unwrap().st.tr.error.is_none());
+    }
+}
+
+// ---- Design pass: the editor panel's layout, at the real panel width ----
+
+mod panel_design {
+    use super::*;
+    use crate::editor_panels::{chip_rows, TranscribeFailure, TranscribeRun, HIT_H};
+    use ferrocast_core::capture::project::Project;
+    use ferrocast_core::capture::transcript::{Transcript, Word};
+
+    fn transcript() -> Transcript {
+        let words = "So today I want to show you how the new export works um and why it is faster than before you know the first thing is the preview"
+            .split_whitespace()
+            .enumerate()
+            .map(|(i, w)| Word { text: w.into(), start: 1.0 + i as f64 * 0.25, end: 1.2 + i as f64 * 0.25, confidence: 0.9 })
+            .collect();
+        Transcript { language: "en-US".into(), words, ..Default::default() }
+    }
+
+    fn open(tag: &str, tab: Tab, tr: Option<Transcript>) -> App {
+        let mut p: Project = p4_project();
+        p.trims.clear();
+        p.transcript = tr;
+        let (mut app, _dir, rx) = editor_app_for(&format!("design-{tag}"), p, &["mic.m4a", "camera.mov"]);
+        std::mem::forget(rx);
+        set_tab(&mut app, tab);
+        app
+    }
+
+    fn panel_rect(app: &App) -> Rect {
+        app.ctx.data(|d| d.get_temp::<Rect>(Id::new("editor-panel-rect"))).expect("the panel was drawn")
+    }
+
+    #[test]
+    fn chip_rows_balance_and_fill_the_width() {
+        // the seven tabs at 12.5 pt: Zoom Cursor Style Clips Camera Audio Transcript
+        let w = [27.0, 37.0, 27.0, 25.0, 42.0, 30.0, 56.0];
+        let rows = chip_rows(&w, 236.0, 4.0, 9.0);
+        assert_eq!(rows.iter().map(Vec::len).collect::<Vec<_>>(), [4, 3], "7 tabs wrap as 4 + 3, not 6 + 1");
+        for (row, texts) in rows.iter().zip([&w[..4], &w[4..]]) {
+            let total: f32 = row.iter().sum::<f32>() + 4.0 * (row.len() as f32 - 1.0);
+            assert!((total - 236.0).abs() < 0.01, "a row is exactly as wide as the panel: {total}");
+            assert!(row.iter().zip(texts).all(|(c, t)| *c >= t + 18.0), "a chip is never narrower than its text: {row:?}");
+        }
+        // the four basic tabs share one row, five tabs split 3 + 2
+        assert_eq!(chip_rows(&w[..4], 236.0, 4.0, 9.0).len(), 1);
+        assert_eq!(chip_rows(&w[..5], 236.0, 4.0, 9.0).iter().map(Vec::len).collect::<Vec<_>>(), [3, 2]);
+        // a panel too narrow for two chips puts each on its own row at full width; nothing is lost
+        let narrow = chip_rows(&w, 60.0, 4.0, 9.0);
+        assert_eq!(narrow.len(), 7);
+        assert!(narrow.iter().all(|r| r == &vec![60.0]));
+        assert!(chip_rows(&[], 236.0, 4.0, 9.0).is_empty());
+    }
+
+    #[test]
+    fn clickable_rows_are_at_least_24_points_tall() {
+        const { assert!(HIT_H >= 24.0) };
+    }
+
+    #[test]
+    fn the_seven_tabs_sit_in_two_even_rows_inside_the_panel() {
+        let mut app = open("tabs", Tab::Camera, Some(transcript()));
+        let texts = render_texts(&mut app, vec![]);
+        let panel = panel_rect(&app);
+        let tabs: Vec<&(String, Rect)> = texts
+            .iter()
+            .filter(|(t, r)| {
+                ["Zoom", "Cursor", "Style", "Clips", "Camera", "Audio", "Transcript"].contains(&t.as_str()) && r.max.y < panel.min.y + 80.0
+            })
+            .collect();
+        assert_eq!(tabs.len(), 7, "{tabs:?}");
+        let mut ys: Vec<i32> = tabs.iter().map(|(_, r)| r.center().y.round() as i32).collect();
+        ys.dedup();
+        assert_eq!(ys.len(), 2, "two rows: {ys:?}");
+        assert!(ys[1] - ys[0] >= 24, "rows are at least a hit target apart: {ys:?}");
+        for (t, r) in &tabs {
+            assert!(r.min.x >= panel.min.x && r.max.x <= panel.max.x, "{t} inside the panel {panel:?}: {r:?}");
+        }
+    }
+
+    /// Every state of the three tabs, dark and light: nothing leaves the panel sideways and no two
+    /// visible texts overlap.
+    #[test]
+    fn every_state_fits_the_panel_without_overlap() {
+        for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+            let scenarios: Vec<(&str, App)> = vec![
+                ("camera", open("c", Tab::Camera, None)),
+                ("audio", open("a", Tab::Audio, None)),
+                ("transcript idle", open("ti", Tab::Transcript, None)),
+                ("transcript error", {
+                    let mut a = open("te", Tab::Transcript, None);
+                    a.editor.as_mut().unwrap().st.tr.error = Some(TranscribeFailure::Permission);
+                    a
+                }),
+                ("transcript running", {
+                    let mut a = open("tr", Tab::Transcript, None);
+                    let mut run = TranscribeRun::new();
+                    (run.done, run.total) = (1.0, 3.0);
+                    a.editor.as_mut().unwrap().st.tr.run = Some(run);
+                    a
+                }),
+                ("transcript words", open("tw", Tab::Transcript, Some(transcript()))),
+            ];
+            for (name, mut app) in scenarios {
+                app.ctx.set_theme(theme);
+                for _ in 0..2 {
+                    render(&mut app, vec![]);
+                }
+                let texts = render_texts(&mut app, vec![]);
+                let panel = panel_rect(&app);
+                let visible: Vec<&(String, Rect)> = texts
+                    .iter()
+                    .filter(|(t, r)| !t.is_empty() && r.min.x >= panel.min.x - 40.0 && r.max.y <= panel.max.y && r.min.y >= panel.min.y)
+                    .collect();
+                assert!(visible.len() > 6, "{name}: something is drawn: {visible:?}");
+                let words = name == "transcript words";
+                for (t, r) in &visible {
+                    assert!(
+                        r.min.x >= panel.min.x - 0.5 && r.max.x <= panel.max.x + 0.5,
+                        "{name} {theme:?}: `{t}` leaves the panel {panel:?}: {r:?}"
+                    );
+                }
+                if words {
+                    continue; // wrapped word labels carry their leading space in the rect
+                }
+                for (i, (ta, ra)) in visible.iter().enumerate() {
+                    for (tb, rb) in &visible[i + 1..] {
+                        let hit = ra.intersect(*rb);
+                        assert!(hit.width() <= 0.5 || hit.height() <= 0.5, "{name} {theme:?}: `{ta}` {ra:?} overlaps `{tb}` {rb:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The selection line keeps its place and height, so the words never jump when a selection appears.
+    #[test]
+    fn the_word_flow_does_not_move_when_a_selection_appears() {
+        let mut app = open("sel", Tab::Transcript, Some(transcript()));
+        let status = label_rect(&mut app, "No selection");
+        app.editor.as_mut().unwrap().st.tr.sel = Some((2, 4));
+        let selected = label_rect(&mut app, "3 words selected · 0:01.50–0:02.20");
+        assert_eq!(status.min.y, selected.min.y, "the count replaces `No selection` on the same line");
+        assert_eq!(status.height(), selected.height());
+    }
+
+    #[test]
+    fn the_new_colours_read_on_both_palettes() {
+        let t = |c: Color32| [c.r() as f32, c.g() as f32, c.b() as f32];
+        for dark in [true, false] {
+            let pal = palette(dark);
+            for backdrop in [0.0_f32, 255.0] {
+                let panel = over(window_over(&pal, backdrop), pal.field);
+                let card = over(panel, pal.field);
+                let chip = over(panel, pal.field);
+                let pill = over(panel, pal.field.gamma_multiply(1.6));
+                let on_chip = over(panel, pal.accent.gamma_multiply(crate::editor_panels::ACCENT_TINT));
+                let selected = over(card, pal.accent.gamma_multiply(0.38));
+                let playhead = over(card, pal.accent.gamma_multiply(0.20));
+                let filler = crate::editor_panels::filler_color(dark);
+                let danger_card = over(panel, pal.danger.gamma_multiply(0.12));
+                let rows = [
+                    ("tab text", contrast(t(pal.sub_strong), chip), 4.5),
+                    ("selected tab text", contrast(t(pal.accent_text), on_chip), 4.5),
+                    ("secondary button text", contrast(t(pal.text), pill), 4.5),
+                    ("mute pill text", contrast(t(pal.sub_strong), over(panel, pal.field.gamma_multiply(1.3))), 4.5),
+                    ("muted pill text", contrast(t(pal.accent_text), on_chip), 4.5),
+                    ("word on selection", contrast(t(pal.text), selected), 4.5),
+                    ("word on playhead tint", contrast(t(pal.text), playhead), 4.5),
+                    ("filler word", contrast(t(filler), card), 4.5),
+                    ("cut word", contrast(t(pal.sub), card), 3.0),
+                    ("error text", contrast(t(pal.text), danger_card), 4.5),
+                    ("primary button", contrast(t(Color32::WHITE), t(pal.accent)), 3.0),
+                ];
+                for (what, got, want) in rows {
+                    assert!(got >= want, "dark={dark} backdrop={backdrop}: {what} is {got:.2}, want >= {want}");
+                }
+            }
+        }
+    }
+}
+
+// ---- Design review: an offscreen software renderer for the egui harness ----
+//
+// `FC_SHOTS_DIR=/some/dir cargo test -p ferrocast shots -- --nocapture` writes one PNG per editor tab and state
+// (dark and light, at 2x). Without the variable the tests do nothing. The rasteriser is only a
+// triangle filler over `Context::tessellate`: enough to see spacing, colour and text without a GPU.
+
+mod shots {
+    use super::*;
+    use egui::epaint::Primitive;
+    use std::collections::HashMap;
+
+    /// Frame buffer + the managed textures (the font atlas) collected from every frame's delta.
+    pub struct Shot {
+        textures: HashMap<egui::TextureId, (usize, usize, Vec<egui::Color32>)>,
+    }
+
+    impl Shot {
+        pub fn new() -> Self {
+            Shot { textures: HashMap::new() }
+        }
+
+        fn absorb(&mut self, delta: &egui::TexturesDelta) {
+            for (id, d) in delta.set.iter().flat_map(|(id, ds)| ds.iter().map(move |d| (id, d))) {
+                let egui::ImageData::Color(img) = &d.image;
+                let [w, h] = img.size;
+                match d.pos {
+                    None => {
+                        self.textures.insert(*id, (w, h, img.pixels.clone()));
+                    }
+                    Some([x, y]) => {
+                        if let Some((tw, _, px)) = self.textures.get_mut(id) {
+                            for row in 0..h {
+                                for col in 0..w {
+                                    px[(y + row) * *tw + x + col] = img.pixels[row * w + col];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Run one frame of the app and paint it; `None` for frames that only warm up the fonts.
+        pub fn frame(&mut self, app: &mut App, size: Vec2, paint: bool, bg: egui::Color32) -> Option<image::RgbaImage> {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), ..Default::default() };
+            let ctx = app.ctx.clone();
+            let mut out = ctx.run_ui(input, |ui| app.draw(ui));
+            self.absorb(&out.textures_delta);
+            out.textures_delta.clear();
+            if !paint {
+                return None;
+            }
+            let ppp = out.pixels_per_point;
+            let prims = ctx.tessellate(out.shapes, ppp);
+            let ss = 2.0;
+            let ppp = ppp * ss;
+            let (w, h) = ((size.x * ppp) as usize, (size.y * ppp) as usize);
+            let mut fb = vec![[bg.r() as f32, bg.g() as f32, bg.b() as f32]; w * h];
+            for p in prims {
+                let Primitive::Mesh(m) = p.primitive else { continue };
+                let Some((tw, th, tex)) = self.textures.get(&m.texture_id) else { continue };
+                let clip = p.clip_rect;
+                let (cx0, cy0) = (((clip.min.x * ppp).floor().max(0.0)) as usize, ((clip.min.y * ppp).floor().max(0.0)) as usize);
+                let (cx1, cy1) = (((clip.max.x * ppp).ceil() as usize).min(w), ((clip.max.y * ppp).ceil() as usize).min(h));
+                for t in m.indices.chunks_exact(3) {
+                    let v = [&m.vertices[t[0] as usize], &m.vertices[t[1] as usize], &m.vertices[t[2] as usize]];
+                    let pt = |i: usize| (v[i].pos.x * ppp, v[i].pos.y * ppp);
+                    let (a, b, c) = (pt(0), pt(1), pt(2));
+                    let area = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+                    if area.abs() < 1e-6 {
+                        continue;
+                    }
+                    let x0 = (a.0.min(b.0).min(c.0).floor().max(cx0 as f32)) as usize;
+                    let x1 = ((a.0.max(b.0).max(c.0).ceil()).min(cx1 as f32)) as usize;
+                    let y0 = (a.1.min(b.1).min(c.1).floor().max(cy0 as f32)) as usize;
+                    let y1 = ((a.1.max(b.1).max(c.1).ceil()).min(cy1 as f32)) as usize;
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                            let w0 = ((b.0 - px) * (c.1 - py) - (b.1 - py) * (c.0 - px)) / area;
+                            let w1 = ((c.0 - px) * (a.1 - py) - (c.1 - py) * (a.0 - px)) / area;
+                            let w2 = 1.0 - w0 - w1;
+                            if w0 < -1e-4 || w1 < -1e-4 || w2 < -1e-4 {
+                                continue;
+                            }
+                            let u = w0 * v[0].uv.x + w1 * v[1].uv.x + w2 * v[2].uv.x;
+                            let vv = w0 * v[0].uv.y + w1 * v[1].uv.y + w2 * v[2].uv.y;
+                            let tx = ((u * *tw as f32) as usize).min(tw - 1);
+                            let ty = ((vv * *th as f32) as usize).min(th - 1);
+                            let tc = tex[ty * tw + tx];
+                            let col = |f: fn(&egui::epaint::Vertex) -> u8| w0 * f(v[0]) as f32 + w1 * f(v[1]) as f32 + w2 * f(v[2]) as f32;
+                            let vc = [col(|v| v.color.r()), col(|v| v.color.g()), col(|v| v.color.b()), col(|v| v.color.a())];
+                            let s = [
+                                vc[0] * tc.r() as f32 / 255.0,
+                                vc[1] * tc.g() as f32 / 255.0,
+                                vc[2] * tc.b() as f32 / 255.0,
+                                vc[3] * tc.a() as f32 / 255.0,
+                            ];
+                            let d = &mut fb[y * w + x];
+                            let k = 1.0 - s[3] / 255.0;
+                            *d = [s[0] + d[0] * k, s[1] + d[1] * k, s[2] + d[2] * k];
+                        }
+                    }
+                }
+            }
+            let (ow, oh) = (w / 2, h / 2);
+            let mut img = image::RgbaImage::new(ow as u32, oh as u32);
+            for y in 0..oh {
+                for x in 0..ow {
+                    let mut acc = [0.0f32; 3];
+                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        let p = fb[(y * 2 + dy) * w + x * 2 + dx];
+                        (0..3).for_each(|k| acc[k] += p[k] / 4.0);
+                    }
+                    img.put_pixel(
+                        x as u32,
+                        y as u32,
+                        image::Rgba([acc[0].min(255.0) as u8, acc[1].min(255.0) as u8, acc[2].min(255.0) as u8, 255]),
+                    );
+                }
+            }
+            Some(img)
+        }
+    }
+
+    pub fn dir() -> Option<std::path::PathBuf> {
+        std::env::var_os("FC_SHOTS_DIR").map(std::path::PathBuf::from).inspect(|d| std::fs::create_dir_all(d).unwrap())
+    }
+
+    /// Paint the app as it is and write `<dir>/<name>-<dark|light>.png`, cropped to `crop` (points) when given.
+    pub fn snap(app: &mut App, name: &str, dark: bool, crop: Option<Rect>) {
+        let Some(dir) = dir() else { return };
+        app.ctx.set_theme(if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+        app.ctx.set_pixels_per_point(2.0);
+        let mut shot = Shot::new();
+        let height = std::env::var("FC_SHOTS_H").ok().and_then(|h| h.parse().ok()).unwrap_or(720.0);
+        let size = Vec2::new(ui::WIDTH, height);
+        let bg = if dark { egui::Color32::from_gray(40) } else { egui::Color32::from_gray(222) };
+        for _ in 0..4 {
+            shot.frame(app, size, false, bg);
+        }
+        let mut img = shot.frame(app, size, true, bg).unwrap();
+        if let Some(c) = crop {
+            img = image::imageops::crop_imm(
+                &img,
+                (c.min.x * 2.0) as u32,
+                (c.min.y * 2.0) as u32,
+                (c.width() * 2.0) as u32,
+                (c.height() * 2.0) as u32,
+            )
+            .to_image();
+        }
+        img.save(dir.join(format!("{name}-{}.png", if dark { "dark" } else { "light" }))).unwrap();
+    }
+
+    /// The right-hand editor panel (the draw code places it at the right edge).
+    pub fn panel_crop() -> Rect {
+        Rect::from_min_max(
+            Pos2::new(ui::WIDTH - crate::editor_panels::PANEL_W - 40.0, 40.0),
+            Pos2::new(ui::WIDTH, 560.0f32.min(std::env::var("FC_SHOTS_H").ok().and_then(|h| h.parse().ok()).unwrap_or(720.0))),
+        )
+    }
+
+    fn word(text: &str, start: f64, end: f64) -> ferrocast_core::capture::transcript::Word {
+        ferrocast_core::capture::transcript::Word { text: text.into(), start, end, confidence: 0.95 }
+    }
+
+    fn long_transcript() -> ferrocast_core::capture::transcript::Transcript {
+        let text = "So today I want to show you how the new export works um and why it is faster than before \
+                    you know the first thing is the preview which uh renders in real time and then we just press the button";
+        let mut t = 1.0;
+        let words = text
+            .split_whitespace()
+            .map(|w| {
+                let x = word(w, t, t + 0.25);
+                t += 0.3;
+                x
+            })
+            .collect();
+        ferrocast_core::capture::transcript::Transcript { language: "en-US".into(), words, ..Default::default() }
+    }
+
+    fn open(tag: &str, tab: Tab, tr: Option<ferrocast_core::capture::transcript::Transcript>) -> App {
+        let mut p = p4_project();
+        p.trims.clear();
+        p.transcript = tr;
+        let (mut app, _dir, rx) = editor_app_for(&format!("shots-{tag}"), p, &["mic.m4a", "system.m4a", "camera.mov"]);
+        std::mem::forget(rx);
+        set_tab(&mut app, tab);
+        app
+    }
+
+    #[test]
+    fn editor_panel_shots() {
+        if dir().is_none() {
+            return;
+        }
+        use crate::editor_panels::{TranscribeFailure, TranscribeRun};
+        for dark in [true, false] {
+            let crop = Some(panel_crop());
+            let mut app = open("cam", Tab::Camera, None);
+            snap(&mut app, "camera", dark, crop);
+            let mut app = open("aud", Tab::Audio, None);
+            snap(&mut app, "audio", dark, crop);
+            let mut app = open("idle", Tab::Transcript, None);
+            snap(&mut app, "transcript-idle", dark, crop);
+            let mut app = open("err", Tab::Transcript, None);
+            app.editor.as_mut().unwrap().st.tr.error = Some(TranscribeFailure::Permission);
+            snap(&mut app, "transcript-error", dark, crop);
+            let mut app = open("run", Tab::Transcript, None);
+            let mut run = TranscribeRun::new();
+            (run.done, run.total) = (1.0, 4.0);
+            app.editor.as_mut().unwrap().st.tr.run = Some(run);
+            snap(&mut app, "transcript-running", dark, crop);
+            let mut app = open("words", Tab::Transcript, Some(long_transcript()));
+            app.editor.as_mut().unwrap().t = 3.1;
+            app.editor.as_mut().unwrap().st.tr.sel = Some((6, 9));
+            app.editor.as_mut().unwrap().transcript_cut(crate::editor_panels::CutAction::Fillers, 5.0);
+            app.editor.as_mut().unwrap().st.tr.sel = Some((6, 9));
+            snap(&mut app, "transcript-words", dark, crop);
+            let mut app = open("fillers", Tab::Transcript, Some(long_transcript()));
+            app.editor.as_mut().unwrap().t = 5.0;
+            snap(&mut app, "transcript-fillers", dark, crop);
+            let mut app = open("zoom", Tab::Style, None);
+            snap(&mut app, "style", dark, crop);
+            let mut app = open("export", Tab::Zoom, None);
+            app.editor.as_mut().unwrap().export.open = true;
+            snap(&mut app, "export", dark, None);
+            for (name, camera, state) in [
+                (
+                    "settings-sources-failed",
+                    false,
+                    crate::record_ctl::DevicesState::Failed("Screen capture is not available in this build.".into()),
+                ),
+                (
+                    "settings-sources-ready",
+                    true,
+                    crate::record_ctl::DevicesState::Ready(ferrocast_core::capture::protocol::Devices {
+                        cameras: vec![ferrocast_core::capture::protocol::CameraDevice {
+                            id: "0x1".into(),
+                            name: "FaceTime HD Camera".into(),
+                            position: "unspecified".into(),
+                            default: true,
+                        }],
+                        microphones: vec![ferrocast_core::capture::protocol::MicrophoneDevice {
+                            id: "m1".into(),
+                            name: "Studio Mic".into(),
+                            default: true,
+                        }],
+                    }),
+                ),
+            ] {
+                let mut app = settings_app(CAPTURE_TAB, egui::ThemePreference::Dark);
+                app.settings.capture.camera = camera;
+                app.rt.devices = state;
+                settle(&mut app);
+                scroll_settings(&mut app, 330.0);
+                snap(&mut app, name, dark, None);
+            }
+        }
     }
 }

@@ -1132,19 +1132,42 @@ pub fn zoom_label(z: &Zoom) -> String {
     format!("{kind}  {}–{}  ·  {:.1}×", clock(z.start), clock(z.end), z.scale)
 }
 
-/// A labelled slider; returns the new value (in the unit of `v`) when it changed. `scale` shows the
-/// value multiplied (0.06 as 6 %).
-fn row_slider(ui: &mut Ui, label: &str, v: f64, range: std::ops::RangeInclusive<f64>, scale: f64, suffix: &str) -> Option<f64> {
+/// A labelled slider: the label in a fixed column at the left, the rail across the middle and the
+/// value box (always the same width) at the right. Returns the new value (in the unit of `v`) when
+/// it changed. `scale` shows the value multiplied (0.06 as 6 %).
+fn row_slider(
+    ui: &mut Ui,
+    pal: &Palette,
+    label: &str,
+    v: f64,
+    range: std::ops::RangeInclusive<f64>,
+    scale: f64,
+    suffix: &str,
+) -> Option<f64> {
     let mut shown = v * scale;
     let (lo, hi) = (range.start() * scale, range.end() * scale);
     ui.horizontal(|ui| {
-        ui.add_sized([70.0, 18.0], egui::Label::new(label));
-        ui.spacing_mut().slider_width = 96.0;
+        ui.allocate_ui_with_layout(egui::vec2(SLIDER_LABEL_W, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_width(SLIDER_LABEL_W);
+            ui.label(egui::RichText::new(label).size(12.5).color(pal.sub_strong));
+        });
+        let gap = ui.spacing().item_spacing.x;
+        let width = (ui.available_width() - SLIDER_VALUE_W - gap - 2.0).max(60.0);
+        let sp = ui.spacing_mut();
+        sp.interact_size.x = SLIDER_VALUE_W;
+        sp.slider_rail_height = 4.0;
+        sp.slider_width = width;
+        ui.visuals_mut().slider_trailing_fill = true;
+        ui.visuals_mut().handle_shape = egui::style::HandleShape::Circle;
         let r = ui.add(egui::Slider::new(&mut shown, lo..=hi).suffix(suffix).max_decimals(2));
         r.changed().then(|| shown / scale)
     })
     .inner
 }
+
+/// Label column and value box of [`row_slider`].
+const SLIDER_LABEL_W: f32 = 56.0;
+const SLIDER_VALUE_W: f32 = 58.0;
 
 fn note(ui: &mut Ui, pal: &Palette, text: &str) {
     ui.label(egui::RichText::new(text).size(11.5).color(pal.sub));
@@ -1153,6 +1176,9 @@ fn note(ui: &mut Ui, pal: &Palette, text: &str) {
 /// The right-hand panel: tabs and the active tab's controls. Every change goes through [`Editor::apply`].
 pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto: &ZoomOpts, fps: f64, now: f64) {
     ui.painter().rect_filled(rect, 8.0, pal.field);
+    // tests check that every tab stays inside the panel
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("editor-panel-rect"), rect));
     ui.scope_builder(UiBuilder::new().max_rect(rect.shrink(8.0)), |ui| {
         let tabs = ed.project.as_ref().map_or_else(|| visible_tabs(&Project::new("", "")), visible_tabs);
         // a Camera / Audio tab left over from another project falls back to Zoom
@@ -1163,14 +1189,10 @@ pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto:
                 ed.st.picking = false;
             }
         }
-        ui.horizontal_wrapped(|ui| {
-            for t in tabs {
-                if ui.selectable_label(ed.st.tab == t, t.label()).clicked() {
-                    ed.st.tab = t;
-                    ed.st.picking = false;
-                }
-            }
-        });
+        if let Some(t) = tab_strip(ui, pal, &tabs, ed.st.tab) {
+            ed.st.tab = t;
+            ed.st.picking = false;
+        }
         ui.separator();
         let Some(proj) = ed.project.clone() else { return };
         // the reason an edit was refused stays in view above the controls
@@ -1323,17 +1345,17 @@ fn cursor_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: 
             }
         }
     });
-    if let Some(v) = row_slider(ui, "Size", c.size, 0.5..=4.0, 1.0, "×") {
+    if let Some(v) = row_slider(ui, pal, "Size", c.size, 0.5..=4.0, 1.0, "×") {
         ed.apply(EditKind::Cursor, now, |p| set_cursor(p, CursorField::Size(v)));
     }
-    if let Some(v) = row_slider(ui, "Smoothing", c.smoothing, 0.0..=1.0, 100.0, " %") {
+    if let Some(v) = row_slider(ui, pal, "Smoothing", c.smoothing, 0.0..=1.0, 100.0, " %") {
         ed.apply(EditKind::Cursor, now, |p| set_cursor(p, CursorField::Smoothing(v)));
     }
     let mut ring = c.click_effect == "ring";
     if ui.checkbox(&mut ring, "Click ring").changed() {
         ed.apply(EditKind::Other, now, |p| set_cursor(p, CursorField::ClickRing(ring)));
     }
-    if let Some(v) = row_slider(ui, "Motion blur", c.motion_blur, 0.0..=2.0, 100.0, " %") {
+    if let Some(v) = row_slider(ui, pal, "Motion blur", c.motion_blur, 0.0..=2.0, 100.0, " %") {
         ed.apply(EditKind::Cursor, now, |p| set_cursor(p, CursorField::MotionBlur(v)));
     }
     note(ui, pal, "The cursor is drawn from the recorded events; None and Hidden remove it.");
@@ -1350,19 +1372,19 @@ fn style_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f
         }
     });
     background_rows(ui, pal, ed, s, now);
-    if let Some(v) = row_slider(ui, "Padding", s.padding, 0.0..=0.45, 100.0, " %") {
+    if let Some(v) = row_slider(ui, pal, "Padding", s.padding, 0.0..=0.45, 100.0, " %") {
         ed.apply(EditKind::Style, now, |p| set_style(p, StyleField::Padding(v)));
     }
-    if let Some(v) = row_slider(ui, "Corners", s.radius, 0.0..=64.0, 1.0, " px") {
+    if let Some(v) = row_slider(ui, pal, "Corners", s.radius, 0.0..=64.0, 1.0, " px") {
         ed.apply(EditKind::Style, now, |p| set_style(p, StyleField::Radius(v)));
     }
-    if let Some(v) = row_slider(ui, "Shadow", s.shadow.blur, 0.0..=120.0, 1.0, " px") {
+    if let Some(v) = row_slider(ui, pal, "Shadow", s.shadow.blur, 0.0..=120.0, 1.0, " px") {
         ed.apply(EditKind::Style, now, |p| set_style(p, StyleField::ShadowBlur(v)));
     }
-    if let Some(v) = row_slider(ui, "Opacity", s.shadow.opacity, 0.0..=1.0, 100.0, " %") {
+    if let Some(v) = row_slider(ui, pal, "Opacity", s.shadow.opacity, 0.0..=1.0, 100.0, " %") {
         ed.apply(EditKind::Style, now, |p| set_style(p, StyleField::ShadowOpacity(v)));
     }
-    if let Some(v) = row_slider(ui, "Offset", s.shadow.dy, 0.0..=80.0, 1.0, " px") {
+    if let Some(v) = row_slider(ui, pal, "Offset", s.shadow.dy, 0.0..=80.0, 1.0, " px") {
         ed.apply(EditKind::Style, now, |p| set_style(p, StyleField::ShadowDy(v)));
     }
 }
@@ -1391,7 +1413,7 @@ fn background_rows(ui: &mut Ui, pal: &Palette, ed: &mut Editor, s: &Style, now: 
         }
     });
     if bg.kind == "gradient" {
-        if let Some(v) = row_slider(ui, "Angle", bg.angle, 0.0..=360.0, 1.0, "°") {
+        if let Some(v) = row_slider(ui, pal, "Angle", bg.angle, 0.0..=360.0, 1.0, "°") {
             ed.apply(EditKind::Style, now, |p| set_style(p, StyleField::BgAngle(v)));
         }
         ui.horizontal_wrapped(|ui| {
@@ -1406,58 +1428,335 @@ fn background_rows(ui: &mut Ui, pal: &Palette, ed: &mut Editor, s: &Style, now: 
     }
 }
 
-/// The read-only list of recorded side files, with the missing-file sentence in the danger colour.
+// ---------------------------------------------------------------------------------------------
+// Panel widgets of the Camera / Audio / Transcript tabs. They paint with the app palette only
+// (no animation), every clickable thing is at least `HIT_H` tall and every state has a word or a
+// shape next to its colour.
+
+/// Height of a clickable row in the panel.
+pub const HIT_H: f32 = 26.0;
+/// Height of a tab chip.
+const TAB_H: f32 = 24.0;
+/// How much of the accent tints a selected chip (low enough for the accent text on it to keep 4.5:1).
+pub const ACCENT_TINT: f32 = 0.10;
+/// Horizontal gap between chips.
+const CHIP_GAP: f32 = 4.0;
+
+/// The widths of a wrapping chip strip: the chips (their text widths plus `pad` on both sides) are
+/// split into the fewest rows that fit `avail`, as evenly as possible (7 chips become 4 + 3), and
+/// each row's spare room is shared between its chips, so every row is exactly `avail` wide.
+pub fn chip_rows(text_w: &[f32], avail: f32, gap: f32, pad: f32) -> Vec<Vec<f32>> {
+    let n = text_w.len();
+    if n == 0 {
+        return vec![];
+    }
+    let w: Vec<f32> = text_w.iter().map(|t| t + 2.0 * pad).collect();
+    for rows in 1..=n {
+        let (base, extra) = (n / rows, n % rows);
+        let (mut out, mut i, mut fits) = (Vec::with_capacity(rows), 0, true);
+        for r in 0..rows {
+            let cnt = base + usize::from(r < extra);
+            let row = &w[i..i + cnt];
+            i += cnt;
+            let need = row.iter().sum::<f32>() + gap * (cnt as f32 - 1.0);
+            if need > avail {
+                fits = false;
+                break;
+            }
+            let spare = (avail - need) / cnt as f32;
+            out.push(row.iter().map(|x| x + spare).collect());
+        }
+        if fits {
+            return out;
+        }
+    }
+    w.iter().map(|_| vec![avail]).collect()
+}
+
+fn font(size: f32) -> egui::FontId {
+    egui::FontId::proportional(size)
+}
+
+/// A button-like painted cell: the response, with the keyboard focus ring and the screen-reader label.
+fn cell(ui: &mut Ui, pal: &Palette, rect: Rect, id: egui::Id, label: &str, selected: Option<bool>) -> egui::Response {
+    let resp = ui.interact(rect, id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| match selected {
+        Some(on) => egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, on, label),
+        None => egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label),
+    });
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect.expand(1.0), 7.0, egui::Stroke::new(2.0, pal.accent.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+    }
+    resp
+}
+
+/// The tab strip: equal-height chips, wrapped into balanced rows that fill the panel width.
+fn tab_strip(ui: &mut Ui, pal: &Palette, tabs: &[Tab], current: Tab) -> Option<Tab> {
+    let widths: Vec<f32> = tabs.iter().map(|t| ui.painter().layout_no_wrap(t.label().into(), font(12.5), pal.text).size().x).collect();
+    let avail = ui.available_width();
+    let mut clicked = None;
+    let mut i = 0;
+    for row in chip_rows(&widths, avail, CHIP_GAP, 9.0) {
+        let (strip, _) = ui.allocate_exact_size(egui::vec2(avail, TAB_H), egui::Sense::hover());
+        let mut x = strip.min.x;
+        for w in row {
+            let t = tabs[i];
+            i += 1;
+            let hit = Rect::from_min_size(egui::pos2(x, strip.min.y), egui::vec2(w, TAB_H));
+            x += w + CHIP_GAP;
+            let resp = cell(ui, pal, hit, ui.id().with(("tab", t.label())), t.label(), Some(t == current));
+            let on = t == current;
+            let chip = hit;
+            let fill = if on {
+                pal.accent.gamma_multiply(ACCENT_TINT)
+            } else if resp.hovered() {
+                pal.sel
+            } else {
+                pal.field
+            };
+            ui.painter().rect_filled(chip, 7.0, fill);
+            let color = if on { pal.accent_text } else { pal.sub_strong };
+            ui.painter().text(chip.center(), egui::Align2::CENTER_CENTER, t.label(), font(12.5), color);
+            if resp.clicked() {
+                clicked = Some(t);
+            }
+        }
+    }
+    clicked
+}
+
+/// A small caption above a control group.
+fn caption(ui: &mut Ui, pal: &Palette, text: &str) {
+    ui.label(egui::RichText::new(text).size(12.0).color(pal.sub_strong));
+}
+
+/// A rounded, hairline-edged container that fills the panel width.
+fn card<R>(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
+    egui::Frame::new()
+        .fill(pal.field)
+        .stroke(egui::Stroke::new(1.0, pal.sep))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 6.0;
+            add(ui)
+        })
+        .inner
+}
+
+/// A full-width (or `width`-wide) secondary button; a disabled one is dimmed and inert.
+fn secondary_button(ui: &mut Ui, pal: &Palette, label: &str, width: f32, enabled: bool) -> bool {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, HIT_H), egui::Sense::hover());
+    let resp = cell(ui, pal, rect, ui.id().with(("btn", label)), label, None);
+    let hover = enabled && resp.hovered();
+    ui.painter().rect_filled(rect, 7.0, if hover { pal.sel } else { pal.field.gamma_multiply(1.6) });
+    let color = if enabled { pal.text } else { pal.sub };
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(12.5), color);
+    enabled && resp.clicked()
+}
+
+/// The main action of a tab: accent fill, white label.
+fn primary_button(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::hover());
+    let resp = cell(ui, pal, rect, ui.id().with(("primary", label)), label, None);
+    ui.painter().rect_filled(rect, 8.0, if resp.hovered() { pal.accent.gamma_multiply(1.15) } else { pal.accent });
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(13.0), egui::Color32::WHITE);
+    resp.clicked()
+}
+
+/// `label` on the left, a switch on the right; the whole row is the click target.
+fn toggle_row(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), HIT_H), egui::Sense::hover());
+    let resp = ui.interact(rect, ui.id().with(("toggle", label)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label));
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(rect, 7.0, pal.field);
+    }
+    p.text(egui::pos2(rect.min.x + 2.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font(13.0), pal.text);
+    let track = Rect::from_center_size(egui::pos2(rect.max.x - 22.0, rect.center().y), egui::vec2(34.0, 20.0));
+    let off = if pal.text.r() > 128 { egui::Color32::from_gray(74) } else { egui::Color32::from_gray(200) };
+    p.rect_filled(track, 10.0, if on { pal.accent } else { off });
+    let kx = if on { track.max.x - 10.0 } else { track.min.x + 10.0 };
+    p.circle_filled(egui::pos2(kx, track.center().y), 7.5, egui::Color32::WHITE);
+    if resp.has_focus() {
+        p.rect_stroke(rect.expand(1.0), 7.0, egui::Stroke::new(2.0, pal.accent.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+    }
+    resp.clicked()
+}
+
+#[derive(Clone, Copy)]
+enum Glyph {
+    Circle,
+    Rounded,
+    Square,
+}
+
+fn paint_glyph(p: &egui::Painter, at: egui::Pos2, g: Glyph, color: egui::Color32) {
+    let s = egui::Stroke::new(1.5, color);
+    let r = Rect::from_center_size(at, egui::vec2(12.0, 12.0));
+    match g {
+        Glyph::Circle => {
+            p.circle_stroke(at, 6.0, s);
+        }
+        Glyph::Rounded => {
+            p.rect_stroke(r, 3.5, s, egui::StrokeKind::Inside);
+        }
+        Glyph::Square => {
+            p.rect_stroke(r, 0.5, s, egui::StrokeKind::Inside);
+        }
+    }
+}
+
+/// An equal-width segmented control (the look of the Settings bars), each segment with a small
+/// drawn shape and its name. Returns the clicked index.
+fn shape_segments(ui: &mut Ui, pal: &Palette, items: &[(Glyph, &str)], current: usize) -> Option<usize> {
+    let (track, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), HIT_H), egui::Sense::hover());
+    let seg_w = (track.width() - 4.0) / items.len() as f32;
+    ui.painter().rect_filled(track, 8.0, pal.field.gamma_multiply(1.3));
+    let mut clicked = None;
+    for (i, (glyph, label)) in items.iter().enumerate() {
+        let hit = Rect::from_min_size(egui::pos2(track.min.x + 2.0 + i as f32 * seg_w, track.min.y), egui::vec2(seg_w, HIT_H));
+        let resp = cell(ui, pal, hit, ui.id().with(("seg", *label)), label, Some(i == current));
+        let on = i == current;
+        if on {
+            ui.painter().rect_filled(hit.shrink2(egui::vec2(0.0, 2.0)), 6.0, pal.sel.gamma_multiply(1.8));
+        } else if resp.hovered() {
+            ui.painter().rect_filled(hit.shrink2(egui::vec2(0.0, 2.0)), 6.0, pal.field);
+        }
+        let color = if on { pal.text } else { pal.sub_strong };
+        let galley = ui.painter().layout_no_wrap((*label).into(), font(12.0), color);
+        let total = 12.0 + 6.0 + galley.size().x;
+        let x0 = hit.center().x - total / 2.0;
+        paint_glyph(ui.painter(), egui::pos2(x0 + 6.0, hit.center().y), *glyph, color);
+        ui.painter().galley(egui::pos2(x0 + 18.0, hit.center().y - galley.size().y / 2.0), galley, color);
+        if resp.clicked() {
+            clicked = Some(i);
+        }
+    }
+    clicked
+}
+
+/// The four corners as a 2 x 2 grid of cells, each showing a mini frame with the camera bubble in
+/// that corner; the active one is filled and outlined. Returns the clicked corner.
+fn corner_picker(ui: &mut Ui, pal: &Palette, current: Corner) -> Option<Corner> {
+    let corners = [
+        (Corner::TopLeft, "Top left"),
+        (Corner::TopRight, "Top right"),
+        (Corner::BottomLeft, "Bottom left"),
+        (Corner::BottomRight, "Bottom right"),
+    ];
+    let w = (ui.available_width() - CHIP_GAP) / 2.0;
+    let mut clicked = None;
+    let (area, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 2.0 * 32.0 + CHIP_GAP), egui::Sense::hover());
+    for (i, (corner, label)) in corners.iter().enumerate() {
+        let (col, row) = ((i % 2) as f32, (i / 2) as f32);
+        let hit =
+            Rect::from_min_size(egui::pos2(area.min.x + col * (w + CHIP_GAP), area.min.y + row * (32.0 + CHIP_GAP)), egui::vec2(w, 32.0));
+        let resp = cell(ui, pal, hit, ui.id().with(("corner", *label)), label, Some(*corner == current));
+        let on = *corner == current;
+        let fill = if on {
+            pal.accent.gamma_multiply(ACCENT_TINT)
+        } else if resp.hovered() {
+            pal.sel
+        } else {
+            pal.field.gamma_multiply(1.3)
+        };
+        let p = ui.painter();
+        p.rect_filled(hit, 7.0, fill);
+        if on {
+            p.rect_stroke(hit, 7.0, egui::Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), egui::StrokeKind::Inside);
+        }
+        // the bubble sits in the cell's own corner, like the camera in the frame
+        let bubble = Rect::from_min_size(
+            egui::pos2(
+                if col == 0.0 { hit.min.x + 6.0 } else { hit.max.x - 6.0 - 12.0 },
+                if row == 0.0 { hit.min.y + 5.0 } else { hit.max.y - 5.0 - 9.0 },
+            ),
+            egui::vec2(12.0, 9.0),
+        );
+        let ink = if on { pal.accent_text } else { pal.sub_strong };
+        if on {
+            p.rect_filled(bubble, 3.0, ink);
+        } else {
+            p.rect_stroke(bubble, 3.0, egui::Stroke::new(1.2, ink), egui::StrokeKind::Inside);
+        }
+        p.text(hit.center(), egui::Align2::CENTER_CENTER, *label, font(12.0), if on { pal.text } else { pal.sub_strong });
+        if resp.clicked() {
+            clicked = Some(*corner);
+        }
+    }
+    clicked
+}
+
+/// The recorded side files of the project, as quiet secondary text (a missing file in the danger colour).
 fn source_rows(ui: &mut Ui, pal: &Palette, ed: &Editor, proj: &Project, only: &[&str]) {
     for info in source_infos(proj, &ed.dir).iter().filter(|i| only.contains(&i.label)) {
-        ui.label(egui::RichText::new(info.label).size(11.5).color(pal.sub));
-        let color = if info.missing { pal.danger } else { pal.text };
-        ui.label(egui::RichText::new(info.text()).size(12.0).color(color));
+        ui.label(egui::RichText::new(info.label).size(11.5).color(pal.sub_strong));
+        let color = if info.missing { pal.danger } else { pal.sub_strong };
+        ui.label(egui::RichText::new(info.text()).size(11.5).color(color));
     }
 }
 
 fn camera_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
     let c = proj.camera.unwrap_or_default();
-    let mut visible = c.visible;
-    if ui.checkbox(&mut visible, "Show camera").changed() {
-        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Visible(visible)));
+    if toggle_row(ui, pal, "Show camera", c.visible) {
+        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Visible(!c.visible)));
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Shape");
-        for (shape, label) in [(CameraShape::Circle, "Circle"), (CameraShape::Rounded, "Rounded"), (CameraShape::Square, "Square")] {
-            if ui.selectable_label(c.shape == shape, label).clicked() {
-                ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Shape(shape)));
-            }
-        }
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Corner");
-        for (corner, label) in [
-            (Corner::TopLeft, "Top left"),
-            (Corner::TopRight, "Top right"),
-            (Corner::BottomLeft, "Bottom left"),
-            (Corner::BottomRight, "Bottom right"),
-        ] {
-            if ui.selectable_label(c.corner == corner, label).clicked() {
-                ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Corner(corner)));
-            }
-        }
-    });
-    if let Some(v) = row_slider(ui, "Size", c.size, SIZE_MIN..=SIZE_MAX, 100.0, " %") {
+    ui.add_space(4.0);
+    caption(ui, pal, "Shape");
+    let shapes = [CameraShape::Circle, CameraShape::Rounded, CameraShape::Square];
+    let items = [(Glyph::Circle, "Circle"), (Glyph::Rounded, "Rounded"), (Glyph::Square, "Square")];
+    let cur = shapes.iter().position(|s| *s == c.shape).unwrap_or(1);
+    if let Some(i) = shape_segments(ui, pal, &items, cur) {
+        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Shape(shapes[i])));
+    }
+    ui.add_space(4.0);
+    caption(ui, pal, "Corner");
+    if let Some(corner) = corner_picker(ui, pal, c.corner) {
+        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Corner(corner)));
+    }
+    ui.add_space(4.0);
+    if let Some(v) = row_slider(ui, pal, "Size", c.size, SIZE_MIN..=SIZE_MAX, 100.0, " %") {
         ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::Size(v)));
     }
-    if let Some(v) = row_slider(ui, "Margin", c.margin, 0.0..=MARGIN_MAX, 100.0, " %") {
+    if let Some(v) = row_slider(ui, pal, "Margin", c.margin, 0.0..=MARGIN_MAX, 100.0, " %") {
         ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::Margin(v)));
     }
-    let mut mirror = c.mirror;
-    if ui.checkbox(&mut mirror, "Mirror").changed() {
-        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Mirror(mirror)));
+    if toggle_row(ui, pal, "Mirror", c.mirror) {
+        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Mirror(!c.mirror)));
     }
-    ui.separator();
+    ui.add_space(6.0);
     source_rows(ui, pal, ed, proj, &["Camera"]);
     note(ui, pal, "The camera is recorded as its own file, so it can be moved, resized or hidden without re-recording.");
 }
 
+/// The mute switch of a track card: a pill that says `Mute` or `Muted` (so the state is a word, not only a colour).
+fn mute_pill(ui: &mut Ui, pal: &Palette, track: &str, muted: bool) -> bool {
+    let label = if muted { "Muted" } else { "Mute" };
+    let w = ui.painter().layout_no_wrap(label.into(), font(12.0), pal.text).size().x + 24.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w.max(60.0), 24.0), egui::Sense::hover());
+    let resp = cell(ui, pal, rect, ui.id().with(("mute", track)), label, Some(muted));
+    let (fill, ink) = if muted {
+        (pal.accent.gamma_multiply(ACCENT_TINT), pal.accent_text)
+    } else if resp.hovered() {
+        (pal.sel, pal.sub_strong)
+    } else {
+        (pal.field.gamma_multiply(1.3), pal.sub_strong)
+    };
+    ui.painter().rect_filled(rect, 12.0, fill);
+    if muted {
+        ui.painter().rect_stroke(rect, 12.0, egui::Stroke::new(1.0, pal.accent.gamma_multiply(0.6)), egui::StrokeKind::Inside);
+    }
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(12.0), ink);
+    resp.clicked()
+}
+
 fn audio_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
+    let infos = source_infos(proj, &ed.dir);
     for (track, label, present) in
         [(AudioTrack::Mic, "Microphone", proj.sources.mic.is_some()), (AudioTrack::System, "System audio", proj.sources.system.is_some())]
     {
@@ -1465,23 +1764,52 @@ fn audio_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f
             continue;
         }
         let m = track_mix(proj, track);
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(label).size(12.5).strong().color(pal.text));
-            if ui.selectable_label(m.mute, if m.mute { "Muted" } else { "Mute" }).clicked() {
-                ed.apply(EditKind::Other, now, |p| set_audio(p, AudioField::Mute(track, !m.mute)));
+        card(ui, pal, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(label).size(13.0).strong().color(pal.text));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if mute_pill(ui, pal, label, m.mute) {
+                        ed.apply(EditKind::Other, now, |p| set_audio(p, AudioField::Mute(track, !m.mute)));
+                    }
+                });
+            });
+            if let Some(info) = infos.iter().find(|i| i.label == label) {
+                let color = if info.missing { pal.danger } else { pal.sub_strong };
+                ui.label(egui::RichText::new(info.text()).size(11.5).color(color));
             }
+            // a muted track keeps its gain, shown dimmed
+            ui.scope(|ui| {
+                if m.mute {
+                    ui.set_opacity(0.7);
+                }
+                if let Some(v) = row_slider(ui, pal, "Gain", m.gain_db, GAIN_DB_MIN..=GAIN_DB_MAX, 1.0, " dB") {
+                    ed.apply(EditKind::Audio, now, |p| set_audio(p, AudioField::Gain(track, v)));
+                }
+            });
         });
-        if let Some(v) = row_slider(ui, "Gain", m.gain_db, GAIN_DB_MIN..=GAIN_DB_MAX, 1.0, " dB") {
-            ed.apply(EditKind::Audio, now, |p| set_audio(p, AudioField::Gain(track, v)));
+    }
+    ui.add_space(4.0);
+    card(ui, pal, |ui| {
+        ui.label(egui::RichText::new("Master").size(13.0).strong().color(pal.text));
+        if let Some(v) = row_slider(ui, pal, "Gain", proj.audio.master_db, GAIN_DB_MIN..=GAIN_DB_MAX, 1.0, " dB") {
+            ed.apply(EditKind::Audio, now, |p| set_audio(p, AudioField::Master(v)));
         }
-    }
-    ui.separator();
-    if let Some(v) = row_slider(ui, "Master", proj.audio.master_db, GAIN_DB_MIN..=GAIN_DB_MAX, 1.0, " dB") {
-        ed.apply(EditKind::Audio, now, |p| set_audio(p, AudioField::Master(v)));
-    }
-    ui.separator();
-    source_rows(ui, pal, ed, proj, &["Microphone", "System audio"]);
+    });
+    ui.add_space(2.0);
     note(ui, pal, "The mix is applied when you export; the preview is silent.");
+}
+
+/// A message card: an `!` badge and the text, tinted with the danger colour (the words carry the meaning).
+fn error_card(ui: &mut Ui, pal: &Palette, text: &str) {
+    egui::Frame::new()
+        .fill(pal.danger.gamma_multiply(0.12))
+        .stroke(egui::Stroke::new(1.0, pal.danger.gamma_multiply(0.4)))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new(text).size(12.0).color(pal.text));
+        });
 }
 
 fn transcript_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
@@ -1492,10 +1820,11 @@ fn transcript_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, f
         note(ui, pal, "No words were found in the audio.");
     }
     if let Some(f) = ed.st.tr.error.clone() {
-        ui.label(egui::RichText::new(f.text()).size(12.0).color(pal.danger));
-        if f == TranscribeFailure::Permission && ui.button("Open Speech Recognition settings").clicked() {
+        error_card(ui, pal, &f.text());
+        if f == TranscribeFailure::Permission && secondary_button(ui, pal, "Open Speech Recognition settings", ui.available_width(), true) {
             crate::capture_ctl::open_pane(crate::capture_ctl::SPEECH_PANE);
         }
+        ui.add_space(4.0);
     }
     if let Some(r) = ed.st.tr.run.as_ref() {
         let (done, total, cancelling) = (r.done, r.total, r.cancelling);
@@ -1507,44 +1836,72 @@ fn transcript_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, f
         } else {
             "Starting…".to_string()
         };
-        ui.add(egui::ProgressBar::new(frac).text(text));
-        if ui.add_enabled(!cancelling, egui::Button::new("Cancel")).clicked() {
+        let mut cancel = false;
+        card(ui, pal, |ui| {
+            ui.label(egui::RichText::new(text).size(13.0).color(pal.text));
+            let (bar, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
+            ui.painter().rect_filled(bar, 3.0, pal.sep);
+            if frac > 0.0 {
+                ui.painter().rect_filled(Rect::from_min_size(bar.min, egui::vec2(bar.width() * frac, bar.height())), 3.0, pal.accent);
+            }
+            ui.add_space(2.0);
+            cancel = secondary_button(ui, pal, "Cancel", ui.available_width(), !cancelling);
+        });
+        if cancel {
             ed.cancel_transcribe();
         }
+        ui.add_space(2.0);
+        note(ui, pal, "Closing the editor cancels it.");
         return;
     }
     if !can_transcribe(proj) {
         note(ui, pal, "This recording has no audio to transcribe.");
         return;
     }
-    ui.horizontal(|ui| {
-        ui.label("Language");
-        let mut loc = ed.st.tr.locale.min(LOCALES.len() - 1);
-        egui::ComboBox::from_id_salt("transcript-locale").selected_text(LOCALES[loc].1).show_ui(ui, |ui| {
-            for (i, (_, name)) in LOCALES.iter().enumerate() {
-                ui.selectable_value(&mut loc, i, *name);
-            }
-        });
-        ed.st.tr.locale = loc;
+    note(ui, pal, "Turn the audio into words you can click, select and cut.");
+    ui.add_space(4.0);
+    caption(ui, pal, "Language");
+    let mut loc = ed.st.tr.locale.min(LOCALES.len() - 1);
+    egui::ComboBox::from_id_salt("transcript-locale").width(ui.available_width()).selected_text(LOCALES[loc].1).show_ui(ui, |ui| {
+        for (i, (_, name)) in LOCALES.iter().enumerate() {
+            ui.selectable_value(&mut loc, i, *name);
+        }
     });
-    if ui.button("Transcribe").clicked() {
+    ed.st.tr.locale = loc;
+    ui.add_space(4.0);
+    if primary_button(ui, pal, "Transcribe") {
         ed.st.tr.start = true;
     }
     note(ui, pal, "Transcription runs on this Mac. Nothing leaves it.");
 }
 
+/// Height of one line of the word flow.
+const WORD_LINE_H: f32 = 22.0;
+
+/// The colour of a filler word: amber, dark enough on the light panel to read.
+pub fn filler_color(dark: bool) -> egui::Color32 {
+    if dark {
+        egui::Color32::from_rgb(232, 163, 76)
+    } else {
+        egui::Color32::from_rgb(150, 82, 0)
+    }
+}
+
 fn transcript_words(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
     use crate::editor_ctl::clock;
-    use egui::{Color32, Sense, Vec2};
+    use egui::{Sense, Vec2};
     let Some(tr) = proj.transcript.as_ref() else { return };
     let n = tr.words.len();
     let sel = selection_bounds(ed.st.tr.sel, n);
     let (mut fillers, mut pauses, mut delete) = (false, false, false);
-    ui.horizontal_wrapped(|ui| {
-        delete = ui.add_enabled(sel.is_some(), egui::Button::new("Delete selection")).clicked();
-        fillers = ui.button("Remove fillers").clicked();
-        pauses = ui.button("Tighten pauses").clicked();
+    // the two automatic edits side by side, the selection edit under them
+    let half = (ui.available_width() - CHIP_GAP) / 2.0;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = CHIP_GAP;
+        fillers = secondary_button(ui, pal, "Remove fillers", half, true);
+        pauses = secondary_button(ui, pal, "Tighten pauses", half, true);
     });
+    delete = secondary_button(ui, pal, "Delete selection", ui.available_width(), sel.is_some()) || delete;
     if let Some(msg) = ed.st.tr.notice.as_deref() {
         note(ui, pal, msg);
     }
@@ -1557,56 +1914,66 @@ fn transcript_words(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project,
         None => "No selection".to_string(),
     };
     note(ui, pal, &status);
-    note(ui, pal, "Click a word to move the playhead. Shift-click or drag to select.");
-    ui.separator();
     let tl = ed.timeline.clone();
     let cur = word_at(tr, ed.t);
     let flags = filler_flags(tr, proj.duration);
     let shift = ui.input(|i| i.modifiers.shift);
-    let orange = Color32::from_rgb(222, 150, 60);
+    let filler = filler_color(ui.visuals().dark_mode);
     let (mut click, mut drag_start, mut dragging) = (None, None, false);
     let mut rects: Vec<(usize, Rect)> = Vec::with_capacity(n);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(4.0, 3.0);
-        for (i, w) in tr.words.iter().enumerate() {
-            let cut = tl.as_ref().is_some_and(|tl| word_is_cut(tl, w));
-            let color = if cut {
-                pal.sub
-            } else if flags.get(i).copied().unwrap_or(false) {
-                orange
-            } else {
-                pal.text
-            };
-            let mut rt = egui::RichText::new(w.text.as_str()).size(13.0).color(color);
-            if cut {
-                rt = rt.strikethrough();
-            }
-            if sel.is_some_and(|(a, b)| (a..=b).contains(&i)) {
-                rt = rt.background_color(pal.sel);
-            } else if cur == Some(i) {
-                rt = rt.background_color(pal.accent.gamma_multiply(0.45));
-            }
-            let r = ui.add(egui::Label::new(rt).selectable(false).sense(Sense::click_and_drag()));
-            if r.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if r.clicked() {
-                click = Some(i);
-            }
-            if r.drag_started() {
-                drag_start = Some(i);
-            }
-            dragging |= r.dragged();
-            rects.push((i, r.rect));
-        }
-    });
+    egui::Frame::new().fill(pal.field).stroke(egui::Stroke::new(1.0, pal.sep)).corner_radius(8).inner_margin(egui::Margin::same(10)).show(
+        ui,
+        |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                // roomy lines (the wrap ignores the vertical spacing, so the height is the word's own)
+                ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+                for (i, w) in tr.words.iter().enumerate() {
+                    let cut = tl.as_ref().is_some_and(|tl| word_is_cut(tl, w));
+                    let is_filler = flags.get(i).copied().unwrap_or(false);
+                    let color = if cut {
+                        pal.sub
+                    } else if is_filler {
+                        filler
+                    } else {
+                        pal.text
+                    };
+                    let mut rt = egui::RichText::new(w.text.as_str()).size(13.5).line_height(Some(WORD_LINE_H)).color(color);
+                    if cut {
+                        rt = rt.strikethrough();
+                    }
+                    if is_filler && !cut {
+                        rt = rt.italics();
+                    }
+                    if sel.is_some_and(|(a, b)| (a..=b).contains(&i)) {
+                        rt = rt.background_color(pal.accent.gamma_multiply(0.38));
+                    } else if cur == Some(i) {
+                        // the word under the playhead: a soft tint and an underline
+                        rt = rt.background_color(pal.accent.gamma_multiply(0.20)).underline();
+                    }
+                    let r = ui.add(egui::Label::new(rt).selectable(false).sense(Sense::click_and_drag()));
+                    if r.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if r.clicked() {
+                        click = Some(i);
+                    }
+                    if r.drag_started() {
+                        drag_start = Some(i);
+                    }
+                    dragging |= r.dragged();
+                    rects.push((i, r.rect));
+                }
+            });
+        },
+    );
     if let Some(i) = drag_start {
         ed.st.tr.anchor = Some(i);
         ed.st.tr.sel = Some((i, i));
     }
     if dragging {
         let pos = ui.input(|i| i.pointer.interact_pos());
-        let hit = pos.and_then(|p| rects.iter().find(|(_, r)| r.expand2(Vec2::new(3.0, 2.0)).contains(p)).map(|(i, _)| *i));
+        let hit = pos.and_then(|p| rects.iter().find(|(_, r)| r.expand2(Vec2::new(3.0, 1.0)).contains(p)).map(|(i, _)| *i));
         if let (Some(a), Some(j)) = (ed.st.tr.anchor, hit) {
             ed.st.tr.sel = Some((a, j));
         }
@@ -1633,6 +2000,9 @@ fn transcript_words(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project,
     if pauses {
         ed.transcript_cut(CutAction::Pauses, now);
     }
+    ui.add_space(2.0);
+    // the hint sits under the words, so the first lines of the transcript are in view in the small panel
+    note(ui, pal, "Click a word to move the playhead. Shift-click or drag to select.");
     note(ui, pal, "Cut words are struck through. Filler words are orange.");
 }
 
