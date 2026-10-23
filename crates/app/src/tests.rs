@@ -48,6 +48,7 @@ fn fixture() -> App {
         base: vec![],
         hotkeys: None,
         capture: crate::capture_ctl::CaptureState::with(std::path::PathBuf::new(), crate::capture_ctl::Availability::Available),
+        selection: Default::default(),
         finder: services::FinderEnterState { hooks: inert_finder_hooks(), ..Default::default() },
         _tray: None,
         notes_tray: None,
@@ -11363,4 +11364,72 @@ fn capture_shortcut_record_opens_the_hotkey_view_for_that_command() {
         View::Hotkey { id, .. } => assert_eq!(id, "builtin:capture-window"),
         _ => panic!("the Hotkey view opens"),
     }
+}
+
+// ---- live bug: the selection is non-blocking, one flow at a time ----
+
+#[test]
+fn a_second_capture_command_while_a_selection_is_pending_is_refused() {
+    use crate::capture_ctl::{CaptureKind, Flow, SELECTION_BUSY};
+    let mut app = fixture();
+    app.visible = true;
+    let first = Flow::Capture(CaptureKind::Area);
+    app.selection.begin(first).unwrap();
+    app.run_capture(CaptureKind::Window);
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(SELECTION_BUSY));
+    assert!(app.visible, "a refused command does not hide the launcher");
+    assert!(app.selection.begin(Flow::Capture(CaptureKind::Screen)).is_err(), "the first flow still owns the slot");
+}
+
+#[test]
+fn esc_in_the_overlay_leaves_no_toast_and_frees_the_slot() {
+    use crate::capture_ctl::{CaptureKind, Flow};
+    use ferrocast_core::capture::protocol::Shareable;
+    use ferrocast_macos::selector::Selection;
+    let mut app = fixture();
+    app.visible = true;
+    for flow in [Flow::Capture(CaptureKind::Area), Flow::Capture(CaptureKind::Scrolling)] {
+        app.selection.begin(flow).unwrap();
+        assert!(app.selection.listed(flow));
+        app.capture_selected(flow, Some(Selection::Cancelled), Shareable::default());
+        assert!(app.toast.is_none(), "{flow:?}: Esc says nothing");
+        assert!(app.selection.begin(flow).is_ok(), "{flow:?}: the slot is free again");
+        app.selection.cancel();
+    }
+}
+
+#[test]
+fn a_selection_that_arrives_after_the_flow_was_cancelled_is_ignored() {
+    use crate::capture_ctl::{CaptureKind, Flow};
+    use ferrocast_core::capture::protocol::Shareable;
+    let mut app = fixture();
+    app.visible = true;
+    let other = Flow::Capture(CaptureKind::Window);
+    app.selection.begin(other).unwrap();
+    app.capture_selected(Flow::Capture(CaptureKind::Area), None, Shareable::default());
+    assert!(app.selection.begin(other).is_err(), "the stale message did not touch the pending flow");
+    app.capture_listed(Flow::Capture(CaptureKind::Area), Ok(Shareable::default()));
+    assert!(app.toast.is_none());
+}
+
+#[test]
+fn a_listing_that_fails_clears_the_slot_and_says_why() {
+    use crate::capture_ctl::{CaptureKind, Flow, Outcome};
+    let mut app = fixture();
+    app.visible = true;
+    let cap = Flow::Capture(CaptureKind::Area);
+    app.selection.begin(cap).unwrap();
+    app.capture_listed(cap, Err(Outcome::Failed("helper gone".into())));
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Capture failed: helper gone"));
+    assert!(app.selection.begin(cap).is_ok());
+    app.selection.cancel();
+    app.toast = None;
+    app.selection.begin(cap).unwrap();
+    app.capture_listed(cap, Err(Outcome::PermissionDenied));
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(crate::capture_ctl::PERMISSION_TOAST));
+    app.toast = None;
+    app.selection.begin(cap).unwrap();
+    app.capture_listed(cap, Err(Outcome::Cancelled));
+    assert!(app.toast.is_none());
+    assert!(app.selection.begin(cap).is_ok(), "cancelled also frees the slot");
 }

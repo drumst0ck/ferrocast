@@ -207,44 +207,105 @@ pub fn outcome_toast(o: &Outcome) -> Option<String> {
 /// Opens the Screen Recording pane of System Settings (never in tests).
 pub fn open_screen_recording_pane() {
     if !cfg!(test) {
-        let _ = std::process::Command::new("/usr/bin/open").arg(SCREEN_RECORDING_PANE).status();
+        // spawn, do not wait: this runs on the main thread inside a winit callback
+        let _ = std::process::Command::new("/usr/bin/open").arg(SCREEN_RECORDING_PANE).spawn();
     }
 }
 
-fn pointer_top_left(mtm: objc2::MainThreadMarker) -> Point {
+pub(crate) fn pointer_top_left(mtm: objc2::MainThreadMarker) -> Point {
     let primary_h = objc2_app_kit::NSScreen::screens(mtm).iter().next().map(|s| s.frame().size.height).unwrap_or(0.0);
     let m = objc2_app_kit::NSEvent::mouseLocation();
     ferrocast_core::capture::region::flip_point(Point { x: m.x, y: m.y }, primary_h)
 }
 
-/// Main thread: ask the helper what can be captured, let the user choose (Area and Window) and
-/// return the target. `Err` is the finished outcome (cancel, permission, failure).
-pub fn choose_target(
-    exe: &Path,
-    kind: CaptureKind,
-    mtm: objc2::MainThreadMarker,
-    log: impl Fn(&str) + Send + 'static,
-) -> Result<Target, Outcome> {
+/// The flows that pick something on screen first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flow {
+    Capture(CaptureKind),
+}
+
+impl Flow {
+    /// The capture kind that decides the overlay mode and the target.
+    pub fn capture_kind(self) -> CaptureKind {
+        match self {
+            Flow::Capture(k) => k,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    /// The helper is listing displays and windows on a worker thread.
+    Listing,
+    /// The overlay is on screen and waits for the user.
+    Selecting,
+}
+
+/// At most one select-then-act flow at a time (the overlay is a single shared panel set).
+#[derive(Debug, Default)]
+pub struct PendingSelection {
+    current: Option<(Flow, Stage)>,
+}
+
+impl PendingSelection {
+    #[cfg(test)]
+    pub fn is_pending(&self) -> bool {
+        self.current.is_some()
+    }
+
+    /// Claims the slot; `Err` when another flow is pending (the caller refuses the command).
+    pub fn begin(&mut self, flow: Flow) -> Result<(), ()> {
+        if self.current.is_some() {
+            return Err(());
+        }
+        self.current = Some((flow, Stage::Listing));
+        Ok(())
+    }
+
+    /// The listing finished: true when `flow` is the pending one and now waits for the overlay.
+    /// A stale message (flow cancelled meanwhile) returns false and changes nothing.
+    pub fn listed(&mut self, flow: Flow) -> bool {
+        match self.current {
+            Some((f, Stage::Listing)) if f == flow => {
+                self.current = Some((flow, Stage::Selecting));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The selection arrived (a `Screen` flow has none and skips the overlay): true when `flow` is
+    /// the pending one; the slot is free again.
+    pub fn finish(&mut self, flow: Flow) -> bool {
+        match self.current {
+            Some((f, _)) if f == flow => {
+                self.current = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Drops the pending flow (failure or cancel).
+    pub fn cancel(&mut self) {
+        self.current = None;
+    }
+}
+
+/// Sentence when a command arrives while a selection is pending.
+pub const SELECTION_BUSY: &str = "A selection is already in progress. Press Esc to cancel it.";
+
+/// WORKER thread: ask the helper what can be captured (up to 10 s). Never call this on the main
+/// thread: the overlay is started afterwards from the main loop (`selector::start`).
+pub fn list_shareable(exe: &Path, log: impl Fn(&str) + Send + 'static) -> Result<Shareable, Outcome> {
     use ferrocast_core::capture::protocol::{parse_body, Command};
     use ferrocast_macos::capture::{helper_path, timeout_for, Helper, ScreenshotError};
-    let fail = |e: ScreenshotError| match e {
+    let mut helper = Helper::spawn(&helper_path(exe), log).map_err(|e| Outcome::Failed(e.to_string()))?;
+    let body = helper.call(Command::Shareable, timeout_for(&Command::Shareable)).map_err(|e| match ScreenshotError::from(e) {
         ScreenshotError::PermissionDenied => Outcome::PermissionDenied,
         other => Outcome::Failed(other.to_string()),
-    };
-    let mut helper = Helper::spawn(&helper_path(exe), log).map_err(|e| Outcome::Failed(e.to_string()))?;
-    let body = helper.call(Command::Shareable, timeout_for(&Command::Shareable)).map_err(|e| fail(e.into()))?;
-    let shareable: Shareable = parse_body(&body).map_err(Outcome::Failed)?;
-    drop(helper);
-    let selection = match kind {
-        CaptureKind::Screen => None,
-        CaptureKind::Area | CaptureKind::Window | CaptureKind::Scrolling => {
-            select_mode(kind).map(|mode| ferrocast_macos::selector::select_with(mtm, selector_windows(&shareable.windows), mode))
-        }
-    };
-    match capture_plan(kind, selection, pointer_top_left(mtm), &shareable) {
-        Plan::Shoot(t) => Ok(t),
-        Plan::Nothing => Err(Outcome::Cancelled),
-    }
+    })?;
+    parse_body(&body).map_err(Outcome::Failed)
 }
 
 /// Overlay start mode per capture kind: Capture Window starts in window mode (S5); Screen has no overlay.
@@ -376,22 +437,6 @@ pub fn scroll_error_message(e: ferrocast_macos::scroll::ScrollError) -> String {
         ScrollError::NotTrusted => "Scrolling capture needs Accessibility. Turn Ferrocast on in System Settings → Privacy & Security → Accessibility, then try again.".into(),
         ScrollError::EventFailed => "Scrolling capture could not scroll the page".into(),
     }
-}
-
-/// Main thread: ask the helper what exists and let the user draw the area to scroll (Esc: cancel).
-pub fn choose_scroll_area(exe: &Path, mtm: objc2::MainThreadMarker, log: impl Fn(&str) + Send + 'static) -> Result<ScrollArea, Outcome> {
-    use ferrocast_core::capture::protocol::{parse_body, Command};
-    use ferrocast_macos::capture::{helper_path, timeout_for, Helper, ScreenshotError};
-    let mut helper = Helper::spawn(&helper_path(exe), log).map_err(|e| Outcome::Failed(e.to_string()))?;
-    let body = helper.call(Command::Shareable, timeout_for(&Command::Shareable)).map_err(|e| match ScreenshotError::from(e) {
-        ScreenshotError::PermissionDenied => Outcome::PermissionDenied,
-        other => Outcome::Failed(other.to_string()),
-    })?;
-    let shareable: Shareable = parse_body(&body).map_err(Outcome::Failed)?;
-    drop(helper);
-    let selection =
-        ferrocast_macos::selector::select_with(mtm, selector_windows(&shareable.windows), ferrocast_macos::selector::Mode::Area);
-    scroll_area(Some(selection), &shareable).ok_or(Outcome::Cancelled)
 }
 
 /// Sleeps `ms`, returning true when Esc was pressed meanwhile.
@@ -779,5 +824,60 @@ mod tests {
         assert_eq!(CaptureKind::Scrolling.command_id(), "builtin:capture-scrolling");
         assert_eq!(CaptureKind::from_command_id("builtin:capture-scrolling"), Some(CaptureKind::Scrolling));
         assert_eq!(select_mode(CaptureKind::Scrolling), Some(ferrocast_macos::selector::Mode::Area));
+    }
+
+    #[test]
+    fn one_pending_selection_at_a_time() {
+        let mut p = PendingSelection::default();
+        assert!(!p.is_pending());
+        assert_eq!(p.begin(Flow::Capture(CaptureKind::Area)), Ok(()));
+        assert!(p.is_pending());
+        assert_eq!(p.begin(Flow::Capture(CaptureKind::Screen)), Err(()), "a second command while pending is refused");
+        assert!(p.is_pending(), "the refused command left the first one alone");
+        assert!(p.finish(Flow::Capture(CaptureKind::Area)));
+        assert_eq!(p.begin(Flow::Capture(CaptureKind::Window)), Ok(()), "free again once the first finished");
+    }
+
+    #[test]
+    fn cancel_clears_the_pending_flow_and_makes_late_messages_stale() {
+        let area = Flow::Capture(CaptureKind::Area);
+        let mut p = PendingSelection::default();
+        p.begin(area).unwrap();
+        p.cancel();
+        assert!(!p.is_pending());
+        assert!(!p.listed(area), "the listing that comes back after a cancel is ignored");
+        assert!(!p.finish(area), "so is a selection");
+        p.cancel();
+        assert!(!p.is_pending());
+    }
+
+    #[test]
+    fn a_flow_goes_listing_then_selecting_then_done_in_that_order() {
+        let (area, window) = (Flow::Capture(CaptureKind::Area), Flow::Capture(CaptureKind::Window));
+        let mut p = PendingSelection::default();
+        p.begin(area).unwrap();
+        assert!(!p.listed(window), "another flow's listing is not ours");
+        assert!(p.listed(area));
+        assert!(!p.listed(area), "the listing is only accepted once");
+        assert!(!p.finish(window));
+        assert!(p.is_pending());
+        assert!(p.finish(area));
+        assert!(!p.finish(area), "a selection is only accepted once");
+    }
+
+    #[test]
+    fn a_flow_maps_to_the_capture_kind_that_picks_its_overlay() {
+        assert_eq!(Flow::Capture(CaptureKind::Window).capture_kind(), CaptureKind::Window);
+        assert_eq!(select_mode(Flow::Capture(CaptureKind::Window).capture_kind()), Some(ferrocast_macos::selector::Mode::Window));
+        assert_eq!(select_mode(Flow::Capture(CaptureKind::Screen).capture_kind()), None, "Capture Screen shows no overlay");
+    }
+
+    #[test]
+    fn a_cancelled_selection_plans_nothing_for_every_flow() {
+        let sh = two();
+        for kind in [CaptureKind::Area, CaptureKind::Window, CaptureKind::Scrolling] {
+            assert_eq!(capture_plan(kind, Some(Selection::Cancelled), Point { x: 0.0, y: 0.0 }, &sh), Plan::Nothing, "{kind:?}");
+        }
+        assert_eq!(scroll_area(Some(Selection::Cancelled), &sh), None);
     }
 }

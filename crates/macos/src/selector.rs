@@ -2,21 +2,30 @@
 //! display, a crosshair, a `W × H` pixel label, a hole for the selected area, <kbd>Space</kbd> to
 //! toggle window mode and <kbd>Esc</kbd> to cancel.
 //!
-//! `select` runs on the main thread and blocks (pumping AppKit events itself) until the user
-//! finishes. The behaviour lives in [`SelectorState`] and [`layout_for`], both pure and unit-tested;
+//! [`start`] shows the panels on the main thread and returns at once; the panel views' own event
+//! handlers finish the selection (mouse up, window click, Esc, a display change), close the
+//! panels and call `on_done` exactly once. That is the only entry point an app running inside a
+//! winit event callback may use. [`select`] / [`select_with`] block in a nested AppKit event loop and
+//! exist for the dev examples only. The behaviour lives in [`SelectorState`] and [`layout_for`], both pure and unit-tested;
 //! the AppKit code only forwards events to them and draws what they say. All geometry is in
 //! top-left global points (see `ferrocast_core::capture::region`).
 
 use std::cell::{Cell, RefCell};
+use std::ptr::NonNull;
+use std::rc::Rc;
 
 use ferrocast_core::capture::region::{flip_point, flip_rect, select_area, size_label, snap_window, Display, Point, Rect, Window};
 use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::NSApplicationDidChangeScreenParametersNotification;
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSBezierPath, NSColor, NSCursor, NSEvent, NSEventMask, NSFont, NSPanel, NSScreen, NSTextAlignment,
     NSTextField, NSView, NSWindingRule, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
-use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSDate, NSDefaultRunLoopMode, NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+};
 
 /// Smallest dragged side, in points, that counts as an area (a plain click selects nothing).
 const MIN_SIDE: f64 = 2.0;
@@ -197,10 +206,60 @@ pub fn layout_for(state: &SelectorState, index: usize) -> OverlayLayout {
 
 // ------------------------------------------------------------------ AppKit
 
+/// Called once with what the user chose.
+pub type OnDone = Box<dyn FnOnce(Selection)>;
+
+/// Why [`start`] did not show anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartError {
+    /// A selection is already on screen.
+    Busy,
+    /// No display to draw on.
+    NoDisplay,
+}
+
+impl std::fmt::Display for StartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartError::Busy => write!(f, "a selection is already in progress"),
+            StartError::NoDisplay => write!(f, "no display to select on"),
+        }
+    }
+}
+
+/// The pending completion callback. Pure helpers so "one selection at a time" and "exactly once"
+/// are testable without AppKit.
+fn register(slot: &mut Option<OnDone>, on_done: OnDone) -> Result<(), StartError> {
+    if slot.is_some() {
+        return Err(StartError::Busy);
+    }
+    *slot = Some(on_done);
+    Ok(())
+}
+
+/// Runs the callback if it is still pending; false when it already ran (or never existed).
+fn fire(slot: &mut Option<OnDone>, selection: Selection) -> bool {
+    match slot.take() {
+        Some(cb) => {
+            cb(selection);
+            true
+        }
+        None => false,
+    }
+}
+
 thread_local! {
     static STATE: RefCell<Option<SelectorState>> = const { RefCell::new(None) };
     static PRIMARY_HEIGHT: Cell<f64> = const { Cell::new(0.0) };
     static VIEWS: RefCell<Vec<(Retained<OverlayView>, Retained<NSTextField>)>> = const { RefCell::new(Vec::new()) };
+    /// The completion callback of the selection on screen; `Some` while one is active.
+    static ON_DONE: RefCell<Option<OnDone>> = const { RefCell::new(None) };
+    /// Panels of the selection on screen.
+    static PANELS: RefCell<Vec<Retained<SelectorPanel>>> = const { RefCell::new(Vec::new()) };
+    /// Closed panels, kept alive until the next `start`: the closing happens inside one of their own
+    /// view's event handlers, which must not be deallocated while it runs.
+    static GRAVE: RefCell<Vec<Retained<SelectorPanel>>> = const { RefCell::new(Vec::new()) };
+    static OBSERVER: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>> = const { RefCell::new(None) };
 }
 
 fn with_state(f: impl FnOnce(&mut SelectorState)) {
@@ -210,6 +269,29 @@ fn with_state(f: impl FnOnce(&mut SelectorState)) {
         }
     });
     refresh();
+    if let Some(done) = STATE.with(|s| s.borrow().as_ref().and_then(SelectorState::outcome)) {
+        complete(done);
+    }
+}
+
+/// Close the panels, clear the state and call `on_done` (once). Safe to call twice.
+fn complete(selection: Selection) {
+    if ON_DONE.with(|c| c.borrow().is_none()) {
+        return;
+    }
+    if let Some(token) = OBSERVER.with(|o| o.borrow_mut().take()) {
+        unsafe { NSNotificationCenter::defaultCenter().removeObserver(ProtocolObject::as_ref(&*token)) };
+    }
+    VIEWS.with(|v| v.borrow_mut().clear());
+    STATE.with(|s| *s.borrow_mut() = None);
+    let panels = PANELS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    for p in &panels {
+        p.orderOut(None);
+        p.close();
+    }
+    GRAVE.with(|g| g.borrow_mut().extend(panels));
+    let mut cb = ON_DONE.with(|c| c.borrow_mut().take());
+    fire(&mut cb, selection);
 }
 
 /// Mouse position in top-left global points.
@@ -389,19 +471,22 @@ fn displays_now(mtm: MainThreadMarker) -> (Vec<Display>, Vec<NSRect>, f64) {
     (displays, cocoa, primary_h)
 }
 
-/// Show the overlay on every display and block the calling main-thread run loop until the user
-/// selects an area, picks a window or cancels. `windows` are front-to-back frames in top-left
-/// points (for window mode). Nothing is written and nothing else is shown on `Cancelled`.
-pub fn select(mtm: MainThreadMarker, windows: Vec<Window>) -> Selection {
-    select_with(mtm, windows, Mode::Area)
-}
-
-/// [`select`] starting in `mode`; <kbd>Space</kbd> still toggles between the two.
-pub fn select_with(mtm: MainThreadMarker, windows: Vec<Window>, mode: Mode) -> Selection {
+/// Show the overlay on every display and return at once. `windows` are front-to-back frames in
+/// top-left points (for window mode). `on_done` runs on the main thread, exactly once, when the user
+/// selects an area, picks a window, presses Esc or the display configuration changes (then with
+/// [`Selection::Cancelled`]); the panels are closed by then. Nothing is written and nothing else is
+/// shown on `Cancelled`. Only one selection can be active: a second `start` returns
+/// [`StartError::Busy`] and drops its callback unused.
+pub fn start(mtm: MainThreadMarker, windows: Vec<Window>, mode: Mode, on_done: OnDone) -> Result<(), StartError> {
+    if ON_DONE.with(|c| c.borrow().is_some()) {
+        return Err(StartError::Busy);
+    }
     let (displays, cocoa, primary_h) = displays_now(mtm);
     if displays.is_empty() {
-        return Selection::Cancelled;
+        return Err(StartError::NoDisplay);
     }
+    GRAVE.with(|g| g.borrow_mut().clear());
+    ON_DONE.with(|c| register(&mut c.borrow_mut(), on_done))?;
     PRIMARY_HEIGHT.with(|p| p.set(primary_h));
     let mut state = SelectorState::with_mode(displays.clone(), windows, mode);
     state.pointer_move(mouse_point());
@@ -453,11 +538,44 @@ pub fn select_with(mtm: MainThreadMarker, windows: Vec<Window>, mode: Mode) -> S
         VIEWS.with(|v| v.borrow_mut().push((view, label)));
         panels.push(panel);
     }
+    PANELS.with(|p| *p.borrow_mut() = panels);
+    // a display added, removed or rearranged invalidates every rectangle: cancel
+    let block = block2::RcBlock::new(|_n: NonNull<NSNotification>| complete(Selection::Cancelled));
+    let token = unsafe {
+        NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(NSApplicationDidChangeScreenParametersNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+    OBSERVER.with(|o| *o.borrow_mut() = Some(token));
     refresh();
+    Ok(())
+}
 
-    let result = loop {
-        if let Some(done) = STATE.with(|s| s.borrow().as_ref().and_then(SelectorState::outcome)) {
-            break done;
+/// BLOCKING [`select_with`] in area mode. For the dev examples only.
+pub fn select(mtm: MainThreadMarker, windows: Vec<Window>) -> Selection {
+    select_with(mtm, windows, Mode::Area)
+}
+
+/// Blocking wrapper over [`start`]: pumps AppKit events itself until the selection is done.
+///
+/// **Never call this from inside a winit event callback** (or any other event handler): the nested
+/// `nextEventMatchingMask` loop re-enters winit's handler and winit aborts with "tried to handle
+/// event while another event is currently being handled". The app uses [`start`]; this exists for
+/// `examples/selector_demo.rs`, which has no event loop of its own. <kbd>Space</kbd> still toggles
+/// between the two modes.
+pub fn select_with(mtm: MainThreadMarker, windows: Vec<Window>, mode: Mode) -> Selection {
+    let result = Rc::new(Cell::new(None));
+    let slot = result.clone();
+    if start(mtm, windows, mode, Box::new(move |s| slot.set(Some(s)))).is_err() {
+        return Selection::Cancelled;
+    }
+    let app = NSApplication::sharedApplication(mtm);
+    loop {
+        if let Some(done) = result.get() {
+            return done;
         }
         let until = NSDate::distantFuture();
         if let Some(ev) =
@@ -465,15 +583,7 @@ pub fn select_with(mtm: MainThreadMarker, windows: Vec<Window>, mode: Mode) -> S
         {
             app.sendEvent(&ev);
         }
-    };
-
-    for p in &panels {
-        p.orderOut(None);
-        p.close();
     }
-    VIEWS.with(|v| v.borrow_mut().clear());
-    STATE.with(|s| *s.borrow_mut() = None);
-    result
 }
 
 #[cfg(test)]
@@ -710,5 +820,37 @@ mod tests {
     fn selector_manual() {
         let mtm = MainThreadMarker::new().expect("run with --test-threads=1 on the main thread");
         println!("{:?}", select(mtm, Vec::new()));
+    }
+
+    fn recorder() -> (Rc<RefCell<Vec<Selection>>>, OnDone) {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let l = log.clone();
+        (log, Box::new(move |s| l.borrow_mut().push(s)))
+    }
+
+    #[test]
+    fn a_second_selection_is_refused_while_one_is_active() {
+        let mut slot = None;
+        let (first, cb1) = recorder();
+        let (second, cb2) = recorder();
+        assert_eq!(register(&mut slot, cb1), Ok(()));
+        assert_eq!(register(&mut slot, cb2), Err(StartError::Busy));
+        assert!(fire(&mut slot, Selection::Window(3)));
+        assert_eq!(*first.borrow(), vec![Selection::Window(3)]);
+        assert!(second.borrow().is_empty(), "the refused callback never runs");
+    }
+
+    #[test]
+    fn on_done_runs_exactly_once_and_the_slot_is_free_again() {
+        let mut slot = None;
+        let (log, cb) = recorder();
+        register(&mut slot, cb).unwrap();
+        assert!(fire(&mut slot, Selection::Cancelled));
+        assert!(!fire(&mut slot, Selection::Area(Rect::new(0.0, 0.0, 5.0, 5.0))), "a late Esc or display change does nothing");
+        assert_eq!(*log.borrow(), vec![Selection::Cancelled]);
+        let (again, cb) = recorder();
+        assert_eq!(register(&mut slot, cb), Ok(()), "a new selection can start after the first finished");
+        assert!(fire(&mut slot, Selection::Cancelled));
+        assert_eq!(again.borrow().len(), 1);
     }
 }

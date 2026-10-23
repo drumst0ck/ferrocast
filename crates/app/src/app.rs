@@ -925,6 +925,18 @@ fn wikilink(rel: &str, title: &str) -> String {
     }
 }
 
+/// True while a visible floating panel of ours (pin, HUD, countdown, shelf, notes) is on screen:
+/// `NSApplication.hide` would take it away too (live bug: Pin vanished the moment it opened).
+/// The launcher is a plain window, not a panel.
+fn other_panel_visible(mtm: objc2::MainThreadMarker) -> bool {
+    use objc2::runtime::NSObjectProtocol;
+    use objc2::ClassType;
+    objc2_app_kit::NSApplication::sharedApplication(mtm)
+        .windows()
+        .iter()
+        .any(|w| w.isVisible() && w.isKindOfClass(objc2_app_kit::NSPanel::class()))
+}
+
 pub struct App {
     /// The update poller thread once started (never more than one).
     pub(crate) update_poller: Option<std::thread::JoinHandle<()>>,
@@ -949,6 +961,8 @@ pub struct App {
     hotkeys: Option<Hotkeys>,
     /// Screenshot commands: availability and the once-per-session shortcut sentence.
     capture: crate::capture_ctl::CaptureState,
+    /// The select-then-act flow in progress (Capture Area, Window, Screen and Scrolling), at most one.
+    selection: crate::capture_ctl::PendingSelection,
     /// Opt-in Enter on a Finder selection (tap, in-flight guard, injectable system hooks).
     finder: services::FinderEnterState,
     _tray: Option<tray_icon::TrayIcon>,
@@ -1212,6 +1226,7 @@ impl App {
             base: vec![],
             hotkeys,
             capture: crate::capture_ctl::CaptureState::detect(instance::running_exe().unwrap_or_default()),
+            selection: Default::default(),
             finder: Default::default(),
             _tray: tray,
             notes_tray: None,
@@ -1648,8 +1663,9 @@ impl App {
         self.shared.visible.store(false, Ordering::Relaxed);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         // hiding the whole app would also hide the floating shelf and Notes panels
-        if let Some(mtm) =
-            objc2::MainThreadMarker::new().filter(|_| !ferrocast_macos::shelf::is_visible() && !ferrocast_macos::notes::is_visible())
+        // (the same goes for every other floating panel: a pinned capture, the recording HUD)
+        if let Some(mtm) = objc2::MainThreadMarker::new()
+            .filter(|m| !ferrocast_macos::shelf::is_visible() && !ferrocast_macos::notes::is_visible() && !other_panel_visible(*m))
         {
             objc2_app_kit::NSApplication::sharedApplication(mtm).hide(None);
         }
@@ -3522,6 +3538,8 @@ impl App {
                     }
                 }
                 Msg::Capture(outcome) => self.finish_capture(outcome),
+                Msg::CaptureListed(flow, listed) => self.capture_listed(flow, listed),
+                Msg::CaptureSelected(flow, selection, shareable) => self.capture_selected(flow, selection, *shareable),
                 Msg::CaptureScroll(outcome, note) => {
                     self.finish_capture(outcome);
                     if let Some(n) = note {
@@ -5210,32 +5228,39 @@ impl App {
         }
     }
 
+    /// Claims the single selection slot for `flow`; says so and returns false when one is pending.
+    fn claim_selection(&mut self, flow: crate::capture_ctl::Flow) -> bool {
+        if self.selection.begin(flow).is_ok() {
+            return true;
+        }
+        self.capture_say(crate::capture_ctl::SELECTION_BUSY.into());
+        false
+    }
+
+    /// First step of every select-then-act flow: the helper lists displays and windows on a WORKER
+    /// thread (up to 10 s), then `Msg::CaptureListed` brings the result back to the main loop.
+    fn list_for(&mut self, flow: crate::capture_ctl::Flow) {
+        let exe = self.capture.exe.clone();
+        let root = self.store.root.clone();
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            let listed = crate::capture_ctl::list_shareable(&exe, move |m| instance::log(&root, m));
+            bus.send(Msg::CaptureListed(flow, listed));
+        });
+    }
+
     fn run_capture(&mut self, kind: crate::capture_ctl::CaptureKind) {
-        use crate::capture_ctl::{choose_target, shoot, Outcome};
-        if !self.capture_gate() {
+        let flow = crate::capture_ctl::Flow::Capture(kind);
+        if !self.capture_gate() || !self.claim_selection(flow) {
             return;
         }
         self.hide();
-        let exe = self.capture.exe.clone();
-        let root = self.store.root.clone();
-        let log = move |m: &str| instance::log(&root, m);
-        let Some(mtm) = objc2::MainThreadMarker::new() else {
-            return;
-        };
-        let target = match choose_target(&exe, kind, mtm, log.clone()) {
-            Ok(t) => t,
-            Err(Outcome::Cancelled) => return,
-            Err(o) => return self.finish_capture(o),
-        };
-        let dir = self.settings.capture.screenshots_dir(&dirs::home_dir().unwrap_or_default());
-        let cursor = self.settings.capture.include_cursor;
-        let bus = self.bus.clone();
-        std::thread::spawn(move || bus.send(Msg::Capture(shoot(&exe, target, &dir, cursor, log))));
+        self.list_for(flow);
     }
 
     /// Capture Scrolling (S10): pick an area, then scroll it and stitch the strips off-thread.
     fn run_capture_scrolling(&mut self) {
-        use crate::capture_ctl::{choose_scroll_area, scroll_capture, scroll_error_message, Outcome};
+        use crate::capture_ctl::{scroll_error_message, CaptureKind, Flow};
         if !self.capture_gate() {
             return;
         }
@@ -5244,24 +5269,97 @@ impl App {
             self.capture_say(scroll_error_message(e));
             return;
         }
+        let flow = Flow::Capture(CaptureKind::Scrolling);
+        if !self.claim_selection(flow) {
+            return;
+        }
         self.hide();
+        self.list_for(flow);
+    }
+
+    /// The helper listed what exists: start the overlay (non-blocking) or, for the flows without
+    /// one, go straight on. Runs in the main loop, never inside the overlay.
+    fn capture_listed(
+        &mut self,
+        flow: crate::capture_ctl::Flow,
+        listed: Result<ferrocast_core::capture::protocol::Shareable, crate::capture_ctl::Outcome>,
+    ) {
+        use crate::capture_ctl::{select_mode, selector_windows};
+        if !self.selection.listed(flow) {
+            return; // cancelled meanwhile
+        }
+        let shareable = match listed {
+            Ok(s) => s,
+            Err(o) => {
+                self.selection.cancel();
+                return self.flow_failed(flow, o);
+            }
+        };
+        let Some(mode) = select_mode(flow.capture_kind()) else {
+            return self.capture_selected(flow, None, shareable);
+        };
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            self.selection.cancel();
+            return;
+        };
+        let windows = selector_windows(&shareable.windows);
+        let bus = self.bus.clone();
+        let mut shareable = Some(Box::new(shareable));
+        let done = Box::new(move |sel| {
+            if let Some(s) = shareable.take() {
+                bus.send(Msg::CaptureSelected(flow, Some(sel), s));
+            }
+        });
+        if let Err(e) = ferrocast_macos::selector::start(mtm, windows, mode, done) {
+            self.selection.cancel();
+            instance::log(&self.store.root, &format!("selection overlay did not start: {e}"));
+        }
+    }
+
+    /// A flow that failed before or instead of a selection: say what the flow's kind says.
+    fn flow_failed(&mut self, flow: crate::capture_ctl::Flow, o: crate::capture_ctl::Outcome) {
+        use crate::capture_ctl::{Flow, Outcome};
+        match (flow, o) {
+            (_, Outcome::Cancelled | Outcome::Saved(_)) => {}
+            (Flow::Capture(_), o) => self.finish_capture(o),
+        }
+    }
+
+    /// The user chose (or `None`: the flow has no overlay): carry on with the flow. Esc plans
+    /// nothing, so no file and no toast.
+    fn capture_selected(
+        &mut self,
+        flow: crate::capture_ctl::Flow,
+        selection: Option<ferrocast_macos::selector::Selection>,
+        shareable: ferrocast_core::capture::protocol::Shareable,
+    ) {
+        use crate::capture_ctl::{capture_plan, scroll_area, scroll_capture, shoot, CaptureKind, Flow, Plan};
+        if !self.selection.finish(flow) {
+            return;
+        }
+        let pointer = match objc2::MainThreadMarker::new() {
+            Some(mtm) => crate::capture_ctl::pointer_top_left(mtm),
+            None => ferrocast_core::capture::region::Point { x: 0.0, y: 0.0 },
+        };
         let exe = self.capture.exe.clone();
         let root = self.store.root.clone();
         let log = move |m: &str| instance::log(&root, m);
-        let Some(mtm) = objc2::MainThreadMarker::new() else {
-            return;
-        };
-        let area = match choose_scroll_area(&exe, mtm, log.clone()) {
-            Ok(a) => a,
-            Err(Outcome::Cancelled) => return,
-            Err(o) => return self.finish_capture(o),
-        };
         let dir = self.settings.capture.screenshots_dir(&dirs::home_dir().unwrap_or_default());
         let bus = self.bus.clone();
-        std::thread::spawn(move || {
-            let (outcome, note) = scroll_capture(&exe, &area, &dir, log);
-            bus.send(Msg::CaptureScroll(outcome, note));
-        });
+        match flow {
+            Flow::Capture(CaptureKind::Scrolling) => {
+                let Some(area) = scroll_area(selection, &shareable) else { return };
+                std::thread::spawn(move || {
+                    let (outcome, note) = scroll_capture(&exe, &area, &dir, log);
+                    bus.send(Msg::CaptureScroll(outcome, note));
+                });
+            }
+            Flow::Capture(kind) => {
+                let Plan::Shoot(target) = capture_plan(kind, selection, pointer, &shareable) else { return };
+                let cursor = self.settings.capture.include_cursor;
+                std::thread::spawn(move || bus.send(Msg::Capture(shoot(&exe, target, &dir, cursor, log))));
+            }
+        }
     }
 
     /// Runs one button of the Capture window on the saved file.
