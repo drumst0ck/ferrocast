@@ -1,0 +1,12 @@
+{
+  "language": "en-US",
+  "generated_at": "2025-01-01T00:00:00Z",
+  "words": [
+    { "text": "So", "start": 0.4, "end": 0.6, "confidence": 0.98 },
+    { "text": "um,", "start": 0.6, "end": 0.9, "confidence": 0.7 },
+    { "text": "I", "start": 1.0, "end": 1.1, "confidence": 0.99 },
+    { "text": "like", "start": 1.1, "end": 1.4, "confidence": 0.95 },
+    { "text": "this.", "start": 1.4, "end": 1.9, "confidence": 0.97 },
+    { "text": "Next", "start": 3.2, "end": 3.5, "confidence": 0.96 }
+  ]
+}

@@ -5,6 +5,7 @@
 //! does not use them serializes byte-stably.
 
 use super::camera::CameraLayout;
+use super::transcript::Transcript;
 use super::MIN_SEGMENT;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -298,9 +299,9 @@ pub struct Project {
     /// P6 effects (placeholder).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loupes: Vec<Value>,
-    /// P5 transcript (placeholder).
+    /// P5 transcript (source-time words); omitted until transcribed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript: Option<Value>,
+    pub transcript: Option<Transcript>,
     #[serde(default)]
     pub export: Export,
     /// Fields written by a newer build, kept on save.

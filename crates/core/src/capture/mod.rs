@@ -18,4 +18,5 @@ pub mod cursor;
 pub mod curves;
 pub mod export;
 pub mod timeline;
+pub mod transcript;
 pub mod zoom;
