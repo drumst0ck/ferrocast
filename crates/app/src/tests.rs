@@ -51,6 +51,8 @@ fn fixture() -> App {
         selection: Default::default(),
         finder: services::FinderEnterState { hooks: inert_finder_hooks(), ..Default::default() },
         _tray: None,
+        record: Default::default(),
+        tray_rec_shown: false,
         notes_tray: None,
         icons: IconCache::new(store.images_dir()),
         stack: vec![View::Root],
@@ -6438,6 +6440,26 @@ fn tray_menu_has_check_for_updates_before_the_separator() {
     let at = items.iter().position(|(id, label)| *id == "check_updates" && *label == "Check for Updates…");
     assert!(at.is_some(), "{items:?}");
     assert!(items.iter().any(|(id, _)| *id == "settings"));
+}
+
+#[test]
+fn tray_menu_offers_stop_recording_first_only_while_recording() {
+    assert_eq!(services::tray_menu_items(false), services::tray_items().to_vec());
+    let rec = services::tray_menu_items(true);
+    assert_eq!(rec[0], ("stop_recording", "Stop Recording"));
+    assert_eq!(rec[1..], services::tray_items());
+}
+
+#[test]
+fn the_tray_stop_recording_item_requests_a_stop_only_while_recording() {
+    let mut app = fixture();
+    app.bus.send(Msg::Tray("stop_recording".into()));
+    app.drain();
+    assert!(app.record.is_idle(), "nothing to stop");
+    app.record.begin(0);
+    app.bus.send(Msg::Tray("stop_recording".into()));
+    app.drain();
+    assert_eq!(app.record.phase(), crate::record_ctl::Phase::Stopping);
 }
 
 #[test]

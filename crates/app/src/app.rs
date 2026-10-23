@@ -966,6 +966,10 @@ pub struct App {
     /// Opt-in Enter on a Finder selection (tap, in-flight guard, injectable system hooks).
     finder: services::FinderEnterState,
     _tray: Option<tray_icon::TrayIcon>,
+    /// Recording lifecycle (S13); T19 drives it, the tray mirrors it.
+    record: crate::record_ctl::RecordCtl,
+    /// Whether the tray currently shows the recording icon and `Stop Recording` item.
+    tray_rec_shown: bool,
     /// The second menu-bar item that toggles Notes; present while `notes_menu_bar_button` is on.
     /// Dropping it removes the item.
     notes_tray: Option<Box<dyn std::any::Any>>,
@@ -1229,6 +1233,8 @@ impl App {
             selection: Default::default(),
             finder: Default::default(),
             _tray: tray,
+            record: Default::default(),
+            tray_rec_shown: false,
             notes_tray: None,
             stack: vec![View::Root],
             query: String::new(),
@@ -2488,6 +2494,14 @@ impl App {
 
     /// Creates the Notes toggle in the menu bar when the setting is on and none exists, removes it
     /// (by dropping it) when the setting is off. Main thread only.
+    /// Mirror the recording state in the menu bar: `●  mm:ss`, red-dot icon, `Stop Recording`.
+    pub(crate) fn sync_recording_tray(&mut self) {
+        let (title, stop) = (self.record.tray_title(), self.record.shows_stop_item());
+        if let Some(tray) = self._tray.as_ref() {
+            services::set_tray_recording(tray, title.as_deref(), stop, &mut self.tray_rec_shown);
+        }
+    }
+
     pub(crate) fn sync_notes_tray(&mut self) {
         match (self.settings.notes_menu_bar_button, self.notes_tray.is_some()) {
             (true, false) => self.notes_tray = (self.fx.notes_tray)(&self.bus),
@@ -3496,6 +3510,11 @@ impl App {
                     }
                     "check_updates" => self.check_updates(),
                     "notes_toggle" => self.open_notes_window(|c, d| c.toggle(d)),
+                    "stop_recording" => {
+                        // T19 performs the returned effect (send `record.stop`, hide the HUD).
+                        let _effect = self.record.request_stop();
+                        self.sync_recording_tray();
+                    }
                     "quit" => self.quit(),
                     _ => {}
                 },
