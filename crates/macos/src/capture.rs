@@ -37,6 +37,8 @@ pub fn timeout_for(cmd: &Command) -> Duration {
         Command::Hello => 5,
         Command::Shareable => 10,
         Command::Screenshot { .. } => 20,
+        // A preview frame includes loading the asset on the first request (220 ms measured), far below this.
+        Command::RenderFrame { .. } => 10,
         Command::RecordStart { .. } | Command::RecordPause | Command::RecordResume => 10,
         // The helper may wait 5 s for stopCapture and 8 s for finishWriting: the client must outlast both,
         // otherwise it kills the helper and the recording is lost.

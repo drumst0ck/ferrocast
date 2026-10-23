@@ -49,6 +49,31 @@ pub enum Command {
     RecordPause,
     #[serde(rename = "record.resume")]
     RecordResume,
+    /// Render one preview frame of a project to a PNG. `t` is the source time of the take in
+    /// seconds (the caller maps output time with `timeline`); frames go through a file, never stdout.
+    #[serde(rename = "render.frame")]
+    RenderFrame {
+        /// Absolute project directory.
+        project: String,
+        t: f64,
+        /// Output width in pixels; the height follows the project's aspect.
+        width: u32,
+        /// Absolute PNG path; the helper picks one under `<project>/.cache` when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        out: Option<String>,
+    },
+}
+
+/// Payload of a successful `render.frame`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RenderFrameDone {
+    pub path: String,
+    pub size: [u32; 2],
+    #[serde(default)]
+    pub ms: f64,
+    /// Served from the helper's frame cache.
+    #[serde(default)]
+    pub cached: bool,
 }
 
 fn default_screen_file() -> String {
@@ -478,5 +503,38 @@ mod tests {
             ev(r#"{"event":"state","id":5,"state":"brand-new"}"#),
             Some(RecordEvent::State { state: RecordState::Unknown, message: None })
         );
+    }
+
+    #[test]
+    fn render_frame_request_encodes_project_in_json_and_omits_absent_out() {
+        let c = Command::RenderFrame { project: "/Users/me/Demo é.ferrocast".into(), t: 12.34, width: 960, out: None };
+        let s = encode_request(&Request { id: 9, command: c.clone() });
+        assert_eq!(s, r#"{"id":9,"cmd":"render.frame","project":"/Users/me/Demo é.ferrocast","t":12.34,"width":960}"#);
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap().command, c);
+        let with = Command::RenderFrame { project: "/p".into(), t: 0.0, width: 64, out: Some("/p/.cache/f-0.png".into()) };
+        let s = encode_request(&Request { id: 10, command: with.clone() });
+        assert!(s.ends_with(r#""width":64,"out":"/p/.cache/f-0.png"}"#), "{s}");
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap().command, with);
+    }
+
+    #[test]
+    fn render_frame_request_rejects_missing_required_fields() {
+        assert!(serde_json::from_str::<Request>(r#"{"id":1,"cmd":"render.frame","project":"/p","t":1.0}"#).is_err());
+        assert!(serde_json::from_str::<Request>(r#"{"id":1,"cmd":"render.frame","t":1.0,"width":10}"#).is_err());
+    }
+
+    #[test]
+    fn render_frame_reply_parses_and_tolerates_unknown_fields() {
+        let Line::Ok { body, .. } =
+            decode_line(r#"{"id":9,"ok":true,"path":"/p/.cache/f.png","size":[960,540],"ms":22.5,"cached":true,"future":1}"#).unwrap()
+        else {
+            panic!()
+        };
+        let d: RenderFrameDone = parse_body(&body).unwrap();
+        assert_eq!((d.path.as_str(), d.size, d.ms, d.cached), ("/p/.cache/f.png", [960, 540], 22.5, true));
+        let Line::Ok { body, .. } = decode_line(r#"{"id":9,"ok":true,"path":"/x.png","size":[2,2]}"#).unwrap() else { panic!() };
+        let d: RenderFrameDone = parse_body(&body).unwrap();
+        assert_eq!((d.ms, d.cached), (0.0, false));
+        assert!(parse_body::<RenderFrameDone>(&serde_json::json!({"ok":true})).is_err());
     }
 }

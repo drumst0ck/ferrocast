@@ -231,6 +231,141 @@ PY
   rm -rf "$recdir"
 fi
 
+# render.frame (T24): needs no Screen Recording grant. Generates a 30-frame 320x200 screen.mov with
+# AVAssetWriter (swiftc), pairs it with crates/core/fixtures/render_project.json (checked by a Rust
+# test), renders a 960 px frame and checks: PNG of the expected size, written atomically, cache hit
+# bytes equal, a second helper process gives identical bytes (determinism), and a project that also
+# carries P6 fields (loupes/looks/split, S19) renders the same bytes as one without. The sha256 is
+# printed and compared with $RENDER_GOLDEN (default target/capture-spike/render-golden.sha256) when
+# that file exists, else stored there. Delete it after an intended change of the look.
+if ! command -v swiftc >/dev/null 2>&1 || ! xcrun --find swiftc >/dev/null 2>&1; then
+  echo "SKIP: render.frame (swiftc not available)"
+else
+  run '{"id":1,"cmd":"hello"}'
+  if ! printf '%s' "$out" | grep -q '"render.frame"'; then
+    echo "SKIP: render.frame (helper does not advertise render.frame)"
+  else
+    mkdir -p target/capture-spike/tmp
+    rdir=$(mktemp -d "$PWD/target/capture-spike/tmp/render.XXXXXX")
+    cat > "$rdir/gen.swift" <<'SWIFT'
+import AVFoundation
+import CoreGraphics
+import Foundation
+
+// usage: gen <project-dir>: screen.mov with 30 frames, 320x200, 30 fps: gradient, a red square at
+// the top left and a white bar that moves right.
+let url = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("screen.mov")
+try? FileManager.default.removeItem(at: url)
+let w = 320, h = 200
+let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
+let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+    AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: w, AVVideoHeightKey: h])
+let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+    kCVPixelBufferWidthKey as String: w, kCVPixelBufferHeightKey as String: h])
+writer.add(input)
+writer.startWriting()
+writer.startSession(atSourceTime: .zero)
+for i in 0..<30 {
+    while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.005) }
+    var pb: CVPixelBuffer?
+    CVPixelBufferPoolCreatePixelBuffer(nil, adaptor.pixelBufferPool!, &pb)
+    let buf = pb!
+    CVPixelBufferLockBaseAddress(buf, [])
+    let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buf), width: w, height: h, bitsPerComponent: 8,
+                        bytesPerRow: CVPixelBufferGetBytesPerRow(buf), space: srgb,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+    let g = CGGradient(colorsSpace: srgb, colors: [CGColor(red: 0.1, green: 0.6, blue: 0.9, alpha: 1),
+                                                   CGColor(red: 0.95, green: 0.8, blue: 0.2, alpha: 1)] as CFArray, locations: nil)!
+    ctx.drawLinearGradient(g, start: CGPoint(x: 0, y: Double(h)), end: CGPoint(x: Double(w), y: 0), options: [])
+    ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: h - 40, width: 40, height: 40))
+    ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    ctx.fill(CGRect(x: 10 + i * 9, y: 90, width: 12, height: 20))
+    CVPixelBufferUnlockBaseAddress(buf, [])
+    adaptor.append(buf, withPresentationTime: CMTime(value: Int64(i), timescale: 30))
+}
+input.markAsFinished()
+let sem = DispatchSemaphore(value: 0)
+writer.finishWriting { sem.signal() }
+sem.wait()
+if writer.status != .completed { FileHandle.standardError.write(Data("fixture failed\n".utf8)); exit(1) }
+SWIFT
+    mkdir -p "$rdir/Fixture.ferrocast"
+    if swiftc -O "$rdir/gen.swift" -o "$rdir/gen" 2>/dev/null && "$rdir/gen" "$rdir/Fixture.ferrocast" \
+       && cp crates/core/fixtures/render_project.json "$rdir/Fixture.ferrocast/project.json"; then
+      render_out=$(python3 - "$helper" "$rdir/Fixture.ferrocast" "${RENDER_GOLDEN:-target/capture-spike/render-golden.sha256}" <<'PY'
+import hashlib, json, os, struct, subprocess, sys
+
+helper, project, golden = sys.argv[1:4]
+
+def session(reqs):
+    """One helper process; returns the replies in order."""
+    p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    out, _ = p.communicate("".join(json.dumps(r) + "\n" for r in reqs), timeout=60)
+    replies = [json.loads(l) for l in out.splitlines()]
+    assert len(replies) == len(reqs) and p.returncode == 0, (replies, p.returncode)
+    return replies
+
+def req(i, t=0.5, width=960, **kw):
+    return dict({"id": i, "cmd": "render.frame", "project": project, "t": t, "width": width}, **kw)
+
+def png_size(path):
+    d = open(path, "rb").read(24)
+    assert d[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+    return list(struct.unpack(">II", d[16:24]))
+
+def digest(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()
+
+try:
+    out_a, out_b = project + "/.cache/a.png", project + "/.cache/b.png"
+    ra, rb, bad, missing = session([req(1, out=out_a), req(2, out=out_b), req(3, t="x"), req(4, project=project + "/nope")])
+    assert ra.get("ok") and not ra["cached"] and ra["size"] == [960, 540], ra
+    assert png_size(out_a) == [960, 540] and not os.path.exists(out_a + ".partial"), "size or .partial"
+    assert rb.get("ok") and rb["cached"] and digest(out_a) == digest(out_b), ("cache hit differs", rb)
+    assert bad.get("error") == "invalid" and missing.get("error") == "not-found", (bad, missing)
+    sha = digest(out_a)
+
+    out_c = project + "/.cache/c.png"
+    assert session([req(5, out=out_c)])[0].get("ok") and digest(out_c) == sha, "second process differs (not deterministic)"
+
+    # S19: P6 fields (loupes, looks, split) in project.json change nothing about the frame.
+    path = project + "/project.json"
+    edl = json.load(open(path))
+    edl.update({"loupes": [{"start": 0.1, "end": 0.4}], "looks": "warm", "split": {"layout": "left"}})
+    json.dump(edl, open(path, "w"))
+    out_d = project + "/.cache/d.png"
+    assert session([req(6, out=out_d)])[0].get("ok") and digest(out_d) == sha, "P6 fields changed the rendered bytes"
+
+    a = session([req(7, t=0.0, width=480, out=project + "/.cache/e.png")])[0]
+    assert a.get("ok") and a["size"] == [480, 270], a
+
+    note = ""
+    if os.path.exists(golden):
+        want = open(golden).read().strip()
+        assert want == sha, "golden mismatch: %s != %s (delete %s after an intended change)" % (sha, want, golden)
+        note = ", golden matches"
+    else:
+        os.makedirs(os.path.dirname(golden), exist_ok=True)
+        open(golden, "w").write(sha + "\n")
+        note = ", golden stored"
+    print("PASS: render.frame (960x540 PNG %d bytes in %.0f ms, cache hit identical, 2nd process identical, P6 fields ignored, 480 px -> 480x270, sha256 %s%s)"
+          % (os.path.getsize(out_a), ra["ms"], sha[:16], note))
+except Exception as e:
+    print("FAIL: render.frame (%s)" % (e,)); sys.exit(1)
+PY
+      ); render_rc=$?
+      echo "$render_out"
+      [ "$render_rc" = 0 ] || fail=1
+    else
+      echo "SKIP: render.frame (fixture movie could not be generated: AVFoundation unavailable?)"
+    fi
+    rm -rf "$rdir"
+  fi
+fi
+
 # Unknown command: structured error, still protocol-only stdout.
 run '{"id":3,"cmd":"nope"}'
 [ "$(field error)" = invalid ] && echo "PASS: unknown command rejected" || bad "unknown command rc=$rc out=$out"
