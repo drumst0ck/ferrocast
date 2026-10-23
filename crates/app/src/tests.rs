@@ -11074,3 +11074,113 @@ fn capture_saved_with_save_only_does_nothing_more() {
     app.finish_capture(Outcome::Saved(std::path::PathBuf::from("/nonexistent/Capture.png")));
     assert!(app.toast.is_none());
 }
+
+// ---- T8: the Capture window (S7) ----
+
+fn capture_png(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("fc-capture-result-{}-{tag}", std::process::id()));
+    std::fs::create_dir_all(&d).unwrap();
+    let f = d.join("Capture 2026-10-23 at 14.05.22.png");
+    image::RgbaImage::from_pixel(120, 80, image::Rgba([20, 120, 220, 255])).save(&f).unwrap();
+    f
+}
+
+fn capture_app(file: &std::path::Path) -> App {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::CaptureResult { file: file.to_path_buf(), size: (120, 80) }];
+    app
+}
+
+fn capture_buttons_drawn(app: &mut App) -> Vec<(Pos2, bool)> {
+    app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
+    app.ctx.data_mut(|d| d.remove::<Vec<String>>(Id::new("body-notes")));
+    render(app, vec![]);
+    let hits: Vec<(String, Id, Rect, bool)> = app.ctx.data(|d| d.get_temp(Id::new("ctl-hits"))).unwrap_or_default();
+    hits.into_iter().filter(|h| h.0 == "small_btn").map(|h| (h.2.center(), h.3)).collect()
+}
+
+#[test]
+fn capture_window_renders_six_enabled_buttons_and_the_shortcuts() {
+    let f = capture_png("render");
+    let mut app = capture_app(&f);
+    let btns = capture_buttons_drawn(&mut app);
+    assert_eq!(btns.len(), 6, "Copy, Save, Annotate…, Background…, Copy Text, Pin");
+    assert!(btns.iter().all(|b| b.1), "all enabled while the file exists");
+    let notes: Vec<String> = app.ctx.data(|d| d.get_temp(Id::new("body-notes"))).unwrap_or_default();
+    let line = notes.join(" ");
+    for hint in ["↵", "⌘S", "⌘⇧A", "⌘⇧B", "⌘T", "⌘P"] {
+        assert!(line.contains(hint), "{hint} missing from {line:?}");
+    }
+    assert!(
+        app.ctx.data(|d| d.get_temp::<std::sync::Arc<(std::path::PathBuf, egui::TextureHandle)>>(Id::new("capture-tex"))).is_some(),
+        "preview drawn"
+    );
+    let chips = app.view().footer_hints();
+    assert!(chips.contains(&("Back", "esc")) && chips.iter().any(|c| c.1 == "↵"), "{chips:?}");
+    assert_eq!(app.view().title(), "Capture");
+}
+
+#[test]
+fn capture_window_buttons_are_disabled_when_the_file_is_gone() {
+    let mut app = capture_app(std::path::Path::new("/nonexistent/capture.png"));
+    let btns = capture_buttons_drawn(&mut app);
+    assert_eq!(btns.len(), 6);
+    assert!(btns.iter().all(|b| !b.1));
+    app.toast = None;
+    app.capture_result_run(crate::capture_ctl::ResultButton::Copy);
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("no longer exists")), "{:?}", app.toast);
+    assert!(matches!(app.view(), View::CaptureResult { .. }));
+}
+
+#[test]
+fn capture_window_annotate_and_background_open_the_existing_editors_on_the_saved_file() {
+    let f = capture_png("editors");
+    let mut app = capture_app(&f);
+    let btns = capture_buttons_drawn(&mut app);
+    click_at(&mut app, btns[2].0);
+    assert!(matches!(app.view(), View::Annotate { file, .. } if *file == f), "Annotate… acts on the saved path");
+    let mut app = capture_app(&f);
+    let btns = capture_buttons_drawn(&mut app);
+    click_at(&mut app, btns[3].0);
+    assert!(matches!(app.view(), View::FrameImage { file, .. } if *file == f), "Background… acts on the saved path");
+    let mut app = capture_app(&f);
+    render(&mut app, vec![key_mod_event(Key::A, Modifiers { shift: true, ..Modifiers::COMMAND })]);
+    assert!(matches!(app.view(), View::Annotate { file, .. } if *file == f), "⌘⇧A");
+    let mut app = capture_app(&f);
+    render(&mut app, vec![key_mod_event(Key::B, Modifiers { shift: true, ..Modifiers::COMMAND })]);
+    assert!(matches!(app.view(), View::FrameImage { file, .. } if *file == f), "⌘⇧B");
+}
+
+#[test]
+fn capture_window_copy_text_and_pin_are_stubs_that_say_not_available_yet() {
+    let f = capture_png("stubs");
+    for (idx, key) in [(4, Key::T), (5, Key::P)] {
+        let mut app = capture_app(&f);
+        let btns = capture_buttons_drawn(&mut app);
+        click_at(&mut app, btns[idx].0);
+        assert!(app.toast.as_ref().is_some_and(|t| t.0 == "Not available yet"), "button {idx}: {:?}", app.toast);
+        assert!(matches!(app.view(), View::CaptureResult { .. }), "the window stays open");
+        let mut app = capture_app(&f);
+        render(&mut app, vec![key_mod_event(key, Modifiers::COMMAND)]);
+        assert!(app.toast.as_ref().is_some_and(|t| t.0 == "Not available yet"), "shortcut {key:?}: {:?}", app.toast);
+    }
+}
+
+#[test]
+fn capture_window_escape_closes_it() {
+    let f = capture_png("esc");
+    let mut app = capture_app(&f);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+}
+
+#[test]
+fn saved_capture_with_after_show_opens_the_capture_window() {
+    let f = capture_png("finish");
+    let mut app = fixture();
+    app.visible = true;
+    assert_eq!(app.settings.capture.after, ferrocast_core::capture::settings::AfterCapture::Show);
+    app.finish_capture(crate::capture_ctl::Outcome::Saved(f.clone()));
+    assert!(matches!(app.view(), View::CaptureResult { file, size } if *file == f && *size == (120, 80)), "{}", app.view().title());
+}

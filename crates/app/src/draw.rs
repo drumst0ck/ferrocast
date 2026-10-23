@@ -1234,6 +1234,10 @@ impl App {
                 }
                 true
             }
+            View::CaptureResult { .. } if k.enter => {
+                self.capture_result_run(crate::capture_ctl::ResultButton::Copy);
+                true
+            }
             View::Annotate { file, doc, .. } if k.enter => {
                 if doc.items.is_empty() {
                     self.toast("Nothing drawn yet");
@@ -4364,6 +4368,65 @@ impl App {
         note_line(ui, Pos2::new(rect.center().x, rect.max.y - 14.0), "drag a slider · the preview is a reduced copy", pal);
     }
 
+    /// Capture window (S7): the saved picture, the six actions and their shortcuts.
+    fn draw_capture_result(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, file: &std::path::Path, size: (u32, u32)) {
+        use crate::capture_ctl::{button_enabled, result_buttons};
+        let ctx = ui.ctx().clone();
+        let exists = file.exists();
+        let specs = result_buttons();
+        // Enter is handled with the other windows' Enter; the rest are chords
+        let mut run = ctx.input_mut(|i| {
+            specs
+                .iter()
+                .filter(|s| s.shortcut.is_some_and(|(_, k)| k != Key::Enter))
+                .find_map(|s| s.shortcut.filter(|&(m, k)| i.consume_key(m, k)))
+                .and_then(|(m, k)| crate::capture_ctl::result_shortcut(m, k))
+        });
+        // the preview is decoded once per file, capped at 1600 px
+        let cached: Option<std::sync::Arc<(PathBuf, egui::TextureHandle)>> = ctx.data(|d| d.get_temp(Id::new("capture-tex")));
+        let tex = match cached {
+            Some(c) if c.0 == file => Some(c),
+            _ => {
+                let loaded = image::open(file).ok().map(|i| i.thumbnail(1600, 1600).to_rgba8()).map(|rgba| {
+                    let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
+                    std::sync::Arc::new((file.to_path_buf(), ctx.load_texture("capture-view", ci, egui::TextureOptions::LINEAR)))
+                });
+                if let Some(t) = &loaded {
+                    ctx.data_mut(|d| d.insert_temp(Id::new("capture-tex"), t.clone()));
+                }
+                loaded
+            }
+        };
+        let bar = Rect::from_min_size(Pos2::new(rect.min.x + 12.0, rect.max.y - 66.0), Vec2::new(rect.width() - 24.0, 30.0));
+        let area = Rect::from_min_max(rect.min + Vec2::new(12.0, 8.0), Pos2::new(rect.max.x - 12.0, bar.min.y - 8.0));
+        let scale = (area.width() / size.0.max(1) as f32).min(area.height() / size.1.max(1) as f32).clamp(0.01, 1.0);
+        let img_rect = Rect::from_center_size(area.center(), Vec2::new(size.0 as f32 * scale, size.1 as f32 * scale));
+        match tex {
+            Some(t) => {
+                egui::Image::new(&t.1).paint_at(ui, img_rect);
+            }
+            None => {
+                ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "Preview unavailable", FontId::proportional(14.0), pal.sub);
+            }
+        }
+        ui.scope_builder(UiBuilder::new().max_rect(bar), |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                for s in &specs {
+                    let on = button_enabled(s.id, exists);
+                    if ui.add_enabled_ui(on, |ui| small_btn(ui, pal, s.label)).inner {
+                        run = Some(s.id);
+                    }
+                }
+            });
+        });
+        let hints: Vec<String> = specs.iter().map(|s| format!("{} {}", s.hint, s.label.trim_end_matches('…'))).collect();
+        note_line(ui, Pos2::new(rect.center().x, rect.max.y - 14.0), hints.join(" · "), pal);
+        if let Some(b) = run {
+            self.capture_result_run(b);
+        }
+    }
+
     /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.
     #[allow(clippy::too_many_arguments)]
     fn draw_annotate(
@@ -4925,6 +4988,7 @@ impl App {
             View::EditPhoto { size, opts, .. } => {
                 self.draw_edit_photo(ui, rect, pal, size, opts);
             }
+            View::CaptureResult { file, size } => self.draw_capture_result(ui, rect, pal, &file, size),
             View::Annotate { file, size, doc, tool, color, sel } => {
                 self.draw_annotate(ui, rect, pal, &file, size, doc, tool, color, sel);
             }

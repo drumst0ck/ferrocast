@@ -455,6 +455,12 @@ pub enum Act {
         index: usize,
         args: Vec<String>,
     },
+    /// Capture window, Copy Text: recognise the text of this saved capture and copy it.
+    // T10: replace the "Not available yet" stub in the executor with the OCR call.
+    CaptureCopyText(PathBuf),
+    /// Capture window, Pin: float this saved capture above every window.
+    // T11: replace the "Not available yet" stub in the executor with the pin panel.
+    PinImage(PathBuf),
 }
 
 #[derive(Clone, Debug)]

@@ -575,6 +575,11 @@ pub enum View {
     Update {
         release: ferrocast_core::update::Release,
     },
+    /// Capture window (S7): the saved picture and its actions.
+    CaptureResult {
+        file: PathBuf,
+        size: (u32, u32),
+    },
 }
 
 /// One wheel segment: label, SF symbol, and what releasing on it does.
@@ -657,6 +662,7 @@ impl View {
             View::RedactImage { .. } => vec![SAVE, ("Remove", "⌫"), BACK],
             View::CropImage { .. } | View::VideoCrop { .. } => vec![("Crop", "↵"), BACK],
             View::Annotate { .. } => vec![SAVE, ("Undo", "⌘Z"), ("Delete", "⌫"), BACK],
+            View::CaptureResult { .. } => vec![("Copy", "↵"), ("Save", "⌘S"), ("Annotate", "⌘⇧A"), BACK],
             View::Reorder { purpose, .. } => {
                 let primary = match purpose {
                     ReorderPurpose::JoinVideos => "Join",
@@ -687,6 +693,7 @@ impl View {
             View::PdfOrganize { .. } => "Organize PDF",
             View::Reorder { .. } => "Choose Order",
             View::Annotate { .. } => "Annotate Image",
+            View::CaptureResult { .. } => "Capture",
             View::EditPhoto { .. } => "Edit Photo",
             View::CropImage { .. } => "Crop Image",
             View::CompressImage { media: Some(_), .. } => "Compress Audio and Video",
@@ -5195,6 +5202,39 @@ impl App {
         std::thread::spawn(move || bus.send(Msg::Capture(shoot(&exe, target, &dir, cursor, log))));
     }
 
+    /// Runs one button of the Capture window on the saved file.
+    pub(crate) fn capture_result_run(&mut self, b: crate::capture_ctl::ResultButton) {
+        use crate::capture_ctl::{button_enabled, ResultButton};
+        let Some(View::CaptureResult { file, .. }) = self.stack.last() else { return };
+        let file = file.clone();
+        if !button_enabled(b, file.exists()) {
+            self.toast("The capture file no longer exists");
+            return;
+        }
+        match b {
+            ResultButton::Copy => match std::fs::read(&file) {
+                Ok(png) => {
+                    clipboard::write_png(&png);
+                    self.shared.mark_clipboard_write();
+                    self.toast("Screenshot copied");
+                    self.hide();
+                    self.reset_to_root();
+                }
+                Err(e) => self.toast(format!("Copy failed: {e}")),
+            },
+            // the picture is already in the Capture folder: Save shows it in Finder
+            ResultButton::Save => {
+                let _ = apps::reveal(&file);
+                let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                self.toast(format!("Saved: {name}"));
+            }
+            ResultButton::Annotate => self.perform(Act::AnnotateCanvas(file), false),
+            ResultButton::Background => self.perform(Act::FrameImage(file), false),
+            ResultButton::CopyText => self.perform(Act::CaptureCopyText(file), false),
+            ResultButton::Pin => self.perform(Act::PinImage(file), false),
+        }
+    }
+
     fn finish_capture(&mut self, outcome: crate::capture_ctl::Outcome) {
         use crate::capture_ctl::{after_action, open_screen_recording_pane, outcome_toast, AfterAction, Outcome};
         if let Some(m) = outcome_toast(&outcome) {
@@ -5203,10 +5243,13 @@ impl App {
         match outcome {
             Outcome::PermissionDenied => open_screen_recording_pane(),
             Outcome::Saved(path) => match after_action(self.settings.capture.after) {
-                // T8: open the Capture window (`View::CaptureResult`) here instead of revealing the file.
-                AfterAction::Show => {
-                    let _ = apps::reveal(&path);
-                }
+                AfterAction::Show => match services::image_size(&path) {
+                    Some(size) => {
+                        self.show();
+                        self.push(View::CaptureResult { file: path, size });
+                    }
+                    None => self.capture_say("Capture failed: could not read the saved image".into()),
+                },
                 AfterAction::CopyImage => match std::fs::read(&path) {
                     Ok(png) => {
                         clipboard::write_png(&png);
@@ -5569,6 +5612,16 @@ impl App {
             Act::NotionAddHere(n) => {
                 let kind = if n.kind == ferrocast_core::notion::ItemKind::Page { "page" } else { "data_source" };
                 self.notion_add_open(Some(ferrocast_core::models::NotionTarget { id: n.id, kind: kind.into(), title: n.title }));
+            }
+            // T10: OCR replaces this stub.
+            Act::CaptureCopyText(file) => {
+                let _ = file;
+                self.toast("Not available yet");
+            }
+            // T11: the pin panel replaces this stub.
+            Act::PinImage(file) => {
+                let _ = file;
+                self.toast("Not available yet");
             }
             Act::PasteText(t) => self.paste_text(&t),
             Act::Reveal(p) => {

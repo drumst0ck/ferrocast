@@ -260,6 +260,51 @@ pub fn shoot(exe: &Path, target: Target, dir: &Path, cursor: bool, log: impl Fn(
     }
 }
 
+/// The Capture window's buttons (S7), in display order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResultButton {
+    Copy,
+    Save,
+    Annotate,
+    Background,
+    CopyText,
+    Pin,
+}
+
+/// One button of the Capture window: label, the shortcut it shows and the key that runs it.
+#[derive(Clone, Copy, Debug)]
+pub struct ButtonSpec {
+    pub id: ResultButton,
+    pub label: &'static str,
+    pub hint: &'static str,
+    pub shortcut: Option<(egui::Modifiers, egui::Key)>,
+}
+
+pub fn result_buttons() -> Vec<ButtonSpec> {
+    use egui::{Key, Modifiers};
+    let cmd = Modifiers::COMMAND;
+    let cmd_shift = Modifiers { shift: true, ..Modifiers::COMMAND };
+    let spec = |id, label, hint, shortcut| ButtonSpec { id, label, hint, shortcut: Some(shortcut) };
+    vec![
+        spec(ResultButton::Copy, "Copy", "↵", (Modifiers::NONE, Key::Enter)),
+        spec(ResultButton::Save, "Save", "⌘S", (cmd, Key::S)),
+        spec(ResultButton::Annotate, "Annotate…", "⌘⇧A", (cmd_shift, Key::A)),
+        spec(ResultButton::Background, "Background…", "⌘⇧B", (cmd_shift, Key::B)),
+        spec(ResultButton::CopyText, "Copy Text", "⌘T", (cmd, Key::T)),
+        spec(ResultButton::Pin, "Pin", "⌘P", (cmd, Key::P)),
+    ]
+}
+
+/// The button a key press runs (Enter included: Copy and close).
+pub fn result_shortcut(m: egui::Modifiers, key: egui::Key) -> Option<ResultButton> {
+    result_buttons().into_iter().find(|b| b.shortcut == Some((m, key))).map(|b| b.id)
+}
+
+/// Every button needs the saved file; nothing is enabled once it is gone.
+pub fn button_enabled(_b: ResultButton, file_exists: bool) -> bool {
+    file_exists
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,5 +424,39 @@ mod tests {
         assert_eq!(outcome_toast(&Outcome::Saved(PathBuf::from("/x.png"))), None);
         assert_eq!(outcome_toast(&Outcome::Failed("boom".into())).as_deref(), Some("Capture failed: boom"));
         assert_eq!(SCREEN_RECORDING_PANE, "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+    }
+
+    #[test]
+    fn s7_result_buttons_are_the_six_in_order_with_the_plan_shortcuts() {
+        let b = result_buttons();
+        let labels: Vec<_> = b.iter().map(|x| x.label).collect();
+        assert_eq!(labels, ["Copy", "Save", "Annotate…", "Background…", "Copy Text", "Pin"]);
+        let hints: Vec<_> = b.iter().map(|x| x.hint).collect();
+        assert_eq!(hints, ["↵", "⌘S", "⌘⇧A", "⌘⇧B", "⌘T", "⌘P"]);
+    }
+
+    #[test]
+    fn s7_shortcuts_map_to_buttons_and_nothing_else_does() {
+        use egui::{Key, Modifiers};
+        let cmd = Modifiers::COMMAND;
+        let cs = Modifiers { shift: true, ..Modifiers::COMMAND };
+        assert_eq!(result_shortcut(Modifiers::NONE, Key::Enter), Some(ResultButton::Copy));
+        assert_eq!(result_shortcut(cmd, Key::S), Some(ResultButton::Save));
+        assert_eq!(result_shortcut(cmd, Key::T), Some(ResultButton::CopyText));
+        assert_eq!(result_shortcut(cmd, Key::P), Some(ResultButton::Pin));
+        assert_eq!(result_shortcut(cs, Key::A), Some(ResultButton::Annotate));
+        assert_eq!(result_shortcut(cs, Key::B), Some(ResultButton::Background));
+        assert_eq!(result_shortcut(Modifiers::NONE, Key::S), None, "a bare letter is not a shortcut");
+        assert_eq!(result_shortcut(cs, Key::S), None, "extra shift is a different chord");
+        assert_eq!(result_shortcut(cmd, Key::Enter), None);
+    }
+
+    #[test]
+    fn s7_buttons_need_the_saved_file() {
+        assert_eq!(result_buttons().len(), 6);
+        for b in result_buttons() {
+            assert!(button_enabled(b.id, true), "{:?}", b.id);
+            assert!(!button_enabled(b.id, false), "{:?}", b.id);
+        }
     }
 }
