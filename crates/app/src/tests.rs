@@ -47,6 +47,7 @@ fn fixture() -> App {
         scripts: vec![],
         base: vec![],
         hotkeys: None,
+        capture: crate::capture_ctl::CaptureState::with(std::path::PathBuf::new(), crate::capture_ctl::Availability::Available),
         finder: services::FinderEnterState { hooks: inert_finder_hooks(), ..Default::default() },
         _tray: None,
         notes_tray: None,
@@ -11012,4 +11013,64 @@ fn the_forms_paint_and_send_with_cmd_enter() {
     oc_daily_form(&mut app, "x");
     let text = painted(&mut app);
     assert!(!text.contains("Title"), "the daily form has only the text: {text}");
+}
+
+fn capture_ids(app: &App) -> Vec<String> {
+    app.base.iter().filter(|i| i.id.starts_with("builtin:capture-")).map(|i| i.id.clone()).collect()
+}
+
+#[test]
+fn capture_commands_are_listed_only_when_capture_is_available() {
+    use crate::capture_ctl::{Availability, CaptureState};
+    let mut app = fixture();
+    app.rebuild();
+    assert_eq!(capture_ids(&app), ["builtin:capture-area", "builtin:capture-window", "builtin:capture-screen"]);
+    let item = app.base.iter().find(|i| i.id == "builtin:capture-area").unwrap();
+    assert_eq!((item.title.as_str(), item.subtitle.as_str(), item.is_command()), ("Capture Area", "Capture", true));
+    for availability in [Availability::NeedsMacOs14(13), Availability::NoHelper] {
+        app.capture = CaptureState::with(std::path::PathBuf::new(), availability);
+        app.rebuild();
+        assert!(capture_ids(&app).is_empty(), "{availability:?}");
+    }
+}
+
+#[test]
+fn stored_capture_shortcut_on_macos_13_toasts_once_per_session() {
+    use crate::capture_ctl::{Availability, CaptureState};
+    let mut app = fixture();
+    app.capture = CaptureState::with(std::path::PathBuf::new(), Availability::NeedsMacOs14(13));
+    app.rebuild();
+    app.visible = true;
+    assert!(!app.capture_gate());
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Screen capture needs macOS 14. This Mac runs macOS 13."));
+    app.toast = None;
+    assert!(!app.capture_gate());
+    assert!(app.toast.is_none(), "second press stays quiet");
+    app.capture = CaptureState::with(std::path::PathBuf::new(), Availability::NoHelper);
+    assert!(!app.capture_gate());
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Screen capture is not available in this build."));
+}
+
+#[test]
+fn capture_permission_denied_shows_the_exact_toast_and_cancel_is_silent() {
+    use crate::capture_ctl::Outcome;
+    let mut app = fixture();
+    app.visible = true;
+    app.finish_capture(Outcome::Cancelled);
+    assert!(app.toast.is_none(), "Esc: no toast");
+    app.finish_capture(Outcome::PermissionDenied);
+    assert_eq!(
+        app.toast.as_ref().map(|t| t.0.as_str()),
+        Some("Screen Recording is off for Ferrocast. Turn it on in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.")
+    );
+}
+
+#[test]
+fn capture_saved_with_save_only_does_nothing_more() {
+    use crate::capture_ctl::Outcome;
+    let mut app = fixture();
+    app.visible = true;
+    app.settings.capture.after = ferrocast_core::capture::settings::AfterCapture::Save;
+    app.finish_capture(Outcome::Saved(std::path::PathBuf::from("/nonexistent/Capture.png")));
+    assert!(app.toast.is_none());
 }

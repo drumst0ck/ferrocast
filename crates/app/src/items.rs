@@ -58,6 +58,9 @@ pub enum Builtin {
     ReloadScripts,
     Settings,
     Quit,
+    CaptureArea,
+    CaptureWindow,
+    CaptureScreen,
 }
 
 impl Builtin {
@@ -100,6 +103,9 @@ impl Builtin {
         Builtin::ReloadScripts,
         Builtin::Settings,
         Builtin::Quit,
+        Builtin::CaptureArea,
+        Builtin::CaptureWindow,
+        Builtin::CaptureScreen,
     ];
 
     pub fn title(&self) -> &'static str {
@@ -142,6 +148,9 @@ impl Builtin {
             Builtin::ReloadScripts => "Reload Script Directories",
             Builtin::Settings => "Ferrocast Settings",
             Builtin::Quit => "Quit Ferrocast",
+            Builtin::CaptureArea => "Capture Area",
+            Builtin::CaptureWindow => "Capture Window",
+            Builtin::CaptureScreen => "Capture Screen",
         }
     }
 
@@ -169,6 +178,7 @@ impl Builtin {
             }
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
             Builtin::Settings | Builtin::Quit => "Ferrocast",
+            Builtin::CaptureArea | Builtin::CaptureWindow | Builtin::CaptureScreen => "Capture",
         }
     }
 
@@ -203,6 +213,7 @@ impl Builtin {
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => ("sf:terminal", [60, 60, 70]),
             Builtin::Settings => ("sf:gearshape", [120, 120, 130]),
             Builtin::Quit => ("sf:power", [177, 36, 36]),
+            Builtin::CaptureArea | Builtin::CaptureWindow | Builtin::CaptureScreen => ("sf:camera.viewfinder", [86, 194, 255]),
         }
     }
 
@@ -238,6 +249,9 @@ impl Builtin {
             Builtin::Notes => &["floating notes", "raycast notes"],
             Builtin::CreateDictatedNote => &["dictate", "voice note"],
             Builtin::Settings => &["preferences", "config"],
+            Builtin::CaptureArea => &["screenshot", "screen shot", "capture", "region", "snip", "selection"],
+            Builtin::CaptureWindow => &["screenshot", "screen shot", "capture", "window"],
+            Builtin::CaptureScreen => &["screenshot", "screen shot", "capture", "display", "fullscreen", "full screen"],
             _ => &[],
         };
         k.iter().map(|s| s.to_string()).collect()

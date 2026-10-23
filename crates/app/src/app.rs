@@ -940,6 +940,8 @@ pub struct App {
     scripts: Vec<ScriptCommand>,
     base: Vec<Item>,
     hotkeys: Option<Hotkeys>,
+    /// Screenshot commands: availability and the once-per-session shortcut sentence.
+    capture: crate::capture_ctl::CaptureState,
     /// Opt-in Enter on a Finder selection (tap, in-flight guard, injectable system hooks).
     finder: services::FinderEnterState,
     _tray: Option<tray_icon::TrayIcon>,
@@ -1202,6 +1204,7 @@ impl App {
             scripts: vec![],
             base: vec![],
             hotkeys,
+            capture: crate::capture_ctl::CaptureState::detect(instance::running_exe().unwrap_or_default()),
             finder: Default::default(),
             _tray: tray,
             notes_tray: None,
@@ -1531,6 +1534,9 @@ impl App {
             });
         }
         for b in Builtin::ALL {
+            if self.capture_hidden(*b) {
+                continue;
+            }
             let (g, c) = b.glyph();
             v.push(Item {
                 id: b.id(),
@@ -3474,12 +3480,28 @@ impl App {
                     let target = self.hotkeys.as_ref().and_then(|h| h.map.get(&id).cloned());
                     match target.as_deref() {
                         Some("__launcher") => self.toggle(),
+                        // a stored capture shortcut on a Mac that cannot capture: say why, once
+                        Some(cmd)
+                            if crate::capture_ctl::CaptureKind::from_command_id(cmd).is_some()
+                                && !self.base.iter().any(|i| i.id == cmd) =>
+                        {
+                            self.capture_gate();
+                        }
                         Some(cmd) => {
                             if let Some(item) = self.base.iter().find(|i| i.id == cmd).cloned() {
                                 self.prev_pid = running::frontmost().map(|f| f.pid).filter(|p| *p != std::process::id() as i32);
                                 // the Notes commands open their own floating window, not the launcher
-                                let own_window =
-                                    matches!(item.kind, Kind::Builtin(Builtin::Notes | Builtin::CreateNote | Builtin::CreateDictatedNote));
+                                let own_window = matches!(
+                                    item.kind,
+                                    Kind::Builtin(
+                                        Builtin::Notes
+                                            | Builtin::CreateNote
+                                            | Builtin::CreateDictatedNote
+                                            | Builtin::CaptureArea
+                                            | Builtin::CaptureWindow
+                                            | Builtin::CaptureScreen
+                                    )
+                                );
                                 let needs_ui =
                                     !own_window && matches!(item.kind, Kind::Builtin(_) | Kind::Quicklink { .. } | Kind::Script(_));
                                 if needs_ui && !self.visible {
@@ -3491,6 +3513,7 @@ impl App {
                         None => {}
                     }
                 }
+                Msg::Capture(outcome) => self.finish_capture(outcome),
                 Msg::Script { run, text, code } => match self.runs.remove(&run) {
                     Some(RunKind::Output) => {
                         for v in self.stack.iter_mut() {
@@ -5122,6 +5145,81 @@ impl App {
         self.sec_dirty = true;
     }
 
+    /// Capture commands are listed only where capture works (S1, S3).
+    fn capture_hidden(&self, b: Builtin) -> bool {
+        crate::capture_ctl::CaptureKind::from_command_id(&b.id()).is_some()
+            && self.capture.availability != crate::capture_ctl::Availability::Available
+    }
+
+    /// Says `msg` where the user is looking: a toast in the launcher, else a notification.
+    fn capture_say(&mut self, msg: String) {
+        if self.visible {
+            self.toast(msg);
+        } else {
+            services::notify("Ferrocast", &msg);
+        }
+    }
+
+    /// True when capture may run; otherwise shows the S3 sentence once per session.
+    fn capture_gate(&mut self) -> bool {
+        match self.capture.gate() {
+            crate::capture_ctl::Gate::Go => true,
+            crate::capture_ctl::Gate::Say(m) => {
+                self.capture_say(m);
+                false
+            }
+            crate::capture_ctl::Gate::Quiet => false,
+        }
+    }
+
+    fn run_capture(&mut self, kind: crate::capture_ctl::CaptureKind) {
+        use crate::capture_ctl::{choose_target, shoot, Outcome};
+        if !self.capture_gate() {
+            return;
+        }
+        self.hide();
+        let exe = self.capture.exe.clone();
+        let root = self.store.root.clone();
+        let log = move |m: &str| instance::log(&root, m);
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let target = match choose_target(&exe, kind, mtm, log.clone()) {
+            Ok(t) => t,
+            Err(Outcome::Cancelled) => return,
+            Err(o) => return self.finish_capture(o),
+        };
+        let dir = self.settings.capture.screenshots_dir(&dirs::home_dir().unwrap_or_default());
+        let cursor = self.settings.capture.include_cursor;
+        let bus = self.bus.clone();
+        std::thread::spawn(move || bus.send(Msg::Capture(shoot(&exe, target, &dir, cursor, log))));
+    }
+
+    fn finish_capture(&mut self, outcome: crate::capture_ctl::Outcome) {
+        use crate::capture_ctl::{after_action, open_screen_recording_pane, outcome_toast, AfterAction, Outcome};
+        if let Some(m) = outcome_toast(&outcome) {
+            self.capture_say(m);
+        }
+        match outcome {
+            Outcome::PermissionDenied => open_screen_recording_pane(),
+            Outcome::Saved(path) => match after_action(self.settings.capture.after) {
+                // T8: open the Capture window (`View::CaptureResult`) here instead of revealing the file.
+                AfterAction::Show => {
+                    let _ = apps::reveal(&path);
+                }
+                AfterAction::CopyImage => match std::fs::read(&path) {
+                    Ok(png) => {
+                        clipboard::write_png(&png);
+                        self.capture_say("Screenshot copied".into());
+                    }
+                    Err(e) => self.capture_say(format!("Capture failed: {e}")),
+                },
+                AfterAction::Nothing => {}
+            },
+            Outcome::Cancelled | Outcome::Failed(_) => {}
+        }
+    }
+
     fn run_builtin(&mut self, b: Builtin) {
         match b {
             Builtin::AskAi => self.push(View::Ai {
@@ -5246,6 +5344,9 @@ impl App {
             }
             Builtin::Settings => self.push(View::Settings),
             Builtin::Quit => self.quit(),
+            Builtin::CaptureArea => self.run_capture(crate::capture_ctl::CaptureKind::Area),
+            Builtin::CaptureWindow => self.run_capture(crate::capture_ctl::CaptureKind::Window),
+            Builtin::CaptureScreen => self.run_capture(crate::capture_ctl::CaptureKind::Screen),
         }
     }
 

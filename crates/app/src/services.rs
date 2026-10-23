@@ -202,6 +202,8 @@ pub enum Msg {
         result: Result<Vec<ferrocast_core::obsidian::Block>, ()>,
     },
     Wake,
+    /// A screenshot finished (see `capture_ctl`).
+    Capture(crate::capture_ctl::Outcome),
 }
 
 /// What the Obsidian scan found.
