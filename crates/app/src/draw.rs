@@ -706,7 +706,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 }
                 app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel });
             }
-            // `settings-tab-N`: open Settings on tab N (0 General … 8 Advanced), for design review shots
+            // `settings-tab-N`: open Settings on tab N (0 General … 9 Advanced), for design review shots
             Ok(v) if v.starts_with("settings-tab-") => {
                 let n = v.trim_start_matches("settings-tab-").parse::<usize>().unwrap_or(0);
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), n));
@@ -745,7 +745,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 app.push(View::Settings);
             }
             Ok("settings-advanced") => {
-                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 8usize));
+                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 9usize));
                 app.push(View::Settings);
             }
             Ok("timers") => {
@@ -5832,6 +5832,7 @@ impl App {
         let (mut check_now, mut install_now) = (false, false);
         let (mut new_snippet, mut create_script) = (false, false);
         let mut reset_req: Option<usize> = None;
+        let mut record_capture: Option<(String, String)> = None;
         let update_channel = {
             let id = Id::new("update_channel");
             match ctx.data(|d| d.get_temp::<ferrocast_core::update::Channel>(id)) {
@@ -5963,7 +5964,7 @@ impl App {
             }
         }
 
-        // ---- sidebar keyboard: ⌘1…⌘9 anywhere in Settings; ↑/↓ only when the pointer is over the
+        // ---- sidebar keyboard: ⌘1…⌘9 and ⌘0 anywhere in Settings; ↑/↓ only when the pointer is over the
         // sidebar (and no text field is being edited) or a sidebar item has the keyboard focus
         let item_id = |i: usize| Id::new(("settings-tab-item", i));
         for (i, key) in SETTINGS_NUM_KEYS.iter().enumerate() {
@@ -6586,6 +6587,48 @@ impl App {
                         ui.add_space(10.0);
                         note(ui, pal, "Credentials and server address come from the AI tab; this tab only picks which provider and model translate.");
                     }
+                    CAPTURE_TAB => {
+                        use ferrocast_core::capture::AfterCapture as A;
+                        section(ui, pal, "Screenshots");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Capture folder", "Where screenshots are saved. Empty uses the default.", |ui| {
+                                field(ui, pal, &mut s.capture.folder, 300.0, "~/Pictures/Ferrocast Captures", false);
+                            });
+                            row(ui, pal, "Format", "Screenshots are saved as PNG. Other formats are not available yet.", |ui| keycap(ui, pal, "PNG"));
+                            row(ui, pal, "After capture", "Show opens the Capture window; Copy only copies; Save only saves the file.", |ui| {
+                                segmented(ui, pal, &mut s.capture.after, &[(A::Show, "Show"), (A::Copy, "Copy"), (A::Save, "Save")]);
+                            });
+                            row(ui, pal, "Include cursor", "Draw the mouse pointer in screenshots.", |ui| toggle(ui, pal, &mut s.capture.include_cursor));
+                        });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Recording");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Recording frame rate", "For screen recording, which is not available yet.", |ui| {
+                                segmented(ui, pal, &mut s.capture.fps, &[(30, "30 fps"), (60, "60 fps")]);
+                            });
+                            row(ui, pal, "Recording countdown", "Seconds before a recording starts. Screen recording is not available yet.", |ui| {
+                                segmented(ui, pal, &mut s.capture.countdown, &[(0, "Off"), (3, "3 s"), (5, "5 s")]);
+                            });
+                        });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Shortcuts");
+                        group(ui, pal, |ui| {
+                            for (title, b) in CAPTURE_SHORTCUTS {
+                                let id = b.id();
+                                row(ui, pal, title, "Press it from any app. Empty by default.", |ui| {
+                                    if small_btn(ui, pal, "Record…") {
+                                        record_capture = Some((id.clone(), b.title().to_string()));
+                                    }
+                                    match s.hotkey(&id) {
+                                        Some(h) => keycap(ui, pal, &services::hotkey_label(h)),
+                                        None => {
+                                            ui.label(RichText::new("Not set").size(12.0).color(pal.sub_strong));
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                    }
                     NOTES_TAB => {
                         group(ui, pal, |ui| {
                             row(ui, pal, "Show Notes Toggle Button in Menu Bar", "Adds a button to the menu bar that shows or hides the Notes window.", |ui| {
@@ -6621,7 +6664,7 @@ impl App {
                             });
                         });
                     }
-                    6 => {
+                    7 => {
                         group(ui, pal, |ui| {
                             row(ui, pal, "Default folder", "Scripts with Raycast metadata here become commands.", |ui| {
                                 ui.label(RichText::new(self.store.scripts_dir().display().to_string()).size(12.0).color(pal.sub));
@@ -6645,7 +6688,7 @@ impl App {
                         if self.scripts.is_empty() && s.script_directories.is_empty() {
                             ui.add_space(14.0);
                             let line = "Scripts with Raycast metadata become commands you can run from the launcher.";
-                            if empty_state(ui, pal, 6, "No script commands yet", line, "Create script") {
+                            if empty_state(ui, pal, 7, "No script commands yet", line, "Create script") {
                                 create_script = true;
                             }
                         }
@@ -7001,6 +7044,11 @@ impl App {
                 return;
             }
         }
+        if let Some((id, name)) = record_capture {
+            self.commit_settings(s);
+            self.push(View::Hotkey { id, name, err: String::new() });
+            return;
+        }
         if rec {
             self.push(View::Hotkey { id: "__launcher".into(), name: "Ferrocast launcher".into(), err: String::new() });
             return;
@@ -7162,23 +7210,26 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
     }
 }
 
-/// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Power = 5..8.
-const SETTINGS_TABS: [(&str, &str); 9] = [
+/// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Capture = 5, Power = 6..10.
+const SETTINGS_TABS: [(&str, &str); 10] = [
     ("General", "sf:gearshape"),
     ("Clipboard", "sf:doc.on.clipboard"),
     ("Snippets", "sf:curlybraces"),
     ("AI", "sf:sparkles"),
     ("Translate", "sf:character.bubble"),
+    ("Capture", "sf:camera.viewfinder"),
     ("Notes", "sf:note.text"),
     ("Scripts", "sf:terminal"),
     ("Integrations", "sf:link"),
     ("Advanced", "sf:slider.horizontal.3"),
 ];
-/// Indices of the first tab of the second and third group: a divider is drawn before each.
-const SETTINGS_GROUP_STARTS: [usize; 2] = [3, 5];
-const SETTINGS_NUM_KEYS: [Key; 9] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
-/// Index of the Integrations tab in `draw_settings` (after Notes and Scripts).
-pub(crate) const INTEGRATIONS_TAB: usize = 7;
+/// Indices of the first tab of the second, third and fourth group: a divider is drawn before each.
+const SETTINGS_GROUP_STARTS: [usize; 3] = [3, 5, 6];
+/// ⌘1…⌘9 jump to the first nine tabs and ⌘0 to the tenth.
+const SETTINGS_NUM_KEYS: [Key; 10] =
+    [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9, Key::Num0];
+/// Index of the Integrations tab in `draw_settings` (after Capture, Notes and Scripts).
+pub(crate) const INTEGRATIONS_TAB: usize = 8;
 
 /// Width of Search Obsidian's list when the preview pane is shown (the pane takes the rest of the 750 pt).
 const OBSIDIAN_LIST_W: f32 = 310.0;
@@ -7523,7 +7574,16 @@ fn row_body(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, 
 /// Index of the Translate tab in `draw_settings`.
 const TRANSLATE_TAB: usize = 4;
 /// Index of the Notes tab.
-const NOTES_TAB: usize = 5;
+const NOTES_TAB: usize = 6;
+/// Index of the Capture tab.
+const CAPTURE_TAB: usize = 5;
+/// Shortcut rows of the Capture tab: row title and the command each one binds. The hotkey is the
+/// command's own (`Settings::hotkey`), registered by `Hotkeys::apply`; there is no default.
+const CAPTURE_SHORTCUTS: [(&str, Builtin); 3] = [
+    ("Capture Area shortcut", Builtin::CaptureArea),
+    ("Capture Window shortcut", Builtin::CaptureWindow),
+    ("Capture Screen shortcut", Builtin::CaptureScreen),
+];
 
 /// The zoom levels of the Notes tab: 50 %, 60 % … 300 %, the steps of the editor's ⌘+ and ⌘-.
 fn notes_zoom_steps() -> Vec<f64> {
@@ -8387,7 +8447,7 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
             "translate_apple",
         ],
     ),
-    (8, &["rem_px", "window_gap"]),
+    (9, &["rem_px", "window_gap"]),
 ];
 
 /// `s` with the fields of `tab` (see `RESET_FIELDS`) copied from `from`; a tab without an entry,

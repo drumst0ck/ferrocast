@@ -673,7 +673,7 @@ impl View {
             }
             View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
             View::NotionAdd { .. } | View::ObsidianNew { .. } | View::ObsidianDaily { .. } => vec![("Send", "⌘↵"), BACK],
-            View::Settings => vec![("Tabs", "⌘1–9"), ("Find", "⌘F"), BACK],
+            View::Settings => vec![("Tabs", "⌘1–0"), ("Find", "⌘F"), BACK],
             _ => vec![],
         }
     }
