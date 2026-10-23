@@ -35,6 +35,8 @@ Hay cinco formas de dar formato:
 
 Un pie en la parte inferior de la ventana muestra los atajos principales: New <kbd>⌘</kbd> <kbd>N</kbd>, Browse <kbd>⌘</kbd> <kbd>P</kbd>, Pin <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>P</kbd> y Actions <kbd>⌘</kbd> <kbd>K</kbd>. Puedes hacer clic en sus elementos y, en una ventana estrecha, los menos importantes se omiten.
 
+La ventana de notas usa los mismos colores que el lanzador y sigue el ajuste Appearance de Settings (System, Dark o Light).
+
 ### Formatos de párrafo
 
 | Formato | Atajo | Markdown |

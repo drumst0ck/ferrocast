@@ -35,6 +35,8 @@ There are five ways to format:
 
 A footer at the very bottom of the window lists the main shortcuts: New <kbd>⌘</kbd> <kbd>N</kbd>, Browse <kbd>⌘</kbd> <kbd>P</kbd>, Pin <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>P</kbd> and Actions <kbd>⌘</kbd> <kbd>K</kbd>. You can click the items in it, and in a narrow window the least important ones drop out.
 
+The Notes window uses the same colors as the launcher and follows the Appearance setting in Settings (System, Dark or Light).
+
 ### Paragraph formats
 
 | Format | Shortcut | Markdown |
