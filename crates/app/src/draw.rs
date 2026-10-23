@@ -7579,10 +7579,11 @@ const NOTES_TAB: usize = 6;
 const CAPTURE_TAB: usize = 5;
 /// Shortcut rows of the Capture tab: row title and the command each one binds. The hotkey is the
 /// command's own (`Settings::hotkey`), registered by `Hotkeys::apply`; there is no default.
-const CAPTURE_SHORTCUTS: [(&str, Builtin); 3] = [
+const CAPTURE_SHORTCUTS: [(&str, Builtin); 4] = [
     ("Capture Area shortcut", Builtin::CaptureArea),
     ("Capture Window shortcut", Builtin::CaptureWindow),
     ("Capture Screen shortcut", Builtin::CaptureScreen),
+    ("Capture Scrolling shortcut", Builtin::CaptureScrolling),
 ];
 
 /// The zoom levels of the Notes tab: 50 %, 60 % … 300 %, the steps of the editor's ⌘+ and ⌘-.

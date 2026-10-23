@@ -75,6 +75,7 @@ pub const ENTRIES: &[Entry] = &[
     e(5, "Capture Area shortcut", &["hotkey", "keybinding", "screenshot", "region", "selection", "key"]),
     e(5, "Capture Window shortcut", &["hotkey", "keybinding", "screenshot", "key"]),
     e(5, "Capture Screen shortcut", &["hotkey", "keybinding", "screenshot", "display", "fullscreen", "key"]),
+    e(5, "Capture Scrolling shortcut", &["hotkey", "keybinding", "screenshot", "long", "full page", "stitch", "key"]),
     // 6 Notes
     e(6, "Show Notes Toggle Button in Menu Bar", &["floating notes", "status bar", "tray", "icon", "button", "show", "hide", "window"]),
     e(6, "Escape Key Loses Focus", &["esc", "close", "window", "keyboard", "floating notes", "unfocus"]),
@@ -270,6 +271,7 @@ mod tests {
                 "Capture Area shortcut",
                 "Capture Window shortcut",
                 "Capture Screen shortcut",
+                "Capture Scrolling shortcut",
             ]
         );
         for (q, title) in
