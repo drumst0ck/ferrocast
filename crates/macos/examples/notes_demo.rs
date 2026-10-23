@@ -10,6 +10,7 @@ use std::rc::Rc;
 use ferrocast_core::richtext::{self, BlockKind};
 use ferrocast_macos::notes::{self, Anchor, EmojiEvent, Event, PopupKey, SlashEvent};
 use ferrocast_macos::notes_format::Format;
+use ferrocast_macos::notes_hints::Hint;
 use ferrocast_macos::notes_palette::{self, PaletteItem};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -315,6 +316,7 @@ fn main() {
 
     editor_checks(&app, &out);
     window_checks(&app, &out, &events);
+    hint_checks(&app, &out, &events);
 
     notes::hide();
 
@@ -1542,14 +1544,17 @@ fn window_checks(app: &NSApplication, out: &std::path::Path, events: &Rc<RefCell
 
     // ---- Format Bar
     reset(app, "hello world");
-    check("Format Bar is hidden by default", !notes::format_bar_visible(), "visible");
+    check("Format Bar is hidden at the macOS level before the app applies its setting", !notes::format_bar_visible(), "visible");
     let bottom_hidden = editor_scroll_bottom(app);
     notes::set_format_bar_visible(true);
     pump(150);
     let bold = bar_button_on(app, "Bold ⌘B");
     check(
         "set_format_bar_visible(true) shows the bar and shrinks the editor",
-        notes::format_bar_visible() && bold.is_some() && bottom_hidden == 0.0 && (editor_scroll_bottom(app) - 36.0).abs() < 0.5,
+        notes::format_bar_visible()
+            && bold.is_some()
+            && (bottom_hidden - 30.0).abs() < 0.5
+            && (editor_scroll_bottom(app) - 66.0).abs() < 0.5,
         &format!("bottom {bottom_hidden} -> {}", editor_scroll_bottom(app)),
     );
     tv_of(app).setSelectedRange(NSRange::new(0, 5));
@@ -1796,8 +1801,195 @@ fn window_checks(app: &NSApplication, out: &std::path::Path, events: &Rc<RefCell
     }
     app.setAppearance(None);
     notes::set_format_bar_visible(false);
-    check("Format Bar hides again", !notes::format_bar_visible() && editor_scroll_bottom(app) == 0.0, "still visible");
+    check("Format Bar hides again", !notes::format_bar_visible() && (editor_scroll_bottom(app) - 30.0).abs() < 0.5, "still visible");
     notes::set_on_change(Box::new(|_| {}));
+}
+
+// ------------------------------------------------------------------ hint bar checks
+
+fn content_size(app: &NSApplication) -> (f64, f64) {
+    app.keyWindow().and_then(|w| w.contentView()).map(|c| (c.bounds().size.width, c.bounds().size.height)).unwrap_or((0.0, 0.0))
+}
+
+fn editor_scroll_height(app: &NSApplication) -> f64 {
+    tv_of(app).enclosingScrollView().map(|s| s.frame().size.height).unwrap_or(-1.0)
+}
+
+/// Click the centre of a hint group with real mouse events addressed to the window.
+fn click_hint(app: &NSApplication, hint: Hint) -> bool {
+    let Some(bar) = notes::hint_bar() else { return false };
+    let Some(f) = bar.group_frame(hint) else { return false };
+    let p = bar.view().convertPoint_toView(NSPoint::new(f.origin.x + f.size.width / 2.0, f.origin.y + f.size.height / 2.0), None);
+    let win = app.keyWindow().map(|w| w.windowNumber()).unwrap_or(0);
+    app.sendEvent(&mouse_event(NSEventType::LeftMouseDown, win, p.x, p.y, 1));
+    app.sendEvent(&mouse_event(NSEventType::LeftMouseUp, win, p.x, p.y, 1));
+    pump(80);
+    true
+}
+
+/// S11: the footer hint bar (geometry, stacking with the Format Bar, what fits at each width,
+/// clicks, the palette on top, theme pixels, snapshots).
+fn hint_checks(app: &NSApplication, out: &std::path::Path, events: &Rc<RefCell<Vec<Event>>>) {
+    use ferrocast_macos::notes_hints::{self, visible_hints};
+    use ferrocast_macos::notes_theme::{self as theme, Appearance, Rgba};
+    notes::set_escape_loses_focus(false);
+    notes::show();
+    wait_key(1500);
+    set_window_size(app, 560.0, 420.0);
+    reset(app, "# Hints\n\nNote text.");
+    notes::set_format_bar_visible(false);
+    pump(100);
+    let Some(bar) = notes::hint_bar() else {
+        check("hint bar exists", false, "none");
+        return;
+    };
+    let vf = bar.view().frame();
+    check(
+        "hint bar exists, 30 pt high, at the very bottom, full width",
+        (vf.size.height - 30.0).abs() < 0.01
+            && vf.origin.y == 0.0
+            && (vf.size.width - content_size(app).0).abs() < 0.5
+            && !bar.view().isHidden(),
+        &format!("{vf:?}"),
+    );
+    let h_hint_only = editor_scroll_height(app);
+    let (_, ch) = content_size(app);
+    check(
+        "Format Bar hidden: the editor stops 30 pt above the bottom",
+        (editor_scroll_bottom(app) - 30.0).abs() < 0.5 && (h_hint_only - (ch - 30.0)).abs() < 0.5,
+        &format!("bottom {} height {h_hint_only} of {ch}", editor_scroll_bottom(app)),
+    );
+    notes::set_format_bar_visible(true);
+    pump(150);
+    let h_both = editor_scroll_height(app);
+    let bar_y = app
+        .keyWindow()
+        .and_then(|w| w.contentView())
+        .and_then(|c| find_button(&c, "Bold ⌘B"))
+        .map(|b| b.convertRect_toView(b.bounds(), None).origin.y)
+        .unwrap_or(-1.0);
+    check(
+        "both bars: editor above the Format Bar (36), Format Bar above the hint bar (30); the editor shrank by 36",
+        (editor_scroll_bottom(app) - 66.0).abs() < 0.5
+            && (h_hint_only - h_both - 36.0).abs() < 0.5
+            && (h_both - (ch - 66.0)).abs() < 0.5
+            && (30.0..66.0).contains(&bar_y),
+        &format!("bottom {} heights {h_hint_only} -> {h_both}, Bold y {bar_y}", editor_scroll_bottom(app)),
+    );
+
+    // what fits at each width: the pure rule, and the frames follow it
+    let sizes = bar.sizes();
+    println!("      measured: typing {:.1}, groups {:?}", sizes.typing, sizes.groups);
+    for w in [320.0, 400.0, 480.0, 560.0, 700.0] {
+        set_window_size(app, w, 420.0);
+        let (cw, _) = content_size(app);
+        let want = visible_hints(cw, &sizes);
+        let got = bar.visible();
+        let mut inside = true;
+        let mut shown = 0;
+        let mut order_ok = true;
+        let mut prev_x = f64::MAX;
+        for (i, h) in notes_hints::Hint::ALL.iter().enumerate() {
+            match bar.group_frame(*h) {
+                Some(f) => {
+                    shown += 1;
+                    inside &= f.origin.x >= notes_hints::PAD - 0.01 && f.origin.x + f.size.width <= cw - notes_hints::PAD + 0.01;
+                    order_ok &= f.origin.x < prev_x && i < want.groups;
+                    prev_x = f.origin.x;
+                }
+                None => order_ok &= i >= want.groups,
+            }
+        }
+        println!("      width {cw:.0}: typing {} groups {}", got.typing, got.groups);
+        check(
+            &format!("width {w:.0}: hint bar shows what the rule says, whole groups only, 12 pt padding kept"),
+            got == want && shown == want.groups && inside && order_ok,
+            &format!("want {want:?} got {got:?} shown {shown} inside {inside} order {order_ok}"),
+        );
+        if w == 320.0 {
+            check("320 pt: Actions ⌘K is still there", bar.group_frame(Hint::Actions).is_some(), "missing");
+        }
+    }
+    set_window_size(app, 560.0, 420.0);
+
+    // clicks fire the matching event once and the editor keeps the keyboard
+    for (hint, want, name) in [
+        (Hint::Actions, Event::Actions, "Actions ⌘K"),
+        (Hint::Browse, Event::Browse, "Browse ⌘P"),
+        (Hint::Pin, Event::TogglePin, "Pin ⇧⌘P"),
+        (Hint::New, Event::New, "New ⌘N"),
+    ] {
+        notes::focus_editor();
+        events.borrow_mut().clear();
+        let clicked = click_hint(app, hint);
+        check(
+            &format!("clicking {name} fires {want:?} once and the editor keeps focus"),
+            clicked && *events.borrow() == vec![want] && first_responder_text_view(app).is_some(),
+            &format!("clicked {clicked} events {:?}", events.borrow()),
+        );
+    }
+    events.borrow_mut().clear();
+
+    // the palette overlay covers the window: the hint bar neither shows through nor steals clicks
+    let item = |id: &str| PaletteItem { id: id.into(), title: id.into(), ..PaletteItem::default() };
+    for hint in [Hint::Actions, Hint::New] {
+        notes_palette::show("Search", vec![item("a"), item("b")]);
+        pump(150);
+        events.borrow_mut().clear();
+        click_hint(app, hint);
+        check(
+            &format!("palette open: a click over the {hint:?} hint fires no event"),
+            events.borrow().is_empty(),
+            &format!("{:?}", events.borrow()),
+        );
+    }
+    notes_palette::hide();
+    pump(100);
+    events.borrow_mut().clear();
+
+    // theme pixels: background and hairline, both appearances, both bars visible at 560
+    reset(app, "# Weekly plan\n\nShip the **Notes** window and write the docs for it.\n\nA second paragraph of text.");
+    notes::set_format_bar_visible(true);
+    for (name, setting, dark) in [("light", Appearance::Light, false), ("dark", Appearance::Dark, true)] {
+        theme::set_appearance(setting);
+        pump(300);
+        let path = out.join(format!("notes-hints-{name}.png"));
+        check(&format!("hint bar {name}: snapshot written"), notes::snapshot_png(&path), "failed");
+        println!("      {}", path.display());
+        let rep = std::fs::read(&path)
+            .ok()
+            .and_then(|d| objc2_app_kit::NSBitmapImageRep::imageRepWithData(&objc2_foundation::NSData::with_bytes(&d)));
+        let Some(rep) = rep else {
+            check(&format!("hint bar {name}: snapshot readable"), false, "no image");
+            continue;
+        };
+        let (w, h) = (rep.pixelsWide(), rep.pixelsHigh());
+        let (cw, _) = content_size(app);
+        let scale = w as f64 / cw;
+        let t = if dark { theme::DARK } else { theme::LIGHT };
+        let bg = theme::window_bg(dark);
+        // 4 pt from the left edge and 15 pt above the bottom: inside the bar, left of the typing hint
+        let got_bg = pixel(&rep, (4.0 * scale) as isize, h - (6.0 * scale) as isize);
+        check(&format!("hint bar {name}: background is the opaque bg token"), close(got_bg, bg, 2), &format!("got {got_bg:?} want {bg:?}"));
+        let want_sep = theme::composite_over(t.sep, Rgba(bg.0, bg.1, bg.2, 255));
+        let row = h - (29.5 * scale).round() as isize;
+        let got_sep = pixel(&rep, (4.0 * scale) as isize, row);
+        check(
+            &format!("hint bar {name}: top hairline is the composited sep token"),
+            close(got_sep, want_sep, 6) && !close(got_sep, got_bg, 1),
+            &format!("got {got_sep:?} want {want_sep:?} bg {got_bg:?}"),
+        );
+    }
+    set_window_size(app, 400.0, 420.0);
+    for (name, setting) in [("light", Appearance::Light), ("dark", Appearance::Dark)] {
+        theme::set_appearance(setting);
+        pump(300);
+        snapshot(out, &format!("hints-{name}-400"));
+    }
+    theme::set_appearance(Appearance::System);
+    notes::set_format_bar_visible(false);
+    set_window_size(app, 560.0, 420.0);
+    pump(100);
 }
 
 fn popup_selected() -> Option<usize> {

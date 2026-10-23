@@ -20,6 +20,7 @@ pub use crate::notes_editor::{
     Anchor, EmojiEvent, PopupKey, SlashEvent,
 };
 use crate::notes_format::Format;
+use crate::notes_hints::{self, Hint, HintBar};
 use crate::notes_popups::{emoji_items, slash_items, FormatBar, Item, Rect as PopupRect, SuggestionPopup};
 use crate::notes_theme::{self as theme, Token};
 use objc2_app_kit::{
@@ -55,7 +56,8 @@ const TOOLBAR_H: f64 = 44.0;
 const DEFAULT_W: f64 = 560.0;
 const DEFAULT_H: f64 = 420.0;
 const MIN_W: f64 = 320.0;
-const MIN_H: f64 = 220.0;
+/// Toolbar 44 + Format Bar 36 + hint bar 30 leave about 120 pt for the editor at this height.
+const MIN_H: f64 = 230.0;
 const INSET: f64 = 16.0;
 const BUTTON_RADIUS: f64 = 8.0;
 const MAX_TITLE_CHARS: usize = 60;
@@ -87,6 +89,8 @@ struct Ui {
     bar: Rc<FormatBar>,
     /// Horizontal scroller-less container of the Format Bar (the bar is wider than the window minimum).
     bar_scroll: Retained<NSScrollView>,
+    /// Footer hint bar, always visible at the very bottom (below the Format Bar).
+    hints: Rc<HintBar>,
     /// Kept alive: the text view delegate and button target are weak references.
     _target: Retained<NotesTarget>,
 }
@@ -598,6 +602,19 @@ fn build(mtm: MainThreadMarker) -> Ui {
     bar_scroll.setHidden(true);
     content.addSubview(&bar_scroll);
 
+    // Footer hint bar: the lowest view, 30 pt, always visible.
+    let hints = Rc::new(HintBar::new());
+    hints.set_on_click(Box::new(|h| {
+        fire_event(match h {
+            Hint::Actions => Event::Actions,
+            Hint::Browse => Event::Browse,
+            Hint::Pin => Event::TogglePin,
+            Hint::New => Event::New,
+        });
+    }));
+    hints.view().setFrame(rect(0.0, 0.0, DEFAULT_W, notes_hints::HEIGHT));
+    content.addSubview(hints.view());
+
     // Toolbar strip: opaque `bg`, hides the text scrolling under it; 1 pt `sep` hairline at its bottom edge.
     let toolbar = fill_view(mtm, rect(0.0, DEFAULT_H - TOOLBAR_H, DEFAULT_W, TOOLBAR_H), Token::Bg);
     toolbar.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin);
@@ -630,7 +647,7 @@ fn build(mtm: MainThreadMarker) -> Ui {
     install_popup_hooks();
     install_key_monitor();
 
-    Ui { panel, text_view, title, scroll, bar, bar_scroll, _target: target }
+    Ui { panel, text_view, title, scroll, bar, bar_scroll, hints, _target: target }
 }
 
 /// Apply the stored theme appearance to the Notes window when it exists (see `notes_theme::set_appearance`).
@@ -670,6 +687,7 @@ pub fn show() {
     if app.isHidden() {
         app.unhideWithoutActivation();
     }
+    layout_bar();
     panel.makeKeyAndOrderFront(None);
     app.activate();
     #[allow(deprecated)]
@@ -758,8 +776,9 @@ pub fn set_escape_loses_focus(on: bool) {
 
 // ---------------------------------------------------------------- Format Bar
 
-/// Show or hide the Format Bar at the bottom of the window (hidden by default). The editor
-/// scroll view shrinks by the bar height while it is visible.
+/// Show or hide the Format Bar at the bottom of the window (the macOS-level default is hidden;
+/// the app applies the saved setting, which is on by default, when the window is first used).
+/// The editor scroll view shrinks by the bar height while it is visible.
 pub fn set_format_bar_visible(visible: bool) {
     if parts().is_none() {
         return;
@@ -771,6 +790,12 @@ pub fn set_format_bar_visible(visible: bool) {
 
 pub fn format_bar_visible() -> bool {
     BAR_VISIBLE.get()
+}
+
+/// The footer hint bar, creating the window on first use (demo and tests of the layout).
+pub fn hint_bar() -> Option<Rc<HintBar>> {
+    parts()?;
+    UI.with(|u| u.borrow().as_ref().map(|ui| ui.hints.clone()))
 }
 
 /// Content width of the Format Bar and the width of its visible part. The bar scrolls
@@ -790,20 +815,27 @@ pub fn format_bar_scroll_to(x: f64) -> f64 {
     clip.bounds().origin.x
 }
 
-/// Place the bar container and the editor scroll view for the current window size and bar state.
+/// Place the hint bar, the Format Bar container and the editor scroll view for the current
+/// window size and bar state (top to bottom: editor, Format Bar when visible, hint bar).
 fn layout_bar() {
-    let parts = UI.with(|u| u.borrow().as_ref().map(|ui| (ui.panel.clone(), ui.scroll.clone(), ui.bar.clone(), ui.bar_scroll.clone())));
-    let Some((panel, scroll, bar, bar_scroll)) = parts else { return };
+    let parts = UI.with(|u| {
+        u.borrow().as_ref().map(|ui| (ui.panel.clone(), ui.scroll.clone(), ui.bar.clone(), ui.bar_scroll.clone(), ui.hints.clone()))
+    });
+    let Some((panel, scroll, bar, bar_scroll, hints)) = parts else { return };
     let Some(content) = panel.contentView() else { return };
     let b = content.bounds();
     let visible = BAR_VISIBLE.get();
+    let hint_h = notes_hints::HEIGHT;
     let bar_h = if visible { FormatBar::HEIGHT } else { 0.0 };
+    hints.view().setFrame(rect(0.0, 0.0, b.size.width, hint_h));
+    hints.layout(b.size.width);
     bar_scroll.setHidden(!visible);
-    bar_scroll.setFrame(rect(0.0, 0.0, b.size.width, FormatBar::HEIGHT));
+    bar_scroll.setFrame(rect(0.0, hint_h, b.size.width, FormatBar::HEIGHT));
     if let Some(doc) = bar_scroll.documentView() {
         doc.setFrame(rect(0.0, 0.0, bar.content_width().max(b.size.width), FormatBar::HEIGHT));
     }
-    scroll.setFrame(rect(0.0, bar_h, b.size.width, (b.size.height - bar_h).max(0.0)));
+    let below = hint_h + bar_h;
+    scroll.setFrame(rect(0.0, below, b.size.width, (b.size.height - below).max(0.0)));
 }
 
 /// Push the formats at the cursor / selection to the bar; a no-op while it is hidden.

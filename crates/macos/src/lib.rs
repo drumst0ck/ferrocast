@@ -18,6 +18,7 @@ pub mod notes;
 pub mod notes_dictation;
 pub mod notes_editor;
 pub mod notes_format;
+pub mod notes_hints;
 pub mod notes_palette;
 pub mod notes_popups;
 pub mod notes_theme;
