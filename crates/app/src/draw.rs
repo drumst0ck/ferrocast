@@ -6404,7 +6404,7 @@ impl App {
                         group(ui, pal, |ui| {
                             let apple = s.translate_apple && apple_ok;
                             let desc = match s.translate_provider {
-                                _ if apple => "Translations run on this Mac with Apple Translation: offline once the languages are downloaded.".to_string(),
+                                _ if apple => "Translations run on this Mac with Apple Translation, without sending the text anywhere.".to_string(),
                                 _ if s.translate_apple => "Apple Translation needs macOS 26, so the chat provider translates here.".to_string(),
                                 None => "Translating dragged text uses the chat provider and its model.".to_string(),
                                 Some(p) => format!("Translations use {} with the model and sign-in set for it.", ferrocast_core::translate::provider_name(p)),
@@ -6473,6 +6473,11 @@ impl App {
                         if s.translate_apple && apple_ok {
                             ui.add_space(14.0);
                             section(ui, pal, "Apple languages");
+                            // Apple decides: with some macOS versions a language needs a pack first, with others
+                            // its model is already on the Mac and every supported language reports as ready
+                            let needs_download = ferrocast_core::translate::languages(&s.translate_languages)
+                                .iter()
+                                .any(|l| apple_states.get(l) == Some(&ferrocast_core::translate::AppleLang::NeedsDownload));
                             group(ui, pal, |ui| {
                                 for lang in ferrocast_core::translate::languages(&s.translate_languages) {
                                     let state = apple_states.get(&lang).copied().unwrap_or(ferrocast_core::translate::AppleLang::Checking);
@@ -6493,16 +6498,22 @@ impl App {
                                     });
                                     form_sep(ui, pal, frame.response.rect);
                                 }
-                                row(ui, pal, "Download languages", "Apple downloads each language once in System Settings → General → Language & Region → Translation Languages. After that, translating works offline.", |ui| {
-                                    if small_btn(ui, pal, "Check again") {
-                                        recheck_apple = true;
-                                    }
-                                    if small_btn(ui, pal, "Open Language settings") {
-                                        open_language_settings = true;
-                                    }
-                                });
+                                if needs_download {
+                                    row(ui, pal, "Download languages", "Apple downloads each language once in System Settings → General → Language & Region → Translation Languages. After that, translating works offline.", |ui| {
+                                        if small_btn(ui, pal, "Check again") {
+                                            recheck_apple = true;
+                                        }
+                                        if small_btn(ui, pal, "Open Language settings") {
+                                            open_language_settings = true;
+                                        }
+                                    });
+                                }
                             });
                             ui.add_space(10.0);
+                            if !needs_download {
+                                note(ui, pal, "Apple translates on this Mac with its own model: no language needs downloading right now. If Apple ever asks for one, its status says so and a download button appears here.");
+                                ui.add_space(6.0);
+                            }
                             note(ui, pal, "Each language is checked as a pair with your Mac's system language (with English for the system language itself). Translating from another language needs that one downloaded too.");
                         } else if s.translate_provider.is_none() && !s.translate_apple {
                             ui.add_space(10.0);

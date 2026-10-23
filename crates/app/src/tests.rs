@@ -7207,6 +7207,8 @@ fn sd3_every_drawn_row_is_indexed_and_every_entry_is_drawn() {
     for l in ferrocast_core::translate::DEFAULT_LANGUAGES {
         app.apple_langs.insert(l.to_string(), ferrocast_core::translate::AppleLang::Installed);
     }
+    // the download row only exists while some language needs a download
+    app.apple_langs.insert("Chinese".into(), ferrocast_core::translate::AppleLang::NeedsDownload);
     collect(&mut app);
     APPLE_AVAILABLE.with(|a| a.set(false));
     assert!(drawn.len() > 20, "rows were recorded: {drawn:?}");
@@ -7471,6 +7473,26 @@ fn the_languages_card_shows_one_chip_per_wheel_language_and_the_model_row_goes_a
     assert!(languages.contains(&sd4_chip("error", "Not supported by Apple")), "Japanese");
     let rows = app.ctx.data(|d| d.get_temp::<Vec<(String, bool)>>(Id::new("row-stacked"))).unwrap_or_default();
     assert!(!rows.iter().any(|(t, _)| t == "Model"), "no model for the on-device engine");
+}
+
+#[test]
+fn the_download_row_only_exists_while_a_language_needs_a_download() {
+    use ferrocast_core::translate::AppleLang;
+    let drawn = |app: &App| drawn_rows(app).iter().any(|(_, t)| t == "Download languages");
+    // Apple reports every language ready (its own model is on the Mac): no download row, an explaining note instead
+    let mut app = apple_tab(true);
+    app.settings.translate_apple = true;
+    for l in ferrocast_core::translate::DEFAULT_LANGUAGES {
+        app.apple_langs.insert(l.to_string(), AppleLang::Installed);
+    }
+    settle(&mut app);
+    assert!(!drawn(&app), "nothing to download, so no download row");
+    // Apple says one language still needs a pack: the row (with its System Settings button) is back
+    let mut app = apple_tab(true);
+    app.settings.translate_apple = true;
+    app.apple_langs.insert("German".into(), AppleLang::NeedsDownload);
+    settle(&mut app);
+    assert!(drawn(&app), "a language needs a download, so the row is drawn");
 }
 
 #[test]
@@ -9357,6 +9379,10 @@ fn every_index_entry_is_drawn_on_the_tab_it_names() {
                 app.settings.ai_provider = chat;
                 app.settings.translate_provider = tr;
                 app.settings.translate_apple = apple;
+                if apple {
+                    // the download row only exists while some language needs a download
+                    app.apple_langs.insert("English".into(), ferrocast_core::translate::AppleLang::NeedsDownload);
+                }
                 seed_model_lists(&mut app);
                 render(&mut app, vec![]);
                 render(&mut app, vec![]);
