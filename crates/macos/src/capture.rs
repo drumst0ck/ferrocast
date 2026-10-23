@@ -4,7 +4,7 @@
 use anyhow::{anyhow, bail, Result};
 use ferrocast_core::capture::compose::FrameParams;
 use ferrocast_core::capture::events::Events;
-use ferrocast_core::capture::export::{self, ExportOptions, ExportPlan, Format};
+use ferrocast_core::capture::export::{self, ExportOptions, ExportPlan};
 use ferrocast_core::capture::project::{self as capture_project, Project};
 use ferrocast_core::capture::protocol::{
     self, Command, ErrorCode, Excludes, ExportDone, ExportEvent, ExportStarted, Hello, Line, RecordEvent, RecordStarted, RecordStopped,
@@ -580,7 +580,7 @@ impl Helper {
         let command = Command::Render {
             project: project_dir.to_string_lossy().into_owned(),
             out: out.to_string_lossy().into_owned(),
-            format: Format::Mp4,
+            format: plan.format,
             codec: plan.codec,
             width: plan.size[0],
             height: plan.size[1],
@@ -999,7 +999,7 @@ mod stop_timeout_tests {
 #[cfg(test)]
 mod export_tests {
     use super::*;
-    use ferrocast_core::capture::export::{Codec, Quality, Segment};
+    use ferrocast_core::capture::export::{Codec, Format, Quality, Segment};
     use std::os::unix::fs::PermissionsExt;
 
     fn fake(name: &str, body: &str) -> PathBuf {
@@ -1018,6 +1018,7 @@ mod export_tests {
             frames: 60,
             size: [960, 540],
             fps: 30,
+            format: Format::Mp4,
             codec: Codec::H264,
             quality: Quality::Standard,
         }
@@ -1047,6 +1048,17 @@ echo '{"id":1,"ok":true,"path":"/o.mp4","bytes":1234,"duration":2.0,"frames":60}
         let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
         assert!(wire.contains(r#""cmd":"render""#) && wire.contains("Demo é.mp4") && wire.contains("params.ndjson"), "{wire}");
         assert!(wire.contains(r#""codec":"h264""#) && wire.contains(r#""width":960"#) && wire.contains(r#""frames":60"#), "{wire}");
+    }
+
+    #[test]
+    fn gif_plan_travels_as_format_gif() {
+        let p = fake("gif", OK_SCRIPT);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let gif = ExportPlan { format: Format::Gif, size: [960, 540], fps: 15, frames: 30, ..plan() };
+        let (_, rx) = h.export_start(&dir_of(&p), &p.with_file_name("Demo.gif"), &gif, Path::new("/p/params.ndjson")).unwrap();
+        h.export_wait(&rx, &AtomicBool::new(false), |_| {}).unwrap();
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(wire.contains(r#""format":"gif""#) && wire.contains(r#""fps":15"#) && wire.contains("Demo.gif"), "{wire}");
     }
 
     #[test]
@@ -1198,7 +1210,7 @@ echo '{"event":"progress","id":1,"done_frames":60,"total_frames":60,"eta":0.0}'
 echo '{"id":1,"ok":true,"path":"/o.mp4","bytes":10,"duration":2.0,"frames":60}'"#,
         );
         let dir = project_dir("ok");
-        let opts = ExportOptions { codec: Codec::Hevc, width: 960, fps: 30, quality: Quality::High };
+        let opts = ExportOptions { format: Format::Mp4, codec: Codec::Hevc, width: 960, fps: 30, quality: Quality::High };
         let mut seen = vec![];
         let done = export_project(&p, |_| {}, &dir, &out_of(&p), &opts, &AtomicBool::new(false), |d, t, _| seen.push((d, t))).unwrap();
         assert_eq!(done.bytes, 10);
@@ -1214,9 +1226,25 @@ echo '{"id":1,"ok":true,"path":"/o.mp4","bytes":10,"duration":2.0,"frames":60}'"
     }
 
     #[test]
+    fn export_project_clamps_gif_limits_before_the_helper_sees_them() {
+        let p = fake(
+            "gifproject",
+            r#"read l
+echo "$l" > "$(dirname "$0")/req.json"
+echo '{"event":"started","id":1,"total_frames":30}'
+echo '{"id":1,"ok":true,"path":"/o.gif","bytes":10,"duration":2.0,"frames":30}'"#,
+        );
+        let dir = project_dir("gif");
+        let opts = ExportOptions { format: Format::Gif, codec: Codec::H264, width: 1920, fps: 60, quality: Quality::Standard };
+        export_project(&p, |_| {}, &dir, &p.with_file_name("o.gif"), &opts, &AtomicBool::new(false), |_, _, _| {}).unwrap();
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(wire.contains(r#""format":"gif""#) && wire.contains(r#""width":960"#) && wire.contains(r#""fps":15"#), "{wire}");
+    }
+
+    #[test]
     fn export_project_refuses_bad_options_before_starting_a_helper() {
         let dir = project_dir("bad");
-        let opts = ExportOptions { codec: Codec::H264, width: 5000, fps: 30, quality: Quality::Standard };
+        let opts = ExportOptions { format: Format::Mp4, codec: Codec::H264, width: 5000, fps: 30, quality: Quality::Standard };
         let e = export_project(
             Path::new("/nonexistent/helper"),
             |_| {},
@@ -1261,7 +1289,7 @@ echo '{"id":1,"ok":true,"path":"/o.mp4","bytes":10,"duration":2.0,"frames":60}'"
 #[cfg(test)]
 mod export_live_tests {
     use super::*;
-    use ferrocast_core::capture::export::{Codec, Quality};
+    use ferrocast_core::capture::export::{Codec, Format, Quality};
     use ferrocast_core::capture::project::{Speed, Trim, Zoom};
 
     fn root() -> PathBuf {
@@ -1342,7 +1370,7 @@ mod export_live_tests {
         assert_eq!(want, 2.5);
         for (codec, fps, width) in [(Codec::H264, 30, 960), (Codec::Hevc, 60, 640)] {
             let out = dir.with_file_name(format!("speed-{codec:?}-{fps}.mp4").to_lowercase());
-            let opts = ExportOptions { codec, width, fps, quality: Quality::Standard };
+            let opts = ExportOptions { format: Format::Mp4, codec, width, fps, quality: Quality::Standard };
             let t = Instant::now();
             let mut last = (0, 0);
             let done =
@@ -1369,6 +1397,112 @@ mod export_live_tests {
         }
     }
 
+    /// (width, height, loop count if the NETSCAPE extension is there, per-frame delays in cs).
+    fn parse_gif(path: &Path) -> (u16, u16, Option<u16>, Vec<u16>) {
+        let d = std::fs::read(path).unwrap();
+        assert!(d.starts_with(b"GIF89a") || d.starts_with(b"GIF87a"), "not a GIF");
+        let (w, h) = (u16::from_le_bytes([d[6], d[7]]), u16::from_le_bytes([d[8], d[9]]));
+        let mut i = 13 + if d[10] & 0x80 != 0 { 3 << ((d[10] & 7) + 1) } else { 0 };
+        let (mut looped, mut delays) = (None, vec![]);
+        let skip_blocks = |mut i: usize| {
+            while d[i] != 0 {
+                i += d[i] as usize + 1;
+            }
+            i + 1
+        };
+        while i < d.len() {
+            match d[i] {
+                0x21 if d[i + 1] == 0xF9 => {
+                    delays.push(u16::from_le_bytes([d[i + 4], d[i + 5]]));
+                    i = skip_blocks(i + 2);
+                }
+                0x21 if d[i + 1] == 0xFF => {
+                    if &d[i + 3..i + 14] == b"NETSCAPE2.0" && d[i + 14] == 3 && d[i + 15] == 1 {
+                        looped = Some(u16::from_le_bytes([d[i + 16], d[i + 17]]));
+                    }
+                    i = skip_blocks(i + 2);
+                }
+                0x21 => i = skip_blocks(i + 2),
+                0x2C => {
+                    let packed = d[i + 9];
+                    i += 10 + if packed & 0x80 != 0 { 3 << ((packed & 7) + 1) } else { 0 } + 1;
+                    i = skip_blocks(i);
+                }
+                0x3B => break,
+                b => panic!("unexpected GIF byte {b:#x} at {i}"),
+            }
+        }
+        (w, h, looped, delays)
+    }
+
+    #[test]
+    #[ignore = "needs the built helper and the editor fixture"]
+    fn export_live_gif_matches_output_duration_and_loops_forever() {
+        let Some(h) = helper() else { return eprintln!("SKIP: no helper") };
+        let Some(dir) = scratch("gif", |p| {
+            p.trims = vec![Trim { start: 0.0, end: 3.0 }];
+            p.speeds = vec![Speed { start: 1.0, end: 2.0, factor: 2.0 }];
+        }) else {
+            return;
+        };
+        let want = ferrocast_core::capture::timeline::Timeline::new(&Project::load(&dir).unwrap()).output_duration();
+        assert_eq!(want, 2.5);
+        for (width, fps) in [(480, 15), (960, 15), (1920, 30)] {
+            let out = dir.with_file_name(format!("gif-{width}-{fps}.gif"));
+            let opts = ExportOptions { format: Format::Gif, codec: Codec::H264, width, fps, quality: Quality::Standard };
+            let t = Instant::now();
+            let mut last = (0, 0);
+            let done =
+                export_project(&h, |l| eprintln!("helper: {l}"), &dir, &out, &opts, &AtomicBool::new(false), |d, n, _| last = (d, n))
+                    .unwrap_or_else(|e| panic!("{e}"));
+            let secs = t.elapsed().as_secs_f64();
+            let (gw, gh, looped, delays) = parse_gif(&out);
+            let total = f64::from(delays.iter().map(|&c| u32::from(c)).sum::<u32>()) / 100.0;
+            eprintln!(
+                "GIF {width}px @{fps}: {gw}x{gh}, {} frames, delays {:?}.., loop {looped:?}, total {total:.2} s (want {want}), {} bytes, {secs:.2} s = {:.1} frames/s",
+                delays.len(),
+                &delays[..delays.len().min(6)],
+                done.bytes,
+                f64::from(done.frames) / secs
+            );
+            assert!(out.exists() && !partial_path(&out).exists());
+            assert_eq!(last.0, last.1, "progress reached the end");
+            assert_eq!(u32::from(gw), width.min(960), "the helper never exceeds the clamped width");
+            assert_eq!(delays.len() as u32, done.frames);
+            assert_eq!(delays.len(), 38, "2.5 s at 15 fps = 37.5 -> 38 frames");
+            assert_eq!(looped, Some(0), "loop forever");
+            assert!((total - want).abs() <= 1.0 / 15.0, "total {total} vs {want}");
+            assert!((done.duration - total).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    #[ignore = "needs the built helper and the editor fixture"]
+    fn export_live_gif_cancel_leaves_nothing() {
+        let Some(h) = helper() else { return eprintln!("SKIP: no helper") };
+        let Some(dir) = scratch("gifcancel", |_| {}) else { return };
+        let out = dir.with_file_name("cancel.gif");
+        let _ = std::fs::remove_file(&out);
+        let opts = ExportOptions { format: Format::Gif, codec: Codec::H264, width: 960, fps: 15, quality: Quality::Standard };
+        let cancel = AtomicBool::new(false);
+        let e = export_project(
+            &h,
+            |_| {},
+            &dir,
+            &out,
+            &opts,
+            &cancel,
+            |d, _, _| {
+                if d >= 5 {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(e, ExportError::Cancelled);
+        assert!(!out.exists() && !partial_path(&out).exists(), "no output and no .partial");
+    }
+
     #[test]
     #[ignore = "needs the built helper and the editor fixture"]
     fn export_live_cancel_leaves_nothing() {
@@ -1376,7 +1510,7 @@ mod export_live_tests {
         let Some(dir) = scratch("cancel", |_| {}) else { return };
         let out = dir.with_file_name("cancel.mp4");
         let _ = std::fs::remove_file(&out);
-        let opts = ExportOptions { codec: Codec::H264, width: 1920, fps: 60, quality: Quality::Standard };
+        let opts = ExportOptions { format: Format::Mp4, codec: Codec::H264, width: 1920, fps: 60, quality: Quality::Standard };
         let cancel = AtomicBool::new(false);
         let e = export_project(
             &h,

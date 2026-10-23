@@ -24,6 +24,26 @@ pub const MAX_LONG_EDGE: u32 = 3840;
 pub const MAX_PIXELS: u64 = 3840 * 2160;
 pub const MAX_FPS: u32 = 60;
 pub const MIN_WIDTH: u32 = 16;
+/// GIF limits (S16): width and frame rate. A larger request is clamped by [`export_plan`] and
+/// rejected (`invalid`) by the helper.
+pub const GIF_MAX_WIDTH: u32 = 960;
+pub const GIF_MAX_FPS: u32 = 15;
+/// Memory budget of one GIF, in frames x pixels. `CGImageDestinationAddImage` keeps every frame
+/// until `finalize` (no streaming API). Measured on this Mac (T29, 960 x 540, real helper, peak
+/// resident set): 38 frames 257 MB, 150 frames (10 s at 15 fps) 897 MB, 300 frames 1.3 GB,
+/// 450 frames 2.2 GB, about 4.7 MB per frame. 300 frames of 960 x 540 (20 s at 15 fps, ~1.3 GB) is the
+/// budget; smaller or lower-fps clips get proportionally more frames, taller ones fewer.
+pub const GIF_MAX_PIXEL_FRAMES: u64 = 300 * 960 * 540;
+
+/// Per-frame delays in centiseconds (the only unit GIF has) for `frames` frames at `fps`.
+/// Frame `i` ends at `round((i + 1) * 100 / fps)` centiseconds and lasts the difference to the
+/// previous end, so the rounding error is spread over the frames and the TOTAL is
+/// `round(frames * 100 / fps)`: within half a centisecond of the exact length, never a
+/// frame-delay off (rounding each delay alone would drift by up to `frames / 2` cs).
+pub fn gif_delays(frames: u32, fps: u32) -> Vec<u32> {
+    let end = |i: u32| (u64::from(i) * 100 + u64::from(fps) / 2) / u64::from(fps.max(1));
+    (0..frames).map(|i| (end(i + 1) - end(i)) as u32).collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -49,16 +69,19 @@ pub enum Quality {
     High,
 }
 
-/// Container of an export. GIF arrives with T29.
+/// Container of an export. GIF has its own limits (S16), see [`GIF_MAX_WIDTH`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Mp4,
+    Gif,
 }
 
 /// What the user chose in the export sheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExportOptions {
+    pub format: Format,
+    /// Ignored for GIF.
     pub codec: Codec,
     /// Output width in pixels (even); the height follows the project's aspect.
     pub width: u32,
@@ -83,6 +106,7 @@ pub struct ExportPlan {
     /// Output pixels, both even.
     pub size: [u32; 2],
     pub fps: u32,
+    pub format: Format,
     pub codec: Codec,
     pub quality: Quality,
 }
@@ -95,6 +119,11 @@ pub enum PlanError {
     InvalidTimeline(String),
     BadSize(String),
     BadFps(u32),
+    /// A GIF would exceed [`GIF_MAX_PIXEL_FRAMES`] (ImageIO keeps every frame in memory).
+    GifTooLong {
+        frames: u32,
+        max_seconds: f64,
+    },
 }
 
 impl std::fmt::Display for PlanError {
@@ -104,6 +133,9 @@ impl std::fmt::Display for PlanError {
             Self::InvalidTimeline(m) => write!(f, "The edit is not valid: {m}"),
             Self::BadSize(m) => write!(f, "{m}"),
             Self::BadFps(n) => write!(f, "{n} fps is not supported: use 1 to {MAX_FPS}."),
+            Self::GifTooLong { max_seconds, .. } => {
+                write!(f, "This edit is too long for a GIF: the limit is {max_seconds:.0} seconds. Trim it or export an MP4.")
+            }
         }
     }
 }
@@ -139,7 +171,8 @@ pub fn export_plan(project: &Project, source: [u32; 2], opts: &ExportOptions) ->
     if opts.fps == 0 || opts.fps > MAX_FPS {
         return Err(PlanError::BadFps(opts.fps));
     }
-    let w = opts.width;
+    let gif = opts.format == Format::Gif;
+    let (fps, w) = if gif { (opts.fps.min(GIF_MAX_FPS), opts.width.min(GIF_MAX_WIDTH)) } else { (opts.fps, opts.width) };
     if w < MIN_WIDTH || !w.is_multiple_of(2) || w > MAX_LONG_EDGE {
         return Err(PlanError::BadSize(format!("The width {w} is not valid: use an even number from {MIN_WIDTH} to {MAX_LONG_EDGE}.")));
     }
@@ -156,8 +189,14 @@ pub fn export_plan(project: &Project, source: [u32; 2], opts: &ExportOptions) ->
         return Err(PlanError::InvalidTimeline(problem));
     }
     let segments = tl.pieces().iter().map(|p| Segment { src_start: p.src_start, src_end: p.src_end, speed: p.factor }).collect();
-    let frames = (duration * f64::from(opts.fps)).round().max(1.0) as u32;
-    Ok(ExportPlan { segments, duration, frames, size: [w, h], fps: opts.fps, codec: opts.codec, quality: opts.quality })
+    let frames = (duration * f64::from(fps)).round().max(1.0) as u32;
+    if gif {
+        let max_frames = (GIF_MAX_PIXEL_FRAMES / (u64::from(w) * u64::from(h))) as u32;
+        if frames > max_frames {
+            return Err(PlanError::GifTooLong { frames, max_seconds: (f64::from(max_frames) / f64::from(fps)).floor() });
+        }
+    }
+    Ok(ExportPlan { segments, duration, frames, size: [w, h], fps, format: opts.format, codec: opts.codec, quality: opts.quality })
 }
 
 /// Output width for a resolution tier: `long_edge` is the longer side of the result
@@ -207,7 +246,7 @@ mod tests {
     }
 
     fn opts(width: u32, fps: u32) -> ExportOptions {
-        ExportOptions { codec: Codec::H264, width, fps, quality: Quality::Standard }
+        ExportOptions { format: Format::Mp4, codec: Codec::H264, width, fps, quality: Quality::Standard }
     }
 
     #[test]
@@ -358,5 +397,86 @@ mod tests {
         assert_eq!(serde_json::to_string(&l).unwrap(), r#"{"t":1.5}"#);
         let back: FrameLine = serde_json::from_str(r#"{"t":2.0,"camera":{"x":0.25,"y":0.25,"w":0.5,"h":0.5}}"#).unwrap();
         assert_eq!(back.params.camera.map(|c| c.w), Some(0.5));
+    }
+    fn gif_opts(width: u32, fps: u32) -> ExportOptions {
+        ExportOptions { format: Format::Gif, ..opts(width, fps) }
+    }
+
+    #[test]
+    fn gif_plan_clamps_width_and_fps_but_mp4_is_unchanged() {
+        let p = project(2.0);
+        let plan = export_plan(&p, SRC, &gif_opts(1920, 30)).unwrap();
+        assert_eq!((plan.size, plan.fps, plan.frames, plan.format), ([960, 540], 15, 30, Format::Gif));
+        let plan = export_plan(&p, SRC, &gif_opts(3840, 60)).unwrap();
+        assert_eq!((plan.size[0], plan.fps), (960, 15));
+        let plan = export_plan(&p, SRC, &gif_opts(480, 10)).unwrap();
+        assert_eq!((plan.size, plan.fps, plan.frames), ([480, 270], 10, 20), "within the limits nothing changes");
+        let plan = export_plan(&p, SRC, &gif_opts(960, 15)).unwrap();
+        assert_eq!((plan.size[0], plan.fps), (960, 15), "the limits themselves are allowed");
+        // MP4 keeps its own limits
+        let mp4 = export_plan(&p, SRC, &opts(3840, 60)).unwrap();
+        assert_eq!((mp4.size[0], mp4.fps, mp4.format), (3840, 60, Format::Mp4));
+        // still validated like any export
+        assert!(matches!(export_plan(&p, SRC, &gif_opts(8, 15)), Err(PlanError::BadSize(_))));
+        assert!(matches!(export_plan(&p, SRC, &gif_opts(481, 15)), Err(PlanError::BadSize(_))), "odd width");
+        assert_eq!(export_plan(&p, SRC, &gif_opts(960, 0)), Err(PlanError::BadFps(0)));
+        assert_eq!(export_plan(&p, SRC, &gif_opts(960, 61)), Err(PlanError::BadFps(61)));
+        // portrait: the width is clamped, the height follows (960 x 1707 -> even)
+        let mut portrait = project(1.0);
+        portrait.style.aspect = "9:16".into();
+        assert_eq!(export_plan(&portrait, SRC, &gif_opts(2160, 30)).unwrap().size, [960, 1708]);
+    }
+
+    #[test]
+    fn gif_length_is_capped_by_a_pixel_budget_with_a_clear_message() {
+        // 960 x 540 at 15 fps: 300 frames = 20 s
+        assert!(export_plan(&project(20.0), SRC, &gif_opts(960, 15)).is_ok());
+        let err = export_plan(&project(21.0), SRC, &gif_opts(960, 15)).unwrap_err();
+        assert!(matches!(err, PlanError::GifTooLong { frames: 315, .. }), "{err:?}");
+        let text = err.to_string();
+        assert!(text.contains("too long for a GIF") && text.contains("20 seconds") && text.contains("MP4"), "{text}");
+        // a lower fps or a smaller picture allows a longer clip, taller pictures a shorter one, MP4 has no cap
+        assert!(export_plan(&project(21.0), SRC, &gif_opts(960, 10)).is_ok());
+        assert!(export_plan(&project(60.0), SRC, &gif_opts(480, 15)).is_ok(), "480 x 270: 1200 frames");
+        assert!(export_plan(&project(81.0), SRC, &gif_opts(480, 15)).is_err());
+        let mut portrait = project(7.0);
+        portrait.style.aspect = "9:16".into();
+        assert!(matches!(export_plan(&portrait, SRC, &gif_opts(960, 15)), Err(PlanError::GifTooLong { .. })), "960 x 1708: 94 frames");
+        portrait.duration = 6.0;
+        assert!(export_plan(&portrait, SRC, &gif_opts(960, 15)).is_ok());
+        assert!(export_plan(&project(600.0), SRC, &opts(960, 15)).is_ok());
+    }
+
+    #[test]
+    fn gif_delays_spread_the_rounding_so_the_total_stays_exact() {
+        // 15 fps = 6.67 cs per frame: 7, 6, 7 repeating, never 7 x n
+        assert_eq!(gif_delays(6, 15), vec![7, 6, 7, 7, 6, 7]);
+        assert_eq!(gif_delays(15, 15).iter().sum::<u32>(), 100, "15 frames at 15 fps last exactly 1 s");
+        assert_eq!(gif_delays(10, 10), vec![10; 10]);
+        assert!(gif_delays(0, 15).is_empty());
+        for fps in 1..=GIF_MAX_FPS {
+            for frames in [1u32, 2, 7, 15, 100, 149, 150, 450] {
+                let d = gif_delays(frames, fps);
+                assert_eq!(d.len() as u32, frames);
+                let total: u32 = d.iter().sum();
+                let exact = f64::from(frames) * 100.0 / f64::from(fps);
+                assert!((f64::from(total) - exact).abs() <= 0.5, "{frames} @ {fps}: {total} vs {exact}");
+                let nominal = 100.0 / f64::from(fps);
+                assert!(d.iter().all(|&c| c >= 2 && (f64::from(c) - nominal).abs() < 1.0), "{d:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn gif_total_duration_is_within_one_frame_delay_of_output_duration() {
+        let mut p = project(10.0);
+        p.trims = vec![Trim { start: 0.5, end: 7.3 }];
+        p.speeds = vec![Speed { start: 2.0, end: 4.0, factor: 1.5 }];
+        let exact = Timeline::new(&p).output_duration();
+        for fps in [5, 10, 12, 15] {
+            let plan = export_plan(&p, SRC, &gif_opts(480, fps)).unwrap();
+            let total = f64::from(gif_delays(plan.frames, plan.fps).iter().sum::<u32>()) / 100.0;
+            assert!((total - exact).abs() <= 1.0 / f64::from(fps), "{fps} fps: {total} vs {exact}");
+        }
     }
 }

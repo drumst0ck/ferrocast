@@ -725,7 +725,7 @@ mod tests {
     fn render_request_rejects_unknown_codec_and_missing_fields() {
         let ok = encode_request(&Request { id: 1, command: render_command() });
         assert!(serde_json::from_str::<Request>(&ok.replace("hevc", "vp9")).is_err());
-        assert!(serde_json::from_str::<Request>(&ok.replace("\"mp4\"", "\"gif\"")).is_err());
+        assert!(serde_json::from_str::<Request>(&ok.replace("\"mp4\"", "\"avi\"")).is_err());
         assert!(serde_json::from_str::<Request>(&ok.replace(r#""frames":4392,"#, "")).is_err());
     }
 

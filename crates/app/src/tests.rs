@@ -12188,7 +12188,7 @@ fn cmd_e_and_the_button_open_the_export_sheet_and_esc_closes_only_the_sheet() {
     let dest = ed.export.dest.clone().expect("a default destination");
     assert_eq!(dest.file_name().unwrap(), "Demo.mp4", "named after the project, next to it");
     assert!(screen_has(&mut app, "Export video") && screen_has(&mut app, "H.264") && screen_has(&mut app, "60 fps"));
-    assert!(!screen_has(&mut app, "GIF"), "no GIF control until T29");
+    assert!(screen_has(&mut app, "GIF") && screen_has(&mut app, "MP4"), "the format choice (T29)");
     // Esc closes the sheet and the editor stays
     render(&mut app, vec![key_event(Key::Escape)]);
     assert!(!app.editor.as_ref().unwrap().export.open);
@@ -12197,6 +12197,32 @@ fn cmd_e_and_the_button_open_the_export_sheet_and_esc_closes_only_the_sheet() {
     click_label(&mut app, "Export…");
     render(&mut app, vec![]);
     assert!(app.editor.as_ref().unwrap().export.open);
+}
+
+#[test]
+fn the_gif_choice_swaps_the_pickers_for_the_gif_limits_and_the_extension() {
+    let (mut app, _rx, _dir) = editor_app_in("export-gif");
+    render(&mut app, vec![cmd_key(Key::E)]);
+    render(&mut app, vec![]);
+    assert!(screen_has(&mut app, "60 fps") && screen_has(&mut app, "4K") && screen_has(&mut app, "H.264"));
+    click_label(&mut app, "GIF");
+    render(&mut app, vec![]);
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.export.format, ferrocast_core::capture::export::Format::Gif);
+    assert_eq!(ed.export.dest.as_ref().unwrap().file_name().unwrap(), "Demo.gif");
+    for gone in ["60 fps", "30 fps", "4K", "1080p", "H.264", "HEVC", "Quality"] {
+        assert!(!screen_has(&mut app, gone), "{gone} is MP4-only");
+    }
+    for shown in ["480 px", "720 px", "960 px", "10 fps", "15 fps", "Export"] {
+        assert!(screen_has(&mut app, shown), "{shown}");
+    }
+    // the defaults are 720 px and 15 fps and the summary is a GIF-sized plan
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!((ed.export.gif_res.label(), ed.export.gif_fps), ("720 px", 15));
+    click_label(&mut app, "MP4");
+    render(&mut app, vec![]);
+    assert_eq!(app.editor.as_ref().unwrap().export.dest.as_ref().unwrap().file_name().unwrap(), "Demo.mp4");
+    assert!(screen_has(&mut app, "60 fps") && !screen_has(&mut app, "480 px"));
 }
 
 #[test]
