@@ -51,6 +51,8 @@ pub struct ScrubQueue {
     /// A key that failed: not asked again until [`ScrubQueue::invalidate`] (no error flood).
     last_failed: Option<Key>,
     shown_seq: u64,
+    /// The in-flight render started before the last [`ScrubQueue::invalidate`].
+    stale: bool,
 }
 
 impl ScrubQueue {
@@ -87,13 +89,14 @@ impl ScrubQueue {
     pub fn complete(&mut self, seq: u64, ok: bool) -> Option<Req> {
         let flying = self.in_flight.filter(|f| f.seq == seq)?;
         self.in_flight = None;
-        if ok {
+        let stale = std::mem::take(&mut self.stale);
+        if !ok {
+            self.last_failed = Some(flying.key);
+        } else if !stale {
             self.last_done = Some(flying.key);
             self.last_failed = None;
-        } else {
-            self.last_failed = Some(flying.key);
         }
-        let next = self.pending.take()?;
+        let next = self.pending.take().or(stale.then_some(flying.key))?;
         if self.last_done == Some(next) || self.last_failed == Some(next) {
             return None;
         }
@@ -111,10 +114,11 @@ impl ScrubQueue {
     }
 
     /// Forget what was rendered or failed (after an edit, or to retry): the next request renders.
-    #[allow(dead_code)] // T27: every EDL edit invalidates the queue
+    /// A render already in flight predates the edit: when it returns, the same frame is asked for again.
     pub fn invalidate(&mut self) {
         self.last_done = None;
         self.last_failed = None;
+        self.stale = self.in_flight.is_some();
     }
 
     pub fn busy(&self) -> bool {
@@ -328,6 +332,8 @@ pub type Renderer = Box<dyn FnMut(&Path, f64, u32, FrameParams) -> Result<Render
 
 pub enum WorkerCmd {
     Frame(Req),
+    /// The edited project (T27): the frames after this one are composed and styled from it.
+    Project(Box<Project>),
 }
 
 /// What the worker tells the app (wrapped in `Msg::Editor`).
@@ -341,6 +347,8 @@ pub struct Opened {
     /// The project had no zooms and `zoom::auto_zooms` produced these (in memory only).
     pub auto_zoomed: bool,
     pub note: Option<String>,
+    /// `events.json` (None when missing or unreadable): the panels need it for `Auto zoom` and the focus picker.
+    pub events: Option<Events>,
 }
 
 pub struct FrameOut {
@@ -417,7 +425,51 @@ fn load(dir: &Path, auto_zoom: Option<&ZoomOpts>) -> Result<Loaded, String> {
             auto_zoomed = !project.zooms.is_empty();
         }
     }
-    Ok((project.clone(), events, Opened { project, auto_zoomed, note }))
+    Ok((project.clone(), events.clone(), Opened { project, auto_zoomed, note, events }))
+}
+
+/// The helper reads the style (background, padding, radius, shadow, aspect) from the `project.json`
+/// it is given, and the request carries only camera/cursor/ring/blur. To preview an edit before the
+/// autosave writes the real file, the worker renders from a scratch folder that holds the EDITED
+/// `project.json` and a link to the take. When it cannot be made the real folder is used.
+struct Preview {
+    dir: PathBuf,
+    scratch: bool,
+}
+
+impl Preview {
+    fn new(real: &Path, project: &Project) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("ferrocast-preview-{}-{n}", std::process::id()));
+        let file = real.join(&project.sources.screen.file);
+        let made = std::fs::create_dir_all(&dir)
+            .and_then(|()| std::os::unix::fs::symlink(&file, dir.join(&project.sources.screen.file)))
+            .and_then(|()| project.save(&dir).map_err(std::io::Error::other))
+            .is_ok();
+        if made {
+            Self { dir, scratch: true }
+        } else {
+            let _ = std::fs::remove_dir_all(&dir);
+            Self { dir: real.to_path_buf(), scratch: false }
+        }
+    }
+
+    /// Show `project` in the next frames (a failed write keeps the previous look).
+    fn update(&self, project: &Project) {
+        if self.scratch {
+            let _ = project.save(&self.dir);
+        }
+    }
+}
+
+impl Drop for Preview {
+    fn drop(&mut self) {
+        if self.scratch {
+            // the folder holds a link to the take: remove_dir_all removes the link, not the take
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
 }
 
 fn serve(
@@ -428,16 +480,28 @@ fn serve(
     renderer: &mut Renderer,
     notify: &dyn Fn(EditorMsg),
 ) {
-    let composer = events.map(|e| Composer::new(project, e));
-    while let Ok(WorkerCmd::Frame(req)) = rx.recv() {
-        let started = Instant::now();
-        let params = composer.as_ref().map_or_else(FrameParams::default, |c| c.at(req.key.t));
-        let result = renderer(dir, req.key.t, req.key.width, params).and_then(|f| {
-            let bytes = std::fs::read(&f.path).map_err(|e| format!("preview frame unreadable: {e}"))?;
-            let image = crate::services::decode_png(&bytes).ok_or("preview frame is not a PNG")?;
-            Ok(FrameOut { image, t: req.key.t, helper_ms: f.ms, total_ms: started.elapsed().as_secs_f64() * 1000.0 })
-        });
-        notify(EditorMsg::Frame { dir: dir.to_path_buf(), seq: req.seq, result });
+    let preview = Preview::new(dir, project);
+    let mut project = project.clone();
+    loop {
+        let composer = events.map(|e| Composer::new(&project, e));
+        let edited = loop {
+            match rx.recv() {
+                Err(_) => return,
+                Ok(WorkerCmd::Project(p)) => break *p,
+                Ok(WorkerCmd::Frame(req)) => {
+                    let started = Instant::now();
+                    let params = composer.as_ref().map_or_else(FrameParams::default, |c| c.at(req.key.t));
+                    let result = renderer(&preview.dir, req.key.t, req.key.width, params).and_then(|f| {
+                        let bytes = std::fs::read(&f.path).map_err(|e| format!("preview frame unreadable: {e}"))?;
+                        let image = crate::services::decode_png(&bytes).ok_or("preview frame is not a PNG")?;
+                        Ok(FrameOut { image, t: req.key.t, helper_ms: f.ms, total_ms: started.elapsed().as_secs_f64() * 1000.0 })
+                    });
+                    notify(EditorMsg::Frame { dir: dir.to_path_buf(), seq: req.seq, result });
+                }
+            }
+        };
+        preview.update(&edited);
+        project = edited;
     }
 }
 
@@ -488,6 +552,10 @@ pub struct Editor {
     pub dirty: bool,
     pub worker: Option<Sender<WorkerCmd>>,
     pub rate: Rate,
+    /// `events.json` for `Auto zoom` and the focus picker (set when the project opens).
+    pub events: Option<Events>,
+    /// Panels, history and autosave (T27).
+    pub st: crate::editor_panels::Studio,
 }
 
 impl Editor {
@@ -507,6 +575,8 @@ impl Editor {
             dirty: false,
             worker,
             rate: Rate::default(),
+            events: None,
+            st: crate::editor_panels::Studio::new(),
         }
     }
 
@@ -516,6 +586,7 @@ impl Editor {
                 self.timeline = Some(Timeline::new(&o.project));
                 self.dirty = o.auto_zoomed;
                 self.note = o.note;
+                self.events = o.events;
                 self.t = self.timeline.as_ref().map_or(0.0, first_time);
                 self.project = Some(o.project);
             }
@@ -930,12 +1001,12 @@ mod tests {
         let mut ed = Editor::new(PathBuf::from("/p"), Some(tx));
         let mut p = project(&[], &[]);
         p.zooms = vec![zoom(1.0, 2.0)];
-        ed.opened(Ok(Opened { project: p, auto_zoomed: true, note: None }));
+        ed.opened(Ok(Opened { project: p, auto_zoomed: true, note: None, events: None }));
         ed
     }
 
     fn sent(rx: &Receiver<WorkerCmd>) -> Vec<Req> {
-        rx.try_iter().map(|WorkerCmd::Frame(r)| r).collect()
+        rx.try_iter().filter_map(|c| if let WorkerCmd::Frame(r) = c { Some(r) } else { None }).collect()
     }
 
     #[test]
@@ -1026,7 +1097,7 @@ mod tests {
     #[test]
     fn seeking_never_lands_in_a_cut_or_past_the_end() {
         let mut ed = Editor::new(PathBuf::from("/p"), None);
-        ed.opened(Ok(Opened { project: project(&[(1.0, 4.0), (6.0, 9.0)], &[]), auto_zoomed: false, note: None }));
+        ed.opened(Ok(Opened { project: project(&[(1.0, 4.0), (6.0, 9.0)], &[]), auto_zoomed: false, note: None, events: None }));
         assert_eq!(ed.t, 1.0, "starts at the first kept time");
         ed.seek(5.0, 0.0, 60.0);
         assert_eq!(ed.t, 6.0);
@@ -1167,6 +1238,51 @@ mod tests {
             EditorMsg::Frame { result: Err(e), .. } => assert_eq!(e, "take frame timed out"),
             _ => panic!("expected the failure"),
         }
+    }
+
+    #[test]
+    fn edited_projects_render_from_a_scratch_folder_and_the_real_project_json_is_untouched() {
+        let d = fixture_dir("scratch", "render_project.json");
+        let before = std::fs::read(d.join("project.json")).unwrap();
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<(PathBuf, String, bool)>>> = Default::default();
+        let log = seen.clone();
+        let png = d.join("fake.png");
+        image::RgbaImage::from_pixel(8, 4, image::Rgba([1, 2, 3, 255])).save(&png).unwrap();
+        let r: Renderer = Box::new(move |dir, _, _, _| {
+            let json = std::fs::read_to_string(dir.join("project.json")).unwrap_or_default();
+            log.lock().unwrap().push((dir.to_path_buf(), json, dir.join("screen.mov").is_file()));
+            Ok(RenderedFrame { path: png.clone(), size: [8, 4], ms: 1.0, cached: false })
+        });
+        let (mtx, mrx) = channel();
+        let mtx = std::sync::Mutex::new(mtx);
+        let tx = spawn_worker(d.clone(), None, r, Box::new(move |m| mtx.lock().unwrap().send(m).unwrap()));
+        let EditorMsg::Opened { result, .. } = mrx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else {
+            panic!("Opened first")
+        };
+        let mut edited = result.unwrap().project;
+        let ask = |seq: u64| {
+            tx.send(WorkerCmd::Frame(Req { seq, key: Key { t: 0.1, width: 960 } })).unwrap();
+            let EditorMsg::Frame { result, .. } = mrx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("a frame") };
+            result.unwrap();
+        };
+        ask(1);
+        edited.style.padding = 0.31;
+        tx.send(WorkerCmd::Project(Box::new(edited))).unwrap();
+        ask(2);
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2);
+        assert_ne!(seen[0].0, d, "frames come from the scratch folder, not the project folder");
+        assert_eq!(seen[0].0, seen[1].0);
+        assert!(seen[0].2 && seen[1].2, "the take is reachable from the scratch folder");
+        assert!(!seen[0].1.contains("0.31") && seen[1].1.contains("0.31"), "the second frame is styled from the edited project");
+        assert_eq!(std::fs::read(d.join("project.json")).unwrap(), before, "the worker never writes the real project.json");
+        drop(tx);
+        let gone = (0..100).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            !seen[0].0.exists()
+        });
+        assert!(gone, "the scratch folder is removed when the editor closes");
+        assert!(d.join("screen.mov").is_file(), "removing it does not touch the take");
     }
 
     /// Live check against the REAL helper on the fixture project (no Screen Recording needed: it

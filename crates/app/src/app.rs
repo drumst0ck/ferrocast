@@ -671,7 +671,7 @@ impl View {
             View::Annotate { .. } => vec![SAVE, ("Undo", "⌘Z"), ("Delete", "⌫"), BACK],
             View::CaptureResult { .. } => vec![("Copy", "↵"), ("Save", "⌘S"), ("Annotate", "⌘⇧A"), BACK],
             View::Recordings => vec![("Open", "↵"), ("Show in Finder", "⌘↵"), ("Trash", "⌘⌫"), BACK],
-            View::Editor { .. } => vec![("Play", "space"), ("Frame", "←/→"), ("Second", "⇧←/→"), BACK],
+            View::Editor { .. } => vec![("Play", "space"), ("Frame", "←/→"), ("Undo", "⌘Z"), ("Redo", "⇧⌘Z"), BACK],
             View::Reorder { purpose, .. } => {
                 let primary = match purpose {
                     ReorderPurpose::JoinVideos => "Join",
@@ -1682,6 +1682,7 @@ impl App {
     }
 
     fn hide(&mut self) {
+        self.editor_flush();
         self.visible = false;
         self.hidden_at = Instant::now();
         self.shared.visible.store(false, Ordering::Relaxed);
@@ -2530,6 +2531,7 @@ impl App {
 
     /// Writes pending notes and exits.
     fn quit(&mut self) -> ! {
+        self.editor_flush();
         self.notes_do(|c, d| c.flush(d));
         std::process::exit(0)
     }
@@ -2541,6 +2543,7 @@ impl App {
     }
 
     fn push(&mut self, v: View) {
+        self.editor_flush();
         self.sec_dirty = true;
         self.nav_at = Instant::now();
         if matches!(v, View::Windows) {
@@ -2607,7 +2610,15 @@ impl App {
         });
     }
 
+    /// Write the editor's pending edits now (Esc, closing, hiding, switching view, quitting).
+    fn editor_flush(&mut self) {
+        if let Some(ed) = self.editor.as_mut() {
+            ed.flush(ed.now());
+        }
+    }
+
     fn pop(&mut self) {
+        self.editor_flush();
         // Escape (or going back) also ends a running translating effect
         self.end_effect(false);
         self.sec_dirty = true;
@@ -2829,6 +2840,7 @@ impl App {
     }
 
     fn reset_to_root(&mut self) {
+        self.editor_flush();
         self.sec_dirty = true;
         self.nav_at = Instant::now();
         self.stack = vec![View::Root];
@@ -5481,6 +5493,7 @@ impl App {
     /// Open the studio editor on a project folder: a render worker loads it (applying the auto zooms
     /// in memory when it has none and `capture.auto_zoom` is on) and renders the preview frames.
     fn open_editor(&mut self, dir: PathBuf) {
+        self.editor_flush();
         let exe = self.capture.exe.clone();
         let root = self.store.root.clone();
         let log = move |m: &str| instance::log(&root, m);
@@ -5499,6 +5512,9 @@ impl App {
 
     /// The editor session ends with its view: dropping it stops the worker and the helper.
     fn editor_gc(&mut self) {
+        if !self.stack.iter().any(|v| matches!(v, View::Editor { .. })) {
+            self.editor_flush();
+        }
         if self.editor.is_some() && !self.stack.iter().any(|v| matches!(v, View::Editor { .. })) {
             self.editor = None;
         }
