@@ -12638,3 +12638,290 @@ fn notes_and_app_palettes_have_the_same_values() {
         }
     }
 }
+
+// ---- P5: the Transcript tab (egui harness; the helper is never started: the Mac has no Speech grant) ----
+
+mod transcript_tab {
+    use super::*;
+    use crate::editor_panels::{TranscribeFailure, TranscribeRun};
+    use ferrocast_core::capture::project::Project;
+    use ferrocast_core::capture::transcript::{Transcript, Word};
+
+    fn speech() -> Transcript {
+        let w = |text: &str, start: f64, end: f64| Word { text: text.into(), start, end, confidence: 0.95 };
+        Transcript {
+            language: "en-US".into(),
+            words: vec![
+                w("alpha", 0.5, 0.8),
+                w("um", 1.0, 1.3),
+                w("bravo", 1.5, 1.8),
+                w("charlie", 1.9, 2.1),
+                w("delta", 2.2, 2.5),
+                w("echo", 4.0, 4.4),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// The camera fixture (mic + system) without its trim, so every word is kept at first.
+    fn project(transcript: Option<Transcript>) -> Project {
+        let mut p = p4_project();
+        p.trims.clear();
+        p.transcript = transcript;
+        p
+    }
+
+    fn open(tag: &str, transcript: Option<Transcript>) -> (App, std::path::PathBuf) {
+        let (mut app, dir, _rx) = editor_app_for(&format!("p5-{tag}"), project(transcript), &["mic.m4a"]);
+        std::mem::forget(_rx); // the worker channel must stay open for `after_change`
+        set_tab(&mut app, Tab::Transcript);
+        (app, dir)
+    }
+
+    /// Every painted text with its own rectangle (a wrapped label's galley starts with the row's
+    /// leading space) and its first section format (colour, background, strike-through).
+    fn formats(app: &mut App) -> Vec<(String, Rect, egui::TextFormat)> {
+        fn walk(s: &egui::Shape, out: &mut Vec<(String, Rect, egui::TextFormat)>) {
+            match s {
+                egui::Shape::Text(t) => {
+                    if let Some(sec) = t.galley.job.sections.first() {
+                        let r = Rect::from_min_size(t.pos, t.galley.size());
+                        let r = Rect::from_min_max(Pos2::new(r.min.x + sec.leading_space, r.min.y), r.max);
+                        out.push((t.galley.text().to_string(), r, sec.format.clone()));
+                    }
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+                _ => {}
+            }
+        }
+        let input =
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))), ..Default::default() };
+        let ctx = app.ctx.clone();
+        let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+        output.textures_delta.clear();
+        let mut out = vec![];
+        output.shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+        out
+    }
+
+    fn fmt(app: &mut App, word: &str) -> egui::TextFormat {
+        formats(app).into_iter().find(|(t, _, _)| t == word).unwrap_or_else(|| panic!("no `{word}` on screen")).2
+    }
+
+    fn word_pos(app: &mut App, word: &str) -> Pos2 {
+        formats(app).into_iter().find(|(t, _, _)| t == word).unwrap_or_else(|| panic!("no `{word}` on screen")).1.center()
+    }
+
+    fn click_word(app: &mut App, word: &str) {
+        let p = word_pos(app, word);
+        click_at(app, p);
+    }
+
+    fn texts(app: &mut App) -> Vec<String> {
+        render_texts(app, vec![]).into_iter().map(|(t, _)| t).collect()
+    }
+
+    fn shift_click_label(app: &mut App, text: &str) {
+        let pos = word_pos(app, text);
+        let btn = |pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::SHIFT };
+        render_mods(app, vec![Event::PointerMoved(pos)], Modifiers::SHIFT);
+        render_mods(app, vec![btn(true)], Modifiers::SHIFT);
+        render_mods(app, vec![btn(false)], Modifiers::SHIFT);
+        render(app, vec![]);
+    }
+
+    #[test]
+    fn a_project_without_audio_and_without_transcript_has_no_transcript_tab() {
+        let (mut app, _rx, _dir) = editor_app_in("p5-plain");
+        let t = tab_labels(&mut app);
+        assert!(!t.iter().any(|x| x == "Transcript"), "{t:?}");
+        // audio shows it; so does a transcript without audio
+        let (mut app, _dir) = open("tab-audio", None);
+        assert!(texts(&mut app).iter().any(|x| x == "Transcript"));
+        let mut p = project(Some(speech()));
+        p.sources.mic = None;
+        p.sources.system = None;
+        let (mut app, _d, _rx) = editor_app_for("p5-tab-only-transcript", p, &[]);
+        assert!(texts(&mut app).iter().any(|x| x == "Transcript"));
+    }
+
+    #[test]
+    fn idle_offers_a_language_and_the_transcribe_button() {
+        let (mut app, _dir) = open("idle", None);
+        let t = texts(&mut app);
+        for want in ["Language", "System language", "Transcribe", "Transcription runs on this Mac. Nothing leaves it."] {
+            assert!(t.iter().any(|x| x == want), "idle lacks `{want}`: {t:?}");
+        }
+        assert!(!t.iter().any(|x| x == "Cancel" || x == "Delete selection"));
+        // in this test build the helper is not there: the click is answered with a message, nothing starts
+        click_label(&mut app, "Transcribe");
+        assert!(app.editor.as_ref().unwrap().st.tr.run.is_none());
+        assert!(screen_has(&mut app, "Transcription is not available in this build."));
+    }
+
+    #[test]
+    fn running_shows_progress_and_cancel_sets_the_flag() {
+        let (mut app, _dir) = open("running", None);
+        let mut run = TranscribeRun::new();
+        (run.done, run.total) = (1.0, 4.0);
+        let flag = run.cancel.clone();
+        app.editor.as_mut().unwrap().st.tr.run = Some(run);
+        let t = texts(&mut app);
+        assert!(t.iter().any(|x| x == "Transcribing… 25 %") && t.iter().any(|x| x == "Cancel"), "{t:?}");
+        assert!(!t.iter().any(|x| x == "Transcribe"), "no second start while running");
+        click_label(&mut app, "Cancel");
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(screen_has(&mut app, "Cancelling…"));
+    }
+
+    #[test]
+    fn errors_are_clear_and_the_permission_one_offers_the_settings_pane() {
+        let (mut app, _dir) = open("error", None);
+        app.editor.as_mut().unwrap().st.tr.error = Some(TranscribeFailure::Permission);
+        let t = texts(&mut app);
+        assert!(
+            t.iter().any(|x| x
+                == "Speech Recognition permission is needed. Open System Settings > Privacy & Security > Speech Recognition and allow Ferrocast."),
+            "{t:?}"
+        );
+        assert!(t.iter().any(|x| x == "Open Speech Recognition settings") && t.iter().any(|x| x == "Transcribe"), "retry stays available");
+        click_label(&mut app, "Open Speech Recognition settings"); // `open_pane` is inert in tests
+        let msg = ferrocast_macos::capture::transcription_unavailable_message("Spanish (Spain)");
+        app.editor.as_mut().unwrap().st.tr.error = Some(TranscribeFailure::Message(msg.clone()));
+        let t = texts(&mut app);
+        assert!(t.contains(&msg) && !t.iter().any(|x| x == "Open Speech Recognition settings"), "{t:?}");
+    }
+
+    #[test]
+    fn with_a_transcript_the_words_flow_and_are_marked() {
+        let (mut app, _dir) = open("words", Some(speech()));
+        let t = texts(&mut app);
+        for want in ["Delete selection", "Remove fillers", "Tighten pauses", "alpha", "um", "bravo", "charlie", "delta", "echo"] {
+            assert!(t.iter().any(|x| x == want), "lacks `{want}`: {t:?}");
+        }
+        assert!(!t.iter().any(|x| x == "Transcribe"), "a transcript replaces the Transcribe button");
+        let (plain, filler) = (fmt(&mut app, "alpha"), fmt(&mut app, "um"));
+        assert_ne!(plain.color, filler.color, "the filler is marked");
+        assert!(plain.strikethrough.width == 0.0 && plain.background == egui::Color32::TRANSPARENT);
+        // the word under the playhead is highlighted
+        app.editor.as_mut().unwrap().t = 1.6;
+        assert_ne!(fmt(&mut app, "bravo").background, egui::Color32::TRANSPARENT);
+        assert_eq!(fmt(&mut app, "charlie").background, egui::Color32::TRANSPARENT);
+        // the transcript is read-only: no text field anywhere (words are labels)
+        assert!(!app.ctx.egui_wants_keyboard_input());
+    }
+
+    #[test]
+    fn clicking_a_word_seeks_and_a_cut_word_lands_on_the_nearest_kept_time() {
+        let (mut app, _dir) = open("seek", Some(speech()));
+        click_word(&mut app, "charlie");
+        assert!((editor_t(&app) - 1.9).abs() < 1e-9, "{}", editor_t(&app));
+        assert_eq!(app.editor.as_ref().unwrap().st.history.undo_len(), 0, "seeking is not an edit");
+        // cut "um" (about 0.98-1.32): a click on it lands next to the cut, never inside it
+        app.editor.as_mut().unwrap().transcript_cut(crate::editor_panels::CutAction::Fillers, 5.0);
+        click_word(&mut app, "um");
+        let t = editor_t(&app);
+        assert!(app.editor.as_ref().unwrap().timeline.as_ref().unwrap().is_kept(t) && (t - 0.98).abs() < 0.05, "{t}");
+    }
+
+    #[test]
+    fn cut_words_are_struck_through_and_dimmed() {
+        let (mut app, _dir) = open("strike", Some(speech()));
+        app.editor.as_mut().unwrap().transcript_cut(crate::editor_panels::CutAction::Fillers, 5.0);
+        let (cut, kept) = (fmt(&mut app, "um"), fmt(&mut app, "alpha"));
+        assert!(cut.strikethrough.width > 0.0 && kept.strikethrough.width == 0.0);
+        assert_ne!(cut.color, kept.color, "dimmed");
+        assert!(screen_has(&mut app, "Removed 1 cut"), "{:?}", texts(&mut app));
+    }
+
+    #[test]
+    fn shift_click_selects_a_range_and_delete_selection_is_one_undo_step() {
+        let (mut app, dir) = open("select", Some(speech()));
+        let start = editor_proj(&app).to_json();
+        click_word(&mut app, "bravo");
+        assert!(screen_has(&mut app, "No selection") && screen_has(&mut app, "Click a word to move the playhead."));
+        shift_click_label(&mut app, "delta");
+        assert_eq!(app.editor.as_ref().unwrap().st.tr.sel, Some((2, 4)));
+        assert!(screen_has(&mut app, "3 words selected"), "{:?}", texts(&mut app));
+        assert_ne!(fmt(&mut app, "charlie").background, egui::Color32::TRANSPARENT, "the selection is highlighted");
+        assert_eq!(fmt(&mut app, "alpha").background, egui::Color32::TRANSPARENT);
+        click_label(&mut app, "Delete selection");
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.st.history.undo_len(), 1);
+        assert_eq!(ed.st.tr.sel, None);
+        let tl = ed.timeline.clone().unwrap();
+        let w = speech().words;
+        let cut: Vec<bool> = w.iter().map(|w| crate::editor_panels::word_is_cut(&tl, w)).collect();
+        assert_eq!(cut, [false, false, true, true, true, false], "exactly the selected words");
+        assert!(fmt(&mut app, "charlie").strikethrough.width > 0.0);
+        app.editor.as_mut().unwrap().flush(1e6);
+        assert_eq!(ferrocast_core::capture::project::Project::load(&dir).unwrap().to_json(), editor_proj(&app).to_json(), "autosaved");
+        render(&mut app, vec![key_mod_event(Key::Z, Modifiers::COMMAND)]);
+        assert_eq!(editor_proj(&app).to_json(), start, "Cmd+Z restores the project");
+        assert_eq!(fmt(&mut app, "charlie").strikethrough.width, 0.0);
+    }
+
+    #[test]
+    fn dragging_across_words_selects_them() {
+        let (mut app, _dir) = open("drag", Some(speech()));
+        let (a, b) = (word_pos(&mut app, "bravo"), word_pos(&mut app, "delta"));
+        let btn = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        render(&mut app, vec![Event::PointerMoved(a)]);
+        render(&mut app, vec![btn(a, true)]);
+        render(&mut app, vec![Event::PointerMoved(Pos2::new((a.x + b.x) / 2.0, a.y))]);
+        render(&mut app, vec![Event::PointerMoved(b)]);
+        render(&mut app, vec![btn(b, false)]);
+        render(&mut app, vec![]);
+        assert_eq!(app.editor.as_ref().unwrap().st.tr.sel, Some((2, 4)), "{:?}", app.editor.as_ref().unwrap().st.tr.sel);
+        assert_eq!(app.editor.as_ref().unwrap().st.history.undo_len(), 0, "selecting edits nothing");
+    }
+
+    #[test]
+    fn remove_fillers_and_tighten_pauses_each_report_and_undo_once() {
+        let (mut app, dir) = open("actions", Some(speech()));
+        let start = editor_proj(&app).to_json();
+        click_label(&mut app, "Remove fillers");
+        assert_eq!(app.editor.as_ref().unwrap().st.history.undo_len(), 1);
+        assert!(screen_has(&mut app, "Removed 1 cut · 0.3 s"), "{:?}", texts(&mut app));
+        click_label(&mut app, "Remove fillers");
+        assert_eq!(app.editor.as_ref().unwrap().st.history.undo_len(), 1);
+        assert!(screen_has(&mut app, "No filler words found."));
+        click_label(&mut app, "Tighten pauses");
+        assert_eq!(app.editor.as_ref().unwrap().st.history.undo_len(), 2);
+        assert!(screen_has(&mut app, "Removed "), "{:?}", texts(&mut app));
+        click_label(&mut app, "Tighten pauses");
+        assert!(screen_has(&mut app, "No long pauses to tighten."));
+        assert_eq!(app.editor.as_ref().unwrap().st.history.undo_len(), 2);
+        // autosave writes the transcript together with the cuts
+        app.editor.as_mut().unwrap().flush(1e6);
+        let saved = ferrocast_core::capture::project::Project::load(&dir).unwrap();
+        assert_eq!(saved.transcript, Some(speech()));
+        assert!(!saved.trims.is_empty() || saved.to_json() != start, "the cuts are on disk");
+        render(&mut app, vec![key_mod_event(Key::Z, Modifiers::COMMAND)]);
+        render(&mut app, vec![key_mod_event(Key::Z, Modifiers::COMMAND)]);
+        assert_eq!(editor_proj(&app).to_json(), start, "one Cmd+Z per action");
+    }
+
+    #[test]
+    fn a_finished_transcription_shows_the_words_and_autosave_writes_them() {
+        let (mut app, dir) = open("finish", None);
+        app.handle_editor(crate::editor_ctl::EditorMsg::Transcribe {
+            dir: dir.clone(),
+            msg: crate::editor_panels::TranscribeMsg::Done(Box::new(speech())),
+        });
+        let t = texts(&mut app);
+        assert!(t.iter().any(|x| x == "alpha") && t.iter().any(|x| x == "Remove fillers"), "{t:?}");
+        app.editor.as_mut().unwrap().flush(1e6);
+        assert_eq!(
+            ferrocast_core::capture::project::Project::load(&dir).unwrap().transcript,
+            Some(speech()),
+            "autosave writes `transcript`"
+        );
+        // a message for another project is ignored
+        app.handle_editor(crate::editor_ctl::EditorMsg::Transcribe {
+            dir: "/elsewhere".into(),
+            msg: crate::editor_panels::TranscribeMsg::Failed(TranscribeFailure::Permission),
+        });
+        assert!(app.editor.as_ref().unwrap().st.tr.error.is_none());
+    }
+}

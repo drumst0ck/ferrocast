@@ -23,6 +23,7 @@ for sig in [SIGTERM, SIGINT] {
     source.setEventHandler {
         shutdownRecorder()
         shutdownExport()
+        shutdownTranscribe()
         exit(0)
     }
     source.resume()
@@ -43,7 +44,7 @@ func handle(_ req: [String: Any]) {
     if cmd == "hello" {
         reply(id, ["protocol": protocolVersion, "os": osVersionString(), "version": helperVersion,
                    "sck": sckAvailable(), "metal": MTLCreateSystemDefaultDevice() != nil,
-                   "capabilities": sckAvailable() ? ["shareable", "screenshot", "record", "render.frame", "render", "devices", "record.sources"] : []])
+                   "capabilities": sckAvailable() ? ["shareable", "screenshot", "record", "render.frame", "render", "devices", "record.sources", "transcribe"] : []])
         return
     }
     guard #available(macOS 14, *) else {
@@ -60,7 +61,8 @@ func handle(_ req: [String: Any]) {
     case "render.frame":
         if exportInProgress() { fail(id, "busy", "an export is running") } else { handleRenderFrame(id, req) }
     case "render": handleRender(id, req)
-    case "cancel": handleCancel(id, req)
+    case "cancel": if !handleTranscribeCancel(id, req) { handleCancel(id, req) }
+    case "transcribe": handleTranscribe(id, req)
     default: fail(id, "invalid", "unknown command: \(cmd)")
     }
 }
@@ -78,3 +80,4 @@ while let line = readLine(strippingNewline: true) {
 // stdin closed: the app is gone. Keep a playable recording if one is running.
 shutdownRecorder()
 shutdownExport()
+shutdownTranscribe()

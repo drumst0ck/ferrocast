@@ -355,6 +355,11 @@ pub enum EditorMsg {
         dir: PathBuf,
         msg: crate::editor_export::ExportMsg,
     },
+    /// The transcription thread (P5): progress, the transcript, a failure or the cancel.
+    Transcribe {
+        dir: PathBuf,
+        msg: crate::editor_panels::TranscribeMsg,
+    },
 }
 
 pub struct Opened {
@@ -664,7 +669,16 @@ impl Editor {
                 self.note = o.note;
                 self.events = o.events;
                 self.t = self.timeline.as_ref().map_or(0.0, first_time);
-                self.project = Some(o.project);
+                let mut project = o.project;
+                // a `transcript.json` next to a project that has no transcript yet is adopted (and saved into project.json)
+                if project.transcript.is_none() {
+                    if let Some(t) = crate::editor_panels::adopt_transcript(&self.dir) {
+                        project.transcript = Some(t);
+                        self.dirty = true;
+                        self.st.autosave.changed(self.now());
+                    }
+                }
+                self.project = Some(project);
             }
             Err(e) => self.error = Some(e),
         }

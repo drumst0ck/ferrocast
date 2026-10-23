@@ -132,7 +132,7 @@ In the editor, a **Camera** tab appears when the recording has a camera: show or
 
 ## Editing a recording
 
-The editor shows the preview on the left and a panel with four tabs on the right. Under the preview there is a timeline (a ruler, a row for trims and speed changes, a row for zooms) with the playhead, and a row with **Play**/**Pause**, **Undo**, **Redo**, **Export…** and the time. The time reads `output time / output length · source time`, so you see the length after your edits. At the right end of that row you see the number of zooms and the save state. <kbd>Esc</kbd> closes the editor and writes anything not yet saved.
+The editor shows the preview on the left and a panel with tabs on the right (Zoom, Cursor, Style and Clips, plus Camera, Audio and Transcript when the recording has them). Under the preview there is a timeline (a ruler, a row for trims and speed changes, a row for zooms) with the playhead, and a row with **Play**/**Pause**, **Undo**, **Redo**, **Export…** and the time. The time reads `output time / output length · source time`, so you see the length after your edits. At the right end of that row you see the number of zooms and the save state. <kbd>Esc</kbd> closes the editor and writes anything not yet saved.
 
 The cursor you see is drawn by the editor from the recorded events in `events.json`. It is not in `screen.mov`, which is why you can resize it, smooth it or remove it.
 
@@ -186,6 +186,24 @@ Every change can be undone and redone (<kbd>⌘</kbd> <kbd>Z</kbd>, <kbd>⇧</kb
 - **Speed**: pick 0.25×, 0.5×, 1×, 2×, 4×, 8× or 16× (or type a value), then **Apply to segment**.
 - Below, the list of segments (click one to move the playhead) and the length before and after your edits.
 
+### Transcript
+
+The **Transcript** tab appears when the recording has a microphone or system audio track, or already has a transcript. It turns the speech into text you can read and cut, and everything runs on your Mac: the audio and the text never leave it.
+
+The first time, the tab shows a **Language** list (**System language** by default) and a **Transcribe** button. The first time you press **Transcribe**, macOS asks for the **Speech Recognition** permission (the same prompt may also ask for Microphone access). If it was denied, the tab says `Speech Recognition permission is needed. Open System Settings > Privacy & Security > Speech Recognition and allow Ferrocast.` and offers a button that opens that pane. The languages that work are the ones whose on-device models your Mac has; if one is not available, the tab says so. A bar shows the progress and **Cancel** stops it and leaves nothing behind. The text is saved with the project (`transcript.json` next to `project.json`), so it is not worked out again.
+
+Then the tab shows the words as flowing text. The word under the playhead is highlighted. Click a word to move the playhead to it (a word that is already cut moves the playhead to the nearest kept moment). Shift-click or drag to select a range of words. The text is read-only: you cut words, you do not retype them. Cut words are struck through and dimmed, and filler words are marked in orange.
+
+- **Delete selection** cuts exactly the selected words.
+- **Remove fillers** cuts filler words such as `um` and `uh` (and `like` or `you know` only when they are isolated or unclear). English and Spanish have a list; other languages have none.
+- **Tighten pauses** shortens silences longer than 0.7 s to about 0.25 s.
+
+Each action cuts the timeline like **Clips** does, is one step for <kbd>⌘</kbd> <kbd>Z</kbd>, and tells you how many cuts and seconds it removed, or that there was nothing to remove. The cuts are saved and exported like any other edit.
+
+:::caution
+Accuracy depends on the audio quality, so check the words before you cut. macOS 14 and later use the Speech framework. The newer macOS 26 engine is used only when its language assets are already installed; Ferrocast never downloads them.
+:::
+
 ### Saving
 
 The editor writes `project.json` by itself 1 s after your last change, as a temporary file renamed into place. The save state reads `Saved` or `Saving…`; if a write fails it shows the error text and tries again. A recording you only opened is not rewritten.
@@ -210,7 +228,7 @@ A GIF holds all its frames in memory, so its length is limited. At 960 px wide (
 :::caution[Limits]
 - PNG only. Settings → Capture shows the format as PNG, with no other choice. **Include cursor** draws the pointer in area, window and screen captures.
 - The scrolling capture keeps all its strips in memory until it finishes.
-- Transcript editing is not available yet. Audio is only in MP4 exports.
+- Audio is only in MP4 exports. Transcripts need the Speech Recognition permission and an on-device model for the language; words are cut, never retyped.
 - The editor does not use image wallpapers: the Style presets are gradients.
 - A recording is lost if you quit Ferrocast while it runs. Stop it first.
 :::

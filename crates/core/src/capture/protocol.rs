@@ -120,6 +120,19 @@ pub enum Command {
     /// Stop the request with id `target`; the export answers `cancelled` and leaves no output.
     #[serde(rename = "cancel")]
     Cancel { target: u64 },
+    /// Transcribe a project's audio ON-DEVICE (P5). The helper reads `<project>/<audio>` (a plain
+    /// file name: no separator, no `..`; default `mic.m4a`), emits `progress` / `heartbeat` events
+    /// and ends with `ok` ([`TranscribeDone`]) after writing `<project>/transcript.json`, or an error
+    /// (`permission-speech`, `transcription-unavailable`, `not-found`, `cancelled`, ...).
+    #[serde(rename = "transcribe")]
+    Transcribe {
+        project: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audio: Option<String>,
+        /// BCP-47 locale such as `en-US`; absent = the system locale.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        locale: Option<String>,
+    },
 }
 
 /// Payload of the final `ok` of a `render`.
@@ -487,6 +500,12 @@ pub enum ErrorCode {
     NotFound,
     #[serde(rename = "busy")]
     Busy,
+    /// Speech Recognition is not authorized (the helper never raises the system prompt itself).
+    #[serde(rename = "permission-speech")]
+    PermissionSpeech,
+    /// No on-device recogniser for the locale (the helper never falls back to the network).
+    #[serde(rename = "transcription-unavailable")]
+    TranscriptionUnavailable,
     #[serde(rename = "cancelled")]
     Cancelled,
     #[serde(rename = "disk-full")]
@@ -582,6 +601,42 @@ pub fn decode_line(line: &str) -> Result<Line, String> {
 /// Typed view of an `ok` body.
 pub fn parse_body<T: serde::de::DeserializeOwned>(body: &Value) -> Result<T, String> {
     serde_json::from_value(body.clone()).map_err(|e| e.to_string())
+}
+
+/// Payload of the final `ok` of a `transcribe`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscribeDone {
+    pub language: String,
+    pub words: u32,
+    /// Absolute path of the written `transcript.json`.
+    pub path: String,
+}
+
+/// Non-terminal events of a running `transcribe`; positions are seconds of the source audio.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TranscribeEvent {
+    Progress {
+        done_secs: f64,
+        total_secs: f64,
+    },
+    /// Sign of life while the recogniser is busy.
+    Heartbeat,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "event", rename_all = "lowercase")]
+enum TranscribeWire {
+    Progress { done_secs: f64, total_secs: f64 },
+    Heartbeat {},
+}
+
+/// Decode a `transcribe` event line by name; `None` for other events or malformed bodies.
+pub fn parse_transcribe_event(name: &str, body: &Value) -> Option<TranscribeEvent> {
+    matches!(name, "progress" | "heartbeat").then(|| serde_json::from_value::<TranscribeWire>(body.clone()).ok()).flatten().map(|w| match w
+    {
+        TranscribeWire::Progress { done_secs, total_secs } => TranscribeEvent::Progress { done_secs, total_secs },
+        TranscribeWire::Heartbeat {} => TranscribeEvent::Heartbeat,
+    })
 }
 
 #[cfg(test)]
@@ -1139,5 +1194,57 @@ mod tests {
             parse_record_event(&name, &body),
             Some(RecordEvent::Warn { code: "camera-lost".into(), message: Some("unplugged".into()), free_bytes: None })
         );
+    }
+
+    #[test]
+    fn transcribe_request_omits_absent_options_and_round_trips() {
+        let r = Request {
+            id: 9,
+            command: Command::Transcribe {
+                project: "/p/Demo.ferrocast".into(),
+                audio: Some("mic.m4a".into()),
+                locale: Some("en-US".into()),
+            },
+        };
+        let s = encode_request(&r);
+        assert_eq!(s, r#"{"id":9,"cmd":"transcribe","project":"/p/Demo.ferrocast","audio":"mic.m4a","locale":"en-US"}"#);
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+        let bare: Request = serde_json::from_str(r#"{"id":1,"cmd":"transcribe","project":"/p"}"#).unwrap();
+        assert_eq!(bare.command, Command::Transcribe { project: "/p".into(), audio: None, locale: None });
+        assert_eq!(encode_request(&bare), r#"{"id":1,"cmd":"transcribe","project":"/p"}"#);
+    }
+
+    #[test]
+    fn transcribe_events_and_result_decode() {
+        let ev = |l: &str| {
+            let Line::Event { name, body, .. } = decode_line(l).unwrap() else { panic!() };
+            parse_transcribe_event(&name, &body)
+        };
+        assert_eq!(
+            ev(r#"{"event":"progress","id":9,"done_secs":12.5,"total_secs":60.0,"future":1}"#),
+            Some(TranscribeEvent::Progress { done_secs: 12.5, total_secs: 60.0 })
+        );
+        assert_eq!(ev(r#"{"event":"heartbeat","id":9}"#), Some(TranscribeEvent::Heartbeat));
+        assert_eq!(ev(r#"{"event":"progress","id":9,"done_frames":1,"total_frames":2}"#), None);
+        assert_eq!(ev(r#"{"event":"tick","id":9}"#), None);
+        let Line::Ok { body, .. } = decode_line(r#"{"id":9,"ok":true,"language":"en-US","words":42,"path":"/p/transcript.json"}"#).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            parse_body::<TranscribeDone>(&body).unwrap(),
+            TranscribeDone { language: "en-US".into(), words: 42, path: "/p/transcript.json".into() }
+        );
+    }
+
+    #[test]
+    fn speech_error_codes_decode_and_unknown_codes_stay_internal() {
+        let code = |l: &str| match decode_line(l).unwrap() {
+            Line::Error { code, .. } => code,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(code(r#"{"id":1,"error":"permission-speech","message":"m"}"#), ErrorCode::PermissionSpeech);
+        assert_eq!(code(r#"{"id":1,"error":"transcription-unavailable","message":"m"}"#), ErrorCode::TranscriptionUnavailable);
+        assert_eq!(code(r#"{"id":1,"error":"future-code","message":"m"}"#), ErrorCode::Internal);
     }
 }

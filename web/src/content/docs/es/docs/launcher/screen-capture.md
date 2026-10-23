@@ -132,7 +132,7 @@ En el editor aparece una pestaña **Camera** cuando la grabación tiene cámara:
 
 ## Editar una grabación
 
-El editor muestra la vista previa a la izquierda y un panel con cuatro pestañas a la derecha. Debajo de la vista previa hay una línea de tiempo (una regla, una fila para recortes y cambios de velocidad y otra para los zooms) con el cabezal, y una fila con **Play**/**Pause**, **Undo**, **Redo**, **Export…** y el tiempo. El tiempo se lee `tiempo de salida / duración de salida · tiempo original`, así ves la duración tras tus cambios. En el extremo derecho de esa fila aparecen el número de zooms y el estado de guardado. <kbd>Esc</kbd> cierra el editor y escribe lo que aún no se haya guardado.
+El editor muestra la vista previa a la izquierda y un panel con pestañas a la derecha (Zoom, Cursor, Style y Clips, más Camera, Audio y Transcript cuando la grabación los tiene). Debajo de la vista previa hay una línea de tiempo (una regla, una fila para recortes y cambios de velocidad y otra para los zooms) con el cabezal, y una fila con **Play**/**Pause**, **Undo**, **Redo**, **Export…** y el tiempo. El tiempo se lee `tiempo de salida / duración de salida · tiempo original`, así ves la duración tras tus cambios. En el extremo derecho de esa fila aparecen el número de zooms y el estado de guardado. <kbd>Esc</kbd> cierra el editor y escribe lo que aún no se haya guardado.
 
 El cursor que ves lo dibuja el editor a partir de los eventos grabados en `events.json`. No está en `screen.mov`, y por eso puedes cambiarle el tamaño, suavizarlo o quitarlo.
 
@@ -186,6 +186,24 @@ Todos los cambios se pueden deshacer y rehacer (<kbd>⌘</kbd> <kbd>Z</kbd>, <kb
 - **Speed**: elige 0.25×, 0.5×, 1×, 2×, 4×, 8× o 16× (o escribe un valor) y pulsa **Apply to segment**.
 - Debajo, la lista de segmentos (haz clic en uno para mover el cabezal) y la duración antes y después de tus cambios.
 
+### Transcript
+
+La pestaña **Transcript** aparece cuando la grabación tiene una pista de micrófono o de audio del sistema, o ya tiene una transcripción. Convierte el habla en texto que puedes leer y recortar, y todo se hace en tu Mac: el audio y el texto no salen de él.
+
+La primera vez, la pestaña muestra una lista **Language** (**System language** por defecto) y un botón **Transcribe**. La primera vez que pulsas **Transcribe**, macOS pide el permiso de **Reconocimiento de voz** (el mismo aviso puede pedir también acceso al micrófono). Si se denegó, la pestaña dice `Speech Recognition permission is needed. Open System Settings > Privacy & Security > Speech Recognition and allow Ferrocast.` y ofrece un botón que abre ese panel. Los idiomas que funcionan son aquellos cuyos modelos en el dispositivo tiene tu Mac; si uno no está disponible, la pestaña lo indica. Una barra muestra el progreso y **Cancel** lo detiene sin dejar nada. El texto se guarda con el proyecto (`transcript.json` junto a `project.json`), así que no se vuelve a calcular.
+
+Después la pestaña muestra las palabras como texto corrido. La palabra bajo el cabezal aparece resaltada. Haz clic en una palabra para mover el cabezal hasta ella (si ya está cortada, el cabezal va al momento conservado más cercano). Mayúsculas + clic o arrastrar selecciona un rango de palabras. El texto es de solo lectura: se cortan palabras, no se reescriben. Las palabras cortadas aparecen tachadas y atenuadas, y las muletillas se marcan en naranja.
+
+- **Delete selection** corta exactamente las palabras seleccionadas.
+- **Remove fillers** corta muletillas como `um` y `uh` (y `like` o `you know` solo cuando están aisladas o poco claras). Hay lista para inglés y español; otros idiomas no tienen.
+- **Tighten pauses** acorta los silencios de más de 0,7 s a unos 0,25 s.
+
+Cada acción corta la línea de tiempo igual que **Clips**, cuenta como un paso para <kbd>⌘</kbd> <kbd>Z</kbd> y te dice cuántos cortes y segundos quitó, o que no había nada que quitar. Los cortes se guardan y se exportan como cualquier otra edición.
+
+:::caution
+La precisión depende de la calidad del audio, así que revisa las palabras antes de cortar. macOS 14 y posteriores usan el framework Speech. El motor más nuevo de macOS 26 se usa solo cuando sus recursos de idioma ya están instalados; Ferrocast nunca los descarga.
+:::
+
 ### Guardado
 
 El editor escribe `project.json` solo, 1 s después de tu último cambio, como un archivo temporal que se renombra al terminar. El estado de guardado dice `Saved` o `Saving…`; si falla una escritura muestra el texto del error y vuelve a intentarlo. Una grabación que solo has abierto no se reescribe.
@@ -210,7 +228,7 @@ Un GIF guarda todos sus fotogramas en memoria, así que su duración tiene un l�
 :::caution[Límites]
 - Solo PNG. Ajustes → Capture muestra el formato como PNG, sin otra opción. **Include cursor** dibuja el puntero en las capturas de área, ventana y pantalla.
 - La captura con scroll guarda todas las tiras en memoria hasta terminar.
-- La edición de la transcripción todavía no está disponible. El audio solo va en las exportaciones MP4.
+- El audio solo va en las exportaciones MP4. Las transcripciones necesitan el permiso de Reconocimiento de voz y un modelo en el dispositivo para el idioma; las palabras se cortan, nunca se reescriben.
 - El editor no usa imágenes de fondo: los preajustes de Style son degradados.
 - Una grabación se pierde si sales de Ferrocast mientras graba. Párala antes.
 :::

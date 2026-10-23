@@ -4658,6 +4658,7 @@ impl App {
         }
         let export_action = crate::editor_export::draw_sheet(ui, rect, pal, ed);
         self.editor_export_do(export_action);
+        self.editor_transcribe_do();
     }
 
     /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.

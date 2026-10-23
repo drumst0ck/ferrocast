@@ -1670,6 +1670,65 @@ PY
   rm -rf "$p4dir"
 fi
 
+# Transcribe (P5): `hello` lists it; a project WITHOUT audio, and names with a separator or `..`, are
+# refused with a structured error and leave no transcript; the granted path (a 1 s silent m4a, 0 words) runs
+# only when Speech Recognition is already authorized and an on-device model exists, and SKIPs cleanly otherwise
+# (permission-speech with exit 1, never a system prompt: the helper does not call requestAuthorization).
+run '{"id":1,"cmd":"hello"}'
+if printf '%s\n' "$out" | python3 -c 'import sys,json; sys.exit(0 if "transcribe" in json.loads(sys.stdin.readline()).get("capabilities", []) else 1)'; then
+  echo "PASS: hello lists transcribe"
+elif [ "$sck" != True ]; then
+  echo "SKIP: transcribe capability (macOS older than 14)"
+else
+  bad "hello does not list transcribe: $out"
+fi
+if [ "$sck" = True ]; then
+  tdir=$(mktemp -d)
+  run "{\"id\":40,\"cmd\":\"transcribe\",\"project\":\"$tdir\"}"
+  if [ "$rc" = 0 ] && [ "$(field error)" = not-found ] && [ ! -e "$tdir/transcript.json" ] && [ ! -e "$tdir/transcript.json.partial" ]; then
+    echo "PASS: transcribe without audio answers not-found and writes nothing"
+  else
+    bad "transcribe without audio rc=$rc out=$out"
+  fi
+  for name in '../mic.m4a' 'a/mic.m4a' '..'; do
+    run "{\"id\":41,\"cmd\":\"transcribe\",\"project\":\"$tdir\",\"audio\":\"$name\"}"
+    [ "$(field error)" = invalid ] && [ ! -e "$tdir/transcript.json" ] || bad "transcribe accepted audio name '$name': rc=$rc out=$out"
+  done
+  echo "PASS: transcribe rejects audio names with a separator or .."
+  if python3 - "$tdir/mic.wav" <<'PY' && afconvert -f m4af -d aac "$tdir/mic.wav" "$tdir/mic.m4a" 2>/dev/null
+import sys, wave
+w = wave.open(sys.argv[1], "wb")
+w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+w.writeframes(b"\0\0" * 16000)
+w.close()
+PY
+  then
+    run "{\"id\":42,\"cmd\":\"transcribe\",\"project\":\"$tdir\",\"audio\":\"mic.m4a\",\"locale\":\"en-US\"}"
+    err=$(printf '%s\n' "$out" | tail -1 | python3 -c "import sys,json; print(json.loads(sys.stdin.readline()).get('error',''))")
+    if [ "$rc" = 1 ] && [ "$err" = permission-speech ] && [ ! -e "$tdir/transcript.json" ]; then
+      echo "SKIP: transcribe (Speech Recognition not authorized; structured permission-speech, exit 1, no prompt, no file)"
+    elif [ "$err" = transcription-unavailable ]; then
+      echo "SKIP: transcribe (no on-device model for en-US)"
+    elif [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | tail -1 | python3 -c "import sys,json; print(json.loads(sys.stdin.readline()).get('ok',''))")" = True ] \
+      && [ ! -e "$tdir/transcript.json.partial" ] \
+      && python3 - "$tdir/transcript.json" <<'PY'
+import json, sys
+t = json.load(open(sys.argv[1]))
+assert t["language"] == "en-US" and isinstance(t["words"], list)
+for w in t["words"]:
+    assert set(w) == {"text", "start", "end", "confidence"} and w["end"] >= w["start"] >= 0
+PY
+    then
+      echo "PASS: transcribe wrote a valid transcript.json (silent audio)"
+    else
+      bad "transcribe granted path rc=$rc out=$out"
+    fi
+  else
+    echo "SKIP: transcribe granted path (no afconvert or python wave to build a sample)"
+  fi
+  rm -rf "$tdir"
+fi
+
 # Unknown command: structured error, still protocol-only stdout.
 run '{"id":3,"cmd":"nope"}'
 [ "$(field error)" = invalid ] && echo "PASS: unknown command rejected" || bad "unknown command rc=$rc out=$out"
