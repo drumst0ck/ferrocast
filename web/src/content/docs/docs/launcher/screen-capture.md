@@ -128,11 +128,11 @@ Settings → Capture → **Sources** has **Camera**, **Microphone** and **System
 
 The first time a source is used, macOS asks for Camera or Microphone permission when you start the recording. If it is denied, the recording does not start and a notice opens the matching System Settings pane. System audio uses the Screen Recording permission. If a camera or microphone disappears while recording, the recording continues and a notice says which source was lost.
 
-In the editor, a **Camera** tab appears when the recording has a camera: show or hide it, **Circle**, **Rounded** or **Square**, one of the four corners, size (10 to 40 %), margin and mirror. The camera stays fixed in the frame while the screen zooms. An **Audio** tab appears when there is a microphone or system track: gain per track (-60 to +12 dB), mute per track and a master gain. MP4 exports mix the tracks into one AAC audio track (48 kHz stereo) that follows your trims and speed changes; a speed change also changes the pitch. GIFs have no audio.
+In the editor, a **Camera** tab appears when the recording has a camera: show or hide it, a **Layout** (**Overlay** or **Split**), **Circle**, **Rounded** or **Square**, one of the four corners, size (10 to 40 %), margin and mirror, plus a **Look**, **Cutout (beta)** and **Follow face** (see [Recording effects](#recording-effects)). The camera stays fixed in the frame while the screen zooms. An **Audio** tab appears when there is a microphone or system track: gain per track (-60 to +12 dB), mute per track and a master gain. MP4 exports mix the tracks into one AAC audio track (48 kHz stereo) that follows your trims and speed changes; a speed change also changes the pitch. GIFs have no audio.
 
 ## Editing a recording
 
-The editor shows the preview on the left and a panel with tabs on the right (Zoom, Cursor, Style and Clips, plus Camera, Audio and Transcript when the recording has them). Under the preview there is a timeline (a ruler, a row for trims and speed changes, a row for zooms) with the playhead, and a row with **Play**/**Pause**, **Undo**, **Redo**, **Export…** and the time. The time reads `output time / output length · source time`, so you see the length after your edits. At the right end of that row you see the number of zooms and the save state. <kbd>Esc</kbd> closes the editor and writes anything not yet saved.
+The editor shows the preview on the left and a panel with tabs on the right (Zoom, Loupe, Cursor, Style and Clips, plus Camera, Audio and Transcript when the recording has them). Under the preview there is a timeline (a ruler, a row for trims and speed changes, a row for zooms, a row for loupes) with the playhead, and a row with **Play**/**Pause**, **Undo**, **Redo**, **Export…** and the time. The time reads `output time / output length · source time`, so you see the length after your edits. At the right end of that row you see the number of zooms (and of loupes, when there are any) and the save state. <kbd>Esc</kbd> closes the editor and writes anything not yet saved.
 
 The cursor you see is drawn by the editor from the recorded events in `events.json`. It is not in `screen.mov`, which is why you can resize it, smooth it or remove it.
 
@@ -204,6 +204,60 @@ Each action cuts the timeline like **Clips** does, is one step for <kbd>⌘</kbd
 Accuracy depends on the audio quality, so check the words before you cut. macOS 14 and later use the Speech framework. The newer macOS 26 engine is used only when its language assets are already installed; Ferrocast never downloads them.
 :::
 
+### Recording effects
+
+These effects are made in the editor and drawn over the recording when you play it and when you export it. They never change `screen.mov` or `camera.mov`, so you can turn each one off again. Each is one step for <kbd>⌘</kbd> <kbd>Z</kbd> and saved with the project. They apply to the preview and to MP4 and GIF exports, and they make an export a little slower.
+
+#### Loupe
+
+A loupe is a magnifying glass over the screen: a round lens that shows part of the screen larger for a few seconds. It magnifies the recording itself, so the text inside stays sharp, and it moves with the zoom. Use it to point at a small detail without zooming the whole screen.
+
+The **Loupe** tab has **Add at playhead**, which adds a loupe of 3 s (shorter if the next loupe is close; if the playhead is inside a loupe you get `There is already a loupe at the playhead.`). Click a loupe in the list to edit it:
+
+- **Start** and **End**. Loupes cannot overlap.
+- **Scale** (1.2× to 4×) and **Radius** (5 to 30 % of the width of the picture).
+- **Focus**: **Follow cursor** keeps the lens on the pointer; **Pick on preview** sets a fixed spot where you click the preview.
+- **Ease in** and **Ease out** (0 to 3 s): how long the lens takes to fade in and out.
+- **Delete loupe** removes it.
+
+The timeline has a row of loupe segments under the zoom row. Click a segment to select it and open its settings; the selected one is outlined.
+
+#### Split screen
+
+By default the camera is a bubble over the screen. In the **Camera** tab, **Layout** → **Split** puts the screen and the camera side by side instead, so the camera never covers anything.
+
+- **Side**: Left, Right, Top or Bottom, the side the camera takes.
+- **Ratio** (25 to 50 %): how much of the picture the camera takes along that direction.
+- **Gap** (0 to 10 % of the width): the space between the two parts.
+
+The screen is shown whole in the rest of the picture, and the camera fills its part (so its edges can be cropped). **Mirror** still applies. **Shape**, **Corner**, **Size** and **Margin** are for the bubble and are hidden in a split; they come back when you choose **Overlay**.
+
+#### Looks
+
+A look changes the colour of the camera picture only. The screen is not touched. In the **Camera** tab, **Look** offers **None** and six looks: **Warm**, **Cool**, **Cinematic**, **Faded**, **High contrast** and **Mono**. **Intensity** (0 to 100 %) blends the look with the original picture.
+
+To use your own colour table, put a `.cube` file (a 3D LUT) inside the recording's project folder and point to it in `project.json`. There is no file picker. Close the recording in the editor first, because the editor rewrites `project.json` when you change something. Inside the `camera` object, add:
+
+```json
+"look": { "file": "my-grade.cube", "intensity": 0.8 }
+```
+
+The name must be a plain file name that ends in `.cube`, in the project folder itself (no folders). `intensity` is optional and defaults to 1. The Look picker then shows `Custom look: my-grade.cube` with no chip selected; choosing a chip replaces it. If the file is missing or is not a valid `.cube`, the preview and the export say so instead of ignoring it.
+
+#### Cutout (beta)
+
+**Cutout (beta)** removes the background behind you. It uses the macOS Vision framework to find the person, on your Mac. In the bubble layout the person is drawn without the bubble shape and without a shadow, and the whole camera picture is kept inside the camera area, resting on its bottom edge, so a head near the side of the frame is not cut off. It is a beta: the quality of the edge depends on the light and on the background (a plain, well-lit background works best).
+
+#### Face tracking
+
+**Follow face** keeps your face centred in the camera picture when you move. It needs a one-time analysis: press **Analyze face**. It runs on your Mac with the Vision framework, shows a progress bar with **Cancel**, and saves the result as `camera_track.json` in the project folder. It follows the largest face it finds. When it finishes, **Follow face** turns on. If it finds no face, the tab says `No face was found in the camera. Check that the camera shows you and try again.`
+
+- **Zoom** (1× to 3×) sets how tight the picture is around the face. The default is 1.4× for the bubble and 1× in a split.
+- Turning **Follow face** on before analyzing shows `Analyze the camera first.`
+- Press **Analyze face** again to redo the analysis.
+
+The analysis and `camera_track.json` stay on your Mac.
+
 ### Saving
 
 The editor writes `project.json` by itself 1 s after your last change, as a temporary file renamed into place. The save state reads `Saved` or `Saving…`; if a write fails it shows the error text and tries again. A recording you only opened is not rewritten.
@@ -230,6 +284,7 @@ A GIF holds all its frames in memory, so its length is limited. At 960 px wide (
 - The scrolling capture keeps all its strips in memory until it finishes.
 - Audio is only in MP4 exports. Transcripts need the Speech Recognition permission and an on-device model for the language; words are cut, never retyped.
 - The editor does not use image wallpapers: the Style presets are gradients.
+- Recording effects (loupe, split screen, looks, cutout and face tracking) show in the preview and in MP4 and GIF exports only, and they slow an export a little. Cutout edges depend on the light and the background. Face tracking follows the largest face and needs the analysis first. Custom looks are set in `project.json` (there is no file picker).
 - A recording is lost if you quit Ferrocast while it runs. Stop it first.
 :::
 
