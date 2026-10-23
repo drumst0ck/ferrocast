@@ -13,8 +13,12 @@ use egui::{Rect, Ui, UiBuilder};
 use ferrocast_core::capture::camera::{CameraLayout, CameraShape, Corner, MARGIN_MAX, SIZE_MAX, SIZE_MIN};
 use ferrocast_core::capture::project::{AudioTrack, Project, Style, TrackMix, Trim, Zoom, GAIN_DB_MAX, GAIN_DB_MIN};
 use ferrocast_core::capture::timeline::{self, EditKind, History, Timeline};
+use ferrocast_core::capture::transcript::{self, Options as TranscriptOptions, Transcript, Word};
 use ferrocast_core::capture::zoom::{self, ZoomOpts, MAX_SCALE};
 use ferrocast_core::capture::MIN_SEGMENT;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Undo steps kept.
@@ -39,6 +43,8 @@ pub enum Tab {
     Camera,
     /// Only for projects with a microphone or system audio source (P4).
     Audio,
+    /// Only for projects with transcribable audio or an existing transcript (P5).
+    Transcript,
 }
 
 impl Tab {
@@ -50,6 +56,7 @@ impl Tab {
             Tab::Clips => "Clips",
             Tab::Camera => "Camera",
             Tab::Audio => "Audio",
+            Tab::Transcript => "Transcript",
         }
     }
 
@@ -63,7 +70,8 @@ impl Tab {
     }
 }
 
-/// The tabs of the panel: Camera only with a camera source, Audio only with a microphone or system source.
+/// The tabs of the panel: Camera only with a camera source, Audio only with a microphone or system source,
+/// Transcript with transcribable audio (microphone or system) or a transcript already in the project.
 pub fn visible_tabs(p: &Project) -> Vec<Tab> {
     let mut v = vec![Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips];
     if p.sources.camera.is_some() {
@@ -72,7 +80,263 @@ pub fn visible_tabs(p: &Project) -> Vec<Tab> {
     if p.sources.mic.is_some() || p.sources.system.is_some() {
         v.push(Tab::Audio);
     }
+    if can_transcribe(p) || p.transcript.is_some() {
+        v.push(Tab::Transcript);
+    }
     v
+}
+
+// ---------------------------------------------------------------------------------------------
+// Transcript (P5): pure helpers. The words, the filler/pause detection and the cuts live in
+// `ferrocast_core::capture::transcript`; this part only maps them to what the tab shows and does.
+
+/// Languages offered by the picker: `(BCP-47 locale, name)`. The first entry is the system language
+/// (the helper's default); which of the others work depends on the on-device models of this Mac.
+pub const LOCALES: &[(&str, &str)] = &[
+    ("", "System language"),
+    ("en-US", "English (US)"),
+    ("en-GB", "English (UK)"),
+    ("es-ES", "Spanish (Spain)"),
+    ("es-MX", "Spanish (Mexico)"),
+    ("fr-FR", "French"),
+    ("de-DE", "German"),
+    ("it-IT", "Italian"),
+    ("pt-BR", "Portuguese (Brazil)"),
+    ("ja-JP", "Japanese"),
+    ("zh-CN", "Chinese (Mandarin)"),
+];
+
+/// The locale to send to the helper for picker entry `i` (`None` = the system language).
+pub fn locale_arg(i: usize) -> Option<&'static str> {
+    LOCALES.get(i).map(|l| l.0).filter(|l| !l.is_empty())
+}
+
+/// The audio file to transcribe: the microphone, else the system audio.
+pub fn audio_for_transcription(p: &Project) -> Option<&str> {
+    p.sources.mic.as_ref().or(p.sources.system.as_ref()).map(|s| s.file.as_str())
+}
+
+pub fn can_transcribe(p: &Project) -> bool {
+    audio_for_transcription(p).is_some()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptView {
+    /// No (usable) transcript: the Transcribe controls.
+    Idle,
+    /// Words to read and cut.
+    Words,
+}
+
+pub fn transcript_view(p: &Project) -> TranscriptView {
+    if p.transcript.as_ref().is_some_and(|t| !t.words.is_empty()) {
+        TranscriptView::Words
+    } else {
+        TranscriptView::Idle
+    }
+}
+
+/// Why a transcription produced no transcript, as the tab shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranscribeFailure {
+    /// Speech Recognition is not allowed: the tab offers to open the Settings pane.
+    Permission,
+    Message(String),
+}
+
+impl TranscribeFailure {
+    pub fn text(&self) -> String {
+        match self {
+            Self::Permission => {
+                "Speech Recognition permission is needed. Open System Settings > Privacy & Security > Speech Recognition and allow Ferrocast."
+                    .into()
+            }
+            Self::Message(m) => m.clone(),
+        }
+    }
+}
+
+/// A helper error as a failure message (a cancel is not a failure: the worker reports it apart).
+pub fn map_transcribe_error(e: &ferrocast_macos::capture::TranscribeError) -> TranscribeFailure {
+    use ferrocast_macos::capture::TranscribeError;
+    match e {
+        TranscribeError::PermissionSpeech(_) => TranscribeFailure::Permission,
+        TranscribeError::Unavailable(m) => TranscribeFailure::Message(m.clone()),
+        other => TranscribeFailure::Message(other.to_string()),
+    }
+}
+
+/// Index of the word being spoken at source time `t` (`start <= t < end`; gaps belong to no word).
+pub fn word_at(t: &Transcript, time: f64) -> Option<usize> {
+    if !time.is_finite() {
+        return None;
+    }
+    t.words.iter().position(|w| time >= w.start && time < w.end)
+}
+
+/// The kept time closest to source time `t` (itself when kept; on a tie the later one), where the
+/// playhead may land when a word that was cut is clicked.
+pub fn nearest_kept(tl: &Timeline, t: f64) -> f64 {
+    let pieces = tl.pieces();
+    if pieces.is_empty() || !t.is_finite() || tl.is_kept(t) {
+        return t;
+    }
+    let prev = pieces.iter().rev().find(|c| c.src_end < t).map(|c| c.src_end);
+    let next = pieces.iter().find(|c| c.src_start > t).map(|c| c.src_start);
+    match (prev, next) {
+        (Some(a), Some(b)) => {
+            if t - a < b - t {
+                a
+            } else {
+                b
+            }
+        }
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => t,
+    }
+}
+
+/// A word is cut when the middle of it is no longer in the timeline.
+pub fn word_is_cut(tl: &Timeline, w: &Word) -> bool {
+    !tl.is_kept((w.start + w.end) / 2.0)
+}
+
+/// The selected words as `(first, last)`, ordered and clamped to `n` words; `None` when empty.
+pub fn selection_bounds(sel: Option<(usize, usize)>, n: usize) -> Option<(usize, usize)> {
+    let (a, b) = sel?;
+    let (lo, hi) = (a.min(b), a.max(b));
+    (lo < n).then(|| (lo, hi.min(n - 1)))
+}
+
+/// The single source-time cut that removes exactly the selected words (core `word_range_cuts`).
+pub fn selection_cut(t: &Transcript, sel: Option<(usize, usize)>) -> Option<(f64, f64)> {
+    let (a, b) = selection_bounds(sel, t.words.len())?;
+    transcript::word_range_cuts(t, a, b)
+}
+
+/// Which words `Remove fillers` would take out: those inside one of its cuts.
+pub fn filler_flags(t: &Transcript, duration: f64) -> Vec<bool> {
+    let cuts = transcript::remove_fillers(t, &t.language, &TranscriptOptions { duration: Some(duration), ..Default::default() });
+    t.words.iter().map(|w| cuts.iter().any(|&(a, b)| (w.start + w.end) / 2.0 >= a && (w.start + w.end) / 2.0 <= b)).collect()
+}
+
+/// The three cutting actions of the tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CutAction {
+    Fillers,
+    Pauses,
+    Selection,
+}
+
+impl CutAction {
+    fn nothing(self) -> &'static str {
+        match self {
+            Self::Fillers => "No filler words found.",
+            Self::Pauses => "No long pauses to tighten.",
+            Self::Selection => "That selection is already cut.",
+        }
+    }
+}
+
+/// `Removed 3 cuts · 1.4 s`.
+pub fn cut_report(cuts: usize, secs: f64) -> String {
+    format!("Removed {cuts} cut{} · {secs:.1} s", if cuts == 1 { "" } else { "s" })
+}
+
+/// Progress and cancel flag of the transcription in flight. Dropping it (the editor session ends)
+/// cancels the work.
+pub struct TranscribeRun {
+    pub cancel: Arc<AtomicBool>,
+    pub done: f64,
+    pub total: f64,
+    pub cancelling: bool,
+}
+
+impl TranscribeRun {
+    pub fn new() -> Self {
+        Self { cancel: Arc::new(AtomicBool::new(false)), done: 0.0, total: 0.0, cancelling: false }
+    }
+}
+
+impl Default for TranscribeRun {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TranscribeRun {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+/// What the transcription thread tells the app (inside `EditorMsg::Transcribe`).
+#[derive(Debug)]
+pub enum TranscribeMsg {
+    Progress {
+        done: f64,
+        total: f64,
+    },
+    /// The helper wrote `transcript.json`; the thread read it back.
+    Done(Box<Transcript>),
+    Failed(TranscribeFailure),
+    Cancelled,
+    /// The system permission prompt was answered (or dismissed): the app may start the helper, which
+    /// reports `permission-speech` itself when Speech Recognition is not allowed.
+    PermissionAsked,
+}
+
+/// State of the Transcript tab.
+#[derive(Default)]
+pub struct TranscriptUi {
+    /// Index into [`LOCALES`].
+    pub locale: usize,
+    pub run: Option<TranscribeRun>,
+    pub error: Option<TranscribeFailure>,
+    /// Selected words, `(anchor, cursor)` in either order.
+    pub sel: Option<(usize, usize)>,
+    /// Where a shift-click or drag selection starts.
+    pub anchor: Option<usize>,
+    /// What the last cut action did (or why it did nothing).
+    pub notice: Option<String>,
+    /// The Transcribe button was pressed: the app starts the worker (it owns the helper path and the bus).
+    pub start: bool,
+    /// The system permission prompt was already raised in this session (it is raised at most once).
+    pub asked: bool,
+}
+
+/// `transcript.json` of a project folder; a missing or broken file is no transcript.
+pub fn adopt_transcript(dir: &Path) -> Option<Transcript> {
+    Transcript::from_json(&std::fs::read_to_string(dir.join("transcript.json")).ok()?).ok()
+}
+
+/// The helper call, on the worker thread: blocks until the transcript is written, then reads it.
+fn run_transcribe(
+    helper: &Path,
+    log: impl Fn(&str) + Send + 'static,
+    dir: &Path,
+    audio: &str,
+    locale: Option<&str>,
+    cancel: &AtomicBool,
+    on_progress: impl FnMut(f64, f64),
+) -> TranscribeMsg {
+    use ferrocast_macos::capture::{Helper, TranscribeError};
+    let mut helper = match Helper::spawn(helper, log) {
+        Ok(h) => h,
+        Err(e) => return TranscribeMsg::Failed(TranscribeFailure::Message(format!("Could not start the transcriber: {e}"))),
+    };
+    match helper.transcribe(dir, Some(audio), locale, cancel, on_progress) {
+        Ok(_) => match std::fs::read_to_string(dir.join("transcript.json")) {
+            Ok(json) => match Transcript::from_json(&json) {
+                Ok(t) => TranscribeMsg::Done(Box::new(t)),
+                Err(e) => TranscribeMsg::Failed(TranscribeFailure::Message(e)),
+            },
+            Err(e) => TranscribeMsg::Failed(TranscribeFailure::Message(format!("The transcript could not be read: {e}"))),
+        },
+        Err(TranscribeError::Cancelled) => TranscribeMsg::Cancelled,
+        Err(e) => TranscribeMsg::Failed(map_transcribe_error(&e)),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -582,6 +846,8 @@ pub struct Studio {
     pub picking: bool,
     /// Speed factor offered by the Clips tab.
     pub speed: f64,
+    /// The Transcript tab (P5).
+    pub tr: TranscriptUi,
     started: Instant,
 }
 
@@ -595,6 +861,7 @@ impl Studio {
             selected_zoom: None,
             picking: false,
             speed: 2.0,
+            tr: TranscriptUi::default(),
             started: Instant::now(),
         }
     }
@@ -646,6 +913,114 @@ impl Editor {
         self.st.edit_error = None;
         self.after_change(now);
         true
+    }
+
+    /// Start transcribing on a worker thread (never the caller's): `helper` is the capture helper
+    /// executable, `notify` delivers the [`TranscribeMsg`]s to the app.
+    pub fn start_transcribe(
+        &mut self,
+        helper: PathBuf,
+        log: impl Fn(&str) + Send + 'static,
+        notify: Box<dyn Fn(crate::editor_ctl::EditorMsg) + Send>,
+    ) -> Result<(), String> {
+        if self.st.tr.run.is_some() {
+            return Err("A transcription is already running.".into());
+        }
+        let Some(p) = self.project.as_ref() else { return Err("The project is not loaded yet.".into()) };
+        let audio = audio_for_transcription(p).ok_or("This recording has no audio to transcribe.")?.to_owned();
+        let locale = locale_arg(self.st.tr.locale).map(str::to_owned);
+        let run = TranscribeRun::new();
+        let cancel = run.cancel.clone();
+        self.st.tr.run = Some(run);
+        self.st.tr.error = None;
+        self.st.tr.notice = None;
+        let dir = self.dir.clone();
+        std::thread::spawn(move || {
+            let send = |msg| notify(crate::editor_ctl::EditorMsg::Transcribe { dir: dir.clone(), msg });
+            let msg = run_transcribe(&helper, log, &dir, &audio, locale.as_deref(), &cancel, |done, total| {
+                send(TranscribeMsg::Progress { done, total })
+            });
+            send(msg);
+        });
+        Ok(())
+    }
+
+    /// Cancel: the helper stops and leaves no `transcript.json`.
+    pub fn cancel_transcribe(&mut self) {
+        if let Some(r) = self.st.tr.run.as_mut() {
+            r.cancel.store(true, Ordering::Relaxed);
+            r.cancelling = true;
+        }
+    }
+
+    /// A message of the transcription thread. The transcript goes into the project through
+    /// [`Editor::apply`] (one undo step, saved by the autosave).
+    pub fn transcribe_msg(&mut self, msg: TranscribeMsg, now: f64) {
+        match msg {
+            TranscribeMsg::Progress { done, total } => {
+                if let Some(r) = self.st.tr.run.as_mut() {
+                    (r.done, r.total) = (done, total);
+                }
+            }
+            TranscribeMsg::Done(t) => {
+                self.st.tr.run = None;
+                self.st.tr.error = None;
+                self.st.tr.sel = None;
+                self.st.tr.anchor = None;
+                let t = *t;
+                self.apply(EditKind::Other, now, move |p| {
+                    p.transcript = Some(t);
+                    Ok(())
+                });
+            }
+            TranscribeMsg::Failed(f) => {
+                self.st.tr.run = None;
+                self.st.tr.error = Some(f);
+            }
+            TranscribeMsg::Cancelled => {
+                self.st.tr.run = None;
+                self.st.tr.error = None;
+            }
+            TranscribeMsg::PermissionAsked => {
+                // the placeholder run kept the tab on "Starting…" while the prompt was up
+                let cancelled = self.st.tr.run.take().is_some_and(|r| r.cancelling);
+                self.st.tr.start = !cancelled;
+            }
+        }
+    }
+
+    /// Remove fillers / Tighten pauses / Delete selection: ONE undoable edit through [`Editor::apply`],
+    /// with a report (or the reason nothing happened) in `st.tr.notice`.
+    pub fn transcript_cut(&mut self, action: CutAction, now: f64) {
+        let Some(p) = self.project.as_ref() else { return };
+        let Some(t) = p.transcript.as_ref() else { return };
+        let opts = TranscriptOptions { duration: Some(p.duration), ..Default::default() };
+        let cuts: Vec<(f64, f64)> = match action {
+            CutAction::Fillers => transcript::remove_fillers(t, &t.language, &opts),
+            CutAction::Pauses => transcript::tighten_pauses(t, &opts),
+            CutAction::Selection => selection_cut(t, self.st.tr.sel).into_iter().collect(),
+        };
+        self.st.tr.notice = None;
+        if cuts.is_empty() {
+            self.st.tr.notice = Some(action.nothing().into());
+            return;
+        }
+        let before = Timeline::new(p).output_duration();
+        let n = cuts.len();
+        let changed = self.apply(EditKind::Other, now, |p| {
+            *p = transcript::apply_cuts(p, &cuts)?;
+            Ok(())
+        });
+        if changed {
+            let after = self.timeline.as_ref().map_or(before, Timeline::output_duration);
+            self.st.tr.notice = Some(cut_report(n, (before - after).max(0.0)));
+            if action == CutAction::Selection {
+                self.st.tr.sel = None;
+                self.st.tr.anchor = None;
+            }
+        } else if self.st.edit_error.is_none() {
+            self.st.tr.notice = Some(action.nothing().into());
+        }
     }
 
     /// Width / height of the recorded video (16:9 when `events.json` is missing).
@@ -812,6 +1187,7 @@ pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto:
                 Tab::Clips => clips_tab(ui, pal, ed, &proj, fps, now),
                 Tab::Camera => camera_tab(ui, pal, ed, &proj, now),
                 Tab::Audio => audio_tab(ui, pal, ed, &proj, now),
+                Tab::Transcript => transcript_tab(ui, pal, ed, &proj, fps, now),
             }
         });
     });
@@ -1106,6 +1482,158 @@ fn audio_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f
     ui.separator();
     source_rows(ui, pal, ed, proj, &["Microphone", "System audio"]);
     note(ui, pal, "The mix is applied when you export; the preview is silent.");
+}
+
+fn transcript_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
+    if transcript_view(proj) == TranscriptView::Words {
+        return transcript_words(ui, pal, ed, proj, fps, now);
+    }
+    if proj.transcript.is_some() {
+        note(ui, pal, "No words were found in the audio.");
+    }
+    if let Some(f) = ed.st.tr.error.clone() {
+        ui.label(egui::RichText::new(f.text()).size(12.0).color(pal.danger));
+        if f == TranscribeFailure::Permission && ui.button("Open Speech Recognition settings").clicked() {
+            crate::capture_ctl::open_pane(crate::capture_ctl::SPEECH_PANE);
+        }
+    }
+    if let Some(r) = ed.st.tr.run.as_ref() {
+        let (done, total, cancelling) = (r.done, r.total, r.cancelling);
+        let frac = if total > 0.0 { (done / total).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let text = if cancelling {
+            "Cancelling…".to_string()
+        } else if total > 0.0 {
+            format!("Transcribing… {:.0} %", frac * 100.0)
+        } else {
+            "Starting…".to_string()
+        };
+        ui.add(egui::ProgressBar::new(frac).text(text));
+        if ui.add_enabled(!cancelling, egui::Button::new("Cancel")).clicked() {
+            ed.cancel_transcribe();
+        }
+        return;
+    }
+    if !can_transcribe(proj) {
+        note(ui, pal, "This recording has no audio to transcribe.");
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label("Language");
+        let mut loc = ed.st.tr.locale.min(LOCALES.len() - 1);
+        egui::ComboBox::from_id_salt("transcript-locale").selected_text(LOCALES[loc].1).show_ui(ui, |ui| {
+            for (i, (_, name)) in LOCALES.iter().enumerate() {
+                ui.selectable_value(&mut loc, i, *name);
+            }
+        });
+        ed.st.tr.locale = loc;
+    });
+    if ui.button("Transcribe").clicked() {
+        ed.st.tr.start = true;
+    }
+    note(ui, pal, "Transcription runs on this Mac. Nothing leaves it.");
+}
+
+fn transcript_words(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
+    use crate::editor_ctl::clock;
+    use egui::{Color32, Sense, Vec2};
+    let Some(tr) = proj.transcript.as_ref() else { return };
+    let n = tr.words.len();
+    let sel = selection_bounds(ed.st.tr.sel, n);
+    let (mut fillers, mut pauses, mut delete) = (false, false, false);
+    ui.horizontal_wrapped(|ui| {
+        delete = ui.add_enabled(sel.is_some(), egui::Button::new("Delete selection")).clicked();
+        fillers = ui.button("Remove fillers").clicked();
+        pauses = ui.button("Tighten pauses").clicked();
+    });
+    if let Some(msg) = ed.st.tr.notice.as_deref() {
+        note(ui, pal, msg);
+    }
+    // both lines keep their height whatever the selection is, so the words never move under a drag
+    let status = match sel {
+        Some((a, b)) => {
+            let k = b - a + 1;
+            format!("{k} word{} selected · {}–{}", if k == 1 { "" } else { "s" }, clock(tr.words[a].start), clock(tr.words[b].end))
+        }
+        None => "No selection".to_string(),
+    };
+    note(ui, pal, &status);
+    note(ui, pal, "Click a word to move the playhead. Shift-click or drag to select.");
+    ui.separator();
+    let tl = ed.timeline.clone();
+    let cur = word_at(tr, ed.t);
+    let flags = filler_flags(tr, proj.duration);
+    let shift = ui.input(|i| i.modifiers.shift);
+    let orange = Color32::from_rgb(222, 150, 60);
+    let (mut click, mut drag_start, mut dragging) = (None, None, false);
+    let mut rects: Vec<(usize, Rect)> = Vec::with_capacity(n);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(4.0, 3.0);
+        for (i, w) in tr.words.iter().enumerate() {
+            let cut = tl.as_ref().is_some_and(|tl| word_is_cut(tl, w));
+            let color = if cut {
+                pal.sub
+            } else if flags.get(i).copied().unwrap_or(false) {
+                orange
+            } else {
+                pal.text
+            };
+            let mut rt = egui::RichText::new(w.text.as_str()).size(13.0).color(color);
+            if cut {
+                rt = rt.strikethrough();
+            }
+            if sel.is_some_and(|(a, b)| (a..=b).contains(&i)) {
+                rt = rt.background_color(pal.sel);
+            } else if cur == Some(i) {
+                rt = rt.background_color(pal.accent.gamma_multiply(0.45));
+            }
+            let r = ui.add(egui::Label::new(rt).selectable(false).sense(Sense::click_and_drag()));
+            if r.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if r.clicked() {
+                click = Some(i);
+            }
+            if r.drag_started() {
+                drag_start = Some(i);
+            }
+            dragging |= r.dragged();
+            rects.push((i, r.rect));
+        }
+    });
+    if let Some(i) = drag_start {
+        ed.st.tr.anchor = Some(i);
+        ed.st.tr.sel = Some((i, i));
+    }
+    if dragging {
+        let pos = ui.input(|i| i.pointer.interact_pos());
+        let hit = pos.and_then(|p| rects.iter().find(|(_, r)| r.expand2(Vec2::new(3.0, 2.0)).contains(p)).map(|(i, _)| *i));
+        if let (Some(a), Some(j)) = (ed.st.tr.anchor, hit) {
+            ed.st.tr.sel = Some((a, j));
+        }
+    }
+    if let Some(i) = click {
+        if shift {
+            let a = ed.st.tr.anchor.unwrap_or(i);
+            ed.st.tr.anchor = Some(a);
+            ed.st.tr.sel = Some((a, i));
+        } else {
+            ed.st.tr.anchor = Some(i);
+            ed.st.tr.sel = None;
+            if let Some(tl) = tl.as_ref() {
+                ed.seek(nearest_kept(tl, tr.words[i].start), now, fps);
+            }
+        }
+    }
+    if delete {
+        ed.transcript_cut(CutAction::Selection, now);
+    }
+    if fillers {
+        ed.transcript_cut(CutAction::Fillers, now);
+    }
+    if pauses {
+        ed.transcript_cut(CutAction::Pauses, now);
+    }
+    note(ui, pal, "Cut words are struck through. Filler words are orange.");
 }
 
 fn clips_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
@@ -1723,11 +2251,14 @@ mod tests {
         assert_eq!(visible_tabs(&cam), [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera]);
         let mut mic = base();
         mic.sources.mic = Some(Source { file: "mic.m4a".into(), offset: 0.0 });
-        assert_eq!(visible_tabs(&mic), [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Audio]);
+        assert_eq!(visible_tabs(&mic), [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Audio, Tab::Transcript]);
         let mut sys = base();
         sys.sources.system = Some(Source { file: "system.m4a".into(), offset: 0.0 });
         assert!(visible_tabs(&sys).contains(&Tab::Audio) && !visible_tabs(&sys).contains(&Tab::Camera));
-        assert_eq!(visible_tabs(&with_sources()), [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera, Tab::Audio]);
+        assert_eq!(
+            visible_tabs(&with_sources()),
+            [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera, Tab::Audio, Tab::Transcript]
+        );
         // a stored tab the project no longer offers falls back to the first one
         assert_eq!(Tab::Camera.or_first(&base()), Tab::Zoom);
         assert_eq!(Tab::Camera.or_first(&with_sources()), Tab::Camera);
@@ -1848,5 +2379,360 @@ mod tests {
             infos[1].text()
         );
         assert!(source_infos(&base(), &dir).is_empty());
+    }
+
+    // ---- P5: the Transcript tab (pure logic, then the editor wiring)
+
+    use ferrocast_core::capture::transcript::{Transcript, Word};
+
+    fn words(list: &[(&str, f64, f64)]) -> Transcript {
+        Transcript {
+            language: "en-US".into(),
+            words: list.iter().map(|&(t, s, e)| Word { text: t.into(), start: s, end: e, confidence: 0.95 }).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// "so um this is a test ... done": a filler at 1.0 and a 2.1 s pause before the last word.
+    fn speech() -> Transcript {
+        words(&[
+            ("so", 0.5, 0.8),
+            ("um", 1.0, 1.3),
+            ("this", 1.5, 1.8),
+            ("is", 1.9, 2.1),
+            ("a", 2.2, 2.3),
+            ("test", 2.4, 2.9),
+            ("done", 5.0, 5.4),
+        ])
+    }
+
+    fn talking() -> Project {
+        let mut p = with_sources();
+        p.transcript = Some(speech());
+        p
+    }
+
+    #[test]
+    fn the_transcript_tab_needs_audio_or_an_existing_transcript() {
+        use ferrocast_core::capture::project::Source;
+        assert!(!visible_tabs(&base()).contains(&Tab::Transcript), "no audio, no transcript: no tab");
+        let mut mic = base();
+        mic.sources.mic = Some(Source { file: "mic.m4a".into(), offset: 0.0 });
+        assert!(visible_tabs(&mic).contains(&Tab::Transcript));
+        let mut sys = base();
+        sys.sources.system = Some(Source { file: "system.m4a".into(), offset: 0.0 });
+        assert!(visible_tabs(&sys).contains(&Tab::Transcript));
+        let mut had = base();
+        had.transcript = Some(speech());
+        assert!(visible_tabs(&had).contains(&Tab::Transcript), "a transcript alone keeps the tab");
+        assert_eq!(Tab::Transcript.label(), "Transcript");
+        assert_eq!(Tab::Transcript.or_first(&base()), Tab::Zoom);
+    }
+
+    #[test]
+    fn the_transcribe_button_state_follows_the_project() {
+        use ferrocast_core::capture::project::Source;
+        assert_eq!(audio_for_transcription(&base()), None);
+        assert!(!can_transcribe(&base()));
+        let mut sys = base();
+        sys.sources.system = Some(Source { file: "system.m4a".into(), offset: 0.0 });
+        assert_eq!(audio_for_transcription(&sys), Some("system.m4a"));
+        assert_eq!(audio_for_transcription(&with_sources()), Some("mic.m4a"), "the microphone wins");
+        assert!(can_transcribe(&sys));
+        assert_eq!(transcript_view(&base()), TranscriptView::Idle);
+        assert_eq!(transcript_view(&talking()), TranscriptView::Words);
+        let mut empty = with_sources();
+        empty.transcript = Some(words(&[]));
+        assert_eq!(transcript_view(&empty), TranscriptView::Idle, "a transcript without words offers to transcribe again");
+        assert_eq!(locale_arg(0), None, "the first entry is the system language");
+        assert!(LOCALES.len() > 4 && locale_arg(1).is_some());
+    }
+
+    #[test]
+    fn helper_errors_become_clear_messages() {
+        use ferrocast_macos::capture::{transcription_unavailable_message, TranscribeError};
+        let perm = map_transcribe_error(&TranscribeError::PermissionSpeech("Speech Recognition is not authorized".into()));
+        assert_eq!(perm, TranscribeFailure::Permission);
+        assert_eq!(
+            perm.text(),
+            "Speech Recognition permission is needed. Open System Settings > Privacy & Security > Speech Recognition and allow Ferrocast."
+        );
+        let m = transcription_unavailable_message("Spanish (Spain)");
+        assert_eq!(map_transcribe_error(&TranscribeError::Unavailable(m.clone())).text(), m, "the helper's sentence as is");
+        assert_eq!(map_transcribe_error(&TranscribeError::Timeout), TranscribeFailure::Message(TranscribeError::Timeout.to_string()));
+        assert!(map_transcribe_error(&TranscribeError::Other("boom".into())).text().contains("boom"));
+        assert_eq!(crate::capture_ctl::SPEECH_PANE, "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition");
+    }
+
+    #[test]
+    fn the_word_under_the_playhead_and_the_seek_target() {
+        let t = speech();
+        assert_eq!(word_at(&t, 0.6), Some(0));
+        assert_eq!(word_at(&t, 1.0), Some(1), "a word starts inclusive");
+        assert_eq!(word_at(&t, 0.9), None, "a gap belongs to no word");
+        assert_eq!(word_at(&t, 99.0), None);
+        assert_eq!(word_at(&t, f64::NAN), None);
+        // a cut from 1.0 to 1.4 (the "um"): a click on it lands on the nearest kept time
+        let mut p = talking();
+        assert!(timeline::remove_range(&mut p, 1.0, 1.4));
+        let tl = Timeline::new(&p);
+        assert_eq!(nearest_kept(&tl, 0.6), 0.6, "kept time stays");
+        assert_eq!(nearest_kept(&tl, 1.1), 1.0, "closer to the end of the previous piece");
+        assert_eq!(nearest_kept(&tl, 1.3), 1.4, "closer to the start of the next piece");
+        assert!(word_is_cut(&tl, &speech().words[1]) && !word_is_cut(&tl, &speech().words[0]));
+        // a word half inside a cut by its middle is cut
+        let flags: Vec<bool> = speech().words.iter().map(|w| word_is_cut(&tl, w)).collect();
+        assert_eq!(flags, [false, true, false, false, false, false, false]);
+    }
+
+    #[test]
+    fn a_selection_is_one_range_and_one_cut() {
+        let t = speech();
+        assert_eq!(selection_bounds(None, 7), None);
+        assert_eq!(selection_bounds(Some((3, 1)), 7), Some((1, 3)), "dragging backwards");
+        assert_eq!(selection_bounds(Some((5, 40)), 7), Some((5, 6)), "clamped to the words");
+        assert_eq!(selection_bounds(Some((8, 9)), 7), None);
+        assert_eq!(selection_bounds(Some((0, 0)), 0), None);
+        let (a, b) = selection_cut(&t, Some((3, 1))).unwrap();
+        let want = ferrocast_core::capture::transcript::word_range_cuts(&t, 1, 3).unwrap();
+        assert_eq!((a, b), want, "exactly the core cut for the words");
+        assert!(a < 1.0 && b > 2.1, "{a} {b}");
+        assert_eq!(selection_cut(&t, None), None);
+    }
+
+    #[test]
+    fn filler_words_are_flagged_like_the_button_would_cut_them() {
+        let flags = filler_flags(&speech(), 10.0);
+        assert_eq!(flags, [false, true, false, false, false, false, false]);
+        assert_eq!(filler_flags(&words(&[]), 10.0), Vec::<bool>::new());
+    }
+
+    fn talking_editor(tag: &str) -> (Editor, Receiver<WorkerCmd>, PathBuf) {
+        let dir = temp(tag);
+        let (tx, rx) = channel();
+        let mut ed = Editor::new(dir.clone(), Some(tx));
+        let p = talking();
+        p.save(&dir).unwrap();
+        ed.opened(Ok(Opened { project: p, auto_zoomed: false, note: None, events: None }));
+        (ed, rx, dir)
+    }
+
+    fn out_len(ed: &Editor) -> f64 {
+        ed.timeline.as_ref().unwrap().output_duration()
+    }
+
+    #[test]
+    fn each_cut_action_is_one_undo_step_with_a_report() {
+        let (mut ed, rx, dir) = talking_editor("tr-cuts");
+        let start = ed.project.as_ref().unwrap().to_json();
+        ed.transcript_cut(CutAction::Fillers, 10.0);
+        assert_eq!(ed.st.history.undo_len(), 1);
+        let notice = ed.st.tr.notice.clone().unwrap();
+        assert!(notice.starts_with("Removed 1 cut") && notice.contains("0.3 s"), "{notice}");
+        assert!((out_len(&ed) - 9.64).abs() < 0.2, "{}", out_len(&ed));
+        assert!(!project_cmds(&rx).is_empty(), "the worker got the edited project");
+        // nothing left to remove: a message, no new undo step
+        ed.transcript_cut(CutAction::Fillers, 20.0);
+        assert_eq!(ed.st.history.undo_len(), 1);
+        assert_eq!(ed.st.tr.notice.as_deref(), Some("No filler words found."));
+        // the 2.1 s pause
+        let before = out_len(&ed);
+        ed.transcript_cut(CutAction::Pauses, 30.0);
+        assert_eq!(ed.st.history.undo_len(), 2);
+        assert!(before - out_len(&ed) > 1.5, "{} -> {}", before, out_len(&ed));
+        assert!(ed.st.tr.notice.as_deref().unwrap().starts_with("Removed "));
+        ed.transcript_cut(CutAction::Pauses, 40.0);
+        assert_eq!(ed.st.tr.notice.as_deref(), Some("No long pauses to tighten."));
+        assert_eq!(ed.st.history.undo_len(), 2);
+        // a selection
+        ed.st.tr.sel = Some((2, 4));
+        ed.transcript_cut(CutAction::Selection, 50.0);
+        assert_eq!(ed.st.history.undo_len(), 3);
+        assert_eq!(ed.st.tr.sel, None, "the selection is consumed");
+        let tl = ed.timeline.clone().unwrap();
+        let cut: Vec<bool> = speech().words.iter().map(|w| word_is_cut(&tl, w)).collect();
+        assert_eq!(cut, [false, true, true, true, true, false, false]);
+        // the same selection again: already cut
+        ed.st.tr.sel = Some((2, 4));
+        ed.transcript_cut(CutAction::Selection, 60.0);
+        assert_eq!(ed.st.history.undo_len(), 3);
+        assert_eq!(ed.st.tr.notice.as_deref(), Some("That selection is already cut."));
+        // autosave writes the cuts, the transcript stays
+        ed.flush(61.0);
+        assert!(disk(&dir).transcript.is_some());
+        assert_eq!(disk(&dir).trims, ed.project.as_ref().unwrap().trims);
+        for _ in 0..3 {
+            assert!(ed.undo(70.0));
+        }
+        assert_eq!(ed.project.as_ref().unwrap().to_json(), start, "three undos restore the project byte for byte");
+    }
+
+    #[test]
+    fn a_cut_that_would_delete_everything_is_refused_with_its_message() {
+        let (mut ed, _rx, _dir) = talking_editor("tr-all");
+        ed.st.tr.sel = Some((0, 6));
+        ed.transcript_cut(CutAction::Selection, 10.0);
+        // the selection ends at the last word, the take goes on to 10 s: something is left, so this is a normal cut
+        assert_eq!(ed.st.history.undo_len(), 1);
+        let mut p = talking();
+        p.duration = 5.4;
+        p.transcript = Some(words(&[("only", 0.0, 5.4)]));
+        let (tx, _rx2) = channel();
+        let mut ed2 = Editor::new(temp("tr-all2"), Some(tx));
+        ed2.opened(Ok(Opened { project: p, auto_zoomed: false, note: None, events: None }));
+        ed2.st.tr.sel = Some((0, 0));
+        ed2.transcript_cut(CutAction::Selection, 10.0);
+        assert_eq!(ed2.st.history.undo_len(), 0);
+        assert!(ed2.st.edit_error.as_deref().unwrap().contains("delete everything"), "{:?}", ed2.st.edit_error);
+    }
+
+    #[test]
+    fn a_finished_transcription_is_stored_through_the_history_and_autosaved() {
+        let dir = temp("tr-done");
+        let (tx, rx) = channel();
+        let mut ed = Editor::new(dir.clone(), Some(tx));
+        let p = with_sources();
+        p.save(&dir).unwrap();
+        ed.opened(Ok(Opened { project: p, auto_zoomed: false, note: None, events: None }));
+        ed.st.tr.run = Some(TranscribeRun::new());
+        ed.transcribe_msg(TranscribeMsg::Progress { done: 1.0, total: 4.0 }, 1.0);
+        assert_eq!(ed.st.tr.run.as_ref().map(|r| (r.done, r.total)), Some((1.0, 4.0)));
+        ed.transcribe_msg(TranscribeMsg::Done(Box::new(speech())), 2.0);
+        assert!(ed.st.tr.run.is_none() && ed.st.tr.error.is_none());
+        assert_eq!(ed.project.as_ref().unwrap().transcript, Some(speech()));
+        assert_eq!(ed.st.history.undo_len(), 1);
+        assert!(ed.st.autosave.pending());
+        assert!(!project_cmds(&rx).is_empty());
+        ed.flush(3.0);
+        assert_eq!(disk(&dir).transcript, Some(speech()), "autosave writes `transcript`");
+        assert!(ed.undo(4.0));
+        assert!(ed.project.as_ref().unwrap().transcript.is_none(), "one undo removes it again");
+        ed.transcribe_msg(TranscribeMsg::Failed(TranscribeFailure::Message("nope".into())), 5.0);
+        assert_eq!(ed.st.tr.error, Some(TranscribeFailure::Message("nope".into())));
+        ed.transcribe_msg(TranscribeMsg::Cancelled, 6.0);
+        assert!(ed.st.tr.run.is_none() && ed.st.tr.error.is_none(), "a cancel is not an error");
+    }
+
+    #[test]
+    fn answering_the_permission_prompt_starts_the_transcription_unless_cancelled() {
+        let (mut ed, _rx, _dir) = talking_editor("tr-asked");
+        ed.st.tr.run = Some(TranscribeRun::new());
+        ed.transcribe_msg(TranscribeMsg::PermissionAsked, 1.0);
+        assert!(ed.st.tr.run.is_none() && ed.st.tr.start, "the app may now start the helper");
+        ed.st.tr.start = false;
+        ed.st.tr.run = Some(TranscribeRun::new());
+        ed.cancel_transcribe();
+        ed.transcribe_msg(TranscribeMsg::PermissionAsked, 2.0);
+        assert!(ed.st.tr.run.is_none() && !ed.st.tr.start, "a cancel during the prompt starts nothing");
+    }
+
+    #[test]
+    fn an_existing_transcript_file_is_loaded_when_the_project_has_none() {
+        let dir = temp("tr-file");
+        std::fs::write(dir.join("transcript.json"), serde_json::to_string(&speech()).unwrap()).unwrap();
+        let (tx, _rx) = channel();
+        let mut ed = Editor::new(dir.clone(), Some(tx));
+        let p = with_sources();
+        p.save(&dir).unwrap();
+        ed.opened(Ok(Opened { project: p, auto_zoomed: false, note: None, events: None }));
+        assert_eq!(ed.project.as_ref().unwrap().transcript, Some(speech()));
+        assert!(ed.st.autosave.pending(), "the adopted transcript is saved into project.json");
+        assert!(!ed.st.history.can_undo(), "loading is not an undo step");
+        // a broken file is ignored
+        let dir2 = temp("tr-file-bad");
+        std::fs::write(dir2.join("transcript.json"), "{nope").unwrap();
+        let (tx, _rx) = channel();
+        let mut ed2 = Editor::new(dir2.clone(), Some(tx));
+        ed2.opened(Ok(Opened { project: with_sources(), auto_zoomed: false, note: None, events: None }));
+        assert!(ed2.project.as_ref().unwrap().transcript.is_none());
+        // a project that already has one keeps it
+        let mut ed3 = Editor::new(dir.clone(), None);
+        let mut q = with_sources();
+        q.transcript = Some(words(&[("x", 0.0, 0.1)]));
+        ed3.opened(Ok(Opened { project: q.clone(), auto_zoomed: false, note: None, events: None }));
+        assert_eq!(ed3.project.unwrap().transcript, q.transcript);
+    }
+
+    fn fake_helper(tag: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp(tag).parent().unwrap().to_path_buf();
+        let p = dir.join("helper.sh");
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    fn run_fake(tag: &str, body: &str, cancel_now: bool) -> (Vec<TranscribeMsg>, std::thread::ThreadId) {
+        let (tx, _rx) = channel();
+        let dir = temp(tag);
+        let mut ed = Editor::new(dir, Some(tx));
+        ed.opened(Ok(Opened { project: with_sources(), auto_zoomed: false, note: None, events: None }));
+        let (ntx, nrx) = channel();
+        let threads = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let t2 = threads.clone();
+        let notify: Box<dyn Fn(crate::editor_ctl::EditorMsg) + Send> = Box::new(move |m| {
+            *t2.lock().unwrap() = Some(std::thread::current().id());
+            let _ = ntx.send(m);
+        });
+        ed.start_transcribe(fake_helper(tag, body), |_| {}, notify).unwrap();
+        assert!(ed.st.tr.run.is_some(), "running right away");
+        assert!(ed.start_transcribe(PathBuf::from("/nonexistent"), |_| {}, Box::new(|_| {})).is_err(), "one at a time");
+        if cancel_now {
+            ed.cancel_transcribe();
+            assert!(ed.st.tr.run.as_ref().unwrap().cancelling);
+        }
+        let mut out = vec![];
+        while let Ok(crate::editor_ctl::EditorMsg::Transcribe { msg, .. }) = nrx.recv_timeout(std::time::Duration::from_secs(10)) {
+            let end = !matches!(msg, TranscribeMsg::Progress { .. });
+            out.push(msg);
+            if end {
+                break;
+            }
+        }
+        let worker = threads.lock().unwrap().unwrap();
+        (out, worker)
+    }
+
+    #[test]
+    fn transcription_runs_on_a_worker_thread_and_reports_progress_then_the_transcript() {
+        let dir = temp("tr-run");
+        let body = format!(
+            r#"read l
+echo '{{"event":"progress","id":1,"done_secs":1.5,"total_secs":3.0}}'
+printf '%s' '{}' > '{}/transcript.json'
+echo '{{"id":1,"ok":true,"language":"en-US","words":7,"path":"{}/transcript.json"}}'"#,
+            serde_json::to_string(&speech()).unwrap(),
+            dir.display(),
+            dir.display()
+        );
+        let (msgs, worker) = run_fake("tr-run", &body, false);
+        assert_ne!(worker, std::thread::current().id(), "never the calling (main) thread");
+        assert!(matches!(msgs[0], TranscribeMsg::Progress { done, total } if done == 1.5 && total == 3.0), "{msgs:?}");
+        assert!(matches!(msgs.last(), Some(TranscribeMsg::Done(t)) if **t == speech()), "{msgs:?}");
+    }
+
+    #[test]
+    fn permission_and_cancel_come_back_as_their_own_messages() {
+        let (msgs, _) = run_fake("tr-perm", r#"read l; echo '{"id":1,"error":"permission-speech","message":"nope"}'"#, false);
+        assert!(matches!(msgs.last(), Some(TranscribeMsg::Failed(TranscribeFailure::Permission))), "{msgs:?}");
+        let (msgs, _) =
+            run_fake("tr-cancel", r#"read l; read c; echo '{"id":1,"error":"cancelled","message":"Transcription cancelled"}'"#, true);
+        assert!(matches!(msgs.last(), Some(TranscribeMsg::Cancelled)), "{msgs:?}");
+        // a missing helper is a message, not a crash
+        let (tx, _rx) = channel();
+        let mut ed = Editor::new(temp("tr-missing"), Some(tx));
+        ed.opened(Ok(Opened { project: with_sources(), auto_zoomed: false, note: None, events: None }));
+        let (ntx, nrx) = channel();
+        ed.start_transcribe(PathBuf::from("/nonexistent/helper"), |_| {}, Box::new(move |m| drop(ntx.send(m)))).unwrap();
+        let Ok(crate::editor_ctl::EditorMsg::Transcribe { msg: TranscribeMsg::Failed(f), .. }) =
+            nrx.recv_timeout(std::time::Duration::from_secs(10))
+        else {
+            panic!("expected a failure")
+        };
+        assert!(!f.text().is_empty());
+        // no audio at all: refused before any thread starts
+        let mut none = Editor::new(temp("tr-noaudio"), None);
+        none.opened(Ok(Opened { project: base(), auto_zoomed: false, note: None, events: None }));
+        assert!(none.start_transcribe(PathBuf::from("/x"), |_| {}, Box::new(|_| {})).is_err());
     }
 }

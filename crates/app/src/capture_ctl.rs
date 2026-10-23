@@ -204,6 +204,9 @@ pub fn outcome_toast(o: &Outcome) -> Option<String> {
     }
 }
 
+/// Speech Recognition pane of System Settings (the editor's Transcript tab).
+pub const SPEECH_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition";
+
 /// Opens the Screen Recording pane of System Settings (never in tests).
 pub fn open_screen_recording_pane() {
     open_pane(SCREEN_RECORDING_PANE);

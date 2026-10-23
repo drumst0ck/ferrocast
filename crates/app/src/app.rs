@@ -5544,7 +5544,47 @@ impl App {
                     }
                 }
             }
+            EditorMsg::Transcribe { dir, msg } if dir == ed.dir => {
+                let now = ed.now();
+                ed.transcribe_msg(msg, now);
+            }
             _ => {}
+        }
+    }
+
+    /// The Transcribe button was pressed: start the worker (the helper path, log and bus belong to the app).
+    pub(crate) fn editor_transcribe_do(&mut self) {
+        let exe = self.capture.exe.clone();
+        let root = self.store.root.clone();
+        let bus = self.bus.clone();
+        let Some(ed) = self.editor.as_mut() else { return };
+        if !std::mem::take(&mut ed.st.tr.start) {
+            return;
+        }
+        if !ferrocast_macos::capture::available(&exe) {
+            ed.st.tr.error = Some(crate::editor_panels::TranscribeFailure::Message("Transcription is not available in this build.".into()));
+            return;
+        }
+        // The helper never prompts (it answers `permission-speech`), so the app raises the system prompt
+        // the first time. `request_access` also covers the microphone, as the Notes dictation does.
+        // Never in tests. The placeholder run keeps the tab on "Starting…" until the prompt is answered.
+        if !cfg!(test)
+            && !ed.st.tr.asked
+            && ferrocast_macos::notes_dictation::status() == ferrocast_macos::notes_dictation::Status::NotDetermined
+        {
+            ed.st.tr.asked = true;
+            ed.st.tr.run = Some(crate::editor_panels::TranscribeRun::new());
+            let dir = ed.dir.clone();
+            ferrocast_macos::notes_dictation::request_access(Box::new(move |_| {
+                let msg = crate::editor_panels::TranscribeMsg::PermissionAsked;
+                bus.send(Msg::Editor(Box::new(crate::editor_ctl::EditorMsg::Transcribe { dir: dir.clone(), msg })));
+            }));
+            return;
+        }
+        let log = move |m: &str| instance::log(&root, m);
+        let notify = Box::new(move |m| bus.send(Msg::Editor(Box::new(m))));
+        if let Err(e) = ed.start_transcribe(ferrocast_macos::capture::helper_path(&exe), log, notify) {
+            ed.st.tr.error = Some(crate::editor_panels::TranscribeFailure::Message(e));
         }
     }
 
