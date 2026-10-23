@@ -14,7 +14,8 @@ func send(_ object: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
     var line = data
     line.append(0x0A)
-    FileHandle.standardOutput.write(line)
+    // try?: a closed stdout (parent gone) must not raise.
+    try? FileHandle.standardOutput.write(contentsOf: line)
 }
 
 func reply(_ id: Any?, _ fields: [String: Any]) {
