@@ -845,6 +845,7 @@ impl App {
         // typing a label on the annotation canvas: the text field owns Enter and Escape
         let typing = (matches!(view, View::Annotate { .. }) && ctx.data(|d| d.get_temp::<bool>(Id::new("annot-typing"))).unwrap_or(false))
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
+            || (matches!(view, View::Editor { .. }) && self.editor.as_ref().is_some_and(|e| e.export.open))
             || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::RedactImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. } | View::BleepAudio { .. } | View::NormalizeAudio { .. } | View::ChannelsAudio { .. }) && kbd_edit);
         ctx.input_mut(|i| {
             let mut k = Keys::default();
@@ -4462,9 +4463,15 @@ impl App {
         };
         // keys: ⌘Z / ⇧⌘Z undo and redo every edit; Space plays, arrows step one frame (shift: one
         // second), Home/End jump. None of them while a panel number field is being typed in.
-        let typing = ctx.egui_wants_keyboard_input();
+        let typing = ctx.egui_wants_keyboard_input() || ed.export.open;
         let (mut undo, mut redo) = (false, false);
+        let mut open_export = false;
         ctx.input_mut(|i| {
+            if ed.export.open {
+                return;
+            }
+            // ⌘E opens the Export sheet (also while a number field is being edited)
+            open_export = i.consume_key(Modifiers::COMMAND, Key::E);
             if typing {
                 return;
             }
@@ -4613,13 +4620,14 @@ impl App {
             }
             s
         };
-        let (mut toggle, mut undo_btn, mut redo_btn) = (false, false, false);
+        let (mut toggle, mut undo_btn, mut redo_btn, mut export_btn) = (false, false, false, false);
         ui.scope_builder(UiBuilder::new().max_rect(ctrl), |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
                 toggle = small_btn(ui, pal, if playing { "Pause" } else { "Play" });
                 ui.add_enabled_ui(ed.st.history.can_undo(), |ui| undo_btn = small_btn(ui, pal, "Undo"));
                 ui.add_enabled_ui(ed.st.history.can_redo(), |ui| redo_btn = small_btn(ui, pal, "Redo"));
+                export_btn = small_btn(ui, pal, "Export…");
                 ui.label(RichText::new(label).size(12.5).color(pal.text));
             });
         });
@@ -4643,6 +4651,13 @@ impl App {
         if toggle {
             ed.toggle_play(now, fps);
         }
+        // the Export sheet (T28): ⌘E or the button opens it, it sits on top of everything else
+        if open_export || export_btn {
+            let dir = ed.dir.clone();
+            ed.export.show(&dir, &proj);
+        }
+        let export_action = crate::editor_export::draw_sheet(ui, rect, pal, ed);
+        self.editor_export_do(export_action);
     }
 
     /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.

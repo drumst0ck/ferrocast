@@ -3,13 +3,17 @@
 
 use anyhow::{anyhow, bail, Result};
 use ferrocast_core::capture::compose::FrameParams;
+use ferrocast_core::capture::events::Events;
+use ferrocast_core::capture::export::{self, ExportOptions, ExportPlan};
+use ferrocast_core::capture::project::{self as capture_project, Project};
 use ferrocast_core::capture::protocol::{
-    self, Command, ErrorCode, Excludes, Hello, Line, RecordEvent, RecordStarted, RecordStopped, RenderFrameDone, Request, Scale,
-    ScreenshotDone, Shareable, Target,
+    self, Command, ErrorCode, Excludes, ExportDone, ExportEvent, ExportStarted, Hello, Line, RecordEvent, RecordStarted, RecordStopped,
+    RenderFrameDone, Request, Scale, ScreenshotDone, Shareable, Target,
 };
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -44,6 +48,10 @@ pub fn timeout_for(cmd: &Command) -> Duration {
         // The helper may wait 5 s for stopCapture and 8 s for finishWriting: the client must outlast both,
         // otherwise it kills the helper and the recording is lost.
         Command::RecordStop => 20,
+        // `render`: only the wait for `started` (the helper validates and opens the writer); the
+        // export itself has no deadline, `Helper::export_wait` watches its heartbeats instead.
+        Command::Render { .. } => 15,
+        Command::Cancel { .. } => 5,
     })
 }
 
@@ -195,6 +203,52 @@ impl std::fmt::Display for RenderError {
 }
 impl std::error::Error for RenderError {}
 
+/// Why an export did not produce a file. `Display` carries the helper's own message so the editor can show it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ExportError {
+    /// The request or the project was refused.
+    Invalid(String),
+    NotFound(String),
+    DiskFull(String),
+    /// The user cancelled: no output file is left.
+    Cancelled,
+    /// The helper went silent (no progress or heartbeat) and was killed.
+    Timeout,
+    /// The helper exited during the export.
+    Closed,
+    Other(String),
+}
+
+impl ExportError {
+    fn from_helper(code: ErrorCode, message: String) -> Self {
+        match code {
+            ErrorCode::Invalid => Self::Invalid(message),
+            ErrorCode::NotFound => Self::NotFound(message),
+            ErrorCode::DiskFull => Self::DiskFull(message),
+            ErrorCode::Cancelled => Self::Cancelled,
+            code => Self::Other(format!("{code:?}: {message}")),
+        }
+    }
+}
+
+impl std::fmt::Display for ExportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(m) | Self::NotFound(m) => write!(f, "{m}"),
+            Self::DiskFull(m) => write!(f, "The disk is full: {m}"),
+            Self::Cancelled => write!(f, "Export cancelled"),
+            Self::Timeout => write!(f, "The export stopped responding and was cancelled."),
+            Self::Closed => write!(f, "The capture helper closed during the export."),
+            Self::Other(m) => write!(f, "Export failed: {m}"),
+        }
+    }
+}
+impl std::error::Error for ExportError {}
+
+/// Longest silence (no `progress`, no `heartbeat`) before an export is declared hung. The helper
+/// promises a sign of life at least every 30 s.
+pub const EXPORT_SILENCE: Duration = Duration::from_secs(45);
+
 /// `<project>/<file>.partial`: what the helper writes until a clean stop renames it.
 fn recording_partial(project: &Path, file: &str) -> PathBuf {
     partial_path(&project.join(file))
@@ -205,6 +259,74 @@ fn partial_path(out: &Path) -> PathBuf {
     let mut s = out.as_os_str().to_owned();
     s.push(".partial");
     PathBuf::from(s)
+}
+
+/// Export `project_dir` to `out` with a short-lived helper (the editor's Export sheet): plan and
+/// per-frame parameters are computed here (`capture::export`), the helper renders and encodes.
+/// `progress(done_frames, total_frames, eta_seconds)` is called as events arrive; setting `cancel`
+/// stops the export and leaves no output. The params file is always removed.
+pub fn export_project(
+    helper: &Path,
+    log: impl Fn(&str) + Send + 'static,
+    project_dir: &Path,
+    out: &Path,
+    opts: &ExportOptions,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(u32, u32, Option<f64>),
+) -> std::result::Result<ExportDone, ExportError> {
+    let invalid = |m: String| ExportError::Invalid(m);
+    let project = Project::load(project_dir).map_err(|e| invalid(e.to_string()))?;
+    let events_text = std::fs::read_to_string(capture_project::events_path(project_dir))
+        .map_err(|e| invalid(format!("events.json could not be read: {e}")))?;
+    let events = Events::decode(&events_text).map_err(|e| invalid(e.to_string()))?;
+    let plan = export::export_plan(&project, export::source_pixels(&events), opts).map_err(|e| invalid(e.to_string()))?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ExportError::Cancelled);
+    }
+    let cache = project_dir.join(".cache");
+    std::fs::create_dir_all(&cache).map_err(|e| invalid(format!("could not create {}: {e}", cache.display())))?;
+    let params = cache.join(format!("export-{}.ndjson", std::process::id()));
+    let written = std::fs::File::create(&params).and_then(|f| {
+        let mut w = std::io::BufWriter::new(f);
+        export::write_frame_params(&project, &events, &plan, &mut w)?;
+        w.flush()
+    });
+    let result = written.map_err(|e| invalid(format!("could not write the frame parameters: {e}"))).and_then(|_| {
+        let mut h = Helper::spawn(helper, log).map_err(|e| ExportError::Other(e.to_string()))?;
+        let (_, rx) = h.export_start(project_dir, out, &plan, &params)?;
+        h.export_wait(&rx, cancel, |ev| {
+            if let ExportEvent::Progress { done_frames, total_frames, eta } = ev {
+                progress(*done_frames, *total_frames, *eta);
+            }
+        })
+    });
+    let _ = std::fs::remove_file(&params);
+    result
+}
+
+/// Hand a line that belongs to the running export to its sink. Returns whether it was consumed:
+/// events of the export id, and its final `ok` / error line (which also ends the stream).
+fn route_export_line(sink: &ExportSink, line: &Line) -> bool {
+    let mut guard = sink.lock().unwrap();
+    let Some((id, tx)) = guard.as_ref() else { return false };
+    match line {
+        Line::Event { id: Some(eid), name, body } if eid == id => {
+            if let Some(ev) = protocol::parse_export_event(name, body) {
+                let _ = tx.send(ev);
+                return true;
+            }
+            false
+        }
+        Line::Ok { id: rid, .. } | Line::Error { id: Some(rid), .. } if rid == id => {
+            if let Some(ev) = protocol::export_final(line) {
+                let _ = tx.send(ev);
+                guard.take();
+                return true;
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 /// Take one screenshot with a short-lived helper (see [`Helper::screenshot`]).
@@ -222,6 +344,8 @@ pub fn screenshot(
     h.screenshot(target, out, cursor)
 }
 
+type ExportSink = Arc<Mutex<Option<(u64, Sender<ExportEvent>)>>>;
+
 pub struct Helper {
     child: Child,
     stdin: ChildStdin,
@@ -229,6 +353,10 @@ pub struct Helper {
     next_id: u64,
     /// Where recording events go; set by `record_start`, cleared on stop and when stdout closes.
     recording_events: Arc<Mutex<Option<Sender<RecordEvent>>>>,
+    /// Id and event sink of the export in progress; the reader thread routes its lines here.
+    export_events: ExportSink,
+    /// Request id and `<out>.partial` of the export in progress.
+    export: Option<(u64, PathBuf)>,
     /// Partial file of the recording in progress, removed whenever the recording is lost.
     recording_partial: Option<PathBuf>,
 }
@@ -243,10 +371,15 @@ impl Helper {
         let (tx, lines) = channel();
         let recording_events: Arc<Mutex<Option<Sender<RecordEvent>>>> = Arc::default();
         let subscriber = recording_events.clone();
+        let export_events: ExportSink = Arc::default();
+        let exports = export_events.clone();
         std::thread::spawn(move || {
             for l in BufReader::new(stdout).lines().map_while(|l| l.ok()) {
                 match protocol::decode_line(&l) {
                     Ok(line) => {
+                        if route_export_line(&exports, &line) {
+                            continue;
+                        }
                         if let Line::Event { name, body, .. } = &line {
                             if let Some(ev) = protocol::parse_record_event(name, body) {
                                 if let Some(sink) = subscriber.lock().unwrap().as_ref() {
@@ -262,15 +395,19 @@ impl Helper {
                     Err(e) => eprintln!("capture helper: bad line ({e}): {l}"),
                 }
             }
-            // stdout closed: end the event stream so receivers see the disconnect.
+            // stdout closed: end the event streams so receivers see the disconnect. An export
+            // that never got its final line is reported as failed rather than just vanishing.
             subscriber.lock().unwrap().take();
+            if let Some((_, sink)) = exports.lock().unwrap().take() {
+                let _ = sink.send(ExportEvent::Failed { code: ErrorCode::Internal, message: "the capture helper closed".into() });
+            }
         });
         std::thread::spawn(move || {
             for l in BufReader::new(stderr).lines().map_while(|l| l.ok()) {
                 log(&l);
             }
         });
-        Ok(Helper { child, stdin, lines, next_id: 1, recording_events, recording_partial: None })
+        Ok(Helper { child, stdin, lines, next_id: 1, recording_events, export_events, export: None, recording_partial: None })
     }
 
     /// Send one command and wait for its reply body; kills the helper on timeout.
@@ -423,6 +560,134 @@ impl Helper {
         // Events the helper emitted before the reply are already queued; closing the sender ends the stream.
         self.recording_events.lock().unwrap().take();
         done
+    }
+
+    /// Start exporting `project_dir` to `out` (a plain path in JSON). `params_file` is the NDJSON of
+    /// `export::FrameLine` written by `export::write_frame_params` (the caller removes it afterwards).
+    /// Returns once the helper accepted the job (`started`); the channel then carries `Progress` /
+    /// `Heartbeat` and ends with one terminal event. Drive it with [`Helper::export_wait`].
+    /// On failure no `<out>.partial` is left.
+    pub fn export_start(
+        &mut self,
+        project_dir: &Path,
+        out: &Path,
+        plan: &ExportPlan,
+        params_file: &Path,
+    ) -> std::result::Result<(ExportStarted, Receiver<ExportEvent>), ExportError> {
+        if self.export.is_some() {
+            return Err(ExportError::Other("an export is already running".into()));
+        }
+        let command = Command::Render {
+            project: project_dir.to_string_lossy().into_owned(),
+            out: out.to_string_lossy().into_owned(),
+            format: plan.format,
+            codec: plan.codec,
+            width: plan.size[0],
+            height: plan.size[1],
+            fps: plan.fps,
+            quality: plan.quality,
+            frames: plan.frames,
+            segments: plan.segments.clone(),
+            params_file: params_file.to_string_lossy().into_owned(),
+        };
+        let timeout = timeout_for(&command);
+        let id = self.next_id;
+        self.next_id += 1;
+        let partial = partial_path(out);
+        let (tx, rx) = channel();
+        *self.export_events.lock().unwrap() = Some((id, tx));
+        let line = protocol::encode_request(&Request { id, command });
+        if writeln!(self.stdin, "{line}").and_then(|_| self.stdin.flush()).is_err() {
+            self.export_events.lock().unwrap().take();
+            return Err(ExportError::Closed);
+        }
+        let deadline = Instant::now() + timeout;
+        let result = loop {
+            match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(ExportEvent::Started { total_frames }) => break Ok(ExportStarted { total_frames }),
+                Ok(ExportEvent::Failed { code, message }) => break Err(ExportError::from_helper(code, message)),
+                Ok(ExportEvent::Cancelled) => break Err(ExportError::Cancelled),
+                Ok(ExportEvent::Done(_)) => break Err(ExportError::Other("the export finished before it started".into())),
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    self.kill();
+                    break Err(ExportError::Timeout);
+                }
+                Err(RecvTimeoutError::Disconnected) => break Err(ExportError::Closed),
+            }
+        };
+        match result {
+            Ok(started) => {
+                self.export = Some((id, partial));
+                Ok((started, rx))
+            }
+            Err(e) => {
+                self.export_events.lock().unwrap().take();
+                let _ = std::fs::remove_file(partial);
+                Err(e)
+            }
+        }
+    }
+
+    /// Ask the helper to stop the running export; it answers `Cancelled` on the event channel.
+    pub fn export_cancel(&mut self) -> std::result::Result<(), ExportError> {
+        let Some((target, _)) = self.export.as_ref() else { return Ok(()) };
+        let line = protocol::encode_request(&Request { id: self.next_id, command: Command::Cancel { target: *target } });
+        self.next_id += 1;
+        writeln!(self.stdin, "{line}").and_then(|_| self.stdin.flush()).map_err(|_| ExportError::Closed)
+    }
+
+    /// Follow an export to its end: `on_event` sees every non-terminal event (progress for the UI),
+    /// `cancel` set to true sends `cancel` once, and a helper silent for [`EXPORT_SILENCE`] is
+    /// killed. Whatever the outcome, no `<out>.partial` is left behind unless the export succeeded.
+    pub fn export_wait(
+        &mut self,
+        events: &Receiver<ExportEvent>,
+        cancel: &AtomicBool,
+        on_event: impl FnMut(&ExportEvent),
+    ) -> std::result::Result<ExportDone, ExportError> {
+        self.export_wait_with(events, cancel, EXPORT_SILENCE, on_event)
+    }
+
+    fn export_wait_with(
+        &mut self,
+        events: &Receiver<ExportEvent>,
+        cancel: &AtomicBool,
+        silence: Duration,
+        mut on_event: impl FnMut(&ExportEvent),
+    ) -> std::result::Result<ExportDone, ExportError> {
+        let mut last_sign = Instant::now();
+        let mut cancel_sent = false;
+        let result = loop {
+            if cancel.load(Ordering::Relaxed) && !cancel_sent {
+                cancel_sent = true;
+                if let Err(e) = self.export_cancel() {
+                    break Err(e);
+                }
+            }
+            match events.recv_timeout(Duration::from_millis(50)) {
+                Ok(ExportEvent::Done(done)) => break Ok(done),
+                Ok(ExportEvent::Failed { code, message }) => break Err(ExportError::from_helper(code, message)),
+                Ok(ExportEvent::Cancelled) => break Err(ExportError::Cancelled),
+                Ok(ev) => {
+                    last_sign = Instant::now();
+                    on_event(&ev);
+                }
+                Err(RecvTimeoutError::Timeout) if last_sign.elapsed() > silence => {
+                    self.kill();
+                    break Err(ExportError::Timeout);
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break Err(ExportError::Closed),
+            }
+        };
+        self.export_events.lock().unwrap().take();
+        if let Some((_, partial)) = self.export.take() {
+            if result.is_err() {
+                let _ = std::fs::remove_file(partial);
+            }
+        }
+        result
     }
 
     pub fn kill(&mut self) {
@@ -728,5 +993,541 @@ mod stop_timeout_tests {
     fn record_stop_outlasts_the_helpers_own_stop_and_finish_waits() {
         // 5 s stopCapture + 8 s finishWriting inside the helper.
         assert!(timeout_for(&Command::RecordStop) > Duration::from_secs(13));
+    }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    use ferrocast_core::capture::export::{Codec, Format, Quality, Segment};
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fake(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fc-export-test-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("helper.sh");
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    fn plan() -> ExportPlan {
+        ExportPlan {
+            segments: vec![Segment { src_start: 0.0, src_end: 2.0, speed: 1.0 }],
+            duration: 2.0,
+            frames: 60,
+            size: [960, 540],
+            fps: 30,
+            format: Format::Mp4,
+            codec: Codec::H264,
+            quality: Quality::Standard,
+        }
+    }
+
+    fn out_of(p: &Path) -> PathBuf {
+        p.with_file_name("Demo é.mp4")
+    }
+
+    const OK_SCRIPT: &str = r#"read l; echo "$l" > "$(dirname "$0")/req.json"
+echo '{"event":"started","id":1,"total_frames":60}'
+echo '{"event":"progress","id":1,"done_frames":30,"total_frames":60,"eta":1.0}'
+echo '{"event":"heartbeat","id":1}'
+echo '{"id":1,"ok":true,"path":"/o.mp4","bytes":1234,"duration":2.0,"frames":60}'"#;
+
+    #[test]
+    fn export_streams_progress_and_ends_with_the_result() {
+        let p = fake("ok", OK_SCRIPT);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (started, rx) =
+            h.export_start(&p.with_file_name("Demo.ferrocast"), &out_of(&p), &plan(), Path::new("/p/params.ndjson")).unwrap();
+        assert_eq!(started.total_frames, 60);
+        let mut seen = vec![];
+        let done = h.export_wait(&rx, &AtomicBool::new(false), |e| seen.push(e.clone())).unwrap();
+        assert_eq!((done.path.as_str(), done.bytes, done.duration), ("/o.mp4", 1234, 2.0));
+        assert_eq!(seen, vec![ExportEvent::Progress { done_frames: 30, total_frames: 60, eta: Some(1.0) }, ExportEvent::Heartbeat]);
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(wire.contains(r#""cmd":"render""#) && wire.contains("Demo é.mp4") && wire.contains("params.ndjson"), "{wire}");
+        assert!(wire.contains(r#""codec":"h264""#) && wire.contains(r#""width":960"#) && wire.contains(r#""frames":60"#), "{wire}");
+    }
+
+    #[test]
+    fn gif_plan_travels_as_format_gif() {
+        let p = fake("gif", OK_SCRIPT);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let gif = ExportPlan { format: Format::Gif, size: [960, 540], fps: 15, frames: 30, ..plan() };
+        let (_, rx) = h.export_start(&dir_of(&p), &p.with_file_name("Demo.gif"), &gif, Path::new("/p/params.ndjson")).unwrap();
+        h.export_wait(&rx, &AtomicBool::new(false), |_| {}).unwrap();
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(wire.contains(r#""format":"gif""#) && wire.contains(r#""fps":15"#) && wire.contains("Demo.gif"), "{wire}");
+    }
+
+    #[test]
+    fn refused_export_maps_the_error_and_removes_the_partial() {
+        let p = fake("refused", r#"read l; echo '{"id":1,"error":"invalid","message":"width is odd"}'"#);
+        let out = out_of(&p);
+        std::fs::write(partial_path(&out), b"half").unwrap();
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let e = h.export_start(&dir_of(&p), &out, &plan(), Path::new("/p/x")).unwrap_err();
+        assert_eq!(e, ExportError::Invalid("width is odd".into()));
+        assert!(e.to_string().contains("width is odd"));
+        assert!(!out.exists() && !partial_path(&out).exists());
+    }
+
+    fn dir_of(p: &Path) -> PathBuf {
+        p.parent().unwrap().to_path_buf()
+    }
+
+    #[test]
+    fn cancel_sends_the_target_and_leaves_no_output() {
+        let p = fake(
+            "cancel",
+            r#"read l
+echo '{"event":"started","id":1,"total_frames":600}'
+echo '{"event":"progress","id":1,"done_frames":5,"total_frames":600}'
+read c; echo "$c" > "$(dirname "$0")/cancel.json"
+echo '{"id":1,"error":"cancelled","message":"Export cancelled"}'
+echo '{"id":2,"ok":true}'"#,
+        );
+        let out = out_of(&p);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (_, rx) = h.export_start(&dir_of(&p), &out, &plan(), Path::new("/p/x")).unwrap();
+        std::fs::write(partial_path(&out), b"half").unwrap();
+        let cancel = AtomicBool::new(false);
+        let e = h
+            .export_wait(&rx, &cancel, |ev| {
+                if matches!(ev, ExportEvent::Progress { .. }) {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            })
+            .unwrap_err();
+        assert_eq!(e, ExportError::Cancelled);
+        assert!(!out.exists() && !partial_path(&out).exists(), "no output and no .partial");
+        let wire = std::fs::read_to_string(p.with_file_name("cancel.json")).unwrap();
+        assert_eq!(wire.trim(), r#"{"id":2,"cmd":"cancel","target":1}"#);
+        // the helper is reusable: a second export may start
+        assert!(h.export.is_none());
+    }
+
+    #[test]
+    fn failure_after_start_is_reported_and_cleans_up() {
+        let p = fake(
+            "disk",
+            r#"read l; echo '{"event":"started","id":1,"total_frames":10}'
+echo '{"id":1,"error":"disk-full","message":"No space left on device"}'"#,
+        );
+        let out = out_of(&p);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (_, rx) = h.export_start(&dir_of(&p), &out, &plan(), Path::new("/p/x")).unwrap();
+        std::fs::write(partial_path(&out), b"half").unwrap();
+        let e = h.export_wait(&rx, &AtomicBool::new(false), |_| {}).unwrap_err();
+        assert_eq!(e, ExportError::DiskFull("No space left on device".into()));
+        assert!(!partial_path(&out).exists());
+    }
+
+    #[test]
+    fn a_silent_helper_is_killed_and_its_partial_removed() {
+        let p = fake("silent", r#"read l; echo '{"event":"started","id":1,"total_frames":10}'; sleep 30"#);
+        let out = out_of(&p);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (_, rx) = h.export_start(&dir_of(&p), &out, &plan(), Path::new("/p/x")).unwrap();
+        std::fs::write(partial_path(&out), b"half").unwrap();
+        let t = Instant::now();
+        let e = h.export_wait_with(&rx, &AtomicBool::new(false), Duration::from_millis(300), |_| {}).unwrap_err();
+        assert_eq!(e, ExportError::Timeout);
+        assert!(t.elapsed() < Duration::from_secs(5));
+        assert!(h.child.try_wait().unwrap().is_some(), "helper killed");
+        assert!(!partial_path(&out).exists());
+    }
+
+    #[test]
+    fn heartbeats_keep_a_slow_export_alive() {
+        let p = fake(
+            "beats",
+            r#"read l; echo '{"event":"started","id":1,"total_frames":10}'
+for i in 1 2 3 4 5 6; do sleep 0.1; echo '{"event":"heartbeat","id":1}'; done
+echo '{"id":1,"ok":true,"path":"/o.mp4","bytes":1,"duration":0.3}'"#,
+        );
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (_, rx) = h.export_start(&dir_of(&p), &out_of(&p), &plan(), Path::new("/p/x")).unwrap();
+        let r = h.export_wait_with(&rx, &AtomicBool::new(false), Duration::from_millis(400), |_| {});
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn helper_dying_mid_export_reports_failure_and_removes_the_partial() {
+        let p = fake("die", r#"read l; echo '{"event":"started","id":1,"total_frames":10}'; exit 1"#);
+        let out = out_of(&p);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (_, rx) = h.export_start(&dir_of(&p), &out, &plan(), Path::new("/p/x")).unwrap();
+        std::fs::write(partial_path(&out), b"half").unwrap();
+        let e = h.export_wait(&rx, &AtomicBool::new(false), |_| {}).unwrap_err();
+        assert!(matches!(e, ExportError::Other(_) | ExportError::Closed), "{e:?}");
+        assert!(!partial_path(&out).exists());
+    }
+
+    #[test]
+    fn render_events_of_other_requests_and_record_events_do_not_leak_into_an_export() {
+        let p = fake(
+            "other",
+            r#"read l; echo '{"event":"progress","id":99,"done_frames":1,"total_frames":2}'
+echo '{"event":"started","id":1,"total_frames":4}'
+echo '{"event":"tick","id":1,"elapsed":1.0,"frames":1,"dropped":0}'
+echo '{"id":1,"ok":true,"path":"/o.mp4","bytes":1,"duration":0.1}'"#,
+        );
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (_, rx) = h.export_start(&dir_of(&p), &out_of(&p), &plan(), Path::new("/p/x")).unwrap();
+        let mut n = 0;
+        h.export_wait(&rx, &AtomicBool::new(false), |_| n += 1).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    /// A project folder with a 2 s project.json and a minimal events.json, plus a fake helper that
+    /// echoes the number of lines of the params file it was given.
+    fn project_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fc-export-proj-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut p = Project::new("t", "2026-01-01T00:00:00Z");
+        p.duration = 2.0;
+        p.save(&dir).unwrap();
+        std::fs::write(
+            dir.join("events.json"),
+            r#"{"version":1,"screen":{"size":[1600,1000],"scale":2.0,"display_frame":[0,0,800,500]},"cursor":[[0.0,100,100,"arrow"],[1.0,300,200,"arrow"]]}"#,
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn export_project_plans_writes_params_and_cleans_up() {
+        let p = fake(
+            "project",
+            r#"read l
+f=$(printf '%s' "$l" | sed 's/.*"params_file":"\([^"]*\)".*/\1/')
+wc -l < "$f" | tr -d ' ' > "$(dirname "$0")/lines.txt"
+echo "$l" > "$(dirname "$0")/req.json"
+echo '{"event":"started","id":1,"total_frames":60}'
+echo '{"event":"progress","id":1,"done_frames":60,"total_frames":60,"eta":0.0}'
+echo '{"id":1,"ok":true,"path":"/o.mp4","bytes":10,"duration":2.0,"frames":60}'"#,
+        );
+        let dir = project_dir("ok");
+        let opts = ExportOptions { format: Format::Mp4, codec: Codec::Hevc, width: 960, fps: 30, quality: Quality::High };
+        let mut seen = vec![];
+        let done = export_project(&p, |_| {}, &dir, &out_of(&p), &opts, &AtomicBool::new(false), |d, t, _| seen.push((d, t))).unwrap();
+        assert_eq!(done.bytes, 10);
+        assert_eq!(seen, vec![(60, 60)]);
+        assert_eq!(std::fs::read_to_string(p.with_file_name("lines.txt")).unwrap().trim(), "60", "one params line per frame");
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(
+            wire.contains(r#""codec":"hevc""#) && wire.contains(r#""width":960,"height":540"#) && wire.contains(r#""quality":"high""#),
+            "{wire}"
+        );
+        let leftovers = std::fs::read_dir(dir.join(".cache")).unwrap().count();
+        assert_eq!(leftovers, 0, "params file removed");
+    }
+
+    #[test]
+    fn export_project_clamps_gif_limits_before_the_helper_sees_them() {
+        let p = fake(
+            "gifproject",
+            r#"read l
+echo "$l" > "$(dirname "$0")/req.json"
+echo '{"event":"started","id":1,"total_frames":30}'
+echo '{"id":1,"ok":true,"path":"/o.gif","bytes":10,"duration":2.0,"frames":30}'"#,
+        );
+        let dir = project_dir("gif");
+        let opts = ExportOptions { format: Format::Gif, codec: Codec::H264, width: 1920, fps: 60, quality: Quality::Standard };
+        export_project(&p, |_| {}, &dir, &p.with_file_name("o.gif"), &opts, &AtomicBool::new(false), |_, _, _| {}).unwrap();
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(wire.contains(r#""format":"gif""#) && wire.contains(r#""width":960"#) && wire.contains(r#""fps":15"#), "{wire}");
+    }
+
+    #[test]
+    fn export_project_refuses_bad_options_before_starting_a_helper() {
+        let dir = project_dir("bad");
+        let opts = ExportOptions { format: Format::Mp4, codec: Codec::H264, width: 5000, fps: 30, quality: Quality::Standard };
+        let e = export_project(
+            Path::new("/nonexistent/helper"),
+            |_| {},
+            &dir,
+            &dir.join("o.mp4"),
+            &opts,
+            &AtomicBool::new(false),
+            |_, _, _| {},
+        )
+        .unwrap_err();
+        assert!(matches!(e, ExportError::Invalid(ref m) if m.contains("5000")), "{e:?}");
+        let cancelled = ExportOptions { width: 960, ..opts };
+        let e = export_project(
+            Path::new("/nonexistent/helper"),
+            |_| {},
+            &dir,
+            &dir.join("o.mp4"),
+            &cancelled,
+            &AtomicBool::new(true),
+            |_, _, _| {},
+        )
+        .unwrap_err();
+        assert_eq!(e, ExportError::Cancelled);
+        let missing = std::env::temp_dir().join("fc-export-no-such-project");
+        let e =
+            export_project(Path::new("/x"), |_| {}, &missing, &missing.join("o.mp4"), &cancelled, &AtomicBool::new(false), |_, _, _| {})
+                .unwrap_err();
+        assert!(matches!(e, ExportError::Invalid(_)));
+    }
+
+    #[test]
+    fn render_has_no_deadline_beyond_the_start_ack() {
+        let c = Command::Cancel { target: 1 };
+        assert!(timeout_for(&c) <= Duration::from_secs(10));
+    }
+}
+
+/// Live export tests against the real helper and the synthetic editor fixture
+/// (`scripts/capture-smoke.sh --keep` writes it). They skip when either is missing; run them with
+/// `cargo test -p ferrocast-macos --lib export_live -- --ignored --nocapture`. Outputs stay in
+/// `target/capture-spike/t28/out/` for looking at.
+#[cfg(test)]
+mod export_live_tests {
+    use super::*;
+    use ferrocast_core::capture::export::{Codec, Format, Quality};
+    use ferrocast_core::capture::project::{Speed, Trim, Zoom};
+
+    fn root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn helper() -> Option<PathBuf> {
+        let p = std::env::var_os("FERROCAST_CAPTURE_HELPER")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root().join("target/capture-spike/t28/ferrocast-capture"));
+        is_executable(&p).then_some(p)
+    }
+
+    /// A scratch copy of the fixture: its screen.mov (symlink), events.json and a project edited by `edit`.
+    fn scratch(name: &str, edit: impl FnOnce(&mut Project)) -> Option<PathBuf> {
+        let fixture = root().join("target/capture-spike/editor-fixture/Take.ferrocast");
+        if !fixture.join("screen.mov").exists() {
+            eprintln!("SKIP: no fixture at {}", fixture.display());
+            return None;
+        }
+        let dir = root().join("target/capture-spike/t28/out").join(format!("{name}.ferrocast"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_file(dir.join("screen.mov"));
+        std::os::unix::fs::symlink(fixture.join("screen.mov").canonicalize().unwrap(), dir.join("screen.mov")).unwrap();
+        std::fs::copy(fixture.join("events.json"), dir.join("events.json")).unwrap();
+        let mut p = Project::load(&fixture).unwrap();
+        p.trims.clear();
+        p.zooms = vec![Zoom {
+            id: "z1".into(),
+            start: 0.6,
+            end: 2.2,
+            mode: "manual".into(),
+            scale: 2.5,
+            focus: Some([0.625, 0.55]),
+            ease_in: 0.4,
+            ease_out: 0.4,
+        }];
+        edit(&mut p);
+        p.save(&dir).unwrap();
+        Some(dir)
+    }
+
+    fn probe(path: &Path) -> (String, u32, u32, f64, u32) {
+        let o = std::process::Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries"])
+            .arg("stream=codec_name,width,height,nb_read_frames:format=duration")
+            .args(["-of", "default=nw=1"])
+            .arg(path)
+            .output()
+            .expect("ffprobe");
+        let text = String::from_utf8(o.stdout).unwrap();
+        let get =
+            |k: &str| text.lines().find_map(|l| l.strip_prefix(&format!("{k}="))).unwrap_or_else(|| panic!("{k} in {text}")).to_string();
+        (
+            get("codec_name"),
+            get("width").parse().unwrap(),
+            get("height").parse().unwrap(),
+            get("duration").parse().unwrap(),
+            get("nb_read_frames").parse().unwrap(),
+        )
+    }
+
+    fn have_ffprobe() -> bool {
+        std::process::Command::new("ffprobe").arg("-version").output().is_ok()
+    }
+
+    #[test]
+    #[ignore = "needs the built helper and the editor fixture"]
+    fn export_live_mp4_matches_output_duration() {
+        let Some(h) = helper() else { return eprintln!("SKIP: no helper") };
+        let Some(dir) = scratch("speed", |p| {
+            p.trims = vec![Trim { start: 0.0, end: 3.0 }];
+            p.speeds = vec![Speed { start: 1.0, end: 2.0, factor: 2.0 }];
+        }) else {
+            return;
+        };
+        let want = ferrocast_core::capture::timeline::Timeline::new(&Project::load(&dir).unwrap()).output_duration();
+        assert_eq!(want, 2.5);
+        for (codec, fps, width) in [(Codec::H264, 30, 960), (Codec::Hevc, 60, 640)] {
+            let out = dir.with_file_name(format!("speed-{codec:?}-{fps}.mp4").to_lowercase());
+            let opts = ExportOptions { format: Format::Mp4, codec, width, fps, quality: Quality::Standard };
+            let t = Instant::now();
+            let mut last = (0, 0);
+            let done =
+                export_project(&h, |l| eprintln!("helper: {l}"), &dir, &out, &opts, &AtomicBool::new(false), |d, n, _| last = (d, n))
+                    .unwrap_or_else(|e| panic!("{e}"));
+            let secs = t.elapsed().as_secs_f64();
+            eprintln!(
+                "EXPORT {codec:?} {width}px @{fps}: {} frames in {secs:.2} s = {:.1} frames/s, {} bytes",
+                done.frames,
+                f64::from(done.frames) / secs,
+                done.bytes
+            );
+            assert!(out.exists() && !partial_path(&out).exists());
+            assert_eq!(last.0, last.1, "progress reached the end");
+            assert!((done.duration - want).abs() <= 1.0 / f64::from(fps));
+            if have_ffprobe() {
+                let (name, w, hh, dur, frames) = probe(&out);
+                eprintln!("ffprobe: {name} {w}x{hh} duration {dur:.4} frames {frames}");
+                assert_eq!(name, if codec == Codec::Hevc { "hevc" } else { "h264" });
+                assert_eq!([w, hh], [width, width * 9 / 16 / 2 * 2]);
+                assert!((dur - want).abs() <= 1.0 / f64::from(fps), "duration {dur} vs {want}");
+                assert_eq!(frames, done.frames);
+            }
+        }
+    }
+
+    /// (width, height, loop count if the NETSCAPE extension is there, per-frame delays in cs).
+    fn parse_gif(path: &Path) -> (u16, u16, Option<u16>, Vec<u16>) {
+        let d = std::fs::read(path).unwrap();
+        assert!(d.starts_with(b"GIF89a") || d.starts_with(b"GIF87a"), "not a GIF");
+        let (w, h) = (u16::from_le_bytes([d[6], d[7]]), u16::from_le_bytes([d[8], d[9]]));
+        let mut i = 13 + if d[10] & 0x80 != 0 { 3 << ((d[10] & 7) + 1) } else { 0 };
+        let (mut looped, mut delays) = (None, vec![]);
+        let skip_blocks = |mut i: usize| {
+            while d[i] != 0 {
+                i += d[i] as usize + 1;
+            }
+            i + 1
+        };
+        while i < d.len() {
+            match d[i] {
+                0x21 if d[i + 1] == 0xF9 => {
+                    delays.push(u16::from_le_bytes([d[i + 4], d[i + 5]]));
+                    i = skip_blocks(i + 2);
+                }
+                0x21 if d[i + 1] == 0xFF => {
+                    if &d[i + 3..i + 14] == b"NETSCAPE2.0" && d[i + 14] == 3 && d[i + 15] == 1 {
+                        looped = Some(u16::from_le_bytes([d[i + 16], d[i + 17]]));
+                    }
+                    i = skip_blocks(i + 2);
+                }
+                0x21 => i = skip_blocks(i + 2),
+                0x2C => {
+                    let packed = d[i + 9];
+                    i += 10 + if packed & 0x80 != 0 { 3 << ((packed & 7) + 1) } else { 0 } + 1;
+                    i = skip_blocks(i);
+                }
+                0x3B => break,
+                b => panic!("unexpected GIF byte {b:#x} at {i}"),
+            }
+        }
+        (w, h, looped, delays)
+    }
+
+    #[test]
+    #[ignore = "needs the built helper and the editor fixture"]
+    fn export_live_gif_matches_output_duration_and_loops_forever() {
+        let Some(h) = helper() else { return eprintln!("SKIP: no helper") };
+        let Some(dir) = scratch("gif", |p| {
+            p.trims = vec![Trim { start: 0.0, end: 3.0 }];
+            p.speeds = vec![Speed { start: 1.0, end: 2.0, factor: 2.0 }];
+        }) else {
+            return;
+        };
+        let want = ferrocast_core::capture::timeline::Timeline::new(&Project::load(&dir).unwrap()).output_duration();
+        assert_eq!(want, 2.5);
+        for (width, fps) in [(480, 15), (960, 15), (1920, 30)] {
+            let out = dir.with_file_name(format!("gif-{width}-{fps}.gif"));
+            let opts = ExportOptions { format: Format::Gif, codec: Codec::H264, width, fps, quality: Quality::Standard };
+            let t = Instant::now();
+            let mut last = (0, 0);
+            let done =
+                export_project(&h, |l| eprintln!("helper: {l}"), &dir, &out, &opts, &AtomicBool::new(false), |d, n, _| last = (d, n))
+                    .unwrap_or_else(|e| panic!("{e}"));
+            let secs = t.elapsed().as_secs_f64();
+            let (gw, gh, looped, delays) = parse_gif(&out);
+            let total = f64::from(delays.iter().map(|&c| u32::from(c)).sum::<u32>()) / 100.0;
+            eprintln!(
+                "GIF {width}px @{fps}: {gw}x{gh}, {} frames, delays {:?}.., loop {looped:?}, total {total:.2} s (want {want}), {} bytes, {secs:.2} s = {:.1} frames/s",
+                delays.len(),
+                &delays[..delays.len().min(6)],
+                done.bytes,
+                f64::from(done.frames) / secs
+            );
+            assert!(out.exists() && !partial_path(&out).exists());
+            assert_eq!(last.0, last.1, "progress reached the end");
+            assert_eq!(u32::from(gw), width.min(960), "the helper never exceeds the clamped width");
+            assert_eq!(delays.len() as u32, done.frames);
+            assert_eq!(delays.len(), 38, "2.5 s at 15 fps = 37.5 -> 38 frames");
+            assert_eq!(looped, Some(0), "loop forever");
+            assert!((total - want).abs() <= 1.0 / 15.0, "total {total} vs {want}");
+            assert!((done.duration - total).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    #[ignore = "needs the built helper and the editor fixture"]
+    fn export_live_gif_cancel_leaves_nothing() {
+        let Some(h) = helper() else { return eprintln!("SKIP: no helper") };
+        let Some(dir) = scratch("gifcancel", |_| {}) else { return };
+        let out = dir.with_file_name("cancel.gif");
+        let _ = std::fs::remove_file(&out);
+        let opts = ExportOptions { format: Format::Gif, codec: Codec::H264, width: 960, fps: 15, quality: Quality::Standard };
+        let cancel = AtomicBool::new(false);
+        let e = export_project(
+            &h,
+            |_| {},
+            &dir,
+            &out,
+            &opts,
+            &cancel,
+            |d, _, _| {
+                if d >= 5 {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(e, ExportError::Cancelled);
+        assert!(!out.exists() && !partial_path(&out).exists(), "no output and no .partial");
+    }
+
+    #[test]
+    #[ignore = "needs the built helper and the editor fixture"]
+    fn export_live_cancel_leaves_nothing() {
+        let Some(h) = helper() else { return eprintln!("SKIP: no helper") };
+        let Some(dir) = scratch("cancel", |_| {}) else { return };
+        let out = dir.with_file_name("cancel.mp4");
+        let _ = std::fs::remove_file(&out);
+        let opts = ExportOptions { format: Format::Mp4, codec: Codec::H264, width: 1920, fps: 60, quality: Quality::Standard };
+        let cancel = AtomicBool::new(false);
+        let e = export_project(
+            &h,
+            |_| {},
+            &dir,
+            &out,
+            &opts,
+            &cancel,
+            |d, _, _| {
+                if d >= 10 {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(e, ExportError::Cancelled);
+        assert!(!out.exists() && !partial_path(&out).exists(), "no output and no .partial");
+        assert_eq!(std::fs::read_dir(dir.join(".cache")).map(|d| d.count()).unwrap_or(0), 0, "params file removed");
     }
 }

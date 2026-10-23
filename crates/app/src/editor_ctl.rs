@@ -338,8 +338,20 @@ pub enum WorkerCmd {
 
 /// What the worker tells the app (wrapped in `Msg::Editor`).
 pub enum EditorMsg {
-    Opened { dir: PathBuf, result: Result<Box<Opened>, String> },
-    Frame { dir: PathBuf, seq: u64, result: Result<FrameOut, String> },
+    Opened {
+        dir: PathBuf,
+        result: Result<Box<Opened>, String>,
+    },
+    Frame {
+        dir: PathBuf,
+        seq: u64,
+        result: Result<FrameOut, String>,
+    },
+    /// The MP4 export thread (T28): progress, the result, the destination picked in the save dialog.
+    Export {
+        dir: PathBuf,
+        msg: crate::editor_export::ExportMsg,
+    },
 }
 
 pub struct Opened {
@@ -556,6 +568,8 @@ pub struct Editor {
     pub events: Option<Events>,
     /// Panels, history and autosave (T27).
     pub st: crate::editor_panels::Studio,
+    /// The Export sheet and the export in progress (T28).
+    pub export: crate::editor_export::ExportSheet,
 }
 
 impl Editor {
@@ -577,6 +591,7 @@ impl Editor {
             rate: Rate::default(),
             events: None,
             st: crate::editor_panels::Studio::new(),
+            export: crate::editor_export::ExportSheet::default(),
         }
     }
 

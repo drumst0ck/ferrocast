@@ -18,7 +18,7 @@ import UniformTypeIdentifiers
 // scale with the requested width; `style.padding` is a fraction of the output width per side.
 // `t` is the source time of the take in seconds (the caller maps output time with `timeline`).
 
-private func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
+func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
 
 /// Style as stored in project.json, with the same defaults as `capture::project::Style`.
 struct RenderStyle {
@@ -66,9 +66,10 @@ func renderAspect(_ spec: String, source: CGSize) -> Double {
     return Double(source.width / max(source.height, 1))
 }
 
-func renderGeometry(_ style: RenderStyle, source: CGSize, width: Int) -> RenderGeometry {
+/// `height` (export only) pins the canvas height; without it the height follows the aspect, as in `render.frame`.
+func renderGeometry(_ style: RenderStyle, source: CGSize, width: Int, height: Int? = nil) -> RenderGeometry {
     let w = Double(width)
-    let h = max(1, (w / renderAspect(style.aspect, source: source)).rounded())
+    let h = height.map { Double(max(1, $0)) } ?? max(1, (w / renderAspect(style.aspect, source: source)).rounded())
     let ref = w / 1920
     let pad = min(max(style.padding, 0), 0.45) * w
     let iw = max(1, w - 2 * pad), ih = max(1, h - 2 * pad)
@@ -142,7 +143,7 @@ private func maskImage(canvas: CGSize, rect: CGRect, radius: CGFloat) -> CGImage
 
 private func rawImage(_ cg: CGImage) -> CIImage { CIImage(cgImage: cg, options: [.colorSpace: NSNull()]) }
 
-private let renderContext: CIContext = {
+let renderContext: CIContext = {
     let opts: [CIContextOption: Any] = [.workingColorSpace: renderSRGB, .outputColorSpace: renderSRGB]
     if MTLCreateSystemDefaultDevice() != nil { return CIContext(options: opts) }
     var cpu = opts
@@ -288,9 +289,16 @@ private func overlayLayers(_ fx: FrameFx, view: CGRect, picture: CGSize, ref: CG
     return (cursor, ring)
 }
 
-/// Compose the styled still for one take frame.
+/// Compose the styled still for one take frame (PNG path of `render.frame`).
 func composeStyledFrame(take: CGImage, style: RenderStyle, project: String, width: Int, fx: FrameFx = .none) -> CGImage? {
-    let geo = renderGeometry(style, source: CGSize(width: take.width, height: take.height), width: width)
+    guard let (result, canvas) = composeStyledImage(take: take, style: style, project: project, width: width, fx: fx) else { return nil }
+    return renderContext.createCGImage(result, from: canvas, format: .RGBA8, colorSpace: renderSRGB)
+}
+
+/// The composition shared by `render.frame` and the MP4 export (`Export.swift`): one lazy
+/// CoreImage graph over `canvas` (top-left pixels, y-up CI space). Callers rasterise it.
+func composeStyledImage(take: CGImage, style: RenderStyle, project: String, width: Int, height: Int? = nil, fx: FrameFx = .none) -> (CIImage, CGRect)? {
+    let geo = renderGeometry(style, source: CGSize(width: take.width, height: take.height), width: width, height: height)
     let canvas = CGRect(origin: .zero, size: geo.canvas)
     // CoreImage is y-up; the geometry is top-left.
     let frameCI = CGRect(x: geo.frame.minX, y: geo.canvas.height - geo.frame.maxY, width: geo.frame.width, height: geo.frame.height)
@@ -348,7 +356,7 @@ func composeStyledFrame(take: CGImage, style: RenderStyle, project: String, widt
         result = shadow.composited(over: result)
     }
     result = rounded.composited(over: result).cropped(to: canvas)
-    return renderContext.createCGImage(result, from: canvas, format: .RGBA8, colorSpace: renderSRGB)
+    return (result, canvas)
 }
 
 // MARK: - Take access
@@ -479,7 +487,7 @@ private func cacheStore(_ key: FrameKey, _ value: CachedFrame) {
     }
 }
 
-private func mtime(_ path: String) -> Double {
+func mtime(_ path: String) -> Double {
     ((try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date)?.timeIntervalSince1970 ?? 0
 }
 

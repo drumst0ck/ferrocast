@@ -545,6 +545,255 @@ PY
     else
       echo "SKIP: render.frame (fixture movie could not be generated: AVFoundation unavailable?)"
     fi
+    # T28: MP4 export (`render`). The per-frame parameters Rust would compute (source time and camera)
+    # are written here by hand: one NDJSON line per output frame in params_file. Checks: `started`,
+    # `progress` events and a final `ok`; the MP4 header (parsed here, no ffprobe needed) has the
+    # requested codec and size and a duration within one frame of frames/fps; no `.partial` is left; a
+    # `cancel` mid-export answers `cancelled` and leaves no output and no `.partial`; bad requests
+    # are `invalid`; the helper keeps answering afterwards. Output stays in target/capture-spike/export-smoke/.
+    edir="$rdir/Export.ferrocast"
+    mkdir -p "$edir/.cache" target/capture-spike/export-smoke
+    if "$rdir/gen" "$edir" 90 && cp crates/core/fixtures/render_project.json "$edir/project.json"; then
+      export_out=$(python3 - "$helper" "$edir" "$PWD/target/capture-spike/export-smoke" <<'PY'
+import json, os, queue, struct, subprocess, sys, threading, time
+
+helper, project, outdir = sys.argv[1:4]
+p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+lines = queue.Queue()
+threading.Thread(target=lambda: [lines.put(json.loads(l)) for l in p.stdout], daemon=True).start()
+
+def send(o):
+    p.stdin.write(json.dumps(o) + "\n"); p.stdin.flush()
+
+def until(pred, timeout=90):
+    """Lines up to and including the first for which pred is true."""
+    got, end = [], time.time() + timeout
+    while time.time() < end:
+        try: l = lines.get(timeout=1)
+        except queue.Empty: continue
+        got.append(l)
+        if pred(l): return got
+    raise AssertionError("timeout, got %r" % got[-3:])
+
+def params(n, zoom=True):
+    path = project + "/.cache/params-%d.ndjson" % n
+    with open(path, "w") as f:
+        for i in range(n):
+            o = {"t": min(i / 30.0, 2.96)}
+            if zoom and 30 <= i < 60: o["camera"] = {"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}
+            f.write(json.dumps(o) + "\n")
+    return path
+
+def request(i, n, out, codec="h264", **kw):
+    r = {"id": i, "cmd": "render", "project": project, "out": out, "format": "mp4", "codec": codec, "width": 480,
+         "height": 270, "fps": 30, "quality": "standard", "frames": n,
+         "segments": [{"src_start": 0.0, "src_end": n / 30.0, "speed": 1.0}], "params_file": params(n)}
+    r.update(kw); return r
+
+def boxes(data, start=0, end=None):
+    end = len(data) if end is None else end
+    while start + 8 <= end:
+        size, kind = struct.unpack(">I4s", data[start:start + 8]); hdr = 8
+        if size == 1: size = struct.unpack(">Q", data[start + 8:start + 16])[0]; hdr = 16
+        if size == 0: size = end - start
+        yield kind.decode("latin1"), start + hdr, start + size
+        start += size
+
+def probe(path):
+    d = open(path, "rb").read()
+    info = {}
+    def walk(s, e):
+        for k, a, b in boxes(d, s, e):
+            if k in ("moov", "trak", "mdia", "minf", "stbl"): walk(a, b)
+            elif k == "mvhd":
+                v = d[a]; ts, dur = struct.unpack(">II", d[a + 12:a + 20]) if v == 0 else (struct.unpack(">I", d[a + 20:a + 24])[0], struct.unpack(">Q", d[a + 24:a + 32])[0])
+                info["duration"] = dur / ts
+            elif k == "stsd" and "codec" not in info:
+                e0 = a + 8; info["codec"] = d[e0 + 4:e0 + 8].decode("latin1")
+                info["size"] = list(struct.unpack(">HH", d[e0 + 32:e0 + 36]))
+    walk(0, len(d)); return info
+
+try:
+    out = outdir + "/smoke.mp4"
+    for f in (out, out + ".partial"):
+        if os.path.exists(f): os.remove(f)
+    send(request(1, 90, out))
+    got = until(lambda l: "event" not in l)
+    assert got[0].get("event") == "started" and got[0]["total_frames"] == 90, got[0]
+    final = got[-1]
+    assert final.get("ok") and final["path"] == out and final["frames"] == 90, final
+    prog = [l for l in got if l.get("event") == "progress"]
+    assert prog and prog[-1]["done_frames"] == 90, prog[-1:]
+    assert not os.path.exists(out + ".partial"), ".partial left"
+    info = probe(out)
+    assert info["codec"] == "avc1" and info["size"] == [480, 270], info
+    assert abs(info["duration"] - 3.0) <= 1 / 30.0, info
+    hevc = outdir + "/smoke-hevc.mp4"
+    send(request(2, 30, hevc, codec="hevc"))
+    got = until(lambda l: "event" not in l)
+    assert got[-1].get("ok"), got[-1]
+    assert probe(hevc)["codec"] in ("hvc1", "hev1"), probe(hevc)
+
+    cancelled = outdir + "/smoke-cancel.mp4"
+    for f in (cancelled, cancelled + ".partial"):
+        if os.path.exists(f): os.remove(f)
+    send(request(3, 600, cancelled))
+    until(lambda l: l.get("event") == "progress")
+    send({"id": 4, "cmd": "cancel", "target": 3})
+    got = until(lambda l: l.get("id") == 3 and "event" not in l)
+    assert got[-1].get("error") == "cancelled", got[-1]
+    assert not os.path.exists(cancelled) and not os.path.exists(cancelled + ".partial"), "cancel left output"
+
+    send(request(5, 30, "relative.mp4"))
+    assert until(lambda l: l.get("id") == 5)[-1].get("error") == "invalid"
+    send(request(6, 30, outdir + "/odd.mp4", width=481))
+    assert until(lambda l: l.get("id") == 6)[-1].get("error") == "invalid"
+    send({"id": 7, "cmd": "cancel", "target": 99})
+    assert until(lambda l: l.get("id") == 7)[-1].get("error") == "not-found"
+    send({"id": 8, "cmd": "hello"})
+    assert until(lambda l: l.get("id") == 8)[-1].get("ok")
+    print("PASS: render MP4 (h264 480x270 duration %.3f s for 90 frames @30, hevc ok, progress events, cancel leaves nothing, bad requests invalid)" % info["duration"])
+except Exception as e:
+    print("FAIL: render MP4 (%s)" % (e,)); sys.exit(1)
+finally:
+    p.stdin.close()
+    try: p.wait(timeout=10)
+    except Exception: p.kill()
+PY
+      ); export_rc=$?
+      echo "$export_out"
+      [ "$export_rc" = 0 ] || fail=1
+    else
+      echo "SKIP: render MP4 (fixture movie could not be generated)"
+    fi
+    # T29: GIF export (`render` with format "gif"), same params file / progress / cancel / .partial
+    # rules as MP4. The GIF is parsed here (no ffprobe, no ImageIO needed to read it): the
+    # requested size, one frame per output frame, per-frame delays in centiseconds whose TOTAL is
+    # round(frames * 100 / fps) (the rounding is spread, not accumulated), the NETSCAPE loop
+    # extension with count 0 (forever), no `.partial`. Limits (S16): width 1920, fps 30 and a clip
+    # over the memory budget are `invalid`; cancel leaves no output. Output: target/capture-spike/export-smoke/.
+    if [ -x "$rdir/gen" ] && [ -d "$edir" ]; then
+      gif_out=$(python3 - "$helper" "$edir" "$PWD/target/capture-spike/export-smoke" <<'PY'
+import json, os, queue, struct, subprocess, sys, threading, time
+
+helper, project, outdir = sys.argv[1:4]
+p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+lines = queue.Queue()
+threading.Thread(target=lambda: [lines.put(json.loads(l)) for l in p.stdout], daemon=True).start()
+
+def send(o):
+    p.stdin.write(json.dumps(o) + "\n"); p.stdin.flush()
+
+def until(pred, timeout=90):
+    got, end = [], time.time() + timeout
+    while time.time() < end:
+        try: l = lines.get(timeout=1)
+        except queue.Empty: continue
+        got.append(l)
+        if pred(l): return got
+    raise AssertionError("timeout, got %r" % got[-3:])
+
+def params(n, fps):
+    path = project + "/.cache/gif-params-%d.ndjson" % n
+    with open(path, "w") as f:
+        for i in range(n):
+            o = {"t": min(i / float(fps), 2.96)}
+            if n // 3 <= i < 2 * n // 3: o["camera"] = {"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}
+            f.write(json.dumps(o) + "\n")
+    return path
+
+def request(i, n, out, width=480, fps=15, **kw):
+    r = {"id": i, "cmd": "render", "project": project, "out": out, "format": "gif", "codec": "h264", "width": width,
+         "height": width * 9 // 16 // 2 * 2, "fps": fps, "quality": "standard", "frames": n,
+         "segments": [{"src_start": 0.0, "src_end": n / float(fps), "speed": 1.0}], "params_file": params(n, fps)}
+    r.update(kw); return r
+
+def parse_gif(path):
+    d = open(path, "rb").read()
+    # ImageIO writes the header "GIF87a" yet uses the 89a extensions (delay, loop): decoders accept it
+    assert d[:6] in (b"GIF89a", b"GIF87a"), d[:6]
+    w, h, flags = struct.unpack("<HHB", d[6:11])
+    i = 13 + (3 * 2 ** ((flags & 7) + 1) if flags & 0x80 else 0)
+    info = {"size": [w, h], "delays": [], "loop": None, "frames": 0}
+    def skip(i):
+        while d[i]: i += d[i] + 1
+        return i + 1
+    while i < len(d):
+        b = d[i]
+        if b == 0x21:
+            if d[i + 1] == 0xF9: info["delays"].append(struct.unpack("<H", d[i + 4:i + 6])[0])
+            elif d[i + 1] == 0xFF and d[i + 3:i + 14] == b"NETSCAPE2.0": info["loop"] = struct.unpack("<H", d[i + 16:i + 18])[0]
+            i = skip(i + 2)
+        elif b == 0x2C:
+            info["frames"] += 1
+            packed = d[i + 9]
+            i += 10 + (3 * 2 ** ((packed & 7) + 1) if packed & 0x80 else 0) + 1
+            i = skip(i)
+        elif b == 0x3B: break
+        else: raise AssertionError("bad GIF byte %x at %d" % (b, i))
+    return info
+
+try:
+    out = outdir + "/smoke.gif"
+    for f in (out, out + ".partial"):
+        if os.path.exists(f): os.remove(f)
+    send(request(1, 45, out))
+    got = until(lambda l: "event" not in l)
+    assert got[0].get("event") == "started" and got[0]["total_frames"] == 45, got[0]
+    final = got[-1]
+    assert final.get("ok") and final["path"] == out and final["frames"] == 45, final
+    prog = [l for l in got if l.get("event") == "progress"]
+    assert prog and prog[-1]["done_frames"] == 45, prog[-1:]
+    assert not os.path.exists(out + ".partial"), ".partial left"
+    g = parse_gif(out)
+    assert g["size"] == [480, 270] and g["frames"] == 45 and len(g["delays"]) == 45, g
+    assert g["loop"] == 0, "no NETSCAPE loop-forever extension"
+    assert sum(g["delays"]) == 300 and set(g["delays"]) == {6, 7}, g["delays"]
+    assert abs(final["duration"] - 3.0) < 1e-9
+    # 960 px at 10 fps (7 cs rounding is not an issue at 10 fps: all delays 10)
+    big = outdir + "/smoke-960.gif"
+    send(request(2, 30, big, width=960, fps=10))
+    got = until(lambda l: "event" not in l)
+    assert got[-1].get("ok"), got[-1]
+    g2 = parse_gif(big)
+    assert g2["size"] == [960, 540] and g2["frames"] == 30 and set(g2["delays"]) == {10}, g2
+
+    cancelled = outdir + "/smoke-cancel.gif"
+    for f in (cancelled, cancelled + ".partial"):
+        if os.path.exists(f): os.remove(f)
+    send(request(3, 300, cancelled, width=960))
+    until(lambda l: l.get("event") == "progress")
+    send({"id": 4, "cmd": "cancel", "target": 3})
+    got = until(lambda l: l.get("id") == 3 and "event" not in l)
+    assert got[-1].get("error") == "cancelled", got[-1]
+    assert not os.path.exists(cancelled) and not os.path.exists(cancelled + ".partial"), "cancel left output"
+
+    send(request(5, 30, outdir + "/wide.gif", width=962))
+    r = until(lambda l: l.get("id") == 5)[-1]
+    assert r.get("error") == "invalid" and "960" in r.get("message", ""), r
+    send(request(6, 30, outdir + "/fast.gif", fps=30))
+    r = until(lambda l: l.get("id") == 6)[-1]
+    assert r.get("error") == "invalid" and "15 fps" in r.get("message", ""), r
+    send(request(7, 400, outdir + "/long.gif", width=960))
+    r = until(lambda l: l.get("id") == 7)[-1]
+    assert r.get("error") == "invalid" and "too long" in r.get("message", ""), r
+    assert not any(os.path.exists(outdir + "/" + n) for n in ("wide.gif", "fast.gif", "long.gif"))
+    send({"id": 8, "cmd": "hello"})
+    assert until(lambda l: l.get("id") == 8)[-1].get("ok")
+    print("PASS: render GIF (480x270 45 frames, delays %s.. total 3.00 s, loop forever, 960 px at 10 fps, cancel leaves nothing, width/fps/length limits invalid)" % g["delays"][:6])
+except Exception as e:
+    print("FAIL: render GIF (%s)" % (e,)); sys.exit(1)
+finally:
+    p.stdin.close()
+    try: p.wait(timeout=10)
+    except Exception: p.kill()
+PY
+      ); gif_rc=$?
+      echo "$gif_out"
+      [ "$gif_rc" = 0 ] || fail=1
+    else
+      echo "SKIP: render GIF (swiftc/ImageIO fixture not available)"
+    fi
     if [ "$keep" = 1 ] && [ -x "$rdir/gen" ]; then
       kd=target/capture-spike/editor-fixture/Take.ferrocast
       mkdir -p "$kd"
