@@ -217,6 +217,8 @@ pub enum Msg {
     CaptureScroll(crate::capture_ctl::Outcome, Option<String>),
     /// Copy Text finished: text for the clipboard (None: leave it) and the toast.
     OcrDone(Option<String>, String),
+    /// Recording flow: countdown ticks, HUD buttons, helper events (see `record_ctl`).
+    Record(crate::record_ctl::RecordMsg),
 }
 
 /// What the Obsidian scan found.

@@ -62,6 +62,11 @@ pub enum Builtin {
     CaptureWindow,
     CaptureScreen,
     CaptureScrolling,
+    RecordScreen,
+    RecordArea,
+    RecordWindow,
+    OpenLastRecording,
+    Recordings,
 }
 
 impl Builtin {
@@ -108,6 +113,11 @@ impl Builtin {
         Builtin::CaptureWindow,
         Builtin::CaptureScreen,
         Builtin::CaptureScrolling,
+        Builtin::RecordScreen,
+        Builtin::RecordArea,
+        Builtin::RecordWindow,
+        Builtin::OpenLastRecording,
+        Builtin::Recordings,
     ];
 
     pub fn title(&self) -> &'static str {
@@ -154,6 +164,11 @@ impl Builtin {
             Builtin::CaptureWindow => "Capture Window",
             Builtin::CaptureScreen => "Capture Screen",
             Builtin::CaptureScrolling => "Capture Scrolling",
+            Builtin::RecordScreen => "Record Screen",
+            Builtin::RecordArea => "Record Area",
+            Builtin::RecordWindow => "Record Window",
+            Builtin::OpenLastRecording => "Open Last Recording",
+            Builtin::Recordings => "Recordings",
         }
     }
 
@@ -181,7 +196,15 @@ impl Builtin {
             }
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
             Builtin::Settings | Builtin::Quit => "Ferrocast",
-            Builtin::CaptureArea | Builtin::CaptureWindow | Builtin::CaptureScreen | Builtin::CaptureScrolling => "Capture",
+            Builtin::CaptureArea
+            | Builtin::CaptureWindow
+            | Builtin::CaptureScreen
+            | Builtin::CaptureScrolling
+            | Builtin::RecordScreen
+            | Builtin::RecordArea
+            | Builtin::RecordWindow
+            | Builtin::OpenLastRecording
+            | Builtin::Recordings => "Capture",
         }
     }
 
@@ -219,6 +242,8 @@ impl Builtin {
             Builtin::CaptureArea | Builtin::CaptureWindow | Builtin::CaptureScreen | Builtin::CaptureScrolling => {
                 ("sf:camera.viewfinder", [86, 194, 255])
             }
+            Builtin::RecordScreen | Builtin::RecordArea | Builtin::RecordWindow => ("sf:record.circle", [240, 83, 95]),
+            Builtin::OpenLastRecording | Builtin::Recordings => ("sf:film.stack", [86, 194, 255]),
         }
     }
 
@@ -258,6 +283,11 @@ impl Builtin {
             Builtin::CaptureWindow => &["screenshot", "screen shot", "capture", "window"],
             Builtin::CaptureScreen => &["screenshot", "screen shot", "capture", "display", "fullscreen", "full screen"],
             Builtin::CaptureScrolling => &["screenshot", "screen shot", "capture", "scrolling", "long", "full page", "stitch"],
+            Builtin::RecordScreen => &["record", "recording", "screen recording", "video", "screencast", "display"],
+            Builtin::RecordArea => &["record", "recording", "screen recording", "video", "screencast", "region", "selection"],
+            Builtin::RecordWindow => &["record", "recording", "screen recording", "video", "screencast", "window"],
+            Builtin::OpenLastRecording => &["record", "recording", "latest", "recent", "video", "screencast"],
+            Builtin::Recordings => &["record", "recording", "recordings", "videos", "screencasts", "browse"],
             _ => &[],
         };
         k.iter().map(|s| s.to_string()).collect()
@@ -317,6 +347,8 @@ pub enum Kind {
     FileTool(Vec<PathBuf>, ferrocast_core::convert::FileTool),
     /// Open an editor window (trim, crop, annotate, organize…) for a file.
     Editor(Act),
+    /// A `.ferrocast` project in the Recordings browser.
+    Recording(PathBuf),
 }
 
 #[derive(Clone, Debug)]
