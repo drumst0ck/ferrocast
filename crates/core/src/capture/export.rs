@@ -11,7 +11,7 @@
 //! * Frame `i` is shown at output time `i / fps`; the frame count is `round(duration * fps)`
 //!   (at least 1), so the video lasts the timeline duration within half a frame.
 
-use super::compose::{Composer, FrameParams};
+use super::compose::{CameraFx, Composer, FrameParams};
 use super::events::Events;
 use super::project::{AudioTrack, Project};
 use super::timeline::{self, Timeline};
@@ -277,8 +277,21 @@ pub struct FrameLine {
 
 /// Write `plan.frames` lines (NDJSON, in output order) for the helper.
 pub fn write_frame_params(project: &Project, events: &Events, plan: &ExportPlan, out: &mut impl Write) -> io::Result<()> {
+    write_frame_params_fx(project, events, plan, CameraFx::default(), out)
+}
+
+/// Pixel size of a `render.frame` canvas for the requested `width`: the height follows the
+/// project's aspect, rounded like the helper does (`max(1, round(w / aspect))`).
+pub fn preview_canvas(project: &Project, source: [u32; 2], width: u32) -> [u32; 2] {
+    let h = (f64::from(width) / aspect_ratio(&project.style.aspect, source)).round().max(1.0);
+    [width, h as u32]
+}
+
+/// [`write_frame_params`] with the P6 camera effects (look, split, face following) of the project
+/// resolved once in `fx` (`CameraFx::prepare` for `plan.size`).
+pub fn write_frame_params_fx(project: &Project, events: &Events, plan: &ExportPlan, fx: CameraFx, out: &mut impl Write) -> io::Result<()> {
     let tl = Timeline::new(project);
-    let composer = Composer::new(project, events);
+    let composer = Composer::new(project, events).with_camera_fx(fx);
     for i in 0..plan.frames {
         let t = tl.to_source(f64::from(i) / f64::from(plan.fps));
         let line = FrameLine { t, params: composer.at(t) };

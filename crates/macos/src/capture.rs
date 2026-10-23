@@ -325,9 +325,11 @@ pub fn export_project(
     let cache = project_dir.join(".cache");
     std::fs::create_dir_all(&cache).map_err(|e| invalid(format!("could not create {}: {e}", cache.display())))?;
     let params = cache.join(format!("export-{}.ndjson", std::process::id()));
+    // P6: look table, split rectangles and face-following path are resolved once for the whole export
+    let fx = ferrocast_core::capture::compose::CameraFx::prepare(&project, project_dir, &events, plan.size).map_err(invalid)?;
     let written = std::fs::File::create(&params).and_then(|f| {
         let mut w = std::io::BufWriter::new(f);
-        export::write_frame_params(&project, &events, &plan, &mut w)?;
+        export::write_frame_params_fx(&project, &events, &plan, fx, &mut w)?;
         w.flush()
     });
     let result = written.map_err(|e| invalid(format!("could not write the frame parameters: {e}"))).and_then(|_| {

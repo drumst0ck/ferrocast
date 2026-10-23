@@ -523,7 +523,7 @@ private func composeExportFrame(_ i: Int, lines: LineReader, takeURL: URL, style
         // first frame the reader is kept open; a trim or speed cut (a jump) costs one generator frame
         let take = try takeFrameAuto(at: takeURL, t: t, mode: spec.generatorOnly ? .generator : .auto).frame
         // P4: the camera take at (source time - offset); nothing before it starts or after it ends
-        let overlay = camera.flatMap { cameraDraw($0, at: t, sequential: !spec.generatorOnly) }
+        let overlay = camera.flatMap { cameraDraw($0, at: t, sequential: !spec.generatorOnly, fx: fx) }
         guard let composed = composeStyledImage(take: take, style: style, project: spec.project, width: spec.width,
                                                 height: spec.height, fx: fx, camera: overlay) else {
             return (nil, ("internal", "could not compose frame \(i)"))

@@ -22,6 +22,10 @@ struct CameraSpec: Equatable {
     var size = 0.20
     var margin = 0.02
     var mirror = true
+    /// P6: `split` puts the camera next to the screen instead of over it (T39).
+    var isSplit = false
+    /// P6 (beta): remove the camera background with person segmentation (T41).
+    var cutout = false
     let url: URL
     let offset: Double
 
@@ -39,6 +43,8 @@ struct CameraSpec: Equatable {
         if let v = num(c["size"]), v.isFinite { size = min(max(v, 0.10), 0.40) }
         if let v = num(c["margin"]), v.isFinite { margin = min(max(v, 0), 0.25) }
         if let v = c["mirror"] as? Bool { mirror = v }
+        isSplit = (c["layout"] as? String) == "split"
+        cutout = (c["cutout"] as? Bool) ?? false
     }
 
     /// Part of the preview frame cache key (the layout is also covered by project.json's mtime).
@@ -68,27 +74,57 @@ private extension Double {
     func clamped(atLeast lo: Double) -> Double { Swift.max(self, lo) }
 }
 
-/// A camera frame ready to be drawn, with its layout.
+/// A camera frame ready to be drawn, with its layout. `picture` (origin 0,0) is the frame after the
+/// P6 crop / look / cut-out; nil only in the split layout while the camera file has not started or
+/// has ended (the camera part then shows the background, never a frozen frame).
 struct CameraDraw {
-    let frame: TakeFrame
+    let picture: CIImage?
     let spec: CameraSpec
+    /// The cut-out leaves transparency: the bubble shape and its shadow would show the cut.
+    var cutout: Bool { spec.cutout }
 }
 
 /// The camera frame for screen source time `t`, or nil when the file has not started / has ended (or
-/// cannot be read: logged, the frame is rendered without the overlay).
-func cameraDraw(_ spec: CameraSpec, at t: Double, sequential: Bool) -> CameraDraw? {
+/// cannot be read: logged, the frame is rendered without the overlay). In the split layout the draw
+/// is still returned then, with no picture, so the screen keeps its place.
+func cameraDraw(_ spec: CameraSpec, at t: Double, sequential: Bool, fx: FrameFx = .none) -> CameraDraw? {
     let ct = t - spec.offset
+    let absent = spec.isSplit && fx.split != nil ? CameraDraw(picture: nil, spec: spec) : nil
     do {
         let r = try reader(for: spec.url)
-        guard ct >= 0, ct < r.duration else { return nil }
+        guard ct >= 0, ct < r.duration else { return absent }
+        let frame: TakeFrame
         if sequential {
-            return CameraDraw(frame: try takeFrameAuto(at: spec.url, t: ct, mode: .auto, state: cameraState).frame, spec: spec)
+            frame = try takeFrameAuto(at: spec.url, t: ct, mode: .auto, state: cameraState).frame
+        } else {
+            frame = TakeFrame(cg: try takeFrame(at: spec.url, t: ct))
         }
-        return CameraDraw(frame: TakeFrame(cg: try takeFrame(at: spec.url, t: ct)), spec: spec)
+        return CameraDraw(picture: cameraPicture(frame, spec: spec, at: ct, fx: fx), spec: spec)
     } catch {
         log("camera overlay skipped at \(t) s: \(error)")
-        return nil
+        return absent
     }
+}
+
+/// Aspect-fill `img` (origin 0,0) into `rectCI` (centre crop, whole pixels), optionally mirrored.
+private func fillPicture(_ img: CIImage, into rectCI: CGRect, mirror: Bool) -> CIImage {
+    let e = img.extent
+    let s = max(rectCI.width / e.width, rectCI.height / e.height)
+    let size = CGSize(width: (e.width * s).rounded(.up), height: (e.height * s).rounded(.up))
+    let origin = CGPoint(x: rectCI.minX - ((size.width - rectCI.width) / 2).rounded(), y: rectCI.minY - ((size.height - rectCI.height) / 2).rounded())
+    var picture = scaled(img, to: size, at: origin).cropped(to: rectCI)
+    if mirror {
+        picture = picture.transformed(by: CGAffineTransform(scaleX: -1, y: 1).concatenating(CGAffineTransform(translationX: 2 * rectCI.minX + rectCI.width, y: 0)))
+    }
+    return picture
+}
+
+/// P6 split layout: the camera aspect-filled into its part of the canvas (`rect`, top-left pixels,
+/// from `camera::split_rects`), over the background. Nothing when there is no picture.
+func compositeSplitCamera(_ draw: CameraDraw, over base: CIImage, rect: CGRect, canvas: CGRect) -> CIImage {
+    guard let img = draw.picture else { return base }
+    let rectCI = CGRect(x: rect.minX, y: canvas.height - rect.maxY, width: rect.width, height: rect.height)
+    return fillPicture(img, into: rectCI, mirror: draw.spec.mirror).composited(over: base).cropped(to: canvas)
 }
 
 /// Mask, placement and shadow of the overlay depend only on the style and the geometry: kept between frames.
@@ -145,21 +181,15 @@ func compositeCamera(_ draw: CameraDraw, over base: CIImage, style: RenderStyle,
     }
 
     // aspect-fill the camera frame into the square (centre crop)
-    let img = draw.frame.image
-    let e = img.extent
-    let s = max(side / e.width, side / e.height)
-    let size = CGSize(width: (e.width * s).rounded(.up), height: (e.height * s).rounded(.up))
-    let origin = CGPoint(x: rectCI.minX - ((size.width - side) / 2).rounded(), y: rectCI.minY - ((size.height - side) / 2).rounded())
-    var picture = scaled(img, to: size, at: origin).cropped(to: rectCI)
-    if spec.mirror {
-        picture = picture.transformed(by: CGAffineTransform(scaleX: -1, y: 1).concatenating(CGAffineTransform(translationX: 2 * rectCI.minX + side, y: 0)))
-    }
-    if let mask = fx.mask {
+    guard let img = draw.picture else { return base }
+    var picture = fillPicture(img, into: rectCI, mirror: spec.mirror)
+    // a cut-out person stands free: no bubble shape, no shadow of the shape
+    if !draw.cutout, let mask = fx.mask {
         picture = picture.applyingFilter("CIBlendWithMask", parameters: [
             kCIInputBackgroundImageKey: CIImage(color: .clear).cropped(to: rectCI), kCIInputMaskImageKey: mask,
         ])
     }
     var result = base
-    if let shadow = fx.shadow { result = shadow.composited(over: result) }
+    if !draw.cutout, let shadow = fx.shadow { result = shadow.composited(over: result) }
     return picture.composited(over: result).cropped(to: canvas)
 }

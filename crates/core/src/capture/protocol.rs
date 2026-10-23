@@ -9,8 +9,11 @@ pub use serde_json::Value;
 pub const PROTOCOL: u32 = 1;
 
 /// A command, tagged by `cmd` on the wire.
+// `RenderFrame` carries the flattened per-frame parameters (P6 made them ~250 bytes); commands are built
+// once per request, so the size difference between variants costs nothing worth a `Box` at every call site.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd")]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     #[serde(rename = "hello")]
     Hello,
@@ -971,6 +974,27 @@ mod tests {
         }
         assert!(v.get("params").is_none());
         assert_eq!(serde_json::from_str::<Request>(&encode_request(&r)).unwrap(), r);
+    }
+
+    #[test]
+    fn render_frame_carries_the_p6_fields_flat_and_omits_them_when_absent() {
+        let line = r#"{"id":9,"cmd":"render.frame","project":"/p","t":1.5,"width":960,"loupe":{"cx":0.5,"cy":0.4,"radius":0.15,"scale":2.5,"alpha":1.0},"camera_crop":{"x":10.0,"y":20.0,"w":300.0,"h":300.0},"look":{"file":"/p/.cache/look-ab.f32","size":17,"hash":"ab"},"split":{"canvas":[960,540],"screen":{"x":0.0,"y":64.0,"w":636.0,"h":412.0},"camera":{"x":644.0,"y":0.0,"w":316.0,"h":540.0}}}"#;
+        let r: Request = serde_json::from_str(line).unwrap();
+        let Command::RenderFrame { params, .. } = &r.command else { panic!() };
+        assert_eq!(params.loupe.map(|l| (l.scale, l.alpha)), Some((2.5, 1.0)));
+        assert_eq!(params.camera_crop.map(|c| c.w), Some(300.0));
+        assert_eq!(params.look.as_ref().map(|l| l.size), Some(17));
+        assert_eq!(params.split.map(|s| s.camera.w), Some(316.0));
+        assert!(params.camera.is_none() && !params.is_noop());
+        let v: serde_json::Value = serde_json::from_str(&encode_request(&r)).unwrap();
+        for k in ["loupe", "camera_crop", "look", "split"] {
+            assert!(v.get(k).is_some(), "{k} missing");
+        }
+        assert_eq!(serde_json::from_str::<Request>(&encode_request(&r)).unwrap(), r);
+        // a request without them encodes to the old line: no P6 key leaks in (S19)
+        let plain: Request = serde_json::from_str(r#"{"id":9,"cmd":"render.frame","project":"/p","t":1.5,"width":960}"#).unwrap();
+        let text = encode_request(&plain);
+        assert!(!["loupe", "camera_crop", "look", "split"].iter().any(|k| text.contains(k)), "{text}");
     }
 
     fn render_command() -> Command {
