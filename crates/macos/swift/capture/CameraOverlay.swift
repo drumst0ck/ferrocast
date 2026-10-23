@@ -107,11 +107,15 @@ func cameraDraw(_ spec: CameraSpec, at t: Double, sequential: Bool, fx: FrameFx 
 }
 
 /// Aspect-fill `img` (origin 0,0) into `rectCI` (centre crop, whole pixels), optionally mirrored.
-private func fillPicture(_ img: CIImage, into rectCI: CGRect, mirror: Bool) -> CIImage {
+/// `fit` keeps the whole frame instead (aspect-fit, resting on the bottom edge): a cut-out person
+/// stands free of the bubble shape, so a wide frame must not lose the sides (the head) to the square.
+private func fillPicture(_ img: CIImage, into rectCI: CGRect, mirror: Bool, fit: Bool = false) -> CIImage {
     let e = img.extent
-    let s = max(rectCI.width / e.width, rectCI.height / e.height)
+    let ratio = (rectCI.width / e.width, rectCI.height / e.height)
+    let s = fit ? min(ratio.0, ratio.1) : max(ratio.0, ratio.1)
     let size = CGSize(width: (e.width * s).rounded(.up), height: (e.height * s).rounded(.up))
-    let origin = CGPoint(x: rectCI.minX - ((size.width - rectCI.width) / 2).rounded(), y: rectCI.minY - ((size.height - rectCI.height) / 2).rounded())
+    let dy = fit ? 0 : ((size.height - rectCI.height) / 2).rounded()
+    let origin = CGPoint(x: rectCI.minX - ((size.width - rectCI.width) / 2).rounded(), y: rectCI.minY - dy)
     var picture = scaled(img, to: size, at: origin).cropped(to: rectCI)
     if mirror {
         picture = picture.transformed(by: CGAffineTransform(scaleX: -1, y: 1).concatenating(CGAffineTransform(translationX: 2 * rectCI.minX + rectCI.width, y: 0)))
@@ -182,7 +186,7 @@ func compositeCamera(_ draw: CameraDraw, over base: CIImage, style: RenderStyle,
 
     // aspect-fill the camera frame into the square (centre crop)
     guard let img = draw.picture else { return base }
-    var picture = fillPicture(img, into: rectCI, mirror: spec.mirror)
+    var picture = fillPicture(img, into: rectCI, mirror: spec.mirror, fit: draw.cutout)
     // a cut-out person stands free: no bubble shape, no shadow of the shape
     if !draw.cutout, let mask = fx.mask {
         picture = picture.applyingFilter("CIBlendWithMask", parameters: [

@@ -7,7 +7,7 @@
 //! T26 does not write `project.json`: autosave and every other edit come in T27, so applying the
 //! auto zooms only marks the in-memory project dirty.
 
-use ferrocast_core::capture::compose::{Composer, FrameParams};
+use ferrocast_core::capture::compose::{CameraFx, Composer, FrameParams};
 use ferrocast_core::capture::events::Events;
 use ferrocast_core::capture::project::{Project, EVENTS_FILE};
 use ferrocast_core::capture::timeline::Timeline;
@@ -209,6 +209,44 @@ pub fn zoom_bars(p: &Project) -> Vec<Bar> {
         .collect()
 }
 
+/// `(top, height)` of the loupe row of the timeline, from the top of the timeline area.
+pub const LOUPE_ROW: (f32, f32) = (60.0, 16.0);
+
+/// The loupe segments' colour: teal, deep enough on the light panel and bright on the dark one
+/// (3:1 against the track in both).
+pub fn loupe_color(dark: bool) -> egui::Color32 {
+    if dark {
+        egui::Color32::from_rgb(64, 200, 180)
+    } else {
+        egui::Color32::from_rgb(0, 128, 112)
+    }
+}
+
+/// One loupe on the loupe track.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoupeBar {
+    pub id: String,
+    pub start: f64,
+    pub end: f64,
+}
+
+/// The loupe track: one bar per `project.loupes` entry, clamped to the recording (empty ones skipped).
+pub fn loupe_bars(p: &Project) -> Vec<LoupeBar> {
+    let dur = if p.duration.is_finite() { p.duration.max(0.0) } else { 0.0 };
+    p.loupes
+        .iter()
+        .filter(|l| l.start.is_finite() && l.end.is_finite())
+        .map(|l| LoupeBar { id: l.id.clone(), start: l.start.max(0.0).min(dur), end: l.end.max(0.0).min(dur) })
+        .filter(|b| b.end > b.start)
+        .collect()
+}
+
+/// The loupe whose bar is under pixel `x` of the track.
+pub fn loupe_hit<'a>(bars: &'a [LoupeBar], axis: &Axis, x: f32) -> Option<&'a str> {
+    let t = axis.time_at(x);
+    bars.iter().find(|b| t >= b.start && t <= b.end).map(|b| b.id.as_str())
+}
+
 // ---------------------------------------------------------------------------------------------
 // Playhead movement
 
@@ -354,6 +392,11 @@ pub enum EditorMsg {
     Export {
         dir: PathBuf,
         msg: crate::editor_export::ExportMsg,
+    },
+    /// The face analysis thread (P6): progress, the result, a failure or the cancel.
+    Face {
+        dir: PathBuf,
+        msg: crate::editor_panels::FaceMsg,
     },
     /// The transcription thread (P5): progress, the transcript, a failure or the cancel.
     Transcribe {
@@ -502,8 +545,16 @@ impl Preview {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("ferrocast-preview-{}-{n}", std::process::id()));
         let file = real.join(&project.sources.screen.file);
+        // the helper reads the camera take from the folder it renders from, so it is linked too
+        // (a plain file name only: the project validator refuses anything else)
+        let camera =
+            project.sources.camera.as_ref().map(|c| c.file.as_str()).filter(|f| !f.is_empty() && !f.contains(['/', '\\']) && *f != "..");
         let made = std::fs::create_dir_all(&dir)
             .and_then(|()| std::os::unix::fs::symlink(&file, dir.join(&project.sources.screen.file)))
+            .and_then(|()| match camera.filter(|f| real.join(f).is_file()) {
+                Some(f) => std::os::unix::fs::symlink(real.join(f), dir.join(f)),
+                None => Ok(()),
+            })
             .and_then(|()| project.save(&dir).map_err(std::io::Error::other))
             .is_ok();
         if made {
@@ -542,15 +593,20 @@ fn serve(
     let preview = Preview::new(dir, project);
     let mut project = project.clone();
     loop {
-        let composer = events.map(|e| Composer::new(&project, e));
+        let mut composer = events.map(|e| Composer::new(&project, e));
+        // identity of the effects the composer carries (None until the first frame resolves them)
+        let mut fx_at: Option<String> = None;
         let edited = loop {
             match rx.recv() {
                 Err(_) => return,
                 Ok(WorkerCmd::Project(p)) => break *p,
                 Ok(WorkerCmd::Frame(req)) => {
                     let started = Instant::now();
-                    let params = composer.as_ref().map_or_else(FrameParams::default, |c| c.at(req.key.t));
-                    let result = renderer(&preview.dir, req.key.t, req.key.width, params).and_then(|f| {
+                    let params = match (composer.as_mut(), events) {
+                        (Some(c), Some(e)) => frame_params_fx(c, &mut fx_at, &project, dir, e, req.key),
+                        _ => Ok(FrameParams::default()),
+                    };
+                    let result = params.and_then(|params| renderer(&preview.dir, req.key.t, req.key.width, params)).and_then(|f| {
                         let image = frame_image(&f)?;
                         Ok(FrameOut { image, t: req.key.t, helper_ms: f.ms, total_ms: started.elapsed().as_secs_f64() * 1000.0 })
                     });
@@ -561,6 +617,51 @@ fn serve(
         preview.update(&edited);
         project = edited;
     }
+}
+
+/// Everything [`CameraFx::prepare`] reads for a preview `width` wide, as one comparable string:
+/// the canvas (aspect, width), the camera layout and file, and the stamps of the files it loads
+/// (the face track, a custom `.cube`). Two equal keys give the same effects, so the (file-reading)
+/// resolve runs only when something in it changed. Projects without a camera share one key.
+pub fn fx_key(project: &Project, dir: &Path, width: u32) -> String {
+    let (Some(layout), Some(src)) = (&project.camera, &project.sources.camera) else { return "none".into() };
+    let stamp = |f: &str| {
+        std::fs::metadata(dir.join(f))
+            .ok()
+            .map(|m| (m.len(), m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos())))
+    };
+    let track = layout.follow_face.then(|| stamp(ferrocast_core::capture::facetrack::TRACK_FILE));
+    let cube = layout.look.as_ref().and_then(|l| l.file.as_deref()).map(stamp);
+    // only the fields `prepare` reads: the bubble's shape, corner, size and cutout are drawn by the helper from project.json
+    let read = (layout.visible, layout.layout, layout.split, &layout.look, layout.follow_face, layout.follow_zoom);
+    format!("{width}|{}|{read:?}|{src:?}|{}|{track:?}|{cube:?}", project.style.aspect, stamp(&src.file).is_some())
+}
+
+/// The parameters of the frame at `key`, with the camera effects resolved for its width. `at` is the
+/// [`fx_key`] of the effects the composer holds: they are rebuilt only when it changes. An effect
+/// that cannot be resolved (a broken `.cube`) is the frame's error, with the reason.
+fn frame_params_fx(
+    composer: &mut Composer<'_>,
+    at: &mut Option<String>,
+    project: &Project,
+    dir: &Path,
+    events: &Events,
+    key: Key,
+) -> Result<FrameParams, String> {
+    let now = fx_key(project, dir, key.width);
+    if at.as_ref() != Some(&now) {
+        let source = ferrocast_core::capture::export::source_pixels(events);
+        let canvas = ferrocast_core::capture::export::preview_canvas(project, source, key.width);
+        match CameraFx::prepare(project, dir, events, canvas) {
+            Ok(fx) => composer.set_camera_fx(fx),
+            Err(e) => {
+                *at = None;
+                return Err(format!("The camera effects could not be applied: {e}"));
+            }
+        }
+        *at = Some(now);
+    }
+    Ok(composer.at(key.t))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1582,5 +1683,172 @@ mod tests {
         eprintln!("playback: {shown} frames shown in {secs:.2} s = {:.1} fps (request cap {PLAY_FPS} fps)", f64::from(shown) / secs);
         assert!(shown >= 10, "playback shows frames: {shown}");
         assert!(real.is_some() || (secs > 2.5 && secs < 4.5), "plays in real time, not faster: {secs}");
+    }
+
+    // ---- P6 preview wiring: the camera effects (look, split, face following) reach the renderer
+
+    fn p6_dir(tag: &str) -> PathBuf {
+        let d = fixture_dir(tag, "p6_project.json");
+        std::fs::write(d.join("camera.mov"), b"not a movie").unwrap();
+        d
+    }
+
+    fn write_track(dir: &Path) {
+        let samples: Vec<String> =
+            (0..200).map(|i| format!(r#"{{"t":{},"x":0.5,"y":0.4,"w":0.1,"h":0.2,"confidence":1}}"#, i as f64 / 10.0)).collect();
+        std::fs::write(
+            dir.join("camera_track.json"),
+            format!(r#"{{"version":1,"fps":10,"width":1280,"height":720,"samples":[{}]}}"#, samples.join(",")),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn preview_frames_carry_the_split_look_loupe_and_face_crop_like_the_export() {
+        let d = p6_dir("p6-fx");
+        write_track(&d);
+        let (o, frames, calls) = run_worker(&d, None, &[1.0]);
+        assert_eq!(frames.len(), 1);
+        let events = Events::decode(&std::fs::read_to_string(d.join("events.json")).unwrap()).unwrap();
+        let canvas =
+            ferrocast_core::capture::export::preview_canvas(&o.project, ferrocast_core::capture::export::source_pixels(&events), 960);
+        let fx = CameraFx::prepare(&o.project, &d, &events, canvas).unwrap();
+        let want = Composer::new(&o.project, &events).with_camera_fx(fx).at(1.0);
+        let got = calls.lock().unwrap()[0].2.clone();
+        assert_eq!(got, want, "the preview asks for exactly what the export would");
+        assert!(got.split.is_some() && got.look.is_some() && got.loupe.is_some() && got.camera_crop.is_some(), "{got:?}");
+    }
+
+    #[test]
+    fn a_project_without_a_camera_gets_the_plain_composer_params() {
+        let d = fixture_dir("p6-none", "render_zoom_project.json");
+        let (o, _f, calls) = run_worker(&d, None, &[1.0]);
+        let events = Events::decode(&std::fs::read_to_string(d.join("events.json")).unwrap()).unwrap();
+        assert_eq!(calls.lock().unwrap()[0].2, Composer::new(&o.project, &events).at(1.0));
+    }
+
+    #[test]
+    fn edits_reach_the_next_frame_and_the_effects_follow_them() {
+        let d = p6_dir("p6-edit");
+        let (r, calls) = fake_renderer(&d);
+        let (mtx, mrx) = channel();
+        let mtx = std::sync::Mutex::new(mtx);
+        let tx = spawn_worker(d.clone(), None, r, Box::new(move |m| mtx.lock().unwrap().send(m).unwrap()));
+        let EditorMsg::Opened { result, .. } = mrx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("Opened") };
+        let mut project = result.unwrap().project;
+        let ask = |tx: &Sender<WorkerCmd>, seq: u64, width: u32| {
+            tx.send(WorkerCmd::Frame(Req { seq, key: Key { t: 1.0, width } })).unwrap();
+            let EditorMsg::Frame { result, .. } = mrx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("Frame") };
+            result
+        };
+        ask(&tx, 1, 960).unwrap();
+        project.camera.as_mut().unwrap().look = None;
+        project.camera.as_mut().unwrap().layout = ferrocast_core::capture::camera::CameraPlacement::Overlay;
+        tx.send(WorkerCmd::Project(Box::new(project.clone()))).unwrap();
+        ask(&tx, 2, 960).unwrap();
+        // a narrower preview (the window was resized) resolves the split again for its canvas
+        project.camera.as_mut().unwrap().layout = ferrocast_core::capture::camera::CameraPlacement::Split;
+        tx.send(WorkerCmd::Project(Box::new(project))).unwrap();
+        ask(&tx, 3, 480).unwrap();
+        let calls = calls.lock().unwrap();
+        assert!(calls[0].2.look.is_some() && calls[0].2.split.is_some());
+        assert!(calls[1].2.look.is_none() && calls[1].2.split.is_none(), "the edit removed both: {:?}", calls[1].2);
+        assert_eq!(calls[2].2.split.as_ref().unwrap().canvas[0], 480, "the split is planned for the width asked");
+    }
+
+    #[test]
+    fn an_unreadable_look_file_is_a_frame_error_with_the_reason_not_a_silent_plain_preview() {
+        let d = p6_dir("p6-badlook");
+        let text = std::fs::read_to_string(d.join("project.json"))
+            .unwrap()
+            .replace(r#""look":{"name":"cinematic","intensity":0.75}"#, r#""look":{"file":"gone.cube"}"#);
+        std::fs::write(d.join("project.json"), text).unwrap();
+        let (r, _calls) = fake_renderer(&d);
+        let (mtx, mrx) = channel();
+        let mtx = std::sync::Mutex::new(mtx);
+        let tx = spawn_worker(d.clone(), None, r, Box::new(move |m| mtx.lock().unwrap().send(m).unwrap()));
+        let _opened = mrx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        tx.send(WorkerCmd::Frame(Req { seq: 1, key: Key { t: 1.0, width: 960 } })).unwrap();
+        let EditorMsg::Frame { result, .. } = mrx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() else { panic!("Frame") };
+        assert!(result.err().unwrap().contains("gone.cube"));
+    }
+
+    #[test]
+    fn the_effects_key_changes_only_with_what_the_effects_read() {
+        let d = p6_dir("p6-key");
+        let events = Events::decode(&std::fs::read_to_string(d.join("events.json")).unwrap()).unwrap();
+        let _ = &events;
+        let base = Project::load(&d).unwrap();
+        let k = |p: &Project, w: u32| fx_key(p, &d, w);
+        let same = k(&base, 960);
+        let mut other = base.clone();
+        other.zooms.clear();
+        other.style.padding = 0.2;
+        other.cursor.size = 3.0;
+        other.camera.as_mut().unwrap().corner = ferrocast_core::capture::camera::Corner::TopLeft;
+        assert_eq!(k(&other, 960), same, "zoom, cursor, padding and the bubble corner are not read by the effects");
+        let mut t = base.clone();
+        t.camera.as_mut().unwrap().look.as_mut().unwrap().intensity = 0.5;
+        assert_ne!(k(&t, 960), same);
+        let mut t = base.clone();
+        t.camera.as_mut().unwrap().split.side = ferrocast_core::capture::camera::SplitSide::Top;
+        assert_ne!(k(&t, 960), same);
+        let mut t = base.clone();
+        t.style.aspect = "1:1".into();
+        assert_ne!(k(&t, 960), same, "the canvas depends on the aspect");
+        assert_ne!(k(&base, 480), same, "and on the width");
+        // a track appearing (the analysis finished) is a change
+        assert_ne!(
+            {
+                write_track(&d);
+                k(&base, 960)
+            },
+            same
+        );
+        // no camera: nothing to rebuild whatever the width
+        let mut none = base.clone();
+        none.sources.camera = None;
+        assert_eq!(k(&none, 960), k(&none, 480));
+    }
+
+    #[test]
+    fn the_preview_folder_links_the_camera_file_so_the_helper_can_draw_it() {
+        let d = p6_dir("p6-link");
+        let project = Project::load(&d).unwrap();
+        let p = Preview::new(&d, &project);
+        assert!(p.scratch && p.dir.join("camera.mov").exists(), "the camera is linked next to the screen");
+        let none = fixture_dir("p6-link-none", "render_project.json");
+        let pn = Preview::new(&none, &Project::load(&none).unwrap());
+        assert!(!pn.dir.join("camera.mov").exists());
+    }
+
+    #[test]
+    fn loupe_bars_follow_the_loupes_and_a_click_selects_the_one_under_it() {
+        use ferrocast_core::capture::project::Loupe;
+        let mk = |id: &str, s: f64, e: f64| Loupe {
+            id: id.into(),
+            start: s,
+            end: e,
+            scale: 2.0,
+            radius: 0.15,
+            x: None,
+            y: None,
+            ease_in: 0.25,
+            ease_out: 0.25,
+            extra: Default::default(),
+        };
+        let mut p = project(&[], &[]);
+        p.loupes = vec![mk("l1", 1.0, 3.0), mk("l2", 9.0, 14.0), mk("l3", 4.0, 4.0)];
+        let bars = loupe_bars(&p);
+        assert_eq!(
+            bars.iter().map(|b| (b.id.as_str(), b.start, b.end)).collect::<Vec<_>>(),
+            [("l1", 1.0, 3.0), ("l2", 9.0, 10.0)],
+            "clamped, empty ones skipped"
+        );
+        let axis = Axis { x0: 0.0, x1: 100.0, duration: 10.0 };
+        assert_eq!(loupe_hit(&bars, &axis, 20.0), Some("l1"));
+        assert_eq!(loupe_hit(&bars, &axis, 95.0), Some("l2"));
+        assert_eq!(loupe_hit(&bars, &axis, 50.0), None);
+        assert!(loupe_bars(&project(&[], &[])).is_empty());
     }
 }

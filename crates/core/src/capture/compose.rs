@@ -157,8 +157,19 @@ impl FrameParams {
     }
 }
 
-/// Zoom of the face-following crop when `camera.follow_zoom` is absent.
+/// Zoom of the face-following crop for the bubble when `camera.follow_zoom` is absent.
 pub const DEFAULT_FOLLOW_ZOOM: f64 = 1.4;
+/// The same in a split: the camera part is portrait (left/right) or wide (top/bottom) and a tight
+/// crop cut the head on a real take, so it shows the largest crop that follows the face.
+pub const DEFAULT_SPLIT_FOLLOW_ZOOM: f64 = 1.0;
+
+/// The face-following zoom of `layout` when it carries no `follow_zoom` (the panel shows it too).
+pub fn default_follow_zoom(layout: &camera::CameraLayout) -> f64 {
+    match layout.layout {
+        CameraPlacement::Overlay => DEFAULT_FOLLOW_ZOOM,
+        CameraPlacement::Split => DEFAULT_SPLIT_FOLLOW_ZOOM,
+    }
+}
 
 /// The P6 camera effects of one export / preview session (T39-T42): resolved ONCE, then read by
 /// [`Composer::at`] for every frame. Build it with [`CameraFx::prepare`].
@@ -203,7 +214,7 @@ impl CameraFx {
                 Some(s) if s.camera.h > 0.0 => s.camera.w / s.camera.h,
                 _ => 1.0,
             };
-            let zoom = layout.follow_zoom.filter(|z| z.is_finite()).unwrap_or(DEFAULT_FOLLOW_ZOOM);
+            let zoom = layout.follow_zoom.filter(|z| z.is_finite()).unwrap_or_else(|| default_follow_zoom(layout));
             fx.follow = load_reframer(&project_dir.join(TRACK_FILE), &ReframeOpts { crop_aspect, zoom, ..ReframeOpts::default() })
                 .map(|r| (r, if src.offset.is_finite() { src.offset } else { 0.0 }));
         }
@@ -325,6 +336,12 @@ impl<'a> Composer<'a> {
     pub fn with_camera_fx(mut self, fx: CameraFx) -> Self {
         self.fx = fx;
         self
+    }
+
+    /// Replace the camera effects of a composer that is kept across frames (the editor preview
+    /// re-resolves them when a field they read changes or the preview width does).
+    pub fn set_camera_fx(&mut self, fx: CameraFx) {
+        self.fx = fx;
     }
 
     fn usable(&self) -> bool {
@@ -744,5 +761,46 @@ mod tests {
         for t in [0.0, 0.7, 1.55, 2.0, 3.2, 9.0] {
             assert_eq!(frame_params(&p, &e, t), frame_params(&p, &w, t), "t={t}");
         }
+    }
+
+    #[test]
+    fn the_default_follow_zoom_depends_on_the_placement_and_an_explicit_one_wins() {
+        use super::super::camera::{CameraLayout, SplitSide};
+        let mut l = CameraLayout::default();
+        assert_eq!(default_follow_zoom(&l), 1.4, "the bubble keeps the tight crop");
+        l.layout = CameraPlacement::Split;
+        for side in [SplitSide::Left, SplitSide::Right, SplitSide::Top, SplitSide::Bottom] {
+            l.split.side = side;
+            assert_eq!(default_follow_zoom(&l), 1.0, "{side:?}: a split part is portrait or wide, a tight crop cuts the head");
+        }
+    }
+
+    #[test]
+    fn prepare_uses_the_placement_default_only_when_follow_zoom_is_absent() {
+        use super::super::camera::{CameraLayout, SplitSide};
+        use super::super::project::Source;
+        let dir = std::env::temp_dir().join(format!("compose-fz-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("camera.mov"), b"x").unwrap();
+        let samples: Vec<String> =
+            (0..20).map(|i| format!(r#"{{"t":{},"x":0.5,"y":0.4,"w":0.1,"h":0.2,"confidence":1}}"#, i as f64 / 10.0)).collect();
+        std::fs::write(
+            dir.join("camera_track.json"),
+            format!(r#"{{"version":1,"fps":10,"width":1280,"height":720,"samples":[{}]}}"#, samples.join(",")),
+        )
+        .unwrap();
+        let mut p = project();
+        p.sources.camera = Some(Source { file: "camera.mov".into(), offset: 0.0 });
+        let mut l = CameraLayout { follow_face: true, layout: CameraPlacement::Split, ..CameraLayout::default() };
+        l.split.side = SplitSide::Left;
+        p.camera = Some(l);
+        let ev = events();
+        let crop_h = |p: &Project| {
+            let fx = CameraFx::prepare(p, &dir, &ev, [1920, 1080]).unwrap();
+            Composer::new(p, &ev).with_camera_fx(fx).at(1.0).camera_crop.unwrap().h
+        };
+        assert!((crop_h(&p) - 720.0).abs() < 1e-6, "zoom 1.0 uses the whole camera height");
+        p.camera.as_mut().unwrap().follow_zoom = Some(1.4);
+        assert!((crop_h(&p) - 720.0 / 1.4).abs() < 1e-6, "an explicit zoom is kept");
     }
 }
