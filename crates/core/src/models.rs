@@ -296,6 +296,8 @@ pub struct Settings {
     pub notes_format_bar: bool,
     /// Id of the note that was open last; the window reopens on it.
     pub notes_last: Option<String>,
+    /// Screenshots and screen recording.
+    pub capture: crate::capture::CaptureSettings,
 }
 
 /// What happens with a finished translation.
@@ -377,6 +379,7 @@ impl Default for Settings {
             notes_menu_bar_button: false,
             notes_format_bar: false,
             notes_last: None,
+            capture: crate::capture::CaptureSettings::default(),
         }
     }
 }

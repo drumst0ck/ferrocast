@@ -22,6 +22,7 @@ class Ferrocast < Formula
       Ferrocast is an app bundle. Link it so Spotlight and Finder can see it:
         ln -sfn "#{opt_prefix}/Ferrocast.app" /Applications/Ferrocast.app
       Then open it and grant Accessibility when asked (System Settings → Privacy & Security).
+      Screen capture and recording need macOS 14 and Screen Recording permission.
       Update with `brew upgrade ferrocast`; the symlink keeps working.
 
       Apple Translation (offline translating of selected text) needs macOS 26 and the Xcode or

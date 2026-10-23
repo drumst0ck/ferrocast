@@ -706,7 +706,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 }
                 app.push(View::Wheel { files, center: Pos2::new(-9999.0, -9999.0), segs, kind, sel });
             }
-            // `settings-tab-N`: open Settings on tab N (0 General … 8 Advanced), for design review shots
+            // `settings-tab-N`: open Settings on tab N (0 General … 9 Advanced), for design review shots
             Ok(v) if v.starts_with("settings-tab-") => {
                 let n = v.trim_start_matches("settings-tab-").parse::<usize>().unwrap_or(0);
                 ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), n));
@@ -745,7 +745,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
                 app.push(View::Settings);
             }
             Ok("settings-advanced") => {
-                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 8usize));
+                ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), 9usize));
                 app.push(View::Settings);
             }
             Ok("timers") => {
@@ -1232,6 +1232,10 @@ impl App {
                     services::image_op_files(vec![file], ferrocast_core::convert::ImageOp::EditWith(opts), self.bus.clone());
                     self.pop();
                 }
+                true
+            }
+            View::CaptureResult { .. } if k.enter => {
+                self.capture_result_run(crate::capture_ctl::ResultButton::Copy);
                 true
             }
             View::Annotate { file, doc, .. } if k.enter => {
@@ -4364,6 +4368,65 @@ impl App {
         note_line(ui, Pos2::new(rect.center().x, rect.max.y - 14.0), "drag a slider · the preview is a reduced copy", pal);
     }
 
+    /// Capture window (S7): the saved picture, the six actions and their shortcuts.
+    fn draw_capture_result(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, file: &std::path::Path, size: (u32, u32)) {
+        use crate::capture_ctl::{button_enabled, result_buttons};
+        let ctx = ui.ctx().clone();
+        let exists = file.exists();
+        let specs = result_buttons();
+        // Enter is handled with the other windows' Enter; the rest are chords
+        let mut run = ctx.input_mut(|i| {
+            specs
+                .iter()
+                .filter(|s| s.shortcut.is_some_and(|(_, k)| k != Key::Enter))
+                .find_map(|s| s.shortcut.filter(|&(m, k)| i.consume_key(m, k)))
+                .and_then(|(m, k)| crate::capture_ctl::result_shortcut(m, k))
+        });
+        // the preview is decoded once per file, capped at 1600 px
+        let cached: Option<std::sync::Arc<(PathBuf, egui::TextureHandle)>> = ctx.data(|d| d.get_temp(Id::new("capture-tex")));
+        let tex = match cached {
+            Some(c) if c.0 == file => Some(c),
+            _ => {
+                let loaded = image::open(file).ok().map(|i| i.thumbnail(1600, 1600).to_rgba8()).map(|rgba| {
+                    let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
+                    std::sync::Arc::new((file.to_path_buf(), ctx.load_texture("capture-view", ci, egui::TextureOptions::LINEAR)))
+                });
+                if let Some(t) = &loaded {
+                    ctx.data_mut(|d| d.insert_temp(Id::new("capture-tex"), t.clone()));
+                }
+                loaded
+            }
+        };
+        let bar = Rect::from_min_size(Pos2::new(rect.min.x + 12.0, rect.max.y - 66.0), Vec2::new(rect.width() - 24.0, 30.0));
+        let area = Rect::from_min_max(rect.min + Vec2::new(12.0, 8.0), Pos2::new(rect.max.x - 12.0, bar.min.y - 8.0));
+        let scale = (area.width() / size.0.max(1) as f32).min(area.height() / size.1.max(1) as f32).clamp(0.01, 1.0);
+        let img_rect = Rect::from_center_size(area.center(), Vec2::new(size.0 as f32 * scale, size.1 as f32 * scale));
+        match tex {
+            Some(t) => {
+                egui::Image::new(&t.1).paint_at(ui, img_rect);
+            }
+            None => {
+                ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "Preview unavailable", FontId::proportional(14.0), pal.sub);
+            }
+        }
+        ui.scope_builder(UiBuilder::new().max_rect(bar), |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                for s in &specs {
+                    let on = button_enabled(s.id, exists);
+                    if ui.add_enabled_ui(on, |ui| small_btn(ui, pal, s.label)).inner {
+                        run = Some(s.id);
+                    }
+                }
+            });
+        });
+        let hints: Vec<String> = specs.iter().map(|s| format!("{} {}", s.hint, s.label.trim_end_matches('…'))).collect();
+        note_line(ui, Pos2::new(rect.center().x, rect.max.y - 14.0), hints.join(" · "), pal);
+        if let Some(b) = run {
+            self.capture_result_run(b);
+        }
+    }
+
     /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.
     #[allow(clippy::too_many_arguments)]
     fn draw_annotate(
@@ -4925,6 +4988,7 @@ impl App {
             View::EditPhoto { size, opts, .. } => {
                 self.draw_edit_photo(ui, rect, pal, size, opts);
             }
+            View::CaptureResult { file, size } => self.draw_capture_result(ui, rect, pal, &file, size),
             View::Annotate { file, size, doc, tool, color, sel } => {
                 self.draw_annotate(ui, rect, pal, &file, size, doc, tool, color, sel);
             }
@@ -5768,6 +5832,7 @@ impl App {
         let (mut check_now, mut install_now) = (false, false);
         let (mut new_snippet, mut create_script) = (false, false);
         let mut reset_req: Option<usize> = None;
+        let mut record_capture: Option<(String, String)> = None;
         let update_channel = {
             let id = Id::new("update_channel");
             match ctx.data(|d| d.get_temp::<ferrocast_core::update::Channel>(id)) {
@@ -5899,7 +5964,7 @@ impl App {
             }
         }
 
-        // ---- sidebar keyboard: ⌘1…⌘9 anywhere in Settings; ↑/↓ only when the pointer is over the
+        // ---- sidebar keyboard: ⌘1…⌘9 and ⌘0 anywhere in Settings; ↑/↓ only when the pointer is over the
         // sidebar (and no text field is being edited) or a sidebar item has the keyboard focus
         let item_id = |i: usize| Id::new(("settings-tab-item", i));
         for (i, key) in SETTINGS_NUM_KEYS.iter().enumerate() {
@@ -6522,6 +6587,48 @@ impl App {
                         ui.add_space(10.0);
                         note(ui, pal, "Credentials and server address come from the AI tab; this tab only picks which provider and model translate.");
                     }
+                    CAPTURE_TAB => {
+                        use ferrocast_core::capture::AfterCapture as A;
+                        section(ui, pal, "Screenshots");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Capture folder", "Where screenshots are saved. Empty uses the default.", |ui| {
+                                field(ui, pal, &mut s.capture.folder, 300.0, "~/Pictures/Ferrocast Captures", false);
+                            });
+                            row(ui, pal, "Format", "Screenshots are saved as PNG. Other formats are not available yet.", |ui| keycap(ui, pal, "PNG"));
+                            row(ui, pal, "After capture", "Show opens the Capture window; Copy only copies; Save only saves the file.", |ui| {
+                                segmented(ui, pal, &mut s.capture.after, &[(A::Show, "Show"), (A::Copy, "Copy"), (A::Save, "Save")]);
+                            });
+                            row(ui, pal, "Include cursor", "Draw the mouse pointer in screenshots.", |ui| toggle(ui, pal, &mut s.capture.include_cursor));
+                        });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Recording");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Recording frame rate", "For screen recording, which is not available yet.", |ui| {
+                                segmented(ui, pal, &mut s.capture.fps, &[(30, "30 fps"), (60, "60 fps")]);
+                            });
+                            row(ui, pal, "Recording countdown", "Seconds before a recording starts. Screen recording is not available yet.", |ui| {
+                                segmented(ui, pal, &mut s.capture.countdown, &[(0, "Off"), (3, "3 s"), (5, "5 s")]);
+                            });
+                        });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Shortcuts");
+                        group(ui, pal, |ui| {
+                            for (title, b) in CAPTURE_SHORTCUTS {
+                                let id = b.id();
+                                row(ui, pal, title, "Press it from any app. Empty by default.", |ui| {
+                                    if small_btn(ui, pal, "Record…") {
+                                        record_capture = Some((id.clone(), b.title().to_string()));
+                                    }
+                                    match s.hotkey(&id) {
+                                        Some(h) => keycap(ui, pal, &services::hotkey_label(h)),
+                                        None => {
+                                            ui.label(RichText::new("Not set").size(12.0).color(pal.sub_strong));
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                    }
                     NOTES_TAB => {
                         group(ui, pal, |ui| {
                             row(ui, pal, "Show Notes Toggle Button in Menu Bar", "Adds a button to the menu bar that shows or hides the Notes window.", |ui| {
@@ -6557,7 +6664,7 @@ impl App {
                             });
                         });
                     }
-                    6 => {
+                    7 => {
                         group(ui, pal, |ui| {
                             row(ui, pal, "Default folder", "Scripts with Raycast metadata here become commands.", |ui| {
                                 ui.label(RichText::new(self.store.scripts_dir().display().to_string()).size(12.0).color(pal.sub));
@@ -6581,7 +6688,7 @@ impl App {
                         if self.scripts.is_empty() && s.script_directories.is_empty() {
                             ui.add_space(14.0);
                             let line = "Scripts with Raycast metadata become commands you can run from the launcher.";
-                            if empty_state(ui, pal, 6, "No script commands yet", line, "Create script") {
+                            if empty_state(ui, pal, 7, "No script commands yet", line, "Create script") {
                                 create_script = true;
                             }
                         }
@@ -6937,6 +7044,11 @@ impl App {
                 return;
             }
         }
+        if let Some((id, name)) = record_capture {
+            self.commit_settings(s);
+            self.push(View::Hotkey { id, name, err: String::new() });
+            return;
+        }
         if rec {
             self.push(View::Hotkey { id: "__launcher".into(), name: "Ferrocast launcher".into(), err: String::new() });
             return;
@@ -7098,23 +7210,26 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
     }
 }
 
-/// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Power = 5..8.
-const SETTINGS_TABS: [(&str, &str); 9] = [
+/// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Capture = 5, Power = 6..10.
+const SETTINGS_TABS: [(&str, &str); 10] = [
     ("General", "sf:gearshape"),
     ("Clipboard", "sf:doc.on.clipboard"),
     ("Snippets", "sf:curlybraces"),
     ("AI", "sf:sparkles"),
     ("Translate", "sf:character.bubble"),
+    ("Capture", "sf:camera.viewfinder"),
     ("Notes", "sf:note.text"),
     ("Scripts", "sf:terminal"),
     ("Integrations", "sf:link"),
     ("Advanced", "sf:slider.horizontal.3"),
 ];
-/// Indices of the first tab of the second and third group: a divider is drawn before each.
-const SETTINGS_GROUP_STARTS: [usize; 2] = [3, 5];
-const SETTINGS_NUM_KEYS: [Key; 9] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
-/// Index of the Integrations tab in `draw_settings` (after Notes and Scripts).
-pub(crate) const INTEGRATIONS_TAB: usize = 7;
+/// Indices of the first tab of the second, third and fourth group: a divider is drawn before each.
+const SETTINGS_GROUP_STARTS: [usize; 3] = [3, 5, 6];
+/// ⌘1…⌘9 jump to the first nine tabs and ⌘0 to the tenth.
+const SETTINGS_NUM_KEYS: [Key; 10] =
+    [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9, Key::Num0];
+/// Index of the Integrations tab in `draw_settings` (after Capture, Notes and Scripts).
+pub(crate) const INTEGRATIONS_TAB: usize = 8;
 
 /// Width of Search Obsidian's list when the preview pane is shown (the pane takes the rest of the 750 pt).
 const OBSIDIAN_LIST_W: f32 = 310.0;
@@ -7459,7 +7574,17 @@ fn row_body(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, 
 /// Index of the Translate tab in `draw_settings`.
 const TRANSLATE_TAB: usize = 4;
 /// Index of the Notes tab.
-const NOTES_TAB: usize = 5;
+const NOTES_TAB: usize = 6;
+/// Index of the Capture tab.
+const CAPTURE_TAB: usize = 5;
+/// Shortcut rows of the Capture tab: row title and the command each one binds. The hotkey is the
+/// command's own (`Settings::hotkey`), registered by `Hotkeys::apply`; there is no default.
+const CAPTURE_SHORTCUTS: [(&str, Builtin); 4] = [
+    ("Capture Area shortcut", Builtin::CaptureArea),
+    ("Capture Window shortcut", Builtin::CaptureWindow),
+    ("Capture Screen shortcut", Builtin::CaptureScreen),
+    ("Capture Scrolling shortcut", Builtin::CaptureScrolling),
+];
 
 /// The zoom levels of the Notes tab: 50 %, 60 % … 300 %, the steps of the editor's ⌘+ and ⌘-.
 fn notes_zoom_steps() -> Vec<f64> {
@@ -8323,7 +8448,7 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
             "translate_apple",
         ],
     ),
-    (8, &["rem_px", "window_gap"]),
+    (9, &["rem_px", "window_gap"]),
 ];
 
 /// `s` with the fields of `tab` (see `RESET_FIELDS`) copied from `from`; a tab without an entry,

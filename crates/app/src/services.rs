@@ -202,6 +202,21 @@ pub enum Msg {
         result: Result<Vec<ferrocast_core::obsidian::Block>, ()>,
     },
     Wake,
+    /// A screenshot finished (see `capture_ctl`).
+    Capture(crate::capture_ctl::Outcome),
+    /// Worker thread: the helper listed what can be captured (or failed); the flow continues on the
+    /// main loop, which starts the non-blocking selection overlay (`selector::start`).
+    CaptureListed(crate::capture_ctl::Flow, Result<ferrocast_core::capture::protocol::Shareable, crate::capture_ctl::Outcome>),
+    /// The selection overlay finished (`None`: Capture Screen / Record Screen, which have no overlay).
+    CaptureSelected(
+        crate::capture_ctl::Flow,
+        Option<ferrocast_macos::selector::Selection>,
+        Box<ferrocast_core::capture::protocol::Shareable>,
+    ),
+    /// A scrolling capture finished: the outcome and an optional note to toast after it.
+    CaptureScroll(crate::capture_ctl::Outcome, Option<String>),
+    /// Copy Text finished: text for the clipboard (None: leave it) and the toast.
+    OcrDone(Option<String>, String),
 }
 
 /// What the Obsidian scan found.

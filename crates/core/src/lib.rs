@@ -5,6 +5,7 @@ pub mod ai;
 pub mod annotate;
 pub mod apple_translate;
 pub mod calc;
+pub mod capture;
 pub mod chatgpt;
 pub mod clipping;
 pub mod collage;

@@ -1,4 +1,5 @@
 mod app;
+mod capture_ctl;
 mod clipboard_policy;
 mod instance;
 mod items;

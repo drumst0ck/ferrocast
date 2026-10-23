@@ -47,6 +47,8 @@ fn fixture() -> App {
         scripts: vec![],
         base: vec![],
         hotkeys: None,
+        capture: crate::capture_ctl::CaptureState::with(std::path::PathBuf::new(), crate::capture_ctl::Availability::Available),
+        selection: Default::default(),
         finder: services::FinderEnterState { hooks: inert_finder_hooks(), ..Default::default() },
         _tray: None,
         notes_tray: None,
@@ -4601,7 +4603,7 @@ fn footer_hints_are_pure_per_view_and_at_most_four_chips_with_back_last() {
     for v in [View::Root, View::Clipboard, View::Snippets, View::Files, View::Notes, View::Welcome] {
         assert!(v.footer_hints().is_empty(), "{} keeps the footer it had", v.title());
     }
-    assert_eq!(View::Settings.footer_hints(), vec![("Tabs", "⌘1–9"), ("Find", "⌘F"), BACK], "Settings hints (SD2, SD4 adds Find)");
+    assert_eq!(View::Settings.footer_hints(), vec![("Tabs", "⌘1–0"), ("Find", "⌘F"), BACK], "Settings hints (SD2, SD4 adds Find)");
 }
 
 /// Views whose footer already drew hints keep drawing exactly them.
@@ -6585,7 +6587,7 @@ fn the_translate_tab_renders_with_every_provider_in_both_themes_and_changes_noth
 #[test]
 fn general_and_ai_tabs_no_longer_draw_the_translation_rows() {
     // The Auto note only exists on the Translate tab now.
-    for tab in [0usize, 3, 5, 6, INTEGRATIONS_TAB, 8] {
+    for tab in [0usize, 3, 5, 6, 7, INTEGRATIONS_TAB, 9] {
         let mut app = translate_tab_app();
         app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), tab));
         render(&mut app, vec![]);
@@ -6601,7 +6603,7 @@ fn general_and_ai_tabs_no_longer_draw_the_translation_rows() {
 
 #[test]
 fn scripts_and_advanced_tabs_keep_rendering_at_their_new_numbers() {
-    for tab in [5usize, 6, INTEGRATIONS_TAB, 8] {
+    for tab in [6usize, 7, INTEGRATIONS_TAB, 9] {
         for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
             let mut app = translate_tab_app();
             app.ctx.set_theme(theme);
@@ -6612,10 +6614,10 @@ fn scripts_and_advanced_tabs_keep_rendering_at_their_new_numbers() {
         }
     }
     // Scripts body has the "Add directory" row, Advanced the units: they are on different tabs
-    assert_eq!(tab_bars(5), Vec::<usize>::new());
     assert_eq!(tab_bars(6), Vec::<usize>::new());
+    assert_eq!(tab_bars(7), Vec::<usize>::new());
     assert_eq!(tab_bars(INTEGRATIONS_TAB), Vec::<usize>::new());
-    assert_eq!(tab_bars(8), Vec::<usize>::new());
+    assert_eq!(tab_bars(9), Vec::<usize>::new());
 }
 
 #[test]
@@ -6751,7 +6753,7 @@ fn every_settings_tab_renders_in_both_themes() {
             settle(&mut app);
             assert!(matches!(app.view(), View::Settings), "tab {tab} {theme:?}");
             assert_eq!(app.settings, before, "drawing alone changes nothing (tab {tab})");
-            assert!(!settings_cards(&app).is_empty() || tab == 8 || tab == 0, "tab {tab} drew no card");
+            assert!(!settings_cards(&app).is_empty() || tab == 9 || tab == 0, "tab {tab} drew no card");
         }
     }
 }
@@ -6778,7 +6780,7 @@ fn the_last_row_of_a_settings_card_has_no_separator_under_it() {
 fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
     use ferrocast_core::models::AiProvider as P;
     // (tab, chat provider, translate provider) -> expected (text fields, combos, drag fields)
-    let cases: [(usize, P, Option<P>, usize, usize, usize); 12] = [
+    let cases: [(usize, P, Option<P>, usize, usize, usize); 13] = [
         (0, P::OpenAiCompatible, None, 1, 0, 0),
         (1, P::OpenAiCompatible, None, 0, 1, 0),
         (2, P::OpenAiCompatible, None, 0, 0, 0),
@@ -6787,10 +6789,11 @@ fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
         (3, P::ChatGpt, None, 0, 1, 0),
         (3, P::ClaudeCode, None, 0, 1, 0),
         (4, P::OpenAiCompatible, Some(P::ChatGpt), 1, 1, 0),
-        (5, P::OpenAiCompatible, None, 0, 1, 0),
-        (6, P::OpenAiCompatible, None, 1, 0, 0),
-        (7, P::OpenAiCompatible, None, 2, 1, 0),
-        (8, P::OpenAiCompatible, None, 0, 0, 2),
+        (5, P::OpenAiCompatible, None, 1, 0, 0),
+        (6, P::OpenAiCompatible, None, 0, 1, 0),
+        (7, P::OpenAiCompatible, None, 1, 0, 0),
+        (8, P::OpenAiCompatible, None, 2, 1, 0),
+        (9, P::OpenAiCompatible, None, 0, 0, 2),
     ];
     for (tab, chat, tr, texts, combos, drags) in cases {
         for theme in BOTH_THEMES {
@@ -6857,8 +6860,9 @@ fn rows_with_wide_controls_stack_and_toggle_rows_do_not() {
 
 // ---- SD2: Settings sidebar, header and footer
 
-const TAB_NAMES: [&str; 9] = ["General", "Clipboard", "Snippets", "AI", "Translate", "Notes", "Scripts", "Integrations", "Advanced"];
-const NUM_KEYS: [Key; 9] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
+const TAB_NAMES: [&str; 10] =
+    ["General", "Clipboard", "Snippets", "AI", "Translate", "Capture", "Notes", "Scripts", "Integrations", "Advanced"];
+const NUM_KEYS: [Key; 10] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9, Key::Num0];
 
 fn cmd_key(key: Key) -> Event {
     Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: CMD }
@@ -6951,14 +6955,14 @@ fn sd2_arrows_do_not_steal_from_a_focused_text_field() {
 }
 
 #[test]
-fn sd2_sidebar_has_eight_items_in_three_groups_with_two_dividers() {
+fn sd2_sidebar_has_ten_items_in_four_groups_with_three_dividers() {
     let app = sd2_app(0);
     let (items, dividers) = sidebar_marks(&app);
     let names: Vec<&str> = items.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, TAB_NAMES);
-    assert_eq!(dividers.len(), 2);
-    // dividers sit after Snippets and after Translate, between the neighbouring items
-    for (d, after) in dividers.iter().zip([2usize, 4]) {
+    assert_eq!(dividers.len(), 3);
+    // dividers sit after Snippets, after Translate and after Capture (its own group), between the neighbouring items
+    for (d, after) in dividers.iter().zip([2usize, 4, 5]) {
         assert!(d.center().y > items[after].1.max.y && d.center().y < items[after + 1].1.min.y, "{d:?} after {}", names[after]);
         assert!(d.height() <= 1.5, "a thin line");
         assert!(items[after + 1].1.min.y - items[after].1.max.y >= 8.0, "room around the divider");
@@ -7187,7 +7191,7 @@ fn sd3_every_drawn_row_is_indexed_and_every_entry_is_drawn() {
         render(app, vec![]);
         drawn.extend(drawn_rows(app));
     };
-    for tab in [0usize, 1, 2, 5, 6, 7, 8] {
+    for tab in [0usize, 1, 2, 5, 6, 7, 8, 9] {
         collect(&mut settings_app(tab, egui::ThemePreference::Dark));
     }
     for p in all {
@@ -7242,7 +7246,7 @@ fn sd3_all_tabs_render_in_both_themes_with_and_without_a_query() {
 // ---- SD4: per-tab polish
 
 /// Footer chips of Settings: Tabs, Find (SD4) and Back, in reading order.
-const SETTINGS_CHIPS: [(&str, &str); 3] = [("Tabs", "⌘1–9"), ("Find", "⌘F"), ("Back", "esc")];
+const SETTINGS_CHIPS: [(&str, &str); 3] = [("Tabs", "⌘1–0"), ("Find", "⌘F"), ("Back", "esc")];
 
 fn sd4_render(app: &mut App) {
     for _ in 0..3 {
@@ -7610,7 +7614,7 @@ fn sd4_the_translate_engine_shows_readiness_as_a_chip() {
 
 #[test]
 fn sd4_accessibility_shows_granted_or_not_granted() {
-    let app = sd4_app(8, egui::ThemePreference::Dark);
+    let app = sd4_app(9, egui::ThemePreference::Dark);
     let want = if windows::accessibility_trusted(false) { sd4_chip("ok", "Granted") } else { sd4_chip("warn", "Not granted") };
     assert_eq!(sd4_chips(&app), vec![want]);
 }
@@ -7720,7 +7724,7 @@ fn sd4_the_reset_table_names_exact_stored_fields() {
     let d = sd4_json(&Settings::default());
     let sc = sd4_json(&sd4_scrambled());
     let mut seen = std::collections::HashSet::new();
-    assert_eq!(RESET_FIELDS.iter().map(|(t, _)| *t).collect::<Vec<_>>(), vec![0, 1, 4, 8], "General, Clipboard, Translate, Advanced");
+    assert_eq!(RESET_FIELDS.iter().map(|(t, _)| *t).collect::<Vec<_>>(), vec![0, 1, 4, 9], "General, Clipboard, Translate, Advanced");
     for (tab, fields) in RESET_FIELDS {
         for f in fields {
             assert!(d.contains_key(*f), "tab {tab}: {f} is not a stored setting");
@@ -7749,7 +7753,7 @@ fn sd4_reset_tab_restores_exactly_that_tabs_fields() {
         }
         assert_eq!(reset_tab(&Settings::default(), tab), Settings::default(), "tab {tab}: resetting defaults changes nothing");
     }
-    for tab in [2usize, 3, 5, 6, INTEGRATIONS_TAB] {
+    for tab in [2usize, 3, 5, 6, 7, INTEGRATIONS_TAB] {
         assert_eq!(reset_tab(&sd4_scrambled(), tab), sd4_scrambled(), "tab {tab} holds user data: no reset");
     }
 }
@@ -7787,12 +7791,12 @@ fn sd4_resetting_a_default_tab_changes_nothing() {
     let mut app = fixture();
     app.settings = Settings { compact_mode: true, ..Settings::default() };
     let before = app.settings.clone();
-    assert!(!app.reset_settings_tab(8), "Advanced already has its defaults");
+    assert!(!app.reset_settings_tab(9), "Advanced already has its defaults");
     assert_eq!(app.settings, before);
     assert!(app.settings_undo.is_none(), "no undo for a no-op");
     assert_ne!(toast_text(&app), "Tab reset · Undo");
     // a tab with no reset at all
-    assert!(!app.reset_settings_tab(6));
+    assert!(!app.reset_settings_tab(7));
     assert_eq!(app.settings, before);
 }
 
@@ -7800,7 +7804,7 @@ fn sd4_resetting_a_default_tab_changes_nothing() {
 fn sd4_the_reset_button_exists_on_four_tabs_and_undo_is_clickable() {
     for tab in 0..SETTINGS_TABS.len() {
         let app = sd4_app(tab, egui::ThemePreference::Dark);
-        assert_eq!(sd4_rect(&app, "settings-reset-button").is_some(), [0, 1, 4, 8].contains(&tab), "tab {tab}");
+        assert_eq!(sd4_rect(&app, "settings-reset-button").is_some(), [0, 1, 4, 9].contains(&tab), "tab {tab}");
     }
     let mut app = settings_app(1, egui::ThemePreference::Dark);
     app.settings.clipboard_enabled = false;
@@ -7844,9 +7848,9 @@ fn sd4_empty(app: &App) -> Vec<(usize, String)> {
 fn sd4_snippets_and_scripts_tabs_compose_an_empty_state() {
     let app = sd4_app(2, egui::ThemePreference::Dark);
     assert_eq!(sd4_empty(&app), vec![(2, "No snippets yet".to_string())]);
-    let app = sd4_app(6, egui::ThemePreference::Dark);
-    assert_eq!(sd4_empty(&app), vec![(6, "No script commands yet".to_string())]);
-    for tab in [0usize, 1, 3, 4, 5, 7, 8] {
+    let app = sd4_app(7, egui::ThemePreference::Dark);
+    assert_eq!(sd4_empty(&app), vec![(7, "No script commands yet".to_string())]);
+    for tab in [0usize, 1, 3, 4, 5, 6, 8, 9] {
         assert!(sd4_empty(&sd4_app(tab, egui::ThemePreference::Dark)).is_empty(), "tab {tab}");
     }
     // data hides the empty state
@@ -7854,7 +7858,7 @@ fn sd4_snippets_and_scripts_tabs_compose_an_empty_state() {
     app.snippets.push(ferrocast_core::models::Snippet::new("Sig", "Best", "!sig"));
     sd4_render(&mut app);
     assert!(sd4_empty(&app).is_empty());
-    let mut app = settings_app(6, egui::ThemePreference::Dark);
+    let mut app = settings_app(7, egui::ThemePreference::Dark);
     app.settings.script_directories.push("~/scripts".into());
     sd4_render(&mut app);
     assert!(sd4_empty(&app).is_empty());
@@ -7867,7 +7871,7 @@ fn sd4_empty_state_buttons_use_the_existing_actions() {
     assert!(r.max.y < ui::HEIGHT - ui::FOOTER_H, "{r:?}");
     click_at(&mut app, r.center());
     assert!(matches!(app.view(), View::SnippetForm { id: None, .. }), "New snippet opens the snippet form");
-    let mut app = sd4_app(6, egui::ThemePreference::Dark);
+    let mut app = sd4_app(7, egui::ThemePreference::Dark);
     let r = sd4_rect(&app, "settings-empty-button").expect("a button");
     assert!(r.max.y < ui::HEIGHT - ui::FOOTER_H, "{r:?}");
     click_at(&mut app, r.center());
@@ -8199,7 +8203,7 @@ fn sd5_reset_link_dividers_and_footer() {
     assert!(r.max.x > ui::WIDTH - 40.0, "right-aligned: {r:?}");
     // group dividers are as wide as the sidebar items
     let (items, dividers) = sidebar_marks(&app);
-    assert_eq!(dividers.len(), 2);
+    assert_eq!(dividers.len(), 3);
     for d in &dividers {
         for (_, it) in &items {
             assert_eq!((d.min.x, d.max.x), (it.min.x, it.max.x), "divider {d:?} vs item {it:?}");
@@ -8688,7 +8692,7 @@ fn notes_tab_hits(app: &mut App, kind: &str) -> Vec<Rect> {
 fn notes_tab_sits_after_translate_and_lists_the_three_controls() {
     assert_eq!(SETTINGS_TABS[TRANSLATE_TAB].0, "Translate");
     assert_eq!(SETTINGS_TABS[NOTES_TAB].0, "Notes");
-    assert_eq!(NOTES_TAB, TRANSLATE_TAB + 1);
+    assert_eq!(NOTES_TAB, CAPTURE_TAB + 1, "Capture is its own group between Translate and Notes");
     for theme in BOTH_THEMES {
         let (app, _) = notes_tab_app(theme);
         let rows: Vec<String> = drawn_rows(&app).into_iter().filter(|(t, _)| *t == NOTES_TAB).map(|(_, n)| n).collect();
@@ -11012,4 +11016,422 @@ fn the_forms_paint_and_send_with_cmd_enter() {
     oc_daily_form(&mut app, "x");
     let text = painted(&mut app);
     assert!(!text.contains("Title"), "the daily form has only the text: {text}");
+}
+
+fn capture_ids(app: &App) -> Vec<String> {
+    app.base.iter().filter(|i| i.id.starts_with("builtin:capture-")).map(|i| i.id.clone()).collect()
+}
+
+#[test]
+fn capture_commands_are_listed_only_when_capture_is_available() {
+    use crate::capture_ctl::{Availability, CaptureState};
+    let mut app = fixture();
+    app.rebuild();
+    assert_eq!(
+        capture_ids(&app),
+        ["builtin:capture-area", "builtin:capture-window", "builtin:capture-screen", "builtin:capture-scrolling"]
+    );
+    let item = app.base.iter().find(|i| i.id == "builtin:capture-area").unwrap();
+    assert_eq!((item.title.as_str(), item.subtitle.as_str(), item.is_command()), ("Capture Area", "Capture", true));
+    let item = app.base.iter().find(|i| i.id == "builtin:capture-scrolling").unwrap();
+    assert_eq!((item.title.as_str(), item.subtitle.as_str(), item.is_command()), ("Capture Scrolling", "Capture", true));
+    for availability in [Availability::NeedsMacOs14(13), Availability::NoHelper] {
+        app.capture = CaptureState::with(std::path::PathBuf::new(), availability);
+        app.rebuild();
+        assert!(capture_ids(&app).is_empty(), "{availability:?}");
+    }
+}
+
+#[test]
+fn stored_capture_shortcut_on_macos_13_toasts_once_per_session() {
+    use crate::capture_ctl::{Availability, CaptureState};
+    let mut app = fixture();
+    app.capture = CaptureState::with(std::path::PathBuf::new(), Availability::NeedsMacOs14(13));
+    app.rebuild();
+    app.visible = true;
+    assert!(!app.capture_gate());
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Screen capture needs macOS 14. This Mac runs macOS 13."));
+    app.toast = None;
+    assert!(!app.capture_gate());
+    assert!(app.toast.is_none(), "second press stays quiet");
+    app.capture = CaptureState::with(std::path::PathBuf::new(), Availability::NoHelper);
+    assert!(!app.capture_gate());
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Screen capture is not available in this build."));
+}
+
+#[test]
+fn capture_permission_denied_shows_the_exact_toast_and_cancel_is_silent() {
+    use crate::capture_ctl::Outcome;
+    let mut app = fixture();
+    app.visible = true;
+    app.finish_capture(Outcome::Cancelled);
+    assert!(app.toast.is_none(), "Esc: no toast");
+    app.finish_capture(Outcome::PermissionDenied);
+    assert_eq!(
+        app.toast.as_ref().map(|t| t.0.as_str()),
+        Some("Screen Recording is off for Ferrocast. Turn it on in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.")
+    );
+}
+
+#[test]
+fn capture_saved_with_save_only_does_nothing_more() {
+    use crate::capture_ctl::Outcome;
+    let mut app = fixture();
+    app.visible = true;
+    app.settings.capture.after = ferrocast_core::capture::settings::AfterCapture::Save;
+    app.finish_capture(Outcome::Saved(std::path::PathBuf::from("/nonexistent/Capture.png")));
+    assert!(app.toast.is_none());
+}
+
+// ---- T8: the Capture window (S7) ----
+
+fn capture_png(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("fc-capture-result-{}-{tag}", std::process::id()));
+    std::fs::create_dir_all(&d).unwrap();
+    let f = d.join("Capture 2026-10-23 at 14.05.22.png");
+    image::RgbaImage::from_pixel(120, 80, image::Rgba([20, 120, 220, 255])).save(&f).unwrap();
+    f
+}
+
+fn capture_app(file: &std::path::Path) -> App {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::CaptureResult { file: file.to_path_buf(), size: (120, 80) }];
+    app
+}
+
+fn capture_buttons_drawn(app: &mut App) -> Vec<(Pos2, bool)> {
+    app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
+    app.ctx.data_mut(|d| d.remove::<Vec<String>>(Id::new("body-notes")));
+    render(app, vec![]);
+    let hits: Vec<(String, Id, Rect, bool)> = app.ctx.data(|d| d.get_temp(Id::new("ctl-hits"))).unwrap_or_default();
+    hits.into_iter().filter(|h| h.0 == "small_btn").map(|h| (h.2.center(), h.3)).collect()
+}
+
+#[test]
+fn capture_window_renders_six_enabled_buttons_and_the_shortcuts() {
+    let f = capture_png("render");
+    let mut app = capture_app(&f);
+    let btns = capture_buttons_drawn(&mut app);
+    assert_eq!(btns.len(), 6, "Copy, Save, Annotate…, Background…, Copy Text, Pin");
+    assert!(btns.iter().all(|b| b.1), "all enabled while the file exists");
+    let notes: Vec<String> = app.ctx.data(|d| d.get_temp(Id::new("body-notes"))).unwrap_or_default();
+    let line = notes.join(" ");
+    for hint in ["↵", "⌘S", "⌘⇧A", "⌘⇧B", "⌘T", "⌘P"] {
+        assert!(line.contains(hint), "{hint} missing from {line:?}");
+    }
+    assert!(
+        app.ctx.data(|d| d.get_temp::<std::sync::Arc<(std::path::PathBuf, egui::TextureHandle)>>(Id::new("capture-tex"))).is_some(),
+        "preview drawn"
+    );
+    let chips = app.view().footer_hints();
+    assert!(chips.contains(&("Back", "esc")) && chips.iter().any(|c| c.1 == "↵"), "{chips:?}");
+    assert_eq!(app.view().title(), "Capture");
+}
+
+#[test]
+fn capture_window_buttons_are_disabled_when_the_file_is_gone() {
+    let mut app = capture_app(std::path::Path::new("/nonexistent/capture.png"));
+    let btns = capture_buttons_drawn(&mut app);
+    assert_eq!(btns.len(), 6);
+    assert!(btns.iter().all(|b| !b.1));
+    app.toast = None;
+    app.capture_result_run(crate::capture_ctl::ResultButton::Copy);
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("no longer exists")), "{:?}", app.toast);
+    assert!(matches!(app.view(), View::CaptureResult { .. }));
+}
+
+#[test]
+fn capture_window_annotate_and_background_open_the_existing_editors_on_the_saved_file() {
+    let f = capture_png("editors");
+    let mut app = capture_app(&f);
+    let btns = capture_buttons_drawn(&mut app);
+    click_at(&mut app, btns[2].0);
+    assert!(matches!(app.view(), View::Annotate { file, .. } if *file == f), "Annotate… acts on the saved path");
+    let mut app = capture_app(&f);
+    let btns = capture_buttons_drawn(&mut app);
+    click_at(&mut app, btns[3].0);
+    assert!(matches!(app.view(), View::FrameImage { file, .. } if *file == f), "Background… acts on the saved path");
+    let mut app = capture_app(&f);
+    render(&mut app, vec![key_mod_event(Key::A, Modifiers { shift: true, ..Modifiers::COMMAND })]);
+    assert!(matches!(app.view(), View::Annotate { file, .. } if *file == f), "⌘⇧A");
+    let mut app = capture_app(&f);
+    render(&mut app, vec![key_mod_event(Key::B, Modifiers { shift: true, ..Modifiers::COMMAND })]);
+    assert!(matches!(app.view(), View::FrameImage { file, .. } if *file == f), "⌘⇧B");
+}
+
+#[test]
+fn capture_window_copy_text_runs_ocr_off_thread_and_closes_the_window() {
+    let f = capture_png("ocr");
+    for via_key in [false, true] {
+        let mut app = capture_app(&f);
+        if via_key {
+            render(&mut app, vec![key_mod_event(Key::T, Modifiers::COMMAND)]);
+        } else {
+            let btns = capture_buttons_drawn(&mut app);
+            click_at(&mut app, btns[4].0);
+        }
+        assert!(app.toast.as_ref().is_none_or(|t| t.0 != "Not available yet"), "{:?}", app.toast);
+        assert!(matches!(app.view(), View::Root), "the window closes while the text is read");
+        // the blank fixture holds no text (or Vision refuses here): either way the clipboard is left alone
+        // Other messages (clipboard polling, notices) may arrive first under load: skip them until OcrDone.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        let mut seen = vec![];
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match app.rx.recv_timeout(left) {
+                Ok(Msg::OcrDone(text, toast)) => {
+                    assert!(text.is_none(), "{text:?}");
+                    assert!(!toast.is_empty());
+                    break;
+                }
+                Ok(_) => seen.push("other message"),
+                Err(e) => panic!("OcrDone expected, got {e:?} after {} other messages", seen.len()),
+            }
+        }
+    }
+}
+
+#[test]
+fn capture_window_pin_is_no_longer_a_stub() {
+    let f = capture_png("pin");
+    let mut app = capture_app(&f);
+    let btns = capture_buttons_drawn(&mut app);
+    click_at(&mut app, btns[5].0);
+    // tests run off the main thread, so no panel can open; the old stub toast must be gone
+    assert!(app.toast.as_ref().is_none_or(|t| t.0 != "Not available yet"), "{:?}", app.toast);
+}
+
+#[test]
+fn capture_window_escape_closes_it() {
+    let f = capture_png("esc");
+    let mut app = capture_app(&f);
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+}
+
+#[test]
+fn saved_capture_with_after_show_opens_the_capture_window() {
+    let f = capture_png("finish");
+    let mut app = fixture();
+    app.visible = true;
+    assert_eq!(app.settings.capture.after, ferrocast_core::capture::settings::AfterCapture::Show);
+    app.finish_capture(crate::capture_ctl::Outcome::Saved(f.clone()));
+    assert!(matches!(app.view(), View::CaptureResult { file, size } if *file == f && *size == (120, 80)), "{}", app.view().title());
+}
+
+// ---- T9: Settings → Capture tab
+
+/// Titles of the Capture tab rows, in drawing order.
+const CAPTURE_TAB_TITLES: [&str; 10] = [
+    "Capture folder",
+    "Format",
+    "After capture",
+    "Include cursor",
+    "Recording frame rate",
+    "Recording countdown",
+    "Capture Area shortcut",
+    "Capture Window shortcut",
+    "Capture Screen shortcut",
+    "Capture Scrolling shortcut",
+];
+
+#[test]
+fn capture_tab_is_its_own_group_between_translate_and_notes() {
+    assert_eq!(SETTINGS_TABS.len(), 10);
+    assert_eq!(SETTINGS_TABS.map(|(n, _)| n).to_vec(), TAB_NAMES.to_vec());
+    assert_eq!((TRANSLATE_TAB, CAPTURE_TAB, NOTES_TAB), (4, 5, 6));
+    assert_eq!(SETTINGS_GROUP_STARTS, [3, 5, 6], "Capture is a group of its own before Power");
+    assert_eq!(SETTINGS_NUM_KEYS.len(), SETTINGS_TABS.len());
+    assert!(!RESET_FIELDS.iter().any(|(t, _)| *t == CAPTURE_TAB), "folders and shortcuts are user data: no reset");
+}
+
+#[test]
+fn capture_tab_rows_are_drawn_in_order_and_indexed_on_that_tab() {
+    use ferrocast_core::settings_index::ENTRIES;
+    let app = sd2_app(CAPTURE_TAB);
+    let rows: Vec<String> = drawn_rows(&app).into_iter().filter(|(t, _)| *t == CAPTURE_TAB).map(|(_, n)| n).collect();
+    assert_eq!(rows, CAPTURE_TAB_TITLES.map(String::from).to_vec());
+    let indexed: Vec<&str> = ENTRIES.iter().filter(|e| e.tab == CAPTURE_TAB).map(|e| e.title).collect();
+    assert_eq!(indexed, CAPTURE_TAB_TITLES.to_vec());
+}
+
+#[test]
+fn capture_settings_are_found_by_the_settings_search() {
+    use ferrocast_core::settings_index::search;
+    for (q, title) in [
+        ("screenshot folder", "Capture folder"),
+        ("png", "Format"),
+        ("after capture", "After capture"),
+        ("clipboard", "After capture"),
+        ("pointer", "Include cursor"),
+        ("fps", "Recording frame rate"),
+        ("countdown", "Recording countdown"),
+        ("capture area", "Capture Area shortcut"),
+        ("window shortcut", "Capture Window shortcut"),
+        ("screenshot hotkey", "Capture Screen shortcut"),
+        ("long screenshot", "Capture Scrolling shortcut"),
+    ] {
+        assert!(search(q).iter().any(|e| e.tab == CAPTURE_TAB && e.title == title), "{q:?} finds {title:?}");
+    }
+    // and the UI jumps to the row
+    let mut app = searching(0, "countdown");
+    assert!(result_titles(&app).contains(&"Recording countdown".to_string()));
+    render(&mut app, vec![key_event(Key::Enter)]);
+    render(&mut app, vec![]);
+    assert_eq!(tab_of(&app), Some(CAPTURE_TAB));
+    assert_eq!(flash_of(&app).as_deref(), Some("Recording countdown"));
+}
+
+#[test]
+fn capture_tab_shows_the_s2_defaults_and_no_jpg_choice() {
+    let mut app = settings_app(CAPTURE_TAB, egui::ThemePreference::Dark);
+    assert_eq!(app.settings.capture, ferrocast_core::capture::CaptureSettings::default());
+    settle(&mut app);
+    let texts = painted_texts(&mut app, vec![]);
+    let has = |t: &str| texts.iter().any(|x| x == t);
+    assert!(has("PNG"), "the format is shown as PNG: {texts:?}");
+    assert!(!texts.iter().any(|x| x.to_uppercase().contains("JPG") && x.len() < 6), "no JPG choice: {texts:?}");
+    for t in ["Show", "Copy", "Save", "30 fps", "60 fps", "Off", "3 s", "5 s"] {
+        assert!(has(t), "{t:?} is a choice: {texts:?}");
+    }
+    assert!(texts.iter().any(|x| x.contains("Ferrocast Captures")), "the empty folder shows the default: {texts:?}");
+    assert_eq!(tab_bars(CAPTURE_TAB), vec![3, 2, 3], "after, fps, countdown");
+}
+
+#[test]
+fn capture_tab_controls_write_to_settings_capture() {
+    use ferrocast_core::capture::AfterCapture;
+    let mut app = settings_app(CAPTURE_TAB, egui::ThemePreference::Dark);
+    settle(&mut app);
+    // After capture: the first three-cell bar, on screen at the top of the tab
+    app.ctx.data_mut(|d| d.remove::<Vec<(Rect, Vec<Rect>)>>(Id::new("segmented-count")));
+    render(&mut app, vec![]);
+    let mut bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+    bars.sort_by(|a, b| a.0.min.y.total_cmp(&b.0.min.y));
+    click_at(&mut app, bars[0].1[2].center());
+    render(&mut app, vec![]);
+    assert_eq!(app.settings.capture.after, AfterCapture::Save);
+    // frame rate (the only two-cell bar) and countdown (the lowest three-cell bar): scroll to them
+    let fps = reach_bar(&mut app, 2).expect("the frame rate bar is reachable");
+    click_at(&mut app, fps[0].center());
+    render(&mut app, vec![]);
+    assert_eq!(app.settings.capture.fps, 30);
+    let cd = reach_bar(&mut app, 3).expect("the countdown bar is reachable");
+    click_at(&mut app, cd[0].center());
+    render(&mut app, vec![]);
+    assert_eq!(app.settings.capture.countdown, 0);
+    let saved: Settings = app.store.load("settings.json");
+    assert_eq!((saved.capture.after, saved.capture.fps, saved.capture.countdown), (AfterCapture::Save, 30, 0), "persisted");
+}
+
+#[test]
+fn capture_shortcut_rows_follow_the_builtin_ids_and_have_no_default() {
+    use crate::items::Builtin;
+    assert_eq!(
+        CAPTURE_SHORTCUTS.map(|(_, b)| b.id()),
+        [Builtin::CaptureArea.id(), Builtin::CaptureWindow.id(), Builtin::CaptureScreen.id(), Builtin::CaptureScrolling.id()]
+    );
+    let s = Settings::default();
+    for (_, b) in CAPTURE_SHORTCUTS {
+        assert_eq!(s.hotkey(&b.id()), None, "no default shortcut for {}", b.title());
+    }
+}
+
+#[test]
+fn capture_shortcut_record_opens_the_hotkey_view_for_that_command() {
+    let mut app = settings_app(CAPTURE_TAB, egui::ThemePreference::Dark);
+    settle(&mut app);
+    // the Record… button of the second shortcut row (Capture Window): scroll it into view
+    let p = scroll_until(&mut app, |app| {
+        app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
+        render(app, vec![]);
+        let mut v: Vec<Rect> = sd5_hits(app).into_iter().filter(|h| h.0 == "small_btn").map(|h| h.2).collect();
+        v.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+        assert_eq!(v.len(), 4, "a Record… button per shortcut");
+        Some(v[1].center())
+    })
+    .expect("reachable");
+    for _ in 0..30 {
+        render(&mut app, vec![]);
+    }
+    let _ = p;
+    app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
+    render(&mut app, vec![]);
+    let mut v: Vec<Rect> = sd5_hits(&app).into_iter().filter(|h| h.0 == "small_btn").map(|h| h.2).collect();
+    v.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+    click_at(&mut app, v[1].center());
+    render(&mut app, vec![]);
+    match app.view() {
+        View::Hotkey { id, .. } => assert_eq!(id, "builtin:capture-window"),
+        _ => panic!("the Hotkey view opens"),
+    }
+}
+
+// ---- live bug: the selection is non-blocking, one flow at a time ----
+
+#[test]
+fn a_second_capture_command_while_a_selection_is_pending_is_refused() {
+    use crate::capture_ctl::{CaptureKind, Flow, SELECTION_BUSY};
+    let mut app = fixture();
+    app.visible = true;
+    let first = Flow::Capture(CaptureKind::Area);
+    app.selection.begin(first).unwrap();
+    app.run_capture(CaptureKind::Window);
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(SELECTION_BUSY));
+    assert!(app.visible, "a refused command does not hide the launcher");
+    assert!(app.selection.begin(Flow::Capture(CaptureKind::Screen)).is_err(), "the first flow still owns the slot");
+}
+
+#[test]
+fn esc_in_the_overlay_leaves_no_toast_and_frees_the_slot() {
+    use crate::capture_ctl::{CaptureKind, Flow};
+    use ferrocast_core::capture::protocol::Shareable;
+    use ferrocast_macos::selector::Selection;
+    let mut app = fixture();
+    app.visible = true;
+    for flow in [Flow::Capture(CaptureKind::Area), Flow::Capture(CaptureKind::Scrolling)] {
+        app.selection.begin(flow).unwrap();
+        assert!(app.selection.listed(flow));
+        app.capture_selected(flow, Some(Selection::Cancelled), Shareable::default());
+        assert!(app.toast.is_none(), "{flow:?}: Esc says nothing");
+        assert!(app.selection.begin(flow).is_ok(), "{flow:?}: the slot is free again");
+        app.selection.cancel();
+    }
+}
+
+#[test]
+fn a_selection_that_arrives_after_the_flow_was_cancelled_is_ignored() {
+    use crate::capture_ctl::{CaptureKind, Flow};
+    use ferrocast_core::capture::protocol::Shareable;
+    let mut app = fixture();
+    app.visible = true;
+    let other = Flow::Capture(CaptureKind::Window);
+    app.selection.begin(other).unwrap();
+    app.capture_selected(Flow::Capture(CaptureKind::Area), None, Shareable::default());
+    assert!(app.selection.begin(other).is_err(), "the stale message did not touch the pending flow");
+    app.capture_listed(Flow::Capture(CaptureKind::Area), Ok(Shareable::default()));
+    assert!(app.toast.is_none());
+}
+
+#[test]
+fn a_listing_that_fails_clears_the_slot_and_says_why() {
+    use crate::capture_ctl::{CaptureKind, Flow, Outcome};
+    let mut app = fixture();
+    app.visible = true;
+    let cap = Flow::Capture(CaptureKind::Area);
+    app.selection.begin(cap).unwrap();
+    app.capture_listed(cap, Err(Outcome::Failed("helper gone".into())));
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Capture failed: helper gone"));
+    assert!(app.selection.begin(cap).is_ok());
+    app.selection.cancel();
+    app.toast = None;
+    app.selection.begin(cap).unwrap();
+    app.capture_listed(cap, Err(Outcome::PermissionDenied));
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(crate::capture_ctl::PERMISSION_TOAST));
+    app.toast = None;
+    app.selection.begin(cap).unwrap();
+    app.capture_listed(cap, Err(Outcome::Cancelled));
+    assert!(app.toast.is_none());
+    assert!(app.selection.begin(cap).is_ok(), "cancelled also frees the slot");
 }
