@@ -11,6 +11,8 @@ Branch: feat/notes-design (worktree target/wt-notes-design), from origin/master 
 - S7 Contrast: text and controls keep at least 4.5:1 in both themes (the app already checks this for Settings), the label chips and the selected rows included.
 - S8 Surfaces: window background, toolbar hairline, code block and inline code fills, quote bar, palette card and pop-ups all come from the S2 palette; inner shapes use a radius between 10 and 14.
 - S9 No behavior change: every existing test and demo assertion keeps passing; only colors, fonts, spacing and radii change.
+- S10 The Format Bar is shown by default (user: "mostremosla por defecto"). Hiding it from the action panel still works and is remembered.
+- S11 A footer at the bottom of the Notes window shows the commands that can be pressed, like the launcher's footer with its key caps, for example "Actions ⌘K" (user: "tambien pongamos abajo en el fondo de la nota, para que se vea que comandos podemos pulsar y usar como el cmd+k").
 
 ## Tasks
 - T1 S2,S4,S5,S8 `crates/macos/src/notes_theme.rs`: the palette as dynamic NSColors (light and dark), an appearance setter (System, Dark, Light), the window chrome (background, toolbar, title, hairline, toolbar buttons tint) in notes.rs; a test that pins the palette values — commit: ec00109
@@ -18,6 +20,8 @@ Branch: feat/notes-design (worktree target/wt-notes-design), from origin/master 
 - T3 S4,S7,S8 overlays: notes_popups.rs (pop-up rows, Format Bar) and notes_palette.rs (card, rows, search field) — commit: 4f4086c
 - T4 S5 app wiring in crates/app: apply the Settings.theme to the Notes window at startup and when it changes; a test that the app palette and the notes palette have the same values — commit: 4ab40dc
 - T5 S9 side-by-side screenshots of launcher and Notes in both themes, demos re-run, changelog line — commit: 82d0614 (T3b) and the changelog sentence
+- T6 S10 default: Settings.notes_format_bar defaults to true (an old settings.json without the key gets true), the demo and app tests follow — commit: pending
+- T7 S11 footer hint bar below the Format Bar: left a typing hint, right key caps for New ⌘N, Browse ⌘P, Pin ⇧⌘P and Actions ⌘K, clickable, dropped by priority when the window is narrow, themed like the launcher footer; docs EN/ES and changelog updated — commit: pending
 
 ## Log
 - L1 (verbatim): "mejoremos el diseño de las notas para que sigan el estilo de la web y de la app"
@@ -33,3 +37,4 @@ Branch: feat/notes-design (worktree target/wt-notes-design), from origin/master 
 - L6 Side-by-side screenshots (/tmp/compare-dark.png and /tmp/compare-light.png, launcher left, Notes right) show that the backgrounds, text and accents match, but the launcher's selected list row is the neutral `sel` fill, while T3 painted selected rows of the pop-ups and the palette as a coral block with dark ink.
 - D5 Selected rows in the Notes overlays follow the launcher: `Sel` fill, normal text colors. Coral stays for caret, links, checkboxes and active Format Bar buttons. This also removes the below-4.5:1 shortcut text on coral. Supersedes the coral selected row in T3.
 - L7 T3b (82d0614) reviewed and re-verified by me on the whole branch: fmt 0, clippy 0, workspace tests with the real HOME and a fake HOME (app 529, core 468, macos 133), the three macos demos. Contrast on the selected row: Text 11.83 dark and 13.62 light, SubStrong 5.64 and 5.81, Sub 4.08 and 3.61 (hint text, asserted at 3:1). Composite images launcher | editor | palette in /private/tmp/notes-design-compare-dark-v2.png and -light-v2.png show the same selection style in launcher and Notes. Not verified: hover versus selection (Field a14 against Sel a24, about 60% of the selection strength), shadows on screen, and the pixel checks depend on the monitor color profile (dev checks, not CI). Not merged to master: waiting for the user to see the images.
+- L8 User (verbatim): "mostremosla por defecto, tambien pongamos abajo en el fondo de la nota, para que se vea que comandos podemos pulsar y usar como el cmd+k". Context: the user could not find the Format Bar (it only appears from the action panel).
