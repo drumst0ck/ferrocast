@@ -12,3 +12,8 @@ pub use settings::{AfterCapture, CaptureSettings, ScreenshotFormat};
 
 /// Shortest segment the editor keeps (reuses the video trimmer's minimum).
 pub const MIN_SEGMENT: f64 = crate::videoplan::MIN_CLIP;
+pub mod compose;
+pub mod cursor;
+pub mod curves;
+pub mod timeline;
+pub mod zoom;

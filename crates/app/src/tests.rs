@@ -54,6 +54,7 @@ fn fixture() -> App {
         record: Default::default(),
         tray_rec_shown: false,
         rt: Default::default(),
+        editor: None,
         notes_tray: None,
         icons: IconCache::new(store.images_dir()),
         stack: vec![View::Root],
@@ -11631,12 +11632,543 @@ fn the_recordings_browser_lists_newest_first_with_reveal_and_trash() {
     assert_eq!(items[0].subtitle, "1:05 · 48 MB");
     assert!(!items[0].accessory.is_empty(), "the date");
     let actions = app.actions_for(items[0]);
-    assert_eq!(actions[0].title, "Show in Finder");
+    assert_eq!(actions[0].title, "Open in Editor");
+    let reveal = actions.iter().find(|a| a.title == "Show in Finder").expect("reveal");
+    assert_eq!(reveal.shortcut, Some((crate::items::CMD, egui::Key::Enter)));
     let trash = actions.iter().find(|a| a.title == "Move to Trash").expect("trash");
     assert!(trash.destructive);
     assert_eq!(trash.shortcut, Some((crate::items::CMD, egui::Key::Backspace)));
-    assert_eq!(app.primary_label(items[0]), "Show in Finder");
+    assert_eq!(app.primary_label(items[0]), "Open in Editor");
     app.query = "old".into();
     let titles: Vec<String> = app.sections().iter().flat_map(|s| s.items.iter().map(|i| i.title.clone())).collect();
     assert_eq!(titles, ["Old"]);
+}
+
+// ---- T26: the studio editor view (S15) ----
+// The render worker is replaced by a channel the test reads: it plays the "fake client".
+
+fn editor_project() -> ferrocast_core::capture::project::Project {
+    let mut p = ferrocast_core::capture::project::Project::new("Demo", "2026-10-23T14:05:22Z");
+    p.duration = 10.0;
+    p.zooms = vec![serde_json::from_value(serde_json::json!({"id":"z1","start":2.0,"end":4.0,"mode":"auto","scale":2.0})).unwrap()];
+    p
+}
+
+/// An app showing the editor on `/r/Demo.ferrocast`, plus the requests the view sends to its worker.
+fn editor_app() -> (App, std::sync::mpsc::Receiver<crate::editor_ctl::WorkerCmd>) {
+    use crate::editor_ctl::{Editor, Opened};
+    let mut app = fixture();
+    let dir = std::path::PathBuf::from("/r/Demo.ferrocast");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut ed = Editor::new(dir.clone(), Some(tx));
+    ed.opened(Ok(Opened { project: editor_project(), auto_zoomed: true, note: None, events: None }));
+    app.editor = Some(ed);
+    app.stack = vec![View::Root, View::Editor { project: dir }];
+    (app, rx)
+}
+
+fn editor_requests(rx: &std::sync::mpsc::Receiver<crate::editor_ctl::WorkerCmd>) -> Vec<crate::editor_ctl::Req> {
+    rx.try_iter().filter_map(|c| if let crate::editor_ctl::WorkerCmd::Frame(r) = c { Some(r) } else { None }).collect()
+}
+
+fn editor_frame(app: &mut App, seq: u64, t: f64) {
+    use crate::editor_ctl::{EditorMsg, FrameOut};
+    let dir = std::path::PathBuf::from("/r/Demo.ferrocast");
+    let out = FrameOut { image: egui::ColorImage::example(), t, helper_ms: 2.0, total_ms: 5.0 };
+    app.handle_editor(EditorMsg::Frame { dir, seq, result: Ok(out) });
+}
+
+fn editor_t(app: &App) -> f64 {
+    app.editor.as_ref().unwrap().t
+}
+
+#[test]
+fn the_editor_renders_loading_error_and_frame_states() {
+    // loading: the project is not there yet
+    let mut app = fixture();
+    let dir = std::path::PathBuf::from("/r/Demo.ferrocast");
+    app.editor = Some(crate::editor_ctl::Editor::new(dir.clone(), None));
+    app.stack = vec![View::Root, View::Editor { project: dir }];
+    render(&mut app, vec![]);
+    // the helper's message is shown when opening fails
+    app.editor.as_mut().unwrap().opened(Err("The recording's video (screen.mov) is missing.".into()));
+    app.ctx.data_mut(|d| d.remove::<Vec<String>>(Id::new("body-notes")));
+    render(&mut app, vec![]);
+    let notes: Vec<String> = app.ctx.data(|d| d.get_temp(Id::new("body-notes"))).unwrap_or_default();
+    assert!(notes.iter().any(|n| n.contains("esc closes the editor")), "{notes:?}");
+    assert!(app.editor.as_ref().unwrap().error.as_deref().is_some_and(|e| e.contains("screen.mov")));
+    // a frame
+    let (mut app, rx) = editor_app();
+    render(&mut app, vec![]);
+    let reqs = editor_requests(&rx);
+    assert_eq!(reqs.len(), 1, "the first frame is asked for as soon as the view draws");
+    assert!(app.editor.as_ref().unwrap().tex.is_none());
+    editor_frame(&mut app, reqs[0].seq, reqs[0].key.t);
+    render(&mut app, vec![]);
+    let ed = app.editor.as_ref().unwrap();
+    assert!(ed.tex.is_some() && ed.shown_t == Some(0.0), "the decoded frame became the preview texture");
+    // a failing frame shows the helper's message and the last frame stays
+    let mut app = editor_app().0;
+    render(&mut app, vec![]);
+    app.handle_editor(crate::editor_ctl::EditorMsg::Frame {
+        dir: "/r/Demo.ferrocast".into(),
+        seq: 1,
+        result: Err("take frame timed out".into()),
+    });
+    assert_eq!(app.editor.as_ref().unwrap().note.as_deref(), Some("take frame timed out"));
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn the_preview_asks_for_its_on_screen_width_capped_at_960() {
+    let (mut app, rx) = editor_app();
+    render(&mut app, vec![]);
+    let r = editor_requests(&rx);
+    let w = r[0].key.width;
+    assert!((64..=crate::editor_ctl::PREVIEW_MAX_WIDTH).contains(&w) && w.is_multiple_of(32), "{w}");
+    assert_eq!(crate::editor_ctl::PREVIEW_MAX_WIDTH, 960);
+}
+
+#[test]
+fn editor_keys_step_frames_seconds_and_jump() {
+    let (mut app, _rx) = editor_app();
+    render(&mut app, vec![]);
+    let fps = f64::from(app.settings.capture.fps);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert!((editor_t(&app) - 1.0 / fps).abs() < 1e-9, "one frame forward: {}", editor_t(&app));
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    render(&mut app, vec![key_event(Key::ArrowLeft)]);
+    assert!((editor_t(&app) - 1.0 / fps).abs() < 1e-9);
+    render(&mut app, vec![key_mod_event(Key::ArrowRight, Modifiers::SHIFT)]);
+    assert!((editor_t(&app) - (1.0 + 1.0 / fps)).abs() < 1e-9, "one second forward");
+    render(&mut app, vec![key_mod_event(Key::ArrowLeft, Modifiers::SHIFT)]);
+    render(&mut app, vec![key_event(Key::End)]);
+    assert!((editor_t(&app) - (10.0 - 1.0 / fps)).abs() < 1e-9, "End is the last frame");
+    render(&mut app, vec![key_event(Key::Home)]);
+    assert_eq!(editor_t(&app), 0.0);
+    render(&mut app, vec![key_event(Key::ArrowLeft)]);
+    assert_eq!(editor_t(&app), 0.0, "never before the start");
+}
+
+#[test]
+fn space_toggles_playback_and_stepping_pauses_it() {
+    let (mut app, _rx) = editor_app();
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Space)]);
+    assert!(app.editor.as_ref().unwrap().playing());
+    render(&mut app, vec![key_event(Key::Space)]);
+    assert!(!app.editor.as_ref().unwrap().playing());
+    render(&mut app, vec![key_event(Key::Space)]);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert!(!app.editor.as_ref().unwrap().playing(), "stepping a frame pauses");
+}
+
+#[test]
+fn clicking_and_dragging_the_timeline_seeks_and_requests_coalesce() {
+    let (mut app, rx) = editor_app();
+    render(&mut app, vec![]);
+    let first = editor_requests(&rx);
+    assert_eq!(first.len(), 1);
+    let tl: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-timeline-rect"))).expect("timeline drawn");
+    let at = |f: f32| Pos2::new(tl.min.x + tl.width() * f, tl.center().y);
+    click_at(&mut app, at(0.5));
+    assert!((editor_t(&app) - 5.0).abs() < 0.2, "click in the middle seeks to half: {}", editor_t(&app));
+    // drag across the strip while the first render is still in flight: nothing is sent
+    let btn = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(&mut app, vec![Event::PointerMoved(at(0.1)), btn(at(0.1), true)]);
+    for i in 2..=9 {
+        render(&mut app, vec![Event::PointerMoved(at(i as f32 / 10.0))]);
+    }
+    render(&mut app, vec![btn(at(0.9), false)]);
+    assert!(editor_requests(&rx).is_empty(), "no request flood while a render is in flight");
+    assert!((editor_t(&app) - 9.0).abs() < 0.3, "the playhead followed the drag: {}", editor_t(&app));
+    // the first frame comes back: only the latest time is asked for
+    editor_frame(&mut app, first[0].seq, first[0].key.t);
+    let next = editor_requests(&rx);
+    assert_eq!(next.len(), 1, "{next:?}");
+    assert!((next[0].key.t - editor_t(&app)).abs() < 1e-9, "the pending request is the latest playhead time");
+}
+
+#[test]
+fn esc_closes_the_editor_and_ends_its_session() {
+    let (mut app, _rx) = editor_app();
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    app.drain();
+    assert!(app.editor.is_none(), "the worker and the helper go with the view");
+}
+
+#[test]
+fn recordings_enter_opens_the_editor_and_the_footer_names_both_keys() {
+    use crate::record_ctl::RecordingEntry;
+    let mut app = fixture();
+    let path: std::path::PathBuf = "/r/Take.ferrocast".into();
+    app.rt.recordings =
+        vec![RecordingEntry { path: path.clone(), name: "Take".into(), duration: Some(5.0), bytes: 1, created: 1_800_000_000 }];
+    app.stack.push(View::Recordings);
+    let hints = app.view().footer_hints();
+    assert_eq!(hints[0], ("Open", "↵"));
+    assert!(hints.contains(&("Show in Finder", "⌘↵")), "{hints:?}");
+    let item = app.sections().into_iter().flat_map(|s| s.items).next().unwrap();
+    app.run_item(&item);
+    assert!(matches!(app.view(), View::Editor { project } if *project == path), "{}", app.view().title());
+    assert_eq!(app.editor.as_ref().map(|e| e.dir.clone()), Some(path));
+    assert_eq!(app.view().title(), "Editor");
+    assert_eq!(app.stack.len(), 3, "Esc returns to the Recordings browser");
+}
+
+#[test]
+fn open_last_recording_opens_the_editor_without_the_not_available_toast() {
+    let root = std::env::temp_dir().join(format!("fc-editor-last-{}", std::process::id()));
+    let project = root.join("Newest.ferrocast");
+    ferrocast_core::capture::project::Project::create(&project, "Newest", "2026-10-23T14:05:22Z").unwrap();
+    let mut app = fixture();
+    app.visible = true;
+    app.settings.capture.recordings_folder = root.to_string_lossy().to_string();
+    app.open_last_recording();
+    assert!(matches!(app.view(), View::Editor { project: p } if *p == project), "{}", app.view().title());
+    assert!(app.toast.as_ref().is_none_or(|t| !t.0.contains("not available yet")), "{:?}", app.toast);
+    // no recordings: the existing message, no editor
+    let mut app = fixture();
+    app.visible = true;
+    app.settings.capture.recordings_folder = root.join("empty").to_string_lossy().to_string();
+    app.open_last_recording();
+    assert!(matches!(app.view(), View::Root) && app.editor.is_none());
+}
+
+// ---- T27: editor panels, undo/redo and autosave (egui harness; the worker is a channel the test reads)
+
+use crate::editor_panels::Tab;
+
+/// Every text the frame painted with its rectangle: find a label, click where it is.
+fn render_texts(app: &mut App, events: Vec<Event>) -> Vec<(String, Rect)> {
+    fn walk(s: &egui::Shape, out: &mut Vec<(String, Rect)>) {
+        match s {
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), Rect::from_min_size(t.pos, t.galley.size()))),
+            egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(ui::WIDTH, ui::HEIGHT))),
+        events,
+        ..Default::default()
+    };
+    let ctx = app.ctx.clone();
+    let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+    output.textures_delta.clear();
+    let mut out = vec![];
+    output.shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+    out
+}
+
+fn label_rect(app: &mut App, text: &str) -> Rect {
+    let texts = render_texts(app, vec![]);
+    let body_bottom = ui::HEIGHT - ui::FOOTER_H;
+    texts
+        .iter()
+        .filter(|(t, r)| t == text && r.max.y < body_bottom)
+        .map(|(_, r)| *r)
+        .next()
+        .unwrap_or_else(|| panic!("no `{text}` on screen: {:?}", texts.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>()))
+}
+
+/// Wheel over the right-hand panel by `dy` points (negative scrolls down).
+fn scroll_panel(app: &mut App, dy: f32) {
+    render(app, vec![Event::PointerMoved(Pos2::new(ui::WIDTH - 100.0, 150.0))]);
+    for _ in 0..6 {
+        let wheel = Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, dy / 6.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        };
+        render(app, vec![wheel]);
+    }
+    render(app, vec![]);
+}
+
+fn click_label(app: &mut App, text: &str) {
+    let r = label_rect(app, text);
+    click_at(app, r.center());
+}
+
+fn screen_has(app: &mut App, text: &str) -> bool {
+    render_texts(app, vec![]).iter().any(|(t, _)| t.contains(text))
+}
+
+/// An editor on a real folder (autosave writes there) and the channel the worker would read.
+fn editor_app_in(tag: &str) -> (App, std::sync::mpsc::Receiver<crate::editor_ctl::WorkerCmd>, std::path::PathBuf) {
+    use crate::editor_ctl::{Editor, Opened};
+    let dir = std::env::temp_dir().join(format!("fc-editor-ui-{}-{tag}", std::process::id())).join("Take.ferrocast");
+    std::fs::create_dir_all(&dir).unwrap();
+    let project = editor_project();
+    project.save(&dir).unwrap();
+    let mut app = fixture();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut ed = Editor::new(dir.clone(), Some(tx));
+    ed.opened(Ok(Opened { project, auto_zoomed: false, note: None, events: None }));
+    app.editor = Some(ed);
+    app.stack = vec![View::Root, View::Editor { project: dir.clone() }];
+    (app, rx, dir)
+}
+
+fn editor_proj(app: &App) -> ferrocast_core::capture::project::Project {
+    app.editor.as_ref().unwrap().project.clone().unwrap()
+}
+
+fn set_tab(app: &mut App, tab: Tab) {
+    app.editor.as_mut().unwrap().st.tab = tab;
+}
+
+#[test]
+fn each_editor_tab_draws_its_controls() {
+    let (mut app, _rx, _dir) = editor_app_in("tabs");
+    for (tab, expect) in [
+        (Tab::Zoom, &["Add at playhead", "Auto zoom", "Auto  0:02.00–0:04.00  ·  2.0×"][..]),
+        (Tab::Cursor, &["Default", "Hidden", "Size", "Smoothing", "Click ring", "Motion blur"][..]),
+        (Tab::Style, &["Aspect", "Background", "Angle", "Aurora"][..]),
+        (Tab::Clips, &["Trim in", "Trim out", "Split", "Delete segment", "Apply to segment", "Segments (click to move the playhead)"][..]),
+    ] {
+        set_tab(&mut app, tab);
+        let texts: Vec<String> = render_texts(&mut app, vec![]).into_iter().map(|(t, _)| t).collect();
+        for want in expect {
+            assert!(texts.iter().any(|t| t == want), "{tab:?} lacks `{want}`: {texts:?}");
+        }
+    }
+    // the rest of the Style tab is below the fold: the wheel scrolls the panel
+    set_tab(&mut app, Tab::Style);
+    let panel = Pos2::new(ui::WIDTH - 100.0, 150.0);
+    render(&mut app, vec![Event::PointerMoved(panel)]);
+    let mut seen = vec![];
+    for _ in 0..6 {
+        let wheel = Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -200.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        };
+        seen.extend(render_texts(&mut app, vec![wheel]).into_iter().map(|(t, _)| t));
+    }
+    for want in ["Padding", "Corners", "Shadow", "Opacity", "Offset"] {
+        assert!(seen.iter().any(|t| t == want), "Style lacks `{want}` after scrolling: {seen:?}");
+    }
+    // the transport row has Undo/Redo and the footer says how
+    assert!(screen_has(&mut app, "Saved"));
+    assert!(app.view().footer_hints().contains(&("Undo", "⌘Z")) && app.view().footer_hints().contains(&("Redo", "⇧⌘Z")));
+    // the tabs switch by click
+    click_label(&mut app, "Cursor");
+    assert_eq!(app.editor.as_ref().unwrap().st.tab, Tab::Cursor);
+}
+
+#[test]
+fn clicking_trim_in_edits_and_cmd_z_and_shift_cmd_z_undo_and_redo_it() {
+    let (mut app, rx, _dir) = editor_app_in("keys");
+    set_tab(&mut app, Tab::Clips);
+    render(&mut app, vec![]);
+    app.editor.as_mut().unwrap().t = 2.0;
+    click_label(&mut app, "Trim in");
+    assert_eq!(editor_proj(&app).trims.len(), 1);
+    assert_eq!(editor_proj(&app).trims[0].start, 2.0, "cut before the playhead");
+    assert!(rx.try_iter().any(|c| matches!(c, crate::editor_ctl::WorkerCmd::Project(p) if p.trims.len() == 1)), "the worker got the edit");
+    assert!(app.editor.as_ref().unwrap().st.history.can_undo());
+    render(&mut app, vec![key_mod_event(Key::Z, Modifiers::COMMAND)]);
+    assert!(editor_proj(&app).trims.is_empty(), "⌘Z undid the trim");
+    render(&mut app, vec![key_mod_event(Key::Z, Modifiers::COMMAND | Modifiers::SHIFT)]);
+    assert_eq!(editor_proj(&app).trims[0].start, 2.0, "⇧⌘Z redid it");
+    // the toolbar buttons do the same
+    click_label(&mut app, "Undo");
+    assert!(editor_proj(&app).trims.is_empty());
+    click_label(&mut app, "Redo");
+    assert_eq!(editor_proj(&app).trims.len(), 1);
+}
+
+#[test]
+fn undo_and_redo_buttons_are_disabled_without_history() {
+    let (mut app, _rx, _dir) = editor_app_in("disabled");
+    let hits_of =
+        |app: &App| -> Vec<(String, egui::Id, Rect, bool)> { app.ctx.data(|d| d.get_temp(Id::new("ctl-hits"))).unwrap_or_default() };
+    app.ctx.data_mut(|d| d.remove::<Vec<(String, egui::Id, Rect, bool)>>(Id::new("ctl-hits")));
+    render(&mut app, vec![]);
+    let flags: Vec<bool> = hits_of(&app).iter().filter(|h| h.0 == "small_btn").map(|h| h.3).collect();
+    assert_eq!(flags, vec![true, false, false], "Play enabled, Undo and Redo disabled: {flags:?}");
+    // a click on a disabled Undo does nothing
+    click_label(&mut app, "Undo");
+    assert!(!app.editor.as_ref().unwrap().st.history.can_undo());
+    app.editor.as_mut().unwrap().apply(ferrocast_core::capture::timeline::EditKind::Style, 1.0, |p| {
+        p.style.radius = 3.0;
+        Ok(())
+    });
+    app.ctx.data_mut(|d| d.remove::<Vec<(String, egui::Id, Rect, bool)>>(Id::new("ctl-hits")));
+    render(&mut app, vec![]);
+    let flags: Vec<bool> = hits_of(&app).iter().filter(|h| h.0 == "small_btn").map(|h| h.3).collect();
+    assert_eq!(flags, vec![true, true, false], "Undo enabled after an edit: {flags:?}");
+}
+
+#[test]
+fn split_speed_and_delete_segment_buttons_edit_the_clips() {
+    let (mut app, _rx, _dir) = editor_app_in("clips");
+    set_tab(&mut app, Tab::Clips);
+    render(&mut app, vec![]);
+    app.editor.as_mut().unwrap().t = 4.0;
+    click_label(&mut app, "Split");
+    assert_eq!(editor_proj(&app).trims.len(), 2);
+    app.editor.as_mut().unwrap().t = 6.0;
+    click_label(&mut app, "4×");
+    click_label(&mut app, "Apply to segment");
+    let p = editor_proj(&app);
+    assert_eq!((p.speeds[0].start, p.speeds[0].end, p.speeds[0].factor), (4.0, 10.0, 4.0));
+    let tl = app.editor.as_ref().unwrap().timeline.clone().unwrap();
+    assert!((tl.output_duration() - (4.0 + 6.0 / 4.0)).abs() < 1e-9, "the timeline shows the speed: {}", tl.output_duration());
+    click_label(&mut app, "Delete segment");
+    assert_eq!(editor_proj(&app).trims.len(), 1);
+    assert!(editor_proj(&app).speeds.is_empty(), "the speed went with its segment");
+    // deleting the last segment is refused inline
+    app.editor.as_mut().unwrap().t = 1.0;
+    click_label(&mut app, "Delete segment");
+    assert_eq!(editor_proj(&app).trims.len(), 1);
+    assert!(screen_has(&mut app, "The only segment cannot be deleted."));
+}
+
+#[test]
+fn zoom_tab_adds_rejects_overlaps_and_deletes() {
+    let (mut app, _rx, _dir) = editor_app_in("zoomtab");
+    render(&mut app, vec![]);
+    app.editor.as_mut().unwrap().t = 6.0;
+    click_label(&mut app, "Add at playhead");
+    let p = editor_proj(&app);
+    assert_eq!(p.zooms.len(), 2);
+    assert_eq!((p.zooms[1].mode.as_str(), p.zooms[1].start), ("manual", 6.0));
+    // the same spot again is refused with the reason, nothing changes
+    click_label(&mut app, "Add at playhead");
+    assert_eq!(editor_proj(&app).zooms.len(), 2);
+    assert!(screen_has(&mut app, "There is already a zoom at the playhead."));
+    // Auto zoom without events says why
+    click_label(&mut app, "Auto zoom");
+    assert!(screen_has(&mut app, "no cursor events"));
+    // the new zoom is selected: its fields show below the list, Delete removes it
+    scroll_panel(&mut app, -400.0);
+    assert!(screen_has(&mut app, "Pick on preview"));
+    click_label(&mut app, "Delete zoom");
+    assert_eq!(editor_proj(&app).zooms.len(), 1);
+    scroll_panel(&mut app, 400.0);
+    app.editor.as_mut().unwrap().apply(ferrocast_core::capture::timeline::EditKind::Zoom, 50.0, |p| {
+        p.zooms.clear();
+        Ok(())
+    });
+    assert!(screen_has(&mut app, "No zooms."));
+}
+
+#[test]
+fn clicking_the_preview_while_picking_sets_the_zoom_focus() {
+    let (mut app, _rx, _dir) = editor_app_in("pick");
+    render(&mut app, vec![]);
+    {
+        let ed = app.editor.as_mut().unwrap();
+        ed.st.selected_zoom = Some("z1".into());
+        ed.st.picking = true;
+    }
+    render(&mut app, vec![]);
+    let img: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-preview-rect"))).expect("preview drawn");
+    click_at(&mut app, Pos2::new(img.min.x + img.width() * 0.25, img.center().y));
+    let z = editor_proj(&app).zooms[0].clone();
+    let f = z.focus.expect("focus set");
+    // 16:9 canvas with the default 6 % padding: the video spans x 0.1067..0.8933 of the preview
+    assert!((f[0] - 0.1822).abs() < 0.01 && (f[1] - 0.5).abs() < 0.01, "{f:?}");
+    assert_eq!(z.mode, "manual", "an edited zoom becomes manual");
+    assert!(!app.editor.as_ref().unwrap().st.picking, "picking ends with the click");
+    // a click on the padding is refused and keeps picking
+    {
+        let ed = app.editor.as_mut().unwrap();
+        ed.st.picking = true;
+    }
+    render(&mut app, vec![]);
+    click_at(&mut app, Pos2::new(img.min.x + 1.0, img.min.y + 1.0));
+    assert!(app.editor.as_ref().unwrap().st.picking);
+    assert!(screen_has(&mut app, "Click inside the video"));
+}
+
+#[test]
+fn style_and_cursor_controls_edit_and_the_preview_is_asked_again() {
+    let (mut app, rx, _dir) = editor_app_in("style");
+    set_tab(&mut app, Tab::Style);
+    render(&mut app, vec![]);
+    let first = editor_requests(&rx);
+    assert_eq!(first.len(), 1);
+    let dir = app.editor.as_ref().unwrap().dir.clone();
+    let out = crate::editor_ctl::FrameOut { image: egui::ColorImage::example(), t: 0.0, helper_ms: 1.0, total_ms: 1.0 };
+    app.handle_editor(crate::editor_ctl::EditorMsg::Frame { dir: dir.clone(), seq: first[0].seq, result: Ok(out) });
+    // the decoded frame has its own aspect, so the preview width changes once: settle that request too
+    render(&mut app, vec![]);
+    for r in editor_requests(&rx) {
+        let out = crate::editor_ctl::FrameOut { image: egui::ColorImage::example(), t: r.key.t, helper_ms: 1.0, total_ms: 1.0 };
+        app.handle_editor(crate::editor_ctl::EditorMsg::Frame { dir: dir.clone(), seq: r.seq, result: Ok(out) });
+    }
+    render(&mut app, vec![]);
+    assert!(editor_requests(&rx).is_empty() && !app.editor.as_ref().unwrap().queue.busy(), "settled");
+    click_label(&mut app, "Dusk");
+    let bg = editor_proj(&app).style.background;
+    assert_eq!((bg.kind.as_str(), bg.stops[0].as_str(), bg.angle), ("gradient", "#2b1055", 160.0));
+    let cmds: Vec<crate::editor_ctl::WorkerCmd> = rx.try_iter().collect();
+    let proj_at =
+        cmds.iter().position(|c| matches!(c, crate::editor_ctl::WorkerCmd::Project(p) if p.style.background.stops[0] == "#2b1055"));
+    let frame_at = cmds.iter().position(|c| matches!(c, crate::editor_ctl::WorkerCmd::Frame(_)));
+    assert!(proj_at.is_some(), "the worker got the edit");
+    assert!(frame_at > proj_at, "the frame is rendered again after the edit, behind the project: {proj_at:?} {frame_at:?}");
+    click_label(&mut app, "Blur");
+    assert_eq!(editor_proj(&app).style.background.kind, "blur");
+    click_label(&mut app, "1:1");
+    assert_eq!(editor_proj(&app).style.aspect, "1:1");
+    set_tab(&mut app, Tab::Cursor);
+    render(&mut app, vec![]);
+    click_label(&mut app, "Hidden");
+    assert_eq!(editor_proj(&app).cursor.style, "hidden");
+    click_label(&mut app, "Click ring");
+    assert_eq!(editor_proj(&app).cursor.click_effect, "none");
+    assert_eq!(app.editor.as_ref().unwrap().st.history.undo_len(), 5, "every discrete click is its own undo step");
+}
+
+#[test]
+fn esc_flushes_the_pending_edit_without_waiting_for_the_idle_second() {
+    let (mut app, _rx, dir) = editor_app_in("esc");
+    set_tab(&mut app, Tab::Clips);
+    render(&mut app, vec![]);
+    app.editor.as_mut().unwrap().t = 2.0;
+    click_label(&mut app, "Trim in");
+    assert_eq!(ferrocast_core::capture::project::Project::load(&dir).unwrap().trims.len(), 0, "not saved yet: the second has not passed");
+    assert!(screen_has(&mut app, "Saving…"));
+    render(&mut app, vec![key_event(Key::Escape)]);
+    let saved = ferrocast_core::capture::project::Project::load(&dir).unwrap();
+    assert_eq!(saved.trims.len(), 1, "Esc wrote it at once");
+    assert!(ferrocast_core::capture::timeline::validate(&saved).is_empty());
+    assert!(!dir.join("project.json.tmp").exists());
+}
+
+#[test]
+fn the_view_saves_one_idle_second_after_the_last_edit() {
+    let (mut app, _rx, dir) = editor_app_in("idle");
+    set_tab(&mut app, Tab::Cursor);
+    render(&mut app, vec![]);
+    click_label(&mut app, "Hidden");
+    render(&mut app, vec![]);
+    assert_eq!(ferrocast_core::capture::project::Project::load(&dir).unwrap().cursor.style, "arrow", "nothing yet");
+    std::thread::sleep(std::time::Duration::from_millis(1150));
+    render(&mut app, vec![]);
+    assert_eq!(ferrocast_core::capture::project::Project::load(&dir).unwrap().cursor.style, "hidden", "written by the debounce");
+    assert!(screen_has(&mut app, "Saved"));
+}
+
+#[test]
+fn a_failed_autosave_shows_its_error_in_the_editor_and_leaves_it_dirty() {
+    let (mut app, _rx, dir) = editor_app_in("failsave");
+    set_tab(&mut app, Tab::Cursor);
+    render(&mut app, vec![]);
+    let gone = dir.with_file_name("Gone.ferrocast");
+    std::fs::rename(&dir, &gone).unwrap();
+    click_label(&mut app, "Hidden");
+    app.editor.as_mut().unwrap().flush(1e9);
+    assert!(screen_has(&mut app, "Could not save project.json"), "the footer carries the error text");
+    assert!(app.editor.as_ref().unwrap().st.autosave.pending());
+    std::fs::rename(&gone, &dir).unwrap();
 }

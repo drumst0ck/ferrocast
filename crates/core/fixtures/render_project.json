@@ -1,0 +1,10 @@
+{"version":1,"name":"Render fixture","created":"2026-10-23T14:05:22Z","duration":1.0,
+ "sources":{"screen":{"file":"screen.mov","offset":0.0}},
+ "trims":[{"start":0.0,"end":1.0}],
+ "speeds":[],
+ "zooms":[],
+ "cursor":{"style":"arrow","size":1.4,"smoothing":0.5,"click_effect":"ring","hide_idle_after":3.0,"motion_blur":0.5},
+ "style":{"aspect":"16:9","padding":0.08,"radius":18,"shadow":{"blur":40,"opacity":0.5,"dy":16},
+          "background":{"kind":"gradient","stops":["#1f1c2c","#928dab"],"angle":135}},
+ "audio":{"mic_gain":1.0,"system_gain":0.6,"mute":false},
+ "export":{"format":"mp4","codec":"h264","size":[1920,1080],"fps":30}}

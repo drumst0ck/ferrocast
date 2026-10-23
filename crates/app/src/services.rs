@@ -219,6 +219,8 @@ pub enum Msg {
     OcrDone(Option<String>, String),
     /// Recording flow: countdown ticks, HUD buttons, helper events (see `record_ctl`).
     Record(crate::record_ctl::RecordMsg),
+    /// The studio editor's render worker (T26): the project loaded, or a preview frame came back.
+    Editor(Box<crate::editor_ctl::EditorMsg>),
 }
 
 /// What the Obsidian scan found.

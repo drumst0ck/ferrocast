@@ -4427,6 +4427,224 @@ impl App {
         }
     }
 
+    /// Studio editor (T26): preview frame, transport row and timeline. The pure parts (scrub queue,
+    /// geometry, play clock, labels) live in `editor_ctl`; edits and panels come in T27.
+    fn draw_editor(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, project: &std::path::Path) {
+        use crate::editor_ctl::{clock, fit, preview_width, ruler_ticks, segment_bars, zoom_bars, Axis, BarKind};
+        let ctx = ui.ctx().clone();
+        let fps = f64::from(self.settings.capture.fps.max(1));
+        let now = ctx.input(|i| i.time);
+        let ppp = ctx.pixels_per_point();
+        let ctrl = Rect::from_min_size(Pos2::new(rect.min.x + 16.0, rect.max.y - 40.0), Vec2::new(rect.width() - 32.0, 30.0));
+        let tl_rect = Rect::from_min_size(Pos2::new(rect.min.x + 16.0, ctrl.min.y - 10.0 - 78.0), Vec2::new(rect.width() - 32.0, 78.0));
+        let panel = Rect::from_min_max(
+            Pos2::new(rect.max.x - 12.0 - crate::editor_panels::PANEL_W, rect.min.y + 8.0),
+            Pos2::new(rect.max.x - 12.0, tl_rect.min.y - 8.0),
+        );
+        let area = Rect::from_min_max(rect.min + Vec2::new(12.0, 8.0), Pos2::new(panel.min.x - 8.0, tl_rect.min.y - 8.0));
+        let auto_opts = {
+            let c = &self.settings.capture;
+            ferrocast_core::capture::zoom::ZoomOpts { scale: c.zoom_scale, ..Default::default() }
+        };
+        let Some(ed) = self.editor.as_mut().filter(|e| e.dir == project) else {
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Opening recording…", FontId::proportional(16.0), pal.sub);
+            return;
+        };
+        if let Some(e) = ed.error.clone() {
+            let g = ui.painter().layout(e, FontId::proportional(14.0), pal.danger, area.width().min(560.0));
+            ui.painter().galley(Pos2::new(area.center().x - g.size().x / 2.0, area.center().y - g.size().y / 2.0), g, pal.danger);
+            note_line(ui, Pos2::new(rect.center().x, rect.max.y - 14.0), "esc closes the editor", pal);
+            return;
+        }
+        let (Some(proj), Some(tl)) = (ed.project.clone(), ed.timeline.clone()) else {
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Opening recording…", FontId::proportional(16.0), pal.sub);
+            return;
+        };
+        // keys: ⌘Z / ⇧⌘Z undo and redo every edit; Space plays, arrows step one frame (shift: one
+        // second), Home/End jump. None of them while a panel number field is being typed in.
+        let typing = ctx.egui_wants_keyboard_input();
+        let (mut undo, mut redo) = (false, false);
+        ctx.input_mut(|i| {
+            if typing {
+                return;
+            }
+            redo = i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+            undo = !redo && i.consume_key(Modifiers::COMMAND, Key::Z);
+            let none = Modifiers::NONE;
+            if i.consume_key(none, Key::Space) {
+                ed.toggle_play(now, fps);
+            }
+            for (key, dir) in [(Key::ArrowLeft, -1i32), (Key::ArrowRight, 1)] {
+                let secs = i.consume_key(Modifiers::SHIFT, key);
+                if secs || i.consume_key(none, key) {
+                    ed.play = None;
+                    let t = if secs {
+                        crate::editor_ctl::step_seconds(&tl, ed.t, dir, fps, proj.duration)
+                    } else {
+                        crate::editor_ctl::step_frames(&tl, ed.t, dir, fps, proj.duration)
+                    };
+                    ed.seek(t, now, fps);
+                }
+            }
+            if i.consume_key(none, Key::Home) {
+                ed.seek(crate::editor_ctl::first_time(&tl), now, fps);
+            }
+            if i.consume_key(none, Key::End) {
+                ed.seek(ed.last(fps), now, fps);
+            }
+        });
+        let edit_now = ed.now();
+        if undo {
+            ed.undo(edit_now);
+        }
+        if redo {
+            ed.redo(edit_now);
+        }
+        ed.autosave_tick(edit_now);
+        if let Some(wait) = ed.st.autosave.wait(edit_now) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait.max(0.05)));
+        }
+        let (proj, tl) = match (ed.project.clone(), ed.timeline.clone()) {
+            (Some(p), Some(t)) => (p, t),
+            _ => (proj, tl),
+        };
+        // the timeline: click or drag to seek
+        let axis = Axis { x0: tl_rect.min.x, x1: tl_rect.max.x, duration: proj.duration };
+        let resp = ui.interact(tl_rect, Id::new("editor-timeline"), egui::Sense::click_and_drag());
+        if let (true, Some(p)) = (resp.clicked() || resp.dragged() || resp.drag_started(), resp.interact_pointer_pos()) {
+            ed.seek(axis.time_at(p.x), now, fps);
+        }
+        ctx.data_mut(|d| d.insert_temp(Id::new("editor-timeline-rect"), tl_rect));
+        // the preview: aspect-correct, as wide as it is on screen (at most 960 px)
+        let aspect = ed.tex.as_ref().map_or(16.0 / 9.0, |t| t.size()[0] as f32 / t.size()[1].max(1) as f32);
+        let (fw, fh) = fit((area.width(), area.height()), aspect);
+        ed.tick(now, fps, preview_width(fw, ppp));
+        if ed.playing() || ed.queue.busy() {
+            ctx.request_repaint();
+        }
+        let img_rect = Rect::from_center_size(area.center(), Vec2::new(fw, fh));
+        ctx.data_mut(|d| d.insert_temp(Id::new("editor-preview-rect"), img_rect));
+        if ed.st.picking {
+            let pick = ui.interact(img_rect, Id::new("editor-preview-pick"), egui::Sense::click());
+            if let (true, Some(pos)) = (pick.clicked(), pick.interact_pointer_pos()) {
+                let click =
+                    [f64::from((pos.x - img_rect.min.x) / img_rect.width()), f64::from((pos.y - img_rect.min.y) / img_rect.height())];
+                let camera = ed.shown_t.zip(ed.events.as_ref()).and_then(|(t, ev)| {
+                    let c = ferrocast_core::capture::compose::Composer::new(&proj, ev).at(t).camera?;
+                    Some([c.x, c.y, c.w, c.h])
+                });
+                crate::editor_panels::pick_focus(ed, click, camera, edit_now);
+            }
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        match ed.tex.as_ref() {
+            Some(t) => {
+                egui::Image::new(t).paint_at(ui, img_rect);
+            }
+            None => {
+                ui.painter().text(area.center(), Align2::CENTER_CENTER, "Rendering preview…", FontId::proportional(14.0), pal.sub);
+            }
+        }
+        if let Some(n) = ed.note.clone() {
+            ui.painter().text(
+                Pos2::new(area.center().x, area.max.y - 4.0),
+                Align2::CENTER_BOTTOM,
+                n,
+                FontId::proportional(12.0),
+                pal.danger,
+            );
+        }
+        // the timeline: ruler, trim/split/speed track, zoom track, playhead
+        let (ruler, track, zrow) = (
+            Rect::from_min_size(tl_rect.min, Vec2::new(tl_rect.width(), 16.0)),
+            Rect::from_min_size(tl_rect.min + Vec2::new(0.0, 22.0), Vec2::new(tl_rect.width(), 24.0)),
+            Rect::from_min_size(tl_rect.min + Vec2::new(0.0, 52.0), Vec2::new(tl_rect.width(), 24.0)),
+        );
+        let p = ui.painter();
+        let ticks = ruler_ticks(proj.duration, tl_rect.width(), 64.0);
+        let whole = ticks.get(1).is_none_or(|s| *s >= 1.0 - 1e-9);
+        for t in ticks {
+            let x = axis.x_at(t);
+            p.line_segment([Pos2::new(x, ruler.max.y - 4.0), Pos2::new(x, ruler.max.y)], egui::Stroke::new(1.0, pal.sub));
+            let label = clock(t);
+            let label = if whole { label.split('.').next().unwrap_or("").to_string() } else { label };
+            p.text(Pos2::new(x + 3.0, ruler.min.y), Align2::LEFT_TOP, label, FontId::proportional(10.5), pal.sub);
+        }
+        p.rect_filled(track, 5.0, pal.field);
+        p.rect_filled(zrow, 5.0, pal.field);
+        let bar_rect = |row: Rect, s: f64, e: f64| {
+            Rect::from_min_max(Pos2::new(axis.x_at(s), row.min.y), Pos2::new(axis.x_at(e).max(axis.x_at(s) + 1.0), row.max.y))
+        };
+        for b in segment_bars(&tl) {
+            let r = bar_rect(track, b.start, b.end);
+            match b.kind {
+                BarKind::Speed(f) => {
+                    p.rect_filled(r, 4.0, Color32::from_rgb(222, 150, 60).gamma_multiply(0.85));
+                    if r.width() > 28.0 {
+                        p.text(r.center(), Align2::CENTER_CENTER, format!("{f}×"), FontId::proportional(11.0), Color32::BLACK);
+                    }
+                }
+                _ => {
+                    p.rect_filled(r, 4.0, pal.accent.gamma_multiply(0.55));
+                }
+            }
+        }
+        for b in zoom_bars(&proj) {
+            p.rect_filled(bar_rect(zrow, b.start, b.end), 4.0, Color32::from_rgb(120, 110, 255).gamma_multiply(0.85));
+        }
+        let x = axis.x_at(ed.t);
+        p.line_segment([Pos2::new(x, ruler.max.y - 2.0), Pos2::new(x, zrow.max.y + 2.0)], egui::Stroke::new(2.0, pal.text));
+        p.add(egui::Shape::convex_polygon(
+            vec![Pos2::new(x - 5.0, ruler.max.y - 8.0), Pos2::new(x + 5.0, ruler.max.y - 8.0), Pos2::new(x, ruler.max.y)],
+            pal.text,
+            egui::Stroke::NONE,
+        ));
+        // the transport row: play/pause, time in output time (source time next to it), zoom count
+        let playing = ed.playing();
+        let (out_t, out_total) = (tl.to_output(ed.t), tl.output_duration());
+        let label = format!("{} / {}   ·   source {}", clock(out_t), clock(out_total), clock(ed.t));
+        let right = {
+            let n = proj.zooms.len();
+            let mut s = format!("{n} zoom{}", if n == 1 { "" } else { "s" });
+            let failed = matches!(ed.st.autosave.status(), crate::editor_panels::SaveStatus::Failed(_));
+            s.push_str(&format!(" · {}", if failed { "Not saved".to_string() } else { ed.save_label() }));
+            if let (true, Some(f)) = (playing, ed.rate.fps()) {
+                s.push_str(&format!(" · {f:.0} fps · {:.0} ms ({:.0} in the helper)", ed.rate.last_ms, ed.rate.last_helper_ms));
+            }
+            s
+        };
+        let (mut toggle, mut undo_btn, mut redo_btn) = (false, false, false);
+        ui.scope_builder(UiBuilder::new().max_rect(ctrl), |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                toggle = small_btn(ui, pal, if playing { "Pause" } else { "Play" });
+                ui.add_enabled_ui(ed.st.history.can_undo(), |ui| undo_btn = small_btn(ui, pal, "Undo"));
+                ui.add_enabled_ui(ed.st.history.can_redo(), |ui| redo_btn = small_btn(ui, pal, "Redo"));
+                ui.label(RichText::new(label).size(12.5).color(pal.text));
+            });
+        });
+        if matches!(ed.st.autosave.status(), crate::editor_panels::SaveStatus::Failed(_)) {
+            ui.painter().text(
+                Pos2::new(rect.center().x, rect.max.y - 2.0),
+                Align2::CENTER_BOTTOM,
+                ed.save_label(),
+                FontId::proportional(11.0),
+                pal.danger,
+            );
+        }
+        if undo_btn {
+            ed.undo(edit_now);
+        }
+        if redo_btn {
+            ed.redo(edit_now);
+        }
+        crate::editor_panels::draw_panel(ui, panel, pal, ed, &auto_opts, fps, edit_now);
+        ui.painter().text(Pos2::new(ctrl.max.x, ctrl.center().y), Align2::RIGHT_CENTER, right, FontId::proportional(11.5), pal.sub);
+        if toggle {
+            ed.toggle_play(now, fps);
+        }
+    }
+
     /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.
     #[allow(clippy::too_many_arguments)]
     fn draw_annotate(
@@ -4989,6 +5207,7 @@ impl App {
                 self.draw_edit_photo(ui, rect, pal, size, opts);
             }
             View::CaptureResult { file, size } => self.draw_capture_result(ui, rect, pal, &file, size),
+            View::Editor { project } => self.draw_editor(ui, rect, pal, &project),
             View::Annotate { file, size, doc, tool, color, sel } => {
                 self.draw_annotate(ui, rect, pal, &file, size, doc, tool, color, sel);
             }

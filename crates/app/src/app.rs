@@ -582,6 +582,10 @@ pub enum View {
     },
     /// Recordings browser (T19): the projects of the recordings folder, newest first.
     Recordings,
+    /// Studio editor (T26): the recording folder being edited; its state lives in `App::editor`.
+    Editor {
+        project: PathBuf,
+    },
 }
 
 /// One wheel segment: label, SF symbol, and what releasing on it does.
@@ -666,7 +670,8 @@ impl View {
             View::CropImage { .. } | View::VideoCrop { .. } => vec![("Crop", "↵"), BACK],
             View::Annotate { .. } => vec![SAVE, ("Undo", "⌘Z"), ("Delete", "⌫"), BACK],
             View::CaptureResult { .. } => vec![("Copy", "↵"), ("Save", "⌘S"), ("Annotate", "⌘⇧A"), BACK],
-            View::Recordings => vec![("Show in Finder", "↵"), ("Trash", "⌘⌫"), BACK],
+            View::Recordings => vec![("Open", "↵"), ("Show in Finder", "⌘↵"), ("Trash", "⌘⌫"), BACK],
+            View::Editor { .. } => vec![("Play", "space"), ("Frame", "←/→"), ("Undo", "⌘Z"), ("Redo", "⇧⌘Z"), BACK],
             View::Reorder { purpose, .. } => {
                 let primary = match purpose {
                     ReorderPurpose::JoinVideos => "Join",
@@ -699,6 +704,7 @@ impl View {
             View::Annotate { .. } => "Annotate Image",
             View::CaptureResult { .. } => "Capture",
             View::Recordings => "Recordings",
+            View::Editor { .. } => "Editor",
             View::EditPhoto { .. } => "Edit Photo",
             View::CropImage { .. } => "Crop Image",
             View::CompressImage { media: Some(_), .. } => "Compress Audio and Video",
@@ -978,6 +984,8 @@ pub struct App {
     tray_rec_shown: bool,
     /// Live recording flow state (T19): session number, pending target, command channel, browser rows.
     rt: crate::record_ctl::Runtime,
+    /// The studio editor session (T26), present while `View::Editor` is on the stack.
+    editor: Option<crate::editor_ctl::Editor>,
     /// The second menu-bar item that toggles Notes; present while `notes_menu_bar_button` is on.
     /// Dropping it removes the item.
     notes_tray: Option<Box<dyn std::any::Any>>,
@@ -1244,6 +1252,7 @@ impl App {
             record: Default::default(),
             tray_rec_shown: false,
             rt: Default::default(),
+            editor: None,
             notes_tray: None,
             stack: vec![View::Root],
             query: String::new(),
@@ -1673,6 +1682,7 @@ impl App {
     }
 
     fn hide(&mut self) {
+        self.editor_flush();
         self.visible = false;
         self.hidden_at = Instant::now();
         self.shared.visible.store(false, Ordering::Relaxed);
@@ -2521,6 +2531,7 @@ impl App {
 
     /// Writes pending notes and exits.
     fn quit(&mut self) -> ! {
+        self.editor_flush();
         self.notes_do(|c, d| c.flush(d));
         std::process::exit(0)
     }
@@ -2532,6 +2543,7 @@ impl App {
     }
 
     fn push(&mut self, v: View) {
+        self.editor_flush();
         self.sec_dirty = true;
         self.nav_at = Instant::now();
         if matches!(v, View::Windows) {
@@ -2598,7 +2610,15 @@ impl App {
         });
     }
 
+    /// Write the editor's pending edits now (Esc, closing, hiding, switching view, quitting).
+    fn editor_flush(&mut self) {
+        if let Some(ed) = self.editor.as_mut() {
+            ed.flush(ed.now());
+        }
+    }
+
     fn pop(&mut self) {
+        self.editor_flush();
         // Escape (or going back) also ends a running translating effect
         self.end_effect(false);
         self.sec_dirty = true;
@@ -2820,6 +2840,7 @@ impl App {
     }
 
     fn reset_to_root(&mut self) {
+        self.editor_flush();
         self.sec_dirty = true;
         self.nav_at = Instant::now();
         self.stack = vec![View::Root];
@@ -2833,9 +2854,10 @@ impl App {
     // ------------------------------------------------------------- messages
 
     fn drain(&mut self) {
+        self.editor_gc();
         while let Ok(m) = self.rx.try_recv() {
             // icon bytes only feed the icon cache: the list holds icon descriptors, not pixels
-            if !matches!(m, Msg::IconBytes(..)) {
+            if !matches!(m, Msg::IconBytes(..) | Msg::Editor(..)) {
                 self.sec_dirty = true;
             }
             match m {
@@ -3566,6 +3588,7 @@ impl App {
                     }
                 }
                 Msg::Record(m) => self.handle_record(m),
+                Msg::Editor(m) => self.handle_editor(*m),
                 Msg::Capture(outcome) => self.finish_capture(outcome),
                 Msg::CaptureListed(flow, listed) => self.capture_listed(flow, listed),
                 Msg::CaptureSelected(flow, selection, shareable) => self.capture_selected(flow, selection, *shareable),
@@ -4704,7 +4727,8 @@ impl App {
             }
             Kind::RunningTimer(i) => a.push(Action::new("Cancel Timer", Act::CancelTimer(*i)).danger()),
             Kind::Recording(p) => {
-                a.push(Action::new("Show in Finder", Act::Run));
+                a.push(Action::new("Open in Editor", Act::Run));
+                a.push(Action::new("Show in Finder", Act::Reveal(p.clone())).key(CMD, Key::Enter));
                 a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Move to Trash", Act::Trash(p.clone())).key(CMD, Key::Backspace).danger());
             }
@@ -4760,7 +4784,7 @@ impl App {
             Kind::Editor(_) => "Open Editor",
             Kind::Timer(..) => "Start Timer",
             Kind::RunningTimer(_) => "Cancel Timer",
-            Kind::Recording(_) => "Show in Finder",
+            Kind::Recording(_) => "Open in Editor",
             Kind::WebSearch(_) => "Search",
             Kind::Window(_) => "Apply to Window",
             _ => "Run Command",
@@ -5037,11 +5061,9 @@ impl App {
                 let i = *i;
                 self.cancel_timer(i);
             }
-            // the editor comes in P3: until then a recording is shown in Finder
             Kind::Recording(p) => {
-                let _ = apps::reveal(p);
-                self.hide();
-                self.reset_to_root();
+                let p = p.clone();
+                self.open_editor(p);
             }
         }
     }
@@ -5451,20 +5473,68 @@ impl App {
         self.invalidate_sections();
     }
 
-    /// Open Last Recording: the editor comes in P3, so for now the newest project is shown in Finder.
+    /// Open Last Recording: the newest project in the studio editor (the launcher is shown for it).
     fn open_last_recording(&mut self) {
         if !self.capture_gate() {
             return;
         }
         match crate::record_ctl::newest(&self.recordings_dir()) {
             Some(p) => {
-                let _ = apps::reveal(&p);
-                let name = p.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                self.hide();
+                if !self.visible {
+                    self.show();
+                }
                 self.reset_to_root();
-                self.capture_say(format!("Showing {name} in Finder. {}", crate::record_ctl::NO_EDITOR_NOTE));
+                self.open_editor(p);
             }
             None => self.capture_say("No recordings yet".into()),
+        }
+    }
+
+    /// Open the studio editor on a project folder: a render worker loads it (applying the auto zooms
+    /// in memory when it has none and `capture.auto_zoom` is on) and renders the preview frames.
+    fn open_editor(&mut self, dir: PathBuf) {
+        self.editor_flush();
+        let exe = self.capture.exe.clone();
+        let root = self.store.root.clone();
+        let log = move |m: &str| instance::log(&root, m);
+        let c = &self.settings.capture;
+        let auto = c.auto_zoom.then(|| ferrocast_core::capture::zoom::ZoomOpts { scale: c.zoom_scale, ..Default::default() });
+        let bus = self.bus.clone();
+        let tx = crate::editor_ctl::spawn_worker(
+            dir.clone(),
+            auto,
+            crate::editor_ctl::helper_renderer(exe, log),
+            Box::new(move |m| bus.send(Msg::Editor(Box::new(m)))),
+        );
+        self.editor = Some(crate::editor_ctl::Editor::new(dir.clone(), Some(tx)));
+        self.push(View::Editor { project: dir });
+    }
+
+    /// The editor session ends with its view: dropping it stops the worker and the helper.
+    fn editor_gc(&mut self) {
+        if !self.stack.iter().any(|v| matches!(v, View::Editor { .. })) {
+            self.editor_flush();
+        }
+        if self.editor.is_some() && !self.stack.iter().any(|v| matches!(v, View::Editor { .. })) {
+            self.editor = None;
+        }
+    }
+
+    fn handle_editor(&mut self, m: crate::editor_ctl::EditorMsg) {
+        use crate::editor_ctl::EditorMsg;
+        let Some(ed) = self.editor.as_mut() else { return };
+        match m {
+            EditorMsg::Opened { dir, result } if dir == ed.dir => ed.opened(result.map(|o| *o)),
+            EditorMsg::Frame { dir, seq, result } if dir == ed.dir => {
+                if let Some((img, t)) = ed.frame_back(seq, result) {
+                    match ed.tex.as_mut() {
+                        Some(t) => t.set(img, egui::TextureOptions::LINEAR),
+                        None => ed.tex = Some(self.ctx.load_texture("editor-preview", img, egui::TextureOptions::LINEAR)),
+                    }
+                    ed.shown_t = Some(t);
+                }
+            }
+            _ => {}
         }
     }
 
