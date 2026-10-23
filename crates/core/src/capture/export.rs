@@ -13,7 +13,7 @@
 
 use super::compose::{Composer, FrameParams};
 use super::events::Events;
-use super::project::Project;
+use super::project::{AudioTrack, Project};
 use super::timeline::{self, Timeline};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
@@ -97,9 +97,65 @@ pub struct Segment {
     pub speed: f64,
 }
 
+/// Which recorded audio file an [`AudioInput`] mixes (wire names `mic` / `system`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioKind {
+    Mic,
+    System,
+}
+
+/// One run of an audio file placed on the output timeline (`timeline::AudioSegment` on the wire).
+/// Seconds; `src_*` is file time, `out_start` the position in the video, the run lasts
+/// `(src_end - src_start) / speed` (a rate change: the pitch follows the speed).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AudioRun {
+    pub src_start: f64,
+    pub src_end: f64,
+    pub out_start: f64,
+    pub speed: f64,
+}
+
+/// One audio file of the MP4 mix: the plain file name inside the project, the linear gain
+/// (`Audio::linear_gain`) and its runs. Muted or zero-gain tracks are never sent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioInput {
+    pub track: AudioKind,
+    pub file: String,
+    pub gain: f64,
+    pub segments: Vec<AudioRun>,
+}
+
+/// The audio inputs of `project` for an MP4 export: mic then system, skipping tracks without a
+/// source, without runs, or with a zero (muted) gain.
+pub fn audio_inputs(project: &Project) -> Vec<AudioInput> {
+    [(AudioKind::Mic, AudioTrack::Mic), (AudioKind::System, AudioTrack::System)]
+        .into_iter()
+        .filter_map(|(kind, track)| {
+            let src = match track {
+                AudioTrack::Mic => project.sources.mic.as_ref(),
+                AudioTrack::System => project.sources.system.as_ref(),
+            }?;
+            let gain = project.audio.linear_gain(track);
+            let segments: Vec<AudioRun> = timeline::audio_segments(project, track)
+                .into_iter()
+                .map(|s| AudioRun { src_start: s.src_start, src_end: s.src_end, out_start: s.out_start, speed: s.speed })
+                .collect();
+            (gain.is_finite() && gain > 0.0 && !segments.is_empty()).then(|| AudioInput {
+                track: kind,
+                file: src.file.clone(),
+                gain,
+                segments,
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportPlan {
     pub segments: Vec<Segment>,
+    /// Audio files to mix into an MP4 (empty for a GIF or a project without audio).
+    pub audio: Vec<AudioInput>,
     /// `timeline::output_duration`.
     pub duration: f64,
     pub frames: u32,
@@ -196,7 +252,8 @@ pub fn export_plan(project: &Project, source: [u32; 2], opts: &ExportOptions) ->
             return Err(PlanError::GifTooLong { frames, max_seconds: (f64::from(max_frames) / f64::from(fps)).floor() });
         }
     }
-    Ok(ExportPlan { segments, duration, frames, size: [w, h], fps, format: opts.format, codec: opts.codec, quality: opts.quality })
+    let audio = if gif { vec![] } else { audio_inputs(project) };
+    Ok(ExportPlan { segments, audio, duration, frames, size: [w, h], fps, format: opts.format, codec: opts.codec, quality: opts.quality })
 }
 
 /// Output width for a resolution tier: `long_edge` is the longer side of the result
@@ -288,6 +345,35 @@ mod tests {
             assert!((video - dur).abs() <= 1.0 / f64::from(fps), "{dur} @ {fps}: {} frames", plan.frames);
             assert!(plan.frames >= 1);
         }
+    }
+
+    #[test]
+    fn audio_inputs_follow_sources_gain_and_timeline() {
+        use super::super::project::{Source, TrackMix};
+        let mut p = project(10.0);
+        assert!(export_plan(&p, SRC, &opts(640, 30)).unwrap().audio.is_empty(), "no audio sources: nothing sent");
+        p.sources.mic = Some(Source { file: "mic.m4a".into(), offset: 0.5 });
+        p.sources.system = Some(Source { file: "system.m4a".into(), offset: 0.0 });
+        p.speeds = vec![Speed { start: 4.0, end: 6.0, factor: 2.0 }];
+        let plan = export_plan(&p, SRC, &opts(640, 30)).unwrap();
+        let names: Vec<_> = plan.audio.iter().map(|a| (a.track, a.file.as_str())).collect();
+        assert_eq!(names, vec![(AudioKind::Mic, "mic.m4a"), (AudioKind::System, "system.m4a")]);
+        assert_eq!(plan.audio[0].gain, 1.0);
+        assert_eq!(plan.audio[1].gain, 0.6);
+        // mic: file time = screen time - 0.5; three pieces (0..4, 4..6 at 2x, 6..10)
+        let m = &plan.audio[0].segments;
+        assert_eq!(m.len(), 3);
+        assert!((m[0].src_start - 0.0).abs() < 1e-12 && (m[0].out_start - 0.5).abs() < 1e-12);
+        assert_eq!(m[1].speed, 2.0);
+        // muted or zero-gain tracks are not sent; a GIF has no audio
+        p.audio.mic = Some(TrackMix { gain_db: 0.0, mute: true });
+        let plan = export_plan(&p, SRC, &opts(640, 30)).unwrap();
+        assert_eq!(plan.audio.iter().map(|a| a.track).collect::<Vec<_>>(), vec![AudioKind::System]);
+        p.audio.mute = true;
+        assert!(export_plan(&p, SRC, &opts(640, 30)).unwrap().audio.is_empty());
+        p.audio.mute = false;
+        let gif = ExportOptions { format: Format::Gif, ..opts(640, 15) };
+        assert!(export_plan(&p, SRC, &gif).unwrap().audio.is_empty());
     }
 
     #[test]

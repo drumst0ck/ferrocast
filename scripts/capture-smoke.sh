@@ -922,6 +922,524 @@ PY
     else
       echo "SKIP: render GIF (swiftc/ImageIO fixture not available)"
     fi
+    # P4 (T32 + T33): the camera overlay and the export audio, on SYNTHETIC sources (no camera or
+    # microphone permission needed): camera.mov (640x360, coloured quadrants + a white marker that moves
+    # with the frame number, offset 0.25 s, only 2 s long), mic.m4a (44.1 kHz mono, 440 Hz from file time
+    # 0.5 s, offset 0.1 s) and system.m4a (48 kHz stereo, 880 Hz from 1.0 s). Checks: for four shape /
+    # corner / size / mirror layouts the overlay sits at the rectangle `capture::camera::rect` gives
+    # (re-derived in Python), shows the camera pixels inside the shape and the screen at the corners of its
+    # bounding square, nothing outside it changes, a frame before the camera starts or after it ends has no
+    # overlay (byte-identical to no camera), the marker gives the camera frame (time - offset), a zoomed
+    # viewport leaves the overlay fixed, raw == PNG, sequential == generator; the helper frame time with and
+    # without the camera; the MP4 mix (ONE AAC track as long as the video, tones at the expected times with
+    # a Goertzel/DFT over PCM decoded by afconvert, 2x run: half the length and double the frequency, a
+    # muted / zero-gain track removed, a gap stays silent, cancel and bad requests). PNGs of each layout
+    # stay in target/capture-spike/export-smoke/p4/.
+    p4d="$rdir/P4.ferrocast"
+    mkdir -p "$p4d/.cache" target/capture-spike/export-smoke/p4
+    cat > "$rdir/gen-p4.swift" <<'SWIFT_P4'
+import AVFoundation
+import CoreGraphics
+import Foundation
+
+// usage: gen-p4 <project-dir>: the P4 sources of a synthetic project, next to the screen.mov of gen.swift.
+//  camera.mov  640x360, 30 fps, 60 frames (2.0 s): quadrants red / green (top) and blue / yellow (bottom)
+//              and a white 30 px marker at x = 20 + (frame * 8) % 600, y = 165...195 (it encodes the frame)
+//  mic.m4a     44.1 kHz MONO, 3.0 s: silence until 0.5 s, then a 440 Hz sine (amplitude 0.5)
+//  system.m4a  48 kHz stereo, 3.0 s: silence until 1.0 s, then an 880 Hz sine (amplitude 0.5)
+let dir = URL(fileURLWithPath: CommandLine.arguments[1])
+let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
+
+func writeCamera() throws {
+    let url = dir.appendingPathComponent("camera.mov")
+    try? FileManager.default.removeItem(at: url)
+    let w = 640, h = 360
+    let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+    let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+        AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: w, AVVideoHeightKey: h,
+        // tagged like a real camera take: an untagged movie is decoded with an assumed matrix and its colours shift
+        AVVideoColorPropertiesKey: [
+            AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+            AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+            AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+        ]])
+    let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        kCVPixelBufferWidthKey as String: w, kCVPixelBufferHeightKey as String: h])
+    writer.add(input)
+    writer.startWriting()
+    writer.startSession(atSourceTime: .zero)
+    for i in 0..<60 {
+        while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.005) }
+        var pb: CVPixelBuffer?
+        CVPixelBufferPoolCreatePixelBuffer(nil, adaptor.pixelBufferPool!, &pb)
+        let buf = pb!
+        CVPixelBufferLockBaseAddress(buf, [])
+        let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buf), width: w, height: h, bitsPerComponent: 8,
+                            bytesPerRow: CVPixelBufferGetBytesPerRow(buf), space: srgb,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+        // CoreGraphics is y-up: the "top" quadrants are the high y values
+        ctx.setFillColor(CGColor(red: 0.9, green: 0.1, blue: 0.1, alpha: 1)); ctx.fill(CGRect(x: 0, y: 180, width: 320, height: 180))
+        ctx.setFillColor(CGColor(red: 0.1, green: 0.8, blue: 0.1, alpha: 1)); ctx.fill(CGRect(x: 320, y: 180, width: 320, height: 180))
+        ctx.setFillColor(CGColor(red: 0.1, green: 0.2, blue: 0.9, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: 320, height: 180))
+        ctx.setFillColor(CGColor(red: 0.95, green: 0.9, blue: 0.1, alpha: 1)); ctx.fill(CGRect(x: 320, y: 0, width: 320, height: 180))
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 20 + (i * 8) % 600, y: 165, width: 30, height: 30))
+        CVPixelBufferUnlockBaseAddress(buf, [])
+        CVBufferSetAttachment(buf, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(buf, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(buf, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+        adaptor.append(buf, withPresentationTime: CMTime(value: Int64(i), timescale: 30))
+    }
+    input.markAsFinished()
+    let sem = DispatchSemaphore(value: 0)
+    writer.finishWriting { sem.signal() }
+    sem.wait()
+    if writer.status != .completed { FileHandle.standardError.write(Data("camera fixture failed\n".utf8)); exit(1) }
+}
+
+func writeTone(_ name: String, rate: Double, channels: Int, freq: Double, from: Double, seconds: Double) throws {
+    let url = dir.appendingPathComponent(name)
+    try? FileManager.default.removeItem(at: url)
+    var file: AVAudioFile? = try AVAudioFile(forWriting: url, settings: [
+        AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: rate, AVNumberOfChannelsKey: channels, AVEncoderBitRateKey: 96000],
+        commonFormat: .pcmFormatFloat32, interleaved: false)
+    let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: AVAudioChannelCount(channels), interleaved: false)!
+    let total = Int(seconds * rate)
+    let chunk = 4096
+    var done = 0
+    while done < total {
+        let n = min(chunk, total - done)
+        let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(n))!
+        buf.frameLength = AVAudioFrameCount(n)
+        for c in 0..<channels {
+            let p = buf.floatChannelData![c]
+            for i in 0..<n {
+                let t = Double(done + i) / rate
+                p[i] = t >= from ? Float(0.5 * sin(2 * Double.pi * freq * t)) : 0
+            }
+        }
+        try file!.write(from: buf)
+        done += n
+    }
+    file = nil
+}
+
+try writeCamera()
+try writeTone("mic.m4a", rate: 44100, channels: 1, freq: 440, from: 0.5, seconds: 3.0)
+try writeTone("system.m4a", rate: 48000, channels: 2, freq: 880, from: 1.0, seconds: 3.0)
+SWIFT_P4
+    if ! command -v afconvert >/dev/null 2>&1; then
+      echo "SKIP: render camera overlay + audio mix (afconvert not available)"
+    elif swiftc -O "$rdir/gen-p4.swift" -o "$rdir/gen-p4" 2>/dev/null && "$rdir/gen" "$p4d" 90 && "$rdir/gen-p4" "$p4d"; then
+      p4r_out=$(python3 - "$helper" "$p4d" "$PWD/target/capture-spike/export-smoke/p4" "$PWD/crates/core/fixtures/render_project.json" <<'PY'
+import json, math, os, shutil, struct, subprocess, sys, wave, zlib
+
+helper, project, outdir, fixture = sys.argv[1:5]
+os.makedirs(outdir, exist_ok=True)
+os.makedirs(project + "/.cache", exist_ok=True)
+_id = [0]
+procs = []
+
+def start():
+    p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    procs.append(p)
+    return p
+
+def call(p, o):
+    _id[0] += 1; o = dict(o, id=_id[0])
+    p.stdin.write(json.dumps(o) + "\n"); p.stdin.flush()
+    while True:
+        l = json.loads(p.stdout.readline())
+        if l.get("id") == o["id"] and "event" not in l: return l
+
+def stop(p):
+    p.stdin.close()
+    try: p.wait(timeout=10)
+    except Exception: p.kill()
+
+def png_pixels(path):
+    d = open(path, "rb").read(); assert d[:8] == b"\x89PNG\r\n\x1a\n"
+    pos, idat = 8, b""
+    while pos < len(d):
+        n, typ = struct.unpack(">I4s", d[pos:pos + 8]); body = d[pos + 8:pos + 8 + n]; pos += 12 + n
+        if typ == b"IHDR": w, h, depth, ct = struct.unpack(">IIBB", body[:10]); assert depth == 8 and ct in (2, 6), (depth, ct)
+        if typ == b"IDAT": idat += body
+    bpp = 4 if ct == 6 else 3
+    raw, stride, rows, prev, q = zlib.decompress(idat), w * bpp, [], bytearray(w * bpp), 0
+    for _ in range(h):
+        f, line = raw[q], bytearray(raw[q + 1:q + 1 + stride]); q += 1 + stride
+        for i in range(stride):
+            a = line[i - bpp] if i >= bpp else 0; b = prev[i]; c = prev[i - bpp] if i >= bpp else 0
+            if f == 1: line[i] = (line[i] + a) & 255
+            elif f == 2: line[i] = (line[i] + b) & 255
+            elif f == 3: line[i] = (line[i] + ((a + b) >> 1)) & 255
+            elif f == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else (b if pb <= pc else c))) & 255
+        rows.append(bytes(line)); prev = line
+    px = b"".join(rows)
+    if bpp == 3: px = b"".join(px[i:i + 3] + b"\xff" for i in range(0, len(px), 3))
+    return w, h, px
+
+# ---- the project: the render fixture, 3 s, plus the P4 sources
+base = json.load(open(fixture))
+base["duration"] = 3.0
+base["trims"] = [{"start": 0.0, "end": 3.0}]
+base["sources"]["camera"] = {"file": "camera.mov", "offset": 0.25}
+base["sources"]["mic"] = {"file": "mic.m4a", "offset": 0.1}
+base["sources"]["system"] = {"file": "system.m4a", "offset": 0.0}
+
+def write_project(cam=None):
+    p = json.loads(json.dumps(base))
+    if cam is not None: p["camera"] = cam
+    json.dump(p, open(project + "/project.json", "w"))
+
+W = 960
+
+def rawframe(p, t, **kw):
+    path = project + "/.cache/p4.rgba"
+    r = call(p, dict({"cmd": "render.frame", "project": project, "t": t, "width": W, "out": path, "format": "raw"}, **kw))
+    assert r.get("ok"), r
+    data = open(path, "rb").read()
+    w, h = r["size"]; assert len(data) == w * h * 4
+    return r, w, h, data
+
+def pngframe(p, t, out, **kw):
+    r = call(p, dict({"cmd": "render.frame", "project": project, "t": t, "width": W, "out": out}, **kw))
+    assert r.get("ok"), r
+    return r
+
+def px(data, w, x, y): o = (y * w + x) * 4; return tuple(data[o:o + 3])
+
+# camera::rect ported a second time (independently of Swift) for the expectations
+def rect(cw, ch, corner, size, margin):
+    side = max(1.0, min(float(round(size * cw)), min(cw, ch)))
+    m = max(0.0, float(round(margin * cw)))
+    mx, my = min(m, max(cw - side, 0)), min(m, max(ch - side, 0))
+    x = mx if corner in ("top_left", "bottom_left") else cw - side - mx
+    y = my if corner in ("top_left", "top_right") else ch - side - my
+    return int(x), int(y), int(side)
+
+def cam_colour(u, v, mirror):
+    cx = 140 + ((1 - u) if mirror else u) * 360; cy = v * 360
+    return {(0, 0): (230, 26, 26), (1, 0): (26, 204, 26), (0, 1): (26, 51, 230), (1, 1): (242, 230, 26)}[(int(cx >= 320), int(cy >= 180))]
+
+def close(a, b, tol): return max(abs(x - y) for x, y in zip(a, b)) <= tol
+
+def marker_index(data, w, r, mirror):
+    x0, y0, side = r
+    y = y0 + side // 2
+    xs = [x for x in range(x0, x0 + side) if all(c >= 225 for c in px(data, w, x, y))]
+    assert xs, "no marker found"
+    u = ((min(xs) + max(xs)) / 2 - x0 + 0.5) / side
+    cx = 140 + ((1 - u) if mirror else u) * 360
+    return (cx - 35) / 8
+
+def note(s): print(s)
+
+try:
+    # ===== A. camera overlay: placement, shape, mirror, time window =====
+    write_project()
+    p = start()
+    _, w0, h0, base_before = rawframe(p, 0.1)
+    _, _, _, base_in = rawframe(p, 1.25)
+    _, _, _, base_in2 = rawframe(p, 1.75)
+    _, _, _, base_after = rawframe(p, 2.5)
+    _, _, _, base_zoom = rawframe(p, 1.25, camera={"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5})
+    stop(p)
+    write_project({"shape": "circle", "corner": "bottom_right", "visible": False})
+    p = start()
+    hid = rawframe(p, 1.25)[3]
+    stop(p)
+    assert hid == base_in, "visible:false must render exactly like no camera"
+    note("overlay: visible:false renders byte-identical to no camera")
+    assert (w0, h0) == (960, 540)
+
+    configs = [
+        ("circle-br-mirror", {"shape": "circle", "corner": "bottom_right", "size": 0.20, "margin": 0.02, "mirror": True, "visible": True}),
+        ("rounded-tl", {"shape": "rounded", "corner": "top_left", "size": 0.25, "margin": 0.03, "mirror": False, "visible": True}),
+        ("square-tr", {"shape": "square", "corner": "top_right", "size": 0.30, "margin": 0.0, "mirror": False, "visible": True}),
+        ("circle-bl-big", {"shape": "circle", "corner": "bottom_left", "size": 0.40, "margin": 0.25, "mirror": True, "visible": True}),
+    ]
+    for name, cam in configs:
+        write_project(cam)
+        p = start()
+        _, w, h, f_in = rawframe(p, 1.25)
+        _, _, _, f_in2 = rawframe(p, 1.75)
+        _, _, _, f_before = rawframe(p, 0.1)
+        _, _, _, f_after = rawframe(p, 2.5)
+        _, _, _, f_zoom = rawframe(p, 1.25, camera={"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5})
+        pngframe(p, 1.25, outdir + "/camera-%s.png" % name)
+        pw, ph, ppx = png_pixels(outdir + "/camera-%s.png" % name)
+        stop(p)
+        rc = rect(w, h, cam["corner"], cam["size"], cam["margin"])
+        x0, y0, side = rc
+        # before the camera file starts (t - 0.25 < 0) and after it ends (t - 0.25 >= 2.0): no overlay, no frozen frame
+        assert f_before == base_before, "%s: overlay drawn before the camera starts" % name
+        assert f_after == base_after, "%s: overlay drawn after the camera ended" % name
+        assert ppx == f_in, "%s: raw differs from the PNG (%d bytes)" % (name, sum(a != b for a, b in zip(ppx, f_in)))
+        # nothing changes away from the overlay: every pixel farther than 40 px from the rect equals the baseline
+        far = 0; changed = 0
+        for y in range(h):
+            for x in range(w):
+                if x0 - 40 <= x < x0 + side + 40 and y0 - 40 <= y < y0 + side + 40: continue
+                far += 1
+                o = (y * w + x) * 4
+                if f_in[o:o + 4] != base_in[o:o + 4]: changed += 1
+        assert changed == 0, "%s: %d pixels changed away from the overlay" % (name, changed)
+        mir = cam["mirror"]; worst = 0
+        for u, v in ((0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)):
+            got = px(f_in, w, x0 + int(u * side), y0 + int(v * side)); want = cam_colour(u, v, mir)
+            worst = max(worst, max(abs(a - b) for a, b in zip(got, want)))
+            assert close(got, want, 45), "%s: (%s,%s) is %s, expected camera %s" % (name, u, v, got, want)
+        if cam["shape"] != "square":
+            for fx_, fy_ in ((3, 3), (side - 4, 3), (3, side - 4), (side - 4, side - 4)):
+                got = px(f_in, w, x0 + fx_, y0 + fy_); want = px(base_in, w, x0 + fx_, y0 + fy_)
+                assert close(got, want, 4), "%s: corner (%d,%d) of the square is %s, the screen has %s" % (name, fx_, fy_, got, want)
+            if cam["shape"] == "circle":
+                d = int(side / 2 * (1 - 1 / math.sqrt(2))) + 6
+                got = px(f_in, w, x0 + d, y0 + d); u = d / side
+                assert close(got, cam_colour(u, u, mir), 40), (name, got)
+        else:
+            got = px(f_in, w, x0 + 1, y0 + 1); assert close(got, cam_colour(1 / side, 1 / side, mir), 40), (name, "square corner", got)
+        sy = min(y0 + side + 2, h - 1); sx = x0 + side // 2
+        shadow_diff = max(abs(a - b) for a, b in zip(px(f_in, w, sx, sy), px(base_in, w, sx, sy)))
+        i1 = marker_index(f_in, w, rc, mir); i2 = marker_index(f_in2, w, rc, mir)
+        assert abs(i1 - 30) <= 1.5 and abs(i2 - 45) <= 1.5, (name, i1, i2)
+        ov_same = all(px(f_zoom, w, x0 + int(u * side), y0 + int(v * side)) == px(f_in, w, x0 + int(u * side), y0 + int(v * side))
+                      for u, v in ((0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75), (0.5, 0.5)))
+        card_changed = sum(1 for i in range(0, w * h * 4, 4 * 97) if f_zoom[i:i + 4] != f_in[i:i + 4])
+        assert ov_same and card_changed > 0, (name, ov_same, card_changed)
+        note("overlay %-16s rect x=%d y=%d side=%d | inside colours max dev %d | marker frame %.1f / %.1f (want 30 / 45) | shadow dev %d | "
+             "%d px away from the overlay unchanged | zoom keeps overlay fixed" % (name, x0, y0, side, worst, i1, i2, shadow_diff, far))
+
+    # sequential vs generator for a consecutive run
+    write_project(configs[0][1])
+    rc0 = rect(960, 540, "bottom_right", 0.2, 0.02)
+    p = start()
+    seq = [marker_index(rawframe(p, 0.9 + k / 30)[3], 960, rc0, True) for k in range(12)]
+    stop(p)
+    p = start()
+    gen = [marker_index(rawframe(p, 0.9 + k / 30, decode="generator")[3], 960, rc0, True) for k in range(12)]
+    stop(p)
+    want = [int((0.9 + k / 30 - 0.25) * 30 + 1e-6) for k in range(12)]
+    assert all(abs(a - b) <= 1.5 for a, b in zip(seq, want)) and all(abs(a - b) <= 1.5 for a, b in zip(gen, want)), (seq, gen, want)
+    note("overlay consecutive run: marker frames sequential %s | generator %s | expected %s" % ([round(x) for x in seq], [round(x) for x in gen], want))
+
+    # ===== B. frame time with and without the camera (helper `ms`, 960 px raw, 60 consecutive) =====
+    def timing(cam):
+        write_project(cam)
+        p = start()
+        ms = [rawframe(p, 0.5 + k / 30)[0]["ms"] for k in range(60)][1:]
+        stop(p)
+        s = sorted(ms)
+        return sum(ms) / len(ms), s[len(s) // 2]
+    off = timing(None); on = timing(configs[0][1])
+    note("frame time (960 px raw, 59 consecutive frames, helper ms): without camera mean %.2f median %.2f | with camera mean %.2f median %.2f | overhead %+.2f ms mean"
+         % (off[0], off[1], on[0], on[1], on[0] - off[0]))
+
+    # ===== C. export audio =====
+    write_project()
+    pf = project + "/.cache/p4-params.ndjson"
+    def params(n, step=1 / 30):
+        with open(pf, "w") as f:
+            for i in range(n): f.write(json.dumps({"t": min(i * step, 2.96)}) + "\n")
+    def tracks(path):
+        d = open(path, "rb").read(); out = []
+        def boxes(s, e):
+            while s + 8 <= e:
+                size, kind = struct.unpack(">I4s", d[s:s + 8]); h = 8
+                if size == 1: size = struct.unpack(">Q", d[s + 8:s + 16])[0]; h = 16
+                if size == 0: size = e - s
+                yield kind.decode("latin1"), s + h, s + size
+                s += size
+        for k, a, b in boxes(0, len(d)):
+            if k != "moov": continue
+            ts = None
+            for k2, a2, b2 in boxes(a, b):
+                if k2 == "mvhd": ts = struct.unpack(">I", d[a2 + 12:a2 + 16])[0]
+                if k2 == "trak":
+                    dur = None; handler = None
+                    for k3, a3, b3 in boxes(a2, b2):
+                        if k3 == "tkhd": dur = struct.unpack(">I", d[a3 + 20:a3 + 24])[0] / ts
+                        if k3 == "mdia":
+                            for k4, a4, b4 in boxes(a3, b3):
+                                if k4 == "hdlr": handler = d[a4 + 8:a4 + 12].decode("latin1")
+                    out.append((handler, dur))
+        return out
+    def export(name, n, audio=None, segs=None, **kw):
+        out = outdir + "/" + name
+        for f in (out, out + ".partial"):
+            if os.path.exists(f): os.remove(f)
+        req = {"cmd": "render", "project": project, "out": out, "format": "mp4", "codec": "h264", "width": 480, "height": 270,
+               "fps": 30, "quality": "standard", "frames": n,
+               "segments": segs or [{"src_start": 0.0, "src_end": n / 30.0, "speed": 1.0}], "params_file": pf}
+        if audio is not None: req["audio"] = audio
+        req.update(kw)
+        pr = start()
+        r = call(pr, req)
+        stop(pr)
+        return out, r
+    def pcm(mp4):
+        wav = mp4 + ".wav"
+        subprocess.run(["afconvert", "-f", "WAVE", "-d", "LEI16@48000", mp4, wav], check=True, capture_output=True)
+        wf = wave.open(wav, "rb"); n = wf.getnframes(); raw = wf.readframes(n)
+        assert wf.getnchannels() == 2 and wf.getframerate() == 48000, (wf.getnchannels(), wf.getframerate())
+        both = struct.unpack("<%dh" % (2 * n), raw)
+        return [v / 32768.0 for v in both[0::2]], wf.getframerate()   # left channel (both are identical)
+    def amp(x, f, t0, t1, rate=48000):
+        seg = x[int(t0 * rate):min(int(t1 * rate), len(x))]; n = len(seg)
+        if n < 16: return 0.0
+        k = 2 * math.pi * f / rate; c = 2 * math.cos(k); s1 = s2 = 0.0
+        for v in seg:
+            s0 = v + c * s1 - s2; s2 = s1; s1 = s0
+        return 2 * math.sqrt(max(s1 * s1 + s2 * s2 - c * s1 * s2, 0)) / n
+    def onset(x, f, steady, win=0.01, hop=0.0025):
+        t = 0.0
+        while (t + win) * 48000 < len(x):
+            if amp(x, f, t, t + win) >= 0.5 * steady: return t + win / 2
+            t += hop
+        return None
+    def last_above(x, f, steady, win=0.01, hop=0.0025):
+        t = len(x) / 48000 - win
+        while t > 0:
+            if amp(x, f, t, t + win) >= 0.5 * steady: return t + win / 2
+            t -= hop
+        return None
+    def vid_aud(out):
+        tr = tracks(out)
+        return [d for h, d in tr if h == "vide"][0], [d for h, d in tr if h == "soun"]
+
+    mic_run = {"track": "mic", "file": "mic.m4a", "gain": 1.0, "segments": [{"src_start": 0.0, "src_end": 2.9, "out_start": 0.1, "speed": 1.0}]}
+    sys_run = {"track": "system", "file": "system.m4a", "gain": 0.6, "segments": [{"src_start": 0.0, "src_end": 3.0, "out_start": 0.0, "speed": 1.0}]}
+
+    # C1: both tracks, no edit. mic tone: file 0.5 + offset 0.1 -> 0.6 s; system tone at 1.0 s
+    params(90)
+    out, r = export("audio-mix.mp4", 90, [mic_run, sys_run])
+    assert r.get("ok"), r
+    vid, aud = vid_aud(out)
+    assert len(aud) == 1, aud
+    x, rate = pcm(out)
+    adur = len(x) / rate
+    m_on = onset(x, 440, 0.5); s_on = onset(x, 880, 0.3)
+    m_amp = amp(x, 440, 1.5, 2.5); s_amp = amp(x, 880, 1.5, 2.5)
+    assert abs(vid - 3.0) <= 1 / 30 and abs(aud[0] - vid) <= 1 / 30 and abs(adur - vid) <= 1 / 30, (vid, aud, adur)
+    assert abs(m_on - 0.6) <= 0.02 and abs(s_on - 1.0) <= 0.02, (m_on, s_on)
+    assert abs(m_amp - 0.5) < 0.05 and abs(s_amp - 0.3) < 0.04, (m_amp, s_amp)
+    assert amp(x, 440, 0.05, 0.5) < 0.02 and amp(x, 880, 0.05, 0.9) < 0.02, "tone before its onset"
+    note("audio mix: 1 audio track | video %.3f s, audio track %.3f s, decoded PCM %.3f s (%d Hz) | 440 Hz onset %.3f s (want 0.600, err %+.1f ms), "
+         "880 Hz onset %.3f s (want 1.000, err %+.1f ms) | amplitude 440 Hz %.3f (gain 1.0 -> 0.5), 880 Hz %.3f (gain 0.6 -> 0.3)"
+         % (vid, aud[0], adur, rate, m_on, (m_on - 0.6) * 1000, s_on, (s_on - 1.0) * 1000, m_amp, s_amp))
+
+    # C2: 2x speed run: halves the duration, doubles the frequency (pitch follows the speed)
+    params(45, step=2 / 30)
+    mic2 = {"track": "mic", "file": "mic.m4a", "gain": 1.0, "segments": [{"src_start": 0.0, "src_end": 2.9, "out_start": 0.05, "speed": 2.0}]}
+    sys2 = {"track": "system", "file": "system.m4a", "gain": 0.6, "segments": [{"src_start": 0.0, "src_end": 3.0, "out_start": 0.0, "speed": 2.0}]}
+    out, r = export("audio-2x.mp4", 45, [mic2, sys2], segs=[{"src_start": 0.0, "src_end": 3.0, "speed": 2.0}])
+    assert r.get("ok"), r
+    vid2, aud2 = vid_aud(out); aud2 = aud2[0]
+    x, rate = pcm(out); adur2 = len(x) / rate
+    a880 = amp(x, 880, 0.4, 1.2); a440 = amp(x, 440, 0.4, 1.2); a1760 = amp(x, 1760, 0.7, 1.4)
+    o880 = onset(x, 880, 0.5); o1760 = onset(x, 1760, 0.3)
+    assert abs(vid2 - 1.5) <= 1 / 30 and abs(aud2 - vid2) <= 1 / 30 and abs(adur2 - vid2) <= 1 / 30, (vid2, aud2, adur2)
+    assert a880 > 0.4 and a440 < 0.03 and a1760 > 0.2, (a880, a440, a1760)
+    assert abs(o880 - 0.30) <= 0.02 and abs(o1760 - 0.50) <= 0.02, (o880, o1760)
+    note("audio 2x: video %.3f s, audio track %.3f s, PCM %.3f s (half of the 3.0 s source) | mic tone is now 880 Hz (amp %.3f, 440 Hz leak %.4f) from %.3f s (want 0.300) | "
+         "system tone is now 1760 Hz (amp %.3f) from %.3f s (want 0.500)" % (vid2, aud2, adur2, a880, a440, o880, a1760, o1760))
+
+    # C3: muted tracks are not sent (mic missing) or have gain 0 -> its tone is gone, the other stays
+    params(90)
+    out, r = export("audio-sys-only.mp4", 90, [sys_run]); assert r.get("ok"), r
+    x, _ = pcm(out)
+    only_sys = (amp(x, 440, 1.5, 2.5), amp(x, 880, 1.5, 2.5)); assert only_sys[0] < 0.01 and only_sys[1] > 0.25, only_sys
+    out, r = export("audio-mic-gain0.mp4", 90, [dict(mic_run, gain=0.0), sys_run]); assert r.get("ok"), r
+    x, _ = pcm(out)
+    g0 = (amp(x, 440, 1.5, 2.5), amp(x, 880, 1.5, 2.5)); assert g0[0] < 0.01 and g0[1] > 0.25, g0
+    out, r = export("audio-all-muted.mp4", 90, [dict(mic_run, gain=0.0), dict(sys_run, gain=0.0)]); assert r.get("ok"), r
+    assert not vid_aud(out)[1], "all muted must write no audio track"
+    out, r = export("audio-none.mp4", 90); assert r.get("ok"), r
+    assert not vid_aud(out)[1], "no audio field must write no audio track"
+    note("audio mute: mic omitted -> 440 Hz amp %.4f, 880 Hz amp %.3f | mic gain 0 -> 440 Hz %.4f, 880 Hz %.3f | all muted / no field -> no audio track" % (only_sys + g0))
+
+    # C4: a trim: two runs with a gap (system file 0.8..1.8 at 0, 2.0..3.0 at 1.5): silence in the gap
+    params(75)
+    gap = {"track": "system", "file": "system.m4a", "gain": 1.0, "segments": [
+        {"src_start": 0.8, "src_end": 1.8, "out_start": 0.0, "speed": 1.0}, {"src_start": 2.0, "src_end": 3.0, "out_start": 1.5, "speed": 1.0}]}
+    out, r = export("audio-gap.mp4", 75, [gap]); assert r.get("ok"), r
+    x, _ = pcm(out)
+    a1, g, a2 = amp(x, 880, 0.3, 0.9), amp(x, 880, 1.05, 1.45), amp(x, 880, 1.6, 2.4)
+    o = onset(x, 880, 0.5); e1 = last_above(x[:int(1.2 * 48000)], 880, 0.5)
+    assert a1 > 0.4 and g < 0.02 and a2 > 0.4 and abs(o - 0.2) <= 0.02 and abs(e1 - 1.0) <= 0.02, (a1, g, a2, o, e1)
+    note("audio trim/gap: 880 Hz amp %.3f in 0.3-0.9 s, %.4f in the gap 1.05-1.45 s, %.3f in 1.6-2.4 s | onset %.3f s (want 0.200), first run ends %.3f s (want 1.000)" % (a1, g, a2, o, e1))
+
+    # C5: cancel with audio leaves nothing; bad requests; missing file
+    params(600)
+    out = outdir + "/audio-cancel.mp4"
+    for f in (out, out + ".partial"):
+        if os.path.exists(f): os.remove(f)
+    pr = start()
+    _id[0] += 1; rid = _id[0]
+    req = {"id": rid, "cmd": "render", "project": project, "out": out, "format": "mp4", "codec": "h264", "width": 480, "height": 270, "fps": 30,
+           "quality": "standard", "frames": 600, "segments": [{"src_start": 0.0, "src_end": 20.0, "speed": 1.0}], "params_file": pf,
+           "audio": [sys_run]}
+    pr.stdin.write(json.dumps(req) + "\n"); pr.stdin.flush()
+    while True:
+        l = json.loads(pr.stdout.readline())
+        if l.get("event") == "progress": break
+    _id[0] += 1
+    pr.stdin.write(json.dumps({"id": _id[0], "cmd": "cancel", "target": rid}) + "\n"); pr.stdin.flush()
+    while True:
+        l = json.loads(pr.stdout.readline())
+        if l.get("id") == rid and "event" not in l: final = l; break
+    assert final.get("error") == "cancelled", final
+    assert not os.path.exists(out) and not os.path.exists(out + ".partial"), "cancel left output"
+    stop(pr)
+    params(30)
+    _, r = export("bad1.mp4", 30, [dict(mic_run, track="bass")]); assert r.get("error") == "invalid", r
+    _, r = export("bad2.mp4", 30, [dict(mic_run, file="../x.m4a")]); assert r.get("error") == "invalid", r
+    _, r = export("bad3.mp4", 30, [dict(mic_run, file="nope.m4a")]); assert r.get("error") == "not-found", r
+    assert not os.path.exists(outdir + "/bad3.mp4") and not os.path.exists(outdir + "/bad3.mp4.partial")
+    note("audio cancel/bad: cancel leaves no output or .partial, unknown track and path escape are invalid, a missing file is not-found")
+
+    # ===== D. export with the camera and the audio =====
+    write_project(configs[0][1])
+    params(90)
+    out, r = export("camera-export.mp4", 90, [mic_run, sys_run])
+    assert r.get("ok"), r
+    ff = shutil.which("ffmpeg")
+    if ff:
+        def grab(i):
+            return subprocess.run([ff, "-v", "error", "-i", out, "-vf", "select=eq(n\\,%d)" % i, "-vframes", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                                  capture_output=True).stdout
+        f0, f45 = grab(0), grab(45)
+        assert len(f0) == 480 * 270 * 3 and len(f45) == len(f0)
+        def p3(d, x, y): o = (y * 480 + x) * 3; return tuple(d[o:o + 3])
+        rc = rect(480, 270, "bottom_right", 0.2, 0.02)
+        cx, cy = rc[0] + rc[2] // 2, rc[1] + rc[2] // 2
+        a, b = p3(f0, cx - 12, cy - 12), p3(f45, cx - 12, cy - 12)
+        want = cam_colour(0.5 - 12 / rc[2], 0.5 - 12 / rc[2], True)
+        assert not close(a, want, 60) and close(b, want, 60), (a, b, want)
+        note("camera export (%d frames, %d bytes): circle centre-12px is %s at frame 0 (no camera yet) and %s at frame 45 (camera colour %s)" % (r["frames"], r["bytes"], a, b, want))
+    else:
+        note("camera export: ok, frames not decoded (ffmpeg not installed)")
+    print("PASS: render camera overlay + audio mix (see the numbers above)")
+except Exception as e:
+    import traceback; traceback.print_exc()
+    print("FAIL: render camera overlay + audio mix (%s)" % (e,)); sys.exit(1)
+finally:
+    for p in procs:
+        try: p.stdin.close()
+        except Exception: pass
+        try: p.wait(timeout=10)
+        except Exception: p.kill()
+PY
+      ); p4r_rc=$?
+      echo "$p4r_out"
+      [ "$p4r_rc" = 0 ] || fail=1
+    else
+      echo "SKIP: render camera overlay + audio mix (synthetic sources could not be generated)"
+    fi
     if [ "$keep" = 1 ] && [ -x "$rdir/gen" ]; then
       kd=target/capture-spike/editor-fixture/Take.ferrocast
       mkdir -p "$kd"

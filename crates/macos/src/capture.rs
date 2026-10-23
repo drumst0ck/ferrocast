@@ -694,6 +694,7 @@ impl Helper {
             quality: plan.quality,
             frames: plan.frames,
             segments: plan.segments.clone(),
+            audio: plan.audio.clone(),
             params_file: params_file.to_string_lossy().into_owned(),
         };
         let timeout = timeout_for(&command);
@@ -1262,6 +1263,7 @@ mod export_tests {
     fn plan() -> ExportPlan {
         ExportPlan {
             segments: vec![Segment { src_start: 0.0, src_end: 2.0, speed: 1.0 }],
+            audio: vec![],
             duration: 2.0,
             frames: 60,
             size: [960, 540],
@@ -1307,6 +1309,31 @@ echo '{"id":1,"ok":true,"path":"/o.mp4","bytes":1234,"duration":2.0,"frames":60}
         h.export_wait(&rx, &AtomicBool::new(false), |_| {}).unwrap();
         let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
         assert!(wire.contains(r#""format":"gif""#) && wire.contains(r#""fps":15"#) && wire.contains("Demo.gif"), "{wire}");
+    }
+
+    #[test]
+    fn audio_inputs_travel_in_the_render_request_only_when_present() {
+        use ferrocast_core::capture::export::{AudioInput, AudioKind, AudioRun};
+        let p = fake("audio", OK_SCRIPT);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (_, rx) = h.export_start(&dir_of(&p), &out_of(&p), &plan(), Path::new("/p/params.ndjson")).unwrap();
+        h.export_wait(&rx, &AtomicBool::new(false), |_| {}).unwrap();
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(!wire.contains(r#""audio":"#), "{wire}");
+        let with = ExportPlan {
+            audio: vec![AudioInput {
+                track: AudioKind::System,
+                file: "system.m4a".into(),
+                gain: 0.6,
+                segments: vec![AudioRun { src_start: 0.0, src_end: 2.0, out_start: 0.0, speed: 1.0 }],
+            }],
+            ..plan()
+        };
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (_, rx) = h.export_start(&dir_of(&p), &out_of(&p), &with, Path::new("/p/params.ndjson")).unwrap();
+        h.export_wait(&rx, &AtomicBool::new(false), |_| {}).unwrap();
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(wire.contains(r#""audio":[{"track":"system","file":"system.m4a","gain":0.6,"segments":[{"src_start":0.0,"src_end":2.0,"out_start":0.0,"speed":1.0}]}]"#), "{wire}");
     }
 
     #[test]

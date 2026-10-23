@@ -1,7 +1,7 @@
 //! NDJSON protocol of the `ferrocast-capture` helper: pure serde types, no I/O.
 
 use super::compose::FrameParams;
-use super::export::{Codec, Format, Quality, Segment};
+use super::export::{AudioInput, Codec, Format, Quality, Segment};
 use serde::{Deserialize, Serialize};
 pub use serde_json::Value;
 
@@ -111,6 +111,9 @@ pub enum Command {
         frames: u32,
         /// Kept source spans and their speed (the audio mix of T33 uses them).
         segments: Vec<Segment>,
+        /// Audio files mixed into one AAC track (mp4 only); omitted when there are none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        audio: Vec<AudioInput>,
         /// Absolute path of the per-frame parameters file.
         params_file: String,
     },
@@ -584,6 +587,7 @@ pub fn parse_body<T: serde::de::DeserializeOwned>(body: &Value) -> Result<T, Str
 #[cfg(test)]
 mod tests {
     use super::super::compose::Camera;
+    use super::super::export::{AudioKind, AudioRun};
     use super::*;
 
     #[test]
@@ -904,8 +908,35 @@ mod tests {
             quality: Quality::High,
             frames: 4392,
             segments: vec![Segment { src_start: 0.0, src_end: 73.2, speed: 1.0 }],
+            audio: vec![],
             params_file: "/Users/me/Demo é.ferrocast/.cache/export-10.ndjson".into(),
         }
+    }
+
+    #[test]
+    fn render_request_audio_field_is_additive() {
+        let Command::Render { audio, .. } = render_command() else { unreachable!() };
+        assert!(audio.is_empty());
+        let mut c = render_command();
+        if let Command::Render { audio, .. } = &mut c {
+            audio.push(AudioInput {
+                track: AudioKind::Mic,
+                file: "mic.m4a".into(),
+                gain: 1.0,
+                segments: vec![AudioRun { src_start: 0.0, src_end: 2.0, out_start: 0.5, speed: 2.0 }],
+            });
+        }
+        let s = encode_request(&Request { id: 3, command: c.clone() });
+        assert!(
+            s.contains(r#""audio":[{"track":"mic","file":"mic.m4a","gain":1.0,"segments":[{"src_start":0.0,"src_end":2.0,"out_start":0.5,"speed":2.0}]}],"params_file""#),
+            "{s}"
+        );
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), Request { id: 3, command: c });
+        // an old request (no audio key) still parses, to no audio
+        let old = encode_request(&Request { id: 1, command: render_command() });
+        assert!(!old.contains(r#""audio":"#));
+        let Request { command: Command::Render { audio, .. }, .. } = serde_json::from_str(&old).unwrap() else { panic!() };
+        assert!(audio.is_empty());
     }
 
     #[test]
