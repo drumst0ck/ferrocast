@@ -5,7 +5,7 @@
 //! the kept ranges at a factor. The map is piecewise linear and monotonic; times in a cut
 //! gap snap to the next kept start and times outside clamp, so both directions are total.
 
-use super::project::{Project, Speed, Trim};
+use super::project::{AudioTrack, Project, Speed, Trim};
 use super::MIN_SEGMENT;
 use crate::videoplan::SPEED_MIN;
 use std::collections::VecDeque;
@@ -337,6 +337,81 @@ impl History {
     }
 }
 
+/// One contiguous run of an audio FILE placed on the output timeline.
+///
+/// Times are seconds. `src_*` is the position inside the audio file (file time 0 = its first
+/// sample), `out_start` is where the run starts in the exported video and `speed` is the
+/// playback factor: the run lasts `(src_end - src_start) / speed` seconds in the output.
+///
+/// Decision (pitch): a speed change is a plain rate change of the audio by the same factor, so
+/// pitch shifts with it (0.25x = two octaves down, 16x = four up). Time-stretching without a
+/// pitch shift is NOT required. Using the video's exact factor is what keeps the audio inside
+/// the +-40 ms sync budget (S16).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioSegment {
+    pub src_start: f64,
+    pub src_end: f64,
+    pub out_start: f64,
+    pub speed: f64,
+}
+
+impl AudioSegment {
+    pub fn out_end(&self) -> f64 {
+        self.out_start + (self.src_end - self.src_start) / self.speed
+    }
+
+    /// Sample-exact version for `rate` Hz. Every boundary is rounded once from its time in
+    /// seconds, so consecutive segments share the same rounded edge and never drift or gap.
+    pub fn to_samples(&self, rate: u32) -> SampleSegment {
+        let r = f64::from(rate);
+        let at = |t: f64| (t * r).round().max(0.0) as u64;
+        SampleSegment {
+            src_start: at(self.src_start),
+            src_end: at(self.src_end),
+            out_start: at(self.out_start),
+            out_end: at(self.out_end()),
+            speed: self.speed,
+        }
+    }
+}
+
+/// [`AudioSegment`] in sample frames at a given rate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SampleSegment {
+    pub src_start: u64,
+    pub src_end: u64,
+    pub out_start: u64,
+    pub out_end: u64,
+    pub speed: f64,
+}
+
+/// The audio runs the exporter must place for `track`: the kept pieces of the timeline (trims,
+/// splits, speeds) mapped into the audio file through its `offset` (the file starts `offset`
+/// seconds after screen time 0; a negative offset means it started earlier). The part of a
+/// piece that falls before the file starts is silence, so the segment starts later in the
+/// output instead. The file's end is not known here: the exporter stops at end of file.
+/// Empty when the project has no such source.
+pub fn audio_segments(p: &Project, track: AudioTrack) -> Vec<AudioSegment> {
+    let src = match track {
+        AudioTrack::Mic => p.sources.mic.as_ref(),
+        AudioTrack::System => p.sources.system.as_ref(),
+    };
+    let Some(off) = src.map(|s| s.offset).filter(|o| o.is_finite()) else { return vec![] };
+    Timeline::new(p)
+        .pieces()
+        .iter()
+        .filter_map(|c| {
+            let (mut fs, fe) = (c.src_start - off, c.src_end - off);
+            let mut out_start = c.out_start;
+            if fs < 0.0 {
+                out_start += -fs / c.factor;
+                fs = 0.0;
+            }
+            (fe > fs).then_some(AudioSegment { src_start: fs, src_end: fe, out_start, speed: c.factor })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,5 +647,112 @@ mod tests {
         assert_eq!(h.undo_len(), 3);
         while h.undo(&mut p) {}
         assert_eq!(p.name, "6");
+    }
+
+    mod audio {
+        use super::*;
+        use crate::capture::project::Source;
+
+        fn with_mic(mut p: Project, offset: f64) -> Project {
+            p.sources.mic = Some(Source { file: "mic.m4a".into(), offset });
+            p
+        }
+        fn seg(src_start: f64, src_end: f64, out_start: f64, speed: f64) -> AudioSegment {
+            AudioSegment { src_start, src_end, out_start, speed }
+        }
+
+        #[test]
+        fn no_source_means_no_segments() {
+            assert!(audio_segments(&proj(10.0, &[], &[]), AudioTrack::Mic).is_empty());
+            let p = with_mic(proj(10.0, &[], &[]), 0.0);
+            assert!(audio_segments(&p, AudioTrack::System).is_empty());
+        }
+
+        #[test]
+        fn whole_recording_is_one_segment() {
+            let p = with_mic(proj(10.0, &[], &[]), 0.0);
+            assert_eq!(audio_segments(&p, AudioTrack::Mic), vec![seg(0.0, 10.0, 0.0, 1.0)]);
+        }
+
+        #[test]
+        fn trims_drop_gaps_and_pack_the_output() {
+            let p = with_mic(proj(10.0, &[(1.0, 4.0), (6.0, 9.0)], &[]), 0.0);
+            assert_eq!(audio_segments(&p, AudioTrack::Mic), vec![seg(1.0, 4.0, 0.0, 1.0), seg(6.0, 9.0, 3.0, 1.0)]);
+        }
+
+        #[test]
+        fn speed_segments_split_and_scale_the_rate() {
+            let p = with_mic(proj(10.0, &[], &[(2.0, 4.0, 0.25), (6.0, 8.0, 16.0)]), 0.0);
+            let s = audio_segments(&p, AudioTrack::Mic);
+            assert_eq!(
+                s,
+                vec![
+                    seg(0.0, 2.0, 0.0, 1.0),
+                    seg(2.0, 4.0, 2.0, 0.25),
+                    seg(4.0, 6.0, 10.0, 1.0),
+                    seg(6.0, 8.0, 12.0, 16.0),
+                    seg(8.0, 10.0, 12.125, 1.0),
+                ]
+            );
+            assert_eq!(s[1].out_end(), 10.0);
+            let tl = Timeline::new(&p);
+            assert_eq!(s.last().unwrap().out_end(), tl.output_duration());
+        }
+
+        #[test]
+        fn mic_recorded_late_is_shifted_and_starts_with_silence() {
+            let p = with_mic(proj(10.0, &[], &[]), 0.2);
+            let s = audio_segments(&p, AudioTrack::Mic);
+            assert_eq!(s.len(), 1);
+            assert_eq!((s[0].src_start, s[0].out_start, s[0].speed), (0.0, 0.2, 1.0));
+            assert!((s[0].src_end - 9.8).abs() < 1e-12);
+            // screen time 5.0 is file time 4.8 and output time 5.0
+            let t = 5.0;
+            assert!(((t - 0.2) - (s[0].src_start + (t - s[0].out_start))).abs() < 1e-12);
+        }
+
+        #[test]
+        fn late_offset_inside_a_sped_up_piece_scales_the_silence() {
+            // piece 0..4 at 4x lasts 1 s; file starts at screen 2.0 -> silence is 0.5 s of output.
+            let p = with_mic(proj(4.0, &[], &[(0.0, 4.0, 4.0)]), 2.0);
+            assert_eq!(audio_segments(&p, AudioTrack::Mic), vec![seg(0.0, 2.0, 0.5, 4.0)]);
+        }
+
+        #[test]
+        fn file_that_starts_after_every_piece_gives_nothing() {
+            let p = with_mic(proj(10.0, &[(0.0, 1.0)], &[]), 5.0);
+            assert!(audio_segments(&p, AudioTrack::Mic).is_empty());
+        }
+
+        #[test]
+        fn early_file_skips_into_the_file() {
+            let p = with_mic(proj(10.0, &[(1.0, 2.0)], &[]), -0.05);
+            let s = audio_segments(&p, AudioTrack::Mic);
+            assert_eq!(s.len(), 1);
+            assert!((s[0].src_start - 1.05).abs() < 1e-12 && (s[0].src_end - 2.05).abs() < 1e-12 && s[0].out_start == 0.0);
+        }
+
+        #[test]
+        fn samples_are_exact_and_contiguous() {
+            let p = with_mic(proj(10.0, &[(1.0, 4.0)], &[(2.0, 3.0, 4.0), (3.0, 4.0, 0.25)]), 0.2);
+            let segs = audio_segments(&p, AudioTrack::Mic);
+            let rate = 48_000;
+            let s: Vec<_> = segs.iter().map(|a| a.to_samples(rate)).collect();
+            assert_eq!((s[0].src_start, s[0].src_end, s[0].out_start, s[0].out_end), (38_400, 86_400, 0, 48_000));
+            // contiguous: each segment starts where the previous one ended
+            for w in s.windows(2) {
+                assert_eq!(w[0].out_end, w[1].out_start);
+            }
+            let tl = Timeline::new(&p);
+            assert_eq!(s.last().unwrap().out_end, (tl.output_duration() * f64::from(rate)).round() as u64);
+        }
+
+        #[test]
+        fn samples_round_each_edge_once_at_44100() {
+            let a = seg(0.0, 1.0 / 3.0, 0.0, 1.0).to_samples(44_100);
+            assert_eq!((a.src_end, a.out_end), (14_700, 14_700));
+            let b = seg(0.0, 1.0, 1.0 / 3.0, 16.0).to_samples(44_100);
+            assert_eq!((b.out_start, b.out_end), (14_700, 14_700 + 2_756));
+        }
     }
 }

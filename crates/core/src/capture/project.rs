@@ -4,6 +4,7 @@
 //! files keep loading, and P3+ fields are omitted when empty so a project that
 //! does not use them serializes byte-stably.
 
+use super::camera::CameraLayout;
 use super::MIN_SEGMENT;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -178,17 +179,77 @@ impl Default for Style {
     }
 }
 
+/// Which recorded audio file a mix setting or segment list refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioTrack {
+    Mic,
+    System,
+}
+
+/// Per-track mix (P4). When present it replaces the legacy linear `mic_gain` / `system_gain`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackMix {
+    /// Gain in dB, `-60..=12`.
+    pub gain_db: f64,
+    pub mute: bool,
+}
+
+impl Default for TrackMix {
+    fn default() -> Self {
+        Self { gain_db: 0.0, mute: false }
+    }
+}
+
+pub const GAIN_DB_MIN: f64 = -60.0;
+pub const GAIN_DB_MAX: f64 = 12.0;
+
+fn db_to_linear(db: f64) -> f64 {
+    10f64.powf(db / 20.0)
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Audio {
     pub mic_gain: f64,
     pub system_gain: f64,
+    /// Mutes every audio track.
     pub mute: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mic: Option<TrackMix>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<TrackMix>,
+    /// Gain applied after the mix, dB, `-60..=12`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub master_db: f64,
 }
 
 impl Default for Audio {
     fn default() -> Self {
-        Self { mic_gain: 1.0, system_gain: 0.6, mute: false }
+        Self { mic_gain: 1.0, system_gain: 0.6, mute: false, mic: None, system: None, master_db: 0.0 }
+    }
+}
+
+impl Audio {
+    /// Linear gain the exporter multiplies a track by (mute, track mix or legacy gain, master).
+    pub fn linear_gain(&self, track: AudioTrack) -> f64 {
+        if self.mute {
+            return 0.0;
+        }
+        let (mix, legacy) = match track {
+            AudioTrack::Mic => (self.mic, self.mic_gain),
+            AudioTrack::System => (self.system, self.system_gain),
+        };
+        let track_gain = match mix {
+            Some(m) if m.mute => return 0.0,
+            Some(m) => db_to_linear(m.gain_db),
+            None => legacy,
+        };
+        track_gain * db_to_linear(self.master_db)
     }
 }
 
@@ -229,9 +290,9 @@ pub struct Project {
     pub cursor: CursorStyle,
     #[serde(default)]
     pub style: Style,
-    /// P4 camera layout (placeholder, opaque until implemented).
+    /// P4 camera overlay layout; omitted when there is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub camera: Option<Value>,
+    pub camera: Option<CameraLayout>,
     #[serde(default)]
     pub audio: Audio,
     /// P6 effects (placeholder).
@@ -324,6 +385,33 @@ impl Project {
                 out.push(format!("{kind} take `{}` is missing", s.file));
             }
         }
+        let all = [
+            Some(("screen", &self.sources.screen)),
+            self.sources.camera.as_ref().map(|s| ("camera", s)),
+            self.sources.mic.as_ref().map(|s| ("mic", s)),
+            self.sources.system.as_ref().map(|s| ("system", s)),
+        ];
+        for (kind, s) in all.into_iter().flatten() {
+            if !is_plain_file_name(&s.file) {
+                out.push(format!("{kind} file `{}` must be a plain file name inside the project", s.file));
+            }
+            if !s.offset.is_finite() {
+                out.push(format!("{kind} offset must be a finite number of seconds"));
+            }
+        }
+        if let Some(c) = &self.camera {
+            out.extend(c.validate());
+        }
+        let mixes = [
+            ("audio.mic.gain_db", self.audio.mic.map(|m| m.gain_db)),
+            ("audio.system.gain_db", self.audio.system.map(|m| m.gain_db)),
+            ("audio.master_db", Some(self.audio.master_db)),
+        ];
+        for (name, v) in mixes {
+            if let Some(v) = v.filter(|v| !(GAIN_DB_MIN..=GAIN_DB_MAX).contains(v)) {
+                out.push(format!("{name} {v} outside {GAIN_DB_MIN}..={GAIN_DB_MAX}"));
+            }
+        }
         let mut prev_end = 0.0;
         for (i, t) in self.trims.iter().enumerate() {
             if t.start < prev_end {
@@ -381,6 +469,11 @@ impl Project {
     }
 }
 
+/// A file name directly inside the project folder: no separators, not empty, not `.` / `..`.
+fn is_plain_file_name(s: &str) -> bool {
+    !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\', '\0'])
+}
+
 fn is_hex_color(s: &str) -> bool {
     s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -423,6 +516,7 @@ pub fn project_dir_name(name: &str, exists: impl Fn(&str) -> bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capture::camera::{CameraShape, Corner};
 
     const PLAN: &str = r##"{"version":1,"name":"Demo","created":"2026-10-23T14:05:22Z","duration":73.2,
  "sources":{"screen":{"file":"screen.mov","offset":0.0}},
@@ -588,5 +682,87 @@ mod tests {
         assert!(atomic_write(&path, b"new", |p, b| std::fs::write(p, b)).is_err());
         assert_eq!(std::fs::read(path.join("keep")).unwrap(), b"old");
         assert!(!t.0.join("project.json.tmp").exists());
+    }
+
+    const CAMERA_FIXTURE: &str = include_str!("../../fixtures/camera_project.json");
+
+    #[test]
+    fn existing_fixtures_round_trip_without_new_fields() {
+        for (name, json) in [
+            ("area_project", include_str!("../../fixtures/area_project.json")),
+            ("render_project", include_str!("../../fixtures/render_project.json")),
+            ("render_zoom_project", include_str!("../../fixtures/render_zoom_project.json")),
+        ] {
+            let p = Project::from_json(json).unwrap();
+            let out = p.to_json();
+            assert!(
+                !out.contains("camera") && !out.contains("master_db") && !out.contains("\"mic\"") && !out.contains("gain_db"),
+                "{name}"
+            );
+            assert_eq!(Project::from_json(&out).unwrap(), p, "{name}");
+            assert_eq!(Project::from_json(&out).unwrap().to_json(), out, "{name}");
+        }
+    }
+
+    #[test]
+    fn camera_fixture_decodes_validates_and_round_trips() {
+        let p = Project::from_json(CAMERA_FIXTURE).unwrap();
+        let cam = p.camera.expect("camera");
+        assert_eq!((cam.shape, cam.corner, cam.size, cam.mirror), (CameraShape::Rounded, Corner::TopRight, 0.25, false));
+        assert_eq!(p.sources.camera.as_ref().unwrap().file, "camera.mov");
+        assert_eq!(p.sources.mic.as_ref().unwrap().offset, 0.2);
+        assert_eq!(p.sources.system.as_ref().unwrap().offset, -0.05);
+        assert_eq!(p.audio.mic, Some(TrackMix { gain_db: 3.0, mute: false }));
+        assert_eq!(p.audio.system, Some(TrackMix { gain_db: -6.0, mute: true }));
+        assert_eq!(p.audio.master_db, -1.5);
+        assert!(p.validate(all_present).is_empty(), "{:?}", p.validate(all_present));
+        let out = p.to_json();
+        assert_eq!(Project::from_json(&out).unwrap(), p);
+        assert_eq!(Project::from_json(&out).unwrap().to_json(), out);
+    }
+
+    fn cam_project() -> Project {
+        Project::from_json(CAMERA_FIXTURE).unwrap()
+    }
+
+    #[test]
+    fn linear_gain_rules() {
+        let mut a = Audio::default();
+        assert_eq!(a.linear_gain(AudioTrack::Mic), 1.0);
+        assert_eq!(a.linear_gain(AudioTrack::System), 0.6);
+        a.mic = Some(TrackMix { gain_db: 6.0, mute: false });
+        assert!((a.linear_gain(AudioTrack::Mic) - 1.9952623149688795).abs() < 1e-12);
+        a.master_db = -6.0;
+        assert!((a.linear_gain(AudioTrack::Mic) - 1.9952623149688795 * 0.501187233627272).abs() < 1e-9);
+        a.mic = Some(TrackMix { gain_db: 0.0, mute: true });
+        assert_eq!(a.linear_gain(AudioTrack::Mic), 0.0);
+        a.mic = None;
+        a.mute = true;
+        assert_eq!(a.linear_gain(AudioTrack::System), 0.0);
+    }
+
+    #[test]
+    fn validate_camera_and_audio_rules() {
+        let bad = |f: &dyn Fn(&mut Project)| {
+            let mut p = cam_project();
+            f(&mut p);
+            p.validate(all_present)
+        };
+        assert_eq!(bad(&|p| p.camera.as_mut().unwrap().size = 0.5).len(), 1);
+        assert_eq!(bad(&|p| p.camera.as_mut().unwrap().margin = 0.9).len(), 1);
+        assert_eq!(bad(&|p| p.audio.mic.as_mut().unwrap().gain_db = 12.5).len(), 1);
+        assert_eq!(bad(&|p| p.audio.system.as_mut().unwrap().gain_db = -60.5).len(), 1);
+        assert_eq!(bad(&|p| p.audio.master_db = f64::NAN).len(), 1);
+        assert_eq!(bad(&|p| p.sources.mic.as_mut().unwrap().offset = f64::INFINITY).len(), 1);
+        assert_eq!(bad(&|p| p.sources.camera.as_mut().unwrap().offset = f64::NAN).len(), 1);
+        for name in ["../mic.m4a", "a/b.m4a", "a\\b.m4a", "..", "", "/abs.m4a"] {
+            let v = bad(&|p| p.sources.system.as_mut().unwrap().file = name.into());
+            assert_eq!(v.len(), 1, "{name:?}: {v:?}");
+        }
+        assert!(bad(&|p| {
+            p.audio.mic.as_mut().unwrap().gain_db = 12.0;
+            p.audio.system.as_mut().unwrap().gain_db = -60.0;
+        })
+        .is_empty());
     }
 }
