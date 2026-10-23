@@ -19,8 +19,11 @@ use std::time::Instant;
 
 /// Widest preview the editor asks for (S15 measures 960 px).
 pub const PREVIEW_MAX_WIDTH: u32 = 960;
-/// Frames requested per second while playing.
-pub const PLAY_FPS: f64 = 30.0;
+/// Most frames requested per second while playing. Only one render is in flight (the scrub queue), so
+/// this is a ceiling, not a target: the take (~57-60 fps) is shown as fast as the helper and the UI
+/// keep up. It was 30: with the UI repainting at 60 Hz a 33.3 ms gate fell on every second or third
+/// repaint and playback ran at ~23 fps although a frame took 9 ms to render (measured live, release app).
+pub const PLAY_FPS: f64 = 60.0;
 
 // ---------------------------------------------------------------------------------------------
 // Scrub queue: only the LATEST requested frame is rendered while one is in flight.
@@ -373,6 +376,45 @@ pub struct FrameOut {
     pub total_ms: f64,
 }
 
+/// The picture of a raw preview frame (`render.frame` with `format:"raw"`): `size[1]` rows of
+/// `stride` bytes, RGBA8 premultiplied, top row first. The helper's canvas is opaque, so this is
+/// also the straight-alpha picture. Rows may be padded (`stride` > 4 x width); a short file, a
+/// stride below one row or an empty size is an error rather than a torn picture.
+pub fn raw_image(bytes: &[u8], size: [u32; 2], stride: u32) -> Result<egui::ColorImage, String> {
+    let (w, h) = (size[0] as usize, size[1] as usize);
+    let (row, stride) = (w * 4, stride as usize);
+    if w == 0 || h == 0 {
+        return Err("preview frame is empty".into());
+    }
+    if stride < row {
+        return Err(format!("preview frame stride {stride} is below one row ({row})"));
+    }
+    // the last row needs no padding
+    let need = stride * (h - 1) + row;
+    if bytes.len() < need {
+        return Err(format!("preview frame is {} bytes, expected {need}", bytes.len()));
+    }
+    let pixels = if stride == row {
+        egui::ColorImage::from_rgba_premultiplied([w, h], &bytes[..row * h])
+    } else {
+        let mut tight = Vec::with_capacity(row * h);
+        for y in 0..h {
+            tight.extend_from_slice(&bytes[y * stride..y * stride + row]);
+        }
+        egui::ColorImage::from_rgba_premultiplied([w, h], &tight)
+    };
+    Ok(pixels)
+}
+
+/// The picture of a frame the helper rendered: raw pixels when `stride` is set, else a PNG file.
+fn frame_image(f: &RenderedFrame) -> Result<egui::ColorImage, String> {
+    let bytes = std::fs::read(&f.path).map_err(|e| format!("preview frame unreadable: {e}"))?;
+    match f.stride {
+        Some(stride) => raw_image(&bytes, f.size, stride),
+        None => crate::services::decode_png(&bytes).ok_or_else(|| "preview frame is not a PNG".to_string()),
+    }
+}
+
 /// Load the project and `events.json` (auto zoom when the project has none), then render the
 /// frames asked for until the sender is dropped.
 pub fn spawn_worker(
@@ -504,8 +546,7 @@ fn serve(
                     let started = Instant::now();
                     let params = composer.as_ref().map_or_else(FrameParams::default, |c| c.at(req.key.t));
                     let result = renderer(&preview.dir, req.key.t, req.key.width, params).and_then(|f| {
-                        let bytes = std::fs::read(&f.path).map_err(|e| format!("preview frame unreadable: {e}"))?;
-                        let image = crate::services::decode_png(&bytes).ok_or("preview frame is not a PNG")?;
+                        let image = frame_image(&f)?;
                         Ok(FrameOut { image, t: req.key.t, helper_ms: f.ms, total_ms: started.elapsed().as_secs_f64() * 1000.0 })
                     });
                     notify(EditorMsg::Frame { dir: dir.to_path_buf(), seq: req.seq, result });
@@ -520,28 +561,48 @@ fn serve(
 // ---------------------------------------------------------------------------------------------
 // Editor state (the UI side)
 
-/// Frames shown per second over the recent past.
+/// Frames shown per second over the last [`RATE_WINDOW`] seconds.
+///
+/// (It used to count from the first frame ever shown, which includes the time the editor sat on
+/// its first still before Space was pressed: a real take read 8-16 fps while playing at 30.)
 #[derive(Debug, Default)]
 pub struct Rate {
-    shown: u64,
-    since: Option<Instant>,
+    /// Seconds since `epoch` at which the recent frames were shown.
+    shown: std::collections::VecDeque<f64>,
+    epoch: Option<Instant>,
     pub last_ms: f64,
     /// The helper's own share of `last_ms`.
     pub last_helper_ms: f64,
 }
 
+/// Window of the frame rate shown in the status line, seconds.
+pub const RATE_WINDOW: f64 = 2.0;
+
 impl Rate {
     pub fn tick(&mut self, ms: f64, helper_ms: f64) {
-        self.shown += 1;
-        self.last_ms = ms;
-        self.last_helper_ms = helper_ms;
-        self.since.get_or_insert_with(Instant::now);
+        let at = self.epoch.get_or_insert_with(Instant::now).elapsed().as_secs_f64();
+        self.tick_at(at, ms, helper_ms);
     }
 
-    /// Frames per second since the first frame (None before two frames).
+    /// A frame was shown at `at` seconds (any monotonic origin, shared with [`Rate::fps_at`]).
+    pub fn tick_at(&mut self, at: f64, ms: f64, helper_ms: f64) {
+        self.last_ms = ms;
+        self.last_helper_ms = helper_ms;
+        self.shown.push_back(at);
+        while self.shown.front().is_some_and(|t| *t < at - RATE_WINDOW) {
+            self.shown.pop_front();
+        }
+    }
+
+    /// Frames per second over the window ending at `now` (None with fewer than two frames in it).
+    pub fn fps_at(&self, now: f64) -> Option<f64> {
+        let recent: Vec<f64> = self.shown.iter().copied().filter(|t| *t >= now - RATE_WINDOW).collect();
+        let (first, last) = (*recent.first()?, *recent.last()?);
+        (recent.len() >= 2 && last > first).then(|| (recent.len() - 1) as f64 / (last - first))
+    }
+
     pub fn fps(&self) -> Option<f64> {
-        let s = self.since?.elapsed().as_secs_f64();
-        (self.shown >= 2 && s > 0.0).then(|| (self.shown - 1) as f64 / s)
+        self.fps_at(self.epoch?.elapsed().as_secs_f64())
     }
 }
 
@@ -709,6 +770,7 @@ impl Editor {
 pub fn helper_renderer(exe: PathBuf, log: impl Fn(&str) + Send + Clone + 'static) -> Renderer {
     use ferrocast_macos::capture::{available, helper_path, Helper, RenderError};
     let mut helper: Option<Helper> = None;
+    let png = std::env::var_os("FERROCAST_PREVIEW_PNG").is_some();
     Box::new(move |dir, t, width, params| {
         for attempt in 0..2 {
             if helper.is_none() {
@@ -719,7 +781,10 @@ pub fn helper_renderer(exe: PathBuf, log: impl Fn(&str) + Send + Clone + 'static
                     Some(Helper::spawn(&helper_path(&exe), log.clone()).map_err(|e| format!("The capture helper did not start: {e}"))?);
             }
             let Some(h) = helper.as_mut() else { continue };
-            match h.render_frame(dir, t, width, params.clone()) {
+            // FERROCAST_PREVIEW_PNG=1 keeps the PNG hand-off, to measure the raw one against it
+            let result =
+                if png { h.render_frame(dir, t, width, params.clone()) } else { h.render_frame_raw(dir, t, width, params.clone()) };
+            match result {
                 Ok(f) => return Ok(f),
                 // a helper that exited is replaced once; a timeout already killed it and is reported as is
                 Err(RenderError::Closed) if attempt == 0 => helper = None,
@@ -757,6 +822,67 @@ mod tests {
     }
 
     // ---- ScrubQueue
+
+    #[test]
+    fn the_rate_counts_frames_over_the_recent_window_not_since_the_first_one() {
+        let mut r = Rate::default();
+        // one frame when the editor opens, then nothing for 5 s (the user has not pressed Space)
+        r.tick_at(0.0, 10.0, 8.0);
+        assert_eq!(r.fps_at(5.0), None, "a single frame is no rate");
+        // playback: a frame every 40 ms from t = 5 s
+        for i in 0..=50 {
+            r.tick_at(5.0 + f64::from(i) * 0.04, 10.0, 8.0);
+        }
+        let fps = r.fps_at(7.0).unwrap();
+        assert!((fps - 25.0).abs() < 0.01, "25 frames/s while playing, not diluted by the idle start: {fps}");
+        assert_eq!((r.last_ms, r.last_helper_ms), (10.0, 8.0));
+    }
+
+    #[test]
+    fn the_rate_goes_away_when_frames_stop_and_follows_a_speed_change() {
+        let mut r = Rate::default();
+        for i in 0..60 {
+            r.tick_at(f64::from(i) * 0.1, 1.0, 1.0); // 10 fps for 6 s
+        }
+        for i in 0..100 {
+            r.tick_at(6.0 + f64::from(i) * 0.02, 1.0, 1.0); // then 50 fps for 2 s
+        }
+        let fast = r.fps_at(8.0).unwrap();
+        assert!(fast > 45.0, "the window only remembers the last 2 s: {fast}");
+        assert_eq!(r.fps_at(30.0), None, "no frames for a long time: no rate");
+    }
+
+    #[test]
+    fn a_tight_raw_frame_becomes_the_same_pixels() {
+        let bytes: Vec<u8> = (0..2 * 3 * 4).map(|i| i as u8).collect();
+        let img = raw_image(&bytes, [3, 2], 12).unwrap();
+        assert_eq!(img.size, [3, 2]);
+        assert_eq!(img.pixels[0], egui::Color32::from_rgba_premultiplied(0, 1, 2, 3));
+        assert_eq!(img.pixels[5], egui::Color32::from_rgba_premultiplied(20, 21, 22, 23));
+    }
+
+    #[test]
+    fn row_padding_is_dropped_and_each_row_starts_at_its_stride() {
+        // 2 px wide, rows of 12 bytes: 8 pixel bytes + 4 padding bytes of 0xEE
+        let mut bytes = vec![];
+        for row in 0..2u8 {
+            bytes.extend([row, 1, 2, 255, row, 3, 4, 255]);
+            bytes.extend([0xEE; 4]);
+        }
+        let img = raw_image(&bytes, [2, 2], 12).unwrap();
+        assert_eq!(img.pixels[2], egui::Color32::from_rgba_premultiplied(1, 1, 2, 255), "row 1 starts at byte 12");
+        assert!(img.pixels.iter().all(|p| p.a() == 255), "padding never reaches the picture");
+    }
+
+    #[test]
+    fn a_short_or_inconsistent_raw_frame_is_an_error() {
+        assert!(raw_image(&[0; 20], [3, 2], 12).is_err(), "file shorter than stride x rows");
+        assert!(raw_image(&[0; 64], [3, 2], 8).is_err(), "stride below one row");
+        assert!(raw_image(&[], [0, 2], 0).is_err(), "empty size");
+        assert!(raw_image(&[0; 24], [3, 2], 12).is_ok(), "exactly enough");
+        // the last row may be missing its padding only
+        assert!(raw_image(&[0; 20], [2, 2], 12).is_ok());
+    }
 
     #[test]
     fn the_first_request_goes_out_at_once() {
@@ -1141,7 +1267,7 @@ mod tests {
         image::RgbaImage::from_pixel(8, 4, image::Rgba([10, 20, 30, 255])).save(&png).unwrap();
         let r: Renderer = Box::new(move |_, t, w, params| {
             log.lock().unwrap().push((t, w, params));
-            Ok(RenderedFrame { path: png.clone(), size: [8, 4], ms: 1.5, cached: false })
+            Ok(RenderedFrame { path: png.clone(), size: [8, 4], ms: 1.5, cached: false, stride: None, decode: None })
         });
         (r, calls)
     }
@@ -1167,6 +1293,40 @@ mod tests {
             }
         }
         (opened, frames, calls)
+    }
+
+    #[test]
+    fn a_raw_frame_from_the_renderer_reaches_the_app_as_pixels_and_a_torn_one_is_an_error() {
+        let d = fixture_dir("raw", "render_project.json");
+        let raw = d.join("preview.rgba");
+        // 2x2 pixels, rows padded to 12 bytes
+        let mut bytes = vec![];
+        for row in 0..2u8 {
+            bytes.extend([10 + row, 20, 30, 255, 40, 50, 60 + row, 255, 0xEE, 0xEE, 0xEE, 0xEE]);
+        }
+        std::fs::write(&raw, &bytes).unwrap();
+        let stride = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(12));
+        let (mtx, mrx) = channel();
+        let mtx = std::sync::Mutex::new(mtx);
+        let (path, st) = (raw.clone(), stride.clone());
+        let r: Renderer = Box::new(move |_, _, _, _| {
+            let stride = Some(st.load(std::sync::atomic::Ordering::SeqCst));
+            Ok(RenderedFrame { path: path.clone(), size: [2, 2], ms: 2.0, cached: false, stride, decode: None })
+        });
+        let tx = spawn_worker(d.clone(), None, r, Box::new(move |m| mtx.lock().unwrap().send(m).unwrap()));
+        let recv = || mrx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert!(matches!(recv(), EditorMsg::Opened { .. }));
+        tx.send(WorkerCmd::Frame(Req { seq: 1, key: Key { t: 0.0, width: 2 } })).unwrap();
+        let EditorMsg::Frame { result, .. } = recv() else { panic!("a frame answers a request") };
+        let f = result.unwrap();
+        assert_eq!(f.image.size, [2, 2]);
+        assert_eq!(f.image.pixels[1], egui::Color32::from_rgba_premultiplied(40, 50, 60, 255));
+        assert_eq!(f.image.pixels[2], egui::Color32::from_rgba_premultiplied(11, 20, 30, 255), "row 1 starts at the stride");
+        // a helper that reports a stride the file cannot satisfy is an error, not a torn picture
+        stride.store(40, std::sync::atomic::Ordering::SeqCst);
+        tx.send(WorkerCmd::Frame(Req { seq: 2, key: Key { t: 0.1, width: 2 } })).unwrap();
+        let EditorMsg::Frame { result, .. } = recv() else { panic!() };
+        assert!(result.is_err_and(|e| e.contains("bytes")), "short file");
     }
 
     #[test]
@@ -1266,7 +1426,7 @@ mod tests {
         let r: Renderer = Box::new(move |dir, _, _, _| {
             let json = std::fs::read_to_string(dir.join("project.json")).unwrap_or_default();
             log.lock().unwrap().push((dir.to_path_buf(), json, dir.join("screen.mov").is_file()));
-            Ok(RenderedFrame { path: png.clone(), size: [8, 4], ms: 1.0, cached: false })
+            Ok(RenderedFrame { path: png.clone(), size: [8, 4], ms: 1.0, cached: false, stride: None, decode: None })
         });
         let (mtx, mrx) = channel();
         let mtx = std::sync::Mutex::new(mtx);
@@ -1333,7 +1493,8 @@ mod tests {
             EditorMsg::Opened { result, .. } => *result.expect("the fixture opens"),
             _ => panic!("Opened comes first"),
         };
-        assert!(opened.auto_zoomed && !opened.project.zooms.is_empty(), "auto zoom applied at open");
+        // a real take brings its own zooms (and the fixture has none: auto zoom applies at open)
+        assert!((real.is_some() || opened.auto_zoomed) && !opened.project.zooms.is_empty(), "the project has zooms at open");
         let zoom_t = opened.project.zooms[0].start + 0.5 * (opened.project.zooms[0].end - opened.project.zooms[0].start);
         let mut ed = Editor::new(dir.clone(), Some(tx.clone()));
         ed.opened(Ok(opened));
@@ -1359,11 +1520,11 @@ mod tests {
             "first frame: helper {:.0} ms, with decode {:.0} ms; zoomed frame: helper {:.0} ms, with decode {:.0} ms",
             cold.helper_ms, cold.total_ms, zoomed.helper_ms, zoomed.total_ms
         );
-        // throughput of the renderer alone: 60 distinct frames back to back (nothing cached)
+        // throughput of the renderer alone: 120 consecutive frames (1/30 s apart, as playback asks) back to back
         let t0 = Instant::now();
         let mut helper_ms = 0.0;
-        for i in 0..60u64 {
-            tx.send(WorkerCmd::Frame(Req { seq: 1000 + i, key: Key { t: 0.01 + i as f64 * 0.047, width: 960 } })).unwrap();
+        for i in 0..120u64 {
+            tx.send(WorkerCmd::Frame(Req { seq: 1000 + i, key: Key { t: 2.0 + i as f64 / 30.0, width: 960 } })).unwrap();
             loop {
                 if let EditorMsg::Frame { result, .. } = wait() {
                     helper_ms += result.expect("frame renders").helper_ms;
@@ -1373,10 +1534,10 @@ mod tests {
         }
         let secs = t0.elapsed().as_secs_f64();
         eprintln!(
-            "renderer alone, 60 frames at 960 px: {:.1} fps (helper mean {:.1} ms/frame, wall {:.1} ms/frame incl. PNG read+decode)",
-            60.0 / secs,
-            helper_ms / 60.0,
-            secs * 1000.0 / 60.0
+            "renderer alone, 120 frames at 960 px: {:.1} fps (helper mean {:.1} ms/frame, wall {:.1} ms/frame incl. file read + decode)",
+            120.0 / secs,
+            helper_ms / 120.0,
+            secs * 1000.0 / 120.0
         );
         // playback through the real pipeline: wall clock, ScrubQueue, frame skipping, 24 fps request cap
         ed.seek(0.0, 0.0, 60.0);
@@ -1404,10 +1565,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         let secs = t0.elapsed().as_secs_f64();
-        eprintln!(
-            "playback of the 3 s fixture: {shown} frames shown in {secs:.2} s = {:.1} fps (request cap {PLAY_FPS} fps)",
-            f64::from(shown) / secs
-        );
+        eprintln!("playback: {shown} frames shown in {secs:.2} s = {:.1} fps (request cap {PLAY_FPS} fps)", f64::from(shown) / secs);
         assert!(shown >= 10, "playback shows frames: {shown}");
         assert!(real.is_some() || (secs > 2.5 && secs < 4.5), "plays in real time, not faster: {secs}");
     }

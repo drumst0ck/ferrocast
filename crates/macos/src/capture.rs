@@ -7,8 +7,8 @@ use ferrocast_core::capture::events::Events;
 use ferrocast_core::capture::export::{self, ExportOptions, ExportPlan};
 use ferrocast_core::capture::project::{self as capture_project, Project};
 use ferrocast_core::capture::protocol::{
-    self, Command, ErrorCode, Excludes, ExportDone, ExportEvent, ExportStarted, Hello, Line, RecordEvent, RecordStarted, RecordStopped,
-    RenderFrameDone, Request, Scale, ScreenshotDone, Shareable, Target,
+    self, Command, ErrorCode, Excludes, ExportDone, ExportEvent, ExportStarted, FrameFormat, Hello, Line, RecordEvent, RecordStarted,
+    RecordStopped, RenderFrameDone, Request, Scale, ScreenshotDone, Shareable, Target,
 };
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -163,6 +163,10 @@ pub struct RenderedFrame {
     pub ms: f64,
     /// Served from the helper's frame cache.
     pub cached: bool,
+    /// `Some(bytes per row)` when the file holds raw premultiplied RGBA8 pixels instead of a PNG.
+    pub stride: Option<u32>,
+    /// How the helper decoded the take frame (diagnostics).
+    pub decode: Option<String>,
 }
 
 /// Why a preview frame could not be rendered. `Display` carries the helper's own message so the
@@ -470,15 +474,45 @@ impl Helper {
         width: u32,
         params: FrameParams,
     ) -> std::result::Result<RenderedFrame, RenderError> {
+        self.render_frame_as(project_dir, t_source, width, params, None)
+    }
+
+    /// Like [`Helper::render_frame`] but the helper writes raw RGBA8 pixels (`stride` is set in the
+    /// result): no PNG encode in the helper and no decode here. The file is reused by the next call,
+    /// so read it before asking for another frame.
+    pub fn render_frame_raw(
+        &mut self,
+        project_dir: &Path,
+        t_source: f64,
+        width: u32,
+        params: FrameParams,
+    ) -> std::result::Result<RenderedFrame, RenderError> {
+        let f = self.render_frame_as(project_dir, t_source, width, params, Some(FrameFormat::Raw))?;
+        if f.stride.is_none() {
+            return Err(RenderError::Other("the capture helper is too old for raw preview frames".into()));
+        }
+        Ok(f)
+    }
+
+    fn render_frame_as(
+        &mut self,
+        project_dir: &Path,
+        t_source: f64,
+        width: u32,
+        params: FrameParams,
+        format: Option<FrameFormat>,
+    ) -> std::result::Result<RenderedFrame, RenderError> {
         if width == 0 {
             return Err(RenderError::Invalid("preview width must be at least 1 px".into()));
         }
-        let command = Command::RenderFrame { project: project_dir.to_string_lossy().into_owned(), t: t_source, width, out: None, params };
+        let command =
+            Command::RenderFrame { project: project_dir.to_string_lossy().into_owned(), t: t_source, width, out: None, format, params };
         let timeout = timeout_for(&command);
         let body = self.call(command, timeout).map_err(RenderError::from)?;
         let done =
             protocol::parse_body::<RenderFrameDone>(&body).map_err(|e| RenderError::Other(format!("bad render.frame reply: {e}")))?;
-        Ok(RenderedFrame { path: PathBuf::from(done.path), size: done.size, ms: done.ms, cached: done.cached })
+        let stride = (done.format == Some(FrameFormat::Raw)).then_some(done.stride).flatten();
+        Ok(RenderedFrame { path: PathBuf::from(done.path), size: done.size, ms: done.ms, cached: done.cached, stride, decode: done.decode })
     }
 
     /// Start recording `target` into `<project>/<file>`. Events (`state`, `tick`, `warn`) arrive on
@@ -934,10 +968,48 @@ echo '{"id":1,"ok":true,"path":"/p/.cache/f-1.png","size":[960,540],"ms":12.5,"c
         let mut h = Helper::spawn(&p, |_| {}).unwrap();
         let params = FrameParams { camera: Some(Camera { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }), ..FrameParams::default() };
         let f = h.render_frame(Path::new("/p/Demo.ferrocast"), 1.5, 960, params).unwrap();
-        assert_eq!(f, RenderedFrame { path: PathBuf::from("/p/.cache/f-1.png"), size: [960, 540], ms: 12.5, cached: true });
+        assert_eq!(
+            f,
+            RenderedFrame {
+                path: PathBuf::from("/p/.cache/f-1.png"),
+                size: [960, 540],
+                ms: 12.5,
+                cached: true,
+                stride: None,
+                decode: None
+            }
+        );
         let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
         assert!(wire.contains(r#""cmd":"render.frame""#) && wire.contains("Demo.ferrocast") && wire.contains(r#""width":960"#), "{wire}");
         assert!(wire.contains(r#""camera":{"x":0.25"#) && wire.contains(r#""t":1.5"#), "{wire}");
+    }
+
+    #[test]
+    fn render_frame_raw_asks_for_raw_and_reports_the_row_stride() {
+        let p = fake(
+            "raw",
+            r#"read l; echo "$l" > "$(dirname "$0")/req.json"
+echo '{"id":1,"ok":true,"path":"/p/.cache/preview.rgba","size":[960,540],"ms":9.5,"format":"raw","stride":3840,"decode":"advance"}'"#,
+        );
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let f = h.render_frame_raw(Path::new("/p"), 2.5, 960, FrameParams::default()).unwrap();
+        assert_eq!(f.stride, Some(3840));
+        assert_eq!((f.size, f.decode.as_deref()), ([960, 540], Some("advance")));
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(wire.contains(r#""format":"raw""#), "{wire}");
+        // the PNG call never sends it
+        let p = fake("png", r#"read l; echo "$l" > "$(dirname "$0")/req.json"; echo '{"id":1,"ok":true,"path":"/x.png","size":[2,2]}'"#);
+        let f = Helper::spawn(&p, |_| {}).unwrap().render_frame(Path::new("/p"), 0.0, 2, FrameParams::default()).unwrap();
+        assert_eq!(f.stride, None);
+        assert!(!std::fs::read_to_string(p.with_file_name("req.json")).unwrap().contains("format"));
+    }
+
+    #[test]
+    fn a_raw_request_answered_with_a_png_reply_is_an_error() {
+        // the helper is older than the app: it ignores `format` and sends a PNG path; the editor must not read it as pixels
+        let p = fake("oldhelper", r#"read l; echo '{"id":1,"ok":true,"path":"/x.png","size":[2,2]}'"#);
+        let e = Helper::spawn(&p, |_| {}).unwrap().render_frame_raw(Path::new("/p"), 0.0, 2, FrameParams::default()).unwrap_err();
+        assert!(matches!(e, RenderError::Other(_)), "{e:?}");
     }
 
     #[test]
