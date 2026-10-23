@@ -5696,6 +5696,7 @@ impl App {
             // the editor draws its own cursor from events.json: the video stays cursor-free
             cursor: false,
             excludes,
+            options: crate::record_ctl::record_options(&self.settings.capture),
             gen: self.rt.gen,
         };
         let root = self.store.root.clone();
@@ -5705,7 +5706,7 @@ impl App {
 
     /// Everything the session thread, the HUD and the countdown timer report.
     pub(crate) fn handle_record(&mut self, m: crate::record_ctl::RecordMsg) {
-        use crate::record_ctl::{discard_unfinished, saved_toast, warn_toast, RecordMsg, StartFailure};
+        use crate::record_ctl::{discard_unfinished, saved_toast, warn_message, RecordMsg};
         use ferrocast_core::capture::protocol::RecordEvent;
         let current = |g: u64, rt: &crate::record_ctl::Runtime| g == rt.gen;
         match m {
@@ -5732,23 +5733,28 @@ impl App {
                     }
                     let effect = self.record.on_stopped();
                     self.perform_record(effect);
-                    match failure {
-                        StartFailure::Permission => {
-                            self.capture_say(crate::capture_ctl::PERMISSION_TOAST.into());
-                            crate::capture_ctl::open_screen_recording_pane();
-                        }
-                        StartFailure::Message(text) => self.capture_say(text),
+                    if let Some(text) = failure.toast() {
+                        self.capture_say(text);
+                    }
+                    if let Some(pane) = failure.pane() {
+                        crate::capture_ctl::open_pane(pane);
                     }
                 }
             }
             RecordMsg::Event(g, ev) if current(g, &self.rt) => {
-                if let RecordEvent::Warn { code, .. } = &ev {
-                    if let Some(text) = warn_toast(code) {
-                        self.capture_say(text.into());
+                if let RecordEvent::Warn { code, message, .. } = &ev {
+                    if let Some(text) = warn_message(code, message.as_deref()) {
+                        self.capture_say(text);
                     }
                 }
                 let effect = self.record.on_event(&ev);
                 self.perform_record(effect);
+            }
+            RecordMsg::Devices(result) => {
+                self.rt.devices = match result {
+                    Ok(d) => crate::record_ctl::DevicesState::Ready(d),
+                    Err(e) => crate::record_ctl::DevicesState::Failed(e),
+                };
             }
             RecordMsg::Finished(g, result) => {
                 if current(g, &self.rt) {

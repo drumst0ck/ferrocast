@@ -6089,6 +6089,8 @@ impl App {
         let mut open_language_settings = false;
         let mut recheck_apple = false;
         let apple_states = self.apple_langs.clone();
+        let devices_state = self.rt.devices.clone();
+        let mut refresh_devices = false;
         let mut remove_dir = None;
         let mut enable = None;
         let mut scratch = std::mem::take(&mut self.scratch);
@@ -6845,6 +6847,68 @@ impl App {
                             });
                         });
                         ui.add_space(14.0);
+                        section(ui, pal, "Sources");
+                        let (cams, mics, known) = match &devices_state {
+                            crate::record_ctl::DevicesState::Ready(d) => (crate::record_ctl::camera_items(d), crate::record_ctl::mic_items(d), true),
+                            _ => (vec![], vec![], false),
+                        };
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Camera", "Record the camera too, as its own file. The first recording asks macOS for access.", |ui| {
+                                toggle(ui, pal, &mut s.capture.camera)
+                            });
+                            row(ui, pal, "Camera device", "Which camera to record. Default uses the one macOS picks.", |ui| {
+                                if small_btn(ui, pal, "Refresh") {
+                                    refresh_devices = true;
+                                }
+                                let shown = crate::record_ctl::device_shown(&cams, &s.capture.camera_id, known);
+                                field_combo(ui, pal, "capture_camera_device", &shown, 190.0, |ui| {
+                                    if ui.selectable_label(s.capture.camera_id.is_empty(), "Default").clicked() {
+                                        s.capture.camera_id.clear();
+                                    }
+                                    for (id, name) in &cams {
+                                        if ui.selectable_label(&s.capture.camera_id == id, name).clicked() {
+                                            s.capture.camera_id = id.clone();
+                                        }
+                                    }
+                                });
+                            });
+                            row(ui, pal, "Microphone", "Record the microphone too, as its own file. The first recording asks macOS for access.", |ui| {
+                                toggle(ui, pal, &mut s.capture.microphone)
+                            });
+                            row(ui, pal, "Microphone device", "Which microphone to record. Default uses the one macOS picks.", |ui| {
+                                if small_btn(ui, pal, "Refresh") {
+                                    refresh_devices = true;
+                                }
+                                let shown = crate::record_ctl::device_shown(&mics, &s.capture.mic_id, known);
+                                field_combo(ui, pal, "capture_mic_device", &shown, 190.0, |ui| {
+                                    if ui.selectable_label(s.capture.mic_id.is_empty(), "Default").clicked() {
+                                        s.capture.mic_id.clear();
+                                    }
+                                    for (id, name) in &mics {
+                                        if ui.selectable_label(&s.capture.mic_id == id, name).clicked() {
+                                            s.capture.mic_id = id.clone();
+                                        }
+                                    }
+                                });
+                            });
+                            row(ui, pal, "System audio", "Record the sound your Mac plays, as its own file.", |ui| toggle(ui, pal, &mut s.capture.system_audio));
+                        });
+                        match &devices_state {
+                            crate::record_ctl::DevicesState::Failed(why) => {
+                                ui.add_space(6.0);
+                                note(ui, pal, &format!("Devices are not listed: {why}"));
+                            }
+                            crate::record_ctl::DevicesState::Loading | crate::record_ctl::DevicesState::Idle => {
+                                ui.add_space(6.0);
+                                note(ui, pal, "Looking for cameras and microphones…");
+                            }
+                            crate::record_ctl::DevicesState::Ready(d) if d.cameras.is_empty() && d.microphones.is_empty() => {
+                                ui.add_space(6.0);
+                                note(ui, pal, "No camera or microphone was found.");
+                            }
+                            crate::record_ctl::DevicesState::Ready(_) => {}
+                        }
+                        ui.add_space(14.0);
                         section(ui, pal, "Shortcuts");
                         group(ui, pal, |ui| {
                             for (title, b) in CAPTURE_SHORTCUTS {
@@ -7218,6 +7282,20 @@ impl App {
         }
         if recheck_apple {
             self.apple_langs.clear();
+        }
+        if tab == CAPTURE_TAB {
+            use crate::record_ctl::DevicesState;
+            let idle = matches!(self.rt.devices, DevicesState::Idle);
+            if (idle || refresh_devices) && !matches!(self.rt.devices, DevicesState::Loading) {
+                if let Some(why) = self.capture.availability.message() {
+                    self.rt.devices = DevicesState::Failed(why);
+                } else {
+                    // the helper call runs on a worker thread; the answer comes back as RecordMsg::Devices
+                    self.rt.devices = DevicesState::Loading;
+                    let root = self.store.root.clone();
+                    crate::record_ctl::load_devices(self.capture.exe.clone(), self.bus.clone(), move |m| crate::instance::log(&root, m));
+                }
+            }
         }
         if tab == TRANSLATE_TAB && s.translate_apple && apple_ok {
             let missing: Vec<String> = ferrocast_core::translate::languages(&s.translate_languages)

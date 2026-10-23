@@ -41,8 +41,15 @@ pub struct CaptureSettings {
     pub cursor_size: f64,
     pub auto_zoom: bool,
     pub zoom_scale: f64,
+    /// Record the camera too (P4).
+    pub camera: bool,
+    /// Camera device id from the helper's `devices`; empty = the system default.
     pub camera_id: String,
+    /// Record the microphone too (P4).
+    pub microphone: bool,
+    /// Microphone device id from the helper's `devices`; empty = the system default.
     pub mic_id: String,
+    /// Record the system audio too (P4).
     pub system_audio: bool,
     /// Seconds before recording starts: 0, 3 or 5.
     pub countdown: u32,
@@ -61,7 +68,9 @@ impl Default for CaptureSettings {
             cursor_size: 1.0,
             auto_zoom: true,
             zoom_scale: 2.0,
+            camera: false,
             camera_id: String::new(),
+            microphone: false,
             mic_id: String::new(),
             system_audio: false,
             countdown: 3,
@@ -136,5 +145,19 @@ mod tests {
         assert_eq!((s.capture.countdown, s.capture.zoom_scale), (3, 2.0));
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn p4_sources_default_off_and_old_files_load_unchanged() {
+        let c = CaptureSettings::default();
+        assert!(!c.camera && !c.microphone && !c.system_audio);
+        assert!(c.camera_id.is_empty() && c.mic_id.is_empty());
+        let s: Settings = serde_json::from_str(r#"{"capture":{"fps":30,"camera_id":"0x1"}}"#).unwrap();
+        assert_eq!((s.capture.fps, s.capture.camera_id.as_str(), s.capture.camera), (30, "0x1", false));
+        let on: Settings =
+            serde_json::from_str(r#"{"capture":{"camera":true,"microphone":true,"system_audio":true,"mic_id":"m"}}"#).unwrap();
+        assert!(on.capture.camera && on.capture.microphone && on.capture.system_audio);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back, on);
     }
 }

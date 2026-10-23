@@ -206,9 +206,14 @@ pub fn outcome_toast(o: &Outcome) -> Option<String> {
 
 /// Opens the Screen Recording pane of System Settings (never in tests).
 pub fn open_screen_recording_pane() {
+    open_pane(SCREEN_RECORDING_PANE);
+}
+
+/// Opens a Privacy pane of System Settings by its URL (never in tests).
+pub fn open_pane(url: &str) {
     if !cfg!(test) {
         // spawn, do not wait: this runs on the main thread inside a winit callback
-        let _ = std::process::Command::new("/usr/bin/open").arg(SCREEN_RECORDING_PANE).spawn();
+        let _ = std::process::Command::new("/usr/bin/open").arg(url).spawn();
     }
 }
 
