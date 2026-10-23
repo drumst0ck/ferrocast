@@ -194,6 +194,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     var lastDroppedWarn = 0.0
     var lastDiskWarn = 0.0
     var warnedNoFrames = false
+    /// Input event log (`events.json`), started and stopped with the recording.
+    var events: InputRecorder?
 
     init(id: Any?, project: String, file: String, writer: ScreenWriter) {
         self.id = id
@@ -254,6 +256,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         timer = nil
         outcome = wasArming ? .failure(RecordFailure(message: message)) : finishFile(at: hostSeconds())
         if case .failure(let f) = outcome { log("recording lost: \(f.message)") }
+        if case .success = outcome { events?.finish(at: hostSeconds(), write: true) } else { events?.finish(at: hostSeconds(), write: false) }
         releasePower()
         event("state", ["state": "failed", "message": message])
     }
@@ -293,7 +296,12 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         t.setEventHandler { [weak self] in self?.tick() }
         queue.sync { timer = t }
         t.resume()
-        queue.async { self.event("state", ["state": "recording", "t": 0.0]) }
+        queue.async {
+            self.event("state", ["state": "recording", "t": 0.0])
+            if let e = self.events, !e.keysAvailable {
+                self.event("warn", ["code": "input-monitoring-off", "message": "Keyboard shortcuts will not be recorded: Input Monitoring is off"])
+            }
+        }
     }
 
     private func tick() {
@@ -326,7 +334,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         var ok = false
         queue.sync {
             guard state == .recording else { return }
-            writer.pause(at: hostSeconds())
+            let now = hostSeconds()
+            writer.pause(at: now)
+            events?.pause(at: now)
             state = .paused
             ok = true
             event("state", ["state": "paused", "t": writer.elapsed(at: hostSeconds())])
@@ -338,7 +348,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         var ok = false
         queue.sync {
             guard state == .paused else { return }
-            writer.resume(at: hostSeconds())
+            let now = hostSeconds()
+            writer.resume(at: now)
+            events?.resume(at: now)
             state = .recording
             ok = true
             event("state", ["state": "recording", "t": writer.elapsed(at: hostSeconds())])
@@ -366,6 +378,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
                 result = outcome ?? result
             } else if state == .stopping {
                 result = finishFile(at: stopTime)
+                if case .success = result { events?.finish(at: stopTime, write: true) } else { events?.finish(at: stopTime, write: false) }
                 state = .done
                 releasePower()
                 event("state", ["state": "stopped"])
@@ -425,6 +438,9 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
     let excluded = Set(((req["excludes"] as? [String: Any])?["window_ids"] as? [NSNumber] ?? []).map { $0.uint32Value })
     let filter: SCContentFilter
     var points = CGSize.zero
+    var inputDisplay: CGRect?
+    var captureRect: CGRect?
+    var inputWindow: UInt32?
     switch kind {
     case "display", "rect":
         guard let did = number(target["display"]),
@@ -434,6 +450,7 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
         }
         filter = SCContentFilter(display: display, excludingWindows: content.windows.filter { excluded.contains($0.windowID) })
         points = display.frame.size
+        inputDisplay = display.frame
         if kind == "rect" {
             guard let r = target["rect"] as? [Any], r.count == 4, let x = number(r[0]), let y = number(r[1]),
                   let w = number(r[2]), let h = number(r[3]), w >= 1, h >= 1 else {
@@ -446,6 +463,7 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
                 return
             }
             config.sourceRect = clamped
+            captureRect = clamped
             points = clamped.size
         }
     case "window":
@@ -456,6 +474,17 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
         }
         filter = SCContentFilter(desktopIndependentWindow: window)
         points = window.frame.size
+        inputWindow = window.windowID
+        // The display holding most of the window; positions in events.json are relative to it.
+        let best = content.displays.max { a, b in
+            let ia = a.frame.intersection(window.frame), ib = b.frame.intersection(window.frame)
+            return (ia.isNull ? 0 : ia.width * ia.height) < (ib.isNull ? 0 : ib.width * ib.height)
+        }
+        inputDisplay = best?.frame ?? CGRect(origin: .zero, size: window.frame.size)
+        if let d = best?.frame {
+            captureRect = CGRect(x: window.frame.minX - d.minX, y: window.frame.minY - d.minY,
+                                 width: window.frame.width, height: window.frame.height)
+        }
     default:
         fail(id, "invalid", "unknown target kind: \(kind)")
         return
@@ -477,6 +506,11 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
     }
 
     let rec = Recorder(id: id, project: project, file: file, writer: writer)
+    if let frame = inputDisplay {
+        let screen = EventsScreen(size: (width, height), scale: scale, displayFrame: frame, captureRect: captureRect)
+        rec.events = InputRecorder(config: EventsConfig(screen: screen, windowID: inputWindow, excluded: excluded),
+                                   url: projectURL.appendingPathComponent("events.json"))
+    }
     let stream = SCStream(filter: filter, configuration: config, delegate: rec)
     rec.stream = stream
     do {
@@ -507,6 +541,7 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
     }
     let t0: Double
     do { t0 = try rec.arm() } catch {
+        rec.events = nil
         stream.stopCapture { _ in sem.signal() }
         _ = sem.wait(timeout: .now() + 5)
         writer.discard()
@@ -514,6 +549,7 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
         fail(id, "internal", (error as? RecordFailure)?.message ?? error.localizedDescription)
         return
     }
+    rec.events?.start(at: t0)
     recorderLock.lock()
     activeRecorder = rec
     recorderLock.unlock()

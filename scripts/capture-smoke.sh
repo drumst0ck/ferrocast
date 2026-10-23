@@ -196,6 +196,34 @@ msg = "file %.3f s, wall %.3f s, helper %.3f s, %d ticks, %s frames, size %s" % 
 if abs(dur - 2.0) > 0.25 or abs(dur - wall) > 0.1 or code != 0 or len(ticks) < 1:
     print("FAIL: record duration/ticks/exit (%s, exit %s)" % (msg, code)); sys.exit(1)
 print("PASS: record (%s)" % msg)
+
+# events.json: written next to screen.mov (atomically, no .partial), version 1, shaped as
+# crates/core/src/capture/events.rs decodes it (the Rust fixture test covers the strict decoder).
+ev_path = os.path.join(project, "events.json")
+if not os.path.isfile(ev_path) or os.path.exists(ev_path + ".partial"):
+    print("FAIL: events.json missing or .partial left"); sys.exit(1)
+try:
+    ev = json.load(open(ev_path))
+    assert ev["version"] == 1 and len(ev["screen"]["size"]) == 2 and ev["screen"]["scale"] > 0
+    assert len(ev["screen"]["display_frame"]) == 4
+    for name in ("cursor", "clicks", "keys", "scroll", "windows"):
+        assert isinstance(ev[name], list), name
+    assert len(ev["cursor"]) >= 1 and all(len(c) == 4 for c in ev["cursor"])
+    ts = [c[0] for c in ev["cursor"]]
+    why = None
+    if ts != sorted(ts):
+        why = "unsorted at %r" % [(i, ts[i - 1], ts[i]) for i in range(1, len(ts)) if ts[i] < ts[i - 1]][:3]
+    elif ts[0] < 0:
+        why = "negative first time %r" % ts[0]
+    elif ts[-1] > dur + 0.2:
+        why = "last sample %.3f after the file end %.3f" % (ts[-1], dur)
+    assert why is None, "cursor times: %s" % why
+    for k in ev["keys"]:  # privacy: contents only for shortcuts
+        assert any(m != "shift" for m in k.get("mods", [])) or not (k.get("code") or k.get("char")), "plain key stored"
+except Exception as e:
+    print("FAIL: events.json invalid (%r)" % (e,)); sys.exit(1)
+print("PASS: events.json (version %d, %d cursor samples, %d clicks, %d keys, %d scroll, %d windows)" % (
+    ev["version"], len(ev["cursor"]), len(ev["clicks"]), len(ev["keys"]), len(ev["scroll"]), len(ev["windows"])))
 PY
   ); rec_rc=$?
   echo "$rec_out"
