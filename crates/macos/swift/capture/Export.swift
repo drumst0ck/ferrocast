@@ -33,6 +33,11 @@ import UniformTypeIdentifiers
 // the quantisation (palette, dither) is ImageIO's. Finalize runs on its own thread so heartbeats and
 // `cancel` keep being served (a cancel during finalize waits for it, then removes the file).
 //
+// Take decoding: sequential (`AVAssetReader`, Decode.swift) while the source times of consecutive output
+// frames are close, one generator request for the first frame and after every trim or speed cut. A
+// request field `"decode":"generator"` forces the old one-request-per-frame path (reference for the
+// smoke check; not sent by the app). 1080p/30 of a real Retina take: 18 -> 75 fps.
+//
 // Audio: OUT OF SCOPE until T33. The writer is built so that an audio input can be added next to the
 // video input before `startWriting` (mapping `screen.mov`'s audio through `segments`); today the MP4
 // has no audio track.
@@ -81,6 +86,8 @@ struct ExportSpec {
     var frames: Int
     var paramsFile: String
     var segmentSeconds: Double
+    /// `"decode":"generator"` in the request: the old one-request-per-frame path (reference for the smoke check).
+    var generatorOnly = false
 }
 
 /// Same limits as `capture::export` in Rust (the helper re-checks what it is sent).
@@ -182,9 +189,11 @@ func handleRender(_ id: Any?, _ req: [String: Any]) {
     activeExport = job
     exportLock.unlock()
     let spec = ExportSpec(project: project, out: out, format: format, codec: codec, width: w, height: h, fps: fps, quality: quality,
-                          frames: frames, paramsFile: paramsFile, segmentSeconds: seconds)
+                          frames: frames, paramsFile: paramsFile, segmentSeconds: seconds,
+                          generatorOnly: (req["decode"] as? String) == "generator")
     Thread.detachNewThread {
         if spec.format == "gif" { runGifExport(job, spec) } else { runExport(job, spec) }
+        closeSequentialDecoder()
         releaseExportSlot(job)
         job.finished.signal()
     }
@@ -440,7 +449,9 @@ private func composeExportFrame(_ i: Int, lines: LineReader, takeURL: URL, style
         return (nil, ("invalid", "params_file line \(i + 1) is malformed"))
     }
     do {
-        let take = try takeFrame(at: takeURL, t: t)
+        // sequential decode (Decode.swift): output frames ask for increasing source times, so after the
+        // first frame the reader is kept open; a trim or speed cut (a jump) costs one generator frame
+        let take = try takeFrameAuto(at: takeURL, t: t, mode: spec.generatorOnly ? .generator : .auto).frame
         guard let composed = composeStyledImage(take: take, style: style, project: spec.project, width: spec.width,
                                                 height: spec.height, fx: fx) else {
             return (nil, ("internal", "could not compose frame \(i)"))
