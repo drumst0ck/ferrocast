@@ -542,6 +542,132 @@ PY
       else
         echo "SKIP: render.frame T25 (zoom fixture could not be generated)"
       fi
+
+      # S15/S16 performance work: raw preview frames (`format:"raw"`) and the sequential take decoder
+      # (AVAssetReader) used for consecutive times and for every exported frame. Checks: a raw frame
+      # equals the PNG frame PIXEL FOR PIXEL (the PNG path keeps the generator and its golden bytes);
+      # the `decode` field of the reply shows the decoder policy (first frame and jumps = generator,
+      # the second consecutive frame = reopen, then advance, a time inside the same sample = reuse, a
+      # repeated key = cache, a jump back or far ahead = generator); an unknown format is `invalid`;
+      # a sequential export (with a backward and a forward cut) has the same frame count/duration as the
+      # generator export, and 3 decoded frames match it within a tolerance (compared with ffmpeg when installed).
+      sdir="$rdir/Seq.ferrocast"
+      mkdir -p "$sdir/.cache" target/capture-spike/export-smoke
+      if "$rdir/gen" "$sdir" 90 && cp crates/core/fixtures/render_project.json "$sdir/project.json"; then
+        seq_out=$(python3 - "$helper" "$sdir" "$PWD/target/capture-spike/export-smoke" <<'PY'
+import json, os, shutil, struct, subprocess, sys, zlib
+
+helper, project, outdir = sys.argv[1:4]
+p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+_id = [0]
+
+def call(o):
+    _id[0] += 1; o = dict(o, id=_id[0])
+    p.stdin.write(json.dumps(o) + "\n"); p.stdin.flush()
+    while True:
+        l = json.loads(p.stdout.readline())
+        if l.get("id") == o["id"] and "event" not in l: return l
+
+def png_pixels(path):
+    d = open(path, "rb").read(); assert d[:8] == b"\x89PNG\r\n\x1a\n"
+    pos, idat = 8, b""
+    while pos < len(d):
+        n, typ = struct.unpack(">I4s", d[pos:pos + 8]); body = d[pos + 8:pos + 8 + n]; pos += 12 + n
+        if typ == b"IHDR": w, h, depth, ct = struct.unpack(">IIBB", body[:10]); assert depth == 8 and ct in (2, 6), (depth, ct)
+        if typ == b"IDAT": idat += body
+    bpp = 4 if ct == 6 else 3
+    raw, stride, rows, prev, q = zlib.decompress(idat), w * bpp, [], bytearray(w * bpp), 0
+    for _ in range(h):
+        f, line = raw[q], bytearray(raw[q + 1:q + 1 + stride]); q += 1 + stride
+        for i in range(stride):
+            a = line[i - bpp] if i >= bpp else 0; b = prev[i]; c = prev[i - bpp] if i >= bpp else 0
+            if f == 1: line[i] = (line[i] + a) & 255
+            elif f == 2: line[i] = (line[i] + b) & 255
+            elif f == 3: line[i] = (line[i] + ((a + b) >> 1)) & 255
+            elif f == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else (b if pb <= pc else c))) & 255
+        rows.append(bytes(line)); prev = line
+    px = b"".join(rows)
+    if bpp == 3: px = b"".join(px[i:i + 3] + b"\xff" for i in range(0, len(px), 3))
+    return w, h, px
+
+def frame(t, width=160, **kw):
+    return dict({"cmd": "render.frame", "project": project, "t": t, "width": width}, **kw)
+
+try:
+    png, rawf = project + "/.cache/s.png", project + "/.cache/s.rgba"
+    # raw == PNG, pixel for pixel, for a consecutive run (sequential decoder) and two single frames
+    steps, decodes = [], []
+    times = [0.2 + i / 30 for i in range(6)] + [0.5, 0.5, 0.5 + 0.004, 2.5, 0.1, 1.9]
+    for t in times:
+        r = call(frame(t, out=rawf, format="raw")); assert r.get("ok") and r["format"] == "raw", r
+        w, h = r["size"]; assert r["stride"] == w * 4, r
+        got = open(rawf, "rb").read(); assert len(got) == w * h * 4, (len(got), r)
+        q = call(frame(t, out=png)); assert q.get("ok") and "format" not in q, q
+        pw, ph, px = png_pixels(png)
+        assert (pw, ph) == (w, h), ((pw, ph), (w, h))
+        assert px == got, "raw frame differs from the PNG frame at t=%s (%d bytes differ)" % (t, sum(a != b for a, b in zip(px, got)))
+        decodes.append(r["decode"])
+    # 0.2 generator, 0.233 reopen, 0.267 .. 0.367 advance, 0.5 advance (4 frames ahead, reader still open),
+    # 0.5 again cache, 0.504 reuse (inside the sample of 0.5), 2.5 / 0.1 / 1.9 generator
+    # (far ahead of the open reader, backwards, far ahead again)
+    want = ["generator", "reopen", "advance", "advance", "advance", "advance", "advance"]
+    assert decodes == want + ["cache", "reuse", "generator", "generator", "generator"], decodes
+    bad = call(frame(0.5, format="bmp")); assert bad.get("error") == "invalid", bad
+
+    # sequential export (default) vs the generator export, with a backward and a forward cut
+    n = 90
+    pf = project + "/.cache/seq-params.ndjson"
+    with open(pf, "w") as f:
+        for i in range(n):
+            t = i / 30.0 if i < 30 else (0.5 + (i - 30) / 30.0 if i < 60 else 2.0 + (i - 60) / 30.0 - 0.0)
+            f.write(json.dumps({"t": min(t, 2.96)}) + "\n")
+    def export(name, **kw):
+        out = outdir + "/" + name
+        if os.path.exists(out): os.remove(out)
+        r = call(dict({"cmd": "render", "project": project, "out": out, "format": "mp4", "codec": "h264", "width": 480, "height": 270,
+                       "fps": 30, "quality": "standard", "frames": n,
+                       "segments": [{"src_start": 0.0, "src_end": n / 30.0, "speed": 1.0}], "params_file": pf}, **kw))
+        assert r.get("ok") and r["frames"] == n and not os.path.exists(out + ".partial"), r
+        return out
+    a, b = export("seq-fast.mp4"), export("seq-ref.mp4", decode="generator")
+    # The pixel buffers handed to the encoder are bit-identical in both modes (checked with an
+    # instrumented build: FNV hash of every frame). The hardware H.264 encoder is not deterministic
+    # against the pace of its input (the faster sequential export differs run to run), so the MP4s
+    # are compared after decoding, on 3 frames (before the cuts, after the backward cut, after the
+    # forward cut), within a tolerance: max 40 / mean 2 levels. A wrong frame (off by one: the white bar
+    # moves 9 px per frame) differs by 100+ levels over hundreds of pixels.
+    note = "frames not compared (ffmpeg not installed)"
+    if shutil.which("ffmpeg"):
+        raws = []
+        for m in (a, b):
+            r = subprocess.run(["ffmpeg", "-v", "error", "-i", m, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True)
+            assert r.returncode == 0 and len(r.stdout) == n * 480 * 270 * 3, (r.returncode, len(r.stdout))
+            raws.append(r.stdout)
+        size, worst, total = 480 * 270 * 3, 0, 0
+        for i in (5, 40, 80):
+            x, y = raws[0][i * size:(i + 1) * size], raws[1][i * size:(i + 1) * size]
+            d = [abs(u - v) for u, v in zip(x, y)]
+            worst, total = max(worst, max(d)), total + sum(d)
+        mean = total / (3 * size)
+        assert worst <= 40 and mean <= 2.0, "sequential export frames differ from the generator export (max %d, mean %.2f)" % (worst, mean)
+        note = "3 decoded frames match the generator export (max diff %d, mean %.3f)" % (worst, mean)
+    print("PASS: render.frame raw (== PNG pixel for pixel on %d frames, decode %s, bad format invalid) and sequential MP4 export (%d frames, %s)"
+          % (len(times), "/".join(sorted(set(decodes))), n, note))
+except Exception as e:
+    print("FAIL: render.frame raw / sequential export (%s)" % (e,)); sys.exit(1)
+finally:
+    p.stdin.close()
+    try: p.wait(timeout=10)
+    except Exception: p.kill()
+PY
+        ); seq_rc=$?
+        echo "$seq_out"
+        [ "$seq_rc" = 0 ] || fail=1
+      else
+        echo "SKIP: render.frame raw / sequential (fixture could not be generated)"
+      fi
     else
       echo "SKIP: render.frame (fixture movie could not be generated: AVFoundation unavailable?)"
     fi

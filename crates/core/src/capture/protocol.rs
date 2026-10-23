@@ -63,6 +63,10 @@ pub enum Command {
         /// Absolute PNG path; the helper picks one under `<project>/.cache` when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         out: Option<String>,
+        /// `Raw` writes premultiplied RGBA8 pixels instead of a PNG (the editor preview skips the
+        /// PNG encode and decode); absent = PNG, byte-identical to before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<FrameFormat>,
         /// Optional `camera`, `cursor`, `ring`, `blur` (T25), evaluated by `capture::compose`.
         /// Absent = the plain styled frame of T24.
         #[serde(flatten)]
@@ -179,6 +183,15 @@ pub fn export_final(line: &Line) -> Option<ExportEvent> {
     }
 }
 
+/// How `render.frame` hands the picture over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FrameFormat {
+    Png,
+    /// `size[1]` rows of `stride` bytes, RGBA8 premultiplied, top row first.
+    Raw,
+}
+
 /// Payload of a successful `render.frame`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RenderFrameDone {
@@ -189,6 +202,15 @@ pub struct RenderFrameDone {
     /// Served from the helper's frame cache.
     #[serde(default)]
     pub cached: bool,
+    /// Present for a raw frame.
+    #[serde(default)]
+    pub format: Option<FrameFormat>,
+    /// Bytes per row of a raw frame.
+    #[serde(default)]
+    pub stride: Option<u32>,
+    /// How the take frame was decoded (`reuse`, `advance`, `reopen`, `generator`, `cache`): diagnostics.
+    #[serde(default)]
+    pub decode: Option<String>,
 }
 
 fn default_screen_file() -> String {
@@ -628,6 +650,7 @@ mod tests {
             t: 12.34,
             width: 960,
             out: None,
+            format: None,
             params: FrameParams::default(),
         };
         let s = encode_request(&Request { id: 9, command: c.clone() });
@@ -638,11 +661,51 @@ mod tests {
             t: 0.0,
             width: 64,
             out: Some("/p/.cache/f-0.png".into()),
+            format: None,
             params: FrameParams::default(),
         };
         let s = encode_request(&Request { id: 10, command: with.clone() });
         assert!(s.ends_with(r#""width":64,"out":"/p/.cache/f-0.png"}"#), "{s}");
         assert_eq!(serde_json::from_str::<Request>(&s).unwrap().command, with);
+    }
+
+    #[test]
+    fn render_frame_raw_format_is_encoded_and_the_default_stays_the_old_line() {
+        let raw = Command::RenderFrame {
+            project: "/p".into(),
+            t: 1.0,
+            width: 960,
+            out: None,
+            format: Some(FrameFormat::Raw),
+            params: FrameParams::default(),
+        };
+        let s = encode_request(&Request { id: 3, command: raw.clone() });
+        assert_eq!(s, r#"{"id":3,"cmd":"render.frame","project":"/p","t":1.0,"width":960,"format":"raw"}"#);
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap().command, raw);
+        // a request without `format` decodes to None and encodes back without it (PNG path unchanged)
+        let r: Request = serde_json::from_str(r#"{"id":3,"cmd":"render.frame","project":"/p","t":1.0,"width":960}"#).unwrap();
+        let Command::RenderFrame { format, .. } = &r.command else { panic!() };
+        assert_eq!(*format, None);
+        assert!(!encode_request(&r).contains("format"));
+        assert!(
+            serde_json::from_str::<Request>(r#"{"id":3,"cmd":"render.frame","project":"/p","t":1.0,"width":9,"format":"bmp"}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn render_frame_raw_reply_carries_stride_and_decode() {
+        let Line::Ok { body, .. } = decode_line(
+            r#"{"id":9,"ok":true,"path":"/p/.cache/preview.rgba","size":[960,540],"format":"raw","stride":3840,"decode":"advance"}"#,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let d: RenderFrameDone = parse_body(&body).unwrap();
+        assert_eq!((d.format, d.stride, d.decode.as_deref()), (Some(FrameFormat::Raw), Some(3840), Some("advance")));
+        // a PNG reply has none of them
+        let Line::Ok { body, .. } = decode_line(r#"{"id":9,"ok":true,"path":"/x.png","size":[2,2]}"#).unwrap() else { panic!() };
+        let d: RenderFrameDone = parse_body(&body).unwrap();
+        assert_eq!((d.format, d.stride, d.decode), (None, None, None));
     }
 
     #[test]

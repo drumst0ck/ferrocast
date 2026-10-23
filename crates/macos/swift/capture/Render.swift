@@ -17,6 +17,12 @@ import UniformTypeIdentifiers
 // Units: `style.radius`, `shadow.blur` and `shadow.dy` are authored for a 1920 px wide output and
 // scale with the requested width; `style.padding` is a fraction of the output width per side.
 // `t` is the source time of the take in seconds (the caller maps output time with `timeline`).
+//
+// Performance (S15, measured on a real 2940x1912 HEVC take, 960 px preview): the editor asks for
+// `format:"raw"` frames, which skip the PNG encode here and decode in the app, and whose take frames
+// come from a sequential AVAssetReader while the times are consecutive (Decode.swift). The default
+// PNG path is untouched (generator decode, same graph, same bytes: the smoke golden checks it). The
+// mask and the background + shadow graph are kept between frames with the same style and geometry.
 
 func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
 
@@ -143,6 +149,32 @@ private func maskImage(canvas: CGSize, rect: CGRect, radius: CGFloat) -> CGImage
 
 private func rawImage(_ cg: CGImage) -> CIImage { CIImage(cgImage: cg, options: [.colorSpace: NSNull()]) }
 
+struct BackdropKey: Equatable {
+    let style: String
+    let geo: RenderGeometry
+    let project: String
+
+    init(style s: RenderStyle, geo: RenderGeometry, project: String) {
+        // every field that changes the background or the shadow
+        var text = "\(s.bgKind)|\(s.bgStops)|\(s.bgAngle)|\(s.shadowOpacity)"
+        if s.bgKind == "image", let path = s.bgStops.first {
+            let full = path.hasPrefix("/") ? path : (project as NSString).appendingPathComponent(path)
+            text += "|\(mtime(full))"
+        }
+        style = text
+        self.geo = geo
+        self.project = project
+    }
+}
+
+struct Backdrop {
+    let key: BackdropKey
+    let mask: CIImage
+    let backdrop: CIImage?
+}
+
+private var backdropCache: Backdrop?
+
 let renderContext: CIContext = {
     let opts: [CIContextOption: Any] = [.workingColorSpace: renderSRGB, .outputColorSpace: renderSRGB]
     if MTLCreateSystemDefaultDevice() != nil { return CIContext(options: opts) }
@@ -174,7 +206,7 @@ private func coverCanvas(_ img: CIImage, canvas: CGRect) -> CIImage {
     return placed.cropped(to: canvas)
 }
 
-private func backgroundImage(_ style: RenderStyle, take: CGImage, project: String, geo: RenderGeometry, canvas: CGRect) -> CIImage {
+private func backgroundImage(_ style: RenderStyle, take: TakeFrame, project: String, geo: RenderGeometry, canvas: CGRect) -> CIImage {
     func gradient(_ stops: [String], _ angle: Double) -> CIImage? {
         gradientImage(stops: stops, angle: angle, size: geo.canvas).map(rawImage)
     }
@@ -197,7 +229,7 @@ private func backgroundImage(_ style: RenderStyle, take: CGImage, project: Strin
     case "blur":
         // The frame itself, covering the canvas, blurred (same idea as `frame blur` for stills).
         let sigma = 40 * geo.canvas.width / 1920
-        return blurred(coverCanvas(rawImage(take), canvas: canvas), sigma: sigma, within: canvas)
+        return blurred(coverCanvas(take.raw(), canvas: canvas), sigma: sigma, within: canvas)
     default:
         if let g = gradient(style.bgStops, style.bgAngle) { return g }
     }
@@ -290,21 +322,46 @@ private func overlayLayers(_ fx: FrameFx, view: CGRect, picture: CGSize, ref: CG
 }
 
 /// Compose the styled still for one take frame (PNG path of `render.frame`).
-func composeStyledFrame(take: CGImage, style: RenderStyle, project: String, width: Int, fx: FrameFx = .none) -> CGImage? {
+func composeStyledFrame(take: TakeFrame, style: RenderStyle, project: String, width: Int, fx: FrameFx = .none) -> CGImage? {
     guard let (result, canvas) = composeStyledImage(take: take, style: style, project: project, width: width, fx: fx) else { return nil }
     return renderContext.createCGImage(result, from: canvas, format: .RGBA8, colorSpace: renderSRGB)
 }
 
+/// The same composition rasterised into `buffer` as tightly packed RGBA8 (premultiplied, sRGB, top row
+/// first): the raw hand-off of `render.frame` (`format:"raw"`). The canvas is opaque (the background
+/// covers it), so premultiplied and straight alpha are the same bytes. Same CoreImage graph and the
+/// same pixel format as the PNG path: the smoke check compares both pixel for pixel.
+func composeStyledRaw(take: TakeFrame, style: RenderStyle, project: String, width: Int, fx: FrameFx = .none,
+                      into buffer: inout [UInt8]) -> (width: Int, height: Int)? {
+    guard let (result, canvas) = composeStyledImage(take: take, style: style, project: project, width: width, fx: fx) else { return nil }
+    let w = Int(canvas.width), h = Int(canvas.height)
+    if buffer.count != w * h * 4 { buffer = [UInt8](repeating: 0, count: w * h * 4) }
+    buffer.withUnsafeMutableBytes {
+        renderContext.render(result, toBitmap: $0.baseAddress!, rowBytes: w * 4, bounds: canvas, format: .RGBA8, colorSpace: renderSRGB)
+    }
+    return (w, h)
+}
+
 /// The composition shared by `render.frame` and the MP4 export (`Export.swift`): one lazy
 /// CoreImage graph over `canvas` (top-left pixels, y-up CI space). Callers rasterise it.
-func composeStyledImage(take: CGImage, style: RenderStyle, project: String, width: Int, height: Int? = nil, fx: FrameFx = .none) -> (CIImage, CGRect)? {
+func composeStyledImage(take: TakeFrame, style: RenderStyle, project: String, width: Int, height: Int? = nil, fx: FrameFx = .none) -> (CIImage, CGRect)? {
     let geo = renderGeometry(style, source: CGSize(width: take.width, height: take.height), width: width, height: height)
     let canvas = CGRect(origin: .zero, size: geo.canvas)
     // CoreImage is y-up; the geometry is top-left.
     let frameCI = CGRect(x: geo.frame.minX, y: geo.canvas.height - geo.frame.maxY, width: geo.frame.width, height: geo.frame.height)
 
-    guard let maskCG = maskImage(canvas: geo.canvas, rect: geo.frame, radius: geo.radius) else { return nil }
-    let mask = rawImage(maskCG)
+    // The mask and the backdrop (background + shadow) depend only on the style and the geometry: a
+    // preview or an export asks for hundreds of frames with the same ones, so the CoreImage graph
+    // pieces are kept (measured on a real take: export 1080p/30 55 -> 75 fps, raw preview ~1 ms per
+    // frame). They are the same lazy graphs the uncached path builds, so the pixels are identical.
+    // `blur` backgrounds follow the frame and are never kept.
+    let key = BackdropKey(style: style, geo: geo, project: project)
+    let hit = backdropCache.flatMap { $0.key == key ? $0 : nil }
+    let mask: CIImage
+    if let hit { mask = hit.mask } else {
+        guard let maskCG = maskImage(canvas: geo.canvas, rect: geo.frame, radius: geo.radius) else { return nil }
+        mask = rawImage(maskCG)
+    }
     let clear = CIImage(color: .clear).cropped(to: canvas)
 
     var picture: CIImage
@@ -313,10 +370,10 @@ func composeStyledImage(take: CGImage, style: RenderStyle, project: String, widt
         let takeSize = CGSize(width: take.width, height: take.height)
         let r = cropRect(cam, take: takeSize)
         let ci = CGRect(x: r.minX, y: takeSize.height - r.maxY, width: r.width, height: r.height)
-        let part = CIImage(cgImage: take).cropped(to: ci).transformed(by: CGAffineTransform(translationX: -ci.minX, y: -ci.minY))
+        let part = take.image.cropped(to: ci).transformed(by: CGAffineTransform(translationX: -ci.minX, y: -ci.minY))
         picture = scaled(part, to: frameCI.size, at: frameCI.origin)
     } else {
-        picture = scaled(CIImage(cgImage: take), to: frameCI.size, at: frameCI.origin)
+        picture = scaled(take.image, to: frameCI.size, at: frameCI.origin)
     }
     if !fx.isNone {
         let view = fx.camera.map { c -> CGRect in
@@ -342,18 +399,24 @@ func composeStyledImage(take: CGImage, style: RenderStyle, project: String, widt
     }
     let rounded = picture.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: clear, kCIInputMaskImageKey: mask])
 
-    var result = backgroundImage(style, take: take, project: project, geo: geo, canvas: canvas)
-    if style.shadowOpacity > 0, geo.shadowSigma > 0.01 || geo.shadowDy != 0 {
-        let shape = mask.applyingFilter("CIMaskToAlpha")
-        let opacity = CGFloat(min(max(style.shadowOpacity, 0), 1))
-        let shadow = blurred(shape, sigma: geo.shadowSigma, within: canvas.insetBy(dx: -4 * geo.shadowSigma, dy: -4 * geo.shadowSigma))
-            // CIMaskToAlpha yields white; make it black and scale the alpha by the opacity.
-            .applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: opacity),
-            ])
-            .transformed(by: CGAffineTransform(translationX: 0, y: -geo.shadowDy))
-        result = shadow.composited(over: result)
+    var result: CIImage
+    if let backdrop = hit?.backdrop {
+        result = backdrop
+    } else {
+        result = backgroundImage(style, take: take, project: project, geo: geo, canvas: canvas)
+        if style.shadowOpacity > 0, geo.shadowSigma > 0.01 || geo.shadowDy != 0 {
+            let shape = mask.applyingFilter("CIMaskToAlpha")
+            let opacity = CGFloat(min(max(style.shadowOpacity, 0), 1))
+            let shadow = blurred(shape, sigma: geo.shadowSigma, within: canvas.insetBy(dx: -4 * geo.shadowSigma, dy: -4 * geo.shadowSigma))
+                // CIMaskToAlpha yields white; make it black and scale the alpha by the opacity.
+                .applyingFilter("CIColorMatrix", parameters: [
+                    "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                    "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: opacity),
+                ])
+                .transformed(by: CGAffineTransform(translationX: 0, y: -geo.shadowDy))
+            result = shadow.composited(over: result)
+        }
+        backdropCache = Backdrop(key: key, mask: mask, backdrop: style.bgKind == "blur" ? nil : result)
     }
     result = rounded.composited(over: result).cropped(to: canvas)
     return (result, canvas)
@@ -361,9 +424,9 @@ func composeStyledImage(take: CGImage, style: RenderStyle, project: String, widt
 
 // MARK: - Take access
 
-private final class ResultBox<T>: @unchecked Sendable { var value: Result<T, Error>? }
+final class ResultBox<T>: @unchecked Sendable { var value: Result<T, Error>? }
 
-private func blocking<T>(_ op: @escaping @Sendable () async throws -> T) throws -> T {
+func blocking<T>(_ op: @escaping @Sendable () async throws -> T) throws -> T {
     let box = ResultBox<T>()
     let sem = DispatchSemaphore(value: 0)
     Task.detached {
@@ -376,7 +439,7 @@ private func blocking<T>(_ op: @escaping @Sendable () async throws -> T) throws 
 
 /// The movie of the last request, kept between `render.frame` calls: loading the asset and its
 /// track properties took a good part of every preview frame (T26). Rebuilt when the file changes.
-private struct TakeReader {
+struct TakeReader {
     let url: URL
     let mtime: Double
     let generator: AVAssetImageGenerator
@@ -386,7 +449,7 @@ private struct TakeReader {
 
 private var takeReader: TakeReader?
 
-private func reader(for url: URL) throws -> TakeReader {
+func reader(for url: URL) throws -> TakeReader {
     let stamp = mtime(url.path)
     if let r = takeReader, r.url == url, r.mtime == stamp { return r }
     let asset = AVURLAsset(url: url)
@@ -465,10 +528,13 @@ private struct FrameKey: Hashable {
     let width: Int
     /// Canonical text of the camera/cursor/ring/blur fields ("" = none).
     let fx: String
+    /// `format:"raw"` frames are cached apart from the PNGs of the same key.
+    let raw: Bool
 }
 
 private struct CachedFrame {
-    let png: Data
+    /// Encoded PNG, or the tightly packed RGBA8 pixels of a raw frame.
+    let data: Data
     let size: [Int]
 }
 
@@ -482,7 +548,7 @@ private func cacheStore(_ key: FrameKey, _ value: CachedFrame) {
     frameCache[key] = value
     frameCacheOrder.removeAll { $0 == key }
     frameCacheOrder.append(key)
-    while frameCacheOrder.count > frameCacheLimit || (frameCacheOrder.count > 1 && frameCache.values.reduce(0) { $0 + $1.png.count } > frameCacheBytes) {
+    while frameCacheOrder.count > frameCacheLimit || (frameCacheOrder.count > 1 && frameCache.values.reduce(0) { $0 + $1.data.count } > frameCacheBytes) {
         frameCache[frameCacheOrder.removeFirst()] = nil
     }
 }
@@ -507,6 +573,24 @@ private func writeAtomically(_ data: Data, to out: String) -> Bool {
     }
 }
 
+/// Raw frames reuse one file: overwritten in place (the consumer reads it before the next request,
+/// so no half-written read is possible, and a rename per frame would only add a directory update).
+private func writeInPlace(_ data: Data, to out: String) -> Bool {
+    try? FileManager.default.createDirectory(atPath: (out as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    let fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    return data.withUnsafeBytes { p in
+        var off = 0
+        while off < p.count {
+            let n = write(fd, p.baseAddress! + off, p.count - off)
+            if n <= 0 { return false }
+            off += n
+        }
+        return true
+    }
+}
+
 private func encodePNG(_ image: CGImage) -> Data? {
     let data = NSMutableData()
     guard let dest = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { return nil }
@@ -524,7 +608,18 @@ private func pruneFrameCache(project: String, keep: String) {
     }
 }
 
-/// `render.frame`: {project, t, width, out?, camera?, cursor?, ring?, blur?} -> {path, size, ms, cached}.
+/// Reused pixel buffer of the raw hand-off (a 960 px frame is ~2 MB).
+private var rawBuffer: [UInt8] = []
+
+/// `render.frame`: {project, t, width, out?, format?, camera?, cursor?, ring?, blur?} -> {path, size, ms, cached}.
+///
+/// `format` is `"png"` (default, byte-identical to T24/T25) or `"raw"` (the editor preview): the file
+/// holds the premultiplied RGBA8 pixels, `size[0] * 4` bytes per row, top row first, and the reply
+/// adds `format:"raw"` and `stride`. The default `out` of a raw frame is the reused
+/// `<project>/.cache/preview.rgba` (one consumer reads it before asking for the next frame). Raw
+/// requests take the take frame through `takeFrameAuto` (sequential reader for consecutive times);
+/// PNG requests keep the generator, so their bytes cannot change. The reply carries `decode`
+/// (`reuse`/`advance`/`reopen`/`generator`) for diagnostics.
 func handleRenderFrame(_ id: Any?, _ req: [String: Any]) {
     let started = DispatchTime.now()
     guard let project = req["project"] as? String, project.hasPrefix("/"),
@@ -537,7 +632,14 @@ func handleRenderFrame(_ id: Any?, _ req: [String: Any]) {
         fail(id, "invalid", "render.frame camera/cursor/ring/blur are malformed")
         return
     }
-    let out = (req["out"] as? String) ?? (project as NSString).appendingPathComponent(".cache/f-\(Int(max(t, 0) * 1000))-\(width).png")
+    let formatName = (req["format"] as? String) ?? "png"
+    guard formatName == "png" || formatName == "raw" else {
+        fail(id, "invalid", "render.frame format must be png or raw")
+        return
+    }
+    let isRaw = formatName == "raw"
+    let out = (req["out"] as? String) ?? (project as NSString).appendingPathComponent(
+        isRaw ? ".cache/preview.rgba" : ".cache/f-\(Int(max(t, 0) * 1000))-\(width).png")
     guard out.hasPrefix("/") else {
         fail(id, "invalid", "out must be an absolute path")
         return
@@ -563,25 +665,49 @@ func handleRenderFrame(_ id: Any?, _ req: [String: Any]) {
     }
 
     let key = FrameKey(project: project, mtime: mtime(projectFile), takeMtime: mtime(takePath),
-                       t: Int64((max(t, 0) * 1_000_000).rounded()), width: width, fx: fx.key)
+                       t: Int64((max(t, 0) * 1_000_000).rounded()), width: width, fx: fx.key, raw: isRaw)
     let ms = { Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000 }
+    let rounded = { (v: Double) in (v * 10).rounded() / 10 }
+    func done(_ size: [Int], cached: Bool, decode: String) {
+        var body: [String: Any] = ["path": out, "size": size, "ms": rounded(ms()), "cached": cached, "decode": decode]
+        if isRaw { body["format"] = "raw"; body["stride"] = size[0] * 4 }
+        reply(id, body)
+    }
     if let hit = frameCache[key] {
-        guard writeAtomically(hit.png, to: out) else { fail(id, "internal", "could not write \(out)"); return }
-        reply(id, ["path": out, "size": hit.size, "ms": (ms() * 10).rounded() / 10, "cached": true])
+        guard writeAtomically(hit.data, to: out) else { fail(id, "internal", "could not write \(out)"); return }
+        done(hit.size, cached: true, decode: "cache")
         return
     }
     do {
-        let take = try takeFrame(at: URL(fileURLWithPath: takePath), t: t)
-        guard let image = composeStyledFrame(take: take, style: RenderStyle(json: json), project: project, width: width, fx: fx),
-              let png = encodePNG(image) else {
-            fail(id, "internal", "could not compose the frame")
-            return
+        let style = RenderStyle(json: json)
+        let url = URL(fileURLWithPath: takePath)
+        let size: [Int]
+        let data: Data
+        var decode = "generator"
+        if isRaw {
+            let (take, served) = try takeFrameAuto(at: url, t: t, mode: (req["decode"] as? String) == "generator" ? .generator : .auto)
+            decode = served
+            guard let dims = composeStyledRaw(take: take, style: style, project: project, width: width, fx: fx, into: &rawBuffer) else {
+                fail(id, "internal", "could not compose the frame")
+                return
+            }
+            size = [dims.width, dims.height]
+            data = Data(rawBuffer)
+            guard writeInPlace(data, to: out) else { fail(id, "internal", "could not write \(out)"); return }
+        } else {
+            let take = TakeFrame(cg: try takeFrame(at: url, t: t))
+            guard let image = composeStyledFrame(take: take, style: style, project: project, width: width, fx: fx),
+                  let png = encodePNG(image) else {
+                fail(id, "internal", "could not compose the frame")
+                return
+            }
+            guard writeAtomically(png, to: out) else { fail(id, "internal", "could not write \(out)"); return }
+            size = [image.width, image.height]
+            data = png
         }
-        guard writeAtomically(png, to: out) else { fail(id, "internal", "could not write \(out)"); return }
-        let size = [image.width, image.height]
-        cacheStore(key, CachedFrame(png: png, size: size))
+        cacheStore(key, CachedFrame(data: data, size: size))
         pruneFrameCache(project: project, keep: out)
-        reply(id, ["path": out, "size": size, "ms": (ms() * 10).rounded() / 10, "cached": false])
+        done(size, cached: false, decode: decode)
     } catch let e as RenderError {
         fail(id, "internal", e.message)
     } catch {
