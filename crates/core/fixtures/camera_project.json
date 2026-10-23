@@ -1,0 +1,11 @@
+{"version":1,"name":"Camera fixture","created":"2026-10-23T14:05:22Z","duration":10.0,
+ "sources":{"screen":{"file":"screen.mov","offset":0.0},"camera":{"file":"camera.mov","offset":0.1},"mic":{"file":"mic.m4a","offset":0.2},"system":{"file":"system.m4a","offset":-0.05}},
+ "trims":[{"start":1.0,"end":9.0}],
+ "speeds":[{"start":4.0,"end":6.0,"factor":2.0}],
+ "zooms":[],
+ "cursor":{"style":"arrow","size":1.4,"smoothing":0.5,"click_effect":"ring","hide_idle_after":3.0,"motion_blur":0.5},
+ "style":{"aspect":"16:9","padding":0.06,"radius":18,"shadow":{"blur":40,"opacity":0.5,"dy":16},
+          "background":{"kind":"gradient","stops":["#1f1c2c","#928dab"],"angle":135}},
+ "camera":{"shape":"rounded","corner":"top_right","size":0.25,"margin":0.03,"mirror":false,"visible":true},
+ "audio":{"mic_gain":1.0,"system_gain":0.6,"mute":false,"mic":{"gain_db":3.0,"mute":false},"system":{"gain_db":-6.0,"mute":true},"master_db":-1.5},
+ "export":{"format":"mp4","codec":"h264","size":[1920,1080],"fps":30}}

@@ -192,9 +192,23 @@ final class SeqDecoder {
     }
 }
 
-private var seqDecoder: SeqDecoder?
-/// Time of the previous request, to recognise consecutive requests (playback) from random ones (scrubbing).
-private var lastWant: CMTime?
+/// The sequential reader and the time of the previous request of ONE track. The screen take and the
+/// camera take (P4) each have their own: one reader per track, reopened on seeks.
+final class DecodeState {
+    fileprivate var seqDecoder: SeqDecoder?
+    /// Time of the previous request, to recognise consecutive requests (playback) from random ones (scrubbing).
+    fileprivate var lastWant: CMTime?
+
+    func close() {
+        seqDecoder?.close()
+        seqDecoder = nil
+        lastWant = nil
+    }
+}
+
+private let takeState = DecodeState()
+/// Decoder state of `camera.mov` (see `CameraOverlay.swift`).
+let cameraState = DecodeState()
 
 /// Which decoder a request may use. `generator` is the old per-frame path, kept as the reference for
 /// the smoke checks and as a fallback knob (`"decode":"generator"` in a `render.frame` or `render` request).
@@ -213,39 +227,41 @@ enum TakeDecode {
 /// seek, a scrub jump, a step back, a trim or speed cut, goes to the generator, which is cheaper than
 /// a reopen for a single frame; the frame after it opens the reader again. A reader that fails falls
 /// back to the generator.
-func takeFrameAuto(at url: URL, t: Double, mode: TakeDecode = .auto) throws -> (frame: TakeFrame, served: String) {
+func takeFrameAuto(at url: URL, t: Double, mode: TakeDecode = .auto, state: DecodeState = takeState) throws -> (frame: TakeFrame, served: String) {
     let r = try reader(for: url)
     let last = max(0, r.duration - 0.5 / max(r.fps, 1))
     let want = CMTime(seconds: min(max(t, 0), last), preferredTimescale: 60000)
-    defer { lastWant = want }
+    defer { state.lastWant = want }
     let stamp = mtime(url.path)
-    if let d = seqDecoder, d.url != url || d.stamp != stamp {
+    if let d = state.seqDecoder, d.url != url || d.stamp != stamp {
         d.close()
-        seqDecoder = nil
+        state.seqDecoder = nil
     }
-    let follows = lastWant.map { want > $0 && (want - $0).seconds <= maxAheadSeconds } ?? false
+    let follows = state.lastWant.map { want > $0 && (want - $0).seconds <= maxAheadSeconds } ?? false
     // a request that follows the previous one closely may be up to a frame or two further from the
     // held sample than the limit (the previous request was served by `reuse` or by the generator):
     // twice the limit there keeps a steady 0.2 s step from flipping between advance and reopen
     let limit = follows ? 2 * maxAheadSeconds : maxAheadSeconds
-    let open = seqDecoder?.wouldStep(want, limit: limit).map { $0 != .reopen } ?? false
+    let open = state.seqDecoder?.wouldStep(want, limit: limit).map { $0 != .reopen } ?? false
     if mode == .auto, open || follows {
-        if seqDecoder == nil { seqDecoder = SeqDecoder(url: url) }
-        if let d = seqDecoder, let buffer = d.frame(at: want, limit: limit) {
+        if state.seqDecoder == nil { state.seqDecoder = SeqDecoder(url: url) }
+        if let d = state.seqDecoder, let buffer = d.frame(at: want, limit: limit) {
             return (TakeFrame(buffer: buffer), "\(d.lastStep)")
         }
-        seqDecoder?.close()
-        seqDecoder = nil
+        state.seqDecoder?.close()
+        state.seqDecoder = nil
     }
     return (TakeFrame(cg: try takeFrame(at: url, t: t)), "generator")
 }
 
-/// Drop the sequential decoder (an export ended, the project changed).
+/// Drop the sequential decoders (an export ended, the project changed).
 func closeSequentialDecoder() {
-    seqDecoder?.close()
-    seqDecoder = nil
-    lastWant = nil
+    takeState.close()
+    cameraState.close()
 }
 
-/// Diagnostics for the smoke checks and the timing logs: (reader opens, samples decoded).
-func sequentialDecoderStats() -> (opens: Int, decoded: Int) { (seqDecoder?.opens ?? 0, seqDecoder?.decoded ?? 0) }
+/// Diagnostics for the smoke checks and the timing logs: (reader opens, samples decoded) of the screen take.
+func sequentialDecoderStats() -> (opens: Int, decoded: Int) { (takeState.seqDecoder?.opens ?? 0, takeState.seqDecoder?.decoded ?? 0) }
+
+/// Same for the camera take.
+func cameraDecoderStats() -> (opens: Int, decoded: Int) { (cameraState.seqDecoder?.opens ?? 0, cameraState.seqDecoder?.decoded ?? 0) }

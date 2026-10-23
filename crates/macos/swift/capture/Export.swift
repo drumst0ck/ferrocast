@@ -38,9 +38,13 @@ import UniformTypeIdentifiers
 // request field `"decode":"generator"` forces the old one-request-per-frame path (reference for the
 // smoke check; not sent by the app). 1080p/30 of a real Retina take: 18 -> 75 fps.
 //
-// Audio: OUT OF SCOPE until T33. The writer is built so that an audio input can be added next to the
-// video input before `startWriting` (mapping `screen.mov`'s audio through `segments`); today the MP4
-// has no audio track.
+// Audio (T33, AudioMix.swift): the optional request field `audio` lists the recorded files (`mic.m4a`,
+// `system.m4a`) with their linear gain and the runs Rust computed (`timeline::audio_segments`); the MP4
+// gets ONE AAC track (48 kHz stereo) of exactly the video's length, fed next to the video frames.
+// Absent or empty `audio` (and every GIF): no audio track, as before.
+//
+// Camera overlay (P4, CameraOverlay.swift): when project.json has a visible `camera` and a camera take,
+// every frame (MP4 and GIF) draws it at camera time = source time - offset, with a second sequential reader.
 //
 // Output: `<out>.partial` is written and renamed to `<out>` only on success; failure and cancel remove it.
 // Threading: the export runs on its own thread so that stdin (`cancel`) keeps being served. Only one
@@ -88,6 +92,8 @@ struct ExportSpec {
     var segmentSeconds: Double
     /// `"decode":"generator"` in the request: the old one-request-per-frame path (reference for the smoke check).
     var generatorOnly = false
+    /// MP4 only: the recorded audio files to mix (muted ones were already dropped by Rust).
+    var audio: [AudioInputSpec] = []
 }
 
 /// Same limits as `capture::export` in Rust (the helper re-checks what it is sent).
@@ -179,6 +185,16 @@ func handleRender(_ id: Any?, _ req: [String: Any]) {
         fail(id, "not-found", "params_file not found")
         return
     }
+    var audio: [AudioInputSpec] = []
+    if format == "mp4" {
+        do { audio = try parseAudioInputs(req, project: project) } catch let e as RenderError {
+            fail(id, "invalid", e.message)
+            return
+        } catch {
+            fail(id, "invalid", "render audio is malformed")
+            return
+        }
+    }
     let job = ExportJob(id: id)
     exportLock.lock()
     if activeExport != nil {
@@ -190,7 +206,7 @@ func handleRender(_ id: Any?, _ req: [String: Any]) {
     exportLock.unlock()
     let spec = ExportSpec(project: project, out: out, format: format, codec: codec, width: w, height: h, fps: fps, quality: quality,
                           frames: frames, paramsFile: paramsFile, segmentSeconds: seconds,
-                          generatorOnly: (req["decode"] as? String) == "generator")
+                          generatorOnly: (req["decode"] as? String) == "generator", audio: audio)
     Thread.detachNewThread {
         if spec.format == "gif" { runGifExport(job, spec) } else { runExport(job, spec) }
         closeSequentialDecoder()
@@ -283,7 +299,9 @@ private func runExport(_ job: ExportJob, _ spec: ExportSpec) {
     let fm = FileManager.default
     let partial = spec.out + ".partial"
     var writer: AVAssetWriter?
+    var mixer: AudioMixer?
     func abort(_ code: String, _ message: String) {
+        mixer?.close()
         writer?.cancelWriting()
         try? fm.removeItem(atPath: partial)
         releaseExportSlot(job)
@@ -304,6 +322,14 @@ private func runExport(_ job: ExportJob, _ spec: ExportSpec) {
     guard let lines = LineReader(path: spec.paramsFile) else { return abort("not-found", "params_file could not be opened") }
     let style = RenderStyle(json: json)
     let takeURL = URL(fileURLWithPath: takePath)
+    let cameraSpec = CameraSpec(json: json, project: spec.project)
+    if !spec.audio.isEmpty {
+        do { mixer = try AudioMixer(specs: spec.audio, frames: spec.frames, fps: spec.fps) } catch let e as RenderError {
+            return abort(e.message.hasSuffix("not found") ? "not-found" : "invalid", e.message)
+        } catch {
+            return abort("invalid", "could not read the audio files")
+        }
+    }
 
     try? fm.createDirectory(atPath: (spec.out as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
     try? fm.removeItem(atPath: partial)
@@ -344,8 +370,17 @@ private func runExport(_ job: ExportJob, _ spec: ExportSpec) {
     ])
     guard w.canAdd(input) else { return abort("internal", "writer refused the video input") }
     w.add(input)
-    // T33: add the audio input here (before startWriting), fed from screen.mov's audio track(s)
-    // through the speed `segments`.
+    var audioInput: AVAssetWriterInput?
+    if mixer != nil {
+        let audioSettings: [String: Any] = [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: mixRate, AVNumberOfChannelsKey: 2,
+                                            AVEncoderBitRateKey: 160_000]
+        guard w.canApply(outputSettings: audioSettings, forMediaType: .audio) else { return abort("invalid", "this Mac cannot encode AAC audio") }
+        let ai = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+        ai.expectsMediaDataInRealTime = false
+        guard w.canAdd(ai) else { return abort("internal", "writer refused the audio input") }
+        w.add(ai)
+        audioInput = ai
+    }
     guard w.startWriting() else {
         return abort(isDiskFull(w.error) ? "disk-full" : "internal", "could not start the writer: \(w.error?.localizedDescription ?? "unknown error")")
     }
@@ -364,11 +399,34 @@ private func runExport(_ job: ExportJob, _ spec: ExportSpec) {
     }
     var lastProgress = DispatchTime(uptimeNanoseconds: 0)
 
+    // Audio is pulled by the writer on its own queue (`requestMediaDataWhenReady`): the writer
+    // interleaves the two inputs and stalls a video input that waits for audio, so one thread
+    // feeding both by polling deadlocks.
+    let audioDone = DispatchSemaphore(value: 0)
+    var audioFailed = false
+    if let mixer, let audioInput {
+        audioInput.requestMediaDataWhenReady(on: DispatchQueue(label: "dev.ferrocast.export.audio")) {
+            while audioInput.isReadyForMoreMediaData {
+                guard w.status == .writing, !job.isCancelled, let chunk = mixer.next(4096) else {
+                    if w.status == .writing { audioInput.markAsFinished() }
+                    audioDone.signal()
+                    return
+                }
+                guard let sb = audioSampleBuffer(samples: chunk.samples, start: chunk.start), audioInput.append(sb) else {
+                    audioFailed = true
+                    if w.status == .writing { audioInput.markAsFinished() }
+                    audioDone.signal()
+                    return
+                }
+            }
+        }
+    }
+
     for i in 0..<spec.frames {
         if job.isCancelled { return abort("cancelled", "Export cancelled") }
         var failure: (String, String)?
         autoreleasepool {
-            let composed = composeExportFrame(i, lines: lines, takeURL: takeURL, style: style, spec: spec)
+            let composed = composeExportFrame(i, lines: lines, takeURL: takeURL, style: style, spec: spec, camera: cameraSpec)
             guard let (image, canvas) = composed.frame else {
                 failure = composed.failure
                 return
@@ -415,7 +473,18 @@ private func runExport(_ job: ExportJob, _ spec: ExportSpec) {
         }
     }
 
+    // the audio mix is exactly as long as the video: wait for the writer to have pulled all of it
     input.markAsFinished()
+    if mixer != nil {
+        while audioDone.wait(timeout: .now() + 0.25) == .timedOut {
+            if job.isCancelled { return abort("cancelled", "Export cancelled") }
+            if w.status == .failed {
+                return abort(isDiskFull(w.error) ? "disk-full" : "internal", "encoding failed: \(w.error?.localizedDescription ?? "unknown error")")
+            }
+            beat()
+        }
+        if audioFailed { return abort("internal", "could not write the audio") }
+    }
     let sem = DispatchSemaphore(value: 0)
     w.finishWriting { sem.signal() }
     while sem.wait(timeout: .now() + 5) == .timedOut { beat() }
@@ -431,6 +500,7 @@ private func runExport(_ job: ExportJob, _ spec: ExportSpec) {
     }
     let bytes = ((try? fm.attributesOfItem(atPath: spec.out)[.size]) as? NSNumber)?.int64Value ?? 0
     log(String(format: "render: %d frames %dx%d %@ in %.1f s", spec.frames, spec.width, spec.height, spec.codec, elapsed(startedAt)))
+    mixer?.close()
     releaseExportSlot(job)
     reply(id, ["path": spec.out, "bytes": bytes, "duration": Double(spec.frames) / Double(spec.fps), "frames": spec.frames])
 }
@@ -440,7 +510,7 @@ private func runExport(_ job: ExportJob, _ spec: ExportSpec) {
 /// Frame `i`: read its params line, decode the take frame at the SOURCE time Rust computed and
 /// compose it with the same code as `render.frame`. Exactly one of the two results is set.
 private func composeExportFrame(_ i: Int, lines: LineReader, takeURL: URL, style: RenderStyle,
-                                spec: ExportSpec) -> (frame: (CIImage, CGRect)?, failure: (String, String)?) {
+                                spec: ExportSpec, camera: CameraSpec?) -> (frame: (CIImage, CGRect)?, failure: (String, String)?) {
     guard let line = lines.next() else {
         return (nil, ("invalid", "params_file ended at frame \(i) of \(spec.frames)"))
     }
@@ -452,8 +522,10 @@ private func composeExportFrame(_ i: Int, lines: LineReader, takeURL: URL, style
         // sequential decode (Decode.swift): output frames ask for increasing source times, so after the
         // first frame the reader is kept open; a trim or speed cut (a jump) costs one generator frame
         let take = try takeFrameAuto(at: takeURL, t: t, mode: spec.generatorOnly ? .generator : .auto).frame
+        // P4: the camera take at (source time - offset); nothing before it starts or after it ends
+        let overlay = camera.flatMap { cameraDraw($0, at: t, sequential: !spec.generatorOnly) }
         guard let composed = composeStyledImage(take: take, style: style, project: spec.project, width: spec.width,
-                                                height: spec.height, fx: fx) else {
+                                                height: spec.height, fx: fx, camera: overlay) else {
             return (nil, ("internal", "could not compose frame \(i)"))
         }
         return (composed, nil)
@@ -497,6 +569,7 @@ private func runGifExport(_ job: ExportJob, _ spec: ExportSpec) {
     guard let lines = LineReader(path: spec.paramsFile) else { return abort("not-found", "params_file could not be opened") }
     let style = RenderStyle(json: json)
     let takeURL = URL(fileURLWithPath: takePath)
+    let cameraSpec = CameraSpec(json: json, project: spec.project)
 
     try? fm.createDirectory(atPath: (spec.out as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
     try? fm.removeItem(atPath: partial)
@@ -525,7 +598,7 @@ private func runGifExport(_ job: ExportJob, _ spec: ExportSpec) {
         if job.isCancelled { return abort("cancelled", "Export cancelled") }
         var failure: (String, String)?
         autoreleasepool {
-            let composed = composeExportFrame(i, lines: lines, takeURL: takeURL, style: style, spec: spec)
+            let composed = composeExportFrame(i, lines: lines, takeURL: takeURL, style: style, spec: spec, camera: cameraSpec)
             guard let (image, canvas) = composed.frame else {
                 failure = composed.failure
                 return

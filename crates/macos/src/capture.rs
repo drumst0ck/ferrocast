@@ -7,8 +7,8 @@ use ferrocast_core::capture::events::Events;
 use ferrocast_core::capture::export::{self, ExportOptions, ExportPlan};
 use ferrocast_core::capture::project::{self as capture_project, Project};
 use ferrocast_core::capture::protocol::{
-    self, Command, ErrorCode, Excludes, ExportDone, ExportEvent, ExportStarted, FrameFormat, Hello, Line, RecordEvent, RecordStarted,
-    RecordStopped, RenderFrameDone, Request, Scale, ScreenshotDone, Shareable, Target,
+    self, Command, DeviceChoice, Devices, ErrorCode, Excludes, ExportDone, ExportEvent, ExportStarted, FrameFormat, Hello, Line, MediaKind,
+    MediaPermissions, RecordEvent, RecordStarted, RecordStopped, RenderFrameDone, Request, Scale, ScreenshotDone, Shareable, Target,
 };
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -19,6 +19,16 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub const HELPER_NAME: &str = "ferrocast-capture";
+
+/// S12: the toast for the helper error `permission-camera` (the app shows it and may open [`CAMERA_PANE`]).
+pub const CAMERA_PERMISSION_TOAST: &str =
+    "Camera is off for Ferrocast. Turn it on in System Settings \u{2192} Privacy & Security \u{2192} Camera.";
+/// S12: the toast for the helper error `permission-microphone` (the app may open [`MICROPHONE_PANE`]).
+pub const MICROPHONE_PERMISSION_TOAST: &str =
+    "Microphone is off for Ferrocast. Turn it on in System Settings \u{2192} Privacy & Security \u{2192} Microphone.";
+/// Settings panes for the S12 toasts.
+pub const CAMERA_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera";
+pub const MICROPHONE_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
 
 /// Where the helper lives: next to the running executable. Pass the exe already resolved through
 /// `instance::resolve_exe` (that function lives in the app crate).
@@ -40,7 +50,9 @@ pub fn available(exe: &Path) -> bool {
 pub fn timeout_for(cmd: &Command) -> Duration {
     Duration::from_secs(match cmd {
         Command::Hello => 5,
-        Command::Shareable => 10,
+        Command::Shareable | Command::Devices => 10,
+        // `permissions` may show the system prompt and waits for the user's answer.
+        Command::Permissions { .. } => 120,
         Command::Screenshot { .. } => 20,
         // A preview frame includes loading the asset on the first request (220 ms measured), far below this.
         Command::RenderFrame { .. } => 10,
@@ -115,6 +127,10 @@ impl std::error::Error for ScreenshotError {}
 #[derive(Debug, PartialEq, Eq)]
 pub enum RecordError {
     PermissionDenied,
+    /// S12: Camera access is off; show [`CAMERA_PERMISSION_TOAST`].
+    PermissionCamera,
+    /// S12: Microphone access is off; show [`MICROPHONE_PERMISSION_TOAST`].
+    PermissionMicrophone,
     NotFound(String),
     Unsupported,
     /// A recording is already running in this helper.
@@ -129,6 +145,8 @@ impl From<CallError> for RecordError {
     fn from(e: CallError) -> Self {
         match e {
             CallError::Helper { code: ErrorCode::PermissionScreen, .. } => Self::PermissionDenied,
+            CallError::Helper { code: ErrorCode::PermissionCamera, .. } => Self::PermissionCamera,
+            CallError::Helper { code: ErrorCode::PermissionMic, .. } => Self::PermissionMicrophone,
             CallError::Helper { code: ErrorCode::NotFound, message } => Self::NotFound(message),
             CallError::Helper { code: ErrorCode::UnsupportedOs, .. } => Self::Unsupported,
             CallError::Helper { code: ErrorCode::Busy, .. } => Self::Busy,
@@ -143,6 +161,8 @@ impl std::fmt::Display for RecordError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PermissionDenied => write!(f, "Screen Recording is not granted"),
+            Self::PermissionCamera => f.write_str(CAMERA_PERMISSION_TOAST),
+            Self::PermissionMicrophone => f.write_str(MICROPHONE_PERMISSION_TOAST),
             Self::NotFound(m) => write!(f, "recording target not found: {m}"),
             Self::Unsupported => write!(f, "screen recording needs macOS 14"),
             Self::Busy => write!(f, "a recording is already running"),
@@ -254,6 +274,17 @@ impl std::error::Error for ExportError {}
 pub const EXPORT_SILENCE: Duration = Duration::from_secs(45);
 
 /// `<project>/<file>.partial`: what the helper writes until a clean stop renames it.
+/// Files the P4 sources write next to the screen take.
+const SIDE_FILES: [&str; 3] = ["camera.mov", "mic.m4a", "system.m4a"];
+
+/// Optional sources of a recording (P4); all off = the plain screen recording.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RecordOptions {
+    pub camera: Option<DeviceChoice>,
+    pub microphone: Option<DeviceChoice>,
+    pub system_audio: bool,
+}
+
 fn recording_partial(project: &Path, file: &str) -> PathBuf {
     partial_path(&project.join(file))
 }
@@ -515,6 +546,21 @@ impl Helper {
         Ok(RenderedFrame { path: PathBuf::from(done.path), size: done.size, ms: done.ms, cached: done.cached, stride, decode: done.decode })
     }
 
+    /// Cameras and microphones (no permission prompt; names may be empty without a grant).
+    pub fn devices(&mut self) -> Result<Devices> {
+        let body = self.call(Command::Devices, timeout_for(&Command::Devices))?;
+        protocol::parse_body(&body).map_err(|e| anyhow!(e))
+    }
+
+    /// Camera / Microphone permission states. The kinds in `request` that are still undecided make
+    /// the system show its prompt (this call waits for the answer); the others are only reported.
+    pub fn media_permissions(&mut self, request: &[MediaKind]) -> Result<MediaPermissions> {
+        let command = Command::Permissions { request: request.to_vec() };
+        let timeout = timeout_for(&command);
+        let body = self.call(command, timeout)?;
+        protocol::parse_body(&body).map_err(|e| anyhow!(e))
+    }
+
     /// Start recording `target` into `<project>/<file>`. Events (`state`, `tick`, `warn`) arrive on
     /// the returned channel until the recording stops or the helper exits. On failure no partial
     /// file is left. The helper keeps running: call [`Helper::record_stop`] to finish.
@@ -527,6 +573,23 @@ impl Helper {
         cursor: bool,
         exclude_windows: Vec<u32>,
     ) -> std::result::Result<(RecordStarted, Receiver<RecordEvent>), RecordError> {
+        self.record_start_with(project, file, target, fps, cursor, exclude_windows, RecordOptions::default())
+    }
+
+    /// [`Helper::record_start`] with the optional P4 sources. Each one is independent; the files
+    /// (`camera.mov`, `mic.m4a`, `system.m4a`) and their offsets come back in `record_stop().sources`.
+    /// A denied camera or microphone fails with `PermissionCamera` / `PermissionMicrophone` before any file exists.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_start_with(
+        &mut self,
+        project: &Path,
+        file: &str,
+        target: Target,
+        fps: u32,
+        cursor: bool,
+        exclude_windows: Vec<u32>,
+        options: RecordOptions,
+    ) -> std::result::Result<(RecordStarted, Receiver<RecordEvent>), RecordError> {
         if file.is_empty() || file == "." || file == ".." || file.contains(['/', '\0']) {
             return Err(RecordError::Other(format!("invalid recording file name: {file:?}")));
         }
@@ -537,6 +600,9 @@ impl Helper {
             fps,
             cursor,
             excludes: Excludes { window_ids: exclude_windows },
+            camera: options.camera,
+            microphone: options.microphone,
+            system_audio: options.system_audio,
         };
         let timeout = timeout_for(&command);
         let (tx, rx) = channel();
@@ -553,6 +619,12 @@ impl Helper {
             Err(e) => {
                 self.recording_events.lock().unwrap().take();
                 let _ = std::fs::remove_file(partial);
+                // Busy: the files belong to the recording that is already running.
+                if e != RecordError::Busy {
+                    for side in SIDE_FILES {
+                        let _ = std::fs::remove_file(recording_partial(project, side));
+                    }
+                }
                 Err(e)
             }
         }
@@ -622,6 +694,7 @@ impl Helper {
             quality: plan.quality,
             frames: plan.frames,
             segments: plan.segments.clone(),
+            audio: plan.audio.clone(),
             params_file: params_file.to_string_lossy().into_owned(),
         };
         let timeout = timeout_for(&command);
@@ -747,7 +820,7 @@ pub fn with_helper<T>(exe: &Path, log: impl Fn(&str) + Send + 'static, f: impl F
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrocast_core::capture::protocol::RecordState;
+    use ferrocast_core::capture::protocol::{MediaAccess, RecordState};
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
 
@@ -941,6 +1014,110 @@ read l; exit 1"#,
         let (_, events) = h.record_start(&dir_of(&p), "screen.mov", Target::Display { display: 1 }, 60, false, Vec::new()).unwrap();
         assert!(events.recv_timeout(Duration::from_millis(300)).is_err());
     }
+    fn p4_project(p: &Path, name: &str) -> PathBuf {
+        let project = dir_of(p).join(name);
+        std::fs::create_dir_all(&project).unwrap();
+        project
+    }
+
+    #[test]
+    fn record_start_without_p4_options_sends_the_old_line() {
+        let p = fake("p4-old", r#"read l; echo "$l" > "$(dirname "$0")/start.json"; echo '{"id":1,"ok":true,"started_at_host":1.0}'"#);
+        let project = p4_project(&p, "old.ferrocast");
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        h.record_start(&project, "screen.mov", Target::Display { display: 1 }, 60, false, Vec::new()).unwrap();
+        let wire = std::fs::read_to_string(dir_of(&p).join("start.json")).unwrap();
+        assert!(!wire.contains("camera") && !wire.contains("microphone") && !wire.contains("system_audio"), "{wire}");
+    }
+
+    #[test]
+    fn record_start_with_sources_sends_them_and_stop_lists_the_files() {
+        let p = fake(
+            "p4-src",
+            r#"read l; echo "$l" > "$(dirname "$0")/start.json"
+echo '{"id":1,"ok":true,"started_at_host":10.5,"size":[200,100],"file":"screen.mov"}'
+echo '{"event":"warn","id":1,"code":"camera-lost","message":"unplugged"}'
+read l; echo '{"id":2,"ok":true,"project":"/p","duration":2.0,"screen":"screen.mov","size":[200,100],"sources":{"screen":{"file":"screen.mov","offset":0},"mic":{"file":"mic.m4a","offset":0.01},"system":{"file":"system.m4a","offset":-0.002}}}'"#,
+        );
+        let project = p4_project(&p, "src.ferrocast");
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let opts = RecordOptions {
+            camera: Some(DeviceChoice { device: Some("cam-1".into()) }),
+            microphone: Some(DeviceChoice::default()),
+            system_audio: true,
+        };
+        let (_, events) = h.record_start_with(&project, "screen.mov", Target::Display { display: 1 }, 60, false, Vec::new(), opts).unwrap();
+        assert_eq!(
+            events.recv_timeout(Duration::from_secs(2)).unwrap(),
+            RecordEvent::Warn { code: "camera-lost".into(), message: Some("unplugged".into()), free_bytes: None }
+        );
+        let done = h.record_stop().unwrap();
+        let s = done.sources.unwrap();
+        assert_eq!((s.camera, s.mic.unwrap().offset, s.system.unwrap().file.as_str()), (None, 0.01, "system.m4a"));
+        let wire = std::fs::read_to_string(dir_of(&p).join("start.json")).unwrap();
+        assert!(wire.contains(r#""camera":{"device":"cam-1"}"#) && wire.contains(r#""microphone":{}"#), "{wire}");
+        assert!(wire.contains(r#""system_audio":true"#), "{wire}");
+    }
+
+    #[test]
+    fn camera_and_microphone_permission_errors_map_and_remove_every_partial() {
+        for (code, want) in
+            [("permission-camera", RecordError::PermissionCamera), ("permission-microphone", RecordError::PermissionMicrophone)]
+        {
+            let p = fake(&format!("p4-{code}"), &format!(r#"read l; echo '{{"id":1,"error":"{code}","message":"off"}}'; exit 1"#));
+            let project = p4_project(&p, "perm.ferrocast");
+            for f in ["screen.mov.partial", "camera.mov.partial", "mic.m4a.partial", "system.m4a.partial"] {
+                std::fs::write(project.join(f), b"half").unwrap();
+            }
+            let opts =
+                RecordOptions { camera: Some(DeviceChoice::default()), microphone: Some(DeviceChoice::default()), system_audio: true };
+            let mut h = Helper::spawn(&p, |_| {}).unwrap();
+            let e = h.record_start_with(&project, "screen.mov", Target::Display { display: 1 }, 60, false, Vec::new(), opts).unwrap_err();
+            assert_eq!(e, want);
+            assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0, "no file left for {code}");
+        }
+    }
+
+    #[test]
+    fn permission_toasts_are_the_s12_texts() {
+        assert_eq!(
+            CAMERA_PERMISSION_TOAST,
+            "Camera is off for Ferrocast. Turn it on in System Settings \u{2192} Privacy & Security \u{2192} Camera."
+        );
+        assert_eq!(
+            MICROPHONE_PERMISSION_TOAST,
+            "Microphone is off for Ferrocast. Turn it on in System Settings \u{2192} Privacy & Security \u{2192} Microphone."
+        );
+        assert_eq!(RecordError::PermissionCamera.to_string(), CAMERA_PERMISSION_TOAST);
+        assert_eq!(RecordError::PermissionMicrophone.to_string(), MICROPHONE_PERMISSION_TOAST);
+    }
+
+    #[test]
+    fn devices_and_permissions_are_typed() {
+        let p = fake(
+            "p4-dev",
+            r#"read l; echo "$l" > "$(dirname "$0")/l1.json"
+echo '{"id":1,"ok":true,"cameras":[{"id":"c","name":"","position":"unspecified","default":true}],"microphones":[]}'
+read l; echo "$l" > "$(dirname "$0")/l2.json"
+echo '{"id":2,"ok":true,"camera":"notDetermined","microphone":"denied"}'"#,
+        );
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let d = h.devices().unwrap();
+        assert_eq!((d.cameras.len(), d.cameras[0].default, d.microphones.len()), (1, true, 0));
+        let perm = h.media_permissions(&[MediaKind::Camera]).unwrap();
+        assert_eq!((perm.camera, perm.microphone), (MediaAccess::NotDetermined, MediaAccess::Denied));
+        assert_eq!(std::fs::read_to_string(dir_of(&p).join("l1.json")).unwrap().trim(), r#"{"id":1,"cmd":"devices"}"#);
+        assert_eq!(
+            std::fs::read_to_string(dir_of(&p).join("l2.json")).unwrap().trim(),
+            r#"{"id":2,"cmd":"permissions","request":["camera"]}"#
+        );
+    }
+
+    #[test]
+    fn p4_timeouts_let_the_user_answer_a_prompt() {
+        assert_eq!(timeout_for(&Command::Devices), Duration::from_secs(10));
+        assert!(timeout_for(&Command::Permissions { request: vec![MediaKind::Camera] }) >= Duration::from_secs(60));
+    }
 }
 
 #[cfg(test)]
@@ -1086,6 +1263,7 @@ mod export_tests {
     fn plan() -> ExportPlan {
         ExportPlan {
             segments: vec![Segment { src_start: 0.0, src_end: 2.0, speed: 1.0 }],
+            audio: vec![],
             duration: 2.0,
             frames: 60,
             size: [960, 540],
@@ -1131,6 +1309,31 @@ echo '{"id":1,"ok":true,"path":"/o.mp4","bytes":1234,"duration":2.0,"frames":60}
         h.export_wait(&rx, &AtomicBool::new(false), |_| {}).unwrap();
         let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
         assert!(wire.contains(r#""format":"gif""#) && wire.contains(r#""fps":15"#) && wire.contains("Demo.gif"), "{wire}");
+    }
+
+    #[test]
+    fn audio_inputs_travel_in_the_render_request_only_when_present() {
+        use ferrocast_core::capture::export::{AudioInput, AudioKind, AudioRun};
+        let p = fake("audio", OK_SCRIPT);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (_, rx) = h.export_start(&dir_of(&p), &out_of(&p), &plan(), Path::new("/p/params.ndjson")).unwrap();
+        h.export_wait(&rx, &AtomicBool::new(false), |_| {}).unwrap();
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(!wire.contains(r#""audio":"#), "{wire}");
+        let with = ExportPlan {
+            audio: vec![AudioInput {
+                track: AudioKind::System,
+                file: "system.m4a".into(),
+                gain: 0.6,
+                segments: vec![AudioRun { src_start: 0.0, src_end: 2.0, out_start: 0.0, speed: 1.0 }],
+            }],
+            ..plan()
+        };
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let (_, rx) = h.export_start(&dir_of(&p), &out_of(&p), &with, Path::new("/p/params.ndjson")).unwrap();
+        h.export_wait(&rx, &AtomicBool::new(false), |_| {}).unwrap();
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(wire.contains(r#""audio":[{"track":"system","file":"system.m4a","gain":0.6,"segments":[{"src_start":0.0,"src_end":2.0,"out_start":0.0,"speed":1.0}]}]"#), "{wire}");
     }
 
     #[test]

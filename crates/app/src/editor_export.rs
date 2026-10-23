@@ -269,11 +269,29 @@ pub fn default_dest(dir: &Path, name: &str, exists: &dyn Fn(&Path) -> bool) -> P
     parent.join(file)
 }
 
-/// `1920×1080 · 2:31 · 4530 frames` or the reason the options cannot be exported.
+/// `Audio: mic + system` or `no audio`, for projects with a camera, microphone or system source
+/// (a plain screen recording says nothing). A muted track does not count as audible.
+pub fn audio_label(project: &Project) -> Option<String> {
+    use ferrocast_core::capture::project::AudioTrack;
+    let s = &project.sources;
+    if s.camera.is_none() && s.mic.is_none() && s.system.is_none() {
+        return None;
+    }
+    let audible = |has: bool, t| has && project.audio.linear_gain(t) > 0.0;
+    let parts: Vec<&str> =
+        [(audible(s.mic.is_some(), AudioTrack::Mic), "mic"), (audible(s.system.is_some(), AudioTrack::System), "system")]
+            .into_iter()
+            .filter_map(|(on, name)| on.then_some(name))
+            .collect();
+    Some(if parts.is_empty() { "no audio".into() } else { format!("Audio: {}", parts.join(" + ")) })
+}
+
+/// `1920×1080 · 2:31 · 4530 frames` (+ ` · Audio: mic + system` / ` · no audio` with extra sources) or the reason the options cannot be exported.
 pub fn summary(project: &Project, source: [u32; 2], opts: &ExportOptions) -> Result<String, String> {
     let plan = export::export_plan(project, source, opts).map_err(|e| e.to_string())?;
+    let audio = audio_label(project).map(|a| format!(" · {a}")).unwrap_or_default();
     Ok(format!(
-        "{}×{} · {} · {} frames",
+        "{}×{} · {} · {} frames{audio}",
         plan.size[0],
         plan.size[1],
         crate::editor_ctl::clock(plan.duration).split('.').next().unwrap_or(""),
@@ -649,6 +667,30 @@ mod tests {
         assert_eq!(summary(&p, [1920, 1080], &o).unwrap(), "1920×1080 · 2:31 · 4530 frames");
         let empty = project(0.0);
         assert!(summary(&empty, [1920, 1080], &o).unwrap_err().contains("nothing to export"));
+    }
+
+    #[test]
+    fn summary_names_the_audio_only_when_there_are_extra_sources() {
+        use ferrocast_core::capture::project::{Source, TrackMix};
+        let src = |f: &str| Some(Source { file: f.into(), offset: 0.0 });
+        let mut p = project(151.0);
+        let o = ExportSheet::default().options(&p, [1920, 1080]);
+        assert_eq!(audio_label(&p), None);
+        assert_eq!(summary(&p, [1920, 1080], &o).unwrap(), "1920×1080 · 2:31 · 4530 frames", "a plain recording is unchanged");
+        p.sources.mic = src("mic.m4a");
+        p.sources.system = src("system.m4a");
+        assert_eq!(summary(&p, [1920, 1080], &o).unwrap(), "1920×1080 · 2:31 · 4530 frames · Audio: mic + system");
+        p.audio.system = Some(TrackMix { gain_db: 0.0, mute: true });
+        assert_eq!(audio_label(&p).as_deref(), Some("Audio: mic"), "a muted track is not in the file");
+        p.audio.mic = Some(TrackMix { gain_db: 0.0, mute: true });
+        assert_eq!(audio_label(&p).as_deref(), Some("no audio"));
+        let mut cam_only = project(151.0);
+        cam_only.sources.camera = src("camera.mov");
+        assert_eq!(audio_label(&cam_only).as_deref(), Some("no audio"), "a camera alone has no sound");
+        let mut all_muted = project(151.0);
+        all_muted.sources.mic = src("mic.m4a");
+        all_muted.audio.mute = true;
+        assert_eq!(audio_label(&all_muted).as_deref(), Some("no audio"));
     }
 
     #[test]

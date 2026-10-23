@@ -122,6 +122,14 @@ Below 2 GB free, a warning shows `Low disk space: N GB left`. Below 200 MB, the 
 
 **Open Last Recording** opens the newest recording in the editor. If there is none, it says `No recordings yet`.
 
+### Camera, microphone and system audio
+
+Settings → Capture → **Sources** has **Camera**, **Microphone** and **System audio** switches (all off by default) and a device list for the camera and the microphone (**Default** unless you pick one; **Refresh** reloads the list). When a switch is on, Record Screen, Area and Window also write `camera.mov`, `mic.m4a` and `system.m4a` next to `screen.mov`, each with its own start offset so they stay in sync.
+
+The first time a source is used, macOS asks for Camera or Microphone permission when you start the recording. If it is denied, the recording does not start and a notice opens the matching System Settings pane. System audio uses the Screen Recording permission. If a camera or microphone disappears while recording, the recording continues and a notice says which source was lost.
+
+In the editor, a **Camera** tab appears when the recording has a camera: show or hide it, **Circle**, **Rounded** or **Square**, one of the four corners, size (10 to 40 %), margin and mirror. The camera stays fixed in the frame while the screen zooms. An **Audio** tab appears when there is a microphone or system track: gain per track (-60 to +12 dB), mute per track and a master gain. MP4 exports mix the tracks into one AAC audio track (48 kHz stereo) that follows your trims and speed changes; a speed change also changes the pitch. GIFs have no audio.
+
 ## Editing a recording
 
 The editor shows the preview on the left and a panel with four tabs on the right. Under the preview there is a timeline (a ruler, a row for trims and speed changes, a row for zooms) with the playhead, and a row with **Play**/**Pause**, **Undo**, **Redo**, **Export…** and the time. The time reads `output time / output length · source time`, so you see the length after your edits. At the right end of that row you see the number of zooms and the save state. <kbd>Esc</kbd> closes the editor and writes anything not yet saved.
@@ -202,7 +210,7 @@ A GIF holds all its frames in memory, so its length is limited. At 960 px wide (
 :::caution[Limits]
 - PNG only. Settings → Capture shows the format as PNG, with no other choice. **Include cursor** draws the pointer in area, window and screen captures.
 - The scrolling capture keeps all its strips in memory until it finishes.
-- Exports have no audio yet. Camera and microphone recording and transcript editing are not available.
+- Transcript editing is not available yet. Audio is only in MP4 exports.
 - The editor does not use image wallpapers: the Style presets are gradients.
 - A recording is lost if you quit Ferrocast while it runs. Stop it first.
 :::

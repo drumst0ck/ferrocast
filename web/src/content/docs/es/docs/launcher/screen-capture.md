@@ -122,6 +122,14 @@ Con menos de 2 GB libres aparece el aviso `Low disk space: N GB left`. Con menos
 
 **Open Last Recording** abre la grabación más reciente en el editor. Si no hay ninguna, dice `No recordings yet`.
 
+### Cámara, micrófono y audio del sistema
+
+Ajustes → Capture → **Sources** tiene los interruptores **Camera**, **Microphone** y **System audio** (todos desactivados) y una lista de dispositivos para la cámara y el micrófono (**Default** salvo que elijas otro; **Refresh** recarga la lista). Con un interruptor activo, Record Screen, Area y Window escriben además `camera.mov`, `mic.m4a` y `system.m4a` junto a `screen.mov`, cada uno con su propio desfase de inicio para que sigan sincronizados.
+
+La primera vez que se usa una fuente, macOS pide el permiso de Cámara o Micrófono al iniciar la grabación. Si se deniega, la grabación no empieza y un aviso abre el panel correspondiente de Ajustes del Sistema. El audio del sistema usa el permiso de Grabación de pantalla. Si una cámara o un micrófono desaparece durante la grabación, esta continúa y un aviso indica qué fuente se perdió.
+
+En el editor aparece una pestaña **Camera** cuando la grabación tiene cámara: mostrar u ocultar, **Circle**, **Rounded** o **Square**, una de las cuatro esquinas, tamaño (de 10 a 40 %), margen y espejo. La cámara permanece fija en el encuadre mientras la pantalla hace zoom. Aparece una pestaña **Audio** cuando hay micrófono o audio del sistema: ganancia por pista (de -60 a +12 dB), silencio por pista y una ganancia general. Las exportaciones MP4 mezclan las pistas en una sola pista de audio AAC (48 kHz estéreo) que sigue tus recortes y cambios de velocidad; un cambio de velocidad también cambia el tono. Los GIF no llevan audio.
+
 ## Editar una grabación
 
 El editor muestra la vista previa a la izquierda y un panel con cuatro pestañas a la derecha. Debajo de la vista previa hay una línea de tiempo (una regla, una fila para recortes y cambios de velocidad y otra para los zooms) con el cabezal, y una fila con **Play**/**Pause**, **Undo**, **Redo**, **Export…** y el tiempo. El tiempo se lee `tiempo de salida / duración de salida · tiempo original`, así ves la duración tras tus cambios. En el extremo derecho de esa fila aparecen el número de zooms y el estado de guardado. <kbd>Esc</kbd> cierra el editor y escribe lo que aún no se haya guardado.
@@ -202,7 +210,7 @@ Un GIF guarda todos sus fotogramas en memoria, así que su duración tiene un l�
 :::caution[Límites]
 - Solo PNG. Ajustes → Capture muestra el formato como PNG, sin otra opción. **Include cursor** dibuja el puntero en las capturas de área, ventana y pantalla.
 - La captura con scroll guarda todas las tiras en memoria hasta terminar.
-- Las exportaciones todavía no llevan audio. La grabación de cámara y de micrófono y la edición de la transcripción no están disponibles.
+- La edición de la transcripción todavía no está disponible. El audio solo va en las exportaciones MP4.
 - El editor no usa imágenes de fondo: los preajustes de Style son degradados.
 - Una grabación se pierde si sales de Ferrocast mientras graba. Párala antes.
 :::

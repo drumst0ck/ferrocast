@@ -10,7 +10,8 @@
 use crate::editor_ctl::{Editor, WorkerCmd};
 use crate::ui::Palette;
 use egui::{Rect, Ui, UiBuilder};
-use ferrocast_core::capture::project::{Project, Style, Trim, Zoom};
+use ferrocast_core::capture::camera::{CameraLayout, CameraShape, Corner, MARGIN_MAX, SIZE_MAX, SIZE_MIN};
+use ferrocast_core::capture::project::{AudioTrack, Project, Style, TrackMix, Trim, Zoom, GAIN_DB_MAX, GAIN_DB_MIN};
 use ferrocast_core::capture::timeline::{self, EditKind, History, Timeline};
 use ferrocast_core::capture::zoom::{self, ZoomOpts, MAX_SCALE};
 use ferrocast_core::capture::MIN_SEGMENT;
@@ -34,19 +35,175 @@ pub enum Tab {
     Cursor,
     Style,
     Clips,
+    /// Only for projects with a camera source (P4).
+    Camera,
+    /// Only for projects with a microphone or system audio source (P4).
+    Audio,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips];
-
     pub fn label(self) -> &'static str {
         match self {
             Tab::Zoom => "Zoom",
             Tab::Cursor => "Cursor",
             Tab::Style => "Style",
             Tab::Clips => "Clips",
+            Tab::Camera => "Camera",
+            Tab::Audio => "Audio",
         }
     }
+
+    /// `self` when the project offers it, else the first tab (a stored Camera tab of another project).
+    pub fn or_first(self, p: &Project) -> Tab {
+        if visible_tabs(p).contains(&self) {
+            self
+        } else {
+            Tab::Zoom
+        }
+    }
+}
+
+/// The tabs of the panel: Camera only with a camera source, Audio only with a microphone or system source.
+pub fn visible_tabs(p: &Project) -> Vec<Tab> {
+    let mut v = vec![Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips];
+    if p.sources.camera.is_some() {
+        v.push(Tab::Camera);
+    }
+    if p.sources.mic.is_some() || p.sources.system.is_some() {
+        v.push(Tab::Audio);
+    }
+    v
+}
+
+// ---------------------------------------------------------------------------------------------
+// Camera and audio edits (P4)
+
+pub enum CameraField {
+    Visible(bool),
+    Shape(CameraShape),
+    Corner(Corner),
+    /// Fraction of the output width, clamped to `0.10..=0.40`.
+    Size(f64),
+    /// Fraction of the output width, clamped to `0..=0.25`.
+    Margin(f64),
+    Mirror(bool),
+}
+
+pub fn set_camera(p: &mut Project, field: CameraField) -> Result<(), String> {
+    if p.sources.camera.is_none() {
+        return Err("This recording has no camera.".into());
+    }
+    let c = p.camera.get_or_insert_with(CameraLayout::default);
+    match field {
+        CameraField::Visible(v) => c.visible = v,
+        CameraField::Shape(s) => c.shape = s,
+        CameraField::Corner(k) => c.corner = k,
+        CameraField::Size(v) => c.size = finite(v)?.clamp(SIZE_MIN, SIZE_MAX),
+        CameraField::Margin(v) => c.margin = finite(v)?.clamp(0.0, MARGIN_MAX),
+        CameraField::Mirror(v) => c.mirror = v,
+    }
+    Ok(())
+}
+
+pub enum AudioField {
+    /// dB, clamped to `-60..=12`.
+    Gain(AudioTrack, f64),
+    Mute(AudioTrack, bool),
+    Master(f64),
+}
+
+fn track_name(t: AudioTrack) -> &'static str {
+    match t {
+        AudioTrack::Mic => "microphone",
+        AudioTrack::System => "system audio",
+    }
+}
+
+fn has_track(p: &Project, t: AudioTrack) -> bool {
+    match t {
+        AudioTrack::Mic => p.sources.mic.is_some(),
+        AudioTrack::System => p.sources.system.is_some(),
+    }
+}
+
+/// The mix of a track as the panel shows it: the stored one, else the legacy linear gain in dB.
+pub fn track_mix(p: &Project, t: AudioTrack) -> TrackMix {
+    let (stored, legacy) = match t {
+        AudioTrack::Mic => (p.audio.mic, p.audio.mic_gain),
+        AudioTrack::System => (p.audio.system, p.audio.system_gain),
+    };
+    stored.unwrap_or(TrackMix {
+        gain_db: if legacy > 0.0 { (20.0 * legacy.log10()).clamp(GAIN_DB_MIN, GAIN_DB_MAX) } else { GAIN_DB_MIN },
+        mute: false,
+    })
+}
+
+pub fn set_audio(p: &mut Project, field: AudioField) -> Result<(), String> {
+    let need = |p: &Project, t: AudioTrack| {
+        if has_track(p, t) {
+            Ok(())
+        } else {
+            Err(format!("This recording has no {}.", track_name(t)))
+        }
+    };
+    match field {
+        AudioField::Master(v) => p.audio.master_db = finite(v)?.clamp(GAIN_DB_MIN, GAIN_DB_MAX),
+        AudioField::Gain(t, v) => {
+            need(p, t)?;
+            let mut m = track_mix(p, t);
+            m.gain_db = finite(v)?.clamp(GAIN_DB_MIN, GAIN_DB_MAX);
+            store_mix(p, t, m);
+        }
+        AudioField::Mute(t, on) => {
+            need(p, t)?;
+            let mut m = track_mix(p, t);
+            m.mute = on;
+            store_mix(p, t, m);
+        }
+    }
+    Ok(())
+}
+
+fn store_mix(p: &mut Project, t: AudioTrack, m: TrackMix) {
+    match t {
+        AudioTrack::Mic => p.audio.mic = Some(m),
+        AudioTrack::System => p.audio.system = Some(m),
+    }
+}
+
+/// One recorded side file for the read-only list of the Camera / Audio tabs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceInfo {
+    pub label: &'static str,
+    pub file: String,
+    pub offset: f64,
+    /// Seconds of the take (the side files cover the same recording).
+    pub duration: f64,
+    pub bytes: Option<u64>,
+    pub missing: bool,
+}
+
+impl SourceInfo {
+    /// `camera.mov · 1:05 · 12 MB · +0.10 s`, or the missing-file sentence.
+    pub fn text(&self) -> String {
+        if self.missing {
+            return format!("{} is missing from the project folder. It is left out of the preview and the export.", self.file);
+        }
+        let size = self.bytes.map(|b| format!(" · {}", crate::record_ctl::format_size(b))).unwrap_or_default();
+        format!("{} · {}{size} · {:+.2} s", self.file, crate::record_ctl::format_duration(self.duration), self.offset)
+    }
+}
+
+/// The camera / microphone / system files of the project and whether each is on disk (disk).
+pub fn source_infos(p: &Project, dir: &std::path::Path) -> Vec<SourceInfo> {
+    [("Camera", &p.sources.camera), ("Microphone", &p.sources.mic), ("System audio", &p.sources.system)]
+        .into_iter()
+        .filter_map(|(label, s)| {
+            let s = s.as_ref()?;
+            let bytes = std::fs::metadata(dir.join(&s.file)).ok().filter(|m| m.is_file()).map(|m| m.len());
+            Some(SourceInfo { label, file: s.file.clone(), offset: s.offset, duration: p.duration, bytes, missing: bytes.is_none() })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -622,8 +779,17 @@ fn note(ui: &mut Ui, pal: &Palette, text: &str) {
 pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto: &ZoomOpts, fps: f64, now: f64) {
     ui.painter().rect_filled(rect, 8.0, pal.field);
     ui.scope_builder(UiBuilder::new().max_rect(rect.shrink(8.0)), |ui| {
-        ui.horizontal(|ui| {
-            for t in Tab::ALL {
+        let tabs = ed.project.as_ref().map_or_else(|| visible_tabs(&Project::new("", "")), visible_tabs);
+        // a Camera / Audio tab left over from another project falls back to Zoom
+        if let Some(p) = ed.project.as_ref() {
+            let tab = ed.st.tab.or_first(p);
+            if tab != ed.st.tab {
+                ed.st.tab = tab;
+                ed.st.picking = false;
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
+            for t in tabs {
                 if ui.selectable_label(ed.st.tab == t, t.label()).clicked() {
                     ed.st.tab = t;
                     ed.st.picking = false;
@@ -644,6 +810,8 @@ pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto:
                 Tab::Cursor => cursor_tab(ui, pal, ed, &proj, now),
                 Tab::Style => style_tab(ui, pal, ed, &proj, now),
                 Tab::Clips => clips_tab(ui, pal, ed, &proj, fps, now),
+                Tab::Camera => camera_tab(ui, pal, ed, &proj, now),
+                Tab::Audio => audio_tab(ui, pal, ed, &proj, now),
             }
         });
     });
@@ -860,6 +1028,84 @@ fn background_rows(ui: &mut Ui, pal: &Palette, ed: &mut Editor, s: &Style, now: 
     } else if bg.kind == "blur" {
         note(ui, pal, "The recording itself, blurred.");
     }
+}
+
+/// The read-only list of recorded side files, with the missing-file sentence in the danger colour.
+fn source_rows(ui: &mut Ui, pal: &Palette, ed: &Editor, proj: &Project, only: &[&str]) {
+    for info in source_infos(proj, &ed.dir).iter().filter(|i| only.contains(&i.label)) {
+        ui.label(egui::RichText::new(info.label).size(11.5).color(pal.sub));
+        let color = if info.missing { pal.danger } else { pal.text };
+        ui.label(egui::RichText::new(info.text()).size(12.0).color(color));
+    }
+}
+
+fn camera_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
+    let c = proj.camera.unwrap_or_default();
+    let mut visible = c.visible;
+    if ui.checkbox(&mut visible, "Show camera").changed() {
+        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Visible(visible)));
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Shape");
+        for (shape, label) in [(CameraShape::Circle, "Circle"), (CameraShape::Rounded, "Rounded"), (CameraShape::Square, "Square")] {
+            if ui.selectable_label(c.shape == shape, label).clicked() {
+                ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Shape(shape)));
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Corner");
+        for (corner, label) in [
+            (Corner::TopLeft, "Top left"),
+            (Corner::TopRight, "Top right"),
+            (Corner::BottomLeft, "Bottom left"),
+            (Corner::BottomRight, "Bottom right"),
+        ] {
+            if ui.selectable_label(c.corner == corner, label).clicked() {
+                ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Corner(corner)));
+            }
+        }
+    });
+    if let Some(v) = row_slider(ui, "Size", c.size, SIZE_MIN..=SIZE_MAX, 100.0, " %") {
+        ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::Size(v)));
+    }
+    if let Some(v) = row_slider(ui, "Margin", c.margin, 0.0..=MARGIN_MAX, 100.0, " %") {
+        ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::Margin(v)));
+    }
+    let mut mirror = c.mirror;
+    if ui.checkbox(&mut mirror, "Mirror").changed() {
+        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Mirror(mirror)));
+    }
+    ui.separator();
+    source_rows(ui, pal, ed, proj, &["Camera"]);
+    note(ui, pal, "The camera is recorded as its own file, so it can be moved, resized or hidden without re-recording.");
+}
+
+fn audio_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
+    for (track, label, present) in
+        [(AudioTrack::Mic, "Microphone", proj.sources.mic.is_some()), (AudioTrack::System, "System audio", proj.sources.system.is_some())]
+    {
+        if !present {
+            continue;
+        }
+        let m = track_mix(proj, track);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(label).size(12.5).strong().color(pal.text));
+            if ui.selectable_label(m.mute, if m.mute { "Muted" } else { "Mute" }).clicked() {
+                ed.apply(EditKind::Other, now, |p| set_audio(p, AudioField::Mute(track, !m.mute)));
+            }
+        });
+        if let Some(v) = row_slider(ui, "Gain", m.gain_db, GAIN_DB_MIN..=GAIN_DB_MAX, 1.0, " dB") {
+            ed.apply(EditKind::Audio, now, |p| set_audio(p, AudioField::Gain(track, v)));
+        }
+    }
+    ui.separator();
+    if let Some(v) = row_slider(ui, "Master", proj.audio.master_db, GAIN_DB_MIN..=GAIN_DB_MAX, 1.0, " dB") {
+        ed.apply(EditKind::Audio, now, |p| set_audio(p, AudioField::Master(v)));
+    }
+    ui.separator();
+    source_rows(ui, pal, ed, proj, &["Microphone", "System audio"]);
+    note(ui, pal, "The mix is applied when you export; the preview is silent.");
 }
 
 fn clips_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
@@ -1450,5 +1696,157 @@ mod tests {
         ed.flush(ed.now());
         assert_eq!(Project::load(&dir).unwrap().style, Project::from_json(&String::from_utf8(original).unwrap()).unwrap().style);
         eprintln!("after Undo x2 + flush: project.json style equals the original again");
+    }
+
+    // ---- P4: camera and audio panels
+
+    fn with_sources() -> Project {
+        use ferrocast_core::capture::camera::CameraLayout;
+        use ferrocast_core::capture::project::{Source, TrackMix};
+        let mut p = base();
+        p.sources.camera = Some(Source { file: "camera.mov".into(), offset: 0.1 });
+        p.sources.mic = Some(Source { file: "mic.m4a".into(), offset: 0.2 });
+        p.sources.system = Some(Source { file: "system.m4a".into(), offset: 0.0 });
+        p.camera = Some(CameraLayout::default());
+        p.audio.mic = Some(TrackMix::default());
+        p.audio.system = Some(TrackMix::default());
+        p
+    }
+
+    #[test]
+    fn the_camera_and_audio_tabs_exist_only_for_projects_with_those_sources() {
+        use ferrocast_core::capture::project::Source;
+        let plain = [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips];
+        assert_eq!(visible_tabs(&base()), plain, "no camera and no audio: neither tab");
+        let mut cam = base();
+        cam.sources.camera = Some(Source { file: "camera.mov".into(), offset: 0.0 });
+        assert_eq!(visible_tabs(&cam), [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera]);
+        let mut mic = base();
+        mic.sources.mic = Some(Source { file: "mic.m4a".into(), offset: 0.0 });
+        assert_eq!(visible_tabs(&mic), [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Audio]);
+        let mut sys = base();
+        sys.sources.system = Some(Source { file: "system.m4a".into(), offset: 0.0 });
+        assert!(visible_tabs(&sys).contains(&Tab::Audio) && !visible_tabs(&sys).contains(&Tab::Camera));
+        assert_eq!(visible_tabs(&with_sources()), [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera, Tab::Audio]);
+        // a stored tab the project no longer offers falls back to the first one
+        assert_eq!(Tab::Camera.or_first(&base()), Tab::Zoom);
+        assert_eq!(Tab::Camera.or_first(&with_sources()), Tab::Camera);
+        assert_eq!(Tab::Clips.or_first(&base()), Tab::Clips);
+    }
+
+    #[test]
+    fn camera_edits_map_to_the_layout_and_clamp() {
+        use ferrocast_core::capture::camera::{CameraShape, Corner, MARGIN_MAX, SIZE_MAX, SIZE_MIN};
+        let mut p = with_sources();
+        set_camera(&mut p, CameraField::Shape(CameraShape::Square)).unwrap();
+        set_camera(&mut p, CameraField::Corner(Corner::TopLeft)).unwrap();
+        set_camera(&mut p, CameraField::Mirror(false)).unwrap();
+        set_camera(&mut p, CameraField::Visible(false)).unwrap();
+        set_camera(&mut p, CameraField::Size(0.3)).unwrap();
+        set_camera(&mut p, CameraField::Margin(0.05)).unwrap();
+        let c = p.camera.unwrap();
+        assert_eq!(
+            (c.shape, c.corner, c.mirror, c.visible, c.size, c.margin),
+            (CameraShape::Square, Corner::TopLeft, false, false, 0.3, 0.05)
+        );
+        set_camera(&mut p, CameraField::Size(0.9)).unwrap();
+        assert_eq!(p.camera.unwrap().size, SIZE_MAX);
+        set_camera(&mut p, CameraField::Size(0.0)).unwrap();
+        assert_eq!(p.camera.unwrap().size, SIZE_MIN);
+        set_camera(&mut p, CameraField::Margin(5.0)).unwrap();
+        assert_eq!(p.camera.unwrap().margin, MARGIN_MAX);
+        set_camera(&mut p, CameraField::Margin(-1.0)).unwrap();
+        assert_eq!(p.camera.unwrap().margin, 0.0);
+        assert!(set_camera(&mut p, CameraField::Size(f64::NAN)).is_err());
+        assert!(set_camera(&mut p, CameraField::Margin(f64::INFINITY)).is_err());
+        assert!(p.validate(|_| true).is_empty(), "everything the panel writes validates");
+        // a camera source without a stored layout gets the default one first
+        let mut no_layout = with_sources();
+        no_layout.camera = None;
+        set_camera(&mut no_layout, CameraField::Mirror(false)).unwrap();
+        assert!(!no_layout.camera.unwrap().mirror);
+        // no camera source: nothing to edit
+        assert!(set_camera(&mut base(), CameraField::Visible(false)).unwrap_err().contains("no camera"));
+    }
+
+    #[test]
+    fn audio_edits_map_to_the_mix_and_clamp() {
+        use ferrocast_core::capture::project::AudioTrack;
+        let mut p = with_sources();
+        set_audio(&mut p, AudioField::Gain(AudioTrack::Mic, 6.5)).unwrap();
+        set_audio(&mut p, AudioField::Mute(AudioTrack::System, true)).unwrap();
+        set_audio(&mut p, AudioField::Master(-3.0)).unwrap();
+        assert_eq!((p.audio.mic.unwrap().gain_db, p.audio.system.unwrap().mute, p.audio.master_db), (6.5, true, -3.0));
+        set_audio(&mut p, AudioField::Gain(AudioTrack::Mic, 40.0)).unwrap();
+        assert_eq!(p.audio.mic.unwrap().gain_db, 12.0);
+        set_audio(&mut p, AudioField::Gain(AudioTrack::System, -300.0)).unwrap();
+        assert_eq!(p.audio.system.unwrap().gain_db, -60.0);
+        set_audio(&mut p, AudioField::Master(99.0)).unwrap();
+        assert_eq!(p.audio.master_db, 12.0);
+        assert!(set_audio(&mut p, AudioField::Gain(AudioTrack::Mic, f64::NAN)).is_err());
+        assert!(set_audio(&mut p, AudioField::Master(f64::NEG_INFINITY)).is_err());
+        assert!(p.validate(|_| true).is_empty());
+        // a track that was not recorded cannot be edited
+        let mut only_mic = with_sources();
+        only_mic.sources.system = None;
+        assert!(set_audio(&mut only_mic, AudioField::Mute(AudioTrack::System, true)).unwrap_err().contains("system audio"));
+        // a project with the legacy linear gain shows it in dB and keeps it when only muted
+        let mut legacy = with_sources();
+        legacy.audio.system = None;
+        assert!((track_mix(&legacy, AudioTrack::System).gain_db - 20.0 * 0.6f64.log10()).abs() < 1e-9);
+        set_audio(&mut legacy, AudioField::Mute(AudioTrack::System, true)).unwrap();
+        let m = legacy.audio.system.unwrap();
+        assert!(m.mute && (m.gain_db - 20.0 * 0.6f64.log10()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_gain_drag_is_one_undo_step_and_autosave_writes_the_fields() {
+        use ferrocast_core::capture::project::AudioTrack;
+        let dir = temp("p4-undo");
+        let (tx, _rx) = channel();
+        let mut ed = Editor::new(dir.clone(), Some(tx));
+        let p = with_sources();
+        p.save(&dir).unwrap();
+        ed.opened(Ok(Opened { project: p.clone(), auto_zoomed: false, note: None, events: None }));
+        for (i, v) in [-1.0, -2.0, -3.5].into_iter().enumerate() {
+            assert!(ed.apply(EditKind::Audio, 10.0 + i as f64 * 0.1, |p| set_audio(p, AudioField::Gain(AudioTrack::Mic, v))));
+        }
+        for (i, v) in [0.25, 0.3].into_iter().enumerate() {
+            assert!(ed.apply(EditKind::Style, 20.0 + i as f64 * 0.1, |p| set_camera(p, CameraField::Size(v))));
+        }
+        assert!(
+            ed.apply(EditKind::Other, 30.0, |p| set_camera(p, CameraField::Shape(ferrocast_core::capture::camera::CameraShape::Square)))
+        );
+        ed.flush(31.0);
+        let saved = disk(&dir);
+        assert_eq!(saved.audio.mic.unwrap().gain_db, -3.5);
+        assert_eq!(saved.camera.unwrap().size, 0.3);
+        assert!(ed.undo(32.0), "the shape");
+        assert!(ed.undo(32.0), "both size drags");
+        assert_eq!(ed.project.as_ref().unwrap().camera.unwrap().size, 0.20);
+        assert!(ed.undo(32.0), "the three gain drags");
+        assert_eq!(ed.project.as_ref().unwrap().audio.mic.unwrap().gain_db, 0.0);
+        assert!(!ed.undo(32.0), "nothing left: one step per drag");
+        // an invalid value is refused with a message and leaves the project alone
+        let before = ed.project.clone();
+        assert!(!ed.apply(EditKind::Audio, 40.0, |p| set_audio(p, AudioField::Master(f64::NAN))));
+        assert!(ed.st.edit_error.is_some() && ed.project == before);
+    }
+
+    #[test]
+    fn source_infos_report_name_offset_and_missing_files() {
+        let dir = temp("p4-info");
+        std::fs::write(dir.join("mic.m4a"), vec![0u8; 2048]).unwrap();
+        let p = with_sources();
+        let infos = source_infos(&p, &dir);
+        assert_eq!(infos.iter().map(|i| i.label).collect::<Vec<_>>(), ["Camera", "Microphone", "System audio"]);
+        assert!(infos[0].missing && infos[2].missing && !infos[1].missing);
+        assert!(infos[0].text().contains("camera.mov") && infos[0].text().contains("missing"), "{}", infos[0].text());
+        assert!(
+            infos[1].text().contains("mic.m4a") && infos[1].text().contains("2 KB") && infos[1].text().contains("+0.20 s"),
+            "{}",
+            infos[1].text()
+        );
+        assert!(source_infos(&base(), &dir).is_empty());
     }
 }

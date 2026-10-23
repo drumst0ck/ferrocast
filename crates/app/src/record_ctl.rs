@@ -317,12 +317,40 @@ pub fn display_frame_for(target: &Target, shareable: &Shareable) -> Option<[f64;
 pub enum StartFailure {
     /// S4: the permission toast and the Settings pane.
     Permission,
+    /// S12: Camera is off.
+    PermissionCamera,
+    /// S12: Microphone is off.
+    PermissionMicrophone,
     Message(String),
+}
+
+impl StartFailure {
+    /// The text to show.
+    pub fn toast(&self) -> Option<String> {
+        Some(match self {
+            StartFailure::Permission => crate::capture_ctl::PERMISSION_TOAST.into(),
+            StartFailure::PermissionCamera => ferrocast_macos::capture::CAMERA_PERMISSION_TOAST.into(),
+            StartFailure::PermissionMicrophone => ferrocast_macos::capture::MICROPHONE_PERMISSION_TOAST.into(),
+            StartFailure::Message(m) => m.clone(),
+        })
+    }
+
+    /// The Settings pane to open next to the toast (permission failures only).
+    pub fn pane(&self) -> Option<&'static str> {
+        match self {
+            StartFailure::Permission => Some(crate::capture_ctl::SCREEN_RECORDING_PANE),
+            StartFailure::PermissionCamera => Some(ferrocast_macos::capture::CAMERA_PANE),
+            StartFailure::PermissionMicrophone => Some(ferrocast_macos::capture::MICROPHONE_PANE),
+            StartFailure::Message(_) => None,
+        }
+    }
 }
 
 pub fn start_failure(e: &RecordError) -> StartFailure {
     match e {
         RecordError::PermissionDenied => StartFailure::Permission,
+        RecordError::PermissionCamera => StartFailure::PermissionCamera,
+        RecordError::PermissionMicrophone => StartFailure::PermissionMicrophone,
         RecordError::Busy => StartFailure::Message("A recording is already running".into()),
         other => StartFailure::Message(format!("Recording failed: {other}")),
     }
@@ -331,6 +359,128 @@ pub fn start_failure(e: &RecordError) -> StartFailure {
 /// Toast for a helper `warn` code (`None`: nothing to say; disk warnings go through [`RecordCtl`]).
 pub fn warn_toast(code: &str) -> Option<&'static str> {
     (code == "input-monitoring-off").then_some(INPUT_MONITORING_TOAST)
+}
+
+/// [`warn_toast`] plus the P4 source warnings (`camera-lost`, `mic-lost`, `source-failed`).
+pub fn warn_message(code: &str, message: Option<&str>) -> Option<String> {
+    match code {
+        "camera-lost" => Some("The camera stopped. The recording continues without it.".into()),
+        "mic-lost" => Some("The microphone stopped. The recording continues without it.".into()),
+        "source-failed" => Some(match message.map(str::trim).filter(|m| !m.is_empty()) {
+            Some(m) => format!("A source could not be recorded: {m}"),
+            None => "A source could not be recorded.".into(),
+        }),
+        other => warn_toast(other).map(String::from),
+    }
+}
+
+/// The optional sources the Settings > Capture toggles ask for (empty device id = the default device).
+pub fn record_options(c: &ferrocast_core::capture::CaptureSettings) -> ferrocast_macos::capture::RecordOptions {
+    use ferrocast_core::capture::protocol::DeviceChoice;
+    let choice = |id: &str| DeviceChoice { device: Some(id.trim()).filter(|d| !d.is_empty()).map(String::from) };
+    ferrocast_macos::capture::RecordOptions {
+        camera: c.camera.then(|| choice(&c.camera_id)),
+        microphone: c.microphone.then(|| choice(&c.mic_id)),
+        system_audio: c.system_audio,
+    }
+}
+
+/// The wanted sources whose permission is still undecided: only these may make the system prompt.
+pub fn media_to_request(
+    o: &ferrocast_macos::capture::RecordOptions,
+    perms: &ferrocast_core::capture::protocol::MediaPermissions,
+) -> Vec<ferrocast_core::capture::protocol::MediaKind> {
+    use ferrocast_core::capture::protocol::{MediaAccess, MediaKind};
+    let mut v = vec![];
+    if o.camera.is_some() && perms.camera == MediaAccess::NotDetermined {
+        v.push(MediaKind::Camera);
+    }
+    if o.microphone.is_some() && perms.microphone == MediaAccess::NotDetermined {
+        v.push(MediaKind::Microphone);
+    }
+    v
+}
+
+/// After any prompt: the first wanted source that is not authorized (camera first).
+pub fn media_unmet(
+    o: &ferrocast_macos::capture::RecordOptions,
+    perms: &ferrocast_core::capture::protocol::MediaPermissions,
+) -> Option<RecordError> {
+    use ferrocast_core::capture::protocol::MediaAccess::Authorized;
+    if o.camera.is_some() && perms.camera != Authorized {
+        Some(RecordError::PermissionCamera)
+    } else if o.microphone.is_some() && perms.microphone != Authorized {
+        Some(RecordError::PermissionMicrophone)
+    } else {
+        None
+    }
+}
+
+/// Runs on the session thread right before `record.start` (user action: the Record command): asks the
+/// system for the wanted sources that are still undecided, nothing else. `Err` = do not start.
+fn ensure_media(helper: &mut ferrocast_macos::capture::Helper, o: &ferrocast_macos::capture::RecordOptions) -> Result<(), RecordError> {
+    if o.camera.is_none() && o.microphone.is_none() {
+        return Ok(());
+    }
+    // an old helper without `permissions`: let `record.start` decide
+    let Ok(mut perms) = helper.media_permissions(&[]) else { return Ok(()) };
+    let ask = media_to_request(o, &perms);
+    if !ask.is_empty() {
+        if let Ok(after) = helper.media_permissions(&ask) {
+            perms = after;
+        }
+    }
+    media_unmet(o, &perms).map_or(Ok(()), Err)
+}
+
+/// (id, shown name) of each camera; a camera without a name (no grant yet) shows its id.
+pub fn camera_items(d: &ferrocast_core::capture::protocol::Devices) -> Vec<(String, String)> {
+    d.cameras.iter().map(|c| (c.id.clone(), if c.name.trim().is_empty() { c.id.clone() } else { c.name.clone() })).collect()
+}
+
+pub fn mic_items(d: &ferrocast_core::capture::protocol::Devices) -> Vec<(String, String)> {
+    d.microphones.iter().map(|m| (m.id.clone(), if m.name.trim().is_empty() { m.id.clone() } else { m.name.clone() })).collect()
+}
+
+/// What a device picker shows for the stored `id`: `Default` when empty; `known` says the list was loaded.
+pub fn device_shown(items: &[(String, String)], id: &str, known: bool) -> String {
+    if id.trim().is_empty() {
+        return "Default".into();
+    }
+    match items.iter().find(|(i, _)| i == id) {
+        Some((_, name)) => name.clone(),
+        None if known => format!("{id} (not connected)"),
+        None => id.into(),
+    }
+}
+
+/// The camera / microphone lists of Settings > Capture.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum DevicesState {
+    /// Not asked yet: the tab asks when it opens.
+    #[default]
+    Idle,
+    Loading,
+    Ready(ferrocast_core::capture::protocol::Devices),
+    /// Why there is no list (no helper, helper error).
+    Failed(String),
+}
+
+/// Lists the devices on a worker thread; the answer arrives as `RecordMsg::Devices`. Never blocks the caller.
+pub fn load_devices(exe: PathBuf, bus: crate::services::Bus, log: impl Fn(&str) + Send + 'static) {
+    use crate::services::Msg;
+    std::thread::spawn(move || {
+        let result = (|| {
+            let helper = ferrocast_macos::capture::helper_path(&exe);
+            if !ferrocast_macos::capture::available(&exe) {
+                return Err(crate::capture_ctl::NO_HELPER_MESSAGE.to_string());
+            }
+            let mut h =
+                ferrocast_macos::capture::Helper::spawn(&helper, log).map_err(|e| format!("The capture helper did not start: {e}"))?;
+            h.devices().map_err(|e| format!("Could not list the devices: {e}"))
+        })();
+        bus.send(Msg::Record(RecordMsg::Devices(result)));
+    });
 }
 
 /// What the user is told once the project is finished.
@@ -457,6 +607,23 @@ pub fn finalize_project(project: &Path, done: &RecordStopped) -> Result<(), Stri
     let mut p = Project::load(project).map_err(|e| e.to_string())?;
     p.duration = done.duration;
     p.sources.screen.file = done.screen.clone();
+    if let Some(src) = &done.sources {
+        use ferrocast_core::capture::project::{Source, TrackMix};
+        let side = |f: &ferrocast_core::capture::protocol::SourceFile| Source { file: f.file.clone(), offset: f.offset };
+        p.sources.camera = src.camera.as_ref().map(|c| Source { file: c.file.clone(), offset: c.offset });
+        p.sources.mic = src.mic.as_ref().map(side);
+        p.sources.system = src.system.as_ref().map(side);
+        // the camera overlay starts with the defaults; every recorded audio track starts at 0 dB
+        if p.sources.camera.is_some() && p.camera.is_none() {
+            p.camera = Some(ferrocast_core::capture::camera::CameraLayout::default());
+        }
+        if p.sources.mic.is_some() && p.audio.mic.is_none() {
+            p.audio.mic = Some(TrackMix::default());
+        }
+        if p.sources.system.is_some() && p.audio.system.is_none() {
+            p.audio.system = Some(TrackMix::default());
+        }
+    }
     p.save(project).map_err(|e| e.to_string())?;
     make_thumb(project, &done.screen);
     Ok(())
@@ -506,6 +673,8 @@ pub enum RecordMsg {
     /// HUD Stop button.
     Stop,
     Started(u64, Result<(), StartFailure>),
+    /// The device lists of Settings > Capture (`load_devices`).
+    Devices(Result<ferrocast_core::capture::protocol::Devices, String>),
     Event(u64, RecordEvent),
     Finished(u64, Result<Saved, String>),
 }
@@ -522,6 +691,8 @@ pub struct Runtime {
     pub project: Option<PathBuf>,
     /// Content of the Recordings browser (reloaded when it opens and after a trash).
     pub recordings: Vec<RecordingEntry>,
+    /// Cameras and microphones for Settings > Capture.
+    pub devices: DevicesState,
 }
 
 #[derive(Clone, Debug)]
@@ -539,6 +710,8 @@ pub struct Session {
     pub fps: u32,
     pub cursor: bool,
     pub excludes: Vec<u32>,
+    /// Camera / microphone / system audio from Settings > Capture.
+    pub options: ferrocast_macos::capture::RecordOptions,
     pub gen: u64,
 }
 
@@ -553,7 +726,10 @@ pub fn run_session(s: Session, cmds: std::sync::mpsc::Receiver<Cmd>, bus: crate:
         Ok(h) => h,
         Err(e) => return say(RecordMsg::Started(gen, Err(StartFailure::Message(format!("Recording failed: {e}"))))),
     };
-    let events = match helper.record_start(&s.project, "screen.mov", s.target, s.fps, s.cursor, s.excludes) {
+    if let Err(e) = ensure_media(&mut helper, &s.options) {
+        return say(RecordMsg::Started(gen, Err(start_failure(&e))));
+    }
+    let events = match helper.record_start_with(&s.project, "screen.mov", s.target, s.fps, s.cursor, s.excludes, s.options) {
         Ok((_, rx)) => rx,
         Err(e) => return say(RecordMsg::Started(gen, Err(start_failure(&e)))),
     };
@@ -1004,10 +1180,164 @@ mod tests {
             dropped: 0,
             interrupted: false,
             message: None,
+            sources: None,
         };
         finalize_project(&dir, &done).unwrap();
         assert_eq!(Project::load(&dir).unwrap().duration, 73.2);
         assert_eq!(read_entry(&dir).unwrap().duration, Some(73.2));
         assert!(finalize_project(&s.0.join("nope.ferrocast"), &done).is_err());
+    }
+
+    // ---- P4: sources
+
+    fn settings_with(
+        camera: bool,
+        camera_id: &str,
+        microphone: bool,
+        mic_id: &str,
+        system: bool,
+    ) -> ferrocast_core::capture::CaptureSettings {
+        ferrocast_core::capture::CaptureSettings {
+            camera,
+            camera_id: camera_id.into(),
+            microphone,
+            mic_id: mic_id.into(),
+            system_audio: system,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn options_follow_the_settings_toggles_and_devices() {
+        use ferrocast_core::capture::protocol::DeviceChoice;
+        let off = record_options(&settings_with(false, "0x1", false, "m", false));
+        assert_eq!(off, ferrocast_macos::capture::RecordOptions::default(), "a device id alone does not turn a source on");
+        let all = record_options(&settings_with(true, "0x1", true, "", true));
+        assert_eq!(all.camera, Some(DeviceChoice { device: Some("0x1".into()) }));
+        assert_eq!(all.microphone, Some(DeviceChoice { device: None }), "empty id = the default device");
+        assert!(all.system_audio);
+        let only_mic = record_options(&settings_with(false, "", true, " ", false));
+        assert_eq!((only_mic.camera, only_mic.system_audio), (None, false));
+        assert_eq!(only_mic.microphone, Some(DeviceChoice { device: None }), "blank id = the default device");
+    }
+
+    #[test]
+    fn camera_and_microphone_denials_have_their_own_failure() {
+        assert_eq!(start_failure(&RecordError::PermissionCamera), StartFailure::PermissionCamera);
+        assert_eq!(start_failure(&RecordError::PermissionMicrophone), StartFailure::PermissionMicrophone);
+        assert_eq!(StartFailure::PermissionCamera.toast().as_deref(), Some(ferrocast_macos::capture::CAMERA_PERMISSION_TOAST));
+        assert_eq!(StartFailure::PermissionMicrophone.toast().as_deref(), Some(ferrocast_macos::capture::MICROPHONE_PERMISSION_TOAST));
+        assert_eq!(StartFailure::Permission.toast().as_deref(), Some(crate::capture_ctl::PERMISSION_TOAST));
+        assert_eq!(StartFailure::Message("x".into()).toast().as_deref(), Some("x"));
+        assert_eq!(StartFailure::PermissionCamera.pane(), Some(ferrocast_macos::capture::CAMERA_PANE));
+        assert_eq!(StartFailure::PermissionMicrophone.pane(), Some(ferrocast_macos::capture::MICROPHONE_PANE));
+        assert_eq!(StartFailure::Permission.pane(), Some(crate::capture_ctl::SCREEN_RECORDING_PANE));
+        assert_eq!(StartFailure::Message("x".into()).pane(), None);
+    }
+
+    #[test]
+    fn source_warnings_become_clear_toasts() {
+        assert_eq!(warn_message("camera-lost", None).as_deref(), Some("The camera stopped. The recording continues without it."));
+        assert_eq!(
+            warn_message("mic-lost", Some("unplugged")).as_deref(),
+            Some("The microphone stopped. The recording continues without it.")
+        );
+        assert_eq!(
+            warn_message("source-failed", Some("no camera frames")).as_deref(),
+            Some("A source could not be recorded: no camera frames")
+        );
+        assert_eq!(warn_message("source-failed", None).as_deref(), Some("A source could not be recorded."));
+        assert_eq!(warn_message("input-monitoring-off", None).as_deref(), Some(INPUT_MONITORING_TOAST), "the S12 text is untouched");
+        assert_eq!(warn_message("low-disk", None), None);
+    }
+
+    #[test]
+    fn only_undecided_sources_that_are_wanted_are_requested() {
+        use ferrocast_core::capture::protocol::{MediaAccess as A, MediaKind as K, MediaPermissions};
+        let perms = |camera, microphone| MediaPermissions { camera, microphone };
+        let both = record_options(&settings_with(true, "", true, "", false));
+        assert_eq!(media_to_request(&both, &perms(A::NotDetermined, A::NotDetermined)), vec![K::Camera, K::Microphone]);
+        assert_eq!(media_to_request(&both, &perms(A::Authorized, A::NotDetermined)), vec![K::Microphone]);
+        assert!(media_to_request(&both, &perms(A::Denied, A::Authorized)).is_empty(), "a denied source is never asked again");
+        let none = record_options(&settings_with(false, "", false, "", true));
+        assert!(media_to_request(&none, &perms(A::NotDetermined, A::NotDetermined)).is_empty(), "unwanted sources never prompt");
+        let cam = record_options(&settings_with(true, "", false, "", false));
+        assert_eq!(media_to_request(&cam, &perms(A::NotDetermined, A::NotDetermined)), vec![K::Camera], "just the wanted source");
+    }
+
+    #[test]
+    fn a_wanted_source_that_is_not_authorized_stops_the_start() {
+        use ferrocast_core::capture::protocol::{MediaAccess as A, MediaPermissions};
+        let perms = |camera, microphone| MediaPermissions { camera, microphone };
+        let both = record_options(&settings_with(true, "", true, "", false));
+        assert_eq!(media_unmet(&both, &perms(A::Authorized, A::Authorized)), None);
+        assert_eq!(media_unmet(&both, &perms(A::Denied, A::Authorized)), Some(RecordError::PermissionCamera));
+        assert_eq!(media_unmet(&both, &perms(A::Authorized, A::Restricted)), Some(RecordError::PermissionMicrophone));
+        assert_eq!(media_unmet(&both, &perms(A::NotDetermined, A::Denied)), Some(RecordError::PermissionCamera), "camera first");
+        let mic = record_options(&settings_with(false, "", true, "", false));
+        assert_eq!(media_unmet(&mic, &perms(A::Denied, A::Authorized)), None, "an unwanted source does not matter");
+    }
+
+    #[test]
+    fn finalize_writes_the_sources_and_a_default_camera_layout() {
+        use ferrocast_core::capture::camera::CameraLayout;
+        use ferrocast_core::capture::project::{Project, TrackMix};
+        use ferrocast_core::capture::protocol::{CameraSource, RecordSources, SourceFile};
+        let s = Scratch::new("final-src");
+        let dir = project(&s.0, "Demo.ferrocast", "2026-10-23T14:05:22Z", 0.0, 10);
+        let done = RecordStopped {
+            project: dir.to_string_lossy().into(),
+            duration: 12.5,
+            screen: "screen.mov".into(),
+            size: [1920, 1080],
+            frames: 0,
+            dropped: 0,
+            interrupted: false,
+            message: None,
+            sources: Some(RecordSources {
+                screen: SourceFile { file: "screen.mov".into(), offset: 0.0 },
+                camera: Some(CameraSource { file: "camera.mov".into(), offset: 0.12, size: [1280, 720], frames: 300 }),
+                mic: Some(SourceFile { file: "mic.m4a".into(), offset: -0.03 }),
+                system: None,
+            }),
+        };
+        finalize_project(&dir, &done).unwrap();
+        let p = Project::load(&dir).unwrap();
+        assert_eq!((p.sources.camera.as_ref().map(|c| (c.file.as_str(), c.offset))), Some(("camera.mov", 0.12)));
+        assert_eq!((p.sources.mic.as_ref().map(|c| (c.file.as_str(), c.offset))), Some(("mic.m4a", -0.03)));
+        assert!(p.sources.system.is_none());
+        assert_eq!(p.camera, Some(CameraLayout::default()));
+        assert_eq!(p.audio.mic, Some(TrackMix::default()));
+        assert_eq!(p.audio.system, None, "no system source, no system track");
+        // no camera: no layout; no sources at all: the project stays a plain screen project
+        let plain = project(&s.0, "Plain.ferrocast", "2026-10-23T14:05:22Z", 0.0, 10);
+        finalize_project(&plain, &RecordStopped { sources: None, ..done.clone() }).unwrap();
+        let q = Project::load(&plain).unwrap();
+        assert!(q.camera.is_none() && q.sources.camera.is_none() && q.sources.mic.is_none());
+        let audio_only = project(&s.0, "Audio.ferrocast", "2026-10-23T14:05:22Z", 0.0, 10);
+        let mut only = done.clone();
+        only.sources.as_mut().unwrap().camera = None;
+        finalize_project(&audio_only, &only).unwrap();
+        assert!(Project::load(&audio_only).unwrap().camera.is_none());
+    }
+
+    #[test]
+    fn device_lists_show_names_default_and_the_reason_when_missing() {
+        use ferrocast_core::capture::protocol::{CameraDevice, Devices, MicrophoneDevice};
+        let d = Devices {
+            cameras: vec![
+                CameraDevice { id: "0x1".into(), name: "FaceTime HD".into(), position: "unspecified".into(), default: true },
+                CameraDevice { id: "0x2".into(), name: String::new(), position: "unspecified".into(), default: false },
+            ],
+            microphones: vec![MicrophoneDevice { id: "m1".into(), name: "Studio Mic".into(), default: false }],
+        };
+        let cams = camera_items(&d);
+        assert_eq!(cams, vec![("0x1".to_string(), "FaceTime HD".to_string()), ("0x2".to_string(), "0x2".to_string())], "no name: the id");
+        assert_eq!(mic_items(&d), vec![("m1".to_string(), "Studio Mic".to_string())]);
+        assert_eq!(device_shown(&cams, "", true), "Default");
+        assert_eq!(device_shown(&cams, "0x1", true), "FaceTime HD");
+        assert_eq!(device_shown(&cams, "0x9", true), "0x9 (not connected)");
+        assert_eq!(device_shown(&[], "0x9", false), "0x9", "unknown list: just the id");
+        assert_eq!(device_shown(&[], "", false), "Default");
     }
 }

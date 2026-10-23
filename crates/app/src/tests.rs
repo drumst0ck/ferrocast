@@ -6814,7 +6814,7 @@ fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
         (3, P::ChatGpt, None, 0, 1, 0),
         (3, P::ClaudeCode, None, 0, 1, 0),
         (4, P::OpenAiCompatible, Some(P::ChatGpt), 1, 1, 0),
-        (5, P::OpenAiCompatible, None, 1, 0, 0),
+        (5, P::OpenAiCompatible, None, 1, 2, 0),
         (6, P::OpenAiCompatible, None, 0, 1, 0),
         (7, P::OpenAiCompatible, None, 1, 0, 0),
         (8, P::OpenAiCompatible, None, 2, 1, 0),
@@ -11248,13 +11248,18 @@ fn saved_capture_with_after_show_opens_the_capture_window() {
 // ---- T9: Settings → Capture tab
 
 /// Titles of the Capture tab rows, in drawing order.
-const CAPTURE_TAB_TITLES: [&str; 13] = [
+const CAPTURE_TAB_TITLES: [&str; 18] = [
     "Capture folder",
     "Format",
     "After capture",
     "Include cursor",
     "Recording frame rate",
     "Recording countdown",
+    "Camera",
+    "Camera device",
+    "Microphone",
+    "Microphone device",
+    "System audio",
     "Capture Area shortcut",
     "Capture Window shortcut",
     "Capture Screen shortcut",
@@ -11295,6 +11300,11 @@ fn capture_settings_are_found_by_the_settings_search() {
         ("pointer", "Include cursor"),
         ("fps", "Recording frame rate"),
         ("countdown", "Recording countdown"),
+        ("webcam", "Camera"),
+        ("facecam", "Camera device"),
+        ("narration", "Microphone"),
+        ("mic", "Microphone device"),
+        ("computer audio", "System audio"),
         ("capture area", "Capture Area shortcut"),
         ("window shortcut", "Capture Window shortcut"),
         ("screenshot hotkey", "Capture Screen shortcut"),
@@ -11381,14 +11391,14 @@ fn capture_shortcut_rows_follow_the_builtin_ids_and_have_no_default() {
 fn capture_shortcut_record_opens_the_hotkey_view_for_that_command() {
     let mut app = settings_app(CAPTURE_TAB, egui::ThemePreference::Dark);
     settle(&mut app);
-    // the Record… button of the second shortcut row (Capture Window): scroll it into view
+    // the Record… button of the second shortcut row (Capture Window; the Refresh buttons of the Sources rows come first): scroll it into view
     let p = scroll_until(&mut app, |app| {
         app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
         render(app, vec![]);
         let mut v: Vec<Rect> = sd5_hits(app).into_iter().filter(|h| h.0 == "small_btn").map(|h| h.2).collect();
         v.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
-        assert_eq!(v.len(), 7, "a Record… button per shortcut");
-        Some(v[1].center())
+        assert_eq!(v.len(), 9, "two Refresh buttons (devices) and a Record… button per shortcut");
+        Some(v[3].center())
     })
     .expect("reachable");
     for _ in 0..30 {
@@ -11399,12 +11409,302 @@ fn capture_shortcut_record_opens_the_hotkey_view_for_that_command() {
     render(&mut app, vec![]);
     let mut v: Vec<Rect> = sd5_hits(&app).into_iter().filter(|h| h.0 == "small_btn").map(|h| h.2).collect();
     v.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
-    click_at(&mut app, v[1].center());
+    click_at(&mut app, v[3].center());
     render(&mut app, vec![]);
     match app.view() {
         View::Hotkey { id, .. } => assert_eq!(id, "builtin:capture-window"),
         _ => panic!("the Hotkey view opens"),
     }
+}
+
+// ---- P4: Settings > Capture sources, record flow reactions, Camera and Audio tabs ----
+
+/// Hits of one kind on the Capture tab, top to bottom.
+fn capture_tab_hits(app: &mut App, kind: &str) -> Vec<Rect> {
+    app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
+    render(app, vec![]);
+    let mut v: Vec<Rect> = sd5_hits(app).into_iter().filter(|h| h.0 == kind).map(|h| h.2).collect();
+    v.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+    v
+}
+
+/// Scroll the Settings body down by about `dy` points and let the animation finish.
+fn scroll_settings(app: &mut App, dy: f32) {
+    render(app, vec![Event::PointerMoved(Pos2::new(500.0, 200.0))]);
+    for _ in 0..6 {
+        let wheel = Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -dy / 6.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        };
+        render(app, vec![wheel]);
+    }
+    for _ in 0..30 {
+        render(app, vec![]);
+    }
+}
+
+#[test]
+fn capture_tab_sources_show_default_devices_and_the_reason_when_none_are_listed() {
+    use crate::record_ctl::DevicesState;
+    use ferrocast_core::capture::protocol::{CameraDevice, Devices, MicrophoneDevice};
+    let mut app = settings_app(CAPTURE_TAB, egui::ThemePreference::Dark);
+    app.rt.devices = DevicesState::Failed("Screen capture is not available in this build.".into());
+    settle(&mut app);
+    scroll_settings(&mut app, 450.0);
+    let texts = painted_texts(&mut app, vec![]);
+    let defaults = texts.iter().filter(|t| *t == "Default").count();
+    assert_eq!(defaults, 2, "both pickers show Default when empty: {texts:?}");
+    for t in ["Camera", "Camera device", "Microphone", "Microphone device", "System audio", "Refresh"] {
+        assert!(texts.iter().any(|x| x == t), "{t:?} on the tab: {texts:?}");
+    }
+    assert!(
+        texts.iter().any(|t| t == "Devices are not listed: Screen capture is not available in this build."),
+        "the reason is shown, not hidden: {texts:?}"
+    );
+    // a stored device is shown by its name once the list is known, by its id before
+    app.settings.capture.camera_id = "0x1".into();
+    app.settings.capture.mic_id = "gone".into();
+    app.rt.devices = DevicesState::Ready(Devices {
+        cameras: vec![CameraDevice { id: "0x1".into(), name: "FaceTime HD".into(), position: "unspecified".into(), default: true }],
+        microphones: vec![MicrophoneDevice { id: "m1".into(), name: "Studio Mic".into(), default: false }],
+    });
+    for _ in 0..3 {
+        render(&mut app, vec![]);
+    }
+    let texts = painted_texts(&mut app, vec![]);
+    assert!(texts.iter().any(|t| t == "FaceTime HD"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "gone (not connected)"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.starts_with("Devices are not listed")));
+}
+
+#[test]
+fn capture_tab_toggles_write_the_source_settings_and_nothing_else_changes() {
+    let mut app = settings_app(CAPTURE_TAB, egui::ThemePreference::Dark);
+    app.rt.devices = crate::record_ctl::DevicesState::Failed("x".into());
+    settle(&mut app);
+    let before = app.settings.clone();
+    assert!(!before.capture.camera && !before.capture.microphone && !before.capture.system_audio);
+    // toggles top to bottom: Include cursor, Camera, Microphone, System audio (the switch may sit below the fold)
+    for (i, check) in [
+        (1usize, (|a: &App| a.settings.capture.camera) as fn(&App) -> bool),
+        (2, |a| a.settings.capture.microphone),
+        (3, |a| a.settings.capture.system_audio),
+    ] {
+        scroll_until(&mut app, |app| capture_tab_hits(app, "toggle").get(i).map(|r| r.center())).expect("reachable");
+        for _ in 0..30 {
+            render(&mut app, vec![]);
+        }
+        let p = capture_tab_hits(&mut app, "toggle")[i].center();
+        click_at(&mut app, p);
+        assert!(check(&app), "toggle {i} turned its source on");
+    }
+    assert_eq!(app.settings.capture.fps, before.capture.fps);
+    assert!(!app.settings.capture.include_cursor);
+}
+
+#[test]
+fn opening_the_capture_tab_loads_devices_off_the_main_thread_and_the_answer_fills_the_lists() {
+    use crate::record_ctl::{DevicesState, RecordMsg};
+    use ferrocast_core::capture::protocol::{Devices, MicrophoneDevice};
+    let mut app = settings_app(CAPTURE_TAB, egui::ThemePreference::Dark);
+    assert_eq!(app.rt.devices, DevicesState::Idle);
+    settle(&mut app);
+    // the tab asked for the lists: the helper call is on a worker thread, the UI only shows Loading
+    assert_eq!(app.rt.devices, DevicesState::Loading);
+    // and asks once, not on every frame
+    render(&mut app, vec![]);
+    assert_eq!(app.rt.devices, DevicesState::Loading);
+    // without a helper the reason is there at once: nothing is spawned and nothing blocks
+    let mut bare = settings_app(CAPTURE_TAB, egui::ThemePreference::Dark);
+    bare.capture = crate::capture_ctl::CaptureState::with(std::path::PathBuf::new(), crate::capture_ctl::Availability::NoHelper);
+    settle(&mut bare);
+    assert_eq!(bare.rt.devices, DevicesState::Failed("Screen capture is not available in this build.".into()));
+    // a worker's answer replaces the state
+    app.handle_record(RecordMsg::Devices(Ok(Devices {
+        cameras: vec![],
+        microphones: vec![MicrophoneDevice { id: "m1".into(), name: "Studio Mic".into(), default: true }],
+    })));
+    assert!(matches!(&app.rt.devices, DevicesState::Ready(d) if d.microphones.len() == 1));
+    app.handle_record(RecordMsg::Devices(Err("boom".into())));
+    assert_eq!(app.rt.devices, DevicesState::Failed("boom".into()));
+}
+
+#[test]
+fn camera_and_microphone_denials_toast_the_s12_text_and_leave_the_recorder_idle() {
+    use crate::record_ctl::{RecordMsg, StartFailure};
+    let mut app = fixture();
+    app.visible = true;
+    app.rt.gen = 2;
+    let dir = std::env::temp_dir().join(format!("fc-p4-deny-{}", std::process::id())).join("Half.ferrocast");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (failure, text) in [
+        (StartFailure::PermissionCamera, "Camera is off for Ferrocast. Turn it on in System Settings → Privacy & Security → Camera."),
+        (
+            StartFailure::PermissionMicrophone,
+            "Microphone is off for Ferrocast. Turn it on in System Settings → Privacy & Security → Microphone.",
+        ),
+    ] {
+        std::fs::create_dir_all(&dir).unwrap();
+        app.record.begin(0);
+        app.rt.project = Some(dir.clone());
+        app.handle_record(RecordMsg::Started(2, Err(failure)));
+        assert!(app.record.is_idle());
+        assert_eq!(toast_text(&app), text);
+        assert!(!dir.exists(), "the half-made project folder is removed, as for Screen Recording");
+    }
+    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+}
+
+#[test]
+fn source_warnings_during_a_recording_become_toasts() {
+    use crate::record_ctl::RecordMsg;
+    use ferrocast_core::capture::protocol::RecordEvent;
+    let mut app = fixture();
+    app.visible = true;
+    app.rt.gen = 4;
+    app.record.begin(0);
+    let warn = |code: &str, m: Option<&str>| RecordEvent::Warn { code: code.into(), message: m.map(String::from), free_bytes: None };
+    app.handle_record(RecordMsg::Event(4, warn("camera-lost", Some("unplugged"))));
+    assert_eq!(toast_text(&app), "The camera stopped. The recording continues without it.");
+    app.handle_record(RecordMsg::Event(4, warn("mic-lost", None)));
+    assert_eq!(toast_text(&app), "The microphone stopped. The recording continues without it.");
+    app.handle_record(RecordMsg::Event(4, warn("source-failed", Some("system audio refused"))));
+    assert_eq!(toast_text(&app), "A source could not be recorded: system audio refused");
+    app.handle_record(RecordMsg::Event(4, warn("input-monitoring-off", None)));
+    assert_eq!(toast_text(&app), "Keyboard shortcuts will not be shown: Input Monitoring is off.");
+}
+
+fn p4_project() -> ferrocast_core::capture::project::Project {
+    use ferrocast_core::capture::project::Project;
+    Project::from_json(include_str!("../../core/fixtures/camera_project.json")).unwrap()
+}
+
+/// An editor on a real folder holding `project` (autosave writes there); `files` are created empty-ish on disk.
+fn editor_app_for(
+    tag: &str,
+    project: ferrocast_core::capture::project::Project,
+    files: &[&str],
+) -> (App, std::path::PathBuf, std::sync::mpsc::Receiver<crate::editor_ctl::WorkerCmd>) {
+    use crate::editor_ctl::{Editor, Opened};
+    let dir = std::env::temp_dir().join(format!("fc-editor-p4-{}-{tag}", std::process::id())).join("Take.ferrocast");
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in files {
+        std::fs::write(dir.join(f), vec![0u8; 4096]).unwrap();
+    }
+    project.save(&dir).unwrap();
+    let mut app = fixture();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut ed = Editor::new(dir.clone(), Some(tx));
+    ed.opened(Ok(Opened { project, auto_zoomed: false, note: None, events: None }));
+    app.editor = Some(ed);
+    app.stack = vec![View::Root, View::Editor { project: dir.clone() }];
+    (app, dir, rx)
+}
+
+fn tab_labels(app: &mut App) -> Vec<String> {
+    render_texts(app, vec![]).into_iter().map(|(t, _)| t).collect()
+}
+
+#[test]
+fn a_project_without_camera_or_audio_shows_neither_tab() {
+    let (mut app, _rx, _dir) = editor_app_in("p4-plain");
+    let texts = tab_labels(&mut app);
+    for t in ["Zoom", "Cursor", "Style", "Clips"] {
+        assert!(texts.iter().any(|x| x == t), "{t} tab: {texts:?}");
+    }
+    assert!(!texts.iter().any(|x| x == "Camera" || x == "Audio"), "no Camera/Audio tab without sources: {texts:?}");
+    // a leftover Camera tab selection (another project) falls back instead of drawing an empty panel
+    set_tab(&mut app, Tab::Camera);
+    let texts = tab_labels(&mut app);
+    assert_eq!(app.editor.as_ref().unwrap().st.tab, Tab::Zoom);
+    assert!(texts.iter().any(|x| x == "Add at playhead"), "{texts:?}");
+}
+
+#[test]
+fn the_camera_tab_draws_its_controls_and_edits_through_the_history() {
+    use ferrocast_core::capture::camera::{CameraShape, Corner};
+    let (mut app, dir, _rx) = editor_app_for("p4-cam", p4_project(), &["camera.mov", "mic.m4a"]);
+    let texts = tab_labels(&mut app);
+    assert!(texts.iter().any(|x| x == "Camera") && texts.iter().any(|x| x == "Audio"), "both tabs: {texts:?}");
+    click_label(&mut app, "Camera");
+    assert_eq!(app.editor.as_ref().unwrap().st.tab, Tab::Camera);
+    let mut texts = tab_labels(&mut app);
+    // the lower part of the tab is below the fold: the wheel scrolls the panel
+    scroll_panel(&mut app, -400.0);
+    texts.extend(tab_labels(&mut app));
+    for want in [
+        "Show camera",
+        "Shape",
+        "Circle",
+        "Rounded",
+        "Square",
+        "Corner",
+        "Top left",
+        "Top right",
+        "Bottom left",
+        "Bottom right",
+        "Size",
+        "Margin",
+        "Mirror",
+    ] {
+        assert!(texts.iter().any(|t| t == want), "Camera tab lacks `{want}`: {texts:?}");
+    }
+    assert!(texts.iter().any(|t| t.starts_with("camera.mov · 0:10") && t.contains("+0.10 s")), "source info: {texts:?}");
+    scroll_panel(&mut app, 400.0);
+    assert_eq!(editor_proj(&app).camera.unwrap().shape, CameraShape::Rounded, "the fixture starts rounded");
+    click_label(&mut app, "Square");
+    click_label(&mut app, "Top left");
+    let c = editor_proj(&app).camera.unwrap();
+    assert_eq!((c.shape, c.corner), (CameraShape::Square, Corner::TopLeft));
+    app.editor.as_mut().unwrap().flush(1e6);
+    let saved = ferrocast_core::capture::project::Project::load(&dir).unwrap().camera.unwrap();
+    assert_eq!((saved.shape, saved.corner), (CameraShape::Square, Corner::TopLeft), "autosave wrote the fields");
+    render(&mut app, vec![key_mod_event(Key::Z, Modifiers::COMMAND)]);
+    assert_eq!(editor_proj(&app).camera.unwrap().corner, Corner::TopRight, "one undo step per click");
+    // hide
+    click_label(&mut app, "Show camera");
+    assert!(!editor_proj(&app).camera.unwrap().visible);
+}
+
+#[test]
+fn the_audio_tab_shows_the_mix_and_a_missing_file_never_crashes() {
+    use ferrocast_core::capture::project::AudioTrack;
+    let (mut app, _dir, _rx) = editor_app_for("p4-audio", p4_project(), &["mic.m4a"]);
+    set_tab(&mut app, Tab::Audio);
+    let mut texts = tab_labels(&mut app);
+    scroll_panel(&mut app, -400.0);
+    texts.extend(tab_labels(&mut app));
+    scroll_panel(&mut app, 400.0);
+    for want in ["Microphone", "System audio", "Gain", "Mute", "Muted", "Master"] {
+        assert!(texts.iter().any(|t| t == want), "Audio tab lacks `{want}`: {texts:?}");
+    }
+    // the fixture's system track is muted; its numeric gain is on screen
+    assert!(
+        texts.iter().any(|t| t == "-6.0") && texts.iter().any(|t| t == "3.0") && texts.iter().any(|t| t == "-1.5"),
+        "gains in dB: {texts:?}"
+    );
+    // system.m4a is not on disk: said clearly
+    assert!(texts.iter().any(|t| t.starts_with("system.m4a is missing")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("mic.m4a · 0:10")), "{texts:?}");
+    // mute buttons edit the project: the fixture has the mic live and the system track muted
+    assert!(!editor_proj(&app).audio.mic.unwrap().mute && editor_proj(&app).audio.system.unwrap().mute);
+    click_label(&mut app, "Muted");
+    assert!(!editor_proj(&app).audio.system.unwrap().mute, "the system track is live again");
+    click_label(&mut app, "Mute");
+    assert!(editor_proj(&app).audio.mic.unwrap().mute, "the first Mute button is the microphone's");
+    assert_eq!(crate::editor_panels::track_mix(&editor_proj(&app), AudioTrack::Mic).gain_db, 3.0, "muting keeps the gain");
+}
+
+#[test]
+fn an_audio_only_project_has_the_audio_tab_and_no_camera_tab() {
+    let mut p = p4_project();
+    p.sources.camera = None;
+    p.camera = None;
+    let (mut app, _dir, _rx) = editor_app_for("p4-audio-only", p, &["mic.m4a", "system.m4a"]);
+    let texts = tab_labels(&mut app);
+    assert!(texts.iter().any(|x| x == "Audio") && !texts.iter().any(|x| x == "Camera"), "{texts:?}");
 }
 
 // ---- T19: recording commands, the flow's reactions and the Recordings browser ----
