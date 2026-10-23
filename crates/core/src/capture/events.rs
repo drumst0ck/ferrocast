@@ -41,6 +41,90 @@ pub struct ScreenInfo {
     pub scale: f64,
     /// `[x, y, w, h]` of the display in points.
     pub display_frame: [f64; 4],
+    /// `[x, y, w, h]` of the recorded area in points, in the SAME space as the
+    /// coordinates (relative to the display's top-left, NOT normalised). Written by
+    /// Record Area / Record Window, where `screen.mov` covers only this rectangle.
+    /// Absent = the video is the whole display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_rect: Option<[f64; 4]>,
+}
+
+/// Maps display points (the unit of `events.json` coordinates) into the normalised
+/// `0..=1` space of `screen.mov`, which is the display or `screen.capture_rect`.
+///
+/// Built once per take. A missing rect, or one covering the whole display (a window as
+/// large as the screen), is the identity space, so display recordings keep computing
+/// exactly what they did before `capture_rect` existed.
+///
+/// Policy for points outside the recorded rectangle: [`CaptureSpace::point`] returns the
+/// raw (possibly `< 0` / `> 1`) value and [`CaptureSpace::contains`] says whether it is
+/// visible; callers HIDE a cursor or click ring that is outside (it is not in the video,
+/// and the plan's cursor is hidden whenever it is not drawn) and use
+/// [`CaptureSpace::point_clamped`] where a position is always needed (camera follow,
+/// zoom focus). A display recording has no outside: its points clamp to the edge, as before.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaptureSpace {
+    origin: [f64; 2],
+    size: [f64; 2],
+    /// The rect is a strict sub-area of the display (points outside can be hidden).
+    sub_area: bool,
+}
+
+/// Slack when comparing points with the rectangle edges (normalised units).
+const EDGE_EPS: f64 = 1e-9;
+
+impl CaptureSpace {
+    pub fn new(screen: &ScreenInfo) -> Self {
+        let [_, _, dw, dh] = screen.display_frame;
+        let whole = Self { origin: [0.0, 0.0], size: [dw, dh], sub_area: false };
+        match screen.capture_rect {
+            Some([x, y, w, h]) if [x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0 => {
+                let covers = x <= 0.0 && y <= 0.0 && x + w >= dw && y + h >= dh;
+                if covers {
+                    whole
+                } else {
+                    Self { origin: [x, y], size: [w, h], sub_area: true }
+                }
+            }
+            _ => whole,
+        }
+    }
+
+    /// Size in points of the space (the recorded rectangle, or the display).
+    pub fn size(&self) -> [f64; 2] {
+        self.size
+    }
+
+    /// Whether the space is a strict sub-area of the display.
+    pub fn is_sub_area(&self) -> bool {
+        self.sub_area
+    }
+
+    /// Display point -> normalised position in the recorded video (unclamped).
+    pub fn point(&self, x: f64, y: f64) -> [f64; 2] {
+        [(x - self.origin[0]) / self.size[0], (y - self.origin[1]) / self.size[1]]
+    }
+
+    /// [`Self::point`] clamped to the video (`0..=1`).
+    pub fn point_clamped(&self, x: f64, y: f64) -> [f64; 2] {
+        let [u, v] = self.point(x, y);
+        [u.clamp(0.0, 1.0), v.clamp(0.0, 1.0)]
+    }
+
+    /// Whether a display point is visible in the video. Always true for a display recording.
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        if !self.sub_area {
+            return true;
+        }
+        let [u, v] = self.point(x, y);
+        (-EDGE_EPS..=1.0 + EDGE_EPS).contains(&u) && (-EDGE_EPS..=1.0 + EDGE_EPS).contains(&v)
+    }
+
+    /// Display rect `[x, y, w, h]` (points) -> the same rect normalised to the video, unclamped.
+    pub fn rect(&self, r: [f64; 4]) -> [f64; 4] {
+        let [x, y] = self.point(r[0], r[1]);
+        [x, y, r[2] / self.size[0], r[3] / self.size[1]]
+    }
 }
 
 /// `[t, x, y, kind]`.
@@ -187,6 +271,15 @@ impl Events {
         if !(self.screen.scale.is_finite() && self.screen.scale > 0.0) {
             out.push("screen.scale must be positive".into());
         }
+        if let Some([x, y, w, h]) = self.screen.capture_rect {
+            let [_, _, dw, dh] = self.screen.display_frame;
+            let finite = [x, y, w, h].iter().all(|v| v.is_finite());
+            if !finite || w <= 0.0 || h <= 0.0 {
+                out.push("screen.capture_rect must be finite with a positive size".into());
+            } else if x < 0.0 || y < 0.0 || x + w > dw + 1e-6 || y + h > dh + 1e-6 {
+                out.push("screen.capture_rect must lie inside the display".into());
+            }
+        }
         out
     }
 }
@@ -262,5 +355,65 @@ mod tests {
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert!(problems[0].starts_with("cursor[2]"));
         assert!(problems[1].starts_with("scroll[0]"));
+    }
+
+    fn screen(rect: Option<[f64; 4]>) -> ScreenInfo {
+        ScreenInfo { size: [1000, 500], scale: 2.0, display_frame: [0.0, 0.0, 1000.0, 500.0], capture_rect: rect }
+    }
+
+    #[test]
+    fn capture_rect_is_optional_and_round_trips() {
+        let e = Events::decode(SAMPLE).unwrap();
+        assert_eq!(e.screen.capture_rect, None);
+        assert!(!e.encode().contains("capture_rect"), "absent stays absent");
+        let with =
+            SAMPLE.replace(r#""display_frame":[0,0,1728,1117]"#, r#""display_frame":[0,0,1728,1117],"capture_rect":[100,50,800,600]"#);
+        let e = Events::decode(&with).unwrap();
+        assert_eq!(e.screen.capture_rect, Some([100.0, 50.0, 800.0, 600.0]));
+        assert!(e.validate().is_empty());
+        assert_eq!(Events::decode(&e.encode()).unwrap(), e);
+    }
+
+    #[test]
+    fn validate_checks_the_capture_rect() {
+        let mut e = Events::new(screen(Some([500.0, 250.0, 500.0, 250.0])));
+        assert!(e.validate().is_empty(), "the lower-right quarter touches the edges and is valid");
+        for bad in [
+            [500.0, 250.0, 0.0, 250.0],
+            [500.0, 250.0, 500.0, -1.0],
+            [-1.0, 0.0, 10.0, 10.0],
+            [600.0, 250.0, 500.0, 250.0],
+            [0.0, 300.0, 10.0, 250.0],
+            [f64::NAN, 0.0, 1.0, 1.0],
+        ] {
+            e.screen.capture_rect = Some(bad);
+            assert_eq!(e.validate().len(), 1, "{bad:?}: {:?}", e.validate());
+        }
+    }
+
+    #[test]
+    fn capture_space_maps_points_and_rects_into_the_rect() {
+        let s = CaptureSpace::new(&screen(Some([500.0, 250.0, 500.0, 250.0])));
+        assert!(s.is_sub_area());
+        assert_eq!(s.point(750.0, 375.0), [0.5, 0.5]);
+        assert_eq!(s.point(500.0, 250.0), [0.0, 0.0]);
+        assert_eq!(s.point(100.0, 600.0), [-0.8, 1.4]);
+        assert_eq!(s.point_clamped(100.0, 600.0), [0.0, 1.0]);
+        assert!(s.contains(1000.0, 500.0) && s.contains(500.0, 250.0) && s.contains(750.0, 300.0));
+        assert!(!s.contains(499.0, 300.0) && !s.contains(750.0, 251.0 - 2.0) && !s.contains(1001.0, 300.0));
+        assert_eq!(s.rect([600.0, 300.0, 100.0, 50.0]), [0.2, 0.2, 0.2, 0.2]);
+    }
+
+    #[test]
+    fn no_rect_or_a_rect_covering_the_display_is_the_identity() {
+        let none = CaptureSpace::new(&screen(None));
+        let full = CaptureSpace::new(&screen(Some([0.0, 0.0, 1000.0, 500.0])));
+        assert_eq!(none, full);
+        assert!(!none.is_sub_area());
+        assert_eq!(none.point(250.0, 125.0), [0.25, 0.25]);
+        assert!(none.contains(-5.0, 9999.0), "a display recording has no outside");
+        assert_eq!(none.rect([100.0, 50.0, 500.0, 250.0]), [0.1, 0.1, 0.5, 0.5]);
+        // an invalid rect is ignored rather than dividing by zero
+        assert_eq!(CaptureSpace::new(&screen(Some([0.0, 0.0, 0.0, 10.0]))), none);
     }
 }

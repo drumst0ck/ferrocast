@@ -1,10 +1,11 @@
 //! Auto zoom from the click log, and viewport maths. Everything here is pure:
 //! the same events and options always give the same zooms, bit for bit.
 //!
-//! Coordinates in `Viewport` are normalised to the display (`0..=1`, top-left
-//! origin); `events.json` points are converted with the display size.
+//! Coordinates in `Viewport` are normalised to the recorded video (`0..=1`, top-left
+//! origin): the display, or `screen.capture_rect` for area/window takes. `events.json`
+//! points are converted with `events::CaptureSpace`.
 use super::curves::{clamp, critical_spring, lerp};
-use super::events::Events;
+use super::events::{CaptureSpace, Events};
 pub use super::project::Zoom;
 
 /// Largest zoom scale the project format accepts (`Project::validate`).
@@ -97,9 +98,12 @@ pub fn auto_zooms(events: &Events, opts: &ZoomOpts) -> Vec<Zoom> {
     }
     let scale = clamp(opts.scale, 1.0, MAX_SCALE);
     let px = events.screen.scale.max(f64::MIN_POSITIVE);
-    let norm = |x: f64, y: f64| [clamp(x / dw, 0.0, 1.0), clamp(y / dh, 0.0, 1.0)];
+    // Focus points are normalised to the recorded video (the capture rect for area/window takes).
+    let space = CaptureSpace::new(&events.screen);
+    let norm = |x: f64, y: f64| space.point_clamped(x, y);
 
-    let mut clicks: Vec<_> = events.clicks.iter().filter(|c| c.is_down() && c.t.is_finite()).collect();
+    // A click outside the recorded rectangle is not in the video: nothing to zoom to.
+    let mut clicks: Vec<_> = events.clicks.iter().filter(|c| c.is_down() && c.t.is_finite() && space.contains(c.x, c.y)).collect();
     clicks.sort_by(|a, b| a.t.total_cmp(&b.t));
     let mut cursor: Vec<_> = events.cursor.iter().filter(|c| c.t().is_finite()).collect();
     cursor.sort_by(|a, b| a.t().total_cmp(&b.t()));
@@ -235,7 +239,7 @@ mod tests {
     use super::*;
 
     fn ev() -> Events {
-        Events::new(ScreenInfo { size: [2000, 1000], scale: 2.0, display_frame: [0.0, 0.0, 1000.0, 500.0] })
+        Events::new(ScreenInfo { size: [2000, 1000], scale: 2.0, display_frame: [0.0, 0.0, 1000.0, 500.0], capture_rect: None })
     }
     fn click(t: f64, x: f64, y: f64) -> Click {
         Click { t, x, y, button: "left".into(), down: true, up: false }
@@ -414,5 +418,35 @@ mod tests {
             a,
             r#"[{"id":"z1","start":4.6,"end":7.2,"mode":"auto","scale":2.0,"focus":[0.275,0.51],"ease_in":0.6,"ease_out":0.7},{"id":"z2","start":19.6,"end":21.2,"mode":"auto","scale":2.0,"focus":[0.75,0.25],"ease_in":0.6,"ease_out":0.7}]"#
         );
+    }
+
+    /// The lower-right quarter `[500, 250, 500, 250]` of the 1000 x 500 pt display was recorded.
+    fn area_with_clicks(c: &[(f64, f64, f64)]) -> Events {
+        let mut e = with_clicks(c);
+        e.screen.size = [1000, 500];
+        e.screen.capture_rect = Some([500.0, 250.0, 500.0, 250.0]);
+        e
+    }
+
+    #[test]
+    fn area_zoom_focus_is_in_the_recorded_rect() {
+        // (700, 350) is (0.4, 0.4) of the rect; a display-normalised focus would be (0.7, 0.7)
+        let z = auto_zooms(&area_with_clicks(&[(5.0, 700.0, 350.0)]), &ZoomOpts::default());
+        assert_eq!(z.len(), 1);
+        let f = z[0].focus.unwrap();
+        assert!((f[0] - 0.4).abs() < 1e-12 && (f[1] - 0.4).abs() < 1e-12, "{f:?}");
+    }
+
+    #[test]
+    fn area_clicks_outside_the_rect_make_no_zoom() {
+        assert!(auto_zooms(&area_with_clicks(&[(5.0, 100.0, 100.0)]), &ZoomOpts::default()).is_empty());
+    }
+
+    #[test]
+    fn a_rect_equal_to_the_display_changes_nothing() {
+        let plain = with_clicks(&[(5.0, 300.0, 100.0), (9.0, 800.0, 400.0)]);
+        let mut full = plain.clone();
+        full.screen.capture_rect = Some([0.0, 0.0, 1000.0, 500.0]);
+        assert_eq!(auto_zooms(&plain, &ZoomOpts::default()), auto_zooms(&full, &ZoomOpts::default()));
     }
 }

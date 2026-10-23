@@ -1,14 +1,16 @@
 //! Per-frame composition parameters for the editor preview and export: everything the
 //! Swift renderer needs to draw one frame, evaluated here so Swift only draws.
 //!
-//! All positions are normalised to the recorded display (`0..=1`, top-left origin). The
+//! All positions are normalised to the recorded video (`0..=1`, top-left origin): the
+//! display, or `screen.capture_rect` for Record Area / Window (see [`CaptureSpace`]; a
+//! cursor or click outside that rectangle is hidden, the camera clamps to its edge). The
 //! camera is the viewport rectangle of [`zoom::viewport_at`]; the cursor is the smoothed
 //! path; the click ring is anchored at the RAW click position (the smoothed cursor can
 //! lag a click, see `cursor::smooth`); the blur comes from finite-difference velocities
 //! of the same functions. Pure and deterministic.
 use super::cursor::{self, CursorOpts, Sample};
 use super::curves::clamp;
-use super::events::Events;
+use super::events::{CaptureSpace, Events};
 use super::project::Project;
 use super::zoom::{self, Viewport};
 use serde::{Deserialize, Serialize};
@@ -105,7 +107,9 @@ pub struct Composer<'a> {
     kinds: Vec<(f64, String)>,
     /// Display size in points (the unit of `events.json` coordinates).
     disp: [f64; 2],
-    /// Recorded pixels across the display (blur and ring are authored in these).
+    /// Display points -> normalised position in `screen.mov` (display or capture rect).
+    space: CaptureSpace,
+    /// Recorded pixels across the video (blur and ring are authored in these).
     px: [f64; 2],
 }
 
@@ -125,6 +129,8 @@ impl<'a> Composer<'a> {
         clicks.sort_by(|a, b| a.t.total_cmp(&b.t));
         let [_, _, dw, dh] = events.screen.display_frame;
         let sc = events.screen.scale.max(f64::MIN_POSITIVE);
+        let space = CaptureSpace::new(&events.screen);
+        let [vw, vh] = space.size();
         let px = |pixels: u32, points: f64| if pixels > 0 { pixels as f64 } else { points * sc };
         Self {
             project,
@@ -134,7 +140,8 @@ impl<'a> Composer<'a> {
             clicks,
             kinds,
             disp: [dw, dh],
-            px: [px(events.screen.size[0], dw), px(events.screen.size[1], dh)],
+            space,
+            px: [px(events.screen.size[0], vw), px(events.screen.size[1], vh)],
         }
     }
 
@@ -142,13 +149,9 @@ impl<'a> Composer<'a> {
         self.disp.iter().all(|d| *d > 0.0 && d.is_finite()) && self.px.iter().all(|p| *p > 0.0)
     }
 
-    fn norm(&self, x: f64, y: f64) -> [f64; 2] {
-        [clamp01(x / self.disp[0]), clamp01(y / self.disp[1])]
-    }
-
-    /// Smoothed cursor, normalised.
+    /// Smoothed cursor, normalised to the video and clamped to its edge (camera follow, blur).
     fn smoothed(&self, t: f64) -> Option<[f64; 2]> {
-        cursor::cursor_at(&self.smooth, t).map(|(x, y)| self.norm(x, y))
+        cursor::cursor_at(&self.smooth, t).map(|(x, y)| self.space.point_clamped(x, y))
     }
 
     /// Active zoom (the latest started wins when they overlap) and the viewport it gives.
@@ -185,15 +188,21 @@ impl<'a> Composer<'a> {
         let kind = self.kind_at(t);
         let opacity = cursor::visible_at(&self.idle, t, &self.opts);
         let hidden = matches!(c.style.as_str(), "none" | "hidden");
-        let cursor_p = match (self.smoothed(t), kind) {
+        // A cursor outside the recorded rectangle is not in the video: hidden, not clamped.
+        let visible = cursor::cursor_at(&self.smooth, t).filter(|&(x, y)| self.space.contains(x, y));
+        let cursor_p = match (visible.and(self.smoothed(t)), kind) {
             (Some([x, y]), Some(kind)) if opacity > 0.0 && !hidden => Some(CursorParams { x, y, kind, size: c.size, opacity }),
             _ => None,
         };
 
-        let ring = (c.click_effect == "ring").then(|| cursor::click_ring(t, &self.clicks, &self.opts)).flatten().map(|r| {
-            let [x, y] = self.norm(r.x, r.y);
-            RingParams { x, y, radius: r.radius / self.px[0], alpha: r.alpha }
-        });
+        let ring = (c.click_effect == "ring")
+            .then(|| cursor::click_ring(t, &self.clicks, &self.opts))
+            .flatten()
+            .filter(|r| self.space.contains(r.x, r.y))
+            .map(|r| {
+                let [x, y] = self.space.point_clamped(r.x, r.y);
+                RingParams { x, y, radius: r.radius / self.px[0], alpha: r.alpha }
+            });
 
         let amount = clamp01(c.motion_blur);
         let blur = (amount > 0.0).then(|| {
@@ -229,7 +238,7 @@ mod tests {
 
     /// 1000 x 500 pt display at 2x (2000 x 1000 px).
     fn events() -> Events {
-        Events::new(ScreenInfo { size: [2000, 1000], scale: 2.0, display_frame: [0.0, 0.0, 1000.0, 500.0] })
+        Events::new(ScreenInfo { size: [2000, 1000], scale: 2.0, display_frame: [0.0, 0.0, 1000.0, 500.0], capture_rect: None })
     }
 
     fn project() -> Project {
@@ -437,5 +446,101 @@ mod tests {
             (f.cursor.map(|c| c.kind), f.blur.map(|b| b.samples))
         );
         assert!(back.camera.is_some());
+    }
+
+    /// Same 1000 x 500 pt display, but only its lower-right quarter `[500, 250, 500, 250]`
+    /// was recorded: `screen.mov` is 1000 x 500 px (2x of 500 x 250 pt).
+    fn area() -> Events {
+        Events::new(ScreenInfo {
+            size: [1000, 500],
+            scale: 2.0,
+            display_frame: [0.0, 0.0, 1000.0, 500.0],
+            capture_rect: Some([500.0, 250.0, 500.0, 250.0]),
+        })
+    }
+
+    fn approx(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+        use serde_json::Value::*;
+        match (a, b) {
+            (Number(x), Number(y)) => (x.as_f64().unwrap() - y.as_f64().unwrap()).abs() < 1e-9,
+            (Array(x), Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(a, b)| approx(a, b)),
+            (Object(x), Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| approx(v, w))),
+            _ => a == b,
+        }
+    }
+
+    #[test]
+    fn an_area_recording_maps_the_cursor_into_the_rect() {
+        let mut e = area();
+        e.cursor = path(1.0, |_| (750.0, 375.0)); // the middle of the rect
+        let c = frame_params(&project(), &e, 0.5).cursor.expect("inside the rect");
+        assert!((c.x - 0.5).abs() < 1e-9 && (c.y - 0.5).abs() < 1e-9, "{c:?}");
+        e.cursor = path(1.0, |_| (625.0, 312.5)); // a quarter in
+        let c = frame_params(&project(), &e, 0.5).cursor.unwrap();
+        assert!((c.x - 0.25).abs() < 1e-9 && (c.y - 0.25).abs() < 1e-9, "{c:?}");
+    }
+
+    #[test]
+    fn an_area_recording_maps_ring_and_camera_and_keeps_the_blur_in_video_pixels() {
+        let mut p = project();
+        p.zooms = vec![zoom(0.0, 3.0, 2.0, Some([0.5, 0.5]))];
+        let mut e = area();
+        e.cursor = path(3.0, |_| (750.0, 375.0));
+        e.clicks = vec![click(1.0, 625.0, 312.5)];
+        let f = frame_params(&p, &e, 1.2);
+        let r = f.ring.expect("ring");
+        assert!((r.x - 0.25).abs() < 1e-9 && (r.y - 0.25).abs() < 1e-9, "{r:?}");
+        assert!(r.radius < 36.0 / 1000.0 + 1e-9, "fraction of the VIDEO width (1000 px): {r:?}");
+        // the cursor sits at the rect centre, i.e. the zoom focus: the camera does not drift
+        let c = f.camera.expect("zoomed");
+        assert!((c.x - 0.25).abs() < 1e-3 && (c.y - 0.25).abs() < 1e-3 && (c.w - 0.5).abs() < 1e-3, "{c:?}");
+        // blur velocity: 400 pt/s right = 800 px/s of the 1000 px wide video, same as the equivalent display take
+        let mut a = area();
+        a.cursor = vec![at(0.0, 600.0, 300.0), at(1.0, 600.0, 300.0), at(1.2, 680.0, 300.0), at(3.0, 680.0, 300.0)];
+        let mut d = events();
+        d.screen.size = [1000, 500]; // a 500 x 250 pt display, so the rect-relative motion is identical
+        d.screen.display_frame = [0.0, 0.0, 500.0, 250.0];
+        d.cursor = vec![at(0.0, 100.0, 50.0), at(1.0, 100.0, 50.0), at(1.2, 180.0, 50.0), at(3.0, 180.0, 50.0)];
+        d.clicks = vec![];
+        for t in [0.5, 1.05, 1.1, 1.15, 2.0] {
+            // the smoothing runs on absolute points, so the last bit may differ: compare within 1e-9
+            let (x, y) = (
+                serde_json::to_value(frame_params(&project(), &a, t)).unwrap(),
+                serde_json::to_value(frame_params(&project(), &d, t)).unwrap(),
+            );
+            assert!(approx(&x, &y), "t={t}: {x} vs {y}");
+        }
+        assert!(frame_params(&project(), &a, 1.1).blur.is_some());
+    }
+
+    #[test]
+    fn outside_the_rect_the_cursor_and_ring_are_hidden_and_the_camera_clamps() {
+        let mut p = project();
+        p.zooms = vec![zoom(0.0, 5.0, 2.0, None)];
+        let mut e = area();
+        // 0..1 s inside, then the pointer leaves to the upper left (outside the rect), clicks there
+        e.cursor = vec![at(0.0, 900.0, 400.0), at(1.0, 900.0, 400.0), at(1.1, 100.0, 100.0), at(4.0, 100.0, 100.0)];
+        e.clicks = vec![click(2.0, 100.0, 100.0)];
+        assert!(frame_params(&p, &e, 0.5).cursor.is_some());
+        let out = frame_params(&p, &e, 2.1);
+        assert_eq!(out.cursor, None, "a cursor outside the recorded area is not drawn");
+        assert_eq!(out.ring, None, "nor is a click ring outside it");
+        let c = out.camera.expect("the zoom goes on");
+        assert!(c.x >= 0.0 && c.y >= 0.0 && c.x + c.w <= 1.0 + 1e-12 && c.y + c.h <= 1.0 + 1e-12, "{c:?}");
+        assert!(c.x < 0.01 && c.y < 0.01, "following a cursor clamped to the top-left edge: {c:?}");
+    }
+
+    #[test]
+    fn a_rect_equal_to_the_display_is_the_identity() {
+        let mut p = project();
+        p.zooms = vec![zoom(1.0, 3.0, 2.0, None)];
+        let mut e = events();
+        e.cursor = path(4.0, |t| (100.0 + t * 150.0, 200.0 + 30.0 * (t * 3.0).sin()));
+        e.clicks = vec![click(1.5, 300.0, 250.0)];
+        let mut w = e.clone();
+        w.screen.capture_rect = Some([0.0, 0.0, 1000.0, 500.0]);
+        for t in [0.0, 0.7, 1.55, 2.0, 3.2, 9.0] {
+            assert_eq!(frame_params(&p, &e, t), frame_params(&p, &w, t), "t={t}");
+        }
     }
 }
