@@ -3507,6 +3507,7 @@ impl App {
                                             | Builtin::CaptureArea
                                             | Builtin::CaptureWindow
                                             | Builtin::CaptureScreen
+                                            | Builtin::CaptureScrolling
                                     )
                                 );
                                 let needs_ui =
@@ -3521,6 +3522,12 @@ impl App {
                     }
                 }
                 Msg::Capture(outcome) => self.finish_capture(outcome),
+                Msg::CaptureScroll(outcome, note) => {
+                    self.finish_capture(outcome);
+                    if let Some(n) = note {
+                        self.capture_say(n);
+                    }
+                }
                 Msg::OcrDone(text, toast) => {
                     if let Some(t) = text {
                         clipboard::write_text(&t);
@@ -5226,6 +5233,37 @@ impl App {
         std::thread::spawn(move || bus.send(Msg::Capture(shoot(&exe, target, &dir, cursor, log))));
     }
 
+    /// Capture Scrolling (S10): pick an area, then scroll it and stitch the strips off-thread.
+    fn run_capture_scrolling(&mut self) {
+        use crate::capture_ctl::{choose_scroll_area, scroll_capture, scroll_error_message, Outcome};
+        if !self.capture_gate() {
+            return;
+        }
+        // posting scroll events needs Accessibility: ask now, before the user draws anything
+        if let Err(e) = ferrocast_macos::scroll::ensure_trusted(true) {
+            self.capture_say(scroll_error_message(e));
+            return;
+        }
+        self.hide();
+        let exe = self.capture.exe.clone();
+        let root = self.store.root.clone();
+        let log = move |m: &str| instance::log(&root, m);
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let area = match choose_scroll_area(&exe, mtm, log.clone()) {
+            Ok(a) => a,
+            Err(Outcome::Cancelled) => return,
+            Err(o) => return self.finish_capture(o),
+        };
+        let dir = self.settings.capture.screenshots_dir(&dirs::home_dir().unwrap_or_default());
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            let (outcome, note) = scroll_capture(&exe, &area, &dir, log);
+            bus.send(Msg::CaptureScroll(outcome, note));
+        });
+    }
+
     /// Runs one button of the Capture window on the saved file.
     pub(crate) fn capture_result_run(&mut self, b: crate::capture_ctl::ResultButton) {
         use crate::capture_ctl::{button_enabled, ResultButton};
@@ -5414,6 +5452,7 @@ impl App {
             Builtin::CaptureArea => self.run_capture(crate::capture_ctl::CaptureKind::Area),
             Builtin::CaptureWindow => self.run_capture(crate::capture_ctl::CaptureKind::Window),
             Builtin::CaptureScreen => self.run_capture(crate::capture_ctl::CaptureKind::Screen),
+            Builtin::CaptureScrolling => self.run_capture_scrolling(),
         }
     }
 

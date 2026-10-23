@@ -11026,9 +11026,14 @@ fn capture_commands_are_listed_only_when_capture_is_available() {
     use crate::capture_ctl::{Availability, CaptureState};
     let mut app = fixture();
     app.rebuild();
-    assert_eq!(capture_ids(&app), ["builtin:capture-area", "builtin:capture-window", "builtin:capture-screen"]);
+    assert_eq!(
+        capture_ids(&app),
+        ["builtin:capture-area", "builtin:capture-window", "builtin:capture-screen", "builtin:capture-scrolling"]
+    );
     let item = app.base.iter().find(|i| i.id == "builtin:capture-area").unwrap();
     assert_eq!((item.title.as_str(), item.subtitle.as_str(), item.is_command()), ("Capture Area", "Capture", true));
+    let item = app.base.iter().find(|i| i.id == "builtin:capture-scrolling").unwrap();
+    assert_eq!((item.title.as_str(), item.subtitle.as_str(), item.is_command()), ("Capture Scrolling", "Capture", true));
     for availability in [Availability::NeedsMacOs14(13), Availability::NoHelper] {
         app.capture = CaptureState::with(std::path::PathBuf::new(), availability);
         app.rebuild();

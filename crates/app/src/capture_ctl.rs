@@ -7,6 +7,7 @@ use chrono::NaiveDateTime;
 use ferrocast_core::capture::protocol::{Display as HelperDisplay, Shareable, Target, Window as HelperWindow};
 use ferrocast_core::capture::region::{capture_file_name, Point, Rect, Window};
 use ferrocast_core::capture::settings::AfterCapture;
+use ferrocast_core::capture::stitch::{StopReason, Strip, MAX_STEPS};
 use ferrocast_macos::selector::Selection;
 use std::path::{Path, PathBuf};
 
@@ -22,10 +23,11 @@ pub enum CaptureKind {
     Area,
     Window,
     Screen,
+    Scrolling,
 }
 
 impl CaptureKind {
-    pub const ALL: [CaptureKind; 3] = [CaptureKind::Area, CaptureKind::Window, CaptureKind::Screen];
+    pub const ALL: [CaptureKind; 4] = [CaptureKind::Area, CaptureKind::Window, CaptureKind::Screen, CaptureKind::Scrolling];
 
     /// The command id of the matching launcher builtin.
     pub fn command_id(self) -> &'static str {
@@ -33,6 +35,7 @@ impl CaptureKind {
             CaptureKind::Area => "builtin:capture-area",
             CaptureKind::Window => "builtin:capture-window",
             CaptureKind::Screen => "builtin:capture-screen",
+            CaptureKind::Scrolling => "builtin:capture-scrolling",
         }
     }
 
@@ -234,7 +237,7 @@ pub fn choose_target(
     drop(helper);
     let selection = match kind {
         CaptureKind::Screen => None,
-        CaptureKind::Area | CaptureKind::Window => {
+        CaptureKind::Area | CaptureKind::Window | CaptureKind::Scrolling => {
             select_mode(kind).map(|mode| ferrocast_macos::selector::select_with(mtm, selector_windows(&shareable.windows), mode))
         }
     };
@@ -248,7 +251,7 @@ pub fn choose_target(
 pub fn select_mode(kind: CaptureKind) -> Option<ferrocast_macos::selector::Mode> {
     use ferrocast_macos::selector::Mode;
     match kind {
-        CaptureKind::Area => Some(Mode::Area),
+        CaptureKind::Area | CaptureKind::Scrolling => Some(Mode::Area),
         CaptureKind::Window => Some(Mode::Window),
         CaptureKind::Screen => None,
     }
@@ -296,6 +299,182 @@ pub fn shoot(exe: &Path, target: Target, dir: &Path, cursor: bool, log: impl Fn(
         Ok(_) => Outcome::Saved(path),
         Err(ScreenshotError::PermissionDenied) => Outcome::PermissionDenied,
         Err(e) => Outcome::Failed(e.to_string()),
+    }
+}
+
+// ---- Capture Scrolling (S10): pure decisions around the driver ----
+
+/// Pause after each scroll so the content (and any smooth scrolling) settles before the next strip.
+pub const SCROLL_SETTLE_MS: u64 = 450;
+
+/// Wheel pixels to post for an area `height` points tall (negative: reveal what is below).
+pub fn scroll_delta(height: f64) -> i32 {
+    let px = (height * 0.8).round().clamp(1.0, 2000.0);
+    -(px as i32)
+}
+
+/// Strips the driver may take: one more than [`MAX_STEPS`], so the stitcher can see that the cap was hit.
+pub fn strip_budget() -> usize {
+    MAX_STEPS + 1
+}
+
+/// What the driver does after a strip was captured.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Step {
+    Continue,
+    Finish,
+    Cancel,
+}
+
+/// `captured` strips so far (the newest included); `identical` when the newest equals the one before.
+pub fn next_step(captured: usize, identical: bool, cancelled: bool) -> Step {
+    if cancelled {
+        Step::Cancel
+    } else if identical || captured >= strip_budget() {
+        Step::Finish
+    } else {
+        Step::Continue
+    }
+}
+
+/// Toast for how the stitcher stopped (`None`: nothing to say).
+pub fn scroll_toast(stop: StopReason, used: usize) -> Option<String> {
+    match stop {
+        StopReason::StoppedAtCap => Some(format!("Scrolling capture stopped at {MAX_STEPS} screens")),
+        StopReason::LowConfidence { at } => Some(format!(
+            "Scrolling capture lost track at screen {}; saved the {used} screen{} captured before it",
+            at + 1,
+            if used == 1 { "" } else { "s" }
+        )),
+        StopReason::EndOfScroll | StopReason::Exhausted => None,
+    }
+}
+
+/// The area a scrolling capture works on.
+#[derive(Debug, PartialEq)]
+pub struct ScrollArea {
+    pub target: Target,
+    /// Centre in global top-left points: where the scroll events are posted.
+    pub centre: (f64, f64),
+    /// Height in points.
+    pub height: f64,
+}
+
+pub fn scroll_area(selection: Option<Selection>, shareable: &Shareable) -> Option<ScrollArea> {
+    let Some(Selection::Area(r)) = selection else { return None };
+    let pointer = Point { x: 0.0, y: 0.0 };
+    match capture_plan(CaptureKind::Area, selection, pointer, shareable) {
+        Plan::Shoot(target) => Some(ScrollArea { target, centre: (r.x + r.w / 2.0, r.y + r.h / 2.0), height: r.h }),
+        Plan::Nothing => None,
+    }
+}
+
+/// Sentence for a failed scroll.
+pub fn scroll_error_message(e: ferrocast_macos::scroll::ScrollError) -> String {
+    use ferrocast_macos::scroll::ScrollError;
+    match e {
+        ScrollError::NotTrusted => "Scrolling capture needs Accessibility. Turn Ferrocast on in System Settings → Privacy & Security → Accessibility, then try again.".into(),
+        ScrollError::EventFailed => "Scrolling capture could not scroll the page".into(),
+    }
+}
+
+/// Main thread: ask the helper what exists and let the user draw the area to scroll (Esc: cancel).
+pub fn choose_scroll_area(exe: &Path, mtm: objc2::MainThreadMarker, log: impl Fn(&str) + Send + 'static) -> Result<ScrollArea, Outcome> {
+    use ferrocast_core::capture::protocol::{parse_body, Command};
+    use ferrocast_macos::capture::{helper_path, timeout_for, Helper, ScreenshotError};
+    let mut helper = Helper::spawn(&helper_path(exe), log).map_err(|e| Outcome::Failed(e.to_string()))?;
+    let body = helper.call(Command::Shareable, timeout_for(&Command::Shareable)).map_err(|e| match ScreenshotError::from(e) {
+        ScreenshotError::PermissionDenied => Outcome::PermissionDenied,
+        other => Outcome::Failed(other.to_string()),
+    })?;
+    let shareable: Shareable = parse_body(&body).map_err(Outcome::Failed)?;
+    drop(helper);
+    let selection =
+        ferrocast_macos::selector::select_with(mtm, selector_windows(&shareable.windows), ferrocast_macos::selector::Mode::Area);
+    scroll_area(Some(selection), &shareable).ok_or(Outcome::Cancelled)
+}
+
+/// Sleeps `ms`, returning true when Esc was pressed meanwhile.
+fn sleep_unless_escape(ms: u64) -> bool {
+    let end = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+    while std::time::Instant::now() < end {
+        if ferrocast_macos::scroll::escape_pressed() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    false
+}
+
+/// One strip of `target` as RGBA (through a temporary PNG that is always removed).
+fn capture_strip(exe: &Path, target: &Target, n: usize, log: &(impl Fn(&str) + Clone + Send + 'static)) -> Result<Strip, Outcome> {
+    use ferrocast_macos::capture::{screenshot, ScreenshotError};
+    let tmp = std::env::temp_dir().join(format!("ferrocast-scroll-{}-{n}.png", std::process::id()));
+    let shot = screenshot(exe, log.clone(), target.clone(), &tmp, false);
+    let decoded = match shot {
+        Ok(_) => image::open(&tmp).map_err(|e| Outcome::Failed(e.to_string())).and_then(|img| {
+            let rgba = img.to_rgba8();
+            let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+            Strip::new(w, h, rgba.into_raw()).map_err(|e| Outcome::Failed(e.to_string()))
+        }),
+        Err(ScreenshotError::PermissionDenied) => Err(Outcome::PermissionDenied),
+        Err(e) => Err(Outcome::Failed(e.to_string())),
+    };
+    let _ = std::fs::remove_file(&tmp);
+    decoded
+}
+
+/// Background thread: scroll `area` step by step, capture a strip per step, stitch and save into
+/// `dir`. Returns the outcome and an optional toast (cap, lost track). Esc cancels with no file.
+pub fn scroll_capture(exe: &Path, area: &ScrollArea, dir: &Path, log: impl Fn(&str) + Clone + Send + 'static) -> (Outcome, Option<String>) {
+    use ferrocast_core::capture::stitch::stitch;
+    let fail = |m: String| (Outcome::Failed(m), None);
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        return fail(format!("cannot create {}: {e}", dir.display()));
+    }
+    // let the selection overlay and the launcher finish disappearing
+    if sleep_unless_escape(250) {
+        return (Outcome::Cancelled, None);
+    }
+    let delta = scroll_delta(area.height);
+    let mut strips: Vec<Strip> = Vec::new();
+    loop {
+        let strip = match capture_strip(exe, &area.target, strips.len(), &log) {
+            Ok(s) => s,
+            Err(o) => return (o, None),
+        };
+        let identical = strips.last() == Some(&strip);
+        strips.push(strip);
+        match next_step(strips.len(), identical, ferrocast_macos::scroll::escape_pressed()) {
+            Step::Cancel => return (Outcome::Cancelled, None),
+            Step::Finish => break,
+            Step::Continue => {}
+        }
+        if let Err(e) = ferrocast_macos::scroll::post_scroll(area.centre.0, area.centre.1, delta) {
+            return fail(scroll_error_message(e));
+        }
+        if sleep_unless_escape(SCROLL_SETTLE_MS) {
+            return (Outcome::Cancelled, None);
+        }
+    }
+    let stitched = match stitch(&strips) {
+        Ok(s) => s,
+        Err(e) => return fail(e.to_string()),
+    };
+    let toast = scroll_toast(stitched.stop, stitched.used);
+    let path = save_path(dir, chrono::Local::now().naive_local());
+    let partial = path.with_extension("png.partial");
+    let img = &stitched.image;
+    let saved = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.rgba.clone())
+        .ok_or_else(|| "stitched image has a bad size".to_string())
+        .and_then(|buf| buf.save_with_format(&partial, image::ImageFormat::Png).map_err(|e| e.to_string()))
+        .and_then(|_| std::fs::rename(&partial, &path).map_err(|e| e.to_string()));
+    match saved {
+        Ok(()) => (Outcome::Saved(path), toast),
+        Err(e) => {
+            let _ = std::fs::remove_file(&partial);
+            fail(e)
+        }
     }
 }
 
@@ -537,5 +716,68 @@ mod tests {
         assert_eq!(pin_args((800, 600), Some(0.0)), Some(((800, 600), 2.0)));
         assert_eq!(pin_args((800, 600), Some(f64::NAN)), Some(((800, 600), 2.0)));
         assert_eq!(pin_args((0, 600), Some(2.0)), None);
+    }
+
+    #[test]
+    fn scroll_delta_is_most_of_the_area_height_downwards() {
+        assert_eq!(scroll_delta(500.0), -400);
+        assert_eq!(scroll_delta(1000.0), -800);
+        assert_eq!(scroll_delta(1.0), -1, "never zero");
+        assert_eq!(scroll_delta(0.0), -1);
+        assert_eq!(scroll_delta(100000.0), -2000, "clamped");
+        assert!(scroll_delta(480.0) < 0 && (-scroll_delta(480.0)) < 480, "leaves overlap to stitch");
+    }
+
+    #[test]
+    fn strip_budget_is_one_over_the_cap() {
+        assert_eq!(strip_budget(), MAX_STEPS + 1);
+        assert_eq!(MAX_STEPS, 60);
+    }
+
+    #[test]
+    fn next_step_follows_stop_rules() {
+        assert_eq!(next_step(1, false, false), Step::Continue);
+        assert_eq!(next_step(5, true, false), Step::Finish, "two identical strips: end of scroll");
+        assert_eq!(next_step(MAX_STEPS, false, false), Step::Continue);
+        assert_eq!(next_step(MAX_STEPS + 1, false, false), Step::Finish, "cap reached");
+        assert_eq!(next_step(3, false, true), Step::Cancel);
+        assert_eq!(next_step(3, true, true), Step::Cancel, "cancel wins");
+    }
+
+    #[test]
+    fn scroll_toasts_are_exact_and_silent_when_fine() {
+        assert_eq!(scroll_toast(StopReason::StoppedAtCap, 60).as_deref(), Some("Scrolling capture stopped at 60 screens"));
+        assert_eq!(scroll_toast(StopReason::EndOfScroll, 4), None);
+        assert_eq!(scroll_toast(StopReason::Exhausted, 4), None);
+        let low = scroll_toast(StopReason::LowConfidence { at: 6 }, 6).expect("a clear toast");
+        assert!(low.contains("screen 7") && low.contains("saved"), "{low}");
+    }
+
+    #[test]
+    fn scroll_area_is_display_local_target_with_global_centre() {
+        let sel = Selection::Area(Rect::new(1100.0, -100.0, 300.0, 200.0));
+        let a = scroll_area(Some(sel), &two()).expect("area");
+        assert_eq!(a.target, Target::Rect { display: 2, rect: [100.0, 100.0, 300.0, 200.0] });
+        assert_eq!(a.centre, (1250.0, 0.0));
+        assert_eq!(a.height, 200.0);
+        assert_eq!(scroll_area(Some(Selection::Cancelled), &two()), None);
+        assert_eq!(scroll_area(Some(Selection::Window(3)), &two()), None, "windows are not scrolled");
+        assert_eq!(scroll_area(None, &two()), None);
+        assert_eq!(scroll_area(Some(Selection::Area(Rect::new(-9000.0, 0.0, 10.0, 10.0))), &two()), None);
+    }
+
+    #[test]
+    fn scroll_errors_say_how_to_fix_accessibility() {
+        use ferrocast_macos::scroll::ScrollError;
+        let m = scroll_error_message(ScrollError::NotTrusted);
+        assert!(m.contains("Accessibility") && m.contains("System Settings"), "{m}");
+        assert!(!scroll_error_message(ScrollError::EventFailed).is_empty());
+    }
+
+    #[test]
+    fn scrolling_is_a_capture_command_with_the_same_gating() {
+        assert_eq!(CaptureKind::Scrolling.command_id(), "builtin:capture-scrolling");
+        assert_eq!(CaptureKind::from_command_id("builtin:capture-scrolling"), Some(CaptureKind::Scrolling));
+        assert_eq!(select_mode(CaptureKind::Scrolling), Some(ferrocast_macos::selector::Mode::Area));
     }
 }

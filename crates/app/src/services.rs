@@ -204,6 +204,8 @@ pub enum Msg {
     Wake,
     /// A screenshot finished (see `capture_ctl`).
     Capture(crate::capture_ctl::Outcome),
+    /// A scrolling capture finished: the outcome and an optional note to toast after it.
+    CaptureScroll(crate::capture_ctl::Outcome, Option<String>),
     /// Copy Text finished: text for the clipboard (None: leave it) and the toast.
     OcrDone(Option<String>, String),
 }
