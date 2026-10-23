@@ -671,7 +671,7 @@ impl View {
             View::Annotate { .. } => vec![SAVE, ("Undo", "⌘Z"), ("Delete", "⌫"), BACK],
             View::CaptureResult { .. } => vec![("Copy", "↵"), ("Save", "⌘S"), ("Annotate", "⌘⇧A"), BACK],
             View::Recordings => vec![("Open", "↵"), ("Show in Finder", "⌘↵"), ("Trash", "⌘⌫"), BACK],
-            View::Editor { .. } => vec![("Play", "space"), ("Frame", "←/→"), ("Undo", "⌘Z"), ("Redo", "⇧⌘Z"), BACK],
+            View::Editor { .. } => vec![("Play", "space"), ("Frame", "←/→"), ("Undo", "⌘Z"), ("Redo", "⇧⌘Z"), ("Export", "⌘E"), BACK],
             View::Reorder { purpose, .. } => {
                 let primary = match purpose {
                     ReorderPurpose::JoinVideos => "Join",
@@ -5534,7 +5534,51 @@ impl App {
                     ed.shown_t = Some(t);
                 }
             }
+            EditorMsg::Export { dir, msg } if dir == ed.dir => {
+                if let crate::editor_export::Outcome::Finished(path) = ed.export.apply(msg) {
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    self.toast(format!("Exported {name}"));
+                    if path.exists() {
+                        let _ = ferrocast_macos::apps::reveal(&path);
+                    }
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// What the Export sheet asked for: start the export (the helper, log and bus belong to the app)
+    /// or open the save dialog on a thread.
+    fn editor_export_do(&mut self, action: crate::editor_export::SheetAction) {
+        use crate::editor_export::{choose_destination, ExportMsg, SheetAction};
+        let exe = self.capture.exe.clone();
+        let root = self.store.root.clone();
+        let bus = self.bus.clone();
+        let Some(ed) = self.editor.as_mut() else { return };
+        match action {
+            SheetAction::None => {}
+            SheetAction::Start => {
+                if !ferrocast_macos::capture::available(&exe) {
+                    ed.export.message = Some("Screen capture is not available in this build.".into());
+                    return;
+                }
+                let dir = ed.dir.clone();
+                let log = move |m: &str| instance::log(&root, m);
+                let notify = Box::new(move |m| bus.send(Msg::Editor(Box::new(m))));
+                if let Err(e) = ed.start_export(ferrocast_macos::capture::helper_path(&exe), log, notify) {
+                    ed.export.message = Some(e);
+                    let _ = dir;
+                }
+            }
+            SheetAction::Choose => {
+                let Some(default) = ed.export.dest.clone() else { return };
+                let dir = ed.dir.clone();
+                std::thread::spawn(move || {
+                    if let Some(p) = choose_destination(&default) {
+                        bus.send(Msg::Editor(Box::new(crate::editor_ctl::EditorMsg::Export { dir, msg: ExportMsg::Dest(p) })));
+                    }
+                });
+            }
         }
     }
 

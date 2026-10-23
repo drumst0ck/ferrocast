@@ -22,6 +22,7 @@ for sig in [SIGTERM, SIGINT] {
     let source = DispatchSource.makeSignalSource(signal: sig, queue: .global())
     source.setEventHandler {
         shutdownRecorder()
+        shutdownExport()
         exit(0)
     }
     source.resume()
@@ -42,7 +43,7 @@ func handle(_ req: [String: Any]) {
     if cmd == "hello" {
         reply(id, ["protocol": protocolVersion, "os": osVersionString(), "version": helperVersion,
                    "sck": sckAvailable(), "metal": MTLCreateSystemDefaultDevice() != nil,
-                   "capabilities": sckAvailable() ? ["shareable", "screenshot", "record", "render.frame"] : []])
+                   "capabilities": sckAvailable() ? ["shareable", "screenshot", "record", "render.frame", "render"] : []])
         return
     }
     guard #available(macOS 14, *) else {
@@ -54,7 +55,10 @@ func handle(_ req: [String: Any]) {
     case "screenshot": handleScreenshot(id, req)
     case "record.start": handleRecordStart(id, req)
     case "record.stop", "record.pause", "record.resume": handleRecordControl(id, cmd)
-    case "render.frame": handleRenderFrame(id, req)
+    case "render.frame":
+        if exportInProgress() { fail(id, "busy", "an export is running") } else { handleRenderFrame(id, req) }
+    case "render": handleRender(id, req)
+    case "cancel": handleCancel(id, req)
     default: fail(id, "invalid", "unknown command: \(cmd)")
     }
 }
@@ -71,3 +75,4 @@ while let line = readLine(strippingNewline: true) {
 
 // stdin closed: the app is gone. Keep a playable recording if one is running.
 shutdownRecorder()
+shutdownExport()

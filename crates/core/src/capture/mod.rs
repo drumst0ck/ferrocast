@@ -15,5 +15,6 @@ pub const MIN_SEGMENT: f64 = crate::videoplan::MIN_CLIP;
 pub mod compose;
 pub mod cursor;
 pub mod curves;
+pub mod export;
 pub mod timeline;
 pub mod zoom;

@@ -11992,7 +11992,7 @@ fn undo_and_redo_buttons_are_disabled_without_history() {
     app.ctx.data_mut(|d| d.remove::<Vec<(String, egui::Id, Rect, bool)>>(Id::new("ctl-hits")));
     render(&mut app, vec![]);
     let flags: Vec<bool> = hits_of(&app).iter().filter(|h| h.0 == "small_btn").map(|h| h.3).collect();
-    assert_eq!(flags, vec![true, false, false], "Play enabled, Undo and Redo disabled: {flags:?}");
+    assert_eq!(flags, vec![true, false, false, true], "Play enabled, Undo and Redo disabled, Export… enabled: {flags:?}");
     // a click on a disabled Undo does nothing
     click_label(&mut app, "Undo");
     assert!(!app.editor.as_ref().unwrap().st.history.can_undo());
@@ -12003,7 +12003,7 @@ fn undo_and_redo_buttons_are_disabled_without_history() {
     app.ctx.data_mut(|d| d.remove::<Vec<(String, egui::Id, Rect, bool)>>(Id::new("ctl-hits")));
     render(&mut app, vec![]);
     let flags: Vec<bool> = hits_of(&app).iter().filter(|h| h.0 == "small_btn").map(|h| h.3).collect();
-    assert_eq!(flags, vec![true, true, false], "Undo enabled after an edit: {flags:?}");
+    assert_eq!(flags, vec![true, true, false, true], "Undo enabled after an edit: {flags:?}");
 }
 
 #[test]
@@ -12171,4 +12171,80 @@ fn a_failed_autosave_shows_its_error_in_the_editor_and_leaves_it_dirty() {
     assert!(screen_has(&mut app, "Could not save project.json"), "the footer carries the error text");
     assert!(app.editor.as_ref().unwrap().st.autosave.pending());
     std::fs::rename(&gone, &dir).unwrap();
+}
+
+// ---- MP4 export sheet (T28)
+
+#[test]
+fn cmd_e_and_the_button_open_the_export_sheet_and_esc_closes_only_the_sheet() {
+    let (mut app, _rx, _dir) = editor_app_in("export-open");
+    render(&mut app, vec![]);
+    assert!(!app.editor.as_ref().unwrap().export.open);
+    assert!(screen_has(&mut app, "Export…"), "the toolbar button");
+    render(&mut app, vec![cmd_key(Key::E)]);
+    render(&mut app, vec![]);
+    let ed = app.editor.as_ref().unwrap();
+    assert!(ed.export.open);
+    let dest = ed.export.dest.clone().expect("a default destination");
+    assert_eq!(dest.file_name().unwrap(), "Demo.mp4", "named after the project, next to it");
+    assert!(screen_has(&mut app, "Export video") && screen_has(&mut app, "H.264") && screen_has(&mut app, "60 fps"));
+    assert!(!screen_has(&mut app, "GIF"), "no GIF control until T29");
+    // Esc closes the sheet and the editor stays
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(!app.editor.as_ref().unwrap().export.open);
+    assert!(matches!(app.view(), View::Editor { .. }), "the editor is still open");
+    // the button opens it too
+    click_label(&mut app, "Export…");
+    render(&mut app, vec![]);
+    assert!(app.editor.as_ref().unwrap().export.open);
+}
+
+#[test]
+fn the_export_sheet_shows_progress_with_eta_and_cancel_stops_it() {
+    use crate::editor_export::{ExportMsg, ExportRun};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let (mut app, _rx, _dir) = editor_app_in("export-progress");
+    render(&mut app, vec![cmd_key(Key::E)]);
+    render(&mut app, vec![]);
+    let cancel = Arc::new(AtomicBool::new(false));
+    app.editor.as_mut().unwrap().export.run = Some(ExportRun { cancel: cancel.clone(), done: 0, total: 0, eta: None, cancelling: false });
+    let dir = app.editor.as_ref().unwrap().dir.clone();
+    app.handle_editor(crate::editor_ctl::EditorMsg::Export { dir, msg: ExportMsg::Progress { done: 42, total: 100, eta: Some(17.2) } });
+    assert!(screen_has(&mut app, "42 % · 18 s left"), "progress and ETA");
+    assert!(screen_has(&mut app, "Cancel"));
+    click_label(&mut app, "Cancel");
+    render(&mut app, vec![]);
+    assert!(cancel.load(Ordering::Relaxed), "Cancel reaches the export thread's flag");
+    assert!(screen_has(&mut app, "Cancelling…"));
+}
+
+#[test]
+fn a_failed_export_keeps_the_sheet_open_with_the_helpers_message_and_success_toasts() {
+    use crate::editor_export::ExportMsg;
+    let (mut app, _rx, dir) = editor_app_in("export-result");
+    render(&mut app, vec![cmd_key(Key::E)]);
+    render(&mut app, vec![]);
+    app.handle_editor(crate::editor_ctl::EditorMsg::Export {
+        dir: dir.clone(),
+        msg: ExportMsg::Failed("The disk is full: No space left".into()),
+    });
+    assert!(app.editor.as_ref().unwrap().export.open);
+    assert!(screen_has(&mut app, "The disk is full: No space left"));
+    // a message for another project is ignored
+    app.handle_editor(crate::editor_ctl::EditorMsg::Export { dir: "/elsewhere".into(), msg: ExportMsg::Failed("other".into()) });
+    assert!(!screen_has(&mut app, "other"));
+    // success: the sheet closes and a toast names the file (Finder reveal is skipped for a path that does not exist)
+    let out = dir.with_file_name("Done.mp4");
+    app.handle_editor(crate::editor_ctl::EditorMsg::Export {
+        dir,
+        msg: ExportMsg::Done(ferrocast_core::capture::protocol::ExportDone {
+            path: out.to_string_lossy().into_owned(),
+            bytes: 1,
+            duration: 1.0,
+            frames: 30,
+        }),
+    });
+    assert!(!app.editor.as_ref().unwrap().export.open);
+    assert!(app.toast.as_ref().is_some_and(|(t, _)| t == "Exported Done.mp4"), "{:?}", app.toast);
 }

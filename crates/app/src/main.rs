@@ -2,6 +2,7 @@ mod app;
 mod capture_ctl;
 mod clipboard_policy;
 mod editor_ctl;
+mod editor_export;
 mod editor_panels;
 mod instance;
 mod items;

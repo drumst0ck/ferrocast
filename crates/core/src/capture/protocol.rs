@@ -1,6 +1,7 @@
 //! NDJSON protocol of the `ferrocast-capture` helper: pure serde types, no I/O.
 
 use super::compose::FrameParams;
+use super::export::{Codec, Format, Quality, Segment};
 use serde::{Deserialize, Serialize};
 pub use serde_json::Value;
 
@@ -67,6 +68,115 @@ pub enum Command {
         #[serde(flatten)]
         params: FrameParams,
     },
+    /// Export the project to a video file (S16). The helper answers with the event `started`
+    /// (or an error), streams `progress` / `heartbeat` events and ends with `ok` (path, bytes,
+    /// duration) or an error (`cancelled` after a `cancel`). Frames are computed by Rust:
+    /// `params_file` is the NDJSON of `export::FrameLine`, one line per output frame.
+    #[serde(rename = "render")]
+    Render {
+        /// Absolute project directory (its `project.json` provides the style).
+        project: String,
+        /// Absolute output path; the helper writes `<out>.partial` and renames on success.
+        out: String,
+        format: Format,
+        codec: Codec,
+        width: u32,
+        height: u32,
+        fps: u32,
+        quality: Quality,
+        /// Number of output frames (= lines of `params_file`).
+        frames: u32,
+        /// Kept source spans and their speed (the audio mix of T33 uses them).
+        segments: Vec<Segment>,
+        /// Absolute path of the per-frame parameters file.
+        params_file: String,
+    },
+    /// Stop the request with id `target`; the export answers `cancelled` and leaves no output.
+    #[serde(rename = "cancel")]
+    Cancel { target: u64 },
+}
+
+/// Payload of the final `ok` of a `render`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportDone {
+    pub path: String,
+    pub bytes: u64,
+    /// Duration of the written video in seconds.
+    pub duration: f64,
+    #[serde(default)]
+    pub frames: u32,
+}
+
+/// What `Helper::export_start` returns once the helper accepted the job.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExportStarted {
+    pub total_frames: u32,
+}
+
+/// Events of a running export. `Done`, `Failed` and `Cancelled` are terminal (built from the final
+/// `ok` / error line by [`export_final`]); the others come from `event` lines ([`parse_export_event`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExportEvent {
+    Started {
+        total_frames: u32,
+    },
+    Progress {
+        done_frames: u32,
+        total_frames: u32,
+        eta: Option<f64>,
+    },
+    /// Sign of life (at least every 30 s while the helper works).
+    Heartbeat,
+    Done(ExportDone),
+    Failed {
+        code: ErrorCode,
+        message: String,
+    },
+    Cancelled,
+}
+
+impl ExportEvent {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Done(_) | Self::Failed { .. } | Self::Cancelled)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "event", rename_all = "lowercase")]
+enum ExportWire {
+    Started {
+        total_frames: u32,
+    },
+    Progress {
+        done_frames: u32,
+        total_frames: u32,
+        #[serde(default)]
+        eta: Option<f64>,
+    },
+    Heartbeat {},
+}
+
+/// Typed view of a `started` / `progress` / `heartbeat` event line; `None` for other events
+/// and for malformed ones.
+pub fn parse_export_event(name: &str, body: &Value) -> Option<ExportEvent> {
+    matches!(name, "started" | "progress" | "heartbeat").then(|| serde_json::from_value::<ExportWire>(body.clone()).ok()).flatten().map(
+        |w| match w {
+            ExportWire::Started { total_frames } => ExportEvent::Started { total_frames },
+            ExportWire::Progress { done_frames, total_frames, eta } => ExportEvent::Progress { done_frames, total_frames, eta },
+            ExportWire::Heartbeat {} => ExportEvent::Heartbeat,
+        },
+    )
+}
+
+/// Terminal event of an export from its final line: `ok` -> `Done`, error `cancelled` ->
+/// `Cancelled`, any other error -> `Failed`. `None` for event lines or an `ok` that is not an export result.
+pub fn export_final(line: &Line) -> Option<ExportEvent> {
+    match line {
+        Line::Ok { body, .. } => parse_body::<ExportDone>(body).ok().map(ExportEvent::Done),
+        Line::Error { code: ErrorCode::Cancelled, .. } => Some(ExportEvent::Cancelled),
+        Line::Error { code, message, .. } => Some(ExportEvent::Failed { code: *code, message: message.clone() }),
+        Line::Event { .. } => None,
+    }
 }
 
 /// Payload of a successful `render.frame`.
@@ -580,6 +690,91 @@ mod tests {
         }
         assert!(v.get("params").is_none());
         assert_eq!(serde_json::from_str::<Request>(&encode_request(&r)).unwrap(), r);
+    }
+
+    fn render_command() -> Command {
+        Command::Render {
+            project: "/Users/me/Demo é.ferrocast".into(),
+            out: "/Users/me/Movies/Demo é.mp4".into(),
+            format: Format::Mp4,
+            codec: Codec::Hevc,
+            width: 3840,
+            height: 2160,
+            fps: 60,
+            quality: Quality::High,
+            frames: 4392,
+            segments: vec![Segment { src_start: 0.0, src_end: 73.2, speed: 1.0 }],
+            params_file: "/Users/me/Demo é.ferrocast/.cache/export-10.ndjson".into(),
+        }
+    }
+
+    #[test]
+    fn render_request_keeps_paths_in_json_and_round_trips() {
+        let r = Request { id: 10, command: render_command() };
+        let s = encode_request(&r);
+        assert_eq!(
+            s,
+            r#"{"id":10,"cmd":"render","project":"/Users/me/Demo é.ferrocast","out":"/Users/me/Movies/Demo é.mp4","format":"mp4","codec":"hevc","width":3840,"height":2160,"fps":60,"quality":"high","frames":4392,"segments":[{"src_start":0.0,"src_end":73.2,"speed":1.0}],"params_file":"/Users/me/Demo é.ferrocast/.cache/export-10.ndjson"}"#
+        );
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+        // the request stays small however long the video is: per-frame data is in the file
+        assert!(s.len() < 600);
+    }
+
+    #[test]
+    fn render_request_rejects_unknown_codec_and_missing_fields() {
+        let ok = encode_request(&Request { id: 1, command: render_command() });
+        assert!(serde_json::from_str::<Request>(&ok.replace("hevc", "vp9")).is_err());
+        assert!(serde_json::from_str::<Request>(&ok.replace("\"mp4\"", "\"gif\"")).is_err());
+        assert!(serde_json::from_str::<Request>(&ok.replace(r#""frames":4392,"#, "")).is_err());
+    }
+
+    #[test]
+    fn cancel_request_names_its_target() {
+        let r = Request { id: 11, command: Command::Cancel { target: 10 } };
+        let s = encode_request(&r);
+        assert_eq!(s, r#"{"id":11,"cmd":"cancel","target":10}"#);
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+    }
+
+    fn event(l: &str) -> Option<ExportEvent> {
+        let Line::Event { name, body, .. } = decode_line(l).unwrap() else { panic!() };
+        parse_export_event(&name, &body)
+    }
+
+    #[test]
+    fn export_events_decode_by_name() {
+        assert_eq!(event(r#"{"event":"started","id":10,"total_frames":4392}"#), Some(ExportEvent::Started { total_frames: 4392 }));
+        assert_eq!(
+            event(r#"{"event":"progress","id":10,"done_frames":100,"total_frames":4392,"eta":18.5,"future":1}"#),
+            Some(ExportEvent::Progress { done_frames: 100, total_frames: 4392, eta: Some(18.5) })
+        );
+        assert_eq!(
+            event(r#"{"event":"progress","id":10,"done_frames":0,"total_frames":10}"#),
+            Some(ExportEvent::Progress { done_frames: 0, total_frames: 10, eta: None })
+        );
+        assert_eq!(event(r#"{"event":"heartbeat","id":10}"#), Some(ExportEvent::Heartbeat));
+        // not export events / malformed
+        assert_eq!(event(r#"{"event":"tick","id":5,"elapsed":1.0,"frames":1,"dropped":0}"#), None);
+        assert_eq!(event(r#"{"event":"progress","id":10,"done_frames":"x","total_frames":1}"#), None);
+        assert_eq!(event(r#"{"event":"started","id":10}"#), None);
+        assert!(!ExportEvent::Heartbeat.is_terminal() && ExportEvent::Cancelled.is_terminal());
+    }
+
+    #[test]
+    fn export_final_maps_ok_cancel_and_errors() {
+        let f = |l: &str| export_final(&decode_line(l).unwrap());
+        assert_eq!(
+            f(r#"{"id":10,"ok":true,"path":"/o.mp4","bytes":88000000,"duration":73.2,"frames":4392}"#),
+            Some(ExportEvent::Done(ExportDone { path: "/o.mp4".into(), bytes: 88_000_000, duration: 73.2, frames: 4392 }))
+        );
+        assert_eq!(f(r#"{"id":10,"error":"cancelled","message":"Export cancelled"}"#), Some(ExportEvent::Cancelled));
+        assert_eq!(
+            f(r#"{"id":10,"error":"disk-full","message":"No space left"}"#),
+            Some(ExportEvent::Failed { code: ErrorCode::DiskFull, message: "No space left".into() })
+        );
+        assert_eq!(f(r#"{"event":"progress","id":10,"done_frames":1,"total_frames":2}"#), None);
+        assert_eq!(f(r#"{"id":10,"ok":true}"#), None, "an ok without the export fields is not a result");
     }
 
     #[test]
