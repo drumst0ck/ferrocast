@@ -11662,7 +11662,7 @@ fn the_camera_tab_draws_its_controls_and_edits_through_the_history() {
         assert!(texts.iter().any(|t| t == want), "Camera tab lacks `{want}`: {texts:?}");
     }
     assert!(texts.iter().any(|t| t.starts_with("camera.mov · 0:10") && t.contains("+0.10 s")), "source info: {texts:?}");
-    assert_eq!(editor_proj(&app).camera.unwrap().shape, CameraShape::Rounded, "the fixture starts rounded");
+    assert_eq!(editor_proj(&app).camera.as_ref().unwrap().shape, CameraShape::Rounded, "the fixture starts rounded");
     click_label(&mut app, "Square");
     click_label(&mut app, "Top left");
     let c = editor_proj(&app).camera.unwrap();
@@ -11671,10 +11671,10 @@ fn the_camera_tab_draws_its_controls_and_edits_through_the_history() {
     let saved = ferrocast_core::capture::project::Project::load(&dir).unwrap().camera.unwrap();
     assert_eq!((saved.shape, saved.corner), (CameraShape::Square, Corner::TopLeft), "autosave wrote the fields");
     render(&mut app, vec![key_mod_event(Key::Z, Modifiers::COMMAND)]);
-    assert_eq!(editor_proj(&app).camera.unwrap().corner, Corner::TopRight, "one undo step per click");
+    assert_eq!(editor_proj(&app).camera.as_ref().unwrap().corner, Corner::TopRight, "one undo step per click");
     // hide
     click_label(&mut app, "Show camera");
-    assert!(!editor_proj(&app).camera.unwrap().visible);
+    assert!(!editor_proj(&app).camera.as_ref().unwrap().visible);
 }
 
 #[test]

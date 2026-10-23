@@ -73,15 +73,19 @@ func renderAspect(_ spec: String, source: CGSize) -> Double {
 }
 
 /// `height` (export only) pins the canvas height; without it the height follows the aspect, as in `render.frame`.
-func renderGeometry(_ style: RenderStyle, source: CGSize, width: Int, height: Int? = nil) -> RenderGeometry {
+///
+/// `area` (P6 split layout, top-left pixels) fits the card into that part of the canvas, with the
+/// same padding, instead of into the whole canvas; without it the geometry is exactly as before.
+func renderGeometry(_ style: RenderStyle, source: CGSize, width: Int, height: Int? = nil, area: CGRect? = nil) -> RenderGeometry {
     let w = Double(width)
     let h = height.map { Double(max(1, $0)) } ?? max(1, (w / renderAspect(style.aspect, source: source)).rounded())
     let ref = w / 1920
     let pad = min(max(style.padding, 0), 0.45) * w
-    let iw = max(1, w - 2 * pad), ih = max(1, h - 2 * pad)
+    let (ox, oy, aw, ah) = area.map { (Double($0.minX), Double($0.minY), Double($0.width), Double($0.height)) } ?? (0, 0, w, h)
+    let iw = max(1, aw - 2 * pad), ih = max(1, ah - 2 * pad)
     let s = min(iw / Double(source.width), ih / Double(source.height))
     let fw = max(1, (Double(source.width) * s).rounded()), fh = max(1, (Double(source.height) * s).rounded())
-    let frame = CGRect(x: ((w - fw) / 2).rounded(), y: ((h - fh) / 2).rounded(), width: fw, height: fh)
+    let frame = CGRect(x: ox + ((aw - fw) / 2).rounded(), y: oy + ((ah - fh) / 2).rounded(), width: fw, height: fh)
     return RenderGeometry(
         canvas: CGSize(width: w, height: h), frame: frame,
         radius: CGFloat(min(max(style.radius, 0) * ref, min(fw, fh) / 2)),
@@ -245,6 +249,11 @@ struct FrameFx {
     var cursor: Cursor?
     var ring: Ring?
     var blur: Blur?
+    /// P6 (Effects.swift): loupe, camera crop, look table and split rectangles, all computed by Rust.
+    var loupe: LoupeFx?
+    var cameraCrop: CGRect?
+    var look: LookFx?
+    var split: SplitFx?
     /// Canonical text of the fields, part of the frame cache key.
     var key = ""
 
@@ -283,8 +292,13 @@ struct FrameFx {
                   let n = num(b["samples"]) else { return nil }
             blur = Blur(samples: Int(min(max(n, 0), 32)), dir: d.map { $0.doubleValue }, length: max(v[0], 0), scene: (b["scene"] as? Bool) ?? false)
         }
+        guard let p6 = P6Fields(request: req) else { return nil }
+        loupe = p6.loupe
+        cameraCrop = p6.cameraCrop
+        look = p6.look
+        split = p6.split
         var parts: [String: Any] = [:]
-        for k in ["camera", "cursor", "ring", "blur"] { if let v = req[k], !(v is NSNull) { parts[k] = v } }
+        for k in ["camera", "cursor", "ring", "blur", "loupe", "camera_crop", "look", "split"] { if let v = req[k], !(v is NSNull) { parts[k] = v } }
         if !parts.isEmpty, let d = try? JSONSerialization.data(withJSONObject: parts, options: [.sortedKeys]) {
             key = String(decoding: d, as: UTF8.self)
         }
@@ -347,7 +361,17 @@ func composeStyledRaw(take: TakeFrame, style: RenderStyle, project: String, widt
 /// CoreImage graph over `canvas` (top-left pixels, y-up CI space). Callers rasterise it.
 func composeStyledImage(take: TakeFrame, style: RenderStyle, project: String, width: Int, height: Int? = nil, fx: FrameFx = .none,
                        camera: CameraDraw? = nil) -> (CIImage, CGRect)? {
-    let geo = renderGeometry(style, source: CGSize(width: take.width, height: take.height), width: width, height: height)
+    // P6 split: the card lives in the screen part of the canvas (rects from `camera::split_rects`, scaled
+    // when this canvas differs from the one Rust planned for)
+    var splitRects: (screen: CGRect, camera: CGRect)?
+    if let sp = fx.split, let cam = camera, cam.spec.isSplit {
+        let probe = renderGeometry(style, source: CGSize(width: take.width, height: take.height), width: width, height: height)
+        let sx = probe.canvas.width / sp.canvas.width, sy = probe.canvas.height / sp.canvas.height
+        let m = { (r: CGRect) in CGRect(x: r.minX * sx, y: r.minY * sy, width: r.width * sx, height: r.height * sy) }
+        splitRects = (m(sp.screen), m(sp.camera))
+    }
+    let geo = renderGeometry(style, source: CGSize(width: take.width, height: take.height), width: width, height: height,
+                             area: splitRects?.screen)
     let canvas = CGRect(origin: .zero, size: geo.canvas)
     // CoreImage is y-up; the geometry is top-left.
     let frameCI = CGRect(x: geo.frame.minX, y: geo.canvas.height - geo.frame.maxY, width: geo.frame.width, height: geo.frame.height)
@@ -377,6 +401,8 @@ func composeStyledImage(take: TakeFrame, style: RenderStyle, project: String, wi
     } else {
         picture = scaled(take.image, to: frameCI.size, at: frameCI.origin)
     }
+    var viewport = CGRect(x: 0, y: 0, width: 1, height: 1)
+    var overlayLayers_: [CIImage] = []
     if !fx.isNone {
         let view = fx.camera.map { c -> CGRect in
             let r = cropRect(c, take: CGSize(width: take.width, height: take.height))
@@ -394,8 +420,12 @@ func composeStyledImage(take: TakeFrame, style: RenderStyle, project: String, wi
                 layers.cursor = motionBlurred(c, dir: b.dir, length: len, samples: b.samples, clamped: false)
             }
         }
+        viewport = view
         for layer in [layers.ring, layers.cursor] {
-            if let l = layer { picture = l.transformed(by: place).composited(over: picture) }
+            if let l = layer {
+                picture = l.transformed(by: place).composited(over: picture)
+                overlayLayers_.append(l.transformed(by: place))
+            }
         }
         picture = picture.cropped(to: frameCI)
     }
@@ -421,8 +451,22 @@ func composeStyledImage(take: TakeFrame, style: RenderStyle, project: String, wi
         backdropCache = Backdrop(key: key, mask: mask, backdrop: style.bgKind == "blur" ? nil : result)
     }
     result = rounded.composited(over: result).cropped(to: canvas)
-    // P4 camera overlay: after the card, so it never follows the zoom viewport
-    if let camera { result = compositeCamera(camera, over: result, style: style, geo: geo, canvas: canvas) }
+    // P6 split: the camera part next to the card, nothing over the screen
+    if let rects = splitRects, let camera {
+        result = compositeSplitCamera(camera, over: result, rect: rects.camera, canvas: canvas)
+    } else if let camera {
+        // P4 camera overlay: after the card, so it never follows the zoom viewport
+        result = compositeCamera(camera, over: result, style: style, geo: geo, canvas: canvas)
+    }
+    // P6 loupe (plan order: camera bubble -> loupe -> blur): the glass over everything, magnifying the screen
+    if let l = fx.loupe {
+        let cropPx = fx.camera.map { cropRect($0, take: CGSize(width: take.width, height: take.height)) }
+        let takeW = cropPx?.width ?? CGFloat(take.width)
+        let centre = CGPoint(x: frameCI.minX + CGFloat((l.cx - viewport.minX) / viewport.width) * frameCI.width,
+                             y: frameCI.minY + (1 - CGFloat((l.cy - viewport.minY) / viewport.height)) * frameCI.height)
+        result = compositeLoupe(l, over: result, take: take, centre: centre, displayPerTakePx: frameCI.width / takeW,
+                                overlays: overlayLayers_, card: frameCI, cardRadius: geo.radius, canvas: canvas)
+    }
     return (result, canvas)
 }
 
@@ -697,7 +741,7 @@ func handleRenderFrame(_ id: Any?, _ req: [String: Any]) {
         if isRaw {
             let (take, served) = try takeFrameAuto(at: url, t: t, mode: (req["decode"] as? String) == "generator" ? .generator : .auto)
             decode = served
-            let cam = cameraSpec.flatMap { cameraDraw($0, at: t, sequential: (req["decode"] as? String) != "generator") }
+            let cam = cameraSpec.flatMap { cameraDraw($0, at: t, sequential: (req["decode"] as? String) != "generator", fx: fx) }
             guard let dims = composeStyledRaw(take: take, style: style, project: project, width: width, fx: fx, camera: cam, into: &rawBuffer) else {
                 fail(id, "internal", "could not compose the frame")
                 return
@@ -707,7 +751,7 @@ func handleRenderFrame(_ id: Any?, _ req: [String: Any]) {
             guard writeInPlace(data, to: out) else { fail(id, "internal", "could not write \(out)"); return }
         } else {
             let take = TakeFrame(cg: try takeFrame(at: url, t: t))
-            let cam = cameraSpec.flatMap { cameraDraw($0, at: t, sequential: false) }
+            let cam = cameraSpec.flatMap { cameraDraw($0, at: t, sequential: false, fx: fx) }
             guard let image = composeStyledFrame(take: take, style: style, project: project, width: width, fx: fx, camera: cam),
                   let png = encodePNG(image) else {
                 fail(id, "internal", "could not compose the frame")

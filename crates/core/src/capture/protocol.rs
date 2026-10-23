@@ -9,8 +9,11 @@ pub use serde_json::Value;
 pub const PROTOCOL: u32 = 1;
 
 /// A command, tagged by `cmd` on the wire.
+// `RenderFrame` carries the flattened per-frame parameters (P6 made them ~250 bytes); commands are built
+// once per request, so the size difference between variants costs nothing worth a `Box` at every call site.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd")]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     #[serde(rename = "hello")]
     Hello,
@@ -133,6 +136,28 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         locale: Option<String>,
     },
+    /// Detect the presenter's face in a project's camera file ON-DEVICE (P6). The helper reads
+    /// `sources.camera.file` from `<project>/project.json`, samples it at `fps` (default 10, 1..=30),
+    /// emits `progress` / `heartbeat` events (same shape as `transcribe`, see [`parse_transcribe_event`])
+    /// and ends with `ok` ([`AnalyzeFaceDone`]) after writing `<project>/camera_track.json`.
+    #[serde(rename = "analyze.face")]
+    AnalyzeFace {
+        project: String,
+        /// Sampling rate in frames per second; absent = the helper's default (10).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fps: Option<f64>,
+    },
+}
+
+/// Payload of the final `ok` of an `analyze.face`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalyzeFaceDone {
+    /// Sampled frames in which a face was found (the samples written).
+    pub faces: u32,
+    /// Sampled frames in total.
+    pub frames: u32,
+    /// Absolute path of the written `camera_track.json`.
+    pub path: String,
 }
 
 /// Payload of the final `ok` of a `render`.
@@ -951,6 +976,27 @@ mod tests {
         assert_eq!(serde_json::from_str::<Request>(&encode_request(&r)).unwrap(), r);
     }
 
+    #[test]
+    fn render_frame_carries_the_p6_fields_flat_and_omits_them_when_absent() {
+        let line = r#"{"id":9,"cmd":"render.frame","project":"/p","t":1.5,"width":960,"loupe":{"cx":0.5,"cy":0.4,"radius":0.15,"scale":2.5,"alpha":1.0},"camera_crop":{"x":10.0,"y":20.0,"w":300.0,"h":300.0},"look":{"file":"/p/.cache/look-ab.f32","size":17,"hash":"ab"},"split":{"canvas":[960,540],"screen":{"x":0.0,"y":64.0,"w":636.0,"h":412.0},"camera":{"x":644.0,"y":0.0,"w":316.0,"h":540.0}}}"#;
+        let r: Request = serde_json::from_str(line).unwrap();
+        let Command::RenderFrame { params, .. } = &r.command else { panic!() };
+        assert_eq!(params.loupe.map(|l| (l.scale, l.alpha)), Some((2.5, 1.0)));
+        assert_eq!(params.camera_crop.map(|c| c.w), Some(300.0));
+        assert_eq!(params.look.as_ref().map(|l| l.size), Some(17));
+        assert_eq!(params.split.map(|s| s.camera.w), Some(316.0));
+        assert!(params.camera.is_none() && !params.is_noop());
+        let v: serde_json::Value = serde_json::from_str(&encode_request(&r)).unwrap();
+        for k in ["loupe", "camera_crop", "look", "split"] {
+            assert!(v.get(k).is_some(), "{k} missing");
+        }
+        assert_eq!(serde_json::from_str::<Request>(&encode_request(&r)).unwrap(), r);
+        // a request without them encodes to the old line: no P6 key leaks in (S19)
+        let plain: Request = serde_json::from_str(r#"{"id":9,"cmd":"render.frame","project":"/p","t":1.5,"width":960}"#).unwrap();
+        let text = encode_request(&plain);
+        assert!(!["loupe", "camera_crop", "look", "split"].iter().any(|k| text.contains(k)), "{text}");
+    }
+
     fn render_command() -> Command {
         Command::Render {
             project: "/Users/me/Demo é.ferrocast".into(),
@@ -1234,6 +1280,25 @@ mod tests {
         assert_eq!(
             parse_body::<TranscribeDone>(&body).unwrap(),
             TranscribeDone { language: "en-US".into(), words: 42, path: "/p/transcript.json".into() }
+        );
+    }
+
+    #[test]
+    fn analyze_face_request_omits_absent_fps_and_result_decodes() {
+        let r = Request { id: 14, command: Command::AnalyzeFace { project: "/p/Demo.ferrocast".into(), fps: Some(10.0) } };
+        let s = encode_request(&r);
+        assert_eq!(s, r#"{"id":14,"cmd":"analyze.face","project":"/p/Demo.ferrocast","fps":10.0}"#);
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+        let bare: Request = serde_json::from_str(r#"{"id":1,"cmd":"analyze.face","project":"/p"}"#).unwrap();
+        assert_eq!(bare.command, Command::AnalyzeFace { project: "/p".into(), fps: None });
+        assert_eq!(encode_request(&bare), r#"{"id":1,"cmd":"analyze.face","project":"/p"}"#);
+        let Line::Ok { body, .. } = decode_line(r#"{"id":14,"ok":true,"faces":90,"frames":100,"path":"/p/camera_track.json"}"#).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            parse_body::<AnalyzeFaceDone>(&body).unwrap(),
+            AnalyzeFaceDone { faces: 90, frames: 100, path: "/p/camera_track.json".into() }
         );
     }
 

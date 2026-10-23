@@ -6,8 +6,11 @@
 # target/capture-spike/editor-fixture/Take.ferrocast (the generated 3 s screen.mov, the render
 # fixture's project.json with duration 3 and no zooms, and render_events.json) for the editor's
 # live test and frame-rate measurement. Nothing else changes.
+# SMOKE_ONLY=p6render: run only hello + the P6 render block (loupe, split, look, crop, cut-out, S19, export; no mouse, no keyboard).
+# SMOKE_ONLY=analyze: run only hello + the analyze.face block (no mouse, no keyboard); SMOKE_FACE_TAKE overrides the real take.
 # --sound: the P4 system-audio check also plays one short system sound (afplay) and checks the RMS.
 set -uo pipefail
+smoke_self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 cd "$(dirname "$0")/.."
 keep=0
 sound=0
@@ -33,6 +36,516 @@ for l in sys.stdin:
 }
 field() { printf '%s\n' "$out" | head -1 | python3 -c "import sys,json; print(json.loads(sys.stdin.readline()).get('$1',''))"; }
 
+# Run a long job: stdin stays OPEN until the final line of request id $1 arrives (stdin EOF cancels the job).
+# Further arguments are extra request lines sent right after it. All stdout goes to $events, rc to $rc.
+run_job() {
+  local jid=$1 req=$2; shift 2
+  local f fifo
+  f=$(mktemp); fifo=$(mktemp -u); mkfifo "$fifo"
+  { printf '%s\n' "$req"; for l in "$@"; do printf '%s\n' "$l"; done; sleep 120; } > "$fifo" 2>/dev/null &
+  local wpid=$!
+  "$helper" < "$fifo" > "$f" 2>/dev/null &
+  local pid=$! n=0
+  while [ $n -lt 1200 ]; do
+    grep -Eq "\"id\":$jid[,}]" "$f" && grep -E "\"id\":$jid[,}]" "$f" | grep -Eq '"ok":true|"error"' && break
+    sleep 0.1; n=$((n + 1))
+  done
+  kill $pid 2>/dev/null; pkill -P $wpid 2>/dev/null; kill $wpid 2>/dev/null
+  wait $pid $wpid 2>/dev/null
+  events=$(cat "$f"); rm -f "$f" "$fifo"
+  rc=0
+}
+
+# analyze.face (P6): `hello` lists it; a project without a camera, and camera names with a separator or `..`,
+# are refused with a structured error and leave no camera_track.json; the positive test runs on a COPY of the
+# user's real camera take (the original is only read) under target/p6-scratch/ and SKIPs when the take is
+# missing. Vision needs no permission. Nothing here moves the mouse or types, so it is safe in the full run;
+# SMOKE_ONLY=analyze runs only this block (right after `hello`) and exits.
+analyze_smoke() {
+  run '{"id":1,"cmd":"hello"}'
+  if printf '%s\n' "$out" | python3 -c 'import sys,json; sys.exit(0 if "analyze.face" in json.loads(sys.stdin.readline()).get("capabilities", []) else 1)'; then
+    echo "PASS: hello lists analyze.face"
+  elif [ "$sck" != True ]; then
+    echo "SKIP: analyze.face capability (macOS older than 14)"; return
+  else
+    bad "hello does not list analyze.face: $out"
+  fi
+  local adir
+  adir=$(mktemp -d)
+  run "{\"id\":50,\"cmd\":\"analyze.face\",\"project\":\"$adir\"}"
+  [ "$(field error)" = not-found ] && [ ! -e "$adir/camera_track.json" ] || bad "analyze.face without project.json rc=$rc out=$out"
+  printf '{"version":1,"sources":{"screen":{"file":"screen.mov","offset":0}}}' > "$adir/project.json"
+  run "{\"id\":51,\"cmd\":\"analyze.face\",\"project\":\"$adir\"}"
+  if [ "$rc" = 0 ] && [ "$(field error)" = not-found ] && [ ! -e "$adir/camera_track.json" ] && [ ! -e "$adir/camera_track.json.partial" ]; then
+    echo "PASS: analyze.face without a camera answers not-found and writes nothing"
+  else
+    bad "analyze.face without camera rc=$rc out=$out"
+  fi
+  for name in '../camera.mov' 'a/camera.mov' '..'; do
+    printf '{"version":1,"sources":{"camera":{"file":"%s","offset":0}}}' "$name" > "$adir/project.json"
+    run "{\"id\":52,\"cmd\":\"analyze.face\",\"project\":\"$adir\"}"
+    [ "$(field error)" = invalid ] && [ ! -e "$adir/camera_track.json" ] || bad "analyze.face accepted camera name '$name': rc=$rc out=$out"
+  done
+  echo "PASS: analyze.face rejects camera names with a separator or .."
+  printf '{"version":1,"sources":{"camera":{"file":"camera.mov","offset":0}}}' > "$adir/project.json"
+  run "{\"id\":53,\"cmd\":\"analyze.face\",\"project\":\"$adir\"}"
+  [ "$(field error)" = not-found ] || bad "analyze.face with a missing camera file rc=$rc out=$out"
+  run "{\"id\":54,\"cmd\":\"analyze.face\",\"project\":\"$adir\",\"fps\":0}"
+  [ "$(field error)" = invalid ] || bad "analyze.face accepted fps 0: rc=$rc out=$out"
+  run "{\"id\":55,\"cmd\":\"analyze.face\",\"project\":\"$adir\",\"fps\":31}"
+  [ "$(field error)" = invalid ] || bad "analyze.face accepted fps 31: rc=$rc out=$out"
+  echo "PASS: analyze.face with a missing camera file is not-found, fps outside 1..30 is invalid"
+  rm -rf "$adir"
+
+  local take=${SMOKE_FACE_TAKE:-/Users/drumstock/Developer/GitHub/raycast/target/wt-p5/target/dev-live/recs/Recording 2026-10-23 at 17.52.50.ferrocast}
+  if [ ! -f "$take/camera.mov" ] || [ ! -f "$take/project.json" ]; then
+    echo "SKIP: analyze.face real take (not found: $take)"; return
+  fi
+  local scratch=target/p6-scratch/face-take.ferrocast
+  mkdir -p target/p6-scratch
+  [ -d "$scratch" ] && find "$scratch" -type f -delete 2>/dev/null
+  mkdir -p "$scratch"
+  cp "$take/project.json" "$take/camera.mov" "$scratch/"
+  local abs t0 t1 events
+  abs=$(cd "$scratch" && pwd)
+  t0=$(python3 -c 'import time; print(time.time())')
+  run_job 60 "{\"id\":60,\"cmd\":\"analyze.face\",\"project\":\"$abs\",\"fps\":10}"
+  t1=$(python3 -c 'import time; print(time.time())')
+  out=$(printf '%s\n' "$events" | tail -1)
+  if [ "$rc" = 0 ] && [ "$(field ok)" = True ] && [ ! -e "$abs/camera_track.json.partial" ] \
+    && python3 - "$abs/camera_track.json" "$abs/camera.mov" "$events" "$t0" "$t1" <<'PY'
+import json, statistics, sys
+track, _cam, events, t0, t1 = sys.argv[1:6]
+t = json.load(open(track))
+lines = [json.loads(l) for l in events.splitlines() if l.strip()]
+final, prog = lines[-1], [l for l in lines if l.get("event") == "progress"]
+assert set(t) == {"version", "fps", "width", "height", "samples"} and t["version"] == 1 and t["fps"] == 10
+assert t["width"] > 0 and t["height"] > 0
+s = t["samples"]
+assert final["faces"] == len(s) > 0 and final["frames"] >= final["faces"], final
+assert final["path"] == track
+total = prog[-1]["total_secs"] if prog else float("nan")
+for p in s:
+    assert set(p) == {"t", "x", "y", "w", "h", "confidence"}
+    for k in "xywh":
+        assert 0 <= p[k] <= 1, p
+    assert 0 <= p["x"] + p["w"] <= 1.0001 and 0 <= p["y"] + p["h"] <= 1.0001, p
+    assert 0 <= p["confidence"] <= 1 and 0 <= p["t"] <= total + 0.2, (p, total)
+assert all(b["t"] > a["t"] for a, b in zip(s, s[1:])), "t must increase"
+run, real = float(t1) - float(t0), total
+print(f"  faces/frames = {final['faces']}/{final['frames']} (detection rate {final['faces'] / final['frames']:.1%}), camera {t['width']}x{t['height']}, duration {real:.3f}s")
+print(f"  first {s[0]}\n  last  {s[-1]}")
+for k in "xy":
+    d = [b[k] - a[k] for a, b in zip(s, s[1:])]
+    print(f"  std of consecutive {k} deltas: {statistics.pstdev(d) if len(d) > 1 else float('nan'):.5f}")
+print(f"  run time {run:.2f}s for {real:.2f}s of video ({real / run:.1f}x real time)")
+PY
+  then
+    echo "PASS: analyze.face on the real camera take wrote a valid camera_track.json"
+  else
+    bad "analyze.face real take rc=$rc out=$out"
+  fi
+  # Cancel: the helper answers `cancelled` and leaves no file.
+  rm -f "$abs/camera_track.json"
+  run_job 61 "{\"id\":61,\"cmd\":\"analyze.face\",\"project\":\"$abs\",\"fps\":30}" '{"id":62,"cmd":"cancel","target":61}'
+  out=$(printf '%s\n' "$events" | grep '"id":61' | tail -1)
+  if [ "$(field error)" = cancelled ]; then
+    [ ! -e "$abs/camera_track.json" ] && [ ! -e "$abs/camera_track.json.partial" ] && echo "PASS: analyze.face cancel answers cancelled and leaves no file" || bad "analyze.face cancel left a file"
+  elif [ "$(field ok)" = True ]; then
+    echo "SKIP: analyze.face cancel (the 4 s take finished before cancel was read)"
+  else
+    bad "analyze.face cancel out=$out"
+  fi
+}
+
+# P6 render side (T38-T42): loupe, split layout, camera look, follow-face crop, cut-out, and S19 (a project without
+# the new fields renders as before). Rust computes every number; this block hands the helper hand-made ones and
+# measures the pixels, with the P4 synthetic sources (gen.swift / gen-p4.swift are cut out of this file below):
+#   loupe: a white 12 px bar of the take is 3x wider inside the glass and every pixel outside the glass is unchanged;
+#   split: the four sides land in `camera::split_rects` (ported a third time here), the card sits in its screen rect,
+#          the camera part shows the camera quadrants and nothing else changes with the camera frame; before the
+#          camera starts and after it ends the part shows the background only;
+#   look: a mono table makes ONLY the camera grey (screen pixels byte-identical), an inverting table turns red to
+#          cyan, a table of the wrong size degrades to the unlooked camera;
+#   crop: camera_crop quadrants give a uniformly coloured bubble, a bad crop is `invalid`;
+#   cut-out (beta): the request succeeds (a synthetic picture has no person; the real take is checked by hand);
+#   S19: no P6 field = the same bytes (also with `layout: overlay` spelled out), and the T24 golden is unchanged
+#   (compared with $RENDER_GOLDEN when it exists; SMOKE_P6_STRICT_PREFIX=1 also pins the P5 golden prefix);
+#   export: an MP4 with split + look + loupe has the planned frame count and the camera part is grey.
+# SMOKE_ONLY=p6render runs only this block (after `hello`); the default run includes it. No mouse, no keyboard.
+p6render_smoke() {
+  if ! command -v swiftc >/dev/null 2>&1 || ! xcrun --find swiftc >/dev/null 2>&1; then
+    echo "SKIP: p6 render (swiftc not available)"; return
+  fi
+  mkdir -p target/capture-spike/tmp target/capture-spike/export-smoke/p6
+  local pdir
+  pdir=$(mktemp -d "$PWD/target/capture-spike/tmp/p6render.XXXXXX")
+  awk "/<<'SWIFT'\$/{f=1;next} /^SWIFT\$/{f=0} f" "$smoke_self" > "$pdir/gen.swift"
+  awk "/<<'SWIFT_P4'\$/{f=1;next} /^SWIFT_P4\$/{f=0} f" "$smoke_self" > "$pdir/gen-p4.swift"
+  local d="$pdir/P6.ferrocast" g="$pdir/G24.ferrocast"
+  mkdir -p "$d/.cache" "$g"
+  if ! { swiftc -O "$pdir/gen.swift" -o "$pdir/gen" 2>/dev/null && swiftc -O "$pdir/gen-p4.swift" -o "$pdir/gen-p4" 2>/dev/null \
+         && "$pdir/gen" "$d" 90 && "$pdir/gen-p4" "$d" && "$pdir/gen" "$g" 30; }; then
+    echo "SKIP: p6 render (synthetic sources could not be generated)"; rm -rf "$pdir"; return
+  fi
+  cp crates/core/fixtures/render_project.json "$g/project.json"
+  local res rc2
+  res=$(python3 - "$helper" "$d" "$g" "$PWD/target/capture-spike/export-smoke/p6" "$PWD/crates/core/fixtures/render_project.json" \
+        "${RENDER_GOLDEN:-target/capture-spike/render-golden.sha256}" "${SMOKE_P6_STRICT_PREFIX:-0}" <<'PY'
+import hashlib, json, math, os, shutil, struct, subprocess, sys, zlib
+
+helper, project, g24, outdir, fixture, golden, strict = sys.argv[1:8]
+os.makedirs(project + "/.cache", exist_ok=True)
+_id = [0]
+procs = []
+
+def start():
+    p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    procs.append(p)
+    return p
+
+def call(p, o):
+    _id[0] += 1; o = dict(o, id=_id[0])
+    p.stdin.write(json.dumps(o) + "\n"); p.stdin.flush()
+    while True:
+        l = json.loads(p.stdout.readline())
+        if l.get("id") == o["id"] and "event" not in l: return l
+
+def stop(p):
+    p.stdin.close()
+    try: p.wait(timeout=10)
+    except Exception: p.kill()
+
+def png_pixels(path):
+    d = open(path, "rb").read(); assert d[:8] == b"\x89PNG\r\n\x1a\n"
+    pos, idat = 8, b""
+    while pos < len(d):
+        n, typ = struct.unpack(">I4s", d[pos:pos + 8]); body = d[pos + 8:pos + 8 + n]; pos += 12 + n
+        if typ == b"IHDR": w, h, depth, ct = struct.unpack(">IIBB", body[:10]); assert depth == 8 and ct in (2, 6), (depth, ct)
+        if typ == b"IDAT": idat += body
+    bpp = 4 if ct == 6 else 3
+    raw, stride, rows, prev, q = zlib.decompress(idat), w * bpp, [], bytearray(w * bpp), 0
+    for _ in range(h):
+        f, line = raw[q], bytearray(raw[q + 1:q + 1 + stride]); q += 1 + stride
+        for i in range(stride):
+            a = line[i - bpp] if i >= bpp else 0; b = prev[i]; c = prev[i - bpp] if i >= bpp else 0
+            if f == 1: line[i] = (line[i] + a) & 255
+            elif f == 2: line[i] = (line[i] + b) & 255
+            elif f == 3: line[i] = (line[i] + ((a + b) >> 1)) & 255
+            elif f == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else (b if pb <= pc else c))) & 255
+        rows.append(bytes(line)); prev = line
+    px = b"".join(rows)
+    if bpp == 3: px = b"".join(px[i:i + 3] + b"\xff" for i in range(0, len(px), 3))
+    return w, h, px
+
+def note(s): print(s)
+def rnd(x): return math.floor(x + 0.5)
+def even(v, lo): return max(math.floor(v / 2) * 2, lo)
+def px(d, w, x, y): o = (y * w + x) * 4; return tuple(d[o:o + 3])
+def close(a, b, tol): return max(abs(x - y) for x, y in zip(a, b)) <= tol
+
+W, H = 960, 540
+base = json.load(open(fixture))
+base["duration"] = 3.0
+base["trims"] = [{"start": 0.0, "end": 3.0}]
+base["sources"]["camera"] = {"file": "camera.mov", "offset": 0.25}
+base["sources"]["mic"] = {"file": "mic.m4a", "offset": 0.1}
+base["sources"]["system"] = {"file": "system.m4a", "offset": 0.0}
+
+def write_project(cam=None):
+    p = json.loads(json.dumps(base))
+    if cam is not None: p["camera"] = cam
+    json.dump(p, open(project + "/project.json", "w"))
+
+def rawframe(p, t, **kw):
+    path = project + "/.cache/p6.rgba"
+    r = call(p, dict({"cmd": "render.frame", "project": project, "t": t, "width": W, "out": path, "format": "raw"}, **kw))
+    assert r.get("ok"), r
+    data = open(path, "rb").read(); w, h = r["size"]; assert (w, h) == (W, H) and len(data) == w * h * 4
+    return data
+
+def pngframe(p, t, out, **kw):
+    r = call(p, dict({"cmd": "render.frame", "project": project, "t": t, "width": W, "out": out}, **kw)); assert r.get("ok"), r
+
+QUAD = {(0, 0): (230, 26, 26), (1, 0): (26, 204, 26), (0, 1): (26, 51, 230), (1, 1): (242, 230, 26)}
+def quad(cx, cy): return QUAD[(int(cx >= 320), int(cy >= 180))]
+
+def split_rects(cw, ch, side, ratio, gap, aspect):
+    w, h = even(cw, 4), even(ch, 4)
+    horiz = side in ("left", "right")
+    axis, cross = (w, h) if horiz else (h, w)
+    ratio = min(max(ratio, 0.25), 0.5)
+    cam_len = min(even(ratio * axis, 2), axis - 2)
+    gap = even(min(min(max(gap, 0), 0.10) * w, axis - cam_len - 2), 0)
+    screen_len = axis - cam_len - gap
+    cam_at, screen_at = (0, cam_len + gap) if side in ("left", "top") else (axis - cam_len, 0)
+    part = lambda at, ln: (at, 0, ln, cross) if horiz else (0, at, cross, ln)
+    cam, area = part(cam_at, cam_len), part(screen_at, screen_len)
+    sh = min(area[2] / aspect, area[3]); sw = min(sh * aspect, area[2])
+    sw = min(even(sw, 2), area[2]); sh = min(even(sh, 2), area[3])
+    screen = (area[0] + even((area[2] - sw) / 2, 0), area[1] + even((area[3] - sh) / 2, 0), sw, sh)
+    return screen, cam
+
+def card_in(area, pad_frac=0.08):
+    ax, ay, aw, ah = area
+    pad = pad_frac * W
+    s = min((aw - 2 * pad) / 320, (ah - 2 * pad) / 200)
+    fw, fh = max(1, rnd(320 * s)), max(1, rnd(200 * s))
+    return ax + rnd((aw - fw) / 2), ay + rnd((ah - fh) / 2), fw, fh, s
+
+def cam_colour_at(rect, x, y, mirror):
+    rx, ry, rw, rh = rect
+    s = max(rw / 640, rh / 360); sw, sh = math.ceil(640 * s), math.ceil(360 * s)
+    ox, oy = rnd((sw - rw) / 2), rnd((sh - rh) / 2)
+    xr = (rw - 1 - (x - rx)) if mirror else (x - rx)
+    cx, cy = (ox + xr + 0.5) / s, (oy + (y - ry) + 0.5) / s
+    near = min(abs(cx - 320), abs(cy - 180)) < 10
+    return quad(cx, cy), near
+
+CAM = {"shape": "circle", "corner": "bottom_right", "size": 0.20, "margin": 0.02, "mirror": True, "visible": True}
+def split_cam(side, ratio=0.33, gap=0.01, **kw):
+    return dict(CAM, layout="split", split={"side": side, "ratio": ratio, "gap": gap}, **kw)
+
+def rect_param(r): return {"x": r[0], "y": r[1], "w": r[2], "h": r[3]}
+def split_param(side, ratio=0.33, gap=0.01):
+    s, c = split_rects(W, H, side, ratio, gap, 320 / 200)
+    return {"split": {"canvas": [W, H], "screen": rect_param(s), "camera": rect_param(c)}}, s, c
+
+def look_file(name, size, f):
+    path = project + "/.cache/" + name
+    data = bytearray()
+    for b in range(size):
+        for g_ in range(size):
+            for r in range(size):
+                m = size - 1; o = f(r / m, g_ / m, b / m)
+                data += struct.pack("<4f", o[0], o[1], o[2], 1.0)
+    open(path, "wb").write(data)
+    return {"look": {"file": path, "size": size, "hash": hashlib.sha256(bytes(data)).hexdigest()}}
+
+try:
+    # ===== S19: nothing new in the request = the old bytes =====
+    write_project(CAM)
+    p = start()
+    old_in = rawframe(p, 1.25); old_before = rawframe(p, 0.1)
+    stop(p)
+    write_project(dict(CAM, layout="overlay"))
+    p = start()
+    assert rawframe(p, 1.25) == old_in and rawframe(p, 0.1) == old_before, "layout: overlay must render like no layout"
+    stop(p)
+    # the T24 golden: the plain fixture, 960 px frame at t = 0.5, same request as the render.frame block
+    gp = start()
+    gout = g24 + "/.cache/g.png"
+    os.makedirs(g24 + "/.cache", exist_ok=True)
+    r = call(gp, {"cmd": "render.frame", "project": g24, "t": 0.5, "width": 960, "out": gout}); assert r.get("ok"), r
+    stop(gp)
+    sha = hashlib.sha256(open(gout, "rb").read()).hexdigest()
+    gnote = "no golden file"
+    if os.path.exists(golden):
+        want = open(golden).read().strip(); assert want == sha, "T24 golden changed: %s != %s" % (sha, want); gnote = "golden file matches"
+    if strict == "1":
+        assert sha.startswith("80e1963b62060270"), "T24 golden prefix changed: " + sha
+        gnote += ", P5 prefix 80e1963b62060270 matches"
+    note("S19: layout:overlay == no layout (byte-identical), T24 frame sha256 %s (%s)" % (sha[:16], gnote))
+
+    # ===== T38 loupe =====
+    write_project()
+    p = start()
+    t = 0.5  # frame 15: the bar is at x = 10 + 15 * 9 % 290 = 145..157, y = 90..110 of the 320x200 take
+    b_in = rawframe(p, t)
+    fx0, fy0, fw, fh, s = card_in((0, 0, W, H))
+    cx, cy = (151 / 320), 0.5
+    centre = (fx0 + cx * fw, fy0 + cy * fh)
+    radius = 0.15
+    L = lambda **kw: dict({"loupe": {"cx": cx, "cy": cy, "radius": radius, "scale": 3.0, "alpha": 1.0}}, **kw)
+    f_l = rawframe(p, t, **L())
+    def run_len(d, y, x0):
+        a = x0
+        while all(c >= 225 for c in px(d, W, a - 1, y)): a -= 1
+        b = x0
+        while all(c >= 225 for c in px(d, W, b + 1, y)): b += 1
+        return b - a + 1
+    yy = int(centre[1])
+    plain, magn = run_len(b_in, yy, int(centre[0])), run_len(f_l, yy, int(centre[0]))
+    assert abs(plain - 12 * s) <= 3, (plain, 12 * s)
+    assert abs(magn - 3 * plain) <= 6, "the marker must be 3x wider in the glass: %d vs %d" % (magn, plain)
+    rr = radius * W
+    bad = sum(1 for y in range(H) for x in range(W) if math.hypot(x - centre[0], y - centre[1]) > rr + 50 and px(f_l, W, x, y) != px(b_in, W, x, y))
+    assert bad == 0, "%d pixels changed outside the glass" % bad
+    assert rawframe(p, t, **L(loupe={"cx": cx, "cy": cy, "radius": radius, "scale": 3.0, "alpha": 0.0})) == b_in, "alpha 0 must draw nothing"
+    half = rawframe(p, t, **L(loupe={"cx": cx, "cy": cy, "radius": radius, "scale": 3.0, "alpha": 0.5}))
+    assert half != f_l and half != b_in, "alpha 0.5 must sit between no loupe and the full loupe"
+    pngframe(p, t, outdir + "/loupe.png", **L())
+    pw, ph, ppx = png_pixels(outdir + "/loupe.png"); assert ppx == f_l, "loupe raw differs from the PNG"
+    zoomed = rawframe(p, t, camera={"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}, **L(loupe={"cx": 0.5, "cy": 0.5, "radius": radius, "scale": 2.0, "alpha": 1.0}))
+    assert zoomed != rawframe(p, t, camera={"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5})
+    for bad_loupe in ({"cx": 0.5, "cy": 0.5, "scale": 2.0, "alpha": 1.0}, {"cx": 0.5, "cy": 0.5, "radius": 0, "scale": 2.0, "alpha": 1.0}):
+        r = call(p, {"cmd": "render.frame", "project": project, "t": t, "width": W, "loupe": bad_loupe}); assert r.get("error") == "invalid", r
+    stop(p)
+    note("loupe: marker %d px -> %d px in the glass (x%.2f), 0 pixels changed outside it, alpha 0 = no loupe, raw == PNG, zoom viewport maps the focus" % (plain, magn, magn / plain))
+
+    # ===== T39 split =====
+    write_project(CAM)
+    p = start()
+    nocam_before = None
+    for side in ("left", "right", "top", "bottom"):
+        write_project(split_cam(side)); stop(p); p = start()
+        sp, srect, crect = split_param(side)
+        t1, t2 = 1.0, 1.8
+        f1, f2 = rawframe(p, t1, **sp), rawframe(p, t2, **sp)
+        before, after = rawframe(p, 0.1, **sp), rawframe(p, 2.9, **sp)
+        cx0, cy0, cw, ch = crect
+        # the camera quadrants in the camera part
+        pts = 0
+        for u, v in ((0.2, 0.2), (0.8, 0.2), (0.2, 0.8), (0.8, 0.8), (0.5, 0.35), (0.5, 0.65), (0.35, 0.5), (0.65, 0.5)):
+            x, y = int(cx0 + u * cw), int(cy0 + v * ch)
+            want, near = cam_colour_at(crect, x, y, True)
+            if near: continue
+            assert close(px(f1, W, x, y), want, 45), "%s: camera part (%d,%d) is %s, expected %s" % (side, x, y, px(f1, W, x, y), want); pts += 1
+        assert pts >= 4, (side, pts)
+        # the card sits in its screen rect: the red square of the take is at the card's top left
+        kx, ky, kw, kh, ks = card_in(srect)
+        assert kx >= srect[0] and kx + kw <= srect[0] + srect[2] and ky >= srect[1] and ky + kh <= srect[1] + srect[3], (side, "card outside its rect")
+        got = px(f1, W, int(kx + 20 * ks), int(ky + 20 * ks)); assert got[0] > 200 and got[1] < 80 and got[2] < 60, (side, "red square", got)
+        # nothing outside the camera part changes with the camera frame, except the bar of the screen take
+        sx0, sy0, sw_, sh_ = srect
+        diff_outside = sum(1 for y in range(H) for x in range(W)
+                           if not (cx0 <= x < cx0 + cw and cy0 <= y < cy0 + ch) and not (kx <= x < kx + kw and ky <= y < ky + kh)
+                           and px(f1, W, x, y) != px(f2, W, x, y))
+        assert diff_outside == 0, "%s: %d pixels outside the camera part and the card changed with the camera frame" % (side, diff_outside)
+        # before the camera starts and after it ends: the part shows the background, never a frozen frame
+        for name, fr in (("before", before), ("after", after)):
+            for u, v in ((0.2, 0.2), (0.8, 0.8), (0.5, 0.5)):
+                x, y = int(cx0 + u * cw), int(cy0 + v * ch)
+                assert not any(close(px(fr, W, x, y), c, 45) for c in QUAD.values()), "%s: camera colour %s the camera file" % (side, name)
+        cam_diff = sum(1 for y in range(int(cy0), int(cy0 + ch)) for x in range(int(cx0), int(cx0 + cw)) if px(before, W, x, y) != px(after, W, x, y))
+        assert cam_diff == 0, "%s: the camera part differs before/after: %d px" % (side, cam_diff)
+        # no bubble: at the overlay's place (outside the camera part) there is no camera
+        pngframe(p, t1, outdir + "/split-%s.png" % side, **sp)
+        pw, ph, ppx = png_pixels(outdir + "/split-%s.png" % side); assert ppx == f1, "%s split raw differs from the PNG" % side
+    note("split: left/right/top/bottom match camera::split_rects (ported here), camera quadrants right in the camera part, the card in its rect, only the camera part moves with the camera frame, background only before/after the file, raw == PNG")
+    # without the split rectangles the helper keeps the overlay (an old caller)
+    write_project(split_cam("right")); stop(p); p = start()
+    leg = rawframe(p, 1.25)
+    write_project(CAM); stop(p); p = start()
+    assert leg == rawframe(p, 1.25), "split layout without `split` params must fall back to the overlay"
+    bad = call(p, {"cmd": "render.frame", "project": project, "t": 1.0, "width": W, "split": {"canvas": [W, H], "screen": {"x": 0, "y": 0, "w": 0, "h": 5}, "camera": rect_param((0, 0, 5, 5))}})
+    assert bad.get("error") == "invalid", bad
+    stop(p)
+
+    # ===== T40 look =====
+    mono = look_file("look-mono.f32", 17, lambda r, g_, b: [0.2126 * r + 0.7152 * g_ + 0.0722 * b] * 3)
+    invert = look_file("look-invert.f32", 2, lambda r, g_, b: [1 - r, 1 - g_, 1 - b])
+    write_project(CAM)
+    p = start()
+    base_in = rawframe(p, 1.25)
+    f_mono, f_inv = rawframe(p, 1.25, **mono), rawframe(p, 1.25, **invert)
+    side_px = round(0.20 * W); m = round(0.02 * W)
+    x0, y0 = W - side_px - m, H - side_px - m
+    diff_far = sum(1 for y in range(H) for x in range(W)
+                   if not (x0 - 40 <= x < x0 + side_px + 40 and y0 - 40 <= y < y0 + side_px + 40) and f_mono[(y * W + x) * 4:(y * W + x) * 4 + 4] != base_in[(y * W + x) * 4:(y * W + x) * 4 + 4])
+    assert diff_far == 0, "%d screen pixels changed by the look" % diff_far
+    worst = 0
+    for u, v in ((0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)):
+        x, y = x0 + int(u * side_px), y0 + int(v * side_px)
+        got = px(f_mono, W, x, y); worst = max(worst, max(got) - min(got))
+        src = px(base_in, W, x, y); luma = 0.2126 * src[0] + 0.7152 * src[1] + 0.0722 * src[2]
+        assert max(got) - min(got) <= 3 and abs(got[0] - luma) <= 30, "mono: %s from %s" % (got, src)
+        gi = px(f_inv, W, x, y)
+        assert close(gi, tuple(255 - c for c in src), 45), "invert: %s from %s" % (gi, src)
+    # a table of the wrong size: logged, the camera is drawn without the look
+    bad = {"look": {"file": mono["look"]["file"], "size": 9, "hash": "wrong-size"}}
+    assert rawframe(p, 1.25, **bad) == base_in, "a bad table must leave the camera alone"
+    # the cache key is path + hash: new bytes under a new hash change the picture
+    assert rawframe(p, 1.25, **mono) == f_mono
+    pngframe(p, 1.25, outdir + "/look-mono.png", **mono); pw, ph, ppx = png_pixels(outdir + "/look-mono.png"); assert ppx == f_mono
+    for badlook in ({"file": "rel.f32", "size": 17, "hash": "x"}, {"file": mono["look"]["file"], "size": 1, "hash": "x"}):
+        r = call(p, {"cmd": "render.frame", "project": project, "t": 1.25, "width": W, "look": badlook}); assert r.get("error") == "invalid", r
+    stop(p)
+    note("look: mono makes the bubble grey (max channel spread %d), 0 screen pixels changed, the inverting table maps red to cyan, a wrong-size table degrades to no look" % worst)
+
+    # ===== T42 camera crop =====
+    write_project(dict(CAM, shape="square", size=0.30, margin=0.0))
+    p = start()
+    side_px = round(0.30 * W); x0, y0 = W - side_px, H - side_px
+    for crop, want in (({"x": 320, "y": 0, "w": 320, "h": 180}, QUAD[(1, 0)]), ({"x": 0, "y": 180, "w": 320, "h": 180}, QUAD[(0, 1)]),
+                       ({"x": 320, "y": 180, "w": 320, "h": 180}, QUAD[(1, 1)]), ({"x": 0, "y": 0, "w": 320, "h": 180}, QUAD[(0, 0)])):
+        f = rawframe(p, 1.25, camera_crop=crop)
+        for u, v in ((0.2, 0.2), (0.8, 0.8), (0.5, 0.5), (0.2, 0.8)):
+            got = px(f, W, x0 + int(u * side_px), y0 + int(v * side_px)); assert close(got, want, 45), (crop, got, want)
+    plain = rawframe(p, 1.25)
+    assert rawframe(p, 1.25, camera_crop={"x": 0, "y": 0, "w": 640, "h": 360}) == plain, "the full frame as the crop is the uncropped camera"
+    r = call(p, {"cmd": "render.frame", "project": project, "t": 1.25, "width": W, "camera_crop": {"x": 0, "y": 0, "w": 0, "h": 10}}); assert r.get("error") == "invalid", r
+    stop(p)
+    # a crop in the split part
+    write_project(split_cam("right")); p = start()
+    sp, srect, crect = split_param("right")
+    f = rawframe(p, 1.25, camera_crop={"x": 320, "y": 0, "w": 180, "h": 180}, **sp)
+    cx0, cy0, cw, ch = crect
+    assert close(px(f, W, int(cx0 + cw / 2), int(cy0 + ch / 2)), QUAD[(1, 0)], 45)
+    stop(p)
+    note("crop: each camera quadrant crop fills the bubble with that colour, the full frame equals no crop, a crop works in the split part, w = 0 is invalid")
+
+    # ===== T41 cut-out (beta) =====
+    write_project(dict(CAM, cutout=True))
+    p = start()
+    a = rawframe(p, 1.25); b = rawframe(p, 1.25)
+    assert a == b, "a repeated cut-out frame must be identical (cached mask)"
+    stop(p)
+    note("cutout: renders without error on a synthetic picture, repeated frame identical (the real take is judged by eye)")
+
+    # ===== export: split + look + loupe =====
+    ff = shutil.which("ffmpeg")
+    write_project(split_cam("right"))
+    sp, srect, crect = split_param("right")
+    ew, eh = 480, 270
+    s2, c2 = split_rects(ew, eh, "right", 0.33, 0.01, 1.6)
+    es = {"split": {"canvas": [ew, eh], "screen": rect_param(s2), "camera": rect_param(c2)}}
+    pf = project + "/.cache/p6-export.ndjson"
+    with open(pf, "w") as fh:
+        for i in range(60):
+            line = {"t": i / 30}
+            line.update(es); line.update(mono)
+            line["loupe"] = {"cx": 0.4, "cy": 0.5, "radius": 0.15, "scale": 2.0, "alpha": 1.0}
+            fh.write(json.dumps(line) + "\n")
+    out = outdir + "/p6-export.mp4"
+    for f_ in (out, out + ".partial"):
+        if os.path.exists(f_): os.remove(f_)
+    p = start()
+    r = call(p, {"cmd": "render", "project": project, "out": out, "format": "mp4", "codec": "h264", "width": ew, "height": eh, "fps": 30, "quality": "standard",
+                 "frames": 60, "segments": [{"src_start": 0.0, "src_end": 2.0, "speed": 1.0}], "params_file": pf})
+    assert r.get("ok") and r["frames"] == 60, r
+    stop(p)
+    if ff:
+        def grab(i):
+            return subprocess.run([ff, "-v", "error", "-i", out, "-vf", "select=eq(n\\,%d)" % i, "-vframes", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True).stdout
+        fr = grab(45); assert len(fr) == ew * eh * 3
+        cx0, cy0, cw, ch = c2
+        worst = 0
+        for u, v in ((0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)):
+            o = (int(cy0 + v * ch) * ew + int(cx0 + u * cw)) * 3; rgb = fr[o:o + 3]; worst = max(worst, max(rgb) - min(rgb))
+        assert worst <= 12, "export camera part is not grey (spread %d)" % worst
+        note("export: 60 frames, split + mono look + loupe, camera part grey (max spread %d after H.264)" % worst)
+    else:
+        note("export: 60 frames written (ffmpeg not installed: pixels not checked)")
+    print("PASS: p6 render (loupe, split, look, crop, cut-out, S19 and export; numbers above)")
+except Exception as e:
+    import traceback; traceback.print_exc()
+    print("FAIL: p6 render (%s)" % (e,)); sys.exit(1)
+finally:
+    for p in procs:
+        try: p.stdin.close()
+        except Exception: pass
+        try: p.wait(timeout=10)
+        except Exception: p.kill()
+PY
+  ); rc2=$?
+  echo "$res"
+  [ "$rc2" = 0 ] || fail=1
+  rm -rf "$pdir"
+}
+
 run '{"id":1,"cmd":"hello"}'
 if [ "$rc" = 0 ] && [ "$(field ok)" = True ] && [ "$(field protocol)" = 1 ]; then
   echo "PASS: hello ($out)"
@@ -41,6 +554,16 @@ else
 fi
 
 sck=$(field sck)
+if [ "${SMOKE_ONLY:-}" = analyze ]; then
+  analyze_smoke
+  [ "$fail" = 0 ] && echo "capture-smoke (analyze only): OK"
+  exit "$fail"
+fi
+if [ "${SMOKE_ONLY:-}" = p6render ]; then
+  p6render_smoke
+  [ "$fail" = 0 ] && echo "capture-smoke (p6render only): OK"
+  exit "$fail"
+fi
 if [ "$sck" != True ]; then
   echo "SKIP: shareable (ScreenCaptureKit unavailable on this macOS)"
 else
@@ -1462,6 +1985,8 @@ PY
   fi
 fi
 
+p6render_smoke
+
 # P4 (T31): `devices`, camera / microphone permission errors and the granted paths, system audio.
 # - devices: well-formed JSON, needs no grant (names may be empty without one). PASS.
 # - camera / microphone NOT authorized (checked with the helper's own `permissions` command, which
@@ -1728,6 +2253,8 @@ PY
   fi
   rm -rf "$tdir"
 fi
+
+analyze_smoke
 
 # Unknown command: structured error, still protocol-only stdout.
 run '{"id":3,"cmd":"nope"}'

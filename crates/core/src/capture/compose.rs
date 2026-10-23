@@ -8,12 +8,17 @@
 //! path; the click ring is anchored at the RAW click position (the smoothed cursor can
 //! lag a click, see `cursor::smooth`); the blur comes from finite-difference velocities
 //! of the same functions. Pure and deterministic.
+use super::camera::{self, CameraPlacement};
 use super::cursor::{self, CursorOpts, Sample};
 use super::curves::clamp;
 use super::events::{CaptureSpace, Events};
+use super::facetrack::{FaceTrack, ReframeOpts, Reframer, TRACK_FILE};
+use super::lut::{self, Lut3D};
 use super::project::Project;
 use super::zoom::{self, Viewport};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::path::Path;
 
 /// Viewport rectangle `[x, y, w, h]` as fractions of the display.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -65,8 +70,67 @@ pub struct BlurParams {
     pub scene: bool,
 }
 
-/// The optional `camera`, `cursor`, `ring` and `blur` fields of `render.frame`.
-/// `FrameParams::default()` is the no-op: the frame is rendered exactly as before P3.
+/// P6 T38: a circular magnifier of the screen content. `cx`, `cy` are fractions of the screen
+/// content (top-left origin), `radius` a fraction of the OUTPUT width, `scale` the magnification
+/// and `alpha` the fade `0..=1`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LoupeParams {
+    pub cx: f64,
+    pub cy: f64,
+    pub radius: f64,
+    pub scale: f64,
+    pub alpha: f64,
+}
+
+/// P6 T42: the part of the camera image to show, in camera SOURCE pixels, top-left origin.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CropParams {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// P6 T40: the colour table of the camera look, resolved by Rust and written ONCE to a scratch
+/// file (`size^3 * 4` little-endian `f32`, RGBA, red fastest, input domain 0..1, intensity already
+/// blended in). Frames only carry this pointer; Swift caches its filter by `file` + `hash`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LookParams {
+    /// Absolute path of the table.
+    pub file: String,
+    /// Edge length of the cube.
+    pub size: u32,
+    /// SHA-256 (hex) of the table bytes.
+    pub hash: String,
+}
+
+/// Output-pixel rectangle, top-left origin (`camera::Rect` on the wire).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RectParams {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl From<camera::Rect> for RectParams {
+    fn from(r: camera::Rect) -> Self {
+        Self { x: r.x, y: r.y, w: r.w, h: r.h }
+    }
+}
+
+/// P6 T39: the split layout of one export or preview, from `camera::split_rects` for `canvas`
+/// (output pixels). The overlay bubble is not drawn while it is present.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SplitParams {
+    pub canvas: [u32; 2],
+    pub screen: RectParams,
+    pub camera: RectParams,
+}
+
+/// The optional `camera`, `cursor`, `ring`, `blur` fields of `render.frame` (T25) and the P6 ones:
+/// `loupe`, `camera_crop`, `look`, `split`. `FrameParams::default()` is the no-op: the frame is
+/// rendered exactly as before P3.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct FrameParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,12 +141,120 @@ pub struct FrameParams {
     pub ring: Option<RingParams>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blur: Option<BlurParams>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loupe: Option<LoupeParams>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_crop: Option<CropParams>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<LookParams>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split: Option<SplitParams>,
 }
 
 impl FrameParams {
     pub fn is_noop(&self) -> bool {
         *self == FrameParams::default()
     }
+}
+
+/// Zoom of the face-following crop when `camera.follow_zoom` is absent.
+pub const DEFAULT_FOLLOW_ZOOM: f64 = 1.4;
+
+/// The P6 camera effects of one export / preview session (T39-T42): resolved ONCE, then read by
+/// [`Composer::at`] for every frame. Build it with [`CameraFx::prepare`].
+#[derive(Debug, Clone, Default)]
+pub struct CameraFx {
+    look: Option<LookParams>,
+    split: Option<SplitParams>,
+    /// Face-following crop and the camera offset (camera time = screen time - offset).
+    follow: Option<(Reframer, f64)>,
+}
+
+impl CameraFx {
+    /// Nothing to apply: frames are produced exactly as without P6 camera effects.
+    pub fn is_empty(&self) -> bool {
+        self.look.is_none() && self.split.is_none() && self.follow.is_none()
+    }
+
+    /// Resolve the look table, the split rectangles and the face-following path for an output of
+    /// `out` pixels. Nothing happens unless the camera is visible and its file exists. Errors
+    /// (an unreadable or malformed `.cube`, a scratch file that cannot be written) are readable
+    /// messages for a request error; a missing, corrupt or size-less `camera_track.json` is NOT an
+    /// error: the camera is simply drawn uncropped.
+    pub fn prepare(project: &Project, project_dir: &Path, events: &super::events::Events, out: [u32; 2]) -> Result<Self, String> {
+        let (Some(layout), Some(src)) = (&project.camera, &project.sources.camera) else { return Ok(Self::default()) };
+        let plain = !src.file.is_empty() && !src.file.contains(['/', '\\']) && src.file != "..";
+        if !layout.visible || !plain || !project_dir.join(&src.file).is_file() {
+            return Ok(Self::default());
+        }
+        let mut fx = Self::default();
+        let [w, h] = [f64::from(out[0]), f64::from(out[1])];
+        if layout.layout == CameraPlacement::Split {
+            let [sw, sh] = super::export::source_pixels(events);
+            let aspect = if sw > 0 && sh > 0 { f64::from(sw) / f64::from(sh) } else { 0.0 };
+            let (screen, cam) = camera::split_rects(w, h, layout, aspect);
+            fx.split = Some(SplitParams { canvas: out, screen: screen.into(), camera: cam.into() });
+        }
+        if let Some(look) = &layout.look {
+            fx.look = resolve_look(look, project_dir)?;
+        }
+        if layout.follow_face {
+            let crop_aspect = match &fx.split {
+                Some(s) if s.camera.h > 0.0 => s.camera.w / s.camera.h,
+                _ => 1.0,
+            };
+            let zoom = layout.follow_zoom.filter(|z| z.is_finite()).unwrap_or(DEFAULT_FOLLOW_ZOOM);
+            fx.follow = load_reframer(&project_dir.join(TRACK_FILE), &ReframeOpts { crop_aspect, zoom, ..ReframeOpts::default() })
+                .map(|r| (r, if src.offset.is_finite() { src.offset } else { 0.0 }));
+        }
+        Ok(fx)
+    }
+}
+
+/// One [`Reframer`] for a track file, or `None` when it is absent, unreadable or has no camera size.
+fn load_reframer(path: &Path, opts: &ReframeOpts) -> Option<Reframer> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let track = FaceTrack::parse(&text).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let dim = |k: &str| v.get(k).and_then(serde_json::Value::as_f64).filter(|d| d.is_finite() && *d >= 1.0);
+    Some(Reframer::new(&track, dim("width")?, dim("height")?, opts))
+}
+
+/// The table of `look` as a scratch file under `<project>/.cache` (named by the content hash, so
+/// an existing file is already right and is not rewritten). `None` for intensity 0 (identity).
+fn resolve_look(look: &camera::Look, project_dir: &Path) -> Result<Option<LookParams>, String> {
+    let intensity = if look.intensity.is_finite() { look.intensity.clamp(0.0, 1.0) } else { 1.0 };
+    let table = match (&look.name, &look.file) {
+        (Some(n), None) => lut::bundled_look(n).ok_or_else(|| format!("`{n}` is not a bundled look"))?,
+        (None, Some(f)) => {
+            if f.is_empty() || f.contains(['/', '\\', '\0']) || f == ".." || f == "." {
+                return Err(format!("the look file `{f}` must be a plain file name inside the project"));
+            }
+            let text = std::fs::read_to_string(project_dir.join(f)).map_err(|e| format!("the look file {f} could not be read: {e}"))?;
+            lut::parse_cube(&text).map_err(|e| format!("the look file {f} is not a valid .cube: {e}"))?
+        }
+        _ => return Err("camera.look needs exactly one of name or file".into()),
+    };
+    if intensity <= 0.0 {
+        return Ok(None);
+    }
+    // CIColorCube takes inputs in 0..1 only: bring a table with another domain onto 0..1
+    let table =
+        if table.domain_min == [0.0; 3] && table.domain_max == [1.0; 3] { table } else { Lut3D::build(table.size, |c| table.sample(c)) };
+    let table = table.with_intensity(intensity as f32);
+    let bytes: Vec<u8> = table.to_rgba_f32().iter().flat_map(|f| f.to_le_bytes()).collect();
+    let hash: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let dir = project_dir.join(".cache");
+    let file = dir.join(format!("look-{}.f32", &hash[..16]));
+    let current = std::fs::metadata(&file).map(|m| m.len() == bytes.len() as u64).unwrap_or(false);
+    if !current {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        let tmp = dir.join(format!("look-{}.f32.partial", &hash[..16]));
+        std::fs::write(&tmp, &bytes)
+            .and_then(|_| std::fs::rename(&tmp, &file))
+            .map_err(|e| format!("could not write {}: {e}", file.display()))?;
+    }
+    Ok(Some(LookParams { file: file.to_string_lossy().into_owned(), size: table.size as u32, hash }))
 }
 
 /// Parameters for source time `t` (seconds). Builds a [`Composer`] each call; callers that
@@ -111,6 +283,8 @@ pub struct Composer<'a> {
     space: CaptureSpace,
     /// Recorded pixels across the video (blur and ring are authored in these).
     px: [f64; 2],
+    /// P6 camera effects (look, split, face following); empty by default.
+    fx: CameraFx,
 }
 
 impl<'a> Composer<'a> {
@@ -142,7 +316,15 @@ impl<'a> Composer<'a> {
             disp: [dw, dh],
             space,
             px: [px(events.screen.size[0], vw), px(events.screen.size[1], vh)],
+            fx: CameraFx::default(),
         }
+    }
+
+    /// Attach the resolved P6 camera effects: every frame then carries `look`, `split` and
+    /// `camera_crop` where they apply. Build ONE [`CameraFx`] per export / preview session.
+    pub fn with_camera_fx(mut self, fx: CameraFx) -> Self {
+        self.fx = fx;
+        self
     }
 
     fn usable(&self) -> bool {
@@ -216,7 +398,27 @@ impl<'a> Composer<'a> {
                 scene: kv[0].hypot(kv[1]) > cv[0].hypot(cv[1]),
             })
         });
-        FrameParams { camera, cursor: cursor_p, ring, blur: blur.flatten() }
+        let loupe = zoom::loupe_at_with_cursor(self.project, t, self.smoothed(t)).map(|l| LoupeParams {
+            cx: l.cx,
+            cy: l.cy,
+            radius: l.radius,
+            scale: l.scale,
+            alpha: l.alpha,
+        });
+        let camera_crop = self.fx.follow.as_ref().map(|(r, offset)| {
+            let c = r.at(t - offset);
+            CropParams { x: c.x, y: c.y, w: c.w, h: c.h }
+        });
+        FrameParams {
+            camera,
+            cursor: cursor_p,
+            ring,
+            blur: blur.flatten(),
+            loupe,
+            camera_crop,
+            look: self.fx.look.clone(),
+            split: self.fx.split,
+        }
     }
 
     /// Kind of the latest cursor sample at or before `t` (the first sample before the log starts).
