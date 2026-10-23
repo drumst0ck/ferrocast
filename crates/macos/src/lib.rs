@@ -20,6 +20,7 @@ pub mod notes_format;
 pub mod notes_palette;
 pub mod notes_popups;
 pub mod pdf;
+pub mod pin;
 pub mod process;
 pub mod running;
 pub mod selector;

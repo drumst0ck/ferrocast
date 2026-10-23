@@ -59,7 +59,12 @@ pub struct SelectorState {
 
 impl SelectorState {
     pub fn new(displays: Vec<Display>, windows: Vec<Window>) -> Self {
-        Self { displays, windows, mode: Mode::Area, drag_start: None, pressed: false, pointer: None, outcome: None }
+        Self::with_mode(displays, windows, Mode::Area)
+    }
+
+    /// Like [`SelectorState::new`] but starting in `mode` (Capture Window starts in `Mode::Window`).
+    pub fn with_mode(displays: Vec<Display>, windows: Vec<Window>, mode: Mode) -> Self {
+        Self { displays, windows, mode, drag_start: None, pressed: false, pointer: None, outcome: None }
     }
 
     pub fn mode(&self) -> Mode {
@@ -388,12 +393,17 @@ fn displays_now(mtm: MainThreadMarker) -> (Vec<Display>, Vec<NSRect>, f64) {
 /// selects an area, picks a window or cancels. `windows` are front-to-back frames in top-left
 /// points (for window mode). Nothing is written and nothing else is shown on `Cancelled`.
 pub fn select(mtm: MainThreadMarker, windows: Vec<Window>) -> Selection {
+    select_with(mtm, windows, Mode::Area)
+}
+
+/// [`select`] starting in `mode`; <kbd>Space</kbd> still toggles between the two.
+pub fn select_with(mtm: MainThreadMarker, windows: Vec<Window>, mode: Mode) -> Selection {
     let (displays, cocoa, primary_h) = displays_now(mtm);
     if displays.is_empty() {
         return Selection::Cancelled;
     }
     PRIMARY_HEIGHT.with(|p| p.set(primary_h));
-    let mut state = SelectorState::new(displays.clone(), windows);
+    let mut state = SelectorState::with_mode(displays.clone(), windows, mode);
     state.pointer_move(mouse_point());
     STATE.with(|s| *s.borrow_mut() = Some(state));
 
@@ -637,6 +647,55 @@ mod tests {
         assert_eq!(l.label.as_ref().map(|(t, _)| t.as_str()), Some("600 × 400"));
         s.pointer_move(pt(1000.0, 800.0));
         assert_eq!(layout_for(&s, 0).hole, None);
+    }
+
+    fn window_start() -> SelectorState {
+        SelectorState::with_mode(displays(), windows(), Mode::Window)
+    }
+
+    #[test]
+    fn starting_in_window_mode_hover_picks_the_topmost_and_click_selects_it() {
+        let mut s = window_start();
+        assert_eq!(s.mode(), Mode::Window);
+        s.pointer_move(pt(150.0, 150.0));
+        assert_eq!(s.hovered_window().map(|w| w.id), Some(7));
+        s.pointer_move(pt(700.0, 500.0));
+        assert_eq!(s.hovered_window().map(|w| w.id), Some(9));
+        s.pointer_down(pt(150.0, 150.0));
+        s.pointer_up(pt(150.0, 150.0));
+        assert_eq!(s.outcome(), Some(Selection::Window(7)));
+    }
+
+    #[test]
+    fn starting_in_window_mode_esc_cancels_and_space_still_toggles() {
+        let mut s = window_start();
+        s.cancel();
+        assert_eq!(s.outcome(), Some(Selection::Cancelled));
+        let mut s = window_start();
+        s.toggle_mode();
+        assert_eq!(s.mode(), Mode::Area);
+        s.pointer_down(pt(10.0, 10.0));
+        s.pointer_up(pt(90.0, 90.0));
+        assert_eq!(s.outcome(), Some(Selection::Area(Rect::new(10.0, 10.0, 80.0, 80.0))));
+        let mut s = window_start();
+        s.toggle_mode();
+        s.toggle_mode();
+        assert_eq!(s.mode(), Mode::Window);
+    }
+
+    #[test]
+    fn new_still_starts_in_area_mode() {
+        assert_eq!(state().mode(), Mode::Area);
+        assert_eq!(SelectorState::with_mode(displays(), windows(), Mode::Area).mode(), Mode::Area);
+    }
+
+    #[test]
+    fn window_start_layout_highlights_without_a_crosshair() {
+        let mut s = window_start();
+        s.pointer_move(pt(150.0, 150.0));
+        let l = layout_for(&s, 0);
+        assert_eq!(l.hole, Some(Rect::new(100.0, 100.0, 300.0, 200.0)));
+        assert_eq!(l.crosshair, None);
     }
 
     #[test]
