@@ -163,7 +163,46 @@ pub enum Msg {
     AiModels(String, Result<Vec<String>, String>),
     /// Whether a wheel language is ready for Apple Translation (Settings → Translate).
     AppleLanguage(String, ferrocast_core::translate::AppleLang),
+    /// Result of "Test connection" in Settings → Integrations (Err: the exact toast text).
+    NotionTested(Result<ferrocast_core::notion::BotInfo, String>),
+    /// Result of a Notion search; `request` identifies the search so a stale answer is dropped.
+    NotionSearched {
+        request: u64,
+        result: Result<ferrocast_core::notion::SearchPage, String>,
+    },
+    /// Result of a Search Notion request (`append`: a "Load more" page); `request` drops stale answers.
+    NotionViewSearched {
+        request: u64,
+        append: bool,
+        result: Result<ferrocast_core::notion::SearchPage, NotionViewError>,
+    },
+    /// Result of Add to Notion / Add Clipboard to Notion.
+    NotionAdded(Result<NotionAddDone, NotionAddError>),
     Wake,
+}
+
+/// A capture that reached Notion: the title of the target it was added to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NotionAddDone {
+    pub target_title: String,
+}
+
+/// Why a capture did not (fully) reach Notion.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NotionAddError {
+    /// The Keychain holds no token: nothing was sent.
+    NoToken,
+    /// The exact toast text (a mapped `NotionError`, plus how many parts went through when a long text stopped midway).
+    Failed(String),
+}
+
+/// Why a Search Notion request produced no page.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NotionViewError {
+    /// The Keychain holds no token: nothing was sent.
+    NoToken,
+    /// The exact toast text of the mapped `NotionError`.
+    Failed(String),
 }
 
 #[derive(Clone)]
@@ -1152,48 +1191,24 @@ pub fn ai_key() -> Option<String> {
 }
 
 pub fn ai_key_for(p: AiProvider) -> Option<String> {
-    let out =
-        std::process::Command::new("/usr/bin/security").args(["find-generic-password", "-s", keychain_service(p), "-w"]).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|k| !k.is_empty())
+    crate::secrets::secret_get(keychain_service(p)).map(|k| k.trim().to_string()).filter(|k| !k.is_empty())
 }
 
 pub fn set_ai_key_for(p: AiProvider, key: &str) -> bool {
-    let key = key.trim();
-    let mut cmd = std::process::Command::new("/usr/bin/security");
-    if key.is_empty() {
-        cmd.args(["delete-generic-password", "-s", keychain_service(p)]);
-    } else {
-        cmd.args(["add-generic-password", "-U", "-s", keychain_service(p), "-a", "ferrocast", "-w", key]);
-    }
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+    crate::secrets::secret_set(keychain_service(p), key.trim())
 }
 
 // ---- Sign in with ChatGPT
 
 pub fn chatgpt_credentials() -> Option<ferrocast_core::chatgpt::Credentials> {
-    let out = std::process::Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", KEYCHAIN_SERVICE_CHATGPT, "-w"])
-        .output()
-        .ok()?;
-    out.status.success().then(|| serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).ok()).flatten()
+    serde_json::from_str(crate::secrets::secret_get(KEYCHAIN_SERVICE_CHATGPT)?.trim()).ok()
 }
 
 fn save_chatgpt_credentials(c: Option<&ferrocast_core::chatgpt::Credentials>) -> bool {
-    let mut cmd = std::process::Command::new("/usr/bin/security");
     match c {
-        None => cmd.args(["delete-generic-password", "-s", KEYCHAIN_SERVICE_CHATGPT]),
-        Some(c) => cmd.args([
-            "add-generic-password",
-            "-U",
-            "-s",
-            KEYCHAIN_SERVICE_CHATGPT,
-            "-a",
-            "ferrocast",
-            "-w",
-            &serde_json::to_string(c).unwrap_or_default(),
-        ]),
-    };
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+        None => crate::secrets::secret_set(KEYCHAIN_SERVICE_CHATGPT, ""),
+        Some(c) => serde_json::to_string(c).is_ok_and(|j| crate::secrets::secret_set(KEYCHAIN_SERVICE_CHATGPT, &j)),
+    }
 }
 
 pub fn chatgpt_sign_out() -> bool {
@@ -2289,7 +2304,7 @@ fn special_convert(
 /// PDF → page images (300 DPI, every page) or its text layer, through PDFKit/AppKit.
 pub(crate) fn pdfkit_convert(f: &std::path::Path, ext: &str) -> Result<Vec<PathBuf>, String> {
     use ferrocast_core::convert::{output_path, output_with_suffix};
-    let tmp = std::env::temp_dir().join(format!("ferrocast-pdfkit-{}", std::process::id()));
+    let tmp = scratch_dir("ferrocast-pdfkit");
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let run = |script: &str, args: &[&str]| {
@@ -2479,7 +2494,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
     let Some(first) = files.first() else { return (outs, errs) };
     let e0 = ext(first);
     let is_pdf = e0 == "pdf";
-    let tmp = std::env::temp_dir().join(format!("ferrocast-ft-{}", std::process::id()));
+    let tmp = scratch_dir("ferrocast-ft");
     let _ = std::fs::create_dir_all(&tmp);
     let need_ff = |errs: &mut Vec<String>| {
         if ffmpeg.is_none() {
@@ -2818,7 +2833,7 @@ fn compress_with(
 /// Apply a one-step adjustment; writes a PNG next to the original.
 fn adjust(f: &std::path::Path, a: ferrocast_core::convert::Adjust) -> Result<PathBuf, String> {
     use ferrocast_core::convert::{output_with_suffix, Adjust};
-    let tmp = std::env::temp_dir().join(format!("ferrocast-adjust-{}.png", std::process::id()));
+    let tmp = scratch_dir("ferrocast-adjust").with_extension("png");
     sips(&["-s", "format", "png", &f.to_string_lossy(), "--out", &tmp.to_string_lossy()])?;
     let img = image::open(&tmp).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&tmp);
@@ -2854,6 +2869,15 @@ fn edit_photo(f: &std::path::Path, o: &ferrocast_core::photo::PhotoOpts) -> Resu
 
 /// Lay the images out in a grid of 600 px cells on white, as one PNG next to the first.
 static COLLAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A scratch directory path of its own for one run of a tool. Runs can overlap (two jobs, or tests
+/// on threads of one process) and each removes its directory when it ends, so the path carries a
+/// sequence number besides the process id; sharing one by pid alone let a finishing run delete the
+/// files of another.
+fn scratch_dir(prefix: &str) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    std::env::temp_dir().join(format!("{prefix}-{}-{}", std::process::id(), SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)))
+}
 
 /// Lay decoded pictures out per `o` (each fills its cell, centred, with rounded corners). Pure
 /// pixel work so the editor can preview it on small copies.
@@ -3044,7 +3068,7 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
     if *op == ImageOp::CombinePdf {
         let Some(first) = files.first() else { return (outs, errs) };
         let out = output_with_suffix(first, &op.suffix(), "pdf", |p| p.exists());
-        let tmp = std::env::temp_dir().join(format!("ferrocast-pdf-{}", std::process::id()));
+        let tmp = scratch_dir("ferrocast-pdf");
         let _ = std::fs::create_dir_all(&tmp);
         let mut pages = vec![];
         for (i, f) in files.iter().enumerate() {
@@ -4094,6 +4118,70 @@ mod convert_tests {
         // without ffmpeg an audio tool says how to get it instead of failing silently
         let (o, e) = run_file_tool(&[d.join("a.mp3")], &FileTool::Trim(0.0, 1.0), None);
         assert!(o.is_empty() && e[0].contains("brew install ffmpeg"), "{e:?}");
+    }
+
+    /// `run_file_tool` calls running at the same time (two jobs, or tests on threads of one process)
+    /// must not share or delete each other's scratch files.
+    #[test]
+    fn concurrent_pdf_splits_do_not_trip_over_each_other() {
+        use ferrocast_core::convert::FileTool;
+        let d = tmp("concurrent-split");
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
+        let (p1, p2) = (d.join("one.pdf"), d.join("two.pdf"));
+        for p in [&p1, &p2] {
+            sips(&["-s", "format", "pdf", icon, "--out", &p.to_string_lossy()]).unwrap();
+        }
+        let (m, e) = run_file_tool(&[p1, p2], &FileTool::Merge, None);
+        assert!(e.is_empty(), "{e:?}");
+        // each worker splits its own copy, so only the scratch directory could be shared
+        let workers: Vec<_> = (0..6)
+            .map(|w| {
+                let copy = d.join(format!("w{w}.pdf"));
+                std::fs::copy(&m[0], &copy).unwrap();
+                std::thread::spawn(move || {
+                    (0..4).map(|_| run_file_tool(std::slice::from_ref(&copy), &FileTool::SplitPages, None)).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for (w, h) in workers.into_iter().enumerate() {
+            for (round, (pages, errs)) in h.join().unwrap().into_iter().enumerate() {
+                assert!(errs.is_empty(), "worker {w} round {round}: {errs:?}");
+                assert_eq!(pages.len(), 2, "worker {w} round {round}: {pages:?}");
+            }
+        }
+    }
+
+    /// The image tools that stage files in a scratch place (combine into a PDF, adjust) share the
+    /// same rule: overlapping runs must not clobber each other.
+    #[test]
+    fn concurrent_image_tools_do_not_trip_over_each_other() {
+        use ferrocast_core::convert::{Adjust, ImageOp};
+        let d = tmp("concurrent-image");
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/icon-1024.png");
+        let workers: Vec<_> = (0..6)
+            .map(|w| {
+                let (a, b) = (d.join(format!("a{w}.png")), d.join(format!("b{w}.png")));
+                std::fs::copy(icon, &a).unwrap();
+                std::fs::copy(icon, &b).unwrap();
+                std::thread::spawn(move || {
+                    (0..4)
+                        .map(|_| {
+                            (
+                                run_image_op(&[a.clone(), b.clone()], &ImageOp::CombinePdf),
+                                run_image_op(std::slice::from_ref(&a), &ImageOp::Adjust(Adjust::Darker)),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for (w, h) in workers.into_iter().enumerate() {
+            for (round, ((pdf, e1), (png, e2))) in h.join().unwrap().into_iter().enumerate() {
+                assert!(e1.is_empty() && e2.is_empty(), "worker {w} round {round}: {e1:?} {e2:?}");
+                assert!(std::fs::read(&pdf[0]).unwrap().starts_with(b"%PDF"), "worker {w} round {round}: combined PDF");
+                assert!(std::fs::read(&png[0]).unwrap().starts_with(b"\x89PNG"), "worker {w} round {round}: adjusted PNG");
+            }
+        }
     }
 
     #[test]
