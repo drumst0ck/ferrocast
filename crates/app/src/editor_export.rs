@@ -522,8 +522,19 @@ pub fn draw_sheet(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor) -> Sh
             }
         });
         match &plan {
-            Ok(s) => ui.label(RichText::new(s).size(12.0).color(pal.text)),
-            Err(e) => ui.label(RichText::new(e).size(12.0).color(pal.danger)),
+            Ok(s) => {
+                // the size / length / frames line, then the sound as a quiet chip next to it
+                let (main, audio) = split_audio(s);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(main).size(12.0).color(pal.text));
+                    if let Some(a) = audio {
+                        info_chip(ui, pal, a);
+                    }
+                });
+            }
+            Err(e) => {
+                ui.label(RichText::new(e).size(12.0).color(pal.danger));
+            }
         };
         if let Some(m) = &ed.export.message {
             ui.label(RichText::new(m).size(12.0).color(pal.danger));
@@ -545,6 +556,25 @@ pub fn draw_sheet(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor) -> Sh
         pal.sub,
     );
     action
+}
+
+/// A summary line split into the plan (`1920×1080 · 2:31 · 4530 frames`) and its audio part
+/// (`Audio: mic + system` / `no audio`) when it has one.
+pub fn split_audio(summary: &str) -> (&str, Option<&str>) {
+    for key in [" · Audio: ", " · no audio"] {
+        if let Some(i) = summary.rfind(key) {
+            return (&summary[..i], Some(&summary[i + " · ".len()..]));
+        }
+    }
+    (summary, None)
+}
+
+/// A small rounded read-only tag in secondary text.
+fn info_chip(ui: &mut Ui, pal: &Palette, text: &str) {
+    let g = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(11.5), pal.sub_strong);
+    let (r, _) = ui.allocate_exact_size(egui::vec2(g.size().x + 16.0, 22.0), egui::Sense::hover());
+    ui.painter().rect_filled(r, 11.0, pal.field.gamma_multiply(1.6));
+    ui.painter().galley(Pos2::new(r.min.x + 8.0, r.center().y - g.size().y / 2.0), g, pal.sub_strong);
 }
 
 /// `/Users/me/…/Demo.mp4` shortened in the middle to at most `max` characters.
@@ -691,6 +721,13 @@ mod tests {
         all_muted.sources.mic = src("mic.m4a");
         all_muted.audio.mute = true;
         assert_eq!(audio_label(&all_muted).as_deref(), Some("no audio"));
+        // the sheet splits the line so the sound can be a chip of its own
+        assert_eq!(
+            split_audio("1920×1080 · 2:31 · 4530 frames · Audio: mic + system"),
+            ("1920×1080 · 2:31 · 4530 frames", Some("Audio: mic + system"))
+        );
+        assert_eq!(split_audio("1920×1080 · 2:31 · 4530 frames · no audio"), ("1920×1080 · 2:31 · 4530 frames", Some("no audio")));
+        assert_eq!(split_audio("1920×1080 · 2:31 · 4530 frames"), ("1920×1080 · 2:31 · 4530 frames", None));
     }
 
     #[test]
