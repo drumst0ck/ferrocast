@@ -22,6 +22,7 @@ pub mod notes_popups;
 pub mod pdf;
 pub mod process;
 pub mod running;
+pub mod selector;
 pub mod shelf;
 pub mod system;
 pub mod url_scheme;
