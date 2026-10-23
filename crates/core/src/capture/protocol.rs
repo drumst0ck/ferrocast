@@ -16,6 +16,16 @@ pub enum Command {
     Hello,
     #[serde(rename = "shareable")]
     Shareable,
+    /// List cameras and microphones (P4). Never prompts for permission.
+    #[serde(rename = "devices")]
+    Devices,
+    /// Report the Camera / Microphone permission state and ask for the ones in `request`
+    /// (this is the only command that can show the system prompt).
+    #[serde(rename = "permissions")]
+    Permissions {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        request: Vec<MediaKind>,
+    },
     #[serde(rename = "screenshot")]
     Screenshot {
         target: Target,
@@ -44,6 +54,15 @@ pub enum Command {
         cursor: bool,
         #[serde(default, skip_serializing_if = "Excludes::is_empty")]
         excludes: Excludes,
+        /// Also record a camera into `camera.mov` (P4). `{}` = the default camera; absent = off.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        camera: Option<DeviceChoice>,
+        /// Also record a microphone into `mic.m4a` (P4). `{}` = the default microphone; absent = off.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        microphone: Option<DeviceChoice>,
+        /// Also record the system audio into `system.m4a` through the screen stream (P4).
+        #[serde(default, skip_serializing_if = "is_false")]
+        system_audio: bool,
     },
     #[serde(rename = "record.stop")]
     RecordStop,
@@ -261,6 +280,118 @@ pub struct RecordStopped {
     pub interrupted: bool,
     #[serde(default)]
     pub message: Option<String>,
+    /// Files of every recorded source with their offset to the screen t0 (P4). Only present when
+    /// the request asked for camera, microphone or system audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sources: Option<RecordSources>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Which device a P4 source records; `device` is the id from `devices`, absent = the system default.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DeviceChoice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+/// A recorded file of a side source. `offset` is seconds from the screen take's t0 to the file's
+/// first sample on the helper's host clock (the file's time 0): the renderer adds it.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SourceFile {
+    pub file: String,
+    #[serde(default)]
+    pub offset: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CameraSource {
+    pub file: String,
+    #[serde(default)]
+    pub offset: f64,
+    #[serde(default)]
+    pub size: [u32; 2],
+    #[serde(default)]
+    pub frames: u64,
+}
+
+/// The `sources` object of a `record.stop` reply; `screen` always has offset 0.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecordSources {
+    pub screen: SourceFile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<CameraSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mic: Option<SourceFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<SourceFile>,
+}
+
+/// A camera as listed by `devices`. `name` may be empty when Camera access was not granted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CameraDevice {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// `front`, `back` or `unspecified` (built-in Mac cameras and externals report `unspecified`).
+    #[serde(default = "default_position")]
+    pub position: String,
+    #[serde(default)]
+    pub default: bool,
+}
+
+/// A microphone as listed by `devices`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MicrophoneDevice {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub default: bool,
+}
+
+/// Payload of a successful `devices`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Devices {
+    #[serde(default)]
+    pub cameras: Vec<CameraDevice>,
+    #[serde(default)]
+    pub microphones: Vec<MicrophoneDevice>,
+}
+
+fn default_position() -> String {
+    "unspecified".into()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Camera,
+    Microphone,
+}
+
+/// `AVAuthorizationStatus` as the helper reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum MediaAccess {
+    #[serde(rename = "authorized")]
+    Authorized,
+    #[serde(rename = "denied")]
+    Denied,
+    #[serde(rename = "restricted")]
+    Restricted,
+    #[serde(rename = "notDetermined")]
+    NotDetermined,
+    #[serde(other)]
+    Unknown,
+}
+
+/// Payload of a successful `permissions`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct MediaPermissions {
+    pub camera: MediaAccess,
+    pub microphone: MediaAccess,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -347,7 +478,7 @@ pub enum ErrorCode {
     PermissionScreen,
     #[serde(rename = "permission-camera")]
     PermissionCamera,
-    #[serde(rename = "permission-mic")]
+    #[serde(rename = "permission-microphone", alias = "permission-mic")]
     PermissionMic,
     #[serde(rename = "not-found")]
     NotFound,
@@ -550,6 +681,9 @@ mod tests {
             fps: 60,
             cursor: true,
             excludes: Excludes::default(),
+            camera: None,
+            microphone: None,
+            system_audio: false,
         };
         let s = encode_request(&Request { id: 5, command: c.clone() });
         assert_eq!(
@@ -568,6 +702,9 @@ mod tests {
             fps: 30,
             cursor: false,
             excludes: Excludes { window_ids: vec![9001] },
+            camera: None,
+            microphone: None,
+            system_audio: false,
         };
         let s = encode_request(&Request { id: 6, command: with.clone() });
         assert!(s.ends_with(r#""excludes":{"window_ids":[9001]}}"#), "{s}");
@@ -847,5 +984,129 @@ mod tests {
                 .unwrap();
         let s = encode_request(&r);
         assert!(s.contains(r#""camera""#) && !s.contains("cursor") && !s.contains("ring") && !s.contains("blur"), "{s}");
+    }
+
+    #[test]
+    fn record_start_without_p4_fields_is_the_old_line_and_decodes_to_none() {
+        let line = r#"{"id":5,"cmd":"record.start","project":"/p","file":"screen.mov","target":{"kind":"display","display":1},"fps":60,"cursor":false}"#;
+        let r: Request = serde_json::from_str(line).unwrap();
+        let Command::RecordStart { camera, microphone, system_audio, .. } = &r.command else { panic!() };
+        assert_eq!((camera, microphone, *system_audio), (&None, &None, false));
+        assert_eq!(encode_request(&r), line, "absent P4 fields must not appear on the wire");
+    }
+
+    #[test]
+    fn record_start_carries_camera_microphone_and_system_audio_independently() {
+        let base = |camera, microphone, system_audio| Command::RecordStart {
+            project: "/p".into(),
+            file: "screen.mov".into(),
+            target: Target::Display { display: 1 },
+            fps: 60,
+            cursor: false,
+            excludes: Excludes::default(),
+            camera,
+            microphone,
+            system_audio,
+        };
+        let c = base(Some(DeviceChoice { device: Some("0x1".into()) }), None, true);
+        let s = encode_request(&Request { id: 1, command: c.clone() });
+        assert!(s.ends_with(r#""cursor":false,"camera":{"device":"0x1"},"system_audio":true}"#), "{s}");
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap().command, c);
+        // `{}` means "the default device"; the key is kept
+        let m = base(None, Some(DeviceChoice::default()), false);
+        let s = encode_request(&Request { id: 2, command: m.clone() });
+        assert!(s.ends_with(r#""cursor":false,"microphone":{}}"#), "{s}");
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap().command, m);
+        // an explicit null is "off"
+        let r: Request = serde_json::from_str(
+            r#"{"id":3,"cmd":"record.start","project":"/p","target":{"kind":"display","display":1},"camera":null,"system_audio":false}"#,
+        )
+        .unwrap();
+        assert_eq!(r.command, base(None, None, false));
+    }
+
+    #[test]
+    fn record_stop_reply_lists_sources_and_old_replies_have_none() {
+        let Line::Ok { body, .. } = decode_line(
+            r#"{"id":8,"ok":true,"project":"/p","duration":2.0,"screen":"screen.mov","size":[2,2],"sources":{"screen":{"file":"screen.mov","offset":0},"camera":{"file":"camera.mov","offset":0.021,"size":[1280,720],"frames":58},"mic":{"file":"mic.m4a","offset":-0.004},"system":{"file":"system.m4a","offset":0.013},"future":1}}"#,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let d: RecordStopped = parse_body(&body).unwrap();
+        let s = d.sources.unwrap();
+        assert_eq!(s.screen, SourceFile { file: "screen.mov".into(), offset: 0.0 });
+        assert_eq!(s.camera, Some(CameraSource { file: "camera.mov".into(), offset: 0.021, size: [1280, 720], frames: 58 }));
+        assert_eq!(s.mic, Some(SourceFile { file: "mic.m4a".into(), offset: -0.004 }));
+        assert_eq!(s.system.map(|f| f.file), Some("system.m4a".into()));
+        let Line::Ok { body, .. } =
+            decode_line(r#"{"id":8,"ok":true,"project":"/p","duration":1.0,"screen":"screen.mov","size":[2,2]}"#).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(parse_body::<RecordStopped>(&body).unwrap().sources, None);
+        // only screen: the optional ones stay None
+        let only: RecordSources = serde_json::from_str(r#"{"screen":{"file":"screen.mov","offset":0}}"#).unwrap();
+        assert_eq!((only.camera, only.mic, only.system), (None, None, None));
+    }
+
+    #[test]
+    fn devices_request_and_reply() {
+        assert_eq!(encode_request(&Request { id: 4, command: Command::Devices }), r#"{"id":4,"cmd":"devices"}"#);
+        let Line::Ok { body, .. } = decode_line(
+            r#"{"id":4,"ok":true,"cameras":[{"id":"0x8020000005ac8514","name":"FaceTime HD Camera","position":"front","default":true},{"id":"x","name":"","default":false}],"microphones":[{"id":"BuiltInMicrophoneDevice","name":"MacBook Pro Microphone","default":true}]}"#,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let d: Devices = parse_body(&body).unwrap();
+        assert_eq!((d.cameras.len(), d.cameras[0].position.as_str(), d.cameras[0].default), (2, "front", true));
+        assert_eq!((d.cameras[1].name.as_str(), d.cameras[1].position.as_str()), ("", "unspecified"));
+        assert_eq!((d.microphones[0].id.as_str(), d.microphones[0].default), ("BuiltInMicrophoneDevice", true));
+        let empty: Devices = parse_body(&serde_json::json!({"ok":true})).unwrap();
+        assert!(empty.cameras.is_empty() && empty.microphones.is_empty());
+    }
+
+    #[test]
+    fn permissions_request_names_what_to_ask_and_reply_reports_states() {
+        let ask = Command::Permissions { request: vec![MediaKind::Camera, MediaKind::Microphone] };
+        let s = encode_request(&Request { id: 6, command: ask.clone() });
+        assert_eq!(s, r#"{"id":6,"cmd":"permissions","request":["camera","microphone"]}"#);
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap().command, ask);
+        assert_eq!(
+            encode_request(&Request { id: 7, command: Command::Permissions { request: vec![] } }),
+            r#"{"id":7,"cmd":"permissions"}"#
+        );
+        let Line::Ok { body, .. } = decode_line(r#"{"id":6,"ok":true,"camera":"notDetermined","microphone":"authorized"}"#).unwrap() else {
+            panic!()
+        };
+        let p: MediaPermissions = parse_body(&body).unwrap();
+        assert_eq!((p.camera, p.microphone), (MediaAccess::NotDetermined, MediaAccess::Authorized));
+        let p: MediaPermissions = parse_body(&serde_json::json!({"camera":"somethingNew","microphone":"restricted"})).unwrap();
+        assert_eq!((p.camera, p.microphone), (MediaAccess::Unknown, MediaAccess::Restricted));
+    }
+
+    #[test]
+    fn media_permission_error_codes() {
+        let e = |c: &str| {
+            let Line::Error { code, .. } = decode_line(&format!(r#"{{"id":1,"error":"{c}","message":"m"}}"#)).unwrap() else { panic!() };
+            code
+        };
+        assert_eq!(e("permission-camera"), ErrorCode::PermissionCamera);
+        assert_eq!(e("permission-microphone"), ErrorCode::PermissionMic);
+        assert_eq!(e("permission-mic"), ErrorCode::PermissionMic, "the pre-P4 spelling still decodes");
+        assert_eq!(serde_json::to_string(&ErrorCode::PermissionMic).unwrap(), r#""permission-microphone""#);
+    }
+
+    #[test]
+    fn camera_and_mic_warn_events_decode() {
+        let Line::Event { name, body, .. } = decode_line(r#"{"event":"warn","id":5,"code":"camera-lost","message":"unplugged"}"#).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            parse_record_event(&name, &body),
+            Some(RecordEvent::Warn { code: "camera-lost".into(), message: Some("unplugged".into()), free_bytes: None })
+        );
     }
 }

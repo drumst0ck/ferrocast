@@ -43,7 +43,7 @@ func handle(_ req: [String: Any]) {
     if cmd == "hello" {
         reply(id, ["protocol": protocolVersion, "os": osVersionString(), "version": helperVersion,
                    "sck": sckAvailable(), "metal": MTLCreateSystemDefaultDevice() != nil,
-                   "capabilities": sckAvailable() ? ["shareable", "screenshot", "record", "render.frame", "render"] : []])
+                   "capabilities": sckAvailable() ? ["shareable", "screenshot", "record", "render.frame", "render", "devices", "record.sources"] : []])
         return
     }
     guard #available(macOS 14, *) else {
@@ -52,6 +52,8 @@ func handle(_ req: [String: Any]) {
     }
     switch cmd {
     case "shareable": handleShareable(id)
+    case "devices": handleDevices(id)
+    case "permissions": handlePermissions(id, req)
     case "screenshot": handleScreenshot(id, req)
     case "record.start": handleRecordStart(id, req)
     case "record.stop", "record.pause", "record.resume": handleRecordControl(id, cmd)

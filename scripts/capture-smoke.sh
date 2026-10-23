@@ -6,12 +6,14 @@
 # target/capture-spike/editor-fixture/Take.ferrocast (the generated 3 s screen.mov, the render
 # fixture's project.json with duration 3 and no zooms, and render_events.json) for the editor's
 # live test and frame-rate measurement. Nothing else changes.
+# --sound: the P4 system-audio check also plays one short system sound (afplay) and checks the RMS.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 keep=0
+sound=0
 args=()
 for a in "$@"; do
-  if [ "$a" = --keep ]; then keep=1; else args+=("$a"); fi
+  if [ "$a" = --keep ]; then keep=1; elif [ "$a" = --sound ]; then sound=1; else args+=("$a"); fi
 done
 helper=${args[0]:-dist/Ferrocast.app/Contents/MacOS/ferrocast-capture}
 [ -x "$helper" ] || { echo "FAIL: helper not found or not executable: $helper"; exit 1; }
@@ -940,6 +942,214 @@ PY
     fi
     rm -rf "$rdir"
   fi
+fi
+
+# P4 (T31): `devices`, camera / microphone permission errors and the granted paths, system audio.
+# - devices: well-formed JSON, needs no grant (names may be empty without one). PASS.
+# - camera / microphone NOT authorized (checked with the helper's own `permissions` command, which
+#   never prompts unless asked): record.start answers the structured permission error, exit 1 and
+#   leaves NO file. When authorized, 2 s are recorded with that source and its duration + offset must
+#   match the screen take within 0.1 s; SKIP when Screen Recording is not granted.
+# - system audio rides the screen stream and needs only Screen Recording: 3 s are recorded and
+#   system.m4a must exist with a duration + offset within 0.1 s of the screen take. With --sound a
+#   short system sound plays (afplay) and the file must not be silent (RMS read by a tiny swiftc probe).
+if [ "$sck" != True ]; then
+  echo "SKIP: P4 sources (ScreenCaptureKit unavailable on this macOS)"
+else
+  p4dir=$(mktemp -d)
+  rms_probe=
+  if [ "$sound" = 1 ] && command -v afplay >/dev/null 2>&1 && xcrun --find swiftc >/dev/null 2>&1; then
+    cat > "$p4dir/rms.swift" <<'SW'
+import AVFoundation
+import Foundation
+let f = try AVAudioFile(forReading: URL(fileURLWithPath: CommandLine.arguments[1]))
+let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: 16384)!
+var sum = 0.0, n = 0.0
+while f.framePosition < f.length {
+    try f.read(into: buf)
+    for c in 0..<Int(f.processingFormat.channelCount) { let p = buf.floatChannelData![c]
+        for i in 0..<Int(buf.frameLength) { let v = Double(p[i]); sum += v * v; n += 1 } }
+}
+print(sqrt(sum / max(n, 1)))
+SW
+    swiftc -O "$p4dir/rms.swift" -o "$p4dir/rms" 2>/dev/null && rms_probe="$p4dir/rms"
+  fi
+  p4_out=$(python3 - "$helper" "${main_display:-1}" "$p4dir" "$sound" "$rms_probe" <<'PY'
+import json, os, struct, subprocess, sys, time
+
+helper, display, base, sound, rms_probe = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4] == "1", sys.argv[5]
+
+def duration(path):
+    """Duration in seconds from moov/mvhd (mov and m4a)."""
+    with open(path, "rb") as f:
+        def find(pos, end, names):
+            while pos + 8 <= end:
+                f.seek(pos)
+                size, kind = struct.unpack(">I4s", f.read(8))
+                head = 8
+                if size == 1:
+                    size, head = struct.unpack(">Q", f.read(8))[0], 16
+                elif size == 0:
+                    size = end - pos
+                if kind == names[0]:
+                    return (pos + head) if len(names) == 1 else find(pos + head, pos + size, names[1:])
+                pos += max(size, 8)
+            return None
+        at = find(0, os.fstat(f.fileno()).st_size, [b"moov", b"mvhd"])
+        f.seek(at)
+        version = f.read(1)[0]
+        f.read(3)
+        if version == 1:
+            f.read(16)
+            scale, dur = struct.unpack(">IQ", f.read(12))
+        else:
+            f.read(8)
+            scale, dur = struct.unpack(">II", f.read(8))
+        return dur / scale
+
+class Session:
+    def __init__(self):
+        self.p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        self.events = []
+    def call(self, o):
+        self.p.stdin.write(json.dumps(o) + "\n"); self.p.stdin.flush()
+        while True:
+            line = self.p.stdout.readline()
+            if not line:
+                return None
+            x = json.loads(line)
+            if "event" in x:
+                self.events.append(x); continue
+            if x.get("id") == o["id"]:
+                return x
+    def close(self):
+        try: self.p.stdin.close()
+        except Exception: pass
+        try: self.p.wait(timeout=10)
+        except Exception: self.p.kill()
+        return self.p.returncode
+
+def start(project, **extra):
+    o = {"id": 1, "cmd": "record.start", "project": project, "file": "screen.mov",
+         "target": {"kind": "display", "display": display}, "fps": 30}
+    o.update(extra)
+    return o
+
+failed = False
+def bad(msg):
+    global failed
+    failed = True
+    print("FAIL: " + msg)
+
+# devices
+s = Session()
+r = s.call({"id": 1, "cmd": "devices"})
+code = s.close()
+try:
+    assert r and r.get("ok") is True and code == 0, (r, code)
+    assert isinstance(r["cameras"], list) and isinstance(r["microphones"], list)
+    for c in r["cameras"]:
+        assert isinstance(c["id"], str) and c["id"] and isinstance(c["name"], str) and c["position"] in ("front", "back", "unspecified") and isinstance(c["default"], bool)
+    for m in r["microphones"]:
+        assert isinstance(m["id"], str) and m["id"] and isinstance(m["name"], str) and isinstance(m["default"], bool)
+    assert sum(c["default"] for c in r["cameras"]) <= 1 and sum(m["default"] for m in r["microphones"]) <= 1
+    print("PASS: devices (%d cameras, %d microphones, names %s)" % (len(r["cameras"]), len(r["microphones"]),
+          "present" if all(c["name"] for c in r["cameras"]) and all(m["name"] for m in r["microphones"]) else "empty without a grant"))
+except Exception as e:
+    bad("devices (%r, exit %r)" % (e, code))
+
+# permission states (never prompts without a `request`)
+s = Session()
+perm = s.call({"id": 1, "cmd": "permissions"})
+s.close()
+state = {"camera": perm.get("camera"), "microphone": perm.get("microphone")} if perm and perm.get("ok") else {}
+if not state:
+    bad("permissions -> %r" % (perm,))
+
+def screen_granted():
+    s = Session()
+    r = s.call({"id": 1, "cmd": "shareable"})
+    s.close()
+    return bool(r and r.get("ok"))
+
+can_record = screen_granted()
+n = 0
+for kind, source, code_name, granted_file in (("camera", "camera", "permission-camera", "camera.mov"), ("microphone", "microphone", "permission-microphone", "mic.m4a")):
+    n += 1
+    project = os.path.join(base, "%s.ferrocast" % kind)
+    if not can_record:
+        print("SKIP: %s (Screen Recording is not granted: the helper answers permission-screen first)" % kind)
+        continue
+    if state.get(kind) != "authorized":
+        s = Session()
+        r = s.call(start(project, **{source: {}}))
+        code = s.close()
+        files = sorted(os.listdir(project)) if os.path.isdir(project) else []
+        if r and r.get("error") == code_name and code == 1 and not files:
+            print("PASS: %s denied (state %s): structured %s, exit 1, no file" % (kind, state.get(kind), code_name))
+            print("SKIP: %s recording (not authorized; the granted path needs the user's permission)" % kind)
+        else:
+            bad("%s denied -> %r, exit %r, files %r" % (kind, r, code, files))
+        continue
+    s = Session()
+    r = s.call(start(project, **{source: {}}))
+    if not r or not r.get("ok"):
+        bad("%s start -> %r" % (kind, r)); s.close(); continue
+    time.sleep(2.0)
+    r2 = s.call({"id": 2, "cmd": "record.stop"})
+    s.close()
+    try:
+        src = r2["sources"]
+        key = "camera" if kind == "camera" else "mic"
+        info = src[key]
+        screen_d = duration(os.path.join(project, "screen.mov"))
+        d = duration(os.path.join(project, granted_file))
+        assert info["file"] == granted_file and abs(d + info["offset"] - screen_d) < 0.1, (d, info, screen_d)
+        assert not any(f.endswith(".partial") for f in os.listdir(project))
+        print("PASS: %s recording (file %.3f s + offset %.3f s vs screen %.3f s%s)" % (kind, d, info["offset"], screen_d, ", size %s, %s frames" % (info["size"], info["frames"]) if kind == "camera" else ""))
+    except Exception as e:
+        bad("%s recording (%r, reply %r)" % (kind, e, r2))
+
+# system audio
+project = os.path.join(base, "system.ferrocast")
+if not can_record:
+    print("SKIP: system audio (Screen Recording is not granted)")
+else:
+    s = Session()
+    r = s.call(start(project, system_audio=True))
+    if not r or not r.get("ok"):
+        bad("system audio start -> %r" % (r,)); s.close()
+    else:
+        time.sleep(0.8)
+        if sound and rms_probe:
+            subprocess.Popen(["afplay", "/System/Library/Sounds/Glass.aiff"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2.2)
+        r2 = s.call({"id": 2, "cmd": "record.stop"})
+        code = s.close()
+        try:
+            info = r2["sources"]["system"]
+            screen_d = duration(os.path.join(project, "screen.mov"))
+            path = os.path.join(project, "system.m4a")
+            d = duration(path)
+            assert code == 0 and info["file"] == "system.m4a" and r2["sources"]["screen"] == {"file": "screen.mov", "offset": 0}, (code, r2)
+            assert abs(d + info["offset"] - screen_d) < 0.1, (d, info, screen_d)
+            assert not any(f.endswith(".partial") for f in os.listdir(project))
+            extra = ""
+            if sound and rms_probe:
+                rms = float(subprocess.check_output([rms_probe, path], text=True).strip())
+                assert rms > 0.002, "silent system audio (rms %.6f)" % rms
+                extra = ", rms %.4f" % rms
+            print("PASS: system audio (file %.3f s + offset %.3f s vs screen %.3f s%s)" % (d, info["offset"], screen_d, extra))
+            if not (sound and rms_probe):
+                print("SKIP: system audio non-silence (pass --sound to play one short system sound and check the RMS)")
+        except Exception as e:
+            bad("system audio (%r, reply %r)" % (e, r2))
+sys.exit(1 if failed else 0)
+PY
+  ); p4_rc=$?
+  echo "$p4_out"
+  [ "$p4_rc" = 0 ] || fail=1
+  rm -rf "$p4dir"
 fi
 
 # Unknown command: structured error, still protocol-only stdout.

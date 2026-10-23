@@ -159,6 +159,13 @@ private func permissionDenied(_ id: Any?) -> Never {
     exit(1)
 }
 
+/// S12: Camera / Microphone not authorized (denied, restricted, or never asked: the helper does not
+/// prompt here, `permissions` does). Replied before any file exists.
+private func mediaPermissionDenied(_ id: Any?, _ kind: MediaKind, _ state: String) -> Never {
+    fail(id, kind.permissionCode, "\(kind.label) is not granted (\(state))")
+    exit(1)
+}
+
 private func number(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
 
 private func even(_ v: Double) -> Int { max(2, Int(v.rounded()) & ~1) }
@@ -196,6 +203,10 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     var warnedNoFrames = false
     /// Input event log (`events.json`), started and stopped with the recording.
     var events: InputRecorder?
+    /// Camera / microphone / system audio (P4); nil = the plain screen recording.
+    var sides: SideSources?
+    /// `sources` of the stop reply once the side files are finished.
+    var sourcesResult: [String: Any]?
 
     init(id: Any?, project: String, file: String, writer: ScreenWriter) {
         self.id = id
@@ -204,7 +215,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         self.writer = writer
     }
 
-    private func event(_ name: String, _ fields: [String: Any] = [:]) {
+    func event(_ name: String, _ fields: [String: Any] = [:]) {
         var o = fields
         o["event"] = name
         if let id = id { o["id"] = id }
@@ -230,6 +241,10 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     // MARK: stream
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
+        if type == .audio {
+            if let system = sides?.system, state == .recording { appendSystemAudio(system, sb) }
+            return
+        }
         guard type == .screen, CMSampleBufferIsValid(sb) else { return }
         guard let atts = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let raw = atts.first?[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete,
@@ -254,11 +269,23 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         interruption = message
         timer?.cancel()
         timer = nil
-        outcome = wasArming ? .failure(RecordFailure(message: message)) : finishFile(at: hostSeconds())
+        sides?.stopSessions()
+        let stoppedAt = hostSeconds()
+        outcome = wasArming ? .failure(RecordFailure(message: message)) : finishFile(at: stoppedAt)
+        finishSides(screenElapsed: writer.elapsed(at: stoppedAt), keep: { if case .success = outcome { return true } else { return false } }())
         if case .failure(let f) = outcome { log("recording lost: \(f.message)") }
         if case .success = outcome { events?.finish(at: hostSeconds(), write: true) } else { events?.finish(at: hostSeconds(), write: false) }
         releasePower()
         event("state", ["state": "failed", "message": message])
+    }
+
+    /// Close the side files (or delete them when the screen take failed) and keep their `sources`.
+    private func finishSides(screenElapsed: Double, keep: Bool) {
+        guard let s = sides else { return }
+        guard keep else { s.discardAll(); return }
+        let (sources, warnings) = s.finish(screenElapsed: screenElapsed)
+        sourcesResult = sources
+        for w in warnings { event("warn", ["code": "source-failed", "message": w]) }
     }
 
     private func finishFile(at now: Double) -> Result<Double, RecordFailure> {
@@ -277,6 +304,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             let t0 = hostSeconds()
             do {
                 try writer.begin(at: t0)
+                sides?.arm(at: t0)
                 if let p = pending { writer.frame(p, hostTime: t0) }
                 pending = nil
                 state = .recording
@@ -311,6 +339,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             interrupt(why)
             return
         }
+        if state == .recording { sides?.poll(now: now) }
         let elapsed = (writer.elapsed(at: now) * 1000).rounded() / 1000
         event("tick", ["elapsed": elapsed, "frames": writer.frames, "dropped": writer.dropped])
         if writer.frames == 0 && elapsed > 5 && !warnedNoFrames {
@@ -336,6 +365,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             guard state == .recording else { return }
             let now = hostSeconds()
             writer.pause(at: now)
+            sides?.pause(at: now)
             events?.pause(at: now)
             state = .paused
             ok = true
@@ -350,6 +380,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             guard state == .paused else { return }
             let now = hostSeconds()
             writer.resume(at: now)
+            sides?.resume(at: now)
             events?.resume(at: now)
             state = .recording
             ok = true
@@ -367,6 +398,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             timer = nil
             if state == .failed { alreadyDone = true; interrupted = interruption } else if state != .done { state = .stopping }
         }
+        if !alreadyDone { sides?.stopSessions() }
         if !alreadyDone, let s = stream {
             let sem = DispatchSemaphore(value: 0)
             s.stopCapture { _ in sem.signal() }
@@ -377,7 +409,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             if alreadyDone {
                 result = outcome ?? result
             } else if state == .stopping {
+                let screenElapsed = writer.elapsed(at: stopTime)
                 result = finishFile(at: stopTime)
+                if case .success = result { finishSides(screenElapsed: screenElapsed, keep: true) } else { finishSides(screenElapsed: screenElapsed, keep: false) }
                 if case .success = result { events?.finish(at: stopTime, write: true) } else { events?.finish(at: stopTime, write: false) }
                 state = .done
                 releasePower()
@@ -411,6 +445,27 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
         return
     }
     if !CGPreflightScreenCaptureAccess() { permissionDenied(id) }
+    // P4 sources are independent and optional; absent = exactly the plain screen recording.
+    let cameraReq = req["camera"] as? [String: Any]
+    let micReq = req["microphone"] as? [String: Any]
+    let wantSystem = req["system_audio"] as? Bool ?? false
+    // S12: refuse BEFORE anything is created. This never prompts (`permissions` does).
+    for (kind, wanted) in [(MediaKind.camera, cameraReq != nil), (MediaKind.microphone, micReq != nil)] where wanted {
+        let state = kind.access
+        if state != "authorized" { mediaPermissionDenied(id, kind, state) }
+    }
+    var cameraDevice: AVCaptureDevice?
+    var micDevice: AVCaptureDevice?
+    if let c = cameraReq {
+        let (d, why) = pickDevice(.camera, c)
+        guard let d = d else { fail(id, "not-found", why); return }
+        cameraDevice = d
+    }
+    if let m = micReq {
+        let (d, why) = pickDevice(.microphone, m)
+        guard let d = d else { fail(id, "not-found", why); return }
+        micDevice = d
+    }
 
     let sem = DispatchSemaphore(value: 0)
     var content: SCShareableContent?
@@ -435,6 +490,13 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
     config.queueDepth = 6
     config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
     config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+    if wantSystem {
+        // System audio shares the screen stream (no second SCStream); the app's own sounds are left out.
+        config.capturesAudio = true
+        config.sampleRate = 48_000
+        config.channelCount = 2
+        config.excludesCurrentProcessAudio = true
+    }
     let excluded = Set(((req["excludes"] as? [String: Any])?["window_ids"] as? [NSNumber] ?? []).map { $0.uint32Value })
     let filter: SCContentFilter
     var points = CGSize.zero
@@ -511,13 +573,42 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
         rec.events = InputRecorder(config: EventsConfig(screen: screen, windowID: inputWindow, excluded: excluded),
                                    url: projectURL.appendingPathComponent("events.json"))
     }
+    if cameraDevice != nil || micDevice != nil || wantSystem {
+        let s = SideSources()
+        do {
+            if let d = cameraDevice { s.camera = try CameraCapture(device: d, final: projectURL.appendingPathComponent("camera.mov")) }
+            if let d = micDevice { s.mic = try MicCapture(device: d, final: projectURL.appendingPathComponent("mic.m4a")) }
+        } catch {
+            s.discardAll()
+            writer.discard()
+            fail(id, "internal", (error as? RecordFailure)?.message ?? error.localizedDescription)
+            return
+        }
+        if wantSystem { s.system = TrackWriter(final: projectURL.appendingPathComponent("system.m4a"), kind: .audio) }
+        s.onWarn = { [weak rec] code, message in
+            rec?.queue.async { rec?.event("warn", ["code": code, "message": message]) }
+        }
+        rec.sides = s
+    }
     let stream = SCStream(filter: filter, configuration: config, delegate: rec)
     rec.stream = stream
     do {
         try stream.addStreamOutput(rec, type: .screen, sampleHandlerQueue: rec.queue)
+        if wantSystem { try stream.addStreamOutput(rec, type: .audio, sampleHandlerQueue: rec.queue) }
     } catch {
+        rec.sides?.discardAll()
         writer.discard()
         fail(id, "internal", "cannot attach the stream output: \(error.localizedDescription)")
+        return
+    }
+    // Camera and microphone run before the screen stream so they are warm when t0 is taken in `arm`.
+    do {
+        try rec.sides?.camera?.start()
+        try rec.sides?.mic?.start()
+    } catch {
+        rec.sides?.discardAll()
+        writer.discard()
+        fail(id, "internal", (error as? RecordFailure)?.message ?? error.localizedDescription)
         return
     }
     rec.holdPower()
@@ -528,12 +619,14 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
     }
     if sem.wait(timeout: .now() + 10) == .timedOut {
         writer.discard()
+        rec.sides?.discardAll()
         rec.releasePower()
         fail(id, "internal", "the capture stream did not start")
         return
     }
     if let e = startError {
         writer.discard()
+        rec.sides?.discardAll()
         rec.releasePower()
         if (e as NSError).code == -3801 { permissionDenied(id) }
         fail(id, "internal", e.localizedDescription)
@@ -545,6 +638,7 @@ func handleRecordStart(_ id: Any?, _ req: [String: Any]) {
         stream.stopCapture { _ in sem.signal() }
         _ = sem.wait(timeout: .now() + 5)
         writer.discard()
+        rec.sides?.discardAll()
         rec.releasePower()
         fail(id, "internal", (error as? RecordFailure)?.message ?? error.localizedDescription)
         return
@@ -582,6 +676,10 @@ func handleRecordControl(_ id: Any?, _ cmd: String) {
                 "project": rec.project, "duration": (duration * 1000).rounded() / 1000, "screen": rec.file,
                 "size": [rec.writer.width, rec.writer.height], "frames": rec.writer.frames, "dropped": rec.writer.dropped,
             ]
+            if var sources = rec.sourcesResult {
+                sources["screen"] = ["file": rec.file, "offset": 0]
+                body["sources"] = sources
+            }
             if let why = interrupted {
                 body["interrupted"] = true
                 body["message"] = why

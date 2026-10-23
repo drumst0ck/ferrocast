@@ -1004,6 +1004,7 @@ mod tests {
             dropped: 0,
             interrupted: false,
             message: None,
+            sources: None,
         };
         finalize_project(&dir, &done).unwrap();
         assert_eq!(Project::load(&dir).unwrap().duration, 73.2);
