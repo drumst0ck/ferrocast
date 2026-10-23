@@ -17,6 +17,8 @@ pub mod compose;
 pub mod cursor;
 pub mod curves;
 pub mod export;
+pub mod facetrack;
+pub mod lut;
 pub mod timeline;
 pub mod transcript;
 pub mod zoom;

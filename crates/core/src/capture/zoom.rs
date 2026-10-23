@@ -4,7 +4,7 @@
 //! Coordinates in `Viewport` are normalised to the recorded video (`0..=1`, top-left
 //! origin): the display, or `screen.capture_rect` for area/window takes. `events.json`
 //! points are converted with `events::CaptureSpace`.
-use super::curves::{clamp, critical_spring, lerp};
+use super::curves::{clamp, critical_spring, lerp, smoothstep};
 use super::events::{CaptureSpace, Events};
 pub use super::project::Zoom;
 
@@ -233,6 +233,167 @@ pub fn viewport_with(zoom: &Zoom, t: f64, cursor: Option<[f64; 2]>, dead_zone: f
     Viewport { cx: clamp(c[0], half, 1.0 - half), cy: clamp(c[1], half, 1.0 - half), scale: s }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Loupes (P6 T38)
+
+use super::project::Project;
+pub use super::project::{Loupe, LOUPE_EASE_MAX, LOUPE_RADIUS_MAX, LOUPE_RADIUS_MIN, LOUPE_SCALE_MAX, LOUPE_SCALE_MIN, MIN_LOUPE};
+use super::timeline::Timeline;
+
+/// Length of a loupe added at the playhead, seconds.
+pub const NEW_LOUPE_LEN: f64 = 3.0;
+
+/// What the renderer draws at one instant: focus centre (`0..=1` of the screen content), radius
+/// (fraction of the output width), magnification and fade (`0..=1`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LoupeState {
+    pub cx: f64,
+    pub cy: f64,
+    pub radius: f64,
+    pub scale: f64,
+    pub alpha: f64,
+}
+
+/// The loupe active at source time `t`, following the cursor of an unfocused loupe through
+/// `cursor` (normalised to the content; the centre of the content when unknown). Fades with the
+/// same smoothstep ease as the rest of the effects: `alpha` is 0 at `start`, 1 after `ease_in`,
+/// and back to 0 at `end` over `ease_out`. The magnification itself stays constant.
+/// Cuts are not consulted: the renderer only asks for kept source times.
+pub fn loupe_at_with_cursor(p: &Project, t: f64, cursor: Option<[f64; 2]>) -> Option<LoupeState> {
+    let l = p.loupes.iter().find(|l| t >= l.start && t < l.end)?;
+    let ramp = |x: f64, dur: f64| if dur > 0.0 { smoothstep(x / dur) } else { 1.0 };
+    let alpha = ramp(t - l.start, l.ease_in) * ramp(l.end - t, l.ease_out);
+    let [cx, cy] = match (l.x, l.y) {
+        (Some(x), Some(y)) => [x, y],
+        _ => cursor.unwrap_or([0.5, 0.5]),
+    };
+    Some(LoupeState { cx: clamp(cx, 0.0, 1.0), cy: clamp(cy, 0.0, 1.0), radius: l.radius, scale: l.scale, alpha })
+}
+
+/// [`loupe_at_with_cursor`] without a cursor.
+pub fn loupe_at(p: &Project, t: f64) -> Option<LoupeState> {
+    loupe_at_with_cursor(p, t, None)
+}
+
+/// A loupe placed on the output timeline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoupeSpan {
+    pub id: String,
+    /// The kept part of the loupe, in source seconds.
+    pub src_start: f64,
+    pub src_end: f64,
+    pub out_start: f64,
+    pub out_end: f64,
+}
+
+/// Every loupe mapped through trims and speeds (in list order). The parts inside a cut are
+/// removed, so a loupe lying wholly in a cut is dropped; a loupe over a speed change keeps its
+/// source range and gets the output time those pieces really take.
+pub fn loupe_output_spans(p: &Project) -> Vec<LoupeSpan> {
+    let tl = Timeline::new(p);
+    let mut out = vec![];
+    for l in &p.loupes {
+        let mut kept: Option<(f64, f64, f64, f64)> = None;
+        for c in tl.pieces() {
+            let (a, b) = (l.start.max(c.src_start), l.end.min(c.src_end));
+            if b <= a {
+                continue;
+            }
+            let (oa, ob) = (tl.to_output(a), c.out_start + (b - c.src_start) / c.factor);
+            kept = Some(kept.map_or((a, b, oa, ob), |(s, _, os, _)| (s, b, os, ob)));
+        }
+        if let Some((src_start, src_end, out_start, out_end)) = kept.filter(|k| k.3 > k.2) {
+            out.push(LoupeSpan { id: l.id.clone(), src_start, src_end, out_start, out_end });
+        }
+    }
+    out
+}
+
+pub enum LoupeField {
+    Start(f64),
+    End(f64),
+    Scale(f64),
+    Radius(f64),
+    /// `None` follows the cursor.
+    Focus(Option<[f64; 2]>),
+    EaseIn(f64),
+    EaseOut(f64),
+}
+
+fn finite(v: f64) -> Result<f64, String> {
+    if v.is_finite() {
+        Ok(v)
+    } else {
+        Err("That is not a number.".into())
+    }
+}
+
+/// A loupe at `at`, [`NEW_LOUPE_LEN`] long, cut short by the next loupe or the end. Returns its id.
+/// Wrap in `History::edit(.., EditKind::Loupe, ..)` to make it undoable.
+pub fn add_loupe(p: &mut Project, at: f64) -> Result<String, String> {
+    let at = finite(at)?.clamp(0.0, p.duration.max(0.0));
+    if p.loupes.iter().any(|l| l.start <= at && at < l.end) {
+        return Err("There is already a loupe at the playhead.".into());
+    }
+    let next = p.loupes.iter().filter(|l| l.start > at).map(|l| l.start).fold(f64::INFINITY, f64::min);
+    let end = (at + NEW_LOUPE_LEN).min(p.duration).min(next);
+    if end - at < MIN_LOUPE {
+        return Err("There is no room for a loupe at the playhead.".into());
+    }
+    let id = (1..).map(|n| format!("l{n}")).find(|id| p.loupes.iter().all(|l| l.id != *id)).unwrap_or_default();
+    p.loupes.push(Loupe {
+        id: id.clone(),
+        start: at,
+        end,
+        scale: 2.0,
+        radius: 0.15,
+        x: None,
+        y: None,
+        ease_in: 0.25,
+        ease_out: 0.25,
+        extra: Default::default(),
+    });
+    p.loupes.sort_by(|a, b| a.start.total_cmp(&b.start));
+    Ok(id)
+}
+
+/// Edit one field of loupe `id`, clamped so the project stays valid (neighbours limit the span).
+pub fn set_loupe(p: &mut Project, id: &str, field: LoupeField) -> Result<(), String> {
+    let dur = p.duration.max(0.0);
+    let idx = p.loupes.iter().position(|l| l.id == id).ok_or("That loupe no longer exists.")?;
+    let prev_end =
+        p.loupes.iter().enumerate().filter(|(i, l)| *i != idx && l.end <= p.loupes[idx].start).map(|(_, l)| l.end).fold(0.0, f64::max);
+    let next_start =
+        p.loupes.iter().enumerate().filter(|(i, l)| *i != idx && l.start >= p.loupes[idx].end).map(|(_, l)| l.start).fold(dur, f64::min);
+    let l = &mut p.loupes[idx];
+    match field {
+        LoupeField::Start(v) => l.start = finite(v)?.clamp(prev_end, (l.end - MIN_LOUPE).max(prev_end)),
+        LoupeField::End(v) => l.end = finite(v)?.clamp(l.start + MIN_LOUPE, next_start.max(l.start + MIN_LOUPE)),
+        LoupeField::Scale(v) => l.scale = finite(v)?.clamp(LOUPE_SCALE_MIN, LOUPE_SCALE_MAX),
+        LoupeField::Radius(v) => l.radius = finite(v)?.clamp(LOUPE_RADIUS_MIN, LOUPE_RADIUS_MAX),
+        LoupeField::Focus(f) => {
+            let (x, y) = match f {
+                Some([x, y]) => (Some(finite(x)?.clamp(0.0, 1.0)), Some(finite(y)?.clamp(0.0, 1.0))),
+                None => (None, None),
+            };
+            l.x = x;
+            l.y = y;
+        }
+        LoupeField::EaseIn(v) => l.ease_in = finite(v)?.clamp(0.0, LOUPE_EASE_MAX),
+        LoupeField::EaseOut(v) => l.ease_out = finite(v)?.clamp(0.0, LOUPE_EASE_MAX),
+    }
+    Ok(())
+}
+
+pub fn delete_loupe(p: &mut Project, id: &str) -> Result<(), String> {
+    let n = p.loupes.len();
+    p.loupes.retain(|l| l.id != id);
+    if p.loupes.len() == n {
+        return Err("That loupe no longer exists.".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::events::{Click, CursorSample, Key, ScreenInfo};
@@ -448,5 +609,171 @@ mod tests {
         let mut full = plain.clone();
         full.screen.capture_rect = Some([0.0, 0.0, 1000.0, 500.0]);
         assert_eq!(auto_zooms(&plain, &ZoomOpts::default()), auto_zooms(&full, &ZoomOpts::default()));
+    }
+}
+
+#[cfg(test)]
+mod loupe_tests {
+    use super::super::project::{Project, Speed, Trim};
+    use super::super::timeline::{EditKind, History};
+    use super::*;
+
+    fn loupe(id: &str, start: f64, end: f64) -> Loupe {
+        Loupe {
+            id: id.into(),
+            start,
+            end,
+            scale: 2.0,
+            radius: 0.12,
+            x: Some(0.3),
+            y: Some(0.6),
+            ease_in: 0.2,
+            ease_out: 0.2,
+            extra: Default::default(),
+        }
+    }
+
+    fn proj() -> Project {
+        let mut p = Project::new("t", "2026-01-01T00:00:00Z");
+        p.duration = 20.0;
+        p
+    }
+
+    fn problems(p: &Project) -> Vec<String> {
+        p.validate(|_| true).into_iter().filter(|m| m.contains("loupe")).collect()
+    }
+
+    #[test]
+    fn loupe_json_is_optional_byte_stable_and_keeps_unknown_fields() {
+        let mut p = proj();
+        assert!(!p.to_json().contains("loupes"));
+        let l = Loupe { x: None, y: None, ..loupe("l1", 1.0, 3.0) };
+        p.loupes.push(l);
+        let s = serde_json::to_string(&p.loupes).unwrap();
+        assert_eq!(s, r#"[{"id":"l1","start":1.0,"end":3.0,"scale":2.0,"radius":0.12,"ease_in":0.2,"ease_out":0.2}]"#);
+        let l: Loupe = serde_json::from_str(r#"{"id":"a","start":1,"end":2,"future":{"k":[1]}}"#).unwrap();
+        assert_eq!((l.scale, l.radius, l.x, l.y), (2.0, 0.15, None, None));
+        assert_eq!(serde_json::to_value(&l).unwrap()["future"], serde_json::json!({"k":[1]}));
+    }
+
+    #[test]
+    fn validation_rules_each_report_one_problem() {
+        let with = |f: &dyn Fn(&mut Vec<Loupe>)| {
+            let mut p = proj();
+            p.loupes = vec![loupe("a", 2.0, 5.0)];
+            f(&mut p.loupes);
+            problems(&p)
+        };
+        assert!(with(&|_| {}).is_empty());
+        assert_eq!(with(&|l| l[0].scale = 1.19).len(), 1);
+        assert_eq!(with(&|l| l[0].scale = 4.01).len(), 1);
+        assert_eq!(with(&|l| l[0].radius = 0.04).len(), 1);
+        assert_eq!(with(&|l| l[0].radius = 0.31).len(), 1);
+        assert_eq!(with(&|l| l[0].x = Some(1.2)).len(), 1);
+        assert_eq!(with(&|l| l[0].y = None).len(), 1, "one focus coordinate without the other");
+        assert_eq!(with(&|l| l[0].ease_in = -0.1).len(), 1);
+        assert_eq!(with(&|l| l[0].ease_out = f64::NAN).len(), 1);
+        assert_eq!(with(&|l| l[0].end = 1.0).len(), 1, "end before start");
+        assert_eq!(with(&|l| l[0].end = 2.1).len(), 1, "too short");
+        assert_eq!(with(&|l| l[0].end = 25.0).len(), 1, "past the duration");
+        assert_eq!(with(&|l| l[0].start = -1.0).len(), 1);
+        assert_eq!(with(&|l| l.push(loupe("b", 4.0, 7.0))).len(), 1, "overlap");
+        assert_eq!(with(&|l| l.push(loupe("a", 6.0, 7.0))).len(), 1, "duplicate id");
+        assert!(with(&|l| l.push(loupe("b", 5.0, 7.0))).is_empty(), "touching is fine");
+        assert!(with(&|l| l.insert(0, loupe("b", 8.0, 9.0))).is_empty(), "order in the file does not matter");
+    }
+
+    #[test]
+    fn loupe_at_envelope_and_focus() {
+        let mut p = proj();
+        p.loupes = vec![loupe("a", 2.0, 6.0)];
+        assert_eq!(loupe_at(&p, 1.9), None);
+        assert_eq!(loupe_at(&p, 6.0), None);
+        let s = loupe_at(&p, 2.0).unwrap();
+        assert_eq!((s.alpha, s.cx, s.cy, s.radius, s.scale), (0.0, 0.3, 0.6, 0.12, 2.0));
+        let mid = loupe_at(&p, 2.1).unwrap().alpha;
+        assert!((mid - 0.5).abs() < 1e-12, "{mid}");
+        assert_eq!(loupe_at(&p, 4.0).unwrap().alpha, 1.0);
+        assert!((loupe_at(&p, 5.9).unwrap().alpha - 0.5).abs() < 1e-12);
+        // follows the cursor when no focus is set, clamped to the content
+        p.loupes[0].x = None;
+        p.loupes[0].y = None;
+        let s = loupe_at_with_cursor(&p, 4.0, Some([0.8, 1.4])).unwrap();
+        assert_eq!((s.cx, s.cy), (0.8, 1.0));
+        let s = loupe_at(&p, 4.0).unwrap();
+        assert_eq!((s.cx, s.cy), (0.5, 0.5));
+        // zero easing is a hard edge, not NaN
+        p.loupes[0].ease_in = 0.0;
+        p.loupes[0].ease_out = 0.0;
+        assert_eq!(loupe_at(&p, 2.0).unwrap().alpha, 1.0);
+    }
+
+    #[test]
+    fn output_spans_follow_cuts_and_speed() {
+        let mut p = proj();
+        p.trims = vec![Trim { start: 0.0, end: 4.0 }, Trim { start: 8.0, end: 20.0 }];
+        p.speeds = vec![Speed { start: 10.0, end: 14.0, factor: 2.0 }];
+        p.loupes = vec![loupe("inside_cut", 5.0, 7.0), loupe("straddle", 3.0, 9.0), loupe("fast", 9.0, 12.0), loupe("late", 12.0, 16.0)];
+        // `fast` and `late` overlap on purpose: spans are computed per loupe, validation is separate.
+        let spans = loupe_output_spans(&p);
+        let ids: Vec<&str> = spans.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["straddle", "fast", "late"], "a loupe wholly inside a cut is dropped");
+        // kept 0..4 -> out 0..4, kept 8..20: 8..10 -> 4..6, 10..14 at 2x -> 6..8, 14..20 -> 8..14
+        let s = &spans[0];
+        assert_eq!((s.out_start, s.out_end), (3.0, 5.0));
+        assert_eq!((s.src_start, s.src_end), (3.0, 9.0));
+        let f = &spans[1];
+        assert_eq!((f.out_start, f.out_end), (5.0, 7.0));
+        let l = &spans[2];
+        assert_eq!((l.out_start, l.out_end), (7.0, 10.0));
+    }
+
+    #[test]
+    fn edits_are_clamped_validated_and_undoable() {
+        let mut p = proj();
+        let mut h = History::new(50, 0.5);
+        let mut id = String::new();
+        assert!(h.edit(&mut p, EditKind::Loupe, 0.0, |p| id = add_loupe(p, 4.0).unwrap()));
+        assert_eq!(p.loupes.len(), 1);
+        assert_eq!((p.loupes[0].start, p.loupes[0].end), (4.0, 7.0));
+        assert!(problems(&p).is_empty());
+        // no loupe on top of another one
+        assert!(add_loupe(&mut p, 5.0).is_err());
+        let before = p.clone();
+        assert!(set_loupe(&mut p, "nope", LoupeField::Scale(2.0)).is_err());
+        assert!(set_loupe(&mut p, &id, LoupeField::Scale(f64::NAN)).is_err());
+        assert_eq!(p, before);
+        // continuous edits coalesce into one undo step and clamp to the valid range
+        for (i, v) in [3.0, 3.5, 9.0].into_iter().enumerate() {
+            assert!(h.edit(&mut p, EditKind::Loupe, 0.1 + i as f64 * 0.1, |p| set_loupe(p, &id, LoupeField::Scale(v)).unwrap()));
+        }
+        assert_eq!(p.loupes[0].scale, 4.0);
+        set_loupe(&mut p, &id, LoupeField::Radius(0.9)).unwrap();
+        assert_eq!(p.loupes[0].radius, 0.30);
+        set_loupe(&mut p, &id, LoupeField::Focus(Some([2.0, -1.0]))).unwrap();
+        assert_eq!((p.loupes[0].x, p.loupes[0].y), (Some(1.0), Some(0.0)));
+        set_loupe(&mut p, &id, LoupeField::Focus(None)).unwrap();
+        assert_eq!((p.loupes[0].x, p.loupes[0].y), (None, None));
+        set_loupe(&mut p, &id, LoupeField::End(100.0)).unwrap();
+        assert_eq!(p.loupes[0].end, 20.0);
+        set_loupe(&mut p, &id, LoupeField::Start(19.99)).unwrap();
+        assert!(p.loupes[0].end - p.loupes[0].start >= MIN_LOUPE - 1e-12);
+        assert!(problems(&p).is_empty(), "{:?}", problems(&p));
+        // a neighbour limits End
+        let mut q = proj();
+        q.loupes = vec![loupe("a", 2.0, 4.0), loupe("b", 8.0, 9.0)];
+        set_loupe(&mut q, "a", LoupeField::End(15.0)).unwrap();
+        assert_eq!(q.loupes[0].end, 8.0);
+        set_loupe(&mut q, "b", LoupeField::Start(0.0)).unwrap();
+        assert_eq!(q.loupes[1].start, 8.0, "a now ends at 8, so b cannot start earlier");
+        // delete + undo/redo restore exact projects
+        assert!(h.edit(&mut p, EditKind::Loupe, 5.0, |p| delete_loupe(p, &id).unwrap()));
+        assert!(p.loupes.is_empty() && delete_loupe(&mut p, &id).is_err());
+        assert!(h.undo(&mut p));
+        assert_eq!((p.loupes.len(), p.loupes[0].scale), (1, 4.0));
+        assert!(h.undo(&mut p));
+        assert!(p.loupes.is_empty(), "the add and the three scale drags were one undo step");
+        assert!(h.redo(&mut p));
+        assert_eq!(p.loupes.len(), 1);
     }
 }

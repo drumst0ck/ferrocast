@@ -13,7 +13,7 @@ fn camera_fixture_decodes_and_maps_audio() {
     let p: Project = serde_json::from_str(FIXTURE).expect("decode");
     assert!(timeline::validate(&p).is_empty(), "{:?}", timeline::validate(&p));
     assert!(p.validate(|_| true).is_empty());
-    let cam = p.camera.unwrap();
+    let cam = p.camera.clone().unwrap();
     assert_eq!(cam.corner, Corner::TopRight);
     let r = camera::rect(1920.0, 1080.0, &cam);
     assert_eq!((r.w, r.x, r.y), (480.0, 1920.0 - 480.0 - 58.0, 58.0));

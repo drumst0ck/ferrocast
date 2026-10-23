@@ -118,6 +118,52 @@ fn ease_out() -> f64 {
     0.7
 }
 
+/// Loupe magnification range (P6 T38).
+pub const LOUPE_SCALE_MIN: f64 = 1.2;
+pub const LOUPE_SCALE_MAX: f64 = 4.0;
+/// Loupe radius range, as a fraction of the output width.
+pub const LOUPE_RADIUS_MIN: f64 = 0.05;
+pub const LOUPE_RADIUS_MAX: f64 = 0.30;
+/// Shortest loupe span, seconds.
+pub const MIN_LOUPE: f64 = 0.2;
+/// Longest fade, seconds.
+pub const LOUPE_EASE_MAX: f64 = 3.0;
+
+/// A magnifier over the screen content for `start..end` (SOURCE seconds, like zooms). `x`/`y`
+/// are the focus (`0..=1` of the screen content); both absent = follow the cursor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Loupe {
+    pub id: String,
+    pub start: f64,
+    pub end: f64,
+    #[serde(default = "loupe_scale")]
+    pub scale: f64,
+    /// Fraction of the output width.
+    #[serde(default = "loupe_radius")]
+    pub radius: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    #[serde(default = "loupe_ease")]
+    pub ease_in: f64,
+    #[serde(default = "loupe_ease")]
+    pub ease_out: f64,
+    /// Fields written by a newer build, kept on save.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+fn loupe_scale() -> f64 {
+    2.0
+}
+fn loupe_radius() -> f64 {
+    0.15
+}
+fn loupe_ease() -> f64 {
+    0.25
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CursorStyle {
@@ -296,9 +342,9 @@ pub struct Project {
     pub camera: Option<CameraLayout>,
     #[serde(default)]
     pub audio: Audio,
-    /// P6 effects (placeholder).
+    /// P6 loupes (source-time magnifier spans); omitted when there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub loupes: Vec<Value>,
+    pub loupes: Vec<Loupe>,
     /// P5 transcript (source-time words); omitted until transcribed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<Transcript>,
@@ -439,6 +485,7 @@ impl Project {
                 out.push(format!("speeds[{i}]: not inside a kept range"));
             }
         }
+        self.validate_loupes(&mut out);
         let mut zooms: Vec<&Zoom> = self.zooms.iter().collect();
         zooms.sort_by(|a, b| a.start.total_cmp(&b.start));
         for w in zooms.windows(2) {
@@ -467,6 +514,51 @@ impl Project {
             out.push(format!("export.fps {} must be 24, 30 or 60", self.export.fps));
         }
         out
+    }
+}
+
+impl Project {
+    fn validate_loupes(&self, out: &mut Vec<String>) {
+        let num = |v: f64, lo: f64, hi: f64| v.is_finite() && (lo..=hi).contains(&v);
+        for (i, l) in self.loupes.iter().enumerate() {
+            let name = format!("loupe {}", l.id);
+            if self.loupes[..i].iter().any(|o| o.id == l.id) {
+                out.push(format!("{name}: duplicate id"));
+            }
+            if !(l.start.is_finite() && l.end.is_finite()) || l.end <= l.start {
+                out.push(format!("{name}: end must be after start"));
+            } else {
+                if l.start < 0.0 || l.end > self.duration {
+                    out.push(format!("{name}: outside 0..{}", self.duration));
+                }
+                if l.end - l.start < MIN_LOUPE - 1e-9 {
+                    out.push(format!("{name}: shorter than {MIN_LOUPE} s"));
+                }
+            }
+            if !num(l.scale, LOUPE_SCALE_MIN, LOUPE_SCALE_MAX) {
+                out.push(format!("{name}: scale {} outside {LOUPE_SCALE_MIN}..={LOUPE_SCALE_MAX}", l.scale));
+            }
+            if !num(l.radius, LOUPE_RADIUS_MIN, LOUPE_RADIUS_MAX) {
+                out.push(format!("{name}: radius {} outside {LOUPE_RADIUS_MIN}..={LOUPE_RADIUS_MAX}", l.radius));
+            }
+            if l.x.is_some() != l.y.is_some() {
+                out.push(format!("{name}: x and y must both be set or both absent"));
+            } else if [l.x, l.y].into_iter().flatten().any(|v| !num(v, 0.0, 1.0)) {
+                out.push(format!("{name}: focus outside 0..=1"));
+            }
+            for (field, v) in [("ease_in", l.ease_in), ("ease_out", l.ease_out)] {
+                if !num(v, 0.0, LOUPE_EASE_MAX) {
+                    out.push(format!("{name}: {field} {v} outside 0..={LOUPE_EASE_MAX}"));
+                }
+            }
+        }
+        let mut spans: Vec<&Loupe> = self.loupes.iter().filter(|l| l.start.is_finite() && l.end.is_finite()).collect();
+        spans.sort_by(|a, b| a.start.total_cmp(&b.start));
+        for w in spans.windows(2) {
+            if w[1].start < w[0].end {
+                out.push(format!("loupes {} and {} overlap", w[0].id, w[1].id));
+            }
+        }
     }
 }
 
@@ -708,7 +800,7 @@ mod tests {
     #[test]
     fn camera_fixture_decodes_validates_and_round_trips() {
         let p = Project::from_json(CAMERA_FIXTURE).unwrap();
-        let cam = p.camera.expect("camera");
+        let cam = p.camera.clone().expect("camera");
         assert_eq!((cam.shape, cam.corner, cam.size, cam.mirror), (CameraShape::Rounded, Corner::TopRight, 0.25, false));
         assert_eq!(p.sources.camera.as_ref().unwrap().file, "camera.mov");
         assert_eq!(p.sources.mic.as_ref().unwrap().offset, 0.2);

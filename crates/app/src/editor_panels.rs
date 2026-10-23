@@ -1702,7 +1702,7 @@ fn source_rows(ui: &mut Ui, pal: &Palette, ed: &Editor, proj: &Project, only: &[
 }
 
 fn camera_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
-    let c = proj.camera.unwrap_or_default();
+    let c = proj.camera.clone().unwrap_or_default();
     if toggle_row(ui, pal, "Show camera", c.visible) {
         ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Visible(!c.visible)));
     }
@@ -2645,19 +2645,19 @@ mod tests {
         set_camera(&mut p, CameraField::Visible(false)).unwrap();
         set_camera(&mut p, CameraField::Size(0.3)).unwrap();
         set_camera(&mut p, CameraField::Margin(0.05)).unwrap();
-        let c = p.camera.unwrap();
+        let c = p.camera.as_ref().unwrap();
         assert_eq!(
             (c.shape, c.corner, c.mirror, c.visible, c.size, c.margin),
             (CameraShape::Square, Corner::TopLeft, false, false, 0.3, 0.05)
         );
         set_camera(&mut p, CameraField::Size(0.9)).unwrap();
-        assert_eq!(p.camera.unwrap().size, SIZE_MAX);
+        assert_eq!(p.camera.as_ref().unwrap().size, SIZE_MAX);
         set_camera(&mut p, CameraField::Size(0.0)).unwrap();
-        assert_eq!(p.camera.unwrap().size, SIZE_MIN);
+        assert_eq!(p.camera.as_ref().unwrap().size, SIZE_MIN);
         set_camera(&mut p, CameraField::Margin(5.0)).unwrap();
-        assert_eq!(p.camera.unwrap().margin, MARGIN_MAX);
+        assert_eq!(p.camera.as_ref().unwrap().margin, MARGIN_MAX);
         set_camera(&mut p, CameraField::Margin(-1.0)).unwrap();
-        assert_eq!(p.camera.unwrap().margin, 0.0);
+        assert_eq!(p.camera.as_ref().unwrap().margin, 0.0);
         assert!(set_camera(&mut p, CameraField::Size(f64::NAN)).is_err());
         assert!(set_camera(&mut p, CameraField::Margin(f64::INFINITY)).is_err());
         assert!(p.validate(|_| true).is_empty(), "everything the panel writes validates");
@@ -2665,7 +2665,7 @@ mod tests {
         let mut no_layout = with_sources();
         no_layout.camera = None;
         set_camera(&mut no_layout, CameraField::Mirror(false)).unwrap();
-        assert!(!no_layout.camera.unwrap().mirror);
+        assert!(!no_layout.camera.as_ref().unwrap().mirror);
         // no camera source: nothing to edit
         assert!(set_camera(&mut base(), CameraField::Visible(false)).unwrap_err().contains("no camera"));
     }
@@ -2721,10 +2721,10 @@ mod tests {
         ed.flush(31.0);
         let saved = disk(&dir);
         assert_eq!(saved.audio.mic.unwrap().gain_db, -3.5);
-        assert_eq!(saved.camera.unwrap().size, 0.3);
+        assert_eq!(saved.camera.as_ref().unwrap().size, 0.3);
         assert!(ed.undo(32.0), "the shape");
         assert!(ed.undo(32.0), "both size drags");
-        assert_eq!(ed.project.as_ref().unwrap().camera.unwrap().size, 0.20);
+        assert_eq!(ed.project.as_ref().unwrap().camera.as_ref().unwrap().size, 0.20);
         assert!(ed.undo(32.0), "the three gain drags");
         assert_eq!(ed.project.as_ref().unwrap().audio.mic.unwrap().gain_db, 0.0);
         assert!(!ed.undo(32.0), "nothing left: one step per drag");

@@ -258,6 +258,7 @@ pub enum EditKind {
     Split,
     Speed,
     Zoom,
+    Loupe,
     Cursor,
     Style,
     Audio,
