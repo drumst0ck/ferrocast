@@ -204,6 +204,8 @@ pub enum Msg {
     Wake,
     /// A screenshot finished (see `capture_ctl`).
     Capture(crate::capture_ctl::Outcome),
+    /// Copy Text finished: text for the clipboard (None: leave it) and the toast.
+    OcrDone(Option<String>, String),
 }
 
 /// What the Obsidian scan found.

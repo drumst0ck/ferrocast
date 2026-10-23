@@ -234,14 +234,53 @@ pub fn choose_target(
     drop(helper);
     let selection = match kind {
         CaptureKind::Screen => None,
-        // T7 gap: `selector::select` has no start-in-window-mode parameter, so Capture Window
-        // opens the same overlay and the user presses Space (S5).
-        CaptureKind::Area | CaptureKind::Window => Some(ferrocast_macos::selector::select(mtm, selector_windows(&shareable.windows))),
+        CaptureKind::Area | CaptureKind::Window => {
+            select_mode(kind).map(|mode| ferrocast_macos::selector::select_with(mtm, selector_windows(&shareable.windows), mode))
+        }
     };
     match capture_plan(kind, selection, pointer_top_left(mtm), &shareable) {
         Plan::Shoot(t) => Ok(t),
         Plan::Nothing => Err(Outcome::Cancelled),
     }
+}
+
+/// Overlay start mode per capture kind: Capture Window starts in window mode (S5); Screen has no overlay.
+pub fn select_mode(kind: CaptureKind) -> Option<ferrocast_macos::selector::Mode> {
+    use ferrocast_macos::selector::Mode;
+    match kind {
+        CaptureKind::Area => Some(Mode::Area),
+        CaptureKind::Window => Some(Mode::Window),
+        CaptureKind::Screen => None,
+    }
+}
+
+/// Copy Text result (S8): the text to put on the clipboard (`None`: leave it alone) and the toast.
+/// A Vision failure toasts its own text.
+pub fn ocr_outcome(result: Result<Vec<ferrocast_core::capture::ocr::TextBox>, String>) -> (Option<String>, String) {
+    use ferrocast_core::capture::ocr;
+    match result {
+        Ok(boxes) => {
+            let text = ocr::join(&boxes);
+            let text = text.trim().to_string();
+            let toast = ocr::toast(&text);
+            (if text.is_empty() { None } else { Some(text) }, toast)
+        }
+        Err(e) => (None, e),
+    }
+}
+
+/// Background thread: recognise the text of `file` (nothing leaves the Mac).
+pub fn recognize(file: &Path) -> (Option<String>, String) {
+    ocr_outcome(ferrocast_macos::vision::recognize_text(file))
+}
+
+/// Pin arguments (S9): pixel size and the scale of the capture's display (2.0 when unknown or
+/// not a positive number). `None` for an empty image.
+pub fn pin_args(size: (u32, u32), scale: Option<f64>) -> Option<((u32, u32), f64)> {
+    if size.0 == 0 || size.1 == 0 {
+        return None;
+    }
+    Some((size, scale.filter(|s| s.is_finite() && *s > 0.0).unwrap_or(2.0)))
 }
 
 /// Background thread: take the picture into `dir` (the helper leaves no partial file on failure).
@@ -458,5 +497,45 @@ mod tests {
             assert!(button_enabled(b.id, true), "{:?}", b.id);
             assert!(!button_enabled(b.id, false), "{:?}", b.id);
         }
+    }
+
+    #[test]
+    fn selector_mode_follows_capture_kind() {
+        use ferrocast_macos::selector::Mode;
+        assert_eq!(select_mode(CaptureKind::Area), Some(Mode::Area));
+        assert_eq!(select_mode(CaptureKind::Window), Some(Mode::Window));
+        assert_eq!(select_mode(CaptureKind::Screen), None);
+    }
+
+    fn tb(text: &str, y: f64) -> ferrocast_core::capture::ocr::TextBox {
+        ferrocast_core::capture::ocr::TextBox { text: text.into(), x: 0.0, y, w: 0.5, h: 0.05, confidence: 1.0 }
+    }
+
+    #[test]
+    fn ocr_outcome_copies_text_and_counts_characters() {
+        let (copy, toast) = ocr_outcome(Ok(vec![tb("héllo", 0.1), tb("ab", 0.5)]));
+        let text = copy.expect("text to copy");
+        assert!(text.contains("héllo") && text.contains("ab"));
+        assert_eq!(toast, format!("Copied {} characters", text.chars().count()));
+    }
+
+    #[test]
+    fn ocr_outcome_without_text_leaves_clipboard_alone() {
+        assert_eq!(ocr_outcome(Ok(vec![])), (None, "No text found".to_string()));
+        assert_eq!(ocr_outcome(Ok(vec![tb("   ", 0.1)])), (None, "No text found".to_string()));
+    }
+
+    #[test]
+    fn ocr_outcome_failure_toasts_the_error_text() {
+        assert_eq!(ocr_outcome(Err("inference context".into())), (None, "inference context".to_string()));
+    }
+
+    #[test]
+    fn pin_args_default_to_retina_and_reject_bad_input() {
+        assert_eq!(pin_args((800, 600), None), Some(((800, 600), 2.0)));
+        assert_eq!(pin_args((800, 600), Some(1.0)), Some(((800, 600), 1.0)));
+        assert_eq!(pin_args((800, 600), Some(0.0)), Some(((800, 600), 2.0)));
+        assert_eq!(pin_args((800, 600), Some(f64::NAN)), Some(((800, 600), 2.0)));
+        assert_eq!(pin_args((0, 600), Some(2.0)), None);
     }
 }

@@ -11152,18 +11152,45 @@ fn capture_window_annotate_and_background_open_the_existing_editors_on_the_saved
 }
 
 #[test]
-fn capture_window_copy_text_and_pin_are_stubs_that_say_not_available_yet() {
-    let f = capture_png("stubs");
-    for (idx, key) in [(4, Key::T), (5, Key::P)] {
+fn capture_window_copy_text_runs_ocr_off_thread_and_closes_the_window() {
+    let f = capture_png("ocr");
+    for via_key in [false, true] {
         let mut app = capture_app(&f);
-        let btns = capture_buttons_drawn(&mut app);
-        click_at(&mut app, btns[idx].0);
-        assert!(app.toast.as_ref().is_some_and(|t| t.0 == "Not available yet"), "button {idx}: {:?}", app.toast);
-        assert!(matches!(app.view(), View::CaptureResult { .. }), "the window stays open");
-        let mut app = capture_app(&f);
-        render(&mut app, vec![key_mod_event(key, Modifiers::COMMAND)]);
-        assert!(app.toast.as_ref().is_some_and(|t| t.0 == "Not available yet"), "shortcut {key:?}: {:?}", app.toast);
+        if via_key {
+            render(&mut app, vec![key_mod_event(Key::T, Modifiers::COMMAND)]);
+        } else {
+            let btns = capture_buttons_drawn(&mut app);
+            click_at(&mut app, btns[4].0);
+        }
+        assert!(app.toast.as_ref().is_none_or(|t| t.0 != "Not available yet"), "{:?}", app.toast);
+        assert!(matches!(app.view(), View::Root), "the window closes while the text is read");
+        // the blank fixture holds no text (or Vision refuses here): either way the clipboard is left alone
+        // Other messages (clipboard polling, notices) may arrive first under load: skip them until OcrDone.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        let mut seen = vec![];
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match app.rx.recv_timeout(left) {
+                Ok(Msg::OcrDone(text, toast)) => {
+                    assert!(text.is_none(), "{text:?}");
+                    assert!(!toast.is_empty());
+                    break;
+                }
+                Ok(_) => seen.push("other message"),
+                Err(e) => panic!("OcrDone expected, got {e:?} after {} other messages", seen.len()),
+            }
+        }
     }
+}
+
+#[test]
+fn capture_window_pin_is_no_longer_a_stub() {
+    let f = capture_png("pin");
+    let mut app = capture_app(&f);
+    let btns = capture_buttons_drawn(&mut app);
+    click_at(&mut app, btns[5].0);
+    // tests run off the main thread, so no panel can open; the old stub toast must be gone
+    assert!(app.toast.as_ref().is_none_or(|t| t.0 != "Not available yet"), "{:?}", app.toast);
 }
 
 #[test]

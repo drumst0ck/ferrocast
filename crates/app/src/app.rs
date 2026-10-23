@@ -3521,6 +3521,13 @@ impl App {
                     }
                 }
                 Msg::Capture(outcome) => self.finish_capture(outcome),
+                Msg::OcrDone(text, toast) => {
+                    if let Some(t) = text {
+                        clipboard::write_text(&t);
+                        self.shared.mark_clipboard_write();
+                    }
+                    self.capture_say(toast);
+                }
                 Msg::Script { run, text, code } => match self.runs.remove(&run) {
                     Some(RunKind::Output) => {
                         for v in self.stack.iter_mut() {
@@ -5179,6 +5186,23 @@ impl App {
         }
     }
 
+    /// Opens the pin panel for `file` at its captured size (S9) and closes the launcher.
+    fn pin_image(&mut self, file: &std::path::Path) {
+        let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+        let scale = objc2_app_kit::NSScreen::mainScreen(mtm).map(|s| s.backingScaleFactor());
+        let Some((size, scale)) = services::image_size(file).and_then(|s| crate::capture_ctl::pin_args(s, scale)) else {
+            self.toast("Could not read the image to pin");
+            return;
+        };
+        match ferrocast_macos::pin::open(mtm, file, size, scale) {
+            Ok(_) => {
+                self.hide();
+                self.reset_to_root();
+            }
+            Err(e) => self.toast(format!("Pin failed: {e}")),
+        }
+    }
+
     fn run_capture(&mut self, kind: crate::capture_ctl::CaptureKind) {
         use crate::capture_ctl::{choose_target, shoot, Outcome};
         if !self.capture_gate() {
@@ -5613,16 +5637,16 @@ impl App {
                 let kind = if n.kind == ferrocast_core::notion::ItemKind::Page { "page" } else { "data_source" };
                 self.notion_add_open(Some(ferrocast_core::models::NotionTarget { id: n.id, kind: kind.into(), title: n.title }));
             }
-            // T10: OCR replaces this stub.
             Act::CaptureCopyText(file) => {
-                let _ = file;
-                self.toast("Not available yet");
+                let bus = self.bus.clone();
+                std::thread::spawn(move || {
+                    let (text, toast) = crate::capture_ctl::recognize(&file);
+                    bus.send(Msg::OcrDone(text, toast));
+                });
+                self.hide();
+                self.reset_to_root();
             }
-            // T11: the pin panel replaces this stub.
-            Act::PinImage(file) => {
-                let _ = file;
-                self.toast("Not available yet");
-            }
+            Act::PinImage(file) => self.pin_image(&file),
             Act::PasteText(t) => self.paste_text(&t),
             Act::Reveal(p) => {
                 let _ = apps::reveal(&p);
