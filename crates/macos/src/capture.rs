@@ -64,6 +64,8 @@ pub fn timeout_for(cmd: &Command) -> Duration {
         // export itself has no deadline, `Helper::export_wait` watches its heartbeats instead.
         Command::Render { .. } => 15,
         Command::Cancel { .. } => 5,
+        // `transcribe` has no reply deadline: `Helper::transcribe` watches for signs of life instead.
+        Command::Transcribe { .. } => TRANSCRIBE_SILENCE.as_secs(),
     })
 }
 
@@ -1804,5 +1806,265 @@ mod export_live_tests {
         assert_eq!(e, ExportError::Cancelled);
         assert!(!out.exists() && !partial_path(&out).exists(), "no output and no .partial");
         assert_eq!(std::fs::read_dir(dir.join(".cache")).map(|d| d.count()).unwrap_or(0), 0, "params file removed");
+    }
+}
+
+// ---- P5: on-device transcription -------------------------------------------------------------
+
+use ferrocast_core::capture::protocol::{TranscribeDone, TranscribeEvent};
+
+/// Sentence the app shows when the helper answers `transcription-unavailable`; `{language}` is the
+/// human name of the locale. The helper builds its message from the same template.
+pub const TRANSCRIPTION_UNAVAILABLE_TEMPLATE: &str = "On-device transcription is not available for {language} on this Mac.";
+
+/// [`TRANSCRIPTION_UNAVAILABLE_TEMPLATE`] with the language filled in.
+pub fn transcription_unavailable_message(language: &str) -> String {
+    TRANSCRIPTION_UNAVAILABLE_TEMPLATE.replace("{language}", language)
+}
+
+/// Longest silence (no progress, no heartbeat, no reply) before a transcription is declared hung.
+/// The helper sends a heartbeat at least every 15 s while the recogniser works.
+pub const TRANSCRIBE_SILENCE: Duration = Duration::from_secs(90);
+
+/// Why a transcription did not produce a transcript. `Display` is the text the app shows.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TranscribeError {
+    /// Speech Recognition is not authorized; the helper did no work and raised no prompt.
+    PermissionSpeech(String),
+    /// No on-device recogniser for the locale; carries the sentence of [`TRANSCRIPTION_UNAVAILABLE_TEMPLATE`].
+    Unavailable(String),
+    Invalid(String),
+    NotFound(String),
+    Cancelled,
+    /// The helper went silent and was killed.
+    Timeout,
+    Closed,
+    Other(String),
+}
+
+impl TranscribeError {
+    fn from_helper(code: ErrorCode, message: String) -> Self {
+        match code {
+            ErrorCode::PermissionSpeech => Self::PermissionSpeech(message),
+            ErrorCode::TranscriptionUnavailable => Self::Unavailable(message),
+            ErrorCode::Invalid => Self::Invalid(message),
+            ErrorCode::NotFound => Self::NotFound(message),
+            ErrorCode::Cancelled => Self::Cancelled,
+            code => Self::Other(format!("{code:?}: {message}")),
+        }
+    }
+}
+
+impl std::fmt::Display for TranscribeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PermissionSpeech(_) => {
+                write!(f, "Speech Recognition is not allowed for Ferrocast. Allow it in System Settings > Privacy & Security.")
+            }
+            Self::Unavailable(m) | Self::Invalid(m) | Self::NotFound(m) => write!(f, "{m}"),
+            Self::Cancelled => write!(f, "Transcription cancelled"),
+            Self::Timeout => write!(f, "The transcription stopped responding and was cancelled."),
+            Self::Closed => write!(f, "The capture helper closed during the transcription."),
+            Self::Other(m) => write!(f, "Transcription failed: {m}"),
+        }
+    }
+}
+impl std::error::Error for TranscribeError {}
+
+impl Helper {
+    /// Transcribe `<project_dir>/<audio>` on this Mac (`audio` default `mic.m4a`, `locale` default the
+    /// system one) and wait for the result: the helper writes `<project_dir>/transcript.json`.
+    /// `on_progress(done_secs, total_secs)` is called for each progress event; setting `cancel` sends
+    /// `cancel` once. Blocking: run it on a worker thread (like `export_project`). Unlike `export_start`
+    /// there is no start acknowledgement to wait for (a permission error is the first and only line),
+    /// so this returns the final result instead of a receiver. No `transcript.json.partial` is left on failure.
+    pub fn transcribe(
+        &mut self,
+        project_dir: &Path,
+        audio: Option<&str>,
+        locale: Option<&str>,
+        cancel: &AtomicBool,
+        on_progress: impl FnMut(f64, f64),
+    ) -> std::result::Result<TranscribeDone, TranscribeError> {
+        self.transcribe_with(project_dir, audio, locale, cancel, TRANSCRIBE_SILENCE, on_progress)
+    }
+
+    fn transcribe_with(
+        &mut self,
+        project_dir: &Path,
+        audio: Option<&str>,
+        locale: Option<&str>,
+        cancel: &AtomicBool,
+        silence: Duration,
+        mut on_progress: impl FnMut(f64, f64),
+    ) -> std::result::Result<TranscribeDone, TranscribeError> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let command = Command::Transcribe {
+            project: project_dir.to_string_lossy().into_owned(),
+            audio: audio.map(str::to_owned),
+            locale: locale.map(str::to_owned),
+        };
+        let line = protocol::encode_request(&Request { id, command });
+        let result = if writeln!(self.stdin, "{line}").and_then(|_| self.stdin.flush()).is_err() {
+            Err(TranscribeError::Closed)
+        } else {
+            let mut last_sign = Instant::now();
+            let mut cancel_sent = false;
+            loop {
+                if cancel.load(Ordering::Relaxed) && !cancel_sent {
+                    cancel_sent = true;
+                    let cid = self.next_id;
+                    self.next_id += 1;
+                    let line = protocol::encode_request(&Request { id: cid, command: Command::Cancel { target: id } });
+                    if writeln!(self.stdin, "{line}").and_then(|_| self.stdin.flush()).is_err() {
+                        break Err(TranscribeError::Closed);
+                    }
+                }
+                match self.lines.recv_timeout(Duration::from_millis(50)) {
+                    Ok(Line::Ok { id: rid, body }) if rid == id => {
+                        break protocol::parse_body::<TranscribeDone>(&body).map_err(|e| TranscribeError::Other(format!("bad result: {e}")))
+                    }
+                    Ok(Line::Error { id: rid, code, message }) if rid.is_none_or(|r| r == id) => {
+                        break Err(TranscribeError::from_helper(code, message))
+                    }
+                    Ok(Line::Event { id: Some(eid), name, body }) if eid == id => {
+                        last_sign = Instant::now();
+                        if let Some(TranscribeEvent::Progress { done_secs, total_secs }) = protocol::parse_transcribe_event(&name, &body) {
+                            on_progress(done_secs, total_secs);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(RecvTimeoutError::Timeout) if last_sign.elapsed() > silence => {
+                        self.kill();
+                        break Err(TranscribeError::Timeout);
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break Err(TranscribeError::Closed),
+                }
+            }
+        };
+        if result.is_err() {
+            let _ = std::fs::remove_file(partial_path(&project_dir.join("transcript.json")));
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod transcribe_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fake(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fc-transcribe-test-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("helper.sh");
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    fn run(p: &Path, cancel: &AtomicBool, silence: Duration) -> (std::result::Result<TranscribeDone, TranscribeError>, Vec<(f64, f64)>) {
+        let mut h = Helper::spawn(p, |_| {}).unwrap();
+        let mut seen = vec![];
+        let r = h.transcribe_with(p.parent().unwrap(), Some("mic.m4a"), Some("en-US"), cancel, silence, |d, t| seen.push((d, t)));
+        (r, seen)
+    }
+
+    const LONG: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn progress_streams_and_the_result_is_typed() {
+        let p = fake(
+            "ok",
+            r#"read l; echo "$l" > "$(dirname "$0")/req.json"
+echo '{"event":"progress","id":1,"done_secs":1.5,"total_secs":3.0}'
+echo '{"event":"heartbeat","id":1}'
+echo '{"event":"progress","id":7,"done_secs":9,"total_secs":9}'
+echo '{"id":1,"ok":true,"language":"en-US","words":4,"path":"/p/transcript.json"}'"#,
+        );
+        let (r, seen) = run(&p, &AtomicBool::new(false), LONG);
+        assert_eq!(r.unwrap(), TranscribeDone { language: "en-US".into(), words: 4, path: "/p/transcript.json".into() });
+        assert_eq!(seen, vec![(1.5, 3.0)], "only the progress of this request, never other ids");
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(
+            wire.starts_with(r#"{"id":1,"cmd":"transcribe","project":""#) && wire.contains(r#""audio":"mic.m4a","locale":"en-US"}"#),
+            "{wire}"
+        );
+    }
+
+    #[test]
+    fn permission_and_unavailable_map_to_their_own_errors() {
+        let p = fake("perm", r#"read l; echo '{"id":1,"error":"permission-speech","message":"Speech Recognition is not authorized"}'"#);
+        let (r, _) = run(&p, &AtomicBool::new(false), LONG);
+        assert_eq!(r.unwrap_err(), TranscribeError::PermissionSpeech("Speech Recognition is not authorized".into()));
+        let msg = transcription_unavailable_message("Spanish (Spain)");
+        assert_eq!(msg, "On-device transcription is not available for Spanish (Spain) on this Mac.");
+        let p = fake("unavail", &format!("read l; echo '{{\"id\":1,\"error\":\"transcription-unavailable\",\"message\":\"{msg}\"}}'"));
+        let (r, _) = run(&p, &AtomicBool::new(false), LONG);
+        let e = r.unwrap_err();
+        assert_eq!(e, TranscribeError::Unavailable(msg.clone()));
+        assert_eq!(e.to_string(), msg, "the app shows the sentence as is");
+    }
+
+    #[test]
+    fn other_helper_errors_map_and_a_bad_result_is_other() {
+        let p = fake("nf", r#"read l; echo '{"id":1,"error":"not-found","message":"mic.m4a is not in the project"}'"#);
+        assert_eq!(
+            run(&p, &AtomicBool::new(false), LONG).0.unwrap_err(),
+            TranscribeError::NotFound("mic.m4a is not in the project".into())
+        );
+        let p = fake("inv", r#"read l; echo '{"id":1,"error":"invalid","message":"bad audio name"}'"#);
+        assert_eq!(run(&p, &AtomicBool::new(false), LONG).0.unwrap_err(), TranscribeError::Invalid("bad audio name".into()));
+        let p = fake("bad", r#"read l; echo '{"id":1,"ok":true}'"#);
+        assert!(matches!(run(&p, &AtomicBool::new(false), LONG).0.unwrap_err(), TranscribeError::Other(_)));
+    }
+
+    #[test]
+    fn failures_remove_the_partial_transcript() {
+        let p = fake("partial", r#"read l; echo '{"id":1,"error":"internal","message":"boom"}'"#);
+        let partial = p.with_file_name("transcript.json.partial");
+        std::fs::write(&partial, b"half").unwrap();
+        assert!(matches!(run(&p, &AtomicBool::new(false), LONG).0.unwrap_err(), TranscribeError::Other(_)));
+        assert!(!partial.exists());
+    }
+
+    #[test]
+    fn cancel_sends_the_target_and_reports_cancelled() {
+        let p = fake(
+            "cancel",
+            r#"read l
+echo '{"event":"progress","id":1,"done_secs":1,"total_secs":60}'
+read c; echo "$c" > "$(dirname "$0")/cancel.json"
+echo '{"id":1,"error":"cancelled","message":"Transcription cancelled"}'"#,
+        );
+        let cancel = AtomicBool::new(false);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let r = h.transcribe_with(p.parent().unwrap(), None, None, &cancel, LONG, |_, _| cancel.store(true, Ordering::Relaxed));
+        assert_eq!(r.unwrap_err(), TranscribeError::Cancelled);
+        let wire = std::fs::read_to_string(p.with_file_name("cancel.json")).unwrap();
+        assert_eq!(wire.trim(), r#"{"id":2,"cmd":"cancel","target":1}"#);
+    }
+
+    #[test]
+    fn a_silent_helper_is_killed_and_a_dead_one_reports_closed() {
+        let p = fake("silent", "read l; sleep 30");
+        let t = Instant::now();
+        assert_eq!(run(&p, &AtomicBool::new(false), Duration::from_millis(300)).0.unwrap_err(), TranscribeError::Timeout);
+        assert!(t.elapsed() < Duration::from_secs(10));
+        let p = fake("dead", "read l; exit 3");
+        assert_eq!(run(&p, &AtomicBool::new(false), LONG).0.unwrap_err(), TranscribeError::Closed);
+    }
+
+    #[test]
+    fn heartbeats_keep_a_slow_transcription_alive() {
+        let p = fake(
+            "beat",
+            r#"read l
+for i in 1 2 3 4; do sleep 0.2; echo '{"event":"heartbeat","id":1}'; done
+echo '{"id":1,"ok":true,"language":"en-US","words":0,"path":"/p/t.json"}'"#,
+        );
+        assert!(run(&p, &AtomicBool::new(false), Duration::from_millis(500)).0.is_ok());
     }
 }
