@@ -2,6 +2,10 @@
 //! and the Format Bar at the bottom of the window. Standalone views with a small API; the
 //! editor owns the wiring. All AppKit calls happen on the main thread; the pure helpers are
 //! unit-tested below.
+//!
+//! Look (T3, S2/S4/S8): every colour comes from `notes_theme` dynamic tokens, never from system
+//! semantic colours. The selected row is the launcher's neutral `Sel` fill with the normal text
+//! colours (D5); coral stays on the Format Bar's active buttons.
 
 use std::cell::{Cell, RefCell};
 use std::path::Path;
@@ -9,16 +13,24 @@ use std::rc::Rc;
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSBitmapImageFileType, NSBox, NSBoxType, NSButton, NSColor,
-    NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSFont, NSFontWeightSemibold, NSImage, NSImageScaling, NSLineBreakMode,
-    NSPanel, NSPopUpMenuWindowLevel, NSScreen, NSScrollView, NSTextAlignment, NSTextField, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowStyleMask,
+    NSAppearance, NSAppearanceCustomization, NSAutoresizingMaskOptions, NSBackingStoreType, NSBezierPath, NSBitmapImageFileType, NSButton,
+    NSColor, NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSFont, NSFontAttributeName, NSFontWeightSemibold,
+    NSForegroundColorAttributeName, NSImage, NSImageScaling, NSLineBreakMode, NSPanel, NSPopUpMenuWindowLevel, NSScreen, NSScrollView,
+    NSTextAlignment, NSTextField, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowStyleMask,
 };
-use objc2_foundation::{NSDictionary, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSAttributedString, NSDictionary, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
 use crate::notes_format::Format;
+use crate::notes_theme::{self as theme, Token};
+
+/// Corner radius of the cards (the app's `ui::RADIUS`).
+pub(crate) const CARD_RADIUS: f64 = 14.0;
+/// Corner radius of a selected or hovered row and of a Format Bar button.
+const ROW_RADIUS: f64 = 8.0;
+/// Alpha of the active Format Bar button's accent tint.
+const ACTIVE_TINT_ALPHA: f64 = 0.18;
 
 /// A rectangle in AppKit screen coordinates (bottom-up): the caret the popup hangs from.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -188,6 +200,72 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
     NSRect::new(NSPoint::new(x, y), NSSize::new(w, h))
 }
 
+// ---------------------------------------------------------------- shared look
+
+/// `token` resolved for `appearance`, its alpha multiplied by `alpha` (a plain, non-dynamic colour).
+pub(crate) fn token_alpha(token: Token, alpha: f64, appearance: &NSAppearance) -> Retained<NSColor> {
+    let c = theme::resolve(token, theme::is_dark_appearance(appearance));
+    NSColor::colorWithSRGBRed_green_blue_alpha(c.0 as f64 / 255.0, c.1 as f64 / 255.0, c.2 as f64 / 255.0, c.3 as f64 / 255.0 * alpha)
+}
+
+define_class!(
+    /// Card: opaque `Bg` rounded rectangle (radius 14) with a 1 pt `Border` stroke inside its
+    /// edge. Corners stay transparent, so a window or layer shadow follows the rounded shape.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FerrocastNotesCard"]
+    pub(crate) struct CardView;
+
+    impl CardView {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            let b = self.bounds();
+            theme::color(Token::Bg).setFill();
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(b, CARD_RADIUS, CARD_RADIUS).fill();
+            let inner = rect(b.origin.x + 0.5, b.origin.y + 0.5, b.size.width - 1.0, b.size.height - 1.0);
+            let r = CARD_RADIUS - 0.5;
+            let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(inner, r, r);
+            path.setLineWidth(1.0);
+            theme::color(Token::Border).setStroke();
+            path.stroke();
+        }
+    }
+);
+
+define_class!(
+    /// Plain view that fills its own bounds with a theme token (dynamic colour).
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FerrocastNotesTokenFill"]
+    #[ivars = std::cell::Cell<Token>]
+    pub(crate) struct TokenFill;
+
+    impl TokenFill {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            // Own bounds, not the dirty rect: a cached snapshot passes a larger one.
+            theme::color(self.ivars().get()).setFill();
+            NSBezierPath::fillRect(self.bounds());
+        }
+    }
+);
+
+pub(crate) fn token_fill(mtm: MainThreadMarker, frame: NSRect, token: Token) -> Retained<TokenFill> {
+    unsafe { msg_send![super(mtm.alloc::<TokenFill>().set_ivars(std::cell::Cell::new(token))), initWithFrame: frame] }
+}
+
+/// Track mouse enter, move and exit over the visible part of `view` (owner: `view`).
+fn track_mouse(mtm: MainThreadMarker, view: &NSView, moved: bool) {
+    let mut opts =
+        NSTrackingAreaOptions::MouseEnteredAndExited | NSTrackingAreaOptions::ActiveAlways | NSTrackingAreaOptions::InVisibleRect;
+    if moved {
+        opts |= NSTrackingAreaOptions::MouseMoved;
+    }
+    let owner: &AnyObject = view;
+    let area = unsafe { NSTrackingArea::initWithRect_options_owner_userInfo(mtm.alloc(), NSRect::ZERO, opts, Some(owner), None) };
+    view.addTrackingArea(&area);
+}
+
 // ---------------------------------------------------------------- suggestion popup
 
 type PickCb = Rc<dyn Fn(usize)>;
@@ -196,6 +274,8 @@ type PickCb = Rc<dyn Fn(usize)>;
 struct Shared {
     items: RefCell<Vec<Item>>,
     selected: Cell<usize>,
+    /// Row under the mouse, if any.
+    hovered: Cell<Option<usize>>,
     on_pick: RefCell<Option<PickCb>>,
 }
 
@@ -246,9 +326,29 @@ define_class!(
                 return;
             }
             let w = self.bounds().size.width;
-            let r = rect(ROW_INSET, shared.selected.get() as f64 * ROW_HEIGHT, w - 2.0 * ROW_INSET, ROW_HEIGHT);
-            NSColor::controlAccentColor().setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(r, 6.0, 6.0).fill();
+            let row = |i: usize| rect(ROW_INSET, i as f64 * ROW_HEIGHT, w - 2.0 * ROW_INSET, ROW_HEIGHT);
+            let selected = shared.selected.get();
+            if let Some(h) = shared.hovered.get().filter(|h| *h != selected && *h < shared.items.borrow().len()) {
+                theme::color(Token::Field).setFill();
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(row(h), ROW_RADIUS, ROW_RADIUS).fill();
+            }
+            theme::color(Token::Sel).setFill();
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(row(selected), ROW_RADIUS, ROW_RADIUS).fill();
+        }
+
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, event: &NSEvent) {
+            update_hover(self, Some(event));
+        }
+
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, event: &NSEvent) {
+            update_hover(self, Some(event));
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            update_hover(self, None);
         }
 
         #[unsafe(method(mouseDown:))]
@@ -273,6 +373,19 @@ define_class!(
 
     unsafe impl NSObjectProtocol for RowsView {}
 );
+
+/// Hover row under the mouse event (`None`: the mouse left the list).
+fn update_hover(view: &RowsView, event: Option<&NSEvent>) {
+    let shared = &view.ivars().shared;
+    let row = event.and_then(|e| {
+        let p = view.convertPoint_fromView(e.locationInWindow(), None);
+        (p.y >= 0.0).then(|| (p.y / ROW_HEIGHT) as usize).filter(|i| *i < shared.items.borrow().len())
+    });
+    if shared.hovered.get() != row {
+        shared.hovered.set(row);
+        view.setNeedsDisplay(true);
+    }
+}
 
 define_class!(
     /// Borderless panel that never takes key or main status: the editor keeps the focus.
@@ -304,7 +417,7 @@ struct RowLabels {
 pub struct SuggestionPopup {
     mtm: MainThreadMarker,
     panel: Retained<SuggestionPanel>,
-    effect: Retained<NSVisualEffectView>,
+    card: Retained<CardView>,
     scroll: Retained<NSScrollView>,
     rows: Retained<RowsView>,
     shared: Rc<Shared>,
@@ -336,19 +449,10 @@ impl SuggestionPopup {
         panel.setBackgroundColor(Some(&NSColor::clearColor()));
         panel.setHasShadow(true);
 
-        let effect = NSVisualEffectView::initWithFrame(mtm.alloc::<NSVisualEffectView>(), frame);
-        effect.setMaterial(NSVisualEffectMaterial::Menu);
-        effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-        effect.setState(NSVisualEffectState::Active);
-        effect.setWantsLayer(true);
-        unsafe {
-            let layer: Option<Retained<AnyObject>> = msg_send![&*effect, layer];
-            if let Some(layer) = layer {
-                let _: () = msg_send![&*layer, setCornerRadius: 8.0f64];
-                let _: () = msg_send![&*layer, setMasksToBounds: true];
-            }
-        }
-        panel.setContentView(Some(&effect));
+        // Opaque `Bg` card, no vibrancy; the clear panel's system shadow follows its rounded shape.
+        let card: Retained<CardView> = unsafe { msg_send![mtm.alloc::<CardView>(), initWithFrame: frame] };
+        panel.setContentView(Some(&card));
+        theme::apply_to(&panel);
 
         let shared = Rc::new(Shared::default());
         let scroll = NSScrollView::initWithFrame(mtm.alloc::<NSScrollView>(), frame);
@@ -359,12 +463,13 @@ impl SuggestionPopup {
         let rows: Retained<RowsView> =
             unsafe { msg_send![super(mtm.alloc::<RowsView>().set_ivars(RowsIvars { shared: shared.clone() })), initWithFrame: frame] };
         scroll.setDocumentView(Some(&rows));
-        effect.addSubview(&scroll);
+        track_mouse(mtm, &rows, true);
+        card.addSubview(&scroll);
 
         Self {
             mtm,
             panel,
-            effect,
+            card,
             scroll,
             rows,
             shared,
@@ -381,8 +486,17 @@ impl SuggestionPopup {
             return;
         }
         self.anchor.set(anchor);
+        self.apply_theme();
         self.set_items(items);
         self.panel.orderFrontRegardless();
+    }
+
+    /// Give the panel the stored Notes appearance (`notes_theme::set_appearance`); `show` does
+    /// it too, so a popup opened later is always right.
+    pub fn apply_theme(&self) {
+        theme::apply_to(&self.panel);
+        self.card.setNeedsDisplay(true);
+        self.rows.setNeedsDisplay(true);
     }
 
     /// Replace the rows (selection goes back to the first); an empty list hides the popup.
@@ -488,23 +602,15 @@ impl SuggestionPopup {
         self.rows.setNeedsDisplay(true);
     }
 
-    /// Semantic label colors; the selected row sits on the accent color.
+    /// Theme token colors; the selected row keeps the normal text colors (its `Sel` fill is
+    /// drawn by the rows view), like the launcher.
     fn restyle(&self) {
-        let sel = self.shared.selected.get();
-        for (i, l) in self.labels.borrow().iter().enumerate() {
-            if i == sel {
-                let c = NSColor::alternateSelectedControlTextColor();
-                l.glyph.setTextColor(Some(&c));
-                l.title.setTextColor(Some(&c));
-                if let Some(d) = &l.detail {
-                    d.setTextColor(Some(&c));
-                }
-            } else {
-                l.glyph.setTextColor(Some(&NSColor::labelColor()));
-                l.title.setTextColor(Some(&NSColor::labelColor()));
-                if let Some(d) = &l.detail {
-                    d.setTextColor(Some(&NSColor::secondaryLabelColor()));
-                }
+        for l in self.labels.borrow().iter() {
+            let (main, soft) = (theme::color(Token::Text), theme::color(Token::Sub));
+            l.glyph.setTextColor(Some(&main));
+            l.title.setTextColor(Some(&main));
+            if let Some(d) = &l.detail {
+                d.setTextColor(Some(&soft));
             }
         }
     }
@@ -517,7 +623,8 @@ impl SuggestionPopup {
         let visible = self.visible_frame(a);
         let (x, y) = place(a, (POPUP_WIDTH, h), visible);
         self.panel.setFrame_display(rect(x, y, POPUP_WIDTH, h), true);
-        self.effect.setFrame(rect(0.0, 0.0, POPUP_WIDTH, h));
+        self.card.setFrame(rect(0.0, 0.0, POPUP_WIDTH, h));
+        self.panel.invalidateShadow();
         self.scroll.setFrame(rect(0.0, POPUP_PAD, POPUP_WIDTH, h - 2.0 * POPUP_PAD));
         self.rows.setFrame(rect(0.0, 0.0, POPUP_WIDTH, n as f64 * ROW_HEIGHT));
         self.rows.scrollPoint(NSPoint::new(0.0, 0.0));
@@ -595,10 +702,12 @@ define_class!(
 );
 
 define_class!(
-    /// Borderless icon button that draws a rounded accent tint while its state is On.
+    /// Borderless icon button: `Sub` icon, a rounded `Field` background and `Text` on hover, a
+    /// rounded 18% `Accent` tint with the icon in `AccentText` while its state is On.
     #[unsafe(super(NSButton))]
     #[thread_kind = MainThreadOnly]
     #[name = "FerrocastFormatButton"]
+    #[ivars = Cell<bool>]
     struct FormatButton;
 
     impl FormatButton {
@@ -617,18 +726,59 @@ define_class!(
 
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, dirty: NSRect) {
-            if self.state() == NSControlStateValueOn {
-                let b = self.bounds();
-                let r = rect(b.origin.x + 1.0, b.origin.y + 1.0, b.size.width - 2.0, b.size.height - 2.0);
-                NSColor::controlAccentColor().colorWithAlphaComponent(0.25).setFill();
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(r, 6.0, 6.0).fill();
+            let fill = if self.state() == NSControlStateValueOn {
+                Some(token_alpha(Token::Accent, ACTIVE_TINT_ALPHA, &self.effectiveAppearance()))
+            } else if self.ivars().get() {
+                Some(theme::color(Token::Field))
+            } else {
+                None
+            };
+            if let Some(fill) = fill {
+                fill.setFill();
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.bounds(), ROW_RADIUS, ROW_RADIUS).fill();
             }
             unsafe {
                 let _: () = msg_send![super(self), drawRect: dirty];
             }
         }
+
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, _event: &NSEvent) {
+            self.ivars().set(true);
+            restyle_button(self);
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            self.ivars().set(false);
+            restyle_button(self);
+        }
     }
 );
+
+/// Colors of a Format Bar button for its state: `AccentText` when pressed, `Text` on hover,
+/// else `Sub`. Icons take the tint; text titles (headings) need an attributed title.
+fn restyle_button(b: &FormatButton) {
+    let token = if b.state() == NSControlStateValueOn {
+        Token::AccentText
+    } else if b.ivars().get() {
+        Token::Text
+    } else {
+        Token::Sub
+    };
+    let color = theme::color(token);
+    b.setContentTintColor(Some(&color));
+    if b.image().is_none() {
+        let font = NSFont::systemFontOfSize_weight(12.0, unsafe { NSFontWeightSemibold });
+        let (k1, k2) = unsafe { (NSFontAttributeName, NSForegroundColorAttributeName) };
+        let attrs: Retained<NSDictionary<NSString, AnyObject>> =
+            NSDictionary::from_slices(&[k1, k2], &[&*font as &AnyObject, &*color as &AnyObject]);
+        let title = unsafe { NSAttributedString::initWithString_attributes(NSAttributedString::alloc(), &b.title(), Some(&attrs)) };
+        b.setAttributedTitle(&title);
+    }
+    let v: &NSView = b;
+    v.setNeedsDisplay(true);
+}
 
 const BUTTON: f64 = 28.0;
 const BUTTON_GAP: f64 = 2.0;
@@ -637,7 +787,7 @@ const BAR_LEFT: f64 = 12.0;
 
 /// The Format Bar strip for the bottom of the Notes window. Main thread only.
 pub struct FormatBar {
-    root: Retained<NSVisualEffectView>,
+    root: Retained<TokenFill>,
     width: f64,
     target: Retained<FormatTarget>,
     /// One button per `Format::ALL` entry, same order.
@@ -652,14 +802,11 @@ impl FormatBar {
     pub fn new() -> FormatBar {
         let mtm = MainThreadMarker::new().expect("FormatBar must be created on the main thread");
         let width = 560.0;
-        let root = NSVisualEffectView::initWithFrame(mtm.alloc::<NSVisualEffectView>(), rect(0.0, 0.0, width, Self::HEIGHT));
-        root.setMaterial(NSVisualEffectMaterial::WindowBackground);
-        root.setBlendingMode(NSVisualEffectBlendingMode::WithinWindow);
-        root.setState(NSVisualEffectState::FollowsWindowActiveState);
+        let root = token_fill(mtm, rect(0.0, 0.0, width, Self::HEIGHT), Token::Bg);
         root.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMaxYMargin);
 
-        let top = NSBox::initWithFrame(mtm.alloc::<NSBox>(), rect(0.0, Self::HEIGHT - 1.0, width, 1.0));
-        top.setBoxType(NSBoxType::Separator);
+        // 1 pt `Sep` hairline on top.
+        let top = token_fill(mtm, rect(0.0, Self::HEIGHT - 1.0, width, 1.0), Token::Sep);
         top.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin);
         root.addSubview(&top);
 
@@ -675,11 +822,8 @@ impl FormatBar {
         for (i, f) in Format::ALL.iter().copied().enumerate() {
             let group = bar_group(f);
             if group != prev_group {
-                let sep = NSBox::initWithFrame(
-                    mtm.alloc::<NSBox>(),
-                    rect(x + (GROUP_GAP - BUTTON_GAP - 1.0) / 2.0, (Self::HEIGHT - 16.0) / 2.0, 1.0, 16.0),
-                );
-                sep.setBoxType(NSBoxType::Separator);
+                let sep =
+                    token_fill(mtm, rect(x + (GROUP_GAP - BUTTON_GAP - 1.0) / 2.0, (Self::HEIGHT - 16.0) / 2.0, 1.0, 16.0), Token::Sep);
                 root.addSubview(&sep);
                 x += GROUP_GAP - BUTTON_GAP;
                 prev_group = group;
@@ -702,8 +846,12 @@ impl FormatBar {
     }
 
     fn make_button(mtm: MainThreadMarker, f: Format, tag: usize, target: &FormatTarget, x: f64) -> Retained<FormatButton> {
-        let b: Retained<FormatButton> =
-            unsafe { msg_send![mtm.alloc::<FormatButton>(), initWithFrame: rect(x, (Self::HEIGHT - 1.0 - BUTTON) / 2.0, BUTTON, BUTTON)] };
+        let b: Retained<FormatButton> = unsafe {
+            msg_send![
+                super(mtm.alloc::<FormatButton>().set_ivars(Cell::new(false))),
+                initWithFrame: rect(x, (Self::HEIGHT - 1.0 - BUTTON) / 2.0, BUTTON, BUTTON)
+            ]
+        };
         let tip = bar_tooltip(f);
         let (symbol, fallback) = bar_icon(f);
         // A missing symbol on this macOS version falls back to a text title.
@@ -727,7 +875,8 @@ impl FormatBar {
         b.setRefusesFirstResponder(true);
         b.setTag(tag as isize);
         b.setToolTip(Some(&NSString::from_str(&tip)));
-        b.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+        restyle_button(&b);
+        track_mouse(mtm, &b, false);
         let t: &AnyObject = target;
         unsafe {
             b.setTarget(Some(t));
@@ -738,7 +887,7 @@ impl FormatBar {
 
     /// The strip, to add at the bottom of the window content (frame width follows the parent).
     pub fn view(&self) -> Retained<NSView> {
-        self.root.clone().into_super()
+        Retained::into_super(self.root.clone())
     }
 
     /// Called with the action of the clicked button.
@@ -752,10 +901,7 @@ impl FormatBar {
         for (f, b) in Format::ALL.iter().zip(&self.buttons) {
             let on = active.contains(f);
             b.setState(if on { NSControlStateValueOn } else { NSControlStateValueOff });
-            let tint = if on { NSColor::controlAccentColor() } else { NSColor::secondaryLabelColor() };
-            b.setContentTintColor(Some(&tint));
-            let v: &NSView = b;
-            v.setNeedsDisplay(true);
+            restyle_button(b);
         }
     }
 }

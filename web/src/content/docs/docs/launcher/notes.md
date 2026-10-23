@@ -31,7 +31,11 @@ There are five ways to format:
 2. Markdown typing: type the Markdown and it turns into formatting.
 3. The `/` menu: type `/` to pick a format from a list.
 4. **Format** in the action panel (<kbd>⌘</kbd> <kbd>K</kbd>).
-5. The Format Bar at the bottom of the window. Show or hide it with **Show Format Bar** or **Hide Format Bar** in the action panel.
+5. The Format Bar at the bottom of the window. It shows by default. **Hide Format Bar** in the action panel turns it off, and **Show Format Bar** brings it back.
+
+A footer at the very bottom of the window lists the main shortcuts: New <kbd>⌘</kbd> <kbd>N</kbd>, Browse <kbd>⌘</kbd> <kbd>P</kbd>, Pin <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>P</kbd> and Actions <kbd>⌘</kbd> <kbd>K</kbd>. You can click the items in it, and in a narrow window the least important ones drop out.
+
+The Notes window uses the same colors as the launcher and follows the Appearance setting in Settings (System, Dark or Light).
 
 ### Paragraph formats
 

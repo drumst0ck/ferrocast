@@ -31,7 +31,11 @@ Hay cinco formas de dar formato:
 2. Escribir Markdown: al teclearlo se convierte en formato.
 3. El menú `/`: escribe `/` para elegir un formato de una lista.
 4. **Format** en el panel de acciones (<kbd>⌘</kbd> <kbd>K</kbd>).
-5. La barra de formato (Format Bar) en la parte inferior de la ventana. Muéstrala u ocúltala con **Show Format Bar** o **Hide Format Bar** en el panel de acciones.
+5. La barra de formato (Format Bar) en la parte inferior de la ventana. Se muestra por defecto. **Hide Format Bar** en el panel de acciones la oculta y **Show Format Bar** la vuelve a mostrar.
+
+Un pie en la parte inferior de la ventana muestra los atajos principales: New <kbd>⌘</kbd> <kbd>N</kbd>, Browse <kbd>⌘</kbd> <kbd>P</kbd>, Pin <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>P</kbd> y Actions <kbd>⌘</kbd> <kbd>K</kbd>. Puedes hacer clic en sus elementos y, en una ventana estrecha, los menos importantes se omiten.
+
+La ventana de notas usa los mismos colores que el lanzador y sigue el ajuste Appearance de Settings (System, Dark o Light).
 
 ### Formatos de párrafo
 

@@ -1448,6 +1448,7 @@ impl App {
             Theme::Light => egui::ThemePreference::Light,
         };
         self.ctx.set_theme(pref);
+        (self.fx.notes_appearance)(notes_appearance(self.settings.theme));
     }
 
     fn script_dirs(&self) -> Vec<PathBuf> {
@@ -7066,6 +7067,16 @@ pub(crate) fn translate_log_line(lang: &str, engine: &str, result: &Result<Strin
     }
 }
 
+/// The Notes appearance that goes with a theme setting.
+pub(crate) fn notes_appearance(theme: Theme) -> ferrocast_macos::notes_theme::Appearance {
+    use ferrocast_macos::notes_theme::Appearance;
+    match theme {
+        Theme::System => Appearance::System,
+        Theme::Dark => Appearance::Dark,
+        Theme::Light => Appearance::Light,
+    }
+}
+
 /// Side effects of delivering a translation, behind function pointers so tests never spawn a
 /// process or touch Accessibility.
 pub(crate) struct Effects {
@@ -7083,6 +7094,8 @@ pub(crate) struct Effects {
     pub(crate) glow_hide: fn(),
     /// Create the Notes toggle item in the menu bar (main thread only); dropping it removes it.
     pub(crate) notes_tray: fn(&Bus) -> Option<Box<dyn std::any::Any>>,
+    /// Make the Notes windows follow the theme setting (main thread only).
+    pub(crate) notes_appearance: fn(ferrocast_macos::notes_theme::Appearance),
     /// Run a script in a browser page, ignoring the result (clean-up).
     pub(crate) web_script: fn(ferrocast_core::translate::Browser, &str),
     /// Start the translation request.
@@ -7109,6 +7122,7 @@ impl Effects {
                 }
             },
             notes_tray: |bus| services::make_notes_tray(bus.clone()).map(|t| Box::new(t) as Box<dyn std::any::Any>),
+            notes_appearance: |a| ferrocast_macos::notes_theme::set_appearance(a),
             web_script: |b, js| services::web_script(b, js.to_string()),
             apple_available: ferrocast_macos::apple_translate::available,
             translate_start: |s, text, lang, pid, out, run, bus| services::translate_text(s, text, lang, pid, out, run, bus.clone()),

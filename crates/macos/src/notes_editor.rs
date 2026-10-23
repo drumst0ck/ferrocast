@@ -31,12 +31,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{define_class, msg_send, sel, AllocAnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSBackgroundColorAttributeName, NSBezierPath, NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventModifierFlags,
-    NSEventType, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightBold, NSFontWeightRegular,
-    NSForegroundColorAttributeName, NSLayoutManager, NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSPasteboard,
-    NSPasteboardType, NSPasteboardTypeString, NSPopover, NSPopoverBehavior, NSStrikethroughStyleAttributeName, NSTextAlignment,
-    NSTextContainer, NSTextField, NSTextFieldDelegate, NSTextInputClient, NSTextStorage, NSTextTab, NSTextView,
-    NSUnderlineStyleAttributeName, NSView, NSViewController, NSWorkspace,
+    NSBezierPath, NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventModifierFlags, NSEventType, NSFont,
+    NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeight, NSFontWeightBold, NSFontWeightLight, NSFontWeightMedium,
+    NSFontWeightRegular, NSForegroundColorAttributeName, NSKernAttributeName, NSLayoutManager, NSMutableParagraphStyle,
+    NSParagraphStyleAttributeName, NSPasteboard, NSPasteboardType, NSPasteboardTypeString, NSPopover, NSPopoverBehavior,
+    NSStrikethroughStyleAttributeName, NSTextAlignment, NSTextContainer, NSTextField, NSTextFieldDelegate, NSTextInputClient,
+    NSTextStorage, NSTextTab, NSTextView, NSUnderlineStyleAttributeName, NSView, NSViewController, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSAttributedStringKey, NSDictionary, NSMutableAttributedString, NSMutableDictionary, NSNumber, NSObject,
@@ -44,6 +44,7 @@ use objc2_foundation::{
 };
 
 use crate::notes_format::Format;
+use crate::notes_theme::{self, Token};
 
 pub const ZOOM_MIN: f64 = 0.5;
 pub const ZOOM_MAX: f64 = 3.0;
@@ -52,6 +53,10 @@ const LINE_SEP: char = '\u{2028}';
 const ZWSP: char = '\u{200B}';
 const ZWSP_U16: u16 = 0x200B;
 const BASE_SIZE: f64 = 14.0;
+/// Space above a code block (the line fragment of its first line includes it).
+const CODE_SPACE_BEFORE: f64 = 14.0;
+/// Alpha of the `Accent` selection background (S4); the demo checks the contrast it leaves.
+pub const SELECTION_ALPHA: f64 = 0.28;
 const LIST_INDENT: f64 = 22.0;
 const LIST_BASE: f64 = 6.0;
 
@@ -446,14 +451,7 @@ fn put(d: &AttrDict, key: &NSString, value: &AnyObject) {
     unsafe { d.setObject_forKey(value, ProtocolObject::from_ref(key)) };
 }
 
-fn font_for(size: f64, bold: bool, italic: bool, mono: bool) -> Retained<NSFont> {
-    let weight = unsafe {
-        if bold {
-            NSFontWeightBold
-        } else {
-            NSFontWeightRegular
-        }
-    };
+fn font_for(size: f64, weight: NSFontWeight, italic: bool, mono: bool) -> Retained<NSFont> {
     let base = if mono { NSFont::monospacedSystemFontOfSize_weight(size, weight) } else { NSFont::systemFontOfSize_weight(size, weight) };
     if italic {
         if let Some(mtm) = MainThreadMarker::new() {
@@ -497,22 +495,41 @@ fn attrs(kind: &BlockKind, level: u8, bits: u8, link: Option<&str>, marker: bool
     let checked = matches!(kind, BlockKind::Task { checked: true });
     let size = if marker && matches!(kind, BlockKind::Task { .. }) { base * 1.15 } else { base } * z;
     let inline_code = bits & CODE != 0;
-    let font =
-        font_for(if inline_code { size * 0.93 } else { size }, heading || bits & BOLD != 0, bits & ITALIC != 0, code_block || inline_code);
+    // S6: headings echo the web's display style (light h1, regular h2, medium h3, -0.022 em).
+    let weight = unsafe {
+        if bits & BOLD != 0 {
+            NSFontWeightBold
+        } else {
+            match kind {
+                BlockKind::Heading(1) => NSFontWeightLight,
+                BlockKind::Heading(2) => NSFontWeightRegular,
+                BlockKind::Heading(_) => NSFontWeightMedium,
+                _ => NSFontWeightRegular,
+            }
+        }
+    };
+    let font = font_for(if inline_code { size * 0.93 } else { size }, weight, bits & ITALIC != 0, code_block || inline_code);
+    // Task boxes are drawn by `draw_decorations`; their glyph stays in the text (click target,
+    // markdown round trip) but is invisible.
     let color = if marker {
         match kind {
-            BlockKind::Task { checked: true } => NSColor::controlAccentColor(),
-            _ => NSColor::secondaryLabelColor(),
+            BlockKind::Task { .. } => NSColor::clearColor(),
+            _ => notes_theme::color(Token::Sub),
         }
-    } else if checked || *kind == BlockKind::Quote {
-        NSColor::secondaryLabelColor()
+    } else if checked {
+        notes_theme::color(Token::Sub)
+    } else if *kind == BlockKind::Quote {
+        notes_theme::color(Token::SubStrong)
     } else if link.is_some() {
-        NSColor::linkColor()
+        notes_theme::color(Token::AccentText)
     } else {
-        NSColor::textColor()
+        notes_theme::color(Token::Text)
     };
     unsafe {
         put(&d, NSFontAttributeName, &font);
+        if heading && !marker {
+            put(&d, NSKernAttributeName, &NSNumber::new_f64(-0.022 * size));
+        }
         put(&d, NSForegroundColorAttributeName, &color);
         if !marker && (bits & STRIKE != 0 || checked) {
             put(&d, NSStrikethroughStyleAttributeName, &NSNumber::new_isize(1));
@@ -520,13 +537,25 @@ fn attrs(kind: &BlockKind, level: u8, bits: u8, link: Option<&str>, marker: bool
         if !marker && (bits & UNDERLINE != 0 || link.is_some()) {
             put(&d, NSUnderlineStyleAttributeName, &NSNumber::new_isize(1));
         }
-        if !marker && inline_code {
-            put(&d, NSBackgroundColorAttributeName, &NSColor::quaternarySystemFillColor());
-        }
     }
 
     let ps = NSMutableParagraphStyle::new();
-    ps.setLineSpacing(2.0 * z);
+    // About 1.4 line height on body text, tighter on headings and code (S6).
+    match kind {
+        BlockKind::Heading(_) => {
+            ps.setLineSpacing(0.0);
+            ps.setLineHeightMultiple(1.12);
+        }
+        BlockKind::Code { .. } => {
+            ps.setLineSpacing(2.0 * z);
+            ps.setLineHeightMultiple(1.15);
+        }
+        BlockKind::Rule => ps.setLineSpacing(2.0 * z),
+        _ => {
+            ps.setLineSpacing(0.0);
+            ps.setLineHeightMultiple(1.4);
+        }
+    }
     ps.setParagraphSpacing(match kind {
         BlockKind::Quote => 4.0 * z,
         BlockKind::Rule => 6.0 * z,
@@ -535,7 +564,7 @@ fn attrs(kind: &BlockKind, level: u8, bits: u8, link: Option<&str>, marker: bool
     });
     ps.setParagraphSpacingBefore(match kind {
         BlockKind::Heading(_) => 6.0 * z,
-        BlockKind::Code { .. } => 10.0 * z,
+        BlockKind::Code { .. } => CODE_SPACE_BEFORE * z,
         BlockKind::Rule => 6.0 * z,
         _ => 0.0,
     });
@@ -2196,12 +2225,102 @@ fn paste_plain(tv: &NSTextView) {
     }
 }
 
+/// One visual line of a character range: x extent and the baseline, in text-container
+/// coordinates.
+struct LinePiece {
+    x: f64,
+    w: f64,
+    baseline: f64,
+}
+
+/// The line pieces of `chars` (a range inside one paragraph), one per laid-out line.
+fn line_pieces(lm: &NSLayoutManager, tc: &NSTextContainer, chars: NSRange) -> Vec<LinePiece> {
+    let glyphs = unsafe { lm.glyphRangeForCharacterRange_actualCharacterRange(chars, ptr::null_mut()) };
+    let end = glyphs.location + glyphs.length;
+    let mut out = Vec::new();
+    let mut g = glyphs.location;
+    while g < end {
+        let mut eff = NSRange::new(0, 0);
+        let frag = unsafe { lm.lineFragmentRectForGlyphAtIndex_effectiveRange(g, &mut eff as *mut NSRange) };
+        let upto = end.min(eff.location + eff.length).max(g + 1);
+        let r = lm.boundingRectForGlyphRange_inTextContainer(range(g, upto - g), tc);
+        let loc = lm.locationForGlyphAtIndex(g);
+        out.push(LinePiece { x: r.origin.x, w: r.size.width, baseline: frag.origin.y + loc.y });
+        g = upto;
+    }
+    out
+}
+
+fn fill_rounded(r: NSRect, radius: f64) {
+    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(r, radius, radius).fill();
+}
+
+/// A task checkbox (S4): `Sub` outline with radius 4 when open; a filled `Accent` box with the
+/// accent ink (#1a0709, D4) check mark when done. Same footprint as the glyph it covers.
+fn draw_checkbox(x: f64, baseline: f64, checked: bool, z: f64) {
+    let side = 14.0 * z;
+    let r = NSRect::new(NSPoint::new(x + 1.0 * z, baseline - 5.2 * z - side / 2.0), NSSize::new(side, side));
+    if checked {
+        notes_theme::color(Token::Accent).setFill();
+        fill_rounded(r, 4.0 * z);
+        let ink = NSColor::colorWithSRGBRed_green_blue_alpha(26.0 / 255.0, 7.0 / 255.0, 9.0 / 255.0, 1.0);
+        ink.setStroke();
+        let check = NSBezierPath::bezierPath();
+        let at = |fx: f64, fy: f64| NSPoint::new(r.origin.x + fx * side, r.origin.y + fy * side);
+        check.moveToPoint(at(0.26, 0.52));
+        check.lineToPoint(at(0.43, 0.69));
+        check.lineToPoint(at(0.75, 0.31));
+        check.setLineWidth(1.9 * z);
+        check.setLineCapStyle(objc2_app_kit::NSLineCapStyle::Round);
+        check.setLineJoinStyle(objc2_app_kit::NSLineJoinStyle::Round);
+        check.stroke();
+    } else {
+        let w = 1.4 * z;
+        notes_theme::color(Token::Sub).setStroke();
+        let inset = NSRect::new(NSPoint::new(r.origin.x + w / 2.0, r.origin.y + w / 2.0), NSSize::new(side - w, side - w));
+        let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(inset, 4.0 * z, 4.0 * z);
+        path.setLineWidth(w);
+        path.stroke();
+    }
+}
+
 fn draw_decorations(tv: &NSTextView) {
     let (Some(st), Some(lm), Some(tc)) = (storage_of(tv), layout_of(tv), container_of(tv)) else { return };
-    let (_, paras) = read_paras(&st, false);
+    let (_, paras) = read_paras(&st, true);
     let o = tv.textContainerOrigin();
     let width = tc.containerSize().width;
     let z = zoom();
+    for p in &paras {
+        if p.end <= p.start && !p.nl {
+            continue;
+        }
+        if let BlockKind::Task { checked } = p.kind {
+            if p.cs > p.start {
+                if let Some(l) = line_pieces(&lm, &tc, range(p.start, 1)).first() {
+                    draw_checkbox(l.x + o.x, l.baseline + o.y, checked, z);
+                }
+            }
+        }
+        // inline code: a `Field` pill with radius 5 behind the mono text
+        if !matches!(p.kind, BlockKind::Code { .. } | BlockKind::Rule) {
+            let f = match p.kind {
+                BlockKind::Heading(1) => 24.0 / BASE_SIZE,
+                BlockKind::Heading(2) => 20.0 / BASE_SIZE,
+                BlockKind::Heading(_) => 17.0 / BASE_SIZE,
+                _ => 1.0,
+            };
+            for run in p.runs.iter().filter(|r| r.bits & CODE != 0 && r.b > r.a) {
+                for l in line_pieces(&lm, &tc, range(run.a, run.b - run.a)) {
+                    notes_theme::color(Token::Field).setFill();
+                    let r = NSRect::new(
+                        NSPoint::new(l.x + o.x - 1.5 * z, l.baseline + o.y - 11.5 * z * f),
+                        NSSize::new(l.w + 3.0 * z, 15.5 * z * f),
+                    );
+                    fill_rounded(r, 5.0 * z);
+                }
+            }
+        }
+    }
     for (k, p) in paras.iter().enumerate() {
         let wants = matches!(p.kind, BlockKind::Code { .. } | BlockKind::Rule | BlockKind::Quote);
         let total = p.end + usize::from(p.nl) - p.start;
@@ -2214,7 +2333,11 @@ fn draw_decorations(tv: &NSTextView) {
         }
         let first = unsafe { lm.lineFragmentRectForGlyphAtIndex_effectiveRange(glyphs.location, ptr::null_mut()) };
         let last = unsafe { lm.lineFragmentRectForGlyphAtIndex_effectiveRange(glyphs.location + glyphs.length - 1, ptr::null_mut()) };
-        let (top, mut bottom) = (first.origin.y + o.y, last.origin.y + last.size.height + o.y);
+        let (mut top, mut bottom) = (first.origin.y + o.y, last.origin.y + last.size.height + o.y);
+        if matches!(p.kind, BlockKind::Code { .. }) && k > 0 {
+            // the first line fragment includes `paragraphSpacingBefore`: start the fill below it
+            top += CODE_SPACE_BEFORE * z;
+        }
         if p.kind == BlockKind::Quote {
             // one bar per run of quote lines
             if k > 0 && paras[k - 1].kind == BlockKind::Quote {
@@ -2233,18 +2356,18 @@ fn draw_decorations(tv: &NSTextView) {
         }
         match &p.kind {
             BlockKind::Code { .. } => {
-                NSColor::labelColor().colorWithAlphaComponent(0.07).setFill();
+                notes_theme::color(Token::Field).setFill();
                 let r = NSRect::new(NSPoint::new(o.x + 1.0, top - 2.0), NSSize::new((width - 2.0).max(0.0), bottom - top + 4.0));
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(r, 6.0 * z, 6.0 * z).fill();
+                fill_rounded(r, 10.0 * z);
             }
             BlockKind::Rule => {
-                NSColor::tertiaryLabelColor().setFill();
+                notes_theme::color(Token::Sep).setFill();
                 let mid = (top + bottom) / 2.0;
                 NSBezierPath::fillRect(NSRect::new(NSPoint::new(o.x + 5.0, mid - 0.5), NSSize::new((width - 10.0).max(0.0), 1.0)));
             }
             _ => {
-                NSColor::tertiaryLabelColor().setFill();
-                NSBezierPath::fillRect(NSRect::new(NSPoint::new(o.x + 5.0 + 2.0 * z, top), NSSize::new(3.0 * z, bottom - top)));
+                notes_theme::color(Token::Accent).setFill();
+                fill_rounded(NSRect::new(NSPoint::new(o.x + 5.0 + 2.0 * z, top), NSSize::new(2.5 * z, bottom - top)), 1.25 * z);
             }
         }
     }
@@ -2308,6 +2431,18 @@ pub(crate) fn new_text_view(mtm: MainThreadMarker, frame: NSRect) -> Retained<NS
     tv.setSmartInsertDeleteEnabled(false);
     tv.setImportsGraphics(false);
     tv.setUsesFontPanel(false);
+    // S4: the coral accent for the caret and the selection (28% alpha, text colour unchanged).
+    tv.setInsertionPointColor(Some(&notes_theme::color(Token::Accent)));
+    let sel: Retained<NSDictionary<NSAttributedStringKey, AnyObject>> = {
+        let d: Retained<AttrDict> = NSMutableDictionary::new();
+        put(
+            &d,
+            unsafe { objc2_app_kit::NSBackgroundColorAttributeName },
+            &notes_theme::color(Token::Accent).colorWithAlphaComponent(SELECTION_ALPHA),
+        );
+        Retained::into_super(d)
+    };
+    unsafe { tv.setSelectedTextAttributes(&sel) };
     tv
 }
 

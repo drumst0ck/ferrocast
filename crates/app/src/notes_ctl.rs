@@ -1750,7 +1750,7 @@ mod tests {
         let mut w = W::new(vec![note("a", "A", 1)]);
         w.settings.notes_zoom = 1.4;
         w.settings.notes_escape_loses_focus = true;
-        w.settings.notes_format_bar = true;
+        assert!(w.settings.notes_format_bar, "the Format Bar is on by default");
         w.toggle();
         let log = w.log();
         assert!(
@@ -2279,17 +2279,28 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_hidden_format_bar_is_applied_at_first_use() {
+        let mut w = W::new(vec![note("a", "A", 1)]);
+        w.settings.notes_format_bar = false;
+        w.toggle();
+        assert!(w.log().contains(&"bar:false".to_string()), "{:?}", w.log());
+    }
+
+    #[test]
     fn format_bar_action_flips_the_setting_and_the_window() {
         let mut w = W::new(vec![note("a", "A", 1)]);
         w.open("a");
-        w.pick_action("format-bar");
-        assert!(w.settings.notes_format_bar);
-        assert!(w.log().contains(&"bar:true".to_string()));
+        assert!(w.settings.notes_format_bar, "visible by default");
         w.ev(Event::Actions);
         assert!(w.st.borrow().levels[0].1.iter().any(|i| i.title == "Hide Format Bar"));
         let out = w.pick("format-bar");
         assert!(out.save_settings && !w.settings.notes_format_bar);
         assert!(w.log().contains(&"bar:false".to_string()));
+        w.ev(Event::Actions);
+        assert!(w.st.borrow().levels[0].1.iter().any(|i| i.title == "Show Format Bar"));
+        let out = w.pick("format-bar");
+        assert!(out.save_settings && w.settings.notes_format_bar);
+        assert!(w.log().contains(&"bar:true".to_string()));
     }
 
     // ---- emoji, AI helpers

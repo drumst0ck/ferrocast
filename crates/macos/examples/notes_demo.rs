@@ -10,6 +10,7 @@ use std::rc::Rc;
 use ferrocast_core::richtext::{self, BlockKind};
 use ferrocast_macos::notes::{self, Anchor, EmojiEvent, Event, PopupKey, SlashEvent};
 use ferrocast_macos::notes_format::Format;
+use ferrocast_macos::notes_hints::Hint;
 use ferrocast_macos::notes_palette::{self, PaletteItem};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -315,6 +316,7 @@ fn main() {
 
     editor_checks(&app, &out);
     window_checks(&app, &out, &events);
+    hint_checks(&app, &out, &events);
 
     notes::hide();
 
@@ -1099,6 +1101,9 @@ fn editor_checks(app: &NSApplication, out: &std::path::Path) {
         ("light", unsafe { NSAppearanceNameAqua }, 1.0),
         ("dark", unsafe { NSAppearanceNameDarkAqua }, 1.0),
         ("light-zoom150", unsafe { NSAppearanceNameAqua }, 1.5),
+        ("dark-zoom150", unsafe { NSAppearanceNameDarkAqua }, 1.5),
+        ("light-zoom50", unsafe { NSAppearanceNameAqua }, 0.5),
+        ("dark-zoom50", unsafe { NSAppearanceNameDarkAqua }, 0.5),
     ] {
         app.setAppearance(NSAppearance::appearanceNamed(appearance).as_deref());
         notes::set_zoom(z);
@@ -1118,6 +1123,147 @@ fn editor_checks(app: &NSApplication, out: &std::path::Path) {
     }
     app.setAppearance(None);
     check("snapshot note round-trips", md() == md_of(note), &md());
+    theme_checks(app, out);
+    style_checks(app);
+    reset(app, note);
+}
+
+/// T2 (S4, S6, S7): heading hierarchy at every zoom level, and the selection stays readable.
+fn style_checks(app: &NSApplication) {
+    use ferrocast_macos::notes_theme::{self as theme, Rgba};
+    use objc2_foundation::NSObjectProtocol as _;
+    reset(app, "# Alpha\n\n## Beta\n\n### Gamma\n\nDelta body");
+    let text = tv_of(app).string().to_string();
+    let at = |w: &str| text.find(w).expect("word in text");
+    for z in [0.5, 1.0, 1.5, 3.0] {
+        notes::set_zoom(z);
+        let tv = tv_of(app);
+        let (h1, h2, h3, body) =
+            (font_size_at(&tv, at("Alpha")), font_size_at(&tv, at("Beta")), font_size_at(&tv, at("Gamma")), font_size_at(&tv, at("Delta")));
+        check(
+            &format!("zoom {z}: headings are larger than the body and strictly ordered 1 > 2 > 3"),
+            body > 0.0 && h3 > body && h2 > h3 && h1 > h2,
+            &format!("h1 {h1} h2 {h2} h3 {h3} body {body}"),
+        );
+    }
+    notes::set_zoom(1.0);
+    let alpha = ferrocast_macos::notes_editor::SELECTION_ALPHA;
+    for (name, t, dark) in [("dark", theme::DARK, true), ("light", theme::LIGHT, false)] {
+        let bg = theme::window_bg(dark);
+        let sel_bg =
+            theme::composite_over(Rgba(t.accent.0, t.accent.1, t.accent.2, (alpha * 255.0).round() as u8), Rgba(bg.0, bg.1, bg.2, 255));
+        let ratio = theme::contrast_ratio(theme::composite_over(t.text, Rgba(sel_bg.0, sel_bg.1, sel_bg.2, 255)), sel_bg);
+        check(
+            &format!("selection {name}: Text over the composited Accent at {:.0}% reaches 4.5:1", alpha * 100.0),
+            ratio >= 4.5,
+            &format!("selection bg {sel_bg:?}, ratio {ratio:.2}"),
+        );
+    }
+    let tv = tv_of(app);
+    let caret = tv.insertionPointColor();
+    let sel_attrs = tv.selectedTextAttributes();
+    check(
+        "caret and selection use the accent, the selection keeps the text colour",
+        !caret.isEqual(Some(&objc2_app_kit::NSColor::controlAccentColor()))
+            && sel_attrs.count() == 1
+            && unsafe { sel_attrs.objectForKey(objc2_app_kit::NSBackgroundColorAttributeName) }.is_some(),
+        &format!("attrs {}", sel_attrs.count()),
+    );
+}
+
+/// Read pixel `(x, y)` (top-left origin) of a snapshot image as 0 to 255 per channel.
+fn pixel(rep: &objc2_app_kit::NSBitmapImageRep, x: isize, y: isize) -> (u8, u8, u8) {
+    // Raw stored components, no colour-space conversion: the snapshot is tagged with this Mac's
+    // display profile but holds the values AppKit drew, so converting would make the check
+    // depend on the monitor.
+    let c = rep.colorAtX_y(x, y).expect("pixel colour");
+    let f = |v: f64| (v * 255.0).round() as u8;
+    (f(c.redComponent()), f(c.greenComponent()), f(c.blueComponent()))
+}
+
+fn close(a: (u8, u8, u8), b: (u8, u8, u8), tol: i32) -> bool {
+    [(a.0, b.0), (a.1, b.1), (a.2, b.2)].iter().all(|&(x, y)| (x as i32 - y as i32).abs() <= tol)
+}
+
+/// T1 (S2, S5, S8): the window chrome uses the app palette in both themes, whatever the macOS
+/// appearance of this Mac is, and the setting round-trips.
+fn theme_checks(app: &NSApplication, out: &std::path::Path) {
+    use ferrocast_macos::notes_theme::{self as theme, Appearance, Rgba};
+    reset(app, "# Theme\n\nShort note.");
+    let mut heading_ink: Vec<(u8, u8, u8)> = Vec::new();
+    for (name, setting, dark) in [("dark", Appearance::Dark, true), ("light", Appearance::Light, false)] {
+        theme::set_appearance(setting);
+        check(
+            &format!("theme {name}: appearance() returns what was set"),
+            theme::appearance() == setting,
+            &format!("{:?}", theme::appearance()),
+        );
+        pump(300);
+        let path = out.join(format!("notes-theme-{name}.png"));
+        let ok = notes::snapshot_png(&path);
+        check(&format!("theme {name}: snapshot written"), ok, "failed");
+        let rep = std::fs::read(&path)
+            .ok()
+            .and_then(|d| objc2_app_kit::NSBitmapImageRep::imageRepWithData(&objc2_foundation::NSData::with_bytes(&d)));
+        let Some(rep) = rep else {
+            check(&format!("theme {name}: snapshot readable"), false, "no image");
+            continue;
+        };
+        let (w, h) = (rep.pixelsWide(), rep.pixelsHigh());
+        let t = if dark { theme::DARK } else { theme::LIGHT };
+        let bg = theme::window_bg(dark);
+        let got_bg = pixel(&rep, w / 2, h * 4 / 5);
+        check(
+            &format!("theme {name}: window background is the opaque bg token"),
+            close(got_bg, bg, 2),
+            &format!("got {got_bg:?} want {bg:?}"),
+        );
+        let scale = w as f64 / app.keyWindow().map_or(560.0, |win| win.contentView().map_or(560.0, |v| v.bounds().size.width));
+        let row = (43.5 * scale).round() as isize;
+        let got_sep = pixel(&rep, w / 4, row);
+        let want_sep = theme::composite_over(t.sep, Rgba(bg.0, bg.1, bg.2, 255));
+        check(
+            &format!("theme {name}: hairline row differs from the background"),
+            !close(got_sep, got_bg, 1),
+            &format!("sep {got_sep:?} bg {got_bg:?}"),
+        );
+        check(
+            &format!("theme {name}: hairline is the composited sep token"),
+            close(got_sep, want_sep, 6),
+            &format!("got {got_sep:?} want {want_sep:?}"),
+        );
+        // The heading glyph pixels (the pixel farthest from the background in the heading band):
+        // the text was laid out once and only the appearance changed, so a dynamic colour is
+        // what recolours it.
+        let mut ink = (got_bg, 0i32);
+        for y in (46.0 * scale) as isize..(100.0 * scale) as isize {
+            for x in 0..w / 2 {
+                let p = pixel(&rep, x, y);
+                let d = (p.0 as i32 - got_bg.0 as i32).abs() + (p.1 as i32 - got_bg.1 as i32).abs() + (p.2 as i32 - got_bg.2 as i32).abs();
+                if d > ink.1 {
+                    ink = (p, d);
+                }
+            }
+        }
+        let want = (t.text.0, t.text.1, t.text.2);
+        check(
+            &format!("theme {name}: heading text pixels are nearer the Text token than the background"),
+            ink.1 > 150 && close(ink.0, want, 70),
+            &format!("ink {:?} want {want:?} bg {got_bg:?}", ink.0),
+        );
+        heading_ink.push(ink.0);
+        println!("      {}", path.display());
+    }
+    if let [dark_ink, light_ink] = heading_ink[..] {
+        check(
+            "theme: heading pixels differ between Dark and Light without set_markdown",
+            !close(dark_ink, light_ink, 60) && dark_ink.0 > light_ink.0,
+            &format!("dark {dark_ink:?} light {light_ink:?}"),
+        );
+    }
+    theme::set_appearance(Appearance::System);
+    check("theme: restored to System", theme::appearance() == Appearance::System, "");
+    pump(100);
 }
 
 // ------------------------------------------------------------------ window integration checks
@@ -1398,14 +1544,17 @@ fn window_checks(app: &NSApplication, out: &std::path::Path, events: &Rc<RefCell
 
     // ---- Format Bar
     reset(app, "hello world");
-    check("Format Bar is hidden by default", !notes::format_bar_visible(), "visible");
+    check("Format Bar is hidden at the macOS level before the app applies its setting", !notes::format_bar_visible(), "visible");
     let bottom_hidden = editor_scroll_bottom(app);
     notes::set_format_bar_visible(true);
     pump(150);
     let bold = bar_button_on(app, "Bold ⌘B");
     check(
         "set_format_bar_visible(true) shows the bar and shrinks the editor",
-        notes::format_bar_visible() && bold.is_some() && bottom_hidden == 0.0 && (editor_scroll_bottom(app) - 36.0).abs() < 0.5,
+        notes::format_bar_visible()
+            && bold.is_some()
+            && (bottom_hidden - 30.0).abs() < 0.5
+            && (editor_scroll_bottom(app) - 66.0).abs() < 0.5,
         &format!("bottom {bottom_hidden} -> {}", editor_scroll_bottom(app)),
     );
     tv_of(app).setSelectedRange(NSRange::new(0, 5));
@@ -1652,8 +1801,195 @@ fn window_checks(app: &NSApplication, out: &std::path::Path, events: &Rc<RefCell
     }
     app.setAppearance(None);
     notes::set_format_bar_visible(false);
-    check("Format Bar hides again", !notes::format_bar_visible() && editor_scroll_bottom(app) == 0.0, "still visible");
+    check("Format Bar hides again", !notes::format_bar_visible() && (editor_scroll_bottom(app) - 30.0).abs() < 0.5, "still visible");
     notes::set_on_change(Box::new(|_| {}));
+}
+
+// ------------------------------------------------------------------ hint bar checks
+
+fn content_size(app: &NSApplication) -> (f64, f64) {
+    app.keyWindow().and_then(|w| w.contentView()).map(|c| (c.bounds().size.width, c.bounds().size.height)).unwrap_or((0.0, 0.0))
+}
+
+fn editor_scroll_height(app: &NSApplication) -> f64 {
+    tv_of(app).enclosingScrollView().map(|s| s.frame().size.height).unwrap_or(-1.0)
+}
+
+/// Click the centre of a hint group with real mouse events addressed to the window.
+fn click_hint(app: &NSApplication, hint: Hint) -> bool {
+    let Some(bar) = notes::hint_bar() else { return false };
+    let Some(f) = bar.group_frame(hint) else { return false };
+    let p = bar.view().convertPoint_toView(NSPoint::new(f.origin.x + f.size.width / 2.0, f.origin.y + f.size.height / 2.0), None);
+    let win = app.keyWindow().map(|w| w.windowNumber()).unwrap_or(0);
+    app.sendEvent(&mouse_event(NSEventType::LeftMouseDown, win, p.x, p.y, 1));
+    app.sendEvent(&mouse_event(NSEventType::LeftMouseUp, win, p.x, p.y, 1));
+    pump(80);
+    true
+}
+
+/// S11: the footer hint bar (geometry, stacking with the Format Bar, what fits at each width,
+/// clicks, the palette on top, theme pixels, snapshots).
+fn hint_checks(app: &NSApplication, out: &std::path::Path, events: &Rc<RefCell<Vec<Event>>>) {
+    use ferrocast_macos::notes_hints::{self, visible_hints};
+    use ferrocast_macos::notes_theme::{self as theme, Appearance, Rgba};
+    notes::set_escape_loses_focus(false);
+    notes::show();
+    wait_key(1500);
+    set_window_size(app, 560.0, 420.0);
+    reset(app, "# Hints\n\nNote text.");
+    notes::set_format_bar_visible(false);
+    pump(100);
+    let Some(bar) = notes::hint_bar() else {
+        check("hint bar exists", false, "none");
+        return;
+    };
+    let vf = bar.view().frame();
+    check(
+        "hint bar exists, 30 pt high, at the very bottom, full width",
+        (vf.size.height - 30.0).abs() < 0.01
+            && vf.origin.y == 0.0
+            && (vf.size.width - content_size(app).0).abs() < 0.5
+            && !bar.view().isHidden(),
+        &format!("{vf:?}"),
+    );
+    let h_hint_only = editor_scroll_height(app);
+    let (_, ch) = content_size(app);
+    check(
+        "Format Bar hidden: the editor stops 30 pt above the bottom",
+        (editor_scroll_bottom(app) - 30.0).abs() < 0.5 && (h_hint_only - (ch - 30.0)).abs() < 0.5,
+        &format!("bottom {} height {h_hint_only} of {ch}", editor_scroll_bottom(app)),
+    );
+    notes::set_format_bar_visible(true);
+    pump(150);
+    let h_both = editor_scroll_height(app);
+    let bar_y = app
+        .keyWindow()
+        .and_then(|w| w.contentView())
+        .and_then(|c| find_button(&c, "Bold ⌘B"))
+        .map(|b| b.convertRect_toView(b.bounds(), None).origin.y)
+        .unwrap_or(-1.0);
+    check(
+        "both bars: editor above the Format Bar (36), Format Bar above the hint bar (30); the editor shrank by 36",
+        (editor_scroll_bottom(app) - 66.0).abs() < 0.5
+            && (h_hint_only - h_both - 36.0).abs() < 0.5
+            && (h_both - (ch - 66.0)).abs() < 0.5
+            && (30.0..66.0).contains(&bar_y),
+        &format!("bottom {} heights {h_hint_only} -> {h_both}, Bold y {bar_y}", editor_scroll_bottom(app)),
+    );
+
+    // what fits at each width: the pure rule, and the frames follow it
+    let sizes = bar.sizes();
+    println!("      measured: typing {:.1}, groups {:?}", sizes.typing, sizes.groups);
+    for w in [320.0, 400.0, 480.0, 560.0, 700.0] {
+        set_window_size(app, w, 420.0);
+        let (cw, _) = content_size(app);
+        let want = visible_hints(cw, &sizes);
+        let got = bar.visible();
+        let mut inside = true;
+        let mut shown = 0;
+        let mut order_ok = true;
+        let mut prev_x = f64::MAX;
+        for (i, h) in notes_hints::Hint::ALL.iter().enumerate() {
+            match bar.group_frame(*h) {
+                Some(f) => {
+                    shown += 1;
+                    inside &= f.origin.x >= notes_hints::PAD - 0.01 && f.origin.x + f.size.width <= cw - notes_hints::PAD + 0.01;
+                    order_ok &= f.origin.x < prev_x && i < want.groups;
+                    prev_x = f.origin.x;
+                }
+                None => order_ok &= i >= want.groups,
+            }
+        }
+        println!("      width {cw:.0}: typing {} groups {}", got.typing, got.groups);
+        check(
+            &format!("width {w:.0}: hint bar shows what the rule says, whole groups only, 12 pt padding kept"),
+            got == want && shown == want.groups && inside && order_ok,
+            &format!("want {want:?} got {got:?} shown {shown} inside {inside} order {order_ok}"),
+        );
+        if w == 320.0 {
+            check("320 pt: Actions ⌘K is still there", bar.group_frame(Hint::Actions).is_some(), "missing");
+        }
+    }
+    set_window_size(app, 560.0, 420.0);
+
+    // clicks fire the matching event once and the editor keeps the keyboard
+    for (hint, want, name) in [
+        (Hint::Actions, Event::Actions, "Actions ⌘K"),
+        (Hint::Browse, Event::Browse, "Browse ⌘P"),
+        (Hint::Pin, Event::TogglePin, "Pin ⇧⌘P"),
+        (Hint::New, Event::New, "New ⌘N"),
+    ] {
+        notes::focus_editor();
+        events.borrow_mut().clear();
+        let clicked = click_hint(app, hint);
+        check(
+            &format!("clicking {name} fires {want:?} once and the editor keeps focus"),
+            clicked && *events.borrow() == vec![want] && first_responder_text_view(app).is_some(),
+            &format!("clicked {clicked} events {:?}", events.borrow()),
+        );
+    }
+    events.borrow_mut().clear();
+
+    // the palette overlay covers the window: the hint bar neither shows through nor steals clicks
+    let item = |id: &str| PaletteItem { id: id.into(), title: id.into(), ..PaletteItem::default() };
+    for hint in [Hint::Actions, Hint::New] {
+        notes_palette::show("Search", vec![item("a"), item("b")]);
+        pump(150);
+        events.borrow_mut().clear();
+        click_hint(app, hint);
+        check(
+            &format!("palette open: a click over the {hint:?} hint fires no event"),
+            events.borrow().is_empty(),
+            &format!("{:?}", events.borrow()),
+        );
+    }
+    notes_palette::hide();
+    pump(100);
+    events.borrow_mut().clear();
+
+    // theme pixels: background and hairline, both appearances, both bars visible at 560
+    reset(app, "# Weekly plan\n\nShip the **Notes** window and write the docs for it.\n\nA second paragraph of text.");
+    notes::set_format_bar_visible(true);
+    for (name, setting, dark) in [("light", Appearance::Light, false), ("dark", Appearance::Dark, true)] {
+        theme::set_appearance(setting);
+        pump(300);
+        let path = out.join(format!("notes-hints-{name}.png"));
+        check(&format!("hint bar {name}: snapshot written"), notes::snapshot_png(&path), "failed");
+        println!("      {}", path.display());
+        let rep = std::fs::read(&path)
+            .ok()
+            .and_then(|d| objc2_app_kit::NSBitmapImageRep::imageRepWithData(&objc2_foundation::NSData::with_bytes(&d)));
+        let Some(rep) = rep else {
+            check(&format!("hint bar {name}: snapshot readable"), false, "no image");
+            continue;
+        };
+        let (w, h) = (rep.pixelsWide(), rep.pixelsHigh());
+        let (cw, _) = content_size(app);
+        let scale = w as f64 / cw;
+        let t = if dark { theme::DARK } else { theme::LIGHT };
+        let bg = theme::window_bg(dark);
+        // 4 pt from the left edge and 15 pt above the bottom: inside the bar, left of the typing hint
+        let got_bg = pixel(&rep, (4.0 * scale) as isize, h - (6.0 * scale) as isize);
+        check(&format!("hint bar {name}: background is the opaque bg token"), close(got_bg, bg, 2), &format!("got {got_bg:?} want {bg:?}"));
+        let want_sep = theme::composite_over(t.sep, Rgba(bg.0, bg.1, bg.2, 255));
+        let row = h - (29.5 * scale).round() as isize;
+        let got_sep = pixel(&rep, (4.0 * scale) as isize, row);
+        check(
+            &format!("hint bar {name}: top hairline is the composited sep token"),
+            close(got_sep, want_sep, 6) && !close(got_sep, got_bg, 1),
+            &format!("got {got_sep:?} want {want_sep:?} bg {got_bg:?}"),
+        );
+    }
+    set_window_size(app, 400.0, 420.0);
+    for (name, setting) in [("light", Appearance::Light), ("dark", Appearance::Dark)] {
+        theme::set_appearance(setting);
+        pump(300);
+        snapshot(out, &format!("hints-{name}-400"));
+    }
+    theme::set_appearance(Appearance::System);
+    notes::set_format_bar_visible(false);
+    set_window_size(app, 560.0, 420.0);
+    pump(100);
 }
 
 fn popup_selected() -> Option<usize> {
