@@ -11246,7 +11246,7 @@ fn saved_capture_with_after_show_opens_the_capture_window() {
 // ---- T9: Settings → Capture tab
 
 /// Titles of the Capture tab rows, in drawing order.
-const CAPTURE_TAB_TITLES: [&str; 10] = [
+const CAPTURE_TAB_TITLES: [&str; 13] = [
     "Capture folder",
     "Format",
     "After capture",
@@ -11257,6 +11257,9 @@ const CAPTURE_TAB_TITLES: [&str; 10] = [
     "Capture Window shortcut",
     "Capture Screen shortcut",
     "Capture Scrolling shortcut",
+    "Record Screen shortcut",
+    "Record Area shortcut",
+    "Record Window shortcut",
 ];
 
 #[test]
@@ -11294,6 +11297,9 @@ fn capture_settings_are_found_by_the_settings_search() {
         ("window shortcut", "Capture Window shortcut"),
         ("screenshot hotkey", "Capture Screen shortcut"),
         ("long screenshot", "Capture Scrolling shortcut"),
+        ("record screen", "Record Screen shortcut"),
+        ("record area", "Record Area shortcut"),
+        ("video hotkey", "Record Window shortcut"),
     ] {
         assert!(search(q).iter().any(|e| e.tab == CAPTURE_TAB && e.title == title), "{q:?} finds {title:?}");
     }
@@ -11353,7 +11359,15 @@ fn capture_shortcut_rows_follow_the_builtin_ids_and_have_no_default() {
     use crate::items::Builtin;
     assert_eq!(
         CAPTURE_SHORTCUTS.map(|(_, b)| b.id()),
-        [Builtin::CaptureArea.id(), Builtin::CaptureWindow.id(), Builtin::CaptureScreen.id(), Builtin::CaptureScrolling.id()]
+        [
+            Builtin::CaptureArea.id(),
+            Builtin::CaptureWindow.id(),
+            Builtin::CaptureScreen.id(),
+            Builtin::CaptureScrolling.id(),
+            Builtin::RecordScreen.id(),
+            Builtin::RecordArea.id(),
+            Builtin::RecordWindow.id(),
+        ]
     );
     let s = Settings::default();
     for (_, b) in CAPTURE_SHORTCUTS {
@@ -11371,7 +11385,7 @@ fn capture_shortcut_record_opens_the_hotkey_view_for_that_command() {
         render(app, vec![]);
         let mut v: Vec<Rect> = sd5_hits(app).into_iter().filter(|h| h.0 == "small_btn").map(|h| h.2).collect();
         v.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
-        assert_eq!(v.len(), 4, "a Record… button per shortcut");
+        assert_eq!(v.len(), 7, "a Record… button per shortcut");
         Some(v[1].center())
     })
     .expect("reachable");

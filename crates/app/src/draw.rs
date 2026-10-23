@@ -6603,10 +6603,10 @@ impl App {
                         ui.add_space(14.0);
                         section(ui, pal, "Recording");
                         group(ui, pal, |ui| {
-                            row(ui, pal, "Recording frame rate", "For screen recording, which is not available yet.", |ui| {
+                            row(ui, pal, "Recording frame rate", "Frames per second of screen recordings.", |ui| {
                                 segmented(ui, pal, &mut s.capture.fps, &[(30, "30 fps"), (60, "60 fps")]);
                             });
-                            row(ui, pal, "Recording countdown", "Seconds before a recording starts. Screen recording is not available yet.", |ui| {
+                            row(ui, pal, "Recording countdown", "Seconds of countdown before a recording starts.", |ui| {
                                 segmented(ui, pal, &mut s.capture.countdown, &[(0, "Off"), (3, "3 s"), (5, "5 s")]);
                             });
                         });
@@ -7579,11 +7579,14 @@ const NOTES_TAB: usize = 6;
 const CAPTURE_TAB: usize = 5;
 /// Shortcut rows of the Capture tab: row title and the command each one binds. The hotkey is the
 /// command's own (`Settings::hotkey`), registered by `Hotkeys::apply`; there is no default.
-const CAPTURE_SHORTCUTS: [(&str, Builtin); 4] = [
+const CAPTURE_SHORTCUTS: [(&str, Builtin); 7] = [
     ("Capture Area shortcut", Builtin::CaptureArea),
     ("Capture Window shortcut", Builtin::CaptureWindow),
     ("Capture Screen shortcut", Builtin::CaptureScreen),
     ("Capture Scrolling shortcut", Builtin::CaptureScrolling),
+    ("Record Screen shortcut", Builtin::RecordScreen),
+    ("Record Area shortcut", Builtin::RecordArea),
+    ("Record Window shortcut", Builtin::RecordWindow),
 ];
 
 /// The zoom levels of the Notes tab: 50 %, 60 % … 300 %, the steps of the editor's ⌘+ and ⌘-.
