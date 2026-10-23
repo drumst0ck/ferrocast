@@ -62,20 +62,21 @@ En Ajustes → Translate → **Engine**:
 
 - **Same as chat** (por defecto) usa el proveedor y el modelo de Ask AI.
 - Un proveedor fijo te deja elegir su **Model**: la lista del proveedor, **Provider default** o **Custom…** para escribir un nombre. Al cambiar de proveedor el modelo se reinicia.
-- **Apple** traduce en tu Mac con Apple Translation, sin proveedor de IA y sin internet una vez descargados sus idiomas. Requiere macOS 26 o posterior; en versiones anteriores el segmento no aparece. Mira [Traducir sin conexión con Apple](#traducir-sin-conexión-con-apple).
+- **Apple** traduce en tu Mac con Apple Translation, sin proveedor de IA, clave ni servidor. El texto no se envía a ningún sitio. Requiere macOS 26 o posterior; en versiones anteriores el segmento no aparece. Mira [Traducir sin conexión con Apple](#traducir-sin-conexión-con-apple).
 
 La dirección del servidor, las claves y los inicios de sesión se configuran en Ajustes → AI; la pestaña Translate solo elige quién traduce. El texto seleccionado se envía como dato, separado de las instrucciones, así que una palabra suelta, un título, una pregunta o una frase que parece una orden («Resume esto», «Ignora lo anterior») se traducen en lugar de contestarse o cumplirse. Después tu Mac comprueba en local el idioma de la respuesta y, si salió en otro idioma (por ejemplo cuando el texto dice «traduce esto al alemán»), Ferrocast lo pide una vez más.
 
 ## Traducir sin conexión con Apple
 
-Apple Translation forma parte de macOS. Traduce cada par de idiomas con un modelo guardado en tu Mac, así que el texto seleccionado no sale de él y no hace falta cuenta, clave ni servidor.
+Apple Translation forma parte de macOS. Traduce en tu Mac, así que el texto seleccionado no sale de él y no hace falta cuenta, clave ni servidor.
 
 1. Abre Ajustes → Translate → **Engine** y elige **Apple**.
-2. La tarjeta **Apple languages** lista cada idioma de tu rueda con un estado: **Installed**, **Needs download** o **Not supported by Apple**.
-3. Para un idioma que necesita descarga, pulsa **Open Language settings**. En Ajustes del Sistema → General → Idioma y región → **Idiomas de traducción**, descárgalo una vez. De vuelta en Ferrocast, pulsa **Check again**.
-4. Arrastra texto y suéltalo sobre ese idioma como siempre. La primera traducción tras abrir la app puede tardar unos segundos mientras carga el modelo.
+2. La tarjeta **Apple languages** lista cada idioma de tu rueda con el estado que informa Apple: **Installed**, **Needs download** o **Not supported by Apple**.
+3. Arrastra texto y suéltalo sobre un idioma como siempre. La primera traducción tras abrir la app puede tardar unos segundos mientras carga el modelo.
 
-Cada estado es un par de idiomas: el idioma con el idioma del sistema de tu Mac, o con el inglés cuando es el propio idioma del sistema. Para traducir desde otro idioma, por ejemplo del francés al alemán, ambos idiomas deben estar descargados. Si sueltas texto sobre un idioma sin descargar, Ferrocast lo dice y dónde conseguirlo; si Apple no admite el idioma, sugiere otro idioma o un motor de IA.
+Que un idioma haya que descargarlo antes depende de tu versión de macOS, y lo decide Apple, no Ferrocast. En un Mac donde Apple traduce con un modelo que ya está instalado, todos los idiomas soportados salen **Installed** y no hay nada que descargar. Cuando Apple dice que un idioma **Needs download**, la tarjeta muestra una fila **Download languages**: pulsa **Open Language settings**, descárgalo en Ajustes del Sistema → General → Idioma y región → **Idiomas de traducción** y pulsa **Check again**. Si sueltas texto sobre un idioma que Apple dice que no está descargado, Ferrocast lo dice y dónde conseguirlo; si Apple no admite el idioma, sugiere otro idioma o un motor de IA.
+
+Cada estado es un par de idiomas: el idioma con el idioma del sistema de tu Mac, o con el inglés cuando es el propio idioma del sistema. Traducir desde otro idioma puede necesitar también ese idioma.
 
 En macOS anterior a la 26, una elección guardada de Apple vuelve al proveedor del chat, con un aviso la primera vez. Apple Translation no obedece instrucciones y el idioma de origen se detecta en tu Mac.
 
