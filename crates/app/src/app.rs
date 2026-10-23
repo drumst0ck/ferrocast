@@ -5548,6 +5548,10 @@ impl App {
                 let now = ed.now();
                 ed.transcribe_msg(msg, now);
             }
+            EditorMsg::Face { dir, msg } if dir == ed.dir => {
+                let now = ed.now();
+                ed.face_msg(msg, now);
+            }
             _ => {}
         }
     }
@@ -5585,6 +5589,26 @@ impl App {
         let notify = Box::new(move |m| bus.send(Msg::Editor(Box::new(m))));
         if let Err(e) = ed.start_transcribe(ferrocast_macos::capture::helper_path(&exe), log, notify) {
             ed.st.tr.error = Some(crate::editor_panels::TranscribeFailure::Message(e));
+        }
+    }
+
+    /// The Analyze face button was pressed: start the worker (the helper path, log and bus belong to the app).
+    pub(crate) fn editor_face_do(&mut self) {
+        let exe = self.capture.exe.clone();
+        let root = self.store.root.clone();
+        let bus = self.bus.clone();
+        let Some(ed) = self.editor.as_mut() else { return };
+        if !std::mem::take(&mut ed.st.face.start) {
+            return;
+        }
+        if !ferrocast_macos::capture::available(&exe) {
+            ed.st.face.error = Some("Face tracking is not available in this build.".into());
+            return;
+        }
+        let log = move |m: &str| instance::log(&root, m);
+        let notify = Box::new(move |m| bus.send(Msg::Editor(Box::new(m))));
+        if let Err(e) = ed.start_face(ferrocast_macos::capture::helper_path(&exe), log, notify) {
+            ed.st.face.error = Some(e);
         }
     }
 

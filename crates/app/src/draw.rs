@@ -4431,7 +4431,9 @@ impl App {
     /// Studio editor (T26): preview frame, transport row and timeline. The pure parts (scrub queue,
     /// geometry, play clock, labels) live in `editor_ctl`; edits and panels come in T27.
     fn draw_editor(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, project: &std::path::Path) {
-        use crate::editor_ctl::{clock, fit, preview_width, ruler_ticks, segment_bars, zoom_bars, Axis, BarKind};
+        use crate::editor_ctl::{
+            clock, fit, loupe_bars, loupe_hit, preview_width, ruler_ticks, segment_bars, zoom_bars, Axis, BarKind, LOUPE_ROW,
+        };
         let ctx = ui.ctx().clone();
         let fps = f64::from(self.settings.capture.fps.max(1));
         let now = ctx.input(|i| i.time);
@@ -4520,6 +4522,14 @@ impl App {
         let resp = ui.interact(tl_rect, Id::new("editor-timeline"), egui::Sense::click_and_drag());
         if let (true, Some(p)) = (resp.clicked() || resp.dragged() || resp.drag_started(), resp.interact_pointer_pos()) {
             ed.seek(axis.time_at(p.x), now, fps);
+            // a click on a loupe segment selects it and shows it in the Loupe tab
+            if let (true, true) = (resp.clicked(), p.y >= tl_rect.min.y + LOUPE_ROW.0) {
+                if let Some(id) = loupe_hit(&loupe_bars(&proj), &axis, p.x).map(str::to_owned) {
+                    ed.st.selected_loupe = Some(id);
+                    ed.st.tab = crate::editor_panels::Tab::Loupe;
+                    ed.st.picking = false;
+                }
+            }
         }
         ctx.data_mut(|d| d.insert_temp(Id::new("editor-timeline-rect"), tl_rect));
         // the preview: aspect-correct, as wide as it is on screen (at most 960 px)
@@ -4561,11 +4571,12 @@ impl App {
                 pal.danger,
             );
         }
-        // the timeline: ruler, trim/split/speed track, zoom track, playhead
-        let (ruler, track, zrow) = (
-            Rect::from_min_size(tl_rect.min, Vec2::new(tl_rect.width(), 16.0)),
-            Rect::from_min_size(tl_rect.min + Vec2::new(0.0, 22.0), Vec2::new(tl_rect.width(), 24.0)),
-            Rect::from_min_size(tl_rect.min + Vec2::new(0.0, 52.0), Vec2::new(tl_rect.width(), 24.0)),
+        // the timeline: ruler, trim/split/speed track, zoom track, loupe track, playhead
+        let (ruler, track, zrow, lrow) = (
+            Rect::from_min_size(tl_rect.min, Vec2::new(tl_rect.width(), 14.0)),
+            Rect::from_min_size(tl_rect.min + Vec2::new(0.0, 16.0), Vec2::new(tl_rect.width(), 20.0)),
+            Rect::from_min_size(tl_rect.min + Vec2::new(0.0, 39.0), Vec2::new(tl_rect.width(), 18.0)),
+            Rect::from_min_size(tl_rect.min + Vec2::new(0.0, LOUPE_ROW.0), Vec2::new(tl_rect.width(), LOUPE_ROW.1)),
         );
         let p = ui.painter();
         let ticks = ruler_ticks(proj.duration, tl_rect.width(), 64.0);
@@ -4579,6 +4590,7 @@ impl App {
         }
         p.rect_filled(track, 5.0, pal.field);
         p.rect_filled(zrow, 5.0, pal.field);
+        p.rect_filled(lrow, 5.0, pal.field);
         let bar_rect = |row: Rect, s: f64, e: f64| {
             Rect::from_min_max(Pos2::new(axis.x_at(s), row.min.y), Pos2::new(axis.x_at(e).max(axis.x_at(s) + 1.0), row.max.y))
         };
@@ -4599,8 +4611,19 @@ impl App {
         for b in zoom_bars(&proj) {
             p.rect_filled(bar_rect(zrow, b.start, b.end), 4.0, Color32::from_rgb(120, 110, 255).gamma_multiply(0.85));
         }
+        // the loupe segments: drawn like the zoom ones; the selected one is brighter with an outline
+        let loupe_fill = crate::editor_ctl::loupe_color(pal.text.r() > 128);
+        for b in loupe_bars(&proj) {
+            let r = bar_rect(lrow, b.start, b.end);
+            if ed.st.selected_loupe.as_deref() == Some(b.id.as_str()) {
+                p.rect_filled(r, 4.0, loupe_fill);
+                p.rect_stroke(r.expand(1.0), 5.0, egui::Stroke::new(1.5, pal.text), egui::StrokeKind::Outside);
+            } else {
+                p.rect_filled(r, 4.0, loupe_fill.gamma_multiply(0.6));
+            }
+        }
         let x = axis.x_at(ed.t);
-        p.line_segment([Pos2::new(x, ruler.max.y - 2.0), Pos2::new(x, zrow.max.y + 2.0)], egui::Stroke::new(2.0, pal.text));
+        p.line_segment([Pos2::new(x, ruler.max.y - 2.0), Pos2::new(x, lrow.max.y + 1.0)], egui::Stroke::new(2.0, pal.text));
         p.add(egui::Shape::convex_polygon(
             vec![Pos2::new(x - 5.0, ruler.max.y - 8.0), Pos2::new(x + 5.0, ruler.max.y - 8.0), Pos2::new(x, ruler.max.y)],
             pal.text,
@@ -4613,6 +4636,10 @@ impl App {
         let right = {
             let n = proj.zooms.len();
             let mut s = format!("{n} zoom{}", if n == 1 { "" } else { "s" });
+            if !proj.loupes.is_empty() {
+                let m = proj.loupes.len();
+                s.push_str(&format!(" · {m} loupe{}", if m == 1 { "" } else { "s" }));
+            }
             let failed = matches!(ed.st.autosave.status(), crate::editor_panels::SaveStatus::Failed(_));
             s.push_str(&format!(" · {}", if failed { "Not saved".to_string() } else { ed.save_label() }));
             if let (true, Some(f)) = (playing, ed.rate.fps()) {
@@ -4659,6 +4686,7 @@ impl App {
         let export_action = crate::editor_export::draw_sheet(ui, rect, pal, ed);
         self.editor_export_do(export_action);
         self.editor_transcribe_do();
+        self.editor_face_do();
     }
 
     /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.

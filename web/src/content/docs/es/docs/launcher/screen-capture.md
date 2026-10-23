@@ -128,11 +128,11 @@ Ajustes → Capture → **Sources** tiene los interruptores **Camera**, **Microp
 
 La primera vez que se usa una fuente, macOS pide el permiso de Cámara o Micrófono al iniciar la grabación. Si se deniega, la grabación no empieza y un aviso abre el panel correspondiente de Ajustes del Sistema. El audio del sistema usa el permiso de Grabación de pantalla. Si una cámara o un micrófono desaparece durante la grabación, esta continúa y un aviso indica qué fuente se perdió.
 
-En el editor aparece una pestaña **Camera** cuando la grabación tiene cámara: mostrar u ocultar, **Circle**, **Rounded** o **Square**, una de las cuatro esquinas, tamaño (de 10 a 40 %), margen y espejo. La cámara permanece fija en el encuadre mientras la pantalla hace zoom. Aparece una pestaña **Audio** cuando hay micrófono o audio del sistema: ganancia por pista (de -60 a +12 dB), silencio por pista y una ganancia general. Las exportaciones MP4 mezclan las pistas en una sola pista de audio AAC (48 kHz estéreo) que sigue tus recortes y cambios de velocidad; un cambio de velocidad también cambia el tono. Los GIF no llevan audio.
+En el editor aparece una pestaña **Camera** cuando la grabación tiene cámara: mostrar u ocultar, un **Layout** (**Overlay** o **Split**), **Circle**, **Rounded** o **Square**, una de las cuatro esquinas, tamaño (de 10 a 40 %), margen y espejo, además de **Look**, **Cutout (beta)** y **Follow face** (consulta [Efectos de grabación](#efectos-de-grabación)). La cámara permanece fija en el encuadre mientras la pantalla hace zoom. Aparece una pestaña **Audio** cuando hay micrófono o audio del sistema: ganancia por pista (de -60 a +12 dB), silencio por pista y una ganancia general. Las exportaciones MP4 mezclan las pistas en una sola pista de audio AAC (48 kHz estéreo) que sigue tus recortes y cambios de velocidad; un cambio de velocidad también cambia el tono. Los GIF no llevan audio.
 
 ## Editar una grabación
 
-El editor muestra la vista previa a la izquierda y un panel con pestañas a la derecha (Zoom, Cursor, Style y Clips, más Camera, Audio y Transcript cuando la grabación los tiene). Debajo de la vista previa hay una línea de tiempo (una regla, una fila para recortes y cambios de velocidad y otra para los zooms) con el cabezal, y una fila con **Play**/**Pause**, **Undo**, **Redo**, **Export…** y el tiempo. El tiempo se lee `tiempo de salida / duración de salida · tiempo original`, así ves la duración tras tus cambios. En el extremo derecho de esa fila aparecen el número de zooms y el estado de guardado. <kbd>Esc</kbd> cierra el editor y escribe lo que aún no se haya guardado.
+El editor muestra la vista previa a la izquierda y un panel con pestañas a la derecha (Zoom, Loupe, Cursor, Style y Clips, más Camera, Audio y Transcript cuando la grabación los tiene). Debajo de la vista previa hay una línea de tiempo (una regla, una fila para recortes y cambios de velocidad, otra para los zooms y otra para las lupas) con el cabezal, y una fila con **Play**/**Pause**, **Undo**, **Redo**, **Export…** y el tiempo. El tiempo se lee `tiempo de salida / duración de salida · tiempo original`, así ves la duración tras tus cambios. En el extremo derecho de esa fila aparecen el número de zooms (y de lupas, si hay alguna) y el estado de guardado. <kbd>Esc</kbd> cierra el editor y escribe lo que aún no se haya guardado.
 
 El cursor que ves lo dibuja el editor a partir de los eventos grabados en `events.json`. No está en `screen.mov`, y por eso puedes cambiarle el tamaño, suavizarlo o quitarlo.
 
@@ -204,6 +204,60 @@ Cada acción corta la línea de tiempo igual que **Clips**, cuenta como un paso 
 La precisión depende de la calidad del audio, así que revisa las palabras antes de cortar. macOS 14 y posteriores usan el framework Speech. El motor más nuevo de macOS 26 se usa solo cuando sus recursos de idioma ya están instalados; Ferrocast nunca los descarga.
 :::
 
+### Efectos de grabación
+
+Estos efectos se hacen en el editor y se dibujan sobre la grabación al reproducirla y al exportarla. Nunca cambian `screen.mov` ni `camera.mov`, así que puedes quitar cada uno cuando quieras. Cada cambio es un paso para <kbd>⌘</kbd> <kbd>Z</kbd> y se guarda con el proyecto. Se aplican a la vista previa y a las exportaciones MP4 y GIF, y hacen la exportación algo más lenta.
+
+#### Lupa
+
+Una lupa es un cristal de aumento sobre la pantalla: una lente redonda que muestra más grande una parte de la pantalla durante unos segundos. Amplía la grabación misma, así que el texto de dentro se mantiene nítido, y se mueve con el zoom. Sirve para señalar un detalle pequeño sin hacer zoom en toda la pantalla.
+
+La pestaña **Loupe** tiene **Add at playhead**, que añade una lupa de 3 s (más corta si la siguiente está cerca; si el cabezal está dentro de una lupa aparece `There is already a loupe at the playhead.`). Haz clic en una lupa de la lista para editarla:
+
+- **Start** y **End**. Las lupas no pueden solaparse.
+- **Scale** (de 1,2× a 4×) y **Radius** (del 5 al 30 % del ancho de la imagen).
+- **Focus**: **Follow cursor** mantiene la lente sobre el puntero; **Pick on preview** fija un punto donde hagas clic en la vista previa.
+- **Ease in** y **Ease out** (de 0 a 3 s): lo que tarda la lente en aparecer y desaparecer.
+- **Delete loupe** la elimina.
+
+La línea de tiempo tiene una fila de segmentos de lupa bajo la fila de zooms. Haz clic en un segmento para seleccionarlo y abrir sus ajustes; el seleccionado lleva un contorno.
+
+#### Pantalla dividida
+
+Por defecto la cámara es un círculo sobre la pantalla. En la pestaña **Camera**, **Layout** → **Split** coloca la pantalla y la cámara una junto a otra, de modo que la cámara no tapa nada.
+
+- **Side**: Left, Right, Top o Bottom, el lado que ocupa la cámara.
+- **Ratio** (del 25 al 50 %): cuánto de la imagen ocupa la cámara en esa dirección.
+- **Gap** (del 0 al 10 % del ancho): el espacio entre las dos partes.
+
+La pantalla se muestra entera en el resto de la imagen y la cámara llena su parte (así que sus bordes pueden recortarse). **Mirror** sigue aplicándose. **Shape**, **Corner**, **Size** y **Margin** son del círculo y se ocultan en una pantalla dividida; vuelven al elegir **Overlay**.
+
+#### Looks
+
+Un look cambia solo el color de la imagen de la cámara. La pantalla no se toca. En la pestaña **Camera**, **Look** ofrece **None** y seis looks: **Warm**, **Cool**, **Cinematic**, **Faded**, **High contrast** y **Mono**. **Intensity** (del 0 al 100 %) mezcla el look con la imagen original.
+
+Para usar tu propia tabla de color, copia un archivo `.cube` (una LUT 3D) dentro de la carpeta del proyecto de la grabación e indícalo en `project.json`. No hay selector de archivos. Cierra antes la grabación en el editor, porque el editor reescribe `project.json` cuando cambias algo. Dentro del objeto `camera`, añade:
+
+```json
+"look": { "file": "my-grade.cube", "intensity": 0.8 }
+```
+
+El nombre debe ser un nombre de archivo simple que termine en `.cube`, en la propia carpeta del proyecto (sin carpetas). `intensity` es opcional y vale 1 por defecto. El selector de Look muestra entonces `Custom look: my-grade.cube` sin ningún chip seleccionado; elegir un chip lo sustituye. Si el archivo no existe o no es un `.cube` válido, la vista previa y la exportación lo dicen en lugar de ignorarlo.
+
+#### Cutout (beta)
+
+**Cutout (beta)** quita el fondo que hay detrás de ti. Usa el framework Vision de macOS para encontrar a la persona, en tu Mac. En la disposición con círculo, la persona se dibuja sin la forma del círculo y sin sombra, y la imagen completa de la cámara se mantiene dentro del área de la cámara, apoyada en su borde inferior, de modo que una cabeza cerca del lateral del encuadre no se corta. Es una beta: la calidad del borde depende de la luz y del fondo (un fondo liso y bien iluminado funciona mejor).
+
+#### Seguimiento de la cara
+
+**Follow face** mantiene tu cara centrada en la imagen de la cámara cuando te mueves. Necesita un análisis previo, una sola vez: pulsa **Analyze face**. Se ejecuta en tu Mac con el framework Vision, muestra una barra de progreso con **Cancel** y guarda el resultado como `camera_track.json` en la carpeta del proyecto. Sigue a la cara más grande que encuentra. Al terminar, **Follow face** se activa. Si no encuentra ninguna cara, la pestaña dice `No face was found in the camera. Check that the camera shows you and try again.` (el texto está solo en inglés).
+
+- **Zoom** (de 1× a 3×) define lo cerrado que queda el encuadre alrededor de la cara. Por defecto es 1,4× para el círculo y 1× en pantalla dividida.
+- Si activas **Follow face** antes de analizar, aparece `Analyze the camera first.`
+- Pulsa **Analyze face** otra vez para repetir el análisis.
+
+El análisis y `camera_track.json` se quedan en tu Mac.
+
 ### Guardado
 
 El editor escribe `project.json` solo, 1 s después de tu último cambio, como un archivo temporal que se renombra al terminar. El estado de guardado dice `Saved` o `Saving…`; si falla una escritura muestra el texto del error y vuelve a intentarlo. Una grabación que solo has abierto no se reescribe.
@@ -230,6 +284,7 @@ Un GIF guarda todos sus fotogramas en memoria, así que su duración tiene un l�
 - La captura con scroll guarda todas las tiras en memoria hasta terminar.
 - El audio solo va en las exportaciones MP4. Las transcripciones necesitan el permiso de Reconocimiento de voz y un modelo en el dispositivo para el idioma; las palabras se cortan, nunca se reescriben.
 - El editor no usa imágenes de fondo: los preajustes de Style son degradados.
+- Los efectos de grabación (lupa, pantalla dividida, looks, cutout y seguimiento de la cara) se ven solo en la vista previa y en las exportaciones MP4 y GIF, y hacen la exportación un poco más lenta. Los bordes del cutout dependen de la luz y del fondo. El seguimiento de la cara sigue a la cara más grande y necesita el análisis previo. Los looks propios se indican en `project.json` (no hay selector de archivos).
 - Una grabación se pierde si sales de Ferrocast mientras graba. Párala antes.
 :::
 

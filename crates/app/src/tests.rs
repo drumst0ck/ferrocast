@@ -11664,7 +11664,8 @@ fn the_camera_tab_draws_its_controls_and_edits_through_the_history() {
     assert!(texts.iter().any(|t| t.starts_with("camera.mov · 0:10") && t.contains("+0.10 s")), "source info: {texts:?}");
     assert_eq!(editor_proj(&app).camera.as_ref().unwrap().shape, CameraShape::Rounded, "the fixture starts rounded");
     click_label(&mut app, "Square");
-    click_label(&mut app, "Top left");
+    // the Layout control (P6) pushed the corner picker below the fold: scroll to it
+    click_in_panel(&mut app, "Top left");
     let c = editor_proj(&app).camera.unwrap();
     assert_eq!((c.shape, c.corner), (CameraShape::Square, Corner::TopLeft));
     app.editor.as_mut().unwrap().flush(1e6);
@@ -11672,9 +11673,209 @@ fn the_camera_tab_draws_its_controls_and_edits_through_the_history() {
     assert_eq!((saved.shape, saved.corner), (CameraShape::Square, Corner::TopLeft), "autosave wrote the fields");
     render(&mut app, vec![key_mod_event(Key::Z, Modifiers::COMMAND)]);
     assert_eq!(editor_proj(&app).camera.as_ref().unwrap().corner, Corner::TopRight, "one undo step per click");
-    // hide
+    // hide (back at the top of the panel)
+    scroll_panel(&mut app, 2000.0);
+    for _ in 0..30 {
+        render(&mut app, vec![]);
+    }
     click_label(&mut app, "Show camera");
     assert!(!editor_proj(&app).camera.as_ref().unwrap().visible);
+}
+
+/// Scroll the panel by `dy` and let the smooth scrolling settle before the next read.
+fn scroll_settled(app: &mut App, dy: f32) {
+    scroll_panel(app, dy);
+    for _ in 0..40 {
+        render(app, vec![]);
+    }
+}
+
+/// The panel's scroll offset back to the top.
+fn scroll_top(app: &mut App) {
+    scroll_settled(app, 3000.0);
+}
+
+/// Click the panel control labelled `text`: scroll the panel from the top, a step at a time, until
+/// the label is fully inside the visible part (below the tab strip), then click it.
+fn click_in_panel(app: &mut App, text: &str) {
+    scroll_top(app);
+    for _ in 0..40 {
+        let panel: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-panel-rect"))).expect("panel drawn");
+        let hit =
+            render_texts(app, vec![]).into_iter().find(|(t, r)| t == text && r.min.y > panel.min.y + 64.0 && r.max.y < panel.max.y - 2.0);
+        if let Some((_, r)) = hit {
+            return click_at(app, r.center());
+        }
+        scroll_settled(app, -40.0);
+    }
+    panic!("`{text}` never came into view in the panel");
+}
+
+#[test]
+fn the_camera_effect_controls_edit_through_the_history_and_autosave() {
+    use ferrocast_core::capture::camera::CameraPlacement;
+    let (mut app, dir, _rx) = editor_app_for("p6-fx", p4_project(), &["camera.mov", "mic.m4a"]);
+    set_tab(&mut app, Tab::Camera);
+    let texts = tab_labels(&mut app);
+    assert!(["Layout", "Overlay", "Split"].iter().all(|w| texts.iter().any(|t| t == w)), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "Side" || t == "Ratio"), "the split controls only show in a split: {texts:?}");
+    click_label(&mut app, "Split");
+    assert_eq!(editor_proj(&app).camera.unwrap().layout, CameraPlacement::Split);
+    let texts = tab_texts_scrolling(&mut app);
+    for want in [
+        "Side",
+        "Left",
+        "Right",
+        "Top",
+        "Bottom",
+        "Ratio",
+        "Gap",
+        "Look",
+        "None",
+        "Warm",
+        "Cool",
+        "Cinematic",
+        "Faded",
+        "High contrast",
+        "Mono",
+        "Cutout (beta)",
+        "Follow face",
+        "Analyze face",
+    ] {
+        assert!(texts.iter().any(|t| t == want), "Camera tab lacks `{want}`: {texts:?}");
+    }
+    assert!(!texts.iter().any(|t| t == "Corner" || t == "Shape"), "the bubble controls hide in a split: {texts:?}");
+    assert!(!texts.iter().any(|t| t == "Intensity"), "no intensity without a look");
+    // a look chip, then the intensity slider appears
+    click_in_panel(&mut app, "Cinematic");
+    let look = editor_proj(&app).camera.unwrap().look.unwrap();
+    assert_eq!((look.name.as_deref(), look.intensity), (Some("cinematic"), 1.0));
+    assert!(tab_texts_scrolling(&mut app).iter().any(|t| t == "Intensity"), "the look has an intensity slider");
+    // the cutout switch
+    click_in_panel(&mut app, "Cutout (beta)");
+    assert!(editor_proj(&app).camera.unwrap().cutout);
+    // Follow face with no track file says what to do first and changes nothing
+    click_in_panel(&mut app, "Follow face");
+    assert!(!editor_proj(&app).camera.unwrap().follow_face);
+    assert_eq!(app.editor.as_ref().unwrap().st.edit_error.as_deref(), Some("Analyze the camera first."));
+    assert!(screen_has(&mut app, "Analyze the camera first."));
+    // with a track it turns on and shows its zoom, defaulting to the split value
+    std::fs::write(dir.join("camera_track.json"), "{}").unwrap();
+    click_in_panel(&mut app, "Follow face");
+    assert!(editor_proj(&app).camera.unwrap().follow_face);
+    let texts = tab_texts_scrolling(&mut app);
+    assert!(texts.iter().any(|t| t == "Zoom"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "1.00"), "split default zoom 1.0 shown");
+    app.editor.as_mut().unwrap().flush(1e6);
+    let saved = ferrocast_core::capture::project::Project::load(&dir).unwrap().camera.unwrap();
+    assert!(saved.layout == CameraPlacement::Split && saved.cutout && saved.follow_face);
+    assert_eq!(saved.look.unwrap().name.as_deref(), Some("cinematic"), "autosave wrote the fields");
+    // undo walks them back one step at a time
+    for _ in 0..4 {
+        app.editor.as_mut().unwrap().undo(2e6);
+    }
+    let c = editor_proj(&app).camera.unwrap();
+    assert!(c.layout == CameraPlacement::Overlay && c.look.is_none() && !c.cutout && !c.follow_face, "{c:?}");
+}
+
+#[test]
+fn analyze_face_without_a_helper_says_so_instead_of_doing_nothing() {
+    let (mut app, _dir, _rx) = editor_app_for("p6-analyze", p4_project(), &["camera.mov", "mic.m4a"]);
+    set_tab(&mut app, Tab::Camera);
+    click_in_panel(&mut app, "Analyze face");
+    render(&mut app, vec![]);
+    let ed = app.editor.as_ref().unwrap();
+    assert!(!ed.st.face.start, "the press was consumed");
+    assert_eq!(ed.st.face.error.as_deref(), Some("Face tracking is not available in this build."));
+    assert!(ed.st.face.run.is_none());
+}
+
+#[test]
+fn a_project_without_a_camera_shows_no_camera_controls_on_any_tab() {
+    let (mut app, _rx, _dir) = editor_app_in("p6-nocam");
+    let mut all = vec![];
+    for tab in [Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera] {
+        set_tab(&mut app, tab);
+        all.extend(tab_texts_scrolling(&mut app));
+    }
+    for banned in ["Layout", "Overlay", "Side", "Ratio", "Look", "Warm", "Cutout (beta)", "Follow face", "Analyze face", "Show camera"] {
+        assert!(!all.iter().any(|t| t == banned), "no camera, no `{banned}`");
+    }
+    assert!(all.iter().any(|t| t == "Add at playhead"), "the Loupe tab itself is always offered");
+}
+
+#[test]
+fn the_loupe_tab_adds_selects_edits_and_deletes_through_the_history() {
+    let (mut app, _rx, dir) = editor_app_in("p6-loupe");
+    set_tab(&mut app, Tab::Loupe);
+    assert!(screen_has(&mut app, "No loupes."));
+    app.editor.as_mut().unwrap().t = 2.0;
+    click_label(&mut app, "Add at playhead");
+    let p = editor_proj(&app);
+    assert_eq!(p.loupes.len(), 1);
+    assert_eq!((p.loupes[0].start, p.loupes[0].end), (2.0, 5.0));
+    let texts = tab_texts_scrolling(&mut app);
+    for want in ["Start", "End", "Scale", "Radius", "Focus", "Follow cursor", "Pick on preview", "Ease in", "Ease out", "Delete loupe"] {
+        assert!(texts.iter().any(|t| t == want), "Loupe tab lacks `{want}`: {texts:?}");
+    }
+    assert!(texts.iter().any(|t| t == "0:02.00–0:05.00  ·  2.0×  ·  Cursor"), "{texts:?}");
+    // Pick on preview arms the picker for the loupe, not the zoom
+    click_in_panel(&mut app, "Pick on preview");
+    let st = &app.editor.as_ref().unwrap().st;
+    assert!(st.picking && st.pick_loupe);
+    // a click on the preview then sets the loupe's focus and leaves the zoom alone
+    let preview: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-preview-rect"))).expect("preview drawn");
+    let zooms_before = editor_proj(&app).zooms.clone();
+    click_at(&mut app, preview.center());
+    let p = editor_proj(&app);
+    assert!(p.loupes[0].x.is_some() && p.loupes[0].y.is_some(), "{:?}", p.loupes[0]);
+    assert_eq!(p.zooms, zooms_before);
+    assert!(!app.editor.as_ref().unwrap().st.picking);
+    app.editor.as_mut().unwrap().flush(1e6);
+    assert_eq!(ferrocast_core::capture::project::Project::load(&dir).unwrap().loupes.len(), 1, "autosave wrote the loupe");
+    // Follow cursor clears the focus again, Delete removes the loupe, undo brings it back
+    click_in_panel(&mut app, "Follow cursor");
+    assert!(editor_proj(&app).loupes[0].x.is_none());
+    click_in_panel(&mut app, "Delete loupe");
+    assert!(editor_proj(&app).loupes.is_empty() && app.editor.as_ref().unwrap().st.selected_loupe.is_none());
+    app.editor.as_mut().unwrap().undo(3e6);
+    assert_eq!(editor_proj(&app).loupes.len(), 1, "undo restores the loupe");
+}
+
+#[test]
+fn a_click_on_a_loupe_segment_of_the_timeline_selects_it_and_opens_the_loupe_tab() {
+    let (mut app, _rx, _dir) = editor_app_in("p6-loupe-tl");
+    {
+        let ed = app.editor.as_mut().unwrap();
+        let mut p = ed.project.clone().unwrap();
+        p.loupes.push(ferrocast_core::capture::project::Loupe {
+            id: "l9".into(),
+            start: 3.0,
+            end: 6.0,
+            scale: 2.0,
+            radius: 0.15,
+            x: None,
+            y: None,
+            ease_in: 0.25,
+            ease_out: 0.25,
+            extra: Default::default(),
+        });
+        ed.project = Some(p);
+    }
+    render(&mut app, vec![]);
+    let tl: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-timeline-rect"))).expect("timeline drawn");
+    let x = tl.min.x + tl.width() * 0.45;
+    // the ruler / segment rows only move the playhead
+    click_at(&mut app, Pos2::new(x, tl.min.y + 20.0));
+    assert_eq!(app.editor.as_ref().unwrap().st.selected_loupe, None);
+    click_at(&mut app, Pos2::new(x, tl.min.y + crate::editor_ctl::LOUPE_ROW.0 + 6.0));
+    let st = &app.editor.as_ref().unwrap().st;
+    assert_eq!(st.selected_loupe.as_deref(), Some("l9"));
+    assert_eq!(st.tab, Tab::Loupe);
+    // a click in the loupe row away from any loupe selects nothing new
+    app.editor.as_mut().unwrap().st.selected_loupe = None;
+    click_at(&mut app, Pos2::new(tl.min.x + tl.width() * 0.9, tl.min.y + crate::editor_ctl::LOUPE_ROW.0 + 6.0));
+    assert_eq!(app.editor.as_ref().unwrap().st.selected_loupe, None);
 }
 
 #[test]
@@ -13019,6 +13220,35 @@ mod panel_design {
         }
     }
 
+    /// The Loupe tab must not cost the plain editor a second row of chips: the panel is only ~205 pt tall.
+    #[test]
+    fn the_five_basic_tabs_share_one_row_and_eight_tabs_wrap_four_and_four() {
+        let mut plain = open_with("tabs5", Tab::Zoom, |p, _| {
+            p.sources.camera = None;
+            p.camera = None;
+            p.sources.mic = None;
+            p.sources.system = None;
+        });
+        let rows = |app: &mut App| {
+            let texts = render_texts(app, vec![]);
+            let panel = panel_rect(app);
+            let mut ys: Vec<i32> = texts
+                .iter()
+                .filter(|(t, r)| {
+                    ["Zoom", "Loupe", "Cursor", "Style", "Clips", "Camera", "Audio", "Transcript"].contains(&t.as_str())
+                        && r.max.y < panel.min.y + 80.0
+                })
+                .map(|(_, r)| r.center().y.round() as i32)
+                .collect();
+            let n = ys.len();
+            ys.dedup();
+            (n, ys.len())
+        };
+        assert_eq!(rows(&mut plain), (5, 1), "Zoom Loupe Cursor Style Clips on one row");
+        let mut all = open_with("tabs8", Tab::Zoom, |_, _| {});
+        assert_eq!(rows(&mut all), (8, 2), "eight tabs on two rows");
+    }
+
     /// Every state of the three tabs, dark and light: nothing leaves the panel sideways and no two
     /// visible texts overlap.
     #[test]
@@ -13069,6 +13299,181 @@ mod panel_design {
                         let hit = ra.intersect(*rb);
                         assert!(hit.width() <= 0.5 || hit.height() <= 0.5, "{name} {theme:?}: `{ta}` {ra:?} overlaps `{tb}` {rb:?}");
                     }
+                }
+            }
+        }
+    }
+
+    fn open_with(tag: &str, tab: Tab, edit: impl FnOnce(&mut Project, &std::path::Path)) -> App {
+        let mut p: Project = p4_project();
+        p.trims.clear();
+        let (mut app, dir, rx) = editor_app_for(&format!("design6-{tag}"), p.clone(), &["mic.m4a", "camera.mov"]);
+        std::mem::forget(rx);
+        edit(&mut p, &dir);
+        app.editor.as_mut().unwrap().project = Some(p);
+        set_tab(&mut app, tab);
+        app
+    }
+
+    fn loupe_at(id: &str, start: f64, end: f64, focus: Option<[f64; 2]>) -> ferrocast_core::capture::project::Loupe {
+        ferrocast_core::capture::project::Loupe {
+            id: id.into(),
+            start,
+            end,
+            scale: 2.0,
+            radius: 0.15,
+            x: focus.map(|f| f[0]),
+            y: focus.map(|f| f[1]),
+            ease_in: 0.25,
+            ease_out: 0.25,
+            extra: Default::default(),
+        }
+    }
+
+    /// Every new P6 state, dark and light, read from the top to the bottom of the panel in scroll
+    /// steps: nothing leaves the panel sideways and no two visible texts overlap.
+    #[test]
+    fn every_p6_state_fits_the_panel_without_overlap() {
+        use ferrocast_core::capture::camera::{CameraPlacement, Look, SplitSide};
+        let split = |p: &mut Project| {
+            let c = p.camera.as_mut().unwrap();
+            c.layout = CameraPlacement::Split;
+            c.split.side = SplitSide::Bottom;
+        };
+        for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+            let scenarios: Vec<(&str, App)> = vec![
+                ("camera overlay", open_with("co", Tab::Camera, |_, _| {})),
+                ("camera split", open_with("cs", Tab::Camera, |p, _| split(p))),
+                (
+                    "camera look",
+                    open_with("cl", Tab::Camera, |p, _| {
+                        split(p);
+                        p.camera.as_mut().unwrap().look = Some(Look { name: Some("high-contrast".into()), file: None, intensity: 0.5 });
+                    }),
+                ),
+                (
+                    "camera custom look",
+                    open_with("cc", Tab::Camera, |p, _| {
+                        p.camera.as_mut().unwrap().look = Some(Look { name: None, file: Some("my-grade-v2.cube".into()), intensity: 1.0 });
+                    }),
+                ),
+                (
+                    "follow face on, track found",
+                    open_with("ft", Tab::Camera, |p, dir| {
+                        p.camera.as_mut().unwrap().follow_face = true;
+                        std::fs::write(dir.join("camera_track.json"), "{}").unwrap();
+                    }),
+                ),
+                ("face running", {
+                    let mut a = open_with("fr", Tab::Camera, |_, _| {});
+                    let mut run = crate::editor_panels::FaceRun::new();
+                    (run.done, run.total) = (2.0, 5.0);
+                    a.editor.as_mut().unwrap().st.face.run = Some(run);
+                    a
+                }),
+                ("face error", {
+                    let mut a = open_with("fe", Tab::Camera, |_, _| {});
+                    a.editor.as_mut().unwrap().st.face.error = Some("The camera recording was not found in the project folder.".into());
+                    a.editor.as_mut().unwrap().st.edit_error = Some("Analyze the camera first.".into());
+                    a
+                }),
+                ("loupe empty", open_with("le", Tab::Loupe, |_, _| {})),
+                ("loupe following", {
+                    let mut a =
+                        open_with("lf", Tab::Loupe, |p, _| p.loupes = vec![loupe_at("l1", 1.0, 3.0, None), loupe_at("l2", 5.0, 8.0, None)]);
+                    a.editor.as_mut().unwrap().st.selected_loupe = Some("l1".into());
+                    a
+                }),
+                ("loupe fixed focus", {
+                    let mut a = open_with("lx", Tab::Loupe, |p, _| p.loupes = vec![loupe_at("l1", 1.0, 3.0, Some([0.3, 0.6]))]);
+                    a.editor.as_mut().unwrap().st.selected_loupe = Some("l1".into());
+                    a
+                }),
+                ("loupe picking", {
+                    let mut a = open_with("lp", Tab::Loupe, |p, _| p.loupes = vec![loupe_at("l1", 1.0, 3.0, None)]);
+                    a.editor.as_mut().unwrap().st.selected_loupe = Some("l1".into());
+                    a.editor.as_mut().unwrap().st.picking = true;
+                    a.editor.as_mut().unwrap().st.pick_loupe = true;
+                    a
+                }),
+            ];
+            for (name, mut app) in scenarios {
+                app.ctx.set_theme(theme);
+                for _ in 0..2 {
+                    render(&mut app, vec![]);
+                }
+                let mut shown = std::collections::HashSet::new();
+                for step in 0..14 {
+                    if step > 0 {
+                        scroll_settled(&mut app, -60.0);
+                    }
+                    let texts = render_texts(&mut app, vec![]);
+                    let panel = panel_rect(&app);
+                    // the scrolling part starts under the tab chips and under a refused-edit message
+                    let tabs = ["Zoom", "Loupe", "Cursor", "Style", "Clips", "Camera", "Audio", "Transcript"];
+                    let mut top = texts
+                        .iter()
+                        .filter(|(t, r)| tabs.contains(&t.as_str()) && r.min.y < panel.min.y + 70.0)
+                        .map(|(_, r)| r.max.y)
+                        .fold(0.0, f32::max)
+                        + 8.0;
+                    if let Some(e) = app.editor.as_ref().and_then(|e| e.st.edit_error.clone()) {
+                        top = texts.iter().filter(|(t, _)| *t == e).map(|(_, r)| r.max.y + 1.0).fold(top, f32::max);
+                    }
+                    let visible: Vec<&(String, Rect)> = texts
+                        .iter()
+                        .filter(|(t, r)| !t.is_empty() && r.min.x >= panel.min.x - 40.0 && r.max.y <= panel.max.y && r.min.y >= top)
+                        .collect();
+                    for (t, r) in &visible {
+                        shown.insert(t.clone());
+                        assert!(
+                            r.min.x >= panel.min.x - 0.5 && r.max.x <= panel.max.x + 0.5,
+                            "{name} {theme:?}: `{t}` leaves the panel {panel:?}: {r:?}"
+                        );
+                    }
+                    for (i, (ta, ra)) in visible.iter().enumerate() {
+                        for (tb, rb) in &visible[i + 1..] {
+                            let hit = ra.intersect(*rb);
+                            assert!(
+                                hit.width() <= 0.5 || hit.height() <= 0.5,
+                                "{name} {theme:?} step {step}: `{ta}` {ra:?} overlaps `{tb}` {rb:?}"
+                            );
+                        }
+                    }
+                }
+                assert!(shown.len() > 1, "{name}: something is drawn: {shown:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_loupe_track_and_new_chips_read_on_both_palettes() {
+        let t = |c: Color32| [c.r() as f32, c.g() as f32, c.b() as f32];
+        for dark in [true, false] {
+            let pal = palette(dark);
+            for backdrop in [0.0_f32, 255.0] {
+                let panel = over(window_over(&pal, backdrop), pal.field);
+                let row = over(window_over(&pal, backdrop), pal.field);
+                let seg = crate::editor_ctl::loupe_color(dark);
+                let dim = over(row, seg.gamma_multiply(0.6));
+                let sel_chip = over(panel, pal.accent.gamma_multiply(crate::editor_panels::ACCENT_TINT));
+                let side_cell = over(panel, pal.field.gamma_multiply(1.3));
+                let rows = [
+                    ("loupe segment vs its track", contrast(t(seg), row), 3.0),
+                    ("unselected loupe segment vs its track", contrast(dim, row), 1.5),
+                    ("selection outline vs the track", contrast(t(pal.text), row), 4.5),
+                    ("look chip text", contrast(t(pal.sub_strong), over(panel, pal.field)), 4.5),
+                    ("selected look chip text", contrast(t(pal.accent_text), sel_chip), 4.5),
+                    ("side cell label", contrast(t(pal.sub_strong), side_cell), 4.5),
+                    (
+                        "selected side cell label",
+                        contrast(t(pal.text), over(panel, pal.accent.gamma_multiply(crate::editor_panels::ACCENT_TINT))),
+                        4.5,
+                    ),
+                    ("note text", contrast(t(pal.sub), panel), 3.0),
+                ];
+                for (what, got, want) in rows {
+                    assert!(got >= want, "dark={dark} backdrop={backdrop}: {what} is {got:.2}, want >= {want}");
                 }
             }
         }
@@ -13311,6 +13716,114 @@ mod shots {
         std::mem::forget(rx);
         set_tab(&mut app, tab);
         app
+    }
+
+    fn loupe(id: &str, start: f64, end: f64, focus: Option<[f64; 2]>) -> ferrocast_core::capture::project::Loupe {
+        ferrocast_core::capture::project::Loupe {
+            id: id.into(),
+            start,
+            end,
+            scale: 2.0,
+            radius: 0.15,
+            x: focus.map(|f| f[0]),
+            y: focus.map(|f| f[1]),
+            ease_in: 0.25,
+            ease_out: 0.25,
+            extra: Default::default(),
+        }
+    }
+
+    /// An editor on the camera fixture with `edit` applied to the project first, on `tab`.
+    fn open_p6(tag: &str, tab: Tab, edit: impl FnOnce(&mut ferrocast_core::capture::project::Project)) -> (App, std::path::PathBuf) {
+        let mut p = p4_project();
+        p.trims.clear();
+        edit(&mut p);
+        let (mut app, dir, rx) = editor_app_for(&format!("shots6-{tag}"), p, &["mic.m4a", "system.m4a", "camera.mov"]);
+        std::mem::forget(rx);
+        set_tab(&mut app, tab);
+        (app, dir)
+    }
+
+    /// Scroll the panel by `dy` and let the smooth scrolling settle.
+    fn scrolled(app: &mut App, dy: f32) {
+        scroll_panel(app, dy);
+        for _ in 0..40 {
+            render(app, vec![]);
+        }
+    }
+
+    /// The P6 states: every new panel state at the real window size (set `FC_SHOTS_H` to `ui::HEIGHT`) or taller.
+    #[test]
+    fn editor_panel_shots_p6() {
+        if dir().is_none() {
+            return;
+        }
+        use crate::editor_panels::FaceRun;
+        use ferrocast_core::capture::camera::{CameraPlacement, Look, SplitSide};
+        for dark in [true, false] {
+            let crop = Some(panel_crop());
+            let split = |p: &mut ferrocast_core::capture::project::Project| {
+                let c = p.camera.as_mut().unwrap();
+                c.layout = CameraPlacement::Split;
+                c.split.side = SplitSide::Left;
+            };
+            let (mut app, _) = open_p6("zoom", Tab::Zoom, |_| {});
+            snap(&mut app, "p6-zoom", dark, crop);
+            let (mut app, _) = open_p6("cam-overlay", Tab::Camera, |_| {});
+            snap(&mut app, "p6-camera-overlay", dark, crop);
+            let (mut app, _) = open_p6("cam-split", Tab::Camera, split);
+            snap(&mut app, "p6-camera-split", dark, crop);
+            let (mut app, _) = open_p6("cam-split2", Tab::Camera, split);
+            scrolled(&mut app, -100.0);
+            snap(&mut app, "p6-camera-split-b", dark, crop);
+            let (mut app, _) = open_p6("cam-look", Tab::Camera, |p| {
+                split(p);
+                p.camera.as_mut().unwrap().look = Some(Look { name: Some("cinematic".into()), file: None, intensity: 0.75 });
+            });
+            scrolled(&mut app, -260.0);
+            snap(&mut app, "p6-camera-look", dark, crop);
+            let (mut app, _) = open_p6("cam-face", Tab::Camera, |_| {});
+            scrolled(&mut app, -600.0);
+            snap(&mut app, "p6-camera-face-idle", dark, crop);
+            let (mut app, dir) = open_p6("cam-face-track", Tab::Camera, |p| p.camera.as_mut().unwrap().follow_face = true);
+            std::fs::write(dir.join("camera_track.json"), "{}").unwrap();
+            app.editor.as_mut().unwrap().st.face.notice = Some("Found a face in 25 of 30 samples.".into());
+            scrolled(&mut app, -600.0);
+            snap(&mut app, "p6-camera-face-track", dark, crop);
+            let (mut app, _) = open_p6("cam-face-run", Tab::Camera, |_| {});
+            let mut run = FaceRun::new();
+            (run.done, run.total) = (3.0, 10.0);
+            app.editor.as_mut().unwrap().st.face.run = Some(run);
+            scrolled(&mut app, -600.0);
+            snap(&mut app, "p6-camera-face-running", dark, crop);
+            let (mut app, _) = open_p6("cam-face-err", Tab::Camera, |_| {});
+            app.editor.as_mut().unwrap().st.face.error = Some("The camera recording was not found in the project folder.".into());
+            app.editor.as_mut().unwrap().st.edit_error = Some("Analyze the camera first.".into());
+            scrolled(&mut app, -600.0);
+            snap(&mut app, "p6-camera-face-error", dark, crop);
+            let (mut app, _) = open_p6("loupe-empty", Tab::Loupe, |_| {});
+            snap(&mut app, "p6-loupe-empty", dark, crop);
+            let two = |p: &mut ferrocast_core::capture::project::Project| {
+                p.loupes = vec![loupe("l1", 1.0, 3.0, None), loupe("l2", 5.0, 8.0, Some([0.3, 0.6]))];
+            };
+            let (mut app, _) = open_p6("loupe-sel", Tab::Loupe, two);
+            app.editor.as_mut().unwrap().st.selected_loupe = Some("l1".into());
+            snap(&mut app, "p6-loupe-selected", dark, crop);
+            let (mut app, _) = open_p6("loupe-sel-b", Tab::Loupe, two);
+            app.editor.as_mut().unwrap().st.selected_loupe = Some("l2".into());
+            scrolled(&mut app, -200.0);
+            snap(&mut app, "p6-loupe-selected-b", dark, crop);
+            let (mut app, _) = open_p6("loupe-pick", Tab::Loupe, two);
+            app.editor.as_mut().unwrap().st.selected_loupe = Some("l1".into());
+            app.editor.as_mut().unwrap().st.picking = true;
+            app.editor.as_mut().unwrap().st.pick_loupe = true;
+            scrolled(&mut app, -100.0);
+            snap(&mut app, "p6-loupe-picking", dark, crop);
+            // the timeline with the loupe track, the whole editor
+            let (mut app, _) = open_p6("timeline", Tab::Loupe, two);
+            app.editor.as_mut().unwrap().st.selected_loupe = Some("l2".into());
+            snap(&mut app, "p6-editor", dark, None);
+        }
     }
 
     #[test]

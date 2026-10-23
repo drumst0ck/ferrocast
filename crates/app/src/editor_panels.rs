@@ -10,11 +10,18 @@
 use crate::editor_ctl::{Editor, WorkerCmd};
 use crate::ui::Palette;
 use egui::{Rect, Ui, UiBuilder};
-use ferrocast_core::capture::camera::{CameraLayout, CameraShape, Corner, MARGIN_MAX, SIZE_MAX, SIZE_MIN};
-use ferrocast_core::capture::project::{AudioTrack, Project, Style, TrackMix, Trim, Zoom, GAIN_DB_MAX, GAIN_DB_MIN};
+use ferrocast_core::capture::camera::{
+    CameraLayout, CameraPlacement, CameraShape, Corner, Look, SplitSide, FOLLOW_ZOOM_MAX, FOLLOW_ZOOM_MIN, MARGIN_MAX, SIZE_MAX, SIZE_MIN,
+    SPLIT_GAP_MAX, SPLIT_RATIO_MAX, SPLIT_RATIO_MIN,
+};
+use ferrocast_core::capture::facetrack::TRACK_FILE;
+use ferrocast_core::capture::lut::BUNDLED_LOOK_NAMES;
+use ferrocast_core::capture::project::{AudioTrack, Loupe, Project, Style, TrackMix, Trim, Zoom, GAIN_DB_MAX, GAIN_DB_MIN};
 use ferrocast_core::capture::timeline::{self, EditKind, History, Timeline};
 use ferrocast_core::capture::transcript::{self, Options as TranscriptOptions, Transcript, Word};
-use ferrocast_core::capture::zoom::{self, ZoomOpts, MAX_SCALE};
+use ferrocast_core::capture::zoom::{
+    self, ZoomOpts, LOUPE_EASE_MAX, LOUPE_RADIUS_MAX, LOUPE_RADIUS_MIN, LOUPE_SCALE_MAX, LOUPE_SCALE_MIN, MAX_SCALE,
+};
 use ferrocast_core::capture::MIN_SEGMENT;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,6 +43,8 @@ pub const NEW_ZOOM_LEN: f64 = 2.0;
 pub enum Tab {
     #[default]
     Zoom,
+    /// Magnifier spans over the screen (P6); every project has it.
+    Loupe,
     Cursor,
     Style,
     Clips,
@@ -51,6 +60,7 @@ impl Tab {
     pub fn label(self) -> &'static str {
         match self {
             Tab::Zoom => "Zoom",
+            Tab::Loupe => "Loupe",
             Tab::Cursor => "Cursor",
             Tab::Style => "Style",
             Tab::Clips => "Clips",
@@ -73,7 +83,7 @@ impl Tab {
 /// The tabs of the panel: Camera only with a camera source, Audio only with a microphone or system source,
 /// Transcript with transcribable audio (microphone or system) or a transcript already in the project.
 pub fn visible_tabs(p: &Project) -> Vec<Tab> {
-    let mut v = vec![Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips];
+    let mut v = vec![Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips];
     if p.sources.camera.is_some() {
         v.push(Tab::Camera);
     }
@@ -340,6 +350,115 @@ fn run_transcribe(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Face analysis (P6): the same worker pattern as the transcription
+
+/// The sentence for a failed face analysis (a cancel is not a failure: the worker reports it apart).
+pub fn map_face_error(e: &ferrocast_macos::capture::AnalyzeFaceError) -> String {
+    use ferrocast_macos::capture::AnalyzeFaceError as E;
+    match e {
+        E::NotFound(_) => "The camera recording was not found in the project folder.".into(),
+        E::Invalid(m) => format!("This camera recording cannot be analyzed: {m}"),
+        other => other.to_string(),
+    }
+}
+
+/// What a finished analysis says: the sentence for the card, or why there is nothing to follow.
+pub fn face_found(faces: u32, frames: u32) -> Result<String, String> {
+    if faces == 0 {
+        Err("No face was found in the camera. Check that the camera shows you and try again.".into())
+    } else {
+        Ok(format!("Found a face in {faces} of {frames} samples."))
+    }
+}
+
+/// Whether the project folder holds the face track (`camera_track.json`).
+pub fn track_present(dir: &Path) -> bool {
+    dir.join(TRACK_FILE).is_file()
+}
+
+/// The Follow face switch: turning it on needs the track file; the sentence says what to do first.
+pub fn follow_request(has_track: bool, want: bool) -> Result<bool, String> {
+    if want && !has_track {
+        Err("Analyze the camera first.".into())
+    } else {
+        Ok(want)
+    }
+}
+
+/// Progress and cancel flag of the face analysis in flight. Dropping it (the editor session ends) cancels the work.
+pub struct FaceRun {
+    pub cancel: Arc<AtomicBool>,
+    pub done: f64,
+    pub total: f64,
+    pub cancelling: bool,
+}
+
+impl FaceRun {
+    pub fn new() -> Self {
+        Self { cancel: Arc::new(AtomicBool::new(false)), done: 0.0, total: 0.0, cancelling: false }
+    }
+}
+
+impl Default for FaceRun {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for FaceRun {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+/// What the analysis thread tells the app (inside `EditorMsg::Face`).
+#[derive(Debug)]
+pub enum FaceMsg {
+    Progress {
+        done: f64,
+        total: f64,
+    },
+    /// The helper wrote `camera_track.json` with a face in `faces` of `frames` samples.
+    Done {
+        faces: u32,
+        frames: u32,
+    },
+    Failed(String),
+    Cancelled,
+}
+
+/// State of the Follow face controls.
+#[derive(Default)]
+pub struct FaceUi {
+    pub run: Option<FaceRun>,
+    pub error: Option<String>,
+    /// What the last analysis found.
+    pub notice: Option<String>,
+    /// The Analyze face button was pressed: the app starts the worker (it owns the helper path and the bus).
+    pub start: bool,
+}
+
+/// The helper call, on the worker thread: blocks until `camera_track.json` is written.
+fn run_face(
+    helper: &Path,
+    log: impl Fn(&str) + Send + 'static,
+    dir: &Path,
+    cancel: &AtomicBool,
+    on_progress: impl FnMut(f64, f64),
+) -> FaceMsg {
+    use ferrocast_macos::capture::{AnalyzeFaceError, Helper};
+    let mut helper = match Helper::spawn(helper, log) {
+        Ok(h) => h,
+        Err(e) => return FaceMsg::Failed(format!("Could not start the face analysis: {e}")),
+    };
+    match helper.analyze_face(dir, None, cancel, on_progress) {
+        Ok(d) => FaceMsg::Done { faces: d.faces, frames: d.frames },
+        Err(AnalyzeFaceError::Cancelled) => FaceMsg::Cancelled,
+        Err(e) => FaceMsg::Failed(map_face_error(&e)),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Camera and audio edits (P4)
 
 pub enum CameraField {
@@ -351,6 +470,64 @@ pub enum CameraField {
     /// Fraction of the output width, clamped to `0..=0.25`.
     Margin(f64),
     Mirror(bool),
+    /// P6: overlay bubble or split screen.
+    Placement(CameraPlacement),
+    SplitSide(SplitSide),
+    /// Camera share along the split axis, clamped to `0.25..=0.5`.
+    SplitRatio(f64),
+    /// Gap between the parts, fraction of the width, clamped to `0..=0.1`.
+    SplitGap(f64),
+    /// A bundled look by name (keeping the intensity), or none.
+    Look(Option<String>),
+    LookIntensity(f64),
+    Cutout(bool),
+    FollowFace(bool),
+    /// Zoom of the face-following crop, clamped to `1..=3`.
+    FollowZoom(f64),
+}
+
+/// The bundled looks as `(id, label)`: the ids are the core's `BUNDLED_LOOK_NAMES`.
+pub const LOOKS: [(&str, &str); 6] = [
+    ("warm", "Warm"),
+    ("cool", "Cool"),
+    ("cinematic", "Cinematic"),
+    ("faded", "Faded"),
+    ("high-contrast", "High contrast"),
+    ("mono", "Mono"),
+];
+
+/// The chips of the Look picker: None, then [`LOOKS`].
+pub fn look_chip_labels() -> Vec<&'static str> {
+    std::iter::once("None").chain(LOOKS.iter().map(|l| l.1)).collect()
+}
+
+/// The selected chip: 0 for no look, `i + 1` for a bundled look, `None` for a custom `.cube` (no chip).
+pub fn look_choice(c: &CameraLayout) -> Option<usize> {
+    match &c.look {
+        None => Some(0),
+        Some(Look { name: Some(n), file: None, .. }) => LOOKS.iter().position(|l| l.0 == n).map(|i| i + 1),
+        Some(_) => None,
+    }
+}
+
+/// The `.cube` file of a look written into `project.json` by hand.
+pub fn custom_look_file(c: &CameraLayout) -> Option<&str> {
+    c.look.as_ref().and_then(|l| l.file.as_deref())
+}
+
+/// The four sides of the split picker, in display order.
+pub const SIDES: [(SplitSide, &str); 4] =
+    [(SplitSide::Left, "Left"), (SplitSide::Right, "Right"), (SplitSide::Top, "Top"), (SplitSide::Bottom, "Bottom")];
+
+/// The part of a mini `frame` the camera takes in a split on `side` (`share` of the frame).
+pub fn side_marker(side: SplitSide, frame: Rect, share: f32) -> Rect {
+    let (w, h) = (frame.width() * share, frame.height() * share);
+    match side {
+        SplitSide::Left => Rect::from_min_max(frame.min, egui::pos2(frame.min.x + w, frame.max.y)),
+        SplitSide::Right => Rect::from_min_max(egui::pos2(frame.max.x - w, frame.min.y), frame.max),
+        SplitSide::Top => Rect::from_min_max(frame.min, egui::pos2(frame.max.x, frame.min.y + h)),
+        SplitSide::Bottom => Rect::from_min_max(egui::pos2(frame.min.x, frame.max.y - h), frame.max),
+    }
 }
 
 pub fn set_camera(p: &mut Project, field: CameraField) -> Result<(), String> {
@@ -365,6 +542,25 @@ pub fn set_camera(p: &mut Project, field: CameraField) -> Result<(), String> {
         CameraField::Size(v) => c.size = finite(v)?.clamp(SIZE_MIN, SIZE_MAX),
         CameraField::Margin(v) => c.margin = finite(v)?.clamp(0.0, MARGIN_MAX),
         CameraField::Mirror(v) => c.mirror = v,
+        CameraField::Placement(v) => c.layout = v,
+        CameraField::SplitSide(v) => c.split.side = v,
+        CameraField::SplitRatio(v) => c.split.ratio = finite(v)?.clamp(SPLIT_RATIO_MIN, SPLIT_RATIO_MAX),
+        CameraField::SplitGap(v) => c.split.gap = finite(v)?.clamp(0.0, SPLIT_GAP_MAX),
+        CameraField::Look(None) => c.look = None,
+        CameraField::Look(Some(name)) => {
+            if !BUNDLED_LOOK_NAMES.contains(&name.as_str()) {
+                return Err(format!("`{name}` is not a bundled look."));
+            }
+            let intensity = c.look.as_ref().map_or(1.0, |l| l.intensity);
+            c.look = Some(Look { name: Some(name), file: None, intensity });
+        }
+        CameraField::LookIntensity(v) => {
+            let v = finite(v)?.clamp(0.0, 1.0);
+            c.look.as_mut().ok_or("Pick a look first.")?.intensity = v;
+        }
+        CameraField::Cutout(v) => c.cutout = v,
+        CameraField::FollowFace(v) => c.follow_face = v,
+        CameraField::FollowZoom(v) => c.follow_zoom = Some(finite(v)?.clamp(FOLLOW_ZOOM_MIN, FOLLOW_ZOOM_MAX)),
     }
     Ok(())
 }
@@ -813,16 +1009,42 @@ fn aspect_ratio(spec: &str, source: f64) -> f64 {
     }
 }
 
+#[cfg(test)]
 /// A click inside the preview image (`0..=1` both axes) -> the zoom focus in the normalised video, or
 /// `None` when the click is on the padding. `video_aspect` is width/height of the recording;
 /// `camera` is the `[x, y, w, h]` crop the frame on screen shows (a zoomed frame).
 pub fn preview_to_focus(click: [f64; 2], style: &Style, video_aspect: f64, camera: Option<[f64; 4]>) -> Option<[f64; 2]> {
+    preview_to_focus_in(click, style, video_aspect, camera, None)
+}
+
+/// The part of the canvas the screen takes in a split, `[x, y, w, h]` as fractions of the canvas, or
+/// `None` without a visible split camera. `source` is the recorded size in pixels.
+pub fn split_area(p: &Project, source: [u32; 2]) -> Option<[f64; 4]> {
+    use ferrocast_core::capture::{camera, export};
+    let layout = p.camera.as_ref().filter(|c| c.visible && c.layout == CameraPlacement::Split)?;
+    p.sources.camera.as_ref()?;
+    let [cw, ch] = export::preview_canvas(p, source, 1000).map(f64::from);
+    let aspect = if source[0] > 0 && source[1] > 0 { f64::from(source[0]) / f64::from(source[1]) } else { 0.0 };
+    let (screen, _) = camera::split_rects(cw, ch, layout, aspect);
+    Some([screen.x / cw, screen.y / ch, screen.w / cw, screen.h / ch])
+}
+
+/// [`preview_to_focus`] when the screen only takes `area` of the canvas (a split): the padding and
+/// the frame are laid out inside it, like the renderer does.
+pub fn preview_to_focus_in(
+    click: [f64; 2],
+    style: &Style,
+    video_aspect: f64,
+    camera: Option<[f64; 4]>,
+    area: Option<[f64; 4]>,
+) -> Option<[f64; 2]> {
     let src = if video_aspect.is_finite() && video_aspect > 0.0 { video_aspect } else { 16.0 / 9.0 };
     let (w, h) = (1.0, 1.0 / aspect_ratio(&style.aspect, src));
     let pad = style.padding.clamp(0.0, 0.45) * w;
-    let s = ((w - 2.0 * pad) / src).min((h - 2.0 * pad) / 1.0);
+    let [ax, ay, aw, ah] = area.map_or([0.0, 0.0, w, h], |[x, y, aw, ah]| [x * w, y * h, aw * w, ah * h]);
+    let s = ((aw - 2.0 * pad) / src).min((ah - 2.0 * pad) / 1.0);
     let (fw, fh) = (src * s, s);
-    let (fx, fy) = ((w - fw) / 2.0, (h - fh) / 2.0);
+    let (fx, fy) = (ax + (aw - fw) / 2.0, ay + (ah - fh) / 2.0);
     let (u, v) = ((click[0] * w - fx) / fw, (click[1] * h - fy) / fh);
     if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
         return None;
@@ -842,12 +1064,18 @@ pub struct Studio {
     /// Inline message of the last rejected edit.
     pub edit_error: Option<String>,
     pub selected_zoom: Option<String>,
-    /// The next click on the preview sets the focus of the selected zoom.
+    /// The selected loupe (P6).
+    pub selected_loupe: Option<String>,
+    /// The next click on the preview sets the focus of the selected zoom (or of the selected loupe
+    /// when `pick_loupe`).
     pub picking: bool,
+    pub pick_loupe: bool,
     /// Speed factor offered by the Clips tab.
     pub speed: f64,
     /// The Transcript tab (P5).
     pub tr: TranscriptUi,
+    /// The Follow face controls of the Camera tab (P6).
+    pub face: FaceUi,
     started: Instant,
 }
 
@@ -859,7 +1087,10 @@ impl Studio {
             tab: Tab::default(),
             edit_error: None,
             selected_zoom: None,
+            selected_loupe: None,
             picking: false,
+            pick_loupe: false,
+            face: FaceUi::default(),
             speed: 2.0,
             tr: TranscriptUi::default(),
             started: Instant::now(),
@@ -986,6 +1217,104 @@ impl Editor {
                 let cancelled = self.st.tr.run.take().is_some_and(|r| r.cancelling);
                 self.st.tr.start = !cancelled;
             }
+        }
+    }
+
+    /// Start analyzing the camera on a worker thread (never the caller's): `helper` is the capture
+    /// helper executable, `notify` delivers the [`FaceMsg`]s to the app.
+    pub fn start_face(
+        &mut self,
+        helper: PathBuf,
+        log: impl Fn(&str) + Send + 'static,
+        notify: Box<dyn Fn(crate::editor_ctl::EditorMsg) + Send>,
+    ) -> Result<(), String> {
+        if self.st.face.run.is_some() {
+            return Err("A face analysis is already running.".into());
+        }
+        let Some(p) = self.project.as_ref() else { return Err("The project is not loaded yet.".into()) };
+        if p.sources.camera.is_none() {
+            return Err("This recording has no camera.".into());
+        }
+        let run = FaceRun::new();
+        let cancel = run.cancel.clone();
+        self.st.face.run = Some(run);
+        self.st.face.error = None;
+        self.st.face.notice = None;
+        let dir = self.dir.clone();
+        std::thread::spawn(move || {
+            let send = |msg| notify(crate::editor_ctl::EditorMsg::Face { dir: dir.clone(), msg });
+            let msg = run_face(&helper, log, &dir, &cancel, |done, total| send(FaceMsg::Progress { done, total }));
+            send(msg);
+        });
+        Ok(())
+    }
+
+    /// Cancel: the helper stops and leaves no `camera_track.json.partial`.
+    pub fn cancel_face(&mut self) {
+        if let Some(r) = self.st.face.run.as_mut() {
+            r.cancel.store(true, Ordering::Relaxed);
+            r.cancelling = true;
+        }
+    }
+
+    /// A message of the analysis thread. A found face turns Follow face on through [`Editor::apply`]
+    /// (one undo step, saved by the autosave); the preview rebuilds its crop from the new track file.
+    pub fn face_msg(&mut self, msg: FaceMsg, now: f64) {
+        match msg {
+            FaceMsg::Progress { done, total } => {
+                if let Some(r) = self.st.face.run.as_mut() {
+                    (r.done, r.total) = (done, total);
+                }
+            }
+            FaceMsg::Done { faces, frames } => {
+                self.st.face.run = None;
+                match face_found(faces, frames) {
+                    Ok(note) => {
+                        self.st.face.error = None;
+                        self.st.face.notice = Some(note);
+                        self.apply(EditKind::Other, now, |p| set_camera(p, CameraField::FollowFace(true)));
+                        // a new track file under an already enabled toggle changes nothing in the project
+                        self.queue.invalidate();
+                    }
+                    Err(e) => {
+                        self.st.face.notice = None;
+                        self.st.face.error = Some(e);
+                    }
+                }
+            }
+            FaceMsg::Failed(m) => {
+                self.st.face.run = None;
+                self.st.face.error = Some(m);
+            }
+            FaceMsg::Cancelled => {
+                self.st.face.run = None;
+                self.st.face.error = None;
+            }
+        }
+    }
+
+    /// Add a loupe at the playhead (one undo step) and select it. False with the reason in `st.edit_error`.
+    pub fn add_loupe_here(&mut self, now: f64) -> bool {
+        let at = self.t;
+        let mut id = None;
+        let done = self.apply(EditKind::Other, now, |p| {
+            id = Some(zoom::add_loupe(p, at)?);
+            Ok(())
+        });
+        if done {
+            self.st.selected_loupe = id;
+            self.st.picking = false;
+        }
+        done
+    }
+
+    /// Delete the selected loupe (one undo step).
+    pub fn delete_selected_loupe(&mut self, now: f64) {
+        let Some(id) = self.st.selected_loupe.clone() else { return };
+        if self.apply(EditKind::Other, now, move |p| zoom::delete_loupe(p, &id)) {
+            self.st.selected_loupe = None;
+            self.st.picking = false;
+            self.st.pick_loupe = false;
         }
     }
 
@@ -1132,6 +1461,13 @@ pub fn zoom_label(z: &Zoom) -> String {
     format!("{kind}  {}–{}  ·  {:.1}×", clock(z.start), clock(z.end), z.scale)
 }
 
+/// `0:02.00–0:05.00 · 2.0× · Cursor` (or `Fixed` for a picked focus).
+pub fn loupe_label(l: &Loupe) -> String {
+    use crate::editor_ctl::clock;
+    let focus = if l.x.is_some() && l.y.is_some() { "Fixed" } else { "Cursor" };
+    format!("{}–{}  ·  {:.1}×  ·  {focus}", clock(l.start), clock(l.end), l.scale)
+}
+
 /// A labelled slider: the label in a fixed column at the left, the rail across the middle and the
 /// value box (always the same width) at the right. Returns the new value (in the unit of `v`) when
 /// it changed. `scale` shows the value multiplied (0.06 as 6 %).
@@ -1161,6 +1497,20 @@ fn row_slider(
         ui.visuals_mut().handle_shape = egui::style::HandleShape::Circle;
         let r = ui.add(egui::Slider::new(&mut shown, lo..=hi).suffix(suffix).max_decimals(2));
         r.changed().then(|| shown / scale)
+    })
+    .inner
+}
+
+/// A labelled number box (a time) in the label column of [`row_slider`], so the rows of a card line up.
+fn row_drag(ui: &mut Ui, pal: &Palette, label: &str, v: f64, range: std::ops::RangeInclusive<f64>, step: f64, suffix: &str) -> Option<f64> {
+    let mut x = v;
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(SLIDER_LABEL_W, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_width(SLIDER_LABEL_W);
+            ui.label(egui::RichText::new(label).size(12.5).color(pal.sub_strong));
+        });
+        let r = ui.add(egui::DragValue::new(&mut x).range(range).speed(step).suffix(suffix).max_decimals(2));
+        r.changed().then_some(x)
     })
     .inner
 }
@@ -1204,6 +1554,7 @@ pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto:
             ui.spacing_mut().item_spacing.y = 6.0;
             match tab {
                 Tab::Zoom => zoom_tab(ui, pal, ed, &proj, auto, now),
+                Tab::Loupe => loupe_tab(ui, pal, ed, &proj, now),
                 Tab::Cursor => cursor_tab(ui, pal, ed, &proj, now),
                 Tab::Style => style_tab(ui, pal, ed, &proj, now),
                 Tab::Clips => clips_tab(ui, pal, ed, &proj, fps, now),
@@ -1298,8 +1649,9 @@ fn zoom_fields(ui: &mut Ui, pal: &Palette, ed: &mut Editor, z: &Zoom, duration: 
         note(ui, pal, "Following the cursor.");
     }
     ui.horizontal(|ui| {
-        let pick = ed.st.picking;
+        let pick = ed.st.picking && !ed.st.pick_loupe;
         if ui.selectable_label(pick, "Pick on preview").on_hover_text("Click the preview to set the focus").clicked() {
+            ed.st.pick_loupe = false;
             ed.st.picking = !pick;
         }
         if ui.add_enabled(!follow, egui::Button::new("Follow cursor")).clicked() {
@@ -1325,12 +1677,20 @@ fn zoom_fields(ui: &mut Ui, pal: &Palette, ed: &mut Editor, z: &Zoom, duration: 
 /// A click on the preview while picking: set the focus of the selected zoom. `click` is `0..=1` in the
 /// preview image; `camera` is the crop the frame on screen shows.
 pub fn pick_focus(ed: &mut Editor, click: [f64; 2], camera: Option<[f64; 4]>, now: f64) {
-    let (Some(id), Some(style)) = (ed.st.selected_zoom.clone(), ed.project.as_ref().map(|p| p.style.clone())) else { return };
+    let for_loupe = ed.st.pick_loupe;
+    let target = if for_loupe { ed.st.selected_loupe.clone() } else { ed.st.selected_zoom.clone() };
+    let (Some(id), Some(project)) = (target, ed.project.clone()) else { return };
     let aspect = ed.video_aspect();
-    match preview_to_focus(click, &style, aspect, camera) {
+    let area = ed.events.as_ref().and_then(|e| split_area(&project, ferrocast_core::capture::export::source_pixels(e)));
+    match preview_to_focus_in(click, &project.style, aspect, camera, area) {
         Some(f) => {
             ed.st.picking = false;
-            ed.apply(EditKind::Other, now, move |p| set_zoom(p, &id, ZoomField::Focus(Some(f))));
+            ed.st.pick_loupe = false;
+            if for_loupe {
+                ed.apply(EditKind::Other, now, move |p| zoom::set_loupe(p, &id, zoom::LoupeField::Focus(Some(f))));
+            } else {
+                ed.apply(EditKind::Other, now, move |p| set_zoom(p, &id, ZoomField::Focus(Some(f))));
+            }
         }
         None => ed.st.edit_error = Some("Click inside the video, not on the background.".into()),
     }
@@ -1441,6 +1801,9 @@ const TAB_H: f32 = 24.0;
 pub const ACCENT_TINT: f32 = 0.10;
 /// Horizontal gap between chips.
 const CHIP_GAP: f32 = 4.0;
+/// Room between a chip's edge and its text. Six pixels keep the five tabs every project has (Zoom,
+/// Loupe, Cursor, Style, Clips) on one row of the 236 pt strip, as the four of them were before the Loupe tab.
+pub const CHIP_PAD: f32 = 6.0;
 
 /// The widths of a wrapping chip strip: the chips (their text widths plus `pad` on both sides) are
 /// split into the fewest rows that fit `avail`, as evenly as possible (7 chips become 4 + 3), and
@@ -1493,21 +1856,28 @@ fn cell(ui: &mut Ui, pal: &Palette, rect: Rect, id: egui::Id, label: &str, selec
 
 /// The tab strip: equal-height chips, wrapped into balanced rows that fill the panel width.
 fn tab_strip(ui: &mut Ui, pal: &Palette, tabs: &[Tab], current: Tab) -> Option<Tab> {
-    let widths: Vec<f32> = tabs.iter().map(|t| ui.painter().layout_no_wrap(t.label().into(), font(12.5), pal.text).size().x).collect();
+    let labels: Vec<&str> = tabs.iter().map(|t| t.label()).collect();
+    chip_strip(ui, pal, "tab", &labels, tabs.iter().position(|t| *t == current)).map(|i| tabs[i])
+}
+
+/// Chips with the look of the tabs (the Look picker uses it too): `current` is the selected one.
+/// Returns the clicked index.
+fn chip_strip(ui: &mut Ui, pal: &Palette, salt: &str, labels: &[&str], current: Option<usize>) -> Option<usize> {
+    let widths: Vec<f32> = labels.iter().map(|t| ui.painter().layout_no_wrap((*t).into(), font(12.5), pal.text).size().x).collect();
     let avail = ui.available_width();
     let mut clicked = None;
     let mut i = 0;
-    for row in chip_rows(&widths, avail, CHIP_GAP, 9.0) {
+    for row in chip_rows(&widths, avail, CHIP_GAP, CHIP_PAD) {
         let (strip, _) = ui.allocate_exact_size(egui::vec2(avail, TAB_H), egui::Sense::hover());
         let mut x = strip.min.x;
         for w in row {
-            let t = tabs[i];
+            let idx = i;
+            let label = labels[idx];
             i += 1;
             let hit = Rect::from_min_size(egui::pos2(x, strip.min.y), egui::vec2(w, TAB_H));
             x += w + CHIP_GAP;
-            let resp = cell(ui, pal, hit, ui.id().with(("tab", t.label())), t.label(), Some(t == current));
-            let on = t == current;
-            let chip = hit;
+            let on = current == Some(idx);
+            let resp = cell(ui, pal, hit, ui.id().with((salt, label)), label, Some(on));
             let fill = if on {
                 pal.accent.gamma_multiply(ACCENT_TINT)
             } else if resp.hovered() {
@@ -1515,11 +1885,11 @@ fn tab_strip(ui: &mut Ui, pal: &Palette, tabs: &[Tab], current: Tab) -> Option<T
             } else {
                 pal.field
             };
-            ui.painter().rect_filled(chip, 7.0, fill);
+            ui.painter().rect_filled(hit, 7.0, fill);
             let color = if on { pal.accent_text } else { pal.sub_strong };
-            ui.painter().text(chip.center(), egui::Align2::CENTER_CENTER, t.label(), font(12.5), color);
+            ui.painter().text(hit.center(), egui::Align2::CENTER_CENTER, label, font(12.5), color);
             if resp.clicked() {
-                clicked = Some(t);
+                clicked = Some(idx);
             }
         }
     }
@@ -1593,6 +1963,12 @@ enum Glyph {
     Circle,
     Rounded,
     Square,
+    /// The camera as a bubble over the screen.
+    Overlay,
+    /// Screen and camera side by side.
+    Split,
+    /// No icon: the label alone.
+    None,
 }
 
 fn paint_glyph(p: &egui::Painter, at: egui::Pos2, g: Glyph, color: egui::Color32) {
@@ -1608,6 +1984,15 @@ fn paint_glyph(p: &egui::Painter, at: egui::Pos2, g: Glyph, color: egui::Color32
         Glyph::Square => {
             p.rect_stroke(r, 0.5, s, egui::StrokeKind::Inside);
         }
+        Glyph::Overlay => {
+            p.rect_stroke(r, 2.0, s, egui::StrokeKind::Inside);
+            p.circle_filled(egui::pos2(r.max.x - 3.5, r.max.y - 3.5), 2.5, color);
+        }
+        Glyph::Split => {
+            p.rect_stroke(r, 2.0, s, egui::StrokeKind::Inside);
+            p.rect_filled(Rect::from_min_max(egui::pos2(r.max.x - 4.0, r.min.y), r.max), 1.0, color);
+        }
+        Glyph::None => {}
     }
 }
 
@@ -1629,10 +2014,11 @@ fn shape_segments(ui: &mut Ui, pal: &Palette, items: &[(Glyph, &str)], current: 
         }
         let color = if on { pal.text } else { pal.sub_strong };
         let galley = ui.painter().layout_no_wrap((*label).into(), font(12.0), color);
-        let total = 12.0 + 6.0 + galley.size().x;
+        let lead = if matches!(glyph, Glyph::None) { 0.0 } else { 18.0 };
+        let total = lead + galley.size().x;
         let x0 = hit.center().x - total / 2.0;
         paint_glyph(ui.painter(), egui::pos2(x0 + 6.0, hit.center().y), *glyph, color);
-        ui.painter().galley(egui::pos2(x0 + 18.0, hit.center().y - galley.size().y / 2.0), galley, color);
+        ui.painter().galley(egui::pos2(x0 + lead, hit.center().y - galley.size().y / 2.0), galley, color);
         if resp.clicked() {
             clicked = Some(i);
         }
@@ -1692,6 +2078,64 @@ fn corner_picker(ui: &mut Ui, pal: &Palette, current: Corner) -> Option<Corner> 
     clicked
 }
 
+/// The four sides of a split as a 2 x 2 grid, each cell a mini frame with the camera part filled on
+/// that side (like [`corner_picker`]); the active one is tinted and outlined. Returns the clicked side.
+fn side_picker(ui: &mut Ui, pal: &Palette, current: SplitSide) -> Option<SplitSide> {
+    let w = (ui.available_width() - CHIP_GAP) / 2.0;
+    let mut clicked = None;
+    let (area, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 2.0 * 32.0 + CHIP_GAP), egui::Sense::hover());
+    for (i, (side, label)) in SIDES.iter().enumerate() {
+        let (col, row) = ((i % 2) as f32, (i / 2) as f32);
+        let hit =
+            Rect::from_min_size(egui::pos2(area.min.x + col * (w + CHIP_GAP), area.min.y + row * (32.0 + CHIP_GAP)), egui::vec2(w, 32.0));
+        let on = *side == current;
+        let resp = cell(ui, pal, hit, ui.id().with(("side", *label)), label, Some(on));
+        let fill = if on {
+            pal.accent.gamma_multiply(ACCENT_TINT)
+        } else if resp.hovered() {
+            pal.sel
+        } else {
+            pal.field.gamma_multiply(1.3)
+        };
+        let p = ui.painter();
+        p.rect_filled(hit, 7.0, fill);
+        if on {
+            p.rect_stroke(hit, 7.0, egui::Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), egui::StrokeKind::Inside);
+        }
+        let ink = if on { pal.accent_text } else { pal.sub_strong };
+        let frame = Rect::from_min_size(egui::pos2(hit.min.x + 8.0, hit.center().y - 7.0), egui::vec2(20.0, 14.0));
+        p.rect_stroke(frame, 2.5, egui::Stroke::new(1.2, ink), egui::StrokeKind::Inside);
+        p.rect_filled(side_marker(*side, frame.shrink(2.0), 0.4), 1.0, ink);
+        p.text(
+            egui::pos2(hit.center().x + 14.0, hit.center().y),
+            egui::Align2::CENTER_CENTER,
+            *label,
+            font(12.0),
+            if on { pal.text } else { pal.sub_strong },
+        );
+        if resp.clicked() {
+            clicked = Some(*side);
+        }
+    }
+    clicked
+}
+
+/// A card with a message, a thin progress bar and a Cancel button; true when Cancel was pressed.
+fn progress_card(ui: &mut Ui, pal: &Palette, text: &str, frac: f32, cancel_enabled: bool) -> bool {
+    let mut cancel = false;
+    card(ui, pal, |ui| {
+        ui.label(egui::RichText::new(text).size(13.0).color(pal.text));
+        let (bar, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
+        ui.painter().rect_filled(bar, 3.0, pal.sep);
+        if frac > 0.0 {
+            ui.painter().rect_filled(Rect::from_min_size(bar.min, egui::vec2(bar.width() * frac, bar.height())), 3.0, pal.accent);
+        }
+        ui.add_space(2.0);
+        cancel = secondary_button(ui, pal, "Cancel", ui.available_width(), cancel_enabled);
+    });
+    cancel
+}
+
 /// The recorded side files of the project, as quiet secondary text (a missing file in the danger colour).
 fn source_rows(ui: &mut Ui, pal: &Palette, ed: &Editor, proj: &Project, only: &[&str]) {
     for info in source_infos(proj, &ed.dir).iter().filter(|i| only.contains(&i.label)) {
@@ -1707,31 +2151,203 @@ fn camera_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: 
         ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Visible(!c.visible)));
     }
     ui.add_space(4.0);
-    caption(ui, pal, "Shape");
-    let shapes = [CameraShape::Circle, CameraShape::Rounded, CameraShape::Square];
-    let items = [(Glyph::Circle, "Circle"), (Glyph::Rounded, "Rounded"), (Glyph::Square, "Square")];
-    let cur = shapes.iter().position(|s| *s == c.shape).unwrap_or(1);
-    if let Some(i) = shape_segments(ui, pal, &items, cur) {
-        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Shape(shapes[i])));
+    caption(ui, pal, "Layout");
+    let placements = [CameraPlacement::Overlay, CameraPlacement::Split];
+    let cur = placements.iter().position(|l| *l == c.layout).unwrap_or(0);
+    if let Some(i) = shape_segments(ui, pal, &[(Glyph::Overlay, "Overlay"), (Glyph::Split, "Split")], cur) {
+        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Placement(placements[i])));
     }
     ui.add_space(4.0);
-    caption(ui, pal, "Corner");
-    if let Some(corner) = corner_picker(ui, pal, c.corner) {
-        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Corner(corner)));
-    }
-    ui.add_space(4.0);
-    if let Some(v) = row_slider(ui, pal, "Size", c.size, SIZE_MIN..=SIZE_MAX, 100.0, " %") {
-        ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::Size(v)));
-    }
-    if let Some(v) = row_slider(ui, pal, "Margin", c.margin, 0.0..=MARGIN_MAX, 100.0, " %") {
-        ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::Margin(v)));
+    if c.layout == CameraPlacement::Split {
+        caption(ui, pal, "Side");
+        if let Some(side) = side_picker(ui, pal, c.split.side) {
+            ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::SplitSide(side)));
+        }
+        ui.add_space(4.0);
+        if let Some(v) = row_slider(ui, pal, "Ratio", c.split.ratio, SPLIT_RATIO_MIN..=SPLIT_RATIO_MAX, 100.0, " %") {
+            ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::SplitRatio(v)));
+        }
+        if let Some(v) = row_slider(ui, pal, "Gap", c.split.gap, 0.0..=SPLIT_GAP_MAX, 100.0, " %") {
+            ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::SplitGap(v)));
+        }
+    } else {
+        caption(ui, pal, "Shape");
+        let shapes = [CameraShape::Circle, CameraShape::Rounded, CameraShape::Square];
+        let items = [(Glyph::Circle, "Circle"), (Glyph::Rounded, "Rounded"), (Glyph::Square, "Square")];
+        let cur = shapes.iter().position(|s| *s == c.shape).unwrap_or(1);
+        if let Some(i) = shape_segments(ui, pal, &items, cur) {
+            ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Shape(shapes[i])));
+        }
+        ui.add_space(4.0);
+        caption(ui, pal, "Corner");
+        if let Some(corner) = corner_picker(ui, pal, c.corner) {
+            ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Corner(corner)));
+        }
+        ui.add_space(4.0);
+        if let Some(v) = row_slider(ui, pal, "Size", c.size, SIZE_MIN..=SIZE_MAX, 100.0, " %") {
+            ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::Size(v)));
+        }
+        if let Some(v) = row_slider(ui, pal, "Margin", c.margin, 0.0..=MARGIN_MAX, 100.0, " %") {
+            ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::Margin(v)));
+        }
     }
     if toggle_row(ui, pal, "Mirror", c.mirror) {
         ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Mirror(!c.mirror)));
     }
     ui.add_space(6.0);
+    caption(ui, pal, "Look");
+    if let Some(i) = chip_strip(ui, pal, "look", &look_chip_labels(), look_choice(&c)) {
+        let name = i.checked_sub(1).map(|k| LOOKS[k].0.to_string());
+        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Look(name)));
+    }
+    if let Some(file) = custom_look_file(&c) {
+        note(ui, pal, &format!("Custom look: {file}"));
+    }
+    if let Some(look) = &c.look {
+        if let Some(v) = row_slider(ui, pal, "Intensity", look.intensity, 0.0..=1.0, 100.0, " %") {
+            ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::LookIntensity(v)));
+        }
+    }
+    ui.add_space(4.0);
+    if toggle_row(ui, pal, "Cutout (beta)", c.cutout) {
+        ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Cutout(!c.cutout)));
+    }
+    note(ui, pal, "On-device; edges depend on light.");
+    ui.add_space(4.0);
+    face_rows(ui, pal, ed, &c, now);
+    ui.add_space(6.0);
     source_rows(ui, pal, ed, proj, &["Camera"]);
     note(ui, pal, "The camera is recorded as its own file, so it can be moved, resized or hidden without re-recording.");
+}
+
+/// Follow face, its zoom and the Analyze face flow (progress and Cancel while it runs).
+fn face_rows(ui: &mut Ui, pal: &Palette, ed: &mut Editor, c: &CameraLayout, now: f64) {
+    let has_track = track_present(&ed.dir);
+    if toggle_row(ui, pal, "Follow face", c.follow_face) {
+        match follow_request(has_track, !c.follow_face) {
+            Ok(on) => {
+                ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::FollowFace(on)));
+            }
+            Err(e) => ed.st.edit_error = Some(e),
+        }
+    }
+    if c.follow_face {
+        let zoom = c.follow_zoom.unwrap_or_else(|| ferrocast_core::capture::compose::default_follow_zoom(c));
+        if let Some(v) = row_slider(ui, pal, "Zoom", zoom, FOLLOW_ZOOM_MIN..=FOLLOW_ZOOM_MAX, 1.0, "×") {
+            ed.apply(EditKind::Style, now, |p| set_camera(p, CameraField::FollowZoom(v)));
+        }
+    }
+    if let Some(r) = ed.st.face.run.as_ref() {
+        let (done, total, cancelling) = (r.done, r.total, r.cancelling);
+        let frac = if total > 0.0 { (done / total).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let text = if cancelling {
+            "Cancelling…".to_string()
+        } else if total > 0.0 {
+            format!("Analyzing… {:.0} %", frac * 100.0)
+        } else {
+            "Starting…".to_string()
+        };
+        if progress_card(ui, pal, &text, frac, !cancelling) {
+            ed.cancel_face();
+        }
+        note(ui, pal, "Closing the editor cancels it.");
+        return;
+    }
+    if let Some(e) = ed.st.face.error.clone() {
+        error_card(ui, pal, &e);
+    }
+    let pressed = if has_track {
+        secondary_button(ui, pal, "Analyze face", ui.available_width(), true)
+    } else {
+        primary_button(ui, pal, "Analyze face")
+    };
+    if pressed {
+        ed.st.face.start = true;
+    }
+    let text = match (&ed.st.face.notice, has_track) {
+        (Some(n), true) => n.clone(),
+        (_, true) => "Face track saved in the project folder.".to_string(),
+        (_, false) => "Runs on this Mac and follows the largest face.".to_string(),
+    };
+    note(ui, pal, &text);
+}
+
+fn loupe_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
+    if secondary_button(ui, pal, "Add at playhead", ui.available_width(), true) {
+        ed.add_loupe_here(now);
+    }
+    if proj.loupes.is_empty() {
+        note(ui, pal, "No loupes. Add one at the playhead to magnify part of the screen.");
+    }
+    for l in &proj.loupes {
+        let open = ed.st.selected_loupe.as_deref() == Some(l.id.as_str());
+        if ui.selectable_label(open, loupe_label(l)).clicked() {
+            ed.st.selected_loupe = (!open).then(|| l.id.clone());
+            ed.st.picking = false;
+        }
+    }
+    if let Some(l) = proj.loupes.iter().find(|l| ed.st.selected_loupe.as_deref() == Some(l.id.as_str())) {
+        ui.add_space(2.0);
+        card(ui, pal, |ui| loupe_fields(ui, pal, ed, l, proj.duration, now));
+    }
+}
+
+fn loupe_fields(ui: &mut Ui, pal: &Palette, ed: &mut Editor, l: &Loupe, duration: f64, now: f64) {
+    use zoom::LoupeField;
+    let id = l.id.clone();
+    let edit = |ed: &mut Editor, kind: EditKind, field: LoupeField| {
+        let id = id.clone();
+        ed.apply(kind, now, move |p| zoom::set_loupe(p, &id, field));
+    };
+    if let Some(v) = row_drag(ui, pal, "Start", l.start, 0.0..=duration, 0.05, " s") {
+        edit(ed, EditKind::Loupe, LoupeField::Start(v));
+    }
+    if let Some(v) = row_drag(ui, pal, "End", l.end, 0.0..=duration, 0.05, " s") {
+        edit(ed, EditKind::Loupe, LoupeField::End(v));
+    }
+    if let Some(v) = row_slider(ui, pal, "Scale", l.scale, LOUPE_SCALE_MIN..=LOUPE_SCALE_MAX, 1.0, "×") {
+        edit(ed, EditKind::Loupe, LoupeField::Scale(v));
+    }
+    if let Some(v) = row_slider(ui, pal, "Radius", l.radius, LOUPE_RADIUS_MIN..=LOUPE_RADIUS_MAX, 100.0, " %") {
+        edit(ed, EditKind::Loupe, LoupeField::Radius(v));
+    }
+    caption(ui, pal, "Focus");
+    let picking = ed.st.picking && ed.st.pick_loupe;
+    let follow = l.x.is_none() || l.y.is_none();
+    let cur = if picking {
+        1
+    } else if follow {
+        0
+    } else {
+        usize::MAX
+    };
+    match shape_segments(ui, pal, &[(Glyph::None, "Follow cursor"), (Glyph::None, "Pick on preview")], cur) {
+        Some(0) => {
+            ed.st.picking = false;
+            ed.st.pick_loupe = false;
+            edit(ed, EditKind::Other, LoupeField::Focus(None));
+        }
+        Some(_) => {
+            ed.st.pick_loupe = true;
+            ed.st.picking = !picking;
+        }
+        None => {}
+    }
+    let text = match (picking, l.x.zip(l.y)) {
+        (true, _) => "Click the preview to set the focus.".to_string(),
+        (false, Some((x, y))) => format!("Focus at {:.0} %, {:.0} %.", x * 100.0, y * 100.0),
+        (false, None) => "Following the cursor.".to_string(),
+    };
+    note(ui, pal, &text);
+    if let Some(v) = row_slider(ui, pal, "Ease in", l.ease_in, 0.0..=LOUPE_EASE_MAX, 1.0, " s") {
+        edit(ed, EditKind::Loupe, LoupeField::EaseIn(v));
+    }
+    if let Some(v) = row_slider(ui, pal, "Ease out", l.ease_out, 0.0..=LOUPE_EASE_MAX, 1.0, " s") {
+        edit(ed, EditKind::Loupe, LoupeField::EaseOut(v));
+    }
+    if secondary_button(ui, pal, "Delete loupe", ui.available_width(), true) {
+        ed.delete_selected_loupe(now);
+    }
 }
 
 /// The mute switch of a track card: a pill that says `Mute` or `Muted` (so the state is a word, not only a colour).
@@ -2614,20 +3230,20 @@ mod tests {
     #[test]
     fn the_camera_and_audio_tabs_exist_only_for_projects_with_those_sources() {
         use ferrocast_core::capture::project::Source;
-        let plain = [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips];
+        let plain = [Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips];
         assert_eq!(visible_tabs(&base()), plain, "no camera and no audio: neither tab");
         let mut cam = base();
         cam.sources.camera = Some(Source { file: "camera.mov".into(), offset: 0.0 });
-        assert_eq!(visible_tabs(&cam), [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera]);
+        assert_eq!(visible_tabs(&cam), [Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera]);
         let mut mic = base();
         mic.sources.mic = Some(Source { file: "mic.m4a".into(), offset: 0.0 });
-        assert_eq!(visible_tabs(&mic), [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Audio, Tab::Transcript]);
+        assert_eq!(visible_tabs(&mic), [Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Audio, Tab::Transcript]);
         let mut sys = base();
         sys.sources.system = Some(Source { file: "system.m4a".into(), offset: 0.0 });
         assert!(visible_tabs(&sys).contains(&Tab::Audio) && !visible_tabs(&sys).contains(&Tab::Camera));
         assert_eq!(
             visible_tabs(&with_sources()),
-            [Tab::Zoom, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera, Tab::Audio, Tab::Transcript]
+            [Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera, Tab::Audio, Tab::Transcript]
         );
         // a stored tab the project no longer offers falls back to the first one
         assert_eq!(Tab::Camera.or_first(&base()), Tab::Zoom);
@@ -3104,5 +3720,309 @@ echo '{{"id":1,"ok":true,"language":"en-US","words":7,"path":"{}/transcript.json
         let mut none = Editor::new(temp("tr-noaudio"), None);
         none.opened(Ok(Opened { project: base(), auto_zoomed: false, note: None, events: None }));
         assert!(none.start_transcribe(PathBuf::from("/x"), |_| {}, Box::new(|_| {})).is_err());
+    }
+
+    // ---- P6: camera effects, face analysis and loupes (pure logic, then the editor wiring)
+
+    #[test]
+    fn camera_effect_edits_map_to_the_layout_and_clamp() {
+        use ferrocast_core::capture::camera::{
+            CameraPlacement, SplitSide, FOLLOW_ZOOM_MAX, FOLLOW_ZOOM_MIN, SPLIT_GAP_MAX, SPLIT_RATIO_MAX, SPLIT_RATIO_MIN,
+        };
+        let mut p = with_sources();
+        set_camera(&mut p, CameraField::Placement(CameraPlacement::Split)).unwrap();
+        set_camera(&mut p, CameraField::SplitSide(SplitSide::Top)).unwrap();
+        set_camera(&mut p, CameraField::SplitRatio(0.4)).unwrap();
+        set_camera(&mut p, CameraField::SplitGap(0.03)).unwrap();
+        let c = p.camera.clone().unwrap();
+        assert_eq!((c.layout, c.split.side, c.split.ratio, c.split.gap), (CameraPlacement::Split, SplitSide::Top, 0.4, 0.03));
+        set_camera(&mut p, CameraField::SplitRatio(0.9)).unwrap();
+        assert_eq!(p.camera.as_ref().unwrap().split.ratio, SPLIT_RATIO_MAX);
+        set_camera(&mut p, CameraField::SplitRatio(0.0)).unwrap();
+        assert_eq!(p.camera.as_ref().unwrap().split.ratio, SPLIT_RATIO_MIN);
+        set_camera(&mut p, CameraField::SplitGap(5.0)).unwrap();
+        assert_eq!(p.camera.as_ref().unwrap().split.gap, SPLIT_GAP_MAX);
+        // a look keeps its intensity when another one is picked, and None removes it
+        set_camera(&mut p, CameraField::Look(Some("warm".into()))).unwrap();
+        assert_eq!(p.camera.as_ref().unwrap().look.as_ref().map(|l| (l.name.as_deref(), l.intensity)), Some((Some("warm"), 1.0)));
+        set_camera(&mut p, CameraField::LookIntensity(0.4)).unwrap();
+        set_camera(&mut p, CameraField::Look(Some("mono".into()))).unwrap();
+        assert_eq!(p.camera.as_ref().unwrap().look.as_ref().unwrap().intensity, 0.4);
+        set_camera(&mut p, CameraField::LookIntensity(7.0)).unwrap();
+        assert_eq!(p.camera.as_ref().unwrap().look.as_ref().unwrap().intensity, 1.0);
+        assert!(set_camera(&mut p, CameraField::Look(Some("sepia".into()))).is_err(), "only the bundled looks");
+        assert!(set_camera(&mut p, CameraField::LookIntensity(f64::NAN)).is_err());
+        set_camera(&mut p, CameraField::Look(None)).unwrap();
+        assert!(p.camera.as_ref().unwrap().look.is_none());
+        assert!(set_camera(&mut p, CameraField::LookIntensity(0.5)).is_err(), "no look to blend");
+        set_camera(&mut p, CameraField::Cutout(true)).unwrap();
+        set_camera(&mut p, CameraField::FollowFace(true)).unwrap();
+        set_camera(&mut p, CameraField::FollowZoom(9.0)).unwrap();
+        assert_eq!(p.camera.as_ref().unwrap().follow_zoom, Some(FOLLOW_ZOOM_MAX));
+        set_camera(&mut p, CameraField::FollowZoom(0.1)).unwrap();
+        assert_eq!(p.camera.as_ref().unwrap().follow_zoom, Some(FOLLOW_ZOOM_MIN));
+        assert!(set_camera(&mut p, CameraField::FollowZoom(f64::INFINITY)).is_err());
+        let c = p.camera.as_ref().unwrap();
+        assert!(c.cutout && c.follow_face);
+        assert!(p.validate(|_| true).is_empty(), "everything the panel writes validates: {:?}", p.validate(|_| true));
+        // a custom .cube set by hand is shown, not replaced, until a chip is picked
+        set_camera(&mut p, CameraField::Look(None)).unwrap();
+        p.camera.as_mut().unwrap().look =
+            Some(ferrocast_core::capture::camera::Look { name: None, file: Some("mine.cube".into()), intensity: 0.8 });
+        assert_eq!(look_choice(p.camera.as_ref().unwrap()), None);
+        assert_eq!(custom_look_file(p.camera.as_ref().unwrap()), Some("mine.cube"));
+        set_camera(&mut p, CameraField::Look(Some("cool".into()))).unwrap();
+        assert_eq!(p.camera.as_ref().unwrap().look.as_ref().unwrap().file, None, "a chip replaces the file");
+    }
+
+    #[test]
+    fn look_chips_are_none_plus_the_six_bundled_looks_in_order() {
+        use ferrocast_core::capture::camera::CameraLayout;
+        use ferrocast_core::capture::lut::BUNDLED_LOOK_NAMES;
+        assert_eq!(LOOKS.iter().map(|l| l.0).collect::<Vec<_>>(), BUNDLED_LOOK_NAMES, "the chips are the core's names");
+        assert_eq!(look_chip_labels(), ["None", "Warm", "Cool", "Cinematic", "Faded", "High contrast", "Mono"]);
+        let mut c = CameraLayout::default();
+        assert_eq!(look_choice(&c), Some(0), "no look = None");
+        for (i, (id, _)) in LOOKS.iter().enumerate() {
+            c.look = Some(ferrocast_core::capture::camera::Look { name: Some((*id).into()), file: None, intensity: 1.0 });
+            assert_eq!(look_choice(&c), Some(i + 1), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_side_picker_maps_to_the_four_sides_and_marks_the_camera_edge() {
+        use ferrocast_core::capture::camera::SplitSide;
+        assert_eq!(SIDES.map(|s| s.0), [SplitSide::Left, SplitSide::Right, SplitSide::Top, SplitSide::Bottom]);
+        assert_eq!(SIDES.map(|s| s.1), ["Left", "Right", "Top", "Bottom"]);
+        let frame = Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(20.0, 12.0));
+        let m = |s| side_marker(s, frame, 0.5);
+        assert_eq!(m(SplitSide::Left), Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(20.0, 32.0)));
+        assert_eq!(m(SplitSide::Right), Rect::from_min_max(egui::pos2(20.0, 20.0), egui::pos2(30.0, 32.0)));
+        assert_eq!(m(SplitSide::Top), Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(30.0, 26.0)));
+        assert_eq!(m(SplitSide::Bottom), Rect::from_min_max(egui::pos2(10.0, 26.0), egui::pos2(30.0, 32.0)));
+    }
+
+    #[test]
+    fn follow_face_needs_a_track_file_and_says_so() {
+        assert_eq!(follow_request(false, true), Err("Analyze the camera first.".to_string()));
+        assert_eq!(follow_request(true, true), Ok(true));
+        assert_eq!(follow_request(false, false), Ok(false), "turning it off never needs a track");
+        let dir = temp("track-file");
+        assert!(!track_present(&dir));
+        std::fs::write(dir.join("camera_track.json"), "{}").unwrap();
+        assert!(track_present(&dir));
+        let sub = temp("track-dir");
+        std::fs::create_dir_all(sub.join("camera_track.json")).unwrap();
+        assert!(!track_present(&sub), "a folder with that name is no track");
+    }
+
+    #[test]
+    fn analyze_errors_become_clear_sentences() {
+        use ferrocast_macos::capture::AnalyzeFaceError as E;
+        assert_eq!(map_face_error(&E::NotFound("x".into())), "The camera recording was not found in the project folder.");
+        assert!(map_face_error(&E::Invalid("camera.mov has no video track".into())).contains("camera.mov has no video track"));
+        assert_eq!(map_face_error(&E::Busy), "A face analysis is already running.");
+        assert!(map_face_error(&E::DiskFull).contains("disk space"));
+        assert!(map_face_error(&E::Timeout).contains("stopped responding"));
+        assert!(map_face_error(&E::Closed).contains("closed"));
+        assert!(map_face_error(&E::Other("boom".into())).contains("boom"));
+        assert_eq!(face_found(25, 30), Ok("Found a face in 25 of 30 samples.".to_string()));
+        assert!(face_found(0, 30).unwrap_err().contains("No face was found"));
+    }
+
+    fn face_ed(tag: &str, body: &str) -> (Editor, std::sync::mpsc::Receiver<crate::editor_ctl::EditorMsg>) {
+        let (tx, _rx) = channel();
+        let mut ed = Editor::new(temp(tag), Some(tx));
+        ed.opened(Ok(Opened { project: with_sources(), auto_zoomed: false, note: None, events: None }));
+        let (ntx, nrx) = channel();
+        ed.start_face(fake_helper(tag, body), |_| {}, Box::new(move |m| drop(ntx.send(m)))).unwrap();
+        (ed, nrx)
+    }
+
+    fn face_msgs(nrx: &std::sync::mpsc::Receiver<crate::editor_ctl::EditorMsg>) -> Vec<FaceMsg> {
+        let mut out = vec![];
+        while let Ok(crate::editor_ctl::EditorMsg::Face { msg, .. }) = nrx.recv_timeout(std::time::Duration::from_secs(10)) {
+            let end = !matches!(msg, FaceMsg::Progress { .. });
+            out.push(msg);
+            if end {
+                break;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_face_analysis_runs_on_a_worker_reports_progress_and_enabling_follow_is_one_undo_step() {
+        let body = r#"read l
+echo '{"event":"progress","id":1,"done_secs":1.5,"total_secs":3.0}'
+echo '{"id":1,"ok":true,"faces":25,"frames":30,"path":"/p/camera_track.json"}'"#;
+        let (mut ed, nrx) = face_ed("face-ok", body);
+        assert!(ed.st.face.run.is_some(), "running right away");
+        assert!(ed.start_face(PathBuf::from("/x"), |_| {}, Box::new(|_| {})).is_err(), "one at a time");
+        let msgs = face_msgs(&nrx);
+        assert!(matches!(msgs[0], FaceMsg::Progress { done, total } if done == 1.5 && total == 3.0), "{msgs:?}");
+        let Some(FaceMsg::Done { faces: 25, frames: 30 }) = msgs.into_iter().last() else { panic!("expected Done") };
+        ed.face_msg(FaceMsg::Progress { done: 1.0, total: 2.0 }, 1.0);
+        assert_eq!((ed.st.face.run.as_ref().unwrap().done, ed.st.face.run.as_ref().unwrap().total), (1.0, 2.0));
+        ed.face_msg(FaceMsg::Done { faces: 25, frames: 30 }, 2.0);
+        assert!(ed.st.face.run.is_none());
+        assert!(ed.project.as_ref().unwrap().camera.as_ref().unwrap().follow_face, "success turns Follow face on");
+        assert_eq!(ed.st.face.notice.as_deref(), Some("Found a face in 25 of 30 samples."));
+        assert!(ed.undo(3.0));
+        assert!(!ed.project.as_ref().unwrap().camera.as_ref().unwrap().follow_face);
+        // a track without a single face keeps the toggle off and says why
+        ed.st.face.run = Some(FaceRun::new());
+        ed.face_msg(FaceMsg::Done { faces: 0, frames: 30 }, 4.0);
+        assert!(!ed.project.as_ref().unwrap().camera.as_ref().unwrap().follow_face);
+        assert!(ed.st.face.error.as_ref().unwrap().contains("No face was found"));
+        ed.face_msg(FaceMsg::Failed("nope".into()), 5.0);
+        assert_eq!(ed.st.face.error.as_deref(), Some("nope"));
+        ed.face_msg(FaceMsg::Cancelled, 6.0);
+        assert!(ed.st.face.error.is_none() && ed.st.face.run.is_none(), "a cancel is not an error");
+    }
+
+    #[test]
+    fn the_face_analysis_can_be_cancelled_and_a_missing_helper_is_a_message() {
+        let (mut ed, nrx) = face_ed("face-cancel", r#"read l; read c; echo '{"id":1,"error":"cancelled","message":"cancelled"}'"#);
+        ed.cancel_face();
+        assert!(ed.st.face.run.as_ref().unwrap().cancelling);
+        assert!(matches!(face_msgs(&nrx).last(), Some(FaceMsg::Cancelled)));
+        let (tx, _rx) = channel();
+        let mut ed = Editor::new(temp("face-missing"), Some(tx));
+        ed.opened(Ok(Opened { project: with_sources(), auto_zoomed: false, note: None, events: None }));
+        let (ntx, nrx) = channel();
+        ed.start_face(PathBuf::from("/nonexistent/helper"), |_| {}, Box::new(move |m| drop(ntx.send(m)))).unwrap();
+        assert!(matches!(face_msgs(&nrx).last(), Some(FaceMsg::Failed(m)) if m.contains("Could not start")));
+        let mut none = Editor::new(temp("face-nocam"), None);
+        none.opened(Ok(Opened { project: base(), auto_zoomed: false, note: None, events: None }));
+        assert!(none.start_face(PathBuf::from("/x"), |_| {}, Box::new(|_| {})).unwrap_err().contains("no camera"));
+    }
+
+    fn loupe_ed(tag: &str) -> Editor {
+        let (tx, _rx) = channel();
+        let mut ed = Editor::new(temp(tag), Some(tx));
+        let mut p = base();
+        p.duration = 10.0;
+        p.trims.clear();
+        p.loupes.clear();
+        p.save(&ed.dir).unwrap();
+        ed.opened(Ok(Opened { project: p, auto_zoomed: false, note: None, events: None }));
+        ed
+    }
+
+    #[test]
+    fn a_loupe_is_added_at_the_playhead_three_seconds_long_or_shorter_before_the_next_one() {
+        let mut ed = loupe_ed("loupe-add");
+        ed.t = 2.0;
+        assert!(ed.add_loupe_here(1.0));
+        let l = ed.project.as_ref().unwrap().loupes[0].clone();
+        assert_eq!((l.start, l.end, l.scale, l.radius, l.x, l.y), (2.0, 5.0, 2.0, 0.15, None, None), "follows the cursor by default");
+        assert_eq!(ed.st.selected_loupe.as_deref(), Some(l.id.as_str()), "the new loupe is selected");
+        ed.t = 0.5;
+        ed.add_loupe_here(2.0);
+        let first = &ed.project.as_ref().unwrap().loupes[0];
+        assert_eq!((first.start, first.end), (0.5, 2.0), "cut short by the next loupe");
+        ed.t = 3.0;
+        assert!(!ed.add_loupe_here(3.0), "inside a loupe");
+        assert!(ed.st.edit_error.as_ref().unwrap().contains("already a loupe"));
+        ed.t = 1.95;
+        assert!(!ed.add_loupe_here(4.0), "no room before the next one");
+        ed.t = 9.9;
+        assert!(!ed.add_loupe_here(5.0), "no room at the end");
+        assert_eq!(ed.project.as_ref().unwrap().loupes.len(), 2);
+    }
+
+    #[test]
+    fn loupe_edits_are_one_undo_step_per_drag_and_autosave_writes_them() {
+        let mut ed = loupe_ed("loupe-edit");
+        ed.t = 1.0;
+        ed.add_loupe_here(10.0);
+        let id = ed.st.selected_loupe.clone().unwrap();
+        for (i, v) in [2.5, 3.0, 3.5].into_iter().enumerate() {
+            assert!(ed.apply(EditKind::Loupe, 20.0 + i as f64 * 0.1, |p| zoom::set_loupe(p, &id, zoom::LoupeField::Scale(v))));
+        }
+        assert!(ed.apply(EditKind::Other, 30.0, |p| zoom::set_loupe(p, &id, zoom::LoupeField::Focus(Some([0.3, 0.6])))));
+        ed.flush(31.0);
+        let saved = disk(&ed.dir).loupes[0].clone();
+        assert_eq!((saved.scale, saved.x, saved.y), (3.5, Some(0.3), Some(0.6)));
+        assert!(ed.undo(32.0), "the focus");
+        assert!(ed.undo(32.0), "the three scale drags");
+        assert_eq!(ed.project.as_ref().unwrap().loupes[0].scale, 2.0);
+        assert!(ed.undo(32.0), "the add");
+        assert!(ed.project.as_ref().unwrap().loupes.is_empty());
+        assert!(!ed.undo(32.0));
+        // out-of-range values clamp to the documented ranges
+        ed.t = 1.0;
+        ed.add_loupe_here(40.0);
+        let id = ed.st.selected_loupe.clone().unwrap();
+        ed.apply(EditKind::Loupe, 41.0, |p| zoom::set_loupe(p, &id, zoom::LoupeField::Scale(99.0)));
+        ed.apply(EditKind::Loupe, 42.5, |p| zoom::set_loupe(p, &id, zoom::LoupeField::Radius(0.0)));
+        let l = &ed.project.as_ref().unwrap().loupes[0];
+        assert_eq!((l.scale, l.radius), (4.0, 0.05));
+    }
+
+    #[test]
+    fn deleting_the_selected_loupe_clears_the_selection_and_picking() {
+        let mut ed = loupe_ed("loupe-del");
+        ed.t = 1.0;
+        ed.add_loupe_here(1.0);
+        ed.st.picking = true;
+        ed.st.pick_loupe = true;
+        ed.delete_selected_loupe(2.0);
+        assert!(ed.project.as_ref().unwrap().loupes.is_empty() && ed.st.selected_loupe.is_none() && !ed.st.picking);
+    }
+
+    #[test]
+    fn a_click_on_the_preview_sets_the_focus_of_the_selected_loupe_when_picking_for_it() {
+        let mut ed = loupe_ed("loupe-pick");
+        ed.t = 1.0;
+        ed.add_loupe_here(1.0);
+        ed.st.picking = true;
+        ed.st.pick_loupe = true;
+        // 16:9 style with the default padding: the centre of the preview is the centre of the video
+        pick_focus(&mut ed, [0.5, 0.5], None, 2.0);
+        let l = &ed.project.as_ref().unwrap().loupes[0];
+        assert!((l.x.unwrap() - 0.5).abs() < 1e-9 && (l.y.unwrap() - 0.5).abs() < 1e-9, "{l:?}");
+        assert!(!ed.st.picking);
+        assert!(
+            ed.project.as_ref().unwrap().zooms.iter().all(|z| z.focus != Some([0.5, 0.5]) || z.mode == "auto"),
+            "the zoom focus is untouched"
+        );
+    }
+
+    #[test]
+    fn the_split_screen_part_is_where_a_pick_lands_in_a_split() {
+        use ferrocast_core::capture::camera::{CameraLayout, CameraPlacement, SplitSide};
+        let mut p = with_sources();
+        p.style.aspect = "16:9".into();
+        p.style.padding = 0.0;
+        assert_eq!(split_area(&p, [2000, 1000]), None, "an overlay camera shares nothing");
+        let mut l = CameraLayout { layout: CameraPlacement::Split, ..CameraLayout::default() };
+        l.split.side = SplitSide::Right;
+        l.split.ratio = 0.25;
+        l.split.gap = 0.0;
+        p.camera = Some(l);
+        let a = split_area(&p, [2000, 1000]).expect("split");
+        assert!(a[0] == 0.0 && a[2] < 0.8 && a[2] > 0.7, "the screen takes the left 75 %: {a:?}");
+        // the middle of the screen part is the middle of the video, not of the canvas
+        let click = [a[0] + a[2] / 2.0, a[1] + a[3] / 2.0];
+        let f = preview_to_focus_in(click, &p.style, 2.0, None, Some(a)).unwrap();
+        assert!((f[0] - 0.5).abs() < 0.02 && (f[1] - 0.5).abs() < 0.02, "{f:?}");
+        assert!(preview_to_focus_in([0.95, 0.5], &p.style, 2.0, None, Some(a)).is_none(), "the camera part is not video");
+        // without an area it is the old mapping
+        assert_eq!(preview_to_focus_in([0.5, 0.5], &p.style, 2.0, None, None), preview_to_focus([0.5, 0.5], &p.style, 2.0, None));
+    }
+
+    #[test]
+    fn loupe_labels_show_the_span_magnification_and_focus_mode() {
+        let mut ed = loupe_ed("loupe-label");
+        ed.t = 2.0;
+        ed.add_loupe_here(1.0);
+        let l = ed.project.as_ref().unwrap().loupes[0].clone();
+        assert_eq!(loupe_label(&l), "0:02.00–0:05.00  ·  2.0×  ·  Cursor");
+        let mut fixed = l;
+        fixed.x = Some(0.2);
+        fixed.y = Some(0.4);
+        assert_eq!(loupe_label(&fixed), "0:02.00–0:05.00  ·  2.0×  ·  Fixed");
     }
 }
