@@ -580,6 +580,8 @@ pub enum View {
         file: PathBuf,
         size: (u32, u32),
     },
+    /// Recordings browser (T19): the projects of the recordings folder, newest first.
+    Recordings,
 }
 
 /// One wheel segment: label, SF symbol, and what releasing on it does.
@@ -627,6 +629,7 @@ impl View {
             | View::Notes
             | View::NotionSearch
             | View::ObsidianSearch
+            | View::Recordings
             | View::Colors(_) => Shape::List,
             View::SnippetForm { .. }
             | View::QuicklinkForm { .. }
@@ -663,6 +666,7 @@ impl View {
             View::CropImage { .. } | View::VideoCrop { .. } => vec![("Crop", "↵"), BACK],
             View::Annotate { .. } => vec![SAVE, ("Undo", "⌘Z"), ("Delete", "⌫"), BACK],
             View::CaptureResult { .. } => vec![("Copy", "↵"), ("Save", "⌘S"), ("Annotate", "⌘⇧A"), BACK],
+            View::Recordings => vec![("Show in Finder", "↵"), ("Trash", "⌘⌫"), BACK],
             View::Reorder { purpose, .. } => {
                 let primary = match purpose {
                     ReorderPurpose::JoinVideos => "Join",
@@ -694,6 +698,7 @@ impl View {
             View::Reorder { .. } => "Choose Order",
             View::Annotate { .. } => "Annotate Image",
             View::CaptureResult { .. } => "Capture",
+            View::Recordings => "Recordings",
             View::EditPhoto { .. } => "Edit Photo",
             View::CropImage { .. } => "Crop Image",
             View::CompressImage { media: Some(_), .. } => "Compress Audio and Video",
@@ -756,6 +761,7 @@ impl View {
             View::Notes => "Search notes…",
             View::NotionSearch => "Search Notion…",
             View::ObsidianSearch => "Search your vault…",
+            View::Recordings => "Search recordings…",
             _ => "Filter…",
         }
     }
@@ -966,6 +972,12 @@ pub struct App {
     /// Opt-in Enter on a Finder selection (tap, in-flight guard, injectable system hooks).
     finder: services::FinderEnterState,
     _tray: Option<tray_icon::TrayIcon>,
+    /// Recording lifecycle (S13); T19 drives it, the tray mirrors it.
+    record: crate::record_ctl::RecordCtl,
+    /// Whether the tray currently shows the recording icon and `Stop Recording` item.
+    tray_rec_shown: bool,
+    /// Live recording flow state (T19): session number, pending target, command channel, browser rows.
+    rt: crate::record_ctl::Runtime,
     /// The second menu-bar item that toggles Notes; present while `notes_menu_bar_button` is on.
     /// Dropping it removes the item.
     notes_tray: Option<Box<dyn std::any::Any>>,
@@ -1229,6 +1241,9 @@ impl App {
             selection: Default::default(),
             finder: Default::default(),
             _tray: tray,
+            record: Default::default(),
+            tray_rec_shown: false,
+            rt: Default::default(),
             notes_tray: None,
             stack: vec![View::Root],
             query: String::new(),
@@ -2488,6 +2503,14 @@ impl App {
 
     /// Creates the Notes toggle in the menu bar when the setting is on and none exists, removes it
     /// (by dropping it) when the setting is off. Main thread only.
+    /// Mirror the recording state in the menu bar: `●  mm:ss`, red-dot icon, `Stop Recording`.
+    pub(crate) fn sync_recording_tray(&mut self) {
+        let (title, stop) = (self.record.tray_title(), self.record.shows_stop_item());
+        if let Some(tray) = self._tray.as_ref() {
+            services::set_tray_recording(tray, title.as_deref(), stop, &mut self.tray_rec_shown);
+        }
+    }
+
     pub(crate) fn sync_notes_tray(&mut self) {
         match (self.settings.notes_menu_bar_button, self.notes_tray.is_some()) {
             (true, false) => self.notes_tray = (self.fx.notes_tray)(&self.bus),
@@ -3496,6 +3519,10 @@ impl App {
                     }
                     "check_updates" => self.check_updates(),
                     "notes_toggle" => self.open_notes_window(|c, d| c.toggle(d)),
+                    "stop_recording" => {
+                        let effect = self.record.request_stop();
+                        self.perform_record(effect);
+                    }
                     "quit" => self.quit(),
                     _ => {}
                 },
@@ -3504,10 +3531,7 @@ impl App {
                     match target.as_deref() {
                         Some("__launcher") => self.toggle(),
                         // a stored capture shortcut on a Mac that cannot capture: say why, once
-                        Some(cmd)
-                            if crate::capture_ctl::CaptureKind::from_command_id(cmd).is_some()
-                                && !self.base.iter().any(|i| i.id == cmd) =>
-                        {
+                        Some(cmd) if crate::record_ctl::is_gated_command(cmd) && !self.base.iter().any(|i| i.id == cmd) => {
                             self.capture_gate();
                         }
                         Some(cmd) => {
@@ -3524,6 +3548,10 @@ impl App {
                                             | Builtin::CaptureWindow
                                             | Builtin::CaptureScreen
                                             | Builtin::CaptureScrolling
+                                            | Builtin::RecordScreen
+                                            | Builtin::RecordArea
+                                            | Builtin::RecordWindow
+                                            | Builtin::OpenLastRecording
                                     )
                                 );
                                 let needs_ui =
@@ -3537,6 +3565,7 @@ impl App {
                         None => {}
                     }
                 }
+                Msg::Record(m) => self.handle_record(m),
                 Msg::Capture(outcome) => self.finish_capture(outcome),
                 Msg::CaptureListed(flow, listed) => self.capture_listed(flow, listed),
                 Msg::CaptureSelected(flow, selection, shareable) => self.capture_selected(flow, selection, *shareable),
@@ -4233,6 +4262,33 @@ impl App {
                 out.retain(|sec| !sec.items.is_empty());
                 out
             }
+            View::Recordings => {
+                let v: Vec<(i64, Item)> = self
+                    .rt
+                    .recordings
+                    .iter()
+                    .filter_map(|e| {
+                        self.matches(&q, &e.name, "").map(|sc| {
+                            let date = chrono::DateTime::from_timestamp(e.created, 0)
+                                .map(|d| crate::record_ctl::format_date(d.with_timezone(&chrono::Local).naive_local()))
+                                .unwrap_or_default();
+                            (
+                                sc,
+                                Item {
+                                    id: format!("rec:{}", e.path.display()),
+                                    title: e.name.clone(),
+                                    subtitle: crate::record_ctl::entry_subtitle(e),
+                                    icon: Icon::Glyph("sf:film", [86, 194, 255]),
+                                    accessory: date,
+                                    keywords: vec![],
+                                    kind: Kind::Recording(e.path.clone()),
+                                },
+                            )
+                        })
+                    })
+                    .collect();
+                self.sorted(v, "Recordings")
+            }
             View::Shelf => {
                 let v: Vec<(i64, Item)> = self
                     .shelf
@@ -4647,6 +4703,11 @@ impl App {
                 a.push(Action::new("Reveal original in Finder", Act::Reveal(files[0].clone())).key(CMD, Key::Enter));
             }
             Kind::RunningTimer(i) => a.push(Action::new("Cancel Timer", Act::CancelTimer(*i)).danger()),
+            Kind::Recording(p) => {
+                a.push(Action::new("Show in Finder", Act::Run));
+                a.push(Action::new("Copy Path", Act::CopyText(p.to_string_lossy().to_string())).key(CMD_SHIFT, Key::C));
+                a.push(Action::new("Move to Trash", Act::Trash(p.clone())).key(CMD, Key::Backspace).danger());
+            }
             Kind::Process(pr) => {
                 a.push(Action::new("Kill Process", Act::Run));
                 a.push(Action::new("Force Kill Process", Act::KillProcess(pr.pid, true)).key(CMD, Key::Enter).danger());
@@ -4699,6 +4760,7 @@ impl App {
             Kind::Editor(_) => "Open Editor",
             Kind::Timer(..) => "Start Timer",
             Kind::RunningTimer(_) => "Cancel Timer",
+            Kind::Recording(_) => "Show in Finder",
             Kind::WebSearch(_) => "Search",
             Kind::Window(_) => "Apply to Window",
             _ => "Run Command",
@@ -4975,6 +5037,12 @@ impl App {
                 let i = *i;
                 self.cancel_timer(i);
             }
+            // the editor comes in P3: until then a recording is shown in Finder
+            Kind::Recording(p) => {
+                let _ = apps::reveal(p);
+                self.hide();
+                self.reset_to_root();
+            }
         }
     }
 
@@ -5186,8 +5254,7 @@ impl App {
 
     /// Capture commands are listed only where capture works (S1, S3).
     fn capture_hidden(&self, b: Builtin) -> bool {
-        crate::capture_ctl::CaptureKind::from_command_id(&b.id()).is_some()
-            && self.capture.availability != crate::capture_ctl::Availability::Available
+        crate::record_ctl::is_gated_command(&b.id()) && self.capture.availability != crate::capture_ctl::Availability::Available
     }
 
     /// Says `msg` where the user is looking: a toast in the launcher, else a notification.
@@ -5322,6 +5389,11 @@ impl App {
         match (flow, o) {
             (_, Outcome::Cancelled | Outcome::Saved(_)) => {}
             (Flow::Capture(_), o) => self.finish_capture(o),
+            (Flow::Record(_), Outcome::PermissionDenied) => {
+                self.capture_say(crate::capture_ctl::PERMISSION_TOAST.into());
+                crate::capture_ctl::open_screen_recording_pane();
+            }
+            (Flow::Record(_), Outcome::Failed(e)) => self.capture_say(format!("Recording failed: {e}")),
         }
     }
 
@@ -5359,6 +5431,236 @@ impl App {
                 let cursor = self.settings.capture.include_cursor;
                 std::thread::spawn(move || bus.send(Msg::Capture(shoot(&exe, target, &dir, cursor, log))));
             }
+            Flow::Record(kind) => {
+                let Plan::Shoot(target) = capture_plan(kind.capture_kind(), selection, pointer, &shareable) else { return };
+                let display = crate::record_ctl::display_frame_for(&target, &shareable);
+                self.rt.gen += 1;
+                self.rt.pending = Some(crate::record_ctl::Pending { target, display });
+                let effect = self.record.begin(self.settings.capture.countdown);
+                self.perform_record(effect);
+            }
+        }
+    }
+
+    fn recordings_dir(&self) -> PathBuf {
+        self.settings.capture.recordings_dir(&dirs::home_dir().unwrap_or_default())
+    }
+
+    fn reload_recordings(&mut self) {
+        self.rt.recordings = crate::record_ctl::scan(&self.recordings_dir());
+        self.invalidate_sections();
+    }
+
+    /// Open Last Recording: the editor comes in P3, so for now the newest project is shown in Finder.
+    fn open_last_recording(&mut self) {
+        if !self.capture_gate() {
+            return;
+        }
+        match crate::record_ctl::newest(&self.recordings_dir()) {
+            Some(p) => {
+                let _ = apps::reveal(&p);
+                let name = p.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                self.hide();
+                self.reset_to_root();
+                self.capture_say(format!("Showing {name} in Finder. {}", crate::record_ctl::NO_EDITOR_NOTE));
+            }
+            None => self.capture_say("No recordings yet".into()),
+        }
+    }
+
+    /// Record Screen / Area / Window: list what exists off the main thread, pick the target with
+    /// the non-blocking overlay, then run the countdown (`capture_selected` -> `perform_record`).
+    fn run_record(&mut self, kind: crate::record_ctl::RecordKind) {
+        if !self.capture_gate() {
+            return;
+        }
+        if matches!(self.record.phase(), crate::record_ctl::Phase::Countdown(_)) {
+            // the command again while the numerals run cancels the start
+            let effect = self.record.request_stop();
+            return self.perform_record(effect);
+        }
+        if !self.record.is_idle() {
+            self.capture_say("A recording is already running. Stop it from the menu bar.".into());
+            return;
+        }
+        let flow = crate::capture_ctl::Flow::Record(kind);
+        if !self.claim_selection(flow) {
+            return;
+        }
+        self.hide();
+        self.list_for(flow);
+    }
+
+    /// Carries out what the recording state machine asked for, then mirrors it in the HUD and tray.
+    pub(crate) fn perform_record(&mut self, effect: crate::record_ctl::Effect) {
+        use crate::record_ctl::{Cmd, Effect, Phase, RecordMsg};
+        use ferrocast_macos::hud;
+        let mtm = objc2::MainThreadMarker::new();
+        match effect {
+            Effect::None => {}
+            Effect::ShowCountdown(n) => {
+                if let Some(mtm) = mtm {
+                    hud::countdown_show(mtm, self.rt.pending.as_ref().and_then(|p| p.display), n);
+                }
+                let (bus, gen) = (self.bus.clone(), self.rt.gen);
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(1));
+                    bus.send(Msg::Record(RecordMsg::CountdownTick(gen)));
+                });
+            }
+            Effect::CancelCountdown => {
+                if let Some(mtm) = mtm {
+                    hud::countdown_hide(mtm);
+                }
+                self.rt.pending = None;
+            }
+            Effect::StartRecording => self.start_recording_now(),
+            Effect::SendPause => self.send_record_cmd(Cmd::Pause),
+            Effect::SendResume => self.send_record_cmd(Cmd::Resume),
+            Effect::SendStop => self.send_record_cmd(Cmd::Stop),
+            Effect::LowDisk(text) => self.capture_say(text),
+            Effect::Ended { error } => {
+                if let Some(mtm) = mtm {
+                    hud::hud_hide(mtm);
+                    hud::countdown_hide(mtm);
+                }
+                self.rt.cmds = None;
+                if let Some(e) = error {
+                    instance::log(&self.store.root, &format!("recording ended: {e}"));
+                }
+            }
+        }
+        if self.record.tray_title().is_some() {
+            hud::hud_update(self.record.elapsed(), self.record.phase() == Phase::Paused);
+        }
+        self.sync_recording_tray();
+    }
+
+    fn send_record_cmd(&mut self, cmd: crate::record_ctl::Cmd) {
+        if let Some(tx) = &self.rt.cmds {
+            let _ = tx.send(cmd);
+        }
+    }
+
+    /// The countdown is over: create the project folder, show the HUD, then start the helper on its
+    /// own thread. The exclusion ids are read after the panels are on screen and before `record.start`.
+    fn start_recording_now(&mut self) {
+        use crate::record_ctl::{discard_unfinished, project_name, RecordMsg, Session};
+        use ferrocast_core::capture::project::{project_dir_name, Project};
+        let (Some(mtm), Some(pending)) = (objc2::MainThreadMarker::new(), self.rt.pending.take()) else {
+            let effect = self.record.on_stopped();
+            return self.perform_record(effect);
+        };
+        let dir = self.recordings_dir();
+        let now = chrono::Local::now();
+        let name = project_name(now.naive_local());
+        let project = dir.join(project_dir_name(&name, |f| dir.join(f).exists()));
+        let created = now.with_timezone(&chrono::Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        if let Err(e) = Project::create(&project, &name, &created) {
+            discard_unfinished(&project);
+            let effect = self.record.on_stopped();
+            self.perform_record(effect);
+            return self.capture_say(format!("Recording failed: cannot create the project folder: {e}"));
+        }
+        let (pause_bus, stop_bus) = (self.bus.clone(), self.bus.clone());
+        ferrocast_macos::hud::hud_show(
+            mtm,
+            pending.display,
+            Box::new(move || pause_bus.send(Msg::Record(RecordMsg::TogglePause))),
+            Box::new(move || stop_bus.send(Msg::Record(RecordMsg::Stop))),
+        );
+        let excludes = ferrocast_macos::hud::excluded_window_ids();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.rt.cmds = Some(tx);
+        self.rt.project = Some(project.clone());
+        let session = Session {
+            exe: self.capture.exe.clone(),
+            project,
+            target: pending.target,
+            fps: self.settings.capture.fps,
+            // the editor draws its own cursor from events.json: the video stays cursor-free
+            cursor: false,
+            excludes,
+            gen: self.rt.gen,
+        };
+        let root = self.store.root.clone();
+        let bus = self.bus.clone();
+        std::thread::spawn(move || crate::record_ctl::run_session(session, rx, bus, move |m| instance::log(&root, m)));
+    }
+
+    /// Everything the session thread, the HUD and the countdown timer report.
+    pub(crate) fn handle_record(&mut self, m: crate::record_ctl::RecordMsg) {
+        use crate::record_ctl::{discard_unfinished, saved_toast, warn_toast, RecordMsg, StartFailure};
+        use ferrocast_core::capture::protocol::RecordEvent;
+        let current = |g: u64, rt: &crate::record_ctl::Runtime| g == rt.gen;
+        match m {
+            RecordMsg::CountdownTick(g) if current(g, &self.rt) => {
+                let effect = self.record.tick_countdown();
+                self.perform_record(effect);
+            }
+            RecordMsg::TogglePause => {
+                let effect = self.record.toggle_pause();
+                self.perform_record(effect);
+            }
+            RecordMsg::Stop => {
+                let effect = self.record.request_stop();
+                self.perform_record(effect);
+            }
+            RecordMsg::Started(g, result) if current(g, &self.rt) => {
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    // the numerals were excluded from the recording; now they can go
+                    ferrocast_macos::hud::countdown_hide(mtm);
+                }
+                if let Err(failure) = result {
+                    if let Some(p) = self.rt.project.take() {
+                        discard_unfinished(&p);
+                    }
+                    let effect = self.record.on_stopped();
+                    self.perform_record(effect);
+                    match failure {
+                        StartFailure::Permission => {
+                            self.capture_say(crate::capture_ctl::PERMISSION_TOAST.into());
+                            crate::capture_ctl::open_screen_recording_pane();
+                        }
+                        StartFailure::Message(text) => self.capture_say(text),
+                    }
+                }
+            }
+            RecordMsg::Event(g, ev) if current(g, &self.rt) => {
+                if let RecordEvent::Warn { code, .. } = &ev {
+                    if let Some(text) = warn_toast(code) {
+                        self.capture_say(text.into());
+                    }
+                }
+                let effect = self.record.on_event(&ev);
+                self.perform_record(effect);
+            }
+            RecordMsg::Finished(g, result) => {
+                if current(g, &self.rt) {
+                    // a helper that vanished sends no `stopped` event: end the state machine here
+                    let effect = self.record.on_stopped();
+                    self.perform_record(effect);
+                }
+                match result {
+                    Ok(saved) => {
+                        let name = saved.project.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                        let low = self.record.stopped_for_low_disk();
+                        let text = saved_toast(&name, saved.duration, saved.interrupted, saved.message.as_deref(), low);
+                        // the editor comes in P3: until then the finished project is shown in Finder
+                        if !cfg!(test) {
+                            let _ = apps::reveal(&saved.project);
+                        }
+                        self.capture_say(text);
+                    }
+                    Err(e) => {
+                        if let Some(p) = self.rt.project.take() {
+                            discard_unfinished(&p);
+                        }
+                        self.capture_say(format!("Recording failed: {e}"));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -5551,6 +5853,16 @@ impl App {
             Builtin::CaptureWindow => self.run_capture(crate::capture_ctl::CaptureKind::Window),
             Builtin::CaptureScreen => self.run_capture(crate::capture_ctl::CaptureKind::Screen),
             Builtin::CaptureScrolling => self.run_capture_scrolling(),
+            Builtin::RecordScreen => self.run_record(crate::record_ctl::RecordKind::Screen),
+            Builtin::RecordArea => self.run_record(crate::record_ctl::RecordKind::Area),
+            Builtin::RecordWindow => self.run_record(crate::record_ctl::RecordKind::Window),
+            Builtin::OpenLastRecording => self.open_last_recording(),
+            Builtin::Recordings => {
+                if self.capture_gate() {
+                    self.reload_recordings();
+                    self.push(View::Recordings);
+                }
+            }
         }
     }
 
@@ -6417,6 +6729,9 @@ impl App {
                     Err(e) => self.toast(format!("Trash failed: {e}")),
                 }
                 self.files.1.retain(|f| f != &p);
+                if self.stack.iter().any(|v| matches!(v, View::Recordings)) {
+                    self.reload_recordings();
+                }
             }
             Act::EditScript(p) => {
                 let _ = std::process::Command::new("/usr/bin/open").arg("-t").arg(&p).status();

@@ -51,6 +51,9 @@ fn fixture() -> App {
         selection: Default::default(),
         finder: services::FinderEnterState { hooks: inert_finder_hooks(), ..Default::default() },
         _tray: None,
+        record: Default::default(),
+        tray_rec_shown: false,
+        rt: Default::default(),
         notes_tray: None,
         icons: IconCache::new(store.images_dir()),
         stack: vec![View::Root],
@@ -6441,6 +6444,26 @@ fn tray_menu_has_check_for_updates_before_the_separator() {
 }
 
 #[test]
+fn tray_menu_offers_stop_recording_first_only_while_recording() {
+    assert_eq!(services::tray_menu_items(false), services::tray_items().to_vec());
+    let rec = services::tray_menu_items(true);
+    assert_eq!(rec[0], ("stop_recording", "Stop Recording"));
+    assert_eq!(rec[1..], services::tray_items());
+}
+
+#[test]
+fn the_tray_stop_recording_item_requests_a_stop_only_while_recording() {
+    let mut app = fixture();
+    app.bus.send(Msg::Tray("stop_recording".into()));
+    app.drain();
+    assert!(app.record.is_idle(), "nothing to stop");
+    app.record.begin(0);
+    app.bus.send(Msg::Tray("stop_recording".into()));
+    app.drain();
+    assert_eq!(app.record.phase(), crate::record_ctl::Phase::Stopping);
+}
+
+#[test]
 fn check_now_entry_point_toasts_and_requests_a_manual_check() {
     let mut app = fixture();
     let exe = std::path::PathBuf::from("/Applications/Ferrocast.app/Contents/MacOS/ferrocast");
@@ -11223,7 +11246,7 @@ fn saved_capture_with_after_show_opens_the_capture_window() {
 // ---- T9: Settings → Capture tab
 
 /// Titles of the Capture tab rows, in drawing order.
-const CAPTURE_TAB_TITLES: [&str; 10] = [
+const CAPTURE_TAB_TITLES: [&str; 13] = [
     "Capture folder",
     "Format",
     "After capture",
@@ -11234,6 +11257,9 @@ const CAPTURE_TAB_TITLES: [&str; 10] = [
     "Capture Window shortcut",
     "Capture Screen shortcut",
     "Capture Scrolling shortcut",
+    "Record Screen shortcut",
+    "Record Area shortcut",
+    "Record Window shortcut",
 ];
 
 #[test]
@@ -11271,6 +11297,9 @@ fn capture_settings_are_found_by_the_settings_search() {
         ("window shortcut", "Capture Window shortcut"),
         ("screenshot hotkey", "Capture Screen shortcut"),
         ("long screenshot", "Capture Scrolling shortcut"),
+        ("record screen", "Record Screen shortcut"),
+        ("record area", "Record Area shortcut"),
+        ("video hotkey", "Record Window shortcut"),
     ] {
         assert!(search(q).iter().any(|e| e.tab == CAPTURE_TAB && e.title == title), "{q:?} finds {title:?}");
     }
@@ -11330,7 +11359,15 @@ fn capture_shortcut_rows_follow_the_builtin_ids_and_have_no_default() {
     use crate::items::Builtin;
     assert_eq!(
         CAPTURE_SHORTCUTS.map(|(_, b)| b.id()),
-        [Builtin::CaptureArea.id(), Builtin::CaptureWindow.id(), Builtin::CaptureScreen.id(), Builtin::CaptureScrolling.id()]
+        [
+            Builtin::CaptureArea.id(),
+            Builtin::CaptureWindow.id(),
+            Builtin::CaptureScreen.id(),
+            Builtin::CaptureScrolling.id(),
+            Builtin::RecordScreen.id(),
+            Builtin::RecordArea.id(),
+            Builtin::RecordWindow.id(),
+        ]
     );
     let s = Settings::default();
     for (_, b) in CAPTURE_SHORTCUTS {
@@ -11348,7 +11385,7 @@ fn capture_shortcut_record_opens_the_hotkey_view_for_that_command() {
         render(app, vec![]);
         let mut v: Vec<Rect> = sd5_hits(app).into_iter().filter(|h| h.0 == "small_btn").map(|h| h.2).collect();
         v.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
-        assert_eq!(v.len(), 4, "a Record… button per shortcut");
+        assert_eq!(v.len(), 7, "a Record… button per shortcut");
         Some(v[1].center())
     })
     .expect("reachable");
@@ -11368,19 +11405,70 @@ fn capture_shortcut_record_opens_the_hotkey_view_for_that_command() {
     }
 }
 
-// ---- live bug: the selection is non-blocking, one flow at a time ----
+// ---- T19: recording commands, the flow's reactions and the Recordings browser ----
+
+fn record_ids(app: &App) -> Vec<String> {
+    app.base.iter().filter(|i| i.id.starts_with("builtin:record") || i.id == "builtin:open-last-recording").map(|i| i.id.clone()).collect()
+}
+
+#[test]
+fn record_commands_are_listed_with_the_capture_gating_and_subtitle() {
+    use crate::capture_ctl::{Availability, CaptureState};
+    let mut app = fixture();
+    app.rebuild();
+    let mut ids = record_ids(&app);
+    ids.sort();
+    assert_eq!(
+        ids,
+        ["builtin:open-last-recording", "builtin:record-area", "builtin:record-screen", "builtin:record-window", "builtin:recordings"]
+    );
+    for (id, title) in [
+        ("builtin:record-screen", "Record Screen"),
+        ("builtin:record-area", "Record Area"),
+        ("builtin:record-window", "Record Window"),
+        ("builtin:open-last-recording", "Open Last Recording"),
+        ("builtin:recordings", "Recordings"),
+    ] {
+        let item = app.base.iter().find(|i| i.id == id).unwrap_or_else(|| panic!("{id}"));
+        assert_eq!((item.title.as_str(), item.subtitle.as_str(), item.is_command()), (title, "Capture", true));
+    }
+    for availability in [Availability::NeedsMacOs14(13), Availability::NoHelper] {
+        app.capture = CaptureState::with(std::path::PathBuf::new(), availability);
+        app.rebuild();
+        assert!(record_ids(&app).is_empty(), "{availability:?}");
+    }
+}
+
+#[test]
+fn a_second_recording_is_refused_while_one_runs() {
+    use crate::record_ctl::{Phase, RecordKind};
+    let mut app = fixture();
+    app.visible = true;
+    app.record.begin(0);
+    app.run_record(RecordKind::Screen);
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("A recording is already running. Stop it from the menu bar."));
+    assert_eq!(app.record.phase(), Phase::Recording, "the running recording is untouched");
+    assert!(app.visible, "nothing else happened");
+}
+
+// ---- live bug #1: the selection is non-blocking, one flow at a time ----
 
 #[test]
 fn a_second_capture_command_while_a_selection_is_pending_is_refused() {
     use crate::capture_ctl::{CaptureKind, Flow, SELECTION_BUSY};
+    use crate::record_ctl::RecordKind;
     let mut app = fixture();
     app.visible = true;
     let first = Flow::Capture(CaptureKind::Area);
     app.selection.begin(first).unwrap();
     app.run_capture(CaptureKind::Window);
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(SELECTION_BUSY));
+    app.toast = None;
+    app.run_record(RecordKind::Area);
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(SELECTION_BUSY), "also for the recording flow");
     assert!(app.visible, "a refused command does not hide the launcher");
     assert!(app.selection.begin(Flow::Capture(CaptureKind::Screen)).is_err(), "the first flow still owns the slot");
+    assert!(app.record.is_idle(), "no recording was started");
 }
 
 #[test]
@@ -11390,11 +11478,13 @@ fn esc_in_the_overlay_leaves_no_toast_and_frees_the_slot() {
     use ferrocast_macos::selector::Selection;
     let mut app = fixture();
     app.visible = true;
-    for flow in [Flow::Capture(CaptureKind::Area), Flow::Capture(CaptureKind::Scrolling)] {
+    for flow in [Flow::Capture(CaptureKind::Area), Flow::Capture(CaptureKind::Scrolling), Flow::Record(crate::record_ctl::RecordKind::Area)]
+    {
         app.selection.begin(flow).unwrap();
         assert!(app.selection.listed(flow));
         app.capture_selected(flow, Some(Selection::Cancelled), Shareable::default());
         assert!(app.toast.is_none(), "{flow:?}: Esc says nothing");
+        assert!(app.record.is_idle(), "{flow:?}: nothing was started");
         assert!(app.selection.begin(flow).is_ok(), "{flow:?}: the slot is free again");
         app.selection.cancel();
     }
@@ -11417,6 +11507,7 @@ fn a_selection_that_arrives_after_the_flow_was_cancelled_is_ignored() {
 #[test]
 fn a_listing_that_fails_clears_the_slot_and_says_why() {
     use crate::capture_ctl::{CaptureKind, Flow, Outcome};
+    use crate::record_ctl::RecordKind;
     let mut app = fixture();
     app.visible = true;
     let cap = Flow::Capture(CaptureKind::Area);
@@ -11426,12 +11517,126 @@ fn a_listing_that_fails_clears_the_slot_and_says_why() {
     assert!(app.selection.begin(cap).is_ok());
     app.selection.cancel();
     app.toast = None;
-    app.selection.begin(cap).unwrap();
-    app.capture_listed(cap, Err(Outcome::PermissionDenied));
+    let rec = Flow::Record(RecordKind::Area);
+    app.selection.begin(rec).unwrap();
+    app.capture_listed(rec, Err(Outcome::PermissionDenied));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(crate::capture_ctl::PERMISSION_TOAST));
     app.toast = None;
-    app.selection.begin(cap).unwrap();
-    app.capture_listed(cap, Err(Outcome::Cancelled));
+    app.selection.begin(rec).unwrap();
+    app.capture_listed(rec, Err(Outcome::Cancelled));
     assert!(app.toast.is_none());
-    assert!(app.selection.begin(cap).is_ok(), "cancelled also frees the slot");
+    assert!(app.selection.begin(rec).is_ok(), "cancelled also frees the slot");
+}
+
+#[test]
+fn the_record_command_during_the_countdown_cancels_the_start() {
+    use crate::record_ctl::{Phase, RecordKind};
+    let mut app = fixture();
+    app.record.begin(3);
+    app.run_record(RecordKind::Area);
+    assert_eq!(app.record.phase(), Phase::Idle);
+}
+
+#[test]
+fn hud_and_tray_stop_send_record_stop_to_the_session() {
+    use crate::record_ctl::{Cmd, Phase, RecordMsg};
+    let mut app = fixture();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.rt.cmds = Some(tx);
+    app.record.begin(0);
+    app.handle_record(RecordMsg::TogglePause);
+    assert_eq!((app.record.phase(), rx.try_recv().ok()), (Phase::Paused, Some(Cmd::Pause)));
+    app.handle_record(RecordMsg::TogglePause);
+    assert_eq!((app.record.phase(), rx.try_recv().ok()), (Phase::Recording, Some(Cmd::Resume)));
+    app.bus.send(Msg::Tray("stop_recording".into()));
+    app.drain();
+    assert_eq!((app.record.phase(), rx.try_recv().ok()), (Phase::Stopping, Some(Cmd::Stop)));
+    app.handle_record(RecordMsg::Stop);
+    assert!(rx.try_recv().is_err(), "a second Stop is not sent twice");
+}
+
+#[test]
+fn helper_events_drive_the_warnings_and_the_disk_guard() {
+    use crate::record_ctl::{Cmd, Phase, RecordMsg};
+    use ferrocast_core::capture::protocol::RecordEvent;
+    let mut app = fixture();
+    app.visible = true;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.rt.cmds = Some(tx);
+    app.rt.gen = 4;
+    app.record.begin(0);
+    let warn = |code: &str, free| RecordEvent::Warn { code: code.into(), message: None, free_bytes: free };
+    app.handle_record(RecordMsg::Event(4, warn("input-monitoring-off", None)));
+    assert_eq!(toast_text(&app), "Keyboard shortcuts will not be shown: Input Monitoring is off.");
+    assert_eq!(app.record.phase(), Phase::Recording, "it records anyway");
+    app.handle_record(RecordMsg::Event(4, warn("low-disk", Some(1_500_000_000))));
+    assert_eq!(toast_text(&app), "Low disk space: 1.5 GB left");
+    assert!(rx.try_recv().is_err());
+    app.handle_record(RecordMsg::Event(3, warn("low-disk", Some(100_000_000))));
+    assert_eq!(app.record.phase(), Phase::Recording, "events of an older session are ignored");
+    app.handle_record(RecordMsg::Event(4, warn("low-disk", Some(100_000_000))));
+    assert_eq!((app.record.phase(), rx.try_recv().ok()), (Phase::Stopping, Some(Cmd::Stop)));
+}
+
+#[test]
+fn a_denied_start_shows_the_s4_toast_and_leaves_the_recorder_idle() {
+    use crate::record_ctl::{RecordMsg, StartFailure};
+    let mut app = fixture();
+    app.visible = true;
+    app.rt.gen = 2;
+    app.record.begin(0);
+    app.handle_record(RecordMsg::Started(2, Err(StartFailure::Permission)));
+    assert!(app.record.is_idle());
+    assert_eq!(
+        toast_text(&app),
+        "Screen Recording is off for Ferrocast. Turn it on in System Settings → Privacy & Security → Screen & System Audio Recording, then try again."
+    );
+    app.record.begin(0);
+    app.handle_record(RecordMsg::Started(2, Err(StartFailure::Message("Recording failed: boom".into()))));
+    assert!(app.record.is_idle());
+    assert_eq!(toast_text(&app), "Recording failed: boom");
+}
+
+#[test]
+fn a_finished_recording_ends_the_flow_and_says_how_long_it_was() {
+    use crate::record_ctl::{RecordMsg, Saved};
+    let mut app = fixture();
+    app.visible = true;
+    app.rt.gen = 1;
+    app.record.begin(0);
+    let saved = Saved { project: "/r/Recording 1.ferrocast".into(), duration: 65.4, interrupted: false, message: None };
+    app.handle_record(RecordMsg::Finished(1, Ok(saved)));
+    assert!(app.record.is_idle(), "a helper that sent no stopped event still ends the flow");
+    assert_eq!(toast_text(&app), "Recording saved: Recording 1 (1:05)");
+    app.handle_record(RecordMsg::Finished(1, Err("writer failed".into())));
+    assert_eq!(toast_text(&app), "Recording failed: writer failed");
+}
+
+#[test]
+fn the_recordings_browser_lists_newest_first_with_reveal_and_trash() {
+    use crate::record_ctl::RecordingEntry;
+    let mut app = fixture();
+    let entry = |name: &str, created| RecordingEntry {
+        path: format!("/r/{name}.ferrocast").into(),
+        name: name.into(),
+        duration: Some(65.0),
+        bytes: 48_000_000,
+        created,
+    };
+    app.rt.recordings = vec![entry("New", 1_800_000_000), entry("Old", 1_700_000_000)];
+    app.stack.push(View::Recordings);
+    let sections = app.sections();
+    let items: Vec<_> = sections.iter().flat_map(|s| s.items.iter()).collect();
+    assert_eq!(items.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(), ["New", "Old"]);
+    assert_eq!(items[0].subtitle, "1:05 · 48 MB");
+    assert!(!items[0].accessory.is_empty(), "the date");
+    let actions = app.actions_for(items[0]);
+    assert_eq!(actions[0].title, "Show in Finder");
+    let trash = actions.iter().find(|a| a.title == "Move to Trash").expect("trash");
+    assert!(trash.destructive);
+    assert_eq!(trash.shortcut, Some((crate::items::CMD, egui::Key::Backspace)));
+    assert_eq!(app.primary_label(items[0]), "Show in Finder");
+    app.query = "old".into();
+    let titles: Vec<String> = app.sections().iter().flat_map(|s| s.items.iter().map(|i| i.title.clone())).collect();
+    assert_eq!(titles, ["Old"]);
 }

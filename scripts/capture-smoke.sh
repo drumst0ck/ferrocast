@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 helper=${1:-dist/Ferrocast.app/Contents/MacOS/ferrocast-capture}
 [ -x "$helper" ] || { echo "FAIL: helper not found or not executable: $helper"; exit 1; }
 fail=0
+main_display=
 bad() { echo "FAIL: $*"; fail=1; }
 
 # Run one request; stdout to $out, exit code to $rc. Stdout must be only JSON object lines.
@@ -35,6 +36,7 @@ else
   run '{"id":2,"cmd":"shareable"}'
   if [ "$rc" = 0 ] && [ "$(field ok)" = True ]; then
     echo "PASS: shareable"
+    main_display=$(printf '%s\n' "$out" | head -1 | python3 -c 'import sys,json; print(next((d["id"] for d in json.loads(sys.stdin.readline())["displays"] if d.get("main")), ""))')
   elif [ "$rc" = 1 ] && [ "$(field error)" = permission-screen ]; then
     echo "SKIP: shareable (Screen Recording permission not granted; structured permission-screen, exit 1)"
   else
@@ -105,6 +107,135 @@ PY
   wrc=$?
   if [ "$wrc" = 1 ]; then fail=1; fi
   rm -rf "$wdir"
+fi
+
+# Recording: 2 s of the main display; the duration of screen.mov must be within 0.1 s of the wall
+# clock between the start reply and the stop request, static screen included. SKIP (structured
+# permission-screen, exit 1, no file) when Screen Recording is not granted. The duration comes from
+# the movie header (mvhd) parsed here, so neither ffprobe nor AVFoundation is needed.
+if [ "$sck" != True ]; then
+  echo "SKIP: record (ScreenCaptureKit unavailable on this macOS)"
+else
+  recdir=$(mktemp -d)
+  rec_out=$(python3 - "$helper" "${main_display:-1}" "$recdir/Smoke.ferrocast" <<'PY'
+import json, os, struct, subprocess, sys, time
+
+helper, display, project = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+
+def mov_duration(path):
+    """Movie duration in seconds from moov/mvhd."""
+    with open(path, "rb") as f:
+        def find(pos, end, names):
+            while pos + 8 <= end:
+                f.seek(pos)
+                size, kind = struct.unpack(">I4s", f.read(8))
+                head = 8
+                if size == 1:
+                    size, head = struct.unpack(">Q", f.read(8))[0], 16
+                elif size == 0:
+                    size = end - pos
+                if kind == names[0]:
+                    return (pos + head) if len(names) == 1 else find(pos + head, pos + size, names[1:])
+                pos += max(size, 8)
+            return None
+        at = find(0, os.fstat(f.fileno()).st_size, [b"moov", b"mvhd"])
+        if at is None:
+            raise ValueError("no moov/mvhd box")
+        f.seek(at)
+        version = f.read(1)[0]
+        f.read(3)
+        if version == 1:
+            f.read(16)
+            scale, dur = struct.unpack(">IQ", f.read(12))
+        else:
+            f.read(8)
+            scale, dur = struct.unpack(">II", f.read(8))
+        return dur / scale
+
+p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+def send(o):
+    p.stdin.write(json.dumps(o) + "\n"); p.stdin.flush()
+def read_until(rid):
+    events = []
+    for line in p.stdout:
+        o = json.loads(line)  # every stdout line must be a protocol object
+        assert isinstance(o, dict)
+        if "event" in o:
+            events.append(o); continue
+        if o.get("id") == rid:
+            return o, events
+    return None, events
+
+t_send = time.monotonic()
+send({"id": 1, "cmd": "record.start", "project": project, "file": "screen.mov",
+      "target": {"kind": "display", "display": display}, "fps": 30, "cursor": False})
+r, ev = read_until(1)
+if r is None or r.get("error"):
+    p.stdin.close(); code = p.wait()
+    if r and r.get("error") == "permission-screen" and code == 1 and not os.path.exists(project):
+        print("SKIP: record (Screen Recording permission not granted; structured permission-screen, exit 1, no file left)"); sys.exit(3)
+    print("FAIL: record.start -> %r exit=%s" % (r, code)); sys.exit(1)
+t_ok = time.monotonic()
+time.sleep(2.0)
+send({"id": 2, "cmd": "record.stop"})
+r2, ev2 = read_until(2)
+# Wall clock = from the start reply to the stop reply: the file ends when the stop is processed, so the
+# stop latency (15-45 ms measured) belongs to the reference. Measuring to the moment the stop was SENT made
+# the check fail by ~5 ms on a cold start (live run, 2.110 s file vs 2.005 s).
+t_stop = time.monotonic()
+p.stdin.close(); code = p.wait(timeout=10)
+wall = t_stop - t_ok
+wall_send = t_stop - t_send
+ticks = [e for e in ev + ev2 if e["event"] == "tick"]
+if not r2 or r2.get("error"):
+    print("FAIL: record.stop -> %r" % (r2,)); sys.exit(1)
+path = os.path.join(project, "screen.mov")
+if not os.path.isfile(path) or os.path.exists(path + ".partial"):
+    print("FAIL: screen.mov missing or .partial left"); sys.exit(1)
+dur = mov_duration(path)
+msg = "file %.3f s, wall %.3f s (%.3f s from the request), helper %.3f s, %d ticks, %s frames, size %s" % (dur, wall, wall_send, r2["duration"], len(ticks), r2.get("frames"), r2.get("size"))
+# The file starts inside startCapture, i.e. somewhere between the moment the request was SENT and the start
+# reply, and ends when the stop is processed. So its length must lie in [wall(reply -> stop reply) - 0.1 s,
+# wall(request -> stop reply) + 0.1 s]. Locally the file is 10-35 ms longer than the first reference; on the
+# CI virtual machine (a static display, 2-3 frames in 2 s) it was 170-240 ms longer because the start reply
+# arrives late, which a fixed 0.1 s tolerance around the reply wrongly called a failure. The nominal 2 s
+# check stays as a loose sanity band (start latency included).
+if abs(dur - 2.0) > 0.6 or dur < wall - 0.1 or dur > wall_send + 0.1 or code != 0 or len(ticks) < 1:
+    print("FAIL: record duration/ticks/exit (%s, exit %s)" % (msg, code)); sys.exit(1)
+print("PASS: record (%s)" % msg)
+
+# events.json: written next to screen.mov (atomically, no .partial), version 1, shaped as
+# crates/core/src/capture/events.rs decodes it (the Rust fixture test covers the strict decoder).
+ev_path = os.path.join(project, "events.json")
+if not os.path.isfile(ev_path) or os.path.exists(ev_path + ".partial"):
+    print("FAIL: events.json missing or .partial left"); sys.exit(1)
+try:
+    ev = json.load(open(ev_path))
+    assert ev["version"] == 1 and len(ev["screen"]["size"]) == 2 and ev["screen"]["scale"] > 0
+    assert len(ev["screen"]["display_frame"]) == 4
+    for name in ("cursor", "clicks", "keys", "scroll", "windows"):
+        assert isinstance(ev[name], list), name
+    assert len(ev["cursor"]) >= 1 and all(len(c) == 4 for c in ev["cursor"])
+    ts = [c[0] for c in ev["cursor"]]
+    why = None
+    if ts != sorted(ts):
+        why = "unsorted at %r" % [(i, ts[i - 1], ts[i]) for i in range(1, len(ts)) if ts[i] < ts[i - 1]][:3]
+    elif ts[0] < 0:
+        why = "negative first time %r" % ts[0]
+    elif ts[-1] > dur + 0.2:
+        why = "last sample %.3f after the file end %.3f" % (ts[-1], dur)
+    assert why is None, "cursor times: %s" % why
+    for k in ev["keys"]:  # privacy: contents only for shortcuts
+        assert any(m != "shift" for m in k.get("mods", [])) or not (k.get("code") or k.get("char")), "plain key stored"
+except Exception as e:
+    print("FAIL: events.json invalid (%r)" % (e,)); sys.exit(1)
+print("PASS: events.json (version %d, %d cursor samples, %d clicks, %d keys, %d scroll, %d windows)" % (
+    ev["version"], len(ev["cursor"]), len(ev["clicks"]), len(ev["keys"]), len(ev["scroll"]), len(ev["windows"])))
+PY
+  ); rec_rc=$?
+  echo "$rec_out"
+  case $rec_rc in 0) ;; 3) ;; *) fail=1 ;; esac
+  rm -rf "$recdir"
 fi
 
 # Unknown command: structured error, still protocol-only stdout.

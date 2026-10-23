@@ -11,6 +11,7 @@ mod media_tools_tests;
 mod notes_ctl;
 mod notion_io;
 mod perf;
+mod record_ctl;
 mod route;
 mod secrets;
 mod services;

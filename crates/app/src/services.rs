@@ -217,6 +217,8 @@ pub enum Msg {
     CaptureScroll(crate::capture_ctl::Outcome, Option<String>),
     /// Copy Text finished: text for the clipboard (None: leave it) and the toast.
     OcrDone(Option<String>, String),
+    /// Recording flow: countdown ticks, HUD buttons, helper events (see `record_ctl`).
+    Record(crate::record_ctl::RecordMsg),
 }
 
 /// What the Obsidian scan found.
@@ -921,17 +923,72 @@ pub fn tray_items() -> [(&'static str, &'static str); 4] {
     [("open", "Open Ferrocast"), ("clipboard", "Clipboard History"), ("settings", "Settings…"), ("check_updates", "Check for Updates…")]
 }
 
-pub fn make_tray(bus: Bus) -> Option<tray_icon::TrayIcon> {
-    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+/// Tray entries above the separator: `Stop Recording` leads while a recording runs.
+pub fn tray_menu_items(recording: bool) -> Vec<(&'static str, &'static str)> {
+    let mut items = Vec::new();
+    if recording {
+        items.push(("stop_recording", "Stop Recording"));
+    }
+    items.extend(tray_items());
+    items
+}
+
+fn build_tray_menu(recording: bool) -> Option<tray_icon::menu::Menu> {
+    use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
     let menu = Menu::new();
-    for (id, label) in tray_items() {
+    for (id, label) in tray_menu_items(recording) {
         menu.append(&MenuItem::with_id(id, label, true, None)).ok()?;
     }
     menu.append(&PredefinedMenuItem::separator()).ok()?;
     menu.append(&MenuItem::with_id("quit", "Quit Ferrocast", true, None)).ok()?;
-    MenuEvent::set_event_handler(Some(move |e: MenuEvent| bus.send(Msg::Tray(e.id.0.clone()))));
+    Some(menu)
+}
 
-    // 32x32 ring template icon
+/// Filled red disc, drawn as a coloured (non-template) icon while recording.
+fn recording_icon_rgba(n: usize) -> Vec<u8> {
+    let mut rgba = vec![0u8; n * n * 4];
+    let c = (n as f32 - 1.0) / 2.0;
+    for y in 0..n {
+        for x in 0..n {
+            let (dx, dy) = (x as f32 - c, y as f32 - c);
+            if (dx * dx + dy * dy).sqrt() < n as f32 * 0.3 {
+                let i = (y * n + x) * 4;
+                rgba[i..i + 4].copy_from_slice(&[255, 59, 48, 255]);
+            }
+        }
+    }
+    rgba
+}
+
+/// Put the tray in (or take it out of) the recording state: the `●  mm:ss` title, the red-dot icon
+/// and the `Stop Recording` item. `title: None` restores the normal ring icon and menu. The menu
+/// and icon are only swapped when `shown` changes (replacing an open menu would close it); the
+/// title is refreshed on every call. Main thread only.
+pub fn set_tray_recording(tray: &tray_icon::TrayIcon, title: Option<&str>, stop_item: bool, shown: &mut bool) {
+    tray.set_title(title);
+    if stop_item == *shown {
+        return;
+    }
+    if let Some(menu) = build_tray_menu(stop_item) {
+        tray.set_menu(Some(Box::new(menu)));
+    }
+    let rgba = if stop_item { recording_icon_rgba(32) } else { ring_icon_rgba() };
+    if let Ok(icon) = tray_icon::Icon::from_rgba(rgba, 32, 32) {
+        let _ = if stop_item { tray.set_icon(Some(icon)) } else { tray.set_icon_templated(Some(icon)) };
+    }
+    *shown = stop_item;
+}
+
+pub fn make_tray(bus: Bus) -> Option<tray_icon::TrayIcon> {
+    use tray_icon::menu::MenuEvent;
+    let menu = build_tray_menu(false)?;
+    MenuEvent::set_event_handler(Some(move |e: MenuEvent| bus.send(Msg::Tray(e.id.0.clone()))));
+    let icon = tray_icon::Icon::from_rgba(ring_icon_rgba(), 32, 32).ok()?;
+    tray_icon::TrayIconBuilder::new().with_menu(Box::new(menu)).with_icon_templated(icon).with_tooltip("Ferrocast").build().ok()
+}
+
+/// 32x32 ring template icon.
+fn ring_icon_rgba() -> Vec<u8> {
     let n = 32usize;
     let mut rgba = vec![0u8; n * n * 4];
     for y in 0..n {
@@ -947,8 +1004,7 @@ pub fn make_tray(bus: Bus) -> Option<tray_icon::TrayIcon> {
             }
         }
     }
-    let icon = tray_icon::Icon::from_rgba(rgba, n as u32, n as u32).ok()?;
-    tray_icon::TrayIconBuilder::new().with_menu(Box::new(menu)).with_icon_templated(icon).with_tooltip("Ferrocast").build().ok()
+    rgba
 }
 
 /// The Notes toggle in the menu bar: a second status item, without a menu, whose click toggles the

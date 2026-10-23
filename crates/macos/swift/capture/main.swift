@@ -11,6 +11,22 @@ setvbuf(stdout, nil, _IOLBF, 0)
 // process that never touched CoreGraphics aborts with `CGS_REQUIRE_INIT` (seen live: Capture Window saved
 // nothing and the helper logged the assertion). Window recording uses the same filter.
 _ = CGMainDisplayID()
+// A closed pipe must not kill the helper while it is finishing a recording.
+signal(SIGPIPE, SIG_IGN)
+
+// SIGTERM / SIGINT: finish an active recording (playable file), then exit. The main thread is
+// blocked reading stdin, so the handlers run on a global queue.
+var signalSources: [DispatchSourceSignal] = []
+for sig in [SIGTERM, SIGINT] {
+    signal(sig, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: sig, queue: .global())
+    source.setEventHandler {
+        shutdownRecorder()
+        exit(0)
+    }
+    source.resume()
+    signalSources.append(source)
+}
 
 func sckAvailable() -> Bool {
     if #available(macOS 14, *) { return true }
@@ -26,7 +42,7 @@ func handle(_ req: [String: Any]) {
     if cmd == "hello" {
         reply(id, ["protocol": protocolVersion, "os": osVersionString(), "version": helperVersion,
                    "sck": sckAvailable(), "metal": MTLCreateSystemDefaultDevice() != nil,
-                   "capabilities": sckAvailable() ? ["shareable", "screenshot"] : []])
+                   "capabilities": sckAvailable() ? ["shareable", "screenshot", "record"] : []])
         return
     }
     guard #available(macOS 14, *) else {
@@ -36,6 +52,8 @@ func handle(_ req: [String: Any]) {
     switch cmd {
     case "shareable": handleShareable(id)
     case "screenshot": handleScreenshot(id, req)
+    case "record.start": handleRecordStart(id, req)
+    case "record.stop", "record.pause", "record.resume": handleRecordControl(id, cmd)
     default: fail(id, "invalid", "unknown command: \(cmd)")
     }
 }
@@ -49,3 +67,6 @@ while let line = readLine(strippingNewline: true) {
     }
     handle(obj)
 }
+
+// stdin closed: the app is gone. Keep a playable recording if one is running.
+shutdownRecorder()

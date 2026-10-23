@@ -11,6 +11,7 @@ pub mod expansion;
 pub mod files;
 pub mod finder_enter;
 pub mod glow;
+pub mod hud;
 pub mod keyboard;
 pub mod language;
 pub mod notes;

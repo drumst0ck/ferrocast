@@ -222,6 +222,7 @@ pub(crate) fn pointer_top_left(mtm: objc2::MainThreadMarker) -> Point {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flow {
     Capture(CaptureKind),
+    Record(crate::record_ctl::RecordKind),
 }
 
 impl Flow {
@@ -229,6 +230,7 @@ impl Flow {
     pub fn capture_kind(self) -> CaptureKind {
         match self {
             Flow::Capture(k) => k,
+            Flow::Record(k) => k.capture_kind(),
         }
     }
 }
@@ -828,14 +830,16 @@ mod tests {
 
     #[test]
     fn one_pending_selection_at_a_time() {
+        use crate::record_ctl::RecordKind;
         let mut p = PendingSelection::default();
         assert!(!p.is_pending());
         assert_eq!(p.begin(Flow::Capture(CaptureKind::Area)), Ok(()));
         assert!(p.is_pending());
         assert_eq!(p.begin(Flow::Capture(CaptureKind::Screen)), Err(()), "a second command while pending is refused");
+        assert_eq!(p.begin(Flow::Record(RecordKind::Area)), Err(()), "also across capture and record");
         assert!(p.is_pending(), "the refused command left the first one alone");
         assert!(p.finish(Flow::Capture(CaptureKind::Area)));
-        assert_eq!(p.begin(Flow::Capture(CaptureKind::Window)), Ok(()), "free again once the first finished");
+        assert_eq!(p.begin(Flow::Record(RecordKind::Area)), Ok(()), "free again once the first finished");
     }
 
     #[test]
@@ -867,9 +871,10 @@ mod tests {
 
     #[test]
     fn a_flow_maps_to_the_capture_kind_that_picks_its_overlay() {
+        use crate::record_ctl::RecordKind;
         assert_eq!(Flow::Capture(CaptureKind::Window).capture_kind(), CaptureKind::Window);
-        assert_eq!(select_mode(Flow::Capture(CaptureKind::Window).capture_kind()), Some(ferrocast_macos::selector::Mode::Window));
-        assert_eq!(select_mode(Flow::Capture(CaptureKind::Screen).capture_kind()), None, "Capture Screen shows no overlay");
+        assert_eq!(select_mode(Flow::Record(RecordKind::Window).capture_kind()), Some(ferrocast_macos::selector::Mode::Window));
+        assert_eq!(select_mode(Flow::Record(RecordKind::Screen).capture_kind()), None, "Record Screen shows no overlay");
     }
 
     #[test]
