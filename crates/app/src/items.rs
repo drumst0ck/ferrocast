@@ -48,6 +48,10 @@ pub enum Builtin {
     SearchNotion,
     AddToNotion,
     AddClipboardToNotion,
+    SearchObsidian,
+    NewObsidianNote,
+    AppendToDailyNote,
+    AddClipboardToDailyNote,
     CreateDictatedNote,
     CreateScript,
     OpenScriptsFolder,
@@ -86,6 +90,10 @@ impl Builtin {
         Builtin::SearchNotion,
         Builtin::AddToNotion,
         Builtin::AddClipboardToNotion,
+        Builtin::SearchObsidian,
+        Builtin::NewObsidianNote,
+        Builtin::AppendToDailyNote,
+        Builtin::AddClipboardToDailyNote,
         Builtin::CreateDictatedNote,
         Builtin::CreateScript,
         Builtin::OpenScriptsFolder,
@@ -124,6 +132,10 @@ impl Builtin {
             Builtin::SearchNotion => "Search Notion",
             Builtin::AddToNotion => "Add to Notion",
             Builtin::AddClipboardToNotion => "Add Clipboard to Notion",
+            Builtin::SearchObsidian => "Search Obsidian",
+            Builtin::NewObsidianNote => "New Obsidian Note",
+            Builtin::AppendToDailyNote => "Append to Daily Note",
+            Builtin::AddClipboardToDailyNote => "Add Clipboard to Daily Note",
             Builtin::CreateDictatedNote => "Create Dictated Note",
             Builtin::CreateScript => "Create Script Command",
             Builtin::OpenScriptsFolder => "Open Script Commands Folder",
@@ -152,6 +164,9 @@ impl Builtin {
             Builtin::Shelf => "Files",
             Builtin::Notes | Builtin::SearchNotes | Builtin::CreateNote | Builtin::CreateDictatedNote => "Notes",
             Builtin::SearchNotion | Builtin::AddToNotion | Builtin::AddClipboardToNotion => "Notion",
+            Builtin::SearchObsidian | Builtin::NewObsidianNote | Builtin::AppendToDailyNote | Builtin::AddClipboardToDailyNote => {
+                "Obsidian"
+            }
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => "Script Commands",
             Builtin::Settings | Builtin::Quit => "Ferrocast",
         }
@@ -181,6 +196,10 @@ impl Builtin {
             Builtin::SearchNotion => ("sf:doc.text.magnifyingglass", [60, 60, 70]),
             Builtin::AddToNotion => ("sf:square.and.pencil", [60, 60, 70]),
             Builtin::AddClipboardToNotion => ("sf:doc.on.clipboard", [60, 60, 70]),
+            Builtin::SearchObsidian => ("sf:doc.text.magnifyingglass", [124, 58, 237]),
+            Builtin::NewObsidianNote => ("sf:square.and.pencil", [124, 58, 237]),
+            Builtin::AppendToDailyNote => ("sf:calendar.badge.plus", [124, 58, 237]),
+            Builtin::AddClipboardToDailyNote => ("sf:doc.on.clipboard", [124, 58, 237]),
             Builtin::CreateScript | Builtin::OpenScriptsFolder | Builtin::ReloadScripts => ("sf:terminal", [60, 60, 70]),
             Builtin::Settings => ("sf:gearshape", [120, 120, 130]),
             Builtin::Quit => ("sf:power", [177, 36, 36]),
@@ -210,6 +229,10 @@ impl Builtin {
             Builtin::ConvertFiles => &["convert", "converter", "format", "png", "jpg", "mp4", "mp3", "pdf", "compress", "zip"],
             Builtin::ConvertFinderSelection => &["finder", "selection", "convert", "wheel", "format"],
             Builtin::SearchNotion => &["notion", "pages", "wiki", "docs", "notes"],
+            Builtin::SearchObsidian => &["obsidian", "vault", "notes", "markdown", "zettelkasten", "second brain"],
+            Builtin::NewObsidianNote => &["obsidian", "new", "note", "create", "capture"],
+            Builtin::AppendToDailyNote => &["obsidian", "daily", "journal", "append", "today"],
+            Builtin::AddClipboardToDailyNote => &["obsidian", "daily", "journal", "clipboard", "append"],
             Builtin::AddToNotion => &["notion", "capture", "save", "note", "clip"],
             Builtin::AddClipboardToNotion => &["notion", "clipboard", "save"],
             Builtin::Notes => &["floating notes", "raycast notes"],
@@ -256,6 +279,10 @@ pub enum Kind {
     NotionLoadMore,
     /// The only row of Search Notion without a token: opens Settings → Integrations.
     NotionConnect,
+    /// A note found by Search Obsidian, by its path relative to the vault.
+    ObsidianNote(String),
+    /// The only row of Search Obsidian without a usable vault: opens Settings → Integrations.
+    ObsidianSetup,
     OpenWindow(WindowInfo),
     Process(ferrocast_macos::process::ProcInfo),
     /// Start a countdown of this many seconds with an optional label.
@@ -308,6 +335,8 @@ pub enum Act {
     NotionTarget(ferrocast_core::notion::NotionItem),
     /// Open the Add to Notion form aimed at this page or database (one time; the stored target stays).
     NotionAddHere(ferrocast_core::notion::NotionItem),
+    /// Open Obsidian's own search (`obsidian://search`) for this query in the chosen vault.
+    ObsidianSearch(String),
     PasteText(String),
     Reveal(PathBuf),
     QuitApp(i32),

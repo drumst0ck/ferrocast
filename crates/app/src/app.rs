@@ -485,11 +485,22 @@ pub enum View {
     },
     Notes,
     NotionSearch,
+    /// Search Obsidian: notes of the chosen vault with a preview pane (state in `App::ov`).
+    ObsidianSearch,
     /// Add to Notion form: optional title, the text, and where it goes (the capture target or a one-off).
     NotionAdd {
         title: String,
         text: String,
         target: ferrocast_core::models::NotionTarget,
+    },
+    /// New Obsidian Note form: optional title and the text.
+    ObsidianNew {
+        title: String,
+        text: String,
+    },
+    /// Append to Daily Note form: only the text.
+    ObsidianDaily {
+        text: String,
     },
     Colors(Rgba),
     SnippetForm {
@@ -610,8 +621,14 @@ impl View {
             | View::Convert(_)
             | View::Notes
             | View::NotionSearch
+            | View::ObsidianSearch
             | View::Colors(_) => Shape::List,
-            View::SnippetForm { .. } | View::QuicklinkForm { .. } | View::NotionAdd { .. } | View::Settings => Shape::Form,
+            View::SnippetForm { .. }
+            | View::QuicklinkForm { .. }
+            | View::NotionAdd { .. }
+            | View::ObsidianNew { .. }
+            | View::ObsidianDaily { .. }
+            | View::Settings => Shape::Form,
             _ => Shape::Single,
         }
     }
@@ -649,7 +666,7 @@ impl View {
                 vec![(primary, "↵"), ("Move", "⌘↑/↓"), BACK]
             }
             View::PdfOrganize { .. } => vec![SAVE, ("Rotate", "R"), ("Remove", "⌫"), BACK],
-            View::NotionAdd { .. } => vec![("Send", "⌘↵"), BACK],
+            View::NotionAdd { .. } | View::ObsidianNew { .. } | View::ObsidianDaily { .. } => vec![("Send", "⌘↵"), BACK],
             View::Settings => vec![("Tabs", "⌘1–9"), ("Find", "⌘F"), BACK],
             _ => vec![],
         }
@@ -692,7 +709,10 @@ impl View {
             View::Convert(_) => "Convert",
             View::Notes => "Search Notes",
             View::NotionSearch => "Search Notion",
+            View::ObsidianSearch => "Search Obsidian",
             View::NotionAdd { .. } => "Add to Notion",
+            View::ObsidianNew { .. } => "New Obsidian Note",
+            View::ObsidianDaily { .. } => "Append to Daily Note",
             View::Colors(_) => "Copy Color as…",
             View::SnippetForm { .. } => "Snippet",
             View::QuicklinkForm { .. } => "Quicklink",
@@ -728,6 +748,7 @@ impl View {
             View::Convert(_) => "Convert to…",
             View::Notes => "Search notes…",
             View::NotionSearch => "Search Notion…",
+            View::ObsidianSearch => "Search your vault…",
             _ => "Filter…",
         }
     }
@@ -805,9 +826,97 @@ pub struct NotionAdd {
     pub schema: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
 }
 
+/// State of the New Obsidian Note / Append to Daily Note commands.
+#[derive(Default)]
+pub struct ObsidianCompose {
+    /// The precondition check of a send is running on a thread.
+    pub sending: bool,
+}
+
+const OBSIDIAN_NO_VAULT: &str = "Choose your Obsidian vault in Settings → Integrations.";
+
+/// Settings → Integrations → Obsidian: what the background scan found (None = still looking).
+#[derive(Default)]
+pub struct ObsidianUi {
+    /// A scan was started this session (the tab starts one the first time it is drawn).
+    pub started: bool,
+    pub scanning: bool,
+    pub vaults: Option<Vec<ferrocast_core::obsidian::Vault>>,
+    /// Vault Obsidian reports as open.
+    pub open: Option<std::path::PathBuf>,
+    pub installed: Option<bool>,
+    /// The folder picker is open (one at a time).
+    pub picking: bool,
+}
+
+/// Status line of the Obsidian app row.
+pub fn obsidian_status(installed: Option<bool>) -> &'static str {
+    match installed {
+        None => "Checking for Obsidian…",
+        Some(true) => "Obsidian is installed",
+        Some(false) => "Obsidian is not installed. Download it from obsidian.md.",
+    }
+}
+
+/// Folder name of a vault path: the name Obsidian and `obsidian://` URIs use.
+fn vault_name(path: &std::path::Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+/// State of the Search Obsidian view. The index cache outlives the view, so reopening shows the last
+/// results at once while a refresh runs; everything else is reset on open.
+#[derive(Default)]
+pub struct ObsidianView {
+    /// The last index and the vault it belongs to.
+    pub cache: Option<(PathBuf, Arc<Vec<ferrocast_core::obsidian::NoteEntry>>)>,
+    /// The vault whose folder was not found by the last index.
+    pub missing: Option<PathBuf>,
+    /// Vault the newest index request was made for (None: ask again on the next tick).
+    pub requested_for: Option<PathBuf>,
+    pub indexing: bool,
+    /// Id of the newest index request; older answers are dropped.
+    pub index_request: u64,
+    /// Content hits (relative paths) for the query they answer.
+    pub content: Option<(String, Vec<String>)>,
+    pub content_request: u64,
+    /// Trimmed query of the newest content scan.
+    pub content_asked: Option<String>,
+    /// Latest typed query and the egui time it last changed (debounce).
+    pub seen: String,
+    pub seen_at: f64,
+    /// ⌘Y hides the preview pane (the list then takes the full width).
+    pub hide_preview: bool,
+    /// Note whose preview was last requested, and the id of that request.
+    pub preview_for: Option<String>,
+    pub preview_request: u64,
+    /// The note the answer belongs to and its blocks (`Err`: unreadable).
+    pub preview: Option<(String, Result<Vec<ferrocast_core::obsidian::Block>, ()>)>,
+    /// Selected note waiting out the preview pause, and the egui time it was first seen.
+    pub pv_seen: Option<String>,
+    pub pv_seen_at: f64,
+}
+
 /// Wait after the last keystroke before Search Notion asks the API (seconds of egui time).
 const NOTION_DEBOUNCE: f64 = 0.25;
 const NOTION_PAGE: u32 = 20;
+/// Wait after the last keystroke before Search Obsidian scans note contents (seconds of egui time).
+const OBSIDIAN_DEBOUNCE: f64 = 0.25;
+/// Wait before the selected note is read for the preview (seconds of egui time).
+const OBSIDIAN_PREVIEW_PAUSE: f64 = 0.12;
+/// Notes listed per section.
+const OBSIDIAN_LIMIT: usize = 30;
+
+/// `[[stem]]` for a note: Obsidian resolves links by file name, so the stem is the target, with the
+/// title as the shown text when it differs (`[[stem|Title]]`). Folders are left out, as Obsidian does.
+fn wikilink(rel: &str, title: &str) -> String {
+    let file = rel.rsplit('/').next().unwrap_or(rel);
+    let stem = file.rsplit_once('.').map(|(s, _)| s).unwrap_or(file);
+    if title.is_empty() || title == stem {
+        format!("[[{stem}]]")
+    } else {
+        format!("[[{stem}|{title}]]")
+    }
+}
 
 pub struct App {
     /// The update poller thread once started (never more than one).
@@ -905,8 +1014,14 @@ pub struct App {
     notion: NotionUi,
     /// Search Notion command view.
     nv: NotionView,
+    /// Search Obsidian command view.
+    pub(crate) ov: ObsidianView,
     /// Add to Notion commands.
     na: NotionAdd,
+    /// New Obsidian Note / daily note commands.
+    pub(crate) oc: ObsidianCompose,
+    /// Settings → Integrations → Obsidian.
+    pub(crate) obsidian: ObsidianUi,
     rates: ferrocast_core::currency::Rates,
     rates_checked_at: Instant,
     /// Result list for the current query/view, reused across frames until something changes.
@@ -1134,7 +1249,10 @@ impl App {
             key_scratch: String::new(),
             notion: NotionUi::default(),
             nv: NotionView::default(),
+            ov: ObsidianView::default(),
             na: NotionAdd::default(),
+            oc: ObsidianCompose::default(),
+            obsidian: ObsidianUi::default(),
             rates: store_rates,
             rates_checked_at: Instant::now(),
             sec_cache: None,
@@ -1786,6 +1904,254 @@ impl App {
         vec![Section { title: if self.nv.shown.is_empty() { "Recently edited" } else { "Results" }.into(), items }]
     }
 
+    // ------------------------------------------------------------ Search Obsidian (command)
+
+    /// Open the view: forget what the last visit asked, keep the cached index, and refresh it.
+    fn obsidian_view_open(&mut self) {
+        let ov = &mut self.ov;
+        ov.requested_for = None;
+        ov.content = None;
+        ov.content_asked = None;
+        ov.content_request += 1;
+        ov.seen.clear();
+        ov.preview_for = None;
+        ov.preview = None;
+        ov.pv_seen = None;
+        self.obsidian_ensure_index();
+    }
+
+    /// Index the vault on a thread unless the newest request already covers it. Never walks on the
+    /// UI thread: a cloud-synced vault can take seconds on first access.
+    fn obsidian_ensure_index(&mut self) {
+        let Some(vault) = self.obsidian_vault() else { return };
+        if self.ov.requested_for.as_ref() == Some(&vault.path) {
+            return;
+        }
+        self.ov.requested_for = Some(vault.path.clone());
+        self.ov.index_request += 1;
+        self.ov.indexing = true;
+        let (request, bus, root) = (self.ov.index_request, self.bus.clone(), vault.path);
+        std::thread::spawn(move || {
+            let notes = root.is_dir().then(|| ferrocast_core::obsidian::index_vault(&root));
+            bus.send(Msg::ObsidianIndexed { request, vault: root, notes });
+        });
+    }
+
+    fn handle_obsidian_indexed(&mut self, request: u64, vault: PathBuf, notes: Option<Vec<ferrocast_core::obsidian::NoteEntry>>) {
+        if request != self.ov.index_request || self.settings.obsidian_vault.as_ref() != Some(&vault) {
+            return;
+        }
+        self.ov.indexing = false;
+        match notes {
+            Some(n) => {
+                self.ov.missing = None;
+                self.ov.cache = Some((vault, Arc::new(n)));
+            }
+            None => {
+                self.ov.missing = Some(vault);
+                self.ov.cache = None;
+            }
+        }
+        self.invalidate_sections();
+    }
+
+    /// The cached index when it belongs to the chosen vault.
+    fn obsidian_entries(&self) -> Option<Arc<Vec<ferrocast_core::obsidian::NoteEntry>>> {
+        let vault = self.settings.obsidian_vault.as_ref()?;
+        self.ov.cache.as_ref().filter(|(p, _)| p == vault).map(|(_, e)| e.clone())
+    }
+
+    fn obsidian_entry(&self, rel: &str) -> Option<ferrocast_core::obsidian::NoteEntry> {
+        self.obsidian_entries()?.iter().find(|e| e.rel_path == rel).cloned()
+    }
+
+    /// Debounce the content scan, keep the index fresh and read the preview of the selected note.
+    /// `now` is the egui time in seconds.
+    pub(crate) fn tick_obsidian_view(&mut self, now: f64) {
+        if !self.visible || !matches!(self.view(), View::ObsidianSearch) {
+            return;
+        }
+        // the vault may have been chosen in Settings while this view waited underneath
+        self.obsidian_ensure_index();
+        let q = self.query.trim().to_string();
+        if q.chars().count() < 3 {
+            if self.ov.content.is_some() || self.ov.content_asked.is_some() {
+                self.ov.content = None;
+                self.ov.content_asked = None;
+                self.ov.content_request += 1; // an answer still in flight is stale now
+                self.invalidate_sections();
+            }
+        } else if self.ov.content_asked.as_deref() != Some(q.as_str()) {
+            if self.ov.seen != q {
+                self.ov.seen = q.clone();
+                self.ov.seen_at = now;
+            }
+            let wait = self.ov.seen_at + OBSIDIAN_DEBOUNCE - now;
+            if wait > 0.0 {
+                self.ctx.request_repaint_after(Duration::from_secs_f64(wait + 0.01));
+            } else if let Some(entries) = self.obsidian_entries() {
+                self.obsidian_content_request(q, entries);
+            }
+        }
+        self.tick_obsidian_preview(now);
+    }
+
+    fn obsidian_content_request(&mut self, query: String, entries: Arc<Vec<ferrocast_core::obsidian::NoteEntry>>) {
+        let Some(vault) = self.obsidian_vault() else { return };
+        self.ov.content_request += 1;
+        self.ov.content_asked = Some(query.clone());
+        let (request, bus) = (self.ov.content_request, self.bus.clone());
+        std::thread::spawn(move || {
+            let hits = services::content_scan(&vault.path, &entries, &query, OBSIDIAN_LIMIT, &services::is_dataless);
+            bus.send(Msg::ObsidianContent { request, query, hits });
+        });
+    }
+
+    fn handle_obsidian_content(&mut self, request: u64, query: String, hits: Vec<String>) {
+        if request != self.ov.content_request {
+            return;
+        }
+        self.ov.content = Some((query, hits));
+        self.invalidate_sections();
+    }
+
+    /// Read the selected note once the selection has rested for a moment (holding an arrow key must not
+    /// read, or make a cloud provider download, every note it passes).
+    fn tick_obsidian_preview(&mut self, now: f64) {
+        if self.ov.hide_preview {
+            return;
+        }
+        let rel = self.sections_cached().iter().flat_map(|s| s.items.iter()).nth(self.selected).and_then(|i| match &i.kind {
+            Kind::ObsidianNote(rel) => Some(rel.clone()),
+            _ => None,
+        });
+        let Some(rel) = rel else {
+            self.ov.pv_seen = None;
+            return;
+        };
+        if self.ov.preview_for.as_deref() == Some(rel.as_str()) {
+            self.ov.pv_seen = None;
+            return;
+        }
+        if self.ov.pv_seen.as_deref() != Some(rel.as_str()) {
+            self.ov.pv_seen = Some(rel.clone());
+            self.ov.pv_seen_at = now;
+        }
+        let wait = self.ov.pv_seen_at + OBSIDIAN_PREVIEW_PAUSE - now;
+        if wait > 0.0 {
+            self.ctx.request_repaint_after(Duration::from_secs_f64(wait + 0.01));
+            return;
+        }
+        let Some(vault) = self.obsidian_vault() else { return };
+        self.ov.preview_request += 1;
+        self.ov.preview_for = Some(rel.clone());
+        self.ov.preview = None;
+        self.ov.pv_seen = None;
+        let (request, bus, path) = (self.ov.preview_request, self.bus.clone(), vault.path.join(&rel));
+        std::thread::spawn(move || bus.send(Msg::ObsidianPreview { request, result: services::read_preview(&path) }));
+    }
+
+    fn handle_obsidian_preview(&mut self, request: u64, result: Result<Vec<ferrocast_core::obsidian::Block>, ()>) {
+        if request != self.ov.preview_request {
+            return;
+        }
+        if let Some(rel) = self.ov.preview_for.clone() {
+            self.ov.preview = Some((rel, result));
+        }
+    }
+
+    pub(crate) fn obsidian_toggle_preview(&mut self) {
+        self.ov.hide_preview = !self.ov.hide_preview;
+    }
+
+    fn obsidian_view_sections(&self) -> Vec<Section> {
+        let setup = |title: &str| {
+            vec![Section {
+                title: title.into(),
+                items: vec![Item {
+                    id: "obsidian:setup".into(),
+                    title: "Open Settings → Integrations".into(),
+                    subtitle: String::new(),
+                    icon: Icon::Glyph("sf:gearshape", [120, 120, 130]),
+                    accessory: String::new(),
+                    keywords: vec![],
+                    kind: Kind::ObsidianSetup,
+                }],
+            }]
+        };
+        let Some(vault) = self.obsidian_vault() else { return setup("Choose your Obsidian vault") };
+        if self.ov.missing.as_ref() == Some(&vault.path) {
+            return setup("The vault folder was not found");
+        }
+        let Some(entries) = self.obsidian_entries() else { return vec![] };
+        let q = self.query.trim();
+        let now = chrono::Utc::now();
+        let row = |e: &ferrocast_core::obsidian::NoteEntry| Item {
+            id: format!("obsidian:{}", e.rel_path),
+            title: e.title.clone(),
+            subtitle: e.rel_path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default(),
+            icon: Icon::Glyph("sf:doc.text", [124, 58, 237]),
+            accessory: chrono::DateTime::from_timestamp(e.modified as i64, 0)
+                .map(|t| notion_io::relative_time(&t.to_rfc3339(), now))
+                .unwrap_or_default(),
+            keywords: vec![],
+            kind: Kind::ObsidianNote(e.rel_path.clone()),
+        };
+        let found = ferrocast_core::obsidian::search(&entries, q, OBSIDIAN_LIMIT);
+        let mut out = vec![];
+        if !found.is_empty() {
+            out.push(Section {
+                title: if q.is_empty() { "Recent" } else { "Notes" }.into(),
+                items: found.iter().map(|&i| row(&entries[i])).collect(),
+            });
+        }
+        if q.chars().count() >= 3 {
+            if let Some((_, rels)) = self.ov.content.as_ref().filter(|(cq, _)| cq == q) {
+                let shown: std::collections::HashSet<&str> = found.iter().map(|&i| entries[i].rel_path.as_str()).collect();
+                let items: Vec<Item> = rels
+                    .iter()
+                    .filter(|r| !shown.contains(r.as_str()))
+                    .filter_map(|r| entries.iter().find(|e| &e.rel_path == r))
+                    .map(row)
+                    .collect();
+                if !items.is_empty() {
+                    out.push(Section { title: "In notes".into(), items });
+                }
+            }
+        }
+        out
+    }
+
+    /// Enter: open the note in Obsidian. Obsidian known to be missing: say so and open nothing. Not yet
+    /// detected (`None`): try anyway, the system answers if nothing handles `obsidian://`.
+    fn obsidian_open_note(&mut self, rel: &str) {
+        let Some(vault) = self.obsidian_vault() else { return };
+        self.obsidian_open_uri(ferrocast_core::obsidian::uri_open(&vault.name, rel));
+    }
+
+    fn obsidian_search_in_app(&mut self, query: &str) {
+        let Some(vault) = self.obsidian_vault() else { return };
+        if query.trim().is_empty() {
+            self.toast("Type something to search for in Obsidian.");
+            return;
+        }
+        self.obsidian_open_uri(ferrocast_core::obsidian::uri_search(&vault.name, query));
+    }
+
+    fn obsidian_open_uri(&mut self, uri: String) {
+        if self.obsidian_installed() == Some(false) {
+            self.toast("Obsidian is not installed. Download it from obsidian.md.");
+            return;
+        }
+        if !ferrocast_core::obsidian::uri_len_ok(&uri) {
+            self.toast("That link is too long for Obsidian (over 8,000 characters).");
+            return;
+        }
+        notion_io::open_url(&uri);
+        self.hide();
+        self.reset_to_root();
+    }
+
     // ------------------------------------------------------------ Add to Notion (commands)
 
     fn notion_open_settings_tab(&mut self) {
@@ -1869,6 +2235,167 @@ impl App {
             }
             Err(services::NotionAddError::Failed(msg)) => self.toast(msg),
         }
+    }
+
+    // ------------------------------------------------------------ New note / daily note (commands)
+
+    /// The chosen vault, or a toast and Settings → Integrations (first precondition, no I/O).
+    fn obsidian_compose_vault(&mut self) -> Option<ferrocast_core::obsidian::Vault> {
+        let vault = self.obsidian_vault();
+        if vault.is_none() {
+            self.toast(OBSIDIAN_NO_VAULT);
+            self.notion_open_settings_tab();
+        }
+        vault
+    }
+
+    /// ⌘↵ on the New Obsidian Note form.
+    pub(crate) fn obsidian_new_submit(&mut self) {
+        let View::ObsidianNew { title, text } = self.view().clone() else { return };
+        if title.trim().is_empty() && text.trim().is_empty() {
+            self.toast("Write something to send first.");
+            return;
+        }
+        self.obsidian_send(services::ObsidianJob::New { title, text });
+    }
+
+    /// ⌘↵ on the Append to Daily Note form.
+    pub(crate) fn obsidian_daily_submit(&mut self) {
+        let View::ObsidianDaily { text } = self.view().clone() else { return };
+        if text.trim().is_empty() {
+            self.toast("Write something to send first.");
+            return;
+        }
+        self.obsidian_send(services::ObsidianJob::Daily { text });
+    }
+
+    /// Check the preconditions on a thread (disk reads) and answer with `Msg::ObsidianSent`; the link is
+    /// opened (and the form cleared) only from the answer, on the UI thread.
+    fn obsidian_send(&mut self, job: services::ObsidianJob) {
+        if self.oc.sending {
+            return;
+        }
+        let Some(vault) = self.obsidian_compose_vault() else { return };
+        self.oc.sending = true;
+        let installed = self.obsidian_installed();
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            let now = chrono::Local::now().naive_local();
+            bus.send(Msg::ObsidianSent(services::obsidian_prepare(&job, &vault.path, &vault.name, installed, now)));
+        });
+    }
+
+    fn handle_obsidian_sent(&mut self, r: services::ObsidianPrepared) {
+        self.oc.sending = false;
+        let uri = match r.result {
+            Ok(uri) => uri,
+            Err(refusal) => {
+                self.toast(refusal.message());
+                if matches!(refusal, services::ObsidianRefusal::FolderMissing) {
+                    self.notion_open_settings_tab();
+                }
+                return;
+            }
+        };
+        notion_io::open_url(&uri);
+        let was_new = r.kind == services::ObsidianKind::New;
+        self.toast(if was_new { "Sent to Obsidian" } else { "Added to today's daily note" });
+        match self.stack.last_mut() {
+            Some(View::ObsidianNew { title, text }) if was_new => {
+                title.clear();
+                text.clear();
+            }
+            Some(View::ObsidianDaily { text }) if !was_new => text.clear(),
+            _ => {}
+        }
+    }
+
+    // ------------------------------------------------------------ Obsidian (Settings → Integrations)
+
+    /// Vaults found by the last scan (None while it has not answered).
+    #[cfg(test)]
+    pub fn obsidian_vaults(&self) -> Option<Vec<ferrocast_core::obsidian::Vault>> {
+        self.obsidian.vaults.clone()
+    }
+
+    /// The selected vault (by path; the name is the folder name). T8 and T9 use this.
+    pub fn obsidian_vault(&self) -> Option<ferrocast_core::obsidian::Vault> {
+        let path = self.settings.obsidian_vault.clone()?;
+        Some(ferrocast_core::obsidian::Vault { id: String::new(), name: vault_name(&path), path })
+    }
+
+    /// Whether the Obsidian app was found by the last scan (None: not scanned yet). Blocking detection
+    /// for worker threads is `services::obsidian_installed_now`.
+    pub fn obsidian_installed(&self) -> Option<bool> {
+        self.obsidian.installed
+    }
+
+    /// Scan `obsidian.json` and look for the app on a thread; the answer is `Msg::ObsidianScanned`.
+    fn obsidian_scan_with(&mut self, config: std::path::PathBuf, detect: impl FnOnce() -> bool + Send + 'static) {
+        self.obsidian.started = true;
+        self.obsidian.scanning = true;
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            let (vaults, open) = services::scan_obsidian_config(&config);
+            bus.send(Msg::ObsidianScanned(services::ObsidianScan { vaults, open, installed: detect() }));
+        });
+    }
+
+    pub(crate) fn obsidian_scan(&mut self) {
+        let config = ferrocast_core::obsidian::config_path(&dirs::home_dir().unwrap_or_default());
+        self.obsidian_scan_with(config, services::obsidian_installed_now);
+    }
+
+    fn handle_obsidian_scanned(&mut self, r: services::ObsidianScan) {
+        self.obsidian.scanning = false;
+        self.obsidian.vaults = Some(r.vaults);
+        self.obsidian.open = r.open;
+        self.obsidian.installed = Some(r.installed);
+    }
+
+    fn obsidian_set(&mut self, path: std::path::PathBuf) {
+        let name = vault_name(&path);
+        let mut s = self.settings.clone();
+        s.obsidian_vault = Some(path);
+        self.commit_settings(s);
+        self.toast(format!("Obsidian vault set to {name}"));
+    }
+
+    fn obsidian_pick(&mut self, i: usize) {
+        let Some(v) = self.obsidian.vaults.as_ref().and_then(|v| v.get(i)).cloned() else { return };
+        self.obsidian_set(v.path);
+    }
+
+    /// Open the folder picker on a thread (it is modal and slow); the answer is `Msg::ObsidianFolder`.
+    fn obsidian_choose_folder_with(&mut self, picker: impl FnOnce() -> Option<std::path::PathBuf> + Send + 'static) {
+        if self.obsidian.picking {
+            return;
+        }
+        self.obsidian.picking = true;
+        let bus = self.bus.clone();
+        std::thread::spawn(move || bus.send(Msg::ObsidianFolder(picker())));
+    }
+
+    pub(crate) fn obsidian_choose_folder(&mut self) {
+        self.obsidian_choose_folder_with(|| apps::choose_folder("Choose your Obsidian vault folder"));
+    }
+
+    fn handle_obsidian_folder(&mut self, p: Option<std::path::PathBuf>) {
+        self.obsidian.picking = false;
+        let Some(p) = p else { return };
+        if !p.is_dir() {
+            self.toast("That is not a folder. Choose your Obsidian vault folder.");
+            return;
+        }
+        // "/a/b/" and "/a/b" are the same vault
+        self.obsidian_set(p.components().collect());
+    }
+
+    fn obsidian_clear(&mut self) {
+        let mut s = self.settings.clone();
+        s.obsidian_vault = None;
+        self.commit_settings(s);
+        self.toast("Obsidian vault cleared");
     }
 
     fn notion_clear_target(&mut self) {
@@ -2284,6 +2811,12 @@ impl App {
                 Msg::NotionSearched { request, result } => self.handle_notion_searched(request, result),
                 Msg::NotionViewSearched { request, append, result } => self.handle_notion_view_searched(request, append, result),
                 Msg::NotionAdded(r) => self.handle_notion_added(r),
+                Msg::ObsidianSent(r) => self.handle_obsidian_sent(r),
+                Msg::ObsidianIndexed { request, vault, notes } => self.handle_obsidian_indexed(request, vault, notes),
+                Msg::ObsidianContent { request, query, hits } => self.handle_obsidian_content(request, query, hits),
+                Msg::ObsidianPreview { request, result } => self.handle_obsidian_preview(request, result),
+                Msg::ObsidianScanned(r) => self.handle_obsidian_scanned(r),
+                Msg::ObsidianFolder(p) => self.handle_obsidian_folder(p),
                 Msg::Toast(t) => {
                     // A sign-in or sign-out may just have finished; let Settings re-read the Keychain.
                     self.ctx.data_mut(|d| d.remove::<bool>(Id::new("chatgpt_signed")));
@@ -3717,6 +4250,7 @@ impl App {
                 out
             }
             View::NotionSearch => self.notion_view_sections(),
+            View::ObsidianSearch => self.obsidian_view_sections(),
             View::Colors(c) => vec![Section {
                 title: "Formats".into(),
                 items: c
@@ -3966,7 +4500,23 @@ impl App {
                 a.push(Action::new("Add Text Here…", Act::NotionAddHere(n.clone())));
             }
             Kind::NotionLoadMore => a.push(Action::new("Load More", Act::Run)),
-            Kind::NotionConnect => a.push(Action::new("Open Settings → Integrations", Act::Run)),
+            Kind::NotionConnect | Kind::ObsidianSetup => a.push(Action::new("Open Settings → Integrations", Act::Run)),
+            Kind::ObsidianNote(rel) => {
+                let entry = self.obsidian_entry(rel);
+                let title = entry.as_ref().map(|e| e.title.as_str()).unwrap_or_default();
+                let root = self.obsidian_vault().map(|v| v.path).unwrap_or_default();
+                let abs = root.join(rel);
+                a.push(Action::new("Open in Obsidian", Act::Run));
+                a.push(Action::new("Reveal in Finder", Act::Reveal(abs.clone())).key(CMD, Key::Enter));
+                a.push(Action::new("Copy Wikilink", Act::CopyText(wikilink(rel, title))).key(CMD_SHIFT, Key::C));
+                a.push(
+                    Action::new("Copy Path", Act::CopyText(abs.to_string_lossy().into_owned()))
+                        .key(Modifiers { alt: true, ..CMD_SHIFT }, Key::C),
+                );
+                // ⌘Y is the preview toggle of this view
+                a.push(Action::new("Quick Look", Act::QuickLook(abs)).key(CMD_SHIFT, Key::Y));
+                a.push(Action::new("Search in Obsidian", Act::ObsidianSearch(self.query.trim().to_string())));
+            }
             Kind::Note(id) => {
                 let pinned = self.notes.iter().any(|n| &n.id == id && n.pinned_at.is_some());
                 a.push(Action::new("Open Note", Act::Run));
@@ -4055,7 +4605,8 @@ impl App {
             Kind::Note(_) => "Open Note",
             Kind::Notion(_) => "Open",
             Kind::NotionLoadMore => "Load More",
-            Kind::NotionConnect => "Open Settings",
+            Kind::NotionConnect | Kind::ObsidianSetup => "Open Settings",
+            Kind::ObsidianNote(_) => "Open in Obsidian",
             Kind::Script(_) => "Run Script Command",
             Kind::Url(_) => "Open in Browser",
             Kind::OpenWindow(_) => "Switch to Window",
@@ -4178,7 +4729,8 @@ impl App {
             Kind::Builtin(b) => self.run_builtin(*b),
             Kind::Notion(n) => self.notion_open_url(&n.url.clone()),
             Kind::NotionLoadMore => self.notion_load_more(),
-            Kind::NotionConnect => self.notion_open_settings_tab(),
+            Kind::NotionConnect | Kind::ObsidianSetup => self.notion_open_settings_tab(),
+            Kind::ObsidianNote(rel) => self.obsidian_open_note(&rel.clone()),
             Kind::Prefilled(b, q) => {
                 self.run_builtin(*b);
                 if let View::Ai { prompt, .. } = self.stack.last_mut().unwrap() {
@@ -4640,6 +5192,28 @@ impl App {
             Builtin::Notes => self.open_notes_window(|c, d| c.toggle(d)),
             Builtin::CreateNote => self.open_notes_window(|c, d| c.create_note(d)),
             Builtin::CreateDictatedNote => self.open_notes_window(|c, d| c.create_dictated_note(d)),
+            Builtin::NewObsidianNote => {
+                if self.obsidian_compose_vault().is_some() {
+                    self.push(View::ObsidianNew { title: String::new(), text: String::new() });
+                }
+            }
+            Builtin::AppendToDailyNote => {
+                if self.obsidian_compose_vault().is_some() {
+                    self.push(View::ObsidianDaily { text: String::new() });
+                }
+            }
+            Builtin::AddClipboardToDailyNote => {
+                if self.obsidian_compose_vault().is_some() {
+                    match notion_io::read_clipboard().filter(|t| !t.trim().is_empty()) {
+                        Some(text) => self.obsidian_send(services::ObsidianJob::Daily { text }),
+                        None => self.toast("The clipboard has no text."),
+                    }
+                }
+            }
+            Builtin::SearchObsidian => {
+                self.push(View::ObsidianSearch);
+                self.obsidian_view_open();
+            }
             Builtin::CreateScript => self.push(View::CreateScript { title: String::new(), mode: 0 }),
             Builtin::OpenScriptsFolder => {
                 let d = self.store.scripts_dir();
@@ -4869,6 +5443,7 @@ impl App {
             Act::Run => {}
             Act::CopyText(t) => self.copy_text(&t),
             Act::NotionTarget(n) => self.notion_set_target(n),
+            Act::ObsidianSearch(q) => self.obsidian_search_in_app(&q),
             Act::NotionAddHere(n) => {
                 let kind = if n.kind == ferrocast_core::notion::ItemKind::Page { "page" } else { "data_source" };
                 self.notion_add_open(Some(ferrocast_core::models::NotionTarget { id: n.id, kind: kind.into(), title: n.title }));
