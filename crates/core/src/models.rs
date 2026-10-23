@@ -4,6 +4,7 @@ use crate::fuzzy::Sensitivity;
 use crate::ranking::Frecency;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -282,6 +283,9 @@ pub struct Settings {
     /// Page or data source Notion quick capture writes to.
     #[serde(default)]
     pub notion_target: Option<NotionTarget>,
+    /// Root folder of the Obsidian vault the integration uses (its folder name is the vault name).
+    #[serde(default)]
+    pub obsidian_vault: Option<PathBuf>,
     /// Zoom of the Notes window text (1.0 = actual size).
     pub notes_zoom: f64,
     /// Notes: Esc only gives up the keyboard focus instead of closing the window.
@@ -367,6 +371,7 @@ impl Default for Settings {
             update_skipped: None,
             update_last_check: None,
             notion_target: None,
+            obsidian_vault: None,
             notes_zoom: 1.0,
             notes_escape_loses_focus: false,
             notes_menu_bar_button: false,
@@ -453,6 +458,18 @@ mod tests {
         assert!(!json.contains("token"), "no token field in settings.json");
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back.notion_target, Some(t));
+    }
+
+    #[test]
+    fn obsidian_vault_is_optional_in_old_files_and_persists_as_a_path() {
+        let old = r#"{"launcher_hotkey":"Alt+Space","compact_mode":true}"#;
+        let s: Settings = serde_json::from_str(old).expect("a settings.json without obsidian_vault loads");
+        assert_eq!(s.obsidian_vault, None);
+        let with = Settings { obsidian_vault: Some(PathBuf::from("/Users/me/Notes Vault")), ..Default::default() };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains(r#""obsidian_vault":"/Users/me/Notes Vault""#), "{json}");
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.obsidian_vault, Some(PathBuf::from("/Users/me/Notes Vault")));
     }
 
     #[test]

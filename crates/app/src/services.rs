@@ -178,7 +178,221 @@ pub enum Msg {
     },
     /// Result of Add to Notion / Add Clipboard to Notion.
     NotionAdded(Result<NotionAddDone, NotionAddError>),
+    /// Preconditions checked for New Obsidian Note / daily note: the link to open or the refusal.
+    ObsidianSent(ObsidianPrepared),
+    /// Result of the background Obsidian scan: vaults, the open one, and whether the app is installed.
+    ObsidianScanned(ObsidianScan),
+    /// The folder picker closed (None: cancelled).
+    ObsidianFolder(Option<PathBuf>),
+    /// The vault index of Search Obsidian (`None`: the vault folder does not exist). `request` drops stale answers.
+    ObsidianIndexed {
+        request: u64,
+        vault: PathBuf,
+        notes: Option<Vec<ferrocast_core::obsidian::NoteEntry>>,
+    },
+    /// Relative paths of the notes whose content matched `query` (newest `request` only).
+    ObsidianContent {
+        request: u64,
+        query: String,
+        hits: Vec<String>,
+    },
+    /// The preview blocks of the selected note (`Err`: the file could not be read).
+    ObsidianPreview {
+        request: u64,
+        result: Result<Vec<ferrocast_core::obsidian::Block>, ()>,
+    },
     Wake,
+}
+
+/// What the Obsidian scan found.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObsidianScan {
+    pub vaults: Vec<ferrocast_core::obsidian::Vault>,
+    /// Path of the vault Obsidian reports as open.
+    pub open: Option<PathBuf>,
+    pub installed: bool,
+}
+
+/// Read vault list from an `obsidian.json` (missing or unreadable file: no vaults).
+pub fn scan_obsidian_config(config: &std::path::Path) -> (Vec<ferrocast_core::obsidian::Vault>, Option<PathBuf>) {
+    let Ok(json) = std::fs::read_to_string(config) else { return (Vec::new(), None) };
+    let vaults = ferrocast_core::obsidian::parse_vault_config(&json);
+    let open = serde_json::from_str::<serde_json::Value>(&json)
+        .ok()
+        .and_then(|v| v.get("vaults")?.as_object().cloned())
+        .and_then(|m| m.values().find(|e| e.get("open").and_then(|o| o.as_bool()) == Some(true))?.get("path")?.as_str().map(PathBuf::from));
+    (vaults, open)
+}
+
+/// What a New Obsidian Note / daily note send is about.
+pub enum ObsidianJob {
+    New { title: String, text: String },
+    Daily { text: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ObsidianKind {
+    New,
+    Daily,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ObsidianRefusal {
+    FolderMissing,
+    NotInstalled,
+    DailyPluginOff,
+    TooLong,
+}
+
+impl ObsidianRefusal {
+    pub fn message(&self) -> &'static str {
+        match self {
+            Self::FolderMissing => "The vault folder was not found. Choose it again in Settings → Integrations.",
+            Self::NotInstalled => "Obsidian is not installed. Download it from obsidian.md.",
+            Self::DailyPluginOff => "Turn on the Daily notes plugin in Obsidian (Settings → Core plugins).",
+            Self::TooLong => "That is too long to send through Obsidian. Shorten it or paste it in Obsidian directly.",
+        }
+    }
+}
+
+pub struct ObsidianPrepared {
+    pub kind: ObsidianKind,
+    pub result: Result<String, ObsidianRefusal>,
+}
+
+/// Characters that cannot go in a file name (and `#^[]`, which break Obsidian links).
+const ILLEGAL_NAME_CHARS: &str = "/\\:*?\"<>|#^[]";
+
+fn clean_name(s: &str) -> String {
+    let spaced: String = s.chars().map(|c| if ILLEGAL_NAME_CHARS.contains(c) { ' ' } else { c }).collect();
+    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// File name (no extension) for a new note: the trimmed title, else the first non-empty line of the
+/// text (cut at 80 characters), else `yyyy-MM-dd HH.mm`; illegal characters become spaces.
+pub fn note_title(title: &str, text: &str, now: chrono::NaiveDateTime) -> String {
+    let raw = if title.trim().is_empty() {
+        text.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| l.chars().take(80).collect::<String>()).unwrap_or_default()
+    } else {
+        title.trim().to_string()
+    };
+    let cleaned = clean_name(&raw);
+    if cleaned.is_empty() {
+        now.format("%Y-%m-%d %H.%M").to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// `append=true` adds the content verbatim, so the next append must start on a new line.
+pub fn ensure_newline(text: &str) -> String {
+    if text.ends_with('\n') {
+        text.to_string()
+    } else {
+        format!("{text}\n")
+    }
+}
+
+/// Is the Daily notes core plugin on in this vault? `core-plugins.json` is an array of enabled ids or
+/// an object of id → bool. None: missing, unreadable or an unknown shape (let Obsidian answer).
+pub fn daily_plugin_enabled(vault: &std::path::Path) -> Option<bool> {
+    let raw = std::fs::read_to_string(vault.join(".obsidian/core-plugins.json")).ok()?;
+    match serde_json::from_str::<serde_json::Value>(&raw).ok()? {
+        serde_json::Value::Array(a) => Some(a.iter().any(|v| v.as_str() == Some("daily-notes"))),
+        serde_json::Value::Object(o) => Some(o.get("daily-notes").and_then(|v| v.as_bool()) == Some(true)),
+        _ => None,
+    }
+}
+
+/// Run the preconditions in order (folder, installed, daily plugin, length) and build the link.
+/// Blocking disk reads: call it from a worker thread only.
+pub fn obsidian_prepare(
+    job: &ObsidianJob,
+    vault: &std::path::Path,
+    name: &str,
+    installed: Option<bool>,
+    now: chrono::NaiveDateTime,
+) -> ObsidianPrepared {
+    let kind = match job {
+        ObsidianJob::New { .. } => ObsidianKind::New,
+        ObsidianJob::Daily { .. } => ObsidianKind::Daily,
+    };
+    let result = (|| {
+        if !vault.is_dir() {
+            return Err(ObsidianRefusal::FolderMissing);
+        }
+        if installed == Some(false) {
+            return Err(ObsidianRefusal::NotInstalled);
+        }
+        let uri = match job {
+            ObsidianJob::New { title, text } => ferrocast_core::obsidian::uri_new(name, &note_title(title, text, now), text, false),
+            ObsidianJob::Daily { text } => {
+                if daily_plugin_enabled(vault) == Some(false) {
+                    return Err(ObsidianRefusal::DailyPluginOff);
+                }
+                ferrocast_core::obsidian::uri_daily(name, &ensure_newline(text), true, true)
+            }
+        };
+        if ferrocast_core::obsidian::uri_len_ok(&uri) {
+            Ok(uri)
+        } else {
+            Err(ObsidianRefusal::TooLong)
+        }
+    })();
+    ObsidianPrepared { kind, result }
+}
+
+/// Is Obsidian installed? Blocking (spawns `mdfind`): call it from a worker thread only.
+pub fn obsidian_installed_now() -> bool {
+    let home = dirs::home_dir().unwrap_or_default();
+    if std::path::Path::new("/Applications/Obsidian.app").exists() || home.join("Applications/Obsidian.app").exists() {
+        return true;
+    }
+    std::process::Command::new("/usr/bin/mdfind")
+        .arg("kMDItemCFBundleIdentifier == 'md.obsidian'")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// Is this file a cloud placeholder that is not downloaded yet (macOS `SF_DATALESS`)? Reading it would
+/// make the provider download it, so the content scan skips these. Unreadable or missing: `false`.
+pub fn is_dataless(path: &std::path::Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        const SF_DATALESS: u32 = 0x4000_0000;
+        std::fs::metadata(path).map(|m| m.st_flags() & SF_DATALESS != 0).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Content scan for Search Obsidian: relative paths of notes containing `query`, leaving out the files
+/// `dataless` flags (so a search never makes a cloud provider download the whole vault). Blocking.
+pub fn content_scan(
+    root: &std::path::Path,
+    entries: &[ferrocast_core::obsidian::NoteEntry],
+    query: &str,
+    limit: usize,
+    dataless: &dyn Fn(&std::path::Path) -> bool,
+) -> Vec<String> {
+    let local: Vec<ferrocast_core::obsidian::NoteEntry> = entries.iter().filter(|e| !dataless(&root.join(&e.rel_path))).cloned().collect();
+    ferrocast_core::obsidian::content_hits(root, &local, query, limit).into_iter().map(|i| local[i].rel_path.clone()).collect()
+}
+
+/// Read at most the first 200 KB of a note and parse it for the preview pane. Blocking.
+pub fn read_preview(path: &std::path::Path) -> Result<Vec<ferrocast_core::obsidian::Block>, ()> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|_| ())?;
+    let mut bytes = Vec::new();
+    file.take(200 * 1024).read_to_end(&mut bytes).map_err(|_| ())?;
+    Ok(ferrocast_core::obsidian::parse_preview(&String::from_utf8_lossy(&bytes)))
 }
 
 /// A capture that reached Notion: the title of the target it was added to.
