@@ -1,12 +1,12 @@
 ---
 title: "Screen capture"
-description: "Take screenshots and record your screen from the launcher: area, window, whole screen or a scrolling page. Needs macOS 14 and Screen Recording."
+description: "Take screenshots, record your screen, then edit it with auto zoom and export MP4 or GIF, all from the launcher. Needs macOS 14 and Screen Recording."
 sidebar:
   order: 15
 ---
 Ferrocast takes screenshots from the launcher or from a hotkey you choose. Each capture is saved as a PNG and opens in a small Capture window where you can copy it, annotate it, copy the text in it or pin it above your other windows.
 
-It also records your screen. A recording is saved as a project folder with the video and a log of what you did with the mouse. Editing and export are coming later: today you can record, browse and reveal your recordings in Finder.
+It also records your screen. A recording is saved as a project folder with the video and a log of what you did with the mouse. You can then edit it in Ferrocast, with automatic zooms on your clicks, and export it as an MP4 or a GIF.
 
 ## The four screenshot commands
 
@@ -75,7 +75,7 @@ Choose the area that scrolls, and Ferrocast scrolls it for you, takes a strip af
 | **Record Screen** | Records a whole display. |
 | **Record Area** | Choose an area, as in Capture Area, then record it. |
 | **Record Window** | Choose a window, as in Capture Window, then record it. |
-| **Open Last Recording** | Shows your newest recording in Finder. See the note on the editor below. |
+| **Open Last Recording** | Opens your newest recording in the editor. |
 | **Recordings** | Lists your recordings, newest first. |
 
 Each one has the subtitle “Capture” and no default shortcut. Set shortcuts in Settings → Capture → Shortcuts.
@@ -94,7 +94,7 @@ Each recording is a folder named `Recording YYYY-MM-DD at HH.MM.SS.ferrocast` in
 
 | File | What it holds |
 |---|---|
-| `screen.mov` | The video. The mouse pointer is not drawn into it: the editor will draw it later from `events.json`. |
+| `screen.mov` | The video. The mouse pointer is not drawn into it: the editor draws it from `events.json`. |
 | `events.json` | A log of the cursor position (about 60 times a second), clicks, scrolling, and the position of the windows. For keys it stores only shortcuts (a key pressed with a modifier other than <kbd>⇧</kbd>) so they can be shown. Plain typing is never stored beyond the time of each key press, so a recording cannot contain a password. |
 | `project.json` | The recording's settings and its duration. |
 | `thumb.png` | A still picture of the recording, used in the Recordings list. |
@@ -115,16 +115,95 @@ Below 2 GB free, a warning shows `Low disk space: N GB left`. Below 200 MB, the 
 
 | Key | Action |
 |---|---|
-| <kbd>↵</kbd> | Show in Finder |
+| <kbd>↵</kbd> | Open in the editor |
+| <kbd>⌘</kbd> <kbd>↵</kbd> | Show in Finder |
 | <kbd>⌘</kbd> <kbd>⌫</kbd> | Move to Trash (asks to confirm) |
 | <kbd>Esc</kbd> | Go back |
 
-The editor is not available yet. **Open Last Recording** therefore only reveals the newest project in Finder and says `Showing NAME in Finder. The editor is not available yet.` If there is no recording, it says `No recordings yet`. Editing and export are coming later; there is no date.
+**Open Last Recording** opens the newest recording in the editor. If there is none, it says `No recordings yet`.
+
+## Editing a recording
+
+The editor shows the preview on the left and a panel with four tabs on the right. Under the preview there is a timeline (a ruler, a row for trims and speed changes, a row for zooms) with the playhead, and a row with **Play**/**Pause**, **Undo**, **Redo**, **Export…** and the time. The time reads `output time / output length · source time`, so you see the length after your edits. At the right end of that row you see the number of zooms and the save state. <kbd>Esc</kbd> closes the editor and writes anything not yet saved.
+
+The cursor you see is drawn by the editor from the recorded events in `events.json`. It is not in `screen.mov`, which is why you can resize it, smooth it or remove it.
+
+### Playback and keys
+
+| Key | Action |
+|---|---|
+| <kbd>Space</kbd> | Play or pause |
+| <kbd>←</kbd> / <kbd>→</kbd> | One frame back or forward |
+| <kbd>⇧</kbd> <kbd>←</kbd> / <kbd>⇧</kbd> <kbd>→</kbd> | One second back or forward |
+| <kbd>Home</kbd> / <kbd>End</kbd> | Jump to the start or the end |
+| <kbd>⌘</kbd> <kbd>Z</kbd> / <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>Z</kbd> | Undo / Redo |
+| <kbd>⌘</kbd> <kbd>E</kbd> | Export… |
+
+Click or drag on the timeline to move the playhead. While you type in a number field of the panel, only <kbd>⌘</kbd> <kbd>E</kbd> keeps working. The one-frame step uses the frame rate of Settings → Capture → **Recording frame rate**.
+
+### Auto zoom
+
+Auto zoom zooms toward your clicks. Clicks that are close in time and place form one group. A zoom starts 0.4 s before the first click of a group and returns to the whole screen after 1.2 s without clicks or cursor movement. The default level is 2×.
+
+When you open a recording that has no zooms, Ferrocast works them out and applies them in memory only. Nothing is written to `project.json` until you change something. Exporting a recording you have not touched saves its `project.json` first, with those zooms.
+
+Auto zoom is on by default. `capture.auto_zoom` and `capture.zoom_scale` in `settings.json` turn it off or set the level (1× to 6×); there is no Settings row for them yet. The **Auto zoom** button of the Zoom tab uses the same level.
+
+### The panel
+
+Every change can be undone and redone (<kbd>⌘</kbd> <kbd>Z</kbd>, <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>Z</kbd>, or the **Undo** and **Redo** buttons). Changes of the same kind made within one second, such as dragging a slider, are one step. A change that would make the project invalid is refused and the reason shows in red above the controls.
+
+**Zoom**
+
+- **Add at playhead** adds a manual zoom of 2 s, shorter if the next zoom is close. If the playhead is inside a zoom you get `There is already a zoom at the playhead.`
+- **Auto zoom** replaces the automatic zooms with new ones. Manual zooms stay and win any overlap.
+- Click a zoom in the list to edit it: **Start**, **End**, **Scale** (1× to 6×), **Focus** (X and Y, in %), **Ease in** and **Ease out** (0 to 3 s). Editing a zoom makes it manual, so Auto zoom keeps it.
+- **Pick on preview** sets the focus where you click the preview. **Follow cursor** makes the zoom follow the pointer again. **Delete zoom** removes it.
+
+**Cursor**
+
+- **Default**, **None** and **Hidden**: the pointer, or no pointer (None and Hidden do the same).
+- **Size** (0.5× to 4×), **Smoothing** (0 to 100 %), **Click ring** (a ring where you clicked) and **Motion blur** (0 to 200 %).
+
+**Style**
+
+- **Aspect**: 16:9, 4:3, 1:1, 9:16 or Source.
+- **Background**: **Colour**, **Gradient** or **Blur** (the recording itself, blurred), with colour pickers and an **Angle** for gradients.
+- Eight gradient presets: Aurora, Dusk, Ocean, Graphite, Sand, Lilac, Forest and Rose. A preset is stored as a gradient, not as a wallpaper image.
+- **Padding** (0 to 45 %), **Corners** (0 to 64 px) and the shadow: **Shadow** (blur, 0 to 120 px), **Opacity** and **Offset** (0 to 80 px).
+
+**Clips**
+
+- **Trim in** cuts everything before the playhead and **Trim out** everything after it. **Split** splits the segment at the playhead. **Delete segment** removes the segment at the playhead.
+- **Speed**: pick 0.25×, 0.5×, 1×, 2×, 4×, 8× or 16× (or type a value), then **Apply to segment**.
+- Below, the list of segments (click one to move the playhead) and the length before and after your edits.
+
+### Saving
+
+The editor writes `project.json` by itself 1 s after your last change, as a temporary file renamed into place. The save state reads `Saved` or `Saving…`; if a write fails it shows the error text and tries again. A recording you only opened is not rewritten.
+
+### Export…
+
+**Export…** (or <kbd>⌘</kbd> <kbd>E</kbd>) opens a sheet. It saves `project.json` first, because the export renders the saved project.
+
+| Format | Options |
+|---|---|
+| **MP4** | Codec **H.264** or **HEVC**. Resolution **Source**, **1080p** or **4K** (the long side is 1920 or 3840 px), never above 3840×2160. Frame rate **30 fps** or **60 fps**. Quality **Standard** or **High**. |
+| **GIF** | Width **480 px**, **720 px** or **960 px**. Frame rate **10 fps** or **15 fps**. |
+
+The sheet shows the result, for example `1920×1080 · 2:31 · 4530 frames`, and the destination. **Choose…** opens a save dialog. The default name is the project name with `.mp4` or `.gif`, next to the project folder; a number is added if that name exists. While it runs, a bar shows the percentage and the time left. **Cancel** (or <kbd>Esc</kbd>) stops it and leaves no partial file. At the end a toast says `Exported NAME` and the file is shown in Finder. Closing the editor cancels an export in progress. The exported length is the length of the edited timeline, trims and speed changes included.
+
+A GIF holds all its frames in memory, so its length is limited. At 960 px wide (16:9, 15 fps) the limit is 20 seconds; a narrower or slower GIF can be longer, for example about 80 seconds at 480 px. Over the limit the sheet says:
+
+`This edit is too long for a GIF: the limit is N seconds. Trim it or export an MP4.`
+
+(N is the limit for the width, frame rate and aspect you chose.)
 
 :::caution[Limits]
 - PNG only. Settings → Capture shows the format as PNG, with no other choice. **Include cursor** draws the pointer in area, window and screen captures.
 - The scrolling capture keeps all its strips in memory until it finishes.
-- Recordings cannot be edited or exported yet, and there is no camera or audio recording. Open them from Finder.
+- Exports have no audio yet. Camera and microphone recording and transcript editing are not available.
+- The editor does not use image wallpapers: the Style presets are gradients.
 - A recording is lost if you quit Ferrocast while it runs. Stop it first.
 :::
 
