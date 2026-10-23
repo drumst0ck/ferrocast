@@ -1,6 +1,8 @@
 //! Screen capture and recording: pure, platform-independent logic.
 
+pub mod events;
 pub mod ocr;
+pub mod project;
 pub mod protocol;
 pub mod region;
 pub mod settings;
