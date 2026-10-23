@@ -7,9 +7,12 @@ import Metal
 import UniformTypeIdentifiers
 
 // `render.frame`: one still of a project, styled like the editor preview (T24).
-// Style only: background, padding, rounded corners, drop shadow, output aspect. The camera
-// transform, cursor, click ring and motion blur come with T25. P6 fields of project.json
-// (loupes, looks, split, ...) are ignored here, so a project without them renders exactly as before.
+// Style: background, padding, rounded corners, drop shadow, output aspect. T25 adds, from the optional
+// `camera`, `cursor`, `ring` and `blur` request fields (all maths is evaluated by `capture::compose`
+// in Rust, Swift only draws): a crop of the SOURCE frame to the viewport before styling, the cursor
+// sprite, the click ring and a directional motion blur. A request without those fields renders exactly
+// as T24 did. P6 fields of project.json (loupes, looks, split, ...) are ignored here, so a project
+// without them renders exactly as before.
 //
 // Units: `style.radius`, `shadow.blur` and `shadow.dy` are authored for a 1920 px wide output and
 // scale with the requested width; `style.padding` is a fraction of the output width per side.
@@ -200,8 +203,93 @@ private func backgroundImage(_ style: RenderStyle, take: CGImage, project: Strin
     return gradient(RenderStyle(json: [:]).bgStops, 135) ?? CIImage(color: .black).cropped(to: canvas)
 }
 
+/// The optional per-frame fields of `render.frame` (normalised to the recorded display, top-left origin).
+struct FrameFx {
+    struct Cursor { var x: Double, y: Double, kind: String, size: Double, opacity: Double }
+    struct Ring { var x: Double, y: Double, radius: Double, alpha: Double }
+    struct Blur { var samples: Int, dir: [Double], length: Double, scene: Bool }
+    var camera: CGRect?
+    var cursor: Cursor?
+    var ring: Ring?
+    var blur: Blur?
+    /// Canonical text of the fields, part of the frame cache key.
+    var key = ""
+
+    static let none = FrameFx()
+
+    var isNone: Bool { camera == nil && cursor == nil && ring == nil && blur == nil }
+
+    /// nil when a present field is malformed.
+    init?(request req: [String: Any]) {
+        func obj(_ k: String) -> [String: Any]?? {
+            guard let v = req[k], !(v is NSNull) else { return .some(nil) }
+            return (v as? [String: Any]).map { .some($0) }
+        }
+        func fin(_ d: [String: Any], _ names: [String]) -> [Double]? {
+            let v = names.compactMap { num(d[$0]) }
+            return v.count == names.count && v.allSatisfy { $0.isFinite } ? v : nil
+        }
+        guard case .some(let cam) = obj("camera"), case .some(let cur) = obj("cursor"),
+              case .some(let rng) = obj("ring"), case .some(let blr) = obj("blur") else { return nil }
+        if let c = cam {
+            guard let v = fin(c, ["x", "y", "w", "h"]), v[2] > 0, v[3] > 0 else { return nil }
+            // S15: the viewport never leaves the display, whatever the caller sent.
+            let w = min(v[2], 1), h = min(v[3], 1)
+            camera = CGRect(x: min(max(v[0], 0), 1 - w), y: min(max(v[1], 0), 1 - h), width: w, height: h)
+        }
+        if let c = cur {
+            guard let v = fin(c, ["x", "y", "size", "opacity"]), v[2] > 0 else { return nil }
+            cursor = Cursor(x: v[0], y: v[1], kind: (c["kind"] as? String) ?? "arrow", size: min(v[2], 8), opacity: min(max(v[3], 0), 1))
+        }
+        if let r = rng {
+            guard let v = fin(r, ["x", "y", "radius", "alpha"]) else { return nil }
+            ring = Ring(x: v[0], y: v[1], radius: max(v[2], 0), alpha: min(max(v[3], 0), 1))
+        }
+        if let b = blr {
+            guard let v = fin(b, ["length"]), let d = b["dir"] as? [NSNumber], d.count == 2,
+                  let n = num(b["samples"]) else { return nil }
+            blur = Blur(samples: Int(min(max(n, 0), 32)), dir: d.map { $0.doubleValue }, length: max(v[0], 0), scene: (b["scene"] as? Bool) ?? false)
+        }
+        var parts: [String: Any] = [:]
+        for k in ["camera", "cursor", "ring", "blur"] { if let v = req[k], !(v is NSNull) { parts[k] = v } }
+        if !parts.isEmpty, let d = try? JSONSerialization.data(withJSONObject: parts, options: [.sortedKeys]) {
+            key = String(decoding: d, as: UTF8.self)
+        }
+    }
+
+    private init() {}
+}
+
+/// Pixel crop of the take for a normalised viewport, top-left origin, at least 1 px, inside the take.
+private func cropRect(_ cam: CGRect, take: CGSize) -> CGRect {
+    let x0 = max(0, min(Int((cam.minX * take.width).rounded()), Int(take.width) - 1))
+    let y0 = max(0, min(Int((cam.minY * take.height).rounded()), Int(take.height) - 1))
+    let x1 = max(x0 + 1, min(Int((cam.maxX * take.width).rounded()), Int(take.width)))
+    let y1 = max(y0 + 1, min(Int((cam.maxY * take.height).rounded()), Int(take.height)))
+    return CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
+}
+
+/// Cursor sprite and click ring as separate transparent layers the size of the picture. `view` is
+/// the normalised viewport actually shown; `ref` scales authored sizes like the rest of the style.
+private func overlayLayers(_ fx: FrameFx, view: CGRect, picture: CGSize, ref: CGFloat) -> (cursor: CIImage?, ring: CIImage?) {
+    func map(_ x: Double, _ y: Double) -> CGPoint {
+        CGPoint(x: CGFloat((x - view.minX) / view.width) * picture.width, y: CGFloat((y - view.minY) / view.height) * picture.height)
+    }
+    var ring: CIImage?
+    if let r = fx.ring, r.alpha > 0 {
+        let c = map(r.x, r.y), radius = CGFloat(r.radius / view.width) * picture.width
+        ring = drawnLayer(size: picture) { drawClickRing($0, center: c, radius: radius, alpha: CGFloat(r.alpha), line: max(1, 3 * ref)) }
+    }
+    var cursor: CIImage?
+    if let c = fx.cursor, c.opacity > 0 {
+        let at = map(c.x, c.y)
+        cursor = drawnLayer(size: picture) { drawCursorSprite($0, kind: c.kind, at: at, scale: CGFloat(c.size) * ref, opacity: CGFloat(c.opacity)) }
+    }
+    return (cursor, ring)
+}
+
 /// Compose the styled still for one take frame.
-func composeStyledFrame(take: CGImage, style: RenderStyle, project: String, width: Int) -> CGImage? {
+func composeStyledFrame(take: CGImage, style: RenderStyle, project: String, width: Int, fx: FrameFx = .none) -> CGImage? {
     let geo = renderGeometry(style, source: CGSize(width: take.width, height: take.height), width: width)
     let canvas = CGRect(origin: .zero, size: geo.canvas)
     // CoreImage is y-up; the geometry is top-left.
@@ -211,7 +299,39 @@ func composeStyledFrame(take: CGImage, style: RenderStyle, project: String, widt
     let mask = rawImage(maskCG)
     let clear = CIImage(color: .clear).cropped(to: canvas)
 
-    let picture = scaled(CIImage(cgImage: take), to: frameCI.size, at: frameCI.origin)
+    var picture: CIImage
+    if let cam = fx.camera {
+        // Camera: crop the SOURCE frame to the viewport (pixel aligned) and scale it to the frame.
+        let takeSize = CGSize(width: take.width, height: take.height)
+        let r = cropRect(cam, take: takeSize)
+        let ci = CGRect(x: r.minX, y: takeSize.height - r.maxY, width: r.width, height: r.height)
+        let part = CIImage(cgImage: take).cropped(to: ci).transformed(by: CGAffineTransform(translationX: -ci.minX, y: -ci.minY))
+        picture = scaled(part, to: frameCI.size, at: frameCI.origin)
+    } else {
+        picture = scaled(CIImage(cgImage: take), to: frameCI.size, at: frameCI.origin)
+    }
+    if !fx.isNone {
+        let view = fx.camera.map { c -> CGRect in
+            let r = cropRect(c, take: CGSize(width: take.width, height: take.height))
+            return CGRect(x: r.minX / CGFloat(take.width), y: r.minY / CGFloat(take.height),
+                          width: r.width / CGFloat(take.width), height: r.height / CGFloat(take.height))
+        } ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+        let ref = CGFloat(geo.canvas.width / 1920)
+        var layers = overlayLayers(fx, view: view, picture: geo.frame.size, ref: ref)
+        let place = CGAffineTransform(translationX: frameCI.minX, y: frameCI.minY)
+        if let b = fx.blur, b.samples > 1 {
+            let len = b.length * Double(frameCI.width)
+            if b.scene {
+                picture = motionBlurred(picture, dir: b.dir, length: len, samples: b.samples, clamped: true)
+            } else if let c = layers.cursor {
+                layers.cursor = motionBlurred(c, dir: b.dir, length: len, samples: b.samples, clamped: false)
+            }
+        }
+        for layer in [layers.ring, layers.cursor] {
+            if let l = layer { picture = l.transformed(by: place).composited(over: picture) }
+        }
+        picture = picture.cropped(to: frameCI)
+    }
     let rounded = picture.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: clear, kCIInputMaskImageKey: mask])
 
     var result = backgroundImage(style, take: take, project: project, geo: geo, canvas: canvas)
@@ -290,6 +410,8 @@ private struct FrameKey: Hashable {
     let takeMtime: Double
     let t: Int64
     let width: Int
+    /// Canonical text of the camera/cursor/ring/blur fields ("" = none).
+    let fx: String
 }
 
 private struct CachedFrame {
@@ -349,7 +471,7 @@ private func pruneFrameCache(project: String, keep: String) {
     }
 }
 
-/// `render.frame`: {project, t, width, out?} -> {path, size, ms, cached}.
+/// `render.frame`: {project, t, width, out?, camera?, cursor?, ring?, blur?} -> {path, size, ms, cached}.
 func handleRenderFrame(_ id: Any?, _ req: [String: Any]) {
     let started = DispatchTime.now()
     guard let project = req["project"] as? String, project.hasPrefix("/"),
@@ -358,6 +480,10 @@ func handleRenderFrame(_ id: Any?, _ req: [String: Any]) {
         return
     }
     let width = Int(w)
+    guard let fx = FrameFx(request: req) else {
+        fail(id, "invalid", "render.frame camera/cursor/ring/blur are malformed")
+        return
+    }
     let out = (req["out"] as? String) ?? (project as NSString).appendingPathComponent(".cache/f-\(Int(max(t, 0) * 1000))-\(width).png")
     guard out.hasPrefix("/") else {
         fail(id, "invalid", "out must be an absolute path")
@@ -384,7 +510,7 @@ func handleRenderFrame(_ id: Any?, _ req: [String: Any]) {
     }
 
     let key = FrameKey(project: project, mtime: mtime(projectFile), takeMtime: mtime(takePath),
-                       t: Int64((max(t, 0) * 1_000_000).rounded()), width: width)
+                       t: Int64((max(t, 0) * 1_000_000).rounded()), width: width, fx: fx.key)
     let ms = { Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000 }
     if let hit = frameCache[key] {
         guard writeAtomically(hit.png, to: out) else { fail(id, "internal", "could not write \(out)"); return }
@@ -393,7 +519,7 @@ func handleRenderFrame(_ id: Any?, _ req: [String: Any]) {
     }
     do {
         let take = try takeFrame(at: URL(fileURLWithPath: takePath), t: t)
-        guard let image = composeStyledFrame(take: take, style: RenderStyle(json: json), project: project, width: width),
+        guard let image = composeStyledFrame(take: take, style: RenderStyle(json: json), project: project, width: width, fx: fx),
               let png = encodePNG(image) else {
             fail(id, "internal", "could not compose the frame")
             return

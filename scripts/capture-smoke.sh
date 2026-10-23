@@ -252,11 +252,13 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 
-// usage: gen <project-dir>: screen.mov with 30 frames, 320x200, 30 fps: gradient, a red square at
-// the top left and a white bar that moves right.
+// usage: gen <project-dir> [frames=30]: screen.mov with 320x200 frames at 30 fps: gradient, a red
+// square at the top left and a white bar that moves right (wrapping at 300 px: frames < 34 are
+// unchanged from T24, so its golden stays valid).
 let url = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("screen.mov")
 try? FileManager.default.removeItem(at: url)
 let w = 320, h = 200
+let frames = CommandLine.arguments.count > 2 ? Int(CommandLine.arguments[2]) ?? 30 : 30
 let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
 let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -267,7 +269,7 @@ let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sour
 writer.add(input)
 writer.startWriting()
 writer.startSession(atSourceTime: .zero)
-for i in 0..<30 {
+for i in 0..<frames {
     while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.005) }
     var pb: CVPixelBuffer?
     CVPixelBufferPoolCreatePixelBuffer(nil, adaptor.pixelBufferPool!, &pb)
@@ -282,7 +284,7 @@ for i in 0..<30 {
     ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
     ctx.fill(CGRect(x: 0, y: h - 40, width: 40, height: 40))
     ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-    ctx.fill(CGRect(x: 10 + i * 9, y: 90, width: 12, height: 20))
+    ctx.fill(CGRect(x: 10 + (i * 9) % 290, y: 90, width: 12, height: 20))
     CVPixelBufferUnlockBaseAddress(buf, [])
     adaptor.append(buf, withPresentationTime: CMTime(value: Int64(i), timescale: 30))
 }
@@ -359,6 +361,143 @@ PY
       ); render_rc=$?
       echo "$render_out"
       [ "$render_rc" = 0 ] || fail=1
+
+      # T25: camera crop, cursor sprite, click ring and motion blur from the optional render.frame
+      # fields. The fields come from crates/core/fixtures/render_zoom_params.json, which a Rust test
+      # (compose_fixture) keeps equal to what capture::compose evaluates: Rust owns the maths, the
+      # helper only draws. events.json next to it was written by the Swift EventLog. Frames are kept
+      # under target/capture-spike/render-fixture/t25/ for looking at.
+      zdir="$rdir/Zoom.ferrocast"
+      mkdir -p "$zdir" target/capture-spike/render-fixture/t25
+      if "$rdir/gen" "$zdir" 90 && cp crates/core/fixtures/render_zoom_project.json "$zdir/project.json" \
+         && cp crates/core/fixtures/render_events.json "$zdir/events.json"; then
+        t25_out=$(python3 - "$helper" "$zdir" crates/core/fixtures/render_zoom_params.json target/capture-spike/render-fixture/t25 <<'PY'
+import hashlib, json, os, shutil, struct, subprocess, sys, zlib
+
+helper, project, params_file, keep = sys.argv[1:5]
+frames = json.load(open(params_file))
+
+def session(reqs):
+    p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    out, _ = p.communicate("".join(json.dumps(r) + "\n" for r in reqs), timeout=60)
+    replies = [json.loads(l) for l in out.splitlines()]
+    assert len(replies) == len(reqs) and p.returncode == 0, (replies, p.returncode)
+    return replies
+
+n = [100]
+def req(t, name, params=None, width=960):
+    n[0] += 1
+    return dict({"id": n[0], "cmd": "render.frame", "project": project, "t": t, "width": width,
+                 "out": "%s/.cache/%s.png" % (project, name)}, **(params or {}))
+
+def digest(name):
+    return hashlib.sha256(open("%s/.cache/%s.png" % (project, name), "rb").read()).hexdigest()
+
+def pixels(name):
+    """Decode an 8-bit RGB/RGBA non-interlaced PNG into (w, h, rows of bytes, channels)."""
+    d = open("%s/.cache/%s.png" % (project, name), "rb").read()
+    assert d[:8] == b"\x89PNG\r\n\x1a\n"
+    pos, idat, w = 8, b"", None
+    while pos < len(d):
+        ln, kind = struct.unpack(">I4s", d[pos:pos + 8])
+        body = d[pos + 8:pos + 8 + ln]
+        if kind == b"IHDR":
+            w, h, depth, ctype, _, _, inter = struct.unpack(">IIBBBBB", body)
+            assert depth == 8 and ctype in (2, 6) and inter == 0, (depth, ctype, inter)
+        elif kind == b"IDAT":
+            idat += body
+        pos += 12 + ln
+    ch = 3 if ctype == 2 else 4
+    raw, stride, rows, prev = zlib.decompress(idat), w * ch, [], bytearray(w * ch)
+    for y in range(h):
+        f, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            a = line[i - ch] if i >= ch else 0
+            b = prev[i]
+            c = prev[i - ch] if i >= ch else 0
+            if f == 1: line[i] = (line[i] + a) & 255
+            elif f == 2: line[i] = (line[i] + b) & 255
+            elif f == 3: line[i] = (line[i] + (a + b) // 2) & 255
+            elif f == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(line); prev = line
+    return w, h, rows, ch
+
+def count(name, pred):
+    w, h, rows, ch = pixels(name)
+    return sum(1 for r in rows for x in range(w) if pred(r[x * ch], r[x * ch + 1], r[x * ch + 2]))
+
+red = lambda r, g, b: r > 200 and g < 60 and b < 60
+
+try:
+    assert [round(f["t"], 2) for f in frames] == [0.2, 0.85, 1.2, 2.5], frames
+    reqs = [req(f["t"], "z%d" % i, f["params"]) for i, f in enumerate(frames)]
+    first = session(reqs)
+    for r in first:
+        assert r.get("ok") and r["size"] == [960, 540], r
+    base = [digest("z%d" % i) for i in range(4)]
+    assert len(set(base)) == 4, "the four frames are not all different"
+
+    # determinism: a second process renders identical bytes
+    session([req(f["t"], "y%d" % i, f["params"]) for i, f in enumerate(frames)])
+    assert [digest("y%d" % i) for i in range(4)] == base, "second process differs (not deterministic)"
+
+    # S19: no new fields = the plain T24 frame, whatever the project's zooms say; the T24 check
+    # above compares the plain Fixture frame with the golden sha256.
+    plain = session([req(0.2, "p0"), req(1.2, "p2")])
+    assert all(r.get("ok") for r in plain)
+    assert digest("p0") != base[0] and digest("p2") != base[2], "params had no effect"
+    ident = session([req(1.2, "i2", {"camera": {"x": 0, "y": 0, "w": 1, "h": 1}})])[0]
+    assert ident.get("ok") and digest("i2") == digest("p2"), "identity camera differs from no camera"
+
+    # camera: the red square (top left, 12 % of the source) is visible before and gone at full zoom
+    red_before, red_zoom, red_after = count("z0", red), count("z2", red), count("z3", red)
+    assert red_before > 200 and red_zoom == 0 and red_after > 200, (red_before, red_zoom, red_after)
+
+    # ablations: each effect changes pixels, so each is really drawn
+    p = lambda i: frames[i]["params"]
+    ab = {"cursor": (0, "cursor"), "ring": (2, "ring"), "blur": (1, "blur"), "camera": (2, "camera")}
+    ab_reqs = [req(frames[i]["t"], "no-" + k, {kk: v for kk, v in p(i).items() if kk != k}) for k, (i, _) in ab.items()]
+    session(ab_reqs)
+    for k, (i, _) in ab.items():
+        assert digest("no-" + k) != base[i], "removing %s changed nothing" % k
+    # blur leaves a longer streak than the sharp frame: more non-gradient... compared by byte difference
+    sharp, blurred = pixels("no-blur"), pixels("z1")
+    diff = sum(1 for ra, rb in zip(sharp[2], blurred[2]) for a, b in zip(ra, rb) if abs(a - b) > 8)
+    assert diff > 500, "blur changed too few samples (%d)" % diff
+
+    # malformed fields are an error, not a silent default
+    bad = session([req(0.2, "bad", {"camera": {"x": "a", "y": 0, "w": 1, "h": 1}}),
+                   req(0.2, "bad2", {"ring": [1]})])
+    assert all(b.get("error") == "invalid" for b in bad), bad
+
+    # the cache key includes the params: same t and width, different fields, different bytes
+    c = session([req(1.2, "k1", p(2)), req(1.2, "k2"), req(1.2, "k3", p(2))])
+    assert not c[1]["cached"] and c[2]["cached"], c
+    assert digest("k1") == digest("k3") == base[2] and digest("k2") == digest("p2"), "cache served the wrong frame"
+
+    # a camera far outside the display is clamped to the display (S15), not an error
+    out_of = session([req(1.2, "far", {"camera": {"x": 0.9, "y": 0.9, "w": 0.5, "h": 0.5}}),
+                      req(1.2, "far-ok", {"camera": {"x": 0.5, "y": 0.5, "w": 0.5, "h": 0.5}})])
+    assert all(r.get("ok") for r in out_of) and digest("far") == digest("far-ok"), "viewport left the display"
+
+    # perf budget (plan: <= 45 ms at 960 px): later frames of one session, assets loaded
+    warm = session([req(0.2, "w0", p(0)), req(0.85, "w1", p(1)), req(1.2, "w2", p(2)), req(2.5, "w3", p(3))])
+    ms = [round(r["ms"]) for r in warm if not r["cached"]]
+    for i in range(4):
+        shutil.copy("%s/.cache/z%d.png" % (project, i), "%s/frame-%d.png" % (keep, i))
+    print("PASS: render.frame T25 (4 frames 960x540 differ, 2nd process identical, params-less = T24 frame, identity camera = none, red square %d -> %d -> %d px, cursor/ring/blur/camera each change pixels, malformed -> invalid, cache keyed by params, camera clamped; frame ms %s, budget 45 ms, PNGs in %s)"
+          % (red_before, red_zoom, red_after, ms, keep))
+except Exception as e:
+    print("FAIL: render.frame T25 (%r)" % (e,)); sys.exit(1)
+PY
+        ); t25_rc=$?
+        echo "$t25_out"
+        [ "$t25_rc" = 0 ] || fail=1
+      else
+        echo "SKIP: render.frame T25 (zoom fixture could not be generated)"
+      fi
     else
       echo "SKIP: render.frame (fixture movie could not be generated: AVFoundation unavailable?)"
     fi

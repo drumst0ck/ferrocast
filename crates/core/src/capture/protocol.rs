@@ -1,5 +1,6 @@
 //! NDJSON protocol of the `ferrocast-capture` helper: pure serde types, no I/O.
 
+use super::compose::FrameParams;
 use serde::{Deserialize, Serialize};
 pub use serde_json::Value;
 
@@ -61,6 +62,10 @@ pub enum Command {
         /// Absolute PNG path; the helper picks one under `<project>/.cache` when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         out: Option<String>,
+        /// Optional `camera`, `cursor`, `ring`, `blur` (T25), evaluated by `capture::compose`.
+        /// Absent = the plain styled frame of T24.
+        #[serde(flatten)]
+        params: FrameParams,
     },
 }
 
@@ -315,6 +320,7 @@ pub fn parse_body<T: serde::de::DeserializeOwned>(body: &Value) -> Result<T, Str
 
 #[cfg(test)]
 mod tests {
+    use super::super::compose::Camera;
     use super::*;
 
     #[test]
@@ -507,11 +513,23 @@ mod tests {
 
     #[test]
     fn render_frame_request_encodes_project_in_json_and_omits_absent_out() {
-        let c = Command::RenderFrame { project: "/Users/me/Demo é.ferrocast".into(), t: 12.34, width: 960, out: None };
+        let c = Command::RenderFrame {
+            project: "/Users/me/Demo é.ferrocast".into(),
+            t: 12.34,
+            width: 960,
+            out: None,
+            params: FrameParams::default(),
+        };
         let s = encode_request(&Request { id: 9, command: c.clone() });
         assert_eq!(s, r#"{"id":9,"cmd":"render.frame","project":"/Users/me/Demo é.ferrocast","t":12.34,"width":960}"#);
         assert_eq!(serde_json::from_str::<Request>(&s).unwrap().command, c);
-        let with = Command::RenderFrame { project: "/p".into(), t: 0.0, width: 64, out: Some("/p/.cache/f-0.png".into()) };
+        let with = Command::RenderFrame {
+            project: "/p".into(),
+            t: 0.0,
+            width: 64,
+            out: Some("/p/.cache/f-0.png".into()),
+            params: FrameParams::default(),
+        };
         let s = encode_request(&Request { id: 10, command: with.clone() });
         assert!(s.ends_with(r#""width":64,"out":"/p/.cache/f-0.png"}"#), "{s}");
         assert_eq!(serde_json::from_str::<Request>(&s).unwrap().command, with);
@@ -536,5 +554,40 @@ mod tests {
         let d: RenderFrameDone = parse_body(&body).unwrap();
         assert_eq!((d.ms, d.cached), (0.0, false));
         assert!(parse_body::<RenderFrameDone>(&serde_json::json!({"ok":true})).is_err());
+    }
+
+    #[test]
+    fn render_frame_without_p3_fields_decodes_to_noop_params() {
+        // A T24 request (no camera/cursor/ring/blur) keeps meaning exactly what it meant (S19).
+        let r: Request = serde_json::from_str(r#"{"id":9,"cmd":"render.frame","project":"/p","t":1.5,"width":960}"#).unwrap();
+        let Command::RenderFrame { params, .. } = r.command else { panic!() };
+        assert!(params.is_noop());
+    }
+
+    #[test]
+    fn render_frame_carries_camera_cursor_ring_and_blur_as_flat_optional_fields() {
+        let line = r#"{"id":9,"cmd":"render.frame","project":"/p","t":1.5,"width":960,"camera":{"x":0.25,"y":0.25,"w":0.5,"h":0.5},"cursor":{"x":0.5,"y":0.4,"kind":"ibeam","size":1.4,"opacity":1.0},"ring":{"x":0.3,"y":0.4,"radius":0.01,"alpha":0.5},"blur":{"samples":4,"shutter":0.5,"dir":[1.0,0.0],"length":0.004}}"#;
+        let r: Request = serde_json::from_str(line).unwrap();
+        let Command::RenderFrame { params, .. } = &r.command else { panic!() };
+        assert_eq!(params.camera, Some(Camera { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }));
+        assert_eq!(params.cursor.as_ref().map(|c| c.kind.as_str()), Some("ibeam"));
+        assert_eq!(params.ring.as_ref().map(|r| r.alpha), Some(0.5));
+        assert_eq!(params.blur.as_ref().map(|b| b.samples), Some(4));
+        // encode puts them back as top-level keys (no nesting under "params")
+        let v: serde_json::Value = serde_json::from_str(&encode_request(&r)).unwrap();
+        for k in ["camera", "cursor", "ring", "blur"] {
+            assert!(v.get(k).is_some(), "{k} missing");
+        }
+        assert!(v.get("params").is_none());
+        assert_eq!(serde_json::from_str::<Request>(&encode_request(&r)).unwrap(), r);
+    }
+
+    #[test]
+    fn render_frame_partial_p3_fields_leave_the_others_absent() {
+        let r: Request =
+            serde_json::from_str(r#"{"id":1,"cmd":"render.frame","project":"/p","t":0,"width":64,"camera":{"x":0,"y":0,"w":0.5,"h":0.5}}"#)
+                .unwrap();
+        let s = encode_request(&r);
+        assert!(s.contains(r#""camera""#) && !s.contains("cursor") && !s.contains("ring") && !s.contains("blur"), "{s}");
     }
 }
