@@ -1,6 +1,7 @@
 mod app;
 mod capture_ctl;
 mod clipboard_policy;
+mod editor_ctl;
 mod instance;
 mod items;
 #[cfg(test)]

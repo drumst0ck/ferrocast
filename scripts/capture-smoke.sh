@@ -2,9 +2,18 @@
 # Smoke test for the ferrocast-capture helper. Usage: scripts/capture-smoke.sh [path-to-helper]
 # Default path: dist/Ferrocast.app/Contents/MacOS/ferrocast-capture. Permission-dependent checks
 # print SKIP when Screen Recording is not granted. Exit 0 on pass, 1 on failure.
+# --keep (anywhere in the arguments): also leave an editor fixture project under
+# target/capture-spike/editor-fixture/Take.ferrocast (the generated 3 s screen.mov, the render
+# fixture's project.json with duration 3 and no zooms, and render_events.json) for the editor's
+# live test and frame-rate measurement. Nothing else changes.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-helper=${1:-dist/Ferrocast.app/Contents/MacOS/ferrocast-capture}
+keep=0
+args=()
+for a in "$@"; do
+  if [ "$a" = --keep ]; then keep=1; else args+=("$a"); fi
+done
+helper=${args[0]:-dist/Ferrocast.app/Contents/MacOS/ferrocast-capture}
 [ -x "$helper" ] || { echo "FAIL: helper not found or not executable: $helper"; exit 1; }
 fail=0
 main_display=
@@ -252,13 +261,15 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 
-// usage: gen <project-dir> [frames=30]: screen.mov with 320x200 frames at 30 fps: gradient, a red
+// usage: gen <project-dir> [frames=30] [first-pts-in-frames=0]: screen.mov with 320x200 frames at 30 fps: gradient, a red
 // square at the top left and a white bar that moves right (wrapping at 300 px: frames < 34 are
 // unchanged from T24, so its golden stays valid).
 let url = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("screen.mov")
 try? FileManager.default.removeItem(at: url)
 let w = 320, h = 200
 let frames = CommandLine.arguments.count > 2 ? Int(CommandLine.arguments[2]) ?? 30 : 30
+// a real SCStream take does not start at 0 (first frame at ~13 ms): a nonzero value reproduces it
+let firstPts = CommandLine.arguments.count > 3 ? Int64(CommandLine.arguments[3]) ?? 0 : 0
 let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
 let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -286,7 +297,7 @@ for i in 0..<frames {
     ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
     ctx.fill(CGRect(x: 10 + (i * 9) % 290, y: 90, width: 12, height: 20))
     CVPixelBufferUnlockBaseAddress(buf, [])
-    adaptor.append(buf, withPresentationTime: CMTime(value: Int64(i), timescale: 30))
+    adaptor.append(buf, withPresentationTime: CMTime(value: Int64(i) + firstPts, timescale: 30))
 }
 input.markAsFinished()
 let sem = DispatchSemaphore(value: 0)
@@ -361,6 +372,32 @@ PY
       ); render_rc=$?
       echo "$render_out"
       [ "$render_rc" = 0 ] || fail=1
+
+      # A real recording starts at its first sample (~13 ms), not at 0: the frame at t = 0 must be
+      # the first sample, not "Cannot Open" (found on the first live take; the fixture above starts at 0).
+      odir="$rdir/Offset.ferrocast"
+      mkdir -p "$odir"
+      if "$rdir/gen" "$odir" 30 2 && cp crates/core/fixtures/render_project.json "$odir/project.json"; then
+        off_out=$(python3 - "$helper" "$odir" <<'PY'
+import json, subprocess, sys
+
+helper, project = sys.argv[1:3]
+reqs = [{"id": i + 1, "cmd": "render.frame", "project": project, "t": t, "width": 480,
+         "out": "%s/.cache/o%d.png" % (project, i)} for i, t in enumerate([0.0, 0.01, 0.2])]
+p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+out, _ = p.communicate("".join(json.dumps(r) + "\n" for r in reqs), timeout=60)
+replies = [json.loads(l) for l in out.splitlines()]
+bad = [r for r in replies if not r.get("ok")]
+if len(replies) != 3 or bad:
+    print("FAIL: render.frame before the first sample (%s)" % (bad or replies,)); sys.exit(1)
+print("PASS: render.frame at t = 0 of a take whose first sample is after 0 (3 of 3)")
+PY
+        ); off_rc=$?
+        echo "$off_out"
+        [ "$off_rc" = 0 ] || fail=1
+      else
+        echo "FAIL: render.frame offset fixture could not be made"; fail=1
+      fi
 
       # T25: camera crop, cursor sprite, click ring and motion blur from the optional render.frame
       # fields. The fields come from crates/core/fixtures/render_zoom_params.json, which a Rust test
@@ -500,6 +537,24 @@ PY
       fi
     else
       echo "SKIP: render.frame (fixture movie could not be generated: AVFoundation unavailable?)"
+    fi
+    if [ "$keep" = 1 ] && [ -x "$rdir/gen" ]; then
+      kd=target/capture-spike/editor-fixture/Take.ferrocast
+      mkdir -p "$kd"
+      if "$rdir/gen" "$kd" 90 && python3 - "$kd" <<'PY'
+import json, shutil, sys
+d = sys.argv[1]
+p = json.load(open("crates/core/fixtures/render_project.json"))
+p["duration"] = 3.0
+p["trims"] = [{"start": 0.0, "end": 3.0}]
+json.dump(p, open(d + "/project.json", "w"), indent=1)
+shutil.copy("crates/core/fixtures/render_events.json", d + "/events.json")
+PY
+      then
+        echo "KEPT: editor fixture project at $kd"
+      else
+        echo "FAIL: --keep could not write the editor fixture"; fail=1
+      fi
     fi
     rm -rf "$rdir"
   fi

@@ -252,8 +252,6 @@ pub enum RecordKind {
 
 pub const OPEN_LAST_ID: &str = "builtin:open-last-recording";
 pub const RECORDINGS_ID: &str = "builtin:recordings";
-/// Shown in place of an editor until P3 ships.
-pub const NO_EDITOR_NOTE: &str = "The editor is not available yet.";
 /// S12: the start sheet text for `warn input-monitoring-off`; recording goes on.
 pub const INPUT_MONITORING_TOAST: &str = "Keyboard shortcuts will not be shown: Input Monitoring is off.";
 

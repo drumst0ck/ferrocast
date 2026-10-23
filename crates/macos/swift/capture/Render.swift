@@ -366,9 +366,21 @@ private func blocking<T>(_ op: @escaping @Sendable () async throws -> T) throws 
     return try box.value!.get()
 }
 
-/// The take frame at exactly `t` (clamped into the movie): zero tolerance, so a scrubbed time
-/// returns the frame covering it rather than a nearby keyframe.
-private func takeFrame(at url: URL, t: Double) throws -> CGImage {
+/// The movie of the last request, kept between `render.frame` calls: loading the asset and its
+/// track properties took a good part of every preview frame (T26). Rebuilt when the file changes.
+private struct TakeReader {
+    let url: URL
+    let mtime: Double
+    let generator: AVAssetImageGenerator
+    let duration: Double
+    let fps: Double
+}
+
+private var takeReader: TakeReader?
+
+private func reader(for url: URL) throws -> TakeReader {
+    let stamp = mtime(url.path)
+    if let r = takeReader, r.url == url, r.mtime == stamp { return r }
     let asset = AVURLAsset(url: url)
     let (duration, fps) = try blocking {
         let d = try await asset.load(.duration).seconds
@@ -376,12 +388,45 @@ private func takeFrame(at url: URL, t: Double) throws -> CGImage {
         return (d, Double(f))
     }
     guard duration.isFinite, duration > 0 else { throw RenderError("take has no duration") }
-    let last = max(0, duration - 0.5 / max(fps, 1))
-    let at = CMTime(seconds: min(max(t, 0), last), preferredTimescale: 60000)
     let gen = AVAssetImageGenerator(asset: asset)
     gen.appliesPreferredTrackTransform = true
     gen.requestedTimeToleranceBefore = .zero
     gen.requestedTimeToleranceAfter = .zero
+    let r = TakeReader(url: url, mtime: stamp, generator: gen, duration: duration, fps: fps)
+    takeReader = r
+    return r
+}
+
+/// The take frame at exactly `t` (clamped into the movie): zero tolerance, so a scrubbed time
+/// returns the frame covering it rather than a nearby keyframe.
+///
+/// A take written by SCStream starts at its first frame (~13 ms) while the track claims to start
+/// at 0, and a request before that sample fails with "Cannot Open" (the editor opens at t = 0).
+/// Within the first four frames a failed request is retried a little later until the first sample
+/// is found.
+func takeFrame(at url: URL, t: Double) throws -> CGImage {
+    let r = try reader(for: url)
+    let last = max(0, r.duration - 0.5 / max(r.fps, 1))
+    let want = min(max(t, 0), last)
+    let frame = 1 / max(r.fps, 1)
+    var offset = 0.0
+    while true {
+        let at = CMTime(seconds: want + offset, preferredTimescale: 60000)
+        switch generate(r.generator, at: at) {
+        case .success(let image):
+            return image
+        case .failure(let e):
+            if want + offset < 4 * frame, !(e is RenderError) {
+                offset += frame / 8
+                continue
+            }
+            takeReader = nil
+            throw e
+        }
+    }
+}
+
+private func generate(_ gen: AVAssetImageGenerator, at: CMTime) -> Result<CGImage, Error> {
     let sem = DispatchSemaphore(value: 0)
     var image: CGImage?
     var failure: Error?
@@ -391,10 +436,10 @@ private func takeFrame(at url: URL, t: Double) throws -> CGImage {
     }
     if sem.wait(timeout: .now() + 8) == .timedOut {
         gen.cancelAllCGImageGeneration()
-        throw RenderError("take frame timed out")
+        return .failure(RenderError("take frame timed out"))
     }
-    guard let image else { throw failure ?? RenderError("frame unavailable") }
-    return image
+    guard let image else { return .failure(failure ?? RenderError("frame unavailable")) }
+    return .success(image)
 }
 
 struct RenderError: Error {

@@ -2,9 +2,10 @@
 //! `ferrocast_core::capture::protocol`). Text and paths never travel in argv.
 
 use anyhow::{anyhow, bail, Result};
+use ferrocast_core::capture::compose::FrameParams;
 use ferrocast_core::capture::protocol::{
-    self, Command, ErrorCode, Excludes, Hello, Line, RecordEvent, RecordStarted, RecordStopped, Request, Scale, ScreenshotDone, Shareable,
-    Target,
+    self, Command, ErrorCode, Excludes, Hello, Line, RecordEvent, RecordStarted, RecordStopped, RenderFrameDone, Request, Scale,
+    ScreenshotDone, Shareable, Target,
 };
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -145,6 +146,55 @@ impl std::fmt::Display for RecordError {
 }
 impl std::error::Error for RecordError {}
 
+/// A preview frame the helper rendered (`render.frame`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderedFrame {
+    pub path: PathBuf,
+    pub size: [u32; 2],
+    /// Time the helper spent (0 when it did not say).
+    pub ms: f64,
+    /// Served from the helper's frame cache.
+    pub cached: bool,
+}
+
+/// Why a preview frame could not be rendered. `Display` carries the helper's own message so the
+/// editor can show it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RenderError {
+    /// The request or the project was refused (bad project.json, width 0…).
+    Invalid(String),
+    /// A take is missing.
+    NotFound(String),
+    Timeout,
+    /// The helper exited (the next request needs a new helper).
+    Closed,
+    Other(String),
+}
+
+impl From<CallError> for RenderError {
+    fn from(e: CallError) -> Self {
+        match e {
+            CallError::Helper { code: ErrorCode::Invalid, message } => Self::Invalid(message),
+            CallError::Helper { code: ErrorCode::NotFound, message } => Self::NotFound(message),
+            CallError::Helper { code, message } => Self::Other(format!("{code:?}: {message}")),
+            CallError::Timeout => Self::Timeout,
+            CallError::Closed => Self::Closed,
+        }
+    }
+}
+
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(m) | Self::NotFound(m) => write!(f, "{m}"),
+            Self::Timeout => write!(f, "the preview timed out"),
+            Self::Closed => write!(f, "the capture helper closed"),
+            Self::Other(m) => write!(f, "preview failed: {m}"),
+        }
+    }
+}
+impl std::error::Error for RenderError {}
+
 /// `<project>/<file>.partial`: what the helper writes until a clean stop renames it.
 fn recording_partial(project: &Path, file: &str) -> PathBuf {
     partial_path(&project.join(file))
@@ -271,6 +321,27 @@ impl Helper {
             let _ = std::fs::remove_file(partial_path(out));
         }
         result
+    }
+
+    /// Render the preview frame of `project_dir` at SOURCE time `t_source` (map output time with
+    /// `timeline` first), `width` px wide, with the camera/cursor/ring/blur `params` that
+    /// `capture::compose::Composer` computed. The helper stays alive between calls and caches assets.
+    pub fn render_frame(
+        &mut self,
+        project_dir: &Path,
+        t_source: f64,
+        width: u32,
+        params: FrameParams,
+    ) -> std::result::Result<RenderedFrame, RenderError> {
+        if width == 0 {
+            return Err(RenderError::Invalid("preview width must be at least 1 px".into()));
+        }
+        let command = Command::RenderFrame { project: project_dir.to_string_lossy().into_owned(), t: t_source, width, out: None, params };
+        let timeout = timeout_for(&command);
+        let body = self.call(command, timeout).map_err(RenderError::from)?;
+        let done =
+            protocol::parse_body::<RenderFrameDone>(&body).map_err(|e| RenderError::Other(format!("bad render.frame reply: {e}")))?;
+        Ok(RenderedFrame { path: PathBuf::from(done.path), size: done.size, ms: done.ms, cached: done.cached })
     }
 
     /// Start recording `target` into `<project>/<file>`. Events (`state`, `tick`, `warn`) arrive on
@@ -570,6 +641,82 @@ read l; exit 1"#,
         let mut h = Helper::spawn(&p, |_| {}).unwrap();
         let (_, events) = h.record_start(&dir_of(&p), "screen.mov", Target::Display { display: 1 }, 60, false, Vec::new()).unwrap();
         assert!(events.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod render_frame_tests {
+    use super::*;
+    use ferrocast_core::capture::compose::{Camera, FrameParams};
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fake(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fc-render-test-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("helper.sh");
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    #[test]
+    fn render_frame_parses_the_reply_and_sends_params_on_the_wire() {
+        let p = fake(
+            "ok",
+            r#"read l; echo "$l" > "$(dirname "$0")/req.json"
+echo '{"id":1,"ok":true,"path":"/p/.cache/f-1.png","size":[960,540],"ms":12.5,"cached":true}'"#,
+        );
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let params = FrameParams { camera: Some(Camera { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }), ..FrameParams::default() };
+        let f = h.render_frame(Path::new("/p/Demo.ferrocast"), 1.5, 960, params).unwrap();
+        assert_eq!(f, RenderedFrame { path: PathBuf::from("/p/.cache/f-1.png"), size: [960, 540], ms: 12.5, cached: true });
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(wire.contains(r#""cmd":"render.frame""#) && wire.contains("Demo.ferrocast") && wire.contains(r#""width":960"#), "{wire}");
+        assert!(wire.contains(r#""camera":{"x":0.25"#) && wire.contains(r#""t":1.5"#), "{wire}");
+    }
+
+    #[test]
+    fn one_long_lived_helper_serves_many_frames() {
+        let p =
+            fake("many", r#"n=0; while read l; do n=$((n+1)); echo "{\"id\":$n,\"ok\":true,\"path\":\"/f$n.png\",\"size\":[10,5]}"; done"#);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        for i in 1..=3 {
+            let f = h.render_frame(Path::new("/p"), i as f64, 10, FrameParams::default()).unwrap();
+            assert_eq!(f.path, PathBuf::from(format!("/f{i}.png")));
+            assert!(!f.cached && f.ms == 0.0, "missing optional fields default");
+        }
+    }
+
+    #[test]
+    fn helper_failures_map_and_keep_the_helpers_message() {
+        let p = fake("inv", r#"read l; echo '{"id":1,"error":"invalid","message":"project.json: bad zoom"}'"#);
+        let e = Helper::spawn(&p, |_| {}).unwrap().render_frame(Path::new("/p"), 0.0, 960, FrameParams::default()).unwrap_err();
+        assert_eq!(e, RenderError::Invalid("project.json: bad zoom".into()));
+        assert!(e.to_string().contains("bad zoom"), "{e}");
+        let p = fake("nf", r#"read l; echo '{"id":1,"error":"not-found","message":"screen.mov is missing"}'"#);
+        let e = Helper::spawn(&p, |_| {}).unwrap().render_frame(Path::new("/p"), 0.0, 960, FrameParams::default()).unwrap_err();
+        assert_eq!(e, RenderError::NotFound("screen.mov is missing".into()));
+        let p = fake("int", r#"read l; echo '{"id":1,"error":"internal","message":"boom"}'"#);
+        let e = Helper::spawn(&p, |_| {}).unwrap().render_frame(Path::new("/p"), 0.0, 960, FrameParams::default()).unwrap_err();
+        assert!(matches!(&e, RenderError::Other(m) if m.contains("boom")), "{e:?}");
+    }
+
+    #[test]
+    fn a_dead_helper_is_closed_and_a_bad_reply_is_other() {
+        let p = fake("dead", "exit 0");
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(h.render_frame(Path::new("/p"), 0.0, 960, FrameParams::default()).unwrap_err(), RenderError::Closed);
+        let p = fake("bad", r#"read l; echo '{"id":1,"ok":true}'"#);
+        let e = Helper::spawn(&p, |_| {}).unwrap().render_frame(Path::new("/p"), 0.0, 960, FrameParams::default()).unwrap_err();
+        assert!(matches!(e, RenderError::Other(_)), "{e:?}");
+    }
+
+    #[test]
+    fn a_zero_width_is_refused_before_the_helper_is_asked() {
+        let p = fake("zero", "read l; sleep 5");
+        let e = Helper::spawn(&p, |_| {}).unwrap().render_frame(Path::new("/p"), 0.0, 0, FrameParams::default()).unwrap_err();
+        assert!(matches!(e, RenderError::Invalid(_)), "{e:?}");
     }
 }
 

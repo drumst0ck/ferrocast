@@ -54,6 +54,7 @@ fn fixture() -> App {
         record: Default::default(),
         tray_rec_shown: false,
         rt: Default::default(),
+        editor: None,
         notes_tray: None,
         icons: IconCache::new(store.images_dir()),
         stack: vec![View::Root],
@@ -11631,12 +11632,207 @@ fn the_recordings_browser_lists_newest_first_with_reveal_and_trash() {
     assert_eq!(items[0].subtitle, "1:05 · 48 MB");
     assert!(!items[0].accessory.is_empty(), "the date");
     let actions = app.actions_for(items[0]);
-    assert_eq!(actions[0].title, "Show in Finder");
+    assert_eq!(actions[0].title, "Open in Editor");
+    let reveal = actions.iter().find(|a| a.title == "Show in Finder").expect("reveal");
+    assert_eq!(reveal.shortcut, Some((crate::items::CMD, egui::Key::Enter)));
     let trash = actions.iter().find(|a| a.title == "Move to Trash").expect("trash");
     assert!(trash.destructive);
     assert_eq!(trash.shortcut, Some((crate::items::CMD, egui::Key::Backspace)));
-    assert_eq!(app.primary_label(items[0]), "Show in Finder");
+    assert_eq!(app.primary_label(items[0]), "Open in Editor");
     app.query = "old".into();
     let titles: Vec<String> = app.sections().iter().flat_map(|s| s.items.iter().map(|i| i.title.clone())).collect();
     assert_eq!(titles, ["Old"]);
+}
+
+// ---- T26: the studio editor view (S15) ----
+// The render worker is replaced by a channel the test reads: it plays the "fake client".
+
+fn editor_project() -> ferrocast_core::capture::project::Project {
+    let mut p = ferrocast_core::capture::project::Project::new("Demo", "2026-10-23T14:05:22Z");
+    p.duration = 10.0;
+    p.zooms = vec![serde_json::from_value(serde_json::json!({"id":"z1","start":2.0,"end":4.0,"mode":"auto","scale":2.0})).unwrap()];
+    p
+}
+
+/// An app showing the editor on `/r/Demo.ferrocast`, plus the requests the view sends to its worker.
+fn editor_app() -> (App, std::sync::mpsc::Receiver<crate::editor_ctl::WorkerCmd>) {
+    use crate::editor_ctl::{Editor, Opened};
+    let mut app = fixture();
+    let dir = std::path::PathBuf::from("/r/Demo.ferrocast");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut ed = Editor::new(dir.clone(), Some(tx));
+    ed.opened(Ok(Opened { project: editor_project(), auto_zoomed: true, note: None }));
+    app.editor = Some(ed);
+    app.stack = vec![View::Root, View::Editor { project: dir }];
+    (app, rx)
+}
+
+fn editor_requests(rx: &std::sync::mpsc::Receiver<crate::editor_ctl::WorkerCmd>) -> Vec<crate::editor_ctl::Req> {
+    rx.try_iter().map(|crate::editor_ctl::WorkerCmd::Frame(r)| r).collect()
+}
+
+fn editor_frame(app: &mut App, seq: u64, t: f64) {
+    use crate::editor_ctl::{EditorMsg, FrameOut};
+    let dir = std::path::PathBuf::from("/r/Demo.ferrocast");
+    let out = FrameOut { image: egui::ColorImage::example(), t, helper_ms: 2.0, total_ms: 5.0 };
+    app.handle_editor(EditorMsg::Frame { dir, seq, result: Ok(out) });
+}
+
+fn editor_t(app: &App) -> f64 {
+    app.editor.as_ref().unwrap().t
+}
+
+#[test]
+fn the_editor_renders_loading_error_and_frame_states() {
+    // loading: the project is not there yet
+    let mut app = fixture();
+    let dir = std::path::PathBuf::from("/r/Demo.ferrocast");
+    app.editor = Some(crate::editor_ctl::Editor::new(dir.clone(), None));
+    app.stack = vec![View::Root, View::Editor { project: dir }];
+    render(&mut app, vec![]);
+    // the helper's message is shown when opening fails
+    app.editor.as_mut().unwrap().opened(Err("The recording's video (screen.mov) is missing.".into()));
+    app.ctx.data_mut(|d| d.remove::<Vec<String>>(Id::new("body-notes")));
+    render(&mut app, vec![]);
+    let notes: Vec<String> = app.ctx.data(|d| d.get_temp(Id::new("body-notes"))).unwrap_or_default();
+    assert!(notes.iter().any(|n| n.contains("esc closes the editor")), "{notes:?}");
+    assert!(app.editor.as_ref().unwrap().error.as_deref().is_some_and(|e| e.contains("screen.mov")));
+    // a frame
+    let (mut app, rx) = editor_app();
+    render(&mut app, vec![]);
+    let reqs = editor_requests(&rx);
+    assert_eq!(reqs.len(), 1, "the first frame is asked for as soon as the view draws");
+    assert!(app.editor.as_ref().unwrap().tex.is_none());
+    editor_frame(&mut app, reqs[0].seq, reqs[0].key.t);
+    render(&mut app, vec![]);
+    let ed = app.editor.as_ref().unwrap();
+    assert!(ed.tex.is_some() && ed.shown_t == Some(0.0), "the decoded frame became the preview texture");
+    // a failing frame shows the helper's message and the last frame stays
+    let mut app = editor_app().0;
+    render(&mut app, vec![]);
+    app.handle_editor(crate::editor_ctl::EditorMsg::Frame {
+        dir: "/r/Demo.ferrocast".into(),
+        seq: 1,
+        result: Err("take frame timed out".into()),
+    });
+    assert_eq!(app.editor.as_ref().unwrap().note.as_deref(), Some("take frame timed out"));
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn the_preview_asks_for_its_on_screen_width_capped_at_960() {
+    let (mut app, rx) = editor_app();
+    render(&mut app, vec![]);
+    let r = editor_requests(&rx);
+    let w = r[0].key.width;
+    assert!((64..=crate::editor_ctl::PREVIEW_MAX_WIDTH).contains(&w) && w.is_multiple_of(32), "{w}");
+    assert_eq!(crate::editor_ctl::PREVIEW_MAX_WIDTH, 960);
+}
+
+#[test]
+fn editor_keys_step_frames_seconds_and_jump() {
+    let (mut app, _rx) = editor_app();
+    render(&mut app, vec![]);
+    let fps = f64::from(app.settings.capture.fps);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert!((editor_t(&app) - 1.0 / fps).abs() < 1e-9, "one frame forward: {}", editor_t(&app));
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    render(&mut app, vec![key_event(Key::ArrowLeft)]);
+    assert!((editor_t(&app) - 1.0 / fps).abs() < 1e-9);
+    render(&mut app, vec![key_mod_event(Key::ArrowRight, Modifiers::SHIFT)]);
+    assert!((editor_t(&app) - (1.0 + 1.0 / fps)).abs() < 1e-9, "one second forward");
+    render(&mut app, vec![key_mod_event(Key::ArrowLeft, Modifiers::SHIFT)]);
+    render(&mut app, vec![key_event(Key::End)]);
+    assert!((editor_t(&app) - (10.0 - 1.0 / fps)).abs() < 1e-9, "End is the last frame");
+    render(&mut app, vec![key_event(Key::Home)]);
+    assert_eq!(editor_t(&app), 0.0);
+    render(&mut app, vec![key_event(Key::ArrowLeft)]);
+    assert_eq!(editor_t(&app), 0.0, "never before the start");
+}
+
+#[test]
+fn space_toggles_playback_and_stepping_pauses_it() {
+    let (mut app, _rx) = editor_app();
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Space)]);
+    assert!(app.editor.as_ref().unwrap().playing());
+    render(&mut app, vec![key_event(Key::Space)]);
+    assert!(!app.editor.as_ref().unwrap().playing());
+    render(&mut app, vec![key_event(Key::Space)]);
+    render(&mut app, vec![key_event(Key::ArrowRight)]);
+    assert!(!app.editor.as_ref().unwrap().playing(), "stepping a frame pauses");
+}
+
+#[test]
+fn clicking_and_dragging_the_timeline_seeks_and_requests_coalesce() {
+    let (mut app, rx) = editor_app();
+    render(&mut app, vec![]);
+    let first = editor_requests(&rx);
+    assert_eq!(first.len(), 1);
+    let tl: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-timeline-rect"))).expect("timeline drawn");
+    let at = |f: f32| Pos2::new(tl.min.x + tl.width() * f, tl.center().y);
+    click_at(&mut app, at(0.5));
+    assert!((editor_t(&app) - 5.0).abs() < 0.2, "click in the middle seeks to half: {}", editor_t(&app));
+    // drag across the strip while the first render is still in flight: nothing is sent
+    let btn = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    render(&mut app, vec![Event::PointerMoved(at(0.1)), btn(at(0.1), true)]);
+    for i in 2..=9 {
+        render(&mut app, vec![Event::PointerMoved(at(i as f32 / 10.0))]);
+    }
+    render(&mut app, vec![btn(at(0.9), false)]);
+    assert!(editor_requests(&rx).is_empty(), "no request flood while a render is in flight");
+    assert!((editor_t(&app) - 9.0).abs() < 0.3, "the playhead followed the drag: {}", editor_t(&app));
+    // the first frame comes back: only the latest time is asked for
+    editor_frame(&mut app, first[0].seq, first[0].key.t);
+    let next = editor_requests(&rx);
+    assert_eq!(next.len(), 1, "{next:?}");
+    assert!((next[0].key.t - editor_t(&app)).abs() < 1e-9, "the pending request is the latest playhead time");
+}
+
+#[test]
+fn esc_closes_the_editor_and_ends_its_session() {
+    let (mut app, _rx) = editor_app();
+    render(&mut app, vec![]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(matches!(app.view(), View::Root));
+    app.drain();
+    assert!(app.editor.is_none(), "the worker and the helper go with the view");
+}
+
+#[test]
+fn recordings_enter_opens_the_editor_and_the_footer_names_both_keys() {
+    use crate::record_ctl::RecordingEntry;
+    let mut app = fixture();
+    let path: std::path::PathBuf = "/r/Take.ferrocast".into();
+    app.rt.recordings =
+        vec![RecordingEntry { path: path.clone(), name: "Take".into(), duration: Some(5.0), bytes: 1, created: 1_800_000_000 }];
+    app.stack.push(View::Recordings);
+    let hints = app.view().footer_hints();
+    assert_eq!(hints[0], ("Open", "↵"));
+    assert!(hints.contains(&("Show in Finder", "⌘↵")), "{hints:?}");
+    let item = app.sections().into_iter().flat_map(|s| s.items).next().unwrap();
+    app.run_item(&item);
+    assert!(matches!(app.view(), View::Editor { project } if *project == path), "{}", app.view().title());
+    assert_eq!(app.editor.as_ref().map(|e| e.dir.clone()), Some(path));
+    assert_eq!(app.view().title(), "Editor");
+    assert_eq!(app.stack.len(), 3, "Esc returns to the Recordings browser");
+}
+
+#[test]
+fn open_last_recording_opens_the_editor_without_the_not_available_toast() {
+    let root = std::env::temp_dir().join(format!("fc-editor-last-{}", std::process::id()));
+    let project = root.join("Newest.ferrocast");
+    ferrocast_core::capture::project::Project::create(&project, "Newest", "2026-10-23T14:05:22Z").unwrap();
+    let mut app = fixture();
+    app.visible = true;
+    app.settings.capture.recordings_folder = root.to_string_lossy().to_string();
+    app.open_last_recording();
+    assert!(matches!(app.view(), View::Editor { project: p } if *p == project), "{}", app.view().title());
+    assert!(app.toast.as_ref().is_none_or(|t| !t.0.contains("not available yet")), "{:?}", app.toast);
+    // no recordings: the existing message, no editor
+    let mut app = fixture();
+    app.visible = true;
+    app.settings.capture.recordings_folder = root.join("empty").to_string_lossy().to_string();
+    app.open_last_recording();
+    assert!(matches!(app.view(), View::Root) && app.editor.is_none());
 }
