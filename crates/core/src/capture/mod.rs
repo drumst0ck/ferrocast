@@ -3,6 +3,7 @@
 pub mod protocol;
 pub mod region;
 pub mod settings;
+pub mod stitch;
 
 pub use settings::{AfterCapture, CaptureSettings, ScreenshotFormat};
 
