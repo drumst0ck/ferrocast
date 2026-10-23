@@ -133,6 +133,28 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         locale: Option<String>,
     },
+    /// Detect the presenter's face in a project's camera file ON-DEVICE (P6). The helper reads
+    /// `sources.camera.file` from `<project>/project.json`, samples it at `fps` (default 10, 1..=30),
+    /// emits `progress` / `heartbeat` events (same shape as `transcribe`, see [`parse_transcribe_event`])
+    /// and ends with `ok` ([`AnalyzeFaceDone`]) after writing `<project>/camera_track.json`.
+    #[serde(rename = "analyze.face")]
+    AnalyzeFace {
+        project: String,
+        /// Sampling rate in frames per second; absent = the helper's default (10).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fps: Option<f64>,
+    },
+}
+
+/// Payload of the final `ok` of an `analyze.face`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalyzeFaceDone {
+    /// Sampled frames in which a face was found (the samples written).
+    pub faces: u32,
+    /// Sampled frames in total.
+    pub frames: u32,
+    /// Absolute path of the written `camera_track.json`.
+    pub path: String,
 }
 
 /// Payload of the final `ok` of a `render`.
@@ -1234,6 +1256,25 @@ mod tests {
         assert_eq!(
             parse_body::<TranscribeDone>(&body).unwrap(),
             TranscribeDone { language: "en-US".into(), words: 42, path: "/p/transcript.json".into() }
+        );
+    }
+
+    #[test]
+    fn analyze_face_request_omits_absent_fps_and_result_decodes() {
+        let r = Request { id: 14, command: Command::AnalyzeFace { project: "/p/Demo.ferrocast".into(), fps: Some(10.0) } };
+        let s = encode_request(&r);
+        assert_eq!(s, r#"{"id":14,"cmd":"analyze.face","project":"/p/Demo.ferrocast","fps":10.0}"#);
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+        let bare: Request = serde_json::from_str(r#"{"id":1,"cmd":"analyze.face","project":"/p"}"#).unwrap();
+        assert_eq!(bare.command, Command::AnalyzeFace { project: "/p".into(), fps: None });
+        assert_eq!(encode_request(&bare), r#"{"id":1,"cmd":"analyze.face","project":"/p"}"#);
+        let Line::Ok { body, .. } = decode_line(r#"{"id":14,"ok":true,"faces":90,"frames":100,"path":"/p/camera_track.json"}"#).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            parse_body::<AnalyzeFaceDone>(&body).unwrap(),
+            AnalyzeFaceDone { faces: 90, frames: 100, path: "/p/camera_track.json".into() }
         );
     }
 

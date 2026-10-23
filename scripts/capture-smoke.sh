@@ -6,6 +6,7 @@
 # target/capture-spike/editor-fixture/Take.ferrocast (the generated 3 s screen.mov, the render
 # fixture's project.json with duration 3 and no zooms, and render_events.json) for the editor's
 # live test and frame-rate measurement. Nothing else changes.
+# SMOKE_ONLY=analyze: run only hello + the analyze.face block (no mouse, no keyboard); SMOKE_FACE_TAKE overrides the real take.
 # --sound: the P4 system-audio check also plays one short system sound (afplay) and checks the RMS.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -33,6 +34,128 @@ for l in sys.stdin:
 }
 field() { printf '%s\n' "$out" | head -1 | python3 -c "import sys,json; print(json.loads(sys.stdin.readline()).get('$1',''))"; }
 
+# Run a long job: stdin stays OPEN until the final line of request id $1 arrives (stdin EOF cancels the job).
+# Further arguments are extra request lines sent right after it. All stdout goes to $events, rc to $rc.
+run_job() {
+  local jid=$1 req=$2; shift 2
+  local f fifo
+  f=$(mktemp); fifo=$(mktemp -u); mkfifo "$fifo"
+  { printf '%s\n' "$req"; for l in "$@"; do printf '%s\n' "$l"; done; sleep 120; } > "$fifo" 2>/dev/null &
+  local wpid=$!
+  "$helper" < "$fifo" > "$f" 2>/dev/null &
+  local pid=$! n=0
+  while [ $n -lt 1200 ]; do
+    grep -Eq "\"id\":$jid[,}]" "$f" && grep -E "\"id\":$jid[,}]" "$f" | grep -Eq '"ok":true|"error"' && break
+    sleep 0.1; n=$((n + 1))
+  done
+  kill $pid 2>/dev/null; pkill -P $wpid 2>/dev/null; kill $wpid 2>/dev/null
+  wait $pid $wpid 2>/dev/null
+  events=$(cat "$f"); rm -f "$f" "$fifo"
+  rc=0
+}
+
+# analyze.face (P6): `hello` lists it; a project without a camera, and camera names with a separator or `..`,
+# are refused with a structured error and leave no camera_track.json; the positive test runs on a COPY of the
+# user's real camera take (the original is only read) under target/p6-scratch/ and SKIPs when the take is
+# missing. Vision needs no permission. Nothing here moves the mouse or types, so it is safe in the full run;
+# SMOKE_ONLY=analyze runs only this block (right after `hello`) and exits.
+analyze_smoke() {
+  run '{"id":1,"cmd":"hello"}'
+  if printf '%s\n' "$out" | python3 -c 'import sys,json; sys.exit(0 if "analyze.face" in json.loads(sys.stdin.readline()).get("capabilities", []) else 1)'; then
+    echo "PASS: hello lists analyze.face"
+  elif [ "$sck" != True ]; then
+    echo "SKIP: analyze.face capability (macOS older than 14)"; return
+  else
+    bad "hello does not list analyze.face: $out"
+  fi
+  local adir
+  adir=$(mktemp -d)
+  run "{\"id\":50,\"cmd\":\"analyze.face\",\"project\":\"$adir\"}"
+  [ "$(field error)" = not-found ] && [ ! -e "$adir/camera_track.json" ] || bad "analyze.face without project.json rc=$rc out=$out"
+  printf '{"version":1,"sources":{"screen":{"file":"screen.mov","offset":0}}}' > "$adir/project.json"
+  run "{\"id\":51,\"cmd\":\"analyze.face\",\"project\":\"$adir\"}"
+  if [ "$rc" = 0 ] && [ "$(field error)" = not-found ] && [ ! -e "$adir/camera_track.json" ] && [ ! -e "$adir/camera_track.json.partial" ]; then
+    echo "PASS: analyze.face without a camera answers not-found and writes nothing"
+  else
+    bad "analyze.face without camera rc=$rc out=$out"
+  fi
+  for name in '../camera.mov' 'a/camera.mov' '..'; do
+    printf '{"version":1,"sources":{"camera":{"file":"%s","offset":0}}}' "$name" > "$adir/project.json"
+    run "{\"id\":52,\"cmd\":\"analyze.face\",\"project\":\"$adir\"}"
+    [ "$(field error)" = invalid ] && [ ! -e "$adir/camera_track.json" ] || bad "analyze.face accepted camera name '$name': rc=$rc out=$out"
+  done
+  echo "PASS: analyze.face rejects camera names with a separator or .."
+  printf '{"version":1,"sources":{"camera":{"file":"camera.mov","offset":0}}}' > "$adir/project.json"
+  run "{\"id\":53,\"cmd\":\"analyze.face\",\"project\":\"$adir\"}"
+  [ "$(field error)" = not-found ] || bad "analyze.face with a missing camera file rc=$rc out=$out"
+  run "{\"id\":54,\"cmd\":\"analyze.face\",\"project\":\"$adir\",\"fps\":0}"
+  [ "$(field error)" = invalid ] || bad "analyze.face accepted fps 0: rc=$rc out=$out"
+  run "{\"id\":55,\"cmd\":\"analyze.face\",\"project\":\"$adir\",\"fps\":31}"
+  [ "$(field error)" = invalid ] || bad "analyze.face accepted fps 31: rc=$rc out=$out"
+  echo "PASS: analyze.face with a missing camera file is not-found, fps outside 1..30 is invalid"
+  rm -rf "$adir"
+
+  local take=${SMOKE_FACE_TAKE:-/Users/drumstock/Developer/GitHub/raycast/target/wt-p5/target/dev-live/recs/Recording 2026-10-23 at 17.52.50.ferrocast}
+  if [ ! -f "$take/camera.mov" ] || [ ! -f "$take/project.json" ]; then
+    echo "SKIP: analyze.face real take (not found: $take)"; return
+  fi
+  local scratch=target/p6-scratch/face-take.ferrocast
+  mkdir -p target/p6-scratch
+  [ -d "$scratch" ] && find "$scratch" -type f -delete 2>/dev/null
+  mkdir -p "$scratch"
+  cp "$take/project.json" "$take/camera.mov" "$scratch/"
+  local abs t0 t1 events
+  abs=$(cd "$scratch" && pwd)
+  t0=$(python3 -c 'import time; print(time.time())')
+  run_job 60 "{\"id\":60,\"cmd\":\"analyze.face\",\"project\":\"$abs\",\"fps\":10}"
+  t1=$(python3 -c 'import time; print(time.time())')
+  out=$(printf '%s\n' "$events" | tail -1)
+  if [ "$rc" = 0 ] && [ "$(field ok)" = True ] && [ ! -e "$abs/camera_track.json.partial" ] \
+    && python3 - "$abs/camera_track.json" "$abs/camera.mov" "$events" "$t0" "$t1" <<'PY'
+import json, statistics, sys
+track, _cam, events, t0, t1 = sys.argv[1:6]
+t = json.load(open(track))
+lines = [json.loads(l) for l in events.splitlines() if l.strip()]
+final, prog = lines[-1], [l for l in lines if l.get("event") == "progress"]
+assert set(t) == {"version", "fps", "width", "height", "samples"} and t["version"] == 1 and t["fps"] == 10
+assert t["width"] > 0 and t["height"] > 0
+s = t["samples"]
+assert final["faces"] == len(s) > 0 and final["frames"] >= final["faces"], final
+assert final["path"] == track
+total = prog[-1]["total_secs"] if prog else float("nan")
+for p in s:
+    assert set(p) == {"t", "x", "y", "w", "h", "confidence"}
+    for k in "xywh":
+        assert 0 <= p[k] <= 1, p
+    assert 0 <= p["x"] + p["w"] <= 1.0001 and 0 <= p["y"] + p["h"] <= 1.0001, p
+    assert 0 <= p["confidence"] <= 1 and 0 <= p["t"] <= total + 0.2, (p, total)
+assert all(b["t"] > a["t"] for a, b in zip(s, s[1:])), "t must increase"
+run, real = float(t1) - float(t0), total
+print(f"  faces/frames = {final['faces']}/{final['frames']} (detection rate {final['faces'] / final['frames']:.1%}), camera {t['width']}x{t['height']}, duration {real:.3f}s")
+print(f"  first {s[0]}\n  last  {s[-1]}")
+for k in "xy":
+    d = [b[k] - a[k] for a, b in zip(s, s[1:])]
+    print(f"  std of consecutive {k} deltas: {statistics.pstdev(d) if len(d) > 1 else float('nan'):.5f}")
+print(f"  run time {run:.2f}s for {real:.2f}s of video ({real / run:.1f}x real time)")
+PY
+  then
+    echo "PASS: analyze.face on the real camera take wrote a valid camera_track.json"
+  else
+    bad "analyze.face real take rc=$rc out=$out"
+  fi
+  # Cancel: the helper answers `cancelled` and leaves no file.
+  rm -f "$abs/camera_track.json"
+  run_job 61 "{\"id\":61,\"cmd\":\"analyze.face\",\"project\":\"$abs\",\"fps\":30}" '{"id":62,"cmd":"cancel","target":61}'
+  out=$(printf '%s\n' "$events" | grep '"id":61' | tail -1)
+  if [ "$(field error)" = cancelled ]; then
+    [ ! -e "$abs/camera_track.json" ] && [ ! -e "$abs/camera_track.json.partial" ] && echo "PASS: analyze.face cancel answers cancelled and leaves no file" || bad "analyze.face cancel left a file"
+  elif [ "$(field ok)" = True ]; then
+    echo "SKIP: analyze.face cancel (the 4 s take finished before cancel was read)"
+  else
+    bad "analyze.face cancel out=$out"
+  fi
+}
+
 run '{"id":1,"cmd":"hello"}'
 if [ "$rc" = 0 ] && [ "$(field ok)" = True ] && [ "$(field protocol)" = 1 ]; then
   echo "PASS: hello ($out)"
@@ -41,6 +164,11 @@ else
 fi
 
 sck=$(field sck)
+if [ "${SMOKE_ONLY:-}" = analyze ]; then
+  analyze_smoke
+  [ "$fail" = 0 ] && echo "capture-smoke (analyze only): OK"
+  exit "$fail"
+fi
 if [ "$sck" != True ]; then
   echo "SKIP: shareable (ScreenCaptureKit unavailable on this macOS)"
 else
@@ -1728,6 +1856,8 @@ PY
   fi
   rm -rf "$tdir"
 fi
+
+analyze_smoke
 
 # Unknown command: structured error, still protocol-only stdout.
 run '{"id":3,"cmd":"nope"}'

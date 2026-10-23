@@ -66,6 +66,8 @@ pub fn timeout_for(cmd: &Command) -> Duration {
         Command::Cancel { .. } => 5,
         // `transcribe` has no reply deadline: `Helper::transcribe` watches for signs of life instead.
         Command::Transcribe { .. } => TRANSCRIBE_SILENCE.as_secs(),
+        // Same: `Helper::analyze_face` watches for progress / heartbeats.
+        Command::AnalyzeFace { .. } => ANALYZE_SILENCE.as_secs(),
     })
 }
 
@@ -2064,6 +2066,234 @@ echo '{"id":1,"error":"cancelled","message":"Transcription cancelled"}'"#,
             r#"read l
 for i in 1 2 3 4; do sleep 0.2; echo '{"event":"heartbeat","id":1}'; done
 echo '{"id":1,"ok":true,"language":"en-US","words":0,"path":"/p/t.json"}'"#,
+        );
+        assert!(run(&p, &AtomicBool::new(false), Duration::from_millis(500)).0.is_ok());
+    }
+}
+
+// ---- P6: on-device face tracking -------------------------------------------------------------
+
+use ferrocast_core::capture::protocol::AnalyzeFaceDone;
+
+/// Longest silence (no progress, no heartbeat, no reply) before a face analysis is declared hung.
+/// The helper sends progress at most every 250 ms while frames decode and a heartbeat after 10 s of silence.
+pub const ANALYZE_SILENCE: Duration = Duration::from_secs(60);
+
+/// Why a face analysis did not produce a `camera_track.json`. `Display` is the text the app shows.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AnalyzeFaceError {
+    Invalid(String),
+    NotFound(String),
+    /// Another analysis is already running in the helper.
+    Busy,
+    Cancelled,
+    DiskFull,
+    /// The helper went silent and was killed.
+    Timeout,
+    Closed,
+    Other(String),
+}
+
+impl AnalyzeFaceError {
+    fn from_helper(code: ErrorCode, message: String) -> Self {
+        match code {
+            ErrorCode::Invalid => Self::Invalid(message),
+            ErrorCode::NotFound => Self::NotFound(message),
+            ErrorCode::Busy => Self::Busy,
+            ErrorCode::Cancelled => Self::Cancelled,
+            ErrorCode::DiskFull => Self::DiskFull,
+            code => Self::Other(format!("{code:?}: {message}")),
+        }
+    }
+}
+
+impl std::fmt::Display for AnalyzeFaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(m) | Self::NotFound(m) => write!(f, "{m}"),
+            Self::Busy => write!(f, "A face analysis is already running."),
+            Self::Cancelled => write!(f, "Face tracking cancelled"),
+            Self::DiskFull => write!(f, "There is not enough disk space to save the face track."),
+            Self::Timeout => write!(f, "Face tracking stopped responding and was cancelled."),
+            Self::Closed => write!(f, "The capture helper closed during face tracking."),
+            Self::Other(m) => write!(f, "Face tracking failed: {m}"),
+        }
+    }
+}
+impl std::error::Error for AnalyzeFaceError {}
+
+impl Helper {
+    /// Detect the face in the camera file of `project_dir` (sampled at `fps`, default 10) and wait for
+    /// the result: the helper writes `<project_dir>/camera_track.json`. `on_progress(done_secs,
+    /// total_secs)` is called for each progress event; setting `cancel` sends `cancel` once. Blocking:
+    /// run it on a worker thread. No `camera_track.json.partial` is left on failure.
+    pub fn analyze_face(
+        &mut self,
+        project_dir: &Path,
+        fps: Option<f64>,
+        cancel: &AtomicBool,
+        on_progress: impl FnMut(f64, f64),
+    ) -> std::result::Result<AnalyzeFaceDone, AnalyzeFaceError> {
+        self.analyze_face_with(project_dir, fps, cancel, ANALYZE_SILENCE, on_progress)
+    }
+
+    fn analyze_face_with(
+        &mut self,
+        project_dir: &Path,
+        fps: Option<f64>,
+        cancel: &AtomicBool,
+        silence: Duration,
+        mut on_progress: impl FnMut(f64, f64),
+    ) -> std::result::Result<AnalyzeFaceDone, AnalyzeFaceError> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let command = Command::AnalyzeFace { project: project_dir.to_string_lossy().into_owned(), fps };
+        let line = protocol::encode_request(&Request { id, command });
+        let result = if writeln!(self.stdin, "{line}").and_then(|_| self.stdin.flush()).is_err() {
+            Err(AnalyzeFaceError::Closed)
+        } else {
+            let mut last_sign = Instant::now();
+            let mut cancel_sent = false;
+            loop {
+                if cancel.load(Ordering::Relaxed) && !cancel_sent {
+                    cancel_sent = true;
+                    let cid = self.next_id;
+                    self.next_id += 1;
+                    let line = protocol::encode_request(&Request { id: cid, command: Command::Cancel { target: id } });
+                    if writeln!(self.stdin, "{line}").and_then(|_| self.stdin.flush()).is_err() {
+                        break Err(AnalyzeFaceError::Closed);
+                    }
+                }
+                match self.lines.recv_timeout(Duration::from_millis(50)) {
+                    Ok(Line::Ok { id: rid, body }) if rid == id => {
+                        break protocol::parse_body::<AnalyzeFaceDone>(&body)
+                            .map_err(|e| AnalyzeFaceError::Other(format!("bad result: {e}")))
+                    }
+                    Ok(Line::Error { id: rid, code, message }) if rid.is_none_or(|r| r == id) => {
+                        break Err(AnalyzeFaceError::from_helper(code, message))
+                    }
+                    Ok(Line::Event { id: Some(eid), name, body }) if eid == id => {
+                        last_sign = Instant::now();
+                        if let Some(TranscribeEvent::Progress { done_secs, total_secs }) = protocol::parse_transcribe_event(&name, &body) {
+                            on_progress(done_secs, total_secs);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(RecvTimeoutError::Timeout) if last_sign.elapsed() > silence => {
+                        self.kill();
+                        break Err(AnalyzeFaceError::Timeout);
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break Err(AnalyzeFaceError::Closed),
+                }
+            }
+        };
+        if result.is_err() {
+            let _ = std::fs::remove_file(partial_path(&project_dir.join("camera_track.json")));
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod analyze_face_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fake(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fc-analyze-test-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("helper.sh");
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    fn run(p: &Path, cancel: &AtomicBool, silence: Duration) -> (std::result::Result<AnalyzeFaceDone, AnalyzeFaceError>, Vec<(f64, f64)>) {
+        let mut h = Helper::spawn(p, |_| {}).unwrap();
+        let mut seen = vec![];
+        let r = h.analyze_face_with(p.parent().unwrap(), Some(10.0), cancel, silence, |d, t| seen.push((d, t)));
+        (r, seen)
+    }
+
+    const LONG: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn progress_streams_and_the_result_is_typed() {
+        let p = fake(
+            "ok",
+            r#"read l; echo "$l" > "$(dirname "$0")/req.json"
+echo '{"event":"progress","id":1,"done_secs":1.5,"total_secs":3.0}'
+echo '{"event":"heartbeat","id":1}'
+echo '{"event":"progress","id":7,"done_secs":9,"total_secs":9}'
+echo '{"id":1,"ok":true,"faces":25,"frames":30,"path":"/p/camera_track.json"}'"#,
+        );
+        let (r, seen) = run(&p, &AtomicBool::new(false), LONG);
+        assert_eq!(r.unwrap(), AnalyzeFaceDone { faces: 25, frames: 30, path: "/p/camera_track.json".into() });
+        assert_eq!(seen, vec![(1.5, 3.0)], "only the progress of this request, never other ids");
+        let wire = std::fs::read_to_string(p.with_file_name("req.json")).unwrap();
+        assert!(wire.starts_with(r#"{"id":1,"cmd":"analyze.face","project":""#) && wire.trim_end().ends_with(r#""fps":10.0}"#), "{wire}");
+    }
+
+    #[test]
+    fn helper_errors_map_to_their_own_variants() {
+        let err = |code: &str| {
+            let p = fake(code, &format!(r#"read l; echo '{{"id":1,"error":"{code}","message":"m"}}'"#));
+            run(&p, &AtomicBool::new(false), LONG).0.unwrap_err()
+        };
+        assert_eq!(err("not-found"), AnalyzeFaceError::NotFound("m".into()));
+        assert_eq!(err("invalid"), AnalyzeFaceError::Invalid("m".into()));
+        assert_eq!(err("busy"), AnalyzeFaceError::Busy);
+        assert_eq!(err("cancelled"), AnalyzeFaceError::Cancelled);
+        assert_eq!(err("disk-full"), AnalyzeFaceError::DiskFull);
+        assert_eq!(err("internal"), AnalyzeFaceError::Other("Internal: m".into()));
+        let p = fake("bad", r#"read l; echo '{"id":1,"ok":true}'"#);
+        assert!(matches!(run(&p, &AtomicBool::new(false), LONG).0.unwrap_err(), AnalyzeFaceError::Other(_)));
+    }
+
+    #[test]
+    fn failures_remove_the_partial_track() {
+        let p = fake("partial", r#"read l; echo '{"id":1,"error":"internal","message":"boom"}'"#);
+        let partial = p.with_file_name("camera_track.json.partial");
+        std::fs::write(&partial, b"half").unwrap();
+        assert!(matches!(run(&p, &AtomicBool::new(false), LONG).0.unwrap_err(), AnalyzeFaceError::Other(_)));
+        assert!(!partial.exists());
+    }
+
+    #[test]
+    fn cancel_sends_the_target_and_reports_cancelled() {
+        let p = fake(
+            "cancel",
+            r#"read l
+echo '{"event":"progress","id":1,"done_secs":1,"total_secs":60}'
+read c; echo "$c" > "$(dirname "$0")/cancel.json"
+echo '{"id":1,"error":"cancelled","message":"cancelled"}'"#,
+        );
+        let cancel = AtomicBool::new(false);
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let r = h.analyze_face_with(p.parent().unwrap(), None, &cancel, LONG, |_, _| cancel.store(true, Ordering::Relaxed));
+        assert_eq!(r.unwrap_err(), AnalyzeFaceError::Cancelled);
+        let wire = std::fs::read_to_string(p.with_file_name("cancel.json")).unwrap();
+        assert_eq!(wire.trim(), r#"{"id":2,"cmd":"cancel","target":1}"#);
+    }
+
+    #[test]
+    fn a_silent_helper_is_killed_and_a_dead_one_reports_closed() {
+        let p = fake("silent", "read l; sleep 30");
+        let t = Instant::now();
+        assert_eq!(run(&p, &AtomicBool::new(false), Duration::from_millis(300)).0.unwrap_err(), AnalyzeFaceError::Timeout);
+        assert!(t.elapsed() < Duration::from_secs(10));
+        let p = fake("dead", "read l; exit 3");
+        assert_eq!(run(&p, &AtomicBool::new(false), LONG).0.unwrap_err(), AnalyzeFaceError::Closed);
+    }
+
+    #[test]
+    fn heartbeats_keep_a_slow_analysis_alive() {
+        let p = fake(
+            "beat",
+            r#"read l
+for i in 1 2 3 4; do sleep 0.2; echo '{"event":"heartbeat","id":1}'; done
+echo '{"id":1,"ok":true,"faces":0,"frames":0,"path":"/p/t.json"}'"#,
         );
         assert!(run(&p, &AtomicBool::new(false), Duration::from_millis(500)).0.is_ok());
     }
