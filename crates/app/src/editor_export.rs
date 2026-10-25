@@ -432,38 +432,60 @@ pub fn draw_sheet(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor) -> Sh
         }
     }
     let running = ed.export.running();
-    let sheet = Rect::from_center_size(rect.center(), Vec2::new(380.0, if running { 150.0 } else { 290.0 }));
+    let comfy = rect.width() >= crate::editor_ctl::COMFORT_W;
+    let sheet = Rect::from_center_size(
+        rect.center(),
+        Vec2::new(
+            if comfy { 440.0 } else { 392.0 },
+            if running {
+                164.0
+            } else if comfy {
+                332.0
+            } else {
+                318.0
+            },
+        ),
+    );
     ui.painter().rect_filled(rect, 0.0, Color32::from_black_alpha(110));
     // the scrim swallows the pointer so nothing below the sheet reacts
     ui.interact(rect, egui::Id::new("export-scrim"), egui::Sense::click_and_drag());
     // `field` is a translucent tint: over the editor it left the sheet see-through, so the text
     // overlapped the preview and the timeline (seen in the real app); paint the opaque base first
-    ui.painter().rect_filled(sheet, 10.0, pal.bg);
-    ui.painter().rect_filled(sheet, 10.0, pal.field);
+    #[cfg(test)]
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("editor-sheet-rect"), sheet));
+    let radius = (crate::editor_ctl::EDITOR_RADIUS + 4.0) as u8;
+    ui.painter().rect_filled(sheet, radius, pal.bg);
+    ui.painter().rect_filled(sheet, radius, pal.field);
+    ui.painter().rect_stroke(sheet, radius, egui::Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
     let opts = ed.export.options(&project, source);
     let plan = summary(&project, source, &opts);
-    ui.scope_builder(egui::UiBuilder::new().max_rect(sheet.shrink(16.0)), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(sheet.shrink(18.0)), |ui| {
+        crate::editor_panels::panel_style(ui, pal, comfy);
         ui.spacing_mut().item_spacing.y = 8.0;
-        ui.label(RichText::new("Export video").size(15.0).strong().color(pal.text));
+        ui.label(RichText::new("Export video").size(16.0).strong().color(pal.text));
         if let Some((frac, text, cancelling)) = ed.export.run.as_ref().map(|run| {
             let frac = if run.total == 0 { 0.0 } else { run.done as f32 / run.total as f32 };
             let text = if run.cancelling { "Cancelling…".to_string() } else { progress_text(run.done, run.total, run.eta) };
             (frac, text, run.cancelling)
         }) {
-            ui.add(egui::ProgressBar::new(frac).desired_width(sheet.width() - 32.0).text(text));
+            ui.add(egui::ProgressBar::new(frac).desired_width(sheet.width() - 36.0).text(text));
             if let Some(d) = ed.export.dest.as_ref().and_then(|d| d.file_name()) {
-                ui.label(RichText::new(d.to_string_lossy()).size(11.5).color(pal.sub));
+                ui.label(RichText::new(d.to_string_lossy()).size(12.0).color(pal.sub_strong));
             }
-            ui.horizontal(|ui| {
-                if ui.add_enabled(!cancelling, egui::Button::new("Cancel")).clicked() {
-                    ed.export.cancel();
-                }
-            });
+            let w = crate::editor_panels::text_width(ui, "Cancel", 12.5) + 28.0;
+            if crate::editor_panels::secondary_button(ui, pal, "Cancel", w, !cancelling) {
+                ed.export.cancel();
+            }
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
             return;
         }
-        egui::Grid::new("export-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label(RichText::new("Format").color(pal.sub));
+        let key = |ui: &mut Ui, text: &str| {
+            ui.allocate_ui_with_layout(egui::vec2(88.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label(RichText::new(text).size(12.5).color(pal.sub_strong));
+            });
+        };
+        egui::Grid::new("export-grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+            key(ui, "Format");
             let mut format = ed.export.format;
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut format, Format::Mp4, "MP4");
@@ -472,14 +494,14 @@ pub fn draw_sheet(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor) -> Sh
             ed.export.set_format(format);
             ui.end_row();
             if ed.export.format == Format::Gif {
-                ui.label(RichText::new("Width").color(pal.sub));
+                key(ui, "Width");
                 ui.horizontal(|ui| {
                     for r in Res::GIF {
                         ui.selectable_value(&mut ed.export.gif_res, r, r.label());
                     }
                 });
                 ui.end_row();
-                ui.label(RichText::new("Frame rate").color(pal.sub));
+                key(ui, "Frame rate");
                 ui.horizontal(|ui| {
                     for f in Res::GIF_FPS {
                         ui.selectable_value(&mut ed.export.gif_fps, f, format!("{f} fps"));
@@ -488,26 +510,26 @@ pub fn draw_sheet(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor) -> Sh
                 ui.end_row();
                 return;
             }
-            ui.label(RichText::new("Codec").color(pal.sub));
+            key(ui, "Codec");
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut ed.export.codec, Codec::H264, "H.264");
                 ui.selectable_value(&mut ed.export.codec, Codec::Hevc, "HEVC");
             });
             ui.end_row();
-            ui.label(RichText::new("Resolution").color(pal.sub));
+            key(ui, "Resolution");
             ui.horizontal(|ui| {
                 for r in Res::ALL {
                     ui.selectable_value(&mut ed.export.res, r, r.label());
                 }
             });
             ui.end_row();
-            ui.label(RichText::new("Frame rate").color(pal.sub));
+            key(ui, "Frame rate");
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut ed.export.fps, 30, "30 fps");
                 ui.selectable_value(&mut ed.export.fps, 60, "60 fps");
             });
             ui.end_row();
-            ui.label(RichText::new("Quality").color(pal.sub));
+            key(ui, "Quality");
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut ed.export.quality, Quality::Standard, "Standard");
                 ui.selectable_value(&mut ed.export.quality, Quality::High, "High");
@@ -516,45 +538,52 @@ pub fn draw_sheet(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor) -> Sh
         });
         let dest = ed.export.dest.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
         ui.horizontal(|ui| {
-            ui.label(RichText::new(truncate_middle(&dest, 38)).size(11.5).color(pal.sub));
-            if ui.button("Choose…").clicked() {
+            let w = crate::editor_panels::text_width(ui, "Choose…", 12.5) + 28.0;
+            if crate::editor_panels::secondary_button(ui, pal, "Choose…", w, true) {
                 action = SheetAction::Choose;
             }
+            ui.label(RichText::new(truncate_middle(&dest, if comfy { 40 } else { 28 })).size(12.0).color(pal.sub_strong));
         });
         match &plan {
             Ok(s) => {
                 // the size / length / frames line, then the sound as a quiet chip next to it
                 let (main, audio) = split_audio(s);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(main).size(12.0).color(pal.text));
+                    ui.label(RichText::new(main).size(12.5).color(pal.text));
                     if let Some(a) = audio {
                         info_chip(ui, pal, a);
                     }
                 });
             }
             Err(e) => {
-                ui.label(RichText::new(e).size(12.0).color(pal.danger));
+                ui.label(RichText::new(e).size(12.5).color(pal.danger));
             }
         };
         if let Some(m) = &ed.export.message {
-            ui.label(RichText::new(m).size(12.0).color(pal.danger));
+            ui.label(RichText::new(m).size(12.5).color(pal.danger));
         }
-        ui.horizontal(|ui| {
-            if ui.add_enabled(plan.is_ok(), egui::Button::new("Export")).clicked() {
-                action = SheetAction::Start;
-            }
-            if ui.button("Close").clicked() {
-                ed.export.open = false;
-            }
+        // the actions at the bottom right: the main one last, `esc closes` at the left says how to leave
+        let (we, wc) =
+            (crate::editor_panels::text_width(ui, "Export", 13.0) + 40.0, crate::editor_panels::text_width(ui, "Close", 12.5) + 28.0);
+        let row = Rect::from_min_size(Pos2::new(sheet.min.x + 18.0, sheet.max.y - 18.0 - 32.0), Vec2::new(sheet.width() - 36.0, 32.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::editor_panels::primary_button_w(ui, pal, "Export", we, plan.is_ok()) {
+                    action = SheetAction::Start;
+                }
+                if crate::editor_panels::secondary_button(ui, pal, "Close", wc, true) {
+                    ed.export.open = false;
+                }
+            });
         });
+        ui.painter().text(
+            Pos2::new(row.min.x, row.center().y),
+            Align2::LEFT_CENTER,
+            "esc closes",
+            FontId::proportional(12.0),
+            pal.sub_strong,
+        );
     });
-    ui.painter().text(
-        Pos2::new(rect.center().x, rect.max.y - 14.0),
-        Align2::CENTER_CENTER,
-        "⌘E export · esc closes",
-        FontId::proportional(11.0),
-        pal.sub,
-    );
     action
 }
 

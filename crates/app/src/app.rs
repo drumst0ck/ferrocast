@@ -671,7 +671,11 @@ impl View {
             View::Annotate { .. } => vec![SAVE, ("Undo", "⌘Z"), ("Delete", "⌫"), BACK],
             View::CaptureResult { .. } => vec![("Copy", "↵"), ("Save", "⌘S"), ("Annotate", "⌘⇧A"), BACK],
             View::Recordings => vec![("Open", "↵"), ("Show in Finder", "⌘↵"), ("Trash", "⌘⌫"), BACK],
-            View::Editor { .. } => vec![("Play", "space"), ("Frame", "←/→"), ("Undo", "⌘Z"), ("Redo", "⇧⌘Z"), ("Export", "⌘E"), BACK],
+            // the footer drops chips from the second to last one backwards when they do not fit, so the
+            // ones that matter most come first: Play, Export and Full screen outlast Frame, Undo and Redo
+            View::Editor { .. } => {
+                vec![("Play", "space"), ("Export", "⌘E"), ("Full screen", "⌃⌘F"), ("Frame", "←/→"), ("Undo", "⌘Z"), ("Redo", "⇧⌘Z"), BACK]
+            }
             View::Reorder { purpose, .. } => {
                 let primary = match purpose {
                     ReorderPurpose::JoinVideos => "Join",
@@ -1021,6 +1025,8 @@ pub struct App {
     shown_at: Instant,
     hidden_at: Instant,
     cur_height: f32,
+    /// Normal or maximised to the screen (the editor's Full screen button); see `editor_ctl::WindowMode`.
+    win: crate::editor_ctl::WindowMode,
     files: (String, Vec<PathBuf>),
     files_req: String,
     query_changed_at: Instant,
@@ -1276,6 +1282,7 @@ impl App {
             shown_at: Instant::now(),
             hidden_at: Instant::now(),
             cur_height: ui::HEIGHT,
+            win: Default::default(),
             files: (String::new(), vec![]),
             files_req: String::new(),
             query_changed_at: Instant::now(),
@@ -1647,6 +1654,67 @@ impl App {
         self.base = v;
     }
 
+    // ------------------------------------------------------------- full screen
+
+    /// The editor's Full screen button and ⌃⌘F. Not `ViewportCommand::Fullscreen`: the window is a borderless,
+    /// non-resizable, always-on-top panel, where macOS native full screen does not apply (see
+    /// `editor_ctl::WindowMode`), so the window is maximised to its screen's visible frame instead; a second
+    /// press goes back to the editor-sized window.
+    pub(crate) fn toggle_fullscreen(&mut self) {
+        let current = self.ctx.input(|i| i.viewport().outer_rect.or(i.viewport().inner_rect));
+        let screen = self.window_screen();
+        let normal = Vec2::new(ui::WIDTH, self.cur_height);
+        if let Some(cmd) = self.win.toggle(current, screen, normal) {
+            self.send_window(cmd);
+        }
+    }
+
+    /// Back to the normal size when maximised; a no-op otherwise, so it is safe to call whenever.
+    pub(crate) fn leave_fullscreen(&mut self) {
+        if let Some(cmd) = self.win.leave() {
+            self.send_window(cmd);
+        }
+    }
+
+    /// Per frame: the editor view grows the window once (see `editor_ctl::WindowMode`) and every other view
+    /// (Esc, Back, a hidden launcher) puts the launcher's size and place back once. Quiet in between.
+    pub(crate) fn sync_window(&mut self) {
+        // a hidden launcher is not showing the editor: its window is already back to the launcher's size
+        let in_editor = self.visible && matches!(self.view(), View::Editor { .. });
+        let normal = Vec2::new(ui::WIDTH, self.cur_height);
+        let ctx = self.ctx.clone();
+        let screen = self.window_screen();
+        let cmd = self.win.sync(in_editor, || ctx.input(|i| i.viewport().outer_rect.or(i.viewport().inner_rect)), || screen, normal);
+        if let Some(cmd) = cmd {
+            self.send_window(cmd);
+        }
+    }
+
+    fn send_window(&self, cmd: crate::editor_ctl::WindowCmd) {
+        use crate::editor_ctl::WindowCmd;
+        match cmd {
+            WindowCmd::Place { pos, size } => {
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            }
+            WindowCmd::Restore { pos, size } => {
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+                if let Some(p) = pos.or_else(launcher_origin) {
+                    self.ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(p));
+                }
+            }
+        }
+    }
+
+    /// The visible frame (below the menu bar, beside the Dock) of the screen the window is on.
+    fn window_screen(&self) -> Option<Rect> {
+        // tests never ask the real screens: a test sets `test-screen` or has none
+        #[cfg(test)]
+        return self.ctx.data(|d| d.get_temp::<Rect>(Id::new("test-screen")));
+        #[cfg(not(test))]
+        key_window_screen().or_else(|| mouse_top_left().map(|(_, r)| r))
+    }
+
     // ------------------------------------------------------------- show/hide
 
     fn show(&mut self) {
@@ -1684,6 +1752,8 @@ impl App {
 
     fn hide(&mut self) {
         self.editor_flush();
+        // a maximised editor goes back to the launcher's size before the window disappears
+        self.leave_fullscreen();
         self.visible = false;
         self.hidden_at = Instant::now();
         self.shared.visible.store(false, Ordering::Relaxed);
@@ -2715,6 +2785,8 @@ impl App {
         if segs.is_empty() {
             return;
         }
+        // the wheel is positioned for the launcher's size: a maximised window goes back first
+        self.leave_fullscreen();
         let size = Vec2::new(ui::WIDTH, ui::HEIGHT);
         let center = match mouse_top_left() {
             Some((m, screen)) => {
@@ -7291,6 +7363,18 @@ pub(crate) fn mouse_top_left() -> Option<(Pos2, Rect)> {
     let top = primary_h - (v.origin.y + v.size.height);
     let r = Rect::from_min_size(Pos2::new(v.origin.x as f32, top as f32), Vec2::new(v.size.width as f32, v.size.height as f32));
     Some((Pos2::new(m.x as f32, (primary_h - m.y) as f32), r))
+}
+
+/// Visible frame of the screen holding the key window, in top-left screen points.
+#[cfg_attr(test, allow(dead_code))]
+fn key_window_screen() -> Option<Rect> {
+    use objc2_app_kit::{NSApplication, NSScreen};
+    let mtm = objc2::MainThreadMarker::new()?;
+    let scr = NSApplication::sharedApplication(mtm).keyWindow()?.screen()?;
+    let primary_h = NSScreen::screens(mtm).iter().next()?.frame().size.height;
+    let v = scr.visibleFrame();
+    let top = primary_h - (v.origin.y + v.size.height);
+    Some(Rect::from_min_size(Pos2::new(v.origin.x as f32, top as f32), Vec2::new(v.size.width as f32, v.size.height as f32)))
 }
 
 fn launcher_origin() -> Option<Pos2> {

@@ -128,11 +128,21 @@ Settings → Capture → **Sources** has **Camera**, **Microphone** and **System
 
 The first time a source is used, macOS asks for Camera or Microphone permission when you start the recording. If it is denied, the recording does not start and a notice opens the matching System Settings pane. System audio uses the Screen Recording permission. If a camera or microphone disappears while recording, the recording continues and a notice says which source was lost.
 
-In the editor, a **Camera** tab appears when the recording has a camera: show or hide it, a **Layout** (**Overlay** or **Split**), **Circle**, **Rounded** or **Square**, one of the four corners, size (10 to 40 %), margin and mirror, plus a **Look**, **Cutout (beta)** and **Follow face** (see [Recording effects](#recording-effects)). The camera stays fixed in the frame while the screen zooms. An **Audio** tab appears when there is a microphone or system track: gain per track (-60 to +12 dB), mute per track and a master gain. MP4 exports mix the tracks into one AAC audio track (48 kHz stereo) that follows your trims and speed changes; a speed change also changes the pitch. GIFs have no audio.
+In the editor, a **Camera** section appears when the recording has a camera: show or hide it, a **Layout** (**Overlay** or **Split**), **Circle**, **Rounded** or **Square**, one of the four corners, size (10 to 40 %), margin and mirror, plus a **Look**, **Cutout (beta)** and **Follow face** (see [Recording effects](#recording-effects)). The camera stays fixed in the frame while the screen zooms. An **Audio** section appears when there is a microphone or system track: gain per track (-60 to +12 dB), mute per track and a master gain. MP4 exports mix the tracks into one AAC audio track (48 kHz stereo) that follows your trims and speed changes; a speed change also changes the pitch. GIFs have no audio.
 
 ## Editing a recording
 
-The editor shows the preview on the left and a panel with tabs on the right (Zoom, Loupe, Cursor, Style and Clips, plus Camera, Audio and Transcript when the recording has them). Under the preview there is a timeline (a ruler, a row for trims and speed changes, a row for zooms, a row for loupes) with the playhead, and a row with **Play**/**Pause**, **Undo**, **Redo**, **Export…** and the time. The time reads `output time / output length · source time`, so you see the length after your edits. At the right end of that row you see the number of zooms (and of loupes, when there are any) and the save state. <kbd>Esc</kbd> closes the editor and writes anything not yet saved.
+The editor opens in a larger window (about 1100 × 700 pt, centred on your screen and kept inside the visible part of it, so it can be smaller on a small screen) and has three zones:
+
+- **Preview**, top left, on a dark surface. Under it is the transport strip: **Play**/**Pause**, one frame back and one frame forward, the time, **Undo** and **Redo**. The time reads `output time / output length`, with the source time next to it when there is room, so you see the length after your edits.
+- **Inspector**, at the right (about 330 pt wide). It is one column of collapsible sections: **Zoom**, **Loupe**, **Cursor**, **Style** and **Clips**, plus **Camera**, **Audio** and **Transcript** when the recording has them. Each header shows its name and a short state at the right (for example `2 zooms`); click a header to open the section. One section is open at a time, the open one is marked by a down-pointing chevron and a coral bar at the column's edge, and the column scrolls when a section is taller than the window. Clicking a zoom or a loupe on the timeline opens its section and selects it.
+- **Timeline**, across the whole width below: a ruler and three named tracks, **Video** (trims and speed changes), **Zooms** and **Loupes**, with the playhead and an outline on the selected zoom or loupe.
+
+The top bar has the way back (the arrow at the left), the name of the project, its save state (`Saved`, `Saving…` or `Not saved`), the coral **Export…** and **Full screen**. <kbd>Esc</kbd> closes the editor and writes anything not yet saved; the launcher window then goes back to its own size and place. In a window narrower than about 900 pt (for example on a very small screen, or the 750 pt launcher window) the editor uses a more compact layout with a narrower inspector.
+
+### Full screen
+
+**Full screen** (at the right of the top bar) or <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> makes the editor fill the screen, below the menu bar and beside the Dock. The preview grows, the inspector widens to about 360 pt, and the timeline tracks get taller. Press the same button (it now reads **Exit full screen**) or the same keys to go back to the editor's window. <kbd>Esc</kbd>, going back, opening another view or hiding the launcher bring the launcher window back to its normal size and place. This is not macOS native full screen (no new Space): the launcher window is a floating panel, so the editor resizes it over the visible part of the screen instead.
 
 The cursor you see is drawn by the editor from the recorded events in `events.json`. It is not in `screen.mov`, which is why you can resize it, smooth it or remove it.
 
@@ -146,8 +156,9 @@ The cursor you see is drawn by the editor from the recorded events in `events.js
 | <kbd>Home</kbd> / <kbd>End</kbd> | Jump to the start or the end |
 | <kbd>⌘</kbd> <kbd>Z</kbd> / <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>Z</kbd> | Undo / Redo |
 | <kbd>⌘</kbd> <kbd>E</kbd> | Export… |
+| <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> | Full screen / Exit full screen |
 
-Click or drag on the timeline to move the playhead. While you type in a number field of the panel, only <kbd>⌘</kbd> <kbd>E</kbd> keeps working. The one-frame step uses the frame rate of Settings → Capture → **Recording frame rate**.
+Click or drag on the timeline to move the playhead. While you type in a number field of the inspector, only <kbd>⌘</kbd> <kbd>E</kbd> and <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> keep working. The one-frame step uses the frame rate of Settings → Capture → **Recording frame rate**.
 
 ### Auto zoom
 
@@ -155,9 +166,9 @@ Auto zoom zooms toward your clicks. Clicks that are close in time and place form
 
 When you open a recording that has no zooms, Ferrocast works them out and applies them in memory only. Nothing is written to `project.json` until you change something. Exporting a recording you have not touched saves its `project.json` first, with those zooms.
 
-Auto zoom is on by default. `capture.auto_zoom` and `capture.zoom_scale` in `settings.json` turn it off or set the level (1× to 6×); there is no Settings row for them yet. The **Auto zoom** button of the Zoom tab uses the same level.
+Auto zoom is on by default. `capture.auto_zoom` and `capture.zoom_scale` in `settings.json` turn it off or set the level (1× to 6×); there is no Settings row for them yet. The **Auto zoom** button of the Zoom section uses the same level.
 
-### The panel
+### The inspector
 
 Every change can be undone and redone (<kbd>⌘</kbd> <kbd>Z</kbd>, <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>Z</kbd>, or the **Undo** and **Redo** buttons). Changes of the same kind made within one second, such as dragging a slider, are one step. A change that would make the project invalid is refused and the reason shows in red above the controls.
 
@@ -188,11 +199,11 @@ Every change can be undone and redone (<kbd>⌘</kbd> <kbd>Z</kbd>, <kbd>⇧</kb
 
 ### Transcript
 
-The **Transcript** tab appears when the recording has a microphone or system audio track, or already has a transcript. It turns the speech into text you can read and cut, and everything runs on your Mac: the audio and the text never leave it.
+The **Transcript** section appears when the recording has a microphone or system audio track, or already has a transcript. It turns the speech into text you can read and cut, and everything runs on your Mac: the audio and the text never leave it.
 
-The first time, the tab shows a **Language** list (**System language** by default) and a **Transcribe** button. The first time you press **Transcribe**, macOS asks for the **Speech Recognition** permission (the same prompt may also ask for Microphone access). If it was denied, the tab says `Speech Recognition permission is needed. Open System Settings > Privacy & Security > Speech Recognition and allow Ferrocast.` and offers a button that opens that pane. The languages that work are the ones whose on-device models your Mac has; if one is not available, the tab says so. A bar shows the progress and **Cancel** stops it and leaves nothing behind. The text is saved with the project (`transcript.json` next to `project.json`), so it is not worked out again.
+The first time, the section shows a **Language** list (**System language** by default) and a **Transcribe** button. The first time you press **Transcribe**, macOS asks for the **Speech Recognition** permission (the same prompt may also ask for Microphone access). If it was denied, the section says `Speech Recognition permission is needed. Open System Settings > Privacy & Security > Speech Recognition and allow Ferrocast.` and offers a button that opens that pane. The languages that work are the ones whose on-device models your Mac has; if one is not available, the section says so. A bar shows the progress and **Cancel** stops it and leaves nothing behind. The text is saved with the project (`transcript.json` next to `project.json`), so it is not worked out again.
 
-Then the tab shows the words as flowing text. The word under the playhead is highlighted. Click a word to move the playhead to it (a word that is already cut moves the playhead to the nearest kept moment). Shift-click or drag to select a range of words. The text is read-only: you cut words, you do not retype them. Cut words are struck through and dimmed, and filler words are marked in orange.
+Then the section shows the words as flowing text. The word under the playhead is highlighted. Click a word to move the playhead to it (a word that is already cut moves the playhead to the nearest kept moment). Shift-click or drag to select a range of words. The text is read-only: you cut words, you do not retype them. Cut words are struck through and dimmed, and filler words are marked in orange.
 
 - **Delete selection** cuts exactly the selected words.
 - **Remove fillers** cuts filler words such as `um` and `uh` (and `like` or `you know` only when they are isolated or unclear). English and Spanish have a list; other languages have none.
@@ -212,7 +223,7 @@ These effects are made in the editor and drawn over the recording when you play 
 
 A loupe is a magnifying glass over the screen: a round lens that shows part of the screen larger for a few seconds. It magnifies the recording itself, so the text inside stays sharp, and it moves with the zoom. Use it to point at a small detail without zooming the whole screen.
 
-The **Loupe** tab has **Add at playhead**, which adds a loupe of 3 s (shorter if the next loupe is close; if the playhead is inside a loupe you get `There is already a loupe at the playhead.`). Click a loupe in the list to edit it:
+The **Loupe** section has **Add at playhead**, which adds a loupe of 3 s (shorter if the next loupe is close; if the playhead is inside a loupe you get `There is already a loupe at the playhead.`). Click a loupe in the list to edit it:
 
 - **Start** and **End**. Loupes cannot overlap.
 - **Scale** (1.2× to 4×) and **Radius** (5 to 30 % of the width of the picture).
@@ -224,7 +235,7 @@ The timeline has a row of loupe segments under the zoom row. Click a segment to 
 
 #### Split screen
 
-By default the camera is a bubble over the screen. In the **Camera** tab, **Layout** → **Split** puts the screen and the camera side by side instead, so the camera never covers anything.
+By default the camera is a bubble over the screen. In the **Camera** section, **Layout** → **Split** puts the screen and the camera side by side instead, so the camera never covers anything.
 
 - **Side**: Left, Right, Top or Bottom, the side the camera takes.
 - **Ratio** (25 to 50 %): how much of the picture the camera takes along that direction.
@@ -234,7 +245,7 @@ The screen is shown whole in the rest of the picture, and the camera fills its p
 
 #### Looks
 
-A look changes the colour of the camera picture only. The screen is not touched. In the **Camera** tab, **Look** offers **None** and six looks: **Warm**, **Cool**, **Cinematic**, **Faded**, **High contrast** and **Mono**. **Intensity** (0 to 100 %) blends the look with the original picture.
+A look changes the colour of the camera picture only. The screen is not touched. In the **Camera** section, **Look** offers **None** and six looks: **Warm**, **Cool**, **Cinematic**, **Faded**, **High contrast** and **Mono**. **Intensity** (0 to 100 %) blends the look with the original picture.
 
 To use your own colour table, put a `.cube` file (a 3D LUT) inside the recording's project folder and point to it in `project.json`. There is no file picker. Close the recording in the editor first, because the editor rewrites `project.json` when you change something. Inside the `camera` object, add:
 
@@ -250,7 +261,7 @@ The name must be a plain file name that ends in `.cube`, in the project folder i
 
 #### Face tracking
 
-**Follow face** keeps your face centred in the camera picture when you move. It needs a one-time analysis: press **Analyze face**. It runs on your Mac with the Vision framework, shows a progress bar with **Cancel**, and saves the result as `camera_track.json` in the project folder. It follows the largest face it finds. When it finishes, **Follow face** turns on. If it finds no face, the tab says `No face was found in the camera. Check that the camera shows you and try again.`
+**Follow face** keeps your face centred in the camera picture when you move. It needs a one-time analysis: press **Analyze face**. It runs on your Mac with the Vision framework, shows a progress bar with **Cancel**, and saves the result as `camera_track.json` in the project folder. It follows the largest face it finds. When it finishes, **Follow face** turns on. If it finds no face, the section says `No face was found in the camera. Check that the camera shows you and try again.`
 
 - **Zoom** (1× to 3×) sets how tight the picture is around the face. The default is 1.4× for the bubble and 1× in a split.
 - Turning **Follow face** on before analyzing shows `Analyze the camera first.`
