@@ -1658,7 +1658,8 @@ impl App {
 
     /// The editor's Full screen button and ⌃⌘F. Not `ViewportCommand::Fullscreen`: the window is a borderless,
     /// non-resizable, always-on-top panel, where macOS native full screen does not apply (see
-    /// `editor_ctl::WindowMode`), so the window is maximised to its screen's visible frame instead.
+    /// `editor_ctl::WindowMode`), so the window is maximised to its screen's visible frame instead; a second
+    /// press goes back to the editor-sized window.
     pub(crate) fn toggle_fullscreen(&mut self) {
         let current = self.ctx.input(|i| i.viewport().outer_rect.or(i.viewport().inner_rect));
         let screen = self.window_screen();
@@ -1675,10 +1676,16 @@ impl App {
         }
     }
 
-    /// Per frame: only the editor view may stay maximised (Esc, Back and every view change restore the window).
+    /// Per frame: the editor view grows the window once (see `editor_ctl::WindowMode`) and every other view
+    /// (Esc, Back, a hidden launcher) puts the launcher's size and place back once. Quiet in between.
     pub(crate) fn sync_window(&mut self) {
-        let in_editor = matches!(self.view(), View::Editor { .. });
-        if let Some(cmd) = self.win.sync(in_editor) {
+        // a hidden launcher is not showing the editor: its window is already back to the launcher's size
+        let in_editor = self.visible && matches!(self.view(), View::Editor { .. });
+        let normal = Vec2::new(ui::WIDTH, self.cur_height);
+        let ctx = self.ctx.clone();
+        let screen = self.window_screen();
+        let cmd = self.win.sync(in_editor, || ctx.input(|i| i.viewport().outer_rect.or(i.viewport().inner_rect)), || screen, normal);
+        if let Some(cmd) = cmd {
             self.send_window(cmd);
         }
     }
@@ -1701,10 +1708,10 @@ impl App {
 
     /// The visible frame (below the menu bar, beside the Dock) of the screen the window is on.
     fn window_screen(&self) -> Option<Rect> {
+        // tests never ask the real screens: a test sets `test-screen` or has none
         #[cfg(test)]
-        if let Some(r) = self.ctx.data(|d| d.get_temp::<Rect>(Id::new("test-screen"))) {
-            return Some(r);
-        }
+        return self.ctx.data(|d| d.get_temp::<Rect>(Id::new("test-screen")));
+        #[cfg(not(test))]
         key_window_screen().or_else(|| mouse_top_left().map(|(_, r)| r))
     }
 
@@ -7359,6 +7366,7 @@ pub(crate) fn mouse_top_left() -> Option<(Pos2, Rect)> {
 }
 
 /// Visible frame of the screen holding the key window, in top-left screen points.
+#[cfg_attr(test, allow(dead_code))]
 fn key_window_screen() -> Option<Rect> {
     use objc2_app_kit::{NSApplication, NSScreen};
     let mtm = objc2::MainThreadMarker::new()?;

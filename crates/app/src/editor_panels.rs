@@ -39,8 +39,10 @@ pub const MIN_ZOOM: f64 = 0.2;
 /// Length of a zoom added at the playhead.
 pub const NEW_ZOOM_LEN: f64 = 2.0;
 
+/// A section of the inspector (the right-hand column). One is open at a time: opening another closes
+/// the open one (an accordion), so the column never turns into a wall of controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Tab {
+pub enum Section {
     #[default]
     Zoom,
     /// Magnifier spans over the screen (P6); every project has it.
@@ -56,44 +58,85 @@ pub enum Tab {
     Transcript,
 }
 
-impl Tab {
+impl Section {
     pub fn label(self) -> &'static str {
         match self {
-            Tab::Zoom => "Zoom",
-            Tab::Loupe => "Loupe",
-            Tab::Cursor => "Cursor",
-            Tab::Style => "Style",
-            Tab::Clips => "Clips",
-            Tab::Camera => "Camera",
-            Tab::Audio => "Audio",
-            Tab::Transcript => "Transcript",
+            Section::Zoom => "Zoom",
+            Section::Loupe => "Loupe",
+            Section::Cursor => "Cursor",
+            Section::Style => "Style",
+            Section::Clips => "Clips",
+            Section::Camera => "Camera",
+            Section::Audio => "Audio",
+            Section::Transcript => "Transcript",
         }
     }
 
-    /// `self` when the project offers it, else the first tab (a stored Camera tab of another project).
-    pub fn or_first(self, p: &Project) -> Tab {
-        if visible_tabs(p).contains(&self) {
+    /// `self` when the project offers it, else the first section (a stored Camera section of another project).
+    pub fn or_first(self, p: &Project) -> Section {
+        if visible_sections(p).contains(&self) {
             self
         } else {
-            Tab::Zoom
+            Section::Zoom
+        }
+    }
+
+    /// What the header says about the section at its right while it is closed or open: a short state,
+    /// never the same text as a control of the section (those are clicked by their label).
+    pub fn summary(self, p: &Project) -> String {
+        let plural = |n: usize, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "s" });
+        match self {
+            Section::Zoom => plural(p.zooms.len(), "zoom"),
+            Section::Loupe => plural(p.loupes.len(), "loupe"),
+            Section::Cursor => {
+                let style = CURSOR_STYLES.iter().find(|(id, _)| p.cursor.style == *id).map_or("custom", |(_, l)| *l);
+                format!("{:.1}× · {}", p.cursor.size, style.to_lowercase())
+            }
+            Section::Style => format!("{} · {}", p.style.aspect, p.style.background.kind),
+            Section::Clips => plural(Timeline::new(p).pieces().len(), "clip"),
+            Section::Camera => match p.camera.as_ref() {
+                Some(c) if c.visible => format!("{} · on", if c.layout == CameraPlacement::Split { "split" } else { "overlay" }),
+                _ => "off".into(),
+            },
+            Section::Audio => {
+                let mut v = vec![];
+                if p.sources.mic.is_some() {
+                    v.push("mic");
+                }
+                if p.sources.system.is_some() {
+                    v.push("system");
+                }
+                v.join(" + ")
+            }
+            Section::Transcript => match p.transcript.as_ref() {
+                Some(t) => plural(t.words.len(), "word"),
+                None => "not yet".into(),
+            },
         }
     }
 }
 
-/// The tabs of the panel: Camera only with a camera source, Audio only with a microphone or system source,
-/// Transcript with transcribable audio (microphone or system) or a transcript already in the project.
-pub fn visible_tabs(p: &Project) -> Vec<Tab> {
-    let mut v = vec![Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips];
+/// The sections of the inspector: Camera only with a camera source, Audio only with a microphone or system
+/// source, Transcript with transcribable audio (microphone or system) or a transcript already in the project.
+pub fn visible_sections(p: &Project) -> Vec<Section> {
+    let mut v = vec![Section::Zoom, Section::Loupe, Section::Cursor, Section::Style, Section::Clips];
     if p.sources.camera.is_some() {
-        v.push(Tab::Camera);
+        v.push(Section::Camera);
     }
     if p.sources.mic.is_some() || p.sources.system.is_some() {
-        v.push(Tab::Audio);
+        v.push(Section::Audio);
     }
     if can_transcribe(p) || p.transcript.is_some() {
-        v.push(Tab::Transcript);
+        v.push(Section::Transcript);
     }
     v
+}
+
+/// What a click on the timeline selected: its section opens in the inspector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pick {
+    Zoom(String),
+    Loupe(String),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1060,7 +1103,14 @@ pub fn preview_to_focus_in(
 pub struct Studio {
     pub history: History,
     pub autosave: AutosaveClock,
-    pub tab: Tab,
+    /// The open section of the inspector (always one; see [`Section`]).
+    pub open: Section,
+    /// The section the inspector last scrolled to: a change of `open` puts its header at the top once.
+    pub scrolled_to: Section,
+    /// How far the inspector's column can scroll, as the last frame measured it (see `draw_panel`).
+    pub max_scroll: f32,
+    /// Frames in a row the jump to `open` landed where it belongs.
+    pub jump_ok: u8,
     /// Inline message of the last rejected edit.
     pub edit_error: Option<String>,
     pub selected_zoom: Option<String>,
@@ -1084,7 +1134,10 @@ impl Studio {
         Self {
             history: History::new(UNDO_DEPTH, COALESCE_WINDOW),
             autosave: AutosaveClock::new(AUTOSAVE_IDLE),
-            tab: Tab::default(),
+            open: Section::default(),
+            scrolled_to: Section::default(),
+            max_scroll: 0.0,
+            jump_ok: 0,
             edit_error: None,
             selected_zoom: None,
             selected_loupe: None,
@@ -1094,6 +1147,31 @@ impl Studio {
             speed: 2.0,
             tr: TranscriptUi::default(),
             started: Instant::now(),
+        }
+    }
+}
+
+impl Studio {
+    /// Open `section` (the accordion closes the open one) and leave the preview picker.
+    pub fn open_section(&mut self, section: Section) {
+        if self.open != section {
+            self.open = section;
+            self.picking = false;
+        }
+    }
+
+    /// A click on a zoom or loupe bar of the timeline: select it and open its section.
+    pub fn pick(&mut self, pick: Pick) {
+        self.picking = false;
+        match pick {
+            Pick::Zoom(id) => {
+                self.selected_zoom = Some(id);
+                self.open = Section::Zoom;
+            }
+            Pick::Loupe(id) => {
+                self.selected_loupe = Some(id);
+                self.open = Section::Loupe;
+            }
         }
     }
 }
@@ -1542,15 +1620,12 @@ fn pair_drag(
 }
 
 /// Label column and value box of [`row_slider`].
-const SLIDER_LABEL_W: f32 = 56.0;
+const SLIDER_LABEL_W: f32 = 74.0;
 const SLIDER_VALUE_W: f32 = 58.0;
 
 fn note(ui: &mut Ui, pal: &Palette, text: &str) {
     ui.label(egui::RichText::new(text).size(11.5).color(pal.sub));
 }
-
-/// Room between the panel's edge and its content.
-const PANEL_PAD: f32 = 8.0;
 
 /// The look of every plain egui widget inside the panel (buttons, chips made of selectable labels, number
 /// boxes), so the older tabs match the painted widgets of the newer ones: flat controls in one fill, the
@@ -1604,51 +1679,177 @@ fn list_row(ui: &mut Ui, pal: &Palette, label: &str, selected: bool) -> bool {
     resp.clicked()
 }
 
-/// The right-hand panel: tabs and the active tab's controls. Every change goes through [`Editor::apply`].
+/// Height of a section header of the inspector.
+pub fn header_height(comfy: bool) -> f32 {
+    if comfy {
+        38.0
+    } else {
+        30.0
+    }
+}
+
+/// `text` cut with an ellipsis to fit `max_w` points at `size` (empty when not even the ellipsis fits).
+pub(crate) fn elide_to(ui: &Ui, text: &str, size: f32, max_w: f32) -> String {
+    elide(ui, text, size, max_w)
+}
+
+fn elide(ui: &Ui, text: &str, size: f32, max_w: f32) -> String {
+    let width = |t: &str| ui.painter().layout_no_wrap(t.into(), font(size), egui::Color32::WHITE).size().x;
+    if width(text) <= max_w {
+        return text.into();
+    }
+    let mut chars: Vec<char> = text.chars().collect();
+    while !chars.is_empty() {
+        chars.pop();
+        let t: String = chars.iter().collect::<String>().trim_end().to_string() + "…";
+        if width(&t) <= max_w {
+            return t;
+        }
+    }
+    String::new()
+}
+
+/// One header row of the inspector: a chevron (down when open), the section name (larger when open), a short
+/// state at the right and a hairline above it. The open one also has an accent bar at the column's edge, so
+/// the open section is told by its chevron, its size and a bar, not by colour alone. Returns whether it was clicked.
+#[allow(clippy::too_many_arguments)]
+fn section_header(
+    ui: &mut Ui,
+    pal: &Palette,
+    comfy: bool,
+    edge: f32,
+    section: Section,
+    summary: &str,
+    open: bool,
+    first: bool,
+) -> (Rect, bool) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), header_height(comfy)), egui::Sense::hover());
+    let resp = cell(ui, pal, rect, ui.id().with(("section", section.label())), section.label(), Some(open));
+    let p = ui.painter();
+    if !first {
+        p.hline((rect.min.x)..=(rect.max.x), rect.min.y, egui::Stroke::new(1.0, pal.sep));
+    }
+    if resp.hovered() && !open {
+        p.rect_filled(rect.shrink2(egui::vec2(-6.0, 2.0)), crate::editor_ctl::CONTROL_RADIUS, pal.field);
+    }
+    if open {
+        p.rect_filled(Rect::from_center_size(egui::pos2(edge + 1.5, rect.center().y), egui::vec2(3.0, 18.0)), 1.5, pal.accent);
+    }
+    // the chevron: a small triangle, pointing down when open and right when closed
+    let c = egui::pos2(rect.min.x + 5.0, rect.center().y);
+    let tri = if open {
+        vec![egui::pos2(c.x - 4.5, c.y - 2.5), egui::pos2(c.x + 4.5, c.y - 2.5), egui::pos2(c.x, c.y + 3.0)]
+    } else {
+        vec![egui::pos2(c.x - 2.5, c.y - 4.5), egui::pos2(c.x - 2.5, c.y + 4.5), egui::pos2(c.x + 3.0, c.y)]
+    };
+    let ink = if open { pal.text } else { pal.sub_strong };
+    p.add(egui::Shape::convex_polygon(tri, ink, egui::Stroke::NONE));
+    let size = match (comfy, open) {
+        (true, true) => 15.0,
+        (true, false) => 13.5,
+        (false, true) => 14.0,
+        (false, false) => 13.0,
+    };
+    let name = p.layout_no_wrap(section.label().into(), font(size), pal.text);
+    let name_w = name.size().x;
+    p.galley(egui::pos2(rect.min.x + 20.0, rect.center().y - name.size().y / 2.0), name, pal.text);
+    let room = rect.width() - 20.0 - name_w - 14.0;
+    let summary = elide(ui, summary, 12.0, room);
+    if !summary.is_empty() {
+        ui.painter().text(egui::pos2(rect.max.x, rect.center().y), egui::Align2::RIGHT_CENTER, summary, font(12.0), pal.sub_strong);
+    }
+    (rect, resp.clicked())
+}
+
+/// The inspector: the sections of the project in one scrollable column, one of them open. Every change goes
+/// through [`Editor::apply`]; the section bodies are the controls the tabs used to hold.
 pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto: &ZoomOpts, fps: f64, now: f64) {
-    ui.painter().rect_filled(rect, crate::editor_ctl::EDITOR_RADIUS, pal.field);
-    // tests check that every tab stays inside the panel
+    let comfy = rect.width() > 300.0;
+    // the inspector is a step in tone with a hairline at its left edge, not a box
+    ui.painter().rect_filled(rect, 0.0, pal.field);
+    ui.painter().vline(rect.min.x, rect.y_range(), egui::Stroke::new(1.0, pal.sep));
+    // tests check that every section stays inside the panel
     #[cfg(test)]
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("editor-panel-rect"), rect));
-    ui.scope_builder(UiBuilder::new().max_rect(rect.shrink(PANEL_PAD)), |ui| {
-        panel_style(ui, pal, rect.width() > 300.0);
-        let tabs = ed.project.as_ref().map_or_else(|| visible_tabs(&Project::new("", "")), visible_tabs);
-        // a Camera / Audio tab left over from another project falls back to Zoom
-        if let Some(p) = ed.project.as_ref() {
-            let tab = ed.st.tab.or_first(p);
-            if tab != ed.st.tab {
-                ed.st.tab = tab;
-                ed.st.picking = false;
-            }
-        }
-        if let Some(t) = tab_strip(ui, pal, &tabs, ed.st.tab) {
-            ed.st.tab = t;
+    let pad = if comfy { 16.0 } else { 12.0 };
+    let inner = Rect::from_min_max(egui::pos2(rect.min.x + pad, rect.min.y + 2.0), egui::pos2(rect.max.x - pad, rect.max.y));
+    ui.scope_builder(UiBuilder::new().max_rect(inner), |ui| {
+        panel_style(ui, pal, comfy);
+        // Reduce Motion: a change of section jumps, it never glides
+        ui.style_mut().scroll_animation = egui::style::ScrollAnimation::none();
+        ui.style_mut().animation_time = 0.0;
+        let Some(proj) = ed.project.clone() else { return };
+        let sections = visible_sections(&proj);
+        // a Camera / Audio section left over from another project falls back to Zoom
+        let open = ed.st.open.or_first(&proj);
+        if open != ed.st.open {
+            ed.st.open = open;
             ed.st.picking = false;
         }
-        ui.add_space(2.0);
-        let Some(proj) = ed.project.clone() else { return };
-        // the reason an edit was refused stays in view above the controls
+        ui.add_space(4.0);
+        // the reason an edit was refused, or a failed save, stays in view above the sections
         if let Some(e) = ed.st.edit_error.clone() {
             ui.label(egui::RichText::new(e).size(12.0).color(pal.danger));
         }
-        let tab = ed.st.tab;
-        egui::ScrollArea::vertical().id_salt("editor-panel").auto_shrink([false, false]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 6.0;
-            match tab {
-                Tab::Zoom => zoom_tab(ui, pal, ed, &proj, auto, now),
-                Tab::Loupe => loupe_tab(ui, pal, ed, &proj, now),
-                Tab::Cursor => cursor_tab(ui, pal, ed, &proj, now),
-                Tab::Style => style_tab(ui, pal, ed, &proj, now),
-                Tab::Clips => clips_tab(ui, pal, ed, &proj, fps, now),
-                Tab::Camera => camera_tab(ui, pal, ed, &proj, now),
-                Tab::Audio => audio_tab(ui, pal, ed, &proj, now),
-                Tab::Transcript => transcript_tab(ui, pal, ed, &proj, fps, now),
+        if let SaveStatus::Failed(e) = ed.st.autosave.status() {
+            ui.label(egui::RichText::new(e).size(12.0).color(pal.danger));
+        }
+        let mut area = egui::ScrollArea::vertical().id_salt("editor-panel").auto_shrink([false, false]);
+        // a section that just opened puts its header at the top of the column (once)
+        let index = sections.iter().position(|s| *s == open).unwrap_or(0);
+        let jump = ed.st.scrolled_to != open;
+        let target = index as f32 * header_height(comfy);
+        // never past what the last frame measured: forcing more would draw the column shifted for a frame and
+        // snap back when the content turns out to be shorter
+        let forced = target.min(ed.st.max_scroll);
+        if jump {
+            area = area.vertical_scroll_offset(forced);
+        }
+        let out = area.show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = if comfy { 8.0 } else { 6.0 };
+            for (i, sec) in sections.iter().enumerate() {
+                let is_open = *sec == open;
+                let head_gap = ui.spacing().item_spacing.y;
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let (_, clicked) = section_header(ui, pal, comfy, rect.min.x + 1.0, *sec, &sec.summary(&proj), is_open, i == 0);
+                ui.spacing_mut().item_spacing.y = head_gap;
+                if clicked {
+                    ed.st.open_section(*sec);
+                    ui.ctx().request_repaint();
+                }
+                if !is_open {
+                    continue;
+                }
+                ui.add_space(6.0);
+                match sec {
+                    Section::Zoom => zoom_section(ui, pal, ed, &proj, auto, now),
+                    Section::Loupe => loupe_section(ui, pal, ed, &proj, now),
+                    Section::Cursor => cursor_section(ui, pal, ed, &proj, now),
+                    Section::Style => style_section(ui, pal, ed, &proj, now),
+                    Section::Clips => clips_section(ui, pal, ed, &proj, fps, now),
+                    Section::Camera => camera_section(ui, pal, ed, &proj, now),
+                    Section::Audio => audio_section(ui, pal, ed, &proj, now),
+                    Section::Transcript => transcript_section(ui, pal, ed, &proj, fps, now),
+                }
+                ui.add_space(if comfy { 16.0 } else { 10.0 });
             }
         });
+        let max_scroll = (out.content_size.y - out.inner_rect.height()).max(0.0);
+        ed.st.max_scroll = max_scroll;
+        // the jump is done when the column was forced to where it belongs with this frame's measures, two frames
+        // in a row (the very first frame of a window can measure nothing sensible)
+        let right = (forced - target.min(max_scroll)).abs() < 1.0;
+        if jump {
+            ed.st.jump_ok = if right { ed.st.jump_ok + 1 } else { 0 };
+            if ed.st.jump_ok >= 2 {
+                ed.st.scrolled_to = open;
+                ed.st.jump_ok = 0;
+            }
+        }
     });
 }
 
-fn zoom_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, auto: &ZoomOpts, now: f64) {
+fn zoom_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, auto: &ZoomOpts, now: f64) {
     let w = (ui.available_width() - 5.0) / 2.0;
     ui.horizontal(|ui| {
         if secondary_button_tip(ui, pal, "Add at playhead", w, true, "Add a zoom at the playhead") {
@@ -1786,7 +1987,7 @@ pub fn pick_focus(ed: &mut Editor, click: [f64; 2], camera: Option<[f64; 4]>, no
     }
 }
 
-fn cursor_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
+fn cursor_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
     let c = &proj.cursor;
     caption(ui, pal, "Pointer");
     let labels: Vec<&str> = CURSOR_STYLES.iter().map(|(_, l)| *l).collect();
@@ -1810,7 +2011,7 @@ fn cursor_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: 
     note(ui, pal, "The cursor is drawn from the recorded events; None and Hidden remove it.");
 }
 
-fn style_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
+fn style_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
     let s = &proj.style;
     caption(ui, pal, "Aspect");
     let labels: Vec<&str> = ASPECTS.iter().map(|(_, l)| *l).collect();
@@ -1937,12 +2138,6 @@ fn cell(ui: &mut Ui, pal: &Palette, rect: Rect, id: egui::Id, label: &str, selec
     resp
 }
 
-/// The tab strip: equal-height chips, wrapped into balanced rows that fill the panel width.
-fn tab_strip(ui: &mut Ui, pal: &Palette, tabs: &[Tab], current: Tab) -> Option<Tab> {
-    let labels: Vec<&str> = tabs.iter().map(|t| t.label()).collect();
-    chip_strip(ui, pal, "tab", &labels, tabs.iter().position(|t| *t == current)).map(|i| tabs[i])
-}
-
 /// Chips with the look of the tabs (the Look picker uses it too): `current` is the selected one.
 /// Returns the clicked index.
 fn chip_strip(ui: &mut Ui, pal: &Palette, salt: &str, labels: &[&str], current: Option<usize>) -> Option<usize> {
@@ -1984,18 +2179,17 @@ fn caption(ui: &mut Ui, pal: &Palette, text: &str) {
     ui.label(egui::RichText::new(text).size(12.0).color(pal.sub_strong));
 }
 
-/// A rounded, hairline-edged container that fills the panel width.
+/// A group of controls under a selected row: no box of its own (a box inside the inspector would be a card
+/// inside a card), only an indent with a hairline at its left to show what it belongs to.
 fn card<R>(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
-    egui::Frame::new()
-        .fill(pal.field)
-        .corner_radius(crate::editor_ctl::EDITOR_RADIUS as u8)
-        .inner_margin(egui::Margin::same(10))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.y = 6.0;
-            add(ui)
-        })
-        .inner
+    let out = egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 0, top: 4, bottom: 4 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 6.0;
+        add(ui)
+    });
+    let r = out.response.rect;
+    ui.painter().vline(r.min.x + 1.0, (r.min.y + 4.0)..=(r.max.y - 4.0), egui::Stroke::new(1.0, pal.sep));
+    out.inner
 }
 
 /// A full-width (or `width`-wide) secondary button; a disabled one is dimmed and inert.
@@ -2251,7 +2445,7 @@ fn source_rows(ui: &mut Ui, pal: &Palette, ed: &Editor, proj: &Project, only: &[
     }
 }
 
-fn camera_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
+fn camera_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
     let c = proj.camera.clone().unwrap_or_default();
     if toggle_row(ui, pal, "Show camera", c.visible) {
         ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Visible(!c.visible)));
@@ -2378,7 +2572,7 @@ fn face_rows(ui: &mut Ui, pal: &Palette, ed: &mut Editor, c: &CameraLayout, now:
     note(ui, pal, &text);
 }
 
-fn loupe_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
+fn loupe_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
     if secondary_button(ui, pal, "Add at playhead", ui.available_width(), true) {
         ed.add_loupe_here(now);
     }
@@ -2477,7 +2671,7 @@ fn mute_pill(ui: &mut Ui, pal: &Palette, track: &str, muted: bool) -> bool {
     resp.clicked()
 }
 
-fn audio_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
+fn audio_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
     let infos = source_infos(proj, &ed.dir);
     for (track, label, present) in
         [(AudioTrack::Mic, "Microphone", proj.sources.mic.is_some()), (AudioTrack::System, "System audio", proj.sources.system.is_some())]
@@ -2534,7 +2728,7 @@ fn error_card(ui: &mut Ui, pal: &Palette, text: &str) {
         });
 }
 
-fn transcript_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
+fn transcript_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
     if transcript_view(proj) == TranscriptView::Words {
         return transcript_words(ui, pal, ed, proj, fps, now);
     }
@@ -2643,52 +2837,50 @@ fn transcript_words(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project,
     let filler = filler_color(ui.visuals().dark_mode);
     let (mut click, mut drag_start, mut dragging) = (None, None, false);
     let mut rects: Vec<(usize, Rect)> = Vec::with_capacity(n);
-    egui::Frame::new().fill(pal.field).stroke(egui::Stroke::new(1.0, pal.sep)).corner_radius(8).inner_margin(egui::Margin::same(10)).show(
-        ui,
-        |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                // roomy lines (the wrap ignores the vertical spacing, so the height is the word's own)
-                ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
-                for (i, w) in tr.words.iter().enumerate() {
-                    let cut = tl.as_ref().is_some_and(|tl| word_is_cut(tl, w));
-                    let is_filler = flags.get(i).copied().unwrap_or(false);
-                    let color = if cut {
-                        pal.sub
-                    } else if is_filler {
-                        filler
-                    } else {
-                        pal.text
-                    };
-                    let mut rt = egui::RichText::new(w.text.as_str()).size(13.5).line_height(Some(WORD_LINE_H)).color(color);
-                    if cut {
-                        rt = rt.strikethrough();
-                    }
-                    if is_filler && !cut {
-                        rt = rt.italics();
-                    }
-                    if sel.is_some_and(|(a, b)| (a..=b).contains(&i)) {
-                        rt = rt.background_color(pal.accent.gamma_multiply(0.38));
-                    } else if cur == Some(i) {
-                        // the word under the playhead: a soft tint and an underline
-                        rt = rt.background_color(pal.accent.gamma_multiply(0.20)).underline();
-                    }
-                    let r = ui.add(egui::Label::new(rt).selectable(false).sense(Sense::click_and_drag()));
-                    if r.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                    if r.clicked() {
-                        click = Some(i);
-                    }
-                    if r.drag_started() {
-                        drag_start = Some(i);
-                    }
-                    dragging |= r.dragged();
-                    rects.push((i, r.rect));
+    // the words sit on the inspector itself: no box inside the column
+    egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 6)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            // roomy lines (the wrap ignores the vertical spacing, so the height is the word's own)
+            ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+            for (i, w) in tr.words.iter().enumerate() {
+                let cut = tl.as_ref().is_some_and(|tl| word_is_cut(tl, w));
+                let is_filler = flags.get(i).copied().unwrap_or(false);
+                let color = if cut {
+                    pal.sub
+                } else if is_filler {
+                    filler
+                } else {
+                    pal.text
+                };
+                let mut rt = egui::RichText::new(w.text.as_str()).size(13.5).line_height(Some(WORD_LINE_H)).color(color);
+                if cut {
+                    rt = rt.strikethrough();
                 }
-            });
-        },
-    );
+                if is_filler && !cut {
+                    rt = rt.italics();
+                }
+                if sel.is_some_and(|(a, b)| (a..=b).contains(&i)) {
+                    rt = rt.background_color(pal.accent.gamma_multiply(0.38));
+                } else if cur == Some(i) {
+                    // the word under the playhead: a soft tint and an underline
+                    rt = rt.background_color(pal.accent.gamma_multiply(0.20)).underline();
+                }
+                let r = ui.add(egui::Label::new(rt).selectable(false).sense(Sense::click_and_drag()));
+                if r.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if r.clicked() {
+                    click = Some(i);
+                }
+                if r.drag_started() {
+                    drag_start = Some(i);
+                }
+                dragging |= r.dragged();
+                rects.push((i, r.rect));
+            }
+        });
+    });
     if let Some(i) = drag_start {
         ed.st.tr.anchor = Some(i);
         ed.st.tr.sel = Some((i, i));
@@ -2728,7 +2920,7 @@ fn transcript_words(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project,
     note(ui, pal, "Cut words are struck through. Filler words are orange.");
 }
 
-fn clips_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
+fn clips_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
     use crate::editor_ctl::clock;
     let t = ed.t;
     let w = (ui.available_width() - 5.0) / 2.0;
@@ -2862,6 +3054,125 @@ mod tests {
         let mut q = base();
         add_zoom(&mut q, 3.0).unwrap();
         assert_eq!((q.zooms[0].start, q.zooms[0].end), (3.0, 5.0), "NEW_ZOOM_LEN");
+    }
+
+    // ---- the inspector's sections (the accordion state machine)
+
+    fn source(file: &str) -> ferrocast_core::capture::project::Source {
+        serde_json::from_value(serde_json::json!({"file": file, "offset": 0.0})).unwrap()
+    }
+
+    #[test]
+    fn which_sections_exist_depends_on_the_sources_of_the_project() {
+        let plain = base();
+        assert_eq!(visible_sections(&plain), [Section::Zoom, Section::Loupe, Section::Cursor, Section::Style, Section::Clips]);
+        let mut cam = base();
+        cam.sources.camera = Some(source("camera.mov"));
+        assert_eq!(visible_sections(&cam).last(), Some(&Section::Camera), "Camera only with a camera source");
+        assert!(!visible_sections(&cam).contains(&Section::Audio) && !visible_sections(&cam).contains(&Section::Transcript));
+        let mut mic = base();
+        mic.sources.mic = Some(source("mic.m4a"));
+        assert_eq!(&visible_sections(&mic)[5..], [Section::Audio, Section::Transcript], "a microphone brings Audio and Transcript");
+        let mut sys = base();
+        sys.sources.system = Some(source("system.m4a"));
+        assert_eq!(&visible_sections(&sys)[5..], [Section::Audio, Section::Transcript], "so does system audio");
+        // a transcript without any audio still shows the Transcript section, and no Audio one
+        let mut words = base();
+        words.transcript = Some(Transcript { language: "en-US".into(), ..Default::default() });
+        assert_eq!(&visible_sections(&words)[5..], [Section::Transcript]);
+        // the order is the order of the column
+        let mut all = base();
+        all.sources.camera = Some(source("camera.mov"));
+        all.sources.mic = Some(source("mic.m4a"));
+        let labels: Vec<&str> = visible_sections(&all).iter().map(|s| s.label()).collect();
+        assert_eq!(labels, ["Zoom", "Loupe", "Cursor", "Style", "Clips", "Camera", "Audio", "Transcript"]);
+    }
+
+    #[test]
+    fn a_section_of_another_project_falls_back_to_the_first() {
+        let plain = base();
+        for gone in [Section::Camera, Section::Audio, Section::Transcript] {
+            assert_eq!(gone.or_first(&plain), Section::Zoom, "{gone:?}");
+        }
+        for kept in visible_sections(&plain) {
+            assert_eq!(kept.or_first(&plain), kept);
+        }
+    }
+
+    #[test]
+    fn opening_a_section_closes_the_open_one_and_leaves_the_picker() {
+        let mut st = Studio::new();
+        assert_eq!(st.open, Section::Zoom, "a session starts on Zoom");
+        st.picking = true;
+        st.open_section(Section::Style);
+        assert_eq!(st.open, Section::Style, "one section open at a time: Zoom closed");
+        assert!(!st.picking, "leaving a section ends the pick on the preview");
+        // opening the open one again changes nothing (an accordion always has one open)
+        st.picking = true;
+        st.open_section(Section::Style);
+        assert_eq!((st.open, st.picking), (Section::Style, true));
+        st.open_section(Section::Clips);
+        assert_eq!(st.open, Section::Clips);
+    }
+
+    #[test]
+    fn a_click_on_a_timeline_bar_selects_it_and_opens_its_section() {
+        let mut st = Studio::new();
+        st.open_section(Section::Cursor);
+        st.picking = true;
+        st.pick(Pick::Loupe("l7".into()));
+        assert_eq!((st.open, st.selected_loupe.as_deref(), st.picking), (Section::Loupe, Some("l7"), false));
+        assert_eq!(st.selected_zoom, None, "a loupe does not select a zoom");
+        st.pick(Pick::Zoom("z3".into()));
+        assert_eq!((st.open, st.selected_zoom.as_deref()), (Section::Zoom, Some("z3")));
+        assert_eq!(st.selected_loupe.as_deref(), Some("l7"), "the other selection is kept");
+    }
+
+    #[test]
+    fn the_header_summaries_say_the_state_and_never_repeat_a_control_label() {
+        let mut p = base();
+        p.zooms = vec![zoom("z1", 1.0, 2.0, "auto")];
+        assert_eq!(Section::Zoom.summary(&p), "1 zoom");
+        p.zooms.clear();
+        assert_eq!(Section::Zoom.summary(&p), "0 zooms");
+        assert_eq!(Section::Loupe.summary(&p), "0 loupes");
+        assert_eq!(Section::Cursor.summary(&p), "1.4× · default");
+        assert_eq!(Section::Style.summary(&p), format!("{} · {}", p.style.aspect, p.style.background.kind));
+        assert_eq!(Section::Clips.summary(&p), "1 clip");
+        assert_eq!(Section::Camera.summary(&p), "off", "no camera layout, no camera");
+        assert_eq!(Section::Transcript.summary(&p), "not yet");
+        p.sources.mic = Some(source("mic.m4a"));
+        assert_eq!(Section::Audio.summary(&p), "mic");
+        p.sources.system = Some(source("system.m4a"));
+        assert_eq!(Section::Audio.summary(&p), "mic + system");
+        // none of them is the exact text of a button or chip of its section
+        let controls =
+            ["Default", "None", "Hidden", "Split", "Overlay", "Microphone", "Mute", "Muted", "16:9", "Colour", "Gradient", "Blur"];
+        for s in [
+            Section::Zoom,
+            Section::Loupe,
+            Section::Cursor,
+            Section::Style,
+            Section::Clips,
+            Section::Camera,
+            Section::Audio,
+            Section::Transcript,
+        ] {
+            assert!(!controls.contains(&s.summary(&p).as_str()), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn a_long_summary_is_cut_with_an_ellipsis_and_header_rows_are_hit_targets() {
+        assert!(header_height(false) >= 24.0 && header_height(true) >= header_height(false));
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert_eq!(elide(ui, "short", 12.0, 500.0), "short");
+            let cut = elide(ui, "a rather long summary of the state", 12.0, 60.0);
+            assert!(cut.ends_with('…') && cut.len() < "a rather long summary of the state".len(), "{cut}");
+            assert_eq!(elide(ui, "anything", 12.0, 2.0), "", "not even the ellipsis fits");
+        });
+        out.textures_delta.clear();
     }
 
     #[test]
@@ -3339,25 +3650,40 @@ mod tests {
     #[test]
     fn the_camera_and_audio_tabs_exist_only_for_projects_with_those_sources() {
         use ferrocast_core::capture::project::Source;
-        let plain = [Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips];
-        assert_eq!(visible_tabs(&base()), plain, "no camera and no audio: neither tab");
+        let plain = [Section::Zoom, Section::Loupe, Section::Cursor, Section::Style, Section::Clips];
+        assert_eq!(visible_sections(&base()), plain, "no camera and no audio: neither tab");
         let mut cam = base();
         cam.sources.camera = Some(Source { file: "camera.mov".into(), offset: 0.0 });
-        assert_eq!(visible_tabs(&cam), [Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera]);
+        assert_eq!(
+            visible_sections(&cam),
+            [Section::Zoom, Section::Loupe, Section::Cursor, Section::Style, Section::Clips, Section::Camera]
+        );
         let mut mic = base();
         mic.sources.mic = Some(Source { file: "mic.m4a".into(), offset: 0.0 });
-        assert_eq!(visible_tabs(&mic), [Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Audio, Tab::Transcript]);
+        assert_eq!(
+            visible_sections(&mic),
+            [Section::Zoom, Section::Loupe, Section::Cursor, Section::Style, Section::Clips, Section::Audio, Section::Transcript]
+        );
         let mut sys = base();
         sys.sources.system = Some(Source { file: "system.m4a".into(), offset: 0.0 });
-        assert!(visible_tabs(&sys).contains(&Tab::Audio) && !visible_tabs(&sys).contains(&Tab::Camera));
+        assert!(visible_sections(&sys).contains(&Section::Audio) && !visible_sections(&sys).contains(&Section::Camera));
         assert_eq!(
-            visible_tabs(&with_sources()),
-            [Tab::Zoom, Tab::Loupe, Tab::Cursor, Tab::Style, Tab::Clips, Tab::Camera, Tab::Audio, Tab::Transcript]
+            visible_sections(&with_sources()),
+            [
+                Section::Zoom,
+                Section::Loupe,
+                Section::Cursor,
+                Section::Style,
+                Section::Clips,
+                Section::Camera,
+                Section::Audio,
+                Section::Transcript
+            ]
         );
         // a stored tab the project no longer offers falls back to the first one
-        assert_eq!(Tab::Camera.or_first(&base()), Tab::Zoom);
-        assert_eq!(Tab::Camera.or_first(&with_sources()), Tab::Camera);
-        assert_eq!(Tab::Clips.or_first(&base()), Tab::Clips);
+        assert_eq!(Section::Camera.or_first(&base()), Section::Zoom);
+        assert_eq!(Section::Camera.or_first(&with_sources()), Section::Camera);
+        assert_eq!(Section::Clips.or_first(&base()), Section::Clips);
     }
 
     #[test]
@@ -3510,18 +3836,18 @@ mod tests {
     #[test]
     fn the_transcript_tab_needs_audio_or_an_existing_transcript() {
         use ferrocast_core::capture::project::Source;
-        assert!(!visible_tabs(&base()).contains(&Tab::Transcript), "no audio, no transcript: no tab");
+        assert!(!visible_sections(&base()).contains(&Section::Transcript), "no audio, no transcript: no tab");
         let mut mic = base();
         mic.sources.mic = Some(Source { file: "mic.m4a".into(), offset: 0.0 });
-        assert!(visible_tabs(&mic).contains(&Tab::Transcript));
+        assert!(visible_sections(&mic).contains(&Section::Transcript));
         let mut sys = base();
         sys.sources.system = Some(Source { file: "system.m4a".into(), offset: 0.0 });
-        assert!(visible_tabs(&sys).contains(&Tab::Transcript));
+        assert!(visible_sections(&sys).contains(&Section::Transcript));
         let mut had = base();
         had.transcript = Some(speech());
-        assert!(visible_tabs(&had).contains(&Tab::Transcript), "a transcript alone keeps the tab");
-        assert_eq!(Tab::Transcript.label(), "Transcript");
-        assert_eq!(Tab::Transcript.or_first(&base()), Tab::Zoom);
+        assert!(visible_sections(&had).contains(&Section::Transcript), "a transcript alone keeps the tab");
+        assert_eq!(Section::Transcript.label(), "Transcript");
+        assert_eq!(Section::Transcript.or_first(&base()), Section::Zoom);
     }
 
     #[test]

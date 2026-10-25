@@ -1713,8 +1713,10 @@ impl App {
         // the tour is a full-bleed deck: it has no search bar
         let tour_view = matches!(self.view(), View::Welcome);
         // the editor's title bar is slimmer than the launcher's search bar: its height goes to the preview
-        let bar_h = if matches!(self.view(), View::Editor { .. }) { crate::editor_ctl::BAR_H } else { ui::SEARCH_H };
-        let search_rect = Rect::from_min_size(full.min, Vec2::new(full.width(), if tour_view { 0.0 } else { bar_h }));
+        // the editor draws its own top bar (back, project name, Export…, Full screen) inside its area
+        let editor_view = matches!(self.view(), View::Editor { .. });
+        let own_bar = tour_view || editor_view;
+        let search_rect = Rect::from_min_size(full.min, Vec2::new(full.width(), if own_bar { 0.0 } else { ui::SEARCH_H }));
         let footer_rect = Rect::from_min_max(Pos2::new(full.min.x, full.max.y - ui::FOOTER_H), full.max);
         let content = Rect::from_min_max(Pos2::new(full.min.x, search_rect.max.y), Pos2::new(full.max.x, footer_rect.min.y));
 
@@ -1723,7 +1725,7 @@ impl App {
         let placeholder = self.view().placeholder();
         let nested = self.stack.len() > 1;
         let mut back = false;
-        if !tour_view {
+        if !own_bar {
             ui.scope_builder(UiBuilder::new().max_rect(search_rect.shrink2(Vec2::new(18.0, 0.0)).translate(Vec2::new(0.0, 3.0))), |ui| {
                 ui.horizontal_centered(|ui| {
                     if nested && matches!(self.view(), View::Settings) {
@@ -1783,7 +1785,7 @@ impl App {
         let line = |y: f32| {
             ui.painter().hline(full.min.x..=full.max.x, y, Stroke::new(1.0, pal.sep));
         };
-        if !tour_view {
+        if !own_bar {
             line(search_rect.max.y);
         }
         line(footer_rect.min.y);
@@ -1838,9 +1840,7 @@ impl App {
             // under the intro the deck waits, so its entrance plays at the hand-off
             _ if tour_view && self.intro_covers() => {}
             _ if tour_view => self.draw_tour(ui, content, &pal),
-            _ if matches!(self.view(), View::Editor { .. }) => {
-                self.draw_single(ui, content.shrink2(Vec2::new(crate::editor_ctl::MARGIN_X, crate::editor_ctl::MARGIN_Y)), &pal)
-            }
+            _ if editor_view => self.draw_single(ui, content, &pal),
             _ => self.draw_single(ui, content.shrink2(Vec2::new(20.0, 14.0)), &pal),
         }
         self.scroll_to_sel = false;
@@ -4436,22 +4436,24 @@ impl App {
         }
     }
 
-    /// Studio editor (T26): preview frame, transport row and timeline. The pure parts (scrub queue,
-    /// geometry, play clock, labels) live in `editor_ctl`; edits and panels come in T27.
+    /// Studio editor: three zones like a video editor. The top bar (back, project name, save state,
+    /// Export…, Full screen), the preview with its transport strip at the left, the inspector (collapsible
+    /// sections) at the right, and the timeline with its named tracks across the whole width below. The pure
+    /// parts (scrub queue, geometry, play clock, labels, section state) live in `editor_ctl` and `editor_panels`.
     fn draw_editor(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, project: &std::path::Path) {
         use crate::editor_ctl::{
-            clock, loupe_bars, loupe_hit, preview_image_rect, preview_width, ruler_ticks, segment_bars, track_colors, zoom_bars, Axis,
-            BarKind, EDITOR_RADIUS,
+            clock, loupe_bars, loupe_hit, preview_image_rect, preview_width, ruler_ticks, segment_bars, track_colors, zoom_bars, zoom_hit,
+            Axis, BarKind, EDITOR_RADIUS,
         };
         let ctx = ui.ctx().clone();
         let fps = f64::from(self.settings.capture.fps.max(1));
         let now = ctx.input(|i| i.time);
         let ppp = ctx.pixels_per_point();
         // everything is placed by one pure function of the space the editor has (compact at the
-        // launcher's 750 x 475, roomier above ~1060 x 590, e.g. full screen)
+        // launcher's 750 x 475, roomier from ~900 x 520: the default 1100 x 700 editor window, full screen)
         let lay = crate::editor_ctl::layout(rect);
         let comfy = lay.density == crate::editor_ctl::Density::Comfortable;
-        let (ctrl, tl_rect, panel, area) = (lay.transport, lay.tracks, lay.panel, lay.preview);
+        let (tl_rect, area) = (lay.tracks, lay.preview);
         let auto_opts = {
             let c = &self.settings.capture;
             ferrocast_core::capture::zoom::ZoomOpts { scale: c.zoom_scale, ..Default::default() }
@@ -4527,28 +4529,35 @@ impl App {
             (Some(p), Some(t)) => (p, t),
             _ => (proj, tl),
         };
-        // the timeline: click or drag to seek
+        // the timeline: click or drag to seek; a click on a zoom or loupe bar also selects it and opens
+        // its section in the inspector
         let axis = Axis { x0: tl_rect.min.x, x1: tl_rect.max.x, duration: proj.duration };
         let resp = ui.interact(tl_rect, Id::new("editor-timeline"), egui::Sense::click_and_drag());
         if let (true, Some(p)) = (resp.clicked() || resp.dragged() || resp.drag_started(), resp.interact_pointer_pos()) {
             ed.seek(axis.time_at(p.x), now, fps);
-            // a click on a loupe segment selects it and shows it in the Loupe tab
-            if let (true, true) = (resp.clicked(), p.y >= lay.rows[2].min.y - 2.0) {
-                if let Some(id) = loupe_hit(&loupe_bars(&proj), &axis, p.x).map(str::to_owned) {
-                    ed.st.selected_loupe = Some(id);
-                    ed.st.tab = crate::editor_panels::Tab::Loupe;
-                    ed.st.picking = false;
+            if resp.clicked() {
+                let on_row = |r: Rect| p.y >= r.min.y - 2.0 && p.y <= r.max.y + 2.0;
+                let pick = if on_row(lay.rows[2]) {
+                    loupe_hit(&loupe_bars(&proj), &axis, p.x).map(|id| crate::editor_panels::Pick::Loupe(id.to_owned()))
+                } else if on_row(lay.rows[1]) {
+                    zoom_hit(&proj, &axis, p.x).map(|id| crate::editor_panels::Pick::Zoom(id.to_owned()))
+                } else {
+                    None
+                };
+                if let Some(pick) = pick {
+                    ed.st.pick(pick);
                 }
             }
         }
         ctx.data_mut(|d| {
             d.insert_temp(Id::new("editor-timeline-rect"), tl_rect);
             d.insert_temp(Id::new("editor-loupe-row"), lay.rows[2]);
+            d.insert_temp(Id::new("editor-zoom-row"), lay.rows[1]);
             d.insert_temp(Id::new("editor-layout"), lay);
         });
-        // the preview sits on a neutral surface, aspect-correct, as wide as it is on screen (at most 960 px)
+        // the preview sits on a neutral dark surface, aspect-correct, as wide as it is on screen (at most 960 px)
         let aspect = ed.tex.as_ref().map_or(16.0 / 9.0, |t| t.size()[0] as f32 / t.size()[1].max(1) as f32);
-        let img_rect = preview_image_rect(area, if comfy { 12.0 } else { 8.0 }, aspect);
+        let img_rect = preview_image_rect(area, if comfy { 14.0 } else { 8.0 }, aspect);
         ed.tick(now, fps, preview_width(img_rect.width(), ppp));
         if ed.playing() || ed.queue.busy() {
             ctx.request_repaint();
@@ -4573,7 +4582,13 @@ impl App {
                 egui::Image::new(t).corner_radius(4.0).paint_at(ui, img_rect);
             }
             None => {
-                ui.painter().text(area.center(), Align2::CENTER_CENTER, "Rendering preview…", FontId::proportional(14.0), pal.sub_strong);
+                ui.painter().text(
+                    area.center(),
+                    Align2::CENTER_CENTER,
+                    "Rendering preview…",
+                    FontId::proportional(14.0),
+                    crate::editor_ctl::well_ink(),
+                );
             }
         }
         if let Some(n) = ed.note.clone() {
@@ -4582,18 +4597,21 @@ impl App {
                 Align2::CENTER_BOTTOM,
                 n,
                 FontId::proportional(12.0),
-                pal.danger,
+                crate::editor_ctl::well_warn(),
             );
         }
-        // the timeline: the track names, the ruler, the clips / zoom / loupe tracks and the playhead
+        // the timeline zone: a hairline above it, the track names in the gutter, the ruler, the named tracks
+        // (Video, Zooms, Loupes) and the playhead
         let dark = pal.text.r() > 128;
         let colors = track_colors(dark);
         let (ruler, rows) = (lay.ruler, lay.rows);
-        let (name_size, tick_size) = if comfy { (12.0, 11.5) } else { (11.0, 10.5) };
+        let (name_size, tick_size) = if comfy { (12.5, 11.5) } else { (11.0, 10.5) };
         let p = ui.painter();
+        p.hline(lay.timeline.min.x..=lay.timeline.max.x, lay.timeline.min.y, egui::Stroke::new(1.0, pal.sep));
+        p.hline(lay.bar.min.x..=lay.bar.max.x, lay.bar.max.y, egui::Stroke::new(1.0, pal.sep));
         for (row, name) in rows.iter().zip(["Video", "Zooms", "Loupes"]) {
             p.text(
-                Pos2::new(lay.timeline.min.x, row.center().y),
+                Pos2::new(lay.timeline.min.x + lay.pad, row.center().y),
                 Align2::LEFT_CENTER,
                 name,
                 FontId::proportional(name_size),
@@ -4666,33 +4684,16 @@ impl App {
             pal.text,
             egui::Stroke::NONE,
         ));
-        // the transport bar: play, undo, redo, the time; at the right Export and Full screen. The counts
-        // and the save state go to the right of the shell's title bar above the editor.
+        // the transport strip under the preview: play, step, the time; undo and redo at the right
         let playing = ed.playing();
         let (out_t, out_total) = (tl.to_output(ed.t), tl.output_duration());
-        let right = {
-            let n = proj.zooms.len();
-            let mut s = format!("{n} zoom{}", if n == 1 { "" } else { "s" });
-            if !proj.loupes.is_empty() {
-                let m = proj.loupes.len();
-                s.push_str(&format!(" · {m} loupe{}", if m == 1 { "" } else { "s" }));
-            }
-            let failed = matches!(ed.st.autosave.status(), crate::editor_panels::SaveStatus::Failed(_));
-            s.push_str(&format!(" · {}", if failed { "Not saved".to_string() } else { ed.save_label() }));
-            if let (true, Some(f)) = (playing, ed.rate.fps()) {
-                s.push_str(&format!(" · {f:.0} fps · {:.0} ms ({:.0} in the helper)", ed.rate.last_ms, ed.rate.last_helper_ms));
-            }
-            s
-        };
         let maxed = self.win.is_maximised();
-        let (toggle, undo_btn, redo_btn, export_btn, full_btn) = {
+        let (toggle, step, undo_btn, redo_btn) = {
+            let ctrl = lay.transport;
             let bh = if comfy { 34.0 } else { 28.0 };
             let by = ctrl.center().y - bh / 2.0;
             let gap = 6.0;
             let size = if comfy { 13.5 } else { 12.5 };
-            let full_label = if maxed { "Exit full screen" } else { "Full screen" };
-            let full_glyph = if maxed { BarGlyph::ExitFull } else { BarGlyph::EnterFull };
-            // left cluster, then the right one measured from the right edge
             let mut x = ctrl.min.x;
             let mut place = |w: f32| {
                 let r = Rect::from_min_size(Pos2::new(x, by), Vec2::new(w, bh));
@@ -4702,17 +4703,17 @@ impl App {
             let play_label = if playing { "Pause" } else { "Play" };
             let play_glyph = if playing { BarGlyph::Pause } else { BarGlyph::Play };
             let r_play = place(bar_btn_w(ui, play_label, play_glyph, size));
-            let r_undo = place(bar_btn_w(ui, "Undo", BarGlyph::None, size));
-            let r_redo = place(bar_btn_w(ui, "Redo", BarGlyph::None, size));
+            let icon_w = bh.max(32.0);
+            let (r_prev, r_next) = (place(icon_w), place(icon_w));
             let left_end = x;
-            let (wf, we) = (bar_btn_w(ui, full_label, full_glyph, size), bar_btn_w(ui, "Export…", BarGlyph::None, size));
-            let r_full = Rect::from_min_size(Pos2::new(ctrl.max.x - wf, by), Vec2::new(wf, bh));
-            let r_export = Rect::from_min_size(Pos2::new(r_full.min.x - gap - we, by), Vec2::new(we, bh));
+            let (wu, wr) = (bar_btn_w(ui, "Undo", BarGlyph::None, size), bar_btn_w(ui, "Redo", BarGlyph::None, size));
+            let r_redo = Rect::from_min_size(Pos2::new(ctrl.max.x - wr, by), Vec2::new(wr, bh));
+            let r_undo = Rect::from_min_size(Pos2::new(r_redo.min.x - gap - wu, by), Vec2::new(wu, bh));
             let toggle = bar_btn(ui, pal, r_play, "small_btn", play_label, play_glyph, BarStyle::Soft, size, true);
+            let prev = icon_btn(ui, pal, r_prev, "Previous frame", BarGlyph::StepBack, true);
+            let next = icon_btn(ui, pal, r_next, "Next frame", BarGlyph::StepForward, true);
             let undo_btn = bar_btn(ui, pal, r_undo, "small_btn", "Undo", BarGlyph::None, BarStyle::Ghost, size, ed.st.history.can_undo());
             let redo_btn = bar_btn(ui, pal, r_redo, "small_btn", "Redo", BarGlyph::None, BarStyle::Ghost, size, ed.st.history.can_redo());
-            let export_btn = bar_btn(ui, pal, r_export, "small_btn", "Export…", BarGlyph::None, BarStyle::Primary, size, true);
-            let full_btn = bar_btn(ui, pal, r_full, "fullscreen_btn", full_label, full_glyph, BarStyle::Soft, size, true);
             // the time, in output time (the source time next to it), between the two clusters
             let tx = left_end + 8.0;
             let main = ui.painter().layout_no_wrap(
@@ -4722,29 +4723,77 @@ impl App {
             );
             let w_main = main.size().x;
             ui.painter().galley(Pos2::new(tx, ctrl.center().y - main.size().y / 2.0), main, pal.text);
+            let mut after = tx + w_main + 12.0;
             let src = ui.painter().layout_no_wrap(format!("source {}", clock(ed.t)), FontId::proportional(size - 0.5), pal.sub_strong);
-            if tx + w_main + 12.0 + src.size().x <= r_export.min.x - 8.0 {
-                ui.painter().galley(Pos2::new(tx + w_main + 12.0, ctrl.center().y - src.size().y / 2.0), src, pal.sub_strong);
+            if after + src.size().x <= r_undo.min.x - 8.0 {
+                let w = src.size().x;
+                ui.painter().galley(Pos2::new(after, ctrl.center().y - src.size().y / 2.0), src, pal.sub_strong);
+                after += w + 12.0;
             }
-            (toggle, undo_btn, redo_btn, export_btn, full_btn)
+            // while playing: what the renderer manages
+            if let (true, Some(f)) = (playing, ed.rate.fps()) {
+                let s = format!("{f:.0} fps · {:.0} ms ({:.0} in the helper)", ed.rate.last_ms, ed.rate.last_helper_ms);
+                let s = crate::editor_panels::elide_to(ui, &s, size - 1.0, (r_undo.min.x - 8.0 - after).max(0.0));
+                ui.painter().text(
+                    Pos2::new(after, ctrl.center().y),
+                    Align2::LEFT_CENTER,
+                    s,
+                    FontId::proportional(size - 1.0),
+                    pal.sub_strong,
+                );
+            }
+            let step = match (prev, next) {
+                (true, _) => Some(-1),
+                (_, true) => Some(1),
+                _ => None,
+            };
+            (toggle, step, undo_btn, redo_btn)
         };
-        // counts and save state, right-aligned in the shell's title bar (its text centre is 3 pt below the bar's)
-        let failed_save = matches!(ed.st.autosave.status(), crate::editor_panels::SaveStatus::Failed(_));
-        ui.painter().text(
-            Pos2::new(rect.max.x, rect.min.y - crate::editor_ctl::MARGIN_Y - crate::editor_ctl::BAR_H / 2.0 + 3.0),
-            Align2::RIGHT_CENTER,
-            right,
-            FontId::proportional(if comfy { 12.5 } else { 12.0 }),
-            if failed_save { pal.danger } else { pal.sub_strong },
-        );
-        if matches!(ed.st.autosave.status(), crate::editor_panels::SaveStatus::Failed(_)) {
-            ui.painter().text(
-                Pos2::new(rect.center().x, rect.max.y - 2.0),
-                Align2::CENTER_BOTTOM,
-                ed.save_label(),
-                FontId::proportional(11.0),
-                pal.danger,
-            );
+        // the top bar: back, the project's name and its save state at the left; Export… and Full screen at the right
+        let (back_btn, export_btn, full_btn) = {
+            let bar = lay.bar;
+            let bh = if comfy { 34.0 } else { 28.0 };
+            let by = bar.center().y - bh / 2.0;
+            let size = if comfy { 13.5 } else { 12.5 };
+            let full_label = if maxed { "Exit full screen" } else { "Full screen" };
+            let full_glyph = if maxed { BarGlyph::ExitFull } else { BarGlyph::EnterFull };
+            let (wf, we) = (bar_btn_w(ui, full_label, full_glyph, size), bar_btn_w(ui, "Export…", BarGlyph::None, size));
+            let r_full = Rect::from_min_size(Pos2::new(bar.max.x - lay.pad - wf, by), Vec2::new(wf, bh));
+            let r_export = Rect::from_min_size(Pos2::new(r_full.min.x - 8.0 - we, by), Vec2::new(we, bh));
+            let r_back = Rect::from_min_size(Pos2::new(bar.min.x + lay.pad - 6.0, bar.center().y - 16.0), Vec2::splat(32.0));
+            let back_btn = icon_btn(ui, pal, r_back, "Back", BarGlyph::Back, true);
+            let export_btn = bar_btn(ui, pal, r_export, "small_btn", "Export…", BarGlyph::None, BarStyle::Primary, size, true);
+            let full_btn = bar_btn(ui, pal, r_full, "fullscreen_btn", full_label, full_glyph, BarStyle::Soft, size, true);
+            let failed = matches!(ed.st.autosave.status(), crate::editor_panels::SaveStatus::Failed(_));
+            let state = if failed { "Not saved".to_string() } else { ed.save_label() };
+            let name = if proj.name.trim().is_empty() {
+                ed.dir.file_stem().map_or_else(|| "Recording".to_string(), |s| s.to_string_lossy().into_owned())
+            } else {
+                proj.name.clone()
+            };
+            let (name_size, state_size) = (if comfy { 16.0 } else { 14.5 }, if comfy { 12.5 } else { 12.0 });
+            let x0 = r_back.max.x + 6.0;
+            let room = r_export.min.x - 16.0 - x0;
+            let state_w = ui.painter().layout_no_wrap(state.clone(), FontId::proportional(state_size), pal.sub_strong).size().x;
+            let name = crate::editor_panels::elide_to(ui, &name, name_size, (room - state_w - 12.0).max(40.0));
+            let g = ui.painter().layout_no_wrap(name, FontId::proportional(name_size), pal.text);
+            let name_w = g.size().x;
+            ui.painter().galley(Pos2::new(x0, bar.center().y - g.size().y / 2.0), g, pal.text);
+            if x0 + name_w + 12.0 + state_w <= r_export.min.x - 8.0 {
+                ui.painter().text(
+                    Pos2::new(x0 + name_w + 12.0, bar.center().y),
+                    Align2::LEFT_CENTER,
+                    state,
+                    FontId::proportional(state_size),
+                    if failed { pal.danger } else { pal.sub_strong },
+                );
+            }
+            (back_btn, export_btn, full_btn)
+        };
+        if let Some(dir) = step {
+            ed.play = None;
+            let t = crate::editor_ctl::step_frames(&tl, ed.t, dir, fps, proj.duration);
+            ed.seek(t, now, fps);
         }
         if undo_btn {
             ed.undo(edit_now);
@@ -4752,7 +4801,7 @@ impl App {
         if redo_btn {
             ed.redo(edit_now);
         }
-        crate::editor_panels::draw_panel(ui, panel, pal, ed, &auto_opts, fps, edit_now);
+        crate::editor_panels::draw_panel(ui, lay.inspector, pal, ed, &auto_opts, fps, edit_now);
         if toggle {
             ed.toggle_play(now, fps);
         }
@@ -4761,18 +4810,17 @@ impl App {
             let dir = ed.dir.clone();
             ed.export.show(&dir, &proj);
         }
-        let export_action = crate::editor_export::draw_sheet(
-            ui,
-            rect.expand2(Vec2::new(crate::editor_ctl::MARGIN_X, crate::editor_ctl::MARGIN_Y)),
-            pal,
-            ed,
-        );
+        let export_action = crate::editor_export::draw_sheet(ui, rect, pal, ed);
         if full_toggle || full_btn {
             self.toggle_fullscreen();
         }
         self.editor_export_do(export_action);
         self.editor_transcribe_do();
         self.editor_face_do();
+        if back_btn {
+            self.pop();
+            ctx.request_repaint();
+        }
     }
 
     /// Annotation canvas: tool strip, the picture with the drawing composed on it, mouse editing.
@@ -8543,6 +8591,12 @@ enum BarGlyph {
     Pause,
     EnterFull,
     ExitFull,
+    /// A bar and a triangle pointing left: one frame back.
+    StepBack,
+    /// A triangle pointing right and a bar: one frame on.
+    StepForward,
+    /// A chevron pointing left: out of the editor.
+    Back,
 }
 
 const BAR_GLYPH_W: f32 = 12.0;
@@ -8570,6 +8624,20 @@ fn paint_bar_glyph(p: &egui::Painter, c: Pos2, glyph: BarGlyph, color: Color32) 
             for dx in [-3.0, 3.0] {
                 p.rect_filled(Rect::from_center_size(Pos2::new(c.x + dx, c.y), Vec2::new(3.0, BAR_GLYPH_W - 1.0)), 1.0, color);
             }
+        }
+        BarGlyph::StepBack | BarGlyph::StepForward => {
+            // the bar is on the side the triangle points to
+            let d = if glyph == BarGlyph::StepBack { -1.0 } else { 1.0 };
+            p.rect_filled(Rect::from_center_size(Pos2::new(c.x + d * 5.0, c.y), Vec2::new(2.0, BAR_GLYPH_W - 1.0)), 0.5, color);
+            p.add(egui::Shape::convex_polygon(
+                vec![Pos2::new(c.x - d * 4.5, c.y - 5.0), Pos2::new(c.x - d * 4.5, c.y + 5.0), Pos2::new(c.x + d * 2.5, c.y)],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        BarGlyph::Back => {
+            p.line_segment([Pos2::new(c.x + 2.5, c.y - 6.0), Pos2::new(c.x - 3.5, c.y)], s);
+            p.line_segment([Pos2::new(c.x - 3.5, c.y), Pos2::new(c.x + 2.5, c.y + 6.0)], s);
         }
         // four corner brackets: at the edges with their arms inside to enter full screen, near the
         // centre with their arms outside to leave it
@@ -8623,6 +8691,28 @@ fn bar_btn(
     let x0 = r.center().x - (g.size().x + lead) / 2.0;
     paint_bar_glyph(p, Pos2::new(x0 + BAR_GLYPH_W / 2.0, r.center().y), glyph, ink);
     p.galley(Pos2::new(x0 + lead, r.center().y - g.size().y / 2.0), g, ink);
+    enabled && resp.clicked()
+}
+
+/// A button that is only a drawn shape (`label` is its tooltip and its name for screen readers). Not dimmed
+/// when disabled, because the editor's icon buttons are always available.
+fn icon_btn(ui: &mut Ui, pal: &Palette, r: Rect, label: &str, glyph: BarGlyph, enabled: bool) -> bool {
+    let resp = ui.interact(r, ui.id().with(("icon-btn", label)), if enabled { Sense::click() } else { Sense::hover() });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    record_ctl(ui.ctx(), if label == "Back" { "back_btn" } else { "step_btn" }, resp.id, r, enabled);
+    focus_ring(ui, pal, &resp, r);
+    let hover = enabled && resp.hovered();
+    if hover {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let ink = if enabled { pal.text } else { pal.sub };
+    ui.painter().rect_filled(
+        r,
+        crate::editor_ctl::CONTROL_RADIUS,
+        if hover { pal.field.gamma_multiply(1.6) } else { Color32::TRANSPARENT },
+    );
+    paint_bar_glyph(ui.painter(), r.center(), glyph, ink);
+    let resp = resp.on_hover_text(label);
     enabled && resp.clicked()
 }
 
