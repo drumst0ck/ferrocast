@@ -128,15 +128,21 @@ Ajustes → Capture → **Sources** tiene los interruptores **Camera**, **Microp
 
 La primera vez que se usa una fuente, macOS pide el permiso de Cámara o Micrófono al iniciar la grabación. Si se deniega, la grabación no empieza y un aviso abre el panel correspondiente de Ajustes del Sistema. El audio del sistema usa el permiso de Grabación de pantalla. Si una cámara o un micrófono desaparece durante la grabación, esta continúa y un aviso indica qué fuente se perdió.
 
-En el editor aparece una pestaña **Camera** cuando la grabación tiene cámara: mostrar u ocultar, un **Layout** (**Overlay** o **Split**), **Circle**, **Rounded** o **Square**, una de las cuatro esquinas, tamaño (de 10 a 40 %), margen y espejo, además de **Look**, **Cutout (beta)** y **Follow face** (consulta [Efectos de grabación](#efectos-de-grabación)). La cámara permanece fija en el encuadre mientras la pantalla hace zoom. Aparece una pestaña **Audio** cuando hay micrófono o audio del sistema: ganancia por pista (de -60 a +12 dB), silencio por pista y una ganancia general. Las exportaciones MP4 mezclan las pistas en una sola pista de audio AAC (48 kHz estéreo) que sigue tus recortes y cambios de velocidad; un cambio de velocidad también cambia el tono. Los GIF no llevan audio.
+En el editor aparece una sección **Camera** cuando la grabación tiene cámara: mostrar u ocultar, un **Layout** (**Overlay** o **Split**), **Circle**, **Rounded** o **Square**, una de las cuatro esquinas, tamaño (de 10 a 40 %), margen y espejo, además de **Look**, **Cutout (beta)** y **Follow face** (consulta [Efectos de grabación](#efectos-de-grabación)). La cámara permanece fija en el encuadre mientras la pantalla hace zoom. Aparece una sección **Audio** cuando hay micrófono o audio del sistema: ganancia por pista (de -60 a +12 dB), silencio por pista y una ganancia general. Las exportaciones MP4 mezclan las pistas en una sola pista de audio AAC (48 kHz estéreo) que sigue tus recortes y cambios de velocidad; un cambio de velocidad también cambia el tono. Los GIF no llevan audio.
 
 ## Editar una grabación
 
-El editor muestra la vista previa a la izquierda, sobre una superficie neutra, y un panel con pestañas a la derecha (Zoom, Loupe, Cursor, Style y Clips, más Camera, Audio y Transcript cuando la grabación los tiene). Debajo de la vista previa hay una barra con **Play**/**Pause**, **Undo**, **Redo**, el tiempo, **Export…** y **Full screen**, y debajo la línea de tiempo: una regla y tres pistas con nombre, **Video** (recortes y cambios de velocidad), **Zooms** y **Loupes**, con el cabezal. El tiempo se lee `tiempo de salida / duración de salida`, con el tiempo original al lado cuando hay sitio, así ves la duración tras tus cambios. A la derecha de la barra de título aparecen el número de zooms (y de lupas, si hay alguna) y el estado de guardado. <kbd>Esc</kbd> cierra el editor y escribe lo que aún no se haya guardado.
+El editor se abre en una ventana más grande (unos 1100 × 700 pt, centrada en tu pantalla y dentro de su parte visible, así que puede ser menor en una pantalla pequeña) y tiene tres zonas:
+
+- **Vista previa**, arriba a la izquierda, sobre una superficie oscura. Debajo está la tira de transporte: **Play**/**Pause**, un fotograma atrás y uno adelante, el tiempo, **Undo** y **Redo**. El tiempo se lee `tiempo de salida / duración de salida`, con el tiempo original al lado cuando hay sitio, así ves la duración tras tus cambios.
+- **Inspector**, a la derecha (unos 330 pt de ancho). Es una columna de secciones plegables: **Zoom**, **Loupe**, **Cursor**, **Style** y **Clips**, más **Camera**, **Audio** y **Transcript** cuando la grabación los tiene. Cada cabecera muestra su nombre y, a la derecha, un estado breve (por ejemplo `2 zooms`); haz clic en una cabecera para abrir la sección. Solo hay una sección abierta a la vez, la abierta se reconoce por un chevron hacia abajo y una barra coral en el borde de la columna, y la columna se desplaza cuando una sección es más alta que la ventana. Hacer clic en un zoom o una lupa de la línea de tiempo abre su sección y lo selecciona.
+- **Línea de tiempo**, debajo y a todo el ancho: una regla y tres pistas con nombre, **Video** (recortes y cambios de velocidad), **Zooms** y **Loupes**, con el cabezal y un contorno en el zoom o la lupa seleccionados.
+
+La barra superior tiene la flecha para volver (a la izquierda), el nombre del proyecto, su estado de guardado (`Saved`, `Saving…` o `Not saved`), el **Export…** coral y **Full screen**. <kbd>Esc</kbd> cierra el editor y escribe lo que aún no se haya guardado; la ventana del lanzador vuelve entonces a su tamaño y sitio. En una ventana de menos de unos 900 pt de ancho (por ejemplo en una pantalla muy pequeña, o en la ventana de 750 pt del lanzador) el editor usa una disposición más compacta con un inspector más estrecho.
 
 ### Pantalla completa
 
-**Full screen** (a la derecha de la barra) o <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> hace que el editor ocupe la pantalla, bajo la barra de menús y junto al Dock. La vista previa crece, el panel se ensancha hasta unos 320–350 pt y las pistas de la línea de tiempo se hacen más altas. Pulsa el mismo botón (ahora dice **Exit full screen**) o las mismas teclas para volver al tamaño y al sitio que tenía la ventana. <kbd>Esc</kbd>, volver atrás, abrir otra vista u ocultar el lanzador también devuelven la ventana a su tamaño normal. No es la pantalla completa nativa de macOS (sin Space nuevo): la ventana del lanzador es un panel flotante, así que el editor la estira sobre la parte visible de la pantalla.
+**Full screen** (a la derecha de la barra superior) o <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> hace que el editor ocupe la pantalla, bajo la barra de menús y junto al Dock. La vista previa crece, el inspector se ensancha hasta unos 360 pt y las pistas de la línea de tiempo se hacen más altas. Pulsa el mismo botón (ahora dice **Exit full screen**) o las mismas teclas para volver a la ventana del editor. <kbd>Esc</kbd>, volver atrás, abrir otra vista u ocultar el lanzador devuelven la ventana del lanzador a su tamaño y sitio normales. No es la pantalla completa nativa de macOS (sin Space nuevo): la ventana del lanzador es un panel flotante, así que el editor la redimensiona sobre la parte visible de la pantalla.
 
 El cursor que ves lo dibuja el editor a partir de los eventos grabados en `events.json`. No está en `screen.mov`, y por eso puedes cambiarle el tamaño, suavizarlo o quitarlo.
 
@@ -152,7 +158,7 @@ El cursor que ves lo dibuja el editor a partir de los eventos grabados en `event
 | <kbd>⌘</kbd> <kbd>E</kbd> | Export… |
 | <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> | Full screen / Exit full screen |
 
-Haz clic o arrastra sobre la línea de tiempo para mover el cabezal. Mientras escribes en un campo numérico del panel, solo <kbd>⌘</kbd> <kbd>E</kbd> y <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> siguen funcionando. El paso de un fotograma usa la frecuencia de Ajustes → Capture → **Recording frame rate**.
+Haz clic o arrastra sobre la línea de tiempo para mover el cabezal. Mientras escribes en un campo numérico del inspector, solo <kbd>⌘</kbd> <kbd>E</kbd> y <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> siguen funcionando. El paso de un fotograma usa la frecuencia de Ajustes → Capture → **Recording frame rate**.
 
 ### Zoom automático
 
@@ -160,9 +166,9 @@ El zoom automático hace zoom hacia tus clics. Los clics cercanos en el tiempo y
 
 Al abrir una grabación que no tiene zooms, Ferrocast los calcula y los aplica solo en memoria. No se escribe nada en `project.json` hasta que cambias algo. Si exportas una grabación que no has tocado, antes se guarda su `project.json` con esos zooms.
 
-El zoom automático viene activado. `capture.auto_zoom` y `capture.zoom_scale` en `settings.json` lo desactivan o fijan el nivel (de 1× a 6×); todavía no hay fila en Ajustes. El botón **Auto zoom** de la pestaña Zoom usa el mismo nivel.
+El zoom automático viene activado. `capture.auto_zoom` y `capture.zoom_scale` en `settings.json` lo desactivan o fijan el nivel (de 1× a 6×); todavía no hay fila en Ajustes. El botón **Auto zoom** de la sección Zoom usa el mismo nivel.
 
-### El panel
+### El inspector
 
 Todos los cambios se pueden deshacer y rehacer (<kbd>⌘</kbd> <kbd>Z</kbd>, <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>Z</kbd> o los botones **Undo** y **Redo**). Los cambios del mismo tipo hechos en menos de un segundo, como arrastrar un control deslizante, cuentan como un paso. Un cambio que dejaría el proyecto inválido se rechaza y el motivo aparece en rojo sobre los controles.
 
@@ -193,11 +199,11 @@ Todos los cambios se pueden deshacer y rehacer (<kbd>⌘</kbd> <kbd>Z</kbd>, <kb
 
 ### Transcript
 
-La pestaña **Transcript** aparece cuando la grabación tiene una pista de micrófono o de audio del sistema, o ya tiene una transcripción. Convierte el habla en texto que puedes leer y recortar, y todo se hace en tu Mac: el audio y el texto no salen de él.
+La sección **Transcript** aparece cuando la grabación tiene una pista de micrófono o de audio del sistema, o ya tiene una transcripción. Convierte el habla en texto que puedes leer y recortar, y todo se hace en tu Mac: el audio y el texto no salen de él.
 
-La primera vez, la pestaña muestra una lista **Language** (**System language** por defecto) y un botón **Transcribe**. La primera vez que pulsas **Transcribe**, macOS pide el permiso de **Reconocimiento de voz** (el mismo aviso puede pedir también acceso al micrófono). Si se denegó, la pestaña dice `Speech Recognition permission is needed. Open System Settings > Privacy & Security > Speech Recognition and allow Ferrocast.` y ofrece un botón que abre ese panel. Los idiomas que funcionan son aquellos cuyos modelos en el dispositivo tiene tu Mac; si uno no está disponible, la pestaña lo indica. Una barra muestra el progreso y **Cancel** lo detiene sin dejar nada. El texto se guarda con el proyecto (`transcript.json` junto a `project.json`), así que no se vuelve a calcular.
+La primera vez, la sección muestra una lista **Language** (**System language** por defecto) y un botón **Transcribe**. La primera vez que pulsas **Transcribe**, macOS pide el permiso de **Reconocimiento de voz** (el mismo aviso puede pedir también acceso al micrófono). Si se denegó, la sección dice `Speech Recognition permission is needed. Open System Settings > Privacy & Security > Speech Recognition and allow Ferrocast.` y ofrece un botón que abre ese panel. Los idiomas que funcionan son aquellos cuyos modelos en el dispositivo tiene tu Mac; si uno no está disponible, la sección lo indica. Una barra muestra el progreso y **Cancel** lo detiene sin dejar nada. El texto se guarda con el proyecto (`transcript.json` junto a `project.json`), así que no se vuelve a calcular.
 
-Después la pestaña muestra las palabras como texto corrido. La palabra bajo el cabezal aparece resaltada. Haz clic en una palabra para mover el cabezal hasta ella (si ya está cortada, el cabezal va al momento conservado más cercano). Mayúsculas + clic o arrastrar selecciona un rango de palabras. El texto es de solo lectura: se cortan palabras, no se reescriben. Las palabras cortadas aparecen tachadas y atenuadas, y las muletillas se marcan en naranja.
+Después la sección muestra las palabras como texto corrido. La palabra bajo el cabezal aparece resaltada. Haz clic en una palabra para mover el cabezal hasta ella (si ya está cortada, el cabezal va al momento conservado más cercano). Mayúsculas + clic o arrastrar selecciona un rango de palabras. El texto es de solo lectura: se cortan palabras, no se reescriben. Las palabras cortadas aparecen tachadas y atenuadas, y las muletillas se marcan en naranja.
 
 - **Delete selection** corta exactamente las palabras seleccionadas.
 - **Remove fillers** corta muletillas como `um` y `uh` (y `like` o `you know` solo cuando están aisladas o poco claras). Hay lista para inglés y español; otros idiomas no tienen.
@@ -217,7 +223,7 @@ Estos efectos se hacen en el editor y se dibujan sobre la grabación al reproduc
 
 Una lupa es un cristal de aumento sobre la pantalla: una lente redonda que muestra más grande una parte de la pantalla durante unos segundos. Amplía la grabación misma, así que el texto de dentro se mantiene nítido, y se mueve con el zoom. Sirve para señalar un detalle pequeño sin hacer zoom en toda la pantalla.
 
-La pestaña **Loupe** tiene **Add at playhead**, que añade una lupa de 3 s (más corta si la siguiente está cerca; si el cabezal está dentro de una lupa aparece `There is already a loupe at the playhead.`). Haz clic en una lupa de la lista para editarla:
+La sección **Loupe** tiene **Add at playhead**, que añade una lupa de 3 s (más corta si la siguiente está cerca; si el cabezal está dentro de una lupa aparece `There is already a loupe at the playhead.`). Haz clic en una lupa de la lista para editarla:
 
 - **Start** y **End**. Las lupas no pueden solaparse.
 - **Scale** (de 1,2× a 4×) y **Radius** (del 5 al 30 % del ancho de la imagen).
@@ -229,7 +235,7 @@ La línea de tiempo tiene una fila de segmentos de lupa bajo la fila de zooms. H
 
 #### Pantalla dividida
 
-Por defecto la cámara es un círculo sobre la pantalla. En la pestaña **Camera**, **Layout** → **Split** coloca la pantalla y la cámara una junto a otra, de modo que la cámara no tapa nada.
+Por defecto la cámara es un círculo sobre la pantalla. En la sección **Camera**, **Layout** → **Split** coloca la pantalla y la cámara una junto a otra, de modo que la cámara no tapa nada.
 
 - **Side**: Left, Right, Top o Bottom, el lado que ocupa la cámara.
 - **Ratio** (del 25 al 50 %): cuánto de la imagen ocupa la cámara en esa dirección.
@@ -239,7 +245,7 @@ La pantalla se muestra entera en el resto de la imagen y la cámara llena su par
 
 #### Looks
 
-Un look cambia solo el color de la imagen de la cámara. La pantalla no se toca. En la pestaña **Camera**, **Look** ofrece **None** y seis looks: **Warm**, **Cool**, **Cinematic**, **Faded**, **High contrast** y **Mono**. **Intensity** (del 0 al 100 %) mezcla el look con la imagen original.
+Un look cambia solo el color de la imagen de la cámara. La pantalla no se toca. En la sección **Camera**, **Look** ofrece **None** y seis looks: **Warm**, **Cool**, **Cinematic**, **Faded**, **High contrast** y **Mono**. **Intensity** (del 0 al 100 %) mezcla el look con la imagen original.
 
 Para usar tu propia tabla de color, copia un archivo `.cube` (una LUT 3D) dentro de la carpeta del proyecto de la grabación e indícalo en `project.json`. No hay selector de archivos. Cierra antes la grabación en el editor, porque el editor reescribe `project.json` cuando cambias algo. Dentro del objeto `camera`, añade:
 
@@ -255,7 +261,7 @@ El nombre debe ser un nombre de archivo simple que termine en `.cube`, en la pro
 
 #### Seguimiento de la cara
 
-**Follow face** mantiene tu cara centrada en la imagen de la cámara cuando te mueves. Necesita un análisis previo, una sola vez: pulsa **Analyze face**. Se ejecuta en tu Mac con el framework Vision, muestra una barra de progreso con **Cancel** y guarda el resultado como `camera_track.json` en la carpeta del proyecto. Sigue a la cara más grande que encuentra. Al terminar, **Follow face** se activa. Si no encuentra ninguna cara, la pestaña dice `No face was found in the camera. Check that the camera shows you and try again.` (el texto está solo en inglés).
+**Follow face** mantiene tu cara centrada en la imagen de la cámara cuando te mueves. Necesita un análisis previo, una sola vez: pulsa **Analyze face**. Se ejecuta en tu Mac con el framework Vision, muestra una barra de progreso con **Cancel** y guarda el resultado como `camera_track.json` en la carpeta del proyecto. Sigue a la cara más grande que encuentra. Al terminar, **Follow face** se activa. Si no encuentra ninguna cara, la sección dice `No face was found in the camera. Check that the camera shows you and try again.` (el texto está solo en inglés).
 
 - **Zoom** (de 1× a 3×) define lo cerrado que queda el encuadre alrededor de la cara. Por defecto es 1,4× para el círculo y 1× en pantalla dividida.
 - Si activas **Follow face** antes de analizar, aparece `Analyze the camera first.`
