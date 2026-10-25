@@ -6,6 +6,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-25
+
 ### Added
 - **Translate with Apple**: Settings → Translate → Engine has a new **Apple** choice that translates selected text on your Mac with Apple Translation, with no AI provider and without sending the text anywhere. A card lists each wheel language as Apple reports it (Installed, Needs download or Not supported); when Apple says a language needs a download, a button opens the System Settings page where it is downloaded. It needs macOS 26 (older versions keep using the chat provider) and builds made with the macOS 26 SDK; the release and CI runners moved to `macos-26` for that. (docs: /docs/launcher/translate/) #translate #offline
 - **Screen capture**: Capture Area, Capture Window, Capture Screen and Capture Scrolling in the launcher (macOS 14 or later, Screen Recording permission; Capture Scrolling also needs Accessibility). Each capture is saved as a PNG in `~/Pictures/Ferrocast Captures` and opens a Capture window with Copy (↵), Save (⌘S), Annotate… (⌘⇧A), Background… (⌘⇧B), Copy Text (⌘T, on-device Vision) and Pin (⌘P: an always-on-top window you can zoom from 25 % to 400 % and close with Esc). Capture Scrolling stitches a scrolling area, stopping at the end or after 60 screens. Settings → Capture sets the folder, After capture, Include cursor and a shortcut for each command (none by default). PNG only. (docs: /docs/launcher/screen-capture/)
