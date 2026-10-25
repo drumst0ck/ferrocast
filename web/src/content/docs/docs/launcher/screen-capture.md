@@ -132,7 +132,11 @@ In the editor, a **Camera** tab appears when the recording has a camera: show or
 
 ## Editing a recording
 
-The editor shows the preview on the left and a panel with tabs on the right (Zoom, Loupe, Cursor, Style and Clips, plus Camera, Audio and Transcript when the recording has them). Under the preview there is a timeline (a ruler, a row for trims and speed changes, a row for zooms, a row for loupes) with the playhead, and a row with **Play**/**Pause**, **Undo**, **Redo**, **Export…** and the time. The time reads `output time / output length · source time`, so you see the length after your edits. At the right end of that row you see the number of zooms (and of loupes, when there are any) and the save state. <kbd>Esc</kbd> closes the editor and writes anything not yet saved.
+The editor shows the preview on the left, on a neutral surface, and a panel with tabs on the right (Zoom, Loupe, Cursor, Style and Clips, plus Camera, Audio and Transcript when the recording has them). Under the preview there is a bar with **Play**/**Pause**, **Undo**, **Redo**, the time, **Export…** and **Full screen**, and under it the timeline: a ruler and three named tracks, **Video** (trims and speed changes), **Zooms** and **Loupes**, with the playhead. The time reads `output time / output length`, with the source time next to it when there is room, so you see the length after your edits. At the right of the title bar you see the number of zooms (and of loupes, when there are any) and the save state. <kbd>Esc</kbd> closes the editor and writes anything not yet saved.
+
+### Full screen
+
+**Full screen** (at the right of the bar) or <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> makes the editor fill the screen, below the menu bar and beside the Dock. The preview grows, the panel widens to about 320–350 pt, and the timeline tracks get taller. Press the same button (it now reads **Exit full screen**) or the same keys to go back to the size and place the window had. <kbd>Esc</kbd>, going back, opening another view or hiding the launcher also bring the window back to its normal size. This is not macOS native full screen (no new Space): the launcher window is a floating panel, so the editor stretches it over the visible part of the screen instead.
 
 The cursor you see is drawn by the editor from the recorded events in `events.json`. It is not in `screen.mov`, which is why you can resize it, smooth it or remove it.
 
@@ -146,8 +150,9 @@ The cursor you see is drawn by the editor from the recorded events in `events.js
 | <kbd>Home</kbd> / <kbd>End</kbd> | Jump to the start or the end |
 | <kbd>⌘</kbd> <kbd>Z</kbd> / <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>Z</kbd> | Undo / Redo |
 | <kbd>⌘</kbd> <kbd>E</kbd> | Export… |
+| <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> | Full screen / Exit full screen |
 
-Click or drag on the timeline to move the playhead. While you type in a number field of the panel, only <kbd>⌘</kbd> <kbd>E</kbd> keeps working. The one-frame step uses the frame rate of Settings → Capture → **Recording frame rate**.
+Click or drag on the timeline to move the playhead. While you type in a number field of the panel, only <kbd>⌘</kbd> <kbd>E</kbd> and <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> keep working. The one-frame step uses the frame rate of Settings → Capture → **Recording frame rate**.
 
 ### Auto zoom
 

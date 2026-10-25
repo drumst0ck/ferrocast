@@ -132,7 +132,11 @@ En el editor aparece una pestaña **Camera** cuando la grabación tiene cámara:
 
 ## Editar una grabación
 
-El editor muestra la vista previa a la izquierda y un panel con pestañas a la derecha (Zoom, Loupe, Cursor, Style y Clips, más Camera, Audio y Transcript cuando la grabación los tiene). Debajo de la vista previa hay una línea de tiempo (una regla, una fila para recortes y cambios de velocidad, otra para los zooms y otra para las lupas) con el cabezal, y una fila con **Play**/**Pause**, **Undo**, **Redo**, **Export…** y el tiempo. El tiempo se lee `tiempo de salida / duración de salida · tiempo original`, así ves la duración tras tus cambios. En el extremo derecho de esa fila aparecen el número de zooms (y de lupas, si hay alguna) y el estado de guardado. <kbd>Esc</kbd> cierra el editor y escribe lo que aún no se haya guardado.
+El editor muestra la vista previa a la izquierda, sobre una superficie neutra, y un panel con pestañas a la derecha (Zoom, Loupe, Cursor, Style y Clips, más Camera, Audio y Transcript cuando la grabación los tiene). Debajo de la vista previa hay una barra con **Play**/**Pause**, **Undo**, **Redo**, el tiempo, **Export…** y **Full screen**, y debajo la línea de tiempo: una regla y tres pistas con nombre, **Video** (recortes y cambios de velocidad), **Zooms** y **Loupes**, con el cabezal. El tiempo se lee `tiempo de salida / duración de salida`, con el tiempo original al lado cuando hay sitio, así ves la duración tras tus cambios. A la derecha de la barra de título aparecen el número de zooms (y de lupas, si hay alguna) y el estado de guardado. <kbd>Esc</kbd> cierra el editor y escribe lo que aún no se haya guardado.
+
+### Pantalla completa
+
+**Full screen** (a la derecha de la barra) o <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> hace que el editor ocupe la pantalla, bajo la barra de menús y junto al Dock. La vista previa crece, el panel se ensancha hasta unos 320–350 pt y las pistas de la línea de tiempo se hacen más altas. Pulsa el mismo botón (ahora dice **Exit full screen**) o las mismas teclas para volver al tamaño y al sitio que tenía la ventana. <kbd>Esc</kbd>, volver atrás, abrir otra vista u ocultar el lanzador también devuelven la ventana a su tamaño normal. No es la pantalla completa nativa de macOS (sin Space nuevo): la ventana del lanzador es un panel flotante, así que el editor la estira sobre la parte visible de la pantalla.
 
 El cursor que ves lo dibuja el editor a partir de los eventos grabados en `events.json`. No está en `screen.mov`, y por eso puedes cambiarle el tamaño, suavizarlo o quitarlo.
 
@@ -146,8 +150,9 @@ El cursor que ves lo dibuja el editor a partir de los eventos grabados en `event
 | <kbd>Inicio</kbd> / <kbd>Fin</kbd> | Ir al principio o al final |
 | <kbd>⌘</kbd> <kbd>Z</kbd> / <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>Z</kbd> | Deshacer / Rehacer |
 | <kbd>⌘</kbd> <kbd>E</kbd> | Export… |
+| <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> | Full screen / Exit full screen |
 
-Haz clic o arrastra sobre la línea de tiempo para mover el cabezal. Mientras escribes en un campo numérico del panel, solo <kbd>⌘</kbd> <kbd>E</kbd> sigue funcionando. El paso de un fotograma usa la frecuencia de Ajustes → Capture → **Recording frame rate**.
+Haz clic o arrastra sobre la línea de tiempo para mover el cabezal. Mientras escribes en un campo numérico del panel, solo <kbd>⌘</kbd> <kbd>E</kbd> y <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> siguen funcionando. El paso de un fotograma usa la frecuencia de Ajustes → Capture → **Recording frame rate**.
 
 ### Zoom automático
 
