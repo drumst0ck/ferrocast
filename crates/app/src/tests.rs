@@ -71,6 +71,7 @@ fn fixture() -> App {
         shown_at: Instant::now(),
         hidden_at: Instant::now(),
         cur_height: ui::HEIGHT,
+        win: Default::default(),
         files: (String::new(), vec![]),
         files_req: String::new(),
         query_changed_at: Instant::now(),
@@ -11864,17 +11865,18 @@ fn a_click_on_a_loupe_segment_of_the_timeline_selects_it_and_opens_the_loupe_tab
     }
     render(&mut app, vec![]);
     let tl: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-timeline-rect"))).expect("timeline drawn");
+    let loupe_row: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-loupe-row"))).expect("loupe row drawn");
     let x = tl.min.x + tl.width() * 0.45;
     // the ruler / segment rows only move the playhead
     click_at(&mut app, Pos2::new(x, tl.min.y + 20.0));
     assert_eq!(app.editor.as_ref().unwrap().st.selected_loupe, None);
-    click_at(&mut app, Pos2::new(x, tl.min.y + crate::editor_ctl::LOUPE_ROW.0 + 6.0));
+    click_at(&mut app, Pos2::new(x, loupe_row.center().y));
     let st = &app.editor.as_ref().unwrap().st;
     assert_eq!(st.selected_loupe.as_deref(), Some("l9"));
     assert_eq!(st.tab, Tab::Loupe);
     // a click in the loupe row away from any loupe selects nothing new
     app.editor.as_mut().unwrap().st.selected_loupe = None;
-    click_at(&mut app, Pos2::new(tl.min.x + tl.width() * 0.9, tl.min.y + crate::editor_ctl::LOUPE_ROW.0 + 6.0));
+    click_at(&mut app, Pos2::new(tl.min.x + tl.width() * 0.9, loupe_row.center().y));
     assert_eq!(app.editor.as_ref().unwrap().st.selected_loupe, None);
 }
 
@@ -12553,13 +12555,18 @@ fn zoom_tab_adds_rejects_overlaps_and_deletes() {
     click_label(&mut app, "Auto zoom");
     assert!(screen_has(&mut app, "no cursor events"));
     // the new zoom is selected: its fields show below the list, Delete removes it
+    // painted controls exist even where the scroll area clips them: "in view" means inside the panel
+    let in_view = |app: &mut App, text: &str| {
+        let panel: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-panel-rect"))).expect("panel drawn");
+        render_texts(app, vec![]).iter().any(|(t, r)| t == text && r.min.y >= panel.min.y && r.max.y <= panel.max.y)
+    };
     let mut steps = 0;
-    while !screen_has(&mut app, "Pick on preview") && steps < 8 {
+    while !in_view(&mut app, "Pick on preview") && steps < 8 {
         scroll_panel(&mut app, -60.0);
         steps += 1;
     }
-    assert!(screen_has(&mut app, "Pick on preview"));
-    while !screen_has(&mut app, "Delete zoom") && steps < 16 {
+    assert!(in_view(&mut app, "Pick on preview"));
+    while !in_view(&mut app, "Delete zoom") && steps < 16 {
         scroll_panel(&mut app, -60.0);
         steps += 1;
     }
@@ -13526,6 +13533,416 @@ mod panel_design {
     }
 }
 
+// ---- Editor redesign: the layout at the launcher size and at full screen, and the Full screen button ----
+
+mod editor_redesign {
+    use super::*;
+    use crate::editor_ctl::{Density, Layout};
+    use ferrocast_core::capture::project::Project;
+
+    const SMALL: Vec2 = Vec2::new(ui::WIDTH, ui::HEIGHT);
+    const LARGE: Vec2 = Vec2::new(1440.0, 900.0);
+
+    /// One frame at `size`: the texts with the clip rect they were drawn under, and the window commands the frame sent.
+    fn run_at(
+        app: &mut App,
+        size: Vec2,
+        events: Vec<Event>,
+        window: Option<Rect>,
+    ) -> (Vec<(String, Rect, Rect)>, Vec<egui::ViewportCommand>) {
+        fn walk(s: &egui::Shape, clip: Rect, out: &mut Vec<(String, Rect, Rect)>) {
+            match s {
+                egui::Shape::Text(t) => out.push((t.galley.text().to_string(), Rect::from_min_size(t.pos, t.galley.size()), clip)),
+                egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, clip, out)),
+                _ => {}
+            }
+        }
+        let mut raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), events, ..Default::default() };
+        if let Some(w) = window {
+            raw.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { outer_rect: Some(w), ..Default::default() });
+        }
+        let ctx = app.ctx.clone();
+        let mut output = ctx.run_ui(raw, |ui| app.draw(ui));
+        output.textures_delta.clear();
+        let mut out = vec![];
+        output.shapes.iter().for_each(|c| walk(&c.shape, c.clip_rect, &mut out));
+        let cmds = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default();
+        (out, cmds)
+    }
+
+    fn settle(app: &mut App, size: Vec2) -> Vec<(String, Rect, Rect)> {
+        for _ in 0..3 {
+            run_at(app, size, vec![], None);
+        }
+        run_at(app, size, vec![], None).0
+    }
+
+    fn state(tag: &str, tab: Tab, edit: impl FnOnce(&mut Project)) -> App {
+        let mut p = p4_project();
+        p.trims.clear();
+        edit(&mut p);
+        let (mut app, _dir, rx) = editor_app_for(&format!("redesign-{tag}"), p, &["mic.m4a", "camera.mov"]);
+        std::mem::forget(rx);
+        set_tab(&mut app, tab);
+        app
+    }
+
+    fn zoom(id: &str, a: f64, b: f64) -> ferrocast_core::capture::project::Zoom {
+        serde_json::from_value(serde_json::json!({"id":id,"start":a,"end":b,"mode":"manual","scale":2.0})).unwrap()
+    }
+
+    fn loupe(id: &str, a: f64, b: f64) -> ferrocast_core::capture::project::Loupe {
+        ferrocast_core::capture::project::Loupe {
+            id: id.into(),
+            start: a,
+            end: b,
+            scale: 2.0,
+            radius: 0.15,
+            x: None,
+            y: None,
+            ease_in: 0.25,
+            ease_out: 0.25,
+            extra: Default::default(),
+        }
+    }
+
+    fn overlaps(a: Rect, b: Rect) -> bool {
+        let hit = a.intersect(b);
+        hit.width() > 0.5 && hit.height() > 0.5
+    }
+
+    fn states(tag: &str) -> Vec<(&'static str, App)> {
+        let words = (0..30)
+            .map(|i| ferrocast_core::capture::transcript::Word {
+                text: ["so", "today", "um", "we", "export"][i % 5].into(),
+                start: 1.0 + i as f64 * 0.25,
+                end: 1.2 + i as f64 * 0.25,
+                confidence: 0.9,
+            })
+            .collect();
+        let tr = ferrocast_core::capture::transcript::Transcript { language: "en-US".into(), words, ..Default::default() };
+        let mut v = vec![
+            (
+                "plain zoom",
+                state(&format!("{tag}-pz"), Tab::Zoom, |p| {
+                    p.sources.camera = None;
+                    p.camera = None;
+                    p.sources.mic = None;
+                    p.sources.system = None;
+                    p.zooms = vec![zoom("z1", 2.0, 4.0), zoom("z2", 6.0, 8.0)];
+                }),
+            ),
+            ("style", state(&format!("{tag}-st"), Tab::Style, |_| {})),
+            ("clips", state(&format!("{tag}-cl"), Tab::Clips, |_| {})),
+            ("cursor", state(&format!("{tag}-cu"), Tab::Cursor, |_| {})),
+            ("camera", state(&format!("{tag}-ca"), Tab::Camera, |_| {})),
+            ("audio", state(&format!("{tag}-au"), Tab::Audio, |_| {})),
+            ("transcript", state(&format!("{tag}-tr"), Tab::Transcript, move |p| p.transcript = Some(tr))),
+            ("loupe", state(&format!("{tag}-lo"), Tab::Loupe, |p| p.loupes = vec![loupe("l1", 1.0, 3.0), loupe("l2", 5.0, 8.0)])),
+        ];
+        v[7].1.editor.as_mut().unwrap().st.selected_loupe = Some("l2".into());
+        v[0].1.editor.as_mut().unwrap().st.selected_zoom = Some("z2".into());
+        let mut export = state(&format!("{tag}-ex"), Tab::Zoom, |_| {});
+        export.editor.as_mut().unwrap().export.open = true;
+        v.push(("export sheet", export));
+        v
+    }
+
+    /// Every state, at the launcher size and at full-screen size, in both themes: the blocks sit where
+    /// `editor_ctl::layout` says, nothing leaves the window, and no two texts of the chrome overlap.
+    #[test]
+    fn every_editor_state_fits_the_window_at_both_sizes_without_overlap() {
+        for (size, density) in [(SMALL, Density::Compact), (LARGE, Density::Comfortable)] {
+            for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+                for (name, mut app) in states(&format!("{}-{theme:?}", size.x)) {
+                    let what = format!("{name} {}x{} {theme:?}", size.x, size.y);
+                    app.ctx.set_theme(theme);
+                    let texts = settle(&mut app, size);
+                    let lay: Layout = app.ctx.data(|d| d.get_temp(Id::new("editor-layout"))).expect("the editor was drawn");
+                    assert_eq!(lay.density, density, "{what}");
+                    let win = Rect::from_min_size(Pos2::ZERO, size);
+                    // nothing leaves the window sideways or at the bottom
+                    for (t, r, clip) in &texts {
+                        let shown = r.intersect(*clip);
+                        assert!(
+                            shown.max.x <= win.max.x + 0.5 && shown.min.x >= -0.5 && shown.max.y <= win.max.y + 0.5,
+                            "{what}: `{t}` leaves the window: {r:?}"
+                        );
+                    }
+                    // the preview image is on its surface, with the video's aspect
+                    let img: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-preview-rect"))).expect("preview");
+                    assert!(lay.preview.contains_rect(img.shrink(0.01)), "{what}: the image {img:?} is on its surface {:?}", lay.preview);
+                    assert!((img.width() / img.height() - 16.0 / 9.0).abs() < 0.02, "{what}: aspect {img:?}");
+                    if density == Density::Comfortable {
+                        assert!(img.width() > 900.0, "{what}: the preview takes the room: {img:?}");
+                        assert!((320.0..=360.0).contains(&lay.panel.width()), "{what}");
+                        assert!(lay.rows.iter().all(|r| r.height() >= 28.0), "{what}");
+                    }
+                    let panel: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-panel-rect"))).expect("panel");
+                    assert_eq!(panel, lay.panel, "{what}: the panel is where the layout puts it");
+                    // the chrome: the title bar, the transport bar and the timeline never overlap themselves
+                    // only what is actually visible: a text scrolled out of the panel is clipped away
+                    let in_rect = |area: Rect| -> Vec<&(String, Rect, Rect)> {
+                        texts
+                            .iter()
+                            .filter(|(t, r, clip)| !t.is_empty() && area.contains(r.center()) && clip.contains_rect(r.shrink(0.5)))
+                            .collect()
+                    };
+                    let bar = Rect::from_min_max(Pos2::ZERO, Pos2::new(size.x, lay.preview.min.y - 2.0));
+                    let groups = [
+                        ("title bar", in_rect(bar)),
+                        ("transport", in_rect(lay.transport.expand2(Vec2::new(4.0, 6.0)))),
+                        ("timeline", in_rect(lay.timeline.expand2(Vec2::new(0.0, 2.0)))),
+                    ];
+                    for (g, items) in &groups {
+                        if name == "export sheet" && *g != "title bar" {
+                            continue; // the sheet covers them: their texts are drawn under it
+                        }
+                        assert!(items.len() >= 2, "{what}: {g} is drawn: {items:?}");
+                        for (i, (ta, ra, _)) in items.iter().enumerate() {
+                            for (tb, rb, _) in &items[i + 1..] {
+                                assert!(!overlaps(*ra, *rb), "{what}: in the {g}, `{ta}` {ra:?} overlaps `{tb}` {rb:?}");
+                            }
+                        }
+                    }
+                    // the track names stay in their gutter, the tick labels on the tracks
+                    for (t, r, _) in groups[2].1.iter().filter(|_| name != "export sheet") {
+                        if ["Video", "Zooms", "Loupes"].contains(&t.as_str()) {
+                            assert!(r.max.x <= lay.tracks.min.x, "{what}: `{t}` is in the gutter: {r:?}");
+                        } else {
+                            assert!(r.min.x >= lay.tracks.min.x - 0.5 && r.max.x <= lay.tracks.max.x + 1.5, "{what}: tick `{t}` {r:?}");
+                        }
+                    }
+                    for want in ["Play", "Undo", "Redo", "Export…", "Full screen"] {
+                        assert!(
+                            name == "export sheet" || groups[1].1.iter().any(|(t, _, _)| t == want),
+                            "{what}: the transport has `{want}`"
+                        );
+                    }
+                    // the panel's visible texts stay inside it and apart from each other
+                    let visible: Vec<&(String, Rect, Rect)> =
+                        texts.iter().filter(|(t, r, _)| !t.is_empty() && panel.contains_rect(*r) && r.min.y >= panel.min.y + 2.0).collect();
+                    assert!(visible.len() > 3, "{what}: the panel shows something");
+                    if name != "transcript" {
+                        for (i, (ta, ra, _)) in visible.iter().enumerate() {
+                            for (tb, rb, _) in &visible[i + 1..] {
+                                assert!(!overlaps(*ra, *rb), "{what}: in the panel, `{ta}` {ra:?} overlaps `{tb}` {rb:?}");
+                            }
+                        }
+                    }
+                    // the Export sheet is inside the window and its texts are apart
+                    if name == "export sheet" {
+                        let sheet: Rect = app.ctx.data(|d| d.get_temp(Id::new("editor-sheet-rect"))).expect("sheet");
+                        assert!(win.contains_rect(sheet), "{what}: the sheet {sheet:?}");
+                        // what is under the sheet (the same editor without it) is not the sheet's
+                        app.editor.as_mut().unwrap().export.open = false;
+                        let under = settle(&mut app, size);
+                        app.editor.as_mut().unwrap().export.open = true;
+                        let is_under = |t: &str, r: &Rect| under.iter().any(|(u, ur, _)| u == t && (ur.min - r.min).length() < 0.5);
+                        let items: Vec<&(String, Rect, Rect)> = texts
+                            .iter()
+                            .filter(|(t, r, _)| !t.is_empty() && sheet.shrink(2.0).contains_rect(*r) && !is_under(t, r))
+                            .collect();
+                        assert!(items.len() >= 12, "{what}: {items:?}");
+                        for (i, (ta, ra, _)) in items.iter().enumerate() {
+                            for (tb, rb, _) in &items[i + 1..] {
+                                assert!(!overlaps(*ra, *rb), "{what}: in the sheet, `{ta}` {ra:?} overlaps `{tb}` {rb:?}");
+                            }
+                        }
+                        for want in ["Export video", "Format", "Quality", "Choose…", "Close", "Export", "esc closes"] {
+                            assert!(items.iter().any(|(t, _, _)| t == want), "{what}: the sheet has `{want}`");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The transport and tab hit targets are at least 24 pt in both directions at both sizes.
+    #[test]
+    fn transport_buttons_are_at_least_24_points_at_both_sizes() {
+        for size in [SMALL, LARGE] {
+            let mut app = state(&format!("hit-{}", size.x), Tab::Zoom, |_| {});
+            app.ctx.data_mut(|d| d.remove::<Vec<(String, egui::Id, Rect, bool)>>(Id::new("ctl-hits")));
+            settle(&mut app, size);
+            let hits: Vec<(String, egui::Id, Rect, bool)> = app.ctx.data(|d| d.get_temp(Id::new("ctl-hits"))).unwrap_or_default();
+            let bar: Vec<&(String, egui::Id, Rect, bool)> = hits.iter().filter(|h| h.0 == "small_btn" || h.0 == "fullscreen_btn").collect();
+            assert!(bar.iter().any(|h| h.0 == "fullscreen_btn"), "the Full screen button is there");
+            for (kind, _, r, _) in &bar {
+                assert!(r.height() >= 24.0 && r.width() >= 24.0, "{kind} {r:?} at {size:?}");
+            }
+        }
+    }
+
+    fn click_cmds(app: &mut App, size: Vec2, at: Pos2, window: Option<Rect>) -> Vec<egui::ViewportCommand> {
+        let btn = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let mut cmds = vec![];
+        for events in [vec![Event::PointerMoved(at)], vec![btn(true)], vec![btn(false)], vec![]] {
+            cmds.extend(run_at(app, size, events, window).1);
+        }
+        cmds
+    }
+
+    fn text_center(app: &mut App, size: Vec2, label: &str) -> Pos2 {
+        let texts = run_at(app, size, vec![], None).0;
+        texts.iter().find(|(t, ..)| t == label).unwrap_or_else(|| panic!("no `{label}`")).1.center()
+    }
+
+    fn screen() -> Rect {
+        Rect::from_min_max(Pos2::new(0.0, 25.0), Pos2::new(1440.0, 875.0))
+    }
+
+    fn window() -> Rect {
+        Rect::from_min_size(Pos2::new(345.0, 140.0), SMALL)
+    }
+
+    fn place(cmds: &[egui::ViewportCommand]) -> (usize, usize) {
+        let pos = cmds.iter().filter(|c| matches!(c, egui::ViewportCommand::OuterPosition(_))).count();
+        let size = cmds.iter().filter(|c| matches!(c, egui::ViewportCommand::InnerSize(_))).count();
+        (pos, size)
+    }
+
+    #[test]
+    fn the_full_screen_button_maximises_once_and_a_second_click_restores_once() {
+        let (mut app, _rx) = editor_app();
+        app.ctx.data_mut(|d| d.insert_temp(Id::new("test-screen"), screen()));
+        settle(&mut app, SMALL);
+        assert!(!app.win.is_maximised());
+        let at = text_center(&mut app, SMALL, "Full screen");
+        let cmds = click_cmds(&mut app, SMALL, at, Some(window()));
+        assert_eq!(place(&cmds), (1, 1), "one move and one resize: {cmds:?}");
+        assert!(cmds.contains(&egui::ViewportCommand::OuterPosition(screen().min)));
+        assert!(cmds.contains(&egui::ViewportCommand::InnerSize(screen().size())));
+        assert!(app.win.is_maximised());
+        // nothing more is sent while it stays maximised
+        for _ in 0..3 {
+            assert!(run_at(&mut app, LARGE, vec![], Some(screen())).1.is_empty(), "no command per frame");
+        }
+        // the button now offers the way out; a click restores the window where it was, once
+        let at = text_center(&mut app, LARGE, "Exit full screen");
+        let cmds = click_cmds(&mut app, LARGE, at, Some(screen()));
+        assert_eq!(place(&cmds), (1, 1), "{cmds:?}");
+        assert!(cmds.contains(&egui::ViewportCommand::OuterPosition(window().min)), "back at its place: {cmds:?}");
+        assert!(cmds.contains(&egui::ViewportCommand::InnerSize(SMALL)));
+        assert!(!app.win.is_maximised());
+        assert!(run_at(&mut app, SMALL, vec![], Some(window())).1.is_empty());
+    }
+
+    #[test]
+    fn ctrl_cmd_f_toggles_full_screen_and_a_plain_f_does_nothing() {
+        let (mut app, _rx) = editor_app();
+        app.ctx.data_mut(|d| d.insert_temp(Id::new("test-screen"), screen()));
+        settle(&mut app, SMALL);
+        let (_, cmds) = run_at(&mut app, SMALL, vec![key_event(Key::F)], Some(window()));
+        assert!(cmds.is_empty() && !app.win.is_maximised(), "F alone never toggles: {cmds:?}");
+        let both = Modifiers::COMMAND | Modifiers::CTRL;
+        let (_, cmds) = run_at(&mut app, SMALL, vec![key_mod_event(Key::F, both)], Some(window()));
+        assert_eq!(place(&cmds), (1, 1), "{cmds:?}");
+        assert!(app.win.is_maximised());
+        let (_, cmds) = run_at(&mut app, LARGE, vec![key_mod_event(Key::F, both)], Some(screen()));
+        assert_eq!(place(&cmds), (1, 1), "{cmds:?}");
+        assert!(!app.win.is_maximised());
+        // ⌘F without Control is not the shortcut
+        let (_, cmds) = run_at(&mut app, SMALL, vec![key_mod_event(Key::F, Modifiers::COMMAND)], Some(window()));
+        assert!(cmds.is_empty() && !app.win.is_maximised(), "{cmds:?}");
+    }
+
+    #[test]
+    fn full_screen_does_nothing_when_the_screen_is_unknown() {
+        let (mut app, _rx) = editor_app();
+        settle(&mut app, SMALL);
+        let (_, cmds) = run_at(&mut app, SMALL, vec![key_mod_event(Key::F, Modifiers::COMMAND | Modifiers::CTRL)], Some(window()));
+        assert!(cmds.is_empty() && !app.win.is_maximised(), "no screen, no window change: {cmds:?}");
+    }
+
+    /// Esc, Back, a hidden launcher and a wheel all bring the window back to the launcher's size.
+    #[test]
+    fn leaving_the_editor_or_hiding_the_launcher_restores_the_window() {
+        for how in ["esc", "back", "view change", "hide"] {
+            let (mut app, _rx) = editor_app();
+            app.ctx.data_mut(|d| d.insert_temp(Id::new("test-screen"), screen()));
+            settle(&mut app, SMALL);
+            run_at(&mut app, SMALL, vec![key_mod_event(Key::F, Modifiers::COMMAND | Modifiers::CTRL)], Some(window()));
+            assert!(app.win.is_maximised(), "{how}");
+            match how {
+                "esc" => {
+                    run_at(&mut app, LARGE, vec![key_event(Key::Escape)], Some(screen()));
+                    assert!(!matches!(app.view(), View::Editor { .. }), "Esc left the editor");
+                }
+                "back" => app.pop(),
+                "view change" => app.stack = vec![View::Root, View::Settings],
+                _ => app.hide(),
+            }
+            // the per-frame sync (App::logic) restores it; hiding does it at once
+            app.sync_window();
+            assert!(!app.win.is_maximised(), "{how}: the window mode is back to normal");
+            let (_, cmds) = run_at(&mut app, SMALL, vec![], Some(screen()));
+            assert!(cmds.contains(&egui::ViewportCommand::InnerSize(SMALL)), "{how}: the size goes back: {cmds:?}");
+            assert!(cmds.contains(&egui::ViewportCommand::OuterPosition(window().min)), "{how}: and the place: {cmds:?}");
+            assert!(!cmds.iter().any(|c| matches!(c, egui::ViewportCommand::Fullscreen(_))), "{how}: never native full screen");
+            // and it stays quiet afterwards
+            app.sync_window();
+            assert!(run_at(&mut app, SMALL, vec![], Some(window())).1.is_empty(), "{how}");
+        }
+    }
+
+    #[test]
+    fn a_maximised_window_has_square_corners_and_the_footer_lists_the_shortcut() {
+        let (mut app, _rx) = editor_app();
+        settle(&mut app, SMALL);
+        assert!(app.view().footer_hints().contains(&("Full screen", "⌃⌘F")));
+        let chips: Vec<(String, String)> = app.ctx.data(|d| d.get_temp(Id::new("footer-chips"))).unwrap_or_default();
+        assert!(chips.contains(&("Full screen".to_string(), "⌃⌘F".to_string())), "it survives the 750 pt footer: {chips:?}");
+        assert!(chips.contains(&("Back".to_string(), "esc".to_string())));
+    }
+
+    /// Colours that are new in the redesign, both themes, over the worst backdrop.
+    #[test]
+    fn the_timeline_and_transport_colours_read_on_both_palettes() {
+        use crate::editor_ctl::{track_colors, track_fill};
+        let t = |c: Color32| [c.r() as f32, c.g() as f32, c.b() as f32];
+        for dark in [true, false] {
+            let pal = palette(dark);
+            for backdrop in [0.0_f32, 255.0] {
+                let win = window_over(&pal, backdrop);
+                let row = over(win, pal.field);
+                let c = track_colors(dark);
+                let on_row = |col: Color32| over(row, track_fill(col));
+                let speed_ink = Color32::BLACK;
+                let rows = [
+                    ("clip bar vs its row", contrast(on_row(c.clip), row), 3.0),
+                    ("speed bar vs its row", contrast(on_row(c.speed), row), 3.0),
+                    ("zoom bar vs its row", contrast(on_row(c.zoom), row), 3.0),
+                    ("loupe bar vs its row", contrast(on_row(c.loupe), row), 3.0),
+                    ("speed label on its bar", contrast(t(speed_ink), on_row(c.speed)), 4.5),
+                    ("playhead vs the clip bar", contrast(t(pal.text), on_row(c.clip)), 3.0),
+                    ("playhead vs the empty row", contrast(t(pal.text), row), 4.5),
+                    ("track name", contrast(t(pal.sub_strong), win), 4.5),
+                    ("ruler label", contrast(t(pal.sub_strong), win), 4.5),
+                    ("title bar status", contrast(t(pal.sub_strong), win), 4.5),
+                    ("time", contrast(t(pal.text), win), 4.5),
+                    ("transport label", contrast(t(pal.text), over(win, pal.field.gamma_multiply(1.6))), 4.5),
+                    ("disabled Undo", contrast(t(pal.sub), win), 3.0),
+                    ("Export label", contrast(t(Color32::WHITE), t(pal.accent)), 3.0),
+                    (
+                        "selected list row",
+                        contrast(
+                            t(pal.accent_text),
+                            over(over(win, pal.field), pal.accent.gamma_multiply(crate::editor_panels::ACCENT_TINT)),
+                        ),
+                        4.5,
+                    ),
+                    ("list row", contrast(t(pal.text), over(win, pal.field)), 4.5),
+                    ("preview surface vs the window", contrast(over(win, crate::editor_ctl::well(&pal)), win), 1.05),
+                ];
+                for (what, got, want) in rows {
+                    assert!(got >= want, "dark={dark} backdrop={backdrop}: {what} is {got:.2}, want >= {want}");
+                }
+            }
+        }
+    }
+}
+
 // ---- Design review: an offscreen software renderer for the egui harness ----
 //
 // `FC_SHOTS_DIR=/some/dir cargo test -p ferrocast shots -- --nocapture` writes one PNG per editor tab and state
@@ -13684,7 +14101,7 @@ mod shots {
     /// The right-hand editor panel (the draw code places it at the right edge).
     pub fn panel_crop() -> Rect {
         Rect::from_min_max(
-            Pos2::new(ui::WIDTH - crate::editor_panels::PANEL_W - 40.0, 40.0),
+            Pos2::new(ui::WIDTH - crate::editor_ctl::panel_width(0.0) - 40.0, 40.0),
             Pos2::new(ui::WIDTH, 560.0f32.min(std::env::var("FC_SHOTS_H").ok().and_then(|h| h.parse().ok()).unwrap_or(720.0))),
         )
     }
@@ -13823,6 +14240,120 @@ mod shots {
             let (mut app, _) = open_p6("timeline", Tab::Loupe, two);
             app.editor.as_mut().unwrap().st.selected_loupe = Some("l2".into());
             snap(&mut app, "p6-editor", dark, None);
+        }
+    }
+
+    /// A synthetic 1920x1080 preview frame (wallpaper gradient, a dark window with text-like bars); no real
+    /// recording is involved, so these shots carry nobody's screen.
+    fn synthetic_frame(app: &mut App) {
+        let (w, h) = (1920usize, 1080usize);
+        let mut px = vec![egui::Color32::BLACK; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
+                let t = (fx * 0.6 + fy * 0.4).clamp(0.0, 1.0);
+                px[y * w + x] = egui::Color32::from_rgb((70.0 + 120.0 * t) as u8, (60.0 + 40.0 * t) as u8, (190.0 - 60.0 * t) as u8);
+            }
+        }
+        let win = (150usize, 90usize, 1770usize, 990usize);
+        for y in win.1..win.3 {
+            for x in win.0..win.2 {
+                let bar = y < win.1 + 44;
+                px[y * w + x] = if bar { egui::Color32::from_gray(52) } else { egui::Color32::from_gray(28) };
+            }
+        }
+        for (i, c) in [(255u8, 95u8, 87u8), (254, 188, 46), (40, 200, 64)].iter().enumerate() {
+            for y in 0..16 {
+                for x in 0..16 {
+                    px[(win.1 + 14 + y) * w + win.0 + 20 + i * 28 + x] = egui::Color32::from_rgb(c.0, c.1, c.2);
+                }
+            }
+        }
+        for line in 0..14 {
+            let len = 300 + (line * 97) % 900;
+            let col = if line % 3 == 0 { egui::Color32::from_rgb(120, 200, 140) } else { egui::Color32::from_gray(150) };
+            for y in 0..10 {
+                for x in 0..len {
+                    px[(win.1 + 90 + line * 52 + y) * w + win.0 + 40 + x] = col;
+                }
+            }
+        }
+        let img = egui::ColorImage { size: [w, h], source_size: Vec2::new(w as f32, h as f32), pixels: px };
+        let tex = app.ctx.load_texture("shots-frame", img, egui::TextureOptions::LINEAR);
+        app.editor.as_mut().unwrap().tex = Some(tex);
+    }
+
+    /// Paint at `size` points and `ppp` pixels per point; writes `<dir>/<name>-<dark|light>.png`.
+    fn snap_sized(app: &mut App, name: &str, dark: bool, size: Vec2, ppp: f32) {
+        let Some(dir) = dir() else { return };
+        app.ctx.set_theme(if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+        app.ctx.set_pixels_per_point(ppp);
+        let mut shot = Shot::new();
+        let bg = if dark { egui::Color32::from_gray(40) } else { egui::Color32::from_gray(222) };
+        // egui advances 1/60 s per frame without a clock: the 0.14 s fade-in needs ~9 frames to finish
+        for _ in 0..40 {
+            shot.frame(app, size, false, bg);
+        }
+        let img = shot.frame(app, size, true, bg).unwrap();
+        img.save(dir.join(format!("{name}-{}.png", if dark { "dark" } else { "light" }))).unwrap();
+    }
+
+    /// The whole editor in every state, small (the real window) and large, dark and light:
+    /// `FC_SHOTS_DIR=target/p6-scratch/after cargo test -p ferrocast editor_full_shots`.
+    #[test]
+    fn editor_full_shots() {
+        if dir().is_none() {
+            return;
+        }
+        let words = long_transcript();
+        for (tag, size, ppp) in [("small", Vec2::new(ui::WIDTH, ui::HEIGHT), 2.0), ("large", Vec2::new(1440.0, 900.0), 1.0)] {
+            for dark in [true, false] {
+                let mut states: Vec<(&str, App)> = Vec::new();
+                let plain = |t: Tab| {
+                    let mut p = p4_project();
+                    p.trims.clear();
+                    p.sources.camera = None;
+                    p.camera = None;
+                    p.sources.mic = None;
+                    p.sources.system = None;
+                    let (mut app, _d, rx) = editor_app_for(&format!("full-plain-{tag}-{dark}-{t:?}"), p, &[]);
+                    std::mem::forget(rx);
+                    set_tab(&mut app, t);
+                    app
+                };
+                states.push(("plain-zoom", plain(Tab::Zoom)));
+                states.push(("plain-style", plain(Tab::Style)));
+                states.push(("plain-clips", plain(Tab::Clips)));
+                let (app, _) = open_p6(&format!("full-cam-{tag}-{dark}"), Tab::Camera, |_| {});
+                states.push(("camera", app));
+                let (mut app, _) = open_p6(&format!("full-loupe-{tag}-{dark}"), Tab::Loupe, |p| {
+                    p.loupes = vec![loupe("l1", 1.0, 3.0, None), loupe("l2", 5.0, 8.0, Some([0.3, 0.6]))];
+                });
+                app.editor.as_mut().unwrap().st.selected_loupe = Some("l2".into());
+                states.push(("loupe", app));
+                let (mut app, _) = open_p6(&format!("full-tr-{tag}-{dark}"), Tab::Transcript, |p| p.transcript = Some(words.clone()));
+                app.editor.as_mut().unwrap().t = 3.1;
+                app.editor.as_mut().unwrap().st.tr.sel = Some((6, 9));
+                states.push(("transcript", app));
+                let (app, _) = open_p6(&format!("full-audio-{tag}-{dark}"), Tab::Audio, |_| {});
+                states.push(("audio", app));
+                let (mut app, _) = open_p6(&format!("full-export-{tag}-{dark}"), Tab::Zoom, |_| {});
+                app.editor.as_mut().unwrap().export.open = true;
+                states.push(("export", app));
+                for (name, mut app) in states {
+                    synthetic_frame(&mut app);
+                    let ed = app.editor.as_mut().unwrap();
+                    ed.t = ed.t.max(2.5);
+                    let zoom = |id: &str, a: f64, b: f64, mode: &str| -> ferrocast_core::capture::project::Zoom {
+                        serde_json::from_value(serde_json::json!({"id":id,"start":a,"end":b,"mode":mode,"scale":2.0})).unwrap()
+                    };
+                    ed.project.as_mut().unwrap().zooms = vec![zoom("z1", 2.0, 4.0, "auto"), zoom("z2", 6.5, 8.5, "manual")];
+                    if name == "plain-zoom" {
+                        ed.st.selected_zoom = Some("z2".into());
+                    }
+                    snap_sized(&mut app, &format!("{tag}-{name}"), dark, size, ppp);
+                }
+            }
         }
     }
 

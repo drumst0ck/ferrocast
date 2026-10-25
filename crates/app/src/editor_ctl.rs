@@ -7,6 +7,7 @@
 //! T26 does not write `project.json`: autosave and every other edit come in T27, so applying the
 //! auto zooms only marks the in-memory project dirty.
 
+use egui::{Pos2, Rect, Vec2};
 use ferrocast_core::capture::compose::{CameraFx, Composer, FrameParams};
 use ferrocast_core::capture::events::Events;
 use ferrocast_core::capture::project::{Project, EVENTS_FILE};
@@ -209,8 +210,38 @@ pub fn zoom_bars(p: &Project) -> Vec<Bar> {
         .collect()
 }
 
-/// `(top, height)` of the loupe row of the timeline, from the top of the timeline area.
-pub const LOUPE_ROW: (f32, f32) = (60.0, 16.0);
+/// Colours of the timeline tracks. All of them keep 3:1 against the track row they sit on in both
+/// themes (tested), and the track never relies on colour alone: each row has its name at the left.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackColors {
+    pub clip: egui::Color32,
+    pub speed: egui::Color32,
+    pub zoom: egui::Color32,
+    pub loupe: egui::Color32,
+}
+
+/// How a track colour is painted on its row (a touch softer than the pure colour).
+pub fn track_fill(c: egui::Color32) -> egui::Color32 {
+    c.gamma_multiply(0.85)
+}
+
+/// The neutral surface the preview sits on: a step darker than the window in both themes.
+pub fn well(pal: &crate::ui::Palette) -> egui::Color32 {
+    if pal.text.r() > 128 {
+        egui::Color32::from_black_alpha(100)
+    } else {
+        egui::Color32::from_black_alpha(22)
+    }
+}
+
+pub fn track_colors(dark: bool) -> TrackColors {
+    let c = egui::Color32::from_rgb;
+    if dark {
+        TrackColors { clip: c(226, 84, 98), speed: c(214, 150, 62), zoom: c(118, 134, 255), loupe: loupe_color(true) }
+    } else {
+        TrackColors { clip: c(214, 48, 70), speed: c(168, 92, 10), zoom: c(78, 88, 226), loupe: loupe_color(false) }
+    }
+}
 
 /// The loupe segments' colour: teal, deep enough on the light panel and bright on the dark one
 /// (3:1 against the track in both).
@@ -362,6 +393,175 @@ pub fn fit(avail: (f32, f32), aspect: f32) -> (f32, f32) {
         (h * aspect, h)
     } else {
         (w, w / aspect)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Editor layout: a pure function of the space the editor has, so the same code serves the 750 x 475
+// launcher window and a full-screen one.
+
+/// Space around the editor inside the window, and between its blocks.
+pub const MARGIN_X: f32 = 16.0;
+pub const MARGIN_Y: f32 = 8.0;
+/// Radius of every surface of the editor (preview frame, panel, track rows, buttons, sheet).
+pub const EDITOR_RADIUS: f32 = 8.0;
+/// Radius of a control (button, chip, segment).
+pub const CONTROL_RADIUS: f32 = 6.0;
+/// Height of the bar the shell draws on top of the editor (the launcher's search bar is taller).
+pub const BAR_H: f32 = 44.0;
+/// Width from which the editor uses the roomy sizes in full.
+pub const COMFORT_W: f32 = 1060.0;
+/// Height from which the editor uses the roomy sizes in full.
+pub const COMFORT_H: f32 = 590.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Density {
+    /// The 750 x 475 launcher window.
+    Compact,
+    /// A big window or full screen.
+    Comfortable,
+}
+
+/// Width of the right-hand panel for an editor `w` points wide: the compact 252 pt up to ~930 pt,
+/// then 27 % of the width up to 352 pt.
+pub fn panel_width(w: f32) -> f32 {
+    if !w.is_finite() {
+        return 252.0;
+    }
+    (w * 0.27).clamp(252.0, 352.0)
+}
+
+/// Height of one timeline track row for an editor `h` points tall: 22 pt when compact, up to 30 pt
+/// from ~590 pt on.
+pub fn track_row_height(h: f32) -> f32 {
+    if !h.is_finite() {
+        return 22.0;
+    }
+    (22.0 + (h - 380.0) * 0.04).clamp(22.0, 30.0)
+}
+
+/// Compact below either threshold, comfortable when the editor has both the width and the height.
+pub fn density(size: Vec2) -> Density {
+    if size.x >= COMFORT_W && size.y >= COMFORT_H {
+        Density::Comfortable
+    } else {
+        Density::Compact
+    }
+}
+
+/// Where everything of the editor goes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Layout {
+    pub density: Density,
+    /// The neutral surface behind the preview image.
+    pub preview: Rect,
+    pub panel: Rect,
+    pub transport: Rect,
+    /// The whole timeline block: track names at the left, ruler and tracks at the right.
+    pub timeline: Rect,
+    /// Ruler and tracks (what a click on the timeline seeks on).
+    pub tracks: Rect,
+    pub ruler: Rect,
+    /// The three track rows: clips, zoom, loupe.
+    pub rows: [Rect; 3],
+    pub gap: f32,
+}
+
+pub fn layout(rect: Rect) -> Layout {
+    let size = rect.size();
+    let d = density(size);
+    let comfy = d == Density::Comfortable;
+    let gap = if comfy { 12.0 } else { 8.0 };
+    let transport_h = if comfy { 40.0 } else { 32.0 };
+    let (ruler_h, row_gap, gutter) = if comfy { (20.0, 5.0, 64.0) } else { (16.0, 3.0, 46.0) };
+    let row_h = track_row_height(size.y);
+    let tl_h = ruler_h + 4.0 + 3.0 * row_h + 2.0 * row_gap;
+    let timeline = Rect::from_min_max(Pos2::new(rect.min.x, (rect.max.y - tl_h).max(rect.min.y)), rect.max);
+    let transport = Rect::from_min_size(
+        Pos2::new(rect.min.x, (timeline.min.y - gap - transport_h).max(rect.min.y)),
+        Vec2::new(rect.width(), transport_h),
+    );
+    let main = Rect::from_min_max(rect.min, Pos2::new(rect.max.x, (transport.min.y - gap).max(rect.min.y)));
+    let panel_w = panel_width(size.x).min(main.width());
+    let panel = Rect::from_min_max(Pos2::new(main.max.x - panel_w, main.min.y), main.max);
+    let preview = Rect::from_min_max(main.min, Pos2::new((panel.min.x - gap).max(main.min.x), main.max.y));
+    let tracks = Rect::from_min_max(Pos2::new((timeline.min.x + gutter).min(timeline.max.x), timeline.min.y), timeline.max);
+    let ruler = Rect::from_min_size(tracks.min, Vec2::new(tracks.width(), ruler_h));
+    let row = |i: f32| {
+        Rect::from_min_size(Pos2::new(tracks.min.x, tracks.min.y + ruler_h + 4.0 + i * (row_h + row_gap)), Vec2::new(tracks.width(), row_h))
+    };
+    Layout { density: d, preview, panel, transport, timeline, tracks, ruler, rows: [row(0.0), row(1.0), row(2.0)], gap }
+}
+
+/// The largest `aspect` rectangle inside `surface` (with `pad` around it), centred.
+pub fn preview_image_rect(surface: Rect, pad: f32, aspect: f32) -> Rect {
+    let inner = surface.shrink(pad);
+    let (w, h) = fit((inner.width().max(0.0), inner.height().max(0.0)), aspect);
+    Rect::from_center_size(inner.center(), Vec2::new(w, h))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Full screen. The launcher window is a borderless, non-resizable, always-on-top panel of an
+// accessory app: macOS native full screen (`NSWindow.toggleFullScreen`, what
+// `ViewportCommand::Fullscreen` calls) needs a resizable window, moves it to a new Space (the focus
+// loss would hide the launcher) and would leave the menu bar and the Dock out of reach. So "full
+// screen" is "maximise to the screen's visible frame": move and resize the window, remember where
+// it was, put it back on the way out. This state machine decides the commands; `App` sends them.
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum WindowMode {
+    #[default]
+    Normal,
+    Maximised {
+        /// Where the window was (None when unknown: the launcher's usual place is used).
+        pos: Option<Pos2>,
+        size: Vec2,
+    },
+}
+
+/// One window command; `App` turns them into `ViewportCommand`s.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WindowCmd {
+    /// Move to `pos` and resize to `size` (a full-screen request).
+    Place { pos: Pos2, size: Vec2 },
+    /// Back to `size`, at `pos` or, when `None`, at the launcher's usual place.
+    Restore { pos: Option<Pos2>, size: Vec2 },
+}
+
+impl WindowMode {
+    pub fn is_maximised(&self) -> bool {
+        matches!(self, WindowMode::Maximised { .. })
+    }
+
+    /// The button or the shortcut. `current` is the window now, `screen` the visible frame of its screen
+    /// (both in top-left screen points). Without a screen to fill nothing happens.
+    pub fn toggle(&mut self, current: Option<Rect>, screen: Option<Rect>, normal: Vec2) -> Option<WindowCmd> {
+        match *self {
+            WindowMode::Maximised { .. } => self.leave(),
+            WindowMode::Normal => {
+                let screen = screen.filter(|s| s.width() > 0.0 && s.height() > 0.0)?;
+                *self = WindowMode::Maximised { pos: current.map(|r| r.min), size: current.map_or(normal, |r| r.size()) };
+                Some(WindowCmd::Place { pos: screen.min, size: screen.size() })
+            }
+        }
+    }
+
+    /// Back to the normal size (leaving the editor, hiding, a wheel opening). No-op when not maximised,
+    /// so it is safe to call every frame.
+    pub fn leave(&mut self) -> Option<WindowCmd> {
+        match std::mem::take(self) {
+            WindowMode::Normal => None,
+            WindowMode::Maximised { pos, size } => Some(WindowCmd::Restore { pos, size }),
+        }
+    }
+
+    /// Per frame: only the editor may stay maximised.
+    pub fn sync(&mut self, in_editor: bool) -> Option<WindowCmd> {
+        if in_editor {
+            None
+        } else {
+            self.leave()
+        }
     }
 }
 
@@ -1850,5 +2050,162 @@ mod tests {
         assert_eq!(loupe_hit(&bars, &axis, 95.0), Some("l2"));
         assert_eq!(loupe_hit(&bars, &axis, 50.0), None);
         assert!(loupe_bars(&project(&[], &[])).is_empty());
+    }
+
+    // ---- layout and full screen (the editor redesign)
+
+    fn rect(w: f32, h: f32) -> Rect {
+        Rect::from_min_size(Pos2::new(16.0, 52.0), Vec2::new(w, h))
+    }
+
+    #[test]
+    fn density_follows_both_the_width_and_the_height() {
+        assert_eq!(density(Vec2::new(718.0, 385.0)), Density::Compact, "the launcher window");
+        assert_eq!(density(Vec2::new(1408.0, 777.0)), Density::Comfortable, "full screen");
+        assert_eq!(density(Vec2::new(COMFORT_W, COMFORT_H)), Density::Comfortable, "the thresholds are inclusive");
+        assert_eq!(density(Vec2::new(1800.0, COMFORT_H - 1.0)), Density::Compact, "wide but short");
+        assert_eq!(density(Vec2::new(COMFORT_W - 1.0, 1000.0)), Density::Compact, "tall but narrow");
+    }
+
+    #[test]
+    fn the_panel_grows_with_the_window_inside_its_limits() {
+        assert_eq!(panel_width(718.0), 252.0, "compact keeps the old width");
+        assert_eq!(panel_width(0.0), 252.0);
+        assert_eq!(panel_width(f32::NAN), 252.0);
+        let big = panel_width(1408.0);
+        assert!((320.0..=360.0).contains(&big), "{big}");
+        assert_eq!(panel_width(5000.0), 352.0, "capped");
+        let mut last = 0.0;
+        for w in (700..3000).step_by(20) {
+            let p = panel_width(w as f32);
+            assert!(p >= last, "never shrinks while the window grows");
+            last = p;
+        }
+    }
+
+    #[test]
+    fn track_rows_are_22_pt_compact_and_28_to_32_when_comfortable() {
+        assert_eq!(track_row_height(385.0), 22.0 + 5.0 * 0.04);
+        assert!(track_row_height(385.0) < 23.0);
+        assert_eq!(track_row_height(f32::NAN), 22.0);
+        assert!((28.0..=32.0).contains(&track_row_height(COMFORT_H)), "{}", track_row_height(COMFORT_H));
+        assert!((28.0..=32.0).contains(&track_row_height(777.0)));
+        assert_eq!(track_row_height(9000.0), 30.0, "capped");
+        assert_eq!(track_row_height(0.0), 22.0, "floored");
+    }
+
+    #[test]
+    fn every_block_of_the_layout_fits_the_editor_and_none_overlap() {
+        for (w, h) in [(718.0, 385.0), (900.0, 500.0), (1060.0, 590.0), (1408.0, 777.0), (2400.0, 1300.0), (300.0, 200.0)] {
+            let r = rect(w, h);
+            let l = layout(r);
+            let blocks = [("preview", l.preview), ("panel", l.panel), ("transport", l.transport), ("timeline", l.timeline)];
+            for (name, b) in blocks {
+                assert!(r.contains_rect(b), "{w}x{h}: {name} {b:?} inside {r:?}");
+            }
+            for (i, (na, a)) in blocks.iter().enumerate() {
+                for (nb, b) in &blocks[i + 1..] {
+                    let hit = a.intersect(*b);
+                    assert!(hit.width() <= 0.01 || hit.height() <= 0.01, "{w}x{h}: {na} {a:?} overlaps {nb} {b:?}");
+                }
+            }
+            assert!(l.timeline.contains_rect(l.tracks) && l.tracks.contains_rect(l.ruler));
+            let mut top = l.ruler.max.y;
+            for row in l.rows {
+                assert!(l.tracks.contains_rect(row) && row.min.y >= top, "{w}x{h}: rows stack below the ruler without overlap");
+                top = row.max.y;
+            }
+            assert_eq!(l.timeline.max.y, r.max.y, "the timeline sits on the bottom edge");
+            assert_eq!(l.preview.min.y, l.panel.min.y);
+            assert_eq!(l.preview.max.y, l.panel.max.y);
+        }
+    }
+
+    #[test]
+    fn compact_keeps_the_old_panel_and_gets_a_taller_timeline_and_panel() {
+        // the launcher window: 750 x 475 minus the 44 pt bar, the 38 pt footer and the margins
+        let l = layout(rect(750.0 - 2.0 * MARGIN_X, 475.0 - BAR_H - 38.0 - 2.0 * MARGIN_Y));
+        assert_eq!(l.density, Density::Compact);
+        assert_eq!(l.panel.width(), 252.0);
+        assert!(l.panel.height() >= 235.0, "the old panel was ~205 pt tall: {}", l.panel.height());
+        assert!(l.rows.iter().all(|r| r.height() >= 22.0), "rows are no longer squeezed to 18 pt");
+        assert!(l.preview.width() >= 440.0, "{}", l.preview.width());
+    }
+
+    #[test]
+    fn comfortable_uses_the_room() {
+        let l = layout(rect(1408.0, 777.0));
+        assert_eq!(l.density, Density::Comfortable);
+        assert!((320.0..=360.0).contains(&l.panel.width()), "{}", l.panel.width());
+        assert!(l.rows.iter().all(|r| (28.0..=32.0).contains(&r.height())), "{:?}", l.rows);
+        assert!(l.preview.width() > 1000.0 && l.preview.height() > 500.0, "{:?}", l.preview);
+        assert!(l.transport.height() >= 40.0);
+        let compact = layout(rect(718.0, 385.0));
+        assert!(l.timeline.height() > compact.timeline.height());
+    }
+
+    #[test]
+    fn the_preview_keeps_its_aspect_centred_on_the_surface() {
+        let surface = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(500.0, 300.0));
+        let img = preview_image_rect(surface, 8.0, 16.0 / 9.0);
+        assert!((img.width() / img.height() - 16.0 / 9.0).abs() < 1e-3);
+        assert!(surface.shrink(7.99).contains_rect(img), "inside the padding: {img:?}");
+        assert_eq!(img.center(), surface.center());
+        let tall = preview_image_rect(surface, 8.0, 9.0 / 16.0);
+        assert!((tall.height() - 284.0).abs() < 0.01, "a portrait video is as tall as the surface allows: {tall:?}");
+        assert_eq!(preview_image_rect(Rect::from_min_size(Pos2::ZERO, Vec2::ZERO), 8.0, 1.0).size(), Vec2::ZERO);
+    }
+
+    const NORMAL: Vec2 = Vec2::new(750.0, 475.0);
+
+    fn screen() -> Rect {
+        Rect::from_min_max(Pos2::new(0.0, 25.0), Pos2::new(1440.0, 875.0))
+    }
+
+    fn window() -> Rect {
+        Rect::from_min_size(Pos2::new(345.0, 140.0), NORMAL)
+    }
+
+    #[test]
+    fn full_screen_maximises_to_the_visible_frame_and_restores_where_the_window_was() {
+        let mut m = WindowMode::default();
+        assert!(!m.is_maximised());
+        let cmd = m.toggle(Some(window()), Some(screen()), NORMAL);
+        assert_eq!(cmd, Some(WindowCmd::Place { pos: screen().min, size: screen().size() }));
+        assert!(m.is_maximised());
+        // the second toggle puts the window back exactly
+        let cmd = m.toggle(Some(screen()), Some(screen()), NORMAL);
+        assert_eq!(cmd, Some(WindowCmd::Restore { pos: Some(Pos2::new(345.0, 140.0)), size: NORMAL }));
+        assert_eq!(m, WindowMode::Normal);
+        // and it can go again
+        assert!(m.toggle(Some(window()), Some(screen()), NORMAL).is_some());
+    }
+
+    #[test]
+    fn full_screen_without_a_screen_does_nothing_and_without_a_window_rect_restores_the_launcher_place() {
+        let mut m = WindowMode::default();
+        assert_eq!(m.toggle(Some(window()), None, NORMAL), None);
+        assert_eq!(m, WindowMode::Normal, "nothing was remembered");
+        assert_eq!(m.toggle(Some(window()), Some(Rect::NOTHING), NORMAL), None, "an empty screen frame is no screen");
+        assert!(m.toggle(None, Some(screen()), NORMAL).is_some());
+        assert_eq!(m.leave(), Some(WindowCmd::Restore { pos: None, size: NORMAL }), "the size is the launcher's, the place its usual one");
+    }
+
+    #[test]
+    fn leaving_restores_exactly_once_and_only_the_editor_may_stay_maximised() {
+        let mut m = WindowMode::default();
+        assert_eq!(m.leave(), None, "nothing to restore");
+        assert_eq!(m.sync(false), None);
+        m.toggle(Some(window()), Some(screen()), NORMAL);
+        assert_eq!(m.sync(true), None, "still in the editor");
+        assert!(m.is_maximised());
+        let back = m.sync(false);
+        assert_eq!(back, Some(WindowCmd::Restore { pos: Some(window().min), size: NORMAL }), "Esc / Back / another view restores");
+        assert_eq!(m.sync(false), None, "once");
+        assert_eq!(m.leave(), None, "once");
+        // hiding while maximised restores too
+        m.toggle(Some(window()), Some(screen()), NORMAL);
+        assert!(m.leave().is_some());
+        assert!(!m.is_maximised());
     }
 }

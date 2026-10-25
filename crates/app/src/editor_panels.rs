@@ -1439,9 +1439,6 @@ impl Editor {
 // ---------------------------------------------------------------------------------------------
 // Panels (drawing)
 
-/// Width of the right-hand panel.
-pub const PANEL_W: f32 = 252.0;
-
 pub fn hex_to_rgb(hex: &str) -> Option<[u8; 3]> {
     if !hex_ok(hex) {
         return None;
@@ -1515,6 +1512,35 @@ fn row_drag(ui: &mut Ui, pal: &Palette, label: &str, v: f64, range: std::ops::Ra
     .inner
 }
 
+/// Two labelled number boxes side by side (the rows of a card that go in pairs: Start / End, Ease in / Ease out).
+/// Each is `(label, value, range)`; returns the new value of the one that changed.
+fn pair_drag(
+    ui: &mut Ui,
+    pal: &Palette,
+    a: (&str, f64, std::ops::RangeInclusive<f64>),
+    b: (&str, f64, std::ops::RangeInclusive<f64>),
+    step: f64,
+    suffix: &str,
+) -> (Option<f64>, Option<f64>) {
+    ui.horizontal(|ui| {
+        let half = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
+        let one = |ui: &mut Ui, (label, v, range): (&str, f64, std::ops::RangeInclusive<f64>)| {
+            ui.allocate_ui_with_layout(egui::vec2(half, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_min_width(half);
+                ui.label(egui::RichText::new(label).size(12.0).color(pal.sub_strong));
+                let mut x = v;
+                let r = ui.add(egui::DragValue::new(&mut x).range(range).speed(step).suffix(suffix).max_decimals(2));
+                r.changed().then_some(x)
+            })
+            .inner
+        };
+        let first = one(ui, a);
+        let second = one(ui, b);
+        (first, second)
+    })
+    .inner
+}
+
 /// Label column and value box of [`row_slider`].
 const SLIDER_LABEL_W: f32 = 56.0;
 const SLIDER_VALUE_W: f32 = 58.0;
@@ -1523,13 +1549,69 @@ fn note(ui: &mut Ui, pal: &Palette, text: &str) {
     ui.label(egui::RichText::new(text).size(11.5).color(pal.sub));
 }
 
+/// Room between the panel's edge and its content.
+const PANEL_PAD: f32 = 8.0;
+
+/// The look of every plain egui widget inside the panel (buttons, chips made of selectable labels, number
+/// boxes), so the older tabs match the painted widgets of the newer ones: flat controls in one fill, the
+/// selected one tinted with the accent and read in the accent text colour (like the tab chips), one radius,
+/// a 24 pt hit height. Only this scope is touched.
+pub(crate) fn panel_style(ui: &mut Ui, pal: &Palette, comfy: bool) {
+    let r = egui::CornerRadius::same(crate::editor_ctl::CONTROL_RADIUS as u8);
+    let size = if comfy { 13.5 } else { 13.0 };
+    let st = ui.style_mut();
+    for ts in [egui::TextStyle::Body, egui::TextStyle::Button] {
+        st.text_styles.insert(ts, egui::FontId::proportional(size));
+    }
+    st.spacing.item_spacing = egui::vec2(5.0, 4.0);
+    st.spacing.button_padding = egui::vec2(8.0, 3.0);
+    st.spacing.interact_size.y = 24.0;
+    let v = &mut st.visuals;
+    v.selection.bg_fill = pal.accent.gamma_multiply(ACCENT_TINT);
+    v.selection.stroke = egui::Stroke::new(1.0, pal.accent_text);
+    for (w, fill) in
+        [(&mut v.widgets.inactive, pal.field.gamma_multiply(1.6)), (&mut v.widgets.hovered, pal.sel), (&mut v.widgets.active, pal.sel)]
+    {
+        w.weak_bg_fill = fill;
+        w.bg_stroke = egui::Stroke::NONE;
+        w.corner_radius = r;
+        w.fg_stroke = egui::Stroke::new(1.0, pal.text);
+    }
+    v.widgets.hovered.expansion = 0.0;
+    v.widgets.active.expansion = 0.0;
+}
+
+/// A full-width row of a list (a zoom, a loupe, a segment): its text at the left, the selected one tinted with
+/// the accent, read in the accent text colour and marked by a bar at its left edge (not by colour alone).
+fn list_row(ui: &mut Ui, pal: &Palette, label: &str, selected: bool) -> bool {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), HIT_H), egui::Sense::hover());
+    let resp = cell(ui, pal, rect, ui.id().with(("row", label)), label, Some(selected));
+    let fill = if selected {
+        pal.accent.gamma_multiply(ACCENT_TINT)
+    } else if resp.hovered() {
+        pal.sel
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let p = ui.painter();
+    p.rect_filled(rect, crate::editor_ctl::CONTROL_RADIUS, fill);
+    if selected {
+        p.rect_filled(Rect::from_min_size(rect.min + egui::vec2(0.0, 5.0), egui::vec2(3.0, rect.height() - 10.0)), 1.5, pal.accent_text);
+    }
+    let ink = if selected { pal.accent_text } else { pal.text };
+    let clip = p.with_clip_rect(rect);
+    clip.text(egui::pos2(rect.min.x + 10.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font(12.5), ink);
+    resp.clicked()
+}
+
 /// The right-hand panel: tabs and the active tab's controls. Every change goes through [`Editor::apply`].
 pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto: &ZoomOpts, fps: f64, now: f64) {
-    ui.painter().rect_filled(rect, 8.0, pal.field);
+    ui.painter().rect_filled(rect, crate::editor_ctl::EDITOR_RADIUS, pal.field);
     // tests check that every tab stays inside the panel
     #[cfg(test)]
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("editor-panel-rect"), rect));
-    ui.scope_builder(UiBuilder::new().max_rect(rect.shrink(8.0)), |ui| {
+    ui.scope_builder(UiBuilder::new().max_rect(rect.shrink(PANEL_PAD)), |ui| {
+        panel_style(ui, pal, rect.width() > 300.0);
         let tabs = ed.project.as_ref().map_or_else(|| visible_tabs(&Project::new("", "")), visible_tabs);
         // a Camera / Audio tab left over from another project falls back to Zoom
         if let Some(p) = ed.project.as_ref() {
@@ -1543,7 +1625,7 @@ pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto:
             ed.st.tab = t;
             ed.st.picking = false;
         }
-        ui.separator();
+        ui.add_space(2.0);
         let Some(proj) = ed.project.clone() else { return };
         // the reason an edit was refused stays in view above the controls
         if let Some(e) = ed.st.edit_error.clone() {
@@ -1567,14 +1649,15 @@ pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto:
 }
 
 fn zoom_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, auto: &ZoomOpts, now: f64) {
+    let w = (ui.available_width() - 5.0) / 2.0;
     ui.horizontal(|ui| {
-        if ui.button("Add at playhead").clicked() {
+        if secondary_button_tip(ui, pal, "Add at playhead", w, true, "Add a zoom at the playhead") {
             let at = ed.t;
             if ed.apply(EditKind::Other, now, |p| add_zoom(p, at)) {
                 ed.st.selected_zoom = ed.project.as_ref().and_then(|p| p.zooms.iter().find(|z| z.start == at)).map(|z| z.id.clone());
             }
         }
-        if ui.button("Auto zoom").on_hover_text("Replace the automatic zooms; manual ones stay").clicked() {
+        if secondary_button_tip(ui, pal, "Auto zoom", w, true, "Replace the automatic zooms; manual ones stay") {
             auto_zoom(ed, auto, now);
         }
     });
@@ -1583,12 +1666,12 @@ fn zoom_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, auto: &
     }
     for z in &proj.zooms {
         let open = ed.st.selected_zoom.as_deref() == Some(z.id.as_str());
-        if ui.selectable_label(open, zoom_label(z)).clicked() {
+        if list_row(ui, pal, &zoom_label(z), open) {
             ed.st.selected_zoom = (!open).then(|| z.id.clone());
             ed.st.picking = false;
         }
         if open {
-            zoom_fields(ui, pal, ed, z, proj.duration, now);
+            card(ui, pal, |ui| zoom_fields(ui, pal, ed, z, proj.duration, now));
         }
     }
 }
@@ -1609,34 +1692,28 @@ fn auto_zoom(ed: &mut Editor, auto: &ZoomOpts, now: f64) {
     }
 }
 
-fn drag(ui: &mut Ui, label: &str, v: f64, range: std::ops::RangeInclusive<f64>, step: f64, suffix: &str) -> Option<f64> {
-    let mut x = v;
-    ui.horizontal(|ui| {
-        ui.add_sized([70.0, 18.0], egui::Label::new(label));
-        let r = ui.add(egui::DragValue::new(&mut x).range(range).speed(step).suffix(suffix).max_decimals(2));
-        r.changed().then_some(x)
-    })
-    .inner
-}
-
 fn zoom_fields(ui: &mut Ui, pal: &Palette, ed: &mut Editor, z: &Zoom, duration: f64, now: f64) {
     let id = z.id.clone();
     let edit = |ed: &mut Editor, kind: EditKind, field: ZoomField| {
         let id = id.clone();
         ed.apply(kind, now, move |p| set_zoom(p, &id, field));
     };
-    if let Some(v) = drag(ui, "Start", z.start, 0.0..=duration, 0.05, " s") {
+    let (start, end) = pair_drag(ui, pal, ("Start", z.start, 0.0..=duration), ("End", z.end, 0.0..=duration), 0.05, " s");
+    if let Some(v) = start {
         edit(ed, EditKind::Zoom, ZoomField::Start(v));
     }
-    if let Some(v) = drag(ui, "End", z.end, 0.0..=duration, 0.05, " s") {
+    if let Some(v) = end {
         edit(ed, EditKind::Zoom, ZoomField::End(v));
     }
-    if let Some(v) = drag(ui, "Scale", z.scale, 1.0..=MAX_SCALE, 0.02, "×") {
+    if let Some(v) = row_drag(ui, pal, "Scale", z.scale, 1.0..=MAX_SCALE, 0.02, "×") {
         edit(ed, EditKind::Zoom, ZoomField::Scale(v));
     }
     let [fx, fy] = z.focus.unwrap_or([0.5, 0.5]);
     ui.horizontal(|ui| {
-        ui.add_sized([70.0, 18.0], egui::Label::new("Focus"));
+        ui.allocate_ui_with_layout(egui::vec2(SLIDER_LABEL_W, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_width(SLIDER_LABEL_W);
+            ui.label(egui::RichText::new("Focus").size(12.5).color(pal.sub_strong));
+        });
         let (mut x, mut y) = (fx * 100.0, fy * 100.0);
         let a = ui.add(egui::DragValue::new(&mut x).range(0.0..=100.0).suffix(" %").speed(0.5)).changed();
         let b = ui.add(egui::DragValue::new(&mut y).range(0.0..=100.0).suffix(" %").speed(0.5)).changed();
@@ -1648,30 +1725,43 @@ fn zoom_fields(ui: &mut Ui, pal: &Palette, ed: &mut Editor, z: &Zoom, duration: 
     if follow {
         note(ui, pal, "Following the cursor.");
     }
-    ui.horizontal(|ui| {
-        let pick = ed.st.picking && !ed.st.pick_loupe;
-        if ui.selectable_label(pick, "Pick on preview").on_hover_text("Click the preview to set the focus").clicked() {
+    let pick = ed.st.picking && !ed.st.pick_loupe;
+    let cur = if pick {
+        1
+    } else if follow {
+        0
+    } else {
+        usize::MAX
+    };
+    match shape_segments(ui, pal, &[(Glyph::None, "Follow cursor"), (Glyph::None, "Pick on preview")], cur) {
+        Some(0) => {
+            ed.st.picking = false;
+            ed.st.pick_loupe = false;
+            if !follow {
+                edit(ed, EditKind::Other, ZoomField::Focus(None));
+            }
+        }
+        Some(_) => {
             ed.st.pick_loupe = false;
             ed.st.picking = !pick;
         }
-        if ui.add_enabled(!follow, egui::Button::new("Follow cursor")).clicked() {
-            edit(ed, EditKind::Other, ZoomField::Focus(None));
-        }
-    });
-    if let Some(v) = drag(ui, "Ease in", z.ease_in, 0.0..=3.0, 0.02, " s") {
+        None => {}
+    }
+    let (ease_in, ease_out) = pair_drag(ui, pal, ("Ease in", z.ease_in, 0.0..=3.0), ("Ease out", z.ease_out, 0.0..=3.0), 0.02, " s");
+    if let Some(v) = ease_in {
         edit(ed, EditKind::Zoom, ZoomField::EaseIn(v));
     }
-    if let Some(v) = drag(ui, "Ease out", z.ease_out, 0.0..=3.0, 0.02, " s") {
+    if let Some(v) = ease_out {
         edit(ed, EditKind::Zoom, ZoomField::EaseOut(v));
     }
-    if ui.button("Delete zoom").clicked() {
+    if secondary_button(ui, pal, "Delete zoom", ui.available_width(), true) {
         let id = z.id.clone();
         if ed.apply(EditKind::Other, now, move |p| delete_zoom(p, &id)) {
             ed.st.selected_zoom = None;
             ed.st.picking = false;
         }
     }
-    ui.separator();
+    ui.add_space(4.0);
 }
 
 /// A click on the preview while picking: set the focus of the selected zoom. `click` is `0..=1` in the
@@ -1698,22 +1788,21 @@ pub fn pick_focus(ed: &mut Editor, click: [f64; 2], camera: Option<[f64; 4]>, no
 
 fn cursor_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
     let c = &proj.cursor;
-    ui.horizontal(|ui| {
-        for (id, label) in CURSOR_STYLES {
-            if ui.selectable_label(c.style == id, label).clicked() {
-                ed.apply(EditKind::Other, now, |p| set_cursor(p, CursorField::Style(id.into())));
-            }
-        }
-    });
+    caption(ui, pal, "Pointer");
+    let labels: Vec<&str> = CURSOR_STYLES.iter().map(|(_, l)| *l).collect();
+    if let Some(i) = chip_strip(ui, pal, "cursor-style", &labels, CURSOR_STYLES.iter().position(|(id, _)| c.style == *id)) {
+        let id = CURSOR_STYLES[i].0;
+        ed.apply(EditKind::Other, now, |p| set_cursor(p, CursorField::Style(id.into())));
+    }
     if let Some(v) = row_slider(ui, pal, "Size", c.size, 0.5..=4.0, 1.0, "×") {
         ed.apply(EditKind::Cursor, now, |p| set_cursor(p, CursorField::Size(v)));
     }
     if let Some(v) = row_slider(ui, pal, "Smoothing", c.smoothing, 0.0..=1.0, 100.0, " %") {
         ed.apply(EditKind::Cursor, now, |p| set_cursor(p, CursorField::Smoothing(v)));
     }
-    let mut ring = c.click_effect == "ring";
-    if ui.checkbox(&mut ring, "Click ring").changed() {
-        ed.apply(EditKind::Other, now, |p| set_cursor(p, CursorField::ClickRing(ring)));
+    let ring = c.click_effect == "ring";
+    if toggle_row(ui, pal, "Click ring", ring) {
+        ed.apply(EditKind::Other, now, |p| set_cursor(p, CursorField::ClickRing(!ring)));
     }
     if let Some(v) = row_slider(ui, pal, "Motion blur", c.motion_blur, 0.0..=2.0, 100.0, " %") {
         ed.apply(EditKind::Cursor, now, |p| set_cursor(p, CursorField::MotionBlur(v)));
@@ -1723,14 +1812,12 @@ fn cursor_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: 
 
 fn style_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f64) {
     let s = &proj.style;
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Aspect");
-        for (id, label) in ASPECTS {
-            if ui.selectable_label(s.aspect == id, label).clicked() {
-                ed.apply(EditKind::Other, now, |p| set_style(p, StyleField::Aspect(id.into())));
-            }
-        }
-    });
+    caption(ui, pal, "Aspect");
+    let labels: Vec<&str> = ASPECTS.iter().map(|(_, l)| *l).collect();
+    if let Some(i) = chip_strip(ui, pal, "aspect", &labels, ASPECTS.iter().position(|(id, _)| s.aspect == *id)) {
+        let id = ASPECTS[i].0;
+        ed.apply(EditKind::Other, now, |p| set_style(p, StyleField::Aspect(id.into())));
+    }
     background_rows(ui, pal, ed, s, now);
     if let Some(v) = row_slider(ui, pal, "Padding", s.padding, 0.0..=0.45, 100.0, " %") {
         ed.apply(EditKind::Style, now, |p| set_style(p, StyleField::Padding(v)));
@@ -1751,14 +1838,13 @@ fn style_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f
 
 fn background_rows(ui: &mut Ui, pal: &Palette, ed: &mut Editor, s: &Style, now: f64) {
     let bg = &s.background;
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Background");
-        for (id, label) in [("color", "Colour"), ("gradient", "Gradient"), ("blur", "Blur")] {
-            if ui.selectable_label(bg.kind == id, label).clicked() {
-                ed.apply(EditKind::Other, now, |p| set_style(p, StyleField::BgKind(id.into())));
-            }
-        }
-    });
+    caption(ui, pal, "Background");
+    const KINDS: [(&str, &str); 3] = [("color", "Colour"), ("gradient", "Gradient"), ("blur", "Blur")];
+    let labels: Vec<&str> = KINDS.iter().map(|(_, l)| *l).collect();
+    if let Some(i) = chip_strip(ui, pal, "bg-kind", &labels, KINDS.iter().position(|(id, _)| bg.kind == *id)) {
+        let id = KINDS[i].0;
+        ed.apply(EditKind::Other, now, |p| set_style(p, StyleField::BgKind(id.into())));
+    }
     let stops = match bg.kind.as_str() {
         "color" => 1,
         "gradient" => bg.stops.len().min(4),
@@ -1776,13 +1862,10 @@ fn background_rows(ui: &mut Ui, pal: &Palette, ed: &mut Editor, s: &Style, now: 
         if let Some(v) = row_slider(ui, pal, "Angle", bg.angle, 0.0..=360.0, 1.0, "°") {
             ed.apply(EditKind::Style, now, |p| set_style(p, StyleField::BgAngle(v)));
         }
-        ui.horizontal_wrapped(|ui| {
-            for (i, (name, _, _)) in WALLPAPERS.iter().enumerate() {
-                if ui.small_button(*name).clicked() {
-                    ed.apply(EditKind::Other, now, |p| set_style(p, StyleField::Wallpaper(i)));
-                }
-            }
-        });
+        let names: Vec<&str> = WALLPAPERS.iter().map(|(n, _, _)| *n).collect();
+        if let Some(i) = chip_strip(ui, pal, "wallpaper", &names, None) {
+            ed.apply(EditKind::Other, now, |p| set_style(p, StyleField::Wallpaper(i)));
+        }
     } else if bg.kind == "blur" {
         note(ui, pal, "The recording itself, blurred.");
     }
@@ -1796,7 +1879,7 @@ fn background_rows(ui: &mut Ui, pal: &Palette, ed: &mut Editor, s: &Style, now: 
 /// Height of a clickable row in the panel.
 pub const HIT_H: f32 = 26.0;
 /// Height of a tab chip.
-const TAB_H: f32 = 24.0;
+const TAB_H: f32 = 26.0;
 /// How much of the accent tints a selected chip (low enough for the accent text on it to keep 4.5:1).
 pub const ACCENT_TINT: f32 = 0.10;
 /// Horizontal gap between chips.
@@ -1885,7 +1968,7 @@ fn chip_strip(ui: &mut Ui, pal: &Palette, salt: &str, labels: &[&str], current: 
             } else {
                 pal.field
             };
-            ui.painter().rect_filled(hit, 7.0, fill);
+            ui.painter().rect_filled(hit, crate::editor_ctl::CONTROL_RADIUS, fill);
             let color = if on { pal.accent_text } else { pal.sub_strong };
             ui.painter().text(hit.center(), egui::Align2::CENTER_CENTER, label, font(12.5), color);
             if resp.clicked() {
@@ -1905,8 +1988,7 @@ fn caption(ui: &mut Ui, pal: &Palette, text: &str) {
 fn card<R>(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::new()
         .fill(pal.field)
-        .stroke(egui::Stroke::new(1.0, pal.sep))
-        .corner_radius(8)
+        .corner_radius(crate::editor_ctl::EDITOR_RADIUS as u8)
         .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -1917,11 +1999,17 @@ fn card<R>(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
 }
 
 /// A full-width (or `width`-wide) secondary button; a disabled one is dimmed and inert.
-fn secondary_button(ui: &mut Ui, pal: &Palette, label: &str, width: f32, enabled: bool) -> bool {
+pub(crate) fn secondary_button(ui: &mut Ui, pal: &Palette, label: &str, width: f32, enabled: bool) -> bool {
+    secondary_button_tip(ui, pal, label, width, enabled, "")
+}
+
+/// [`secondary_button`] with a tooltip (none when `tip` is empty).
+fn secondary_button_tip(ui: &mut Ui, pal: &Palette, label: &str, width: f32, enabled: bool, tip: &str) -> bool {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, HIT_H), egui::Sense::hover());
     let resp = cell(ui, pal, rect, ui.id().with(("btn", label)), label, None);
+    let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tip) };
     let hover = enabled && resp.hovered();
-    ui.painter().rect_filled(rect, 7.0, if hover { pal.sel } else { pal.field.gamma_multiply(1.6) });
+    ui.painter().rect_filled(rect, crate::editor_ctl::CONTROL_RADIUS, if hover { pal.sel } else { pal.field.gamma_multiply(1.6) });
     let color = if enabled { pal.text } else { pal.sub };
     ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(12.5), color);
     enabled && resp.clicked()
@@ -1929,11 +2017,29 @@ fn secondary_button(ui: &mut Ui, pal: &Palette, label: &str, width: f32, enabled
 
 /// The main action of a tab: accent fill, white label.
 fn primary_button(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::hover());
+    primary_button_w(ui, pal, label, ui.available_width(), true)
+}
+
+/// [`primary_button`] of a given width; a disabled one is dimmed to the neutral fill with muted text and takes no click.
+pub(crate) fn primary_button_w(ui: &mut Ui, pal: &Palette, label: &str, width: f32, enabled: bool) -> bool {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::hover());
     let resp = cell(ui, pal, rect, ui.id().with(("primary", label)), label, None);
-    ui.painter().rect_filled(rect, 8.0, if resp.hovered() { pal.accent.gamma_multiply(1.15) } else { pal.accent });
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(13.0), egui::Color32::WHITE);
-    resp.clicked()
+    let hover = enabled && resp.hovered();
+    let fill = if !enabled {
+        pal.field.gamma_multiply(1.6)
+    } else if hover {
+        pal.accent.gamma_multiply(1.15)
+    } else {
+        pal.accent
+    };
+    ui.painter().rect_filled(rect, crate::editor_ctl::CONTROL_RADIUS + 2.0, fill);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(13.0), if enabled { egui::Color32::WHITE } else { pal.sub });
+    enabled && resp.clicked()
+}
+
+/// Width of `text` at `size`, for sizing a button to its label.
+pub(crate) fn text_width(ui: &Ui, text: &str, size: f32) -> f32 {
+    ui.painter().layout_no_wrap(text.into(), font(size), egui::Color32::WHITE).size().x
 }
 
 /// `label` on the left, a switch on the right; the whole row is the click target.
@@ -2281,7 +2387,7 @@ fn loupe_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, now: f
     }
     for l in &proj.loupes {
         let open = ed.st.selected_loupe.as_deref() == Some(l.id.as_str());
-        if ui.selectable_label(open, loupe_label(l)).clicked() {
+        if list_row(ui, pal, &loupe_label(l), open) {
             ed.st.selected_loupe = (!open).then(|| l.id.clone());
             ed.st.picking = false;
         }
@@ -2625,28 +2731,30 @@ fn transcript_words(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project,
 fn clips_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f64, now: f64) {
     use crate::editor_ctl::clock;
     let t = ed.t;
-    ui.horizontal_wrapped(|ui| {
-        if ui.button("Trim in").on_hover_text("Cut everything before the playhead").clicked() {
+    let w = (ui.available_width() - 5.0) / 2.0;
+    ui.horizontal(|ui| {
+        if secondary_button_tip(ui, pal, "Trim in", w, true, "Cut everything before the playhead") {
             ed.apply(EditKind::Other, now, |p| trim_in(p, t));
         }
-        if ui.button("Trim out").on_hover_text("Cut everything after the playhead").clicked() {
+        if secondary_button_tip(ui, pal, "Trim out", w, true, "Cut everything after the playhead") {
             ed.apply(EditKind::Other, now, |p| trim_out(p, t));
         }
-        if ui.button("Split").on_hover_text("Split the segment at the playhead").clicked() {
+    });
+    ui.horizontal(|ui| {
+        if secondary_button_tip(ui, pal, "Split", w, true, "Split the segment at the playhead") {
             ed.apply(EditKind::Split, now, |p| split_at(p, t));
         }
-        if ui.button("Delete segment").clicked() {
+        if secondary_button_tip(ui, pal, "Delete segment", w, true, "Cut the segment under the playhead") {
             ed.apply(EditKind::Other, now, |p| delete_segment(p, t));
         }
     });
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Speed");
-        for f in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0] {
-            if ui.selectable_label((ed.st.speed - f).abs() < 1e-9, format!("{f}×")).clicked() {
-                ed.st.speed = f;
-            }
-        }
-    });
+    caption(ui, pal, "Speed");
+    const SPEEDS: [f64; 7] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0];
+    let labels: Vec<String> = SPEEDS.iter().map(|f| format!("{f}×")).collect();
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    if let Some(i) = chip_strip(ui, pal, "speed", &refs, SPEEDS.iter().position(|f| (ed.st.speed - f).abs() < 1e-9)) {
+        ed.st.speed = SPEEDS[i];
+    }
     ui.horizontal(|ui| {
         let mut f = ed.st.speed;
         if ui
@@ -2655,12 +2763,13 @@ fn clips_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f
         {
             ed.st.speed = f;
         }
-        if ui.button("Apply to segment").clicked() {
+        let w = text_width(ui, "Apply to segment", 12.5) + 28.0;
+        if secondary_button(ui, pal, "Apply to segment", w, true) {
             let f = ed.st.speed;
             ed.apply(EditKind::Other, now, |p| set_segment_speed(p, t, f));
         }
     });
-    ui.separator();
+    ui.add_space(4.0);
     let Some(tl) = ed.timeline.clone() else { return };
     note(ui, pal, "Segments (click to move the playhead)");
     for (i, b) in crate::editor_ctl::segment_bars(&tl).iter().enumerate() {
@@ -2669,7 +2778,7 @@ fn clips_tab(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fps: f
             crate::editor_ctl::BarKind::Speed(f) => format!("  ·  {f}×"),
             _ => String::new(),
         };
-        if ui.selectable_label(here, format!("{}  {}–{}{speed}", i + 1, clock(b.start), clock(b.end))).clicked() {
+        if list_row(ui, pal, &format!("{}  {}–{}{speed}", i + 1, clock(b.start), clock(b.end)), here) {
             ed.seek(b.start, now, fps);
         }
     }
