@@ -35,7 +35,11 @@ pub(super) struct Perms {
 
 impl Perms {
     fn poll() -> Self {
-        Perms { accessibility: windows::accessibility_trusted(false), input_monitoring: windows::input_monitoring_granted(), automation: windows::finder_automation_granted() }
+        Perms {
+            accessibility: windows::accessibility_trusted(false),
+            input_monitoring: windows::input_monitoring_granted(),
+            automation: windows::finder_automation_granted(),
+        }
     }
 }
 
@@ -160,7 +164,6 @@ enum Tone {
 enum Status {
     Ok,
     Warn,
-    Neutral,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -342,7 +345,6 @@ impl Scene<'_> {
         let col = match kind {
             Status::Ok => GREEN,
             Status::Warn => AMBER,
-            Status::Neutral => self.pal.sub_strong,
         };
         let pos = self.at(x, y, i);
         self.p.circle_filled(pos + Vec2::new(4.0, 8.0), 3.5, self.ink(col, i));
