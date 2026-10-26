@@ -6,6 +6,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-26
+
 ## [Unreleased]
 
 ### Fixed
