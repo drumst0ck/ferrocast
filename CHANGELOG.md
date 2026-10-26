@@ -8,8 +8,6 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [0.2.2] - 2026-10-26
 
-## [Unreleased]
-
 ### Fixed
 - **Welcome tour permissions**: no system permission window appears when Ferrocast opens for the first time any more; macOS asks for Input Monitoring only when the tour reaches the permissions slide (snippet expansion starts after the tour). The tour no longer closes when it loses focus or when you press Grant: it stays open without covering System Settings or the permission dialogs, shows a Dock icon while it runs so you can come back to it, and the hotkey brings it to the front instead of hiding it.
 - **Automation for Finder**: the permissions slide has a Grant button that makes macOS ask right away, so Ferrocast appears in System Settings → Privacy & Security → Automation, and the row shows Granted live like the other two.
