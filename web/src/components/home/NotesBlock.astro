@@ -1,0 +1,49 @@
+---
+/*
+ * Home "Notes" section: the real Notes window picture, the shortcuts as keycaps, and one small live thing:
+ * a real editable field where Markdown typing becomes formatting (src/scripts/notes-typing.js).
+ * Without script the field is a static sample.
+ */
+import type { HomeCopy } from '../../i18n/home.en';
+
+interface Props { t: HomeCopy; lang: 'en' | 'es' }
+const { t, lang } = Astro.props;
+const n = t.notes;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const docsHref = `${base}${lang === 'es' ? '/es' : ''}/docs/launcher/notes/`;
+// Sample kinds: h heading, b bullet, t task, td done task, p paragraph. **x** is bold.
+const inline = (s: string) => s.split('**');
+---
+<section class="nt" id="notes" aria-labelledby="h-nt">
+  <div class="nt-in wrap">
+    <div class="nt-head">
+      <h2 id="h-nt" data-reveal>{n.title}</h2>
+      <p data-reveal style="transition-delay:80ms">{n.lead}</p>
+    </div>
+    <div class="nt-try" data-reveal style="transition-delay:160ms">
+      <div class="nt-field" data-ui>
+        <div class="nt-doc" id="nt-doc" data-notes-field data-label={n.fieldAria} data-describedby="nt-hint">
+          {n.sample.map(([k, text]) => (
+            <div data-k={k === 'td' ? 't' : k} data-done={k === 'td' ? 'true' : undefined}>{text === '' ? <br /> : inline(text).map((part, i) => (i % 2 ? <strong>{part}</strong> : part))}</div>
+          ))}
+        </div>
+      </div>
+      <p class="nt-hint" id="nt-hint"><span>{n.hintLead}</span> {n.triggers.map(([code, what]) => <span class="nt-trig"><code>{code}</code> {what}</span>)}<span class="nt-task">{n.hintTask}</span></p>
+    </div>
+    <figure class="nt-fig" data-reveal style="transition-delay:120ms">
+      <img src={`${base}/img/notes.jpg`} alt={n.imgAlt} width="1500" height="950" loading="lazy" decoding="async" />
+    </figure>
+    <div class="nt-side">
+    <ul class="nt-keys" aria-label={n.keysAria}>
+      {n.keys.map(([combo, what], i) => <li data-reveal style={`transition-delay:${i * 70}ms`}><span class="combo">{(combo as string[]).map((k) => <kbd>{k}</kbd>)}</span><span>{what}</span></li>)}
+    </ul>
+    <ul class="nt-facts" aria-label={n.factsAria}>
+      {n.facts.map(([h, d], i) => <li data-reveal style={`transition-delay:${(i % 3) * 70}ms`}><b>{h}</b><span>{d}</span></li>)}
+    </ul>
+    <a class="tl nt-doc-link" data-reveal href={docsHref}>{n.docs} →</a>
+    </div>
+  </div>
+</section>
+<script>
+  import '../../scripts/notes-typing.js';
+</script>
