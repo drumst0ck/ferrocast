@@ -115,11 +115,14 @@ impl eframe::App for App {
             }
         }
         self.expire_toasts();
+        if self.onboarding && !matches!(self.view(), View::Welcome) {
+            self.finish_onboarding();
+        }
         if self.visible {
             let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
             if focused {
                 self.had_focus = true;
-            } else if self.had_focus && self.shown_at.elapsed() > Duration::from_millis(400) {
+            } else if self.had_focus && !self.onboarding && self.shown_at.elapsed() > Duration::from_millis(400) {
                 self.hide();
             }
             // compact mode

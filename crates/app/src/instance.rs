@@ -18,6 +18,21 @@ pub fn acquire(dir: &Path) -> Option<std::fs::File> {
     (unsafe { flock(f.as_raw_fd(), LOCK_EX | LOCK_NB) } == 0).then_some(f)
 }
 
+/// Like [`acquire`], but waits up to `wait` for the previous copy to exit. macOS's "Quit & Reopen"
+/// after a permission grant starts the new copy while the old one is still shutting down.
+pub fn acquire_wait(dir: &Path, wait: std::time::Duration) -> Option<std::fs::File> {
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(f) = acquire(dir) {
+            return Some(f);
+        }
+        if start.elapsed() >= wait {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 pub fn log_path(dir: &Path) -> PathBuf {
     dir.join("ferrocast.log")
 }

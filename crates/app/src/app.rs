@@ -1022,6 +1022,8 @@ pub struct App {
     web_pending: Option<ferrocast_core::translate::Browser>,
     visible: bool,
     had_focus: bool,
+    /// First-run tour in progress: the window stays open and never hides on blur until it ends.
+    onboarding: bool,
     shown_at: Instant,
     hidden_at: Instant,
     cur_height: f32,
@@ -1185,7 +1187,6 @@ impl App {
             keywords: Default::default(),
         });
         services::start_clipboard(shared.clone(), bus.clone());
-        services::start_expansion(shared.clone());
         services::start_wheel(shared.clone(), bus.clone());
         let update_poller = services::start_update_poller(shared.clone(), bus.clone());
         if let Some(exe) = instance::running_exe() {
@@ -1279,6 +1280,7 @@ impl App {
             web_pending: None,
             visible: !hidden,
             had_focus: false,
+            onboarding: false,
             shown_at: Instant::now(),
             hidden_at: Instant::now(),
             cur_height: ui::HEIGHT,
@@ -1328,6 +1330,14 @@ impl App {
             app.stack.push(View::Welcome);
             // only this first-run path plays the intro; reopening "Welcome" from search does not
             app.begin_intro(tour::reduce_pref());
+            // Permission prompts (the snippet tap asks for Input Monitoring) wait for the tour's
+            // permissions slide, and the window drops its always-on-top level so the system
+            // dialogs and System Settings can sit above it.
+            app.onboarding = true;
+            App::set_dock_icon(true);
+            app.ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
+        } else {
+            services::start_expansion(app.shared.clone());
         }
         app.reload_scripts();
         app.set_theme();
@@ -1750,6 +1760,18 @@ impl App {
         self.ctx.request_repaint();
     }
 
+    /// Ends the first-run guard (window level back to always-on-top) and starts the services that
+    /// were held back so no permission prompt appeared before the tour reached its slide.
+    fn finish_onboarding(&mut self) {
+        if !self.onboarding {
+            return;
+        }
+        self.onboarding = false;
+        Self::set_dock_icon(false);
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
+        services::start_expansion(self.shared.clone());
+    }
+
     fn hide(&mut self) {
         self.editor_flush();
         // a maximised editor goes back to the launcher's size before the window disappears
@@ -1770,8 +1792,25 @@ impl App {
         }
     }
 
+    /// Activation policy of the app: during the first-run tour it gets a Dock icon, so the user can
+    /// come back to it after System Settings covers it; afterwards it is a menu-less accessory again.
+    fn set_dock_icon(on: bool) {
+        use objc2_app_kit::NSApplicationActivationPolicy as P;
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            let policy = if on { P::Regular } else { P::Accessory };
+            objc2_app_kit::NSApplication::sharedApplication(mtm).setActivationPolicy(policy);
+        }
+    }
+
     fn toggle(&mut self) {
-        if self.visible {
+        if self.onboarding && self.visible {
+            // the tour never hides: the hotkey just brings it back in front of System Settings
+            if let Some(mtm) = objc2::MainThreadMarker::new() {
+                #[allow(deprecated)]
+                objc2_app_kit::NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+            }
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        } else if self.visible {
             self.hide();
         } else {
             self.show();

@@ -30,11 +30,12 @@ const AMBER: Color32 = Color32::from_rgb(255, 184, 77);
 pub(super) struct Perms {
     pub accessibility: bool,
     pub input_monitoring: bool,
+    pub automation: bool,
 }
 
 impl Perms {
     fn poll() -> Self {
-        Perms { accessibility: windows::accessibility_trusted(false), input_monitoring: windows::input_monitoring_granted() }
+        Perms { accessibility: windows::accessibility_trusted(false), input_monitoring: windows::input_monitoring_granted(), automation: windows::finder_automation_granted() }
     }
 }
 
@@ -76,7 +77,7 @@ impl Tour {
             from: 0,
             changed: None,
             injected: None,
-            perms: Perms { accessibility: false, input_monitoring: false },
+            perms: Perms { accessibility: false, input_monitoring: false, automation: false },
             polled: f64::NEG_INFINITY,
             reduce: None,
             shots: [None, None, None],
@@ -168,6 +169,7 @@ enum Action {
     Finish,
     GrantAccessibility,
     GrantInputMonitoring,
+    GrantAutomation,
     OpenPane(&'static str),
 }
 
@@ -539,9 +541,9 @@ fn slide_permissions(s: &Scene) -> Vec<String> {
         ("Input Monitoring", "Lets snippets expand as you type. Everything else works without it.", im, im_state),
         (
             "Automation: Finder",
-            "Convert Finder Selection. macOS asks the first time you use it, and it cannot be checked beforehand.",
-            Status::Neutral,
-            "Asked on first use",
+            "Convert Finder Selection. Press Grant so macOS asks now; Ferrocast only appears in the System Settings list after it has asked.",
+            if s.perms.automation { Status::Ok } else { Status::Warn },
+            if s.perms.automation { "Granted" } else { "Not granted" },
         ),
     ];
     let mut lines = Vec::new();
@@ -564,8 +566,9 @@ fn slide_permissions(s: &Scene) -> Vec<String> {
                 let w = s.button(i, bx, y, "Grant", true, false, Action::GrantInputMonitoring);
                 s.button(i, bx + w + 8.0, y, "Open System Settings", false, false, Action::OpenPane(PANE_INPUT));
             }
-            2 => {
-                s.button(i, bx, y, "Open System Settings", false, false, Action::OpenPane(PANE_AUTOMATION));
+            2 if !s.perms.automation => {
+                let w = s.button(i, bx, y, "Grant", true, false, Action::GrantAutomation);
+                s.button(i, bx + w + 8.0, y, "Open System Settings", false, false, Action::OpenPane(PANE_AUTOMATION));
             }
             _ => {}
         }
@@ -737,17 +740,34 @@ impl App {
                 // macOS shows its own prompt only the first time, so a grant also opens the
                 // pane: otherwise a second click would do nothing visible.
                 Action::GrantAccessibility => {
-                    self.hide();
+                    if !self.onboarding {
+                        self.hide();
+                    }
                     windows::accessibility_trusted(true);
                     open_pane(PANE_ACCESSIBILITY);
                 }
                 Action::GrantInputMonitoring => {
-                    self.hide();
+                    if !self.onboarding {
+                        self.hide();
+                    }
                     windows::request_input_monitoring();
                     open_pane(PANE_INPUT);
                 }
+                // An app is only listed under Automation after it has sent an Apple Event to the
+                // target, so ask macOS for Finder now (off the UI thread: the prompt blocks).
+                Action::GrantAutomation => {
+                    std::thread::spawn(|| {
+                        // granted: nothing to do; denied earlier or failed: the prompt will not
+                        // show again, so send the user to the pane
+                        if !matches!(windows::request_finder_automation(), Ok(true)) {
+                            open_pane(PANE_AUTOMATION);
+                        }
+                    });
+                }
                 Action::OpenPane(pane) => {
-                    self.hide();
+                    if !self.onboarding {
+                        self.hide();
+                    }
                     open_pane(pane);
                 }
             }

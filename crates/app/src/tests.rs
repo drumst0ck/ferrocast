@@ -68,6 +68,7 @@ fn fixture() -> App {
         prev_pid: None,
         visible: true,
         had_focus: false,
+        onboarding: false,
         shown_at: Instant::now(),
         hidden_at: Instant::now(),
         cur_height: ui::HEIGHT,
@@ -8855,7 +8856,7 @@ fn tour_app(slide: usize) -> App {
     app.stack = vec![View::Root, View::Welcome];
     app.tour = tour::Tour::new();
     app.tour.slide = slide;
-    app.tour.injected = Some(tour::Perms { accessibility: false, input_monitoring: false });
+    app.tour.injected = Some(tour::Perms { accessibility: false, input_monitoring: false, automation: false });
     app
 }
 
@@ -9082,12 +9083,12 @@ fn perm_lines(app: &App) -> Vec<String> {
 #[test]
 fn permissions_slide_status_follows_the_checked_value() {
     let mut app = tour_app(tour::PERMS_SLIDE);
-    app.tour.injected = Some(tour::Perms { accessibility: true, input_monitoring: false });
+    app.tour.injected = Some(tour::Perms { accessibility: true, input_monitoring: false, automation: false });
     render(&mut app, vec![]);
     let l = perm_lines(&app);
     assert!(l.contains(&"Accessibility: Granted".to_string()), "{l:?}");
     assert!(l.contains(&"Input Monitoring: Not granted".to_string()), "{l:?}");
-    app.tour.injected = Some(tour::Perms { accessibility: false, input_monitoring: true });
+    app.tour.injected = Some(tour::Perms { accessibility: false, input_monitoring: true, automation: false });
     render(&mut app, vec![]);
     let l = perm_lines(&app);
     assert!(l.contains(&"Accessibility: Not granted".to_string()), "{l:?}");

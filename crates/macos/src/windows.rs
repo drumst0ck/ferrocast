@@ -259,6 +259,51 @@ pub fn input_monitoring_granted() -> bool {
 
 /// Ask for Input Monitoring: shows the system prompt the first time and adds Ferrocast to the list
 /// in System Settings. Returns whether access is already granted.
+/// Ask macOS for Automation access to Finder, in this process (so Ferrocast itself is listed under
+/// Privacy & Security > Automation). BLOCKS while the system prompt is open: call off the main
+/// thread. `Ok(true)` granted, `Ok(false)` denied earlier (no prompt is shown again), `Err` otherwise.
+pub fn request_finder_automation() -> Result<bool, i32> {
+    finder_automation(true)
+}
+
+/// Is Automation for Finder granted? Silent: never shows the prompt.
+pub fn finder_automation_granted() -> bool {
+    matches!(finder_automation(false), Ok(true))
+}
+
+fn finder_automation(ask: bool) -> Result<bool, i32> {
+    use std::ffi::c_void;
+    #[repr(C)]
+    struct AEDesc {
+        descriptor_type: u32,
+        data_handle: *mut c_void,
+    }
+    #[link(name = "CoreServices", kind = "framework")]
+    extern "C" {
+        fn AECreateDesc(type_code: u32, data: *const c_void, size: isize, result: *mut AEDesc) -> i16;
+        fn AEDisposeDesc(desc: *mut AEDesc) -> i16;
+        fn AEDeterminePermissionToAutomateTarget(target: *const AEDesc, class: u32, id: u32, ask: bool) -> i32;
+    }
+    const TYPE_BUNDLE_ID: u32 = u32::from_be_bytes(*b"bund");
+    const WILDCARD: u32 = u32::from_be_bytes(*b"****");
+    const DENIED: i32 = -1743;
+    let bundle = b"com.apple.finder";
+    let mut desc = AEDesc { descriptor_type: 0, data_handle: std::ptr::null_mut() };
+    unsafe {
+        let e = AECreateDesc(TYPE_BUNDLE_ID, bundle.as_ptr() as *const c_void, bundle.len() as isize, &mut desc);
+        if e != 0 {
+            return Err(e as i32);
+        }
+        let r = AEDeterminePermissionToAutomateTarget(&desc, WILDCARD, WILDCARD, ask);
+        AEDisposeDesc(&mut desc);
+        match r {
+            0 => Ok(true),
+            DENIED => Ok(false),
+            other => Err(other),
+        }
+    }
+}
+
 pub fn request_input_monitoring() -> bool {
     objc2_core_graphics::CGRequestListenEventAccess()
 }

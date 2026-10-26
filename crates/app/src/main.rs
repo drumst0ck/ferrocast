@@ -31,7 +31,7 @@ fn main() -> eframe::Result {
     let prof = std::env::var_os("FERROCAST_PROFILE").is_some();
     let data_dir = ferrocast_core::storage::Store::default_location().root;
     // Two copies would fight over the global hotkey and the clipboard history.
-    let Some(_instance_lock) = instance::acquire(&data_dir) else {
+    let Some(_instance_lock) = instance::acquire_wait(&data_dir, std::time::Duration::from_secs(8)) else {
         eprintln!("Ferrocast is already running.");
         return Ok(());
     };
