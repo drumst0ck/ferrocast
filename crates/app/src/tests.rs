@@ -9063,6 +9063,27 @@ fn every_tour_slide_renders_at_the_window_size() {
 }
 
 #[test]
+fn the_record_and_notes_slides_render_and_the_deck_advances_past_them() {
+    // slide 5 = "Record your screen.", slide 6 = "Notes that float."
+    assert_eq!(tour::SLIDES, 9);
+    assert_eq!(tour::PERMS_SLIDE, 7, "the permissions slide follows the two new ones");
+    for dark in [true, false] {
+        for slide in [5, 6] {
+            let mut app = tour_app(slide);
+            app.dark = dark;
+            for _ in 0..3 {
+                render(&mut app, vec![]);
+            }
+            assert_eq!(app.tour.slide, slide);
+            tap(&mut app, Key::ArrowRight);
+            assert_eq!(app.tour.slide, slide + 1, "the slide index advances");
+            render(&mut app, vec![]);
+            render(&mut app, vec![]);
+        }
+    }
+}
+
+#[test]
 fn tour_footer_matches_the_deck() {
     let mut app = tour_app(0);
     assert_eq!(app.view().footer_hints().len(), 0, "the tour state lives in App, not in the view");

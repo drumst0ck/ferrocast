@@ -672,7 +672,7 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             }
             Ok("welcome") => {
                 app.push(View::Welcome);
-                // dev aid: FERROCAST_TOUR_SLIDE=<0..6> renders that slide
+                // dev aid: FERROCAST_TOUR_SLIDE=<0..8> renders that slide
                 if let Some(n) = std::env::var("FERROCAST_TOUR_SLIDE").ok().and_then(|v| v.parse().ok()) {
                     app.tour.go(n);
                 }
