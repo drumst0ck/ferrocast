@@ -215,6 +215,26 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             Ok("emoji") => app.push(View::Emoji),
             Ok("settings") => app.push(View::Settings),
             Ok("notes") => app.push(View::Notes),
+            // the recording editor on the `.ferrocast` folder named by FERROCAST_FILES (see scripts/make_recording_fixture.sh);
+            // FERROCAST_EDITOR_T=<seconds> puts the playhead there. The shot waits for the first preview frame.
+            Ok("editor") => {
+                if let Some(dir) = dev_fixture_path() {
+                    app.open_editor(dir);
+                }
+            }
+            // the Recordings browser on the folder holding the fixture recording(s): FERROCAST_FILES is that folder
+            // or one `.ferrocast` project inside it
+            Ok("recordings") => {
+                if let Some(p) = dev_fixture_path() {
+                    let dir = if p.extension().is_some_and(|e| e == "ferrocast") {
+                        p.parent().map(std::path::Path::to_path_buf).unwrap_or(p)
+                    } else {
+                        p
+                    };
+                    app.settings.capture.recordings_folder = dir.to_string_lossy().into_owned();
+                    app.run_builtin(Builtin::Recordings);
+                }
+            }
             // design-review shots of Search Notion: `notion` reads the real Keychain (no token: the connect
             // state), `notion-list` shows a fixed list without any request
             Ok("notion") => app.run_builtin(Builtin::SearchNotion),
@@ -790,8 +810,27 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
             app.panel = Some(ActionPanel { actions, query: String::new(), sel: 0, item });
         }
     }
-    if n == 40 {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+    // the editor needs its render worker: wait (up to ~20 s of frames) for the first preview, then let the layout settle
+    let editor_t = std::env::var("FERROCAST_EDITOR_T").ok().and_then(|v| v.parse::<f64>().ok());
+    if let (Some(ed), Some(t)) = (app.editor.as_mut(), editor_t) {
+        // the playhead moves once the project is loaded (opening puts it at the start)
+        static SEEKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if ed.project.is_some() && !SEEKED.swap(true, Ordering::Relaxed) {
+            ed.t = t;
+        }
+    }
+    let editor_ready = !matches!(std::env::var("FERROCAST_VIEW").as_deref(), Ok("editor"))
+        || app.editor.as_ref().is_some_and(|e| e.tex.is_some() && e.shown_t.is_some_and(|s| editor_t.is_none_or(|t| (s - t).abs() < 0.05)))
+        || n >= 1200;
+    if editor_ready && n >= 40 {
+        static READY_AT: AtomicU32 = AtomicU32::new(0);
+        let at = match READY_AT.compare_exchange(0, n, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => n,
+            Err(first) => first,
+        };
+        if n >= at + 20 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
     }
     let shot = ctx.input(|i| {
         i.events.iter().find_map(|e| match e {
@@ -805,6 +844,11 @@ fn dev_screenshot(ctx: &Context, app: &mut App) {
         std::process::exit(0);
     }
     ctx.request_repaint();
+}
+
+/// The first path of `FERROCAST_FILES` (dev screenshot modes only).
+fn dev_fixture_path() -> Option<std::path::PathBuf> {
+    std::env::var("FERROCAST_FILES").ok()?.split(':').find(|s| !s.is_empty()).map(std::path::PathBuf::from).filter(|p| p.exists())
 }
 
 /// Shorten `text` with an ellipsis so it fits `max_w` points.

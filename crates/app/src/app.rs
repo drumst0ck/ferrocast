@@ -5604,7 +5604,7 @@ impl App {
 
     /// Open the studio editor on a project folder: a render worker loads it (applying the auto zooms
     /// in memory when it has none and `capture.auto_zoom` is on) and renders the preview frames.
-    fn open_editor(&mut self, dir: PathBuf) {
+    pub(crate) fn open_editor(&mut self, dir: PathBuf) {
         self.editor_flush();
         let exe = self.capture.exe.clone();
         let root = self.store.root.clone();
