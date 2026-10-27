@@ -8,9 +8,13 @@ describe('summaryAccessGranted', () => {
     delete process.env[KEY];
   });
 
-  it('denies when the env var is unset', () => {
+  it('allows anyone when the env var is unset or empty', () => {
     delete process.env[KEY];
-    expect(summaryAccessGranted('Bearer secret', null)).toBe(false);
+    expect(summaryAccessGranted(undefined, null)).toBe(true);
+    process.env[KEY] = '';
+    expect(summaryAccessGranted(undefined, null)).toBe(true);
+    process.env[KEY] = '   ';
+    expect(summaryAccessGranted(undefined, null)).toBe(true);
   });
 
   it('denies a missing or wrong token', () => {
