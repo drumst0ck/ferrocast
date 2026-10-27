@@ -166,6 +166,7 @@ export const es: AltCopy = {
     h: 'Sigue leyendo',
     links: [
       ['Guía de migración desde Raycast', '/es/docs/getting-started/migrating-from-raycast/'],
+      ['Raycast vs Alfred vs Spotlight', '/es/raycast-vs-alfred-vs-spotlight/'],
       ['Instalación', '/es/docs/getting-started/install/'],
       ['Datos y privacidad', '/es/docs/reference/data-and-privacy/'],
       ['Preguntas frecuentes de la documentación', '/es/docs/reference/faq/'],

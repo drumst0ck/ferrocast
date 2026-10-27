@@ -1,0 +1,92 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../../components/SiteHeader.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
+import Crumbs from '../../components/seo/Crumbs.astro';
+import SeoNav from '../../components/seo/SeoNav.astro';
+import { dmgUrl } from '../../data/install';
+import { breadcrumbs, SITE } from '../../lib/seo/jsonld';
+import { inline, plain } from '../../lib/seo/markup';
+import { page as t } from '../../lib/seo/launcher-compare';
+import '../../styles/seo.css';
+
+const canonical = `${SITE}${t.path}`;
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    inLanguage: 'es',
+    mainEntity: t.faq.items.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: plain(a) } })),
+  },
+  breadcrumbs(t.crumbs),
+];
+---
+<Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd} lang="es">
+  <SiteHeader lang="es">
+    <SeoNav slot="nav" lang="es" />
+    <span slot="cta">Instalar</span>
+  </SiteHeader>
+  <main class="seo cmp4" id="main">
+    <Crumbs items={t.crumbs} />
+    <h1>{t.h1}</h1>
+    <p class="lead">{t.lead}</p>
+
+    <h2>{t.short.h}</h2>
+    <ul>{t.short.items.map((s) => <li set:html={inline(s)} />)}</ul>
+
+    <h2 id="tabla">{t.table.h}</h2>
+    <div class="c-table">
+      <table>
+        <caption class="sr-only">{t.table.caption}</caption>
+        <thead><tr>{t.table.cols.map((c, i) => <th scope="col">{i === 0 ? <span class="sr-only">Tema</span> : c}</th>)}</tr></thead>
+        <tbody>{t.table.rows.map(([label, ...cells]) => (<tr><th scope="row">{label}</th>{cells.map((c) => <td>{c}</td>)}</tr>))}</tbody>
+      </table>
+    </div>
+    <p class="fine">{t.table.checked}</p>
+
+    <h2>{t.apps.h}</h2>
+    {t.apps.items.map(([h, p]) => (<div><h3>{h}</h3><p set:html={inline(p)} /></div>))}
+
+    <h2>{t.enough.h}</h2>
+    {t.enough.paras.map((p) => <p set:html={inline(p)} />)}
+
+    <h2>{t.faq.h}</h2>
+    <div class="c-faq">
+      {t.faq.items.map(([q, a]) => (<details><summary>{q}</summary><p set:html={inline(a)} /></details>))}
+    </div>
+
+    <p class="c-cta"><a class="btn" href={dmgUrl}>Descargar Ferrocast</a><span class="fine">Gratis · MIT · Apple Silicon · sin cuenta</span></p>
+
+    <h2>{t.sources.h}</h2>
+    <ul class="c-src">
+      {[...t.sources.apple, ...t.sources.rivals].map(([label, href]) => <li><a class="tl" href={href} rel="noopener">{label}</a></li>)}
+    </ul>
+    <p class="fine">{t.disclaimer}</p>
+
+    <h2>{t.more.h}</h2>
+    <ul class="chips">{t.more.links.map(([label, href]) => <li><a href={href}>{label}</a></li>)}</ul>
+  </main>
+  <SiteFooter lang="es" />
+</Base>
+
+<style>
+  .cmp4 .fine { font-size: var(--step-small); color: var(--muted); }
+  .cmp4 h3 { font-size: 1.2rem; margin-bottom: 6px; }
+  .cmp4 h2[id] { scroll-margin-top: 110px; }
+  .cmp4 .c-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .cmp4 .c-table { overflow-x: auto; border-radius: var(--radius); box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); }
+  .cmp4 table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: var(--step-small); line-height: 1.5; }
+  .cmp4 th, .cmp4 td { text-align: left; vertical-align: top; padding: 12px 14px; border-top: 1px solid rgba(255,255,255,.06); }
+  .cmp4 thead th { border-top: 0; background: var(--surface); font-weight: 500; }
+  .cmp4 tbody th { font-weight: 500; color: var(--ink); }
+  .cmp4 td { color: var(--muted); }
+  .cmp4 .c-src { font-size: var(--step-small); }
+  .cmp4 .c-faq summary { cursor: pointer; font-weight: 500; }
+  .cmp4 .c-faq details { padding: 14px 0; border-top: 1px solid rgba(255,255,255,.06); }
+  .cmp4 .c-faq p { margin-top: 8px; }
+  .cmp4 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (prefers-color-scheme: light) {
+    .cmp4 .c-table { box-shadow: inset 0 0 0 1px rgba(0,0,0,.07); }
+    .cmp4 th, .cmp4 td, .cmp4 .c-faq details { border-top-color: rgba(0,0,0,.07); }
+  }
+</style>
