@@ -1,0 +1,9 @@
+---
+/** Dark-only. Starlight's default reads localStorage and prefers-color-scheme. */
+---
+<script is:inline>
+	document.documentElement.dataset.theme = 'dark';
+	window.StarlightThemeProvider = {
+		updatePickers() {},
+	};
+</script>
