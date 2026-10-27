@@ -80,7 +80,9 @@ p + p { margin-top: 0.9em; }
 @media (hover: hover) and (pointer: fine) {
   .link:hover { text-decoration-color: currentColor; }
 }
+/* beasties:exclude start */
 .field { width: 100%; min-height: 3rem; padding: 0.7rem 0.9rem; background: var(--surface); border: 0; border-radius: var(--radius); font-size: max(1rem, var(--step-body)); }
+/* beasties:exclude end */
 
 /* ---------- motion helpers (content stays visible without JavaScript) ---------- */
 .lines .line { display: block; overflow: hidden; padding-bottom: 0.08em; margin-bottom: -0.08em; }
@@ -92,12 +94,14 @@ p + p { margin-top: 0.9em; }
   @media (max-width: 61.99em) {
     .js .hero h1.lines [data-line] { animation: none; opacity: 1; transform: none; }
   }
+  /* beasties:exclude start */
   .js [data-reveal] { opacity: 0; transform: translateY(24px); transition: opacity 700ms var(--ease-out), transform 900ms var(--ease-out); }
   .js [data-reveal].is-in { opacity: 1; transform: none; }
   .js .shutter[data-reveal] { opacity: 1; transform: none; clip-path: inset(0 0 100% 0); transition: clip-path 1100ms var(--ease-in-out); }
   .js .shutter[data-reveal] img { transform: scale(1.12); transition: transform 1500ms var(--ease-soft); }
   .js .shutter[data-reveal].is-in { clip-path: inset(0); }
   .js .shutter[data-reveal].is-in img { transform: none; }
+  /* beasties:exclude end */
 }
 @media (prefers-reduced-motion: reduce) {
   .js .hero h1.lines [data-line] { animation: none; opacity: 1; transform: none; }

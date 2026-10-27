@@ -1,5 +1,6 @@
 /* Styles for the Files page and the home "Convert & file tools" section. Everything is scoped by a
    component class prefix (fx-, kx, ctr, sb, wd-, mx-, tc-, fa-). Tokens and easing come from base.css/site.css. */
+/* beasties:exclude start */
 :root { --c-convert: #ff8c3c; --c-tools: #56c2ff; --c-actions: #59d499; }
 [hidden] { display: none !important; }
 .fx-main { display: block; }
@@ -174,3 +175,4 @@ html:not(.js) .mx-controls, html:not(.js) .mx-count { display: none; }
   .mx-row { border-top-color: rgba(0,0,0,.07); }
   .tc-table th, .tc-table td { border-top-color: rgba(0,0,0,.07); }
 }
+/* beasties:exclude end */

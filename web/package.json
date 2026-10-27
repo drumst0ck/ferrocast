@@ -6,6 +6,7 @@
     "dev": "astro dev",
     "prebuild": "node scripts/sync-changelog.mjs",
     "lastmod:sync": "node scripts/sync-lastmod.mjs",
+    "critical:home": "node scripts/generate-home-critical.mjs",
     "build": "astro build",
     "preview": "astro preview",
     "gen:docs": "tsx scripts/gen-docs.ts",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@types/sanitize-html": "^2.16.2",
+    "beasties": "^0.5.5",
     "drizzle-kit": "^0.31.11",
     "tsx": "^4.23.15",
     "vitest": "^4.1.12"
