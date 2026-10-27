@@ -28,6 +28,8 @@ pub enum EffectKind {
 pub enum Msg {
     Hotkey(u32),
     Tray(String),
+    /// From the tiling worker thread; handled on the UI thread like any other message.
+    Tiling(ferrocast_macos::tiling::Event),
     /// Result of a feed check: `Ok(None)` means no stable release was found.
     UpdateChecked {
         manual: bool,
@@ -851,9 +853,17 @@ impl Hotkeys {
             Err(e) => errors.push(format!("{spec}: {e}")),
         };
         add(self, &s.launcher_hotkey, "__launcher");
-        let ids: std::collections::BTreeSet<&str> =
-            s.commands.keys().map(String::as_str).chain(ferrocast_core::models::DEFAULT_HOTKEYS.iter().map(|(id, _)| *id)).collect();
+        let ids: std::collections::BTreeSet<&str> = s
+            .commands
+            .keys()
+            .map(String::as_str)
+            .chain(ferrocast_core::models::DEFAULT_HOTKEYS.iter().chain(ferrocast_core::tiling::DEFAULT_HOTKEYS).map(|(id, _)| *id))
+            .collect();
         for id in ids {
+            // tiling shortcuts grab global keys: only while tiling is on
+            if id.starts_with("tiling:") && !s.tiling_enabled {
+                continue;
+            }
             if let Some(h) = s.hotkey(id) {
                 add(self, h, id);
             }
@@ -921,8 +931,14 @@ pub fn key_code_name(k: egui::Key) -> Option<String> {
 // Tray
 
 /// Tray entries above the separator, as (id, label).
-pub fn tray_items() -> [(&'static str, &'static str); 4] {
-    [("open", "Open Ferrocast"), ("clipboard", "Clipboard History"), ("settings", "Settings…"), ("check_updates", "Check for Updates…")]
+pub fn tray_items() -> [(&'static str, &'static str); 5] {
+    [
+        ("open", "Open Ferrocast"),
+        ("clipboard", "Clipboard History"),
+        ("tiling_pause", "Pause or Resume Tiling"),
+        ("settings", "Settings…"),
+        ("check_updates", "Check for Updates…"),
+    ]
 }
 
 /// Tray entries above the separator: `Stop Recording` leads while a recording runs.

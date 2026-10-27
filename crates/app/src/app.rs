@@ -975,6 +975,10 @@ pub struct App {
     scripts: Vec<ScriptCommand>,
     base: Vec<Item>,
     hotkeys: Option<Hotkeys>,
+    tiling: Option<ferrocast_macos::tiling::Handle>,
+    tiling_paused: bool,
+    /// Whether the tiling hotkeys are currently registered.
+    tiling_hotkeys: bool,
     /// Screenshot commands: availability and the once-per-session shortcut sentence.
     capture: crate::capture_ctl::CaptureState,
     /// The select-then-act flow in progress (Capture Area, Window, Screen and Scrolling), at most one.
@@ -1252,6 +1256,9 @@ impl App {
             scripts: vec![],
             base: vec![],
             hotkeys,
+            tiling: None,
+            tiling_paused: false,
+            tiling_hotkeys: false,
             capture: crate::capture_ctl::CaptureState::detect(instance::running_exe().unwrap_or_default()),
             selection: Default::default(),
             finder: Default::default(),
@@ -1340,6 +1347,7 @@ impl App {
             services::start_expansion(app.shared.clone());
         }
         app.reload_scripts();
+        app.sync_tiling();
         app.set_theme();
         // Recently Deleted notes past their retention go once per start
         app.notes_do(|c, d| c.startup(d));
@@ -1490,6 +1498,93 @@ impl App {
         self.persist("settings.json", &v);
         *self.shared.settings.write().unwrap() = self.settings.clone();
         self.rebuild();
+        self.sync_tiling();
+    }
+
+    /// Tell the tiling worker the current settings; the worker is only started once tiling or
+    /// hover activation is switched on, so with the defaults nothing runs.
+    fn sync_tiling(&mut self) {
+        let s = &self.settings;
+        let on = s.tiling_enabled || s.tiling_hover_activate;
+        if self.tiling.is_none() && on {
+            let b = self.bus.clone();
+            let h = ferrocast_macos::tiling::spawn(Box::new(move |e| b.send(Msg::Tiling(e))));
+            h.send(ferrocast_macos::tiling::Cmd::MinSizes(self.store.load("tiling-min-sizes.json")));
+            self.tiling = Some(h);
+        }
+        let cfg = ferrocast_macos::tiling::Config {
+            enabled: s.tiling_enabled,
+            paused: self.tiling_paused,
+            layout: s.tiling_layout,
+            display_layouts: s.tiling_display_layouts.iter().filter_map(|(k, v)| Some((k.parse().ok()?, *v))).collect(),
+            gap: s.tiling_gap,
+            excluded: s.tiling_excluded.clone(),
+            hover_activate: s.tiling_hover_activate,
+        };
+        if let Some(h) = &self.tiling {
+            h.send(ferrocast_macos::tiling::Cmd::Config(cfg));
+        }
+        if self.tiling_hotkeys != s.tiling_enabled {
+            self.tiling_hotkeys = s.tiling_enabled;
+            self.apply_hotkeys();
+        }
+    }
+
+    pub(crate) fn run_tiling(&mut self, a: ferrocast_core::tiling::Action, pid: Option<i32>) {
+        use ferrocast_core::tiling::Action;
+        use ferrocast_macos::tiling::Cmd;
+        match a {
+            Action::Toggle => {
+                self.settings.tiling_enabled = !self.settings.tiling_enabled;
+                self.save_settings();
+                let msg = if self.settings.tiling_enabled { "Tiling on" } else { "Tiling off" };
+                self.toast = Some((msg.into(), Instant::now()));
+            }
+            Action::Pause => {
+                self.tiling_paused = !self.tiling_paused;
+                self.sync_tiling();
+                let msg = if self.tiling_paused { "Tiling paused" } else { "Tiling resumed" };
+                self.toast = Some((msg.into(), Instant::now()));
+            }
+            _ if !self.settings.tiling_enabled => {
+                services::notify("Window Tiling", "Turn on automatic tiling in Settings → Advanced first");
+            }
+            Action::Layout(n) => {
+                if let Some(h) = &self.tiling {
+                    h.send(Cmd::Layout { n, pid });
+                }
+            }
+            Action::FocusMode => {
+                if let Some(h) = &self.tiling {
+                    h.send(Cmd::Focus { pid });
+                }
+            }
+            Action::Move(d) => {
+                if let Some(h) = &self.tiling {
+                    h.send(Cmd::Move { dir: d, pid });
+                }
+            }
+        }
+    }
+
+    fn tiling_event(&mut self, e: ferrocast_macos::tiling::Event) {
+        use ferrocast_macos::tiling::Event;
+        match e {
+            Event::DisplayLayout { display, layout } => {
+                self.settings.tiling_display_layouts.insert(display.to_string(), layout);
+                let v = self.settings.clone();
+                self.persist("settings.json", &v);
+                *self.shared.settings.write().unwrap() = self.settings.clone();
+                let name = ferrocast_core::tiling::Layout::from_number(layout).map_or("", |l| l.name());
+                self.toast = Some((format!("Layout {layout}: {name}"), Instant::now()));
+            }
+            Event::MinSizes(m) => self.persist("tiling-min-sizes.json", &m),
+            Event::Notice(m) => services::notify("Window Tiling", &m),
+            Event::StageManager(on) => {
+                let m = if on { "Stage Manager is on: tiling is paused" } else { "Stage Manager is off: tiling resumed" };
+                self.toast = Some((m.into(), Instant::now()));
+            }
+        }
     }
     fn save_snippets(&mut self) {
         let v = self.snippets.clone();
@@ -1621,6 +1716,17 @@ impl App {
                 accessory: "Command".into(),
                 keywords: vec!["window".into(), "resize".into(), "move".into()],
                 kind: Kind::Window(*c),
+            });
+        }
+        for a in ferrocast_core::tiling::Action::ALL {
+            v.push(Item {
+                id: a.id(),
+                title: a.title(),
+                subtitle: "Window Tiling".into(),
+                icon: Icon::Glyph("sf:rectangle.split.2x2", [89, 212, 153]),
+                accessory: "Command".into(),
+                keywords: vec!["window".into(), "tile".into(), "tiling".into(), "layout".into()],
+                kind: Kind::Tiling(a),
             });
         }
         for c in system::SystemCommand::ALL {
@@ -3639,8 +3745,10 @@ impl App {
                     let _ = self.store.save("rates.json", &r);
                     self.rates = r;
                 }
+                Msg::Tiling(e) => self.tiling_event(e),
                 Msg::Tray(id) => match id.as_str() {
                     "open" => self.show(),
+                    "tiling_pause" => self.run_tiling(ferrocast_core::tiling::Action::Pause, None),
                     "clipboard" => {
                         self.show();
                         self.reset_to_root();
@@ -4823,6 +4931,7 @@ impl App {
                 a.push(act);
             }
             Kind::Window(_) => a.push(Action::new("Apply to Focused Window", Act::Run)),
+            Kind::Tiling(_) => a.push(Action::new("Run Command", Act::Run)),
             Kind::Url(_) => a.push(Action::new("Open in Browser", Act::Run)),
             Kind::OpenWindow(_) => a.push(Action::new("Switch to Window", Act::Run)),
             Kind::Timer(..) => a.push(Action::new("Start Timer", Act::Run)),
@@ -5006,6 +5115,12 @@ impl App {
                     }
                     None => services::notify("Window Management", "No target window"),
                 }
+            }
+            Kind::Tiling(a) => {
+                let (a, pid) = (*a, self.prev_pid);
+                self.hide();
+                self.reset_to_root();
+                self.run_tiling(a, pid);
             }
             Kind::Builtin(b) => self.run_builtin(*b),
             Kind::Notion(n) => self.notion_open_url(&n.url.clone()),
@@ -7439,3 +7554,11 @@ mod draw;
 mod intro;
 #[path = "tour.rs"]
 mod tour;
+
+/// Running Dock apps as (bundle id or name, display name), for the tiling exclusion list.
+pub(crate) fn running_tileable_apps() -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> =
+        running::running_apps().into_iter().map(|a| (a.bundle_id.unwrap_or_else(|| a.name.clone()), a.name)).collect();
+    v.sort_by_key(|a| a.1.to_lowercase());
+    v
+}

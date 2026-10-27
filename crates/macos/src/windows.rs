@@ -308,14 +308,14 @@ pub fn request_input_monitoring() -> bool {
     objc2_core_graphics::CGRequestListenEventAccess()
 }
 
-struct AxElement(AXUIElementRef);
+pub(crate) struct AxElement(pub(crate) AXUIElementRef);
 impl Drop for AxElement {
     fn drop(&mut self) {
         unsafe { CFRelease(self.0 as CFTypeRef) }
     }
 }
 
-fn copy_attr(el: AXUIElementRef, attr: &str) -> Option<CFTypeRef> {
+pub(crate) fn copy_attr(el: AXUIElementRef, attr: &str) -> Option<CFTypeRef> {
     let name = CFString::new(attr);
     let mut v: CFTypeRef = std::ptr::null();
     let err = unsafe { AXUIElementCopyAttributeValue(el, name.as_concrete_TypeRef(), &mut v) };
@@ -351,25 +351,25 @@ fn set_value(el: AXUIElementRef, attr: &str, ty: u32, ptr: *const c_void) -> boo
     }
 }
 
-fn set_bool(el: AXUIElementRef, attr: &str, b: bool) -> bool {
+pub(crate) fn set_bool(el: AXUIElementRef, attr: &str, b: bool) -> bool {
     let name = CFString::new(attr);
     let v = if b { CFBoolean::true_value() } else { CFBoolean::false_value() };
     unsafe { AXUIElementSetAttributeValue(el, name.as_concrete_TypeRef(), v.as_CFTypeRef()) == kAXErrorSuccess }
 }
 
-fn get_bool(el: AXUIElementRef, attr: &str) -> Option<bool> {
+pub(crate) fn get_bool(el: AXUIElementRef, attr: &str) -> Option<bool> {
     let v = copy_attr(el, attr)?;
     let b = unsafe { CFBoolean::wrap_under_create_rule(v as _) };
     Some(b == CFBoolean::true_value())
 }
 
-fn frame_of(el: AXUIElementRef) -> Option<Rect> {
+pub(crate) fn frame_of(el: AXUIElementRef) -> Option<Rect> {
     let p = get_point(el)?;
     let s = get_size(el)?;
     Some(Rect::new(p.x, p.y, s.width, s.height))
 }
 
-fn set_frame(el: AXUIElementRef, r: Rect) {
+pub(crate) fn set_frame(el: AXUIElementRef, r: Rect) {
     let p = CGPoint::new(r.x, r.y);
     let s = CGSize::new(r.w, r.h);
     // size → position → size handles moves across displays with different sizes
@@ -379,7 +379,7 @@ fn set_frame(el: AXUIElementRef, r: Rect) {
 }
 
 /// The focused window of the given pid.
-fn focused_window(pid: i32) -> Option<AxElement> {
+pub(crate) fn focused_window(pid: i32) -> Option<AxElement> {
     unsafe {
         let app = AxElement(AXUIElementCreateApplication(pid));
         let w = copy_attr(app.0, kAXFocusedWindowAttribute).or_else(|| copy_attr(app.0, "AXMainWindow"))?;

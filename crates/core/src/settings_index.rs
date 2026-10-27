@@ -104,6 +104,13 @@ pub const ENTRIES: &[Entry] = &[
     e(9, "Accessibility", &["permission", "privacy", "grant", "window management", "security", "access"]),
     e(9, "1 rem", &["px", "pixels", "css", "calculator", "em", "units"]),
     e(9, "Window gap", &["spacing", "margin", "snap", "tiling", "edges", "pt"]),
+    e(9, "Automatic tiling", &["tile", "windows", "layout", "arrange", "snap", "auto", "shoji", "on", "off"]),
+    e(9, "Tiling layout", &["columns", "grid", "spiral", "main", "stack", "display", "monitor"]),
+    e(9, "Space", &["gap", "spacing", "margin", "tiling", "pt", "windows"]),
+    e(9, "Apps that are not tiled", &["exclude", "exclusion", "tile", "ignore", "float", "app", "dialogs"]),
+    e(9, "Activate windows on hover", &["focus follows mouse", "pointer", "raise", "tiling", "mouse"]),
+    e(9, "Highlight border", &["outline", "focused window", "tiling", "frame"]),
+    e(9, "Border color", &["colour", "highlight", "tiling", "accent"]),
     e(9, "Data folder", &["storage", "files", "open", "settings.json", "backup", "location", "path"]),
 ];
 

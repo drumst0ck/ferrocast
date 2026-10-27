@@ -47,6 +47,9 @@ fn fixture() -> App {
         scripts: vec![],
         base: vec![],
         hotkeys: None,
+        tiling: None,
+        tiling_paused: false,
+        tiling_hotkeys: false,
         capture: crate::capture_ctl::CaptureState::with(std::path::PathBuf::new(), crate::capture_ctl::Availability::Available),
         selection: Default::default(),
         finder: services::FinderEnterState { hooks: inert_finder_hooks(), ..Default::default() },
@@ -6644,7 +6647,7 @@ fn scripts_and_advanced_tabs_keep_rendering_at_their_new_numbers() {
     assert_eq!(tab_bars(6), Vec::<usize>::new());
     assert_eq!(tab_bars(7), Vec::<usize>::new());
     assert_eq!(tab_bars(INTEGRATIONS_TAB), Vec::<usize>::new());
-    assert_eq!(tab_bars(9), Vec::<usize>::new());
+    assert_eq!(tab_bars(9), vec![4], "Advanced: only the tiling layout bar");
 }
 
 #[test]
@@ -6820,7 +6823,7 @@ fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
         (6, P::OpenAiCompatible, None, 0, 1, 0),
         (7, P::OpenAiCompatible, None, 1, 0, 0),
         (8, P::OpenAiCompatible, None, 2, 1, 0),
-        (9, P::OpenAiCompatible, None, 0, 0, 2),
+        (9, P::OpenAiCompatible, None, 0, 0, 3),
     ];
     for (tab, chat, tr, texts, combos, drags) in cases {
         for theme in BOTH_THEMES {
@@ -7729,6 +7732,14 @@ fn sd4_scrambled() -> Settings {
     s.translate_apple = true;
     s.rem_px = 20.0;
     s.window_gap = 5.0;
+    s.tiling_enabled = true;
+    s.tiling_layout = 3;
+    s.tiling_display_layouts.insert("1".into(), 2);
+    s.tiling_gap = 20.0;
+    s.tiling_excluded = vec!["com.example.app".into()];
+    s.tiling_hover_activate = true;
+    s.tiling_border = true;
+    s.tiling_border_color = "#112233".into();
     // not on any resettable tab
     s.ai_model = "other-model".into();
     s.script_directories = vec!["~/scripts".into()];
@@ -14690,4 +14701,49 @@ fn the_menu_bar_icon_is_the_coloured_app_icon() {
     // left of the bolt is the red square
     let r = px(w / 5, h / 2);
     assert!(r[0] > 190 && r[1] < 120 && r[2] < 120 && r[3] > 230, "red {r:?}");
+}
+
+#[test]
+fn tiling_is_off_by_default_and_starts_no_worker() {
+    let mut app = fixture();
+    assert!(!app.settings.tiling_enabled && !app.settings.tiling_hover_activate);
+    assert_eq!(app.settings.tiling_gap, 8.0);
+    app.sync_tiling();
+    assert!(app.tiling.is_none(), "no worker while tiling and hover are off");
+}
+
+#[test]
+fn tiling_commands_are_launcher_items_and_the_existing_window_commands_remain() {
+    let app = fixture();
+    for a in ferrocast_core::tiling::Action::ALL {
+        assert!(app.base.iter().any(|i| i.id == a.id() && matches!(i.kind, Kind::Tiling(_))), "{}", a.id());
+    }
+    let windows = app.base.iter().filter(|i| matches!(i.kind, Kind::Window(_))).count();
+    assert_eq!(windows, ferrocast_macos::windows::WindowCommand::ALL.len());
+}
+
+#[test]
+fn pause_toggles_without_starting_a_worker_and_toggle_flips_the_setting() {
+    let mut app = fixture();
+    app.run_tiling(ferrocast_core::tiling::Action::Pause, None);
+    assert!(app.tiling_paused);
+    app.run_tiling(ferrocast_core::tiling::Action::Pause, None);
+    assert!(!app.tiling_paused);
+    app.settings.tiling_enabled = false;
+    app.run_tiling(ferrocast_core::tiling::Action::Toggle, None);
+    assert!(app.settings.tiling_enabled);
+    app.run_tiling(ferrocast_core::tiling::Action::Toggle, None);
+    assert!(!app.settings.tiling_enabled);
+}
+
+#[test]
+fn tiling_hotkeys_are_registered_only_while_tiling_is_on() {
+    let s = ferrocast_core::models::Settings::default();
+    assert_eq!(s.hotkey("tiling:focus-mode"), Some("Control+Alt+KeyZ"));
+    assert_eq!(s.hotkey("tiling:layout-1"), Some("Control+Alt+Super+Digit1"));
+}
+
+#[test]
+fn the_tray_menu_has_a_tiling_pause_item() {
+    assert!(services::tray_items().iter().any(|(id, _)| *id == "tiling_pause"));
 }
