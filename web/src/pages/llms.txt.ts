@@ -1,30 +1,39 @@
-import { getCollection } from 'astro:content';
 import { familyHubs } from '../lib/seo/convert';
-import { allTools } from '../lib/seo/tools';
 import { SITE } from '../lib/seo/jsonld';
-
-const urlOf = (id: string) => `${SITE}/${id.replace(/\/?index$/, '')}/`.replace(/\/\/$/, '/');
+import { counts } from '../data/status';
 
 export async function GET() {
-  const docs = (await getCollection('docs')).filter((d) => d.id.startsWith('docs')).sort((a, b) => a.id.localeCompare(b.id));
+  const { pairs, inputs, tools } = counts();
   const lines = [
     '# Ferrocast',
     '',
-    '> Fast, open-source launcher for macOS written in Rust, with local file conversion (275 conversions across 46 input formats) and 26 file tools. Free, MIT licensed, Apple Silicon only. Nothing is uploaded.',
+    '> Fast, open-source launcher for macOS (Rust, MIT). Search, calculate, clipboard, snippets, Ask AI (Ollama by default), Raycast-compatible Script Commands, ~40 window commands, screen recording with auto zoom, floating Markdown notes, and local file work: {pairs} conversions across {inputs} input formats and {tools} file tools. Apple Silicon only; no account.'.replace(
+      '{pairs}',
+      String(pairs),
+    ).replace('{inputs}', String(inputs)).replace('{tools}', String(tools)),
     '',
-    '## Key pages',
-    `- [Home](${SITE}/): what Ferrocast is and how to install it with Homebrew`,
-    `- [Convert and file tools](${SITE}/files/): interactive explorer of every conversion`,
+    '## Key facts (quotable)',
+    `- ${SITE}/facts/`,
+    `- Source code and README: https://github.com/drumst0ck/ferrocast`,
+    '',
+    '## Primary pages',
+    `- [Home](${SITE}/): overview, measured footprint, install (DMG and Homebrew)`,
+    `- [Key facts and FAQ](${SITE}/facts/): plain facts for citations`,
+    `- [Convert and file tools](${SITE}/files/): interactive explorer of every conversion pair`,
+    `- [File tools index](${SITE}/tools/): all local file tools`,
+    `- [Documentation](${SITE}/docs/): install, launcher features, file tools reference`,
     `- [Changelog](${SITE}/changelog/): release notes`,
+    '',
+    '## Documentation highlights',
+    `- [Install](${SITE}/docs/getting-started/install/)`,
+    `- [Conversion reference](${SITE}/docs/files/conversions/)`,
+    `- [Optional tools (ffmpeg, LibreOffice, …)](${SITE}/docs/files/optional-tools/)`,
+    `- [Migrating from Raycast](${SITE}/docs/getting-started/migrating-from-raycast/)`,
+    `- [Data and privacy](${SITE}/docs/reference/data-and-privacy/)`,
+    `- [FAQ in docs](${SITE}/docs/reference/faq/)`,
     '',
     '## Conversions by family',
     ...familyHubs().map((f) => `- [${f.name}](${SITE}/convert/${f.id}/)`),
-    '',
-    '## File tools',
-    ...allTools().map((t) => `- [${t.name}](${SITE}/tools/${t.slug}/)`),
-    '',
-    '## Documentation',
-    ...docs.map((d) => `- [${d.data.title}](${urlOf(d.id)}): ${d.data.description}`),
     '',
   ];
   return new Response(lines.join('\n'), { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });

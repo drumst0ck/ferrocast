@@ -2,13 +2,30 @@
 
 # Ferrocast
 
-Fast, open-source launcher for macOS, written in Rust. Search, calculate, paste and ask AI from the keyboard; drag any file, tap a key, and convert, compress, crop, trim or redact it on your Mac. Nothing is uploaded.
+**The fast, open-source Mac launcher that also converts files locally.**
+
+Fast, open-source launcher for macOS, written in Rust. Search, calculate, paste and ask AI from the keyboard; drag any file, tap a key, and convert, compress, crop, trim or redact it on your Mac. File conversions and file tools run on your Mac and do not upload your files.
 
 [![CI](https://github.com/drumst0ck/ferrocast/actions/workflows/ci.yml/badge.svg)](https://github.com/drumst0ck/ferrocast/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [Website](https://ferrocast.app) · [Docs](https://ferrocast.app/docs/) · [Changelog](https://ferrocast.app/changelog/) · [Español](README.es.md)
 
 <p align="center"><img src="web/public/img/home.jpg" alt="Ferrocast launcher" width="46%"> <img src="web/public/img/files-wheel-convert.jpg" alt="Ferrocast conversion wheel" width="46%"></p>
+
+## Key facts
+
+| | |
+| --- | --- |
+| **Licence** | [MIT](LICENSE) |
+| **Platform** | Apple Silicon Macs only |
+| **Size** | About 8.5 MB on disk, one process ([measured method](https://ferrocast.app/#bench)) |
+| **Account** | None; no subscription tier |
+| **File conversion** | 275 pairs across 46 input formats, 26 tools, 7 actions — all local |
+| **Launcher** | Search, calculator, clipboard, snippets, quicklinks, ~40 window commands, Raycast-compatible Script Commands |
+| **Ask AI** | [Ollama](https://ollama.com/) on your Mac by default; optional cloud providers |
+| **Privacy** | Conversions stay on disk; see [data and privacy](https://ferrocast.app/docs/reference/data-and-privacy/) for network use (currency rates, optional AI) |
+| **Install** | [DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg) or Homebrew (below); first DMG open may need **Open Anyway** in System Settings |
+| **More** | [Key facts & FAQ](https://ferrocast.app/facts/) · [llms.txt](https://ferrocast.app/llms.txt) for AI assistants |
 
 ## Install
 
@@ -39,8 +56,6 @@ Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not 
 - **Notes**: a floating rich-text window with Markdown, a `/` menu, pinning, export, `ferrocast://` links, AI commands and dictation.
 - **Ask AI** with Ollama, any OpenAI-compatible server, the Anthropic API, Claude Code, or Sign in with ChatGPT.
 
-Not included: React extensions, sync, Search Menu Bar Items and AI context from selection or screen. Ferrocast is independent and not affiliated with Raycast.
-
 ## File tools
 
 - Drag a file, then tap <kbd>⇧</kbd> for conversions, <kbd>⌘</kbd> for tools or <kbd>⌃</kbd> for actions.
@@ -51,6 +66,35 @@ Not included: React extensions, sync, Search Menu Bar Items and AI context from 
 - Local only. macOS tools come first; ffmpeg, LibreOffice, cwebp, unrar and Ghostscript are optional. Results go next to the original and never overwrite it.
 
 Browse every pair at <https://ferrocast.app/files/>.
+
+## Screenshots
+
+<p align="center">
+  <img src="web/public/img/search.jpg" alt="Search" width="31%">
+  <img src="web/public/img/clipboard.jpg" alt="Clipboard history" width="31%">
+  <img src="web/public/img/ai.jpg" alt="Ask AI" width="31%">
+</p>
+<p align="center">
+  <img src="web/public/img/record-editor.jpg" alt="Screen recording editor" width="48%">
+  <img src="web/public/img/notes.jpg" alt="Floating notes" width="48%">
+</p>
+
+## Raycast and Alfred
+
+Ferrocast is **independent** and not affiliated with [Raycast](https://www.raycast.com/) or [Alfred](https://www.alfredapp.com/). This table only states what this repository documents.
+
+| Topic | Ferrocast | Notes for people coming from other launchers |
+| --- | --- | --- |
+| **Price & source** | MIT, open source, no account | See each product’s own site for pricing and licence |
+| **Script Commands** | Raycast-compatible metadata (full, compact, silent, inline) | Existing Script Commands run as they are ([migration guide](https://ferrocast.app/docs/getting-started/migrating-from-raycast/)) |
+| **Snippets** | Import from a Raycast JSON export | Quicklinks are recreated by hand |
+| **File conversion & tools** | 275 local conversion pairs and 26 file tools built in | Not documented in this repo for Raycast or Alfred |
+| **Extensions & sync** | No extension store; no sync between Macs | Also not included: React extensions, Search Menu Bar Items, AI context from selection or screen ([migration guide](https://ferrocast.app/docs/getting-started/migrating-from-raycast/)) |
+
+## What's missing today
+
+- An **extension store** and **sync** between Macs.
+- **React extensions**, **Search Menu Bar Items**, and **AI context** from selection or screen (Raycast-style features Ferrocast does not include yet).
 
 ## Ask AI and privacy
 
