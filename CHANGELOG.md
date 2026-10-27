@@ -6,6 +6,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-27
+
 ### Changed
 - **Welcome tour**: two new slides show screen recording (the recording editor with auto zoom, camera, microphone and system audio, MP4 and GIF export, all on your Mac) and the floating Notes window (Markdown as you type, the `/` menu, pinning, dictation and AI commands). The tour now has nine slides, and the Notes card of “Everything you reach for twice” describes the floating window. (docs: /docs/getting-started/first-run/)
 
