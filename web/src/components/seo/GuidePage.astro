@@ -3,7 +3,8 @@ import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import SiteFooter from '../SiteFooter.astro';
 import Crumbs from './Crumbs.astro';
-import { dmgUrl, installCommand, repo } from '../../data/install';
+import SeoNav from './SeoNav.astro';
+import { dmgUrl, installCommand } from '../../data/install';
 import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
 import { inline, plain } from '../../lib/seo/markup';
 import type { GuideCopy } from '../../lib/seo/compress-video';
@@ -30,16 +31,7 @@ const jsonLd = [
 ---
 <Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd} lang={t.lang} alternates={alternates}>
   <SiteHeader lang={t.lang} current="files" switchHref={other.path} switchLabel={isEs ? 'EN' : 'ES'} switchAria={isEs ? 'Read this page in English' : 'Leer esta página en español'}>
-    {isEs && (
-      <Fragment slot="nav">
-        <a href="/es/#features">Funciones</a>
-        <a href="/files/">Archivos</a>
-        <a href="/es/#install">Instalar</a>
-        <a href="/es/docs/">Documentación</a>
-        <a href="/changelog/">Cambios</a>
-        <a href={repo}>GitHub</a>
-      </Fragment>
-    )}
+    <SeoNav slot="nav" lang={t.lang} />
     <span slot="cta">{isEs ? 'Instalar' : 'Install'}</span>
   </SiteHeader>
   <main class="seo guide" id="main">
