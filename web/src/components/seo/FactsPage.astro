@@ -1,0 +1,82 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../SiteHeader.astro';
+import SiteFooter from '../SiteFooter.astro';
+import Crumbs from './Crumbs.astro';
+import SeoNav from './SeoNav.astro';
+import { en as homeEn } from '../../i18n/home.en';
+import { es as homeEs } from '../../i18n/home.es';
+import { counts } from '../../data/status';
+import { SITE } from '../../lib/seo/jsonld';
+import { inline } from '../../lib/seo/markup';
+import { factsCopy } from '../../lib/seo/facts';
+import '../../styles/seo.css';
+
+interface Props { lang: 'en' | 'es' }
+const { lang } = Astro.props;
+const t = factsCopy(lang);
+const home = lang === 'es' ? homeEs : homeEn;
+const c = counts();
+const fill = (s: string, v: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (m, k) => (k in v ? String(v[k]) : m));
+const vars = { pairs: c.pairs, inputs: c.inputs, tools: c.tools, actions: c.actions };
+const faq = home.faq.items.map(([q, a]) => [q, fill(a, vars)] as [string, string]);
+if (t.description.length < 140 || t.description.length > 160) throw new Error(`facts (${lang}) description is ${t.description.length} characters`);
+
+const canonical = `${SITE}${t.path}`;
+const alternates = { en: `${SITE}/facts/`, es: `${SITE}/es/facts/`, 'x-default': `${SITE}/facts/` };
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Ferrocast',
+    applicationCategory: 'UtilitiesApplication',
+    operatingSystem: 'macOS',
+    description: home.json.appDescription,
+    url: SITE,
+    license: 'https://opensource.org/licenses/MIT',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    inLanguage: lang,
+    mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: a } })),
+  },
+];
+const isEs = lang === 'es';
+---
+<Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd} lang={lang} alternates={alternates}>
+  <SiteHeader lang={lang} switchHref={isEs ? '/facts/' : '/es/facts/'} switchLabel={isEs ? 'EN' : 'ES'} switchAria={isEs ? 'Read this page in English' : 'Leer esta página en español'}>
+    <SeoNav slot="nav" lang={lang} />
+    <span slot="cta">{isEs ? 'Instalar' : 'Install'}</span>
+  </SiteHeader>
+  <main class="seo facts" id="main">
+    <Crumbs items={t.crumbs} />
+    <h1>{t.h1}</h1>
+    <p class="lead" set:html={inline(t.lead)} />
+    <section aria-labelledby="h-facts">
+      <h2 id="h-facts">{t.factsH}</h2>
+      <ul class="fact-list">{t.facts.map((f) => <li>{f}</li>)}</ul>
+    </section>
+    <section aria-labelledby="h-links">
+      <h2 id="h-links">{t.linksH}</h2>
+      <ul>{t.links.map(([label, href]) => <li><a class="tl" href={href}>{label}</a></li>)}</ul>
+    </section>
+    <section aria-labelledby="h-faq">
+      <h2 id="h-faq">{t.faqH}</h2>
+      <div class="fx-faq">
+        {faq.map(([q, a]) => (<details><summary>{q}</summary><p>{a}</p></details>))}
+      </div>
+    </section>
+  </main>
+  <SiteFooter lang={lang} />
+</Base>
+
+<style>
+  .facts .fact-list { max-width: 70ch; }
+  .facts .fact-list li { margin-block: 0.65rem; }
+  .facts .fx-faq { max-width: 70ch; }
+  .facts .fx-faq details { margin-block: 0.75rem; }
+  .facts .fx-faq summary { cursor: pointer; font-weight: 500; }
+  .facts .fx-faq p { margin-top: 0.5rem; color: var(--muted); }
+</style>
