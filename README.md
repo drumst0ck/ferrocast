@@ -113,6 +113,10 @@ cargo test --workspace
 
 Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it). The unnotarized DMG is blocked by Gatekeeper on other Macs; the supported route is Homebrew. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Website
+
+The site in `web/` ships as a Docker image (see `web/Dockerfile`). CSP stays report-only. To read the in-memory violation summary, set **`CSP_REPORT_SUMMARY_TOKEN`** in Coolify and request `GET /api/csp-report/summary/` with `Authorization: Bearer <token>` or `?token=<token>`. If the variable is unset, or the token is missing or wrong, that URL returns 404. `POST /api/csp-report/` is unchanged so browsers can submit reports.
+
 ## Documentation
 
 [ferrocast.app/docs](https://ferrocast.app/docs/) · [Changelog](https://ferrocast.app/changelog/) ([RSS](https://ferrocast.app/changelog/rss.xml)) · [Feature research](docs/RESEARCH.md)

@@ -5,8 +5,8 @@
 process.env.ASTRO_NODE_AUTOSTART = 'disabled';
 
 import http from 'node:http';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { handleCspApi } from './csp-report-handle.mjs';
 
@@ -70,24 +70,41 @@ function applyHeaders(req, res) {
   }
 }
 
-function tryServeHome(req, res) {
+function prerenderedHtmlFile(urlPath) {
+  const mapped = HOME_FILES.get(urlPath);
+  if (mapped) return join(clientDir, mapped);
+  const staticPrefix =
+    urlPath.startsWith('/docs/') ||
+    urlPath.startsWith('/es/docs/') ||
+    urlPath.startsWith('/convert/');
+  if (!staticPrefix || !urlPath.endsWith('/') || urlPath.includes('..')) return null;
+  let decoded;
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    return null;
+  }
+  if (decoded.includes('..')) return null;
+  const abs = resolve(clientDir, decoded.slice(1) + 'index.html');
+  const root = resolve(clientDir) + sep;
+  if (!abs.startsWith(root)) return null;
+  return abs;
+}
+
+function tryServePrerendered(req, res) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
   const path = (req.url ?? '/').split('?')[0];
-  const rel = HOME_FILES.get(path);
-  if (!rel) return false;
-  try {
-    const body = readFileSync(join(clientDir, rel));
-    res.statusCode = 200;
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    if (req.method === 'HEAD') {
-      res.end();
-      return true;
-    }
-    res.end(body);
+  const file = prerenderedHtmlFile(path);
+  if (!file || !existsSync(file)) return false;
+  const body = readFileSync(file);
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  if (req.method === 'HEAD') {
+    res.end();
     return true;
-  } catch {
-    return false;
   }
+  res.end(body);
+  return true;
 }
 
 const { handler } = await import('../dist/server/entry.mjs');
@@ -96,7 +113,7 @@ const server = http.createServer((req, res) => {
   const path = (req.url ?? '/').split('?')[0];
   applyHeaders(req, res);
   if (handleCspApi(req, res, path)) return;
-  if (tryServeHome(req, res)) return;
+  if (tryServePrerendered(req, res)) return;
   handler(req, res);
 });
 
