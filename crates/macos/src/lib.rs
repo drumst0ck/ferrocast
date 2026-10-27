@@ -4,6 +4,7 @@
 pub mod apple_translate;
 pub mod apps;
 pub mod ax_text;
+pub mod color_sampler;
 pub mod capture;
 pub mod clipboard;
 pub mod drag;

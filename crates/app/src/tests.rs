@@ -186,6 +186,7 @@ impl Effects {
             apple_available: || APPLE_AVAILABLE.with(|a| a.get()),
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
+            color_sampler: |_bus| FX_LOG.with(|l| l.borrow_mut().push("color_sampler".into())),
         }
     }
 }
@@ -14690,4 +14691,32 @@ fn the_menu_bar_icon_is_the_coloured_app_icon() {
     // left of the bolt is the red square
     let r = px(w / 5, h / 2);
     assert!(r[0] > 190 && r[1] < 120 && r[2] < 120 && r[3] > 230, "red {r:?}");
+}
+
+#[test]
+fn pick_color_is_a_launcher_command_that_starts_the_sampler() {
+    assert!(Builtin::ALL.contains(&Builtin::PickColor));
+    assert_eq!(Builtin::PickColor.title(), "Pick Color");
+    let mut app = fixture();
+    app.run_builtin(Builtin::PickColor);
+    assert!(FX_LOG.with(|l| l.borrow().contains(&"color_sampler".to_string())));
+}
+
+#[test]
+fn a_picked_color_is_copied_as_hex_and_announced() {
+    let mut app = fixture();
+    let _ = notion_io::take_copied();
+    app.bus.send(Msg::ColorPicked(Some(ferrocast_core::color::Rgba::from_unit(1.0, 0.5, 0.0, 1.0))));
+    app.drain();
+    assert_eq!(notion_io::take_copied(), vec!["#FF8000".to_string()]);
+    assert_eq!(toast_text(&app), "Copied #FF8000");
+}
+
+#[test]
+fn a_cancelled_pick_copies_nothing() {
+    let mut app = fixture();
+    let _ = notion_io::take_copied();
+    app.bus.send(Msg::ColorPicked(None));
+    app.drain();
+    assert!(notion_io::take_copied().is_empty());
 }
