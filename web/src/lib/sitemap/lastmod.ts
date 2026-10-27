@@ -100,6 +100,9 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/es') return fileLastmod('src/pages/es/index.astro', 'src/components/home/HomePage.astro');
     if (path === '/files') return fileLastmod('src/pages/files.astro');
     if (path === '/facts') return fileLastmod('src/pages/facts.astro');
+    if (path === '/compress-video-to-size' || path === '/es/comprimir-video-a-un-tamano') {
+      return fileLastmod('src/lib/seo/compress-video.ts', 'src/components/seo/GuidePage.astro');
+    }
     if (path === '/raycast-alternative' || path === '/es/alternativa-a-raycast') {
       return fileLastmod('src/lib/seo/alt-raycast.ts', 'src/components/seo/AlternativePage.astro');
     }
