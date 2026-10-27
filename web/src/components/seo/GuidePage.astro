@@ -45,7 +45,7 @@ const jsonLd = [
       <table>
         <caption class="sr-only">{t.limits.caption}</caption>
         <thead><tr>{t.limits.cols.map((c) => <th scope="col">{c}</th>)}</tr></thead>
-        <tbody>{t.limits.rows.map(([a, b, c]) => (<tr><th scope="row" set:html={inline(a)} /><td set:html={inline(b)} /><td set:html={inline(c)} /></tr>))}</tbody>
+        <tbody>{t.limits.rows.map(([head, ...cells]) => (<tr><th scope="row" set:html={inline(head)} />{cells.map((c) => <td set:html={inline(c)} />)}</tr>))}</tbody>
       </table>
     </div>
     <p class="fine" set:html={inline(t.limits.note)} />

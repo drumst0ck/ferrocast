@@ -296,6 +296,7 @@ export const en: AltCopy = {
     h: 'Read next',
     links: [
       ['Migrating from Raycast', '/docs/getting-started/migrating-from-raycast/'],
+      ['Ferrocast vs Raycast: free vs Pro', '/ferrocast-vs-raycast/'],
       ['Install', '/docs/getting-started/install/'],
       ['Script Commands', '/raycast-script-commands/'],
       ['Data and privacy', '/docs/reference/data-and-privacy/'],
