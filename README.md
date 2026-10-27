@@ -115,7 +115,7 @@ Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it). The unnota
 
 ## Website
 
-The site in `web/` ships as a Docker image (see `web/Dockerfile`). CSP stays report-only. To read the in-memory violation summary, set **`CSP_REPORT_SUMMARY_TOKEN`** in Coolify and request `GET /api/csp-report/summary/` with `Authorization: Bearer <token>` or `?token=<token>`. If the variable is unset, or the token is missing or wrong, that URL returns 404. `POST /api/csp-report/` is unchanged so browsers can submit reports.
+The site in `web/` ships as a Docker image (see `web/Dockerfile`). CSP stays report-only. `GET /api/csp-report/summary/` is public when **`CSP_REPORT_SUMMARY_TOKEN`** is unset or empty (`Cache-Control: no-store`, `X-Robots-Tag: noindex`). When that variable is set, the same URL returns 404 unless the request sends `Authorization: Bearer <token>` or `?token=<token>`. `POST /api/csp-report/` is unchanged so browsers can submit reports.
 
 ## Documentation
 
