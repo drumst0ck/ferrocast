@@ -21,6 +21,7 @@ export async function GET() {
     `- [Key facts and FAQ](${SITE}/facts/): plain facts for citations`,
     `- [Datos clave](${SITE}/es/facts/): los mismos datos en español`,
     `- [Raycast alternative](${SITE}/raycast-alternative/): what you keep, what is missing, and a sourced Ferrocast vs Raycast vs Alfred table`,
+    `- [Historial del portapapeles que ignora contraseñas](${SITE}/es/historial-portapapeles-mac/): portapapeles de Ferrocast frente al de Spotlight en macOS Tahoe`,
     `- [Free file converter for Mac](${SITE}/free-file-converter-mac/): local conversion without uploads, compared with Permute and CloudConvert`,
     `- [Mac launcher with local AI](${SITE}/local-ai-launcher/): Ollama by default, LM Studio, your own keys or Claude Code, and which providers send text off the Mac`,
     `- [Free Screen Studio alternative](${SITE}/screen-studio-alternative/): screen recording with auto zoom, camera, on-device transcript, MP4 and GIF export`,
