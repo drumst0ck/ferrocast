@@ -21,6 +21,8 @@ export async function GET() {
     `- [Key facts and FAQ](${SITE}/facts/): plain facts for citations`,
     `- [Datos clave](${SITE}/es/facts/): los mismos datos en español`,
     `- [Raycast alternative](${SITE}/raycast-alternative/): what you keep, what is missing, and a sourced Ferrocast vs Raycast vs Alfred table`,
+    `- [Free Screen Studio alternative](${SITE}/screen-studio-alternative/): screen recording with auto zoom, camera, on-device transcript, MP4 and GIF export`,
+    `- [Grabar la pantalla con zoom automático](${SITE}/es/grabar-pantalla-mac-zoom-automatico/): lo mismo en español`,
     `- [Free Alfred alternative](${SITE}/alfred-alternative/): clipboard history and snippets without the Powerpack, with a sourced Alfred comparison`,
     `- [Ferrocast vs Raycast](${SITE}/ferrocast-vs-raycast/): Raycast Free vs Pro vs Ferrocast, feature by feature, with Raycast prices and sources`,
     `- [Run Raycast Script Commands without Raycast](${SITE}/raycast-script-commands/): which @raycast metadata Ferrocast reads, the four output modes and the limits`,

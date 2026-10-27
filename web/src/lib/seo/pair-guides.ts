@@ -59,7 +59,7 @@ export const pairGuides: Record<string, PairGuide> = {
         h: 'Two ways to get a GIF of your screen',
         list: [
           '**Convert an existing recording:** drag the .mov (from Screenshot.app or QuickTime), tap ⇧ and drop on GIF. Ferrocast runs ffmpeg at 12 frames per second and 640 px wide.',
-          '**Record straight to GIF:** record with Ferrocast, edit with auto zoom, then export as GIF at 480, 720 or 960 px wide and 10 or 15 fps. See [screen capture](/docs/launcher/screen-capture/).',
+          '**Record straight to GIF:** record with Ferrocast, edit with auto zoom, then export as GIF at 480, 720 or 960 px wide and 10 or 15 fps. See [screen capture](/docs/launcher/screen-capture/) and [the recorder page](/screen-studio-alternative/).',
         ],
       },
       {
