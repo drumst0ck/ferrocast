@@ -1,0 +1,147 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../SiteHeader.astro';
+import SiteFooter from '../SiteFooter.astro';
+import Crumbs from './Crumbs.astro';
+import { dmgUrl, installCommand, repo } from '../../data/install';
+import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
+import { en, es, inline, plain, sources, type AltCopy } from '../../lib/seo/alt-raycast';
+import '../../styles/seo.css';
+
+interface Props { t: AltCopy }
+const { t } = Astro.props;
+const other = t.lang === 'es' ? en : es;
+const canonical = `${SITE}${t.path}`;
+const alternates = { en: `${SITE}${en.path}`, es: `${SITE}${es.path}`, 'x-default': `${SITE}${en.path}` };
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Ferrocast',
+    applicationCategory: 'UtilitiesApplication',
+    operatingSystem: 'macOS (Apple Silicon)',
+    url: SITE,
+    downloadUrl: dmgUrl,
+    license: 'https://opensource.org/licenses/MIT',
+    sameAs: [repo],
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    inLanguage: t.lang,
+    mainEntity: t.faq.items.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: plain(a) } })),
+  },
+  { ...howTo(t.install.howToName, t.description, t.install.steps), inLanguage: t.lang },
+  breadcrumbs(t.crumbs),
+];
+const isEs = t.lang === 'es';
+---
+<Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd} lang={t.lang} alternates={alternates}>
+  <SiteHeader lang={t.lang} switchHref={other.path} switchLabel={isEs ? 'EN' : 'ES'} switchAria={isEs ? 'Read this page in English' : 'Leer esta página en español'}>
+    {isEs && (
+      <Fragment slot="nav">
+        <a href="/es/#features">Funciones</a>
+        <a href="/files/">Archivos</a>
+        <a href="#install">Instalar</a>
+        <a href="/es/docs/">Documentación</a>
+        <a href="/changelog/">Cambios</a>
+        <a href={repo}>GitHub</a>
+      </Fragment>
+    )}
+    <span slot="cta">{isEs ? 'Instalar' : 'Install'}</span>
+  </SiteHeader>
+  <main class="seo alt" id="main">
+    <Crumbs items={t.crumbs} />
+    <h1>{t.h1}</h1>
+    {t.lead.map((p, i) => <p class={i === 0 ? 'lead' : undefined} set:html={inline(p)} />)}
+    <p class="alt-cta">
+      <a class="btn" href={dmgUrl}>{t.cta.dmg}</a>
+      <a class="tl" href="#install">{t.cta.brew}</a>
+      <span class="alt-note">{t.cta.note}</span>
+    </p>
+
+    <h2>{t.fit.h}</h2>
+    <div class="alt-fit">
+      <div><h3>{t.fit.yesH}</h3><ul>{t.fit.yes.map((s) => <li set:html={inline(s)} />)}</ul></div>
+      <div><h3>{t.fit.noH}</h3><ul>{t.fit.no.map((s) => <li set:html={inline(s)} />)}</ul></div>
+    </div>
+
+    <h2>{t.keep.h}</h2>
+    {t.keep.items.map(([h, p]) => (<div><h3>{h}</h3><p set:html={inline(p)} /></div>))}
+
+    <h2>{t.missing.h}</h2>
+    <ul>{t.missing.items.map((s) => <li>{s}</li>)}</ul>
+    <p class="note" set:html={inline(t.missing.note)} />
+
+    <h2>{t.adds.h}</h2>
+    {t.adds.items.map(([h, p]) => (<div><h3>{h}</h3><p set:html={inline(p)} /></div>))}
+
+    <h2 id="compare">{t.table.h}</h2>
+    <div class="alt-table">
+      <table>
+        <caption class="sr-only">{t.table.caption}</caption>
+        <thead><tr>{t.table.cols.map((c, i) => <th scope="col">{i === 0 ? <span class="sr-only">{isEs ? 'Tema' : 'Topic'}</span> : c}</th>)}</tr></thead>
+        <tbody>
+          {t.table.rows.map(([label, ...cells]) => (<tr><th scope="row">{label}</th>{cells.map((c) => <td>{c}</td>)}</tr>))}
+        </tbody>
+      </table>
+    </div>
+    <p class="fine" set:html={inline(t.table.checked)} />
+    <details class="alt-sources">
+      <summary>{t.table.sourcesH}</summary>
+      <ul>{sources.map(([label, href]) => <li><a class="tl" href={href} rel="noopener">{label}</a></li>)}</ul>
+    </details>
+
+    <h2>{t.price.h}</h2>
+    <ul>{t.price.items.map((s) => <li set:html={inline(s)} />)}</ul>
+
+    <h2 id="install">{t.install.h}</h2>
+    <ol>{t.install.steps.map(([name, text], i) => <li><strong>{name}.</strong> {i === 0 ? <><a class="tl" href={dmgUrl}>{text}</a></> : text}</li>)}</ol>
+    <p>{t.install.brew}</p>
+    <pre><code>{installCommand}</code></pre>
+
+    <h2>{t.faq.h}</h2>
+    <div class="alt-faq">
+      {t.faq.items.map(([q, a]) => (<details><summary>{q}</summary><p set:html={inline(a)} /></details>))}
+    </div>
+
+    <h2>{t.close.h}</h2>
+    <p>{t.close.text}</p>
+    <p class="alt-cta">
+      <a class="btn" href={dmgUrl}>{t.cta.dmg}</a>
+      <span set:html={inline(t.close.star)} />
+    </p>
+    <p class="fine">{t.close.disclaimer}</p>
+
+    <h2>{t.more.h}</h2>
+    <ul class="chips">{t.more.links.map(([label, href]) => <li><a href={href}>{label}</a></li>)}</ul>
+  </main>
+  <SiteFooter lang={t.lang} />
+</Base>
+
+<style>
+  .alt .alt-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .alt .alt-note, .alt .fine { font-size: var(--step-small); color: var(--muted); }
+  .alt .alt-fit { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .alt .alt-fit > div { padding: 18px 20px; background: var(--surface); border-radius: var(--radius); display: grid; gap: 10px; align-content: start; }
+  .alt h3 { font-size: 1.2rem; margin-bottom: 6px; }
+  .alt h2[id] { scroll-margin-top: 110px; }
+  .alt .alt-fit ul { padding-left: 1.1em; }
+  .alt .alt-table { overflow-x: auto; border-radius: var(--radius); box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); }
+  .alt table { border-collapse: collapse; width: 100%; min-width: 680px; font-size: var(--step-small); line-height: 1.5; }
+  .alt th, .alt td { text-align: left; vertical-align: top; padding: 12px 14px; border-top: 1px solid rgba(255,255,255,.06); }
+  .alt thead th { border-top: 0; background: var(--surface); font-weight: 500; }
+  .alt tbody th { font-weight: 500; color: var(--ink); }
+  .alt td { color: var(--muted); }
+  .alt td:first-of-type { color: var(--ink); }
+  .alt .alt-sources summary, .alt .alt-faq summary { cursor: pointer; font-weight: 500; }
+  .alt .alt-sources ul { margin-top: 10px; }
+  .alt .alt-faq details { padding: 14px 0; border-top: 1px solid rgba(255,255,255,.06); }
+  .alt .alt-faq p { margin-top: 8px; }
+  .alt .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (prefers-color-scheme: light) {
+    .alt .alt-table { box-shadow: inset 0 0 0 1px rgba(0,0,0,.07); }
+    .alt th, .alt td, .alt .alt-faq details { border-top-color: rgba(0,0,0,.07); }
+  }
+</style>

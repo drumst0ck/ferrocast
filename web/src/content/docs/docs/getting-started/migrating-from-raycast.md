@@ -22,6 +22,10 @@ React extensions, sync, Search Menu Bar Items and AI context (selection or scree
 Script Command arguments are passed on the command line, as in Raycast, and can be seen with `ps` while the script runs.
 :::
 
+## Comparing options?
+
+The [Raycast alternative](/raycast-alternative/) page sums up what you keep, what is missing, and a sourced table of Ferrocast, Raycast and Alfred.
+
 ## Related
 
 - [Script Commands](/docs/launcher/script-commands/)

@@ -296,6 +296,6 @@ export const es: HomeCopy = {
     dialogTitle: 'Instalar Ferrocast',
     small: 'Licencia MIT. Todo está en GitHub; las incidencias son bienvenidas.',
   },
-  footer: { tagline: 'Un lanzador rápido para macOS', linksAria: 'Enlaces', license: 'Licencia', copyright: '2026 · MIT' },
+  footer: { alternative: 'Alternativa a Raycast', tagline: 'Un lanzador rápido para macOS', linksAria: 'Enlaces', license: 'Licencia', copyright: '2026 · MIT' },
   json: { appDescription: 'Un lanzador rápido y de código abierto para macOS que también convierte archivos: busca, calcula, pega, consulta a una IA y usa herramientas de archivos, todo en tu Mac.' },
 };

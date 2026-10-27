@@ -22,6 +22,10 @@ Extensiones React, sincronización, Search Menu Bar Items y contexto de IA (sele
 Los argumentos de los Script Commands se pasan por línea de comandos, como en Raycast, y pueden verse con `ps` mientras el script corre.
 :::
 
+## ¿Comparando opciones?
+
+La página [Alternativa a Raycast](/es/alternativa-a-raycast/) resume qué conservas, qué falta y una tabla con fuentes de Ferrocast, Raycast y Alfred.
+
 ## Relacionado
 
 - [Script Commands](/es/docs/launcher/script-commands/)
