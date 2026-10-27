@@ -35,6 +35,10 @@ pub struct DeviceDoc {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Tracker {
     pub items: BTreeMap<String, Tracked>,
+    /// False until the first `publish`: a Mac that never synced this domain (or lost its tracker)
+    /// has no history to compare with.
+    #[serde(default)]
+    pub seeded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -57,8 +61,16 @@ pub fn hash(value: &Value) -> String {
 /// Record the current local items: changed or new items get `now`, missing ones become tombstones at
 /// `now`, unchanged ones keep their time. Returns this device's document and the new tracker.
 pub fn publish(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64) -> (DeviceDoc, Tracker) {
+    publish_with(device, items, prev, now, now)
+}
+
+/// Like `publish`, but when `prev` was never seeded (first sync of this domain on this Mac) the local
+/// items are a baseline stamped `first_stamp` instead of `now`: pass 0 when other Macs already
+/// published, so what they published wins and only items nobody has are added.
+pub fn publish_with(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64, first_stamp: i64) -> (DeviceDoc, Tracker) {
+    let unseen = if prev.seeded { now } else { first_stamp };
     let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new() };
-    let mut next = Tracker::default();
+    let mut next = Tracker { items: BTreeMap::new(), seeded: true };
     let mut seen = HashSet::new();
     for (id, value) in items {
         if !seen.insert(id.clone()) {
@@ -67,7 +79,8 @@ pub fn publish(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64
         let h = hash(value);
         let modified = match prev.items.get(id) {
             Some(t) if !t.deleted && t.hash == h => t.modified,
-            _ => now,
+            Some(_) => now,
+            None => unseen,
         };
         doc.items.insert(id.clone(), Record { modified, deleted: false, value: Some(value.clone()) });
         next.items.insert(id.clone(), Tracked { hash: h, modified, deleted: false });
@@ -202,9 +215,18 @@ mod tests {
 
     #[test]
     fn the_newest_edit_wins_and_ties_go_to_the_greater_device() {
-        let a = DeviceDoc { device: "a".into(), items: [("1".to_string(), Record { modified: 5, deleted: false, value: Some(json!("a")) })].into() };
-        let b = DeviceDoc { device: "b".into(), items: [("1".to_string(), Record { modified: 5, deleted: false, value: Some(json!("b")) })].into() };
-        let c = DeviceDoc { device: "c".into(), items: [("1".to_string(), Record { modified: 4, deleted: false, value: Some(json!("c")) })].into() };
+        let a = DeviceDoc {
+            device: "a".into(),
+            items: [("1".to_string(), Record { modified: 5, deleted: false, value: Some(json!("a")) })].into(),
+        };
+        let b = DeviceDoc {
+            device: "b".into(),
+            items: [("1".to_string(), Record { modified: 5, deleted: false, value: Some(json!("b")) })].into(),
+        };
+        let c = DeviceDoc {
+            device: "c".into(),
+            items: [("1".to_string(), Record { modified: 4, deleted: false, value: Some(json!("c")) })].into(),
+        };
         assert_eq!(winners(&[a.clone(), b.clone(), c.clone()])["1"].1.value, Some(json!("b")));
         assert_eq!(winners(&[c, b, a])["1"].1.value, Some(json!("b")), "order of documents does not matter");
     }
@@ -232,7 +254,10 @@ mod tests {
     #[test]
     fn an_unpublished_local_edit_beats_an_older_remote_one() {
         let (da, ta) = publish("a", &items(&[("1", json!("v1"))]), &Tracker::default(), 100);
-        let db = DeviceDoc { device: "b".into(), items: [("1".to_string(), Record { modified: 150, deleted: false, value: Some(json!("theirs")) })].into() };
+        let db = DeviceDoc {
+            device: "b".into(),
+            items: [("1".to_string(), Record { modified: 150, deleted: false, value: Some(json!("theirs")) })].into(),
+        };
         // Local edit made after the last publish, not yet published.
         let (merged, _) = merge(&items(&[("1", json!("mine"))]), &[da, db], &ta);
         assert_eq!(merged, items(&[("1", json!("mine"))]));
@@ -252,7 +277,10 @@ mod tests {
     fn a_local_deletion_is_not_undone_by_an_older_remote_copy() {
         let (_, t1) = publish("a", &items(&[("1", json!("x"))]), &Tracker::default(), 100);
         let (da, t2) = publish("a", &[], &t1, 200);
-        let db = DeviceDoc { device: "b".into(), items: [("1".to_string(), Record { modified: 100, deleted: false, value: Some(json!("x")) })].into() };
+        let db = DeviceDoc {
+            device: "b".into(),
+            items: [("1".to_string(), Record { modified: 100, deleted: false, value: Some(json!("x")) })].into(),
+        };
         let (merged, _) = merge(&[], &[da, db], &t2);
         assert!(merged.is_empty());
     }
@@ -261,7 +289,10 @@ mod tests {
     fn an_edit_elsewhere_after_a_local_deletion_brings_the_item_back() {
         let (_, t1) = publish("a", &items(&[("1", json!("x"))]), &Tracker::default(), 100);
         let (da, t2) = publish("a", &[], &t1, 200);
-        let db = DeviceDoc { device: "b".into(), items: [("1".to_string(), Record { modified: 300, deleted: false, value: Some(json!("x2")) })].into() };
+        let db = DeviceDoc {
+            device: "b".into(),
+            items: [("1".to_string(), Record { modified: 300, deleted: false, value: Some(json!("x2")) })].into(),
+        };
         let (merged, _) = merge(&[], &[da, db], &t2);
         assert_eq!(merged, items(&[("1", json!("x2"))]));
     }

@@ -22,7 +22,7 @@ No, but you do need to open Terminal once and paste four lines. Homebrew does th
 Because moving windows, pasting for you and expanding snippets all need it. Search, the calculator and AI work without it. A welcome screen walks you through it.
 
 ### Is my clipboard history private?
-It never leaves your Mac. It sits in a JSON file in Application Support, and anything copied from a password manager like 1Password is skipped on purpose.
+It stays on your Mac unless you turn on [Sync with iCloud](/docs/launcher/sync/) (off by default), which copies it to your iCloud Drive for your other Macs. It sits in a JSON file in Application Support, and anything copied from a password manager like 1Password is skipped on purpose.
 
 ### What is missing today?
 An extension store and sync between Macs.

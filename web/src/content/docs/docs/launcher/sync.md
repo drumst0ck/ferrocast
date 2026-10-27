@@ -1,0 +1,36 @@
+---
+title: "Sync with iCloud"
+description: "Keep Ferrocast's settings, snippets, quicklinks, notes, clipboard history and Ask AI chats in step between your Macs through iCloud Drive. Off by default."
+sidebar:
+  order: 20
+---
+Sync keeps Ferrocast's data the same on every Mac you use. It goes through the iCloud Drive folder, so you need iCloud Drive turned on in System Settings. It is **off by default**: nothing is read from or written to iCloud Drive until you turn it on.
+
+Turn it on in Settings → Advanced → Sync with iCloud. The status line under **Sync now** shows the time of the last sync and how many other Macs Ferrocast has seen, or the reason it cannot run (for example, the iCloud Drive folder is missing). **Sync now** runs a sync right away.
+
+## What syncs
+
+- **Settings**, hotkeys included.
+- **Snippets** and **quicklinks**.
+- **Notes**, including pinned notes and Recently Deleted.
+- **Clipboard history**, with the images of image entries. Only what Ferrocast recorded on a Mac is shared. Entries from password managers are never recorded, so they are never shared. Your history retention setting still applies.
+- **Ask AI chats**. Ferrocast now saves each conversation so it can reach your other Macs.
+
+## What stays on each Mac
+
+- Script folders, the Obsidian vault, Launch at login, the camera and microphone you picked for recording, the screenshot and recordings folders, update preferences and state, and window and note state such as the last open note and the Notes zoom.
+- The Sync switch itself: you turn it on separately on each Mac.
+- **macOS permissions** (Accessibility, Screen Recording, Input Monitoring and so on). They belong to each Mac and Ferrocast cannot copy them. Grant them again on every Mac.
+- **API keys** in the Keychain. Ferrocast is signed ad hoc, which does not allow iCloud Keychain, so enter each key on every Mac.
+
+## Conflicts
+
+Ferrocast merges item by item. Each snippet, quicklink, note, clipboard entry and chat is compared on its own, and the newest edit wins. An item added on one Mac is never lost because another Mac did not have it. A deletion reaches your other Macs too; if another Mac edits the item later than the deletion, the item comes back. The settings are one item: the most recent change to them on any Mac wins.
+
+Each Mac writes only its own files in the `Ferrocast` folder of iCloud Drive (`devices/<id>/`), so iCloud has no conflicting copies to create. A file another Mac wrote that Ferrocast cannot read is skipped.
+
+The first time you turn sync on in a Mac, what other Macs already published wins: that Mac takes on their settings and items, and anything only it has is added to the rest. Merging happens every 30 seconds, when you open the launcher and when you press **Sync now**. Turning sync off stops all reading and writing but leaves the folder in iCloud Drive as it is.
+
+:::note[Clipboard history]
+The history now leaves the Mac when sync is on, and it is not encrypted in iCloud Drive beyond what iCloud itself provides. Leave sync off if you do not want that.
+:::

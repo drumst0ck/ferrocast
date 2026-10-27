@@ -452,6 +452,22 @@ impl NotesCtl {
         out
     }
 
+    /// After a sync merge replaced the notes: show the open note's merged text in the editor when it
+    /// differs from `previous` (what the editor had), so the next keystroke builds on it.
+    pub fn reload_current(&mut self, d: &Data, previous: &str) {
+        let Some(id) = self.current.clone() else { return };
+        if let Some(n) = d.notes.iter().find(|n| n.id == id && n.deleted_at.is_none()) {
+            if n.text != previous {
+                self.fx.set_markdown(&n.text.clone());
+            }
+        }
+    }
+
+    /// True while typed text is not saved yet (a sync merge waits for it).
+    pub fn has_pending(&self) -> bool {
+        self.dirty
+    }
+
     /// Writes pending text now (app quit).
     pub fn flush(&mut self, d: &mut Data) -> Out {
         let mut out = Out::default();

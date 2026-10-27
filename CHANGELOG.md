@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Sync with iCloud**: opt-in in Settings → Advanced (off by default). Settings (hotkeys included), snippets, quicklinks, notes, clipboard history with its images and Ask AI chats stay in step between your Macs through the iCloud Drive folder, merged item by item with the newest edit winning and deletions included. Script folders, the Obsidian vault, Launch at login, camera and microphone choices, update preferences and macOS permissions stay on each Mac, and Keychain API keys do not sync. Ask AI conversations are now saved so they can sync. (docs: /docs/launcher/sync/)
+
 ### Changed
 - **Menu bar icon**: the menu bar shows Ferrocast's own app icon (the red square with the white bolt) instead of the drawn ring, and goes back to it after a recording stops.
 

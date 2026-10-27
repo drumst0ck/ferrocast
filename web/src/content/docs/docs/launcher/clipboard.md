@@ -10,7 +10,7 @@ Open the Clipboard view from the launcher. Each entry has a detail pane with an 
 
 ## Storage and privacy
 
-History stays on your Mac, in a JSON file in Application Support (unencrypted; see [Data and privacy](/docs/reference/data-and-privacy/)). Deleted clipboard images are removed from disk. A malformed `file://` URL on the pasteboard cannot panic the clipboard watcher. Backup export leaves the clipboard history out.
+History stays on your Mac (unless you turn on [Sync with iCloud](/docs/launcher/sync/)), in a JSON file in Application Support (unencrypted; see [Data and privacy](/docs/reference/data-and-privacy/)). Deleted clipboard images are removed from disk. A malformed `file://` URL on the pasteboard cannot panic the clipboard watcher. Backup export leaves the clipboard history out.
 
 :::caution[Limits]
 Pasting requires Accessibility.

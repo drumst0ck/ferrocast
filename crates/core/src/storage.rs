@@ -47,6 +47,23 @@ impl Store {
         }
     }
 
+    /// Load a list whose items have an `id`. A file written before ids existed (items without one)
+    /// gets its ids assigned and is saved right away, so the ids are the same on every launch:
+    /// sync keys items by id and a new id per launch would look like a deletion plus an addition.
+    pub fn load_with_ids<T: DeserializeOwned + Serialize>(&self, name: &str) -> Vec<T> {
+        let list: Vec<T> = self.load(name);
+        let missing = std::fs::read(self.path(name))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Vec<serde_json::Value>>(&b).ok())
+            .is_some_and(|items| items.iter().any(|v| v.get("id").and_then(|i| i.as_str()).is_none_or(str::is_empty)));
+        if missing {
+            if let Err(e) = self.save(name, &list) {
+                eprintln!("ferrocast: could not save ids to {name}: {e}");
+            }
+        }
+        list
+    }
+
     /// Atomic write (temp file + rename).
     pub fn save<T: Serialize>(&self, name: &str, value: &T) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.root)?;
@@ -60,10 +77,10 @@ impl Store {
     pub fn load_all(&self) -> Data {
         let mut d = Data {
             settings: self.load("settings.json"),
-            snippets: self.load("snippets.json"),
-            quicklinks: self.load("quicklinks.json"),
-            notes: self.load("notes.json"),
-            clipboard: self.load("clipboard.json"),
+            snippets: self.load_with_ids("snippets.json"),
+            quicklinks: self.load_with_ids("quicklinks.json"),
+            notes: self.load_with_ids("notes.json"),
+            clipboard: self.load_with_ids("clipboard.json"),
             frecency: self.load::<Frecency>("frecency.json"),
         };
         if !self.path("quicklinks.json").exists() {
@@ -76,14 +93,22 @@ impl Store {
     }
 }
 
+/// Built-in items have fixed ids so every Mac (and every launch) means the same item.
+fn with_id<T>(mut item: T, set: impl FnOnce(&mut T, String), id: &str) -> T {
+    set(&mut item, id.to_string());
+    item
+}
+
 pub fn default_quicklinks() -> Vec<Quicklink> {
+    let q = |id: &str, name: &str, link: &str| with_id(Quicklink::new(name, link), |q, id| q.id = id, id);
     vec![
-        Quicklink::new("Search Google", "https://www.google.com/search?q={argument name=\"query\"}"),
-        Quicklink::new("Search GitHub", "https://github.com/search?q={argument name=\"query\"}"),
-        Quicklink::new("Search YouTube", "https://www.youtube.com/results?search_query={argument name=\"query\"}"),
-        Quicklink::new("Search crates.io", "https://crates.io/search?q={argument name=\"crate\"}"),
-        Quicklink::new("Rust Docs", "https://docs.rs/{argument name=\"crate\"}"),
-        Quicklink::new(
+        q("default-quicklink-google", "Search Google", "https://www.google.com/search?q={argument name=\"query\"}"),
+        q("default-quicklink-github", "Search GitHub", "https://github.com/search?q={argument name=\"query\"}"),
+        q("default-quicklink-youtube", "Search YouTube", "https://www.youtube.com/results?search_query={argument name=\"query\"}"),
+        q("default-quicklink-crates", "Search crates.io", "https://crates.io/search?q={argument name=\"crate\"}"),
+        q("default-quicklink-docsrs", "Rust Docs", "https://docs.rs/{argument name=\"crate\"}"),
+        q(
+            "default-quicklink-translate",
             "Translate",
             "https://translate.google.com/?sl=auto&tl={argument name=\"to\" default=\"en\"}&text={argument name=\"text\"}",
         ),
@@ -91,10 +116,11 @@ pub fn default_quicklinks() -> Vec<Quicklink> {
 }
 
 pub fn default_snippets() -> Vec<Snippet> {
+    let s = |id: &str, name: &str, text: &str, kw: &str| with_id(Snippet::new(name, text, kw), |s, id| s.id = id, id);
     vec![
-        Snippet::new("Shrug", "¯\\_(ツ)_/¯", "!shrug"),
-        Snippet::new("Today's date", "{date format=\"yyyy-MM-dd\"}", "!today"),
-        Snippet::new("Console log", "console.log({cursor})", ";;log"),
+        s("default-snippet-shrug", "Shrug", "¯\\_(ツ)_/¯", "!shrug"),
+        s("default-snippet-today", "Today's date", "{date format=\"yyyy-MM-dd\"}", "!today"),
+        s("default-snippet-console-log", "Console log", "console.log({cursor})", ";;log"),
     ]
 }
 

@@ -27,8 +27,12 @@ fn fixture() -> App {
         ignored_clipboard_count: Default::default(),
         visible: Default::default(),
         keywords: Default::default(),
+        clip_dirty: Default::default(),
     });
     let mut app = App {
+        sync: SyncCtl::default(),
+        chats: vec![],
+        ai_chat: None,
         update_poller: None,
         ctx,
         shared,
@@ -14690,4 +14694,165 @@ fn the_menu_bar_icon_is_the_coloured_app_icon() {
     // left of the bolt is the red square
     let r = px(w / 5, h / 2);
     assert!(r[0] > 190 && r[1] < 120 && r[2] < 120 && r[3] > 230, "red {r:?}");
+}
+
+#[test]
+fn ask_ai_answers_persist_as_one_chat_with_a_stable_id() {
+    let mut app = fixture();
+    app.stack.push(View::Ai {
+        prompt: String::new(),
+        asked: "first question".into(),
+        answer: "first answer".into(),
+        history: vec![],
+        busy: false,
+        run: 1,
+    });
+    app.save_ai_chat();
+    let id = app.chats[0].id.clone();
+    if let Some(View::Ai { history, asked, answer, .. }) = app.stack.last_mut() {
+        history.push((std::mem::take(asked), std::mem::take(answer)));
+        *asked = "second".into();
+        *answer = "second answer".into();
+    }
+    app.save_ai_chat();
+    assert_eq!(app.chats.len(), 1, "the same conversation keeps its id");
+    assert_eq!(app.chats[0].id, id);
+    assert_eq!(app.chats[0].turns.len(), 2);
+    let saved: Vec<Chat> = app.store.load("chats.json");
+    assert_eq!(saved, app.chats);
+    // a failed answer is not saved
+    if let Some(View::Ai { answer, .. }) = app.stack.last_mut() {
+        *answer = "⚠ boom".into();
+    }
+    app.save_ai_chat();
+    assert_eq!(app.chats[0].turns.len(), 2);
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
+fn sync_is_off_by_default_and_queues_nothing() {
+    let mut app = fixture();
+    assert!(!app.settings.sync_enabled);
+    app.sync_mark("snippets.json");
+    app.sync_all();
+    app.sync_on_show();
+    app.sync_flush();
+    assert!(!app.sync.in_flight && app.sync.pending.is_empty(), "no run starts while sync is off");
+    assert!(app.sync_status().starts_with("Off"));
+    assert!(!app.store.root.join("sync-device-id").exists() && !app.store.root.join("sync-state").exists());
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
+fn a_merge_is_applied_without_queueing_a_new_run() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let merged = ferrocast_core::sync_io::to_items(&[Snippet::new("remote", "text", "!r")]);
+    let t = ferrocast_core::sync::Tracker::default();
+    let snap = app.sync_snapshot("snippets");
+    assert!(app.sync_apply("snippets", merged, t, &snap).is_some());
+    assert_eq!(app.snippets.len(), 1);
+    assert_eq!(app.store.load::<Vec<Snippet>>("snippets.json").len(), 1);
+    assert!(app.sync.pending.is_empty(), "saving a merge is not a local edit");
+    app.sync_mark("snippets.json");
+    assert!(app.sync.pending.contains("snippets"), "a local save queues its domain once sync is on");
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+fn merged_notes(list: &[Note]) -> Vec<(String, serde_json::Value)> {
+    ferrocast_core::sync_io::to_items(list)
+}
+
+#[test]
+fn a_merged_edit_of_the_open_note_reaches_the_editor_and_typing_continues_from_it() {
+    use crate::notes_ctl::NMsg;
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d));
+    let open = app.notes_ctl.current.clone().unwrap();
+    app.settings.sync_enabled = true;
+    let mut remote = app.notes.clone();
+    remote.iter_mut().find(|n| n.id == open).unwrap().text = "Remote edit".into();
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert_eq!(st.borrow().markdown, "Remote edit", "the editor shows the merged text");
+    app.notes_do(|c, d| c.handle(NMsg::Changed("Remote edit, plus mine".into()), d));
+    assert_eq!(app.notes.iter().find(|n| n.id == open).unwrap().text, "Remote edit, plus mine");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_note_deleted_elsewhere_while_open_is_kept_and_typing_is_not_dropped() {
+    use crate::notes_ctl::NMsg;
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d));
+    let open = app.notes_ctl.current.clone().unwrap();
+    app.settings.sync_enabled = true;
+    // the merge removed the open note (a deletion on another Mac)
+    let remote: Vec<Note> = app.notes.iter().filter(|n| n.id != open).cloned().collect();
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert!(app.notes.iter().any(|n| n.id == open), "the open note stays");
+    assert_eq!(app.notes_ctl.current.as_deref(), Some(open.as_str()));
+    app.notes_do(|c, d| c.handle(NMsg::Changed("still typing".into()), d));
+    assert_eq!(app.notes.iter().find(|n| n.id == open).unwrap().text, "still typing");
+    // moved to Recently Deleted elsewhere: same
+    let mut trashed = app.notes.clone();
+    trashed.iter_mut().find(|n| n.id == open).unwrap().deleted_at = Some(99);
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&trashed), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert!(app.notes.iter().find(|n| n.id == open).unwrap().deleted_at.is_none());
+    let _ = st;
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_clipboard_entry_recorded_while_the_run_was_away_is_not_overwritten_by_the_merge() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let entry = |id: &str, c: &str| ClipEntry {
+        id: id.into(),
+        kind: ClipKind::Text,
+        content: c.into(),
+        title: None,
+        copied_at: services::now_secs(),
+        pinned: false,
+        source_app: None,
+        times_copied: 1,
+        width: 0,
+        height: 0,
+    };
+    let snap = app.sync_snapshot("clipboard");
+    // the recorder thread adds an entry after the snapshot was taken
+    app.shared.clipboard.lock().unwrap().push(entry("mine", "just copied"));
+    let merged = ferrocast_core::sync_io::to_items(&[entry("theirs", "from another Mac")]);
+    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), &snap).is_none(), "not applied");
+    let list = app.shared.clipboard.lock().unwrap().clone();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, "mine", "the new entry is still there");
+    // with nothing recorded in between the merge is applied
+    let snap = app.sync_snapshot("clipboard");
+    let merged = ferrocast_core::sync_io::to_items(&[entry("mine", "just copied"), entry("theirs", "from another Mac")]);
+    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert_eq!(app.shared.clipboard.lock().unwrap().len(), 2);
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
+fn turning_sync_on_saves_every_domain_file_first_and_the_status_names_pending_downloads() {
+    let mut app = fixture();
+    app.sync_persist_all(); // what enabling does before the first publish
+    for f in ["snippets.json", "quicklinks.json", "notes.json", "chats.json", "clipboard.json", "settings.json"] {
+        assert!(app.store.path(f).exists(), "{f} is saved before the first publish");
+    }
+    let saved: Vec<Snippet> = app.store.load("snippets.json");
+    assert_eq!(saved, app.snippets);
+    app.settings.sync_enabled = true;
+    app.sync.downloading = 2;
+    assert!(app.sync_status().contains("download") && app.sync_status().contains('2'), "{}", app.sync_status());
+    // turning sync off clears the flag the worker checks before every write
+    app.sync.flag.store(true, Ordering::SeqCst);
+    app.settings.sync_enabled = false;
+    app.save_settings();
+    assert!(!app.sync.flag.load(Ordering::SeqCst));
+    std::fs::remove_dir_all(&app.store.root).ok();
 }
