@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,22 +31,4 @@ export function isEsDocsFallbackUrl(url) {
   const rest = pathname.slice(idx + '/es/docs'.length).replace(/^\//, '');
   const slug = rest === 'index' ? '' : rest;
   return !translatedEsDocSlugs.has(slug);
-}
-
-/** Released versions from repo CHANGELOG.md (excludes empty Unreleased). */
-export function changelogSitemapEntries(site) {
-  const md = readFileSync(join(root, '../CHANGELOG.md'), 'utf8');
-  const entries = [];
-  const re = /^## \[([^\]]+)\](?:\s+-\s+(\d{4}-\d{2}-\d{2}))?/gm;
-  let m;
-  while ((m = re.exec(md))) {
-    const version = m[1].toLowerCase();
-    if (version === 'unreleased') continue;
-    const releasedOn = m[2] ?? null;
-    entries.push({
-      url: new URL(`/changelog/${version}/`, site).href,
-      lastmod: releasedOn ? new Date(`${releasedOn}T00:00:00Z`) : undefined,
-    });
-  }
-  return entries;
 }

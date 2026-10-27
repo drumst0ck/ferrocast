@@ -54,8 +54,8 @@ const fileOuts = heic.outputs.map((o) => ({ ext: o.ext, label: o.label, needs: o
 type Teaser = { version: string; date: string; titles: string[] } | null;
 function readTeaser(): Teaser {
   try {
-    const file = path.resolve(process.cwd(), '..', 'CHANGELOG.md');
-    if (!existsSync(file)) return null;
+    const file = [path.resolve(process.cwd(), 'CHANGELOG.md'), path.resolve(process.cwd(), '..', 'CHANGELOG.md')].find((p) => existsSync(p));
+    if (!file) return null;
     const lines = readFileSync(file, 'utf8').split('\n');
     const heads = lines.map((l, i) => [l.match(/^## \[(.+?)\](?:\s*-\s*(\S+))?/), i] as const).filter(([m]) => m);
     const rel = heads.find(([m]) => m![1].toLowerCase() !== 'unreleased');
