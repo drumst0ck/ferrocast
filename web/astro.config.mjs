@@ -2,6 +2,10 @@ import { defineConfig } from 'astro/config';
 import node from '@astrojs/node';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
+import { changelogSitemapEntries, isEsDocsFallbackUrl } from './sitemap-helpers.mjs';
+
+const site = 'https://ferrocast.app';
+const changelogPages = changelogSitemapEntries(site);
 
 export default defineConfig({
   site: 'https://ferrocast.app',
@@ -22,7 +26,8 @@ export default defineConfig({
         es: { label: 'Español', lang: 'es' },
       },
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/drumst0ck/ferrocast' }],
-      editLink: { baseUrl: 'https://github.com/drumst0ck/ferrocast/edit/master/web/src/content/docs/' },
+      editLink: { baseUrl: 'https://github.com/drumst0ck/ferrocast/edit/master/web/' },
+      routeMiddleware: ['./src/starlightRouteData.ts'],
       customCss: ['./src/styles/fonts.css', './src/styles/starlight.css'],
       components: {
         Header: './src/components/docs/Header.astro',
@@ -34,7 +39,9 @@ export default defineConfig({
           tag: 'script',
           content: `(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-KC23GXFQ');`,
         },
-        { tag: 'meta', attrs: { property: 'og:image', content: 'https://ferrocast.app/og-docs.jpg' } },
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://ferrocast.app/og.jpg' } },
+        { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+        { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
         { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
       ],
       sidebar: [
@@ -47,7 +54,19 @@ export default defineConfig({
       ],
     }),
     // Starlight does not add its own sitemap; this is the only sitemap integration.
-    sitemap(),
+    sitemap({
+      filter: (page) => {
+        if (isEsDocsFallbackUrl(page)) return false;
+        if (page.includes('/changelog/unreleased/')) return false;
+        return true;
+      },
+      customPages: changelogPages.map((e) => e.url),
+      serialize: (item) => {
+        const hit = changelogPages.find((e) => e.url === item.url);
+        if (hit?.lastmod) return { ...item, lastmod: hit.lastmod };
+        return item;
+      },
+    }),
   ],
   devToolbar: { enabled: false },
 });

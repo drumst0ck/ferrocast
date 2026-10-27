@@ -68,6 +68,10 @@ export const es: HomeCopy = {
     ],
     demoHeading: 'Prueba la rueda',
     demoLead: 'Una imagen interactiva construida con las mismas listas que usa la app.',
+    wheelDemo: {
+      keyLabels: { convert: 'Mayús', tools: 'Cmd', actions: 'Ctrl' },
+      samples: { convert: 'un PDF', tools: 'un vídeo MP4', actions: 'cualquier archivo o carpeta' },
+    },
     convert: {
       title: 'Convertir',
       text: '{pairs} pares entre {inputs} formatos. Primero las herramientas de macOS; ffmpeg, LibreOffice, cwebp, unrar y Ghostscript son opcionales.',

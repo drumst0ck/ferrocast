@@ -1,6 +1,16 @@
 ---
 import conversions from '../data/conversions.json';
 import tools from '../data/tools.json';
+import type { HomeCopy } from '../i18n/home.en';
+
+interface Props {
+  /** Home copy `files` block (wheel labels for the active locale). */
+  files: HomeCopy['files'];
+}
+
+const { files } = Astro.props;
+const wd = files.wheelDemo;
+const nameById = Object.fromEntries(files.keys.map(([, name, , id]) => [id, name])) as Record<string, string>;
 
 const MAX = 8;
 type Seg = { label: string; needs?: string | null };
@@ -14,9 +24,9 @@ const mp4 = tools.byFormat.find((b) => b.ext === 'mp4');
 if (!pdf || !mp4) throw new Error('wheel demo sample missing from generated data');
 
 const wheels = [
-  { id: 'convert', key: 'Shift', sym: '⇧', name: 'Convert', color: '#ff8c3c', sample: 'a PDF', all: pdf.outputs.map((o): Seg => ({ label: o.label, needs: o.needs })) },
-  { id: 'tools', key: 'Command', sym: '⌘', name: 'Tools', color: '#56c2ff', sample: 'an MP4 video', all: mp4.single.map((id): Seg => ({ label: labelOf[id] })) },
-  { id: 'actions', key: 'Control', sym: '⌃', name: 'Actions', color: '#59d499', sample: 'any file or folder', all: tools.actions.map((id): Seg => ({ label: actionNames[id] ?? id })) },
+  { id: 'convert' as const, key: wd.keyLabels.convert, sym: '⇧', name: nameById.convert, color: '#ff8c3c', sample: wd.samples.convert, all: pdf.outputs.map((o): Seg => ({ label: o.label, needs: o.needs })) },
+  { id: 'tools' as const, key: wd.keyLabels.tools, sym: '⌘', name: nameById.tools, color: '#56c2ff', sample: wd.samples.tools, all: mp4.single.map((id): Seg => ({ label: labelOf[id] })) },
+  { id: 'actions' as const, key: wd.keyLabels.actions, sym: '⌃', name: nameById.actions, color: '#59d499', sample: wd.samples.actions, all: tools.actions.map((id): Seg => ({ label: actionNames[id] ?? id })) },
 ];
 
 const C = 200, R_IN = 84, R_OUT = 188, GAP = 2.6;
