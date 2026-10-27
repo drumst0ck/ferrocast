@@ -2,21 +2,27 @@
 import '../styles/fonts.css';
 import '../styles/base.css';
 import '../styles/site.css';
+import DeferredGtm from '../components/analytics/DeferredGtm.astro';
 import headlineLatin from '../assets/fonts/stack-sans-headline-latin.woff2?url';
 import textLatin from '../assets/fonts/stack-sans-text-latin.woff2?url';
-const { title, description, canonical, ogImage, jsonLd, lang = 'en', alternates, robots } = Astro.props;
+const {
+  title,
+  description,
+  canonical,
+  ogImage,
+  jsonLd,
+  lang = 'en',
+  alternates,
+  robots,
+  /** Preload only the display face used by the hero H1 (lighter home LCP). */
+  preloadFonts = 'both',
+  jsonLdInBody = false,
+} = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
 <!doctype html>
 <html lang={lang}>
   <head>
-    <!-- Google Tag Manager -->
-    <script is:inline>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
-    new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
-    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
-    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
-    })(window,document,'script','dataLayer','GTM-KC23GXFQ');</script>
-    <!-- End Google Tag Manager -->
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
@@ -41,15 +47,15 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <link rel="icon" href={`${base}/favicon.ico`} sizes="any" />
     <link rel="icon" type="image/png" href={`${base}/favicon.png`} />
     <link rel="preload" as="font" type="font/woff2" href={headlineLatin} crossorigin />
-    <link rel="preload" as="font" type="font/woff2" href={textLatin} crossorigin />
-    {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
+    {preloadFonts === 'both' && <link rel="preload" as="font" type="font/woff2" href={textLatin} crossorigin />}
+    {!jsonLdInBody && jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
     <script is:inline>document.documentElement.classList.add('js')</script>
   </head>
   <body>
-    <!-- Google Tag Manager (noscript) -->
     <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-KC23GXFQ" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
-    <!-- End Google Tag Manager (noscript) -->
     <slot />
+    {jsonLdInBody && jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
+    <DeferredGtm />
     <script>import '../scripts/reveal.js'; import '../scripts/foot-mark.js';</script>
   </body>
 </html>
