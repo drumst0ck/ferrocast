@@ -65,14 +65,36 @@ Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no 
 - **Rueda de traducción**: arrastra texto seleccionado, pulsa <kbd>⌘</kbd> y suelta sobre un idioma. La traducción sustituye la selección en su sitio donde la app lo permite y, si no, se abre en una ventana. Usa tu proveedor de Ask AI (Ollama se queda en local; también sirven las suscripciones de ChatGPT y Claude).
 - Todo en local. Primero las herramientas de macOS; ffmpeg, LibreOffice, cwebp, unrar y Ghostscript son opcionales. El resultado queda junto al original y nunca lo sobrescribe.
 
-Explora todos los pares en <https://ferrocast.app/es/files/>.
+Explora todos los pares en <https://ferrocast.app/files/>.
+
+## Capturas de pantalla
+
+<p align="center">
+  <img src="web/public/img/search.jpg" alt="Búsqueda" width="31%">
+  <img src="web/public/img/clipboard.jpg" alt="Historial del portapapeles" width="31%">
+  <img src="web/public/img/ai.jpg" alt="Ask AI" width="31%">
+</p>
+<p align="center">
+  <img src="web/public/img/record-editor.jpg" alt="Editor de grabación de pantalla" width="48%">
+  <img src="web/public/img/notes.jpg" alt="Notas flotantes" width="48%">
+</p>
+
+## Raycast y Alfred
+
+Ferrocast es **independiente** y no está afiliado a [Raycast](https://www.raycast.com/) ni a [Alfred](https://www.alfredapp.com/). Esta tabla solo recoge lo que documenta este repositorio.
+
+| Tema | Ferrocast | Notas para quienes vienen de otros lanzadores |
+| --- | --- | --- |
+| **Precio y código fuente** | MIT, código abierto, sin cuenta | Consulta la web de cada producto para el precio y la licencia |
+| **Script Commands** | Metadatos compatibles con Raycast (full, compact, silent, inline) | Los Script Commands existentes funcionan tal cual ([guía de migración](https://ferrocast.app/es/docs/getting-started/migrating-from-raycast/)) |
+| **Snippets** | Importación desde una exportación JSON de Raycast | Los quicklinks se recrean a mano |
+| **Conversión y herramientas de archivo** | 275 pares de conversión en local y 26 herramientas de archivo integradas | No está documentado en este repositorio para Raycast ni para Alfred |
+| **Extensiones y sincronización** | Sin tienda de extensiones; sin sincronización entre Macs | Tampoco se incluye: extensiones React, Search Menu Bar Items ni contexto de IA desde la selección o la pantalla ([guía de migración](https://ferrocast.app/es/docs/getting-started/migrating-from-raycast/)) |
 
 ## Qué falta hoy
 
 - **Tienda de extensiones** y **sincronización** entre Macs.
 - **Extensiones React**, **Search Menu Bar Items** y **contexto de IA** desde la selección o la pantalla (funciones al estilo Raycast que Ferrocast aún no incluye).
-
-Ferrocast es independiente y no está afiliado a Raycast ni a Alfred.
 
 ## Ask AI y privacidad
 
