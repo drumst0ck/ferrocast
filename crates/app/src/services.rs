@@ -963,7 +963,7 @@ fn recording_icon_rgba(n: usize) -> Vec<u8> {
 }
 
 /// Put the tray in (or take it out of) the recording state: the `●  mm:ss` title, the red-dot icon
-/// and the `Stop Recording` item. `title: None` restores the normal ring icon and menu. The menu
+/// and the `Stop Recording` item. `title: None` restores the normal app icon and menu. The menu
 /// and icon are only swapped when `shown` changes (replacing an open menu would close it); the
 /// title is refreshed on every call. Main thread only.
 pub fn set_tray_recording(tray: &tray_icon::TrayIcon, title: Option<&str>, stop_item: bool, shown: &mut bool) {
@@ -974,9 +974,14 @@ pub fn set_tray_recording(tray: &tray_icon::TrayIcon, title: Option<&str>, stop_
     if let Some(menu) = build_tray_menu(stop_item) {
         tray.set_menu(Some(Box::new(menu)));
     }
-    let rgba = if stop_item { recording_icon_rgba(32) } else { ring_icon_rgba() };
-    if let Ok(icon) = tray_icon::Icon::from_rgba(rgba, 32, 32) {
-        let _ = if stop_item { tray.set_icon(Some(icon)) } else { tray.set_icon_templated(Some(icon)) };
+    let icon = if stop_item {
+        tray_icon::Icon::from_rgba(recording_icon_rgba(32), 32, 32)
+    } else {
+        let (rgba, w, h) = tray_app_icon_rgba();
+        tray_icon::Icon::from_rgba(rgba, w, h)
+    };
+    if let Ok(icon) = icon {
+        let _ = tray.set_icon(Some(icon));
     }
     *shown = stop_item;
 }
@@ -985,28 +990,19 @@ pub fn make_tray(bus: Bus) -> Option<tray_icon::TrayIcon> {
     use tray_icon::menu::MenuEvent;
     let menu = build_tray_menu(false)?;
     MenuEvent::set_event_handler(Some(move |e: MenuEvent| bus.send(Msg::Tray(e.id.0.clone()))));
-    let icon = tray_icon::Icon::from_rgba(ring_icon_rgba(), 32, 32).ok()?;
-    tray_icon::TrayIconBuilder::new().with_menu(Box::new(menu)).with_icon_templated(icon).with_tooltip("Ferrocast").build().ok()
+    let (rgba, w, h) = tray_app_icon_rgba();
+    let icon = tray_icon::Icon::from_rgba(rgba, w, h).ok()?;
+    tray_icon::TrayIconBuilder::new().with_menu(Box::new(menu)).with_icon(icon).with_tooltip("Ferrocast").build().ok()
 }
 
-/// 32x32 ring template icon.
-fn ring_icon_rgba() -> Vec<u8> {
-    let n = 32usize;
-    let mut rgba = vec![0u8; n * n * 4];
-    for y in 0..n {
-        for x in 0..n {
-            let (dx, dy) = (x as f32 - 15.5, y as f32 - 15.5);
-            let d = (dx * dx + dy * dy).sqrt();
-            let in_ring = (9.0..13.5).contains(&d);
-            // bolt-ish notch
-            let notch = dx > -1.0 && dx < 6.0 && dy.abs() < 2.0 && d < 13.5;
-            if in_ring || notch {
-                let i = (y * n + x) * 4;
-                rgba[i..i + 4].copy_from_slice(&[0, 0, 0, 255]);
-            }
-        }
-    }
-    rgba
+/// Side of the menu bar icon in pixels: 22 pt at 2x, the height macOS gives status items.
+pub const TRAY_ICON_PX: u32 = 44;
+
+/// The coloured app icon, scaled for the menu bar and drawn as-is (not as a template).
+pub fn tray_app_icon_rgba() -> (Vec<u8>, u32, u32) {
+    let img = image::load_from_memory(include_bytes!("../../../resources/icon-1024.png")).expect("bundled app icon decodes").to_rgba8();
+    let small = image::imageops::resize(&img, TRAY_ICON_PX, TRAY_ICON_PX, image::imageops::FilterType::Lanczos3);
+    (small.into_raw(), TRAY_ICON_PX, TRAY_ICON_PX)
 }
 
 /// The Notes toggle in the menu bar: a second status item, without a menu, whose click toggles the
