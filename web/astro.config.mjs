@@ -2,7 +2,8 @@ import { defineConfig } from 'astro/config';
 import node from '@astrojs/node';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
-import { changelogSitemapEntries, isEsDocsFallbackUrl } from './sitemap-helpers.mjs';
+import { changelogSitemapEntries } from './src/lib/changelog/sitemap-entries.ts';
+import { isEsDocsFallbackUrl } from './sitemap-helpers.mjs';
 
 const site = 'https://ferrocast.app';
 const changelogPages = changelogSitemapEntries(site);

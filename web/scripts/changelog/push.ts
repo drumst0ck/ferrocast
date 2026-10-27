@@ -3,13 +3,14 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { parseChangelog } from '../../src/lib/changelog/parse';
+import { resolveChangelogPath } from '../../src/lib/changelog/read-source';
 
 const args = process.argv.slice(2);
 const opt = (name: string, fallback: string) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
-const file = opt('file', '../CHANGELOG.md');
+const file = opt('file', resolveChangelogPath() ?? 'CHANGELOG.md');
 const url = opt('url', process.env.CHANGELOG_URL ?? 'https://ferrocast.app').replace(/\/$/, '');
 const source = readFileSync(file, 'utf8');
 
