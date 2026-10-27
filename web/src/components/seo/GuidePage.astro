@@ -61,7 +61,7 @@ const jsonLd = [
     {t.sections.map((s) => (
       <>
         <h2>{s.h}</h2>
-        {s.paras.map((p) => <p set:html={inline(p)} />)}
+        {s.paras?.map((p) => <p set:html={inline(p)} />)}
         {s.list && <ul>{s.list.map((l) => <li set:html={inline(l)} />)}</ul>}
       </>
     ))}

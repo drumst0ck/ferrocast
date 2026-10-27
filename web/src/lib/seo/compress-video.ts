@@ -25,7 +25,7 @@ export interface GuideCopy {
   /** The page's table: any number of columns, the first cell of each row is its header. */
   limits: { h: string; caption: string; cols: string[]; rows: string[][]; note: string };
   steps: { h: string; howToName: string; items: [string, string][]; code?: string };
-  sections: { h: string; paras: string[]; list?: string[] }[];
+  sections: { h: string; paras?: string[]; list?: string[] }[];
   faq: { h: string; items: [string, string][] };
   more: { h: string; links: [string, string][] };
 }

@@ -7,6 +7,8 @@ import { installCommand as brewBlock } from '../../data/install';
 import { pairFacts, pairMeta, relatedPairs, type Pair } from '../../lib/seo/convert';
 import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
 import { esFor } from '../../lib/seo/convert-es';
+import { pairGuides } from '../../lib/seo/pair-guides';
+import { inline, plain } from '../../lib/seo/markup';
 import '../../styles/seo.css';
 
 interface Props { pair: Pair }
@@ -24,19 +26,23 @@ const steps: [string, string][] = [
   ['Tap Shift', `Tap ⇧ to open the conversion wheel, or press ⌥↵ on a file result in the launcher.`],
   [`Release over ${p.outLabel}`, 'The result is saved next to the original and never overwrites it.'],
 ];
-const jsonLd = [breadcrumbs(crumbs), howTo(`Convert ${p.inLabel} to ${p.outLabel} on Mac`, meta.description, steps)];
+const guide = pairGuides[p.slug];
 const faq: [string, string][] = [
   [`Is my ${p.inLabel} file uploaded anywhere?`, 'No. Conversions run on your Mac; nothing is uploaded.'],
   ['Will it overwrite my original?', 'No. The result is written next to the original with the same name and the new extension. If that name is taken it adds 2, 3 and so on.'],
   ['Do I need to install anything besides Ferrocast?', facts.requirement],
 ];
+if (guide) faq.push(...guide.faq);
+const jsonLd: object[] = [breadcrumbs(crumbs), howTo(`Convert ${p.inLabel} to ${p.outLabel} on Mac`, meta.description, steps)];
+// The FAQ block is marked up only on pages with a written guide, where the answers were checked by hand.
+if (guide) jsonLd.push({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: plain(a) } })) });
 ---
 <Base title={meta.title} description={meta.description} canonical={canonical} jsonLd={jsonLd} alternates={alternates}>
   <SiteHeader current="files" switchHref={es ? `/es/convertir/${es.slug}/` : undefined} switchAria="Leer esta página en español" />
   <main class="seo" id="main">
     <Crumbs items={crumbs} />
     <h1 class="pair-title">{p.inLabel} to {p.outLabel} on your Mac, without uploading</h1>
-    <p class="lead">Convert {p.inLabel} files to {p.outLabel} with Ferrocast. The conversion runs on your Mac and the result is saved next to the original.</p>
+    {guide ? <p class="lead" set:html={inline(guide.lead)} /> : <p class="lead">Convert {p.inLabel} files to {p.outLabel} with Ferrocast. The conversion runs on your Mac and the result is saved next to the original.</p>}
     <h2>How to convert {p.inLabel} to {p.outLabel}</h2>
     <ol>
       <li>Install Ferrocast (below).</li>
@@ -50,6 +56,14 @@ const faq: [string, string][] = [
       <h2>Limits</h2>
       <ul>{facts.limits.map((l) => <li>{l}</li>)}</ul>
     </>)}
+    {guide && guide.sections.map((sec) => (
+      <>
+        <h2>{sec.h}</h2>
+        {sec.paras?.map((x) => <p set:html={inline(x)} />)}
+        {sec.list && <ul>{sec.list.map((x) => <li set:html={inline(x)} />)}</ul>}
+        {sec.code && <pre><code>{sec.code}</code></pre>}
+      </>
+    ))}
     <h2>Install Ferrocast</h2>
     <pre><code>{brewBlock}</code></pre>
     <p>Free, open source (MIT), Apple Silicon only. <a class="tl" href="/docs/getting-started/install/">Install guide</a> · <a class="tl" href="/docs/files/conversions/">All conversions in the docs</a></p>
@@ -61,7 +75,7 @@ const faq: [string, string][] = [
     </ul>
     <p><a class="tl" href={`/convert/${p.family}/`}>All {p.familyName.toLowerCase()} conversions</a> · <a class="tl" href="/tools/">File tools</a> · <a class="tl" href="/files/">Explore all 275 conversions</a></p>
     <h2>Questions</h2>
-    {faq.map(([q, a]) => (<div><h3>{q}</h3><p>{a}</p></div>))}
+    {faq.map(([q, a]) => (<div><h3>{q}</h3><p set:html={inline(a)} /></div>))}
   </main>
   <SiteFooter />
 </Base>
