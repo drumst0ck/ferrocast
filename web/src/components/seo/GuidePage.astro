@@ -1,0 +1,107 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../SiteHeader.astro';
+import SiteFooter from '../SiteFooter.astro';
+import Crumbs from './Crumbs.astro';
+import { dmgUrl, installCommand, repo } from '../../data/install';
+import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
+import { inline, plain } from '../../lib/seo/markup';
+import type { GuideCopy } from '../../lib/seo/compress-video';
+import '../../styles/seo.css';
+
+/** A task page ("how to do X on a Mac") in one language, with its translation as `other`. */
+interface Props { t: GuideCopy; other: GuideCopy }
+const { t, other } = Astro.props;
+const isEs = t.lang === 'es';
+const en = isEs ? other : t;
+const es = isEs ? t : other;
+const canonical = `${SITE}${t.path}`;
+const alternates = { en: `${SITE}${en.path}`, es: `${SITE}${es.path}`, 'x-default': `${SITE}${en.path}` };
+const jsonLd = [
+  { ...howTo(t.steps.howToName, t.description, t.steps.items), inLanguage: t.lang },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    inLanguage: t.lang,
+    mainEntity: t.faq.items.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: plain(a) } })),
+  },
+  breadcrumbs(t.crumbs),
+];
+---
+<Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd} lang={t.lang} alternates={alternates}>
+  <SiteHeader lang={t.lang} current="files" switchHref={other.path} switchLabel={isEs ? 'EN' : 'ES'} switchAria={isEs ? 'Read this page in English' : 'Leer esta página en español'}>
+    {isEs && (
+      <Fragment slot="nav">
+        <a href="/es/#features">Funciones</a>
+        <a href="/files/">Archivos</a>
+        <a href="/es/#install">Instalar</a>
+        <a href="/es/docs/">Documentación</a>
+        <a href="/changelog/">Cambios</a>
+        <a href={repo}>GitHub</a>
+      </Fragment>
+    )}
+    <span slot="cta">{isEs ? 'Instalar' : 'Install'}</span>
+  </SiteHeader>
+  <main class="seo guide" id="main">
+    <Crumbs items={t.crumbs} />
+    <h1>{t.h1}</h1>
+    {t.lead.map((p, i) => <p class={i === 0 ? 'lead' : undefined} set:html={inline(p)} />)}
+    <p class="g-cta"><a class="btn" href={dmgUrl}>{t.cta.dmg}</a><span class="fine">{t.cta.note}</span></p>
+
+    <h2>{t.limits.h}</h2>
+    <div class="g-table">
+      <table>
+        <caption class="sr-only">{t.limits.caption}</caption>
+        <thead><tr>{t.limits.cols.map((c) => <th scope="col">{c}</th>)}</tr></thead>
+        <tbody>{t.limits.rows.map(([a, b, c]) => (<tr><th scope="row">{a}</th><td>{b}</td><td><code>{c}</code></td></tr>))}</tbody>
+      </table>
+    </div>
+    <p class="fine" set:html={inline(t.limits.note)} />
+
+    <h2 id="steps">{t.steps.h}</h2>
+    <ol>{t.steps.items.map(([name, text]) => <li><strong>{name}.</strong> {text}</li>)}</ol>
+    <pre><code>{t.steps.ffmpeg}</code></pre>
+    <details class="g-brew">
+      <summary>{isEs ? 'Instalar Ferrocast con Homebrew' : 'Install Ferrocast with Homebrew'}</summary>
+      <pre><code>{installCommand}</code></pre>
+    </details>
+
+    {t.sections.map((s) => (
+      <>
+        <h2>{s.h}</h2>
+        {s.paras.map((p) => <p set:html={inline(p)} />)}
+        {s.list && <ul>{s.list.map((l) => <li set:html={inline(l)} />)}</ul>}
+      </>
+    ))}
+
+    <h2>{t.faq.h}</h2>
+    <div class="g-faq">
+      {t.faq.items.map(([q, a]) => (<details><summary>{q}</summary><p set:html={inline(a)} /></details>))}
+    </div>
+
+    <h2>{t.more.h}</h2>
+    <ul class="chips">{t.more.links.map(([label, href]) => <li><a href={href}>{label}</a></li>)}</ul>
+  </main>
+  <SiteFooter lang={t.lang} />
+</Base>
+
+<style>
+  .guide .g-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .guide .fine { font-size: var(--step-small); color: var(--muted); }
+  .guide h2[id] { scroll-margin-top: 110px; }
+  .guide .g-table { overflow-x: auto; border-radius: var(--radius); box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); }
+  .guide table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: var(--step-small); line-height: 1.5; }
+  .guide th, .guide td { text-align: left; vertical-align: top; padding: 12px 14px; border-top: 1px solid rgba(255,255,255,.06); }
+  .guide thead th { border-top: 0; background: var(--surface); font-weight: 500; }
+  .guide tbody th { font-weight: 500; color: var(--ink); }
+  .guide td { color: var(--muted); }
+  .guide .g-brew summary, .guide .g-faq summary { cursor: pointer; font-weight: 500; }
+  .guide .g-brew pre { margin-top: 10px; }
+  .guide .g-faq details { padding: 14px 0; border-top: 1px solid rgba(255,255,255,.06); }
+  .guide .g-faq p { margin-top: 8px; }
+  .guide .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (prefers-color-scheme: light) {
+    .guide .g-table { box-shadow: inset 0 0 0 1px rgba(0,0,0,.07); }
+    .guide th, .guide td, .guide .g-faq details { border-top-color: rgba(0,0,0,.07); }
+  }
+</style>
