@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Pick Color**: a launcher command that opens the macOS screen colour sampler; the picked colour is copied as HEX and kept in the clipboard history. (docs: /docs/launcher/calculator/)
+
 ### Changed
 - **Menu bar icon**: the menu bar shows Ferrocast's own app icon (the red square with the white bolt) instead of the drawn ring, and goes back to it after a recording stops.
 

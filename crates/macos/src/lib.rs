@@ -6,6 +6,7 @@ pub mod apps;
 pub mod ax_text;
 pub mod capture;
 pub mod clipboard;
+pub mod color_sampler;
 pub mod drag;
 pub mod expansion;
 pub mod files;

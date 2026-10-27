@@ -3639,6 +3639,13 @@ impl App {
                     let _ = self.store.save("rates.json", &r);
                     self.rates = r;
                 }
+                Msg::ColorPicked(Some(c)) => {
+                    let hex = c.formats()[0].1.clone();
+                    // Not marked as our own write, so the colour also lands in the clipboard history.
+                    notion_io::write_clipboard(&hex);
+                    self.toast(format!("Copied {hex}"));
+                }
+                Msg::ColorPicked(None) => {}
                 Msg::Tray(id) => match id.as_str() {
                     "open" => self.show(),
                     "clipboard" => {
@@ -6073,6 +6080,12 @@ impl App {
                 self.push(View::QuicklinkForm { id: None, name: String::new(), link: String::new(), open_with: String::new() })
             }
             Builtin::SearchEmoji => self.push(View::Emoji),
+            Builtin::PickColor => {
+                // Hide first so the launcher is not what gets sampled.
+                self.hide();
+                self.reset_to_root();
+                (self.fx.color_sampler)(&self.bus);
+            }
             Builtin::SearchFiles => self.push(View::Files),
             Builtin::SwitchWindows => self.push(View::Windows),
             Builtin::KillProcess => self.push(View::Processes),
@@ -7282,6 +7295,8 @@ pub(crate) struct Effects {
     /// Start the translation request.
     pub(crate) apple_available: fn() -> bool,
     pub(crate) translate_start: fn(&Settings, String, String, Option<i32>, ferrocast_core::models::TranslateOutput, u64, &Bus),
+    /// Show the screen colour picker; the result arrives as `Msg::ColorPicked` (main thread only).
+    pub(crate) color_sampler: fn(&Bus),
 }
 
 impl Effects {
@@ -7307,6 +7322,12 @@ impl Effects {
             web_script: |b, js| services::web_script(b, js.to_string()),
             apple_available: ferrocast_macos::apple_translate::available,
             translate_start: |s, text, lang, pid, out, run, bus| services::translate_text(s, text, lang, pid, out, run, bus.clone()),
+            color_sampler: |bus| {
+                let bus = bus.clone();
+                ferrocast_macos::color_sampler::sample(move |c| {
+                    bus.send(Msg::ColorPicked(c.map(|[r, g, b, a]| ferrocast_core::color::Rgba::from_unit(r, g, b, a))))
+                });
+            },
         }
     }
 }
