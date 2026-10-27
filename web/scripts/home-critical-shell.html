@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" class="js">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="src/styles/fonts.css" />
+    <link rel="stylesheet" href="src/styles/base.css" />
+    <link rel="stylesheet" href="src/styles/site.css" />
+    <link rel="stylesheet" href="src/styles/home.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip</a>
+    <div class="cursor-light" aria-hidden="true"></div>
+    <header class="top">
+      <a class="mark" href="/"><img src="/icon.png" alt="" width="30" height="30" />Ferrocast</a>
+      <div class="menu" id="site-menu">
+        <nav class="nav" aria-label="Main">
+          <a href="#features">Features</a>
+          <a href="/docs/">Docs</a>
+        </nav>
+        <a class="lang" href="/es/" lang="es">Español</a>
+      </div>
+      <button class="burger" type="button" aria-expanded="false"><span></span></button>
+      <a class="btn" href="#install">Install</a>
+    </header>
+    <main id="main">
+      <section class="hero">
+        <div class="hero-bg" aria-hidden="true"><i></i><i></i></div>
+        <div class="copy">
+          <h1 class="lines">
+            <span class="line"><span data-line style="--i:0">Line one</span></span>
+            <span class="line"><span data-line style="--i:1">Line two</span></span>
+          </h1>
+          <p class="sub">Subhead</p>
+          <div class="acts"><a class="btn big" href="#">Install</a><a class="btn alt big" href="#">Files</a></div>
+          <p class="proof">Proof</p>
+        </div>
+        <div class="hero-3d fallback">
+          <canvas id="keys" aria-hidden="true"></canvas>
+          <img class="fb" src="/icon.png" alt="" width="256" height="256" />
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

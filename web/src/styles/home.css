@@ -10,6 +10,8 @@
 .hero .btn.alt.big { box-shadow: none; }
 .hero .proof { font-variant-numeric: tabular-nums; }
 
+/* beasties:exclude start */
+
 /* live demo: file row state */
 [data-ui] .lz-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px 4px 58px; }
 [data-ui] .lz-chip { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 14px; border-radius: 999px; background: #2c2c2f; color: #f2f2f2; font-size: 15px; }
@@ -193,3 +195,5 @@
 
 /* tour: ten dots must stay on one row on a phone */
 @media (max-width: 47.9em) { .dots { flex-wrap: nowrap; } .dots button { width: 34px; } }
+
+/* beasties:exclude end */
