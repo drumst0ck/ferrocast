@@ -1,4 +1,5 @@
 ---
+import DeferredGtm from '../analytics/DeferredGtm.astro';
 import Search from 'virtual:starlight/components/Search';
 import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
 import SocialIcons from 'virtual:starlight/components/SocialIcons';
@@ -23,6 +24,7 @@ const links = [
     <LanguageSelect />
   </div>
 </div>
+<DeferredGtm />
 <style>
   .fc-header { display: flex; align-items: center; gap: 1.25rem; height: 100%; }
   .fc-mark { display: inline-flex; align-items: center; gap: 0.6rem; font-family: var(--sl-font-system); font-weight: 500; color: var(--sl-color-white); text-decoration: none; }

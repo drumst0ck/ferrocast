@@ -3,6 +3,7 @@ import node from '@astrojs/node';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import { changelogSitemapEntries } from './src/lib/changelog/sitemap-entries.ts';
+import { lastmodForPageUrl } from './src/lib/sitemap/lastmod.ts';
 import { isEsDocsFallbackUrl } from './sitemap-helpers.mjs';
 
 const site = 'https://ferrocast.app';
@@ -14,6 +15,9 @@ export default defineConfig({
   output: 'static',
   adapter: node({ mode: 'standalone' }),
   trailingSlash: 'always',
+  build: {
+    inlineStylesheets: 'always',
+  },
   integrations: [
     starlight({
       title: 'Ferrocast Docs',
@@ -36,10 +40,6 @@ export default defineConfig({
         PageTitle: './src/components/docs/PageTitle.astro',
       },
       head: [
-        {
-          tag: 'script',
-          content: `(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-KC23GXFQ');`,
-        },
         { tag: 'meta', attrs: { property: 'og:image', content: 'https://ferrocast.app/og.jpg' } },
         { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
         { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
@@ -64,8 +64,8 @@ export default defineConfig({
       customPages: changelogPages.map((e) => e.url),
       serialize: (item) => {
         const hit = changelogPages.find((e) => e.url === item.url);
-        if (hit?.lastmod) return { ...item, lastmod: hit.lastmod };
-        return item;
+        const lastmod = hit?.lastmod ?? lastmodForPageUrl(item.url);
+        return { ...item, lastmod };
       },
     }),
   ],

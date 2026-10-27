@@ -1,0 +1,103 @@
+import { execSync } from 'node:child_process';
+import { existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { translatedEsDocSlugs } from '../docs/es-translations';
+
+const webRoot = process.cwd();
+const BUILD_DATE = new Date(
+  process.env.SOURCE_DATE_EPOCH ? Number(process.env.SOURCE_DATE_EPOCH) * 1000 : Date.now(),
+);
+
+let gitUsable: boolean | undefined;
+
+function hasGit(): boolean {
+  if (gitUsable !== undefined) return gitUsable;
+  try {
+    execSync('git rev-parse --is-inside-work-tree', { cwd: webRoot, stdio: 'ignore' });
+    gitUsable = true;
+  } catch {
+    gitUsable = false;
+  }
+  return gitUsable;
+}
+
+function gitLastCommit(file: string): Date | null {
+  if (!hasGit() || !existsSync(file)) return null;
+  try {
+    const iso = execSync(`git log -1 --format=%cI -- "${file}"`, {
+      cwd: webRoot,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+    return iso ? new Date(iso) : null;
+  } catch {
+    return null;
+  }
+}
+
+function fileLastmod(...paths: string[]): Date {
+  let best = BUILD_DATE;
+  for (const rel of paths) {
+    const abs = join(webRoot, rel);
+    if (!existsSync(abs)) continue;
+    const d = gitLastCommit(abs) ?? statSync(abs).mtime;
+    if (d > best) best = d;
+  }
+  return best;
+}
+
+function docContentPath(segments: string, locale: 'en' | 'es'): string | null {
+  const base = locale === 'es' ? 'src/content/docs/es/docs' : 'src/content/docs/docs';
+  const candidates = [
+    join(base, segments, 'index.mdx'),
+    join(base, segments, 'index.md'),
+    join(base, `${segments}.mdx`),
+    join(base, `${segments}.md`),
+  ];
+  if (locale === 'es' && segments && !translatedEsDocSlugs.has(segments)) {
+    return docContentPath(segments, 'en');
+  }
+  return candidates.find((p) => existsSync(join(webRoot, p))) ?? null;
+}
+
+function pathnameOf(url: string): string {
+  try {
+    return new URL(url).pathname.replace(/\/$/, '') || '/';
+  } catch {
+    return url;
+  }
+}
+
+/** Resolve last modification time for a sitemap URL (never throws). */
+export function lastmodForPageUrl(url: string): Date {
+  try {
+    const path = pathnameOf(url);
+    if (path === '/' || path === '') return fileLastmod('src/pages/index.astro', 'src/components/home/HomePage.astro');
+    if (path === '/es') return fileLastmod('src/pages/es/index.astro', 'src/components/home/HomePage.astro');
+    if (path === '/files') return fileLastmod('src/pages/files.astro');
+    if (path === '/facts') return fileLastmod('src/pages/facts.astro');
+    if (path === '/tools') return fileLastmod('src/pages/tools/index.astro', 'src/data/tools.json');
+    if (path.startsWith('/tools/')) {
+      return fileLastmod('src/pages/tools/[slug].astro', 'src/data/tools.json');
+    }
+    if (path.startsWith('/convert/')) {
+      return fileLastmod('src/pages/convert/[slug].astro', 'src/data/conversions.json');
+    }
+    if (path === '/changelog') return fileLastmod('src/pages/changelog/index.astro', 'CHANGELOG.md');
+    if (path.startsWith('/changelog/')) return fileLastmod('CHANGELOG.md', 'src/pages/changelog/[version].astro');
+    if (path.startsWith('/es/docs')) {
+      const seg = path.replace(/^\/es\/docs\/?/, '');
+      const rel = docContentPath(seg, 'es');
+      return rel ? fileLastmod(rel) : BUILD_DATE;
+    }
+    if (path.startsWith('/docs')) {
+      const seg = path.replace(/^\/docs\/?/, '');
+      const rel = docContentPath(seg, 'en');
+      return rel ? fileLastmod(rel) : BUILD_DATE;
+    }
+    return BUILD_DATE;
+  } catch {
+    return BUILD_DATE;
+  }
+}

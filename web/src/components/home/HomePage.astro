@@ -84,7 +84,7 @@ const steps = t.tour.steps;
 const shotSize = (f: string) => (f === 'record-editor' ? [1500, 954] : f === 'notes' || f.startsWith('files-') ? [1500, 950] : [1300, 823]);
 const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.demo.open, fileHeading: t.demo.fileHeading, fileKind: t.demo.fileKind, fileNeeds: t.demo.fileNeeds, fileAction: t.demo.fileAction, fileNote: t.demo.fileNote };
 ---
-<Base title={title} description={description} canonical={canonical} jsonLd={jsonLd} lang={lang} alternates={alternates}>
+<Base title={title} description={description} canonical={canonical} jsonLd={jsonLd} lang={lang} alternates={alternates} preloadFonts="headline" jsonLdInBody>
   <a class="skip" href="#main">{t.skip}</a>
   <div class="cursor-light" aria-hidden="true"></div>
   <SiteHeader lang={lang} switchHref={switchHref} switchLabel={t.nav.switchLabel} switchAria={t.nav.switchAria}>
