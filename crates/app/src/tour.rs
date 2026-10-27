@@ -1,4 +1,4 @@
-//! First-run tour: a seven-slide deck drawn straight onto the 750×475 window.
+//! First-run tour: a nine-slide deck drawn straight onto the 750×475 window.
 //!
 //! One claim per slide, large type, whole fields of colour, real screenshots and keycaps for
 //! shortcuts. The deck state lives in [`Tour`] (kept in `App`); the drawing is a set of small
@@ -9,8 +9,8 @@ use egui::epaint::{CornerRadius, RectShape};
 use egui::{Color32, FontFamily, TextureHandle, TextureId, TextureOptions};
 use std::cell::RefCell;
 
-pub(super) const SLIDES: usize = 7;
-pub(super) const PERMS_SLIDE: usize = 5;
+pub(super) const SLIDES: usize = 9;
+pub(super) const PERMS_SLIDE: usize = 7;
 const LAST: usize = SLIDES - 1;
 
 /// Time the old slide takes to leave and the new one to arrive.
@@ -71,7 +71,7 @@ pub(super) struct Tour {
     perms: Perms,
     polled: f64,
     reduce: Option<bool>,
-    shots: [Option<TextureHandle>; 3],
+    shots: [Option<TextureHandle>; 5],
 }
 
 impl Tour {
@@ -84,7 +84,7 @@ impl Tour {
             perms: Perms { accessibility: false, input_monitoring: false, automation: false },
             polled: f64::NEG_INFINITY,
             reduce: None,
-            shots: [None, None, None],
+            shots: [None, None, None, None, None],
         }
     }
 
@@ -196,7 +196,7 @@ struct Scene<'a> {
     still: bool,
     interactive: bool,
     slide: usize,
-    shots: [Option<TextureId>; 3],
+    shots: [Option<TextureId>; 5],
     perms: Perms,
     hotkey: Vec<String>,
     actions: &'a RefCell<Vec<Action>>,
@@ -470,7 +470,7 @@ fn slide_reach(s: &Scene) {
         ("40", "Window layouts", "About forty, from halves to other displays."),
         (":)", "Emoji", "Search it, paste it."),
         ("10m", "Timers", "Type timer 10m and go."),
-        ("md", "Notes", "Quick notes in markdown."),
+        ("md", "Notes", "A floating window; Markdown as you type."),
         ("⌘ Y", "Quick Look", "Preview the selected file."),
     ];
     let (x0, y0, cw, ch) = (48.0, 92.0, 228.0, 104.0);
@@ -522,6 +522,64 @@ fn slide_ai(s: &Scene) {
     s.image(3, 2, img);
     s.txt(4, 452.0, 262.0, "Ask AI", 13.0, pal.text);
     s.para(4, 452.0, 282.0, 262.0, "Short answers, in a conversation that lasts while the window is open.", 12.5, pal.sub_strong);
+}
+
+fn slide_record(s: &Scene) {
+    let pal = &s.pal;
+    // the editor, large, on the left; the story on the right
+    s.field(0.0, 0.0, 480.0, s.c.height(), pal.field);
+    let img = s.rect(40.0, 34.0, 400.0, 253.0, 0);
+    s.image(0, 3, img);
+    let mut x = 40.0;
+    for (n, name) in ["Record Screen", "Record Area", "Record Window"].iter().enumerate() {
+        x += s.pill(1 + n, x, 304.0, name, 12.5) + 8.0;
+    }
+    let mut x = 40.0;
+    s.txt(4, x, 348.0, "Screenshots", 12.5, pal.sub_strong);
+    x += s.text_w("Screenshots", 12.5) + 14.0;
+    for name in ["Capture Area", "Window", "Screen", "Scrolling"] {
+        let w = s.text_w(name, 12.5) + 16.0;
+        let r = s.rect(x, 342.0, w, 26.0, 4);
+        let a = s.a(4);
+        s.p.rect_stroke(r, 13.0, Stroke::new(1.0, pal.border.gamma_multiply(a)), StrokeKind::Inside);
+        s.p.text(r.center(), Align2::CENTER_CENTER, name, FontId::proportional(12.0), pal.text.gamma_multiply(a));
+        x += w + 6.0;
+    }
+    let rx = 508.0;
+    s.headline(1, rx, 34.0, "Record\nyour screen.", 38.0, pal.text);
+    let claims = [
+        "Auto zoom moves toward your clicks.",
+        "Camera, microphone and system audio.",
+        "Export MP4 or GIF, all on your Mac, nothing uploaded.",
+    ];
+    for (n, c) in claims.iter().enumerate() {
+        let y = 152.0 + n as f32 * 78.0;
+        s.hairline(2 + n, rx, y - 12.0, 202.0);
+        s.para(2 + n, rx, y, 202.0, c, 14.0, pal.text);
+    }
+}
+
+fn slide_notes(s: &Scene) {
+    let pal = &s.pal;
+    s.field(330.0, 0.0, 750.0, s.c.height(), pal.accent);
+    s.headline(0, 48.0, 34.0, "Notes\nthat float.", 46.0, pal.text);
+    let img = s.rect(358.0, 44.0, 364.0, 230.5, 1);
+    s.image(1, 4, img);
+    s.txt(2, 358.0, 296.0, "Type / for formats, : for emoji.", 13.0, Color32::WHITE);
+    s.keycap(3, 358.0, 330.0, "⌘", 30.0, Tone::OnAccent);
+    s.keycap(3, 396.0, 330.0, "P", 30.0, Tone::OnAccent);
+    s.txt(3, 440.0, 337.0, "browses your notes", 13.0, Color32::WHITE);
+    let claims = [
+        "A floating window above your other apps.",
+        "Markdown as you type, and the / menu.",
+        "Pin notes; ⌘P browses them.",
+        "Dictation and AI commands.",
+    ];
+    for (n, c) in claims.iter().enumerate() {
+        let y = 166.0 + n as f32 * 56.0;
+        s.hairline(1 + n, 48.0, y - 10.0, 246.0);
+        s.para(1 + n, 48.0, y, 246.0, c, 14.0, pal.text);
+    }
 }
 
 fn slide_permissions(s: &Scene) -> Vec<String> {
@@ -633,20 +691,24 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
         // textures, decoded once
-        const PNGS: [&[u8]; 3] = [
+        const PNGS: [&[u8]; 5] = [
             include_bytes!("../../../resources/tour/home.png"),
             include_bytes!("../../../resources/tour/files-wheel-convert.png"),
             include_bytes!("../../../resources/tour/ai.png"),
+            include_bytes!("../../../resources/tour/record.png"),
+            include_bytes!("../../../resources/tour/notes.png"),
         ];
+        // the slide each picture belongs to
+        const PNG_SLIDE: [usize; 5] = [1, 2, 4, 5, 6];
         for (n, bytes) in PNGS.iter().enumerate() {
-            let needed = matches!((n, slide, self.tour.from), (0, 1, _) | (0, _, 1) | (1, 2, _) | (1, _, 2) | (2, 4, _) | (2, _, 4));
+            let needed = slide == PNG_SLIDE[n] || self.tour.from == PNG_SLIDE[n];
             if needed && self.tour.shots[n].is_none() {
                 if let Some(img) = services::decode_png(bytes) {
                     self.tour.shots[n] = Some(ctx.load_texture(format!("tour-{n}"), img, TextureOptions::LINEAR));
                 }
             }
         }
-        let shots = [0, 1, 2].map(|n| self.tour.shots[n].as_ref().map(|t| t.id()));
+        let shots = [0, 1, 2, 3, 4].map(|n| self.tour.shots[n].as_ref().map(|t| t.id()));
         let hotkey = hotkey_keys(&services::hotkey_label(&self.settings.launcher_hotkey));
         let actions = RefCell::new(Vec::new());
         let painter = ui.painter().with_clip_rect(rect);
@@ -677,6 +739,8 @@ impl App {
             2 => slide_wheel(s),
             3 => slide_reach(s),
             4 => slide_ai(s),
+            5 => slide_record(s),
+            6 => slide_notes(s),
             PERMS_SLIDE => perm_lines = slide_permissions(s),
             _ => slide_done(s),
         };

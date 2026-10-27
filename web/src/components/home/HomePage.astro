@@ -9,6 +9,8 @@ import path from 'node:path';
 import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import FilesBlock from './FilesBlock.astro';
+import RecordBlock from './RecordBlock.astro';
+import NotesBlock from './NotesBlock.astro';
 import '../../styles/files.css';
 import '../../styles/home.css';
 import conversions from '../../data/conversions.json';
@@ -79,7 +81,7 @@ const jsonLd = [
   { '@context': 'https://schema.org', '@type': 'FAQPage', inLanguage: lang, mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: a } })) },
 ];
 const steps = t.tour.steps;
-const shotSize = (f: string) => (f.startsWith('files-') ? [1500, 950] : [1300, 823]);
+const shotSize = (f: string) => (f === 'record-editor' ? [1500, 954] : f === 'notes' || f.startsWith('files-') ? [1500, 950] : [1300, 823]);
 const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.demo.open, fileHeading: t.demo.fileHeading, fileKind: t.demo.fileKind, fileNeeds: t.demo.fileNeeds, fileAction: t.demo.fileAction, fileNote: t.demo.fileNote };
 ---
 <Base title={title} description={description} canonical={canonical} jsonLd={jsonLd} lang={lang} alternates={alternates}>
@@ -89,6 +91,8 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
     <Fragment slot="nav">
       <a href="#features">{t.nav.features}</a>
       <a href="#files">{t.nav.files}</a>
+      <a href="#record">{t.nav.record}</a>
+      <a href="#notes">{t.nav.notes}</a>
       <a href={docs('/')}>{t.nav.docs}</a>
       <a href="#install">{t.nav.install}</a>
       <a href="#faq">{t.nav.faq}</a>
@@ -138,6 +142,10 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
     </section>
 
     <FilesBlock t={t} lang={lang} fill={fill} />
+
+    <RecordBlock t={t} lang={lang} />
+
+    <NotesBlock t={t} lang={lang} />
 
     <section class="more-list wrap" id="features" aria-labelledby="h-feat">
       <h2 id="h-feat" data-reveal>{t.features.title}</h2>

@@ -2,6 +2,11 @@
 //! `cargo run -p ferrocast-macos --example notes_demo -- --check [--out <dir>]`
 //! Opens a real window for a couple of seconds, drives it programmatically, asserts the
 //! behavior and writes light/dark PNG snapshots. Exit code 0 only when every assertion holds.
+//!
+//! Website and tour pictures (no checks, see scripts/shots-new.sh):
+//! `cargo run -p ferrocast-macos --example notes_demo -- --shot <out.png> [--note-file <note.md>] [--size WxH] [--light]`
+//! shows the real Notes window with that Markdown note (default: a short sample), in the dark theme
+//! unless `--light`, at WxH points (default 620x460), and writes a snapshot of the window content.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -93,7 +98,9 @@ fn relaunch_in_bundle(args: &[String]) -> ! {
     let status = cmd.status();
     let out = std::fs::read_to_string(&log).unwrap_or_default();
     print!("{out}");
-    let ok = status.map(|s| s.success()).unwrap_or(false) && out.contains("notes_demo: all checks passed");
+    let verdict =
+        if args.iter().any(|a| a == "--shot") { !out.contains("snapshot failed") } else { out.contains("notes_demo: all checks passed") };
+    let ok = status.map(|s| s.success()).unwrap_or(false) && verdict;
     let _ = std::fs::remove_file(&log);
     std::process::exit(if ok { 0 } else { 1 });
 }
@@ -131,8 +138,47 @@ fn first_responder_text_view(app: &NSApplication) -> Option<Retained<NSTextView>
     fr.downcast_ref::<NSTextView>().map(|t| t.retain())
 }
 
+/// `--shot`: one snapshot of the real window with a given note, no assertions.
+fn shot(args: &[String]) {
+    use ferrocast_macos::notes_theme::{self as theme, Appearance};
+    let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let out = PathBuf::from(arg("--shot").expect("--shot <out.png>"));
+    let note = arg("--note-file")
+        .map(|p| std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("cannot read {p}: {e}")))
+        .unwrap_or_else(|| "# Call Ana about the offer\n\nAsk for the revised numbers.\n\n- budget\n- start date\n".into());
+    let (w, h) = arg("--size")
+        .and_then(|s| s.split_once('x').and_then(|(w, h)| Some((w.parse::<f64>().ok()?, h.parse::<f64>().ok()?))))
+        .unwrap_or((620.0, 460.0));
+    let mtm = MainThreadMarker::new().expect("main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    app.finishLaunching();
+    theme::set_appearance(if args.iter().any(|a| a == "--light") { Appearance::Light } else { Appearance::Dark });
+    notes::show();
+    if !wait_key(1500) && !args.iter().any(|a| a == "--bundled") {
+        // no focus for a bare `cargo run` from a background context: re-run inside a throwaway bundle
+        notes::hide();
+        relaunch_in_bundle(args);
+    }
+    reset(&app, &note);
+    tv_of(&app).setSelectedRange(NSRange::new(0, 0));
+    if let Some(win) = app.keyWindow() {
+        win.setContentSize(objc2_foundation::NSSize::new(w, h));
+    }
+    pump(600);
+    if !notes::snapshot_png(&out) {
+        eprintln!("notes_demo: snapshot failed");
+        std::process::exit(1);
+    }
+    println!("{}", out.display());
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--shot") {
+        shot(&args);
+        return;
+    }
     if !args.iter().any(|a| a == "--check") {
         eprintln!("usage: notes_demo --check [--out <dir>]");
         std::process::exit(2);

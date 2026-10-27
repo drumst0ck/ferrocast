@@ -4,7 +4,7 @@ description: "Qué pide Ferrocast la primera vez que lo abres, por qué necesita
 sidebar:
   order: 2
 ---
-La primera vez que abres Ferrocast muestra un **recorrido de bienvenida** de siete diapositivas: qué hace la app y, después, una diapositiva que te guía por los permisos que puede usar. Usa <kbd>←</kbd> <kbd>→</kbd> o <kbd>↵</kbd> para avanzar y <kbd>esc</kbd> para saltarlo. Busca «Welcome» para volver a verlo. Los permisos los concedes tú en Ajustes del Sistema; Ferrocast no puede concederlos por sí mismo.
+La primera vez que abres Ferrocast muestra un **recorrido de bienvenida** de nueve diapositivas: qué hace la app, con una diapositiva sobre la grabación de pantalla y otra sobre la ventana flotante de Notas, y, después, una diapositiva que te guía por los permisos que puede usar. Usa <kbd>←</kbd> <kbd>→</kbd> o <kbd>↵</kbd> para avanzar y <kbd>esc</kbd> para saltarlo. Busca «Welcome» para volver a verlo. Los permisos los concedes tú en Ajustes del Sistema; Ferrocast no puede concederlos por sí mismo.
 
 Abre el lanzador con <kbd>⌥</kbd> <kbd>Space</kbd> (se cambia en los ajustes).
 
