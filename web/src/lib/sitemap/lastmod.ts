@@ -99,7 +99,7 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/' || path === '') return fileLastmod('src/pages/index.astro', 'src/components/home/HomePage.astro');
     if (path === '/es') return fileLastmod('src/pages/es/index.astro', 'src/components/home/HomePage.astro');
     if (path === '/files') return fileLastmod('src/pages/files.astro');
-    if (path === '/facts') return fileLastmod('src/pages/facts.astro');
+    if (path === '/facts' || path === '/es/facts') return fileLastmod('src/lib/seo/facts.ts', 'src/components/seo/FactsPage.astro');
     if (path === '/es/convertir' || path.startsWith('/es/convertir/')) {
       return fileLastmod('src/lib/seo/convert-es.ts', 'src/pages/es/convertir/[slug].astro', 'src/pages/es/convertir/index.astro');
     }
