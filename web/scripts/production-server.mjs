@@ -13,7 +13,7 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 const CSP_REPORT_ONLY = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com",
-  "connect-src 'self' https://www.google-analytics.com https://region1.google-analytics.com https://www.googletagmanager.com",
+  "connect-src 'self' https://www.google-analytics.com https://region1.google-analytics.com https://www.googletagmanager.com https://api.frankfurter.dev",
   "img-src 'self' data: https://www.googletagmanager.com https://www.google-analytics.com",
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self'",
@@ -34,6 +34,10 @@ function applyHeaders(req, res) {
 
   if (path.startsWith('/_astro/')) {
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  } else if (
+    /^\/(?:og\.jpg|favicon\.ico|favicon\.png|icon\.png)$/.test(path)
+  ) {
+    res.setHeader('Cache-Control', 'public, max-age=604800');
   } else if (path.startsWith('/img/') || path.startsWith('/video/')) {
     res.setHeader('Cache-Control', 'public, max-age=604800');
   } else if (

@@ -219,8 +219,9 @@ html:not(.js) .fl .ans { display: block; } html:not(.js) .fp { display: none; }
 @keyframes drift2 { to { transform: translate3d(8vw, -4vw, 0) scale(1.2); } }
 .hero .copy { position: relative; z-index: 2; grid-column: 1 / 8; grid-row: 1; display: grid; gap: 26px; justify-items: start; }
 .hero h1 { font-size: clamp(2.6rem, 1rem + 5.2vw, 6.6rem); line-height: 1.02; color: #fff; }
-/* gradient lives on the animated spans themselves: clipping text through a transformed child drops the text on mobile/Safari and after scroll repaints */
-.hero h1 [data-line] { background: linear-gradient(180deg, #ffffff 30%, #b9b7bf 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: #fff; }
+/* Solid fill for LCP on mobile; gradient applied after load via .hero--gradient (see HomePage). */
+.hero h1 [data-line] { color: #fff; }
+.hero.hero--gradient h1 [data-line] { background: linear-gradient(180deg, #ffffff 30%, #b9b7bf 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: #fff; }
 .hero .sub { font-size: var(--step-lead); line-height: 1.4; max-width: 30em; color: #d3d2d8; }
 .hero .acts { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; }
 .btn.big { min-height: 3.5rem; padding: 0 1.7rem; font-size: 1.0625rem; box-shadow: 0 10px 40px rgba(240,83,95,.45), inset 0 1px 0 rgba(255,255,255,.35); }
@@ -362,7 +363,8 @@ html:not(.js) .vwrap { transform: none; }
   .hero-bg i { opacity: .38; }
   .step h3, .stats dt { background: linear-gradient(180deg, #111114 30%, #5a5961 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
   .hero h1 { color: #111114; }
-  .hero h1 [data-line] { background: linear-gradient(180deg, #111114 30%, #5a5961 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: #111114; }
+  .hero h1 [data-line] { color: #111114; }
+  .hero.hero--gradient h1 [data-line] { background: linear-gradient(180deg, #111114 30%, #5a5961 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: #111114; }
   .hero .sub, .credo p { color: #2c2b31; }
   .btn.big { box-shadow: 0 10px 40px rgba(232,54,75,.3), inset 0 1px 0 rgba(255,255,255,.35); }
   .btn.alt { background: var(--surface); }

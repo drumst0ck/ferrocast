@@ -103,7 +103,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
   </SiteHeader>
 
   <main id="main">
-    <section class="hero" aria-label={t.hero.aria}>
+    <section class="hero" aria-label={t.hero.aria} data-hero-gradient>
       <div class="hero-bg" aria-hidden="true"><i></i><i></i></div>
       <div class="copy">
         <h1 class="lines"><span class="line"><span data-line style="--i:0">{t.hero.line1}</span></span><span class="line"><span data-line style="--i:1">{t.hero.line2}</span></span></h1>
@@ -116,6 +116,15 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
         <img class="fb" src={`${base}/icon.png`} alt="" width="256" height="256" />
       </div>
     </section>
+    <script is:inline>
+      (function () {
+        var root = document.querySelector('.hero[data-hero-gradient]');
+        if (!root || !window.matchMedia('(min-width: 62em)').matches || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        var paint = function () { root.classList.add('hero--gradient'); };
+        if (document.readyState === 'complete') paint();
+        else window.addEventListener('load', paint, { once: true });
+      })();
+    </script>
 
     <section class="stage" aria-label={t.demo.aria}>
       <div class="lzwrap"><div class="lz" data-ui id="lz">

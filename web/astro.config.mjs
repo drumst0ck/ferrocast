@@ -16,7 +16,7 @@ export default defineConfig({
   adapter: node({ mode: 'standalone' }),
   trailingSlash: 'always',
   build: {
-    inlineStylesheets: 'always',
+    inlineStylesheets: 'auto',
   },
   integrations: [
     starlight({

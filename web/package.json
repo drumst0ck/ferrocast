@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "astro dev",
     "prebuild": "node scripts/sync-changelog.mjs",
+    "lastmod:sync": "node scripts/sync-lastmod.mjs",
     "build": "astro build",
     "preview": "astro preview",
     "gen:docs": "tsx scripts/gen-docs.ts",
