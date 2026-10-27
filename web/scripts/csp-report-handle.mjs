@@ -1,3 +1,4 @@
+import { summaryAccessGranted } from './csp-report-auth.mjs';
 import { ingestReport, summaryJson } from './csp-report-store.mjs';
 
 const MAX_BODY = 16 * 1024;
@@ -56,14 +57,18 @@ function extractReports(body) {
  */
 export function handleCspApi(req, res, pathname) {
   if (pathname === '/api/csp-report/summary/' || pathname === '/api/csp-report/summary') {
-    if (req.method !== 'GET') {
-      res.statusCode = 405;
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const allowed =
+      req.method === 'GET' &&
+      summaryAccessGranted(req.headers.authorization, url.searchParams.get('token'));
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Robots-Tag', 'noindex');
+    if (!allowed) {
+      res.statusCode = 404;
       res.end();
       return true;
     }
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-Robots-Tag', 'noindex');
     res.statusCode = 200;
     res.end(JSON.stringify(summaryJson()));
     return true;

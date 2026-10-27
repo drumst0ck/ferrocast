@@ -18,6 +18,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY drizzle ./drizzle
 COPY scripts/migrate.mjs ./scripts/migrate.mjs
+COPY scripts/csp-report-auth.mjs ./scripts/csp-report-auth.mjs
 COPY scripts/csp-report-handle.mjs ./scripts/csp-report-handle.mjs
 COPY scripts/csp-report-store.mjs ./scripts/csp-report-store.mjs
 COPY scripts/production-server.mjs ./scripts/production-server.mjs

@@ -6,6 +6,7 @@ import { changelogSitemapEntries } from './src/lib/changelog/sitemap-entries.ts'
 import { lastmodForPageUrl } from './src/lib/sitemap/lastmod.ts';
 import { isEsDocsFallbackUrl } from './sitemap-helpers.mjs';
 import { homeCriticalCss } from './integrations/home-critical-css.mjs';
+import { pageCriticalCss } from './integrations/page-critical-css.mjs';
 
 const site = 'https://ferrocast.app';
 const changelogPages = changelogSitemapEntries(site);
@@ -21,6 +22,7 @@ export default defineConfig({
   },
   integrations: [
     homeCriticalCss(),
+    pageCriticalCss(),
     starlight({
       title: 'Ferrocast Docs',
       description: 'Documentation for Ferrocast, a fast keyboard launcher and local file converter for macOS, written in Rust.',
