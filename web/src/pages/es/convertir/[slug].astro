@@ -1,0 +1,68 @@
+---
+import Base from '../../../layouts/Base.astro';
+import SiteHeader from '../../../components/SiteHeader.astro';
+import SiteFooter from '../../../components/SiteFooter.astro';
+import Crumbs from '../../../components/seo/Crumbs.astro';
+import SeoNav from '../../../components/seo/SeoNav.astro';
+import { installCommand as brewBlock } from '../../../data/install';
+import { installCommand } from '../../../lib/seo/convert';
+import { breadcrumbs, howTo, SITE } from '../../../lib/seo/jsonld';
+import { inline, plain } from '../../../lib/seo/markup';
+import { esPairs, pairOf, type EsPair } from '../../../lib/seo/convert-es';
+import '../../../styles/seo.css';
+
+export function getStaticPaths() {
+  return esPairs.map((e) => ({ params: { slug: e.slug }, props: { e } }));
+}
+const { e } = Astro.props as { e: EsPair };
+const p = pairOf(e);
+const canonical = `${SITE}/es/convertir/${e.slug}/`;
+const enUrl = `${SITE}/convert/${e.en}/`;
+const alternates = { en: enUrl, es: canonical, 'x-default': enUrl };
+const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+const crumbs: [string, string][] = [['Inicio', '/es/'], ['Convertir', '/es/convertir/'], [`${cap(e.inLabel)} a ${e.outLabel}`, `/es/convertir/${e.slug}/`]];
+const steps: [string, string][] = [
+  ['Instala Ferrocast', e.needs ? `Instala Ferrocast y ${e.needs} (${installCommand(e.needs)}).` : 'Instala Ferrocast con el DMG o con Homebrew.'],
+  [`Arrastra ${e.thing ?? `el archivo ${e.inLabel}`}`, 'Empieza a arrastrarlo desde el Finder, o selecciónalo en el lanzador.'],
+  ['Pulsa ⇧', 'Pulsa ⇧ para abrir la rueda de conversión, o ⌥↵ sobre el archivo en el lanzador.'],
+  [`Suelta sobre ${p.outLabel}`, 'El resultado se guarda junto al original y nunca lo sobrescribe.'],
+];
+const jsonLd = [
+  { ...howTo(`Convertir ${e.inLabel} a ${e.outLabel} en Mac`, e.description, steps), inLanguage: 'es' },
+  { '@context': 'https://schema.org', '@type': 'FAQPage', inLanguage: 'es', mainEntity: e.faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: plain(a) } })) },
+  breadcrumbs(crumbs),
+];
+const others = esPairs.filter((x) => x.slug !== e.slug);
+---
+<Base title={e.title} description={e.description} canonical={canonical} jsonLd={jsonLd} lang="es" alternates={alternates}>
+  <SiteHeader lang="es" current="files" switchHref={`/convert/${e.en}/`} switchLabel="EN" switchAria="Read this page in English">
+    <SeoNav slot="nav" lang="es" />
+    <span slot="cta">Instalar</span>
+  </SiteHeader>
+  <main class="seo" id="main">
+    <Crumbs items={crumbs} />
+    <h1>{e.h1}</h1>
+    <p class="lead">{e.answer}</p>
+    <h2>Cómo convertir {e.inLabel} a {e.outLabel}</h2>
+    <ol>{steps.map(([n, t]) => <li><strong>{n}.</strong> {t}</li>)}</ol>
+    <h2>Qué usa y qué necesita</h2>
+    <dl>
+      <dt>Herramienta</dt><dd>{e.engine}</dd>
+      <dt>Instalar aparte</dt><dd>{e.needs ? <><code>{installCommand(e.needs)}</code> (gratis; Ferrocast te muestra el comando si falta)</> : 'Nada: usa herramientas que vienen con macOS'}</dd>
+    </dl>
+    <h2>Lo que conviene saber</h2>
+    <ul>{e.notes.map((n) => <li set:html={inline(n)} />)}</ul>
+    {e.builtIn && (<><h2>¿Y sin instalar nada?</h2><p set:html={inline(e.builtIn)} /></>)}
+    <h2>Instalar Ferrocast</h2>
+    <pre><code>{brewBlock}</code></pre>
+    <p>Gratis, de código abierto (MIT), solo para Mac con Apple Silicon. <a class="tl" href="/es/docs/getting-started/install/">Guía de instalación</a> · <a class="tl" href="/files/">Las 275 conversiones</a></p>
+    <h2>Preguntas frecuentes</h2>
+    {e.faq.map(([q, a]) => (<div><h3>{q}</h3><p set:html={inline(a)} /></div>))}
+    <h2>Otras conversiones</h2>
+    <ul class="chips">
+      {others.map((x) => <li><a href={`/es/convertir/${x.slug}/`}>{cap(x.inLabel)} a {x.outLabel}</a></li>)}
+      <li><a href={`/convert/${p.family}/`} hreflang="en">Todas las de {p.familyName.toLowerCase()} (en inglés)</a></li>
+    </ul>
+  </main>
+  <SiteFooter lang="es" />
+</Base>

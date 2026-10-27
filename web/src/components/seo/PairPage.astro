@@ -6,6 +6,7 @@ import Crumbs from './Crumbs.astro';
 import { installCommand as brewBlock } from '../../data/install';
 import { pairFacts, pairMeta, relatedPairs, type Pair } from '../../lib/seo/convert';
 import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
+import { esFor } from '../../lib/seo/convert-es';
 import '../../styles/seo.css';
 
 interface Props { pair: Pair }
@@ -14,6 +15,8 @@ const meta = pairMeta(p);
 const facts = pairFacts(p);
 const rel = relatedPairs(p);
 const canonical = `${SITE}/convert/${p.slug}/`;
+const es = esFor(p.slug);
+const alternates = es ? { en: canonical, es: `${SITE}/es/convertir/${es.slug}/`, 'x-default': canonical } : undefined;
 const crumbs: [string, string][] = [['Home', '/'], ['Files', '/files/'], [p.familyName, `/convert/${p.family}/`], [`${p.inLabel} to ${p.outLabel}`, `/convert/${p.slug}/`]];
 const steps: [string, string][] = [
   ['Install Ferrocast', 'Install it with Homebrew; it builds on your Mac.'],
@@ -28,8 +31,8 @@ const faq: [string, string][] = [
   ['Do I need to install anything besides Ferrocast?', facts.requirement],
 ];
 ---
-<Base title={meta.title} description={meta.description} canonical={canonical} jsonLd={jsonLd}>
-  <SiteHeader current="files" />
+<Base title={meta.title} description={meta.description} canonical={canonical} jsonLd={jsonLd} alternates={alternates}>
+  <SiteHeader current="files" switchHref={es ? `/es/convertir/${es.slug}/` : undefined} switchAria="Leer esta página en español" />
   <main class="seo" id="main">
     <Crumbs items={crumbs} />
     <h1>{p.inLabel} to {p.outLabel} on your Mac, without uploading</h1>

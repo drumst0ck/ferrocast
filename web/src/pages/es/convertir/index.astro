@@ -1,0 +1,52 @@
+---
+import Base from '../../../layouts/Base.astro';
+import SiteHeader from '../../../components/SiteHeader.astro';
+import SiteFooter from '../../../components/SiteFooter.astro';
+import Crumbs from '../../../components/seo/Crumbs.astro';
+import SeoNav from '../../../components/seo/SeoNav.astro';
+import { familyHubs } from '../../../lib/seo/convert';
+import { breadcrumbs, SITE } from '../../../lib/seo/jsonld';
+import { esPairs, hub } from '../../../lib/seo/convert-es';
+import '../../../styles/seo.css';
+
+const canonical = `${SITE}${hub.path}`;
+const alternates = { en: `${SITE}/files/`, es: canonical, 'x-default': `${SITE}/files/` };
+const crumbs: [string, string][] = [['Inicio', '/es/'], ['Convertir', '/es/convertir/']];
+const FAMILY_ES: Record<string, string> = {
+  images: 'Imágenes', video: 'Vídeo', audio: 'Audio', documents: 'Documentos', pdf: 'PDF', slides: 'Presentaciones',
+  spreadsheets: 'Hojas de cálculo', subtitles: 'Subtítulos', archives: 'Archivos comprimidos',
+};
+const families = familyHubs();
+for (const f of families) if (!FAMILY_ES[f.id]) throw new Error(`no Spanish name for family ${f.id}`);
+const jsonLd = [
+  breadcrumbs(crumbs),
+  { '@context': 'https://schema.org', '@type': 'ItemList', itemListElement: esPairs.map((e, i) => ({ '@type': 'ListItem', position: i + 1, name: e.h1, url: `${SITE}/es/convertir/${e.slug}/` })) },
+];
+---
+<Base title={hub.title} description={hub.description} canonical={canonical} jsonLd={jsonLd} lang="es" alternates={alternates}>
+  <SiteHeader lang="es" current="files" switchHref="/files/" switchLabel="EN" switchAria="Read this page in English">
+    <SeoNav slot="nav" lang="es" />
+    <span slot="cta">Instalar</span>
+  </SiteHeader>
+  <main class="seo" id="main">
+    <Crumbs items={crumbs} />
+    <h1>{hub.h1}</h1>
+    <p class="lead">{hub.lead}</p>
+    <h2>Las más buscadas</h2>
+    <ul>
+      {esPairs.map((e) => <li><a class="tl" href={`/es/convertir/${e.slug}/`}>{e.h1}</a>. {e.needs ? `Necesita ${e.needs}.` : 'Sin instalar nada más.'}</li>)}
+    </ul>
+    <h2>Cómo funciona</h2>
+    <ol>
+      <li>Arrastra uno o varios archivos desde el Finder, o selecciónalos en el lanzador.</li>
+      <li>Pulsa <kbd>⇧</kbd> para abrir la rueda de conversión.</li>
+      <li>Suelta sobre el formato que quieres. El resultado aparece junto al original.</li>
+    </ol>
+    <p>Primero se usan herramientas de macOS (sips, avconvert, afconvert, textutil). ffmpeg, LibreOffice, cwebp, Ghostscript y unrar son opcionales y solo se usan si están instalados; las conversiones que los necesitan lo indican. <a class="tl" href="/docs/files/optional-tools/" hreflang="en">Herramientas opcionales (en inglés)</a></p>
+    <h2>Todas las conversiones por familia</h2>
+    <p>Las páginas de cada par están en inglés por ahora.</p>
+    <ul class="chips">{families.map((f) => <li><a href={`/convert/${f.id}/`} hreflang="en">{FAMILY_ES[f.id]}</a></li>)}</ul>
+    <p><a class="tl" href="/files/" hreflang="en">Explorar las 275 conversiones</a> · <a class="tl" href="/es/comprimir-video-a-un-tamano/">Comprimir un vídeo a un tamaño</a></p>
+  </main>
+  <SiteFooter lang="es" />
+</Base>
