@@ -1,5 +1,5 @@
 # SEO ideas from Notion (Ferrocast · SEO/AEO)
-Branches: feat/seo-notion-ideas (PR #50, merged), feat/seo-compress-video · Status: in progress
+Branches: feat/seo-notion-ideas (PR #50, merged), feat/seo-compress-video · Status: board done, last PRs merging
 Work through the Notion board "Ferrocast · SEO/AEO / Tablero de ideas" (19 ideas, priority 1 first). Source of truth for each page is its Notion brief; ideas without a brief get one before the page.
 
 ## Specs
@@ -27,7 +27,8 @@ Work through the Notion board "Ferrocast · SEO/AEO / Tablero de ideas" (19 idea
 - T9d S5 Board P3 "Mac launcher with local AI: Ollama, LM Studio, Claude Code" (EN): `/local-ai-launcher/`. — route: inline — commit: see L17
 - T9e S5 Board P3 "Free local file converter for Mac: alternativa a Permute / CloudConvert" (EN): `/free-file-converter-mac/`. — route: inline — commit: see L18
 - T9f S5 Board P4 "Historial del portapapeles en Mac que ignora contraseñas (vs Spotlight de Tahoe)" (ES): Notion brief (page 4063a474adbb8176b8b7ff35f8d40be0), `/es/historial-portapapeles-mac/`. — route: inline — commit: see L19
-- T9 Board P3-P5 (remaining): Alfred alternative, PDF→Word ES/EN, HEIC guide, Screen Studio alternative EN/ES, local AI launcher, Permute/CloudConvert alternative, clipboard ES, mov-to-gif, window management. — pending
+- T9g S5 Board P5 "Window management shortcuts on Mac without Rectangle (40 comandos en el launcher)" (EN): `/mac-window-management/`. — route: inline — commit: see L20
+- T9 Board P3-P5: all covered by T9a-T9g (board done). Alfred alternative, PDF→Word ES/EN, HEIC guide, Screen Studio alternative EN/ES, local AI launcher, Permute/CloudConvert alternative, clipboard ES, mov-to-gif, window management. — pending
 
 ## Log
 - L1 User (verbatim): "Te conecte el mcp de notion, alli hay ideas para hacer de seo, empezamos a hacerlas"
@@ -49,3 +50,4 @@ Work through the Notion board "Ferrocast · SEO/AEO / Tablero de ideas" (19 idea
 - L17 T9d done (branch feat/seo-local-ai, on top of T9c): lib/seo/local-ai.ts (+ test: only Ollama and LM Studio keep text on the Mac, ChatGPT caveat kept, no screen-context claim), pages/local-ai-launcher.astro, linked from /ferrocast-vs-raycast/ and llms.txt. Facts from ask-ai.md (four providers, presets, Test connection, Keychain, Claude Code tools off and warm session, ChatGPT sign-in caveat). PR chain: #57 merged (fdb83ef); #58-#60 merging in job-15.
 - L18 T9e done (branch feat/seo-file-converter, on top of T9d): lib/seo/file-converter.ts (+ test: every /convert/ link is a real pair), pages/free-file-converter-mac.astro, linked from /facts/ and llms.txt. Permute facts from software.charliemonroe.net/permute ($14.99 one-time, base price EUR plus tax, Setapp, Permute 4 needs macOS 26 + Apple Silicon, Permute 3 for 11-15/Intel, 100+ formats, OCR, narration, SRT transcription, App Store version omits capabilities); CloudConvert from cloudconvert.com/pricing (free 10 conversions/day, 1 GB, 5 min). Checks: vitest 92 passed, build ok, FAQ answers visible, nav 6, no overflow at 390.
 - L19 T9f done (branch feat/seo-clipboard-es, on top of T9e): lib/seo/clipboard-es.ts (+ test reading clipboard.rs IGNORED_TYPES and models.rs Retention so the page cannot drift), page with HowTo/FAQPage/Breadcrumb, linked from the ES comparison page and llms.txt. Spotlight described only with Apple's own warning. Checks: vitest 96 passed, build ok, FAQ answers visible.
+- L20 T9g done (branch feat/seo-window-management, on top of T9f): lib/seo/windows.ts (COMMANDS mirrors windows.rs; a test checks presence and order, exactly 40), page linked from the window-management docs and llms.txt. macOS tiling from Apple Support; Rectangle from rectangleapp.com (free download, paid Pro with 10-day trial); its licence is not stated there (GitHub API says NOASSERTION), so the page does not state one. All 19 board ideas now have a page or are covered by one.

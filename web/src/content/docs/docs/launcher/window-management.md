@@ -14,5 +14,6 @@ Needs the Accessibility permission.
 
 ## Related
 
+- [All 40 commands, and how they compare with macOS tiling and Rectangle](/mac-window-management/)
 - [First run and permissions](/docs/getting-started/first-run/)
 - [Root search](/docs/launcher/search/)
