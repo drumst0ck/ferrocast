@@ -1,9 +1,32 @@
 import { execSync } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { translatedEsDocSlugs } from '../docs/es-translations';
 
 const webRoot = process.cwd();
+
+/** Committed git dates for Docker builds without .git (see scripts/sync-lastmod.mjs). */
+let lastmodManifest: Record<string, string> | undefined;
+
+function getManifest(): Record<string, string> {
+  if (lastmodManifest !== undefined) return lastmodManifest;
+  const path = join(webRoot, 'src/data/lastmod.json');
+  if (!existsSync(path)) {
+    lastmodManifest = {};
+    return lastmodManifest;
+  }
+  try {
+    lastmodManifest = JSON.parse(readFileSync(path, 'utf8')) as Record<string, string>;
+  } catch {
+    lastmodManifest = {};
+  }
+  return lastmodManifest;
+}
+
+function manifestLastCommit(rel: string): Date | null {
+  const iso = getManifest()[rel];
+  return iso ? new Date(iso) : null;
+}
 const BUILD_DATE = new Date(
   process.env.SOURCE_DATE_EPOCH ? Number(process.env.SOURCE_DATE_EPOCH) * 1000 : Date.now(),
 );
@@ -37,14 +60,14 @@ function gitLastCommit(file: string): Date | null {
 }
 
 function fileLastmod(...paths: string[]): Date {
-  let best = BUILD_DATE;
+  let best: Date | null = null;
   for (const rel of paths) {
     const abs = join(webRoot, rel);
     if (!existsSync(abs)) continue;
-    const d = gitLastCommit(abs) ?? statSync(abs).mtime;
-    if (d > best) best = d;
+    const d = manifestLastCommit(rel) ?? gitLastCommit(abs) ?? statSync(abs).mtime;
+    if (best === null || d > best) best = d;
   }
-  return best;
+  return best ?? BUILD_DATE;
 }
 
 function docContentPath(segments: string, locale: 'en' | 'es'): string | null {

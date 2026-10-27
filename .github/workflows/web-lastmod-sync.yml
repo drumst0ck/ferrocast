@@ -1,0 +1,32 @@
+name: Sync sitemap lastmod
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'web/**'
+    paths-ignore:
+      - 'web/src/data/lastmod.json'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run lastmod:sync
+      - name: Commit manifest if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/data/lastmod.json
+          git diff --staged --quiet && exit 0
+          git commit -m "chore(web): sync sitemap lastmod manifest [skip ci]"
+          git push

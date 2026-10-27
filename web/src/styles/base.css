@@ -89,12 +89,18 @@ p + p { margin-top: 0.9em; }
 @media (prefers-reduced-motion: no-preference) {
   .js [data-rise] { opacity: 0; transform: translateY(18px); animation: ad-rise var(--t-reveal) var(--ease-out) forwards; animation-delay: calc(var(--i, 0) * 90ms + 120ms); }
   .js .lines [data-line] { opacity: 1; transform: translateY(0.35em); animation: ad-line-hero 900ms var(--ease-out) forwards; animation-delay: calc(var(--i, 0) * 110ms + 80ms); }
+  @media (max-width: 61.99em) {
+    .js .hero h1.lines [data-line] { animation: none; opacity: 1; transform: none; }
+  }
   .js [data-reveal] { opacity: 0; transform: translateY(24px); transition: opacity 700ms var(--ease-out), transform 900ms var(--ease-out); }
   .js [data-reveal].is-in { opacity: 1; transform: none; }
   .js .shutter[data-reveal] { opacity: 1; transform: none; clip-path: inset(0 0 100% 0); transition: clip-path 1100ms var(--ease-in-out); }
   .js .shutter[data-reveal] img { transform: scale(1.12); transition: transform 1500ms var(--ease-soft); }
   .js .shutter[data-reveal].is-in { clip-path: inset(0); }
   .js .shutter[data-reveal].is-in img { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .js .hero h1.lines [data-line] { animation: none; opacity: 1; transform: none; }
 }
 @keyframes ad-rise { to { opacity: 1; transform: none; } }
 @keyframes ad-line-hero { to { transform: none; } }
