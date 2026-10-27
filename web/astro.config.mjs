@@ -44,6 +44,8 @@ export default defineConfig({
         Header: './src/components/docs/Header.astro',
         SkipLink: './src/components/docs/SkipLink.astro',
         PageTitle: './src/components/docs/PageTitle.astro',
+        ThemeProvider: './src/components/docs/ThemeProvider.astro',
+        ThemeSelect: './src/components/docs/ThemeSelect.astro',
       },
       head: [
         { tag: 'meta', attrs: { property: 'og:image', content: 'https://ferrocast.app/og.jpg' } },

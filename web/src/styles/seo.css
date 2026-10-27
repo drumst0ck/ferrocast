@@ -1,5 +1,9 @@
 .seo { max-width: 860px; margin: clamp(32px, 5vw, 64px) auto 0; padding-inline: var(--margin); display: grid; gap: 22px; }
 .seo h1 { font-size: var(--step-head); line-height: 1.02; }
+/* Display face wraps pair titles onto one more line just under 416px after it loads. */
+@media (max-width: 26em) {
+  .seo h1.pair-title { min-height: 3.06em; }
+}
 .seo h2 { font-size: var(--step-lead); margin-top: 18px; }
 .seo p, .seo li { color: var(--muted); max-width: 68ch; }
 .seo .lead { font-size: var(--step-lead); line-height: 1.4; color: var(--ink); }

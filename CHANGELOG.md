@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Changed
+- **Menu bar icon**: the menu bar shows Ferrocast's own app icon (the red square with the white bolt) instead of the drawn ring, and goes back to it after a recording stops.
+
 ## [0.3.0] - 2026-10-27
 
 ### Changed

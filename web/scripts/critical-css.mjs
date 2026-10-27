@@ -128,7 +128,6 @@ async function extractCritical(clientDir, shell) {
     mergeStylesheets: true,
     inlineFonts: false,
     preloadFonts: false,
-    allowRules: [/\[data-theme=light\]/, /prefers-color-scheme:\s*light/],
   });
   const out = await beasties.process(shell);
   const css = [...out.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join('');
