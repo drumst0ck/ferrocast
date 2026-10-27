@@ -1,11 +1,10 @@
 /**
  * Production HTTP entry: Astro standalone handler plus security, CSP, and cache headers.
- * Set ASTRO_NODE_AUTOSTART=disabled so entry.mjs does not bind its own server.
+ * Dynamic-import entry.mjs after ASTRO_NODE_AUTOSTART=disabled (static imports run first).
  */
 process.env.ASTRO_NODE_AUTOSTART = 'disabled';
 
 import http from 'node:http';
-import { handler } from '../dist/server/entry.mjs';
 
 const PORT = Number(process.env.PORT ?? 4321);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -45,6 +44,8 @@ function applyHeaders(req, res) {
     res.setHeader('Cache-Control', 'no-cache');
   }
 }
+
+const { handler } = await import('../dist/server/entry.mjs');
 
 const server = http.createServer((req, res) => {
   applyHeaders(req, res);
