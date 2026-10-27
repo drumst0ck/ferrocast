@@ -92,6 +92,7 @@ export function factsCopy(lang: 'en' | 'es'): FactsCopy {
       ['Home and install', '/'],
       [`All ${c.pairs} conversions`, '/files/'],
       [`All ${c.tools} file tools`, '/tools/'],
+      ['Free file converter for Mac (vs Permute and CloudConvert)', '/free-file-converter-mac/'],
       ['Migrating from Raycast', '/docs/getting-started/migrating-from-raycast/'],
       ['Raycast alternative: Ferrocast vs Raycast vs Alfred', '/raycast-alternative/'],
       ['Ferrocast vs Raycast: what is free, what is paid', '/ferrocast-vs-raycast/'],
