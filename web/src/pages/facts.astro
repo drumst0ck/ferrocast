@@ -1,0 +1,107 @@
+---
+import Base from '../layouts/Base.astro';
+import SiteHeader from '../components/SiteHeader.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import Crumbs from '../components/seo/Crumbs.astro';
+import { en } from '../i18n/home.en';
+import { counts } from '../data/status';
+import { SITE } from '../lib/seo/jsonld';
+import '../styles/seo.css';
+
+const c = counts();
+const fill = (s: string, v: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (m, k) => (k in v ? String(v[k]) : m));
+const vars = { pairs: c.pairs, inputs: c.inputs, tools: c.tools, actions: c.actions };
+
+const keyFacts: string[] = [
+  'Ferrocast is a fast, open-source keyboard launcher for macOS, written in Rust (MIT licence).',
+  'Apple Silicon Macs only; Intel is not supported.',
+  'About 8.5 MB on disk and one process at idle (measured on the maintainer’s Mac; see the home page method note).',
+  `${c.pairs} local file conversions across ${c.inputs} input formats, plus ${c.tools} file tools and ${c.actions} file actions from a drag-and-drop wheel.`,
+  'About 40 window-management commands, clipboard history, snippets, quicklinks, calculator, and floating Markdown notes.',
+  'Ask AI uses Ollama on your Mac by default; you can point it at other providers. API keys go in the Keychain.',
+  'Raycast-compatible Script Commands; snippets import from a Raycast JSON export.',
+  'File conversions and file tools do not upload your files; results are written next to the originals.',
+  'No account and no subscription tier.',
+  'Install with the DMG (first open may need “Open Anyway” in System Settings) or Homebrew (builds on your Mac).',
+  'Optional helpers when installed: ffmpeg, LibreOffice, Ghostscript, cwebp, and unrar.',
+  'Not included today: an extension store, sync between Macs, React extensions, Search Menu Bar Items, and AI context from selection or screen.',
+  'Ferrocast is independent and not affiliated with Raycast or Alfred.',
+];
+
+const faq = en.faq.items.map(([q, a]) => [q, fill(a, vars)] as [string, string]);
+
+const title = 'Ferrocast key facts and FAQ';
+const description =
+  'Plain facts about Ferrocast: the open-source Apple Silicon Mac launcher, local file conversion, install, privacy, Raycast migration, and gaps today.';
+if (description.length < 140 || description.length > 155) throw new Error(`facts description is ${description.length} characters`);
+
+const canonical = `${SITE}/facts/`;
+const crumbs: [string, string][] = [['Home', '/'], ['Key facts', '/facts/']];
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Ferrocast',
+    applicationCategory: 'UtilitiesApplication',
+    operatingSystem: 'macOS',
+    description: en.json.appDescription,
+    url: SITE,
+    license: 'https://opensource.org/licenses/MIT',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: a } })),
+  },
+];
+---
+<Base title={title} description={description} canonical={canonical} jsonLd={jsonLd}>
+  <SiteHeader />
+  <main class="seo facts" id="main">
+    <Crumbs items={crumbs} />
+    <h1>Key facts</h1>
+    <p class="lead">
+      Short, quotable facts about Ferrocast for humans and assistants. Sources: this repository, <a class="tl" href="/docs/">the docs</a>, and
+      <a class="tl" href="https://github.com/drumst0ck/ferrocast">GitHub</a>.
+    </p>
+    <section aria-labelledby="h-facts">
+      <h2 id="h-facts">At a glance</h2>
+      <ul class="fact-list">
+        {keyFacts.map((f) => <li>{f}</li>)}
+      </ul>
+    </section>
+    <section aria-labelledby="h-links">
+      <h2 id="h-links">Learn more</h2>
+      <ul>
+        <li><a class="tl" href="/">Home and install</a></li>
+        <li><a class="tl" href="/files/">All {c.pairs} conversions</a></li>
+        <li><a class="tl" href="/tools/">All {c.tools} file tools</a></li>
+        <li><a class="tl" href="/docs/getting-started/migrating-from-raycast/">Migrating from Raycast</a></li>
+        <li><a class="tl" href="/docs/reference/data-and-privacy/">Data and privacy</a></li>
+        <li><a class="tl" href="/changelog/">Changelog</a></li>
+      </ul>
+    </section>
+    <section aria-labelledby="h-faq">
+      <h2 id="h-faq">Frequently asked questions</h2>
+      <div class="fx-faq">
+        {faq.map(([q, a]) => (
+          <details>
+            <summary>{q}</summary>
+            <p>{a}</p>
+          </details>
+        ))}
+      </div>
+    </section>
+  </main>
+  <SiteFooter />
+</Base>
+
+<style>
+  .facts .fact-list { max-width: 70ch; }
+  .facts .fact-list li { margin-block: 0.65rem; }
+  .facts .fx-faq { max-width: 70ch; }
+  .facts .fx-faq details { margin-block: 0.75rem; }
+  .facts .fx-faq summary { cursor: pointer; font-weight: 500; }
+  .facts .fx-faq p { margin-top: 0.5rem; color: var(--muted); }
+</style>

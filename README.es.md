@@ -2,13 +2,30 @@
 
 # Ferrocast
 
-Lanzador de código abierto para macOS, escrito en Rust. Busca, calcula, pega y pregunta a una IA desde el teclado; arrastra cualquier archivo, pulsa una tecla y conviértelo, comprímelo, recórtalo, córtalo u oculta partes en tu Mac. No se sube nada.
+**El lanzador rápido de código abierto para Mac que también convierte archivos en local.**
+
+Lanzador de código abierto para macOS, escrito en Rust. Busca, calcula, pega y pregunta a una IA desde el teclado; arrastra cualquier archivo, pulsa una tecla y conviértelo, comprímelo, recórtalo, córtalo u oculta partes en tu Mac. Las conversiones y herramientas de archivo se ejecutan en tu Mac y no suben tus archivos.
 
 [![CI](https://github.com/drumst0ck/ferrocast/actions/workflows/ci.yml/badge.svg)](https://github.com/drumst0ck/ferrocast/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [Website](https://ferrocast.app) · [Docs](https://ferrocast.app/docs/) · [Changelog](https://ferrocast.app/changelog/) · [English](README.md)
 
 <p align="center"><img src="web/public/img/home.jpg" alt="Lanzador de Ferrocast" width="46%"> <img src="web/public/img/files-wheel-convert.jpg" alt="Rueda de conversión de Ferrocast" width="46%"></p>
+
+## Datos clave
+
+| | |
+| --- | --- |
+| **Licencia** | [MIT](LICENSE) |
+| **Plataforma** | Solo Mac con Apple Silicon |
+| **Tamaño** | Unos 8,5 MB en disco, un proceso ([método de medición](https://ferrocast.app/es/#bench)) |
+| **Cuenta** | Ninguna; sin plan de pago |
+| **Archivos** | 275 pares entre 46 formatos de entrada, 26 herramientas y 7 acciones — todo en local |
+| **Lanzador** | Búsqueda, calculadora, portapapeles, snippets, quicklinks, ~40 comandos de ventanas, Script Commands compatibles con Raycast |
+| **Ask AI** | [Ollama](https://ollama.com/) en tu Mac por defecto; proveedores en la nube opcionales |
+| **Privacidad** | Las conversiones se quedan en disco; consulta [datos y privacidad](https://ferrocast.app/es/docs/reference/data-and-privacy/) para uso de red (divisas, IA opcional) |
+| **Instalación** | [DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg) o Homebrew (abajo); la primera apertura del DMG puede pedir **Abrir igualmente** en Ajustes del Sistema |
+| **Más** | [Datos clave y FAQ](https://ferrocast.app/facts/) · [llms.txt](https://ferrocast.app/llms.txt) para asistentes de IA |
 
 ## Instalar
 
@@ -39,8 +56,6 @@ Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no 
 - **Notas**: una ventana flotante de texto enriquecido con Markdown, menú `/`, notas fijadas, exportación, enlaces `ferrocast://`, comandos de IA y dictado.
 - **Ask AI** con Ollama, cualquier servidor compatible con OpenAI, la API de Anthropic, Claude Code o Sign in with ChatGPT.
 
-No incluido: extensiones React, sincronización, Search Menu Bar Items y contexto de IA desde la selección o la pantalla. Ferrocast es independiente y no está afiliado a Raycast.
-
 ## Herramientas de archivo
 
 - Arrastra un archivo y pulsa <kbd>⇧</kbd> para conversiones, <kbd>⌘</kbd> para herramientas o <kbd>⌃</kbd> para acciones.
@@ -51,6 +66,13 @@ No incluido: extensiones React, sincronización, Search Menu Bar Items y context
 - Todo en local. Primero las herramientas de macOS; ffmpeg, LibreOffice, cwebp, unrar y Ghostscript son opcionales. El resultado queda junto al original y nunca lo sobrescribe.
 
 Explora todos los pares en <https://ferrocast.app/es/files/>.
+
+## Qué falta hoy
+
+- **Tienda de extensiones** y **sincronización** entre Macs.
+- **Extensiones React**, **Search Menu Bar Items** y **contexto de IA** desde la selección o la pantalla (funciones al estilo Raycast que Ferrocast aún no incluye).
+
+Ferrocast es independiente y no está afiliado a Raycast ni a Alfred.
 
 ## Ask AI y privacidad
 
