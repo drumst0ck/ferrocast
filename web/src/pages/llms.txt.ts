@@ -20,6 +20,8 @@ export async function GET() {
     `- [Home](${SITE}/): overview, measured footprint, install (DMG and Homebrew)`,
     `- [Key facts and FAQ](${SITE}/facts/): plain facts for citations`,
     `- [Raycast alternative](${SITE}/raycast-alternative/): what you keep, what is missing, and a sourced Ferrocast vs Raycast vs Alfred table`,
+    `- [Compress a video to a target size](${SITE}/compress-video-to-size/): fit Discord (20 MiB) or Gmail (25 MB) limits on a Mac without uploading`,
+    `- [Comprimir un vídeo a un tamaño](${SITE}/es/comprimir-video-a-un-tamano/): lo mismo en español`,
     `- [Alternativa a Raycast](${SITE}/es/alternativa-a-raycast/): la misma comparativa en español, con qué conservas y qué falta`,
     `- [Convert and file tools](${SITE}/files/): interactive explorer of every conversion pair`,
     `- [File tools index](${SITE}/tools/): all local file tools`,

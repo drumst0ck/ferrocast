@@ -43,6 +43,7 @@ const jsonLd = [breadcrumbs(crumbs), howTo(`${t.name} on Mac with Ferrocast`, me
       <li>Choose <strong>{t.name}</strong>. The result is saved beside the original.</li>
     </ol>
     <p><a class="tl" href={`/docs/files/tools/${t.docSlug}/`}>Read the full guide, with limits</a></p>
+    {t.id === 'compress' && <p><a class="tl" href="/compress-video-to-size/">Compress a video to fit Discord or email</a></p>}
     <h2>Install Ferrocast</h2>
     <pre><code>{brewBlock}</code></pre>
     <p>Free, open source (MIT), Apple Silicon only. <a class="tl" href="/tools/">All file tools</a> · <a class="tl" href="/files/">All conversions</a></p>

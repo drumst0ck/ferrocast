@@ -1,5 +1,5 @@
 # SEO ideas from Notion (Ferrocast · SEO/AEO)
-Branch: feat/seo-notion-ideas · Status: in progress
+Branches: feat/seo-notion-ideas (PR #50, merged), feat/seo-compress-video · Status: in progress
 Work through the Notion board "Ferrocast · SEO/AEO / Tablero de ideas" (19 ideas, priority 1 first). Source of truth for each page is its Notion brief; ideas without a brief get one before the page.
 
 ## Specs
@@ -8,10 +8,13 @@ Work through the Notion board "Ferrocast · SEO/AEO / Tablero de ideas" (19 idea
 - S3 Brief rules, verbatim: "Lo marcado ⚠️ no se pudo verificar en fuente oficial: no se publica hasta comprobarlo."; "No poner tiempos de arranque ni consumo de memoria de Raycast o Alfred"; "decir que Raycast o Alfred «no tienen» algo que solo no hemos verificado" is forbidden; "Sin aggregateRating"; "El texto debe coincidir exactamente con el visible" (FAQPage); "Español neutro de España, de tú".
 - S4 Brief section 10, verbatim: "/raycast-alternative/ (idea #1). Misma estructura y la misma tabla con las mismas fuentes; hreflang recíproco." and "No es una traducción literal ... El ángulo EN debe apoyarse más en «launcher + conversión local + grabación en una sola app de 8,5 MB»." Board idea #1 title: "Free, open-source Raycast alternative for Mac (with file conversion and screen recording)".
 
+- S5 User (verbatim, L5): "haz pr y mergea cuando este lista y sigue pornorden de prioridsdes"
+- S6 Notion brief "Brief: Comprimir vídeo a un tamaño (EN+ES)" rules, verbatim: "Decir «tamaño exacto» o «sin perder calidad»" is forbidden; "Afirmar límites de plataformas sin fuente oficial" is forbidden.
+
 ## Tasks
 - T1 S1-S3 `/es/alternativa-a-raycast/` page + redirect + llms.txt + sitemap lastmod + entry links (home footer en/es, SiteFooter, migration guides en/es, /facts, llms.txt). — route: inline — commit: see L4
 - T2 S4 `/raycast-alternative/` EN sister page sharing the component and verified table; hreflang pair. — route: inline (same component as T1) — commit: see L4
-- T3 Board P1 "Compress a video to an exact size on Mac (Discord 10/25 MB, email) – offline" EN+ES: brief first. — pending
+- T3 S5-S6 Board P1 "Compress a video to an exact size on Mac" EN+ES: Notion brief (page 4063a474adbb81b78670f290475d87a9), then `/compress-video-to-size/` + `/es/comprimir-video-a-un-tamano/` (GuidePage component). — route: inline — commit: see L7
 - T4 Board P2 "Raycast vs Alfred vs Spotlight (macOS Tahoe) vs Ferrocast" ES. — pending
 - T5 Board P2 hub `/es/convertir` (HEIC→JPG, PDF→Word, MOV→MP4, vídeo→GIF, WebP→JPG). — pending
 - T6 Board P2 "Run Raycast Script Commands without Raycast" EN. — pending
@@ -24,3 +27,6 @@ Work through the Notion board "Ferrocast · SEO/AEO / Tablero de ideas" (19 idea
 - L2 Evidence: Notion board has 19 ideas; only "/es/alternativa-raycast" has state "brief hecho" (brief at /es/alternativa-a-raycast/). Local master was 11 commits behind origin (facts.astro, llms.txt rewrite, sitemap lastmod, README.es Raycast y Alfred section already landed); pulled before branching. Live: /facts/ 200, /es/facts/ 404, /raycast-alternative/ 404.
 - L3 Decision: competitor cells marked ⚠️ in the brief are dropped or written as "no consta en su web" (S3); competitor facts carry the brief's check date 27-oct-2026 and official source links.
 - L4 T1+T2 done: copy in web/src/lib/seo/alt-raycast.ts (+ test), web/src/components/seo/AlternativePage.astro, pages es/alternativa-a-raycast.astro and raycast-alternative.astro; astro `redirects` gives a real 301 from /es/alternativa-raycast/ on the node server; sitemap lastmod mapping; SiteFooter gains lang + link. Checks: vitest 46 passed, build ok, local server 301/200, canonical + hreflang en/es/x-default, JSON-LD SoftwareApplication/FAQPage(10)/HowTo/BreadcrumbList with every FAQ answer present in visible HTML, no horizontal overflow at 1280 and 390, no console errors. Verdict: S1 started, S2 done (title/meta/H1/URL/redirect/schema/links verbatim), S3 done (⚠️ cells written as "no consta en su web"/dropped; no rival speed/RAM), S4 done (EN angle "three apps in one 8.5 MB launcher"). Not verified: Rich Results test on production, Safari. Notion state not changed (no deploy yet).
+- L5 User (verbatim): "haz pr y mergea cuando este lista y sigue pornorden de prioridsdes"
+- L6 PR #50 merged (0411f1e) after CI (build, check) passed; both Raycast ideas set to "publicado" in Notion once /raycast-alternative/ answered 200 live. T3 evidence: Discord free limit is 20 MiB since 2026-09-03 (discord-api-docs reference + change log; most SERP pages still say 8/10 MB); Gmail 25 MB (support.google.com/mail/answer/6584). Ferrocast video compress = one-pass libx264 ABR from size/duration (compress.rs, media.rs), no overshoot retry; Ferrocast's own ffmpeg args on a noisy 60 s 1080p60 clip: 10 MiB → +0.7 %, 20 MiB → +0.4 %, 25 MiB → +0.3 %. Typed "25mb" in the Convert view is image-only (app.rs: `files.iter().all(... Family::Image)`); video uses the Compress… window (KB field). Brief written to Notion, idea set to "brief hecho".
+- L7 T3 done: lib/seo/compress-video.ts (+ test), lib/seo/markup.ts (helpers moved out of alt-raycast.ts), components/seo/GuidePage.astro, two pages, lastmod, llms.txt, links from /tools/compress/ and the Compress docs page. Checks: vitest 55 passed, build ok (needed `npm install` for the `beasties` dep master added), local server 200 on both, JSON-LD HowTo/FAQPage(7)/BreadcrumbList with all answers visible, hreflang pair, no overflow at 1280/390, no console errors. Verdict: S5 continuing, S6 done (no "exact size" claims; limits sourced). Product note for the user: a 3 % safety margin or a two-pass/retry in compress.rs would make "fits under the limit" true without the advice to type 19000 KB.
