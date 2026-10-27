@@ -106,6 +106,9 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/es/raycast-vs-alfred-vs-spotlight') {
       return fileLastmod('src/lib/seo/launcher-compare.ts', 'src/pages/es/raycast-vs-alfred-vs-spotlight.astro');
     }
+    if (path === '/local-ai-launcher') {
+      return fileLastmod('src/lib/seo/local-ai.ts', 'src/components/seo/GuidePage.astro');
+    }
     if (path === '/screen-studio-alternative' || path === '/es/grabar-pantalla-mac-zoom-automatico') {
       return fileLastmod('src/lib/seo/screen-recorder.ts', 'src/components/seo/GuidePage.astro');
     }

@@ -21,6 +21,7 @@ export async function GET() {
     `- [Key facts and FAQ](${SITE}/facts/): plain facts for citations`,
     `- [Datos clave](${SITE}/es/facts/): los mismos datos en español`,
     `- [Raycast alternative](${SITE}/raycast-alternative/): what you keep, what is missing, and a sourced Ferrocast vs Raycast vs Alfred table`,
+    `- [Mac launcher with local AI](${SITE}/local-ai-launcher/): Ollama by default, LM Studio, your own keys or Claude Code, and which providers send text off the Mac`,
     `- [Free Screen Studio alternative](${SITE}/screen-studio-alternative/): screen recording with auto zoom, camera, on-device transcript, MP4 and GIF export`,
     `- [Grabar la pantalla con zoom automático](${SITE}/es/grabar-pantalla-mac-zoom-automatico/): lo mismo en español`,
     `- [Free Alfred alternative](${SITE}/alfred-alternative/): clipboard history and snippets without the Powerpack, with a sourced Alfred comparison`,

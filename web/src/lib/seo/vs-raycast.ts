@@ -97,7 +97,7 @@ export const page: GuideCopy = {
       ['A free Raycast alternative', '/raycast-alternative/'],
       ['Run Raycast Script Commands', '/raycast-script-commands/'],
       ['Migrating from Raycast', '/docs/getting-started/migrating-from-raycast/'],
-      ['Ask AI', '/docs/launcher/ask-ai/'],
+      ['Local AI in the launcher', '/local-ai-launcher/'],
       ['Key facts', '/facts/'],
     ],
   },
