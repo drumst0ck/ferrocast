@@ -23,7 +23,7 @@ export interface GuideCopy {
   lead: string[];
   cta: { dmg: string; note: string };
   limits: { h: string; caption: string; cols: [string, string, string]; rows: [string, string, string][]; note: string };
-  steps: { h: string; howToName: string; items: [string, string][]; ffmpeg: string };
+  steps: { h: string; howToName: string; items: [string, string][]; code?: string };
   sections: { h: string; paras: string[]; list?: string[] }[];
   faq: { h: string; items: [string, string][] };
   more: { h: string; links: [string, string][] };
@@ -47,8 +47,8 @@ export const en: GuideCopy = {
     caption: 'Upload limits and the target size to type in Ferrocast',
     cols: ['Where it goes', 'Limit', 'Type in Ferrocast'],
     rows: [
-      ['Discord, without Nitro', '20 MiB per file (since 3 September 2026; it was 10 MiB)', '19000 KB'],
-      ['Gmail attachment', '25 MB in total; above that Gmail adds a Google Drive link', '23000 KB'],
+      ['Discord, without Nitro', '20 MiB per file (since 3 September 2026; it was 10 MiB)', '`19000 KB`'],
+      ['Gmail attachment', '25 MB in total; above that Gmail adds a Google Drive link', '`23000 KB`'],
     ],
     note: 'Sources: [Discord developer reference](https://github.com/discord/discord-api-docs/blob/main/developers/reference.mdx) and [Gmail Help](https://support.google.com/mail/answer/6584), checked on 27 October 2026. Ferrocast’s size field is in KB (1 KB = 1,024 bytes), so 19000 KB is about 18.6 MiB.',
   },
@@ -63,7 +63,7 @@ export const en: GuideCopy = {
       ['Resize if the video is long', 'Optionally turn on Resize and set the longest edge (for example 1280). It never upscales.'],
       ['Press Enter and check the size', 'The copy is written next to the original as “name compressed.mp4” and never overwrites it. Check its size in Finder before you upload.'],
     ],
-    ffmpeg: 'brew install ffmpeg',
+    code: 'brew install ffmpeg',
   },
   sections: [
     {
@@ -133,8 +133,8 @@ export const es: GuideCopy = {
     caption: 'Límites de subida y tamaño objetivo que escribir en Ferrocast',
     cols: ['Adónde va', 'Límite', 'Escribe en Ferrocast'],
     rows: [
-      ['Discord, sin Nitro', '20 MiB por archivo (desde el 3 de septiembre de 2026; antes, 10 MiB)', '19000 KB'],
-      ['Adjunto de Gmail', '25 MB en total; por encima, Gmail añade un enlace de Google Drive', '23000 KB'],
+      ['Discord, sin Nitro', '20 MiB por archivo (desde el 3 de septiembre de 2026; antes, 10 MiB)', '`19000 KB`'],
+      ['Adjunto de Gmail', '25 MB en total; por encima, Gmail añade un enlace de Google Drive', '`23000 KB`'],
     ],
     note: 'Fuentes: [referencia para desarrolladores de Discord](https://github.com/discord/discord-api-docs/blob/main/developers/reference.mdx) y [Ayuda de Gmail](https://support.google.com/mail/answer/6584), comprobadas el 27 de octubre de 2026. El campo de tamaño de Ferrocast va en KB (1 KB = 1024 bytes), así que 19000 KB son unos 18,6 MiB.',
   },
@@ -149,7 +149,7 @@ export const es: GuideCopy = {
       ['Reduce la resolución si el vídeo es largo', 'Si quieres, activa Resize y fija el lado largo (por ejemplo, 1280). Nunca amplía.'],
       ['Pulsa Intro y comprueba el tamaño', 'La copia se guarda junto al original como «nombre compressed.mp4» y nunca lo sobrescribe. Comprueba su tamaño en el Finder antes de subirla.'],
     ],
-    ffmpeg: 'brew install ffmpeg',
+    code: 'brew install ffmpeg',
   },
   sections: [
     {
