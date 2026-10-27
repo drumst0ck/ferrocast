@@ -62,9 +62,9 @@ const jsonLd = [
   },
 ];
 ---
-<Base title={title} description={description} canonical={canonical} jsonLd={jsonLd}>
+<Base title={title} description={description} canonical={canonical} jsonLd={jsonLd} alternates={{ en: canonical, es: 'https://ferrocast.app/es/convertir/', 'x-default': canonical }}>
   <a class="skip" href="#main">Skip to content</a>
-  <SiteHeader current="files" />
+  <SiteHeader current="files" switchHref="/es/convertir/" switchAria="Leer en español" />
   <main id="main" class="fx-main">
     <section class="fx-hero" aria-label="Introduction">
       <h1>Drag a file. Tap a key. Drop.</h1>
