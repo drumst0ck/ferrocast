@@ -106,6 +106,9 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/es/raycast-vs-alfred-vs-spotlight') {
       return fileLastmod('src/lib/seo/launcher-compare.ts', 'src/pages/es/raycast-vs-alfred-vs-spotlight.astro');
     }
+    if (path === '/raycast-script-commands') {
+      return fileLastmod('src/lib/seo/script-commands.ts', 'src/components/seo/GuidePage.astro');
+    }
     if (path === '/compress-video-to-size' || path === '/es/comprimir-video-a-un-tamano') {
       return fileLastmod('src/lib/seo/compress-video.ts', 'src/components/seo/GuidePage.astro');
     }

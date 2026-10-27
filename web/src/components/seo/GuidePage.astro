@@ -11,13 +11,13 @@ import type { GuideCopy } from '../../lib/seo/compress-video';
 import '../../styles/seo.css';
 
 /** A task page ("how to do X on a Mac") in one language, with its translation as `other`. */
-interface Props { t: GuideCopy; other: GuideCopy }
+interface Props { t: GuideCopy; other?: GuideCopy }
 const { t, other } = Astro.props;
 const isEs = t.lang === 'es';
+const canonical = `${SITE}${t.path}`;
 const en = isEs ? other : t;
 const es = isEs ? t : other;
-const canonical = `${SITE}${t.path}`;
-const alternates = { en: `${SITE}${en.path}`, es: `${SITE}${es.path}`, 'x-default': `${SITE}${en.path}` };
+const alternates = en && es ? { en: `${SITE}${en.path}`, es: `${SITE}${es.path}`, 'x-default': `${SITE}${en.path}` } : undefined;
 const jsonLd = [
   { ...howTo(t.steps.howToName, t.description, t.steps.items), inLanguage: t.lang },
   {
@@ -30,7 +30,7 @@ const jsonLd = [
 ];
 ---
 <Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd} lang={t.lang} alternates={alternates}>
-  <SiteHeader lang={t.lang} current="files" switchHref={other.path} switchLabel={isEs ? 'EN' : 'ES'} switchAria={isEs ? 'Read this page in English' : 'Leer esta página en español'}>
+  <SiteHeader lang={t.lang} current="files" switchHref={other?.path} switchLabel={isEs ? 'EN' : 'ES'} switchAria={isEs ? 'Read this page in English' : 'Leer esta página en español'}>
     <SeoNav slot="nav" lang={t.lang} />
     <span slot="cta">{isEs ? 'Instalar' : 'Install'}</span>
   </SiteHeader>
@@ -45,14 +45,14 @@ const jsonLd = [
       <table>
         <caption class="sr-only">{t.limits.caption}</caption>
         <thead><tr>{t.limits.cols.map((c) => <th scope="col">{c}</th>)}</tr></thead>
-        <tbody>{t.limits.rows.map(([a, b, c]) => (<tr><th scope="row">{a}</th><td>{b}</td><td><code>{c}</code></td></tr>))}</tbody>
+        <tbody>{t.limits.rows.map(([a, b, c]) => (<tr><th scope="row" set:html={inline(a)} /><td set:html={inline(b)} /><td set:html={inline(c)} /></tr>))}</tbody>
       </table>
     </div>
     <p class="fine" set:html={inline(t.limits.note)} />
 
     <h2 id="steps">{t.steps.h}</h2>
     <ol>{t.steps.items.map(([name, text]) => <li><strong>{name}.</strong> {text}</li>)}</ol>
-    <pre><code>{t.steps.ffmpeg}</code></pre>
+    {t.steps.code && <pre><code>{t.steps.code}</code></pre>}
     <details class="g-brew">
       <summary>{isEs ? 'Instalar Ferrocast con Homebrew' : 'Install Ferrocast with Homebrew'}</summary>
       <pre><code>{installCommand}</code></pre>

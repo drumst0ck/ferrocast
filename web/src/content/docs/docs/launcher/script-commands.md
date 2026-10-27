@@ -22,5 +22,6 @@ Script Command arguments (including those of type `password`) are passed on the 
 
 ## Related
 
+- [Run Raycast Script Commands without Raycast](/raycast-script-commands/)
 - [Migrating from Raycast](/docs/getting-started/migrating-from-raycast/)
 - [Settings](/docs/launcher/settings/)

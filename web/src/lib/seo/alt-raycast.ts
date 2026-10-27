@@ -297,7 +297,7 @@ export const en: AltCopy = {
     links: [
       ['Migrating from Raycast', '/docs/getting-started/migrating-from-raycast/'],
       ['Install', '/docs/getting-started/install/'],
-      ['Script Commands', '/docs/launcher/script-commands/'],
+      ['Script Commands', '/raycast-script-commands/'],
       ['Data and privacy', '/docs/reference/data-and-privacy/'],
       ['Optional tools (ffmpeg, LibreOffice…)', '/docs/files/optional-tools/'],
       ['Key facts', '/facts/'],
