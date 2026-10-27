@@ -14672,3 +14672,22 @@ mod shots {
         }
     }
 }
+
+#[test]
+fn the_menu_bar_icon_is_the_coloured_app_icon() {
+    let (rgba, w, h) = services::tray_app_icon_rgba();
+    assert_eq!((w, h), (services::TRAY_ICON_PX, services::TRAY_ICON_PX));
+    assert_eq!(rgba.len(), (w * h * 4) as usize);
+    let px = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+    };
+    // corners are outside the rounded square
+    assert_eq!(px(0, 0)[3], 0);
+    // the bolt in the middle is white
+    let c = px(w / 2, h / 2);
+    assert!(c[0] > 230 && c[1] > 230 && c[2] > 230 && c[3] > 230, "centre {c:?}");
+    // left of the bolt is the red square
+    let r = px(w / 5, h / 2);
+    assert!(r[0] > 190 && r[1] < 120 && r[2] < 120 && r[3] > 230, "red {r:?}");
+}
