@@ -26,6 +26,24 @@ This page lists the shortcuts in the launcher, in the Notes window and in the fi
 | <kbd>⌘</kbd> <kbd>E</kbd> | Edit the selected snippet or quicklink. |
 | <kbd>⌫</kbd> | Go back when the search is empty. |
 
+## With the mouse
+
+Every launcher shortcut above has a click path too, so you can use Ferrocast without the keyboard.
+
+| Click | Action |
+|---|---|
+| Right-click (or two-finger click) a row | Select the row and open its action panel, same as <kbd>⌘</kbd> <kbd>K</kbd>. |
+| Click a row | Run the primary action, same as <kbd>↵</kbd>. A double click does the same. |
+| Click **Actions** in the footer | Open or close the action panel for the selected item. |
+| Click **↵** or **esc** in the footer | Run the primary action, or go back. |
+| Click outside the action panel | Close it. |
+| Hover a clipboard row | **Pin** or **Unpin**, and **Delete** (<kbd>⌘</kbd> <kbd>.</kbd> and <kbd>⌃</kbd> <kbd>X</kbd>). |
+| Hover a snippet or quicklink row | **Edit** and **Delete** (<kbd>⌘</kbd> <kbd>E</kbd> and <kbd>⌃</kbd> <kbd>X</kbd>). |
+| Click **Clear History…** in the Clipboard view | Delete all clipboard entries after a confirmation. Pinned entries stay (<kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>X</kbd>). |
+| Click **+ New** in Snippets or Quicklinks | Create one (<kbd>⌘</kbd> <kbd>N</kbd>). |
+
+Hover any of these buttons to see its name and shortcut.
+
 ## Notes window
 
 These work while the [Notes](/docs/launcher/notes/) window is open.

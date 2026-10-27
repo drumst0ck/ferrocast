@@ -871,6 +871,41 @@ fn elide(p: &egui::Painter, text: &str, font: FontId, max_w: f32) -> String {
     chars[..lo].iter().collect::<String>().trim_end().to_string() + "…"
 }
 
+/// What the mouse did on the list this frame.
+#[derive(Default)]
+struct ListMouse {
+    clicked: Option<usize>,
+    double: Option<usize>,
+    /// Right click / two-finger click.
+    secondary: Option<usize>,
+    /// A hover button: the row and the `Act` its keyboard shortcut runs.
+    button: Option<(usize, Act)>,
+}
+
+fn mini_button_width(ui: &Ui, label: &str) -> f32 {
+    ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(11.5), Color32::WHITE).size().x + 16.0
+}
+
+/// A small text button whose right edge sits at `right` and whose centre line is `cy`.
+fn mini_button_rect(ui: &Ui, _pal: &Palette, right: f32, cy: f32, label: &str) -> Rect {
+    let w = mini_button_width(ui, label);
+    Rect::from_min_size(Pos2::new(right - w, cy - 11.0), Vec2::new(w, 22.0))
+}
+
+/// Draw and handle one mini button; same hover/press feedback as the footer hints (Field, then Sel).
+fn mini_button(ui: &Ui, pal: &Palette, r: Rect, b: &RowButton, id: Id) -> bool {
+    let resp = ui.interact(r, id, Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(b.tip.clone());
+    let p = ui.painter();
+    let fill = if resp.is_pointer_button_down_on() { pal.sel } else { pal.field };
+    p.rect_filled(r, 6.0, fill);
+    if resp.hovered() {
+        p.rect_stroke(r, 6.0, Stroke::new(1.0, if b.destructive { pal.danger } else { pal.border }), StrokeKind::Inside);
+    }
+    let col = if b.destructive { pal.danger } else { pal.text };
+    p.text(r.center(), Align2::CENTER_CENTER, b.label, FontId::proportional(11.5), col);
+    resp.clicked()
+}
+
 fn panel_filter(p: &ActionPanel) -> Vec<usize> {
     let q = p.query.trim().to_lowercase();
     p.actions.iter().enumerate().filter(|(_, a)| q.is_empty() || a.title.to_lowercase().contains(&q)).map(|(i, _)| i).collect()
@@ -882,6 +917,8 @@ impl App {
         let shape = view.shape();
         let hotkey = matches!(view, View::Hotkey { .. });
         let tour = matches!(view, View::Welcome);
+        // a click on a footer hint stands in for its key, so both paths run the very same code
+        let footer_key = ctx.data_mut(|d| d.remove_temp::<String>(Id::new("footer-click")));
         let query_empty = self.query.is_empty();
         let panel = self.panel.is_some();
         // egui drops the focus of a text field at the start of the frame in which Escape arrives,
@@ -916,6 +953,15 @@ impl App {
             }
             if !typing {
                 k.esc = i.consume_key(Modifiers::NONE, Key::Escape);
+            }
+            match footer_key.as_deref() {
+                Some("⌘K") if shape == Shape::List || panel => k.cmd_k = true,
+                Some("↵") => {
+                    k.enter = true;
+                    k.cmd_enter = true;
+                }
+                Some("esc") => k.esc = true,
+                _ => {}
             }
             k.backspace = shape == Shape::List
                 && !panel
@@ -977,8 +1023,7 @@ impl App {
             }
             let Some(item) = cur else { return false };
             if k.cmd_k {
-                let actions = self.actions_for(&item);
-                self.panel = Some(ActionPanel { actions, query: String::new(), sel: 0, item });
+                self.open_panel(item);
                 return true;
             }
             if k.enter || k.cmd_enter {
@@ -1837,9 +1882,31 @@ impl App {
         }
         line(footer_rect.min.y);
 
+        // View-level mouse controls ("Clear History…", "+ New"), over the right end of the search bar
+        if shape == Shape::List && !own_bar && self.panel.is_none() {
+            let mut x = search_rect.max.x - 14.0;
+            let mut recs: Vec<(String, Rect)> = vec![];
+            let mut run = None;
+            for b in self.header_buttons().into_iter().rev() {
+                let r = mini_button_rect(ui, &pal, x, search_rect.center().y + 3.0, b.label);
+                x = r.min.x - 6.0;
+                if mini_button(ui, &pal, r, &b, Id::new(("header-button", b.label))) {
+                    run = Some(b.kind.clone());
+                }
+                recs.push((b.label.to_string(), r));
+            }
+            #[cfg(test)]
+            ctx.data_mut(|d| d.insert_temp(Id::new("header-buttons"), recs));
+            #[cfg(not(test))]
+            drop(recs);
+            if let Some(act) = run {
+                self.perform(act, false);
+                ctx.request_repaint();
+                return;
+            }
+        }
         // ---- content
-        let mut clicked = None;
-        let mut double = None;
+        let mut mouse = ListMouse::default();
         match shape {
             Shape::List => {
                 let detail = if matches!(self.view(), View::Clipboard | View::Snippets | View::Notes | View::Quicklinks) {
@@ -1859,7 +1926,7 @@ impl App {
                 } else {
                     content
                 };
-                (clicked, double) = self.draw_list(ui, list_rect, &sections, &pal);
+                mouse = self.draw_list(ui, list_rect, &sections, &pal);
                 if let Some(rel) = note {
                     let r = Rect::from_min_max(Pos2::new(list_rect.max.x, content.min.y), content.max);
                     ui.painter().vline(r.min.x, r.y_range(), Stroke::new(1.0, pal.sep));
@@ -1909,17 +1976,35 @@ impl App {
         self.draw_footer(ui, footer_rect, &pal, primary, shape == Shape::List);
         // Keep the pop-in animation primed at 0 while the panel is closed.
         ctx.animate_bool_with_time(Id::new("panel_pop"), self.panel.is_some(), 0.12);
-        if self.panel.is_some() {
+        let panel_was_open = self.panel.is_some();
+        if panel_was_open {
             self.draw_panel(ui, content, &pal);
+            // a click that closed (or landed on) the panel is never also a click on the row beneath it
+            mouse = ListMouse::default();
         }
 
         // Hovering already selects, so a single click runs the row, as in the original launcher.
         // Clicks right after a view change are ignored: the second half of a habitual double
         // click must not fire the first row of the screen that just opened.
-        let _ = double;
-        if let Some(i) = clicked.filter(|_| self.nav_at.elapsed() > Duration::from_millis(350)) {
+        // A double click already ran the primary action with its first click, so it maps to the same path.
+        let settled = self.nav_at.elapsed() > Duration::from_millis(350);
+        let nth = |i: usize| sections.iter().flat_map(|s| s.items.iter()).nth(i).cloned();
+        if let Some(i) = mouse.secondary {
+            // right click / two-finger click: select the row and open its actions
             self.selected = i;
-            if let Some(item) = sections.iter().flat_map(|s| s.items.iter()).nth(i).cloned() {
+            if let Some(item) = nth(i) {
+                self.open_panel(item);
+                ctx.request_repaint();
+            }
+        } else if let Some((i, act)) = mouse.button.filter(|_| settled) {
+            self.selected = i;
+            if let Some(item) = nth(i) {
+                self.do_action(item, act);
+                ctx.request_repaint();
+            }
+        } else if let Some(i) = mouse.clicked.or(mouse.double).filter(|_| settled) {
+            self.selected = i;
+            if let Some(item) = nth(i) {
                 if let Some(a) = self.actions_for(&item).first() {
                     self.do_action(item, a.kind.clone());
                 }
@@ -2029,6 +2114,10 @@ impl App {
         let mut first = true;
         #[cfg(test)]
         let mut drawn: Vec<(String, String)> = vec![];
+        // `live` hints (the list/form footers) are buttons; tool-window chips stay plain text
+        let live = window_chips.is_empty();
+        let mut hit_rects: Vec<(String, Rect)> = vec![];
+        let mut footer_click: Option<String> = None;
         let mut hint = |label: &str, key: &str| {
             #[cfg(test)]
             drawn.insert(0, (label.to_string(), key.to_string()));
@@ -2043,9 +2132,23 @@ impl App {
             record_text(ui.ctx(), pal, "footer-key", pal.text, &[pal.field], 1.0);
             let kw = (kg.size().x + 12.0).max(22.0);
             let kr = Rect::from_min_size(Pos2::new(x - kw, cy - 10.0), Vec2::new(kw, 20.0));
+            let lx = kr.min.x - 8.0 - lg.size().x;
+            if live {
+                // Same feedback as the Notes HintBar: a Field background on hover, a stronger one while pressed.
+                let hr = Rect::from_min_max(Pos2::new(lx - 6.0, cy - 12.0), Pos2::new(kr.max.x + 6.0, cy + 12.0));
+                let resp = ui.interact(hr, Id::new(("footer-hint", key)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                if resp.is_pointer_button_down_on() {
+                    p.rect_filled(hr, 6.0, pal.sel);
+                } else if resp.hovered() {
+                    p.rect_filled(hr, 6.0, pal.field);
+                }
+                if resp.clicked() {
+                    footer_click = Some(key.to_string());
+                }
+                hit_rects.push((key.to_string(), hr));
+            }
             p.rect_filled(kr, 5.0, pal.field);
             p.galley(Pos2::new(kr.center().x - kg.size().x / 2.0, cy - kg.size().y / 2.0), kg, pal.text);
-            let lx = kr.min.x - 8.0 - lg.size().x;
             p.galley(Pos2::new(lx, cy - lg.size().y / 2.0), lg, pal.text);
             x = lx - 18.0;
         };
@@ -2067,14 +2170,24 @@ impl App {
         }
         #[cfg(test)]
         ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-chips"), drawn));
+        // the panel's outside-click close must not swallow a click on a footer hint
+        ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-hints"), hit_rects));
+        if let Some(k) = footer_click {
+            ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-click"), k));
+            ui.ctx().request_repaint();
+        }
         if undo_clicked {
             self.undo_settings_reset();
         }
     }
 
-    fn draw_list(&mut self, ui: &mut Ui, rect: Rect, sections: &[Section], pal: &Palette) -> (Option<usize>, Option<usize>) {
+    fn draw_list(&mut self, ui: &mut Ui, rect: Rect, sections: &[Section], pal: &Palette) -> ListMouse {
         let mut clicked = None;
         let mut double = None;
+        let mut secondary = None;
+        let mut button = None;
+        #[cfg(test)]
+        let mut btn_rects: Vec<(String, Rect)> = vec![];
         let sel = self.selected;
         let scroll_sel = self.scroll_to_sel;
         let ctx = ui.ctx().clone();
@@ -2122,6 +2235,12 @@ impl App {
                         if resp.double_clicked() {
                             double = Some(idx);
                         }
+                        if resp.secondary_clicked() {
+                            secondary = Some(idx);
+                        }
+                        // hover buttons for the common per-item actions, on the selected (hovered) row
+                        let row_btns = if selected && self.panel.is_none() { self.row_buttons(item) } else { vec![] };
+                        let btn_total: f32 = row_btns.iter().map(|b| mini_button_width(ui, b.label) + 6.0).sum();
                         // Rows scrolled out of view still take part in layout and selection, but
                         // painting them (and fetching their icons) would be wasted work.
                         if !ui.is_rect_visible(r) {
@@ -2182,7 +2301,7 @@ impl App {
                             acc.push(item.accessory.clone());
                         }
                         let acc = acc.join("  ");
-                        let right = r.max.x - 18.0;
+                        let right = r.max.x - 18.0 - if btn_total > 0.0 { btn_total + 4.0 } else { 0.0 };
                         let ag = painter.layout_no_wrap(acc, FontId::proportional(12.0), pal.sub);
                         let aw = ag.size().x;
                         painter.galley(Pos2::new(right - aw, r.center().y - ag.size().y / 2.0), ag, pal.sub);
@@ -2202,6 +2321,16 @@ impl App {
                                 pal.sub,
                             );
                         }
+                        let mut bx = r.max.x - 14.0;
+                        for b in row_btns.iter().rev() {
+                            let br = mini_button_rect(ui, pal, bx, r.center().y, b.label);
+                            bx = br.min.x - 6.0;
+                            if mini_button(ui, pal, br, b, Id::new(("row-button", b.label, idx))) {
+                                button = Some((idx, b.kind.clone()));
+                            }
+                            #[cfg(test)]
+                            btn_rects.push((b.label.to_string(), br));
+                        }
                         idx += 1;
                     }
                 }
@@ -2211,7 +2340,9 @@ impl App {
         if let Some(i) = hover_sel {
             self.selected = i;
         }
-        (clicked, double)
+        #[cfg(test)]
+        ctx.data_mut(|d| d.insert_temp(Id::new("row-buttons"), btn_rects));
+        ListMouse { clicked, double, secondary, button }
     }
 
     /// Search Obsidian's right pane: the note title and path, then the parsed blocks of its first 200 KB.
@@ -2303,6 +2434,14 @@ impl App {
         let rect = Rect::from_min_size(rect.max - rect.size() * (0.96 + 0.04 * t), rect.size() * (0.96 + 0.04 * t))
             .translate(Vec2::new(0.0, (1.0 - t) * 8.0));
         ui.set_opacity(t);
+        // A click anywhere else closes the panel; the footer hints own their clicks (Actions toggles it).
+        let footer_hits = ui.ctx().data(|d| d.get_temp::<Vec<(String, Rect)>>(Id::new("footer-hints"))).unwrap_or_default();
+        let outside = ui.ctx().input(|i| {
+            (i.pointer.primary_clicked() || i.pointer.secondary_clicked())
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|pos| !rect.expand(2.0).contains(pos) && !footer_hits.iter().any(|(_, r)| r.contains(pos)))
+        });
         let painter = ui.painter().clone();
         painter.rect_filled(rect.expand(1.0), 10.0, Color32::from_black_alpha(90));
         painter.rect_filled(rect, 10.0, if self.dark { Color32::from_rgb(34, 34, 38) } else { Color32::from_rgb(246, 246, 248) });
@@ -2361,6 +2500,8 @@ impl App {
             let item = p.item.clone();
             self.panel = None;
             self.do_action(item, act);
+        } else if outside {
+            self.panel = None;
         }
     }
 

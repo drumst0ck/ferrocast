@@ -4672,6 +4672,86 @@ impl App {
 
     // --------------------------------------------------------------- actions
 
+    /// Open the action panel for `item` (⌘K, the footer "Actions" hint, a right click).
+    pub(crate) fn open_panel(&mut self, item: Item) {
+        let actions = self.actions_for(&item);
+        self.panel = Some(ActionPanel { actions, query: String::new(), sel: 0, item });
+    }
+
+    /// Hover buttons for the common per-item actions of a row; each one carries the `Act` of the
+    /// keyboard shortcut it mirrors, taken from `actions_for` so the two cannot drift apart.
+    pub(crate) fn row_buttons(&self, item: &Item) -> Vec<RowButton> {
+        let own_view = matches!(
+            (&item.kind, self.view()),
+            (Kind::Clip(_), View::Clipboard) | (Kind::Snippet(_), View::Snippets) | (Kind::Quicklink { .. }, View::Quicklinks)
+        );
+        if !own_view {
+            return vec![];
+        }
+        let acts = self.actions_for(item);
+        let pick = |label: &'static str, f: fn(&Act) -> bool| {
+            acts.iter().find(|a| f(&a.kind)).map(|a| RowButton {
+                label,
+                tip: match a.shortcut {
+                    Some((m, k)) => format!("{}  {}", a.title, shortcut_label(m, k)),
+                    None => a.title.clone(),
+                },
+                kind: a.kind.clone(),
+                destructive: a.destructive,
+            })
+        };
+        match &item.kind {
+            Kind::Clip(_) => {
+                let unpin = acts.iter().any(|a| a.title == "Unpin Entry");
+                [
+                    pick(if unpin { "Unpin" } else { "Pin" }, |a| matches!(a, Act::ClipPin(_))),
+                    pick("Delete", |a| matches!(a, Act::ClipDelete(_))),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
+            Kind::Snippet(_) => {
+                [pick("Edit", |a| matches!(a, Act::EditSnippet(_))), pick("Delete", |a| matches!(a, Act::DeleteSnippet(_)))]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+            }
+            Kind::Quicklink { .. } => {
+                [pick("Edit", |a| matches!(a, Act::EditQuicklink(_))), pick("Delete", |a| matches!(a, Act::DeleteQuicklink(_)))]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+            }
+            _ => vec![],
+        }
+    }
+
+    /// View-level mouse controls: "Clear History…" in the clipboard, "+ New" in snippets and quicklinks.
+    pub(crate) fn header_buttons(&self) -> Vec<RowButton> {
+        match self.view() {
+            View::Clipboard => vec![RowButton {
+                label: "Clear History…",
+                tip: format!("Delete All Entries  {} (pinned entries stay)", shortcut_label(CTRL_SHIFT, Key::X)),
+                kind: Act::ClipDeleteAll,
+                destructive: true,
+            }],
+            View::Snippets => vec![RowButton {
+                label: "+ New",
+                tip: format!("Create Snippet  {}", shortcut_label(CMD, Key::N)),
+                kind: Act::CreateSnippet,
+                destructive: false,
+            }],
+            View::Quicklinks => vec![RowButton {
+                label: "+ New",
+                tip: format!("Create Quicklink  {}", shortcut_label(CMD, Key::N)),
+                kind: Act::CreateQuicklink,
+                destructive: false,
+            }],
+            _ => vec![],
+        }
+    }
+
     fn actions_for(&self, item: &Item) -> Vec<Action> {
         let mut a = vec![];
         match &item.kind {

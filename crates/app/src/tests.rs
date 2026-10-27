@@ -14720,3 +14720,262 @@ fn a_cancelled_pick_copies_nothing() {
     app.drain();
     assert!(notion_io::take_copied().is_empty());
 }
+
+// ---- mouse parity: every keyboard action also has a click path (odd/tasks/mouse-parity.md)
+mod mouse_parity {
+    use super::*;
+
+    fn clip(id: &str, pinned: bool) -> ClipEntry {
+        ClipEntry {
+            id: id.into(),
+            kind: ClipKind::Text,
+            content: format!("text of {id}"),
+            title: None,
+            copied_at: now_secs(),
+            pinned,
+            source_app: None,
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    fn clipboard_app() -> App {
+        let mut app = fixture();
+        *app.shared.clipboard.lock().unwrap() = vec![clip("a", false), clip("b", true), clip("c", false)];
+        app.push(View::Clipboard);
+        app.nav_at = Instant::now() - Duration::from_secs(1);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        app
+    }
+
+    fn rects(app: &App, id: &str) -> Vec<(String, Rect)> {
+        app.ctx.data(|d| d.get_temp(Id::new(id))).unwrap_or_default()
+    }
+
+    fn rect_of(app: &App, id: &str, name: &str) -> Rect {
+        rects(app, id).into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no {name} in {id}")).1
+    }
+
+    fn click_button(app: &mut App, pos: Pos2, button: egui::PointerButton) {
+        let btn = |pressed| Event::PointerButton { pos, button, pressed, modifiers: Modifiers::NONE };
+        render(app, vec![Event::PointerMoved(pos)]);
+        render(app, vec![btn(true)]);
+        render(app, vec![btn(false)]);
+        render(app, vec![]);
+        render(app, vec![]);
+    }
+
+    fn row_center(n: usize) -> Pos2 {
+        // search bar, 4 pt of padding, then a 26 pt header per section: the fixture has one pinned
+        // entry ("Pinned", first) and two others, so row 0 sits under one header and rows 1-2 under two
+        let headers = if n == 0 { 1.0 } else { 2.0 };
+        Pos2::new(120.0, ui::SEARCH_H + 4.0 + 26.0 * headers + ui::ROW_H * (n as f32 + 0.5))
+    }
+
+    fn ids(app: &App) -> Vec<String> {
+        app.shared.clipboard.lock().unwrap().iter().map(|e| e.id.clone()).collect()
+    }
+
+    fn debug_act(a: &Act) -> String {
+        format!("{a:?}")
+    }
+
+    #[test]
+    fn row_buttons_run_the_same_act_as_the_keyboard_shortcut() {
+        let mut app = clipboard_app();
+        let item = |app: &App, id: &str| {
+            app.sections()[0]
+                .items
+                .iter()
+                .chain(app.sections().iter().flat_map(|s| s.items.iter()))
+                .find(|i| i.id.contains(id))
+                .cloned()
+                .unwrap()
+        };
+        let a = item(&app, "a");
+        let b = item(&app, "b");
+        let by_key = |app: &App, it: &Item, k: (Modifiers, Key)| app.actions_for(it).into_iter().find(|x| x.shortcut == Some(k)).unwrap();
+        // unpinned: Pin + Delete
+        let btns = app.row_buttons(&a);
+        assert_eq!(btns.iter().map(|b| b.label).collect::<Vec<_>>(), ["Pin", "Delete"]);
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &a, (CMD, Key::Period)).kind));
+        assert_eq!(debug_act(&btns[1].kind), debug_act(&by_key(&app, &a, (CTRL, Key::X)).kind));
+        assert!(btns[1].destructive);
+        assert!(btns[0].tip.contains("⌘."), "tooltip names the shortcut: {}", btns[0].tip);
+        assert!(btns[1].tip.starts_with("Delete Entry") && btns[1].tip.contains("⌃X"), "{}", btns[1].tip);
+        // pinned: Unpin
+        let btns = app.row_buttons(&b);
+        assert_eq!(btns[0].label, "Unpin");
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &b, (CMD, Key::Period)).kind));
+
+        // snippets and quicklinks: Edit + Delete
+        app.snippets = vec![ferrocast_core::models::Snippet { id: "s1".into(), ..ferrocast_core::models::Snippet::new("sn", "t", "") }];
+        app.stack = vec![View::Root, View::Snippets];
+        app.invalidate_sections();
+        let s = app.sections()[0].items[0].clone();
+        let btns = app.row_buttons(&s);
+        assert_eq!(btns.iter().map(|b| b.label).collect::<Vec<_>>(), ["Edit", "Delete"]);
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &s, (CMD, Key::E)).kind));
+        assert_eq!(debug_act(&btns[1].kind), debug_act(&by_key(&app, &s, (CTRL, Key::X)).kind));
+        app.quicklinks = vec![ferrocast_core::models::Quicklink {
+            id: "q1".into(),
+            ..ferrocast_core::models::Quicklink::new("ql", "https://example.com")
+        }];
+        app.stack = vec![View::Root, View::Quicklinks];
+        app.invalidate_sections();
+        let q = app.sections()[0].items[0].clone();
+        let btns = app.row_buttons(&q);
+        assert_eq!(btns.iter().map(|b| b.label).collect::<Vec<_>>(), ["Edit", "Delete"]);
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &q, (CMD, Key::E)).kind));
+        assert_eq!(debug_act(&btns[1].kind), debug_act(&by_key(&app, &q, (CTRL, Key::X)).kind));
+        // the same rows outside their own view get no buttons (e.g. a snippet found from the root)
+        app.stack = vec![View::Root];
+        assert!(app.row_buttons(&s).is_empty() && app.row_buttons(&q).is_empty());
+    }
+
+    #[test]
+    fn header_buttons_map_to_the_keyboard_acts() {
+        let mut app = clipboard_app();
+        let h = app.header_buttons();
+        assert_eq!(h.iter().map(|b| b.label).collect::<Vec<_>>(), ["Clear History…"]);
+        assert_eq!(debug_act(&h[0].kind), debug_act(&Act::ClipDeleteAll));
+        assert!(h[0].destructive && h[0].tip.contains("⌃⇧X"), "{}", h[0].tip);
+        app.stack = vec![View::Root, View::Snippets];
+        assert_eq!(debug_act(&app.header_buttons()[0].kind), debug_act(&Act::CreateSnippet));
+        assert!(app.header_buttons()[0].tip.contains("⌘N"));
+        app.stack = vec![View::Root, View::Quicklinks];
+        assert_eq!(debug_act(&app.header_buttons()[0].kind), debug_act(&Act::CreateQuicklink));
+        app.stack = vec![View::Root];
+        assert!(app.header_buttons().is_empty());
+    }
+
+    #[test]
+    fn footer_actions_hint_opens_and_closes_the_panel_like_cmd_k() {
+        let mut app = clipboard_app();
+        assert!(app.panel.is_none());
+        let r = rect_of(&app, "footer-hints", "⌘K");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        let p = app.panel.as_ref().expect("the footer Actions hint opens the panel");
+        assert_eq!(p.item.id, app.sections()[0].items[app.selected].id, "for the selected item");
+        // clicking it again toggles, as ⌘K does, instead of the outside-click close + reopen
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(app.panel.is_none());
+    }
+
+    #[test]
+    fn footer_enter_and_back_hints_behave_like_enter_and_escape() {
+        let mut app = clipboard_app();
+        app.perform(Act::ClipDeleteAll, false);
+        assert!(matches!(app.view(), View::Confirm { .. }));
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        let before = app.stack.len();
+        let back = rect_of(&app, "footer-hints", "esc");
+        click_button(&mut app, back.center(), egui::PointerButton::Primary);
+        assert_eq!(app.stack.len(), before - 1, "Back pops the confirmation");
+        assert_eq!(ids(&app), ["a", "b", "c"], "and nothing was deleted");
+
+        app.perform(Act::ClipDeleteAll, false);
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        let confirm = rect_of(&app, "footer-hints", "↵");
+        click_button(&mut app, confirm.center(), egui::PointerButton::Primary);
+        assert_eq!(ids(&app), ["b"], "Confirm clears the history and keeps the pinned entry");
+    }
+
+    #[test]
+    fn right_click_selects_the_row_and_opens_its_actions() {
+        let mut app = clipboard_app();
+        let n = app.sections().iter().map(|s| s.items.len()).sum::<usize>();
+        assert!(n >= 3);
+        click_button(&mut app, row_center(2), egui::PointerButton::Secondary);
+        let want = app.sections().iter().flat_map(|s| s.items.iter()).nth(2).unwrap().id.clone();
+        assert_eq!(app.selected, 2);
+        assert_eq!(app.panel.as_ref().expect("panel opened").item.id, want);
+        assert_eq!(ids(&app).len(), 3, "right click runs nothing");
+    }
+
+    #[test]
+    fn clicking_outside_the_panel_closes_it_without_running_the_row_under_the_pointer() {
+        let mut app = clipboard_app();
+        click_button(&mut app, row_center(0), egui::PointerButton::Secondary);
+        assert!(app.panel.is_some());
+        let hidden_before = app.visible;
+        click_button(&mut app, row_center(1), egui::PointerButton::Primary);
+        assert!(app.panel.is_none(), "outside click closes");
+        assert!(matches!(app.view(), View::Clipboard));
+        assert_eq!(app.visible, hidden_before, "the click did not paste/hide");
+        // a click inside the panel does not close it
+        click_button(&mut app, row_center(0), egui::PointerButton::Secondary);
+        let (w, h) = (ui::WIDTH, ui::HEIGHT);
+        click_button(&mut app, Pos2::new(w - 100.0, h - ui::FOOTER_H - 40.0), egui::PointerButton::Primary);
+        assert!(app.panel.is_some(), "a click on the panel's own search field is not an outside click");
+    }
+
+    #[test]
+    fn hover_buttons_pin_and_delete_one_entry() {
+        let mut app = clipboard_app();
+        let first = app.sections().iter().flat_map(|s| s.items.iter()).next().unwrap().clone();
+        let id = first.id.trim_start_matches("clip:").to_string();
+        let _ = id;
+        // pointer on the first row: it becomes the selected one and shows its buttons
+        render(&mut app, vec![Event::PointerMoved(row_center(0))]);
+        render(&mut app, vec![Event::PointerMoved(row_center(0) + Vec2::new(1.0, 0.0))]);
+        render(&mut app, vec![]);
+        let names: Vec<String> = rects(&app, "row-buttons").into_iter().map(|(n, _)| n).collect();
+        assert!(names.contains(&"Delete".to_string()), "{names:?}");
+        let del = rect_of(&app, "row-buttons", "Delete");
+        let before = ids(&app);
+        click_button(&mut app, del.center(), egui::PointerButton::Primary);
+        let after = ids(&app);
+        assert_eq!(after.len(), before.len() - 1, "Delete removed one entry: {before:?} -> {after:?}");
+        assert!(matches!(app.view(), View::Clipboard), "and stayed in the list");
+    }
+
+    #[test]
+    fn hover_pin_button_toggles_pinned() {
+        let mut app = clipboard_app();
+        render(&mut app, vec![Event::PointerMoved(row_center(0))]);
+        render(&mut app, vec![Event::PointerMoved(row_center(0) + Vec2::new(1.0, 0.0))]);
+        render(&mut app, vec![]);
+        let pinned_before = app.shared.clipboard.lock().unwrap().iter().filter(|e| e.pinned).count();
+        let pin = rects(&app, "row-buttons").into_iter().find(|(n, _)| n == "Pin" || n == "Unpin").expect("pin button").1;
+        click_button(&mut app, pin.center(), egui::PointerButton::Primary);
+        let pinned_after = app.shared.clipboard.lock().unwrap().iter().filter(|e| e.pinned).count();
+        assert_ne!(pinned_before, pinned_after, "the entry's pin state flipped");
+    }
+
+    #[test]
+    fn clear_history_button_confirms_then_keeps_pinned_entries() {
+        let mut app = clipboard_app();
+        let r = rect_of(&app, "header-buttons", "Clear History…");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::Confirm { .. }), "same confirmation as Delete All Entries");
+        assert_eq!(ids(&app).len(), 3, "nothing is deleted before confirming");
+        app.perform(Act::ClipDeleteAll, true);
+        assert_eq!(ids(&app), ["b"], "pinned entries stay");
+    }
+
+    #[test]
+    fn plus_button_creates_a_snippet_and_a_quicklink() {
+        let mut app = fixture();
+        app.push(View::Snippets);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let r = rect_of(&app, "header-buttons", "+ New");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::SnippetForm { id: None, .. }));
+        let mut app = fixture();
+        app.push(View::Quicklinks);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let r = rect_of(&app, "header-buttons", "+ New");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::QuicklinkForm { id: None, .. }));
+    }
+}
