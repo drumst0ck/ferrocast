@@ -69,6 +69,10 @@ export const en = {
     ],
     demoHeading: 'Try the wheel',
     demoLead: 'An interactive picture built from the same lists the app uses.',
+    wheelDemo: {
+      keyLabels: { convert: 'Shift', tools: 'Command', actions: 'Control' },
+      samples: { convert: 'a PDF', tools: 'an MP4 video', actions: 'any file or folder' },
+    },
     convert: {
       title: 'Convert',
       text: '{pairs} pairs across {inputs} formats. macOS tools first; ffmpeg, LibreOffice, cwebp, unrar and Ghostscript are optional.',

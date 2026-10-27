@@ -50,7 +50,7 @@ for (const fam of families) if (!f.convert.families[fam.id]) throw new Error(`no
     <div class="fh-demo">
       <h3 class="fh-sub">{f.demoHeading}</h3>
       <p class="muted">{f.demoLead}</p>
-      <WheelDemo />
+      <WheelDemo files={f} />
     </div>
     <div class="fh-cols">
       <article class="fh-col fh-convert">

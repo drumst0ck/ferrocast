@@ -15,6 +15,7 @@ else if (!release) return new Response(null, { status: 404, headers: { Location:
 const r = release!;
 const meta = releaseMeta(r);
 const canonical = new URL(`/changelog/${r.version}/`, Astro.site).href;
+const noindex = r.version === 'unreleased' && r.entries.length === 0;
 const jsonLd = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
@@ -26,7 +27,7 @@ const jsonLd = {
   ...(r.releasedOn ? { datePublished: r.releasedOn } : {}),
 };
 ---
-<Base title={meta.title} description={meta.description} canonical={canonical} jsonLd={jsonLd}>
+<Base title={meta.title} description={meta.description} canonical={canonical} jsonLd={jsonLd} robots={noindex ? 'noindex, follow' : undefined}>
   <SiteHeader />
   <main class="wrap prose" id="main">
     <p class="muted"><a class="tl" href="/changelog/">← All releases</a></p>

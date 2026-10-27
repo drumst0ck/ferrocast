@@ -4,7 +4,7 @@ import '../styles/base.css';
 import '../styles/site.css';
 import headlineLatin from '../assets/fonts/stack-sans-headline-latin.woff2?url';
 import textLatin from '../assets/fonts/stack-sans-text-latin.woff2?url';
-const { title, description, canonical, ogImage, jsonLd, lang = 'en', alternates } = Astro.props;
+const { title, description, canonical, ogImage, jsonLd, lang = 'en', alternates, robots } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
 <!doctype html>
@@ -21,6 +21,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
+    {robots && <meta name="robots" content={robots} />}
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     {canonical && <link rel="canonical" href={canonical} />}
@@ -37,6 +38,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <link rel="apple-touch-icon" href={`${base}/icon.png`} />
+    <link rel="icon" href={`${base}/favicon.ico`} sizes="any" />
     <link rel="icon" type="image/png" href={`${base}/favicon.png`} />
     <link rel="preload" as="font" type="font/woff2" href={headlineLatin} crossorigin />
     <link rel="preload" as="font" type="font/woff2" href={textLatin} crossorigin />
