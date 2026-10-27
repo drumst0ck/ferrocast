@@ -303,7 +303,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
   <FootMark />
   <footer class="foot">
     <span data-reveal>{t.footer.tagline}</span>
-    <nav aria-label={t.footer.linksAria}><a href="#install">{t.nav.install}</a><a href={docs('/')}>{t.nav.docs}</a><a href={`${base}/changelog/`}>{t.nav.changelog}</a><a href={repo}>{t.nav.github}</a><a href={`${repo}/blob/master/LICENSE`}>{t.footer.license}</a></nav>
+    <nav aria-label={t.footer.linksAria}><a href="#install">{t.nav.install}</a><a href={docs('/')}>{t.nav.docs}</a><a href={`${base}/changelog/`}>{t.nav.changelog}</a><a href={`${base}${es ? '/es/alternativa-a-raycast/' : '/raycast-alternative/'}`}>{t.footer.alternative}</a><a href={repo}>{t.nav.github}</a><a href={`${repo}/blob/master/LICENSE`}>{t.footer.license}</a></nav>
     <span class="r">{t.footer.copyright}</span>
   </footer>
 

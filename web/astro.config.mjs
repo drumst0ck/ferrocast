@@ -17,6 +17,8 @@ export default defineConfig({
   output: 'static',
   adapter: node({ mode: 'standalone' }),
   trailingSlash: 'always',
+  // Old slug from the SEO idea board; the brief asks for a redirect to the published URL.
+  redirects: { '/es/alternativa-raycast/': '/es/alternativa-a-raycast/' },
   build: {
     inlineStylesheets: 'auto',
   },
