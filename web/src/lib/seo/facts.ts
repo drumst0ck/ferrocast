@@ -96,6 +96,7 @@ export function factsCopy(lang: 'en' | 'es'): FactsCopy {
       ['Raycast alternative: Ferrocast vs Raycast vs Alfred', '/raycast-alternative/'],
       ['Ferrocast vs Raycast: what is free, what is paid', '/ferrocast-vs-raycast/'],
       ['Run Raycast Script Commands', '/raycast-script-commands/'],
+      ['Free Alfred alternative', '/alfred-alternative/'],
       ['Data and privacy', '/docs/reference/data-and-privacy/'],
       ['Changelog', '/changelog/'],
     ],

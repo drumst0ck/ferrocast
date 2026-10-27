@@ -21,6 +21,7 @@ export async function GET() {
     `- [Key facts and FAQ](${SITE}/facts/): plain facts for citations`,
     `- [Datos clave](${SITE}/es/facts/): los mismos datos en español`,
     `- [Raycast alternative](${SITE}/raycast-alternative/): what you keep, what is missing, and a sourced Ferrocast vs Raycast vs Alfred table`,
+    `- [Free Alfred alternative](${SITE}/alfred-alternative/): clipboard history and snippets without the Powerpack, with a sourced Alfred comparison`,
     `- [Ferrocast vs Raycast](${SITE}/ferrocast-vs-raycast/): Raycast Free vs Pro vs Ferrocast, feature by feature, with Raycast prices and sources`,
     `- [Run Raycast Script Commands without Raycast](${SITE}/raycast-script-commands/): which @raycast metadata Ferrocast reads, the four output modes and the limits`,
     `- [Compress a video to a target size](${SITE}/compress-video-to-size/): fit Discord (20 MiB) or Gmail (25 MB) limits on a Mac without uploading`,
