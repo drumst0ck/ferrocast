@@ -1,0 +1,13 @@
+---
+/*
+ * Main navigation links for the SEO pages, passed to SiteHeader's "nav" slot. Always render it:
+ * passing the slot conditionally leaves SiteHeader with an empty nav when the condition is false.
+ */
+import { repo } from '../../data/install';
+interface Props { lang: 'en' | 'es' }
+const { lang } = Astro.props;
+const links: [string, string][] = lang === 'es'
+  ? [['Funciones', '/es/#features'], ['Archivos', '/files/'], ['Instalar', '/es/#install'], ['Documentación', '/es/docs/'], ['Cambios', '/changelog/'], ['GitHub', repo]]
+  : [['Features', '/#features'], ['Files', '/files/'], ['Install', '/#install'], ['Docs', '/docs/'], ['Changelog', '/changelog/'], ['GitHub', repo]];
+---
+{links.map(([label, href]) => <a href={href}>{label}</a>)}

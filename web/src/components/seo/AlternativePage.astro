@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import SiteFooter from '../SiteFooter.astro';
 import Crumbs from './Crumbs.astro';
+import SeoNav from './SeoNav.astro';
 import { dmgUrl, installCommand, repo } from '../../data/install';
 import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
 import { en, es, inline, plain, sources, type AltCopy } from '../../lib/seo/alt-raycast';
@@ -39,16 +40,7 @@ const isEs = t.lang === 'es';
 ---
 <Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd} lang={t.lang} alternates={alternates}>
   <SiteHeader lang={t.lang} switchHref={other.path} switchLabel={isEs ? 'EN' : 'ES'} switchAria={isEs ? 'Read this page in English' : 'Leer esta página en español'}>
-    {isEs && (
-      <Fragment slot="nav">
-        <a href="/es/#features">Funciones</a>
-        <a href="/files/">Archivos</a>
-        <a href="#install">Instalar</a>
-        <a href="/es/docs/">Documentación</a>
-        <a href="/changelog/">Cambios</a>
-        <a href={repo}>GitHub</a>
-      </Fragment>
-    )}
+    <SeoNav slot="nav" lang={t.lang} />
     <span slot="cta">{isEs ? 'Instalar' : 'Install'}</span>
   </SiteHeader>
   <main class="seo alt" id="main">
