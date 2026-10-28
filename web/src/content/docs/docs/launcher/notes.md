@@ -82,7 +82,7 @@ PNG, JPEG, GIF, HEIC and WebP work, up to 20 MB each. A bigger file or one that 
 
 Ferrocast copies each image into the `attachments` folder of the data folder under a name made from its content, so the same image is stored once. The note gets a standard Markdown link on its own line, such as `![name](attachments/3f2a….png)`, and the image is drawn in the note at its own size, up to 480 points wide, with its proportions kept. Notes stay plain Markdown: the link is a relative path and only files in that folder are ever shown.
 
-To remove an image, select it and press Delete. A file that no note links any more is deleted after 7 days, so undo and Recently Deleted still find it. If a file is missing (for example it has not reached this Mac yet) a placeholder is shown, and the picture appears once the file is here.
+To remove an image, select it and press Delete. A file that no note links any more is deleted 7 days after its link was removed, however old the file is, so undo and Recently Deleted still find it; linking it again cancels that. If a file is missing (for example it has not reached this Mac yet) a placeholder is shown, and the picture appears once the file is here.
 
 The Notes window edits only Ferrocast's own notes. Notes in your Obsidian vault are not edited here, so Ferrocast never copies an image into your vault, and it never moves images from there into its own folder.
 
@@ -119,7 +119,7 @@ Actions that do not apply are left out of the list.
 
 ## Export and copy
 
-**Export** writes the note as **Plain Text**, **Markdown** or **HTML**. The file goes to your Downloads folder and is revealed in Finder; there is no save dialog. **Copy As** puts the note on the clipboard in the same three formats. Neither includes the image files of a note: Markdown keeps the link, and copying as plain text leaves the images out.
+**Export** writes the note as **Plain Text**, **Markdown** or **HTML**. The file goes to your Downloads folder and is revealed in Finder; there is no save dialog. **Copy As** puts the note on the clipboard in the same three formats. None of them includes the image files of a note. Markdown and HTML keep the link (`attachments/…`, which only resolves inside Ferrocast's data folder), and Plain Text writes each image as `alt (attachments/…)`. Copying a selection with <kbd>⌘</kbd> <kbd>C</kbd> puts its Markdown on the clipboard when it contains an image, so cutting, copying, dragging and pasting a paragraph inside Notes keeps its picture; pasted into another app it is the Markdown text.
 
 ## Quicklink and URLs
 

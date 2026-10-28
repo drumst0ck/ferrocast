@@ -82,7 +82,7 @@ Valen PNG, JPEG, GIF, HEIC y WebP, hasta 20 MB cada una. Un archivo mayor o que 
 
 Ferrocast copia cada imagen a la carpeta `attachments` de la carpeta de datos con un nombre hecho a partir de su contenido, así que la misma imagen se guarda una sola vez. La nota recibe un enlace Markdown estándar en su propia línea, como `![nombre](attachments/3f2a….png)`, y la imagen se dibuja en la nota con su tamaño, hasta 480 puntos de ancho y manteniendo la proporción. Las notas siguen siendo Markdown plano: el enlace es una ruta relativa y solo se muestran archivos de esa carpeta.
 
-Para quitar una imagen, selecciónala y pulsa Borrar. Un archivo que ninguna nota enlaza se elimina a los 7 días, de modo que deshacer y Eliminadas recientemente siguen encontrándolo. Si falta un archivo (por ejemplo, aún no ha llegado a este Mac) se muestra un marcador y la imagen aparece cuando el archivo está aquí.
+Para quitar una imagen, selecciónala y pulsa Borrar. Un archivo que ninguna nota enlaza se elimina 7 días después de quitar su enlace, sea cual sea la antigüedad del archivo, de modo que deshacer y Eliminadas recientemente siguen encontrándolo; volver a enlazarlo cancela esa cuenta. Si falta un archivo (por ejemplo, aún no ha llegado a este Mac) se muestra un marcador y la imagen aparece cuando el archivo está aquí.
 
 La ventana de Notes edita solo las notas de Ferrocast. Las notas de tu bóveda de Obsidian no se editan aquí, así que Ferrocast nunca copia una imagen a tu bóveda ni mueve imágenes de ella a su carpeta.
 
@@ -115,7 +115,7 @@ Las acciones que no se pueden aplicar no aparecen en la lista.
 
 ## Exportar y copiar
 
-**Export** escribe la nota como **Plain Text**, **Markdown** o **HTML**. El archivo va a tu carpeta Descargas y se muestra en Finder; no hay diálogo de guardado. **Copy As** deja la nota en el portapapeles en los mismos tres formatos. Ninguno incluye los archivos de imagen de una nota: Markdown conserva el enlace y copiar como texto plano deja fuera las imágenes.
+**Export** escribe la nota como **Plain Text**, **Markdown** o **HTML**. El archivo va a tu carpeta Descargas y se muestra en Finder; no hay diálogo de guardado. **Copy As** deja la nota en el portapapeles en los mismos tres formatos. Ninguno incluye los archivos de imagen de una nota. Markdown y HTML conservan el enlace (`attachments/…`, que solo se resuelve dentro de la carpeta de datos de Ferrocast) y Plain Text escribe cada imagen como `alt (attachments/…)`. Al copiar una selección con <kbd>⌘</kbd> <kbd>C</kbd> que contiene una imagen, se deja su Markdown en el portapapeles, así que cortar, copiar, arrastrar y pegar un párrafo dentro de Notes conserva su imagen; pegado en otra app es el texto Markdown.
 
 ## Quicklink y URL
 

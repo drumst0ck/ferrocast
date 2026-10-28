@@ -31,7 +31,7 @@ Las imágenes de las notas viajan como archivos aparte, junto a los registros de
 
 - Cada Mac escribe solo su propia carpeta, `devices/<id>/attachments/`, así que dos Mac nunca escriben el mismo archivo. Una imagen se sube una sola vez, desde el Mac que la tiene, y solo cuando una nota la enlaza. Un Mac que descargó una imagen no la vuelve a subir.
 - Cuando una nota sincronizada enlaza una imagen que este Mac no tiene, Ferrocast la copia de la carpeta del otro Mac, tras comprobar que el archivo está completo y es el que nombra la nota. Hasta que llega (iCloud puede estar descargándola) la nota muestra un marcador, el estado de la sincronización cuenta el archivo y la imagen aparece cuando ya está aquí.
-- Una imagen nunca se elimina de iCloud Drive mientras las notas de algún Mac la enlacen, y un Mac nunca elimina ninguna mientras las notas de otro Mac no se puedan leer. Una imagen que nada enlaza se elimina a los 7 días.
+- Una imagen nunca se elimina de iCloud Drive mientras las notas de algún Mac la enlacen, y un Mac nunca elimina ninguna mientras las notas de otro Mac no se puedan leer. Una imagen que nada enlaza se elimina 7 días después de que desapareciera el último enlace.
 - Cada imagen pesa como máximo 20 MB. Al desactivar la sincronización se detiene todo el copiado; no se sube ni se elimina nada.
 
 ## Conflictos

@@ -31,7 +31,7 @@ Images in notes travel as separate files, next to the note records, in the same 
 
 - Each Mac writes only its own folder, `devices/<id>/attachments/`, so two Macs never write the same file. An image is uploaded once, by the Mac that has it, and only when a note links it. A Mac that downloaded an image does not upload it again.
 - When a synced note links an image this Mac does not have, Ferrocast copies it from the other Mac's folder, after checking that the file is complete and is the one the note names. Until it arrives (iCloud may still be downloading it) the note shows a placeholder, the sync status counts the file, and the picture appears when it is here.
-- An image is never removed from iCloud Drive while any Mac's notes link it, and a Mac never removes one while another Mac's notes cannot be read. An image that nothing links is removed after 7 days.
+- An image is never removed from iCloud Drive while any Mac's notes link it, and a Mac never removes one while another Mac's notes cannot be read. An image that nothing links is removed 7 days after the last link went away.
 - Each image is at most 20 MB. Turning sync off stops all copying; nothing is uploaded or removed.
 
 ## Conflicts
