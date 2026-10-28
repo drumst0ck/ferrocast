@@ -242,12 +242,22 @@ pub fn toggle_block(blocks: &[Block], fmt: Format) -> Vec<Block> {
     }
 }
 
+/// Length of a span in storage UTF-16 units: an image is one character (its alt text is not in the
+/// storage), anything else is its text.
+pub fn span_units(s: &Span) -> usize {
+    if s.style.image.is_some() {
+        1
+    } else {
+        s.text.encode_utf16().count()
+    }
+}
+
 /// Split spans at a UTF-16 offset into the text before and after it.
 pub fn split_spans(spans: &[Span], at: usize) -> (Vec<Span>, Vec<Span>) {
     let (mut left, mut right) = (Vec::new(), Vec::new());
     let mut pos = 0usize;
     for s in spans {
-        let len: usize = s.text.encode_utf16().count();
+        let len: usize = span_units(s);
         if pos + len <= at {
             left.push(s.clone());
         } else if pos >= at {
@@ -1083,7 +1093,7 @@ fn edit_text(r: NSRange, repl: &str) {
     let (blocks, caret): (Vec<Block>, (usize, usize)) = if !repl.contains('\n') || code_first {
         let mut spans = left.clone();
         spans.extend(text_span(&repl));
-        let caret = spans.iter().map(|s| utf16_len(&s.text)).sum();
+        let caret = spans.iter().map(span_units).sum();
         (vec![make(first_kind, spans, right)], (0, caret))
     } else {
         let lines: Vec<&str> = repl.split('\n').collect();
@@ -1096,7 +1106,7 @@ fn edit_text(r: NSRange, repl: &str) {
             blocks.push(make((BlockKind::Paragraph, 0), text_span(l), vec![]));
         }
         let last_text = text_span(lines[n - 1]);
-        let caret = (n - 1, last_text.iter().map(|s| utf16_len(&s.text)).sum());
+        let caret = (n - 1, last_text.iter().map(span_units).sum());
         blocks.push(make(last_kind, last_text, right));
         (blocks, caret)
     };
@@ -1235,7 +1245,7 @@ fn result_blocks(md: &str) -> Option<Vec<Block>> {
 }
 
 fn spans_len(spans: &[Span]) -> usize {
-    spans.iter().map(|s| utf16_len(&s.text)).sum()
+    spans.iter().map(span_units).sum()
 }
 
 /// Replace the selection (the whole note when nothing is selected) with a Markdown result, as ONE
@@ -1643,7 +1653,7 @@ fn enter_key() {
     let k = para_at(&paras, loc);
     let p = &paras[k];
     let block = block_of(&u, p);
-    let content_len: usize = block.spans.iter().map(|s| utf16_len(&s.text)).sum();
+    let content_len: usize = block.spans.iter().map(span_units).sum();
     let off = loc.saturating_sub(p.cs).min(content_len);
     let (left, right) = split_spans(&block.spans, off);
     match &block.kind {
@@ -1762,7 +1772,7 @@ fn backspace(_tv: &NSTextView, st: &NSTextStorage, loc: usize) -> bool {
                 replace_blocks(k - 1, k, &[block], Some((0, 0)));
                 return true;
             }
-            let off: usize = merged.spans.iter().map(|s| utf16_len(&s.text)).sum();
+            let off: usize = merged.spans.iter().map(span_units).sum();
             merged.spans.extend(block.spans);
             replace_blocks(k - 1, k, &[merged], Some((0, off)));
             true
@@ -2953,6 +2963,22 @@ mod tests {
         assert_eq!(kinds(&r), vec![BlockKind::Paragraph, BlockKind::Rule, BlockKind::Paragraph]);
         let empty = vec![Block { kind: BlockKind::Paragraph, level: 0, spans: vec![] }];
         assert_eq!(kinds(&toggle_block(&empty, Format::Rule)), vec![BlockKind::Rule, BlockKind::Paragraph]);
+    }
+
+    #[test]
+    fn an_image_span_is_one_storage_unit_and_is_never_split_by_its_alt_text() {
+        let mut style = Style::default();
+        style.image = Some("attachments/a.png".into());
+        let img = Span { text: "image".into(), style };
+        let text = |t: &str| Span { text: t.into(), style: Style::default() };
+        assert_eq!(span_units(&img), 1);
+        let spans = vec![text("ab"), img.clone(), text("cd")];
+        let (l, r) = split_spans(&spans, 3);
+        assert_eq!((l, r), (vec![text("ab"), img.clone()], vec![text("cd")]));
+        let (l, r) = split_spans(&spans, 2);
+        assert_eq!((l, r), (vec![text("ab")], vec![img.clone(), text("cd")]));
+        let (l, r) = split_spans(&[img.clone()], 1);
+        assert_eq!((l, r), (vec![img], vec![]));
     }
 
     #[test]

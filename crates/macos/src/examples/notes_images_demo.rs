@@ -298,6 +298,76 @@ fn main() {
         }
     }
 
+    // typing around a pasted picture, like a person: text, Return, paste, Return, text
+    {
+        let ins = |t: &str| {
+            let s = NSString::from_str(t);
+            unsafe {
+                let _: () = msg_send![&*tv, insertText: &*s as &AnyObject];
+            }
+            pump(30);
+        };
+        let newline = || {
+            unsafe {
+                let _: () = msg_send![&*tv, insertNewline: std::ptr::null::<AnyObject>()];
+            }
+            pump(30);
+        };
+        notes::set_markdown("");
+        tv.setSelectedRange(NSRange::new(0, 0));
+        ins("Foto de prueba");
+        newline();
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        let bytes = png(64, 32);
+        pb.setData_forType(Some(&NSData::with_bytes(&bytes)), unsafe { NSPasteboardTypePNG });
+        got.borrow_mut().clear();
+        unsafe {
+            let _: () = msg_send![&*tv, paste: std::ptr::null::<AnyObject>()];
+        }
+        // what the app does with a pasted picture: store it and link it after the cursor line
+        let pasted = match got.borrow().first() {
+            Some(ImageInput::Png(b)) => attachments::store(&root, b, Some("png")).expect("store pasted"),
+            other => panic!("expected pasted PNG data, got {other:?}"),
+        };
+        notes::insert_markdown_after_cursor_line(&attachments::markdown_link(&pasted.alt, &pasted.name));
+        pump(30);
+        newline();
+        ins("Texto debajo");
+        let want = format!("Foto de prueba\n\n![image](attachments/{})\n\nTexto debajo", pasted.name);
+        check(
+            "text, Return, paste, Return, text gives the picture on its own line between them",
+            notes::markdown() == want,
+            &notes::markdown(),
+        );
+        let at = attachments_of(&tv);
+        check("exactly one picture is drawn, at the picture's position", at.len() == 1, &format!("{at:?}"));
+        check(
+            "no typed character carries the image",
+            !notes::markdown().contains("![mage]") && !notes::markdown().contains("![i]"),
+            &notes::markdown(),
+        );
+        // typing more after the picture line is plain text too
+        newline();
+        ins("otra linea");
+        check(
+            "a further line is plain text",
+            notes::markdown() == format!("{want}\n\notra linea") && attachments_of(&tv).len() == 1,
+            &notes::markdown(),
+        );
+        // Return after an image in the middle of a line splits around it without touching its alt text
+        notes::set_markdown(&format!("a ![long alt text](attachments/{}) b", pasted.name));
+        tv.setSelectedRange(NSRange::new(3, 0));
+        newline();
+        ins("X");
+        check(
+            "Return after an inline image keeps the whole alt text and the rest of the line",
+            notes::markdown() == format!("a ![long alt text](attachments/{})\n\nX b", pasted.name),
+            &notes::markdown(),
+        );
+        got.borrow_mut().clear();
+    }
+
     // a file removed from disk is not drawn from the cache
     let tmp_img = attachments::store(&root, &png(20, 10), Some("png")).expect("store");
     let line = format!("![t](attachments/{})", tmp_img.name);
