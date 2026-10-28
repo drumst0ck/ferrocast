@@ -56,7 +56,7 @@ export const es: AltCopy = {
   h1: 'Una alternativa a Raycast gratis y de código abierto para Mac',
   lead: [
     'Ferrocast es un lanzador para Mac gratis y de código abierto (licencia MIT), escrito en Rust. Solo funciona en Mac con Apple Silicon, ocupa unos 8,5 MB y no pide cuenta.',
-    'Tus Script Commands de Raycast funcionan tal cual y tus snippets se importan desde JSON. A cambio, no hay tienda de extensiones ni sincronización entre Macs.',
+    'Tus Script Commands de Raycast funcionan tal cual y tus snippets se importan desde JSON. Las extensiones que ya instalaste con Raycast también pueden ejecutarse, desactivadas por defecto y no por completo. La sincronización entre Macs es opcional por iCloud Drive. Ferrocast no tiene tienda de extensiones propia.',
   ],
   cta: { dmg: 'Descargar el DMG', brew: 'Instalar con Homebrew', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
   fit: {
@@ -71,8 +71,8 @@ export const es: AltCopy = {
     ],
     noH: 'Quédate en Raycast si…',
     no: [
-      'dependes de extensiones de la Store de Raycast;',
-      'necesitas sincronizar la configuración entre varios Macs;',
+      'dependes de instalar extensiones desde la Store de Raycast;',
+      'necesitas la Cloud Sync de Raycast, o sincronizar con Windows o iOS;',
       'usas Search Menu Bar Items;',
       'usas la IA con contexto de la selección o de la pantalla.',
     ],
@@ -88,8 +88,8 @@ export const es: AltCopy = {
   },
   missing: {
     h: 'Qué no tiene Ferrocast (todavía)',
-    items: ['tienda de extensiones;', 'sincronización entre Macs;', 'extensiones React;', 'Search Menu Bar Items;', 'contexto de IA desde la selección o la pantalla.'],
-    note: 'Si necesitas extensiones de Raycast sin Raycast, [Vicinae](https://github.com/vicinaehq/vicinae) y [Tinycast](https://github.com/abue-ammar/tinycast) se presentan como compatibles con ellas.',
+    items: ['tienda de extensiones propia;', 'compatibilidad completa con las extensiones de Raycast (comandos de la barra de menús, inicio de sesión OAuth, funciones de IA, selector de archivos y accesorio de enlace aún no están soportados);', 'Search Menu Bar Items;', 'contexto de IA desde la selección o la pantalla.'],
+    note: 'Ferrocast solo ejecuta extensiones que ya están en `~/.config/raycast/extensions`. No las instala y no contacta con la Store de Raycast. Si necesitas una tienda sin Raycast, [Vicinae](https://github.com/vicinaehq/vicinae) y [Tinycast](https://github.com/abue-ammar/tinycast) se presentan como compatibles con esas extensiones.',
   },
   adds: {
     h: 'Lo que Ferrocast añade y un lanzador normal no',
@@ -112,8 +112,8 @@ export const es: AltCopy = {
       ['IA', 'Incluida, con tu proveedor. Ollama en local por defecto', 'No incluida en Free; en Pro, con créditos mensuales', 'No consta IA integrada en su web'],
       ['Portapapeles', 'Incluido; ignora gestores de contraseñas', 'Incluido en Free; historial ilimitado en planes de pago', 'Con Powerpack; ignora apps de contraseñas por defecto'],
       ['Snippets', 'Incluidos; importación desde Raycast', 'Incluidos en Free', 'Con Powerpack'],
-      ['Extensiones', 'Script Commands compatibles con Raycast; sin tienda', 'Store de extensiones y Script Commands', 'Workflows (Powerpack) y Alfred Gallery'],
-      ['Sync entre Macs', 'No', 'Cloud Sync en planes de pago', 'Con Dropbox u otro servicio de archivos (Powerpack)'],
+      ['Extensiones', 'Script Commands, y extensiones ya instaladas con Raycast (parcial, desactivado por defecto); sin tienda propia', 'Store de extensiones y Script Commands', 'Workflows (Powerpack) y Alfred Gallery'],
+      ['Sync entre Macs', 'Opcional, por iCloud Drive (desactivada por defecto)', 'Cloud Sync en planes de pago', 'Con Dropbox u otro servicio de archivos (Powerpack)'],
       ['Conversión de archivos local', '275 pares, 46 formatos', 'No integrada según su web', 'No integrada según su web'],
       ['Plataformas', 'macOS (Apple Silicon)', 'macOS, Windows (beta pública) e iOS', 'macOS'],
     ],
@@ -145,11 +145,11 @@ export const es: AltCopy = {
     h: 'Preguntas frecuentes',
     items: [
       ['¿Hay una alternativa gratis y de código abierto a Raycast para Mac?', 'Sí. Ferrocast es un lanzador gratis para Mac con licencia MIT, escrito en Rust. Incluye búsqueda, calculadora, portapapeles, snippets, unos 40 comandos de ventanas y Script Commands compatibles con Raycast. No pide cuenta.'],
-      ['¿Puedo usar mis extensiones de Raycast en Ferrocast?', 'No. Ferrocast no ejecuta extensiones React ni tiene tienda de extensiones. Tus Script Commands sí funcionan tal cual.'],
+      ['¿Puedo usar mis extensiones de Raycast en Ferrocast?', 'En parte. Actívalo en Ajustes → Integrations → Raycast extensions. Ferrocast ejecuta entonces las extensiones que ya instalaste con Raycast, desde ~/.config/raycast/extensions. Necesita Node.js 22 o posterior (usa el tuyo, o descarga el oficial, unos 26 MB, cuando pulsas el botón). No contacta con la Store de Raycast, no está afiliado a Raycast y no tiene tienda propia. En una prueba de 40 comandos de vista de 20 extensiones populares, funcionaron 34. Aún no están soportados los comandos de la barra de menús, el inicio de sesión OAuth, las funciones de IA, el selector de archivos y el accesorio de enlace. Los Script Commands siguen funcionando tal cual.'],
       ['¿Cómo paso mis snippets y quicklinks de Raycast?', 'Los snippets se importan desde una exportación JSON de Raycast. Los quicklinks se recrean a mano.'],
       ['¿Ferrocast funciona en Mac con Intel?', 'No. Ferrocast solo funciona en Mac con Apple Silicon. Raycast 2 también exige Apple Silicon y macOS Tahoe.'],
       ['¿Ferrocast tiene IA gratis?', 'Ask AI usa Ollama en tu propio Mac por defecto, sin suscripción. También puedes conectar LM Studio, la API de OpenAI o la de Anthropic, o Claude Code. Las claves se guardan en el Llavero.'],
-      ['¿Ferrocast sincroniza entre varios Macs?', 'No. Ferrocast no tiene sincronización entre Macs. Los datos viven en ~/Library/Application Support/Ferrocast como JSON.'],
+      ['¿Ferrocast sincroniza entre varios Macs?', 'Sí, si lo activas. Ajustes → Advanced → Sync with iCloud está desactivado por defecto y necesita iCloud Drive. Sincroniza ajustes (atajos incluidos), snippets, quicklinks, notas, el historial del portapapeles con sus imágenes, los chats de Ask AI y los temas propios. Las claves del Llavero y los ajustes de cada Mac (carpetas de scripts, el vault de Obsidian, abrir al iniciar sesión, cámara y micrófono, actualizaciones y permisos de macOS) se quedan en ese Mac. Los datos locales siguen en ~/Library/Application Support/Ferrocast como JSON.'],
       ['¿Por qué macOS pide «Abrir igualmente» al abrir Ferrocast?', 'La app lleva firma ad-hoc y no está notarizada. La primera vez hay que confirmarla en Ajustes del Sistema → Privacidad y seguridad. Con Homebrew se compila en tu Mac y no aparece ese aviso.'],
       ['¿Necesito ffmpeg?', 'No para muchas conversiones, porque Ferrocast usa primero herramientas de macOS. ffmpeg, LibreOffice, Ghostscript, cwebp y unrar son opcionales: Ferrocast solo los usa si están instalados, y las conversiones que los necesitan lo indican.'],
       ['¿Raycast es gratis?', 'Raycast tiene un plan Free para uso personal sin IA. Raycast Pro cuesta 10 $ al mes o 96 $ al año, según raycast.com/pricing (comprobado el 27 de octubre de 2026).'],
@@ -167,6 +167,7 @@ export const es: AltCopy = {
     links: [
       ['Guía de migración desde Raycast', '/es/docs/getting-started/migrating-from-raycast/'],
       ['Raycast vs Alfred vs Spotlight', '/es/raycast-vs-alfred-vs-spotlight/'],
+      ['Alternativa gratis a Alfred sin Powerpack', '/es/alternativa-a-alfred/'],
       ['Instalación', '/es/docs/getting-started/install/'],
       ['Datos y privacidad', '/es/docs/reference/data-and-privacy/'],
       ['Preguntas frecuentes de la documentación', '/es/docs/reference/faq/'],
@@ -186,7 +187,7 @@ export const en: AltCopy = {
   h1: 'A free, open-source Raycast alternative for Mac',
   lead: [
     'Ferrocast is a free, open-source (MIT) launcher for Mac, written in Rust. It is one 8.5 MB app that is also a local file converter and a screen recorder with auto zoom. Apple Silicon only, no account.',
-    'Your Raycast Script Commands run as they are and your snippets import from JSON. There is no extension store and no sync between Macs.',
+    'Your Raycast Script Commands run as they are and your snippets import from JSON. Extensions you already installed with Raycast can run too, off by default and not in full. Sync between Macs is opt-in through iCloud Drive. Ferrocast has no extension store of its own.',
   ],
   cta: { dmg: 'Download the DMG', brew: 'Install with Homebrew', note: 'Free · MIT · Apple Silicon · no account' },
   fit: {
@@ -201,8 +202,8 @@ export const en: AltCopy = {
     ],
     noH: 'Stay on Raycast if you…',
     no: [
-      'rely on extensions from the Raycast Store;',
-      'need your setup synced across several Macs;',
+      'rely on installing extensions from the Raycast Store;',
+      'need Raycast Cloud Sync, or sync with Windows or iOS;',
       'use Search Menu Bar Items;',
       'use AI with context from your selection or screen.',
     ],
@@ -218,8 +219,8 @@ export const en: AltCopy = {
   },
   missing: {
     h: 'What Ferrocast does not have (yet)',
-    items: ['an extension store;', 'sync between Macs;', 'React extensions;', 'Search Menu Bar Items;', 'AI context from your selection or screen.'],
-    note: 'If you need Raycast extensions without Raycast, [Vicinae](https://github.com/vicinaehq/vicinae) and [Tinycast](https://github.com/abue-ammar/tinycast) describe themselves as compatible with them.',
+    items: ['an extension store of its own;', 'full Raycast extension support (menu bar commands, OAuth sign-in, AI features, the file picker and the link accessory are not supported yet);', 'Search Menu Bar Items;', 'AI context from your selection or screen.'],
+    note: 'Ferrocast only runs extensions already in `~/.config/raycast/extensions`. It does not install them and it does not contact Raycast’s Store. If you need a store without Raycast, [Vicinae](https://github.com/vicinaehq/vicinae) and [Tinycast](https://github.com/abue-ammar/tinycast) describe themselves as compatible with those extensions.',
   },
   adds: {
     h: 'Three apps in one 8.5 MB launcher',
@@ -242,8 +243,8 @@ export const en: AltCopy = {
       ['AI', 'Included, with your provider. Local Ollama by default', 'Not in Free; in Pro, with monthly credits', 'No built-in AI stated on its website'],
       ['Clipboard', 'Included; skips password managers', 'Included in Free; unlimited history on paid plans', 'With Powerpack; skips password apps by default'],
       ['Snippets', 'Included; import from Raycast', 'Included in Free', 'With Powerpack'],
-      ['Extensions', 'Raycast-compatible Script Commands; no store', 'Extension Store and Script Commands', 'Workflows (Powerpack) and Alfred Gallery'],
-      ['Sync between Macs', 'No', 'Cloud Sync on paid plans', 'Through Dropbox or another file sync service (Powerpack)'],
+      ['Extensions', 'Script Commands, plus extensions already installed with Raycast (partial, off by default); no store of its own', 'Extension Store and Script Commands', 'Workflows (Powerpack) and Alfred Gallery'],
+      ['Sync between Macs', 'Opt-in, through iCloud Drive (off by default)', 'Cloud Sync on paid plans', 'Through Dropbox or another file sync service (Powerpack)'],
       ['Local file conversion', '275 pairs, 46 formats', 'Not built in, per its website', 'Not built in, per its website'],
       ['Platforms', 'macOS (Apple Silicon)', 'macOS, Windows (public beta) and iOS', 'macOS'],
     ],
@@ -275,11 +276,11 @@ export const en: AltCopy = {
     h: 'Questions',
     items: [
       ['Is there a free, open-source Raycast alternative for Mac?', 'Yes. Ferrocast is a free Mac launcher under the MIT licence, written in Rust. It has search, a calculator, clipboard history, snippets, about 40 window commands and Raycast-compatible Script Commands. It needs no account.'],
-      ['Can I use my Raycast extensions in Ferrocast?', 'No. Ferrocast does not run React extensions and has no extension store. Your Script Commands do run as they are.'],
+      ['Can I use my Raycast extensions in Ferrocast?', 'Partly. Turn it on in Settings → Integrations → Raycast extensions. Ferrocast then runs extensions you already installed with Raycast, from ~/.config/raycast/extensions. It needs Node.js 22 or newer (it uses yours, or downloads the official one, about 26 MB, when you press the button). It does not contact Raycast’s Store, is not affiliated with Raycast, and has no store of its own. In a test of 40 view commands from 20 popular extensions, 34 worked. Menu bar commands, OAuth sign-in, AI features, the file picker and the link accessory are not supported yet. Script Commands still run as they are.'],
       ['How do I move my Raycast snippets and quicklinks?', 'Snippets import from a Raycast JSON export. Quicklinks are recreated by hand.'],
       ['Does Ferrocast work on Intel Macs?', 'No. Ferrocast runs only on Apple Silicon Macs. Raycast 2 also requires Apple Silicon and macOS Tahoe.'],
       ['Does Ferrocast have free AI?', 'Ask AI uses Ollama on your own Mac by default, with no subscription. You can also connect LM Studio, the OpenAI or Anthropic API, or Claude Code. Keys are stored in the Keychain.'],
-      ['Does Ferrocast sync between Macs?', 'No. Ferrocast has no sync between Macs. Its data lives in ~/Library/Application Support/Ferrocast as JSON.'],
+      ['Does Ferrocast sync between Macs?', 'Yes, if you turn it on. Settings → Advanced → Sync with iCloud is off by default and needs iCloud Drive. It syncs settings (including hotkeys), snippets, quicklinks, notes, clipboard history with images, Ask AI chats and custom themes. Keychain API keys and per-Mac settings (script folders, the Obsidian vault, launch at login, camera and microphone, updates and macOS permissions) stay on each Mac. Local data still lives in ~/Library/Application Support/Ferrocast as JSON.'],
       ['Why does macOS ask me to “Open Anyway” for Ferrocast?', 'The app is ad-hoc signed and not notarized, so the first launch has to be confirmed in System Settings → Privacy & Security. With Homebrew it builds on your Mac and the prompt does not appear.'],
       ['Do I need ffmpeg?', 'Not for many conversions, because Ferrocast tries macOS tools first. ffmpeg, LibreOffice, Ghostscript, cwebp and unrar are optional: Ferrocast uses them only when they are installed, and the conversions that need them say so.'],
       ['Is Raycast free?', 'Raycast has a Free plan for personal use without AI. Raycast Pro costs $10 a month or $96 a year, according to raycast.com/pricing (checked on 27 October 2026).'],

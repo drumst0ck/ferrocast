@@ -25,7 +25,7 @@ Porque mover ventanas, pegar por ti y expandir snippets lo necesitan. La búsque
 Se queda en tu Mac salvo que actives [Sincronizar con iCloud](/es/docs/launcher/sync/) (desactivado por defecto), que lo copia a tu iCloud Drive para tus otros Macs. Está en un archivo JSON en Application Support, y lo que se copia desde un gestor de contraseñas como 1Password se ignora a propósito.
 
 ### ¿Qué falta hoy?
-Faltan una tienda de extensiones y la sincronización entre Macs.
+Una tienda de extensiones propia, Search Menu Bar Items y contexto de IA desde la selección o la pantalla. Las [extensiones de Raycast](/es/docs/launcher/raycast-extensions/) son solo las que ya instalaste con Raycast, y no todas sus partes. La [sincronización entre Macs](/es/docs/launcher/sync/) es opcional por iCloud Drive.
 
 ## IA y migración
 
