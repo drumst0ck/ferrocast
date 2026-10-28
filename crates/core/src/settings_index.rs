@@ -26,6 +26,11 @@ pub const ENTRIES: &[Entry] = &[
     // 0 General
     e(0, "Launcher hotkey", &["shortcut", "keybinding", "alt space", "record", "open", "global"]),
     e(0, "Appearance", &["theme", "dark", "light", "system", "mode", "color", "colour"]),
+    e(
+        0,
+        "Custom themes",
+        &["theme", "colours", "colors", "accent", "background", "import", "export", "duplicate", "editor", "contrast", "palette"],
+    ),
     e(0, "Compact mode", &["minimal", "search bar", "small", "collapse"]),
     e(0, "Launch at login", &["startup", "start", "boot", "login item", "autostart"]),
     e(0, "Drop wheel", &["drag", "files", "wheel", "convert", "radial"]),

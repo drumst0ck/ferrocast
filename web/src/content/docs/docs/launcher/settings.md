@@ -11,6 +11,7 @@ Open it with <kbd>⌘</kbd> <kbd>,</kbd>. There is also a menu bar icon.
 ## What you can set
 
 - The launcher hotkey (default <kbd>⌥</kbd> <kbd>Space</kbd>) and per-command hotkeys.
+- Appearance (Settings → General): System, Dark or Light, or your own colours with a live preview, contrast warnings and export/import as a file (see [Custom themes](/docs/launcher/themes/)).
 - Launch at login through a LaunchAgent; it applies at the next login.
 - The drag-wheel keys and on/off in Settings → General (see [Drag wheel](/docs/files/drag-wheel/)).
 - Updates (Settings → General): check automatically, ask first or install automatically, and Check now (see [Install](/docs/getting-started/install/#updates)).

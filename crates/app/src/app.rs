@@ -1061,6 +1061,8 @@ pub struct App {
     inline: HashMap<PathBuf, (String, Instant)>,
     focus_first: bool,
     dark: bool,
+    /// Saved custom themes (`themes.json`); `settings.custom_theme` names the selected one.
+    pub(crate) custom_themes: Vec<ferrocast_core::themes::CustomTheme>,
     started: bool,
     act_item: Option<Item>,
     scratch: String,
@@ -1170,6 +1172,7 @@ impl App {
         let recent_emoji = store.load("recent-emoji.json");
         let shelf: Vec<PathBuf> = store.load("shelf.json");
         let data = store.load_all();
+        let store_themes = store.load::<ferrocast_core::themes::ThemeFile>("themes.json").themes;
         if prof {
             eprintln!("data {:?}", t.elapsed());
         }
@@ -1307,6 +1310,7 @@ impl App {
             inline: HashMap::new(),
             focus_first: false,
             dark: true,
+            custom_themes: store_themes,
             started: false,
             act_item: None,
             scratch: String::new(),
@@ -1458,14 +1462,36 @@ impl App {
 
     // ------------------------------------------------------------------ data
 
+    /// The selected custom theme, when `settings.custom_theme` names a saved one.
+    pub(crate) fn active_theme(&self) -> Option<&ferrocast_core::themes::CustomTheme> {
+        let name = self.settings.custom_theme.as_deref()?;
+        self.custom_themes.iter().find(|t| t.name.eq_ignore_ascii_case(name))
+    }
+
     fn set_theme(&mut self) {
-        let pref = match self.settings.theme {
-            Theme::System => egui::ThemePreference::System,
-            Theme::Dark => egui::ThemePreference::Dark,
-            Theme::Light => egui::ThemePreference::Light,
+        use ferrocast_core::themes::ThemeBase;
+        // a custom theme forces light or dark from its base (egui's own widgets and the Notes window follow it)
+        let base = self.active_theme().map(|t| t.base);
+        let (pref, notes) = match base {
+            Some(ThemeBase::Dark) => (egui::ThemePreference::Dark, notes_appearance(Theme::Dark)),
+            Some(ThemeBase::Light) => (egui::ThemePreference::Light, notes_appearance(Theme::Light)),
+            None => (
+                match self.settings.theme {
+                    Theme::System => egui::ThemePreference::System,
+                    Theme::Dark => egui::ThemePreference::Dark,
+                    Theme::Light => egui::ThemePreference::Light,
+                },
+                notes_appearance(self.settings.theme),
+            ),
         };
         self.ctx.set_theme(pref);
-        (self.fx.notes_appearance)(notes_appearance(self.settings.theme));
+        (self.fx.notes_appearance)(notes);
+    }
+
+    /// Persist the custom themes (`themes.json`).
+    pub(crate) fn save_themes(&mut self) {
+        let v = ferrocast_core::themes::ThemeFile { themes: self.custom_themes.clone() };
+        self.persist("themes.json", &v);
     }
 
     fn script_dirs(&self) -> Vec<PathBuf> {
@@ -3582,6 +3608,7 @@ impl App {
                         done: true,
                     });
                 }
+                Msg::ThemePath { export, path } => self.theme_file_picked(export, path),
                 Msg::IconBytes(k, b) => {
                     if !self.icons.map.contains_key(&k) {
                         self.icons.prefetched.insert(k, b);
@@ -7557,5 +7584,7 @@ fn launcher_origin() -> Option<Pos2> {
 mod draw;
 #[path = "intro.rs"]
 mod intro;
+#[path = "theme_ctl.rs"]
+mod theme_ctl;
 #[path = "tour.rs"]
 mod tour;

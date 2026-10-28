@@ -224,6 +224,8 @@ pub struct NotionTarget {
 pub struct Settings {
     pub launcher_hotkey: String,
     pub theme: Theme,
+    /// Name of the selected custom theme (see `themes.json`); `None` follows `theme`.
+    pub custom_theme: Option<String>,
     pub compact_mode: bool,
     pub sensitivity: Sensitivity,
     pub clipboard_enabled: bool,
@@ -334,6 +336,7 @@ impl Default for Settings {
         Settings {
             launcher_hotkey: "Alt+Space".into(),
             theme: Theme::System,
+            custom_theme: None,
             compact_mode: false,
             sensitivity: Sensitivity::Medium,
             clipboard_enabled: true,

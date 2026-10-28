@@ -602,7 +602,7 @@ pub fn split_audio(summary: &str) -> (&str, Option<&str>) {
 fn info_chip(ui: &mut Ui, pal: &Palette, text: &str) {
     let g = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(11.5), pal.sub_strong);
     let (r, _) = ui.allocate_exact_size(egui::vec2(g.size().x + 16.0, 22.0), egui::Sense::hover());
-    ui.painter().rect_filled(r, 11.0, pal.field.gamma_multiply(1.6));
+    ui.painter().rect_filled(r, 11.0, pal.lift(1.6));
     ui.painter().galley(Pos2::new(r.min.x + 8.0, r.center().y - g.size().y / 2.0), g, pal.sub_strong);
 }
 

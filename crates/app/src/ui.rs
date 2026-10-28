@@ -28,9 +28,64 @@ pub struct Palette {
     pub field: Color32,
     pub sep: Color32,
     pub danger: Color32,
+    /// Hover fill of rows and buttons.
+    pub hover: Color32,
+    /// Text and glyphs drawn on an accent fill.
+    pub on_accent: Color32,
+    /// Fill of popovers (the actions panel).
+    pub popover: Color32,
+    /// Fill of the drop wheel's disc.
+    pub disc: Color32,
+    /// A custom theme (opaque surface fills) rather than the built-in translucent ones.
+    pub custom: bool,
+}
+
+impl Palette {
+    /// `field` made `k` times stronger (1.3 resting control, 1.6 hover, 2.4 pressed). The built-in
+    /// palettes brighten their translucent overlay; a custom theme's opaque surface moves toward
+    /// its text colour instead, which works on light and dark bases alike.
+    pub fn lift(&self, k: f32) -> Color32 {
+        if !self.custom {
+            return self.field.gamma_multiply(k);
+        }
+        let t = ((k - 1.0) * 0.1).clamp(0.0, 0.5);
+        let m = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+        Color32::from_rgb(m(self.field.r(), self.text.r()), m(self.field.g(), self.text.g()), m(self.field.b(), self.text.b()))
+    }
+}
+
+/// The palette of a custom theme: every value comes from `ferrocast_core::themes::CustomTheme::derive`.
+pub fn palette_custom(t: &ferrocast_core::themes::CustomTheme) -> Palette {
+    let d = t.derive();
+    let c = |v: [u8; 4]| Color32::from_rgba_unmultiplied(v[0], v[1], v[2], v[3]);
+    let dark = t.base == ferrocast_core::themes::ThemeBase::Dark;
+    Palette {
+        bg: c(d.bg),
+        border: c(d.border),
+        text: c(d.text),
+        sub: c(d.sub),
+        sub_strong: c(d.sub_strong),
+        accent_text: c(d.accent_text),
+        sel: c(d.sel),
+        accent: c(d.accent),
+        field: c(d.field),
+        sep: c(d.sep),
+        danger: c(d.danger),
+        hover: c(d.hover),
+        on_accent: c(d.on_accent),
+        popover: c([d.field[0], d.field[1], d.field[2], 255]),
+        custom: true,
+        disc: c([d.bg[0], d.bg[1], d.bg[2], if dark { 222 } else { 226 }]),
+    }
 }
 
 pub fn palette(dark: bool) -> Palette {
+    let mut p = default_palette(dark);
+    p.hover = p.lift(1.6);
+    p
+}
+
+fn default_palette(dark: bool) -> Palette {
     if dark {
         Palette {
             bg: Color32::from_rgba_unmultiplied(24, 24, 27, 248),
@@ -44,6 +99,11 @@ pub fn palette(dark: bool) -> Palette {
             field: Color32::from_white_alpha(14),
             sep: Color32::from_white_alpha(20),
             danger: Color32::from_rgb(240, 83, 95),
+            hover: Color32::TRANSPARENT,
+            on_accent: Color32::WHITE,
+            popover: Color32::from_rgb(34, 34, 38),
+            disc: Color32::from_rgba_unmultiplied(24, 24, 27, 222),
+            custom: false,
         }
     } else {
         Palette {
@@ -58,6 +118,11 @@ pub fn palette(dark: bool) -> Palette {
             field: Color32::from_black_alpha(10),
             sep: Color32::from_black_alpha(22),
             danger: Color32::from_rgb(200, 40, 40),
+            hover: Color32::TRANSPARENT,
+            on_accent: Color32::WHITE,
+            popover: Color32::from_rgb(246, 246, 248),
+            disc: Color32::from_rgba_unmultiplied(250, 250, 251, 226),
+            custom: false,
         }
     }
 }
