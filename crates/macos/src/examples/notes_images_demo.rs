@@ -368,7 +368,70 @@ fn main() {
         got.borrow_mut().clear();
     }
 
-    // a file removed from disk is not drawn from the cache
+    // moving and copying a picture line inside the note (the drop path, same view as the source)
+    {
+        let name = wide.name.clone();
+        let img = format!("![image](attachments/{name})");
+        let base = format!("Foto de prueba\n\n{img}\n\nTexto debajo");
+        let end = "Foto de prueba\n".encode_utf16().count() + 2 + "Texto debajo".encode_utf16().count();
+        let select_image_line = || {
+            notes::set_markdown(&base);
+            // caret at the start of the image line, Shift+Down: the image and its line break
+            tv.setSelectedRange(NSRange::new(15, 2));
+            notes::markdown_of_selection()
+        };
+        // a copied picture line pasted after text goes on its own paragraph, not inline
+        let md = select_image_line();
+        tv.setSelectedRange(NSRange::new(end, 0));
+        check("pasting a copied picture line at the end of a text line", notes::paste_markdown(&md), "refused");
+        pump(30);
+        check(
+            "the pasted picture goes on its own paragraph after that line",
+            notes::markdown() == format!("{base}\n\n{img}"),
+            &notes::markdown(),
+        );
+        // dragging the picture line to the end of the text line moves it: once, on its own paragraph
+        let md = select_image_line();
+        check("the drop moves the picture line", notes::drop_markdown(&md, end, Some((15, 17))), "refused");
+        pump(30);
+        check(
+            "moved: the original is gone and the picture follows the text on its own paragraph",
+            notes::markdown() == format!("Foto de prueba\n\nTexto debajo\n\n{img}") && attachments_of(&tv).len() == 1,
+            &notes::markdown(),
+        );
+        if let Some(um) = tv.undoManager() {
+            um.undo();
+            pump(30);
+        }
+        check("one undo puts a moved picture back", notes::markdown() == base && attachments_of(&tv).len() == 1, &notes::markdown());
+        // ⌥-drag copies: both stay
+        let md = select_image_line();
+        notes::drop_markdown(&md, end, None);
+        pump(30);
+        check(
+            "copied: the picture is in both places, each on its own paragraph",
+            notes::markdown() == format!("{base}\n\n{img}") && attachments_of(&tv).len() == 2,
+            &notes::markdown(),
+        );
+        // dropping onto the dragged range changes nothing; dropping before the source works too
+        let md = select_image_line();
+        notes::drop_markdown(&md, 16, Some((15, 17)));
+        pump(30);
+        check("dropping a selection onto itself changes nothing", notes::markdown() == base, &notes::markdown());
+        notes::set_markdown(&format!("Foto de prueba\n\n{img}\n\nTexto debajo\n\n{img}"));
+        let last = "Foto de prueba\n".encode_utf16().count() + 2 + "Texto debajo".encode_utf16().count() + 1;
+        tv.setSelectedRange(NSRange::new(last, 1));
+        let md = notes::markdown_of_selection();
+        notes::drop_markdown(&md, 5, Some((last, last + 1)));
+        pump(30);
+        check(
+            "a picture at the end moved up to the first line lands after it, once",
+            notes::markdown() == format!("Foto de prueba\n\n{img}\n\n{img}\n\nTexto debajo") && attachments_of(&tv).len() == 2,
+            &notes::markdown(),
+        );
+    }
+
+    // a file removed is not drawn from the cache
     let tmp_img = attachments::store(&root, &png(20, 10), Some("png")).expect("store");
     let line = format!("![t](attachments/{})", tmp_img.name);
     notes::set_markdown(&line);

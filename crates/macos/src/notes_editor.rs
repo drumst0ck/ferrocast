@@ -1272,14 +1272,60 @@ pub fn replace_selection_markdown(md: &str) -> bool {
 /// Put Markdown at the cursor, replacing only the selection (nothing is replaced without one):
 /// what pasting a selection that was copied from a note does. One undoable edit; false for a blank text.
 pub fn paste_markdown(md: &str) -> bool {
-    let Some(blocks) = result_blocks(md) else { return false };
+    let Some(mut blocks) = result_blocks(md) else { return false };
     let Some((tv, st)) = handles() else { return false };
     let (u, paras) = read_paras(&st, true);
     let sel = tv.selectedRange();
     let (a, b) = (sel.location, sel.location + sel.length);
+    // the line break that ends a selection of whole lines is not content
+    while blocks.len() > 1 && blocks.last().is_some_and(|l| l.kind == BlockKind::Paragraph && l.spans.is_empty()) {
+        blocks.pop();
+    }
+    // pictures on their own lines stay on their own lines (like paste and Insert Image): after the
+    // line the cursor is on, never inline after its text
+    let pictures_only =
+        blocks.iter().all(|b| b.kind == BlockKind::Paragraph && !b.spans.is_empty() && b.spans.iter().all(|s| s.style.image.is_some()));
+    if pictures_only && a == b {
+        insert_blocks_after(para_at(&paras, a), blocks);
+        return true;
+    }
     let (lo, hi) = sel_paras(&paras, a, b);
     splice_blocks(&u, &paras, blocks, (lo, hi, a, b));
     true
+}
+
+/// A drop of Markdown (a selection dragged from a note) at storage offset `idx`. With `moved_from`
+/// (the dragged range, same text view, no ⌥) the source is deleted first as part of the same undo
+/// group and the drop point is shifted back when the source was before it; without it the drop
+/// is a copy. Dropping onto the dragged range itself changes nothing.
+pub fn drop_markdown(md: &str, idx: usize, moved_from: Option<(usize, usize)>) -> bool {
+    let Some((tv, st)) = handles() else { return false };
+    let um = tv.undoManager();
+    if let Some(um) = &um {
+        um.beginUndoGrouping();
+    }
+    let mut at = idx.min(st.length());
+    let mut ok = true;
+    if let Some((a, b)) = moved_from.filter(|(a, b)| a < b) {
+        if at >= a && at <= b {
+            ok = false;
+        } else {
+            // moving the last line away must not leave an empty paragraph behind: take the break before it
+            let from = if b == st.length() && a > 0 && units_of(&st)[a - 1] == 10 { a - 1 } else { a };
+            edit_text(range(from, b - from), "");
+            if at > b {
+                at -= b - from;
+            }
+        }
+    }
+    if ok {
+        tv.setSelectedRange(range(at.min(st.length()), 0));
+        ok = paste_markdown(md);
+    }
+    if let Some(um) = &um {
+        um.endUndoGrouping();
+    }
+    ok || moved_from.is_some()
 }
 
 /// Replace `a..b` (inside paragraphs `lo..=hi`) with `blocks`, keeping the unselected rest of the
@@ -2742,8 +2788,12 @@ define_class!(
                 None if md.is_some() => {
                     let at = self.convertPoint_fromView(sender.draggingLocation(), None);
                     let idx: usize = unsafe { msg_send![self, characterIndexForInsertionAtPoint: at] };
-                    self.setSelectedRange(NSRange::new(idx.min(self.string().length()), 0));
-                    paste_markdown(&md.map(|m| m.to_string()).unwrap_or_default());
+                    // dragged out of this very view without ⌥: a move, the source goes away
+                    let from_here = sender.draggingSource().is_some_and(|src| ptr::eq(&*src as *const AnyObject as *const u8, self as *const Self as *const u8));
+                    let option = NSEvent::modifierFlags_class().contains(NSEventModifierFlags::Option);
+                    let sel = self.selectedRange();
+                    let moved_from = (from_here && !option && sel.length > 0).then_some((sel.location, sel.location + sel.length));
+                    drop_markdown(&md.map(|m| m.to_string()).unwrap_or_default(), idx, moved_from);
                     true
                 }
                 Some(input) => {

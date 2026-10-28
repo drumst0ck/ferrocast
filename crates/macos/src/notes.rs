@@ -13,11 +13,12 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 
 pub use crate::notes_editor::{
-    active_formats, append_markdown, apply_format, choose_images, emoji_commit, insert_at_cursor, insert_markdown_after_cursor_line,
-    insert_markdown_after_selection_line, link_prompt_cancel, link_prompt_open, link_prompt_submit, link_prompt_value, markdown,
-    markdown_of_selection, paragraph_start, replace_range, replace_selection_markdown, select_range, selection, selection_range,
-    set_attachments_root, set_markdown, set_on_emoji, set_on_images, set_on_slash, set_on_zoom_change, set_popup_key_handler, set_zoom,
-    slash_commit, text_in_range, toggle_task_at_cursor, window_point_for_char, zoom, Anchor, EmojiEvent, ImageInput, PopupKey, SlashEvent,
+    active_formats, append_markdown, apply_format, choose_images, drop_markdown, emoji_commit, insert_at_cursor,
+    insert_markdown_after_cursor_line, insert_markdown_after_selection_line, link_prompt_cancel, link_prompt_open, link_prompt_submit,
+    link_prompt_value, markdown, markdown_of_selection, paragraph_start, paste_markdown, replace_range, replace_selection_markdown,
+    select_range, selection, selection_range, set_attachments_root, set_markdown, set_on_emoji, set_on_images, set_on_slash,
+    set_on_zoom_change, set_popup_key_handler, set_zoom, slash_commit, text_in_range, toggle_task_at_cursor, window_point_for_char, zoom,
+    Anchor, EmojiEvent, ImageInput, PopupKey, SlashEvent,
 };
 use crate::notes_format::Format;
 use crate::notes_hints::{self, Hint, HintBar};
