@@ -28,6 +28,7 @@ cat > CHANGELOG.md <<'T'
 ### Added
 - First release.
 T
+mkdir web && cp CHANGELOG.md web/CHANGELOG.md
 git add -A && git commit -qm init
 
 # refusals
@@ -50,6 +51,8 @@ grep -q '^version = "0.2.0"' Cargo.toml || fail "version not bumped"
 grep -q '^## \[Unreleased\]$' CHANGELOG.md || fail "Unreleased heading lost"
 grep -q '^## \[0.2.0\] - [0-9-]*$' CHANGELOG.md || fail "no dated 0.2.0 heading"
 [ "$(git log -1 --format=%s)" = "release: v0.2.0" ] || fail "wrong commit message"
+cmp -s CHANGELOG.md web/CHANGELOG.md || fail "web/CHANGELOG.md not synced with CHANGELOG.md"
+git show --name-only --format= HEAD | grep -qx web/CHANGELOG.md || fail "web/CHANGELOG.md not in the release commit"
 git rev-parse -q --verify refs/tags/v0.2.0 >/dev/null || fail "tag missing"
 scripts/release.sh 0.2.0 --no-push >/dev/null 2>&1 && fail "released the same tag twice"
 
