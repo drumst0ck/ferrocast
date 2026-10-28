@@ -133,6 +133,9 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/compress-video-to-size' || path === '/es/comprimir-video-a-un-tamano') {
       return fileLastmod('src/lib/seo/compress-video.ts', 'src/components/seo/GuidePage.astro');
     }
+    if (path === '/blur-video-mac' || path === '/es/difuminar-video-mac') {
+      return fileLastmod('src/lib/seo/blur-video.ts', 'src/components/seo/BlurVideoPage.astro');
+    }
     if (path === '/raycast-alternative' || path === '/es/alternativa-a-raycast') {
       return fileLastmod('src/lib/seo/alt-raycast.ts', 'src/components/seo/AlternativePage.astro');
     }
