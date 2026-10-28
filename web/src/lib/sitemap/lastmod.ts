@@ -107,8 +107,8 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/es/raycast-vs-alfred-vs-spotlight') {
       return fileLastmod('src/lib/seo/launcher-compare.ts', 'src/pages/es/raycast-vs-alfred-vs-spotlight.astro');
     }
-    if (path === '/mac-window-management') {
-      return fileLastmod('src/lib/seo/windows.ts', 'src/components/seo/GuidePage.astro');
+    if (path === '/mac-window-management' || path === '/es/gestion-de-ventanas-mac') {
+      return fileLastmod('src/lib/seo/windows.ts', 'src/lib/seo/windows-es.ts', 'src/components/seo/GuidePage.astro');
     }
     if (path === '/es/historial-portapapeles-mac') {
       return fileLastmod('src/lib/seo/clipboard-es.ts', 'src/components/seo/GuidePage.astro');
