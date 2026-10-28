@@ -17092,6 +17092,49 @@ mod i18n_ui {
         }
     }
 
+    /// What a finished tool, image operation or conversion says: English is byte-identical to the
+    /// old sentences; every other language has no English sentence left in it.
+    #[test]
+    fn tool_result_messages_are_translated_and_english_is_unchanged() {
+        use crate::services::{convert_result_message as conv, tool_result_message as tool};
+        let one = vec!["a.png: boom".to_string()];
+        let none: Vec<String> = vec![];
+        with_language(Lang::En, || {
+            assert_eq!(tool("Remove metadata", 0, &one, None), "Remove metadata failed: a.png: boom");
+            assert_eq!(tool("Remove metadata", 1, &none, None), "Remove metadata · 1 file written");
+            assert_eq!(tool("Remove metadata", 3, &none, Some("1 B → 2 B")), "Remove metadata · 3 files written · 1 B → 2 B");
+            assert_eq!(tool("Remove metadata", 2, &one, None), "Remove metadata · 2 written, 1 failed: a.png: boom");
+            assert_eq!(conv("PNG", 0, &one), "Conversion failed: a.png: boom");
+            assert_eq!(conv("PNG", 1, &none), "Converted 1 file to PNG");
+            assert_eq!(conv("PNG", 2, &none), "Converted 2 files to PNG");
+            assert_eq!(conv("PNG", 2, &one), "Converted 2, 1 failed: a.png: boom");
+        });
+        for lang in NON_ENGLISH {
+            with_language(lang, || {
+                let all = [
+                    tool("X", 0, &one, None),
+                    tool("X", 1, &none, None),
+                    tool("X", 3, &none, Some("1 B → 2 B")),
+                    tool("X", 2, &one, None),
+                    conv("PNG", 0, &one),
+                    conv("PNG", 1, &none),
+                    conv("PNG", 2, &none),
+                    conv("PNG", 2, &one),
+                ];
+                for m in &all {
+                    for w in ["failed", "written", "Converted", "Conversion", "file"] {
+                        assert!(!m.contains(w), "{lang:?}: English left in {m:?}");
+                    }
+                    assert!(m.contains("boom") || m.contains("X") || m.contains("PNG"), "{lang:?}: the details are kept: {m:?}");
+                }
+            });
+        }
+        with_language(Lang::Es, || {
+            assert_eq!(tool("X", 3, &none, None), "X · 3 archivos escritos");
+            assert_eq!(conv("PNG", 1, &none), "1 archivo convertido a PNG");
+        });
+    }
+
     #[test]
     fn what_every_screen_paints_is_translated_in_every_language() {
         let build = || -> Vec<App> {

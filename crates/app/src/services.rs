@@ -1796,7 +1796,7 @@ pub fn chatgpt_sign_in_device(bus: Bus) {
                     "Signed in, but the Keychain refused to store the session".to_string()
                 }
             }
-            Err(e) => format!("ChatGPT sign-in failed: {e}"),
+            Err(e) => trf("ChatGPT sign-in failed: {e}", &[("e", &e)]),
         };
         bus.send(Msg::Toast(msg));
     });
@@ -1828,9 +1828,9 @@ pub fn chatgpt_sign_in(bus: Bus) {
         let listener = match TcpListener::bind(("127.0.0.1", chatgpt::CALLBACK_PORT)) {
             Ok(l) => l,
             Err(e) => {
-                bus.send(Msg::Toast(format!(
-                    "Port {} is busy ({e}). Quit Codex CLI or Pi if they are signing in, then retry.",
-                    chatgpt::CALLBACK_PORT
+                bus.send(Msg::Toast(trf(
+                    "Port {port} is busy ({e}). Quit Codex CLI or Pi if they are signing in, then retry.",
+                    &[("port", &chatgpt::CALLBACK_PORT.to_string()), ("e", &e.to_string())],
                 )));
                 return;
             }
@@ -1883,7 +1883,7 @@ pub fn chatgpt_sign_in(bus: Bus) {
                     "Signed in, but the Keychain refused to store the session".to_string()
                 }
             }
-            Err(e) => format!("ChatGPT sign-in failed: {e}"),
+            Err(e) => trf("ChatGPT sign-in failed: {e}", &[("e", &e)]),
         };
         bus.send(Msg::Toast(msg));
     });
@@ -1933,7 +1933,7 @@ impl ClaudeSession {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("Could not start Claude Code: {e}"))?;
+            .map_err(|e| trf("Could not start Claude Code: {e}", &[("e", &e.to_string())]))?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let current: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
@@ -1975,7 +1975,7 @@ impl ClaudeSession {
         let msg = serde_json::json!({"type": "user", "message": {"role": "user", "content": question}}).to_string() + "\n";
         let mut g = self.stdin.lock().unwrap();
         let w = g.as_mut().ok_or("Claude Code session is closed")?;
-        w.write_all(msg.as_bytes()).and_then(|_| w.flush()).map_err(|e| format!("Could not talk to Claude Code: {e}"))
+        w.write_all(msg.as_bytes()).and_then(|_| w.flush()).map_err(|e| trf("Could not talk to Claude Code: {e}", &[("e", &e.to_string())]))
     }
 
     pub fn is_alive(&self) -> bool {
@@ -2134,15 +2134,17 @@ pub fn test_ai_connection(settings: &Settings, bus: Bus) {
     std::thread::spawn(move || {
         let msg = match provider {
             AiProvider::ChatGpt => match chatgpt_fresh_credentials() {
-                Ok(c) => format!("Signed in with ChatGPT · token valid for {} min", ((c.expires - now_secs()) / 60).max(0)),
+                Ok(c) => {
+                    trf("Signed in with ChatGPT · token valid for {n} min", &[("n", &((c.expires - now_secs()) / 60).max(0).to_string())])
+                }
                 Err(e) => e,
             },
             AiProvider::ClaudeCode => match claude_code_path() {
-                None => "Claude Code not found. Install it from claude.ai/code and run `claude` once to sign in.".to_string(),
+                None => tr("Claude Code not found. Install it from claude.ai/code and run `claude` once to sign in.").into_owned(),
                 Some(p) => match Command::new(&p).arg("--version").output() {
-                    Ok(o) if o.status.success() => format!("Claude Code ready · {}", String::from_utf8_lossy(&o.stdout).trim()),
-                    Ok(o) => format!("Claude Code failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
-                    Err(e) => format!("Could not run Claude Code: {e}"),
+                    Ok(o) if o.status.success() => trf("Claude Code ready · {v}", &[("v", String::from_utf8_lossy(&o.stdout).trim())]),
+                    Ok(o) => trf("Claude Code failed: {e}", &[("e", String::from_utf8_lossy(&o.stderr).trim())]),
+                    Err(e) => trf("Could not run Claude Code: {e}", &[("e", &e.to_string())]),
                 },
             },
             _ => {
@@ -2175,7 +2177,7 @@ pub fn test_ai_connection(settings: &Settings, bus: Bus) {
                 match out {
                     Ok(o) if o.status.success() => match serde_json::from_slice::<serde_json::Value>(&o.stdout) {
                         Ok(v) if v.get("error").is_some() => {
-                            format!("Server error: {}", v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("unknown"))
+                            trf("Server error: {e}", &[("e", v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("unknown"))])
                         }
                         Ok(v) => {
                             let models: Vec<String> = v["data"]
@@ -2184,17 +2186,17 @@ pub fn test_ai_connection(settings: &Settings, bus: Bus) {
                                 .unwrap_or_default();
                             match models.len() {
                                 0 => "Connected, but the server lists no models".to_string(),
-                                1 => format!("Connected · 1 model: {}", models[0]),
-                                n => format!("Connected · {n} models, e.g. {}", models[0]),
+                                1 => trf("Connected · 1 model: {m}", &[("m", &models[0])]),
+                                n => trf("Connected · {n} models, e.g. {m}", &[("n", &n.to_string()), ("m", &models[0])]),
                             }
                         }
-                        Err(_) => format!("Server answered, but not with a model list ({} bytes)", o.stdout.len()),
+                        Err(_) => trf("Server answered, but not with a model list ({n} bytes)", &[("n", &o.stdout.len().to_string())]),
                     },
-                    Ok(o) => format!(
-                        "Could not connect: {}",
-                        String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("unknown error").trim()
+                    Ok(o) => trf(
+                        "Could not connect: {err}",
+                        &[("err", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("unknown error").trim())],
                     ),
-                    Err(e) => format!("Could not start curl: {e}"),
+                    Err(e) => trf("Could not start curl: {e}", &[("e", &e.to_string())]),
                 }
             }
         };
@@ -2274,7 +2276,7 @@ fn ai_stream_with_key_system(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| format!("Could not start Claude Code: {e}"))?;
+                .map_err(|e| trf("Could not start Claude Code: {e}", &[("e", &e.to_string())]))?;
             (child, ai::transcript_prompt(history, question), ai::parse_claude_code_line)
         }
         AiProvider::ChatGpt => {
@@ -2288,7 +2290,7 @@ fn ai_stream_with_key_system(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| format!("Could not start curl: {e}"))?;
+                .map_err(|e| trf("Could not start curl: {e}", &[("e", &e.to_string())]))?;
             (child, cfg, chatgpt::parse_sse_line)
         }
         AiProvider::Anthropic => {
@@ -2302,7 +2304,7 @@ fn ai_stream_with_key_system(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| format!("Could not start curl: {e}"))?;
+                .map_err(|e| trf("Could not start curl: {e}", &[("e", &e.to_string())]))?;
             (child, cfg, ai::parse_anthropic_sse_line)
         }
         AiProvider::OpenAiCompatible => {
@@ -2314,7 +2316,7 @@ fn ai_stream_with_key_system(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| format!("Could not start curl: {e}"))?;
+                .map_err(|e| trf("Could not start curl: {e}", &[("e", &e.to_string())]))?;
             (child, cfg, ai::parse_sse_line)
         }
     };
@@ -2361,7 +2363,7 @@ fn ai_stream_with_key_system(
         let _ = e.read_to_string(&mut err);
     }
     Err(if err.contains("Failed to connect") || err.contains("Connection refused") {
-        format!("Cannot reach {}. Is your AI server (e.g. Ollama) running? Change it in Settings.", settings.ai_base_url)
+        trf("Cannot reach {url}. Is your AI server (e.g. Ollama) running? Change it in Settings.", &[("url", &settings.ai_base_url)])
     } else if err.trim().is_empty() {
         "The AI server returned an empty answer".to_string()
     } else {
@@ -2551,11 +2553,7 @@ pub fn convert_files(files: Vec<PathBuf>, target: ferrocast_core::convert::Targe
         if let Some(line) = conversion_log_line(&target, files.len(), &errors) {
             crate::instance::log(&ferrocast_core::storage::Store::default_location().root, &line);
         }
-        let msg = match (outputs.len(), errors.len()) {
-            (0, _) => format!("Conversion failed: {}", errors.first().cloned().unwrap_or_default()),
-            (n, 0) => format!("Converted {n} file{} to {}", if n == 1 { "" } else { "s" }, target.label),
-            (n, e) => format!("Converted {n}, {e} failed: {}", errors[0]),
-        };
+        let msg = convert_result_message(target.label, outputs.len(), &errors);
         if let Some(first) = outputs.first() {
             let _ = ferrocast_macos::apps::reveal(first);
         }
@@ -2680,7 +2678,7 @@ pub fn run_conversion(
                     };
                     errors.push(format!("{}: {msg}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
                 }
-                Err(e) => errors.push(format!("could not run {}: {e}", cmd[0])),
+                Err(e) => errors.push(trf("could not run {cmd}: {e}", &[("cmd", &cmd[0].to_string()), ("e", &e.to_string())])),
             }
             if let Some(d) = scratch {
                 let _ = std::fs::remove_dir_all(d);
@@ -2888,7 +2886,9 @@ pub(crate) fn annotate_save(f: &std::path::Path, doc: &ferrocast_core::annotate:
 /// Refuse sources that would need more than ~120 million pixels (480 MB as RGBA) to edit.
 fn check_source_size(f: &std::path::Path) -> Result<(), String> {
     match image_size(f) {
-        Some((w, h)) if u64::from(w) * u64::from(h) > 120_000_000 => Err(format!("the image is too large to edit here ({w}×{h} px)")),
+        Some((w, h)) if u64::from(w) * u64::from(h) > 120_000_000 => {
+            Err(trf("the image is too large to edit here ({w}×{h} px)", &[("w", &w.to_string()), ("h", &h.to_string())]))
+        }
         _ => Ok(()),
     }
 }
@@ -2920,7 +2920,7 @@ fn redact_with(f: &std::path::Path, spec: &ferrocast_core::redact::RedactSpec) -
         Source::Areas(a) => {
             let inside: Vec<Area> = a.iter().filter_map(|a| clamp_area(*a, iw, ih)).collect();
             if inside.is_empty() {
-                return Err(format!("the areas lie outside the image ({iw}×{ih} px)"));
+                return Err(trf("the areas lie outside the image ({iw}×{ih} px)", &[("iw", &iw.to_string()), ("ih", &ih.to_string())]));
             }
             inside
         }
@@ -3070,14 +3070,20 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
             };
             let why = if osa_err.is_empty() { String::new() } else { format!(": {osa_err}") };
             if n == 0 {
-                errs.push(format!("could not read the PDF pages{why}"));
+                errs.push(format!("{}{why}", tr("could not read the PDF pages")));
             }
             for i in 1..=n {
                 let out = output_with_suffix(first, &format!("page {i}"), "pdf", |p| p.exists());
                 // a page PDFKit did not write is an error, never a silently shorter result
                 match std::fs::copy(tmp.join(format!("{i}.pdf")), &out) {
                     Ok(_) => outs.push(out),
-                    Err(e) => errs.push(format!("page {i} of {n} was not written ({e}){why}")),
+                    Err(e) => errs.push(format!(
+                        "{}{why}",
+                        trf(
+                            "page {i} of {n} was not written ({e})",
+                            &[("i", &i.to_string()), ("n", &n.to_string()), ("e", &e.to_string())]
+                        )
+                    )),
                 }
             }
         }
@@ -3132,7 +3138,7 @@ pub fn run_file_tool(files: &[PathBuf], tool: &ferrocast_core::convert::FileTool
                         .arg(&pattern)
                         .output();
                     if !matches!(&r, Ok(o) if o.status.success()) {
-                        errs.push(format!("{}: could not split", f.display()));
+                        errs.push(trf("{file}: could not split", &[("file", &f.display().to_string())]));
                         continue;
                     }
                     let mut parts: Vec<_> = std::fs::read_dir(&tmp)
@@ -3168,6 +3174,40 @@ pub(crate) fn pdf_size_report(before: u64, after: u64) -> String {
     }
 }
 
+/// What a finished file tool or image operation says, in the interface language: `written`
+/// outputs, the `errs` of the files that failed, and an optional size report.
+pub(crate) fn tool_result_message(label: &str, written: usize, errs: &[String], report: Option<&str>) -> String {
+    let first = errs.first().cloned().unwrap_or_default();
+    match (written, errs.len()) {
+        (0, _) => trf("{label} failed: {err}", &[("label", label), ("err", &first)]),
+        (n, 0) => {
+            let key = if n == 1 { "{label} · {n} file written" } else { "{label} · {n} files written" };
+            let base = trf(key, &[("label", label), ("n", &n.to_string())]);
+            match report {
+                Some(r) => format!("{base} · {r}"),
+                None => base,
+            }
+        }
+        (n, e) => trf(
+            "{label} · {n} written, {e} failed: {err}",
+            &[("label", label), ("n", &n.to_string()), ("e", &e.to_string()), ("err", &first)],
+        ),
+    }
+}
+
+/// What a finished conversion says, in the interface language.
+pub(crate) fn convert_result_message(label: &str, written: usize, errors: &[String]) -> String {
+    let first = errors.first().cloned().unwrap_or_default();
+    match (written, errors.len()) {
+        (0, _) => trf("Conversion failed: {err}", &[("err", &first)]),
+        (n, 0) => {
+            let key = if n == 1 { "Converted {n} file to {label}" } else { "Converted {n} files to {label}" };
+            trf(key, &[("n", &n.to_string()), ("label", label)])
+        }
+        (n, e) => trf("Converted {n}, {e} failed: {err}", &[("n", &n.to_string()), ("e", &e.to_string()), ("err", &first)]),
+    }
+}
+
 pub fn file_tool_files(files: Vec<PathBuf>, tool: ferrocast_core::convert::FileTool, ffmpeg: Option<&'static str>, bus: Bus) {
     std::thread::spawn(move || {
         let (outs, errs) = run_file_tool(&files, &tool, ffmpeg);
@@ -3180,16 +3220,7 @@ pub fn file_tool_files(files: Vec<PathBuf>, tool: ferrocast_core::convert::FileT
             }
             _ => None,
         };
-        let msg = match (outs.len(), errs.len()) {
-            (0, _) => format!("{} failed: {}", tool.label(), errs.first().cloned().unwrap_or_default()),
-            (n, 0) => format!(
-                "{} · {n} file{} written{}",
-                tool.label(),
-                if n == 1 { "" } else { "s" },
-                report.as_ref().map(|r| format!(" · {r}")).unwrap_or_default()
-            ),
-            (n, e) => format!("{} · {n} written, {e} failed: {}", tool.label(), errs[0]),
-        };
+        let msg = tool_result_message(&tool.label_tr(), outs.len(), &errs, report.as_deref());
         if let Some(f) = outs.first() {
             let _ = ferrocast_macos::apps::reveal(f);
         }
@@ -3233,7 +3264,7 @@ fn fit_jpeg(input: &std::path::Path, named_after: &std::path::Path, target: u64,
     let size = std::fs::metadata(&out).map_err(|e| e.to_string())?.len();
     if size > target {
         // lowest quality still too big: keep the file but say so
-        return Err(format!("smallest result is {} KB, above the target; try resizing too", size / 1024));
+        return Err(trf("smallest result is {kb} KB, above the target; try resizing too", &[("kb", &(size / 1024).to_string())]));
     }
     Ok(out)
 }
@@ -3523,7 +3554,7 @@ fn frame_image(f: &std::path::Path, o: &ferrocast_core::frame::FrameOpts) -> Res
             // canonical absolute path: a name starting with `-` can never be read as a sips option
             let canon = std::path::Path::new(path).canonicalize().ok().filter(|p| p.is_file());
             let Some(canon) = canon else {
-                return Err(format!("{path} is not a readable image"));
+                return Err(trf("{path} is not a readable image", &[("path", &path.to_string())]));
             };
             let path = canon.to_string_lossy().to_string();
             let bg_tmp = std::env::temp_dir().join(format!(
@@ -3715,7 +3746,17 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
             ImageOp::CropRect(x, y, w, h) => {
                 let (iw, ih) = image_size(f).ok_or("could not read the image size")?;
                 if *w == 0 || *h == 0 || u64::from(*x) + u64::from(*w) > u64::from(iw) || u64::from(*y) + u64::from(*h) > u64::from(ih) {
-                    return Err(format!("the crop ({x},{y} {w}×{h}) is outside the image ({iw}×{ih} px)"));
+                    return Err(trf(
+                        "the crop ({x},{y} {w}×{h}) is outside the image ({iw}×{ih} px)",
+                        &[
+                            ("x", &x.to_string()),
+                            ("y", &y.to_string()),
+                            ("w", &w.to_string()),
+                            ("h", &h.to_string()),
+                            ("iw", &iw.to_string()),
+                            ("ih", &ih.to_string()),
+                        ],
+                    ));
                 }
                 let out = output_with_suffix(f, &op.suffix(), if e.is_empty() { "png" } else { &e }, |p| p.exists());
                 // sips crops height × width at an offset measured from the top-left corner
@@ -3763,7 +3804,7 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
         })();
         match res {
             Ok(o) if o.exists() => outs.push(o),
-            Ok(_) => errs.push(format!("{}: no output produced", name(f))),
+            Ok(_) => errs.push(trf("{name}: no output produced", &[("name", &name(f))])),
             Err(e) => errs.push(format!("{}: {e}", name(f))),
         }
     }
@@ -3773,11 +3814,7 @@ pub fn run_image_op(files: &[PathBuf], op: &ferrocast_core::convert::ImageOp) ->
 pub fn image_op_files(files: Vec<PathBuf>, op: ferrocast_core::convert::ImageOp, bus: Bus) {
     std::thread::spawn(move || {
         let (outs, errs) = run_image_op(&files, &op);
-        let msg = match (outs.len(), errs.len()) {
-            (0, _) => format!("{} failed: {}", op.label(), errs.first().cloned().unwrap_or_default()),
-            (n, 0) => format!("{} · {n} file{} written", op.label(), if n == 1 { "" } else { "s" }),
-            (n, e) => format!("{} · {n} written, {e} failed: {}", op.label(), errs[0]),
-        };
+        let msg = tool_result_message(&op.label_tr(), outs.len(), &errs, None);
         // Annotate already opened Preview; revealing would pull Finder in front of it
         if let Some(f) = outs.first().filter(|_| op != ferrocast_core::convert::ImageOp::Annotate) {
             let _ = ferrocast_macos::apps::reveal(f);

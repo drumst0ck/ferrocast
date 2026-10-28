@@ -1366,12 +1366,12 @@ impl App {
                         let msg = match services::annotate_save(&file, &doc) {
                             Ok(o) => {
                                 let _ = ferrocast_macos::apps::reveal(&o);
-                                format!(
-                                    "Annotated copy saved: {}",
-                                    o.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                                trf(
+                                    "Annotated copy saved: {name}",
+                                    &[("name", &o.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())],
                                 )
                             }
-                            Err(e) => format!("Annotate failed: {e}"),
+                            Err(e) => trf("Annotate failed: {e}", &[("e", &e.to_string())]),
                         };
                         bus.send(Msg::Toast(msg));
                     });

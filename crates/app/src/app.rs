@@ -131,7 +131,7 @@ pub fn frame_job(opts: &ferrocast_core::frame::FrameOpts) -> Result<ferrocast_co
         }
         let p = std::path::Path::new(path);
         if !p.is_file() {
-            return Err(format!("Background: {path} was not found"));
+            return Err(trf("Background: {path} was not found", &[("path", path)]));
         }
         if services::image_size(p).is_none() {
             return Err("Background: could not read that picture".into());
@@ -3955,16 +3955,20 @@ impl App {
                 }
                 Msg::ImportFile(path) => {
                     let outcome = std::fs::read_to_string(&path)
-                        .map_err(|e| format!("Could not read the file: {e}"))
+                        .map_err(|e| trf("Could not read the file: {e}", &[("e", &e.to_string())]))
                         .and_then(|t| ferrocast_core::import::parse_snippets(&t));
                     let text = match outcome {
                         Ok(incoming) => {
                             let (added, conflicts) = ferrocast_core::import::merge_snippets(&mut self.snippets, incoming);
                             self.save_snippets();
-                            format!(
-                                "Imported {added} snippet(s){}",
-                                if conflicts > 0 { format!(", {conflicts} keyword(s) already in use were cleared") } else { String::new() }
-                            )
+                            if conflicts > 0 {
+                                trf(
+                                    "Imported {added} snippet(s), {conflicts} keyword(s) already in use were cleared",
+                                    &[("added", &added.to_string()), ("conflicts", &conflicts.to_string())],
+                                )
+                            } else {
+                                trf("Imported {added} snippet(s)", &[("added", &added.to_string())])
+                            }
                         }
                         Err(e) => {
                             instance::log(&self.store.root, &format!("snippet import failed: {e}"));
@@ -4241,7 +4245,7 @@ impl App {
             };
             top.push(Item {
                 id: "timer".into(),
-                title: format!("Start {what} timer"),
+                title: trf("Start {what} timer", &[("what", &what)]),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:timer", [245, 165, 36]),
                 accessory: tr("Timer").into_owned(),
@@ -4622,7 +4626,7 @@ impl App {
                                         [255, 140, 60],
                                     ),
                                     accessory: match t.needs {
-                                        Some(n) => format!("Needs {}", n.split(' ').next().unwrap_or(n)),
+                                        Some(n) => trf("Needs {tool}", &[("tool", n.split(' ').next().unwrap_or(n))]),
                                         None => format!(".{} · {}", t.ext, t.engine.label()),
                                     },
                                     keywords: vec![],
@@ -4851,8 +4855,11 @@ impl App {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, t)| {
-                        let title =
-                            if t.label.is_empty() { format!("{} timer", ferrocast_core::timer::describe(t.secs)) } else { t.label.clone() };
+                        let title = if t.label.is_empty() {
+                            trf("{what} timer", &[("what", &ferrocast_core::timer::describe(t.secs))])
+                        } else {
+                            t.label.clone()
+                        };
                         self.matches(&q, &title, "").map(|sc| {
                             let left = t.ends_at.saturating_duration_since(now).as_secs();
                             (
@@ -5744,12 +5751,14 @@ impl App {
                 Ok(o) if o.status.success() => {
                     let out = String::from_utf8_lossy(&o.stdout);
                     match out.lines().find(|l| l.starts_with("ferrocast")) {
-                        Some(l) => format!("Update available: {} · run brew upgrade ferrocast", l.trim_start_matches("ferrocast").trim()),
+                        Some(l) => {
+                            trf("Update available: {v} · run brew upgrade ferrocast", &[("v", l.trim_start_matches("ferrocast").trim())])
+                        }
                         None => trf("Ferrocast {version} is up to date", &[("version", env!("CARGO_PKG_VERSION"))]),
                     }
                 }
-                Ok(o) => format!("brew: {}", String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("unknown error")),
-                Err(e) => format!("Could not run brew: {e}"),
+                Ok(o) => trf("brew: {e}", &[("e", String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("unknown error"))]),
+                Err(e) => trf("Could not run brew: {e}", &[("e", &e.to_string())]),
             };
             bus.send(Msg::Toast(msg));
         });
@@ -5833,7 +5842,7 @@ impl App {
         use std::sync::atomic::{AtomicBool, Ordering};
         let cancelled = std::sync::Arc::new(AtomicBool::new(false));
         let flag = cancelled.clone();
-        let what = if label.is_empty() { format!("{} timer", ferrocast_core::timer::describe(secs)) } else { label.clone() };
+        let what = if label.is_empty() { trf("{what} timer", &[("what", &ferrocast_core::timer::describe(secs))]) } else { label.clone() };
         let bus = self.bus.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(secs));
@@ -6700,7 +6709,7 @@ impl App {
                     services::notify("Ferrocast", &msg);
                 }
             }
-            Err(e) => bus.send(Msg::Toast(format!("{}: {e}", c.title()))),
+            Err(e) => bus.send(Msg::Toast(trf("{title}: {e}", &[("title", &tr(&c.title())), ("e", &e.to_string())]))),
         });
     }
 
