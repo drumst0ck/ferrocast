@@ -109,7 +109,7 @@ fn read_strings_file(path: &Path) -> Option<std::collections::HashMap<String, St
 }
 
 /// The user's preferred languages, most preferred first (e.g. ["es-ES", "en-US"]).
-fn preferred_languages() -> Vec<String> {
+pub fn preferred_languages() -> Vec<String> {
     objc2_foundation::NSLocale::preferredLanguages().iter().map(|s| s.to_string()).collect()
 }
 

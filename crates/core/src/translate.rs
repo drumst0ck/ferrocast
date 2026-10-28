@@ -388,7 +388,7 @@ pub fn engine_label(s: &Settings) -> String {
     match s.translate_provider {
         Some(p) if !s.translate_model.is_empty() => format!("{} · {}", provider_name(p), s.translate_model),
         Some(p) => provider_name(p).to_string(),
-        None => format!("Same as chat ({})", provider_name(s.ai_provider)),
+        None => crate::i18n::trf("Same as chat ({provider})", &[("provider", provider_name(s.ai_provider))]),
     }
 }
 

@@ -33,6 +33,25 @@ pub const ENTRIES: &[Entry] = &[
     ),
     e(0, "Compact mode", &["minimal", "search bar", "small", "collapse"]),
     e(0, "Launch at login", &["startup", "start", "boot", "login item", "autostart"]),
+    e(
+        0,
+        "Language",
+        &[
+            "idioma",
+            "sprache",
+            "langue",
+            "idioma",
+            "言語",
+            "语言",
+            "locale",
+            "interface",
+            "translation",
+            "español",
+            "deutsch",
+            "français",
+            "english",
+        ],
+    ),
     e(0, "Drop wheel", &["drag", "files", "wheel", "convert", "radial"]),
     e(0, "Convert wheel key", &["modifier", "shift", "drag", "files", "conversion"]),
     e(0, "Tools wheel key", &["modifier", "control", "drag", "compress", "crop", "redact"]),
@@ -152,14 +171,22 @@ pub fn normalize(s: &str) -> String {
 /// 0 title starts with q, 1 title contains q, 2 a keyword starts with q, 3 every term matches the
 /// title or a keyword. `None` when some term matches nothing.
 fn rank(entry: &Entry, q: &str, terms: &[&str]) -> Option<u8> {
-    let title = normalize(entry.title);
+    rank_in(entry, q, terms, crate::i18n::language())
+}
+
+/// `rank` where the title also matches in `lang` (the row's title in the interface language and
+/// the English one both find the row; keywords stay English).
+fn rank_in(entry: &Entry, q: &str, terms: &[&str], lang: crate::i18n::Lang) -> Option<u8> {
+    let english = normalize(entry.title);
+    let shown = normalize(&crate::i18n::tr_in(entry.title, lang));
+    let titles: Vec<&str> = if shown == english { vec![&english] } else { vec![&shown, &english] };
     let keywords: Vec<String> = entry.keywords.iter().map(|k| normalize(k)).collect();
-    if !terms.iter().all(|t| title.contains(t) || keywords.iter().any(|k| k.contains(t))) {
+    if !terms.iter().all(|t| titles.iter().any(|ti| ti.contains(t)) || keywords.iter().any(|k| k.contains(t))) {
         return None;
     }
-    Some(if title.starts_with(q) {
+    Some(if titles.iter().any(|t| t.starts_with(q)) {
         0
-    } else if title.contains(q) {
+    } else if titles.iter().any(|t| t.contains(q)) {
         1
     } else if keywords.iter().any(|k| k.starts_with(q)) {
         2
@@ -315,6 +342,21 @@ mod tests {
         {
             assert!(titles(q).contains(&(5, title)), "{q:?} finds {title:?}: {:?}", titles(q));
         }
+    }
+
+    #[test]
+    fn rows_are_found_by_their_title_in_the_interface_language_and_in_english() {
+        use crate::i18n::{with_language, Lang};
+        let launcher = ENTRIES.iter().find(|e| e.title == "Launcher hotkey").unwrap();
+        let terms = |q: &'static str| q.split_whitespace().collect::<Vec<_>>();
+        let de = crate::i18n::tr_in("Launcher hotkey", Lang::De).to_string();
+        assert_ne!(de, "Launcher hotkey", "the German title exists");
+        let q = normalize(&de);
+        let qt: Vec<&str> = q.split_whitespace().collect();
+        assert_eq!(rank_in(launcher, &q, &qt, Lang::De), Some(0), "German title finds it in German");
+        assert_eq!(rank_in(launcher, "launcher", &terms("launcher"), Lang::De), Some(0), "English still works");
+        assert_eq!(rank_in(launcher, &q, &qt, Lang::En), None, "a German query finds nothing in English");
+        with_language(Lang::De, || assert!(search(&de).iter().any(|e| e.title == "Launcher hotkey")));
     }
 
     #[test]
