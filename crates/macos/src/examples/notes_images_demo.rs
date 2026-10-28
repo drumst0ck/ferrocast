@@ -431,7 +431,105 @@ fn main() {
         );
     }
 
-    // a file removed is not drawn from the cache
+    // undo after a move in a realistic session: typing, paste, Return, typing, then the drag
+    {
+        let ins = |t: &str| {
+            let s = NSString::from_str(t);
+            unsafe {
+                let _: () = msg_send![&*tv, insertText: &*s as &AnyObject];
+            }
+            pump(30);
+        };
+        let newline = || {
+            unsafe {
+                let _: () = msg_send![&*tv, insertNewline: std::ptr::null::<AnyObject>()];
+            }
+            pump(30);
+        };
+        let undo = |n: &str| {
+            if let Some(um) = tv.undoManager() {
+                um.undo();
+            }
+            pump(30);
+            println!("      undo {n}: {:?}", notes::markdown());
+        };
+        notes::set_markdown("");
+        tv.setSelectedRange(NSRange::new(0, 0));
+        ins("Foto de prueba");
+        newline();
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        pb.setData_forType(Some(&NSData::with_bytes(&png(64, 32))), unsafe { NSPasteboardTypePNG });
+        got.borrow_mut().clear();
+        unsafe {
+            let _: () = msg_send![&*tv, paste: std::ptr::null::<AnyObject>()];
+        }
+        let pasted = match got.borrow().first() {
+            Some(ImageInput::Png(b)) => attachments::store(&root, b, Some("png")).expect("store pasted"),
+            other => panic!("expected pasted PNG data, got {other:?}"),
+        };
+        notes::insert_markdown_after_cursor_line(&attachments::markdown_link(&pasted.alt, &pasted.name));
+        pump(30);
+        newline();
+        ins("Texto debajo");
+        let img = format!("![image](attachments/{})", pasted.name);
+        let before = format!("Foto de prueba\n\n{img}\n\nTexto debajo");
+        check("the session body before the drag", notes::markdown() == before, &notes::markdown());
+        // select the picture line (caret at its start, Shift+Down) and drop it below the text
+        // The drag starts on a selection that was already there and the drop does not touch the
+        // selection first: the typing that came before may still be coalescing in the text view.
+        let r = NSRange::new(15, 2);
+        let md = format!("{img}\n\n<br>");
+        let md2 = img.clone();
+        let end = tv.string().length();
+        // a real drop runs inside the drag session's event-tracking run loop mode
+        let from = Some((r.location, r.location + r.length));
+        let blk = block2::RcBlock::new(move || {
+            notes::drop_markdown(&md, end, from);
+        });
+        unsafe {
+            NSRunLoop::currentRunLoop()
+                .performInModes_block(&objc2_foundation::NSArray::from_slice(&[objc2_app_kit::NSEventTrackingRunLoopMode]), &blk);
+        }
+        unsafe {
+            NSRunLoop::currentRunLoop()
+                .runMode_beforeDate(objc2_app_kit::NSEventTrackingRunLoopMode, &NSDate::dateWithTimeIntervalSinceNow(0.2))
+        };
+        pump(30);
+        let moved = "Foto de prueba\n\nTexto debajo\n\n".to_string() + &img;
+        check("the move", notes::markdown() == moved, &notes::markdown());
+        undo("1");
+        check("one undo restores exactly the pre-drag body", notes::markdown() == before, &notes::markdown());
+        if let Some(um) = tv.undoManager() {
+            um.redo();
+        }
+        pump(30);
+        check("redo applies the move again", notes::markdown() == moved, &notes::markdown());
+        undo("1 again");
+        check("and undo puts it back again", notes::markdown() == before, &notes::markdown());
+        // an ⌥-drag copy in the same session: both pictures, one undo removes the copy only
+        notes::drop_markdown(&md2, end, None);
+        pump(30);
+        check(
+            "copied below the text",
+            notes::markdown() == format!("{before}\n\n{img}") && attachments_of(&tv).len() == 2,
+            &notes::markdown(),
+        );
+        undo("copy");
+        check(
+            "one undo removes the copy and nothing else",
+            notes::markdown() == before && attachments_of(&tv).len() == 1,
+            &notes::markdown(),
+        );
+        undo("2");
+        check(
+            "the next undo undoes typing, never leaving an empty paragraph with lost text",
+            !notes::markdown().contains("<br>") || notes::markdown() == "",
+            &notes::markdown(),
+        );
+    }
+
+    // a file removed from disk is not drawn from the cache
     let tmp_img = attachments::store(&root, &png(20, 10), Some("png")).expect("store");
     let line = format!("![t](attachments/{})", tmp_img.name);
     notes::set_markdown(&line);

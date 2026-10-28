@@ -1300,32 +1300,44 @@ pub fn paste_markdown(md: &str) -> bool {
 /// is a copy. Dropping onto the dragged range itself changes nothing.
 pub fn drop_markdown(md: &str, idx: usize, moved_from: Option<(usize, usize)>) -> bool {
     let Some((tv, st)) = handles() else { return false };
+    let moved_from = moved_from.filter(|(a, b)| a < b);
+    if moved_from.is_some_and(|(a, b)| idx >= a && idx <= b) {
+        return true; // dropped onto the dragged text itself
+    }
+    // The move is built with undo registration off, then applied as ONE change of the whole text:
+    // a single undo step that restores exactly what was there, whatever undo groups or typing
+    // coalescing are open (a real drag runs inside the drag session's run loop mode).
+    tv.breakUndoCoalescing();
     let um = tv.undoManager();
+    let full = |st: &NSTextStorage| range(0, st.length());
+    let before = st.attributedSubstringFromRange(full(&st));
     if let Some(um) = &um {
-        um.beginUndoGrouping();
+        um.disableUndoRegistration();
     }
     let mut at = idx.min(st.length());
-    let mut ok = true;
-    if let Some((a, b)) = moved_from.filter(|(a, b)| a < b) {
-        if at >= a && at <= b {
-            ok = false;
-        } else {
-            // moving the last line away must not leave an empty paragraph behind: take the break before it
-            let from = if b == st.length() && a > 0 && units_of(&st)[a - 1] == 10 { a - 1 } else { a };
-            edit_text(range(from, b - from), "");
-            if at > b {
-                at -= b - from;
-            }
+    if let Some((a, b)) = moved_from {
+        // moving the last line away must not leave an empty paragraph behind: take the break before it
+        let from = if b == st.length() && a > 0 && units_of(&st)[a - 1] == 10 { a - 1 } else { a };
+        edit_text(range(from, b - from), "");
+        if at > b {
+            at -= b - from;
         }
     }
-    if ok {
-        tv.setSelectedRange(range(at.min(st.length()), 0));
-        ok = paste_markdown(md);
-    }
+    tv.setSelectedRange(range(at.min(st.length()), 0));
+    let ok = paste_markdown(md);
+    let after = st.attributedSubstringFromRange(full(&st));
+    let caret = tv.selectedRange();
+    st.setAttributedString(&before);
     if let Some(um) = &um {
-        um.endUndoGrouping();
+        um.enableUndoRegistration();
     }
-    ok || moved_from.is_some()
+    if !ok && moved_from.is_none() {
+        return false;
+    }
+    replace(&tv, range(0, before.length()), &after);
+    tv.setSelectedRange(caret);
+    tv.breakUndoCoalescing();
+    true
 }
 
 /// Replace `a..b` (inside paragraphs `lo..=hi`) with `blocks`, keeping the unselected rest of the
@@ -2772,7 +2784,9 @@ define_class!(
 
         #[unsafe(method(prepareForDragOperation:))]
         fn prepare_for_drag(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
-            if dragged_images(sender).is_some() {
+            // images and our own Markdown selections are dropped by `performDragOperation` below, so
+            // the text view's own drop preparation (which may open undo state) is not run for them
+            if dragged_images(sender).is_some() || sender.draggingPasteboard().stringForType(&md_type()).is_some() {
                 true
             } else {
                 let ok: bool = unsafe { msg_send![super(self), prepareForDragOperation: sender] };
