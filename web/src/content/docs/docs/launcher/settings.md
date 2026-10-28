@@ -12,7 +12,7 @@ Open it with <kbd>⌘</kbd> <kbd>,</kbd>. There is also a menu bar icon.
 
 Ferrocast speaks English, Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese. By default it follows the language order of macOS (System Settings → General → Language & Region); European Portuguese uses the Brazilian text, and a language without a translation, such as Traditional Chinese, falls back to English.
 
-To choose one yourself, open Settings → General → **Language** and pick System or one of the seven languages. It applies at once, with no restart, to the launcher, Settings, the tour, the menu bar menu and notifications. The choice is kept on this Mac only: it is not synced with iCloud. A text that is not translated yet shows in English. Names you type (snippets, quicklinks, notes, scripts) and the titles of Raycast extensions are never translated.
+To choose one yourself, open Settings → General → **Language** and pick System or one of the seven languages. It applies at once, with no restart, to the launcher, Settings, the tour, the menu bar menu and notifications; the Notes window changes after you restart Ferrocast. The choice is kept on this Mac only: it is not synced with iCloud. A text that is not translated yet shows in English. Names you type (snippets, quicklinks, notes, scripts) and the titles of Raycast extensions are never translated.
 
 ## What you can set
 

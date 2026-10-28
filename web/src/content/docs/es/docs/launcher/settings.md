@@ -12,7 +12,7 @@ Ajustes es una barra lateral con diez pestañas: General, Clipboard, Snippets, A
 
 Ferrocast habla inglés, español, alemán, francés, portugués de Brasil, japonés y chino simplificado. Por defecto sigue el orden de idiomas de macOS (Ajustes del Sistema → General → Idioma y región); el portugués de Portugal usa el texto brasileño y un idioma sin traducción, como el chino tradicional, vuelve al inglés.
 
-Para elegirlo tú, abre Ajustes → General → **Idioma** y selecciona Sistema o uno de los siete idiomas. Se aplica al instante, sin reiniciar, al lanzador, los Ajustes, el tour, el menú de la barra de menús y las notificaciones. La elección se guarda solo en este Mac: no se sincroniza con iCloud. Un texto sin traducir aparece en inglés. Los nombres que escribes (fragmentos, enlaces rápidos, notas, scripts) y los títulos de las extensiones de Raycast nunca se traducen.
+Para elegirlo tú, abre Ajustes → General → **Idioma** y selecciona Sistema o uno de los siete idiomas. Se aplica al instante, sin reiniciar, al lanzador, los Ajustes, el tour, el menú de la barra de menús y las notificaciones; la ventana de Notas cambia al reiniciar Ferrocast. La elección se guarda solo en este Mac: no se sincroniza con iCloud. Un texto sin traducir aparece en inglés. Los nombres que escribes (fragmentos, enlaces rápidos, notas, scripts) y los títulos de las extensiones de Raycast nunca se traducen.
 
 ## Qué puedes configurar
 
