@@ -10,11 +10,14 @@ Close the improvements left open in odd/tasks/icloud-sync.md (L13), odd/tasks/cu
 - S5 Window tiling not yet checked with Stage Manager on real hardware (window-tiling.md); a second display is not available on this Mac.
 
 ## Tasks
-- T1 S2 themes.json sync domain (core sync + app wiring + docs en/es). — pending
-- T2 S3 N2 fix, test-first. — pending
-- T3 S4 N1 decision recorded. — pending
+- T1 S2 themes.json sync domain (core sync + app wiring + docs en/es). — blocked (L4): needs themes_tests.rs in the edit surface
+- T2 S3 N2 fix, test-first. — done (L2)
+- T3 S4 N1 decision recorded. — done (L3): no action
 - T4 S5 Live Stage Manager check of tiling (pause notice, resume) on this Mac; second display reported as not testable here. — pending
 - T5 Independent verification (risk item 1: synced user data), PR, merge. — pending
 
 ## Log
 - L1 User (verbatim): "borra todo lo que ya este fusionado, haz las mejoras anotadas". Cleanup done first: 5 worktrees, 27 local and 42 remote branches removed after checking each was merged (ancestor of master, merged PR, or same commits merged under another branch: feat/seo-convertir-es and feat/seo-launcher-compare via #54/#55; feat/raycast-extensions via #82-#85).
+- L2 T2 done (commit in git log, `fix(sync): write the own document only once the merge is applied`). Cause: `sync_io::sync_domain` wrote the merged state to this Mac's own document even when the app did not apply the merge (typing, local change while the run was away); a tracker rebuilt from that document (lost or corrupt tracker) then saw the older local value as different from the baseline and stamped it as a new edit that beat the newer remote value. Fix: `Outcome.applied_doc` carries the merged document; `sync_domain` writes it itself only when there is nothing to apply; `sync_ctl::sync_done` writes it (`SyncIo.write_doc`, handle returned in `SyncDone.io`) only when `sync_apply` applied the merge. The clipboard still keeps its own document to what was copied here. Tests: core `a_merge_that_was_offered_but_not_applied_is_not_written_to_the_own_document_so_a_lost_tracker_keeps_the_remote_edit` (both device-id orders; RED observed with the old write restored: own document held "B edit" and the final value on both Macs was "text of one"), app `the_own_sync_document_holds_the_merged_state_only_once_the_merge_was_applied` (applied vs. not applied through `sync_done`). Test helper `Mac::sync` writes `applied_doc` after applying, like the app.
+- L3 T3 decision (N1): no action. Evidence: `git tag --contains d2714f1` (first sync commit) and `git tag --contains 0e84280` list nothing; `git ls-tree` of v0.1.1, v0.1.2, v0.2.0, v0.2.1, v0.2.2 and v0.3.0 has no `crates/core/src/sync.rs`; the latest release v0.3.0 predates the feature and CHANGELOG.md lists "Sync with iCloud" under [Unreleased]. So the feature is not released yet, no released build wrote documents in the early format, and the only documents in that format are on development Macs. Nothing to implement; the window closes when the first release containing sync ships (anything written by this branch from 0e84280 on is the format users get).
+- L4 T1 stopped before edits: a stable `id` on `CustomTheme` (themes.rs, needed for per-theme LWW keys that survive renames) breaks the struct literal in `crates/core/src/themes_tests.rs` (`sample()`, line 4), which is not in the allowed edit surfaces. Needs that one-line test fix approved (or another design chosen).
