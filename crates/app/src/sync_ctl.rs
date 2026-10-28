@@ -257,16 +257,19 @@ impl App {
                     self.sync.pending_docs.insert(domain, doc);
                 }
             }
+            let was_applied = applied.is_some();
             if out.recovered {
                 instance::log(
                     &root,
-                    &format!("sync {domain}: the data file was unreadable (kept as .corrupt); started over from the other Macs"),
+                    &format!("sync {domain}: the data file was unreadable (kept as .corrupt); started over from this Mac's own iCloud copy and the other Macs"),
                 );
-                self.sync.restored.insert(domain);
+                // named only once the recovered state is in place (a merge not applied retries)
+                if was_applied || !had_merge {
+                    self.sync.restored.insert(domain);
+                }
             } else {
                 self.sync.restored.remove(domain);
             }
-            let was_applied = applied.is_some();
             let tracker = applied.unwrap_or(out.tracker_published);
             match sync_io::save_tracker(&root, domain, &tracker) {
                 Err(e) => instance::log(&root, &format!("sync: saving tracker {domain}: {e:#}")),

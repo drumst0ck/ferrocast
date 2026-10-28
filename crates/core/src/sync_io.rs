@@ -484,6 +484,10 @@ pub fn sync_domain_recovering(
         io.write_doc(domain, &doc)?;
     }
     let ReadDocs { mut docs, corrupt, mut downloading } = io.read_docs(domain);
+    // deletions recorded in the own copy (the merge skips a tombstone for an id this Mac no longer
+    // has, and a tombstone that wins over a loaded item is recorded as someone else's)
+    let own_tombstones: Vec<(String, i64)> =
+        own_copy.iter().flat_map(|o| o.items.iter().filter(|(_, r)| r.deleted).map(|(id, r)| (id.clone(), r.modified))).collect();
     if let Some(mut own) = own_copy {
         own.device = io.device.clone();
         docs.push(own);
@@ -501,6 +505,30 @@ pub fn sync_domain_recovering(
     }
     let (merged, t2) = sync::merge_as(&io.device, snapshot, &docs, &t1);
     let mut t2 = t2;
+    // Own deletions survive a recovery: published again as this Mac's own (not `remote`, so the
+    // clipboard, which does not relay others' deletions, still carries them). Done after the merge,
+    // never before: a tombstone in the tracker for an id the reloaded defaults contain would look
+    // like a new edit and bring the item back.
+    let kept: std::collections::HashSet<&str> = merged.iter().map(|(id, _)| id.as_str()).collect();
+    for (id, modified) in own_tombstones.iter().filter(|(id, _)| !kept.contains(id.as_str())) {
+        match t2.items.get_mut(id) {
+            Some(t) if t.deleted => t.remote = false,
+            Some(_) => {}
+            None => {
+                t2.items.insert(
+                    id.clone(),
+                    sync::Tracked {
+                        hash: String::new(),
+                        modified: *modified,
+                        deleted: true,
+                        remote: false,
+                        pristine: false,
+                        adopted: false,
+                    },
+                );
+            }
+        }
+    }
     if !first {
         sync::restamp_baseline(&mut t2);
     }
@@ -1517,6 +1545,101 @@ mod tests {
             assert!(o.merged.is_some() && o.applied_doc.is_some());
             let own = a.io.read_own_doc("snippets").unwrap();
             assert!(own.items.contains_key("s1") && !own.items["s1"].deleted, "own document untouched until the merge is applied");
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_deletion_made_here_while_the_other_mac_was_offline_survives_recovery() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.snippets = vec![snip("s1", "one"), snip("s2", "two"), snip("s3", "three")];
+            a.sync(1_000);
+            a.sync(1_500);
+            b.sync(2_000);
+            b.sync(2_500);
+            // A deletes s2 while B is offline, then A's file is corrupted and recovered
+            a.snippets.retain(|s| s.id != "s2");
+            a.sync(3_000);
+            std::fs::write(da.join("snippets.json"), "{garbage").unwrap();
+            a.restart();
+            a.sync(4_000);
+            a.sync(4_500);
+            b.sync(5_000);
+            a.sync(5_500);
+            b.sync(6_000);
+            for m in [&a, &b] {
+                assert_eq!(custom_ids(m), ["s1", "s3"], "s2 stays deleted, ids {ida}/{idb}");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_clipboard_deletion_made_here_survives_recovery_too() {
+        let entry = |id: &str, at: i64| ClipEntry {
+            id: id.into(),
+            kind: ClipKind::Text,
+            content: id.into(),
+            title: None,
+            copied_at: at,
+            pinned: false,
+            source_app: None,
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        };
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            let now = 1_000_000_i64;
+            a.clipboard = vec![entry("c1", now / 1000 - 30), entry("c2", now / 1000 - 20)];
+            a.sync_clipboard(now);
+            a.sync_clipboard(now + 500);
+            b.sync_clipboard(now + 1_000);
+            b.sync_clipboard(now + 1_500);
+            a.clipboard.retain(|c| c.id != "c2");
+            a.sync_clipboard(now + 2_000);
+            std::fs::write(da.join("clipboard.json"), "{garbage").unwrap();
+            a.store.load_all();
+            a.clipboard = vec![];
+            assert!(needs_recovery(&da, "clipboard"));
+            for step in 3..8 {
+                let recover = needs_recovery(&da, "clipboard");
+                let d = da.clone();
+                let o = sync_domain_recovering(
+                    &a.io,
+                    "clipboard",
+                    &to_items(&a.clipboard),
+                    &load_tracker(&d, "clipboard"),
+                    now + step * 1_000,
+                    recover,
+                )
+                .unwrap();
+                save_tracker(&d, "clipboard", &o.tracker_merged).unwrap();
+                if recover {
+                    clear_recovery(&d, "clipboard");
+                }
+                if let Some(m) = o.merged {
+                    a.clipboard = from_items(m);
+                    if let Some(doc) = &o.applied_doc {
+                        a.io.write_doc("clipboard", doc).unwrap();
+                    }
+                }
+                b.sync_clipboard(now + step * 1_000 + 500);
+            }
+            for m in [&a, &b] {
+                let mut ids: Vec<_> = m.clipboard.iter().map(|c| c.id.as_str()).collect();
+                ids.sort();
+                assert_eq!(ids, ["c1"], "c2 stays deleted, ids {ida}/{idb}");
+            }
             for d in [da, db, shared] {
                 std::fs::remove_dir_all(d).unwrap();
             }
