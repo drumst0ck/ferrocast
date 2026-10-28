@@ -211,10 +211,34 @@ pub fn tr(key: &str) -> Cow<'_, str> {
     tr_in(key, language())
 }
 
+thread_local! {
+    /// The latest texts built by `trf`/`trn` (already in the interface language), so that a control
+    /// handed one of them does not look it up again.
+    static BUILT: std::cell::RefCell<std::collections::VecDeque<String>> = const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+
+/// How many built texts are remembered per thread.
+const BUILT_KEPT: usize = 256;
+
+fn remember_built(s: &str) {
+    BUILT.with(|b| {
+        let mut b = b.borrow_mut();
+        if b.len() == BUILT_KEPT {
+            b.pop_front();
+        }
+        b.push_back(s.to_string());
+    });
+}
+
+fn is_built(s: &str) -> bool {
+    BUILT.with(|b| b.borrow().iter().any(|x| x == s))
+}
+
 /// Translate `key` into `lang`; English text when it has no translation.
 pub fn tr_in(key: &str, lang: Lang) -> Cow<'_, str> {
     match lookup(key, lang) {
         Some(t) => Cow::Borrowed(t),
+        None if lang != Lang::En && is_built(key) => Cow::Borrowed(key),
         None => {
             if lang != Lang::En && !key.trim().is_empty() && OVERRIDE.with(|o| o.get()).is_some() {
                 MISSES.with(|m| m.borrow_mut().insert(key.to_string()));
@@ -229,10 +253,14 @@ pub fn tr_in(key: &str, lang: Lang) -> Cow<'_, str> {
 /// Falls back to the plain translation of `text`, then to `text`.
 pub fn trc(context: &str, text: &str) -> String {
     let lang = language();
-    match lookup(&format!("{context}|{text}"), lang) {
+    let out = match lookup(&format!("{context}|{text}"), lang) {
         Some(t) => t.to_string(),
         None => tr_in(text, lang).into_owned(),
+    };
+    if lang != Lang::En {
+        remember_built(&out);
     }
+    out
 }
 
 /// Fill `{name}` placeholders of `text`. Unknown placeholders stay as written.
@@ -246,7 +274,11 @@ pub fn fill(text: &str, args: &[(&str, &str)]) -> String {
 
 /// Translate `key` and fill its placeholders: `trf("Delete {name}?", &[("name", &n)])`.
 pub fn trf(key: &str, args: &[(&str, &str)]) -> String {
-    fill(&tr(key), args)
+    let out = fill(&tr(key), args);
+    if language() != Lang::En {
+        remember_built(&out);
+    }
+    out
 }
 
 /// Plural: `one` for a count of one (zero too in French), `other` otherwise; Japanese and Chinese
@@ -262,7 +294,11 @@ pub fn trn_in(one: &str, other: &str, n: u64, lang: Lang) -> String {
         _ => n == 1,
     };
     let key = if singular { one } else { other };
-    fill(&tr_in(key, lang), &[("n", &n.to_string())])
+    let out = fill(&tr_in(key, lang), &[("n", &n.to_string())]);
+    if lang != Lang::En {
+        remember_built(&out);
+    }
+    out
 }
 
 /// Take the keys looked up and not found since the last call, for tests that draw a whole screen
@@ -385,6 +421,18 @@ mod tests {
     }
 
     #[test]
+    fn a_text_built_by_trf_is_not_looked_up_again() {
+        with_language(Lang::De, || {
+            let _ = take_misses();
+            let built = trf("Settings {n}", &[("n", "1")]);
+            assert_eq!(tr(&built), built.as_str());
+            assert!(take_misses().iter().all(|m| m != &built), "already translated, so never a miss");
+            let _ = tr("Not a built text");
+            assert_eq!(take_misses(), ["Not a built text"]);
+        });
+    }
+
+    #[test]
     fn escapes_in_the_table_are_decoded() {
         assert_eq!(unescape("a\\nb\\tc\\\\d"), "a\nb\tc\\d");
         assert_eq!(unescape("plain"), "plain");
@@ -416,6 +464,33 @@ mod tests {
         }
         assert!(missing.is_empty(), "missing translations:\n{}", missing.join("\n"));
         assert!(bad_ph.is_empty(), "placeholders differ from English:\n{}", bad_ph.join("\n"));
+    }
+
+    /// The app loads Arial Unicode for CJK text (see `App::ensure_wide_font`): every character of
+    /// the Japanese and Chinese texts must have a glyph in it or in San Francisco, else it shows as a box.
+    #[test]
+    fn the_wide_font_has_a_glyph_for_every_japanese_and_chinese_character() {
+        use ab_glyph::{Font, FontRef};
+        let read = |p: &str| std::fs::read(p).ok();
+        let (Some(wide), Some(sf)) = (read("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"), read("/System/Library/Fonts/SFNS.ttf"))
+        else {
+            eprintln!("system fonts not found: skipped");
+            return;
+        };
+        let symbols = read("/System/Library/Fonts/Apple Symbols.ttf").unwrap_or_default();
+        let fonts: Vec<FontRef> = [&wide, &sf, &symbols].iter().filter_map(|b| FontRef::try_from_slice(b).ok()).collect();
+        let mut uncovered = std::collections::BTreeSet::new();
+        for (key, cells) in rows() {
+            for lang in [Lang::Ja, Lang::ZhHans] {
+                let text = cells[lang as usize - 1];
+                for c in text.chars().filter(|c| !c.is_whitespace() && !c.is_control()) {
+                    if !fonts.iter().any(|f| f.glyph_id(c).0 != 0) {
+                        uncovered.insert(format!("{c} (U+{:04X}) in {key:?} [{}]", c as u32, lang.code()));
+                    }
+                }
+            }
+        }
+        assert!(uncovered.is_empty(), "characters no loaded font can draw:\n{}", uncovered.into_iter().collect::<Vec<_>>().join("\n"));
     }
 
     fn sorted(mut v: Vec<String>) -> Vec<String> {
