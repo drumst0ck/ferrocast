@@ -31,6 +31,7 @@ export async function GET() {
     `- [Mac launcher with local AI](${SITE}/local-ai-launcher/): Ollama by default, LM Studio, your own keys or Claude Code, and which providers send text off the Mac`,
     `- [Free Screen Studio alternative](${SITE}/screen-studio-alternative/): screen recording with auto zoom, camera, on-device transcript, MP4 and GIF export`,
     `- [Grabar la pantalla con zoom automático](${SITE}/es/grabar-pantalla-mac-zoom-automatico/): lo mismo en español`,
+    `- [Free CleanShot X alternative](${SITE}/cleanshot-alternative/): area, window and scrolling capture, on-device text copy, pin, annotate and auto-zoom recording, with CleanShot prices from its site and what Ferrocast lacks`,
     `- [Free Alfred alternative](${SITE}/alfred-alternative/): clipboard history and snippets without the Powerpack, with a sourced Alfred comparison`,
     `- [Ferrocast vs Raycast](${SITE}/ferrocast-vs-raycast/): Raycast Free vs Pro vs Ferrocast, feature by feature, with Raycast prices and sources`,
     `- [Run Raycast Script Commands without Raycast](${SITE}/raycast-script-commands/): which @raycast metadata Ferrocast reads, the four output modes and the limits`,

@@ -73,6 +73,7 @@ export const en: GuideCopy = {
     h: 'Related',
     links: [
       ['Screen capture docs', '/docs/launcher/screen-capture/'],
+      ['Need screenshots too? A free CleanShot X alternative', '/cleanshot-alternative/'],
       ['MOV to GIF', '/convert/mov-to-gif/'],
       ['Compress a video to a target size', '/compress-video-to-size/'],
       ['Something private in the recording? Cover it', '/blur-video-mac/'],
