@@ -131,8 +131,8 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/es/convertidor-de-archivos-gratis-mac') {
       return fileLastmod('src/lib/seo/file-converter-es.ts', 'src/components/seo/FileConverterEsPage.astro');
     }
-    if (path === '/local-ai-launcher') {
-      return fileLastmod('src/lib/seo/local-ai.ts', 'src/components/seo/GuidePage.astro');
+    if (path === '/local-ai-launcher' || path === '/es/ia-local-mac') {
+      return fileLastmod('src/lib/seo/local-ai.ts', 'src/lib/seo/local-ai-es.ts', 'src/components/seo/GuidePage.astro');
     }
     if (path === '/screen-studio-alternative' || path === '/es/grabar-pantalla-mac-zoom-automatico') {
       return fileLastmod('src/lib/seo/screen-recorder.ts', 'src/components/seo/GuidePage.astro');
