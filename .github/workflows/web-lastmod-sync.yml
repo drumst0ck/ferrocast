@@ -22,7 +22,10 @@ jobs:
       run:
         working-directory: web
     steps:
+      # Full history: with the default shallow clone every file has the same last-commit date.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
