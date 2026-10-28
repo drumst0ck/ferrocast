@@ -6833,7 +6833,7 @@ fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
     use ferrocast_core::models::AiProvider as P;
     // (tab, chat provider, translate provider) -> expected (text fields, combos, drag fields)
     let cases: [(usize, P, Option<P>, usize, usize, usize); 13] = [
-        (0, P::OpenAiCompatible, None, 1, 1, 0),
+        (0, P::OpenAiCompatible, None, 1, 2, 0),
         (1, P::OpenAiCompatible, None, 0, 1, 0),
         (2, P::OpenAiCompatible, None, 0, 0, 0),
         (3, P::OpenAiCompatible, None, 2, 1, 0),
@@ -16619,4 +16619,225 @@ fn the_open_preferences_form_is_scrolled_into_view_among_many_extensions() {
     }
     let (top, clip): (f32, Rect) = app.ctx.data(|d| d.get_temp(Id::new("ext-form-top"))).expect("the form was drawn");
     assert!(top >= clip.min.y && top < clip.max.y, "form top {top} outside the visible pane {clip:?}");
+}
+
+// ---- interface languages
+
+mod i18n_ui {
+    use super::*;
+    use ferrocast_core::i18n::{take_misses, with_language, Lang};
+
+    const NON_ENGLISH: [Lang; 6] = [Lang::Es, Lang::De, Lang::Fr, Lang::PtBr, Lang::Ja, Lang::ZhHans];
+
+    /// Text that reads the same in every language: brand and product names, example values, URLs,
+    /// paths and units. It is shown as is, so it has no row in the table.
+    fn same_everywhere(s: &str) -> bool {
+        const NAMES: [&str; 14] = [
+            "Anthropic",
+            "ChatGPT",
+            "Claude Code",
+            "LM Studio",
+            "Ollama",
+            "OpenAI",
+            "OpenAI API",
+            "Apple",
+            "Notion",
+            "Obsidian",
+            "PNG",
+            "Ferrocast",
+            "Anthropic API",
+            "↻",
+        ];
+        NAMES.contains(&s)
+            || ["http", "~/", "/", "sk-", "ntn_"].iter().any(|p| s.starts_with(p))
+            || ["#!", "abc →", ":)", "md", "10m", "K", "P", "esc", "⌘", "⌘ V", "⌘ Y"].contains(&s)
+            || s.chars().all(|c| !c.is_alphabetic() || c.is_ascii_digit()) && !s.is_empty()
+            || s.ends_with(" fps")
+            || (s.ends_with(" s") && s.starts_with(|c: char| c.is_ascii_digit()))
+    }
+
+    fn missing(lang: Lang, draw: impl FnOnce()) -> Vec<String> {
+        with_language(lang, || {
+            let _ = take_misses();
+            draw();
+            // the wheel keys are translated before they reach the control that draws them
+            let keys: Vec<String> =
+                ["Shift", "Control", "Option", "Command"].map(|k| ferrocast_core::i18n::trc("modifier key", k)).to_vec();
+            take_misses().into_iter().filter(|k| !same_everywhere(k) && !keys.contains(k) && !k.contains("ferrocast-ui-test")).collect()
+        })
+    }
+
+    #[test]
+    fn every_settings_tab_is_translated_in_every_language() {
+        for lang in NON_ENGLISH {
+            let gaps = missing(lang, || {
+                for tab in 0..SETTINGS_TABS.len() {
+                    let mut app = settings_app(tab, egui::ThemePreference::Dark);
+                    settle(&mut app);
+                }
+            });
+            assert!(gaps.is_empty(), "{lang:?}: Settings strings without a translation:\n{}", gaps.join("\n"));
+        }
+    }
+
+    #[test]
+    fn the_launcher_chrome_and_every_built_in_command_are_translated_in_every_language() {
+        for lang in NON_ENGLISH {
+            let gaps = missing(lang, || {
+                let mut app = fixture();
+                app.settings.language = lang.code().into();
+                app.apply_language();
+                assert_eq!(ferrocast_core::i18n::language(), lang);
+                for q in ["", "cl", "calc 2+2"] {
+                    app.query = q.into();
+                    for _ in 0..2 {
+                        render(&mut app, vec![]);
+                    }
+                }
+            });
+            assert!(gaps.is_empty(), "{lang:?}: launcher strings without a translation:\n{}", gaps.join("\n"));
+        }
+    }
+
+    #[test]
+    fn picking_a_language_applies_it_at_once_and_is_saved() {
+        with_language(Lang::En, || {
+            let mut app = fixture();
+            assert!(!app.wide_font);
+            let mut s = app.settings.clone();
+            s.language = "de".into();
+            app.commit_settings(s);
+            assert_eq!(ferrocast_core::i18n::language(), Lang::De, "no restart");
+            let saved: Settings = app.store.load("settings.json");
+            assert_eq!(saved.language, "de");
+            assert!(
+                app.base.iter().any(|i| i.title == "Einstellungen" || i.title.contains("Einstellungen")),
+                "the launcher rows are rebuilt"
+            );
+            assert!(!app.wide_font, "Latin text needs no wide font");
+            let mut s = app.settings.clone();
+            s.language = "system".into();
+            app.commit_settings(s);
+            assert_eq!(app.settings.language, "system");
+        });
+    }
+
+    #[test]
+    fn japanese_and_chinese_load_the_wide_font_the_moment_they_are_picked() {
+        for code in ["ja", "zh-Hans"] {
+            with_language(Lang::En, || {
+                let mut app = fixture();
+                assert!(!app.wide_font);
+                let mut s = app.settings.clone();
+                s.language = code.into();
+                app.commit_settings(s);
+                assert!(app.wide_font, "{code}: the fallback font with the CJK glyphs is loaded");
+            });
+        }
+        for l in [Lang::Ja, Lang::ZhHans] {
+            assert!(l.needs_wide_font());
+            // every translated string of these languages needs it, and the font check agrees
+            let rows: Vec<&str> = ferrocast_core::i18n::rows().map(|(k, _)| k).collect();
+            let sample = rows.iter().find_map(|k| ferrocast_core::i18n::lookup(k, l)).unwrap();
+            assert!(needs_wide_font(sample), "{sample}");
+        }
+        assert!(!Lang::Es.needs_wide_font() && !Lang::De.needs_wide_font());
+    }
+
+    #[test]
+    fn settings_search_finds_rows_by_their_title_in_the_current_language_and_in_english() {
+        with_language(Lang::Es, || {
+            let es = ferrocast_core::i18n::tr("Launcher hotkey").to_string();
+            let app = searching(0, &es);
+            assert!(result_titles(&app).contains(&"Launcher hotkey".to_string()), "{:?}", result_titles(&app));
+            let app = searching(0, "launcher hotkey");
+            assert!(result_titles(&app).contains(&"Launcher hotkey".to_string()), "English still finds it");
+        });
+        with_language(Lang::En, || {
+            let es = ferrocast_core::i18n::tr_in("Launcher hotkey", Lang::Es).to_string();
+            let app = searching(0, &es);
+            assert!(!result_titles(&app).contains(&"Launcher hotkey".to_string()), "a Spanish query finds nothing in English");
+        });
+    }
+
+    #[test]
+    fn the_language_row_lists_system_and_the_seven_languages() {
+        with_language(Lang::En, || {
+            let app = settings_app(0, egui::ThemePreference::Dark);
+            let mut app = app;
+            settle(&mut app);
+            assert!(drawn_rows(&app).iter().any(|(_, t)| t == "Language"));
+        });
+        assert_eq!(
+            Lang::ALL.map(|l| l.native_name()),
+            ["English", "Español", "Deutsch", "Français", "Português (Brasil)", "日本語", "简体中文"]
+        );
+    }
+
+    #[test]
+    fn segmented_controls_fit_the_settings_pane_in_every_language() {
+        // the window is 750 wide and the sidebar 168
+        let pane_right = ui::WIDTH;
+        for lang in Lang::ALL {
+            with_language(lang, || {
+                for tab in 0..SETTINGS_TABS.len() {
+                    let mut app = settings_app(tab, egui::ThemePreference::Dark);
+                    settle(&mut app);
+                    let bars: Vec<(Rect, Vec<Rect>)> = app.ctx.data(|d| d.get_temp(Id::new("segmented-count"))).unwrap_or_default();
+                    for (r, _) in bars {
+                        assert!(r.max.x <= pane_right - 8.0, "{lang:?} tab {tab}: a segmented bar ends at {} of {pane_right}", r.max.x);
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn long_translations_never_run_past_the_tour_slide() {
+        let mut too_wide = vec![];
+        for lang in Lang::ALL {
+            with_language(lang, || {
+                for slide in 0..tour::SLIDES {
+                    let mut app = tour_app(slide);
+                    app.ctx.data_mut(|d| d.remove::<f32>(Id::new("tour-right-extent")));
+                    for _ in 0..3 {
+                        render(&mut app, vec![]);
+                    }
+                    let right: f32 = app.ctx.data(|d| d.get_temp(Id::new("tour-right-extent"))).unwrap_or(0.0);
+                    if right > ui::WIDTH - 10.0 {
+                        too_wide.push(format!("{lang:?} slide {slide}: text reaches {right}"));
+                    }
+                }
+            });
+        }
+        assert!(too_wide.is_empty(), "{}", too_wide.join("\n"));
+    }
+
+    #[test]
+    fn the_tour_is_translated_in_every_language() {
+        for lang in NON_ENGLISH {
+            let gaps = missing(lang, || {
+                for slide in 0..tour::SLIDES {
+                    let mut app = tour_app(slide);
+                    for _ in 0..3 {
+                        render(&mut app, vec![]);
+                    }
+                }
+            });
+            assert!(gaps.is_empty(), "{lang:?}: tour strings without a translation:\n{}", gaps.join("\n"));
+        }
+    }
+
+    #[test]
+    fn the_tray_menu_and_toasts_follow_the_language() {
+        with_language(Lang::Fr, || {
+            assert_eq!(ferrocast_core::i18n::tr("Quit Ferrocast"), "Quitter Ferrocast");
+            assert_eq!(crate::services::ago(120), "il y a 2 min");
+            assert_eq!(ferrocast_core::i18n::trn("{n} command", "{n} commands", 1), "1 commande");
+        });
+        with_language(Lang::En, || {
+            assert_eq!(crate::services::ago(120), "2 min ago");
+            assert_eq!(ferrocast_core::i18n::trn("{n} command", "{n} commands", 3), "3 commands");
+        });
+    }
 }

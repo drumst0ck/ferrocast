@@ -300,7 +300,7 @@ impl App {
             p.text(
                 Pos2::new(full.max.x - 18.0, full.max.y - 16.0),
                 Align2::RIGHT_CENTER,
-                "Skip  esc",
+                tr("Skip  esc"),
                 FontId::proportional(11.5),
                 Color32::WHITE.gamma_multiply(hint),
             );

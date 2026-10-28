@@ -1024,7 +1024,7 @@ impl App {
     pub(crate) fn view_title(&self) -> String {
         match self.view() {
             View::ExtList | View::ExtDetail | View::ExtForm => self.ext_header_title(),
-            v => v.title().to_string(),
+            v => tr(v.title()).into_owned(),
         }
     }
 

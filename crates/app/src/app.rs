@@ -8,6 +8,7 @@ use crate::ui::{self, palette, IconCache, Palette};
 use egui::{Align2, Color32, Context, FontId, Id, Key, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2};
 use ferrocast_core::calc;
 use ferrocast_core::color::Rgba;
+use ferrocast_core::i18n::{tr, trf, trn};
 use ferrocast_core::models::*;
 use ferrocast_core::placeholders::{self, Target};
 use ferrocast_core::ranking::{self, Frecency, Rankable};
@@ -1149,6 +1150,20 @@ fn load_fonts(ctx: &Context, wide: bool) {
     ctx.set_fonts(fonts);
 }
 
+/// The language the `language` setting stands for on this Mac (`"system"` follows macOS).
+pub(crate) fn resolve_language(setting: &str) -> ferrocast_core::i18n::Lang {
+    ferrocast_core::i18n::resolve(setting, &ferrocast_macos::apps::preferred_languages())
+}
+
+/// `keywords` plus the English `title` when the interface language shows another one, so a search
+/// in English still finds a command whose title is translated.
+fn with_english_title(mut keywords: Vec<String>, title: &str) -> Vec<String> {
+    if tr(title) != title {
+        keywords.push(title.to_string());
+    }
+    keywords
+}
+
 /// Scripts outside what San Francisco and Apple Symbols cover.
 pub(crate) fn needs_wide_font(text: &str) -> bool {
     text.chars().any(|c| {
@@ -1203,6 +1218,13 @@ impl App {
         let recent_emoji = store.load("recent-emoji.json");
         let shelf: Vec<PathBuf> = store.load("shelf.json");
         let data = store.load_all();
+        // the interface language, and the wide font its glyphs need (CJK)
+        let language = resolve_language(&data.settings.language);
+        ferrocast_core::i18n::set_language(language);
+        let wide_font = language.needs_wide_font();
+        if wide_font {
+            load_fonts(&ctx, true);
+        }
         let store_themes = ferrocast_core::themes::load_with_ids(&store);
         if prof {
             eprintln!("data {:?}", t.elapsed());
@@ -1349,7 +1371,7 @@ impl App {
             recent_emoji,
             shelf,
             app_icon: None,
-            wide_font: false,
+            wide_font,
             show_t: None,
             nav_at: Instant::now(),
             claude: None,
@@ -1686,7 +1708,8 @@ impl App {
                 self.persist("settings.json", &v);
                 *self.shared.settings.write().unwrap() = self.settings.clone();
                 let name = ferrocast_core::tiling::Layout::from_number(layout).map_or("", |l| l.name());
-                self.toast = Some((format!("Layout {layout}: {name}"), Instant::now()));
+                self.toast =
+                    Some((trf("Layout {layout}: {name}", &[("layout", &layout.to_string()), ("name", &tr(name))]), Instant::now()));
             }
             Event::MinSizes(m) => self.persist("tiling-min-sizes.json", &m),
             Event::Overlay(o) => self.apply_overlay(o),
@@ -1696,7 +1719,7 @@ impl App {
                     self.settings.tiling_excluded.push(app.clone());
                     self.save_settings();
                 }
-                self.toast = Some((format!("{app} is no longer tiled"), Instant::now()));
+                self.toast = Some((trf("{app} is no longer tiled", &[("app", &app)]), Instant::now()));
             }
             Event::Notice(m) => services::notify("Window Tiling", &m),
             Event::StageManager(on) => {
@@ -1811,6 +1834,25 @@ impl App {
         }
     }
 
+    /// Switch the interface language now: strings are looked up each frame, so only what is cached
+    /// (launcher rows, menus) is rebuilt, and the wide font is added for Japanese and Chinese.
+    pub(crate) fn apply_language(&mut self) {
+        let lang = resolve_language(&self.settings.language);
+        if lang == ferrocast_core::i18n::language() {
+            return;
+        }
+        ferrocast_core::i18n::set_language(lang);
+        if lang.needs_wide_font() && !self.wide_font {
+            self.wide_font = true;
+            load_fonts(&self.ctx, true);
+        }
+        if let Some(tray) = self._tray.as_ref() {
+            services::refresh_tray_menu(tray, self.tray_rec_shown);
+        }
+        self.rebuild();
+        self.ctx.request_repaint();
+    }
+
     fn rebuild(&mut self) {
         self.sec_dirty = true;
         let mut v = vec![];
@@ -1832,44 +1874,44 @@ impl App {
             let (g, c) = b.glyph();
             v.push(Item {
                 id: b.id(),
-                title: b.title().into(),
-                subtitle: if b.extension() == b.title() { String::new() } else { b.extension().into() },
+                title: tr(b.title()).into_owned(),
+                subtitle: if b.extension() == b.title() { String::new() } else { tr(b.extension()).into_owned() },
                 icon: Icon::Glyph(g, c),
                 accessory: "Command".into(),
-                keywords: b.keywords(),
+                keywords: with_english_title(b.keywords(), b.title()),
                 kind: Kind::Builtin(*b),
             });
         }
         for c in windows::WindowCommand::ALL {
             v.push(Item {
                 id: c.id(),
-                title: c.title().into(),
-                subtitle: "Window Management".into(),
+                title: tr(c.title()).into_owned(),
+                subtitle: tr("Window Management").into_owned(),
                 icon: Icon::Glyph("sf:rectangle.lefthalf.filled", [89, 212, 153]),
                 accessory: "Command".into(),
-                keywords: vec!["window".into(), "resize".into(), "move".into()],
+                keywords: with_english_title(vec!["window".into(), "resize".into(), "move".into()], c.title()),
                 kind: Kind::Window(*c),
             });
         }
         for a in ferrocast_core::tiling::Action::ALL {
             v.push(Item {
                 id: a.id(),
-                title: a.title(),
-                subtitle: "Window Tiling".into(),
+                title: tr(&a.title()).into_owned(),
+                subtitle: tr("Window Tiling").into_owned(),
                 icon: Icon::Glyph("sf:rectangle.split.2x2", [89, 212, 153]),
                 accessory: "Command".into(),
-                keywords: vec!["window".into(), "tile".into(), "tiling".into(), "layout".into()],
+                keywords: with_english_title(vec!["window".into(), "tile".into(), "tiling".into(), "layout".into()], &a.title()),
                 kind: Kind::Tiling(a),
             });
         }
         for c in system::SystemCommand::ALL {
             v.push(Item {
                 id: c.id(),
-                title: c.title(),
-                subtitle: "System".into(),
+                title: tr(&c.title()).into_owned(),
+                subtitle: tr("System").into_owned(),
                 icon: Icon::Glyph(system_symbol(c), [90, 90, 105]),
                 accessory: "Command".into(),
-                keywords: c.keywords().iter().map(|s| s.to_string()).collect(),
+                keywords: with_english_title(c.keywords().iter().map(|s| s.to_string()).collect(), &c.title()),
                 kind: Kind::System(*c),
             });
         }
@@ -2101,8 +2143,8 @@ impl App {
     fn handle_notion_tested(&mut self, r: Result<ferrocast_core::notion::BotInfo, String>) {
         self.toast(match r {
             Ok(b) => match b.workspace.filter(|w| !w.is_empty()) {
-                Some(w) => format!("Connected to Notion as {} · {w}", b.name),
-                None => format!("Connected to Notion as {}", b.name),
+                Some(w) => trf("Connected to Notion as {name} · {workspace}", &[("name", &b.name), ("workspace", &w)]),
+                None => trf("Connected to Notion as {name}", &[("name", &b.name)]),
             },
             Err(e) => e,
         });
@@ -2153,7 +2195,7 @@ impl App {
         let mut s = self.settings.clone();
         s.notion_target = Some(ferrocast_core::models::NotionTarget { id: item.id, kind: kind.into(), title: item.title.clone() });
         self.commit_settings(s);
-        self.toast(format!("Capture target set to {}", item.title));
+        self.toast(trf("Capture target set to {name}", &[("name", &item.title)]));
     }
 
     // ------------------------------------------------------------ Search Notion (command)
@@ -2618,7 +2660,7 @@ impl App {
     /// Send on a thread; the answer comes back as `Msg::NotionAdded`.
     fn notion_add_start(&mut self, capture: notion_io::Capture) {
         self.na.sending = true;
-        self.toast(format!("Adding to {}…", capture.target.title));
+        self.toast(trf("Adding to {name}…", &[("name", &capture.target.title)]));
         let (read, map, schema, bus) = (notion_io::token_reader(), notion_io::url_mapper(), self.na.schema.clone(), self.bus.clone());
         std::thread::spawn(move || {
             let result = match read() {
@@ -2636,7 +2678,7 @@ impl App {
         match result {
             Ok(done) => {
                 // the toast has no action button, so there is no "Open" link here
-                self.toast(format!("Added to {}", done.target_title));
+                self.toast(trf("Added to {name}", &[("name", &done.target_title)]));
                 if let View::NotionAdd { title, text, .. } = self.stack.last_mut().unwrap() {
                     title.clear();
                     text.clear();
@@ -2771,7 +2813,7 @@ impl App {
         let mut s = self.settings.clone();
         s.obsidian_vault = Some(path);
         self.commit_settings(s);
-        self.toast(format!("Obsidian vault set to {name}"));
+        self.toast(trf("Obsidian vault set to {name}", &[("name", &name)]));
     }
 
     fn obsidian_pick(&mut self, i: usize) {
@@ -3186,7 +3228,7 @@ impl App {
                 let n = t.needs.unwrap_or_default();
                 let cmd = n.split_once('(').map(|(_, c)| c.trim_end_matches(')').to_string()).unwrap_or_else(|| n.to_string());
                 self.copy_text(&cmd);
-                self.toast(format!("Needs {n}. Install command copied: {cmd}"));
+                self.toast(trf("Needs {n}. Install command copied: {cmd}", &[("n", n), ("cmd", &cmd)]));
             }
             WheelPick::Convert(t) => {
                 self.toast(format!("Converting to {}…", t.label));
@@ -3271,7 +3313,7 @@ impl App {
                 }
                 Msg::UpdateFailed(e) => {
                     instance::log(&self.store.root, &format!("update failed: {e}"));
-                    self.toast(format!("Update failed: {e}"));
+                    self.toast(trf("Update failed: {e}", &[("e", &e.to_string())]));
                 }
                 Msg::NotionTested(r) => self.handle_notion_tested(r),
                 Msg::NotionSearched { request, result } => self.handle_notion_searched(request, result),
@@ -4154,7 +4196,7 @@ impl App {
         if let Some(u) = looks_like_url(q) {
             top.push(Item {
                 id: "url".into(),
-                title: format!("Open {u}"),
+                title: trf("Open {u}", &[("u", &u)]),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:globe", [86, 194, 255]),
                 accessory: "URL".into(),
@@ -4208,7 +4250,7 @@ impl App {
         }
         let mut fb = vec![Item {
             id: "fallback:web".into(),
-            title: format!("Search the web for “{q}”"),
+            title: trf("Search the web for “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:magnifyingglass", [120, 120, 130]),
             accessory: "Fallback".into(),
@@ -4217,7 +4259,7 @@ impl App {
         }];
         fb.push(Item {
             id: "fallback:files".into(),
-            title: format!("Search files for “{q}”"),
+            title: trf("Search files for “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:magnifyingglass", [120, 120, 130]),
             accessory: "Fallback".into(),
@@ -4226,7 +4268,7 @@ impl App {
         });
         fb.push(Item {
             id: "fallback:emoji".into(),
-            title: format!("Search emoji for “{q}”"),
+            title: trf("Search emoji for “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:face.smiling", [255, 197, 49]),
             accessory: "Fallback".into(),
@@ -4236,7 +4278,7 @@ impl App {
         if q.split_whitespace().count() <= 3 && q.chars().all(|c| c.is_alphabetic() || c == ' ' || c == '-' || c == '\'') {
             fb.push(Item {
                 id: "fallback:dict".into(),
-                title: format!("Look up “{q}” in Dictionary"),
+                title: trf("Look up “{q}” in Dictionary", &[("q", q)]),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:character.book.closed", [120, 120, 130]),
                 accessory: "Fallback".into(),
@@ -4246,7 +4288,7 @@ impl App {
         }
         fb.push(Item {
             id: "fallback:ai".into(),
-            title: format!("Ask AI: “{q}”"),
+            title: trf("Ask AI: “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:sparkles", [168, 110, 255]),
             accessory: "Fallback".into(),
@@ -4987,8 +5029,8 @@ impl App {
             acts.iter().find(|a| f(&a.kind)).map(|a| RowButton {
                 label,
                 tip: match a.shortcut {
-                    Some((m, k)) => format!("{}  {}", a.title, shortcut_label(m, k)),
-                    None => a.title.clone(),
+                    Some((m, k)) => format!("{}  {}", tr(&a.title), shortcut_label(m, k)),
+                    None => tr(&a.title).into_owned(),
                 },
                 kind: a.kind.clone(),
                 destructive: a.destructive,
@@ -5036,25 +5078,25 @@ impl App {
         match self.view() {
             View::Clipboard => vec![RowButton {
                 label: "Clear History…",
-                tip: format!("Delete All Entries  {} (pinned entries stay)", shortcut_label(CTRL_SHIFT, Key::X)),
+                tip: trf("Delete All Entries  {shortcut} (pinned entries stay)", &[("shortcut", &shortcut_label(CTRL_SHIFT, Key::X))]),
                 kind: Act::ClipDeleteAll,
                 destructive: true,
             }],
             View::Snippets => vec![RowButton {
                 label: "+ New",
-                tip: format!("Create Snippet  {}", shortcut_label(CMD, Key::N)),
+                tip: trf("Create Snippet  {shortcut}", &[("shortcut", &shortcut_label(CMD, Key::N))]),
                 kind: Act::CreateSnippet,
                 destructive: false,
             }],
             View::Quicklinks => vec![RowButton {
                 label: "+ New",
-                tip: format!("Create Quicklink  {}", shortcut_label(CMD, Key::N)),
+                tip: trf("Create Quicklink  {shortcut}", &[("shortcut", &shortcut_label(CMD, Key::N))]),
                 kind: Act::CreateQuicklink,
                 destructive: false,
             }],
             View::Notes => vec![RowButton {
                 label: "+ New",
-                tip: format!("Create Note  {}", shortcut_label(CMD, Key::N)),
+                tip: trf("Create Note  {shortcut}", &[("shortcut", &shortcut_label(CMD, Key::N))]),
                 kind: Act::CreateNote,
                 destructive: false,
             }],
@@ -5381,7 +5423,7 @@ impl App {
 
     fn open_target(&mut self, target: &str, with: Option<&str>) {
         if let Err(e) = apps::open(target, with) {
-            self.toast(format!("Could not open: {e}"));
+            self.toast(trf("Could not open: {e}", &[("e", &e.to_string())]));
         }
         self.hide();
         self.reset_to_root();
@@ -5561,7 +5603,7 @@ impl App {
                     // "ffmpeg (brew install ffmpeg)" → copy the command in parentheses
                     let cmd = n.split_once('(').map(|(_, c)| c.trim_end_matches(')').to_string()).unwrap_or_else(|| n.to_string());
                     self.copy_text(&cmd);
-                    self.toast(format!("Install command copied: {cmd}"));
+                    self.toast(trf("Install command copied: {cmd}", &[("cmd", &cmd)]));
                     return;
                 }
                 let (files, t) = (files.clone(), t.clone());
@@ -5668,7 +5710,7 @@ impl App {
                     let out = String::from_utf8_lossy(&o.stdout);
                     match out.lines().find(|l| l.starts_with("ferrocast")) {
                         Some(l) => format!("Update available: {} · run brew upgrade ferrocast", l.trim_start_matches("ferrocast").trim()),
-                        None => format!("Ferrocast {} is up to date", env!("CARGO_PKG_VERSION")),
+                        None => trf("Ferrocast {version} is up to date", &[("version", env!("CARGO_PKG_VERSION"))]),
                     }
                 }
                 Ok(o) => format!("brew: {}", String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("unknown error")),
@@ -5710,7 +5752,7 @@ impl App {
         let release = match decision {
             Decision::UpToDate => {
                 if manual {
-                    self.toast(format!("Ferrocast {} is up to date", env!("CARGO_PKG_VERSION")));
+                    self.toast(trf("Ferrocast {version} is up to date", &[("version", env!("CARGO_PKG_VERSION"))]));
                 }
                 return;
             }
@@ -5736,7 +5778,7 @@ impl App {
         match ferrocast_core::update::plan_for(channel, writable) {
             Plan::Refuse(reason) => self.toast(reason),
             Plan::Download => {
-                self.toast(format!("Updating to {ver}…"));
+                self.toast(trf("Updating to {version}…", &[("version", &ver)]));
                 services::update_install(release, self.store.root.clone(), self.bus.clone());
             }
             Plan::BrewUpgrade => {
@@ -5768,7 +5810,7 @@ impl App {
             bus.send(Msg::Wake);
         });
         self.timers.push(RunningTimer { ends_at: Instant::now() + Duration::from_secs(secs), secs, label, cancelled });
-        self.toast(format!("Timer started · {}", ferrocast_core::timer::clock(secs)));
+        self.toast(trf("Timer started · {time}", &[("time", &ferrocast_core::timer::clock(secs))]));
         self.hide();
         self.reset_to_root();
     }
@@ -5796,9 +5838,9 @@ impl App {
     fn kill_process(&mut self, pid: i32, force: bool) {
         let name = self.proc_cache.iter().find(|p| p.pid == pid).map(|p| p.name.clone()).unwrap_or_else(|| pid.to_string());
         if ferrocast_macos::process::kill(pid, force) {
-            self.toast(format!("{} {name}", if force { "Force killed" } else { "Killed" }));
+            self.toast(trf(if force { "Force killed {name}" } else { "Killed {name}" }, &[("name", &name)]));
         } else {
-            self.toast(format!("Could not kill {name}"));
+            self.toast(trf("Could not kill {name}", &[("name", &name)]));
         }
         self.proc_cache.retain(|p| p.pid != pid);
         self.sec_dirty = true;
@@ -6396,13 +6438,13 @@ impl App {
                     self.hide();
                     self.reset_to_root();
                 }
-                Err(e) => self.toast(format!("Copy failed: {e}")),
+                Err(e) => self.toast(trf("Copy failed: {e}", &[("e", &e.to_string())])),
             },
             // the picture is already in the Capture folder: Save shows it in Finder
             ResultButton::Save => {
                 let _ = apps::reveal(&file);
                 let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                self.toast(format!("Saved: {name}"));
+                self.toast(trf("Saved: {name}", &[("name", &name)]));
             }
             ResultButton::Annotate => self.perform(Act::AnnotateCanvas(file), false),
             ResultButton::Background => self.perform(Act::FrameImage(file), false),
@@ -6465,7 +6507,7 @@ impl App {
                     }
                     Err(e) => {
                         instance::log(&self.store.root, &format!("export failed: {e}"));
-                        self.toast(format!("Backup failed: {e}"));
+                        self.toast(trf("Backup failed: {e}", &[("e", &e.to_string())]));
                     }
                 }
             }
@@ -6711,7 +6753,7 @@ impl App {
         let Some(s) = self.scripts.get(idx).cloned() else { return };
         if s.needs_confirmation {
             self.push(View::Confirm {
-                msg: format!("Run script “{}”? Scripts have your user account's permissions.", s.title),
+                msg: trf("Run script “{name}”? Scripts have your user account's permissions.", &[("name", &s.title)]),
                 act: Act::RunScript { index: idx, args },
             });
             return;
@@ -6909,7 +6951,7 @@ impl App {
                             bus.send(Msg::Moved(pairs));
                             let _ = apps::reveal(&new[0]);
                         }
-                        Err(e) => bus.send(Msg::Toast(format!("Move failed: {e}"))),
+                        Err(e) => bus.send(Msg::Toast(trf("Move failed: {e}", &[("e", &e.to_string())]))),
                     }
                 });
             }
@@ -7450,7 +7492,7 @@ impl App {
             Act::Trash(p) => {
                 match apps::trash(&p) {
                     Ok(()) => self.toast("Moved to Trash"),
-                    Err(e) => self.toast(format!("Trash failed: {e}")),
+                    Err(e) => self.toast(trf("Trash failed: {e}", &[("e", &e.to_string())])),
                 }
                 self.files.1.retain(|f| f != &p);
                 if self.stack.iter().any(|v| matches!(v, View::Recordings)) {

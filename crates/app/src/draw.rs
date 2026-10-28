@@ -886,7 +886,7 @@ struct ListMouse {
 }
 
 fn mini_button_width(ui: &Ui, label: &str) -> f32 {
-    ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(11.5), Color32::WHITE).size().x + 16.0
+    ui.painter().layout_no_wrap(tr(label).into_owned(), FontId::proportional(11.5), Color32::WHITE).size().x + 16.0
 }
 
 /// A small text button whose right edge sits at `right` and whose centre line is `cy`.
@@ -905,13 +905,18 @@ fn mini_button(ui: &Ui, pal: &Palette, r: Rect, b: &RowButton, id: Id) -> bool {
         p.rect_stroke(r, 6.0, Stroke::new(1.0, if b.destructive { pal.danger } else { pal.border }), StrokeKind::Inside);
     }
     let col = if b.destructive { pal.danger } else { pal.text };
-    p.text(r.center(), Align2::CENTER_CENTER, b.label, FontId::proportional(11.5), col);
+    p.text(r.center(), Align2::CENTER_CENTER, tr(b.label), FontId::proportional(11.5), col);
     resp.clicked()
 }
 
 fn panel_filter(p: &ActionPanel) -> Vec<usize> {
     let q = p.query.trim().to_lowercase();
-    p.actions.iter().enumerate().filter(|(_, a)| q.is_empty() || a.title.to_lowercase().contains(&q)).map(|(i, _)| i).collect()
+    p.actions
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| q.is_empty() || a.title.to_lowercase().contains(&q) || tr(&a.title).to_lowercase().contains(&q))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 impl App {
@@ -1531,7 +1536,7 @@ impl App {
         }
         self.save_settings();
         self.apply_hotkeys();
-        self.toast(format!("Hotkey set to {}", services::hotkey_label(&spec)));
+        self.toast(trf("Hotkey set to {hotkey}", &[("hotkey", &services::hotkey_label(&spec))]));
         self.pop();
         true
     }
@@ -1573,7 +1578,7 @@ impl App {
                     if let Some(o) = self.snippets.iter().find(|s| {
                         Some(&s.id) != id.as_ref() && !s.keyword.is_empty() && (s.keyword.starts_with(&kw) || kw.starts_with(&s.keyword))
                     }) {
-                        let msg = format!("Keyword conflicts with “{}”", o.keyword);
+                        let msg = trf("Keyword conflicts with “{name}”", &[("name", &o.keyword)]);
                         self.toast(&msg);
                         return;
                     }
@@ -1878,7 +1883,7 @@ impl App {
                     }
                     if shape == Shape::List {
                         let te = TextEdit::singleline(&mut self.query)
-                            .hint_text(RichText::new(placeholder).color(pal.sub))
+                            .hint_text(RichText::new(tr(placeholder)).color(pal.sub))
                             .font(FontId::proportional(18.0))
                             .frame(EFrame::NONE)
                             .text_color(pal.text)
@@ -1896,8 +1901,8 @@ impl App {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         record_text(&ctx, &pal, "crumb-parent", pal.sub_strong, &[], 1.0);
                         record_text(&ctx, &pal, "crumb-current", pal.text, &[], 1.0);
-                        ui.label(RichText::new("Settings /").size(16.0).color(pal.sub_strong));
-                        ui.label(RichText::new(name).size(16.0).strong().color(pal.text));
+                        ui.label(RichText::new(format!("{} /", tr("Settings"))).size(16.0).color(pal.sub_strong));
+                        ui.label(RichText::new(tr(name)).size(16.0).strong().color(pal.text));
                         #[cfg(test)]
                         ctx.data_mut(|d| d.insert_temp(Id::new("settings-breadcrumb"), format!("Settings / {name}")));
                     } else {
@@ -1981,14 +1986,20 @@ impl App {
                     ui.painter().text(
                         content.center(),
                         Align2::CENTER_CENTER,
-                        "Type at least 2 characters",
+                        tr("Type at least 2 characters"),
                         FontId::proportional(14.0),
                         pal.sub,
                     );
                 } else if sections.is_empty() && matches!(self.view(), View::ObsidianSearch) && self.ov.indexing {
-                    ui.painter().text(content.center(), Align2::CENTER_CENTER, "Indexing your vault…", FontId::proportional(14.0), pal.sub);
+                    ui.painter().text(
+                        content.center(),
+                        Align2::CENTER_CENTER,
+                        tr("Indexing your vault…"),
+                        FontId::proportional(14.0),
+                        pal.sub,
+                    );
                 } else if sections.is_empty() && !(matches!(self.view(), View::NotionSearch) && self.nv.searching) {
-                    ui.painter().text(content.center(), Align2::CENTER_CENTER, "No results", FontId::proportional(14.0), pal.sub);
+                    ui.painter().text(content.center(), Align2::CENTER_CENTER, tr("No results"), FontId::proportional(14.0), pal.sub);
                 }
             }
             // under the intro the deck waits, so its entrance plays at the hand-off
@@ -2080,36 +2091,36 @@ impl App {
             };
         let obsidian_busy = matches!(self.view(), View::ObsidianSearch) && self.ov.indexing;
         let notion_busy = (matches!(self.view(), View::NotionSearch) && self.nv.searching) || obsidian_busy;
-        let busy_label = if obsidian_busy {
+        let busy_label = &*tr(if obsidian_busy {
             "Indexing vault"
         } else if notion_busy {
             "Searching Notion"
         } else {
             "Searching files"
-        };
+        });
         #[cfg(test)]
         ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("settings-undo-rect")));
         let mut undo_clicked = false;
         match &self.toast {
             Some((t, _)) if t == RESET_TOAST && self.settings_undo.is_some() => {
                 // "Tab reset ·" then a clickable "Undo"
-                let head = p.layout_no_wrap("Tab reset · ".into(), FontId::proportional(12.5), facc);
+                let head = p.layout_no_wrap(format!("{} ", tr("Tab reset ·")), FontId::proportional(12.5), facc);
                 let hw = head.size().x;
                 p.galley(Pos2::new(tx, cy - head.size().y / 2.0), head, facc);
                 record_text(ui.ctx(), pal, "footer-toast", facc, &[], 1.0);
-                let ug = p.layout_no_wrap("Undo".into(), FontId::proportional(12.5), pal.text);
+                let ug = p.layout_no_wrap(tr("Undo").into_owned(), FontId::proportional(12.5), pal.text);
                 let ur = Rect::from_min_size(Pos2::new(tx + hw - 4.0, cy - 14.0), Vec2::new(ug.size().x + 8.0, 28.0));
                 let resp = ui.interact(ur, Id::new("settings-undo"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
                 record_ctl(ui.ctx(), "undo", resp.id, ur, true);
                 let col = if resp.hovered() { facc } else { pal.text };
-                p.text(Pos2::new(ur.min.x + 4.0, cy), Align2::LEFT_CENTER, "Undo", FontId::proportional(12.5), col);
+                p.text(Pos2::new(ur.min.x + 4.0, cy), Align2::LEFT_CENTER, tr("Undo"), FontId::proportional(12.5), col);
                 p.hline((ur.min.x + 4.0)..=(ur.max.x - 4.0), cy + 7.0, Stroke::new(1.0, col));
                 #[cfg(test)]
                 ui.ctx().data_mut(|d| d.insert_temp(Id::new("settings-undo-rect"), ur));
                 undo_clicked = resp.clicked();
             }
             Some((t, _)) => {
-                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, t, FontId::proportional(12.5), facc);
+                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, tr(t), FontId::proportional(12.5), facc);
                 record_text(ui.ctx(), pal, "footer-toast", facc, &[], 1.0);
             }
             None if searching || notion_busy => {
@@ -2141,11 +2152,12 @@ impl App {
         let mut window_chips = if matches!(self.view(), View::Welcome) { self.tour.hints() } else { self.view().footer_hints() };
         // The left text (title or toast) wins: drop the least important chips until both fit.
         let left_w = match &self.toast {
-            Some((t, _)) => p.layout_no_wrap(t.clone(), FontId::proportional(12.5), pal.accent).size().x,
+            Some((t, _)) => p.layout_no_wrap(tr(t).into_owned(), FontId::proportional(12.5), pal.accent).size().x,
             None if settings => p.layout_no_wrap("Ferrocast".into(), FontId::proportional(12.5), fsub).size().x,
             None => p.layout_no_wrap(self.view_title(), FontId::proportional(12.5), pal.sub).size().x,
         };
         let chip_w = |(l, k): &(&str, &str)| {
+            let l = &*tr(l);
             let kw = (p.layout_no_wrap(k.to_string(), FontId::proportional(11.5), pal.text).size().x + 12.0).max(22.0);
             kw + 8.0 + p.layout_no_wrap(l.to_string(), FontId::proportional(12.5), pal.sub).size().x + 18.0
         };
@@ -2168,7 +2180,7 @@ impl App {
             }
             first = false;
             let kg = p.layout_no_wrap(key.to_string(), FontId::proportional(11.5), pal.text);
-            let lg = p.layout_no_wrap(label.to_string(), FontId::proportional(12.5), fsub);
+            let lg = p.layout_no_wrap(tr(label).into_owned(), FontId::proportional(12.5), fsub);
             record_text(ui.ctx(), pal, "footer-label", fsub, &[], 1.0);
             record_text(ui.ctx(), pal, "footer-key", pal.text, &[pal.field], 1.0);
             let kw = (kg.size().x + 12.0).max(22.0);
@@ -2245,7 +2257,7 @@ impl App {
                     ui.painter().text(
                         Pos2::new(hr.min.x + 18.0, hr.center().y + 2.0),
                         Align2::LEFT_CENTER,
-                        &sec.title,
+                        tr(&sec.title),
                         FontId::proportional(12.0),
                         pal.sub,
                     );
@@ -2302,7 +2314,7 @@ impl App {
                             painter.text(
                                 Pos2::new(r.min.x + half / 2.0, mid + 20.0),
                                 Align2::CENTER_CENTER,
-                                if item.accessory.is_empty() { "Calculator" } else { item.accessory.as_str() },
+                                if item.accessory.is_empty() { tr("Calculator") } else { tr(item.accessory.as_str()) },
                                 FontId::proportional(11.5),
                                 pal.sub,
                             );
@@ -2317,7 +2329,7 @@ impl App {
                             painter.text(
                                 Pos2::new(r.min.x + half * 1.5, mid + 24.0),
                                 Align2::CENTER_CENTER,
-                                "Answer",
+                                tr("Answer"),
                                 FontId::proportional(11.5),
                                 pal.sub,
                             );
@@ -2339,7 +2351,7 @@ impl App {
                             }
                         }
                         if !item.accessory.is_empty() {
-                            acc.push(item.accessory.clone());
+                            acc.push(tr(&item.accessory).into_owned());
                         }
                         let acc = acc.join("  ");
                         let right = r.max.x - 18.0 - if btn_total > 0.0 { btn_total + 4.0 } else { 0.0 };
@@ -2408,10 +2420,10 @@ impl App {
                         draw_blocks(ui, pal, &blocks[skip as usize..]);
                     }
                     Some((r, Err(()))) if r == rel => {
-                        ui.add(label(RichText::new("Could not read this note.").size(13.5).color(pal.sub)));
+                        ui.add(label(RichText::new(tr("Could not read this note.")).size(13.5).color(pal.sub)));
                     }
                     _ => {
-                        ui.add(label(RichText::new("Loading…").size(13.5).color(pal.sub)));
+                        ui.add(label(RichText::new(tr("Loading…")).size(13.5).color(pal.sub)));
                     }
                 }
             });
@@ -2449,10 +2461,10 @@ impl App {
         let _ = is_image;
         // facts
         let mut y = card.max.y + 14.0;
-        p.text(Pos2::new(rect.min.x + 2.0, y), Align2::LEFT_CENTER, "Information", FontId::proportional(11.5), pal.sub);
+        p.text(Pos2::new(rect.min.x + 2.0, y), Align2::LEFT_CENTER, tr("Information"), FontId::proportional(11.5), pal.sub);
         y += 18.0;
         for (k, v) in &meta {
-            p.text(Pos2::new(rect.min.x + 2.0, y), Align2::LEFT_CENTER, k, FontId::proportional(12.5), pal.sub);
+            p.text(Pos2::new(rect.min.x + 2.0, y), Align2::LEFT_CENTER, tr(k), FontId::proportional(12.5), pal.sub);
             let vg = p.layout_no_wrap(v.clone(), FontId::proportional(12.5), pal.text);
             let max_w = rect.width() - 110.0;
             let shown = if vg.size().x > max_w { elide(&p, v, FontId::proportional(12.5), max_w) } else { v.clone() };
@@ -2504,7 +2516,12 @@ impl App {
                         click = Some(i);
                     }
                     let col = if a.destructive { pal.danger } else { pal.text };
-                    painter.text(Pos2::new(r.min.x + 16.0, r.center().y), Align2::LEFT_CENTER, &a.title, FontId::proportional(13.5), col);
+                    // a long translation is cut before it runs into the shortcut
+                    let shortcut_w = a.shortcut.map_or(14.0, |(m, k)| {
+                        painter.layout_no_wrap(shortcut_label(m, k), FontId::proportional(12.0), pal.sub).size().x + 24.0
+                    });
+                    let title = elide(&painter, &tr(&a.title), FontId::proportional(13.5), r.width() - 16.0 - shortcut_w);
+                    painter.text(Pos2::new(r.min.x + 16.0, r.center().y), Align2::LEFT_CENTER, title, FontId::proportional(13.5), col);
                     if let Some((m, k)) = a.shortcut {
                         painter.text(
                             Pos2::new(r.max.x - 14.0, r.center().y),
@@ -2525,7 +2542,7 @@ impl App {
             ui.horizontal_centered(|ui| {
                 let r = ui.add(
                     TextEdit::singleline(&mut p.query)
-                        .hint_text(RichText::new("Search for actions…").color(pal.sub))
+                        .hint_text(RichText::new(tr("Search for actions…")).color(pal.sub))
                         .frame(EFrame::NONE)
                         .desired_width(f32::INFINITY)
                         .id(Id::new("action-search")),
@@ -3419,7 +3436,7 @@ impl App {
             ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{clips} clip{}", if clips == 1 { "" } else { "s" })).size(13.0).color(pal.text));
-                    ui.label(RichText::new("·  Equal parts").size(12.5).color(pal.sub));
+                    ui.label(RichText::new(tr("·  Equal parts")).size(12.5).color(pal.sub));
                     ui.add(egui::DragValue::new(&mut parts).range(2..=50));
                     ui.label(
                         RichText::new(if points.is_empty() { "(used while there are no cuts)" } else { "(ignored: cuts are set)" })
@@ -3563,11 +3580,11 @@ impl App {
         let row = Rect::from_min_size(Pos2::new(wave.min.x, wave.max.y + 30.0), Vec2::new(wave.width(), 26.0));
         ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
             ui.horizontal(|ui| {
-                ui.label("Start s");
+                ui.label(tr("Start s"));
                 ui.add(egui::DragValue::new(&mut start).range(0.0..=t.duration).speed(0.01).fixed_decimals(2));
-                ui.label("End s");
+                ui.label(tr("End s"));
                 ui.add(egui::DragValue::new(&mut end).range(0.0..=t.duration).speed(0.01).fixed_decimals(2));
-                silence = ui.button("Trim silence").clicked();
+                silence = ui.button(tr("Trim silence")).clicked();
             });
         });
         if (start - t.start).abs() > 1e-9 {
@@ -3676,9 +3693,9 @@ impl App {
             ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
                 ui.horizontal(|ui| {
                     ui.label(format!("Range {}", sel_now + 1));
-                    ui.label("Start s");
+                    ui.label(tr("Start s"));
                     ui.add(egui::DragValue::new(&mut a).range(0.0..=duration).speed(0.02).fixed_decimals(2));
-                    ui.label("End s");
+                    ui.label(tr("End s"));
                     ui.add(egui::DragValue::new(&mut b).range(0.0..=duration).speed(0.02).fixed_decimals(2));
                 });
             });
@@ -3808,7 +3825,7 @@ impl App {
                     if resp.clicked() {
                         o.bg = Some([255, 255, 255]);
                     }
-                    if ui.selectable_label(o.bg.is_none(), "None").clicked() {
+                    if ui.selectable_label(o.bg.is_none(), tr("None")).clicked() {
                         o.bg = None;
                     }
                 });
@@ -4165,7 +4182,7 @@ impl App {
                         if blur {
                             ui.spacing_mut().slider_width = 120.0;
                             ui.add(egui::Slider::new(&mut radius, crate::app::REDACT_BLUR_RANGE).suffix(" px"));
-                            ui.label(RichText::new("Blur").size(12.0).color(pal.sub));
+                            ui.label(RichText::new(tr("Blur")).size(12.0).color(pal.sub));
                         } else {
                             for (i, c) in ferrocast_core::annotate::COLORS.iter().enumerate().rev() {
                                 let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
@@ -4284,7 +4301,7 @@ impl App {
         let mut t = ref_t.clamp(0.0, max);
         ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Reference frame").size(12.0).color(pal.sub));
+                ui.label(RichText::new(tr("Reference frame")).size(12.0).color(pal.sub));
                 ui.spacing_mut().slider_width = 220.0;
                 ui.add(egui::Slider::new(&mut t, 0.0..=max).suffix(" s").fixed_decimals(2));
             });
@@ -4386,9 +4403,9 @@ impl App {
             ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
                 ui.horizontal(|ui| {
                     ui.label(format!("Area {}", sel_now + 1));
-                    ui.label("Start s");
+                    ui.label(tr("Start s"));
                     ui.add(egui::DragValue::new(&mut a.start).range(0.0..=duration).speed(0.04));
-                    ui.label("End s");
+                    ui.label(tr("End s"));
                     ui.add(egui::DragValue::new(&mut a.end).range(0.0..=duration).speed(0.04));
                     segmented(ui, pal, &mut a.blur, &[(false, "Solid"), (true, "Blur")]);
                 });
@@ -5313,7 +5330,7 @@ impl App {
                         .id(Id::new("annot-text-field"))
                         .desired_width(220.0)
                         .text_color(egui::Color32::from_rgb(col[0], col[1], col[2]))
-                        .hint_text("Type, then Enter"),
+                        .hint_text(tr("Type, then Enter")),
                 )
             });
             let r = field.inner;
@@ -5663,7 +5680,7 @@ impl App {
         ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
             egui::ScrollArea::vertical().id_salt("ext-detail").auto_shrink([false; 2]).show(ui, |ui| {
                 if loading && md.trim().is_empty() {
-                    ui.label(RichText::new("Loading…").size(14.0).color(pal.sub));
+                    ui.label(RichText::new(tr("Loading…")).size(14.0).color(pal.sub));
                 }
                 draw_blocks(ui, pal, &blocks);
             });
@@ -5681,7 +5698,7 @@ impl App {
             egui::ScrollArea::vertical().id_salt("ext-form").auto_shrink([false; 2]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 8.0;
                 if form.is_loading {
-                    ui.label(RichText::new("Loading…").size(12.0).color(pal.sub));
+                    ui.label(RichText::new(tr("Loading…")).size(12.0).color(pal.sub));
                 }
                 for (n, f) in form.fields.iter().enumerate() {
                     let id = egui::Id::new(("ext-form-field", n, f.id.as_str()));
@@ -5794,9 +5811,9 @@ impl App {
                     }
                 }
                 if form.actions.is_empty() {
-                    ui.label(RichText::new("This form has no actions").size(12.0).color(pal.sub));
+                    ui.label(RichText::new(tr("This form has no actions")).size(12.0).color(pal.sub));
                 } else {
-                    ui.label(RichText::new("Submit with ⌘↵ · ⌘K for more actions").size(12.0).color(pal.sub));
+                    ui.label(RichText::new(tr("Submit with ⌘↵ · ⌘K for more actions")).size(12.0).color(pal.sub));
                 }
             });
         });
@@ -5987,12 +6004,12 @@ impl App {
                 ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
                     ui.spacing_mut().item_spacing.y = 8.0;
                     let lbl = |ui: &mut Ui, t: &str| {
-                        ui.label(RichText::new(t).size(12.0).color(pal.sub));
+                        ui.label(RichText::new(tr(t)).size(12.0).color(pal.sub));
                     };
                     match self.stack.last_mut().unwrap() {
                         View::SnippetForm { name, text, keyword, .. } => {
                             lbl(ui, "Name");
-                            let r = ui.add(TextEdit::singleline(name).desired_width(f32::INFINITY).hint_text("e.g. Email signature"));
+                            let r = ui.add(TextEdit::singleline(name).desired_width(f32::INFINITY).hint_text(tr("e.g. Email signature")));
                             if ff {
                                 r.request_focus();
                             }
@@ -6001,7 +6018,7 @@ impl App {
                                 "Text to expand. Supports {clipboard}, {date}, {time}, {cursor}, {uuid}, {argument name=\"x\"}",
                             ));
                             lbl(ui, "Keyword (type it anywhere to expand)");
-                            ui.add(TextEdit::singleline(keyword).desired_width(300.0).hint_text("e.g. !sig"));
+                            ui.add(TextEdit::singleline(keyword).desired_width(300.0).hint_text(tr("e.g. !sig")));
                             lbl(ui, "Save with ⌘↵ · esc to cancel");
                         }
                         View::NotionAdd { title, text, target } => {
@@ -6025,7 +6042,7 @@ impl App {
                                     .id(text_id)
                                     .desired_width(f32::INFINITY)
                                     .desired_rows(9)
-                                    .hint_text("Type or paste. Markdown is supported."),
+                                    .hint_text(tr("Type or paste. Markdown is supported.")),
                             );
                             if ff {
                                 r.request_focus();
@@ -6040,7 +6057,7 @@ impl App {
                                 TextEdit::singleline(title)
                                     .id(Id::new("on_title"))
                                     .desired_width(f32::INFINITY)
-                                    .hint_text("Defaults to the first line"),
+                                    .hint_text(tr("Defaults to the first line")),
                             );
                             if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                                 ui.memory_mut(|m| m.request_focus(text_id));
@@ -6051,7 +6068,7 @@ impl App {
                                     .id(text_id)
                                     .desired_width(f32::INFINITY)
                                     .desired_rows(9)
-                                    .hint_text("Type or paste. Markdown is supported."),
+                                    .hint_text(tr("Type or paste. Markdown is supported.")),
                             );
                             if ff {
                                 r.request_focus();
@@ -6066,7 +6083,7 @@ impl App {
                                     .id(Id::new("od_text"))
                                     .desired_width(f32::INFINITY)
                                     .desired_rows(11)
-                                    .hint_text("Type or paste. Markdown is supported."),
+                                    .hint_text(tr("Type or paste. Markdown is supported.")),
                             );
                             if ff {
                                 r.request_focus();
@@ -6075,7 +6092,7 @@ impl App {
                         }
                         View::QuicklinkForm { name, link, open_with, .. } => {
                             lbl(ui, "Name");
-                            let r = ui.add(TextEdit::singleline(name).desired_width(f32::INFINITY).hint_text("e.g. Search GitHub"));
+                            let r = ui.add(TextEdit::singleline(name).desired_width(f32::INFINITY).hint_text(tr("e.g. Search GitHub")));
                             if ff {
                                 r.request_focus();
                             }
@@ -6086,7 +6103,7 @@ impl App {
                                     .hint_text("https://github.com/search?q={argument name=\"query\"}"),
                             );
                             lbl(ui, "Open with (optional app name)");
-                            ui.add(TextEdit::singleline(open_with).desired_width(300.0).hint_text("e.g. Safari"));
+                            ui.add(TextEdit::singleline(open_with).desired_width(300.0).hint_text(tr("e.g. Safari")));
                             lbl(ui, "Save with ⌘↵ · esc to cancel");
                         }
                         View::Args { defs, values, title, .. } => {
@@ -6131,7 +6148,7 @@ impl App {
                                         ui.set_width(w - chip_w - 36.0);
                                         let r = ui.add(
                                             TextEdit::singleline(prompt)
-                                                .hint_text("Ask anything…")
+                                                .hint_text(tr("Ask anything…"))
                                                 .font(FontId::proportional(15.0))
                                                 .frame(EFrame::NONE)
                                                 .desired_width(f32::INFINITY),
@@ -6171,7 +6188,7 @@ impl App {
                                 }
                                 menu.show(|ui| {
                                     ui.set_min_width(260.0);
-                                    ui.label(RichText::new("Provider").size(11.5).color(pal.sub));
+                                    ui.label(RichText::new(tr("Provider")).size(11.5).color(pal.sub));
                                     for (prov, name) in &active {
                                         if ui.selectable_label(*prov == cur_provider, *name).clicked() {
                                             pick_provider = Some(*prov);
@@ -6179,8 +6196,8 @@ impl App {
                                         }
                                     }
                                     ui.separator();
-                                    ui.label(RichText::new("Model").size(11.5).color(pal.sub));
-                                    if ui.selectable_label(cur_model.is_empty(), "Default").clicked() {
+                                    ui.label(RichText::new(tr("Model")).size(11.5).color(pal.sub));
+                                    if ui.selectable_label(cur_model.is_empty(), tr("Default")).clicked() {
                                         pick_model = Some(String::new());
                                         ui.close();
                                     }
@@ -6197,12 +6214,12 @@ impl App {
                                             ui.label(RichText::new(format!("List unavailable: {e}")).size(11.5).color(pal.sub));
                                         }
                                         _ => {
-                                            ui.label(RichText::new("Loading…").size(11.5).color(pal.sub));
+                                            ui.label(RichText::new(tr("Loading…")).size(11.5).color(pal.sub));
                                             want_models = true;
                                         }
                                     }
                                     ui.separator();
-                                    ui.label(RichText::new("More in Settings → AI (⌘ ,)").size(11.0).color(pal.sub));
+                                    ui.label(RichText::new(tr("More in Settings → AI (⌘ ,)")).size(11.0).color(pal.sub));
                                 });
                             });
                             ui.add_space(6.0);
@@ -6214,9 +6231,9 @@ impl App {
                                     ui.painter().rect_filled(r, 16.0, Color32::from_rgb(168, 110, 255));
                                     ui::paint_icon(&mut icons, ui, r, &Icon::Glyph("sf:sparkles", [168, 110, 255]), pal);
                                     ui.add_space(12.0);
-                                    ui.label(RichText::new("Ask anything").size(20.0).color(pal.text));
+                                    ui.label(RichText::new(tr("Ask anything")).size(20.0).color(pal.text));
                                     ui.label(
-                                        RichText::new("Short answers, in a conversation that lasts while this window is open.")
+                                        RichText::new(tr("Short answers, in a conversation that lasts while this window is open."))
                                             .size(12.5)
                                             .color(pal.sub),
                                     );
@@ -6344,7 +6361,7 @@ impl App {
                                             egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 9)).show(ui, |ui| {
                                                 ui.set_width(w - 28.0);
                                                 ui.horizontal(|ui| {
-                                                    ui.label(RichText::new(*what).size(13.5).color(pal.text));
+                                                    ui.label(RichText::new(tr(what)).size(13.5).color(pal.text));
                                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                                         ui.spacing_mut().item_spacing.x = 4.0;
                                                         for k in keys.split(' ').rev() {
@@ -6364,14 +6381,21 @@ impl App {
                                 ui.spacing_mut().item_spacing.y = 6.0;
                                 ui.add_space(4.0);
                                 ui.label(
-                                    RichText::new(format!("Ferrocast {} is available", release.tag.trim_start_matches('v')))
-                                        .size(20.0)
-                                        .color(pal.text),
+                                    RichText::new(trf(
+                                        "Ferrocast {version} is available",
+                                        &[("version", release.tag.trim_start_matches('v'))],
+                                    ))
+                                    .size(20.0)
+                                    .color(pal.text),
                                 );
-                                ui.label(RichText::new(format!("You have {}.", env!("CARGO_PKG_VERSION"))).size(13.0).color(pal.sub));
+                                ui.label(
+                                    RichText::new(trf("You have {version}.", &[("version", env!("CARGO_PKG_VERSION"))]))
+                                        .size(13.0)
+                                        .color(pal.sub),
+                                );
                                 ui.add_space(8.0);
                                 let notes: String = release.notes.lines().take(40).collect::<Vec<_>>().join("\n");
-                                let notes = if notes.trim().is_empty() { "No release notes.".to_string() } else { notes };
+                                let notes = if notes.trim().is_empty() { tr("No release notes.").into_owned() } else { notes };
                                 group(ui, pal, |ui| {
                                     ui.label(RichText::new(notes).size(13.0).color(pal.text));
                                 });
@@ -6391,7 +6415,7 @@ impl App {
                             });
                         }
                         View::Translation { lang, text } => {
-                            ui.label(RichText::new(format!("Translated to {lang}")).size(15.0).strong().color(pal.text));
+                            ui.label(RichText::new(trf("Translated to {lang}", &[("lang", lang)])).size(15.0).strong().color(pal.text));
                             ui.add_space(6.0);
                             egui::ScrollArea::vertical()
                                 .id_salt("translation")
@@ -6425,7 +6449,11 @@ impl App {
                                     }
                                     ui.add_space(8.0);
                                     ui.label(RichText::new("Ferrocast").size(26.0).color(pal.text));
-                                    ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(13.0).color(pal.sub));
+                                    ui.label(
+                                        RichText::new(trf("Version {version}", &[("version", env!("CARGO_PKG_VERSION"))]))
+                                            .size(13.0)
+                                            .color(pal.sub),
+                                    );
                                     ui.add_space(10.0);
                                     ui.label(
                                         RichText::new(
@@ -6476,14 +6504,14 @@ impl App {
                         View::Confirm { msg, .. } => {
                             ui.add_space(50.0);
                             ui.vertical_centered(|ui| {
-                                ui.label(RichText::new(msg.as_str()).size(20.0).strong().color(pal.text));
+                                ui.label(RichText::new(tr(msg.as_str())).size(20.0).strong().color(pal.text));
                                 ui.add_space(10.0);
-                                ui.label(RichText::new("↵ Confirm      esc Cancel").color(pal.sub));
+                                ui.label(RichText::new(tr("↵ Confirm      esc Cancel")).color(pal.sub));
                             });
                         }
                         View::Alias { name, value, .. } => {
-                            ui.label(RichText::new(format!("Alias for “{name}”")).size(15.0).strong().color(pal.text));
-                            let r = ui.add(TextEdit::singleline(value).desired_width(300.0).hint_text("e.g. gc"));
+                            ui.label(RichText::new(trf("Alias for “{name}”", &[("name", name)])).size(15.0).strong().color(pal.text));
+                            let r = ui.add(TextEdit::singleline(value).desired_width(300.0).hint_text(tr("e.g. gc")));
                             if ff {
                                 r.request_focus();
                             }
@@ -6492,14 +6520,14 @@ impl App {
                         View::Hotkey { id, name, err } => {
                             ui.add_space(30.0);
                             ui.vertical_centered(|ui| {
-                                ui.label(RichText::new(format!("Hotkey for “{name}”")).size(16.0).strong().color(pal.text));
+                                ui.label(RichText::new(trf("Hotkey for “{name}”", &[("name", name)])).size(16.0).strong().color(pal.text));
                                 ui.add_space(8.0);
-                                ui.label(RichText::new("Press the key combination now…").size(20.0).color(pal.accent));
+                                ui.label(RichText::new(tr("Press the key combination now…")).size(20.0).color(pal.accent));
                                 if !err.is_empty() {
                                     ui.label(RichText::new(err.as_str()).color(pal.danger));
                                 }
                                 ui.add_space(8.0);
-                                if id != "__launcher" && ui.button("Clear hotkey").clicked() {
+                                if id != "__launcher" && ui.button(tr("Clear hotkey")).clicked() {
                                     clear_hotkey = true;
                                 }
                                 lbl(ui, "esc to cancel · include ⌘ ⌥ ⌃ or ⇧");
@@ -6508,7 +6536,7 @@ impl App {
                         }
                         View::CreateScript { title, mode } => {
                             lbl(ui, "Title");
-                            let r = ui.add(TextEdit::singleline(title).desired_width(f32::INFINITY).hint_text("e.g. Deploy staging"));
+                            let r = ui.add(TextEdit::singleline(title).desired_width(f32::INFINITY).hint_text(tr("e.g. Deploy staging")));
                             if ff {
                                 r.request_focus();
                             }
@@ -6620,16 +6648,16 @@ impl App {
         sel: &mut usize,
     ) -> Option<&'static ferrocast_core::settings_index::Entry> {
         let ctx = ui.ctx().clone();
-        ui.label(RichText::new("Search results").size(20.0).strong().color(pal.text));
+        ui.label(RichText::new(tr("Search results")).size(20.0).strong().color(pal.text));
         ui.add_space(14.0);
         if hits.is_empty() {
-            let text = format!("No setting matches \u{201c}{}\u{201d}", query.trim());
+            let text = trf("No setting matches “{query}”", &[("query", query.trim())]);
             ui.add_space(26.0);
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new(&text).size(14.5).color(pal.text));
                 ui.add_space(6.0);
                 record_text(&ctx, pal, "note", pal.sub_strong, &[], 1.0);
-                ui.label(RichText::new("Try a shorter word, for example hotkey, model or clipboard.").size(12.0).color(pal.sub_strong));
+                ui.label(RichText::new(tr("Try a shorter word, for example hotkey, model or clipboard.")).size(12.0).color(pal.sub_strong));
             });
             #[cfg(test)]
             ctx.data_mut(|d| d.insert_temp(Id::new("settings-empty-state"), text));
@@ -6664,14 +6692,19 @@ impl App {
             if on {
                 ui.painter().rect_stroke(r.shrink(0.5), 10.0, Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), egui::StrokeKind::Inside);
             }
-            let chip = Rect::from_min_size(Pos2::new(r.min.x + 12.0, r.center().y - 10.0), Vec2::new(74.0, 20.0));
+            // the chip names the tab; it grows for a long name ("Integraciones")
+            let tab_name = tr(SETTINGS_TABS[en.tab].0);
+            let chip_w =
+                (ui.painter().layout_no_wrap(tab_name.to_string(), FontId::proportional(11.0), pal.sub_strong).size().x + 16.0).max(74.0);
+            let chip = Rect::from_min_size(Pos2::new(r.min.x + 12.0, r.center().y - 10.0), Vec2::new(chip_w, 20.0));
             ui.painter().rect_filled(chip, 6.0, pal.bg.gamma_multiply(0.55));
-            ui.painter().text(chip.center(), Align2::CENTER_CENTER, SETTINGS_TABS[en.tab].0, FontId::proportional(11.0), pal.sub_strong);
+            ui.painter().text(chip.center(), Align2::CENTER_CENTER, tab_name, FontId::proportional(11.0), pal.sub_strong);
             // the title, its match in the accent colour
             let font = FontId::proportional(13.5);
             let mut job = egui::text::LayoutJob::default();
-            let chars: Vec<char> = en.title.chars().collect();
-            let (ms, ml) = ferrocast_core::settings_index::match_range(en.title, query).unwrap_or((0, 0));
+            let shown = tr(en.title);
+            let chars: Vec<char> = shown.chars().collect();
+            let (ms, ml) = ferrocast_core::settings_index::match_range(&shown, query).unwrap_or((0, 0));
             // the match is accented only when it is a proper part of the title: a title that is
             // the whole match stays in the normal colour
             let whole = ms == 0 && ml == chars.len();
@@ -6954,7 +6987,7 @@ impl App {
                         m.set_focus_lock_filter(id, egui::EventFilter { vertical_arrows: true, ..Default::default() });
                     });
                     let (r, _) = ui.allocate_exact_size(Vec2::new(side.width(), 34.0), Sense::hover());
-                    let resp = ui.interact(r, id, Sense::click()).on_hover_text(format!("{name}  ⌘{}", i + 1));
+                    let resp = ui.interact(r, id, Sense::click()).on_hover_text(format!("{}  ⌘{}", tr(name), i + 1));
                     record_ctl(&ctx, "sidebar", resp.id, r, true);
                     #[cfg(test)]
                     marks.0.push((name.to_string(), r));
@@ -6991,7 +7024,7 @@ impl App {
                     ui.painter().text(
                         Pos2::new(r.min.x + 38.0, r.center().y),
                         Align2::LEFT_CENTER,
-                        name,
+                        elide(ui.painter(), &tr(name), FontId::proportional(13.5), r.width() - 38.0 - 6.0),
                         FontId::proportional(13.5),
                         if on { pal.text } else { pal.sub_strong },
                     );
@@ -7050,7 +7083,7 @@ impl App {
                 if searching {
                     clicked_result = self.draw_settings_results(ui, pal, &query, &hits, &mut sel);
                 } else {
-                ui.label(RichText::new(SETTINGS_TABS[tab].0).size(20.0).strong().color(pal.text));
+                ui.label(RichText::new(tr(SETTINGS_TABS[tab].0)).size(20.0).strong().color(pal.text));
                 ui.add_space(14.0);
                 match tab {
                     0 => {
@@ -7070,7 +7103,7 @@ impl App {
                                 }
                                 let shown = active_theme.as_ref().map_or("None", |t| t.name.as_str());
                                 field_combo(ui, pal, "custom-theme", shown, 150.0, |ui| {
-                                    if ui.selectable_label(active_theme.is_none(), "None").clicked() {
+                                    if ui.selectable_label(active_theme.is_none(), tr("None")).clicked() {
                                         theme_act.push(ThemeAct::Select(None));
                                     }
                                     for t in &themes_all {
@@ -7100,22 +7133,40 @@ impl App {
                             });
                             row(ui, pal, "Compact mode", "Show only the search bar until you type.", |ui| toggle(ui, pal, &mut s.compact_mode));
                             row(ui, pal, "Launch at login", "Start Ferrocast when you sign in to your Mac.", |ui| toggle(ui, pal, &mut s.launch_at_login));
+                            row(ui, pal, "Language", "The language of Ferrocast. System follows macOS; this Mac only, not synced.", |ui| {
+                                use ferrocast_core::i18n::Lang;
+                                let current = ferrocast_core::i18n::Lang::ALL.into_iter().find(|l| l.code() == s.language);
+                                let shown = current.map_or_else(|| tr("System").to_string(), |l| l.native_name().to_string());
+                                field_combo(ui, pal, "language", &shown, 170.0, |ui| {
+                                    if ui.selectable_label(current.is_none(), tr("System")).clicked() {
+                                        s.language = "system".into();
+                                    }
+                                    for l in Lang::ALL {
+                                        if ui.selectable_label(current == Some(l), l.native_name()).clicked() {
+                                            s.language = ferrocast_core::i18n::setting_value(l).into();
+                                        }
+                                    }
+                                });
+                            });
                             row(ui, pal, "Drop wheel", "While dragging files, tap a key to open a wheel of conversions or actions.", |ui| toggle(ui, pal, &mut s.drop_wheel));
                             row_disabled_if(ui, wheel_off, |ui| {
                                 row(ui, pal, "Convert wheel key", "Tap during a file drag for conversions.", |ui| {
-                                    let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                    let labels = modifier_labels();
+                                    let opts = modifier_options(&labels);
                                     segmented(ui, pal, &mut s.wheel_convert_key, &opts);
                                 });
                             });
                             row_disabled_if(ui, wheel_off, |ui| {
                                 row(ui, pal, "Tools wheel key", "Tap during a file drag for compress, crop, redact…", |ui| {
-                                    let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                    let labels = modifier_labels();
+                                    let opts = modifier_options(&labels);
                                     segmented(ui, pal, &mut s.wheel_tools_key, &opts);
                                 });
                             });
                             row_disabled_if(ui, wheel_off, |ui| {
                                 row(ui, pal, "Actions wheel key", "Tap during a file drag for copy, move, AirDrop…", |ui| {
-                                    let opts: Vec<(String, &str)> = ["Shift", "Control", "Option", "Command"].map(|v| (v.to_string(), v)).to_vec();
+                                    let labels = modifier_labels();
+                                    let opts = modifier_options(&labels);
                                     segmented(ui, pal, &mut s.wheel_actions_key, &opts);
                                 });
                             });
@@ -7156,16 +7207,15 @@ impl App {
                                 );
                             });
                             let checked = match s.update_last_check {
-                                Some(t) => format!("Checked {}", services::ago(services::now_secs() - t)),
-                                None => "Checked never".to_string(),
+                                Some(t) => trf("Checked {when}", &[("when", &services::ago(services::now_secs() - t))]),
+                                None => tr("Checked never").into_owned(),
                             };
                             let desc = match &update_available {
-                                Some(r) => format!(
-                                    "Version {} · {checked} · {} available",
-                                    env!("CARGO_PKG_VERSION"),
-                                    r.tag.trim_start_matches('v')
+                                Some(r) => trf(
+                                    "Version {version} · {checked} · {new} available",
+                                    &[("version", env!("CARGO_PKG_VERSION")), ("checked", &checked), ("new", r.tag.trim_start_matches('v'))],
                                 ),
-                                None => format!("Version {} · {checked}", env!("CARGO_PKG_VERSION")),
+                                None => trf("Version {version} · {checked}", &[("version", env!("CARGO_PKG_VERSION")), ("checked", &checked)]),
                             };
                             row(ui, pal, "Version", &desc, |ui| {
                                 if update_available.is_some() && accent_btn(ui, pal, "Install") {
@@ -7408,7 +7458,7 @@ impl App {
                                 _ if apple => "Translations run on this Mac with Apple Translation, without sending the text anywhere.".to_string(),
                                 _ if s.translate_apple => "Apple Translation needs macOS 26, so the chat provider translates here.".to_string(),
                                 None => "Translating dragged text uses the chat provider and its model.".to_string(),
-                                Some(p) => format!("Translations use {} with the model and sign-in set for it.", ferrocast_core::translate::provider_name(p)),
+                                Some(p) => trf("Translations use {provider} with the model and sign-in set for it.", &[("provider", ferrocast_core::translate::provider_name(p))]),
                             };
                             // readiness of the engine that will translate (the chat's when "Same as chat")
                             let eff = s.translate_provider.unwrap_or(s.ai_provider);
@@ -7518,7 +7568,7 @@ impl App {
                             note(ui, pal, "Each language is checked as a pair with your Mac's system language (with English for the system language itself). Translating from another language needs that one downloaded too.");
                         } else if s.translate_provider.is_none() && !s.translate_apple {
                             ui.add_space(10.0);
-                            note(ui, pal, &format!("Uses the chat provider and model: {}", ferrocast_core::translate::engine_label(&s)));
+                            note(ui, pal, &trf("Uses the chat provider and model: {engine}", &[("engine", &ferrocast_core::translate::engine_label(&s))]));
                         }
                         ui.add_space(10.0);
                         note(ui, pal, "Credentials and server address come from the AI tab; this tab only picks which provider and model translate.");
@@ -7561,7 +7611,7 @@ impl App {
                                 row(ui, pal, "Camera device", "Which camera to record. Default uses the one macOS picks.", |ui| {
                                     let shown = crate::record_ctl::device_shown(&cams, &s.capture.camera_id, known);
                                     field_combo(ui, pal, "capture_camera_device", &shown, 190.0, |ui| {
-                                        if ui.selectable_label(s.capture.camera_id.is_empty(), "Default").clicked() {
+                                        if ui.selectable_label(s.capture.camera_id.is_empty(), tr("Default")).clicked() {
                                             s.capture.camera_id.clear();
                                         }
                                         for (id, name) in &cams {
@@ -7579,7 +7629,7 @@ impl App {
                                 row(ui, pal, "Microphone device", "Which microphone to record. Default uses the one macOS picks.", |ui| {
                                     let shown = crate::record_ctl::device_shown(&mics, &s.capture.mic_id, known);
                                     field_combo(ui, pal, "capture_mic_device", &shown, 190.0, |ui| {
-                                        if ui.selectable_label(s.capture.mic_id.is_empty(), "Default").clicked() {
+                                        if ui.selectable_label(s.capture.mic_id.is_empty(), tr("Default")).clicked() {
                                             s.capture.mic_id.clear();
                                         }
                                         for (id, name) in &mics {
@@ -7609,7 +7659,7 @@ impl App {
                             match &devices_state {
                                 crate::record_ctl::DevicesState::Failed(why) => {
                                     ui.add_space(4.0);
-                                    note(ui, pal, &format!("Devices are not listed: {why}"));
+                                    note(ui, pal, &trf("Devices are not listed: {why}", &[("why", why)]));
                                 }
                                 crate::record_ctl::DevicesState::Loading | crate::record_ctl::DevicesState::Idle => {
                                     ui.add_space(4.0);
@@ -7634,7 +7684,7 @@ impl App {
                                     match s.hotkey(&id) {
                                         Some(h) => keycap(ui, pal, &services::hotkey_label(h)),
                                         None => {
-                                            ui.label(RichText::new("Not set").size(12.0).color(pal.sub_strong));
+                                            ui.label(RichText::new(tr("Not set")).size(12.0).color(pal.sub_strong));
                                         }
                                     }
                                 });
@@ -7785,15 +7835,15 @@ impl App {
                                 }
                                 field_combo(ui, pal, "obsidian_vault", &shown, 200.0, |ui| match &obs_vaults {
                                     None => {
-                                        ui.label(RichText::new("Looking for vaults…").size(12.5).color(pal.sub));
+                                        ui.label(RichText::new(tr("Looking for vaults…")).size(12.5).color(pal.sub));
                                     }
                                     Some(l) if l.is_empty() => {
-                                        ui.label(RichText::new("No vaults found").size(12.5).color(pal.sub));
+                                        ui.label(RichText::new(tr("No vaults found")).size(12.5).color(pal.sub));
                                     }
                                     Some(l) => {
                                         for (i, v) in l.iter().enumerate() {
                                             let open = obs_open.as_deref() == Some(v.path.as_path());
-                                            let label = if open { format!("{} · open", v.name) } else { v.name.clone() };
+                                            let label = if open { trf("{name} · open", &[("name", &v.name)]) } else { v.name.clone() };
                                             let on = obs_vault.as_ref().is_some_and(|c| c.path == v.path);
                                             if ui.selectable_label(on, label).clicked() {
                                                 obs_pick = Some(i);
@@ -7844,7 +7894,7 @@ impl App {
                                 let editing = ext_edit.as_ref().is_some_and(|e| e.ext == m.name);
                                 let has_prefs = !m.all_preferences().is_empty();
                                 let n = m.commands.len();
-                                let desc = format!("{n} command{}", if n == 1 { "" } else { "s" });
+                                let desc = trn("{n} command", "{n} commands", n as u64);
                                 let scrolled_id = Id::new("ext-prefs-scrolled");
                                 if editing {
                                     // first frame of an open form: bring it into view (it can be far down a long list)
@@ -7884,7 +7934,7 @@ impl App {
                                             egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| row_desc(ui, pal, &edit.notice));
                                         }
                                         for p in m.all_preferences() {
-                                            let hint = if p.required { format!("{} (required)", p.title) } else { p.title.clone() };
+                                            let hint = if p.required { trf("{title} (required)", &[("title", &p.title)]) } else { p.title.clone() };
                                             row(ui, pal, &hint, &p.description, |ui| match p.input() {
                                                 PrefInput::Checkbox => {
                                                     let mut v = edit.values.get(&p.name).and_then(|v| v.as_bool()).unwrap_or(false);
@@ -8013,7 +8063,7 @@ impl App {
                             });
                         });
                         for issue in &hotkey_issues {
-                            note(ui, pal, &format!("⚠ Shortcut: {issue}"));
+                            note(ui, pal, &trf("⚠ Shortcut: {issue}", &[("issue", issue)]));
                         }
                         ui.add_space(14.0);
                         section(ui, pal, "Data");
@@ -8453,6 +8503,16 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
 /// Note under the Sync rows in Settings.
 pub(crate) const SYNC_NOTE: &str = "Off by default. Hotkeys sync; script folders, the Obsidian vault, the screenshot and recordings folders, login item, camera and microphone choice, update preferences, the window tiling switch and its per-display layouts, and macOS permissions stay on each Mac. API keys in the Keychain do not sync.";
 
+/// The names of the four modifier keys the wheel settings offer, in the interface language.
+fn modifier_labels() -> [String; 4] {
+    ["Shift", "Control", "Option", "Command"].map(|k| ferrocast_core::i18n::trc("modifier key", k))
+}
+
+/// `(stored value, shown name)` of the modifier keys, for `segmented`.
+fn modifier_options(labels: &[String; 4]) -> Vec<(String, &str)> {
+    ["Shift", "Control", "Option", "Command"].iter().zip(labels).map(|(v, l)| (v.to_string(), l.as_str())).collect()
+}
+
 /// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Capture = 5, Power = 6..10.
 const SETTINGS_TABS: [(&str, &str); 10] = [
     ("General", "sf:gearshape"),
@@ -8576,7 +8636,7 @@ fn draw_blocks(ui: &mut Ui, pal: &Palette, blocks: &[ferrocast_core::obsidian::B
 
 fn section(ui: &mut Ui, pal: &Palette, title: &str) {
     record_text(ui.ctx(), pal, "section", pal.sub_strong, &[], ui.opacity());
-    ui.label(RichText::new(title).size(12.5).color(pal.sub_strong));
+    ui.label(RichText::new(tr(title)).size(12.5).color(pal.sub_strong));
     ui.add_space(6.0);
 }
 
@@ -8591,13 +8651,13 @@ fn card_note(ui: &mut Ui, pal: &Palette, text: &str) {
     egui::Frame::new().inner_margin(egui::Margin { left: 14, right: 14, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
         record_text(ui.ctx(), pal, "card-note", pal.sub_strong, &[pal.field], ui.opacity());
-        ui.label(RichText::new(text).size(12.0).color(pal.sub_strong));
+        ui.label(RichText::new(tr(text)).size(12.0).color(pal.sub_strong));
     });
 }
 
 fn note(ui: &mut Ui, pal: &Palette, text: &str) {
     record_text(ui.ctx(), pal, "note", pal.sub_strong, &[], ui.opacity());
-    ui.label(RichText::new(text).size(12.0).color(pal.sub_strong));
+    ui.label(RichText::new(tr(text)).size(12.0).color(pal.sub_strong));
 }
 
 fn group(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui)) {
@@ -8668,6 +8728,7 @@ const CONTROL_H: f32 = 28.0;
 
 /// The title line of a row: the title, and a status chip right after it when there is one.
 fn row_title(ui: &mut Ui, pal: &Palette, title: &str, chip: Option<(StatusKind, &str)>) {
+    let title = &*tr(title);
     record_text(ui.ctx(), pal, if ui.is_enabled() { "title" } else { "title-disabled" }, pal.text, &[pal.field], ui.opacity());
     match chip {
         None => {
@@ -8686,7 +8747,7 @@ fn row_title(ui: &mut Ui, pal: &Palette, title: &str, chip: Option<(StatusKind, 
 /// The description line of a Settings row.
 fn row_desc(ui: &mut Ui, pal: &Palette, desc: &str) {
     record_text(ui.ctx(), pal, if ui.is_enabled() { "desc" } else { "desc-disabled" }, pal.sub_strong, &[pal.field], ui.opacity());
-    ui.label(RichText::new(desc).size(12.0).color(pal.sub_strong));
+    ui.label(RichText::new(tr(desc)).size(12.0).color(pal.sub_strong));
 }
 
 /// One adaptive Settings row. The text column takes what the control leaves (up to
@@ -8715,7 +8776,7 @@ fn row_flow(
     let stacked = force_stack
         || known.is_some_and(|cw| {
             let text_w = inner_w - cw - 16.0;
-            text_w < MIN_TEXT_W || (desc.chars().count() as f32 * 6.0 / text_w).ceil() > 3.0
+            text_w < MIN_TEXT_W || (tr(desc).chars().count() as f32 * 6.0 / text_w).ceil() > 3.0
         });
     let mut used = Rect::NOTHING;
     let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, look.pad_y)).show(ui, |ui| {
@@ -8797,9 +8858,9 @@ fn row_body(ui: &mut Ui, pal: &Palette, look: RowLook, title: &str, desc: &str, 
                 ui.set_min_width(text_w);
                 ui.set_max_width(text_w);
                 ui.spacing_mut().item_spacing.y = 2.0;
-                ui.label(RichText::new(title).size(13.5).color(pal.text));
+                ui.label(RichText::new(tr(title)).size(13.5).color(pal.text));
                 if look.desc {
-                    ui.label(RichText::new(desc).size(11.5).color(pal.sub));
+                    ui.label(RichText::new(tr(desc)).size(11.5).color(pal.sub));
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -8928,7 +8989,7 @@ fn model_picker_with(
         if let Some(Some(Err(e))) = state {
             ui.label(RichText::new(format!("List unavailable: {e}")).size(11.5).color(pal.sub));
         }
-        let r = ui.selectable_label(custom, "Custom…");
+        let r = ui.selectable_label(custom, tr("Custom…"));
         #[cfg(test)]
         ui.ctx()
             .data_mut(|d| d.get_temp_mut_or_default::<Vec<(String, Rect)>>(Id::new("model-items")).push(("Custom…".to_string(), r.rect)));
@@ -8961,8 +9022,8 @@ fn row_stacked_impl(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control
     let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 11)).show(ui, |ui| {
         ui.set_width(w - 28.0);
         ui.spacing_mut().item_spacing.y = 2.0;
-        ui.label(RichText::new(title).size(13.5).color(pal.text));
-        ui.label(RichText::new(desc).size(11.5).color(pal.sub));
+        ui.label(RichText::new(tr(title)).size(13.5).color(pal.text));
+        ui.label(RichText::new(tr(desc)).size(11.5).color(pal.sub));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
@@ -9189,7 +9250,7 @@ fn search_field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint:
                     .id(id)
                     .desired_width(width)
                     .font(FontId::proportional(12.5))
-                    .hint_text(RichText::new(hint).color(pal.sub_strong))
+                    .hint_text(RichText::new(tr(hint)).color(pal.sub_strong))
                     .margin(egui::Margin { left: 28, right: 24, top: 5, bottom: 5 })
                     .min_size(Vec2::new(0.0, FIELD_H))
                     .vertical_align(egui::Align::Center),
@@ -9213,7 +9274,7 @@ fn field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, 
                 TextEdit::singleline(text)
                     .desired_width(width)
                     .font(FontId::proportional(12.5))
-                    .hint_text(RichText::new(hint).color(pal.sub_strong))
+                    .hint_text(RichText::new(tr(hint)).color(pal.sub_strong))
                     .password(password)
                     .margin(egui::Margin::symmetric(8, 5))
                     .min_size(Vec2::new(0.0, FIELD_H))
@@ -9320,6 +9381,7 @@ fn devices_chip(state: &crate::record_ctl::DevicesState) -> (StatusKind, String)
 }
 
 fn small_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
+    let label = &*tr(label);
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.text);
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 20.0, 28.0), Sense::click());
     record_ctl(ui.ctx(), "small_btn", resp.id, r, ui.is_enabled());
@@ -9362,6 +9424,7 @@ const BAR_GLYPH_W: f32 = 12.0;
 const BAR_PAD: f32 = 11.0;
 
 fn bar_btn_w(ui: &Ui, label: &str, glyph: BarGlyph, size: f32) -> f32 {
+    let label = &*tr(label);
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(size), Color32::WHITE);
     let lead = if glyph == BarGlyph::None { 0.0 } else { BAR_GLYPH_W + 6.0 };
     (g.size().x + lead + 2.0 * BAR_PAD).ceil()
@@ -9428,6 +9491,7 @@ fn bar_btn(
     enabled: bool,
 ) -> bool {
     let resp = ui.interact(r, ui.id().with(("bar-btn", label)), if enabled { Sense::click() } else { Sense::hover() });
+    let label = &*tr(label);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     record_ctl(ui.ctx(), kind, resp.id, r, enabled);
     focus_ring(ui, pal, &resp, r);
@@ -9559,8 +9623,9 @@ fn chip_clickable(key: &str) -> bool {
 /// when disabled, because the editor's icon buttons are always available.
 fn icon_btn(ui: &mut Ui, pal: &Palette, r: Rect, label: &str, glyph: BarGlyph, enabled: bool) -> bool {
     let resp = ui.interact(r, ui.id().with(("icon-btn", label)), if enabled { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     record_ctl(ui.ctx(), if label == "Back" { "back_btn" } else { "step_btn" }, resp.id, r, enabled);
+    let label = &*tr(label);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     focus_ring(ui, pal, &resp, r);
     let hover = enabled && resp.hovered();
     if hover {
@@ -9579,6 +9644,7 @@ fn accent_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
 
 /// `accent_btn`, also returning the button's rect.
 fn accent_btn_r(ui: &mut Ui, pal: &Palette, label: &str) -> (bool, Rect) {
+    let label = &*tr(label);
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.on_accent);
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 24.0, 28.0), Sense::click());
     record_ctl(ui.ctx(), "accent_btn", resp.id, r, ui.is_enabled());
@@ -9591,6 +9657,7 @@ fn accent_btn_r(ui: &mut Ui, pal: &Palette, label: &str) -> (bool, Rect) {
 }
 
 fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
+    let label = &*tr(label);
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), if on { pal.on_accent } else { pal.text });
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 18.0, 28.0), Sense::click());
     record_ctl(ui.ctx(), "pill", resp.id, r, ui.is_enabled());
@@ -9633,6 +9700,9 @@ fn seg_index(ui: &mut Ui, pal: &Palette, value: &mut usize, labels: &[&str]) {
 /// every cell. `min_w` and `pad` set the cell width (widest label + `pad`, at least `min_w`);
 /// Settings uses 56 and 22, narrow panels can ask for less.
 fn segmented_bar(ui: &mut Ui, pal: &Palette, sel: Option<usize>, labels: &[&str], min_w: f32, pad: f32) -> (Option<usize>, Vec<Rect>) {
+    let translated: Vec<std::borrow::Cow<str>> = labels.iter().map(|l| tr(l)).collect();
+    let labels: Vec<&str> = translated.iter().map(|l| &**l).collect();
+    let labels = &labels[..];
     let seg_w = labels
         .iter()
         .map(|l| ui.painter().layout_no_wrap(l.to_string(), FontId::proportional(12.0), pal.text).size().x + pad)
@@ -9836,6 +9906,7 @@ fn status_color(pal: &Palette, kind: StatusKind) -> Color32 {
 
 /// A small status pill: a dot and a short sentence-case text, tinted by `kind`.
 fn status_chip(ui: &mut Ui, pal: &Palette, kind: StatusKind, text: &str) {
+    let text = &*tr(text);
     let c = status_color(pal, kind);
     let g = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(11.5), c);
     let (r, _) = ui.allocate_exact_size(Vec2::new(g.size().x + 26.0, 20.0), Sense::hover());
@@ -9866,6 +9937,7 @@ fn row_disabled_if(ui: &mut Ui, off: bool, add: impl FnOnce(&mut Ui)) {
 /// A quiet text button: `sub_strong` text with an optional 12 pt icon; on hover (or keyboard
 /// focus) the text turns accent and is underlined. 28 pt tall, so it is as easy to hit as a field.
 fn text_btn(ui: &mut Ui, pal: &Palette, label: &str, icon: Option<egui::TextureId>) -> egui::Response {
+    let label = &*tr(label);
     let font = FontId::proportional(12.0);
     let g = ui.painter().layout_no_wrap(label.to_string(), font.clone(), pal.sub_strong);
     let icon_w = if icon.is_some() { 17.0 } else { 0.0 };
@@ -9897,8 +9969,8 @@ fn empty_state(ui: &mut Ui, pal: &Palette, tab: usize, title: &str, line: &str, 
         ui.set_width(ui.available_width());
         ui.vertical_centered(|ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
-            ui.label(RichText::new(title).size(14.5).color(pal.text));
-            ui.label(RichText::new(line).size(12.0).color(pal.sub));
+            ui.label(RichText::new(tr(title)).size(14.5).color(pal.text));
+            ui.label(RichText::new(tr(line)).size(12.0).color(pal.sub));
             ui.add_space(10.0);
             let (c, r) = accent_btn_r(ui, pal, button);
             clicked = c;
@@ -10029,8 +10101,12 @@ impl App {
             || s.notes_escape_loses_focus != self.settings.notes_escape_loses_focus
             || s.notes_menu_bar_button != self.settings.notes_menu_bar_button;
         let sync_turned_on = s.sync_enabled && !self.settings.sync_enabled;
+        let language_changed = s.language != self.settings.language;
         self.settings = s;
         self.save_settings();
+        if language_changed {
+            self.apply_language();
+        }
         if ext_changed {
             self.ext_settings_changed();
         }
@@ -10208,7 +10284,7 @@ fn theme_editor(ui: &mut Ui, pal: &Palette, e: &mut ferrocast_core::themes::Cust
         ui.add_space(2.0);
     }
     ui.add_space(6.0);
-    ui.label(RichText::new("Preview").size(12.0).color(pal.sub_strong));
+    ui.label(RichText::new(tr("Preview")).size(12.0).color(pal.sub_strong));
     ui.add_space(4.0);
     theme_preview(ui, e);
 }

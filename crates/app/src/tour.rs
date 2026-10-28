@@ -12,6 +12,8 @@ use std::cell::RefCell;
 pub(super) const SLIDES: usize = 9;
 pub(super) const PERMS_SLIDE: usize = 7;
 const LAST: usize = SLIDES - 1;
+/// Space kept free at the right edge of a slide's content.
+const TEXT_MARGIN: f32 = 24.0;
 
 /// Time the old slide takes to leave and the new one to arrive.
 const TRANSITION: f64 = 0.38;
@@ -236,12 +238,44 @@ impl Scene<'_> {
         col.gamma_multiply(self.a(i))
     }
 
+    /// Font size that makes the widest line of `s` fit between `x` and the slide's right margin
+    /// (a translation can be longer than the English text the layout was drawn for). Never below 70 %.
+    fn fit(&self, x: f32, s: &str, size: f32) -> f32 {
+        let avail = (self.c.width() - x - TEXT_MARGIN).max(40.0);
+        let widest = s.split('\n').map(|l| self.raw_w(l, size)).fold(0.0, f32::max);
+        if widest > avail {
+            (size * avail / widest).max(size * 0.7)
+        } else {
+            size
+        }
+    }
+
     fn txt(&self, i: usize, x: f32, y: f32, s: &str, size: f32, col: Color32) -> Rect {
-        self.p.text(self.at(x, y, i), Align2::LEFT_TOP, s, FontId::proportional(size), self.ink(col, i))
+        let s = &*tr(s);
+        let size = self.fit(x, s, size);
+        let r = self.p.text(self.at(x, y, i), Align2::LEFT_TOP, s, FontId::proportional(size), self.ink(col, i));
+        self.record_extent(r);
+        r
+    }
+
+    /// Tests read the right-most edge drawn on a slide (relative to the content area).
+    fn record_extent(&self, r: Rect) {
+        #[cfg(test)]
+        {
+            let right = r.max.x - self.c.min.x - self.dx;
+            self.ui.ctx().data_mut(|d| {
+                let m = d.get_temp_mut_or_default::<f32>(Id::new("tour-right-extent"));
+                *m = m.max(right);
+            });
+        }
+        #[cfg(not(test))]
+        let _ = r;
     }
 
     /// Headline: no bold face is loaded, so the strokes are thickened with a second pass.
     fn headline(&self, i: usize, x: f32, y: f32, s: &str, size: f32, col: Color32) -> Rect {
+        let s = &*tr(s);
+        let size = self.fit(x, s, size);
         let pos = self.at(x, y, i);
         let font = FontId::proportional(size);
         let ink = self.ink(col, i);
@@ -255,7 +289,9 @@ impl Scene<'_> {
             bottom = r.max.y;
             right = right.max(r.max.x);
         }
-        Rect::from_min_max(pos, Pos2::new(right, bottom))
+        let r = Rect::from_min_max(pos, Pos2::new(right, bottom));
+        self.record_extent(r);
+        r
     }
 
     /// Wrapped paragraph; returns its rect.
@@ -263,13 +299,18 @@ impl Scene<'_> {
     fn para(&self, i: usize, x: f32, y: f32, w: f32, s: &str, size: f32, col: Color32) -> Rect {
         let pos = self.at(x, y, i);
         let ink = self.ink(col, i);
-        let g = self.p.layout(s.to_string(), FontId::proportional(size), ink, w);
+        let g = self.p.layout(tr(s).into_owned(), FontId::proportional(size), ink, w);
         let r = Rect::from_min_size(pos, g.size());
         self.p.galley(pos, g, ink);
         r
     }
 
     fn text_w(&self, s: &str, size: f32) -> f32 {
+        self.raw_w(&tr(s), size)
+    }
+
+    /// Width of `s` as given (already translated).
+    fn raw_w(&self, s: &str, size: f32) -> f32 {
         self.p.layout_no_wrap(s.to_string(), FontId::proportional(size), Color32::WHITE).size().x
     }
 
@@ -333,7 +374,8 @@ impl Scene<'_> {
     }
 
     fn pill(&self, i: usize, x: f32, y: f32, label: &str, size: f32) -> f32 {
-        let w = self.text_w(label, size) + 20.0;
+        let label = &*tr(label);
+        let w = self.raw_w(label, size) + 20.0;
         let r = self.rect(x, y, w, size + 12.0, i);
         let a = self.a(i);
         self.p.rect_filled(r, r.height() / 2.0, self.pal.field.gamma_multiply(2.0 * a));
@@ -346,18 +388,22 @@ impl Scene<'_> {
             Status::Ok => GREEN,
             Status::Warn => AMBER,
         };
+        let label = &*tr(label);
         let pos = self.at(x, y, i);
         self.p.circle_filled(pos + Vec2::new(4.0, 8.0), 3.5, self.ink(col, i));
         let r = self.p.text(pos + Vec2::new(14.0, 0.0), Align2::LEFT_TOP, label, FontId::proportional(12.5), self.ink(col, i));
+        self.record_extent(r);
         r.max.x - pos.x
     }
 
     /// A button; `primary` is the red one. Returns its width (relative layout) and pushes `action` when clicked.
     #[allow(clippy::too_many_arguments)]
     fn button(&self, i: usize, x: f32, y: f32, label: &str, primary: bool, on_accent: bool, action: Action) -> f32 {
+        let label = &*tr(label);
         let size = 12.5;
-        let w = self.text_w(label, size) + 24.0;
+        let w = self.raw_w(label, size) + 24.0;
         let r = self.rect(x, y, w, 30.0, i);
+        self.record_extent(r);
         let a = self.a(i);
         let (hover, down) = if self.interactive && a > 0.99 {
             let resp = self
@@ -542,7 +588,7 @@ fn slide_record(s: &Scene) {
         let r = s.rect(x, 342.0, w, 26.0, 4);
         let a = s.a(4);
         s.p.rect_stroke(r, 13.0, Stroke::new(1.0, pal.border.gamma_multiply(a)), StrokeKind::Inside);
-        s.p.text(r.center(), Align2::CENTER_CENTER, name, FontId::proportional(12.0), pal.text.gamma_multiply(a));
+        s.p.text(r.center(), Align2::CENTER_CENTER, tr(name), FontId::proportional(12.0), pal.text.gamma_multiply(a));
         x += w + 6.0;
     }
     let rx = 508.0;
@@ -811,7 +857,7 @@ impl App {
                 ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             painter.text(hit.center(), egui::Align2::CENTER_CENTER, glyph, FontId::proportional(18.0), col);
-            let resp = resp.on_hover_text(if by < 0 { "Previous  ←" } else { "Next  →" });
+            let resp = resp.on_hover_text(tr(if by < 0 { "Previous  ←" } else { "Next  →" }));
             if enabled && resp.clicked() {
                 step = by;
             }

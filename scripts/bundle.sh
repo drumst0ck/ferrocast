@@ -63,6 +63,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>dev.ferrocast.launcher</string>
   <key>CFBundleExecutable</key><string>ferrocast</string>
   <key>CFBundleIconFile</key><string>Ferrocast</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>es</string><string>de</string><string>fr</string><string>pt-BR</string><string>ja</string><string>zh-Hans</string></array>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${version}</string>
   <key>CFBundleVersion</key><string>${version}</string>

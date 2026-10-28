@@ -1,5 +1,6 @@
 //! Background services: clipboard monitor, snippet expansion, hotkeys, tray, scripts.
 
+use ferrocast_core::i18n::{tr, trf};
 use ferrocast_core::models::*;
 use ferrocast_core::placeholders::{self, Target};
 use ferrocast_core::script::{self, ScriptCommand};
@@ -488,10 +489,10 @@ pub struct Shared {
 /// `just now`, `5 min ago`, `3 h ago`, `2 d ago`.
 pub fn ago(secs: i64) -> String {
     match secs {
-        s if s < 60 => "just now".into(),
-        s if s < 3600 => format!("{} min ago", s / 60),
-        s if s < 86400 => format!("{} h ago", s / 3600),
-        s => format!("{} d ago", s / 86400),
+        s if s < 60 => tr("just now").into_owned(),
+        s if s < 3600 => trf("{n} min ago", &[("n", &(s / 60).to_string())]),
+        s if s < 86400 => trf("{n} h ago", &[("n", &(s / 3600).to_string())]),
+        s => trf("{n} d ago", &[("n", &(s / 86400).to_string())]),
     }
 }
 
@@ -1091,22 +1092,37 @@ pub fn set_tray_tiling(tray: Option<&tray_icon::TrayIcon>, state: Option<bool>, 
     }
 }
 
+/// "2 Main + stack" with the layout name in the interface language.
+fn tr_layout_label(label: &str) -> String {
+    match label.split_once(' ') {
+        Some((n, name)) => format!("{n} {}", tr(name)),
+        None => label.to_string(),
+    }
+}
+
+/// Rebuild the menu bar menu (the interface language changed).
+pub fn refresh_tray_menu(tray: &tray_icon::TrayIcon, recording: bool) {
+    if let Some(menu) = build_tray_menu(recording) {
+        tray.set_menu(Some(Box::new(menu)));
+    }
+}
+
 fn build_tray_menu(recording: bool) -> Option<tray_icon::menu::Menu> {
     use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
     let menu = Menu::new();
     for (id, label) in tray_menu_items(recording, tray_tiling()) {
-        menu.append(&MenuItem::with_id(id, label, true, None)).ok()?;
+        menu.append(&MenuItem::with_id(id, tr(label), true, None)).ok()?;
     }
     if tray_tiling().is_some() {
         use tray_icon::menu::{CheckMenuItem, Submenu};
-        let sub = Submenu::new("Tiling Layout", true);
+        let sub = Submenu::new(tr("Tiling Layout"), true);
         for (id, label, checked) in tray_layout_items(TRAY_LAYOUT.load(std::sync::atomic::Ordering::Relaxed)) {
-            sub.append(&CheckMenuItem::with_id(id, label, true, checked, None)).ok()?;
+            sub.append(&CheckMenuItem::with_id(id, tr_layout_label(&label), true, checked, None)).ok()?;
         }
         menu.append(&sub).ok()?;
     }
     menu.append(&PredefinedMenuItem::separator()).ok()?;
-    menu.append(&MenuItem::with_id("quit", "Quit Ferrocast", true, None)).ok()?;
+    menu.append(&MenuItem::with_id("quit", tr("Quit Ferrocast"), true, None)).ok()?;
     Some(menu)
 }
 
@@ -1308,6 +1324,7 @@ pub fn notify(title: &str, msg: &str) {
     if cfg!(test) {
         return;
     }
+    let (title, msg) = (tr(title), tr(msg));
     let script = format!(
         "display notification \"{}\" with title \"{}\"",
         msg.replace('\\', "\\\\").replace('"', "\\\""),
