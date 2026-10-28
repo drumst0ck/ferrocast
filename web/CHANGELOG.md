@@ -6,6 +6,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-28
+
 ### Added
 - **Raycast extensions**: runs extensions you installed with Raycast (from ~/.config/raycast/extensions) in the launcher. Off by default: turn it on in Settings → Integrations → Raycast extensions, switch single extensions on or off there and edit their preferences in a form (passwords are masked). It needs Node.js 22 or newer; Ferrocast uses yours or downloads the official one (about 26 MB, checked against a built-in SHA-256) after you press the button. Ferrocast does not contact Raycast's Store and is not affiliated with Raycast. Extensions are third-party code that runs with your permissions and can read what you copy, the text you have selected and the list of apps you use. In a test of 40 `view` commands of 20 popular Store extensions, 34 worked and 4 waited for input; menu bar commands, OAuth sign-in, AI features and a few components (file picker, link accessory) are not supported yet and say so on screen. (docs: /docs/launcher/raycast-extensions/)
 - **Custom themes**: Settings → General has a colour editor for your own themes (accent, background, surface, text, secondary text and separator on a light or dark base) with colour pickers, hex fields, a live preview and warnings when text contrast falls below 4.5:1. Themes can be duplicated (the built-in ones are copied, not edited), renamed, deleted, exported as `.ferrocast-theme` files and imported. System, Dark and Light keep working, and the default look is unchanged. (docs: /docs/launcher/themes/) #settings
