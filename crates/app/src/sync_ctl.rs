@@ -157,6 +157,12 @@ impl App {
             return;
         }
         self.sync.last_gc = Some(Instant::now());
+        // A pending recovery marker (a data file was set aside) means the notes in memory may be
+        // incomplete. Only turning sync on again clears it, so with sync off nothing is cleaned up
+        // until then: images are kept, never lost.
+        if sync_io::needs_recovery(&self.store.root, "notes") {
+            return;
+        }
         let (notes, root, sync_on) = (self.notes.clone(), self.store.root.clone(), self.sync_on());
         std::thread::spawn(move || {
             let dir = if sync_on {

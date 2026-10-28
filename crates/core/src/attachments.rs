@@ -173,7 +173,11 @@ pub fn store_file(root: &Path, file: &Path) -> Result<Stored, Error> {
     if meta.len() > MAX_BYTES {
         return Err(Error::TooLarge { bytes: meta.len() });
     }
-    let bytes = std::fs::read(file).map_err(|e| Error::Io(e.to_string()))?;
+    // read at most one byte over the cap: a file that grows while it is read cannot pass it
+    let mut bytes = Vec::new();
+    std::fs::File::open(file)
+        .and_then(|f| std::io::Read::read_to_end(&mut std::io::Read::take(f, MAX_BYTES + 1), &mut bytes))
+        .map_err(|e| Error::Io(e.to_string()))?;
     let ext = file.extension().map(|e| e.to_string_lossy().to_string());
     let alt = alt_from_file_name(&file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
     store_as(root, &bytes, ext.as_deref(), &alt)
@@ -197,10 +201,34 @@ pub fn referenced<'a>(texts: impl IntoIterator<Item = &'a str>) -> HashSet<Strin
     out
 }
 
-/// Delete attachment files that no note links and that are older than `grace` seconds. Returns how
-/// many were removed. Files that are not named like attachments are never touched.
+/// File inside the attachments folder that remembers since when each file has been unlinked.
+pub const UNLINKED_FILE: &str = ".unlinked.json";
+
+/// Is a file modified at `modified` at least `grace` seconds old at `now`? An unreadable time or one
+/// in the future counts as new.
+fn old_enough(modified: Option<std::time::SystemTime>, now_secs: i64, grace: i64) -> bool {
+    modified.and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).is_some_and(|d| now_secs - d.as_secs() as i64 >= grace)
+}
+
+/// Delete local attachment files that no note links. See [`cleanup_dir`]; the record of unlinked
+/// files is `attachments/.unlinked.json`.
 pub fn cleanup(root: &Path, referenced: &HashSet<String>, now_secs: i64, grace: i64) -> usize {
-    let Ok(rd) = std::fs::read_dir(root.join(DIR)) else { return 0 };
+    let dir = root.join(DIR);
+    cleanup_dir(&dir, &dir.join(UNLINKED_FILE), referenced, now_secs, grace)
+}
+
+/// Delete attachment files in `dir` that no note links, `grace` seconds after they were first seen
+/// unlinked (not after the file's own age: a picture linked for a year is kept a week after its
+/// link is removed, so an undo still finds it). `state` is a JSON file with that first time per
+/// name; a name that is linked again loses its entry, a missing or unreadable record starts every
+/// clock again, and a file whose modified time is unreadable or recent (it was just stored again
+/// while this cleanup held older notes) is kept. Returns how many files were removed. Files that
+/// are not named like attachments are never touched.
+pub fn cleanup_dir(dir: &Path, state: &Path, referenced: &HashSet<String>, now_secs: i64, grace: i64) -> usize {
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    let before: std::collections::BTreeMap<String, i64> =
+        std::fs::read(state).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let mut after = std::collections::BTreeMap::new();
     let mut removed = 0;
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
@@ -208,9 +236,22 @@ pub fn cleanup(root: &Path, referenced: &HashSet<String>, now_secs: i64, grace: 
             continue;
         }
         let Ok(meta) = e.metadata() else { continue };
-        let age = meta.modified().ok().and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64);
-        if meta.is_file() && now_secs - age >= grace && std::fs::remove_file(e.path()).is_ok() {
-            removed += 1;
+        if !meta.is_file() {
+            continue;
+        }
+        let since = before.get(&name).copied().unwrap_or(now_secs);
+        if before.contains_key(&name) && now_secs - since >= grace && old_enough(meta.modified().ok(), now_secs, grace) {
+            if std::fs::remove_file(e.path()).is_ok() {
+                removed += 1;
+                continue;
+            }
+        }
+        after.insert(name, since);
+    }
+    if after != before {
+        if let Ok(bytes) = serde_json::to_vec(&after) {
+            let tmp = state.with_extension("tmp");
+            let _ = std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, state));
         }
     }
     removed
@@ -367,39 +408,81 @@ mod tests {
         assert_eq!(set, [a.to_string(), b.to_string()].into_iter().collect());
     }
 
+    fn now_secs() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+
+    fn set_age(path: &Path, days: i64) {
+        let f = std::fs::File::options().write(true).open(path).unwrap();
+        f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs((now_secs() - days * 86_400) as u64)).unwrap();
+    }
+
+    const DAY: i64 = 86_400;
+
     #[test]
-    fn only_old_unreferenced_files_are_cleaned_up_so_an_undo_still_has_its_image() {
+    fn the_grace_period_counts_from_when_the_link_went_away_not_from_the_files_age() {
         let root = tmp("clean");
         let keep = store(&root, PNG, Some("png")).unwrap().name;
-        let fresh = store(&root, JPG, Some("jpg")).unwrap().name;
-        let old = store(&root, &heic(), Some("heic")).unwrap().name;
-        let day = 24 * 3600;
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-        let age = |n: &str, days: i64| {
-            let f = std::fs::File::options().write(true).open(root.join(DIR).join(n)).unwrap();
-            f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs((now - days * day) as u64)).unwrap();
-        };
-        age(&keep, 30);
-        age(&old, 30);
-        age(&fresh, 1);
+        let gone = store(&root, &heic(), Some("heic")).unwrap().name;
+        let back = store(&root, JPG, Some("jpg")).unwrap().name;
+        for n in [&keep, &gone, &back] {
+            set_age(&root.join(DIR).join(n), 30);
+        }
         std::fs::write(root.join(DIR).join("notes.txt"), "not ours").unwrap();
-        let refs: HashSet<String> = [keep.clone()].into_iter().collect();
-        assert_eq!(cleanup(&root, &refs, now, GRACE_SECS), 1);
+        let now = now_secs();
+        let refs = |names: &[&String]| -> HashSet<String> { names.iter().map(|n| (*n).clone()).collect() };
+        // the first cleanup after the links went away only notes the time
+        assert_eq!(cleanup(&root, &refs(&[&keep]), now, GRACE_SECS), 0);
+        assert!(root.join(DIR).join(&gone).exists(), "a 30 day old file is kept right after it was unlinked (undo)");
+        // still inside the grace period
+        assert_eq!(cleanup(&root, &refs(&[&keep]), now + 6 * DAY, GRACE_SECS), 0);
+        // `back` is linked again before the period is over: its clock is dropped
+        assert_eq!(cleanup(&root, &refs(&[&keep, &back]), now + 6 * DAY + 1, GRACE_SECS), 0);
+        // 8 days after it was first unlinked
+        assert_eq!(cleanup(&root, &refs(&[&keep]), now + 8 * DAY, GRACE_SECS), 1);
+        assert!(!root.join(DIR).join(&gone).exists());
         assert!(root.join(DIR).join(&keep).exists(), "referenced files stay");
-        assert!(root.join(DIR).join(&fresh).exists(), "inside the grace period");
-        assert!(!root.join(DIR).join(&old).exists());
+        assert!(root.join(DIR).join(&back).exists(), "relinked in between: kept");
         assert!(root.join(DIR).join("notes.txt").exists(), "unknown files are never touched");
+        // unlinking `back` again starts a fresh clock instead of reusing the old one
+        assert_eq!(cleanup(&root, &refs(&[&keep]), now + 8 * DAY + 10, GRACE_SECS), 0);
+        assert!(root.join(DIR).join(&back).exists());
+        assert_eq!(cleanup(&root, &refs(&[&keep]), now + 16 * DAY, GRACE_SECS), 1);
     }
 
     #[test]
-    fn pasting_the_same_image_again_restarts_its_grace_period() {
+    fn a_missing_or_corrupt_record_never_deletes_anything() {
+        let root = tmp("record");
+        let name = store(&root, PNG, Some("png")).unwrap().name;
+        set_age(&root.join(DIR).join(&name), 30);
+        let now = now_secs();
+        assert_eq!(cleanup(&root, &HashSet::new(), now, GRACE_SECS), 0);
+        std::fs::write(root.join(DIR).join(UNLINKED_FILE), b"{ nope").unwrap();
+        assert_eq!(cleanup(&root, &HashSet::new(), now + 30 * DAY, GRACE_SECS), 0, "unreadable record: start the clock again");
+        assert!(root.join(DIR).join(&name).exists());
+    }
+
+    #[test]
+    fn an_unreadable_modified_time_counts_as_new() {
+        let now = 100 * DAY;
+        assert!(!old_enough(None, now, GRACE_SECS));
+        let at = |s: i64| Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(s as u64));
+        assert!(old_enough(at(now - 8 * DAY), now, GRACE_SECS));
+        assert!(!old_enough(at(now - DAY), now, GRACE_SECS));
+        assert!(!old_enough(at(now + DAY), now, GRACE_SECS), "a time in the future is new");
+    }
+
+    #[test]
+    fn pasting_the_same_image_again_keeps_it_even_for_a_cleanup_with_older_notes() {
         let root = tmp("touch");
         let name = store(&root, PNG, Some("png")).unwrap().name;
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-        let f = std::fs::File::options().write(true).open(root.join(DIR).join(&name)).unwrap();
-        f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs((now - 30 * 24 * 3600) as u64)).unwrap();
+        let now = now_secs();
+        set_age(&root.join(DIR).join(&name), 30);
+        assert_eq!(cleanup(&root, &HashSet::new(), now - 9 * DAY, GRACE_SECS), 0);
+        // pasted again while a cleanup that started before the paste still holds the old notes
         store(&root, PNG, Some("png")).unwrap();
         assert_eq!(cleanup(&root, &HashSet::new(), now, GRACE_SECS), 0);
+        assert!(root.join(DIR).join(&name).exists());
     }
 
     #[test]
