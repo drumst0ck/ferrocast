@@ -190,6 +190,7 @@ impl Effects {
             apple_available: || APPLE_AVAILABLE.with(|a| a.get()),
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
+            color_sampler: |_bus| FX_LOG.with(|l| l.borrow_mut().push("color_sampler".into())),
         }
     }
 }
@@ -13901,6 +13902,48 @@ mod editor_redesign {
     }
 
     #[test]
+    fn transport_has_buttons_for_second_steps_and_start_end() {
+        for size in [DEFAULT, LARGE] {
+            let mut app = state(&format!("jump-{}", size.x), Section::Zoom, |_| {});
+            settle(&mut app, size);
+            let lay: Layout = app.ctx.data(|d| d.get_temp(Id::new("editor-layout"))).unwrap();
+            let btns = |app: &App| -> Vec<Rect> {
+                app.ctx.data_mut(|d| d.remove::<Vec<(String, egui::Id, Rect, bool)>>(Id::new("ctl-hits")));
+                Vec::new()
+            };
+            let _ = btns(&app);
+            settle(&mut app, size);
+            let hits: Vec<(String, egui::Id, Rect, bool)> = app.ctx.data(|d| d.get_temp(Id::new("ctl-hits"))).unwrap_or_default();
+            let mut row: Vec<Rect> = hits.iter().filter(|h| h.0 == "small_btn" && lay.transport.contains_rect(h.2)).map(|h| h.2).collect();
+            row.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+            row.dedup();
+            // Play, −1 s, +1 s, Start, End, Undo, Redo
+            assert_eq!(row.len(), 7, "{size:?}: {row:?}");
+            assert!(row.windows(2).all(|w| w[0].max.x <= w[1].min.x + 0.01), "{size:?}: no overlap");
+            let click = |app: &mut App, r: Rect| {
+                let at = r.center();
+                let btn =
+                    |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+                for events in [vec![Event::PointerMoved(at)], vec![btn(true)], vec![btn(false)], vec![]] {
+                    run_at(app, size, events, None);
+                }
+            };
+            let t0 = app.editor.as_ref().unwrap().t;
+            click(&mut app, row[2]);
+            let t1 = app.editor.as_ref().unwrap().t;
+            assert!((t1 - t0 - 1.0).abs() < 0.2, "+1 s moves about a second: {t0} -> {t1}");
+            click(&mut app, row[1]);
+            let t2 = app.editor.as_ref().unwrap().t;
+            assert!((t1 - t2 - 1.0).abs() < 0.2, "−1 s: {t1} -> {t2}");
+            click(&mut app, row[4]);
+            let end = app.editor.as_ref().unwrap().t;
+            assert!(end > t1, "End jumps to the last frame");
+            click(&mut app, row[3]);
+            assert!(app.editor.as_ref().unwrap().t < 0.5, "Start jumps to the first frame");
+        }
+    }
+
+    #[test]
     fn transport_buttons_and_section_headers_are_at_least_24_points_at_the_three_sizes() {
         for size in [SMALL, DEFAULT, LARGE] {
             let mut app = state(&format!("hit-{}", size.x), Section::Zoom, |_| {});
@@ -14961,4 +15004,599 @@ fn a_copy_of_settings_json_is_kept_before_the_first_settings_merge_is_applied() 
         .is_some());
     assert_eq!(std::fs::read_to_string(app.store.path("settings.before-sync.json")).unwrap(), before);
     std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
+fn pick_color_is_a_launcher_command_that_starts_the_sampler() {
+    assert!(Builtin::ALL.contains(&Builtin::PickColor));
+    assert_eq!(Builtin::PickColor.title(), "Pick Color");
+    let mut app = fixture();
+    app.run_builtin(Builtin::PickColor);
+    assert!(FX_LOG.with(|l| l.borrow().contains(&"color_sampler".to_string())));
+}
+
+#[test]
+fn a_picked_color_is_copied_as_hex_and_announced() {
+    let mut app = fixture();
+    let _ = notion_io::take_copied();
+    app.bus.send(Msg::ColorPicked(Some(ferrocast_core::color::Rgba::from_unit(1.0, 0.5, 0.0, 1.0))));
+    app.drain();
+    assert_eq!(notion_io::take_copied(), vec!["#FF8000".to_string()]);
+    assert_eq!(toast_text(&app), "Copied #FF8000");
+}
+
+#[test]
+fn a_cancelled_pick_copies_nothing() {
+    let mut app = fixture();
+    let _ = notion_io::take_copied();
+    app.bus.send(Msg::ColorPicked(None));
+    app.drain();
+    assert!(notion_io::take_copied().is_empty());
+}
+
+// ---- mouse parity: every keyboard action also has a click path (odd/tasks/mouse-parity.md)
+mod mouse_parity {
+    use super::*;
+
+    fn clip(id: &str, pinned: bool) -> ClipEntry {
+        ClipEntry {
+            id: id.into(),
+            kind: ClipKind::Text,
+            content: format!("text of {id}"),
+            title: None,
+            copied_at: now_secs(),
+            pinned,
+            source_app: None,
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    fn clipboard_app() -> App {
+        let mut app = fixture();
+        *app.shared.clipboard.lock().unwrap() = vec![clip("a", false), clip("b", true), clip("c", false)];
+        app.push(View::Clipboard);
+        app.nav_at = Instant::now() - Duration::from_secs(1);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        app
+    }
+
+    fn rects(app: &App, id: &str) -> Vec<(String, Rect)> {
+        app.ctx.data(|d| d.get_temp(Id::new(id))).unwrap_or_default()
+    }
+
+    fn rect_of(app: &App, id: &str, name: &str) -> Rect {
+        rects(app, id).into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no {name} in {id}")).1
+    }
+
+    fn click_button(app: &mut App, pos: Pos2, button: egui::PointerButton) {
+        let btn = |pressed| Event::PointerButton { pos, button, pressed, modifiers: Modifiers::NONE };
+        render(app, vec![Event::PointerMoved(pos)]);
+        render(app, vec![btn(true)]);
+        render(app, vec![btn(false)]);
+        render(app, vec![]);
+        render(app, vec![]);
+    }
+
+    fn row_center(n: usize) -> Pos2 {
+        // search bar, 4 pt of padding, then a 26 pt header per section: the fixture has one pinned
+        // entry ("Pinned", first) and two others, so row 0 sits under one header and rows 1-2 under two
+        let headers = if n == 0 { 1.0 } else { 2.0 };
+        Pos2::new(120.0, ui::SEARCH_H + 4.0 + 26.0 * headers + ui::ROW_H * (n as f32 + 0.5))
+    }
+
+    fn ids(app: &App) -> Vec<String> {
+        app.shared.clipboard.lock().unwrap().iter().map(|e| e.id.clone()).collect()
+    }
+
+    fn debug_act(a: &Act) -> String {
+        format!("{a:?}")
+    }
+
+    #[test]
+    fn row_buttons_run_the_same_act_as_the_keyboard_shortcut() {
+        let mut app = clipboard_app();
+        let item = |app: &App, id: &str| {
+            app.sections()[0]
+                .items
+                .iter()
+                .chain(app.sections().iter().flat_map(|s| s.items.iter()))
+                .find(|i| i.id.contains(id))
+                .cloned()
+                .unwrap()
+        };
+        let a = item(&app, "a");
+        let b = item(&app, "b");
+        let by_key = |app: &App, it: &Item, k: (Modifiers, Key)| app.actions_for(it).into_iter().find(|x| x.shortcut == Some(k)).unwrap();
+        // unpinned: Pin + Delete
+        let btns = app.row_buttons(&a);
+        assert_eq!(btns.iter().map(|b| b.label).collect::<Vec<_>>(), ["Pin", "Delete"]);
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &a, (CMD, Key::Period)).kind));
+        assert_eq!(debug_act(&btns[1].kind), debug_act(&by_key(&app, &a, (CTRL, Key::X)).kind));
+        assert!(btns[1].destructive);
+        assert!(btns[0].tip.contains("⌘."), "tooltip names the shortcut: {}", btns[0].tip);
+        assert!(btns[1].tip.starts_with("Delete Entry") && btns[1].tip.contains("⌃X"), "{}", btns[1].tip);
+        // pinned: Unpin
+        let btns = app.row_buttons(&b);
+        assert_eq!(btns[0].label, "Unpin");
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &b, (CMD, Key::Period)).kind));
+
+        // snippets and quicklinks: Edit + Delete
+        app.snippets = vec![ferrocast_core::models::Snippet { id: "s1".into(), ..ferrocast_core::models::Snippet::new("sn", "t", "") }];
+        app.stack = vec![View::Root, View::Snippets];
+        app.invalidate_sections();
+        let s = app.sections()[0].items[0].clone();
+        let btns = app.row_buttons(&s);
+        assert_eq!(btns.iter().map(|b| b.label).collect::<Vec<_>>(), ["Edit", "Delete"]);
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &s, (CMD, Key::E)).kind));
+        assert_eq!(debug_act(&btns[1].kind), debug_act(&by_key(&app, &s, (CTRL, Key::X)).kind));
+        app.quicklinks = vec![ferrocast_core::models::Quicklink {
+            id: "q1".into(),
+            ..ferrocast_core::models::Quicklink::new("ql", "https://example.com")
+        }];
+        app.stack = vec![View::Root, View::Quicklinks];
+        app.invalidate_sections();
+        let q = app.sections()[0].items[0].clone();
+        let btns = app.row_buttons(&q);
+        assert_eq!(btns.iter().map(|b| b.label).collect::<Vec<_>>(), ["Edit", "Delete"]);
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &q, (CMD, Key::E)).kind));
+        assert_eq!(debug_act(&btns[1].kind), debug_act(&by_key(&app, &q, (CTRL, Key::X)).kind));
+        // the same rows outside their own view get no buttons (e.g. a snippet found from the root)
+        app.stack = vec![View::Root];
+        assert!(app.row_buttons(&s).is_empty() && app.row_buttons(&q).is_empty());
+    }
+
+    #[test]
+    fn header_buttons_map_to_the_keyboard_acts() {
+        let mut app = clipboard_app();
+        let h = app.header_buttons();
+        assert_eq!(h.iter().map(|b| b.label).collect::<Vec<_>>(), ["Clear History…"]);
+        assert_eq!(debug_act(&h[0].kind), debug_act(&Act::ClipDeleteAll));
+        assert!(h[0].destructive && h[0].tip.contains("⌃⇧X"), "{}", h[0].tip);
+        app.stack = vec![View::Root, View::Snippets];
+        assert_eq!(debug_act(&app.header_buttons()[0].kind), debug_act(&Act::CreateSnippet));
+        assert!(app.header_buttons()[0].tip.contains("⌘N"));
+        app.stack = vec![View::Root, View::Quicklinks];
+        assert_eq!(debug_act(&app.header_buttons()[0].kind), debug_act(&Act::CreateQuicklink));
+        app.stack = vec![View::Root];
+        assert!(app.header_buttons().is_empty());
+    }
+
+    #[test]
+    fn footer_actions_hint_opens_and_closes_the_panel_like_cmd_k() {
+        let mut app = clipboard_app();
+        assert!(app.panel.is_none());
+        let r = rect_of(&app, "footer-hints", "⌘K");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        let p = app.panel.as_ref().expect("the footer Actions hint opens the panel");
+        assert_eq!(p.item.id, app.sections()[0].items[app.selected].id, "for the selected item");
+        // clicking it again toggles, as ⌘K does, instead of the outside-click close + reopen
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(app.panel.is_none());
+    }
+
+    #[test]
+    fn footer_enter_and_back_hints_behave_like_enter_and_escape() {
+        let mut app = clipboard_app();
+        app.perform(Act::ClipDeleteAll, false);
+        assert!(matches!(app.view(), View::Confirm { .. }));
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        let before = app.stack.len();
+        let back = rect_of(&app, "footer-hints", "esc");
+        click_button(&mut app, back.center(), egui::PointerButton::Primary);
+        assert_eq!(app.stack.len(), before - 1, "Back pops the confirmation");
+        assert_eq!(ids(&app), ["a", "b", "c"], "and nothing was deleted");
+
+        app.perform(Act::ClipDeleteAll, false);
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        let confirm = rect_of(&app, "footer-hints", "↵");
+        click_button(&mut app, confirm.center(), egui::PointerButton::Primary);
+        assert_eq!(ids(&app), ["b"], "Confirm clears the history and keeps the pinned entry");
+    }
+
+    #[test]
+    fn right_click_selects_the_row_and_opens_its_actions() {
+        let mut app = clipboard_app();
+        let n = app.sections().iter().map(|s| s.items.len()).sum::<usize>();
+        assert!(n >= 3);
+        click_button(&mut app, row_center(2), egui::PointerButton::Secondary);
+        let want = app.sections().iter().flat_map(|s| s.items.iter()).nth(2).unwrap().id.clone();
+        assert_eq!(app.selected, 2);
+        assert_eq!(app.panel.as_ref().expect("panel opened").item.id, want);
+        assert_eq!(ids(&app).len(), 3, "right click runs nothing");
+    }
+
+    #[test]
+    fn clicking_outside_the_panel_closes_it_without_running_the_row_under_the_pointer() {
+        let mut app = clipboard_app();
+        click_button(&mut app, row_center(0), egui::PointerButton::Secondary);
+        assert!(app.panel.is_some());
+        let hidden_before = app.visible;
+        click_button(&mut app, row_center(1), egui::PointerButton::Primary);
+        assert!(app.panel.is_none(), "outside click closes");
+        assert!(matches!(app.view(), View::Clipboard));
+        assert_eq!(app.visible, hidden_before, "the click did not paste/hide");
+        // a click inside the panel does not close it
+        click_button(&mut app, row_center(0), egui::PointerButton::Secondary);
+        let (w, h) = (ui::WIDTH, ui::HEIGHT);
+        click_button(&mut app, Pos2::new(w - 100.0, h - ui::FOOTER_H - 40.0), egui::PointerButton::Primary);
+        assert!(app.panel.is_some(), "a click on the panel's own search field is not an outside click");
+    }
+
+    #[test]
+    fn hover_buttons_pin_and_delete_one_entry() {
+        let mut app = clipboard_app();
+        let first = app.sections().iter().flat_map(|s| s.items.iter()).next().unwrap().clone();
+        let id = first.id.trim_start_matches("clip:").to_string();
+        let _ = id;
+        // pointer on the first row: it becomes the selected one and shows its buttons
+        render(&mut app, vec![Event::PointerMoved(row_center(0))]);
+        render(&mut app, vec![Event::PointerMoved(row_center(0) + Vec2::new(1.0, 0.0))]);
+        render(&mut app, vec![]);
+        let names: Vec<String> = rects(&app, "row-buttons").into_iter().map(|(n, _)| n).collect();
+        assert!(names.contains(&"Delete".to_string()), "{names:?}");
+        let del = rect_of(&app, "row-buttons", "Delete");
+        let before = ids(&app);
+        click_button(&mut app, del.center(), egui::PointerButton::Primary);
+        let after = ids(&app);
+        assert_eq!(after.len(), before.len() - 1, "Delete removed one entry: {before:?} -> {after:?}");
+        assert!(matches!(app.view(), View::Clipboard), "and stayed in the list");
+    }
+
+    #[test]
+    fn hover_pin_button_toggles_pinned() {
+        let mut app = clipboard_app();
+        render(&mut app, vec![Event::PointerMoved(row_center(0))]);
+        render(&mut app, vec![Event::PointerMoved(row_center(0) + Vec2::new(1.0, 0.0))]);
+        render(&mut app, vec![]);
+        let pinned_before = app.shared.clipboard.lock().unwrap().iter().filter(|e| e.pinned).count();
+        let pin = rects(&app, "row-buttons").into_iter().find(|(n, _)| n == "Pin" || n == "Unpin").expect("pin button").1;
+        click_button(&mut app, pin.center(), egui::PointerButton::Primary);
+        let pinned_after = app.shared.clipboard.lock().unwrap().iter().filter(|e| e.pinned).count();
+        assert_ne!(pinned_before, pinned_after, "the entry's pin state flipped");
+    }
+
+    #[test]
+    fn clear_history_button_confirms_then_keeps_pinned_entries() {
+        let mut app = clipboard_app();
+        let r = rect_of(&app, "header-buttons", "Clear History…");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::Confirm { .. }), "same confirmation as Delete All Entries");
+        assert_eq!(ids(&app).len(), 3, "nothing is deleted before confirming");
+        app.perform(Act::ClipDeleteAll, true);
+        assert_eq!(ids(&app), ["b"], "pinned entries stay");
+    }
+
+    #[test]
+    fn plus_button_creates_a_snippet_and_a_quicklink() {
+        let mut app = fixture();
+        app.push(View::Snippets);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let r = rect_of(&app, "header-buttons", "+ New");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::SnippetForm { id: None, .. }));
+        let mut app = fixture();
+        app.push(View::Quicklinks);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let r = rect_of(&app, "header-buttons", "+ New");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::QuicklinkForm { id: None, .. }));
+    }
+
+    fn note(id: &str, text: &str, pinned: bool) -> ferrocast_core::models::Note {
+        ferrocast_core::models::Note {
+            id: id.into(),
+            text: text.into(),
+            created: 1,
+            modified: 1,
+            pinned_at: pinned.then_some(5),
+            deleted_at: None,
+        }
+    }
+
+    fn notes_app() -> App {
+        let mut app = fixture();
+        app.notes = vec![note("n1", "first note", false), note("n2", "second note", true)];
+        app.push(View::Notes);
+        app.nav_at = Instant::now() - Duration::from_secs(1);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        app
+    }
+
+    #[test]
+    fn note_rows_get_pin_and_delete_buttons_matching_the_keys() {
+        let app = notes_app();
+        let items: Vec<Item> = app.sections().iter().flat_map(|s| s.items.iter().cloned()).collect();
+        let pinned = items.iter().find(|i| matches!(&i.kind, Kind::Note(id) if id == "n2")).unwrap();
+        let plain = items.iter().find(|i| matches!(&i.kind, Kind::Note(id) if id == "n1")).unwrap();
+        let by_key = |it: &Item, k: (Modifiers, Key)| app.actions_for(it).into_iter().find(|x| x.shortcut == Some(k)).unwrap();
+        let b = app.row_buttons(plain);
+        assert_eq!(b.iter().map(|b| b.label).collect::<Vec<_>>(), ["Pin", "Delete"]);
+        assert_eq!(debug_act(&b[0].kind), debug_act(&by_key(plain, (CMD, Key::Period)).kind));
+        assert_eq!(debug_act(&b[1].kind), debug_act(&by_key(plain, (CTRL, Key::X)).kind));
+        assert!(b[1].destructive);
+        assert_eq!(app.row_buttons(pinned)[0].label, "Unpin");
+    }
+
+    #[test]
+    fn notes_view_has_a_new_note_button() {
+        let mut app = notes_app();
+        let h = app.header_buttons();
+        assert_eq!(h.iter().map(|b| b.label).collect::<Vec<_>>(), ["+ New"]);
+        assert_eq!(debug_act(&h[0].kind), debug_act(&Act::CreateNote));
+        assert!(h[0].tip.contains("⌘N"), "{}", h[0].tip);
+        app.stack = vec![View::Root];
+        assert!(app.header_buttons().is_empty());
+    }
+
+    #[test]
+    fn pdf_organizer_buttons_run_the_keyboard_edits() {
+        use ferrocast_core::pdfplan::{PdfPlan, PlanOp};
+        let mut app = fixture();
+        let f = std::env::temp_dir().join(format!("fc-orgbtn-{}.pdf", std::process::id()));
+        let mut plan = PdfPlan::new(4);
+        plan.cursor = 1;
+        app.stack = vec![View::Root, View::PdfOrganize { file: f, n: 4, plan }];
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let names: Vec<String> = rects(&app, "pdf-ops").into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, PlanOp::ALL.map(|o| o.label()).to_vec());
+        let press = |app: &mut App, op: PlanOp| {
+            let r = rect_of(app, "pdf-ops", op.label());
+            click_button(app, r.center(), egui::PointerButton::Primary);
+        };
+        press(&mut app, PlanOp::MoveLater);
+        let p = organizer_plan(&app);
+        assert_eq!((p.pages.iter().map(|x| x.src).collect::<Vec<_>>(), p.cursor), (vec![0, 2, 1, 3], 2));
+        press(&mut app, PlanOp::RotateRight);
+        assert_eq!(organizer_plan(&app).pages[2].turns, 1);
+        press(&mut app, PlanOp::RotateLeft);
+        assert_eq!(organizer_plan(&app).pages[2].turns, 0);
+        press(&mut app, PlanOp::Duplicate);
+        assert_eq!(organizer_plan(&app).pages.len(), 5);
+        press(&mut app, PlanOp::Remove);
+        assert_eq!(organizer_plan(&app).pages.len(), 4);
+        press(&mut app, PlanOp::MoveEarlier);
+        assert!(matches!(app.view(), View::PdfOrganize { .. }), "buttons never leave the view");
+    }
+
+    #[test]
+    fn footer_chip_keys_parse_to_the_keys_they_name() {
+        let k = |s: &str| chip_key(s);
+        assert_eq!(k("space"), Some((Modifiers::NONE, Key::Space)));
+        assert_eq!(k("I"), Some((Modifiers::NONE, Key::I)));
+        assert_eq!(k("⌫"), Some((Modifiers::NONE, Key::Backspace)));
+        assert_eq!(k("⌘Z"), Some((CMD, Key::Z)));
+        assert_eq!(k("⇧⌘Z"), Some((CMD_SHIFT, Key::Z)));
+        assert_eq!(k("⌘⇧A"), Some((CMD_SHIFT, Key::A)));
+        assert_eq!(k("⌘↵"), Some((CMD, Key::Enter)));
+        assert_eq!(k("⌘⌫"), Some((CMD, Key::Backspace)));
+        assert_eq!(k("⌃⌘F"), Some((Modifiers { ctrl: true, ..CMD }, Key::F)));
+        assert_eq!(k("⌘E"), Some((CMD, Key::E)));
+        // ranges name several keys: they have their own controls
+        for r in ["←/→", "⌘↑/↓", "⌘1–0", ""] {
+            assert_eq!(k(r), None, "{r}");
+        }
+    }
+
+    #[test]
+    fn every_tool_window_chip_is_clickable_or_has_its_own_control() {
+        // chips that name a range of keys, with the control that stands in for them
+        const RANGES: [(&str, &str); 3] = [
+            ("←/→", "Frame / Navigate: step and arrow buttons"),
+            ("⌘↑/↓", "Move: the ↑ ↓ buttons on every row"),
+            ("⌘1–0", "Tabs: the Settings sidebar"),
+        ];
+        for (name, view, chips, _) in u2_windows() {
+            for (label, key) in chips {
+                assert!(chip_clickable(key) || RANGES.iter().any(|(r, _)| *r == key), "{name}: chip {label} {key} has no click path");
+            }
+            let _ = view;
+        }
+        for (label, key) in View::Settings.footer_hints() {
+            assert!(chip_clickable(key) || RANGES.iter().any(|(r, _)| *r == key), "Settings: {label} {key}");
+        }
+    }
+
+    #[test]
+    fn clicking_tool_window_chips_presses_their_keys() {
+        use ferrocast_core::pdfplan::PdfPlan;
+        let mut app = fixture();
+        let f = std::env::temp_dir().join(format!("fc-orgchip-{}.pdf", std::process::id()));
+        app.stack = vec![View::Root, View::PdfOrganize { file: f, n: 3, plan: PdfPlan::new(3) }];
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let r = rect_of(&app, "footer-hints", "R");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(organizer_plan(&app).pages[0].turns, 1, "the Rotate chip is the R key");
+        let r = rect_of(&app, "footer-hints", "⌫");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(organizer_plan(&app).pages.len(), 2, "the Remove chip is the ⌫ key");
+        let r = rect_of(&app, "footer-hints", "esc");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::Root), "the Back chip is esc");
+    }
+
+    #[test]
+    fn tour_chips_and_arrows_move_through_the_deck() {
+        let mut app = fixture();
+        app.push(View::Welcome);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        assert_eq!(app.tour.slide, 0);
+        let r = rect_of(&app, "footer-hints", "↵");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(app.tour.slide, 1, "the Next chip is ↵");
+        let next = rect_of(&app, "tour-arrows", "next");
+        click_button(&mut app, next.center(), egui::PointerButton::Primary);
+        assert_eq!(app.tour.slide, 2, "the › arrow is →");
+        let prev = rect_of(&app, "tour-arrows", "previous");
+        click_button(&mut app, prev.center(), egui::PointerButton::Primary);
+        assert_eq!(app.tour.slide, 1, "the ‹ arrow is ←");
+        click_button(&mut app, prev.center(), egui::PointerButton::Primary);
+        assert_eq!(app.tour.slide, 0);
+        click_button(&mut app, prev.center(), egui::PointerButton::Primary);
+        assert_eq!(app.tour.slide, 0, "no slide before the first");
+    }
+
+    fn trim_app(view: impl FnOnce(PathBuf, ferrocast_core::videoplan::Trim) -> View) -> App {
+        let mut app = fixture();
+        let f = std::env::temp_dir().join(format!("fc-trimbtn-{}.mp4", std::process::id()));
+        let trim = ferrocast_core::videoplan::Trim::new(10.0, 25.0).unwrap();
+        app.stack = vec![View::Root, view(f, trim)];
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        app
+    }
+
+    fn the_trim(app: &App) -> ferrocast_core::videoplan::Trim {
+        match app.view() {
+            View::VideoTrim { trim: Some(t), .. } | View::VideoSplit { trim: Some(t), .. } | View::VideoSnapshot { trim: Some(t), .. } => {
+                *t
+            }
+            other => panic!("unexpected view {}", other.title()),
+        }
+    }
+
+    #[test]
+    fn video_trim_buttons_do_what_their_keys_do() {
+        use ferrocast_core::videoplan::TrimCmd;
+        let mut app = trim_app(|file, trim| View::VideoTrim { file, trim: Some(trim) });
+        let names: Vec<String> = rects(&app, "trim-cmds").into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, TrimCmd::ALL.map(|c| c.label()).to_vec());
+        let press = |app: &mut App, c: TrimCmd| {
+            let r = rect_of(app, "trim-cmds", c.label());
+            click_button(app, r.center(), egui::PointerButton::Primary);
+        };
+        press(&mut app, TrimCmd::SecForward);
+        assert!((the_trim(&app).cursor - 1.0).abs() < 1e-6);
+        press(&mut app, TrimCmd::MarkStart);
+        assert!((the_trim(&app).start - 1.0).abs() < 1e-6, "Set start is I");
+        press(&mut app, TrimCmd::SecForward);
+        press(&mut app, TrimCmd::MarkEnd);
+        assert!((the_trim(&app).end - 2.0).abs() < 1e-6, "Set end is O");
+        press(&mut app, TrimCmd::FrameBack);
+        assert!((the_trim(&app).cursor - 1.96).abs() < 1e-6);
+        press(&mut app, TrimCmd::ToStart);
+        assert!((the_trim(&app).cursor - 1.0).abs() < 1e-6, "Home");
+        press(&mut app, TrimCmd::ToEnd);
+        assert!((the_trim(&app).cursor - 1.96).abs() < 1e-6, "End");
+    }
+
+    #[test]
+    fn snapshot_has_no_marker_buttons_and_split_has_the_cut_buttons() {
+        let app = trim_app(|file, trim| View::VideoSnapshot { file, trim: Some(trim) });
+        let names: Vec<String> = rects(&app, "trim-cmds").into_iter().map(|(n, _)| n).collect();
+        assert!(!names.iter().any(|n| n == "Set start" || n == "Set end"), "{names:?}");
+        assert!(names.iter().any(|n| n == "Frame ▶"));
+
+        let mut app = trim_app(|file, trim| View::VideoSplit { file, trim: Some(trim), points: vec![], parts: 2 });
+        let cut = rect_of(&app, "trim-cmds", "Cut here");
+        // at the very start of the clip there is nothing to cut: same as M
+        click_button(&mut app, cut.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::VideoSplit { points, .. } if points.is_empty()));
+        let fwd = rect_of(&app, "trim-cmds", "+1 s");
+        click_button(&mut app, fwd.center(), egui::PointerButton::Primary);
+        let cut = rect_of(&app, "trim-cmds", "Cut here");
+        click_button(&mut app, cut.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::VideoSplit { points, .. } if points.len() == 1), "Cut here is M");
+        let rm = rect_of(&app, "trim-cmds", "Remove last");
+        click_button(&mut app, rm.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::VideoSplit { points, .. } if points.is_empty()), "Remove last is ⌫");
+    }
+
+    #[test]
+    fn wheel_switcher_chips_change_the_wheel_like_tapping_a_modifier() {
+        use ferrocast_core::wheel::WheelKind;
+        let dir = std::env::temp_dir().join(format!("fc-wheel-switch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("pic.png");
+        image::RgbImage::new(64, 48).save(&png).unwrap();
+        let (mut app, _, _) = wheel_click_fixture(&png);
+        render(&mut app, vec![]);
+        let kind = |app: &App| match app.view() {
+            View::Wheel { kind, .. } => *kind,
+            other => panic!("wheel closed: {}", other.title()),
+        };
+        assert_eq!(kind(&app), WheelKind::Tools);
+        let r = rect_of(&app, "wheel-switch", "Convert");
+        wheel_click_at(&mut app, r.center());
+        assert_eq!(kind(&app), WheelKind::Convert, "the Convert chip is Shift");
+        let r = rect_of(&app, "wheel-switch", "Actions");
+        wheel_click_at(&mut app, r.center());
+        assert_eq!(kind(&app), WheelKind::Actions, "the Actions chip is ⌃");
+        let r = rect_of(&app, "wheel-switch", "Tools");
+        wheel_click_at(&mut app, r.center());
+        assert_eq!(kind(&app), WheelKind::Tools, "the Tools chip is ⌘, and none of these clicks cancelled the wheel");
+    }
+
+    #[test]
+    fn annotate_undo_and_delete_buttons_match_cmd_z_and_delete() {
+        use ferrocast_core::annotate::{Doc, Shape, Style, Tool};
+        let style = Style { color: [255, 0, 0], width: 3.0, fill: false };
+        let mut doc = Doc::default();
+        doc.add(Shape::Line((1.0, 1.0), (20.0, 20.0)), style);
+        doc.add(Shape::Line((2.0, 2.0), (30.0, 30.0)), style);
+        let mut app = fixture();
+        app.stack = vec![
+            View::Root,
+            View::Annotate { file: "/nonexistent/mp.png".into(), size: (100, 80), doc, tool: Tool::Select, color: 0, sel: Some(0) },
+        ];
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let items = |app: &App| match app.view() {
+            View::Annotate { doc, .. } => doc.items.len(),
+            _ => panic!("annotate closed"),
+        };
+        let r = rect_of(&app, "annot-btns", "Delete");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(items(&app), 1, "Delete removes the selected shape");
+        let r = rect_of(&app, "annot-btns", "Undo");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(items(&app), 0, "Undo removes the newest shape");
+        // nothing left: the buttons are inert, like the keys
+        let r = rect_of(&app, "annot-btns", "Undo");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(items(&app), 0);
+    }
+
+    #[test]
+    fn redact_remove_chip_deletes_the_selected_area() {
+        let r = ferrocast_core::croprect::Rect { x: 10, y: 10, w: 30, h: 20 };
+        let mut app = fixture();
+        app.stack = vec![
+            View::Root,
+            View::RedactImage {
+                file: "/nonexistent/rd.png".into(),
+                size: (100, 80),
+                areas: vec![r],
+                sel: Some(0),
+                blur: true,
+                radius: 24,
+                color: 5,
+            },
+        ];
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let chip = rect_of(&app, "footer-hints", "⌫");
+        click_button(&mut app, chip.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::RedactImage { areas, .. } if areas.is_empty()), "the Remove chip is ⌫");
+    }
 }

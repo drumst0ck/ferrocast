@@ -85,6 +85,10 @@ In the action panel, **Delete Note** and **Delete All Notes** move notes to **Re
 
 <kbd>⌘</kbd> <kbd>+</kbd> zooms in, <kbd>⌘</kbd> <kbd>-</kbd> zooms out and <kbd>⌘</kbd> <kbd>0</kbd> goes back to actual size. The zoom also lives in Settings → Notes.
 
+## With the mouse
+
+Every shortcut of the window has a click path. The toolbar has **‹** and **›** (back and forward through the notes you opened), **Browse**, **+** (new note) and **×** (close). The footer has **Actions**, **Browse**, **Pin** and **New**. Right-click the editor, the toolbar or an empty part of the window for a menu with New Note, Browse Notes, Pin or Unpin, Back, Forward, Zoom In, Zoom Out, Actual Size, Actions and Close; in the editor it comes after the usual Cut, Copy and Paste entries. Pinned notes are listed first in **Browse Notes**: click one to open it, as <kbd>⌘</kbd> <kbd>1</kbd> to <kbd>⌘</kbd> <kbd>9</kbd> does. In **Search Notes**, hover a row for **Pin** or **Unpin** and **Delete**, and click **+ New** for a new note.
+
 ## The action panel
 
 <kbd>⌘</kbd> <kbd>K</kbd> opens the action panel for the open note. Type to search it, including the items inside its submenus (for example Format › Bold or Export › Markdown). It holds:

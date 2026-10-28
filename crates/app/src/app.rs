@@ -3671,6 +3671,13 @@ impl App {
                     let _ = self.store.save("rates.json", &r);
                     self.rates = r;
                 }
+                Msg::ColorPicked(Some(c)) => {
+                    let hex = c.formats()[0].1.clone();
+                    // Not marked as our own write, so the colour also lands in the clipboard history.
+                    notion_io::write_clipboard(&hex);
+                    self.toast(format!("Copied {hex}"));
+                }
+                Msg::ColorPicked(None) => {}
                 Msg::Tray(id) => match id.as_str() {
                     "open" => self.show(),
                     "clipboard" => {
@@ -4696,6 +4703,105 @@ impl App {
     }
 
     // --------------------------------------------------------------- actions
+
+    /// Open the action panel for `item` (⌘K, the footer "Actions" hint, a right click).
+    pub(crate) fn open_panel(&mut self, item: Item) {
+        let actions = self.actions_for(&item);
+        self.panel = Some(ActionPanel { actions, query: String::new(), sel: 0, item });
+    }
+
+    /// Hover buttons for the common per-item actions of a row; each one carries the `Act` of the
+    /// keyboard shortcut it mirrors, taken from `actions_for` so the two cannot drift apart.
+    pub(crate) fn row_buttons(&self, item: &Item) -> Vec<RowButton> {
+        let own_view = matches!(
+            (&item.kind, self.view()),
+            (Kind::Clip(_), View::Clipboard)
+                | (Kind::Snippet(_), View::Snippets)
+                | (Kind::Quicklink { .. }, View::Quicklinks)
+                | (Kind::Note(_), View::Notes)
+        );
+        if !own_view {
+            return vec![];
+        }
+        let acts = self.actions_for(item);
+        let pick = |label: &'static str, f: fn(&Act) -> bool| {
+            acts.iter().find(|a| f(&a.kind)).map(|a| RowButton {
+                label,
+                tip: match a.shortcut {
+                    Some((m, k)) => format!("{}  {}", a.title, shortcut_label(m, k)),
+                    None => a.title.clone(),
+                },
+                kind: a.kind.clone(),
+                destructive: a.destructive,
+            })
+        };
+        match &item.kind {
+            Kind::Clip(_) => {
+                let unpin = acts.iter().any(|a| a.title == "Unpin Entry");
+                [
+                    pick(if unpin { "Unpin" } else { "Pin" }, |a| matches!(a, Act::ClipPin(_))),
+                    pick("Delete", |a| matches!(a, Act::ClipDelete(_))),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
+            Kind::Note(_) => {
+                let unpin = acts.iter().any(|a| a.title == "Unpin Note");
+                [
+                    pick(if unpin { "Unpin" } else { "Pin" }, |a| matches!(a, Act::NotePin(_))),
+                    pick("Delete", |a| matches!(a, Act::NoteDelete(_))),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
+            Kind::Snippet(_) => {
+                [pick("Edit", |a| matches!(a, Act::EditSnippet(_))), pick("Delete", |a| matches!(a, Act::DeleteSnippet(_)))]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+            }
+            Kind::Quicklink { .. } => {
+                [pick("Edit", |a| matches!(a, Act::EditQuicklink(_))), pick("Delete", |a| matches!(a, Act::DeleteQuicklink(_)))]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+            }
+            _ => vec![],
+        }
+    }
+
+    /// View-level mouse controls: "Clear History…" in the clipboard, "+ New" in snippets and quicklinks.
+    pub(crate) fn header_buttons(&self) -> Vec<RowButton> {
+        match self.view() {
+            View::Clipboard => vec![RowButton {
+                label: "Clear History…",
+                tip: format!("Delete All Entries  {} (pinned entries stay)", shortcut_label(CTRL_SHIFT, Key::X)),
+                kind: Act::ClipDeleteAll,
+                destructive: true,
+            }],
+            View::Snippets => vec![RowButton {
+                label: "+ New",
+                tip: format!("Create Snippet  {}", shortcut_label(CMD, Key::N)),
+                kind: Act::CreateSnippet,
+                destructive: false,
+            }],
+            View::Quicklinks => vec![RowButton {
+                label: "+ New",
+                tip: format!("Create Quicklink  {}", shortcut_label(CMD, Key::N)),
+                kind: Act::CreateQuicklink,
+                destructive: false,
+            }],
+            View::Notes => vec![RowButton {
+                label: "+ New",
+                tip: format!("Create Note  {}", shortcut_label(CMD, Key::N)),
+                kind: Act::CreateNote,
+                destructive: false,
+            }],
+            _ => vec![],
+        }
+    }
 
     fn actions_for(&self, item: &Item) -> Vec<Action> {
         let mut a = vec![];
@@ -6108,6 +6214,12 @@ impl App {
                 self.push(View::QuicklinkForm { id: None, name: String::new(), link: String::new(), open_with: String::new() })
             }
             Builtin::SearchEmoji => self.push(View::Emoji),
+            Builtin::PickColor => {
+                // Hide first so the launcher is not what gets sampled.
+                self.hide();
+                self.reset_to_root();
+                (self.fx.color_sampler)(&self.bus);
+            }
             Builtin::SearchFiles => self.push(View::Files),
             Builtin::SwitchWindows => self.push(View::Windows),
             Builtin::KillProcess => self.push(View::Processes),
@@ -7317,6 +7429,8 @@ pub(crate) struct Effects {
     /// Start the translation request.
     pub(crate) apple_available: fn() -> bool,
     pub(crate) translate_start: fn(&Settings, String, String, Option<i32>, ferrocast_core::models::TranslateOutput, u64, &Bus),
+    /// Show the screen colour picker; the result arrives as `Msg::ColorPicked` (main thread only).
+    pub(crate) color_sampler: fn(&Bus),
 }
 
 impl Effects {
@@ -7342,6 +7456,12 @@ impl Effects {
             web_script: |b, js| services::web_script(b, js.to_string()),
             apple_available: ferrocast_macos::apple_translate::available,
             translate_start: |s, text, lang, pid, out, run, bus| services::translate_text(s, text, lang, pid, out, run, bus.clone()),
+            color_sampler: |bus| {
+                let bus = bus.clone();
+                ferrocast_macos::color_sampler::sample(move |c| {
+                    bus.send(Msg::ColorPicked(c.map(|[r, g, b, a]| ferrocast_core::color::Rgba::from_unit(r, g, b, a))))
+                });
+            },
         }
     }
 }

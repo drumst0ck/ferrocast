@@ -74,6 +74,13 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
 }
 
 impl Rgba {
+    /// From 0-1 components (as AppKit gives them): rounded to 0-255, out-of-range and NaN clamped.
+    pub fn from_unit(r: f64, g: f64, b: f64, a: f64) -> Rgba {
+        let c = |v: f64| if v.is_nan() { 0 } else { (v.clamp(0.0, 1.0) * 255.0).round() as u8 };
+        let a = if a.is_nan() { 1.0 } else { a.clamp(0.0, 1.0) as f32 };
+        Rgba { r: c(r), g: c(g), b: c(b), a }
+    }
+
     /// Parse a CSS-like color string. Named colors are intentionally not
     /// accepted so they don't hijack normal searches.
     pub fn parse(input: &str) -> Option<Rgba> {
@@ -176,6 +183,15 @@ impl Rgba {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn from_unit_rounds_clamps_and_keeps_alpha() {
+        let c = Rgba::from_unit(1.0, 0.5, 0.0, 1.0);
+        assert_eq!((c.r, c.g, c.b, c.a), (255, 128, 0, 1.0));
+        assert_eq!(c.formats()[0].1, "#FF8000");
+        let c = Rgba::from_unit(-0.2, 1.4, f64::NAN, 0.25);
+        assert_eq!((c.r, c.g, c.b, c.a), (0, 255, 0, 0.25));
+    }
+
     use super::*;
 
     #[test]

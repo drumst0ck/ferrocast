@@ -27,6 +27,8 @@ pub enum EffectKind {
 
 pub enum Msg {
     Hotkey(u32),
+    /// The screen colour picker finished: the colour, or `None` when cancelled.
+    ColorPicked(Option<ferrocast_core::color::Rgba>),
     Tray(String),
     /// Result of a feed check: `Ok(None)` means no stable release was found.
     UpdateChecked {

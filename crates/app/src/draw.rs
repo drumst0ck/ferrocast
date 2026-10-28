@@ -872,6 +872,41 @@ fn elide(p: &egui::Painter, text: &str, font: FontId, max_w: f32) -> String {
     chars[..lo].iter().collect::<String>().trim_end().to_string() + "…"
 }
 
+/// What the mouse did on the list this frame.
+#[derive(Default)]
+struct ListMouse {
+    clicked: Option<usize>,
+    double: Option<usize>,
+    /// Right click / two-finger click.
+    secondary: Option<usize>,
+    /// A hover button: the row and the `Act` its keyboard shortcut runs.
+    button: Option<(usize, Act)>,
+}
+
+fn mini_button_width(ui: &Ui, label: &str) -> f32 {
+    ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(11.5), Color32::WHITE).size().x + 16.0
+}
+
+/// A small text button whose right edge sits at `right` and whose centre line is `cy`.
+fn mini_button_rect(ui: &Ui, _pal: &Palette, right: f32, cy: f32, label: &str) -> Rect {
+    let w = mini_button_width(ui, label);
+    Rect::from_min_size(Pos2::new(right - w, cy - 11.0), Vec2::new(w, 22.0))
+}
+
+/// Draw and handle one mini button; same hover/press feedback as the footer hints (Field, then Sel).
+fn mini_button(ui: &Ui, pal: &Palette, r: Rect, b: &RowButton, id: Id) -> bool {
+    let resp = ui.interact(r, id, Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(b.tip.clone());
+    let p = ui.painter();
+    let fill = if resp.is_pointer_button_down_on() { pal.sel } else { pal.field };
+    p.rect_filled(r, 6.0, fill);
+    if resp.hovered() {
+        p.rect_stroke(r, 6.0, Stroke::new(1.0, if b.destructive { pal.danger } else { pal.border }), StrokeKind::Inside);
+    }
+    let col = if b.destructive { pal.danger } else { pal.text };
+    p.text(r.center(), Align2::CENTER_CENTER, b.label, FontId::proportional(11.5), col);
+    resp.clicked()
+}
+
 fn panel_filter(p: &ActionPanel) -> Vec<usize> {
     let q = p.query.trim().to_lowercase();
     p.actions.iter().enumerate().filter(|(_, a)| q.is_empty() || a.title.to_lowercase().contains(&q)).map(|(i, _)| i).collect()
@@ -883,6 +918,8 @@ impl App {
         let shape = view.shape();
         let hotkey = matches!(view, View::Hotkey { .. });
         let tour = matches!(view, View::Welcome);
+        // a click on a footer hint stands in for its key, so both paths run the very same code
+        let footer_key = ctx.data_mut(|d| d.remove_temp::<String>(Id::new("footer-click")));
         let query_empty = self.query.is_empty();
         let panel = self.panel.is_some();
         // egui drops the focus of a text field at the start of the frame in which Escape arrives,
@@ -901,6 +938,10 @@ impl App {
             if hotkey {
                 return k;
             }
+            // a click on a chip with its own key (Rotate R, Undo ⌘Z…) presses that key: the same code runs
+            if let Some((modifiers, key)) = footer_key.as_deref().filter(|c| !matches!(*c, "⌘K" | "↵" | "esc")).and_then(chip_key) {
+                i.events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers });
+            }
             if shape == Shape::List || panel {
                 k.cmd_k = i.consume_key(CMD, Key::K);
                 k.up = i.consume_key(Modifiers::NONE, Key::ArrowUp);
@@ -917,6 +958,15 @@ impl App {
             }
             if !typing {
                 k.esc = i.consume_key(Modifiers::NONE, Key::Escape);
+            }
+            match footer_key.as_deref() {
+                Some("⌘K") if shape == Shape::List || panel => k.cmd_k = true,
+                Some("↵") => {
+                    k.enter = true;
+                    k.cmd_enter = true;
+                }
+                Some("esc") => k.esc = true,
+                _ => {}
             }
             k.backspace = shape == Shape::List
                 && !panel
@@ -978,8 +1028,7 @@ impl App {
             }
             let Some(item) = cur else { return false };
             if k.cmd_k {
-                let actions = self.actions_for(&item);
-                self.panel = Some(ActionPanel { actions, query: String::new(), sel: 0, item });
+                self.open_panel(item);
                 return true;
             }
             if k.enter || k.cmd_enter {
@@ -1685,6 +1734,11 @@ impl App {
             if ctx.input(|i| i.pointer.primary_clicked()) {
                 if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                     let d = pos - ui.max_rect().center();
+                    // the switcher chips do what tapping Shift, ⌘ or ⌃ does
+                    if let Some((k, ..)) = wheel_switcher(ui.max_rect(), kind).into_iter().find(|(_, _, _, r)| r.contains(pos)) {
+                        self.switch_wheel(k);
+                        return;
+                    }
                     if let Some(i) = wheel_hit(d, n) {
                         self.apply_wheel(Some(i));
                         return;
@@ -1702,6 +1756,25 @@ impl App {
             }
             let sel = if let Some(View::Wheel { sel, .. }) = self.stack.last() { *sel } else { None };
             self.draw_wheel(ui, &pal, center, &segs, &files, kind, sel);
+            let chips = wheel_switcher(ui.max_rect(), kind);
+            #[cfg(test)]
+            ctx.data_mut(|d| {
+                d.insert_temp(Id::new("wheel-switch"), chips.iter().map(|(_, l, _, r)| (l.to_string(), *r)).collect::<Vec<_>>())
+            });
+            let hover = ctx.input(|i| i.pointer.hover_pos());
+            for (k, label, key, r) in chips {
+                let on = k == kind;
+                let hot = hover.is_some_and(|p| r.contains(p));
+                let fill = if on { pal.accent } else { Color32::from_black_alpha(if hot { 200 } else { 140 }) };
+                ui.painter().rect_filled(r, 11.0, fill);
+                ui.painter().text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    format!("{label}  {key}"),
+                    FontId::proportional(11.5),
+                    if on || hot { Color32::WHITE } else { Color32::from_white_alpha(190) },
+                );
+            }
             return;
         }
         // Fade the launcher in when it appears (opacity only; one multiply per shape).
@@ -1838,9 +1911,31 @@ impl App {
         }
         line(footer_rect.min.y);
 
+        // View-level mouse controls ("Clear History…", "+ New"), over the right end of the search bar
+        if shape == Shape::List && !own_bar && self.panel.is_none() {
+            let mut x = search_rect.max.x - 14.0;
+            let mut recs: Vec<(String, Rect)> = vec![];
+            let mut run = None;
+            for b in self.header_buttons().into_iter().rev() {
+                let r = mini_button_rect(ui, &pal, x, search_rect.center().y + 3.0, b.label);
+                x = r.min.x - 6.0;
+                if mini_button(ui, &pal, r, &b, Id::new(("header-button", b.label))) {
+                    run = Some(b.kind.clone());
+                }
+                recs.push((b.label.to_string(), r));
+            }
+            #[cfg(test)]
+            ctx.data_mut(|d| d.insert_temp(Id::new("header-buttons"), recs));
+            #[cfg(not(test))]
+            drop(recs);
+            if let Some(act) = run {
+                self.perform(act, false);
+                ctx.request_repaint();
+                return;
+            }
+        }
         // ---- content
-        let mut clicked = None;
-        let mut double = None;
+        let mut mouse = ListMouse::default();
         match shape {
             Shape::List => {
                 let detail = if matches!(self.view(), View::Clipboard | View::Snippets | View::Notes | View::Quicklinks) {
@@ -1860,7 +1955,7 @@ impl App {
                 } else {
                     content
                 };
-                (clicked, double) = self.draw_list(ui, list_rect, &sections, &pal);
+                mouse = self.draw_list(ui, list_rect, &sections, &pal);
                 if let Some(rel) = note {
                     let r = Rect::from_min_max(Pos2::new(list_rect.max.x, content.min.y), content.max);
                     ui.painter().vline(r.min.x, r.y_range(), Stroke::new(1.0, pal.sep));
@@ -1910,17 +2005,35 @@ impl App {
         self.draw_footer(ui, footer_rect, &pal, primary, shape == Shape::List);
         // Keep the pop-in animation primed at 0 while the panel is closed.
         ctx.animate_bool_with_time(Id::new("panel_pop"), self.panel.is_some(), 0.12);
-        if self.panel.is_some() {
+        let panel_was_open = self.panel.is_some();
+        if panel_was_open {
             self.draw_panel(ui, content, &pal);
+            // a click that closed (or landed on) the panel is never also a click on the row beneath it
+            mouse = ListMouse::default();
         }
 
         // Hovering already selects, so a single click runs the row, as in the original launcher.
         // Clicks right after a view change are ignored: the second half of a habitual double
         // click must not fire the first row of the screen that just opened.
-        let _ = double;
-        if let Some(i) = clicked.filter(|_| self.nav_at.elapsed() > Duration::from_millis(350)) {
+        // A double click already ran the primary action with its first click, so it maps to the same path.
+        let settled = self.nav_at.elapsed() > Duration::from_millis(350);
+        let nth = |i: usize| sections.iter().flat_map(|s| s.items.iter()).nth(i).cloned();
+        if let Some(i) = mouse.secondary {
+            // right click / two-finger click: select the row and open its actions
             self.selected = i;
-            if let Some(item) = sections.iter().flat_map(|s| s.items.iter()).nth(i).cloned() {
+            if let Some(item) = nth(i) {
+                self.open_panel(item);
+                ctx.request_repaint();
+            }
+        } else if let Some((i, act)) = mouse.button.filter(|_| settled) {
+            self.selected = i;
+            if let Some(item) = nth(i) {
+                self.do_action(item, act);
+                ctx.request_repaint();
+            }
+        } else if let Some(i) = mouse.clicked.or(mouse.double).filter(|_| settled) {
+            self.selected = i;
+            if let Some(item) = nth(i) {
                 if let Some(a) = self.actions_for(&item).first() {
                     self.do_action(item, a.kind.clone());
                 }
@@ -2030,6 +2143,10 @@ impl App {
         let mut first = true;
         #[cfg(test)]
         let mut drawn: Vec<(String, String)> = vec![];
+        // Every chip that names one key is a button; a range (`←/→`) stays text, its own controls do it
+        let live = window_chips.is_empty();
+        let mut hit_rects: Vec<(String, Rect)> = vec![];
+        let mut footer_click: Option<String> = None;
         let mut hint = |label: &str, key: &str| {
             #[cfg(test)]
             drawn.insert(0, (label.to_string(), key.to_string()));
@@ -2044,9 +2161,23 @@ impl App {
             record_text(ui.ctx(), pal, "footer-key", pal.text, &[pal.field], 1.0);
             let kw = (kg.size().x + 12.0).max(22.0);
             let kr = Rect::from_min_size(Pos2::new(x - kw, cy - 10.0), Vec2::new(kw, 20.0));
+            let lx = kr.min.x - 8.0 - lg.size().x;
+            if live || chip_clickable(key) {
+                // Same feedback as the Notes HintBar: a Field background on hover, a stronger one while pressed.
+                let hr = Rect::from_min_max(Pos2::new(lx - 6.0, cy - 12.0), Pos2::new(kr.max.x + 6.0, cy + 12.0));
+                let resp = ui.interact(hr, Id::new(("footer-hint", key)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                if resp.is_pointer_button_down_on() {
+                    p.rect_filled(hr, 6.0, pal.sel);
+                } else if resp.hovered() {
+                    p.rect_filled(hr, 6.0, pal.field);
+                }
+                if resp.clicked() {
+                    footer_click = Some(key.to_string());
+                }
+                hit_rects.push((key.to_string(), hr));
+            }
             p.rect_filled(kr, 5.0, pal.field);
             p.galley(Pos2::new(kr.center().x - kg.size().x / 2.0, cy - kg.size().y / 2.0), kg, pal.text);
-            let lx = kr.min.x - 8.0 - lg.size().x;
             p.galley(Pos2::new(lx, cy - lg.size().y / 2.0), lg, pal.text);
             x = lx - 18.0;
         };
@@ -2068,14 +2199,24 @@ impl App {
         }
         #[cfg(test)]
         ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-chips"), drawn));
+        // the panel's outside-click close must not swallow a click on a footer hint
+        ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-hints"), hit_rects));
+        if let Some(k) = footer_click {
+            ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-click"), k));
+            ui.ctx().request_repaint();
+        }
         if undo_clicked {
             self.undo_settings_reset();
         }
     }
 
-    fn draw_list(&mut self, ui: &mut Ui, rect: Rect, sections: &[Section], pal: &Palette) -> (Option<usize>, Option<usize>) {
+    fn draw_list(&mut self, ui: &mut Ui, rect: Rect, sections: &[Section], pal: &Palette) -> ListMouse {
         let mut clicked = None;
         let mut double = None;
+        let mut secondary = None;
+        let mut button = None;
+        #[cfg(test)]
+        let mut btn_rects: Vec<(String, Rect)> = vec![];
         let sel = self.selected;
         let scroll_sel = self.scroll_to_sel;
         let ctx = ui.ctx().clone();
@@ -2123,6 +2264,12 @@ impl App {
                         if resp.double_clicked() {
                             double = Some(idx);
                         }
+                        if resp.secondary_clicked() {
+                            secondary = Some(idx);
+                        }
+                        // hover buttons for the common per-item actions, on the selected (hovered) row
+                        let row_btns = if selected && self.panel.is_none() { self.row_buttons(item) } else { vec![] };
+                        let btn_total: f32 = row_btns.iter().map(|b| mini_button_width(ui, b.label) + 6.0).sum();
                         // Rows scrolled out of view still take part in layout and selection, but
                         // painting them (and fetching their icons) would be wasted work.
                         if !ui.is_rect_visible(r) {
@@ -2183,7 +2330,7 @@ impl App {
                             acc.push(item.accessory.clone());
                         }
                         let acc = acc.join("  ");
-                        let right = r.max.x - 18.0;
+                        let right = r.max.x - 18.0 - if btn_total > 0.0 { btn_total + 4.0 } else { 0.0 };
                         let ag = painter.layout_no_wrap(acc, FontId::proportional(12.0), pal.sub);
                         let aw = ag.size().x;
                         painter.galley(Pos2::new(right - aw, r.center().y - ag.size().y / 2.0), ag, pal.sub);
@@ -2203,6 +2350,16 @@ impl App {
                                 pal.sub,
                             );
                         }
+                        let mut bx = r.max.x - 14.0;
+                        for b in row_btns.iter().rev() {
+                            let br = mini_button_rect(ui, pal, bx, r.center().y, b.label);
+                            bx = br.min.x - 6.0;
+                            if mini_button(ui, pal, br, b, Id::new(("row-button", b.label, idx))) {
+                                button = Some((idx, b.kind.clone()));
+                            }
+                            #[cfg(test)]
+                            btn_rects.push((b.label.to_string(), br));
+                        }
                         idx += 1;
                     }
                 }
@@ -2212,7 +2369,9 @@ impl App {
         if let Some(i) = hover_sel {
             self.selected = i;
         }
-        (clicked, double)
+        #[cfg(test)]
+        ctx.data_mut(|d| d.insert_temp(Id::new("row-buttons"), btn_rects));
+        ListMouse { clicked, double, secondary, button }
     }
 
     /// Search Obsidian's right pane: the note title and path, then the parsed blocks of its first 200 KB.
@@ -2304,6 +2463,14 @@ impl App {
         let rect = Rect::from_min_size(rect.max - rect.size() * (0.96 + 0.04 * t), rect.size() * (0.96 + 0.04 * t))
             .translate(Vec2::new(0.0, (1.0 - t) * 8.0));
         ui.set_opacity(t);
+        // A click anywhere else closes the panel; the footer hints own their clicks (Actions toggles it).
+        let footer_hits = ui.ctx().data(|d| d.get_temp::<Vec<(String, Rect)>>(Id::new("footer-hints"))).unwrap_or_default();
+        let outside = ui.ctx().input(|i| {
+            (i.pointer.primary_clicked() || i.pointer.secondary_clicked())
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|pos| !rect.expand(2.0).contains(pos) && !footer_hits.iter().any(|(_, r)| r.contains(pos)))
+        });
         let painter = ui.painter().clone();
         painter.rect_filled(rect.expand(1.0), 10.0, Color32::from_black_alpha(90));
         painter.rect_filled(rect, 10.0, if self.dark { Color32::from_rgb(34, 34, 38) } else { Color32::from_rgb(246, 246, 248) });
@@ -2362,6 +2529,8 @@ impl App {
             let item = p.item.clone();
             self.panel = None;
             self.do_action(item, act);
+        } else if outside {
+            self.panel = None;
         }
     }
 
@@ -3186,7 +3355,7 @@ impl App {
                 std::thread::spawn(move || bus.send(Msg::VideoFrame(f.clone(), at, crate::media_tools::preview_frame(ff, &f, at))));
             }
         }
-        let view = Rect::from_min_max(area_in.min + Vec2::new(24.0, 16.0), Pos2::new(area_in.max.x - 24.0, bar.min.y - 40.0));
+        let view = Rect::from_min_max(area_in.min + Vec2::new(24.0, 16.0), Pos2::new(area_in.max.x - 24.0, bar.min.y - 64.0));
         match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("vt-tex"))) {
             Some(tex) => {
                 let sz = tex.size_vec2();
@@ -3217,6 +3386,25 @@ impl App {
             pal.text,
         );
         note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "click the bar to jump", pal);
+        // the keys as buttons: step, markers, ends, and for Split the cut keys (M, ⌫)
+        {
+            use ferrocast_core::videoplan::TrimCmd;
+            let cmds: Vec<TrimCmd> = TrimCmd::ALL.into_iter().filter(|c| !(snapshot && c.is_marker())).collect();
+            let extra: &[(&str, bool)] = if split { &[("Cut here", true), ("Remove last", true)] } else { &[] };
+            let (cmd, ex) = trim_row(ui, pal, Pos2::new(bar.min.x, bar.min.y - 54.0), &cmds, extra);
+            if let Some(c) = cmd {
+                c.apply(&mut t);
+            }
+            match ex {
+                Some(0) => {
+                    t.add_cut(&mut points);
+                }
+                Some(_) => {
+                    points.pop();
+                }
+                None => {}
+            }
+        }
         if split {
             let clips = ferrocast_core::videoplan::split_ranges(t.duration, &points, parts).len();
             let row = Rect::from_min_size(Pos2::new(bar.min.x, bar.max.y + 8.0), Vec2::new(bar.width(), 24.0));
@@ -3360,6 +3548,9 @@ impl App {
             pal.text,
         );
         note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "click the waveform to jump", pal);
+        if let (Some(c), _) = trim_row(ui, pal, Pos2::new(wave.min.x, wave.max.y + 62.0), &ferrocast_core::videoplan::TrimCmd::ALL, &[]) {
+            c.apply(&mut t);
+        }
         let (mut start, mut end, mut silence) = (t.start, t.end, false);
         let row = Rect::from_min_size(Pos2::new(wave.min.x, wave.max.y + 30.0), Vec2::new(wave.width(), 26.0));
         ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
@@ -4736,7 +4927,7 @@ impl App {
         let playing = ed.playing();
         let (out_t, out_total) = (tl.to_output(ed.t), tl.output_duration());
         let maxed = self.win.is_maximised();
-        let (toggle, step, undo_btn, redo_btn) = {
+        let (toggle, step, undo_btn, redo_btn, jump) = {
             let ctrl = lay.transport;
             let bh = if comfy { 34.0 } else { 28.0 };
             let by = ctrl.center().y - bh / 2.0;
@@ -4753,10 +4944,27 @@ impl App {
             let r_play = place(bar_btn_w(ui, play_label, play_glyph, size));
             let icon_w = bh.max(32.0);
             let (r_prev, r_next) = (place(icon_w), place(icon_w));
-            let left_end = x;
             let (wu, wr) = (bar_btn_w(ui, "Undo", BarGlyph::None, size), bar_btn_w(ui, "Redo", BarGlyph::None, size));
             let r_redo = Rect::from_min_size(Pos2::new(ctrl.max.x - wr, by), Vec2::new(wr, bh));
             let r_undo = Rect::from_min_size(Pos2::new(r_redo.min.x - gap - wu, by), Vec2::new(wu, bh));
+            // the keys without a button: ⇧← / ⇧→ (one second), Home and End. They sit after the step buttons
+            // when all four fit between them and the time; a narrow strip leaves them out (the timeline
+            // still reaches every moment with a click)
+            let jump_labels = ["−1 s", "+1 s", "Start", "End"];
+            let time_w = ui
+                .painter()
+                .layout_no_wrap(
+                    format!("{} / {}", clock(out_t), clock(out_total)),
+                    FontId::proportional(if comfy { 15.0 } else { 13.5 }),
+                    pal.text,
+                )
+                .size()
+                .x;
+            let jump_w: f32 = jump_labels.iter().map(|l| bar_btn_w(ui, l, BarGlyph::None, size) + gap).sum();
+            let room = r_undo.min.x - 8.0 - (r_next.max.x + gap + 8.0 + time_w + 12.0);
+            let r_jumps: Vec<Rect> =
+                if room >= jump_w { jump_labels.iter().map(|l| place(bar_btn_w(ui, l, BarGlyph::None, size))).collect() } else { vec![] };
+            let left_end = x;
             let toggle = bar_btn(ui, pal, r_play, "small_btn", play_label, play_glyph, BarStyle::Soft, size, true);
             let prev = icon_btn(ui, pal, r_prev, "Previous frame", BarGlyph::StepBack, true);
             let next = icon_btn(ui, pal, r_next, "Next frame", BarGlyph::StepForward, true);
@@ -4795,7 +5003,13 @@ impl App {
                 (_, true) => Some(1),
                 _ => None,
             };
-            (toggle, step, undo_btn, redo_btn)
+            let mut jump = None;
+            for (n, (l, r)) in jump_labels.iter().zip(r_jumps).enumerate() {
+                if bar_btn(ui, pal, r, "small_btn", l, BarGlyph::None, BarStyle::Ghost, size, true) {
+                    jump = Some(n);
+                }
+            }
+            (toggle, step, undo_btn, redo_btn, jump)
         };
         // the top bar: back, the project's name and its save state at the left; Export… and Full screen at the right
         let (back_btn, export_btn, full_btn) = {
@@ -4841,6 +5055,18 @@ impl App {
         if let Some(dir) = step {
             ed.play = None;
             let t = crate::editor_ctl::step_frames(&tl, ed.t, dir, fps, proj.duration);
+            ed.seek(t, now, fps);
+        }
+        // the same moves as ⇧←, ⇧→, Home and End
+        if let Some(n) = jump {
+            let t = match n {
+                0 | 1 => {
+                    ed.play = None;
+                    crate::editor_ctl::step_seconds(&tl, ed.t, if n == 0 { -1 } else { 1 }, fps, proj.duration)
+                }
+                2 => crate::editor_ctl::first_time(&tl),
+                _ => ed.last(fps),
+            };
             ed.seek(t, now, fps);
         }
         if undo_btn {
@@ -4943,6 +5169,31 @@ impl App {
                         if resp.clicked() {
                             color = i;
                         }
+                    }
+                    // the keys without a button: ⌘Z and ⌫
+                    ui.add_space(10.0);
+                    #[cfg(test)]
+                    let mut btns: Vec<(String, Rect)> = vec![];
+                    let can_undo = !doc.items.is_empty();
+                    let undo = ui.add_enabled(can_undo, egui::Button::new("Undo"));
+                    record_strip(&ctx, undo.rect);
+                    if undo.clicked() {
+                        doc.undo();
+                        sel = None;
+                    }
+                    let can_delete = sel.is_some_and(|s| s < doc.items.len());
+                    let delete = ui.add_enabled(can_delete, egui::Button::new("Delete"));
+                    record_strip(&ctx, delete.rect);
+                    if delete.clicked() {
+                        if let Some(s) = sel.take() {
+                            doc.remove(s);
+                        }
+                    }
+                    #[cfg(test)]
+                    {
+                        btns.push(("Undo".into(), undo.rect));
+                        btns.push(("Delete".into(), delete.rect));
+                        ctx.data_mut(|d| d.insert_temp(Id::new("annot-btns"), btns));
                     }
                 });
             })
@@ -5298,6 +5549,37 @@ impl App {
                     .size(12.0)
                     .color(pal.sub),
             );
+            ui.add_space(8.0);
+            // the keyboard edits as buttons: the same `PdfPlan` calls the keys make
+            let mut op = None;
+            #[cfg(test)]
+            let mut op_rects: Vec<(String, Rect)> = vec![];
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for o in ferrocast_core::pdfplan::PlanOp::ALL {
+                    let start = ui.cursor().min;
+                    if pill(ui, pal, o.label(), false) {
+                        op = Some(o);
+                    }
+                    #[cfg(test)]
+                    op_rects.push((o.label().to_string(), Rect::from_min_max(start, Pos2::new(ui.cursor().min.x, start.y + 28.0))));
+                    #[cfg(not(test))]
+                    let _ = start;
+                }
+            });
+            #[cfg(test)]
+            ctx.data_mut(|d| d.insert_temp(Id::new("pdf-ops"), op_rects));
+            if let Some(o) = op {
+                let mut edited = plan.clone();
+                o.apply(&mut edited);
+                if edited != plan {
+                    if let Some(View::PdfOrganize { plan: p, .. }) = self.stack.last_mut() {
+                        *p = edited.clone();
+                    }
+                    plan = edited;
+                    ctx.request_repaint();
+                }
+            }
             ui.add_space(8.0);
             let mut res = CellDrag::default();
             egui::ScrollArea::horizontal().id_salt("pdf-strip").auto_shrink([false, true]).show(ui, |ui| {
@@ -8762,6 +9044,110 @@ fn bar_btn(
     paint_bar_glyph(p, Pos2::new(x0 + BAR_GLYPH_W / 2.0, r.center().y), glyph, ink);
     p.galley(Pos2::new(x0 + lead, r.center().y - g.size().y / 2.0), g, ink);
     enabled && resp.clicked()
+}
+
+/// The buttons of the trim viewers' keys (`TrimCmd`, plus `extra` pills such as "Cut here"), laid out
+/// from `origin`. Returns the command or the extra pill (index) clicked this frame.
+fn trim_row(
+    ui: &mut Ui,
+    pal: &Palette,
+    origin: Pos2,
+    cmds: &[ferrocast_core::videoplan::TrimCmd],
+    extra: &[(&str, bool)],
+) -> (Option<ferrocast_core::videoplan::TrimCmd>, Option<usize>) {
+    let mut picked = (None, None);
+    #[cfg(test)]
+    let mut recs: Vec<(String, Rect)> = vec![];
+    let row = Rect::from_min_size(origin, Vec2::new(ui::WIDTH - 2.0 * origin.x, 28.0));
+    ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for c in cmds {
+                #[cfg(test)]
+                let x0 = ui.cursor().min.x;
+                if pill(ui, pal, c.label(), false) {
+                    picked.0 = Some(*c);
+                }
+                #[cfg(test)]
+                recs.push((
+                    c.label().to_string(),
+                    Rect::from_min_max(Pos2::new(x0, origin.y), Pos2::new(ui.cursor().min.x - 6.0, origin.y + 28.0)),
+                ));
+            }
+            for (i, (label, enabled)) in extra.iter().enumerate() {
+                #[cfg(test)]
+                let x0 = ui.cursor().min.x;
+                let clicked = ui.add_enabled_ui(*enabled, |ui| pill(ui, pal, label, false)).inner;
+                if clicked {
+                    picked.1 = Some(i);
+                }
+                #[cfg(test)]
+                recs.push((
+                    label.to_string(),
+                    Rect::from_min_max(Pos2::new(x0, origin.y), Pos2::new(ui.cursor().min.x - 6.0, origin.y + 28.0)),
+                ));
+            }
+        });
+    });
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| d.insert_temp(Id::new("trim-cmds"), recs));
+    picked
+}
+
+/// The three chips under the ring that switch wheels (the click path of tapping Shift, ⌘ or ⌃):
+/// `(kind, label, key, rect)`. None for a text wheel, which has nothing to switch to.
+fn wheel_switcher(
+    rect: Rect,
+    current: ferrocast_core::wheel::WheelKind,
+) -> Vec<(ferrocast_core::wheel::WheelKind, &'static str, &'static str, Rect)> {
+    use ferrocast_core::wheel::WheelKind;
+    if current == WheelKind::Translate {
+        return vec![];
+    }
+    let (w, h, gap) = (92.0, 22.0, 8.0);
+    let total = 3.0 * w + 2.0 * gap;
+    let y = rect.max.y - 12.0 - h;
+    [(WheelKind::Convert, "Convert", "⇧"), (WheelKind::Tools, "Tools", "⌘"), (WheelKind::Actions, "Actions", "⌃")]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (k, l, key))| {
+            let x = rect.center().x - total / 2.0 + i as f32 * (w + gap);
+            (k, l, key, Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)))
+        })
+        .collect()
+}
+
+/// The key a footer chip names, for the chips that name exactly one key: `space`, `I`, `⌫`, `⌘Z`,
+/// `⇧⌘Z`, `⌘↵`, `⌃⌘F`. Ranges (`←/→`, `⌘↑/↓`, `⌘1–0`) and `↵`/`esc`/`⌘K` (handled by `read_keys`
+/// itself) are not parsed.
+fn chip_key(label: &str) -> Option<(Modifiers, Key)> {
+    let mut m = Modifiers::NONE;
+    let mut rest = label;
+    loop {
+        let mut chars = rest.chars();
+        match chars.next() {
+            Some('⌘') => m.command = true,
+            Some('⌃') => m.ctrl = true,
+            Some('⌥') => m.alt = true,
+            Some('⇧') => m.shift = true,
+            _ => break,
+        }
+        rest = chars.as_str();
+    }
+    let key = match rest {
+        "space" => Key::Space,
+        "⌫" => Key::Backspace,
+        "↵" => Key::Enter,
+        "esc" => Key::Escape,
+        r if r.chars().count() == 1 && r.chars().all(|c| c.is_ascii_alphabetic()) => Key::from_name(&r.to_uppercase())?,
+        _ => return None,
+    };
+    Some((m, key))
+}
+
+/// A footer chip that a click can press: one named key, or one of the three `read_keys` handles.
+fn chip_clickable(key: &str) -> bool {
+    matches!(key, "⌘K" | "↵" | "esc") || chip_key(key).is_some()
 }
 
 /// A button that is only a drawn shape (`label` is its tooltip and its name for screen readers). Not dimmed

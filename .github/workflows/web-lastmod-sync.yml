@@ -2,22 +2,30 @@ name: Sync sitemap lastmod
 on:
   push:
     branches: [master]
+    # A push may not set both paths and paths-ignore. The negated pattern
+    # keeps a lastmod-only commit (this job's own push) from starting a new run.
     paths:
       - 'web/**'
-    paths-ignore:
-      - 'web/src/data/lastmod.json'
+      - '!web/src/data/lastmod.json'
 
 permissions:
   contents: write
 
 jobs:
   sync:
+    # Path filters are skipped when GitHub cannot compute the diff. The actor
+    # check still stops github-actions[bot] from committing again. Do not put
+    # a skip-ci token in the commit message; that would skip every workflow.
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web
     steps:
+      # Full history: with the default shallow clone every file has the same last-commit date.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -28,5 +36,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/data/lastmod.json
           git diff --staged --quiet && exit 0
-          git commit -m "chore(web): sync sitemap lastmod manifest [skip ci]"
+          git commit -m "chore(web): sync sitemap lastmod manifest"
           git push
