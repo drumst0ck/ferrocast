@@ -124,6 +124,20 @@ pub fn set_language(l: Lang) {
 }
 
 thread_local! {
+    /// Depth of [`with_verbatim`] scopes on this thread.
+    static VERBATIM: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Run `f` showing every text as written: for text that is not Ferrocast's own (the user's
+/// names, an extension's titles), which must never be mistaken for a catalog key.
+pub fn with_verbatim<R>(f: impl FnOnce() -> R) -> R {
+    VERBATIM.with(|v| v.set(v.get() + 1));
+    let r = f();
+    VERBATIM.with(|v| v.set(v.get() - 1));
+    r
+}
+
+thread_local! {
     static OVERRIDE: std::cell::Cell<Option<Lang>> = const { std::cell::Cell::new(None) };
 }
 
@@ -236,6 +250,9 @@ fn is_built(s: &str) -> bool {
 
 /// Translate `key` into `lang`; English text when it has no translation.
 pub fn tr_in(key: &str, lang: Lang) -> Cow<'_, str> {
+    if VERBATIM.with(|v| v.get()) > 0 {
+        return Cow::Borrowed(key);
+    }
     match lookup(key, lang) {
         Some(t) => Cow::Borrowed(t),
         None if lang != Lang::En && is_built(key) => Cow::Borrowed(key),
@@ -418,6 +435,16 @@ mod tests {
         assert_eq!(language(), Lang::Fr, "the global language applies where nothing overrides it");
         with_language(Lang::En, || assert_eq!(language(), Lang::En));
         set_language(Lang::En);
+    }
+
+    #[test]
+    fn text_inside_a_verbatim_scope_is_never_translated() {
+        with_language(Lang::De, || {
+            assert_eq!(tr("Settings"), "Einstellungen");
+            assert_eq!(with_verbatim(|| tr("Settings").into_owned()), "Settings");
+            assert_eq!(with_verbatim(|| trn("{n} command", "{n} commands", 2)), "2 commands");
+            assert_eq!(tr("Settings"), "Einstellungen", "the scope ends");
+        });
     }
 
     #[test]

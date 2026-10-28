@@ -1319,6 +1319,11 @@ pub fn run_script(cmd: &ScriptCommand, args: Vec<String>, run: u64, bus: Bus) {
     });
 }
 
+/// `notify` for text that is not Ferrocast's own (an extension's): shown as written.
+pub fn notify_verbatim(title: &str, msg: &str) {
+    ferrocast_core::i18n::with_verbatim(|| notify(title, msg));
+}
+
 pub fn notify(title: &str, msg: &str) {
     // tests dispatch real jobs that fail on purpose; they must not raise system notifications
     if cfg!(test) {

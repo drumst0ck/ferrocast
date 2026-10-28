@@ -358,7 +358,7 @@ impl App {
                     title: c.title.clone(),
                     subtitle: m.title.clone(),
                     icon: Icon::Glyph("sf:puzzlepiece.extension", EXT_GLYPH_COLOR),
-                    accessory: "Raycast Extension".into(),
+                    accessory: tr("Raycast Extension").into_owned(),
                     keywords: vec![m.title.clone(), m.name.clone()],
                     kind: Kind::ExtCommand { ext: m.name.clone(), cmd: c.name.clone() },
                 })
@@ -610,13 +610,13 @@ impl App {
                     let text = format!("{title}{sep}{message}");
                     let text = if style == "failure" { format!("⚠ {text}") } else { text };
                     if self.visible {
-                        self.toast(text);
+                        self.toast_verbatim(text);
                     } else {
-                        services::notify("Ferrocast", &text);
+                        services::notify_verbatim("Ferrocast", &text);
                     }
                 }
                 RuntimeMsg::Hud { title } => {
-                    self.toast(title);
+                    self.toast_verbatim(title);
                     self.hide();
                     self.reset_to_root();
                 }
@@ -922,7 +922,7 @@ impl App {
     fn ext_to_actions(&self, v: &[view::ActionModel]) -> Vec<Action> {
         v.iter()
             .map(|a| {
-                let mut x = Action::new(a.title.clone(), Act::ExtAction(a.id.clone()));
+                let mut x = Action::new(a.title.clone(), Act::ExtAction(a.id.clone())).verbatim();
                 if let Some((m, k)) = a.shortcut.as_ref().and_then(map_shortcut) {
                     x = x.key(m, k);
                 }
@@ -962,7 +962,7 @@ impl App {
             .iter()
             .map(|o| {
                 let tick = if &o.value == current { "✓ " } else { "" };
-                Action::new(format!("{tick}{label}: {}", o.title), Act::ExtAction(view::dropdown_action_id(&d.id, &o.value)))
+                Action::new(format!("{tick}{label}: {}", o.title), Act::ExtAction(view::dropdown_action_id(&d.id, &o.value))).verbatim()
             })
             .collect()
     }
@@ -1030,7 +1030,7 @@ impl App {
 
     /// Label of the Enter action of a row.
     pub(crate) fn ext_primary(&self, item_id: &str) -> String {
-        self.ext_actions(item_id).first().map(|a| a.title.clone()).unwrap_or_else(|| "No actions".into())
+        self.ext_actions(item_id).first().map(|a| a.title.clone()).unwrap_or_else(|| tr("No actions").into_owned())
     }
 
     /// Tell the runtime the user triggered an action.

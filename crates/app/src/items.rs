@@ -529,11 +529,25 @@ pub struct Action {
     pub kind: Act,
     pub shortcut: Option<(Modifiers, Key)>,
     pub destructive: bool,
+    /// The title is text from an extension: shown as written, never translated.
+    pub verbatim: bool,
 }
 
 impl Action {
     pub fn new(title: impl Into<String>, kind: Act) -> Action {
-        Action { title: title.into(), kind, shortcut: None, destructive: false }
+        Action { title: title.into(), kind, shortcut: None, destructive: false, verbatim: false }
+    }
+    pub fn verbatim(mut self) -> Action {
+        self.verbatim = true;
+        self
+    }
+    /// The title as shown: built-in titles are translated, extension ones are not.
+    pub fn shown_title(&self) -> std::borrow::Cow<'_, str> {
+        if self.verbatim {
+            std::borrow::Cow::Borrowed(&self.title)
+        } else {
+            ferrocast_core::i18n::tr(&self.title)
+        }
     }
     pub fn key(mut self, m: Modifiers, k: Key) -> Action {
         self.shortcut = Some((m, k));

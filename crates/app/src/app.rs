@@ -1033,6 +1033,8 @@ pub struct App {
     scroll_to_sel: bool,
     panel: Option<ActionPanel>,
     toast: Option<(String, Instant)>,
+    /// The toast is user or extension text: shown as typed.
+    toast_user: bool,
     /// The last "Reset this tab": (tab, the settings before it, when); Undo restores that tab's fields.
     settings_undo: Option<(usize, Settings, Instant)>,
     prev_pid: Option<i32>,
@@ -1344,6 +1346,7 @@ impl App {
             scroll_to_sel: false,
             panel: None,
             toast,
+            toast_user: false,
             settings_undo: None,
             prev_pid: None,
             fx: Effects::real(),
@@ -1662,13 +1665,13 @@ impl App {
                 self.settings.tiling_enabled = !self.settings.tiling_enabled;
                 self.save_settings();
                 let msg = if self.settings.tiling_enabled { "Tiling on" } else { "Tiling off" };
-                self.toast = Some((msg.into(), Instant::now()));
+                self.toast(msg);
             }
             Action::Pause => {
                 self.tiling_paused = !self.tiling_paused;
                 self.sync_tiling();
                 let msg = if self.tiling_paused { "Tiling paused" } else { "Tiling resumed" };
-                self.toast = Some((msg.into(), Instant::now()));
+                self.toast(msg);
             }
             _ if !self.settings.tiling_enabled => {
                 services::notify("Window Tiling", "Turn on automatic tiling in Settings → Advanced first");
@@ -1719,12 +1722,12 @@ impl App {
                     self.settings.tiling_excluded.push(app.clone());
                     self.save_settings();
                 }
-                self.toast = Some((trf("{app} is no longer tiled", &[("app", &app)]), Instant::now()));
+                self.toast(trf("{app} is no longer tiled", &[("app", &app)]));
             }
             Event::Notice(m) => services::notify("Window Tiling", &m),
             Event::StageManager(on) => {
                 let m = if on { "Stage Manager is on: tiling is paused" } else { "Stage Manager is off: tiling resumed" };
-                self.toast = Some((m.into(), Instant::now()));
+                self.toast(m);
             }
         }
     }
@@ -1862,7 +1865,7 @@ impl App {
                 title: a.name.clone(),
                 subtitle: String::new(),
                 icon: Icon::App(a.path.to_string_lossy().to_string()),
-                accessory: "Application".into(),
+                accessory: tr("Application").into_owned(),
                 keywords: a.keywords.clone(),
                 kind: Kind::App { path: a.path.to_string_lossy().to_string() },
             });
@@ -1877,7 +1880,7 @@ impl App {
                 title: tr(b.title()).into_owned(),
                 subtitle: if b.extension() == b.title() { String::new() } else { tr(b.extension()).into_owned() },
                 icon: Icon::Glyph(g, c),
-                accessory: "Command".into(),
+                accessory: tr("Command").into_owned(),
                 keywords: with_english_title(b.keywords(), b.title()),
                 kind: Kind::Builtin(*b),
             });
@@ -1888,7 +1891,7 @@ impl App {
                 title: tr(c.title()).into_owned(),
                 subtitle: tr("Window Management").into_owned(),
                 icon: Icon::Glyph("sf:rectangle.lefthalf.filled", [89, 212, 153]),
-                accessory: "Command".into(),
+                accessory: tr("Command").into_owned(),
                 keywords: with_english_title(vec!["window".into(), "resize".into(), "move".into()], c.title()),
                 kind: Kind::Window(*c),
             });
@@ -1899,7 +1902,7 @@ impl App {
                 title: tr(&a.title()).into_owned(),
                 subtitle: tr("Window Tiling").into_owned(),
                 icon: Icon::Glyph("sf:rectangle.split.2x2", [89, 212, 153]),
-                accessory: "Command".into(),
+                accessory: tr("Command").into_owned(),
                 keywords: with_english_title(vec!["window".into(), "tile".into(), "tiling".into(), "layout".into()], &a.title()),
                 kind: Kind::Tiling(a),
             });
@@ -1910,7 +1913,7 @@ impl App {
                 title: tr(&c.title()).into_owned(),
                 subtitle: tr("System").into_owned(),
                 icon: Icon::Glyph(system_symbol(c), [90, 90, 105]),
-                accessory: "Command".into(),
+                accessory: tr("Command").into_owned(),
                 keywords: with_english_title(c.keywords().iter().map(|s| s.to_string()).collect(), &c.title()),
                 kind: Kind::System(*c),
             });
@@ -1921,7 +1924,7 @@ impl App {
                 title: q.name.clone(),
                 subtitle: q.link.clone(),
                 icon: Icon::Glyph("sf:link", [86, 194, 255]),
-                accessory: "Quicklink".into(),
+                accessory: tr("Quicklink").into_owned(),
                 keywords: vec![],
                 kind: Kind::Quicklink { id: q.id.clone(), arg: None },
             });
@@ -1936,7 +1939,7 @@ impl App {
                     Some(e) => Icon::Emoji(e),
                     None => Icon::Glyph("sf:terminal", [60, 60, 70]),
                 },
-                accessory: "Script Command".into(),
+                accessory: tr("Script Command").into_owned(),
                 keywords: s.description.iter().cloned().collect(),
                 kind: Kind::Script(i),
             });
@@ -2308,10 +2311,10 @@ impl App {
     fn notion_view_sections(&self) -> Vec<Section> {
         if self.nv.connected == Some(false) {
             return vec![Section {
-                title: "Connect Notion to search your pages".into(),
+                title: tr("Connect Notion to search your pages").into_owned(),
                 items: vec![Item {
                     id: "notion:connect".into(),
-                    title: "Open Settings → Integrations".into(),
+                    title: tr("Open Settings → Integrations").into_owned(),
                     subtitle: String::new(),
                     icon: Icon::Glyph("sf:gearshape", [120, 120, 130]),
                     accessory: String::new(),
@@ -2345,7 +2348,7 @@ impl App {
         if self.nv.has_more {
             items.push(Item {
                 id: "notion:more".into(),
-                title: "Load more".into(),
+                title: tr("Load more").into_owned(),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:ellipsis", [120, 120, 130]),
                 accessory: String::new(),
@@ -2356,7 +2359,7 @@ impl App {
         if items.is_empty() {
             return vec![];
         }
-        vec![Section { title: if self.nv.shown.is_empty() { "Recently edited" } else { "Results" }.into(), items }]
+        vec![Section { title: tr(if self.nv.shown.is_empty() { "Recently edited" } else { "Results" }).into_owned(), items }]
     }
 
     // ------------------------------------------------------------ Search Obsidian (command)
@@ -2522,10 +2525,10 @@ impl App {
     fn obsidian_view_sections(&self) -> Vec<Section> {
         let setup = |title: &str| {
             vec![Section {
-                title: title.into(),
+                title: tr(title).into_owned(),
                 items: vec![Item {
                     id: "obsidian:setup".into(),
-                    title: "Open Settings → Integrations".into(),
+                    title: tr("Open Settings → Integrations").into_owned(),
                     subtitle: String::new(),
                     icon: Icon::Glyph("sf:gearshape", [120, 120, 130]),
                     accessory: String::new(),
@@ -2556,7 +2559,7 @@ impl App {
         let mut out = vec![];
         if !found.is_empty() {
             out.push(Section {
-                title: if q.is_empty() { "Recent" } else { "Notes" }.into(),
+                title: tr(if q.is_empty() { "Recent" } else { "Notes" }).into_owned(),
                 items: found.iter().map(|&i| row(&entries[i])).collect(),
             });
         }
@@ -2570,7 +2573,7 @@ impl App {
                     .map(row)
                     .collect();
                 if !items.is_empty() {
-                    out.push(Section { title: "In notes".into(), items });
+                    out.push(Section { title: tr("In notes").into_owned(), items });
                 }
             }
         }
@@ -2860,7 +2863,14 @@ impl App {
         self.toast("Capture target cleared");
     }
 
+    /// A toast made of text the user (or an extension) wrote: shown as typed.
+    pub(crate) fn toast_verbatim(&mut self, s: impl Into<String>) {
+        self.toast(s);
+        self.toast_user = true;
+    }
+
     fn toast(&mut self, s: impl Into<String>) {
+        self.toast_user = false;
         self.toast = Some((s.into(), Instant::now()));
         self.ctx.request_repaint_after(Duration::from_millis(2600));
     }
@@ -3878,7 +3888,7 @@ impl App {
                     self.show();
                     self.push(View::Output {
                         run: 0,
-                        title: "Sign in with ChatGPT".into(),
+                        title: tr("Sign in with ChatGPT").into_owned(),
                         text: format!(
                             "Your code:\n\n    {code}\n\nIt is already on your clipboard. A browser tab with {} should be open; paste the code there and approve. This screen can be closed; Ferrocast keeps waiting in the background and will tell you when it is done.",
                             ferrocast_core::chatgpt::DEVICE_VERIFICATION_URL
@@ -4128,14 +4138,14 @@ impl App {
         if q.is_empty() {
             let favs: Vec<Item> = self.settings.favorites.iter().filter_map(|f| self.base.iter().find(|i| &i.id == f).cloned()).collect();
             if !favs.is_empty() {
-                out.push(Section { title: "Favorites".into(), items: favs });
+                out.push(Section { title: tr("Favorites").into_owned(), items: favs });
             }
             let mut recent: Vec<&Item> =
                 self.base.iter().filter(|i| !self.settings.is_favorite(&i.id) && self.frecency.last_used(&i.id).is_some()).collect();
             recent.sort_by(|a, b| self.frecency.score(&b.id, now).total_cmp(&self.frecency.score(&a.id, now)));
             recent.truncate(8);
             if !recent.is_empty() {
-                out.push(Section { title: "Suggestions".into(), items: recent.into_iter().cloned().collect() });
+                out.push(Section { title: tr("Suggestions").into_owned(), items: recent.into_iter().cloned().collect() });
             }
             let cmds: Vec<Item> = self
                 .base
@@ -4144,7 +4154,7 @@ impl App {
                 .take(10)
                 .cloned()
                 .collect();
-            out.push(Section { title: "Commands".into(), items: cmds });
+            out.push(Section { title: tr("Commands").into_owned(), items: cmds });
             let apps: Vec<Item> = self
                 .base
                 .iter()
@@ -4153,7 +4163,7 @@ impl App {
                 .cloned()
                 .collect();
             if !apps.is_empty() {
-                out.push(Section { title: "Applications".into(), items: apps });
+                out.push(Section { title: tr("Applications").into_owned(), items: apps });
             }
             return out;
         }
@@ -4166,7 +4176,7 @@ impl App {
                 title: r.display.clone(),
                 subtitle: r.question.clone(),
                 icon: Icon::Glyph("sf:timer", [255, 99, 99]),
-                accessory: "Time".into(),
+                accessory: tr("Time").into_owned(),
                 keywords: vec![],
                 kind: Kind::Calc(r),
             });
@@ -4177,7 +4187,7 @@ impl App {
                 title: r.display.clone(),
                 subtitle: r.question.clone(),
                 icon: Icon::Glyph("sf:equal", [255, 99, 99]),
-                accessory: "Calculator".into(),
+                accessory: tr("Calculator").into_owned(),
                 keywords: vec![],
                 kind: Kind::Calc(r),
             });
@@ -4188,7 +4198,7 @@ impl App {
                 title: c.formats()[0].1.clone(),
                 subtitle: q.into(),
                 icon: Icon::Color(c),
-                accessory: "Color".into(),
+                accessory: tr("Color").into_owned(),
                 keywords: vec![],
                 kind: Kind::Color(c),
             });
@@ -4199,7 +4209,7 @@ impl App {
                 title: trf("Open {u}", &[("u", &u)]),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:globe", [86, 194, 255]),
-                accessory: "URL".into(),
+                accessory: tr("URL").into_owned(),
                 keywords: vec![],
                 kind: Kind::Url(u),
             });
@@ -4215,13 +4225,13 @@ impl App {
                 title: format!("Start {what} timer"),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:timer", [245, 165, 36]),
-                accessory: "Timer".into(),
+                accessory: tr("Timer").into_owned(),
                 keywords: vec![],
                 kind: Kind::Timer(t.secs, t.label),
             });
         }
         if !top.is_empty() {
-            out.push(Section { title: "Result".into(), items: top });
+            out.push(Section { title: tr("Result").into_owned(), items: top });
         }
         // alias + argument: "g rust"
         if let Some((first, rest)) = q.split_once(' ') {
@@ -4232,7 +4242,7 @@ impl App {
                 if let Kind::Quicklink { id, .. } = &it.kind {
                     it.kind = Kind::Quicklink { id: id.clone(), arg: Some(rest.trim().to_string()) };
                 }
-                out.push(Section { title: "Quicklink".into(), items: vec![it] });
+                out.push(Section { title: tr("Quicklink").into_owned(), items: vec![it] });
             }
         }
         let mut scored: Vec<(f64, &Item)> = self
@@ -4243,17 +4253,17 @@ impl App {
         scored.sort_by(|a, b| b.0.total_cmp(&a.0));
         scored.truncate(40);
         if !scored.is_empty() {
-            out.push(Section { title: "Results".into(), items: scored.into_iter().map(|(_, i)| i.clone()).collect() });
+            out.push(Section { title: tr("Results").into_owned(), items: scored.into_iter().map(|(_, i)| i.clone()).collect() });
         }
         if self.settings.file_search_in_root && self.files.0 == q && !self.files.1.is_empty() {
-            out.push(Section { title: "Files".into(), items: self.files.1.iter().take(8).map(|p| file_item(p)).collect() });
+            out.push(Section { title: tr("Files").into_owned(), items: self.files.1.iter().take(8).map(|p| file_item(p)).collect() });
         }
         let mut fb = vec![Item {
             id: "fallback:web".into(),
             title: trf("Search the web for “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:magnifyingglass", [120, 120, 130]),
-            accessory: "Fallback".into(),
+            accessory: tr("Fallback").into_owned(),
             keywords: vec![],
             kind: Kind::WebSearch(q.to_string()),
         }];
@@ -4262,7 +4272,7 @@ impl App {
             title: trf("Search files for “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:magnifyingglass", [120, 120, 130]),
-            accessory: "Fallback".into(),
+            accessory: tr("Fallback").into_owned(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchFiles, q.to_string()),
         });
@@ -4271,7 +4281,7 @@ impl App {
             title: trf("Search emoji for “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:face.smiling", [255, 197, 49]),
-            accessory: "Fallback".into(),
+            accessory: tr("Fallback").into_owned(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchEmoji, q.to_string()),
         });
@@ -4281,7 +4291,7 @@ impl App {
                 title: trf("Look up “{q}” in Dictionary", &[("q", q)]),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:character.book.closed", [120, 120, 130]),
-                accessory: "Fallback".into(),
+                accessory: tr("Fallback").into_owned(),
                 keywords: vec![],
                 kind: Kind::Url(format!("dict://{}", q.replace(' ', "%20"))),
             });
@@ -4291,11 +4301,11 @@ impl App {
             title: trf("Ask AI: “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:sparkles", [168, 110, 255]),
-            accessory: "Fallback".into(),
+            accessory: tr("Fallback").into_owned(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::AskAi, q.to_string()),
         });
-        out.push(Section { title: "Use with…".into(), items: fb });
+        out.push(Section { title: tr("Use with…").into_owned(), items: fb });
         out
     }
 
@@ -4313,7 +4323,7 @@ impl App {
         if !self.query.trim().is_empty() {
             v.sort_by_key(|a| std::cmp::Reverse(a.0));
         }
-        vec![Section { title: title.into(), items: v.into_iter().map(|(_, i)| i).collect() }]
+        vec![Section { title: tr(title).into_owned(), items: v.into_iter().map(|(_, i)| i).collect() }]
     }
 
     /// Anything that can change the result list calls this; the next frame recomputes.
@@ -4410,7 +4420,7 @@ impl App {
                 [("Pinned", pinned), ("Today", today), ("Yesterday", yest), ("Earlier", older)]
                     .into_iter()
                     .filter(|(_, v)| !v.is_empty())
-                    .map(|(t, items)| Section { title: t.into(), items })
+                    .map(|(t, items)| Section { title: tr(t).into_owned(), items })
                     .collect()
             }
             View::Snippets => {
@@ -4476,7 +4486,7 @@ impl App {
                             title: e.name().to_string(),
                             subtitle: e.shortcode().map(|s| format!(":{s}:")).unwrap_or_default(),
                             icon: Icon::Emoji(e.as_str().to_string()),
-                            accessory: "Recent".into(),
+                            accessory: tr("Recent").into_owned(),
                             keywords: vec![],
                             kind: Kind::Emoji(e.as_str()),
                         })
@@ -4503,13 +4513,13 @@ impl App {
                     .collect();
                 let mut out = self.sorted(v, "Emoji");
                 if !recent.is_empty() {
-                    out.insert(0, Section { title: "Recently used".into(), items: recent });
+                    out.insert(0, Section { title: tr("Recently used").into_owned(), items: recent });
                 }
                 out
             }
             View::Files => {
                 if self.files.0 == q && !self.files.1.is_empty() {
-                    vec![Section { title: "Files".into(), items: self.files.1.iter().map(|p| file_item(p)).collect() }]
+                    vec![Section { title: tr("Files").into_owned(), items: self.files.1.iter().map(|p| file_item(p)).collect() }]
                 } else {
                     vec![]
                 }
@@ -4672,13 +4682,13 @@ impl App {
                                 },
                                 [255, 140, 60],
                             ),
-                            accessory: "Image tool".into(),
+                            accessory: tr("Image tool").into_owned(),
                             keywords: vec![],
                             kind: Kind::ImageTool(files.clone(), op),
                         })
                         .collect();
                     if !tools.is_empty() {
-                        out.push(Section { title: "Image tools".into(), items: tools });
+                        out.push(Section { title: tr("Image tools").into_owned(), items: tools });
                     }
                 }
                 // trim, split and merge for audio, video and PDF
@@ -4729,7 +4739,7 @@ impl App {
                         })
                         .collect();
                     if !items.is_empty() {
-                        out.push(Section { title: "File tools".into(), items });
+                        out.push(Section { title: tr("File tools").into_owned(), items });
                     }
                 }
                 out.extend(self.editor_section(&files, &q, &sub));
@@ -4856,17 +4866,17 @@ impl App {
                 let (pinned, rest): (Vec<_>, Vec<_>) = rows.iter().partition(|r| r.pinned);
                 let mut out = vec![];
                 if !pinned.is_empty() {
-                    out.push(Section { title: "Pinned".into(), items: pinned.into_iter().map(item).collect() });
+                    out.push(Section { title: tr("Pinned").into_owned(), items: pinned.into_iter().map(item).collect() });
                 }
                 if !rest.is_empty() {
-                    out.push(Section { title: "Notes".into(), items: rest.into_iter().map(item).collect() });
+                    out.push(Section { title: tr("Notes").into_owned(), items: rest.into_iter().map(item).collect() });
                 }
                 out
             }
             View::NotionSearch => self.notion_view_sections(),
             View::ObsidianSearch => self.obsidian_view_sections(),
             View::Colors(c) => vec![Section {
-                title: "Formats".into(),
+                title: tr("Formats").into_owned(),
                 items: c
                     .formats()
                     .into_iter()
@@ -4956,12 +4966,12 @@ impl App {
                 title: title.to_string(),
                 subtitle: sub.to_string(),
                 icon: Icon::Glyph("sf:slider.horizontal.3", [255, 140, 60]),
-                accessory: "Editor".into(),
+                accessory: tr("Editor").into_owned(),
                 keywords: vec![],
                 kind: Kind::Editor(act),
             })
             .collect();
-        (!items.is_empty()).then_some(Section { title: "Editors".into(), items })
+        (!items.is_empty()).then_some(Section { title: tr("Editors").into_owned(), items })
     }
 
     /// Tools the format table lists but Ferrocast cannot do yet; shown, not hidden (parity plan A2).
@@ -4995,12 +5005,12 @@ impl App {
                 title: tool_label(t).to_string(),
                 subtitle: sub.to_string(),
                 icon: Icon::Glyph(tool_symbol(t), [255, 140, 60]),
-                accessory: "Not available yet".into(),
+                accessory: tr("Not available yet").into_owned(),
                 keywords: vec![],
                 kind: Kind::Editor(Act::Convert(files.to_vec())),
             })
             .collect();
-        (!items.is_empty()).then_some(Section { title: "Tools".into(), items })
+        (!items.is_empty()).then_some(Section { title: tr("Tools").into_owned(), items })
     }
 
     // --------------------------------------------------------------- actions
@@ -7525,7 +7535,7 @@ fn file_item(p: &std::path::Path) -> Item {
             .map(|d| d.to_string_lossy().replace(&dirs::home_dir().unwrap_or_default().to_string_lossy().to_string(), "~"))
             .unwrap_or_default(),
         icon: Icon::App(p.to_string_lossy().to_string()),
-        accessory: "File".into(),
+        accessory: tr("File").into_owned(),
         keywords: vec![],
         kind: Kind::File(p.to_path_buf()),
     }

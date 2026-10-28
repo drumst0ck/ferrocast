@@ -909,12 +909,21 @@ fn mini_button(ui: &Ui, pal: &Palette, r: Rect, b: &RowButton, id: Id) -> bool {
     resp.clicked()
 }
 
+/// A toast as shown: Ferrocast's own text is translated, the user's or an extension's is not.
+fn shown_toast(t: &str, user: bool) -> std::borrow::Cow<'_, str> {
+    if user {
+        std::borrow::Cow::Borrowed(t)
+    } else {
+        tr(t)
+    }
+}
+
 fn panel_filter(p: &ActionPanel) -> Vec<usize> {
     let q = p.query.trim().to_lowercase();
     p.actions
         .iter()
         .enumerate()
-        .filter(|(_, a)| q.is_empty() || a.title.to_lowercase().contains(&q) || tr(&a.title).to_lowercase().contains(&q))
+        .filter(|(_, a)| q.is_empty() || a.title.to_lowercase().contains(&q) || a.shown_title().to_lowercase().contains(&q))
         .map(|(i, _)| i)
         .collect()
 }
@@ -2012,16 +2021,16 @@ impl App {
 
         // ---- footer
         let primary = match shape {
-            Shape::List => cur.as_ref().map(|i| self.primary_label(i)),
+            Shape::List => cur.as_ref().map(|i| (self.primary_label(i), matches!(i.kind, Kind::ExtItem(_)))),
             _ => match self.view() {
-                View::Args { .. } => Some("Run".into()),
-                View::Output { .. } => Some("Copy Output".into()),
-                View::Confirm { .. } => Some("Confirm".into()),
-                View::Ai { .. } => Some("Ask".into()),
-                View::Update { .. } => Some("Install and relaunch".into()),
-                View::ExtDetail | View::ExtForm => self.ext_detail_actions().first().map(|a| a.title.clone()),
-                View::SnippetForm { .. } | View::QuicklinkForm { .. } => Some("Save".into()),
-                View::Alias { .. } | View::CreateScript { .. } => Some("Save".into()),
+                View::Args { .. } => Some(("Run".into(), false)),
+                View::Output { .. } => Some(("Copy Output".into(), false)),
+                View::Confirm { .. } => Some(("Confirm".into(), false)),
+                View::Ai { .. } => Some(("Ask".into(), false)),
+                View::Update { .. } => Some(("Install and relaunch".into(), false)),
+                View::ExtDetail | View::ExtForm => self.ext_detail_actions().first().map(|a| (a.title.clone(), true)),
+                View::SnippetForm { .. } | View::QuicklinkForm { .. } => Some(("Save".into(), false)),
+                View::Alias { .. } | View::CreateScript { .. } => Some(("Save".into(), false)),
                 _ => None,
             },
         };
@@ -2064,7 +2073,7 @@ impl App {
         }
     }
 
-    fn draw_footer(&mut self, ui: &Ui, rect: Rect, pal: &Palette, primary: Option<String>, list: bool) {
+    fn draw_footer(&mut self, ui: &Ui, rect: Rect, pal: &Palette, primary: Option<(String, bool)>, list: bool) {
         let p = ui.painter();
         let cy = rect.center().y;
         // App icon at the far left, as the original launcher does.
@@ -2120,7 +2129,7 @@ impl App {
                 undo_clicked = resp.clicked();
             }
             Some((t, _)) => {
-                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, tr(t), FontId::proportional(12.5), facc);
+                p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, shown_toast(t, self.toast_user), FontId::proportional(12.5), facc);
                 record_text(ui.ctx(), pal, "footer-toast", facc, &[], 1.0);
             }
             None if searching || notion_busy => {
@@ -2152,7 +2161,7 @@ impl App {
         let mut window_chips = if matches!(self.view(), View::Welcome) { self.tour.hints() } else { self.view().footer_hints() };
         // The left text (title or toast) wins: drop the least important chips until both fit.
         let left_w = match &self.toast {
-            Some((t, _)) => p.layout_no_wrap(tr(t).into_owned(), FontId::proportional(12.5), pal.accent).size().x,
+            Some((t, _)) => p.layout_no_wrap(shown_toast(t, self.toast_user).into_owned(), FontId::proportional(12.5), pal.accent).size().x,
             None if settings => p.layout_no_wrap("Ferrocast".into(), FontId::proportional(12.5), fsub).size().x,
             None => p.layout_no_wrap(self.view_title(), FontId::proportional(12.5), pal.sub).size().x,
         };
@@ -2171,7 +2180,7 @@ impl App {
         let live = window_chips.is_empty();
         let mut hit_rects: Vec<(String, Rect)> = vec![];
         let mut footer_click: Option<String> = None;
-        let mut hint = |label: &str, key: &str| {
+        let mut hint = |label: &str, key: &str, verbatim: bool| {
             #[cfg(test)]
             drawn.insert(0, (label.to_string(), key.to_string()));
             if !first {
@@ -2180,7 +2189,7 @@ impl App {
             }
             first = false;
             let kg = p.layout_no_wrap(key.to_string(), FontId::proportional(11.5), pal.text);
-            let lg = p.layout_no_wrap(tr(label).into_owned(), FontId::proportional(12.5), fsub);
+            let lg = p.layout_no_wrap(if verbatim { label.to_string() } else { tr(label).into_owned() }, FontId::proportional(12.5), fsub);
             record_text(ui.ctx(), pal, "footer-label", fsub, &[], 1.0);
             record_text(ui.ctx(), pal, "footer-key", pal.text, &[pal.field], 1.0);
             let kw = (kg.size().x + 12.0).max(22.0);
@@ -2208,17 +2217,17 @@ impl App {
         if !window_chips.is_empty() {
             // tool windows: chips in reading order, so the primary action ends up leftmost
             for (label, key) in window_chips.iter().rev() {
-                hint(label, key);
+                hint(label, key, false);
             }
         } else {
             if list {
-                hint("Actions", "⌘K");
+                hint("Actions", "⌘K", false);
             }
             if let Some(pl) = primary {
-                hint(&pl, "↵");
+                hint(&pl.0, "↵", pl.1);
             }
             if !list && self.stack.len() > 1 {
-                hint("Back", "esc");
+                hint("Back", "esc", false);
             }
         }
         #[cfg(test)]
@@ -2257,7 +2266,7 @@ impl App {
                     ui.painter().text(
                         Pos2::new(hr.min.x + 18.0, hr.center().y + 2.0),
                         Align2::LEFT_CENTER,
-                        tr(&sec.title),
+                        &sec.title,
                         FontId::proportional(12.0),
                         pal.sub,
                     );
@@ -2314,7 +2323,11 @@ impl App {
                             painter.text(
                                 Pos2::new(r.min.x + half / 2.0, mid + 20.0),
                                 Align2::CENTER_CENTER,
-                                if item.accessory.is_empty() { tr("Calculator") } else { tr(item.accessory.as_str()) },
+                                if item.accessory.is_empty() {
+                                    tr("Calculator")
+                                } else {
+                                    std::borrow::Cow::Borrowed(item.accessory.as_str())
+                                },
                                 FontId::proportional(11.5),
                                 pal.sub,
                             );
@@ -2351,7 +2364,7 @@ impl App {
                             }
                         }
                         if !item.accessory.is_empty() {
-                            acc.push(tr(&item.accessory).into_owned());
+                            acc.push(item.accessory.clone());
                         }
                         let acc = acc.join("  ");
                         let right = r.max.x - 18.0 - if btn_total > 0.0 { btn_total + 4.0 } else { 0.0 };
@@ -2520,7 +2533,7 @@ impl App {
                     let shortcut_w = a.shortcut.map_or(14.0, |(m, k)| {
                         painter.layout_no_wrap(shortcut_label(m, k), FontId::proportional(12.0), pal.sub).size().x + 24.0
                     });
-                    let title = elide(&painter, &tr(&a.title), FontId::proportional(13.5), r.width() - 16.0 - shortcut_w);
+                    let title = elide(&painter, &a.shown_title(), FontId::proportional(13.5), r.width() - 16.0 - shortcut_w);
                     painter.text(Pos2::new(r.min.x + 16.0, r.center().y), Align2::LEFT_CENTER, title, FontId::proportional(13.5), col);
                     if let Some((m, k)) = a.shortcut {
                         painter.text(
@@ -7935,7 +7948,9 @@ impl App {
                                         }
                                         for p in m.all_preferences() {
                                             let hint = if p.required { trf("{title} (required)", &[("title", &p.title)]) } else { p.title.clone() };
-                                            row(ui, pal, &hint, &p.description, |ui| match p.input() {
+                                            // the extension's own title, description and values: shown as written
+                                            let path_hint = tr("Path or name").into_owned();
+                                            ferrocast_core::i18n::with_verbatim(|| row(ui, pal, &hint, &p.description, |ui| match p.input() {
                                                 PrefInput::Checkbox => {
                                                     let mut v = edit.values.get(&p.name).and_then(|v| v.as_bool()).unwrap_or(false);
                                                     toggle(ui, pal, &mut v);
@@ -7955,13 +7970,13 @@ impl App {
                                                 kind => {
                                                     let mut v = edit.values.get(&p.name).and_then(|v| v.as_str()).unwrap_or("").to_string();
                                                     let hint = match p.kind.as_str() {
-                                                        "file" | "directory" | "appPicker" => "Path or name",
+                                                        "file" | "directory" | "appPicker" => path_hint.as_str(),
                                                         _ => "",
                                                     };
                                                     field(ui, pal, &mut v, 220.0, hint, kind == PrefInput::Password);
                                                     edit.values.insert(p.name.clone(), v.into());
                                                 }
-                                            });
+                                            }));
                                         }
                                         row(ui, pal, "Save these values", "Saved in a file on this Mac (extensions/<name>/preferences.json in Ferrocast's data folder), not in the Keychain. Passwords are masked here and never written to the log.", |ui| {
                                             if accent_btn(ui, pal, "Save") {

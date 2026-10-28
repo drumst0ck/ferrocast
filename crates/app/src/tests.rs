@@ -76,6 +76,7 @@ fn fixture() -> App {
         scroll_to_sel: false,
         panel: None,
         toast: None,
+        toast_user: false,
         settings_undo: None,
         prev_pid: None,
         visible: true,
@@ -15688,10 +15689,7 @@ mod mouse_parity {
         assert_eq!(btns.iter().map(|b| b.label).collect::<Vec<_>>(), ["Edit", "Delete"]);
         assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &s, (CMD, Key::E)).kind));
         assert_eq!(debug_act(&btns[1].kind), debug_act(&by_key(&app, &s, (CTRL, Key::X)).kind));
-        app.quicklinks = vec![ferrocast_core::models::Quicklink {
-            id: "q1".into(),
-            ..ferrocast_core::models::Quicklink::new("ql", "https://example.com")
-        }];
+        app.quicklinks = vec![ferrocast_core::models::Quicklink::new("Notes", "Calculator")];
         app.stack = vec![View::Root, View::Quicklinks];
         app.invalidate_sections();
         let q = app.sections()[0].items[0].clone();
@@ -16826,6 +16824,34 @@ mod i18n_ui {
             });
             assert!(gaps.is_empty(), "{lang:?}: tour strings without a translation:\n{}", gaps.join("\n"));
         }
+    }
+
+    /// Names the user typed are shown as typed even when they equal a catalog key.
+    #[test]
+    fn user_data_named_like_a_catalog_key_is_never_translated() {
+        with_language(Lang::Es, || {
+            let mut app = fixture();
+            app.snippets = vec![ferrocast_core::models::Snippet::new("Settings", "text", "Timers")];
+            app.quicklinks = vec![ferrocast_core::models::Quicklink::new("Notes", "Calculator")];
+            app.rebuild();
+            for (view, want, not) in
+                [(View::Snippets, ["Settings", "Timers"], "Temporizadores"), (View::Quicklinks, ["Notes", "Calculator"], "Calculadora")]
+            {
+                app.stack = vec![View::Root, view];
+                let mut texts = vec![];
+                for _ in 0..3 {
+                    texts = render_texts(&mut app, vec![]).into_iter().map(|(t, _)| t).collect::<Vec<_>>();
+                }
+                for w in want {
+                    assert!(texts.iter().any(|t| t == w), "{w:?} shows as typed: {texts:?}");
+                }
+                assert!(!texts.iter().any(|t| t == not), "{not}: {texts:?}");
+            }
+            // a toast carrying only user text is not translated either
+            app.toast_verbatim("Settings");
+            let texts = render_texts(&mut app, vec![]);
+            assert!(texts.iter().any(|(t, _)| t == "Settings"), "{texts:?}");
+        });
     }
 
     #[test]
