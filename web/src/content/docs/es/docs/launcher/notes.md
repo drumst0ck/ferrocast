@@ -1,6 +1,6 @@
 ---
 title: "Notas"
-description: "Una ventana flotante de notas con texto enriquecido sobre tus otras apps: Markdown, menú de barra, fijar notas, exportar, comandos de IA y dictado."
+description: "Una ventana flotante de notas con texto enriquecido: Markdown, imágenes, menú de barra, fijar notas, exportar, comandos de IA y dictado."
 sidebar:
   order: 14
 ---
@@ -70,6 +70,22 @@ Los enlaces no están en el menú `/`. Los enlaces se abren con <kbd>⌘</kbd> y
 
 Escribe `/` para abrir un menú de formatos y fíltralo al teclear. Escribe `:` para abrir una lista de emoji y fíltrala igual.
 
+## Imágenes
+
+Puedes poner una imagen en una nota de tres maneras:
+
+- Pégala con <kbd>⌘</kbd> <kbd>V</kbd>: una captura de pantalla, una imagen copiada de un navegador o archivos de imagen copiados en Finder.
+- Arrastra archivos de imagen sobre la nota. Quedan después de la línea donde los sueltas.
+- Elige **Insert Image…** (<kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>I</kbd>, o el menú del clic derecho) y escoge archivos.
+
+Valen PNG, JPEG, GIF, HEIC y WebP, hasta 20 MB cada una. Un archivo mayor o que no sea una imagen se rechaza con un mensaje que lo nombra; las demás imágenes que añadiste se insertan igualmente. Si pegas texto que lleva una imagen al lado (de una web o de un documento), el texto se pega como siempre.
+
+Ferrocast copia cada imagen a la carpeta `attachments` de la carpeta de datos con un nombre hecho a partir de su contenido, así que la misma imagen se guarda una sola vez. La nota recibe un enlace Markdown estándar en su propia línea, como `![nombre](attachments/3f2a….png)`, y la imagen se dibuja en la nota con su tamaño, hasta 480 puntos de ancho y manteniendo la proporción. Las notas siguen siendo Markdown plano: el enlace es una ruta relativa y solo se muestran archivos de esa carpeta.
+
+Para quitar una imagen, selecciónala y pulsa Borrar. Un archivo que ninguna nota enlaza se elimina a los 7 días, de modo que deshacer y Eliminadas recientemente siguen encontrándolo. Si falta un archivo (por ejemplo, aún no ha llegado a este Mac) se muestra un marcador y la imagen aparece cuando el archivo está aquí.
+
+La ventana de Notes edita solo las notas de Ferrocast. Las notas de tu bóveda de Obsidian no se editan aquí, así que Ferrocast nunca copia una imagen a tu bóveda ni mueve imágenes de ella a su carpeta.
+
 ## Organizar las notas
 
 - **Browse Notes**: <kbd>⌘</kbd> <kbd>P</kbd> o el botón de la barra de herramientas lista todas las notas.
@@ -99,7 +115,7 @@ Las acciones que no se pueden aplicar no aparecen en la lista.
 
 ## Exportar y copiar
 
-**Export** escribe la nota como **Plain Text**, **Markdown** o **HTML**. El archivo va a tu carpeta Descargas y se muestra en Finder; no hay diálogo de guardado. **Copy As** deja la nota en el portapapeles en los mismos tres formatos.
+**Export** escribe la nota como **Plain Text**, **Markdown** o **HTML**. El archivo va a tu carpeta Descargas y se muestra en Finder; no hay diálogo de guardado. **Copy As** deja la nota en el portapapeles en los mismos tres formatos. Ninguno incluye los archivos de imagen de una nota: Markdown conserva el enlace y copiar como texto plano deja fuera las imágenes.
 
 ## Quicklink y URL
 
@@ -142,6 +158,7 @@ Ajustes → Notes tiene tres opciones:
 - <kbd>esc</kbd> cierra la ventana salvo que actives **Escape Key Loses Focus**.
 - <kbd>⌘</kbd> <kbd>0</kbd> significa tamaño real, así que las notas fijadas usan de <kbd>⌘</kbd> <kbd>1</kbd> a <kbd>⌘</kbd> <kbd>9</kbd>.
 - Los comandos de IA y el dictado dependen de tu proveedor y de los permisos de macOS.
+- Las imágenes se dibujan en su propia línea o dentro de un párrafo, nunca con el texto rodeándolas, y no se pueden redimensionar ni recortar en la nota.
 :::
 
 ## Relacionado

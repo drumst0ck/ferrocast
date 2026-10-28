@@ -1,6 +1,6 @@
 ---
 title: "Sync with iCloud"
-description: "Keep Ferrocast's settings, snippets, quicklinks, notes, clipboard, chats and custom themes in step between your Macs with iCloud Drive."
+description: "Keep Ferrocast's settings, snippets, quicklinks, notes and their images, clipboard, chats and themes in step between Macs with iCloud Drive."
 sidebar:
   order: 20
 ---
@@ -13,7 +13,7 @@ Turn it on in Settings → Advanced → Sync with iCloud. The status line under 
 - **Settings**, hotkeys included.
 - **Snippets** and **quicklinks**.
 - **Custom themes**. Each theme is its own item, so a theme you edit, rename or delete reaches your other Macs. If you rename the selected theme on one Mac, the other Macs keep it selected. Two themes with the same name made on different Macs both stay; rename one of them.
-- **Notes**, including pinned notes and Recently Deleted.
+- **Notes**, including pinned notes and Recently Deleted, and the images in them (see below).
 - **Clipboard history**, with the images of image entries. Only what Ferrocast recorded on a Mac is shared. Entries from password managers are never recorded, so they are never shared. Your history retention setting still applies.
 - **Ask AI chats**. Ferrocast now saves each conversation so it can reach your other Macs.
 
@@ -24,6 +24,15 @@ Turn it on in Settings → Advanced → Sync with iCloud. The status line under 
 - The Sync switch itself: you turn it on separately on each Mac.
 - **macOS permissions** (Accessibility, Screen Recording, Input Monitoring and so on). They belong to each Mac and Ferrocast cannot copy them. Grant them again on every Mac.
 - **API keys** in the Keychain. Ferrocast is signed ad hoc, which does not allow iCloud Keychain, so enter each key on every Mac.
+
+## Note images
+
+Images in notes travel as separate files, next to the note records, in the same `Ferrocast` folder of iCloud Drive.
+
+- Each Mac writes only its own folder, `devices/<id>/attachments/`, so two Macs never write the same file. An image is uploaded once, by the Mac that has it, and only when a note links it. A Mac that downloaded an image does not upload it again.
+- When a synced note links an image this Mac does not have, Ferrocast copies it from the other Mac's folder, after checking that the file is complete and is the one the note names. Until it arrives (iCloud may still be downloading it) the note shows a placeholder, the sync status counts the file, and the picture appears when it is here.
+- An image is never removed from iCloud Drive while any Mac's notes link it, and a Mac never removes one while another Mac's notes cannot be read. An image that nothing links is removed after 7 days.
+- Each image is at most 20 MB. Turning sync off stops all copying; nothing is uploaded or removed.
 
 ## Conflicts
 
