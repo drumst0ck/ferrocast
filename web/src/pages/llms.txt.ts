@@ -38,6 +38,7 @@ export async function GET() {
     `- [Compress a video to a target size](${SITE}/compress-video-to-size/): fit Discord (20 MiB) or Gmail (25 MB) limits on a Mac without uploading`,
     `- [Comprimir un vídeo a un tamaño](${SITE}/es/comprimir-video-a-un-tamano/): lo mismo en español`,
     `- [Blur part of a video on Mac](${SITE}/blur-video-mac/): cover up to 64 areas with their own times, locally, with ffmpeg. No face tracking`,
+    `- [Editar vídeo en Mac sin iMovie](${SITE}/es/editar-video-mac-sin-imovie/): recortar, dividir, unir, acelerar, recortar el encuadre y quitar el sonido en local con ffmpeg`,
     `- [Difuminar parte de un vídeo en Mac](${SITE}/es/difuminar-video-mac/): lo mismo en español`,
     `- [Convertir archivos en Mac](${SITE}/es/convertir/): conversiones más buscadas en español (HEIC a JPG, WebP a JPG, MOV a MP4, vídeo a GIF, PDF a Word)`,
     `- [Raycast vs Alfred vs Spotlight](${SITE}/es/raycast-vs-alfred-vs-spotlight/): comparativa en español con Spotlight de macOS Tahoe, con fuentes oficiales`,
