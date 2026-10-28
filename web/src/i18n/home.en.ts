@@ -95,6 +95,7 @@ export const en = {
     },
     never: 'Results are written next to the original, never over it.',
     ctaExplore: 'Explore every conversion',
+    ctaCompare: 'Compare with Permute and CloudConvert',
     ctaDocs: 'Read the docs',
   },
   record: {

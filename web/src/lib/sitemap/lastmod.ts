@@ -115,6 +115,9 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/free-file-converter-mac') {
       return fileLastmod('src/lib/seo/file-converter.ts', 'src/components/seo/GuidePage.astro', 'src/data/conversions.json');
     }
+    if (path === '/es/convertidor-de-archivos-gratis-mac') {
+      return fileLastmod('src/lib/seo/file-converter-es.ts', 'src/components/seo/FileConverterEsPage.astro');
+    }
     if (path === '/local-ai-launcher') {
       return fileLastmod('src/lib/seo/local-ai.ts', 'src/components/seo/GuidePage.astro');
     }
