@@ -17,6 +17,7 @@ pub mod convert;
 pub mod currency;
 pub mod epub;
 pub mod epub_write;
+pub mod extensions;
 pub mod finder_enter;
 pub mod frame;
 pub mod fuzzy;

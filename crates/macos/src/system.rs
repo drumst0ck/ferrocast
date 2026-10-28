@@ -36,6 +36,12 @@ pub fn osascript(script: &str) -> anyhow::Result<String> {
 /// Like `osascript`, but gives up (and kills the process) after `secs` seconds, so a pending
 /// Automation prompt cannot hang the caller forever.
 pub fn osascript_timeout(script: &str, secs: u64) -> anyhow::Result<String> {
+    osascript_raw(script, secs, None).map(|o| o.trim().to_string())
+}
+
+/// Like `osascript_timeout`, but returns stdout verbatim (leading/trailing whitespace and the final
+/// newline `osascript` adds are kept) and stops early, killing the process, once `cancel` is set.
+pub fn osascript_raw(script: &str, secs: u64, cancel: Option<&std::sync::atomic::AtomicBool>) -> anyhow::Result<String> {
     use std::io::Read;
     use std::process::Stdio;
     let mut child = Command::new("/usr/bin/osascript").arg("-e").arg(script).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
@@ -55,6 +61,11 @@ pub fn osascript_timeout(script: &str, secs: u64) -> anyhow::Result<String> {
         if let Some(st) = child.try_wait()? {
             break st;
         }
+        if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("cancelled");
+        }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
@@ -64,7 +75,7 @@ pub fn osascript_timeout(script: &str, secs: u64) -> anyhow::Result<String> {
     };
     let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
     anyhow::ensure!(status.success(), "{}", err.trim());
-    Ok(out.trim().to_string())
+    Ok(out)
 }
 
 fn sh(cmd: &str, args: &[&str]) -> anyhow::Result<()> {
@@ -359,7 +370,23 @@ mod tests {
 
 #[cfg(test)]
 mod timeout_tests {
-    use super::{osascript_timeout, reduce_motion};
+    use super::{osascript_raw, osascript_timeout, reduce_motion};
+
+    #[test]
+    fn raw_keeps_whitespace_while_osascript_timeout_still_trims() {
+        let script = "return \"  a b  \"";
+        assert_eq!(osascript_raw(script, 5, None).unwrap(), "  a b  \n");
+        assert_eq!(osascript_timeout(script, 5).unwrap(), "a b", "other callers keep getting trimmed output");
+    }
+
+    #[test]
+    fn a_cancelled_script_is_killed_long_before_its_deadline() {
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let t = std::time::Instant::now();
+        let e = osascript_raw("delay 30", 60, Some(&cancel)).unwrap_err().to_string();
+        assert!(e.contains("cancelled"), "{e}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(3));
+    }
 
     #[test]
     fn a_stuck_script_is_killed_at_the_deadline() {

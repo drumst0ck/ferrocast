@@ -343,6 +343,12 @@ pub struct Settings {
     pub notes_escape_loses_focus: bool,
     /// Notes: show a toggle button for the Notes window in the menu bar.
     pub notes_menu_bar_button: bool,
+    /// Run Raycast extensions installed in ~/.config/raycast/extensions (off: that folder is never read).
+    #[serde(default)]
+    pub run_raycast_extensions: bool,
+    /// Folder names of installed Raycast extensions the user switched off (extensions are on by default).
+    #[serde(default)]
+    pub raycast_extensions_disabled: Vec<String>,
     /// Notes: show the Format Bar at the bottom of the window (on by default; a file that
     /// lacks the key loads as on, an explicit `false` stays off).
     #[serde(default = "default_notes_format_bar")]
@@ -447,6 +453,8 @@ impl Default for Settings {
             notes_zoom: 1.0,
             notes_escape_loses_focus: false,
             notes_menu_bar_button: false,
+            run_raycast_extensions: false,
+            raycast_extensions_disabled: Vec::new(),
             notes_format_bar: default_notes_format_bar(),
             notes_last: None,
             capture: crate::capture::CaptureSettings::default(),

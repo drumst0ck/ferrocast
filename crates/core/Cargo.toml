@@ -13,5 +13,6 @@ anyhow.workspace = true
 dirs.workspace = true
 chrono-tz = "0.10"
 sha2 = "0.11.1"
+libc = "0.2"
 base64 = "0.23.1"
 ab_glyph = "0.2"
