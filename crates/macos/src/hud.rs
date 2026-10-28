@@ -21,11 +21,11 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSBackingStoreType, NSBezelStyle, NSButton, NSColor, NSFont, NSPanel, NSPopUpMenuWindowLevel, NSScreen, NSTextAlignment, NSTextField,
-    NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowCollectionBehavior,
-    NSWindowSharingType, NSWindowStyleMask,
+    NSBackingStoreType, NSBezelStyle, NSButton, NSColor, NSFont, NSFontAttributeName, NSPanel, NSPopUpMenuWindowLevel, NSScreen,
+    NSStringDrawing, NSTextAlignment, NSTextField, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+    NSVisualEffectView, NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask,
 };
-use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSDictionary, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
 // ------------------------------------------------------------------ pure logic
 
@@ -121,7 +121,41 @@ impl Countdown {
 }
 
 const COUNTDOWN_SIZE: f64 = 240.0;
+/// Narrowest the HUD gets (English); a longer Pause/Resume/Stop caption widens it.
 const HUD_W: f64 = 264.0;
+/// Space a push button adds around its caption (bezel and padding, both sides).
+const PUSH_PAD: f64 = 20.0;
+/// Pause/Resume button x and the gaps of the HUD row.
+const HUD_PAUSE_X: f64 = 116.0;
+const HUD_GAP: f64 = 6.0;
+const HUD_RIGHT_PAD: f64 = 14.0;
+
+/// Width of `text` in the system font at `size` points (no main thread needed).
+pub(crate) fn text_width(text: &str, size: f64) -> f64 {
+    let font = NSFont::systemFontOfSize(size);
+    let key = unsafe { NSFontAttributeName };
+    let attrs = NSDictionary::from_slices(&[key], &[&*font as &AnyObject]);
+    unsafe { NSString::from_str(text).sizeWithAttributes(Some(&attrs)) }.width
+}
+
+/// Width of a push button captioned `text` (13 pt), never under `min`.
+pub(crate) fn push_button_width(text: &str, min: f64) -> f64 {
+    (text_width(text, 13.0) + PUSH_PAD).ceil().max(min)
+}
+
+/// Pause/Resume and Stop button widths for the current language: Pause/Resume share one
+/// width (the caption toggles), both at least their English size.
+fn hud_button_widths() -> (f64, f64) {
+    use ferrocast_core::i18n::tr;
+    let pause = push_button_width(&tr("Pause"), 70.0).max(push_button_width(&tr("Resume"), 70.0));
+    (pause, push_button_width(&tr("Stop"), 58.0))
+}
+
+/// `(window width, Pause x, Stop x)` for buttons of these widths.
+pub(crate) fn hud_layout(pause_w: f64, stop_w: f64) -> (f64, f64, f64) {
+    let stop_x = HUD_PAUSE_X + pause_w + HUD_GAP;
+    ((stop_x + stop_w + HUD_RIGHT_PAD).max(HUD_W), HUD_PAUSE_X, stop_x)
+}
 const HUD_H: f64 = 44.0;
 const HUD_BOTTOM_GAP: f64 = 28.0;
 
@@ -137,8 +171,8 @@ pub fn centered_frame(outer: [f64; 4], w: f64, h: f64) -> [f64; 4] {
 
 /// Where the HUD first appears on `display` (Cocoa frame): bottom centre, above the Dock area
 /// when `display` is the visible frame.
-pub fn hud_frame(display: [f64; 4]) -> [f64; 4] {
-    [display[0] + (display[2] - HUD_W) / 2.0, display[1] + HUD_BOTTOM_GAP, HUD_W, HUD_H]
+pub fn hud_frame(display: [f64; 4], width: f64) -> [f64; 4] {
+    [display[0] + (display[2] - width) / 2.0, display[1] + HUD_BOTTOM_GAP, width, HUD_H]
 }
 
 /// Window numbers worth excluding: only real (positive) ones.
@@ -337,10 +371,12 @@ pub fn countdown_hide(_mtm: MainThreadMarker) {
 /// thread. An HUD already on screen is replaced.
 pub fn hud_show(mtm: MainThreadMarker, display: Option<[f64; 4]>, on_pause_toggle: Box<dyn Fn()>, on_stop: Box<dyn Fn()>) {
     hud_hide(mtm);
-    let frame = hud_frame(display_frame(mtm, display));
+    let (pause_w, stop_w) = hud_button_widths();
+    let (hud_w, pause_x, stop_x) = hud_layout(pause_w, stop_w);
+    let frame = hud_frame(display_frame(mtm, display), hud_w);
     let panel = new_panel(mtm, frame, false);
     panel.setMovableByWindowBackground(true);
-    let fx = frosted(mtm, [0.0, 0.0, HUD_W, HUD_H], HUD_H / 2.0);
+    let fx = frosted(mtm, [0.0, 0.0, hud_w, HUD_H], HUD_H / 2.0);
 
     let target: Retained<HudTarget> = unsafe {
         msg_send![
@@ -375,7 +411,7 @@ pub fn hud_show(mtm: MainThreadMarker, display: Option<[f64; 4]>, on_pause_toggl
     };
     pause.setBezelStyle(NSBezelStyle::Push);
     pause.setRefusesFirstResponder(true);
-    pause.setFrame(rect([116.0, (HUD_H - 24.0) / 2.0, 70.0, 24.0]));
+    pause.setFrame(rect([pause_x, (HUD_H - 24.0) / 2.0, pause_w, 24.0]));
     fx.addSubview(&pause);
 
     let stop = unsafe {
@@ -388,7 +424,7 @@ pub fn hud_show(mtm: MainThreadMarker, display: Option<[f64; 4]>, on_pause_toggl
     };
     stop.setBezelStyle(NSBezelStyle::Push);
     stop.setRefusesFirstResponder(true);
-    stop.setFrame(rect([192.0, (HUD_H - 24.0) / 2.0, 58.0, 24.0]));
+    stop.setFrame(rect([stop_x, (HUD_H - 24.0) / 2.0, stop_w, 24.0]));
     fx.addSubview(&stop);
 
     let view: &NSView = &fx;
@@ -521,7 +557,7 @@ mod tests {
 
     #[test]
     fn hud_starts_bottom_center_of_the_display() {
-        let f = hud_frame([100.0, 50.0, 1000.0, 800.0]);
+        let f = hud_frame([100.0, 50.0, 1000.0, 800.0], HUD_W);
         assert_eq!(f, [100.0 + (1000.0 - HUD_W) / 2.0, 50.0 + HUD_BOTTOM_GAP, HUD_W, HUD_H]);
     }
 
@@ -529,5 +565,28 @@ mod tests {
     fn only_real_window_numbers_are_excluded() {
         assert_eq!(usable_window_ids(&[Some(9001), None, Some(-1), Some(0), Some(42)]), vec![9001, 42]);
         assert!(usable_window_ids(&[]).is_empty());
+    }
+
+    #[test]
+    fn hud_buttons_fit_their_captions_in_every_language() {
+        use ferrocast_core::i18n::{tr_in, Lang};
+        // English keeps the original geometry
+        let en = |k| tr_in(k, Lang::En).into_owned();
+        assert_eq!(push_button_width(&en("Pause"), 70.0), 70.0);
+        assert_eq!(push_button_width(&en("Resume"), 70.0), 70.0);
+        assert_eq!(push_button_width(&en("Stop"), 58.0), 58.0);
+        assert_eq!(hud_layout(70.0, 58.0), (HUD_W, 116.0, 192.0));
+        for lang in [Lang::En, Lang::Es, Lang::De, Lang::Fr, Lang::PtBr, Lang::Ja, Lang::ZhHans] {
+            let t = |k| tr_in(k, lang).into_owned();
+            let pause_w = push_button_width(&t("Pause"), 70.0).max(push_button_width(&t("Resume"), 70.0));
+            let stop_w = push_button_width(&t("Stop"), 58.0);
+            for (title, w) in [("Pause", pause_w), ("Resume", pause_w), ("Stop", stop_w)] {
+                let need = text_width(&t(title), 13.0) + PUSH_PAD;
+                assert!(w >= need, "{lang:?} {title}: button {w} pt is narrower than its caption needs ({need})");
+            }
+            let (total, px, sx) = hud_layout(pause_w, stop_w);
+            assert!(px + pause_w <= sx, "{lang:?}: the buttons overlap");
+            assert!(sx + stop_w + HUD_RIGHT_PAD <= total, "{lang:?}: Stop runs past the HUD");
+        }
     }
 }

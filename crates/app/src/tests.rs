@@ -16853,6 +16853,37 @@ mod i18n_ui {
             app.toast_verbatim("Settings");
             let texts = render_texts(&mut app, vec![]);
             assert!(texts.iter().any(|(t, _)| t == "Settings"), "{texts:?}");
+            // a script command's output reaches the toast as the script printed it
+            app.visible = true;
+            app.runs.insert(7, RunKind::Compact("Settings".into()));
+            app.bus.send(Msg::Script { run: 7, text: "Copy\n".into(), code: 0 });
+            app.drain();
+            let texts = render_texts(&mut app, vec![]);
+            assert!(texts.iter().any(|(t, _)| t == "Copy"), "script output shows as printed: {texts:?}");
+            assert!(!texts.iter().any(|(t, _)| t == "Copiar"), "{texts:?}");
+            // with no output the fallback keeps the script's title as written
+            app.runs.insert(8, RunKind::Compact("Settings".into()));
+            app.bus.send(Msg::Script { run: 8, text: String::new(), code: 0 });
+            app.drain();
+            let texts = render_texts(&mut app, vec![]);
+            assert!(texts.iter().any(|(t, _)| t.contains("Settings") && !t.contains("Ajustes")), "{texts:?}");
+            assert!(!texts.iter().any(|(t, _)| t.contains("finished")), "the sentence itself is translated: {texts:?}");
+            // an extension titled like a catalog key, in Settings → Integrations
+            app.settings.run_raycast_extensions = true;
+            app.ext.test_set_manifests(vec![
+                ext_manifest(r#"{"name":"n","title":"Notes","preferences":[{"name":"k","type":"textfield","title":"K"}],"commands":[{"name":"x","title":"X","mode":"view"}]}"#),
+                ext_manifest(r#"{"name":"t","title":"Timers","commands":[{"name":"x","title":"X","mode":"view"}]}"#),
+            ]);
+            // opening its form scrolls the extension's row into view
+            app.ext_open_prefs("n", "");
+            app.stack = vec![View::Root, View::Settings];
+            app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), INTEGRATIONS_TAB));
+            let mut texts = vec![];
+            for _ in 0..3 {
+                texts = render_texts(&mut app, vec![]).into_iter().map(|(t, _)| t).collect::<Vec<_>>();
+            }
+            assert!(texts.iter().any(|t| t == "Notes"), "extension \"Notes\" shows as installed: {texts:?}");
+            assert!(texts.iter().any(|t| t == "Cerrar"), "its button is still translated: {texts:?}");
         });
     }
 

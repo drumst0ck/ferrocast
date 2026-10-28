@@ -1711,8 +1711,7 @@ impl App {
                 self.persist("settings.json", &v);
                 *self.shared.settings.write().unwrap() = self.settings.clone();
                 let name = ferrocast_core::tiling::Layout::from_number(layout).map_or("", |l| l.name());
-                self.toast =
-                    Some((trf("Layout {layout}: {name}", &[("layout", &layout.to_string()), ("name", &tr(name))]), Instant::now()));
+                self.toast(trf("Layout {layout}: {name}", &[("layout", &layout.to_string()), ("name", &tr(name))]));
             }
             Event::MinSizes(m) => self.persist("tiling-min-sizes.json", &m),
             Event::Overlay(o) => self.apply_overlay(o),
@@ -3214,7 +3213,10 @@ impl App {
                         let drop = effect_drop_point(center);
                         (self.fx.effect_probe)(self.prev_pid, drop, run, &self.bus);
                     }
-                    let working = format!("Translating to {lang} with {}…", ferrocast_core::translate::engine_label(&chosen));
+                    let working = trf(
+                        "Translating to {lang} with {engine}…",
+                        &[("lang", &lang), ("engine", &ferrocast_core::translate::engine_label(&chosen))],
+                    );
                     self.toast(fallback_note.unwrap_or(working));
                     (self.fx.translate_start)(&engine, text, lang, self.prev_pid, self.settings.translate_output, run, &self.bus);
                 }
@@ -3231,7 +3233,7 @@ impl App {
                 self.perform(Act::AnnotateCanvas(files[0].clone()), false);
             }
             WheelPick::Image(op) => {
-                self.toast(format!("{}…", op.label()));
+                self.toast(format!("{}…", tr(&op.label())));
                 services::image_op_files(files, op, self.bus.clone());
             }
             WheelPick::Convert(t) if t.needs.is_some() => {
@@ -4073,18 +4075,20 @@ impl App {
                             }
                         }
                     }
+                    // the script's title and output are the user's: shown as printed
                     Some(RunKind::Compact(title)) => {
                         let line = script::last_line(&text);
-                        let line = if line.is_empty() { format!("{title} finished") } else { line };
+                        let line = if line.is_empty() { trf("{title} finished", &[("title", &title)]) } else { line };
                         if self.visible {
-                            self.toast(line);
+                            self.toast_verbatim(line);
                         } else {
-                            services::notify(&title, &line);
+                            services::notify_verbatim(&title, &line);
                         }
                     }
                     Some(RunKind::Silent(title)) => {
                         let line = script::last_line(&text);
-                        services::notify(&title, if line.is_empty() { "Done" } else { &line });
+                        let line = if line.is_empty() { tr("Done").into_owned() } else { line };
+                        services::notify_verbatim(&title, &line);
                     }
                     Some(RunKind::Inline(p)) => {
                         self.inline.insert(p, (script::first_line(&text), Instant::now()));
@@ -5603,7 +5607,7 @@ impl App {
             }
             Kind::ImageTool(files, op) => {
                 let (files, op) = (files.clone(), op.clone());
-                self.toast(format!("{}…", op.label()));
+                self.toast(format!("{}…", tr(&op.label())));
                 services::image_op_files(files, op, self.bus.clone());
                 self.hide();
                 self.reset_to_root();
@@ -5617,15 +5621,13 @@ impl App {
                     return;
                 }
                 let (files, t) = (files.clone(), t.clone());
-                self.toast(format!(
-                    "Converting {} to {}…",
-                    if files.len() == 1 {
-                        files[0].file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
-                    } else {
-                        format!("{} files", files.len())
-                    },
-                    t.label
-                ));
+                let what = if files.len() == 1 {
+                    files[0].file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                } else {
+                    trn("{n} file", "{n} files", files.len() as u64)
+                };
+                // the file name is the user's; the sentence around it is translated
+                self.toast_verbatim(trf("Converting {file} to {format}…", &[("file", &what), ("format", t.label)]));
                 services::convert_files(files, t, self.tools, self.bus.clone());
                 self.hide();
                 self.reset_to_root();

@@ -54,8 +54,8 @@ Actual Size	Tamaño real	Originalgröße	Taille réelle	Tamanho real	実際の�
 Add	Añadir	Hinzufügen	Ajouter	Adicionar	追加	添加
 Add Background	Añadir fondo	Hintergrund hinzufügen	Ajouter un arrière-plan	Adicionar fundo	背景を追加	添加背景
 Add Background…	Añadir fondo…	Hintergrund hinzufügen …	Ajouter un arrière-plan…	Adicionar fundo…	背景を追加…	添加背景…
-Add Clipboard to Daily Note	Añadir el portapapeles a la nota diaria	Zwischenablage zur Tagesnotiz hinzufügen	Ajouter le presse-papiers à la note quotidienne	Adicionar a Área de Transferência à nota diária	クリップボードをデイリーノートに追加	将剪贴板添加到每日笔记
-Add Clipboard to Notion	Añadir el portapapeles a Notion	Zwischenablage zu Notion hinzufügen	Ajouter le presse-papiers à Notion	Adicionar a Área de Transferência ao Notion	クリップボードをNotionに追加	将剪贴板添加到 Notion
+Add Clipboard to Daily Note	Añadir el portapapeles a la nota diaria	Zwischenablage zur Tagesnotiz hinzufügen	Ajouter le presse-papiers à la note quotidienne	Adicionar a área de transferência à nota diária	クリップボードをデイリーノートに追加	将剪贴板添加到每日笔记
+Add Clipboard to Notion	Añadir el portapapeles a Notion	Zwischenablage zu Notion hinzufügen	Ajouter le presse-papiers à Notion	Adicionar a área de transferência ao Notion	クリップボードをNotionに追加	将剪贴板添加到 Notion
 Add Text Here…	Añadir texto aquí…	Text hier hinzufügen …	Ajouter du texte ici…	Adicionar texto aqui…	ここにテキストを追加…	在此添加文本…
 Add a zoom at the playhead	Añadir un zoom en el cabezal	Zoom an der Abspielposition hinzufügen	Ajouter un zoom à la tête de lecture	Adicionar um zoom na posição de reprodução	再生ヘッドの位置にズームを追加	在播放头处添加缩放
 Add app	Añadir app	App hinzufügen	Ajouter une app	Adicionar app	Appを追加	添加 App
@@ -149,7 +149,7 @@ Background: choose a picture first	Fondo: elige primero una imagen	Hintergrund: 
 Background: could not read that picture	Fondo: no se pudo leer esa imagen	Hintergrund: Dieses Bild konnte nicht gelesen werden	Arrière-plan : impossible de lire cette image	Fundo: não foi possível ler essa imagem	背景:その画像を読み込めませんでした	背景:无法读取该图片
 Background: could not read the image	Fondo: no se pudo leer la imagen	Hintergrund: Das Bild konnte nicht gelesen werden	Arrière-plan : impossible de lire l’image	Fundo: não foi possível ler a imagem	背景:画像を読み込めませんでした	背景:无法读取图像
 Backup failed: {e}	Falló la copia de seguridad: {e}	Backup fehlgeschlagen: {e}	Échec de la sauvegarde : {e}	Falha no backup: {e}	バックアップに失敗しました:{e}	备份失败:{e}
-Backup saved to Downloads (clipboard history excluded)	Copia de seguridad guardada en Descargas (sin el historial del portapapeles)	Backup in „Downloads“ gesichert (ohne Zwischenablage-Verlauf)	Sauvegarde enregistrée dans Téléchargements (historique du presse-papiers exclu)	Backup salvo em Downloads (sem o histórico da Área de Transferência)	バックアップを「ダウンロード」に保存しました(クリップボード履歴は除く)	备份已存储到“下载”(不含剪贴板历史记录)
+Backup saved to Downloads (clipboard history excluded)	Copia de seguridad guardada en Descargas (sin el historial del portapapeles)	Backup in „Downloads“ gesichert (ohne Zwischenablage-Verlauf)	Sauvegarde enregistrée dans Téléchargements (historique du presse-papiers exclu)	Backup salvo em Downloads (sem o histórico da área de transferência)	バックアップを「ダウンロード」に保存しました(クリップボード履歴は除く)	备份已存储到“下载”(不含剪贴板历史记录)
 Balanced	Equilibrada	Ausgewogen	Équilibrée	Equilibrada	バランス	均衡
 Base URL ending in /v1.	URL base que termina en /v1.	Basis-URL, die auf /v1 endet.	URL de base se terminant par /v1.	URL base terminada em /v1.	/v1で終わるベースURL。	以 /v1 结尾的基础 URL。
 Bleep Audio	Pitar audio	Audio zensieren	Bipper l’audio	Censurar áudio	オーディオにピー音を入れる	消音处理音频
@@ -262,10 +262,10 @@ Click a word to move the playhead. Shift-click or drag to select.	Haz clic en un
 Click inside the video, not on the background.	Haz clic dentro del vídeo, no en el fondo.	Klicke ins Video, nicht auf den Hintergrund.	Cliquez dans la vidéo, pas sur l’arrière-plan.	Clique dentro do vídeo, não no fundo.	背景ではなく、ビデオ内をクリックしてください。	请点按视频内部,而不是背景。
 Click ring	Anillo de clic	Klickring	Anneau de clic	Anel de clique	クリックリング	点按光圈
 Click the preview to set the focus.	Haz clic en la vista previa para fijar el enfoque.	Klicke in die Vorschau, um den Fokus zu setzen.	Cliquez sur l’aperçu pour définir le focus.	Clique na pré-visualização para definir o foco.	プレビューをクリックしてフォーカスを設定します。	点按预览以设置焦点。
-Clipboard	Portapapeles	Zwischenablage	Presse-papiers	Área de Transferência	クリップボード	剪贴板
-Clipboard History	Historial del portapapeles	Zwischenablage-Verlauf	Historique du presse-papiers	Histórico da Área de Transferência	クリップボード履歴	剪贴板历史记录
-Clipboard history	Historial del portapapeles	Zwischenablage-Verlauf	Historique du presse-papiers	Histórico da Área de Transferência	クリップボード履歴	剪贴板历史记录
-Clipboard history cleared	Historial del portapapeles borrado	Zwischenablage-Verlauf gelöscht	Historique du presse-papiers effacé	Histórico da Área de Transferência limpo	クリップボード履歴を消去しました	剪贴板历史记录已清除
+Clipboard	Portapapeles	Zwischenablage	Presse-papiers	área de transferência	クリップボード	剪贴板
+Clipboard History	Historial del portapapeles	Zwischenablage-Verlauf	Historique du presse-papiers	Histórico da área de transferência	クリップボード履歴	剪贴板历史记录
+Clipboard history	Historial del portapapeles	Zwischenablage-Verlauf	Historique du presse-papiers	Histórico da área de transferência	クリップボード履歴	剪贴板历史记录
+Clipboard history cleared	Historial del portapapeles borrado	Zwischenablage-Verlauf gelöscht	Historique du presse-papiers effacé	Histórico da área de transferência limpo	クリップボード履歴を消去しました	剪贴板历史记录已清除
 Clips	Clips	Clips	Clips	Clipes	クリップ	片段
 Close	Cerrar	Schließen	Fermer	Fechar	閉じる	关闭
 Close Notes	Cerrar Notas	Notizen schließen	Fermer Notes	Fechar Notas	ノートを閉じる	关闭笔记
@@ -328,27 +328,27 @@ Converting to {label}…	Convirtiendo a {label}…	Konvertierung in {label} …	
 Convert…	Convertir…	Konvertieren …	Convertir…	Converter…	変換…	转换…
 Copied	Copiado	Kopiert	Copié	Copiado	コピー日時	拷贝时间
 Copied as {format}	Copiado como {format}	Kopiert als {format}	Copié en {format}	Copiado como {format}	{format}としてコピーしました	已拷贝为{format}
-Copied to Clipboard	Copiado al portapapeles	In die Zwischenablage kopiert	Copié dans le presse-papiers	Copiado para a Área de Transferência	クリップボードにコピーしました	已拷贝到剪贴板
+Copied to Clipboard	Copiado al portapapeles	In die Zwischenablage kopiert	Copié dans le presse-papiers	Copiado para a área de transferência	クリップボードにコピーしました	已拷贝到剪贴板
 Copied {hex}	Copiado {hex}	{hex} kopiert	{hex} copié	{hex} copiado	{hex}をコピーしました	已拷贝 {hex}
 Copy	Copiar	Kopieren	Copier	Copiar	コピー	拷贝
 Copy Answer	Copiar respuesta	Antwort kopieren	Copier la réponse	Copiar resposta	答えをコピー	拷贝答案
 Copy As	Copiar como	Kopieren als	Copier comme	Copiar como	形式を指定してコピー	拷贝为
 Copy Color	Copiar color	Farbe kopieren	Copier la couleur	Copiar cor	カラーをコピー	拷贝颜色
 Copy Color as…	Copiar color como…	Farbe kopieren als …	Copier la couleur comme…	Copiar cor como…	カラーをコピー形式…	将颜色拷贝为…
-Copy Emoji to Clipboard	Copiar emoji al portapapeles	Emoji in die Zwischenablage kopieren	Copier l’émoji dans le presse-papiers	Copiar emoji para a Área de Transferência	絵文字をクリップボードにコピー	将表情拷贝到剪贴板
+Copy Emoji to Clipboard	Copiar emoji al portapapeles	Emoji in die Zwischenablage kopieren	Copier l’émoji dans le presse-papiers	Copiar emoji para a área de transferência	絵文字をクリップボードにコピー	将表情拷贝到剪贴板
 Copy File	Copiar archivo	Datei kopieren	Copier le fichier	Copiar arquivo	ファイルをコピー	拷贝文件
 Copy Link	Copiar enlace	Link kopieren	Copier le lien	Copiar link	リンクをコピー	拷贝链接
 Copy Output	Copiar salida	Ausgabe kopieren	Copier la sortie	Copiar saída	出力をコピー	拷贝输出
 Copy PID	Copiar PID	PID kopieren	Copier le PID	Copiar PID	PIDをコピー	拷贝 PID
 Copy Path	Copiar ruta	Pfad kopieren	Copier le chemin	Copiar caminho	パスをコピー	拷贝路径
 Copy Question and Answer	Copiar pregunta y respuesta	Frage und Antwort kopieren	Copier la question et la réponse	Copiar pergunta e resposta	質問と答えをコピー	拷贝问题和答案
-Copy Snippet to Clipboard	Copiar fragmento al portapapeles	Textbaustein in die Zwischenablage kopieren	Copier l’extrait dans le presse-papiers	Copiar trecho para a Área de Transferência	スニペットをクリップボードにコピー	将文本片段拷贝到剪贴板
+Copy Snippet to Clipboard	Copiar fragmento al portapapeles	Textbaustein in die Zwischenablage kopieren	Copier l’extrait dans le presse-papiers	Copiar trecho para a área de transferência	スニペットをクリップボードにコピー	将文本片段拷贝到剪贴板
 Copy Text	Copiar texto	Text kopieren	Copier le texte	Copiar texto	テキストをコピー	拷贝文本
 Copy Wikilink	Copiar wikienlace	Wikilink kopieren	Copier le wikilien	Copiar wikilink	Wikiリンクをコピー	拷贝维基链接
 Copy failed: {e}	Falló la copia: {e}	Kopieren fehlgeschlagen: {e}	Échec de la copie : {e}	Falha ao copiar: {e}	コピーに失敗しました:{e}	拷贝失败:{e}
 Copy install command	Copiar comando de instalación	Installationsbefehl kopieren	Copier la commande d’installation	Copiar comando de instalação	インストールコマンドをコピー	拷贝安装命令
 Copy only	Solo copiar	Nur kopieren	Copier seulement	Só copiar	コピーのみ	仅拷贝
-Copy to Clipboard	Copiar al portapapeles	In die Zwischenablage kopieren	Copier dans le presse-papiers	Copiar para a Área de Transferência	クリップボードにコピー	拷贝到剪贴板
+Copy to Clipboard	Copiar al portapapeles	In die Zwischenablage kopieren	Copier dans le presse-papiers	Copiar para a área de transferência	クリップボードにコピー	拷贝到剪贴板
 Corner	Esquina	Ecke	Coin	Canto	角	角落
 Corners	Esquinas	Ecken	Coins	Cantos	角	圆角
 Could not change login item: {e}	No se pudo cambiar el elemento de inicio: {e}	Anmeldeobjekt konnte nicht geändert werden: {e}	Impossible de modifier l’élément d’ouverture : {e}	Não foi possível alterar o item de login: {e}	ログイン項目を変更できませんでした:{e}	无法更改登录项:{e}
@@ -417,7 +417,7 @@ Delete Entry	Eliminar entrada	Eintrag löschen	Supprimer l’entrée	Excluir ent
 Delete Note	Eliminar nota	Notiz löschen	Supprimer la note	Excluir nota	ノートを削除	删除笔记
 Delete Quicklink	Eliminar enlace rápido	Schnelllink löschen	Supprimer le lien rapide	Excluir link rápido	クイックリンクを削除	删除快速链接
 Delete Snippet	Eliminar fragmento	Textbaustein löschen	Supprimer l’extrait	Excluir trecho	スニペットを削除	删除文本片段
-Delete all clipboard history?	¿Eliminar todo el historial del portapapeles?	Gesamten Zwischenablage-Verlauf löschen?	Supprimer tout l’historique du presse-papiers ?	Excluir todo o histórico da Área de Transferência?	クリップボード履歴をすべて削除しますか?	要删除所有剪贴板历史记录吗?
+Delete all clipboard history?	¿Eliminar todo el historial del portapapeles?	Gesamten Zwischenablage-Verlauf löschen?	Supprimer tout l’historique du presse-papiers ?	Excluir todo o histórico da área de transferência?	クリップボード履歴をすべて削除しますか?	要删除所有剪贴板历史记录吗?
 Delete loupe	Eliminar lupa	Lupe löschen	Supprimer la loupe	Excluir lupa	拡大鏡を削除	删除放大镜
 Delete segment	Eliminar segmento	Segment löschen	Supprimer le segment	Excluir segmento	セグメントを削除	删除片段
 Delete selection	Eliminar selección	Auswahl löschen	Supprimer la sélection	Excluir seleção	選択範囲を削除	删除所选内容
@@ -509,7 +509,7 @@ Extensions are programs written by other people. They run on this Mac with your 
 Extra directory.	Carpeta adicional.	Zusätzlicher Ordner.	Dossier supplémentaire.	Pasta adicional.	追加のフォルダ。	额外的文件夹。
 Face track saved in the project folder.	Seguimiento de cara guardado en la carpeta del proyecto.	Gesichtsverfolgung im Projektordner gesichert.	Suivi du visage enregistré dans le dossier du projet.	Rastreamento de rosto salvo na pasta do projeto.	顔の追跡データをプロジェクトフォルダに保存しました。	面部跟踪数据已存储在项目文件夹中。
 Face tracking is not available in this build.	El seguimiento de caras no está disponible en esta versión.	Die Gesichtsverfolgung ist in diesem Build nicht verfügbar.	Le suivi du visage n’est pas disponible dans cette version.	O rastreamento de rosto não está disponível nesta versão.	このビルドでは顔の追跡を利用できません。	此版本不支持面部跟踪。
-Fallback	Alternativa	Ausweichen	Secours	Alternativa	フォールバック	备选
+Fallback	Alternativa	Alternative	Secours	Alternativa	フォールバック	备选
 Favorites	Favoritos	Favoriten	Favoris	Favoritos	お気に入り	个人收藏
 Featured	Destacada	Hervorgehoben	Mise en avant	Destaque	注目	突出
 Ferrocast Settings	Ajustes de Ferrocast	Ferrocast-Einstellungen	Réglages de Ferrocast	Ajustes do Ferrocast	Ferrocast設定	Ferrocast 设置
@@ -636,7 +636,7 @@ Integrations	Integraciones	Integrationen	Intégrations	Integrações	連携	集�
 Italic	Cursiva	Kursiv	Italique	Itálico	斜体	斜体
 Join	Unir	Zusammenfügen	Assembler	Juntar	結合	合并
 Keep history for	Conservar el historial durante	Verlauf aufbewahren für	Conserver l’historique pendant	Manter o histórico por	履歴の保持期間	历史记录保留时间
-Keep settings, snippets, quicklinks, custom themes, notes, clipboard history and Ask AI chats in step between your Macs through iCloud Drive.	Mantiene sincronizados entre tus Mac, mediante iCloud Drive, los ajustes, fragmentos, enlaces rápidos, temas personalizados, notas, historial del portapapeles y chats de Preguntar a la IA.	Hält Einstellungen, Textbausteine, Schnelllinks, eigene Themen, Notizen, Zwischenablage-Verlauf und „KI fragen“-Chats über iCloud Drive zwischen deinen Macs auf dem gleichen Stand.	Garde synchronisés entre vos Mac, via iCloud Drive, les réglages, extraits, liens rapides, thèmes personnalisés, notes, historique du presse-papiers et conversations « Demander à l’IA ».	Mantém sincronizados entre seus Macs, pelo iCloud Drive, os ajustes, trechos, links rápidos, temas personalizados, notas, histórico da Área de Transferência e conversas de Perguntar à IA.	設定、スニペット、クイックリンク、カスタムテーマ、ノート、クリップボード履歴、「AIに質問」のチャットを、iCloud Drive経由でMac間で同期します。	通过 iCloud 云盘让你的各台 Mac 保持设置、文本片段、快速链接、自定义主题、笔记、剪贴板历史记录和“询问 AI”对话同步。
+Keep settings, snippets, quicklinks, custom themes, notes, clipboard history and Ask AI chats in step between your Macs through iCloud Drive.	Mantiene sincronizados entre tus Mac, mediante iCloud Drive, los ajustes, fragmentos, enlaces rápidos, temas personalizados, notas, historial del portapapeles y chats de Preguntar a la IA.	Hält Einstellungen, Textbausteine, Schnelllinks, eigene Themen, Notizen, Zwischenablage-Verlauf und „KI fragen“-Chats über iCloud Drive zwischen deinen Macs auf dem gleichen Stand.	Garde synchronisés entre vos Mac, via iCloud Drive, les réglages, extraits, liens rapides, thèmes personnalisés, notes, historique du presse-papiers et conversations « Demander à l’IA ».	Mantém sincronizados entre seus Macs, pelo iCloud Drive, os ajustes, trechos, links rápidos, temas personalizados, notas, histórico da área de transferência e conversas de Perguntar à IA.	設定、スニペット、クイックリンク、カスタムテーマ、ノート、クリップボード履歴、「AIに質問」のチャットを、iCloud Drive経由でMac間で同期します。	通过 iCloud 云盘让你的各台 Mac 保持设置、文本片段、快速链接、自定义主题、笔记、剪贴板历史记录和“询问 AI”对话同步。
 Keep what you copy so you can paste it later. Password managers are skipped.	Guarda lo que copias para poder pegarlo más tarde. Se omiten los gestores de contraseñas.	Behält, was du kopierst, damit du es später einfügen kannst. Passwortmanager werden übersprungen.	Conserve ce que vous copiez pour le coller plus tard. Les gestionnaires de mots de passe sont ignorés.	Guarda o que você copia para colar depois. Gerenciadores de senhas são ignorados.	コピーした内容を保存して、後でペーストできるようにします。パスワード管理Appは対象外です。	保留你拷贝的内容,以便稍后粘贴。会跳过密码管理器。
 Key stored	Clave guardada	Schlüssel gesichert	Clé enregistrée	Chave salva	キーは保存済み	密钥已存储
 Keyboard Shortcuts	Atajos de teclado	Tastaturkurzbefehle	Raccourcis clavier	Atalhos de teclado	キーボードショートカット	键盘快捷键
@@ -939,7 +939,7 @@ Pin Note	Fijar nota	Notiz anpinnen	Épingler la note	Fixar nota	ノートを固�
 Pin failed: {e}	Falló al fijar: {e}	Anpinnen fehlgeschlagen: {e}	Échec de l’épinglage : {e}	Falha ao fixar: {e}	固定に失敗しました:{e}	固定失败:{e}
 Pin notes; ⌘P browses them.	Fija notas; ⌘P las explora.	Notizen anpinnen; ⌘P durchsucht sie.	Épinglez des notes ; ⌘P les parcourt.	Fixe notas; ⌘P navega por elas.	ノートを固定。⌘Pで一覧を表示。	固定笔记;⌘P 可浏览它们。
 Pin or Unpin Note	Fijar o desfijar nota	Notiz anpinnen oder lösen	Épingler ou désépingler la note	Fixar ou desafixar nota	ノートを固定/固定解除	固定或取消固定笔记
-Pin or unpin a clipboard entry	Fijar o desfijar una entrada del portapapeles	Zwischenablage-Eintrag anpinnen oder lösen	Épingler ou désépingler une entrée du presse-papiers	Fixar ou desafixar uma entrada da Área de Transferência	クリップボードの項目を固定/固定解除	固定或取消固定剪贴板条目
+Pin or unpin a clipboard entry	Fijar o desfijar una entrada del portapapeles	Zwischenablage-Eintrag anpinnen oder lösen	Épingler ou désépingler une entrée du presse-papiers	Fixar ou desafixar uma entrada da área de transferência	クリップボードの項目を固定/固定解除	固定或取消固定剪贴板条目
 Pin or unpin the note	Fijar o desfijar la nota	Notiz anpinnen oder lösen	Épingler ou désépingler la note	Fixar ou desafixar a nota	ノートを固定/固定解除	固定或取消固定笔记
 Pinned	Fijados	Angepinnt	Épinglés	Fixados	固定済み	已固定
 Placeholders	Marcadores	Platzhalter	Variables	Marcadores	プレースホルダ	占位符
@@ -988,7 +988,7 @@ Range {n} · {from}–{to}	Rango {n} · {from}–{to}	Bereich {n} · {from}–{t
 Ranking reset	Clasificación restablecida	Rangfolge zurückgesetzt	Classement réinitialisé	Classificação redefinida	ランキングをリセットしました	排序已重置
 Raycast Extension	Extensión de Raycast	Raycast-Erweiterung	Extension Raycast	Extensão do Raycast	Raycast拡張機能	Raycast 扩展
 Raycast extensions	Extensiones de Raycast	Raycast-Erweiterungen	Extensions Raycast	Extensões do Raycast	Raycast拡張機能	Raycast 扩展
-Raycast is a trademark of its owner. Ferrocast is an independent project.	Raycast es una marca registrada de su propietario. Ferrocast es un proyecto independiente.	Raycast ist eine Marke seines Inhabers. Ferrocast ist ein unabhängiges Projekt.	Raycast est une marque de son propriétaire. Ferrocast est un projet indépendant.	Raycast é uma marca registrada de seu proprietário. O Ferrocast é um projeto independente.	Raycastはその所有者の商標です。Ferrocastは独立したプロジェクトです。	Raycast 是其所有者的商标。Ferrocast 是一个独立项目。
+Raycast is a trademark of its owner. Ferrocast is an independent project.	Raycast es una marca comercial de su propietario. Ferrocast es un proyecto independiente.	Raycast ist eine Marke seines Inhabers. Ferrocast ist ein unabhängiges Projekt.	Raycast est une marque de son propriétaire. Ferrocast est un projet indépendant.	Raycast é uma marca registrada de seu proprietário. O Ferrocast é um projeto independente.	Raycastはその所有者の商標です。Ferrocastは独立したプロジェクトです。	Raycast 是其所有者的商标。Ferrocast 是一个独立项目。
 Reading a vault happens on this Mac and nothing is uploaded. Creating notes and the daily note go through Obsidian.	La lectura de una bóveda se hace en este Mac y no se sube nada. Crear notas y la nota diaria se hace a través de Obsidian.	Ein Vault wird auf diesem Mac gelesen, nichts wird hochgeladen. Notizen und die Tagesnotiz werden über Obsidian angelegt.	La lecture d’un coffre se fait sur ce Mac et rien n’est envoyé. La création de notes et de la note quotidienne passe par Obsidian.	A leitura de um cofre acontece neste Mac e nada é enviado. A criação de notas e da nota diária passa pelo Obsidian.	Vaultの読み取りはこのMac上で行われ、何もアップロードされません。ノートとデイリーノートの作成はObsidian経由で行われます。	读取库的操作在这台 Mac 上进行,不会上传任何内容。创建笔记和每日笔记则通过 Obsidian 完成。
 Reading the audio…	Leyendo el audio…	Audio wird gelesen …	Lecture de l’audio…	Lendo o áudio…	オーディオを読み込み中…	正在读取音频…
 Reading the file…	Leyendo el archivo…	Datei wird gelesen …	Lecture du fichier…	Lendo o arquivo…	ファイルを読み込み中…	正在读取文件…
@@ -1125,7 +1125,7 @@ Search Quicklinks	Buscar enlaces rápidos	Schnelllinks suchen	Rechercher des lie
 Search Snippets	Buscar fragmentos	Textbausteine suchen	Rechercher des extraits	Buscar trechos	スニペットを検索	搜索文本片段
 Search actions…	Buscar acciones…	Aktionen suchen …	Rechercher des actions…	Buscar ações…	アクションを検索…	搜索操作…
 Search apps, commands, files… or calculate	Busca apps, comandos, archivos… o calcula	Apps, Befehle, Dateien suchen … oder rechnen	Cherchez des apps, commandes, fichiers… ou calculez	Busque apps, comandos, arquivos… ou calcule	App、コマンド、ファイルを検索…または計算	搜索 App、命令、文件…或进行计算
-Search clipboard history…	Buscar en el historial del portapapeles…	Zwischenablage-Verlauf durchsuchen …	Rechercher dans l’historique du presse-papiers…	Buscar no histórico da Área de Transferência…	クリップボード履歴を検索…	搜索剪贴板历史记录…
+Search clipboard history…	Buscar en el historial del portapapeles…	Zwischenablage-Verlauf durchsuchen …	Rechercher dans l’historique du presse-papiers…	Buscar no histórico da área de transferência…	クリップボード履歴を検索…	搜索剪贴板历史记录…
 Search emoji by name…	Buscar emojis por nombre…	Emoji nach Namen suchen …	Rechercher un émoji par nom…	Buscar emojis por nome…	名前で絵文字を検索…	按名称搜索表情…
 Search emoji for “{q}”	Buscar emojis con «{q}»	Emoji nach „{q}“ durchsuchen	Rechercher « {q} » dans les émojis	Buscar emojis com “{q}”	「{q}」で絵文字を検索	搜索包含“{q}”的表情
 Search files by name…	Buscar archivos por nombre…	Dateien nach Namen suchen …	Rechercher des fichiers par nom…	Buscar arquivos por nome…	名前でファイルを検索…	按名称搜索文件…
@@ -1321,7 +1321,7 @@ The canvas of the video.	El lienzo del vídeo.	Die Fläche des Videos.	Le caneva
 The capture file no longer exists	El archivo de la captura ya no existe	Die Aufnahmedatei existiert nicht mehr	Le fichier de capture n’existe plus	O arquivo da captura não existe mais	キャプチャのファイルは存在しません	捕获文件已不存在
 The capture helper keeps closing.	El ayudante de captura se sigue cerrando.	Der Aufnahme-Helfer beendet sich immer wieder.	L’assistant de capture ne cesse de se fermer.	O auxiliar de captura continua fechando.	キャプチャヘルパーが繰り返し終了します。	捕获助手不断关闭。
 The capture helper stopped unexpectedly	El ayudante de captura se detuvo inesperadamente	Der Aufnahme-Helfer wurde unerwartet beendet	L’assistant de capture s’est arrêté de façon inattendue	O auxiliar de captura parou inesperadamente	キャプチャヘルパーが予期せず停止しました	捕获助手意外停止
-The clipboard has no text.	El portapapeles no contiene texto.	Die Zwischenablage enthält keinen Text.	Le presse-papiers ne contient pas de texte.	A Área de Transferência não tem texto.	クリップボードにテキストがありません。	剪贴板中没有文本。
+The clipboard has no text.	El portapapeles no contiene texto.	Die Zwischenablage enthält keinen Text.	Le presse-papiers ne contient pas de texte.	A área de transferência não tem texto.	クリップボードにテキストがありません。	剪贴板中没有文本。
 The copy aims for this file size.	La copia apunta a este tamaño de archivo.	Die Kopie soll diese Dateigröße erreichen.	La copie vise cette taille de fichier.	A cópia busca este tamanho de arquivo.	コピーはこのファイルサイズを目指します。	副本将以此文件大小为目标。
 The copy is a JPEG next to the original; the original is never changed.	La copia es un JPEG junto al original; el original nunca se modifica.	Die Kopie ist ein JPEG neben dem Original; das Original wird nie verändert.	La copie est un JPEG à côté de l’original ; l’original n’est jamais modifié.	A cópia é um JPEG ao lado do original; o original nunca é alterado.	コピーは元のファイルの隣にJPEGとして作成され、元のファイルは変更されません。	副本是原文件旁边的 JPEG;原文件绝不会被更改。
 The copy is an MP4 next to the original; the original is never changed.	La copia es un MP4 junto al original; el original nunca se modifica.	Die Kopie ist eine MP4-Datei neben dem Original; das Original wird nie verändert.	La copie est un MP4 à côté de l’original ; l’original n’est jamais modifié.	A cópia é um MP4 ao lado do original; o original nunca é alterado.	コピーは元のファイルの隣にMP4として作成され、元のファイルは変更されません。	副本是原文件旁边的 MP4;原文件绝不会被更改。
@@ -1713,3 +1713,7 @@ Window has no frame	La ventana no tiene marco	Das Fenster hat keinen Rahmen	La f
 No screens	No hay pantallas	Keine Bildschirme	Aucun écran	Nenhuma tela	ディスプレイがありません	没有显示器
 Nothing to restore	Nada que restaurar	Nichts wiederherzustellen	Rien à restaurer	Nada para restaurar	復元するものがありません	没有可恢复的内容
 Only one display	Solo hay una pantalla	Nur ein Bildschirm	Un seul écran	Apenas uma tela	ディスプレイが1台のみです	只有一个显示器
+Translating to {lang} with {engine}…	Traduciendo a {lang} con {engine}…	Übersetze nach {lang} mit {engine} …	Traduction en {lang} avec {engine}…	Traduzindo para {lang} com {engine}…	{engine}で{lang}に翻訳中…	正在使用 {engine} 翻译为{lang}…
+Converting {file} to {format}…	Convirtiendo {file} a {format}…	{file} wird in {format} konvertiert …	Conversion de {file} en {format}…	Convertendo {file} para {format}…	{file}を{format}に変換中…	正在将 {file} 转换为 {format}…
+{title} finished	{title} ha terminado	{title} ist fertig	{title} est terminé	{title} terminou	{title}が完了しました	{title} 已完成
+shelf|Clear	Vaciar	Leeren	Vider	Esvaziar	空にする	清空

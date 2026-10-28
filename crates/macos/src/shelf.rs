@@ -369,6 +369,15 @@ fn small_button(
     b
 }
 
+/// Header geometry from the right edge: `(Clear x, Clear width, title row width)`. The Clear
+/// button is as wide as its caption needs (never under 50 pt); the title row takes what is left.
+fn header_layout(clear_w: f64) -> (f64, f64, f64) {
+    let close_x = 222.0;
+    let clear_w = clear_w.max(50.0);
+    let clear_x = close_x - 8.0 - clear_w;
+    (clear_x, clear_w, clear_x - 4.0 - 10.0)
+}
+
 fn build(mtm: MainThreadMarker) -> Ui {
     let h = panel_height(0);
     let frame = rect(0.0, 0.0, WIDTH, h);
@@ -411,18 +420,20 @@ fn build(mtm: MainThreadMarker) -> Ui {
     let target: Retained<ShelfTarget> = unsafe { msg_send![mtm.alloc::<ShelfTarget>(), init] };
 
     // Header: drag-all handle + Clear + close.
+    let clear_title = ferrocast_core::i18n::trc("shelf", "Clear");
+    let (clear_x, clear_w, row_w) = header_layout((crate::hud::text_width(&clear_title, 13.0) + 16.0).ceil());
     let title_row: Retained<ShelfRow> = unsafe {
         msg_send![
             super(mtm.alloc::<ShelfRow>().set_ivars(RowIvars { path: None })),
-            initWithFrame: rect(10.0, 8.0, 150.0, 24.0)
+            initWithFrame: rect(10.0, 8.0, row_w, 24.0)
         ]
     };
     let title = NSTextField::labelWithString(&NSString::from_str(&ferrocast_core::i18n::tr("Shelf")), mtm);
-    title.setFrame(rect(4.0, 3.0, 142.0, 18.0));
+    title.setFrame(rect(4.0, 3.0, row_w - 8.0, 18.0));
     title_row.addSubview(&title);
     content.addSubview(&title_row);
 
-    let clear = small_button(mtm, &ferrocast_core::i18n::tr("Clear"), &target, sel!(shelfClear:), rect(164.0, 10.0, 50.0, 20.0));
+    let clear = small_button(mtm, &clear_title, &target, sel!(shelfClear:), rect(clear_x, 10.0, clear_w, 20.0));
     content.addSubview(&clear);
     let close = small_button(mtm, "×", &target, sel!(shelfClose:), rect(222.0, 10.0, 28.0, 20.0));
     content.addSubview(&close);
@@ -601,6 +612,21 @@ mod tests {
 
     fn p(s: &str) -> PathBuf {
         PathBuf::from(s)
+    }
+
+    #[test]
+    fn clear_button_fits_its_caption_in_every_language() {
+        use ferrocast_core::i18n::Lang;
+        assert_eq!(header_layout(0.0), (164.0, 50.0, 150.0), "English keeps the original geometry");
+        for lang in [Lang::En, Lang::Es, Lang::De, Lang::Fr, Lang::PtBr, Lang::Ja, Lang::ZhHans] {
+            let title = ferrocast_core::i18n::with_language(lang, || ferrocast_core::i18n::trc("shelf", "Clear"));
+            let need = crate::hud::text_width(&title, 13.0) + 16.0;
+            let (x, w, row_w) = header_layout((crate::hud::text_width(&title, 13.0) + 16.0).ceil());
+            assert!(w >= need, "{lang:?}: Clear is {w} pt wide, its caption needs {need}");
+            assert!(x + w + 8.0 <= 222.0, "{lang:?}: Clear overlaps the close button");
+            assert!(10.0 + row_w + 4.0 <= x, "{lang:?}: the title row overlaps Clear");
+            assert!(row_w >= 60.0, "{lang:?}: no room left for the title");
+        }
     }
 
     #[test]

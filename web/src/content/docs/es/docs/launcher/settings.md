@@ -1,10 +1,10 @@
 ---
 title: "Ajustes y copia de seguridad"
-description: "Ajustes de Ferrocast tiene diez pestañas, de General a Advanced. Elige el idioma, define atajos e inicio al abrir sesión y haz copias de seguridad."
+description: "Ajustes de Ferrocast tiene diez pestañas, de General a Avanzado. Elige el idioma, define atajos e inicio al abrir sesión y haz copias de seguridad."
 sidebar:
   order: 12
 ---
-Ajustes es una barra lateral con diez pestañas: General, Clipboard, Snippets, AI, Translate, Capture, Notes, Scripts, Integrations y Advanced. <kbd>⌘</kbd> <kbd>1</kbd> a <kbd>⌘</kbd> <kbd>9</kbd> y <kbd>⌘</kbd> <kbd>0</kbd> saltan a ellas en ese orden. Cada ajuste es una fila con un título, una descripción en lenguaje sencillo y su control (interruptores animados, selectores segmentados, teclas).
+Ajustes es una barra lateral con diez pestañas: General, Portapapeles, Fragmentos, IA, Traducir, Captura, Notas, Scripts, Integraciones y Avanzado (los nombres siguen el idioma de la interfaz). <kbd>⌘</kbd> <kbd>1</kbd> a <kbd>⌘</kbd> <kbd>9</kbd> y <kbd>⌘</kbd> <kbd>0</kbd> saltan a ellas en ese orden. Cada ajuste es una fila con un título, una descripción en lenguaje sencillo y su control (interruptores animados, selectores segmentados, teclas).
 
 Ábrelos con <kbd>⌘</kbd> <kbd>,</kbd>. También hay un icono en la barra de menús.
 

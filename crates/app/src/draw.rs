@@ -8011,7 +8011,9 @@ impl App {
                                     ui.ctx().data_mut(|d| d.remove::<String>(scrolled_id));
                                 }
                                 group(ui, pal, |ui| {
-                                    row(ui, pal, &m.title, &desc, |ui| {
+                                    // the extension's own title is shown as installed; Ferrocast's buttons are translated first
+                                    let btn = tr(if editing { "Close" } else { "Preferences…" }).into_owned();
+                                    ferrocast_core::i18n::with_verbatim(|| row(ui, pal, &m.title, &desc, |ui| {
                                         let mut on = !s.raycast_extensions_disabled.contains(&m.name);
                                         if toggle_changed(ui, pal, &mut on) {
                                             s.raycast_extensions_disabled.retain(|n| n != &m.name);
@@ -8019,14 +8021,14 @@ impl App {
                                                 s.raycast_extensions_disabled.push(m.name.clone());
                                             }
                                         }
-                                        if has_prefs && small_btn(ui, pal, if editing { "Close" } else { "Preferences…" }) {
+                                        if has_prefs && small_btn(ui, pal, &btn) {
                                             if editing {
                                                 ext_close = true;
                                             } else {
                                                 ext_open = Some(m.name.clone());
                                             }
                                         }
-                                    });
+                                    }));
                                     if let (true, Some(edit)) = (editing, ext_edit.as_mut()) {
                                         if !edit.notice.is_empty() {
                                             egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| row_desc(ui, pal, &edit.notice));
