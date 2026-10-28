@@ -60,6 +60,10 @@ export const page: GuideCopy = {
       ],
     },
     {
+      h: 'File tools',
+      paras: ['Reordering pages inside one PDF is its own tool: [Organize PDF pages](/tools/organize-pdf/).'],
+    },
+    {
       h: 'Where Permute does more',
       paras: ['Permute’s website lists text-to-speech narration, OCR and transcription to SRT, and it runs on Intel Macs with Permute 3. If you need those, it is the better pick. Ferrocast’s strength is that conversion lives in the launcher you already use, for free.'],
     },

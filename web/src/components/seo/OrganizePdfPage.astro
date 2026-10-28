@@ -1,0 +1,120 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../SiteHeader.astro';
+import SiteFooter from '../SiteFooter.astro';
+import Crumbs from './Crumbs.astro';
+import { dmgUrl, installCommand } from '../../data/install';
+import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
+import { inline, plain } from '../../lib/seo/markup';
+import { page as t } from '../../lib/seo/organize-pdf';
+import '../../styles/seo.css';
+
+const canonical = `${SITE}${t.path}`;
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Ferrocast',
+    operatingSystem: 'macOS 13+',
+    applicationCategory: 'UtilitiesApplication',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    url: canonical,
+  },
+  { ...howTo(t.steps.howToName, t.description, t.steps.items), inLanguage: 'en' },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    inLanguage: 'en',
+    mainEntity: t.faq.items.map(([q, a]) => ({
+      '@type': 'Question',
+      name: q,
+      acceptedAnswer: { '@type': 'Answer', text: plain(a) },
+    })),
+  },
+  breadcrumbs(t.crumbs),
+];
+---
+<Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd}>
+  <SiteHeader current="files" />
+  <main class="seo guide" id="main">
+    <Crumbs items={t.crumbs} />
+    <h1>{t.h1}</h1>
+    <p class="lead">{t.lead}</p>
+    <p class="g-cta"><a class="btn" href={dmgUrl}>Download Ferrocast</a><span class="fine">Free · MIT · Apple Silicon · no upload</span></p>
+
+    <h2>{t.can.h}</h2>
+    <p>{t.can.intro}</p>
+    <div class="g-table">
+      <table>
+        <caption class="sr-only">Keys in the PDF organizer</caption>
+        <thead><tr>{t.can.cols.map((c) => <th scope="col">{c}</th>)}</tr></thead>
+        <tbody>
+          {t.can.rows.map(([head, cell]) => (
+            <tr><th scope="row" set:html={inline(head)} /><td set:html={inline(cell)} /></tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <p>{t.can.buttons}</p>
+    <img class="shot" src="/img/files-organize.jpg" alt="Organize PDF window in Ferrocast, with page thumbnails and one page selected" width="1500" height="950" loading="lazy" decoding="async" />
+
+    <h2 id="steps">{t.steps.h}</h2>
+    <ol>{t.steps.items.map(([name, text]) => <li><strong>{name}.</strong> {text}</li>)}</ol>
+    <details class="g-brew">
+      <summary>Install Ferrocast with Homebrew</summary>
+      <pre><code>{installCommand}</code></pre>
+    </details>
+
+    <h2>{t.command.h}</h2>
+    {t.command.paras.map((p) => <p set:html={inline(p)} />)}
+
+    <h2>{t.limits.h}</h2>
+    <ul>{t.limits.items.map((item) => <li set:html={inline(item)} />)}</ul>
+
+    <h2>{t.compare.h}</h2>
+    <div class="g-table">
+      <table>
+        <caption class="sr-only">{t.compare.caption}</caption>
+        <thead><tr>{t.compare.cols.map((c) => <th scope="col">{c}</th>)}</tr></thead>
+        <tbody>
+          {t.compare.rows.map(([head, ...cells]) => (
+            <tr><th scope="row" set:html={inline(head)} />{cells.map((c) => <td set:html={inline(c)} />)}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <p class="fine" set:html={inline(t.compare.note)} />
+
+    <h2>{t.related.h}</h2>
+    <ul class="chips">{t.related.links.map(([label, href]) => <li><a href={href}>{label}</a></li>)}</ul>
+
+    <h2>{t.faq.h}</h2>
+    <div class="g-faq">
+      {t.faq.items.map(([q, a]) => (
+        <details><summary>{q}</summary><p set:html={inline(a)} /></details>
+      ))}
+    </div>
+  </main>
+  <SiteFooter />
+</Base>
+
+<style>
+  .guide .g-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .guide .fine { font-size: var(--step-small); color: var(--muted); }
+  .guide .g-table { overflow-x: auto; border-radius: var(--radius); box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); }
+  .guide table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: var(--step-small); line-height: 1.5; }
+  .guide th, .guide td { text-align: left; vertical-align: top; padding: 12px 14px; border-top: 1px solid rgba(255,255,255,.06); }
+  .guide thead th { border-top: 0; background: var(--surface); font-weight: 500; }
+  .guide tbody th { font-weight: 500; color: var(--ink); }
+  .guide td { color: var(--muted); }
+  .guide .g-brew summary, .guide .g-faq summary { cursor: pointer; font-weight: 500; }
+  .guide .g-brew pre { margin-top: 10px; }
+  .guide .g-faq details { padding: 14px 0; border-top: 1px solid rgba(255,255,255,.06); }
+  .guide .g-faq p { margin-top: 8px; }
+  .guide .shot { margin-top: 16px; }
+  .guide .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (prefers-color-scheme: light) {
+    .guide .g-table { box-shadow: inset 0 0 0 1px rgba(0,0,0,.07); }
+    .guide th, .guide td, .guide .g-faq details { border-top-color: rgba(0,0,0,.07); }
+  }
+</style>

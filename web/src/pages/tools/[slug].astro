@@ -1,4 +1,5 @@
 ---
+import OrganizePdfPage from '../../components/seo/OrganizePdfPage.astro';
 import ToolPageView from '../../components/seo/ToolPage.astro';
 import { allTools } from '../../lib/seo/tools';
 
@@ -7,4 +8,4 @@ export function getStaticPaths() {
 }
 const { tool } = Astro.props;
 ---
-<ToolPageView tool={tool} />
+{tool.id === 'organizePdf' ? <OrganizePdfPage /> : <ToolPageView tool={tool} />}
