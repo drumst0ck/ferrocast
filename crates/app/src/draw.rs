@@ -3,6 +3,7 @@
 use super::*;
 use egui::TextureOptions;
 use egui::{Event, Frame as EFrame, RichText, TextEdit};
+use ferrocast_core::extensions::manifest::PrefInput;
 use global_hotkey::hotkey::HotKey;
 use std::str::FromStr;
 
@@ -137,6 +138,7 @@ impl eframe::App for App {
         let now = ctx.input(|i| i.time);
         self.tick_notion_view(now);
         self.tick_obsidian_view(now);
+        self.ext_tick();
         // debounced file search
         let q = self.query.trim().to_string();
         let wants = self.visible
@@ -942,7 +944,7 @@ impl App {
             if let Some((modifiers, key)) = footer_key.as_deref().filter(|c| !matches!(*c, "⌘K" | "↵" | "esc")).and_then(chip_key) {
                 i.events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers });
             }
-            if shape == Shape::List || panel {
+            if shape == Shape::List || panel || matches!(view, View::ExtDetail | View::ExtForm) {
                 k.cmd_k = i.consume_key(CMD, Key::K);
                 k.up = i.consume_key(Modifiers::NONE, Key::ArrowUp);
                 k.down = i.consume_key(Modifiers::NONE, Key::ArrowDown);
@@ -1054,6 +1056,9 @@ impl App {
             return false;
         }
         // forms / single views
+        if matches!(self.view(), View::ExtDetail | View::ExtForm) && self.ext_detail_keys(k) {
+            return true;
+        }
         if k.esc {
             if matches!(self.view(), View::Settings) {
                 // the first Escape of a Settings search only clears the query
@@ -1613,6 +1618,7 @@ impl App {
 
     fn detail_for(&self, item: &Item) -> Option<Detail> {
         match &item.kind {
+            Kind::ExtItem(id) => self.ext_item_detail(id).map(|d| Detail::Text(d.markdown, d.meta)),
             Kind::Clip(id) => {
                 let e = self.shared.clipboard.lock().unwrap().iter().find(|e| &e.id == id).cloned()?;
                 let mut meta = vec![];
@@ -1847,7 +1853,7 @@ impl App {
         let content = Rect::from_min_max(Pos2::new(full.min.x, search_rect.max.y), Pos2::new(full.max.x, footer_rect.min.y));
 
         // ---- search bar
-        let title = self.view().title();
+        let title = self.view_title();
         let placeholder = self.view().placeholder();
         let nested = self.stack.len() > 1;
         let mut back = false;
@@ -1895,7 +1901,7 @@ impl App {
                         #[cfg(test)]
                         ctx.data_mut(|d| d.insert_temp(Id::new("settings-breadcrumb"), format!("Settings / {name}")));
                     } else {
-                        ui.label(RichText::new(title).size(16.0).strong().color(pal.text));
+                        ui.label(RichText::new(&title).size(16.0).strong().color(pal.text));
                     }
                 });
             });
@@ -1943,7 +1949,7 @@ impl App {
         let mut mouse = ListMouse::default();
         match shape {
             Shape::List => {
-                let detail = if matches!(self.view(), View::Clipboard | View::Snippets | View::Notes | View::Quicklinks) {
+                let detail = if matches!(self.view(), View::Clipboard | View::Snippets | View::Notes | View::Quicklinks | View::ExtList) {
                     cur.as_ref().and_then(|i| self.detail_for(i))
                 } else {
                     None
@@ -2002,6 +2008,7 @@ impl App {
                 View::Confirm { .. } => Some("Confirm".into()),
                 View::Ai { .. } => Some("Ask".into()),
                 View::Update { .. } => Some("Install and relaunch".into()),
+                View::ExtDetail | View::ExtForm => self.ext_detail_actions().first().map(|a| a.title.clone()),
                 View::SnippetForm { .. } | View::QuicklinkForm { .. } => Some("Save".into()),
                 View::Alias { .. } | View::CreateScript { .. } => Some("Save".into()),
                 _ => None,
@@ -2126,7 +2133,7 @@ impl App {
                     p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, "Ferrocast", FontId::proportional(12.5), fsub);
                     record_text(ui.ctx(), pal, "footer-left", fsub, &[], 1.0);
                 } else {
-                    p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, self.view().title(), FontId::proportional(12.5), pal.sub);
+                    p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, self.view_title(), FontId::proportional(12.5), pal.sub);
                 }
             }
         }
@@ -2136,7 +2143,7 @@ impl App {
         let left_w = match &self.toast {
             Some((t, _)) => p.layout_no_wrap(t.clone(), FontId::proportional(12.5), pal.accent).size().x,
             None if settings => p.layout_no_wrap("Ferrocast".into(), FontId::proportional(12.5), fsub).size().x,
-            None => p.layout_no_wrap(self.view().title().into(), FontId::proportional(12.5), pal.sub).size().x,
+            None => p.layout_no_wrap(self.view_title(), FontId::proportional(12.5), pal.sub).size().x,
         };
         let chip_w = |(l, k): &(&str, &str)| {
             let kw = (p.layout_no_wrap(k.to_string(), FontId::proportional(11.5), pal.text).size().x + 12.0).max(22.0);
@@ -5649,6 +5656,156 @@ impl App {
         });
     }
 
+    /// A Detail screen of a Raycast extension: its Markdown, or the "not supported" line.
+    fn draw_ext_detail(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette) {
+        let (md, loading) = self.ext_detail_content();
+        let blocks = ferrocast_core::obsidian::parse_preview(&md);
+        ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+            egui::ScrollArea::vertical().id_salt("ext-detail").auto_shrink([false; 2]).show(ui, |ui| {
+                if loading && md.trim().is_empty() {
+                    ui.label(RichText::new("Loading…").size(14.0).color(pal.sub));
+                }
+                draw_blocks(ui, pal, &blocks);
+            });
+        });
+    }
+
+    /// A form of a Raycast extension: its fields, edited here; ⌘↵ runs the first action, ⌘K lists them.
+    fn draw_ext_form(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette, focus_first: bool) {
+        use ferrocast_core::extensions::view::FieldKind;
+        let Some(form) = self.ext_form() else { return };
+        let mut st = self.ext.form.clone();
+        let mut changes: Vec<(String, serde_json::Value)> = vec![];
+        let mut first = focus_first;
+        ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+            egui::ScrollArea::vertical().id_salt("ext-form").auto_shrink([false; 2]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 8.0;
+                if form.is_loading {
+                    ui.label(RichText::new("Loading…").size(12.0).color(pal.sub));
+                }
+                for (n, f) in form.fields.iter().enumerate() {
+                    let id = egui::Id::new(("ext-form-field", n, f.id.as_str()));
+                    let label = |ui: &mut Ui| {
+                        if !f.title.is_empty() && f.kind != FieldKind::Checkbox {
+                            ui.label(RichText::new(&f.title).size(12.0).color(pal.sub));
+                        }
+                    };
+                    match f.kind {
+                        FieldKind::Description => {
+                            if !f.title.is_empty() {
+                                ui.label(RichText::new(&f.title).size(13.0).strong().color(pal.text));
+                            }
+                            ui.add(egui::Label::new(RichText::new(&f.text).size(13.0).color(pal.sub)).wrap());
+                            continue;
+                        }
+                        FieldKind::Separator => {
+                            ui.separator();
+                            continue;
+                        }
+                        FieldKind::Text | FieldKind::Password | FieldKind::Date => {
+                            label(ui);
+                            let mut s = st.get(&f.id).as_str().unwrap_or("").to_string();
+                            let hint = if f.placeholder.is_empty() && f.kind == FieldKind::Date {
+                                "YYYY-MM-DD".to_string()
+                            } else {
+                                f.placeholder.clone()
+                            };
+                            let r = ui.add(
+                                TextEdit::singleline(&mut s)
+                                    .id(id)
+                                    .desired_width(f32::INFINITY)
+                                    .password(f.kind == FieldKind::Password)
+                                    .hint_text(hint),
+                            );
+                            if first {
+                                r.request_focus();
+                                first = false;
+                            }
+                            if r.changed() {
+                                changes.push((f.id.clone(), serde_json::Value::String(s)));
+                            }
+                        }
+                        FieldKind::TextArea => {
+                            label(ui);
+                            let mut s = st.get(&f.id).as_str().unwrap_or("").to_string();
+                            let r = ui.add(
+                                TextEdit::multiline(&mut s)
+                                    .id(id)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(5)
+                                    .hint_text(f.placeholder.clone()),
+                            );
+                            if first {
+                                r.request_focus();
+                                first = false;
+                            }
+                            if r.changed() {
+                                changes.push((f.id.clone(), serde_json::Value::String(s)));
+                            }
+                        }
+                        FieldKind::Checkbox => {
+                            let mut b = st.get(&f.id).as_bool().unwrap_or(false);
+                            if ui.checkbox(&mut b, RichText::new(&f.title).size(13.0).color(pal.text)).changed() {
+                                changes.push((f.id.clone(), serde_json::Value::Bool(b)));
+                            }
+                        }
+                        FieldKind::Dropdown => {
+                            label(ui);
+                            let cur = st.get(&f.id).as_str().unwrap_or("").to_string();
+                            let shown = f.options.iter().find(|o| o.value == cur).map(|o| o.title.clone()).unwrap_or_default();
+                            egui::ComboBox::from_id_salt(id).selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                                for o in &f.options {
+                                    if ui.selectable_label(o.value == cur, &o.title).clicked() {
+                                        changes.push((f.id.clone(), serde_json::Value::String(o.value.clone())));
+                                    }
+                                }
+                            });
+                        }
+                        FieldKind::Tags => {
+                            label(ui);
+                            let mut cur: Vec<String> = st
+                                .get(&f.id)
+                                .as_array()
+                                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                                .unwrap_or_default();
+                            let mut changed = false;
+                            for o in &f.options {
+                                let mut on = cur.contains(&o.value);
+                                if ui.checkbox(&mut on, RichText::new(&o.title).size(13.0).color(pal.text)).changed() {
+                                    cur.retain(|x| x != &o.value);
+                                    if on {
+                                        cur.push(o.value.clone());
+                                    }
+                                    changed = true;
+                                }
+                            }
+                            if changed {
+                                changes.push((
+                                    f.id.clone(),
+                                    serde_json::Value::Array(cur.into_iter().map(serde_json::Value::String).collect()),
+                                ));
+                            }
+                        }
+                    }
+                    if !f.error.is_empty() {
+                        ui.label(RichText::new(&f.error).size(12.0).color(Color32::from_rgb(255, 99, 90)));
+                    } else if !f.info.is_empty() {
+                        ui.label(RichText::new(&f.info).size(11.5).color(pal.sub));
+                    }
+                }
+                if form.actions.is_empty() {
+                    ui.label(RichText::new("This form has no actions").size(12.0).color(pal.sub));
+                } else {
+                    ui.label(RichText::new("Submit with ⌘↵ · ⌘K for more actions").size(12.0).color(pal.sub));
+                }
+            });
+        });
+        for (id, v) in changes {
+            st.set(&id, v.clone());
+            self.ext_form_changed(&id, v);
+        }
+    }
+
     fn draw_single(&mut self, ui: &mut Ui, rect: Rect, pal: &Palette) {
         let ff = std::mem::take(&mut self.focus_first);
         let view = self.view().clone();
@@ -5656,6 +5813,8 @@ impl App {
             View::Settings => {
                 ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| self.draw_settings(ui, pal));
             }
+            View::ExtDetail => self.draw_ext_detail(ui, rect, pal),
+            View::ExtForm => self.draw_ext_form(ui, rect, pal, ff),
             View::VideoRedact { size: Some(_), .. } => {
                 self.draw_video_redact(ui, rect, pal);
             }
@@ -6599,6 +6758,15 @@ impl App {
         let mut nquery = std::mem::take(&mut self.notion.query);
         let (mut notion_save, mut notion_test, mut notion_search, mut notion_clear, mut notion_open) = (false, false, false, false, false);
         let mut notion_pick: Option<usize> = None;
+        if tab == INTEGRATIONS_TAB {
+            self.ext_rescan_node_if_needed();
+        }
+        let (ext_node_status, ext_node_ok) = self.ext_node_status();
+        let (mut ext_download, ext_busy) = (false, self.ext.downloading);
+        let ext_manifests: Vec<_> =
+            if tab == INTEGRATIONS_TAB && self.settings.run_raycast_extensions { self.ext.manifests().to_vec() } else { vec![] };
+        let mut ext_edit = self.ext.take_prefs();
+        let (mut ext_open, mut ext_save, mut ext_close): (Option<String>, bool, bool) = (None, false, false);
         let has_notion = if tab == INTEGRATIONS_TAB {
             match ctx.data(|d| d.get_temp::<bool>(Id::new("notion_has_token"))) {
                 Some(v) => v,
@@ -7648,6 +7816,115 @@ impl App {
                         });
                         ui.add_space(10.0);
                         note(ui, pal, "Reading a vault happens on this Mac and nothing is uploaded. Creating notes and the daily note go through Obsidian.");
+                        ui.add_space(14.0);
+                        section(ui, pal, "Raycast extensions");
+                        group(ui, pal, |ui| {
+                            row(
+                                ui,
+                                pal,
+                                "Run Raycast extensions",
+                                ext_glue::EXT_DISCLOSURE,
+                                |ui| toggle(ui, pal, &mut s.run_raycast_extensions),
+                            );
+                            if s.run_raycast_extensions {
+                                let chip = if ext_node_ok { (StatusKind::Ok, "Ready") } else { (StatusKind::Warn, "Needed") };
+                                row_chip(ui, pal, "Node.js 22 or newer", &ext_node_status, Some(chip), |ui| {
+                                    if !ext_node_ok && small_btn(ui, pal, if ext_busy { "Downloading…" } else { "Download Node.js (about 26 MB)" }) && !ext_busy {
+                                        ext_download = true;
+                                    }
+                                });
+                            }
+                        });
+                        if s.run_raycast_extensions {
+                            ui.add_space(10.0);
+                            if ext_manifests.is_empty() {
+                                note(ui, pal, "No extensions found in ~/.config/raycast/extensions. Install some with Raycast and they show up here.");
+                            }
+                            for m in &ext_manifests {
+                                let editing = ext_edit.as_ref().is_some_and(|e| e.ext == m.name);
+                                let has_prefs = !m.all_preferences().is_empty();
+                                let n = m.commands.len();
+                                let desc = format!("{n} command{}", if n == 1 { "" } else { "s" });
+                                let scrolled_id = Id::new("ext-prefs-scrolled");
+                                if editing {
+                                    // first frame of an open form: bring it into view (it can be far down a long list)
+                                    let done = ui.ctx().data(|d| d.get_temp::<String>(scrolled_id)).is_some_and(|n| n == m.name);
+                                    if !done {
+                                        ui.scroll_to_rect_animation(
+                                            Rect::from_min_size(ui.cursor().min, Vec2::new(1.0, 400.0)),
+                                            Some(egui::Align::TOP),
+                                            egui::style::ScrollAnimation::none(),
+                                        );
+                                        ui.ctx().data_mut(|d| d.insert_temp(scrolled_id, m.name.clone()));
+                                    }
+                                    #[cfg(test)]
+                                    ui.ctx().data_mut(|d| d.insert_temp(Id::new("ext-form-top"), (ui.cursor().min.y, ui.clip_rect())));
+                                } else if ui.ctx().data(|d| d.get_temp::<String>(scrolled_id)).is_some_and(|n| n == m.name) {
+                                    ui.ctx().data_mut(|d| d.remove::<String>(scrolled_id));
+                                }
+                                group(ui, pal, |ui| {
+                                    row(ui, pal, &m.title, &desc, |ui| {
+                                        let mut on = !s.raycast_extensions_disabled.contains(&m.name);
+                                        if toggle_changed(ui, pal, &mut on) {
+                                            s.raycast_extensions_disabled.retain(|n| n != &m.name);
+                                            if !on {
+                                                s.raycast_extensions_disabled.push(m.name.clone());
+                                            }
+                                        }
+                                        if has_prefs && small_btn(ui, pal, if editing { "Close" } else { "Preferences…" }) {
+                                            if editing {
+                                                ext_close = true;
+                                            } else {
+                                                ext_open = Some(m.name.clone());
+                                            }
+                                        }
+                                    });
+                                    if let (true, Some(edit)) = (editing, ext_edit.as_mut()) {
+                                        if !edit.notice.is_empty() {
+                                            egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| row_desc(ui, pal, &edit.notice));
+                                        }
+                                        for p in m.all_preferences() {
+                                            let hint = if p.required { format!("{} (required)", p.title) } else { p.title.clone() };
+                                            row(ui, pal, &hint, &p.description, |ui| match p.input() {
+                                                PrefInput::Checkbox => {
+                                                    let mut v = edit.values.get(&p.name).and_then(|v| v.as_bool()).unwrap_or(false);
+                                                    toggle(ui, pal, &mut v);
+                                                    edit.values.insert(p.name.clone(), v.into());
+                                                }
+                                                PrefInput::Dropdown => {
+                                                    let cur = edit.values.get(&p.name).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                    let shown = p.options.iter().find(|(_, v)| *v == cur).map(|(t, _)| t.clone()).unwrap_or(cur);
+                                                    field_combo(ui, pal, ("ext-pref", &m.name, &p.name), &shown, 180.0, |ui| {
+                                                        for (title, value) in &p.options {
+                                                            if ui.selectable_label(false, title).clicked() {
+                                                                edit.values.insert(p.name.clone(), value.clone().into());
+                                                            }
+                                                        }
+                                                    });
+                                                }
+                                                kind => {
+                                                    let mut v = edit.values.get(&p.name).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                    let hint = match p.kind.as_str() {
+                                                        "file" | "directory" | "appPicker" => "Path or name",
+                                                        _ => "",
+                                                    };
+                                                    field(ui, pal, &mut v, 220.0, hint, kind == PrefInput::Password);
+                                                    edit.values.insert(p.name.clone(), v.into());
+                                                }
+                                            });
+                                        }
+                                        row(ui, pal, "Save these values", "Saved in a file on this Mac (extensions/<name>/preferences.json in Ferrocast's data folder), not in the Keychain. Passwords are masked here and never written to the log.", |ui| {
+                                            if accent_btn(ui, pal, "Save") {
+                                                ext_save = true;
+                                            }
+                                        });
+                                    }
+                                });
+                                ui.add_space(8.0);
+                            }
+                        }
+                        ui.add_space(10.0);
+                        note(ui, pal, "Ferrocast reads the extensions Raycast already installed in ~/.config/raycast/extensions, only while this is on. It never contacts Raycast's Store. Ferrocast is not affiliated with Raycast. The download button fetches Node.js from nodejs.org (about 26 MB), checks its SHA-256 against a value built into Ferrocast and keeps only the node program.");
                     }
                     _ => {
                         section(ui, pal, "Permissions");
@@ -7896,6 +8173,19 @@ impl App {
         }
         if notion_open {
             let _ = std::process::Command::new("/usr/bin/open").arg("https://www.notion.so/my-integrations").spawn();
+        }
+        self.ext.put_prefs(ext_edit);
+        if ext_close {
+            self.ext.put_prefs(None);
+        }
+        if let Some(name) = ext_open {
+            self.ext_open_prefs(&name, "");
+        }
+        if ext_save {
+            self.ext_save_prefs();
+        }
+        if ext_download {
+            self.ext_download_node();
         }
         let need_models = tab == 3 && !self.ai_models.contains_key(&models_key);
         if fetch_models || need_models {
@@ -9733,12 +10023,17 @@ impl App {
         let hotkey_changed = s.launcher_hotkey != self.settings.launcher_hotkey;
         let dirs_changed = s.script_directories != self.settings.script_directories;
         let start_poller = s.update_check && self.update_poller.is_none();
+        let ext_changed = s.run_raycast_extensions != self.settings.run_raycast_extensions
+            || s.raycast_extensions_disabled != self.settings.raycast_extensions_disabled;
         let notes_changed = s.notes_zoom != self.settings.notes_zoom
             || s.notes_escape_loses_focus != self.settings.notes_escape_loses_focus
             || s.notes_menu_bar_button != self.settings.notes_menu_bar_button;
         let sync_turned_on = s.sync_enabled && !self.settings.sync_enabled;
         self.settings = s;
         self.save_settings();
+        if ext_changed {
+            self.ext_settings_changed();
+        }
         if sync_turned_on {
             self.sync_persist_all();
             self.sync_all();

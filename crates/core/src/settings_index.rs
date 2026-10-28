@@ -105,6 +105,7 @@ pub const ENTRIES: &[Entry] = &[
     e(8, "Vault", &["obsidian", "vault", "notes", "markdown", "daily", "pick", "clear", "open"]),
     e(8, "Vault folder", &["obsidian", "vault", "notes", "markdown", "daily", "choose", "folder", "finder"]),
     e(8, "Obsidian app", &["obsidian", "vault", "notes", "markdown", "daily", "installed", "download", "status"]),
+    e(8, "Run Raycast extensions", &["raycast", "extensions", "store", "node", "plugins", "permissions"]),
     // 9 Advanced
     e(9, "Accessibility", &["permission", "privacy", "grant", "window management", "security", "access"]),
     e(9, "1 rem", &["px", "pixels", "css", "calculator", "em", "units"]),

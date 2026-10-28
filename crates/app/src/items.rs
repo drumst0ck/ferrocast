@@ -356,6 +356,13 @@ pub enum Kind {
     Editor(Act),
     /// A `.ferrocast` project in the Recordings browser.
     Recording(PathBuf),
+    /// A command of an installed Raycast extension (names from its manifest).
+    ExtCommand {
+        ext: String,
+        cmd: String,
+    },
+    /// A row of the running extension's list, by the extension's item id (empty: a note row).
+    ExtItem(String),
 }
 
 #[derive(Clone, Debug)]
@@ -512,6 +519,8 @@ pub enum Act {
     /// Capture window, Pin: float this saved capture above every window.
     // T11: replace the "Not available yet" stub in the executor with the pin panel.
     PinImage(PathBuf),
+    /// Trigger an action of the running Raycast extension (its action id).
+    ExtAction(String),
 }
 
 #[derive(Clone, Debug)]

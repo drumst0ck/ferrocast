@@ -586,6 +586,12 @@ pub enum View {
     Editor {
         project: PathBuf,
     },
+    /// A list screen of the running Raycast extension (state in `App::ext`).
+    ExtList,
+    /// A detail (or not-supported) screen of the running Raycast extension.
+    ExtDetail,
+    /// A form of the running Raycast extension (fields drawn natively, values in `App::ext`).
+    ExtForm,
 }
 
 /// One wheel segment: label, SF symbol, and what releasing on it does.
@@ -634,12 +640,14 @@ impl View {
             | View::NotionSearch
             | View::ObsidianSearch
             | View::Recordings
+            | View::ExtList
             | View::Colors(_) => Shape::List,
             View::SnippetForm { .. }
             | View::QuicklinkForm { .. }
             | View::NotionAdd { .. }
             | View::ObsidianNew { .. }
             | View::ObsidianDaily { .. }
+            | View::ExtForm
             | View::Settings => Shape::Form,
             _ => Shape::Single,
         }
@@ -752,6 +760,7 @@ impl View {
             View::Translation { .. } => "Translation",
             View::Wheel { .. } => "Wheel",
             View::Update { .. } => "Update available",
+            View::ExtList | View::ExtDetail | View::ExtForm => "Raycast Extension",
         }
     }
     fn placeholder(&self) -> &'static str {
@@ -806,6 +815,9 @@ struct Keys {
     left: bool,
     right: bool,
 }
+
+/// Bus messages handled per frame; a flood (a chatty background job) must not freeze the UI.
+pub(crate) const MAX_MSGS_PER_FRAME: usize = 200;
 
 const NOTION_NO_TOKEN: &str = "Paste your Notion token first.";
 
@@ -980,6 +992,8 @@ pub struct App {
     apps_at: Instant,
     scripts: Vec<ScriptCommand>,
     base: Vec<Item>,
+    /// Raycast extensions: discovery, the running command's process and screens.
+    pub(crate) ext: ext_glue::ExtState,
     hotkeys: Option<Hotkeys>,
     tiling: Option<ferrocast_macos::tiling::Handle>,
     tiling_paused: bool,
@@ -1283,6 +1297,7 @@ impl App {
             apps_at: Instant::now(),
             scripts: vec![],
             base: vec![],
+            ext: Default::default(),
             hotkeys,
             tiling: None,
             tiling_paused: false,
@@ -1884,6 +1899,8 @@ impl App {
                 kind: Kind::Script(i),
             });
         }
+        self.ext_ensure_loaded();
+        v.extend(self.ext_command_items());
         v.retain(|i| !self.settings.is_disabled(&i.id));
         self.base = v;
     }
@@ -2869,6 +2886,8 @@ impl App {
     fn quit(&mut self) -> ! {
         self.editor_flush();
         self.notes_do(|c, d| c.flush(d));
+        // process::exit skips destructors: stop the extension sidecar (and its children) by hand
+        self.ext_kill();
         std::process::exit(0)
     }
 
@@ -2954,6 +2973,7 @@ impl App {
     }
 
     fn pop(&mut self) {
+        self.ext_before_pop();
         self.editor_flush();
         // Escape (or going back) also ends a running translating effect
         self.end_effect(false);
@@ -3178,6 +3198,7 @@ impl App {
     }
 
     fn reset_to_root(&mut self) {
+        self.ext_leave_root();
         self.editor_flush();
         self.sec_dirty = true;
         self.nav_at = Instant::now();
@@ -3193,13 +3214,28 @@ impl App {
 
     fn drain(&mut self) {
         self.editor_gc();
-        while let Ok(m) = self.rx.try_recv() {
+        let mut handled = 0usize;
+        while handled < MAX_MSGS_PER_FRAME {
+            let Ok(m) = self.rx.try_recv() else { break };
+            handled += 1;
             // icon bytes only feed the icon cache: the list holds icon descriptors, not pixels
             if !matches!(m, Msg::IconBytes(..) | Msg::Editor(..)) {
                 self.sec_dirty = true;
             }
             match m {
                 Msg::Wake => {}
+                Msg::Ext(id, ev) => self.ext_event(id, ev),
+                Msg::ExtNodeFound(n) => self.ext.node_found(n),
+                Msg::ExtNodeDownloaded(r) => match r {
+                    Ok(n) => {
+                        self.ext.download_finished(Some(n));
+                        self.toast("Node.js downloaded and verified");
+                    }
+                    Err(e) => {
+                        self.ext.downloading = false;
+                        self.toast(format!("Node.js download failed: {e}"));
+                    }
+                },
                 // a URL comes from outside: the launcher steps aside like for any Notes command
                 Msg::Notes(m @ crate::notes_ctl::NMsg::Url(_)) => self.open_notes_window(|c, d| c.handle(m, d)),
                 Msg::Notes(m) => self.notes_do(|c, d| c.handle(m, d)),
@@ -4006,6 +4042,10 @@ impl App {
                 },
             }
         }
+        if handled >= MAX_MSGS_PER_FRAME {
+            // more is waiting: come back next frame instead of holding this one
+            self.ctx.request_repaint();
+        }
     }
 
     fn tick_inline(&mut self) {
@@ -4285,6 +4325,7 @@ impl App {
         let q = self.query.trim().to_string();
         match self.view() {
             View::Root => self.root_sections(),
+            View::ExtList => self.ext_sections(&q),
             View::Clipboard => {
                 let list = self.shared.clipboard.lock().unwrap().clone();
                 let now = now_secs();
@@ -5207,6 +5248,8 @@ impl App {
                 a.push(Action::new("Copy PID", Act::CopyText(pr.pid.to_string())).key(CMD_SHIFT, Key::C));
                 a.push(Action::new("Copy Path", Act::CopyText(pr.path.clone())).key(CMD, Key::P));
             }
+            Kind::ExtItem(id) => a = self.ext_actions(id),
+            Kind::ExtCommand { .. } => a.push(Action::new("Run Extension Command", Act::Run)),
             _ => a.push(Action::new("Open", Act::Run)),
         }
         if matches!(self.view(), View::Root) && item.is_command() {
@@ -5229,6 +5272,9 @@ impl App {
     }
 
     fn actions_for_cheap(&self, item: &Item) -> String {
+        if let Kind::ExtItem(id) = &item.kind {
+            return self.ext_primary(id);
+        }
         match &item.kind {
             Kind::App { .. } => "Open Application",
             Kind::Quicklink { .. } => "Open Quicklink",
@@ -5539,6 +5585,15 @@ impl App {
             Kind::Recording(p) => {
                 let p = p.clone();
                 self.open_editor(p);
+            }
+            Kind::ExtCommand { ext, cmd } => {
+                let (e, c) = (ext.clone(), cmd.clone());
+                self.ext_launch(&e, &c);
+            }
+            Kind::ExtItem(id) => {
+                if let Some(Act::ExtAction(a)) = self.ext_actions(id).into_iter().next().map(|a| a.kind) {
+                    self.ext_trigger(a);
+                }
             }
         }
     }
@@ -6764,6 +6819,7 @@ impl App {
                 self.reset_to_root();
             }
             Act::PinImage(file) => self.pin_image(&file),
+            Act::ExtAction(id) => self.ext_trigger(id),
             Act::PasteText(t) => self.paste_text(&t),
             Act::Reveal(p) => {
                 let _ = apps::reveal(&p);
@@ -7830,6 +7886,8 @@ fn launcher_origin() -> Option<Pos2> {
 
 #[path = "draw.rs"]
 mod draw;
+#[path = "ext_glue.rs"]
+mod ext_glue;
 #[path = "intro.rs"]
 mod intro;
 #[path = "sync_ctl.rs"]
