@@ -9,10 +9,10 @@ Priority-3 pages from the Notion "Ferrocast · SEO/AEO / Tablero de ideas" board
 - S4 /lightweight-mac-launcher is skipped (user: "Saltarla").
 
 ## Tasks
-- T1 S3 /remove-metadata-mac + /es/quitar-metadatos-mac — card-remove-metadata.md. — built, not committed (commit: pending, parent owns commits)
-- T2 S3 /es/alternativa-a-alfred (ES pair of /alfred-alternative/) — card-alternativa-alfred.md. — built, not committed (commit: pending, parent owns commits)
-- T3 S3 /es/unir-pdf-mac — card-unir-pdf.md. — built, not committed (commit: pending, parent owns commits)
-- T4 S3 /translate-selected-text-mac + /es/traducir-texto-seleccionado-mac — card-traducir-seleccion.md. — built, not committed (commit: pending, parent owns commits)
+- T1 S3 /remove-metadata-mac + /es/quitar-metadatos-mac — card-remove-metadata.md. — done (75ab611) (commit: pending, parent owns commits)
+- T2 S3 /es/alternativa-a-alfred (ES pair of /alfred-alternative/) — card-alternativa-alfred.md. — done (75ab611) (commit: pending, parent owns commits)
+- T3 S3 /es/unir-pdf-mac — card-unir-pdf.md. — done (75ab611) (commit: pending, parent owns commits)
+- T4 S3 /translate-selected-text-mac + /es/traducir-texto-seleccionado-mac — card-traducir-seleccion.md. — done (75ab611) (commit: pending, parent owns commits)
 
 ## Log
 - L1 Round 2 (odd/tasks/seo-board-2.md) merged as PR #90; this round follows the same patterns.
