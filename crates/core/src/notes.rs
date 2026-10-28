@@ -89,7 +89,8 @@ fn strip_links(s: &str) -> String {
         let after = &rest[i + 1..];
         if let Some(j) = after.find("](") {
             if let Some(k) = after[j + 2..].find(')') {
-                out.push_str(&rest[..i]);
+                // `![alt](src)` shows as its alt
+                out.push_str(rest[..i].strip_suffix('!').unwrap_or(&rest[..i]));
                 out.push_str(&after[..j]);
                 rest = &after[j + 2 + k + 1..];
                 continue;
@@ -303,6 +304,8 @@ mod tests {
         assert_eq!(t("  \n\n"), "Untitled");
         assert_eq!(t("\n## Groceries\nmilk"), "Groceries");
         assert_eq!(t("> quoted"), "quoted");
+        assert_eq!(t("![Team photo](attachments/0123456789abcdef0123456789abcdef.png)"), "Team photo");
+        assert_eq!(t("wow! [site](http://a.b)"), "wow! site");
         assert_eq!(t("- item"), "item");
         assert_eq!(t("* item"), "item");
         assert_eq!(t("1. first"), "first");

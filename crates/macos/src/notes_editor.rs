@@ -304,6 +304,7 @@ fn bits_style(bits: u8, link: Option<String>) -> Style {
         underline: bits & UNDERLINE != 0,
         code: bits & CODE != 0,
         link,
+        image: None,
     }
 }
 

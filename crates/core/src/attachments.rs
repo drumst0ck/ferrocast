@@ -1,0 +1,412 @@
+//! Image attachments of notes.
+//!
+//! An image pasted, dropped or inserted into a note is copied to `<data dir>/attachments/` under a
+//! content-hashed name (`<32 hex>.<ext>`, the original extension, lower case) and the note links it
+//! with a relative Markdown image: `![name](attachments/<hash>.<ext>)`. Everything here is pure file
+//! logic and decides what a link may point at: only that exact shape, never a path that leaves the
+//! folder. Files no note links any more are removed after a grace period (see [`cleanup`]) so an
+//! undo or a restored note still finds its image.
+
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+/// Folder name inside the data dir, and the first segment of every link.
+pub const DIR: &str = "attachments";
+/// Largest image accepted (bytes).
+pub const MAX_BYTES: u64 = 20 * 1024 * 1024;
+/// An unreferenced file is kept this long (seconds) before it is deleted.
+pub const GRACE_SECS: i64 = 7 * 24 * 3600;
+
+const HASH_LEN: usize = 32;
+const EXTS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "heic", "webp"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    TooLarge { bytes: u64 },
+    NotAnImage,
+    Io(String),
+}
+
+impl Error {
+    /// Text for the user.
+    pub fn message(&self) -> String {
+        match self {
+            Error::TooLarge { bytes } => {
+                format!("Image too large ({} MB). The limit is {} MB.", bytes.div_ceil(1024 * 1024), MAX_BYTES / (1024 * 1024))
+            }
+            Error::NotAnImage => "Not a supported image. Use PNG, JPEG, GIF, HEIC or WebP.".to_string(),
+            Error::Io(e) => format!("Could not save the image: {e}"),
+        }
+    }
+}
+
+/// A stored attachment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stored {
+    /// `<hash>.<ext>`.
+    pub name: String,
+    /// `attachments/<hash>.<ext>`, the link target.
+    pub rel: String,
+    /// Alt text for the link (the file's name without extension).
+    pub alt: String,
+}
+
+/// The image type of `bytes` from their first bytes: `png`, `jpg`, `gif`, `heic` or `webp`.
+pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        Some("png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("jpg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else if bytes.len() >= 12
+        && &bytes[4..8] == b"ftyp"
+        && matches!(&bytes[8..12], b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1")
+    {
+        Some("heic")
+    } else {
+        None
+    }
+}
+
+fn family(ext: &str) -> &str {
+    if ext == "jpeg" {
+        "jpg"
+    } else {
+        ext
+    }
+}
+
+/// `<first 32 hex of sha256>.<ext>`.
+pub fn hash_name(bytes: &[u8], ext: &str) -> String {
+    let hex: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    format!("{}.{ext}", &hex[..HASH_LEN])
+}
+
+/// Is `name` exactly `<32 lower-case hex>.<known extension>`?
+pub fn is_valid_name(name: &str) -> bool {
+    let Some((stem, ext)) = name.split_once('.') else { return false };
+    stem.len() == HASH_LEN && stem.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) && EXTS.contains(&ext)
+}
+
+/// Does `bytes` hash to the name (a file received from another Mac must be whole and the one asked for)?
+pub fn content_matches(name: &str, bytes: &[u8]) -> bool {
+    is_valid_name(name)
+        && name
+            .split_once('.')
+            .is_some_and(|(stem, ext)| sniff(bytes).is_some_and(|k| family(k) == family(ext)) && hash_name(bytes, ext).starts_with(stem))
+}
+
+/// The file name of a link target: only `attachments/<valid name>` qualifies.
+pub fn name_from_src(src: &str) -> Option<&str> {
+    let name = src.strip_prefix("attachments/")?;
+    is_valid_name(name).then_some(name)
+}
+
+/// Where a link points inside `root`, or `None` for anything that is not a plain attachment link.
+pub fn resolve(root: &Path, src: &str) -> Option<PathBuf> {
+    name_from_src(src).map(|n| root.join(DIR).join(n))
+}
+
+/// Like [`resolve`], but only for a regular file that is really in the folder (a symlink is not followed).
+pub fn resolve_existing(root: &Path, src: &str) -> Option<PathBuf> {
+    let p = resolve(root, src)?;
+    let meta = std::fs::symlink_metadata(&p).ok()?;
+    (meta.is_file() && !meta.file_type().is_symlink()).then_some(p)
+}
+
+/// `![alt](attachments/<name>)`.
+pub fn markdown_link(alt: &str, name: &str) -> String {
+    format!("![{alt}](attachments/{name})")
+}
+
+/// Alt text from a file name: the stem without brackets and line breaks; "image" when nothing is left.
+pub fn alt_from_file_name(file_name: &str) -> String {
+    let stem = file_name.rsplit_once('.').map_or(file_name, |(s, _)| s);
+    let clean: String = stem.chars().filter(|c| !matches!(c, '[' | ']' | '\\')).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let clean = clean.trim().to_string();
+    if clean.is_empty() {
+        "image".into()
+    } else {
+        clean
+    }
+}
+
+/// Copy `bytes` into the attachments folder. The type comes from the content; `ext_hint` (the
+/// original extension) is kept when it agrees. An identical image already there is reused and its
+/// age restarts.
+pub fn store(root: &Path, bytes: &[u8], ext_hint: Option<&str>) -> Result<Stored, Error> {
+    store_as(root, bytes, ext_hint, "image")
+}
+
+fn store_as(root: &Path, bytes: &[u8], ext_hint: Option<&str>, alt: &str) -> Result<Stored, Error> {
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(Error::TooLarge { bytes: bytes.len() as u64 });
+    }
+    let kind = sniff(bytes).ok_or(Error::NotAnImage)?;
+    let hint = ext_hint.map(str::to_ascii_lowercase);
+    let ext = match hint.as_deref() {
+        Some(h) if EXTS.contains(&h) && family(h) == kind => h,
+        _ => kind,
+    };
+    let name = hash_name(bytes, ext);
+    let dir = root.join(DIR);
+    let path = dir.join(&name);
+    std::fs::create_dir_all(&dir).map_err(|e| Error::Io(e.to_string()))?;
+    if path.is_file() {
+        if let Ok(f) = std::fs::File::options().write(true).open(&path) {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
+    } else {
+        let tmp = dir.join(format!(".{name}.tmp"));
+        std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| Error::Io(e.to_string()))?;
+    }
+    Ok(Stored { rel: format!("{DIR}/{name}"), name, alt: alt.to_string() })
+}
+
+/// [`store`] for a file on disk (drag and drop, the open panel). The size is checked before the file is read.
+pub fn store_file(root: &Path, file: &Path) -> Result<Stored, Error> {
+    let meta = std::fs::metadata(file).map_err(|e| Error::Io(e.to_string()))?;
+    if meta.len() > MAX_BYTES {
+        return Err(Error::TooLarge { bytes: meta.len() });
+    }
+    let bytes = std::fs::read(file).map_err(|e| Error::Io(e.to_string()))?;
+    let ext = file.extension().map(|e| e.to_string_lossy().to_string());
+    let alt = alt_from_file_name(&file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+    store_as(root, &bytes, ext.as_deref(), &alt)
+}
+
+/// Attachment file names the notes link (deleted notes in the trash count: they can be restored).
+pub fn referenced<'a>(texts: impl IntoIterator<Item = &'a str>) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for t in texts {
+        if !t.contains(DIR) {
+            continue;
+        }
+        for b in crate::richtext::parse(t).blocks {
+            for s in b.spans {
+                if let Some(n) = s.style.image.as_deref().and_then(name_from_src) {
+                    out.insert(n.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Delete attachment files that no note links and that are older than `grace` seconds. Returns how
+/// many were removed. Files that are not named like attachments are never touched.
+pub fn cleanup(root: &Path, referenced: &HashSet<String>, now_secs: i64, grace: i64) -> usize {
+    let Ok(rd) = std::fs::read_dir(root.join(DIR)) else { return 0 };
+    let mut removed = 0;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !is_valid_name(&name) || referenced.contains(&name) {
+            continue;
+        }
+        let Ok(meta) = e.metadata() else { continue };
+        let age = meta.modified().ok().and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64);
+        if meta.is_file() && now_secs - age >= grace && std::fs::remove_file(e.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ferrocast-attach-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3];
+    const JPG: &[u8] = &[0xff, 0xd8, 0xff, 0xe0, 0, 16, b'J', b'F', b'I', b'F'];
+
+    fn heic() -> Vec<u8> {
+        let mut v = vec![0, 0, 0, 24];
+        v.extend_from_slice(b"ftypheic");
+        v.extend_from_slice(&[0; 8]);
+        v
+    }
+
+    fn webp() -> Vec<u8> {
+        let mut v = b"RIFF".to_vec();
+        v.extend_from_slice(&[10, 0, 0, 0]);
+        v.extend_from_slice(b"WEBPVP8 ");
+        v
+    }
+
+    #[test]
+    fn content_decides_the_type_and_the_five_formats_are_accepted() {
+        assert_eq!(sniff(PNG), Some("png"));
+        assert_eq!(sniff(JPG), Some("jpg"));
+        assert_eq!(sniff(b"GIF89a..."), Some("gif"));
+        assert_eq!(sniff(&heic()), Some("heic"));
+        assert_eq!(sniff(&webp()), Some("webp"));
+        assert_eq!(sniff(b"%PDF-1.4"), None);
+        assert_eq!(sniff(b""), None);
+    }
+
+    #[test]
+    fn the_name_is_the_content_hash_with_the_original_extension() {
+        let a = hash_name(PNG, "png");
+        assert_eq!(a, hash_name(PNG, "png"));
+        assert_ne!(a, hash_name(JPG, "jpg"));
+        assert!(a.ends_with(".png") && a.len() == 32 + 4);
+        assert!(is_valid_name(&a));
+    }
+
+    #[test]
+    fn store_copies_once_keeps_the_extension_and_reports_the_link() {
+        let root = tmp("store");
+        let one = store(&root, PNG, Some("PNG")).unwrap();
+        assert_eq!(one.rel, format!("attachments/{}", one.name));
+        assert!(one.name.ends_with(".png"));
+        assert_eq!(std::fs::read(root.join(&one.rel)).unwrap(), PNG);
+        let two = store(&root, PNG, Some("png")).unwrap();
+        assert_eq!(one.name, two.name);
+        assert_eq!(std::fs::read_dir(root.join(DIR)).unwrap().count(), 1);
+        // jpeg keeps the spelling the user had, a wrong hint falls back to the real type
+        assert!(store(&root, JPG, Some("jpeg")).unwrap().name.ends_with(".jpeg"));
+        assert!(store(&root, JPG, Some("png")).unwrap().name.ends_with(".jpg"));
+        assert!(store(&root, &heic(), None).unwrap().name.ends_with(".heic"));
+    }
+
+    #[test]
+    fn big_or_non_image_files_are_refused_with_a_clear_message() {
+        let root = tmp("refuse");
+        let big = vec![0u8; MAX_BYTES as usize + 1];
+        let e = store(&root, &big, Some("png")).unwrap_err();
+        assert_eq!(e, Error::TooLarge { bytes: MAX_BYTES + 1 });
+        assert!(e.message().contains("20 MB"), "{}", e.message());
+        let e = store(&root, b"hello world", Some("png")).unwrap_err();
+        assert_eq!(e, Error::NotAnImage);
+        assert!(e.message().contains("PNG"), "{}", e.message());
+        assert!(!root.join(DIR).exists() || std::fs::read_dir(root.join(DIR)).unwrap().count() == 0);
+    }
+
+    #[test]
+    fn a_file_over_the_cap_is_refused_before_it_is_read() {
+        let root = tmp("filecap");
+        let f = root.join("huge.png");
+        let file = std::fs::File::create(&f).unwrap();
+        file.set_len(MAX_BYTES + 1).unwrap();
+        assert!(matches!(store_file(&root, &f), Err(Error::TooLarge { .. })));
+        let ok = root.join("My Shot.PNG");
+        std::fs::write(&ok, PNG).unwrap();
+        let s = store_file(&root, &ok).unwrap();
+        assert_eq!(s.alt, "My Shot");
+        assert!(matches!(store_file(&root, &root.join("missing.png")), Err(Error::Io(_))));
+    }
+
+    #[test]
+    fn markdown_link_is_relative_and_alt_is_safe() {
+        assert_eq!(
+            markdown_link("shot", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"),
+            "![shot](attachments/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png)"
+        );
+        assert_eq!(alt_from_file_name("a [b] (c)\n.png"), "a b (c)");
+        assert_eq!(alt_from_file_name(".png"), "image");
+    }
+
+    #[test]
+    fn links_never_leave_the_attachments_folder() {
+        let root = tmp("paths");
+        let name = "0123456789abcdef0123456789abcdef.png";
+        assert_eq!(resolve(&root, &format!("attachments/{name}")), Some(root.join("attachments").join(name)));
+        for bad in [
+            "../secret.png",
+            "attachments/../secret.png",
+            "attachments/../../etc/passwd",
+            "/etc/passwd",
+            "/attachments/0123456789abcdef0123456789abcdef.png",
+            "attachments/sub/0123456789abcdef0123456789abcdef.png",
+            "attachments\\0123456789abcdef0123456789abcdef.png",
+            "attachments/0123456789abcdef0123456789abcdef.png/..",
+            "attachments/0123456789ABCDEF0123456789abcdef.png",
+            "attachments/0123456789abcdef0123456789abcdef.exe",
+            "attachments/short.png",
+            "file:///etc/passwd",
+            "https://x.test/a.png",
+            "attachments/%2e%2e%2fx.png",
+            "attachments/0123456789abcdef0123456789abcdef.png\0",
+            "",
+        ] {
+            assert_eq!(resolve(&root, bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_symlink_in_the_folder_is_not_followed_out() {
+        let root = tmp("symlink");
+        let outside = tmp("outside");
+        std::fs::write(outside.join("x.png"), PNG).unwrap();
+        std::fs::create_dir_all(root.join(DIR)).unwrap();
+        let name = "0123456789abcdef0123456789abcdef.png";
+        std::os::unix::fs::symlink(outside.join("x.png"), root.join(DIR).join(name)).unwrap();
+        assert_eq!(resolve_existing(&root, &format!("attachments/{name}")), None);
+    }
+
+    #[test]
+    fn references_come_from_image_links_in_every_note_including_deleted_ones() {
+        let a = "0123456789abcdef0123456789abcdef.png";
+        let b = "fedcba9876543210fedcba9876543210.jpg";
+        let notes = [
+            format!("hello ![x](attachments/{a})"),
+            format!("- item\n\n![y](attachments/{b})"),
+            "![z](../secret.png) [t](attachments/0123456789abcdef0123456789abcdee.png)".to_string(),
+        ];
+        let set = referenced(notes.iter().map(String::as_str));
+        assert_eq!(set, [a.to_string(), b.to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn only_old_unreferenced_files_are_cleaned_up_so_an_undo_still_has_its_image() {
+        let root = tmp("clean");
+        let keep = store(&root, PNG, Some("png")).unwrap().name;
+        let fresh = store(&root, JPG, Some("jpg")).unwrap().name;
+        let old = store(&root, &heic(), Some("heic")).unwrap().name;
+        let day = 24 * 3600;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let age = |n: &str, days: i64| {
+            let f = std::fs::File::options().write(true).open(root.join(DIR).join(n)).unwrap();
+            f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs((now - days * day) as u64)).unwrap();
+        };
+        age(&keep, 30);
+        age(&old, 30);
+        age(&fresh, 1);
+        std::fs::write(root.join(DIR).join("notes.txt"), "not ours").unwrap();
+        let refs: HashSet<String> = [keep.clone()].into_iter().collect();
+        assert_eq!(cleanup(&root, &refs, now, GRACE_SECS), 1);
+        assert!(root.join(DIR).join(&keep).exists(), "referenced files stay");
+        assert!(root.join(DIR).join(&fresh).exists(), "inside the grace period");
+        assert!(!root.join(DIR).join(&old).exists());
+        assert!(root.join(DIR).join("notes.txt").exists(), "unknown files are never touched");
+    }
+
+    #[test]
+    fn pasting_the_same_image_again_restarts_its_grace_period() {
+        let root = tmp("touch");
+        let name = store(&root, PNG, Some("png")).unwrap().name;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let f = std::fs::File::options().write(true).open(root.join(DIR).join(&name)).unwrap();
+        f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs((now - 30 * 24 * 3600) as u64)).unwrap();
+        store(&root, PNG, Some("png")).unwrap();
+        assert_eq!(cleanup(&root, &HashSet::new(), now, GRACE_SECS), 0);
+    }
+
+    #[test]
+    fn a_downloaded_file_must_match_its_hash() {
+        let name = hash_name(PNG, "png");
+        assert!(content_matches(&name, PNG));
+        assert!(!content_matches(&name, JPG));
+        assert!(!content_matches("../x.png", PNG));
+    }
+}
