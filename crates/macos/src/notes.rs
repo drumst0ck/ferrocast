@@ -25,9 +25,9 @@ use crate::notes_popups::{emoji_items, slash_items, FormatBar, Item, Rect as Pop
 use crate::notes_theme::{self as theme, Token};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSBitmapImageFileType, NSButton, NSEvent, NSEventModifierFlags,
-    NSEventType, NSFloatingWindowLevel, NSFont, NSFontWeightMedium, NSImage, NSLineBreakMode, NSPanel, NSScrollView, NSTextAlignment,
-    NSTextDelegate, NSTextField, NSTextView, NSTextViewDelegate, NSView, NSWindowButton, NSWindowCollectionBehavior, NSWindowDelegate,
-    NSWindowStyleMask, NSWindowTitleVisibility,
+    NSEventType, NSFloatingWindowLevel, NSFont, NSFontWeightMedium, NSImage, NSLineBreakMode, NSMenu, NSMenuItem, NSPanel, NSScrollView,
+    NSTextAlignment, NSTextDelegate, NSTextField, NSTextView, NSTextViewDelegate, NSView, NSWindowButton, NSWindowCollectionBehavior,
+    NSWindowDelegate, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_foundation::{NSDictionary, NSEdgeInsets, NSNotification, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString};
 
@@ -65,6 +65,99 @@ const FRAME_NAME: &str = "FerrocastNotesWindow";
 const KEY_ESCAPE: u16 = 53;
 
 // ---------------------------------------------------------------- pure logic
+
+/// Window commands that have a keyboard shortcut and therefore also a click path (toolbar
+/// buttons and the right-click menu). The shortcuts themselves stay in `handle_shortcut` and
+/// the editor; this table only names what the mouse offers for them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cmd {
+    Back,
+    Forward,
+    TogglePin,
+    New,
+    Browse,
+    Actions,
+    ZoomIn,
+    ZoomOut,
+    ActualSize,
+    Close,
+}
+
+impl Cmd {
+    /// Menu layout: groups separated by a rule.
+    pub(crate) const MENU: [&'static [Cmd]; 4] = [
+        &[Cmd::New, Cmd::Browse, Cmd::TogglePin],
+        &[Cmd::Back, Cmd::Forward],
+        &[Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ActualSize],
+        &[Cmd::Actions, Cmd::Close],
+    ];
+
+    pub(crate) const ALL: [Cmd; 10] = [
+        Cmd::New,
+        Cmd::Browse,
+        Cmd::TogglePin,
+        Cmd::Back,
+        Cmd::Forward,
+        Cmd::ZoomIn,
+        Cmd::ZoomOut,
+        Cmd::ActualSize,
+        Cmd::Actions,
+        Cmd::Close,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Cmd::Back => "Back",
+            Cmd::Forward => "Forward",
+            Cmd::TogglePin => "Pin or Unpin Note",
+            Cmd::New => "New Note",
+            Cmd::Browse => "Browse Notes…",
+            Cmd::Actions => "Actions…",
+            Cmd::ZoomIn => "Zoom In",
+            Cmd::ZoomOut => "Zoom Out",
+            Cmd::ActualSize => "Actual Size",
+            Cmd::Close => "Close Notes",
+        }
+    }
+
+    /// Key equivalent shown next to the entry: `(key, shift)`, always with ⌘.
+    pub(crate) fn key(self) -> (&'static str, bool) {
+        match self {
+            Cmd::Back => ("[", false),
+            Cmd::Forward => ("]", false),
+            Cmd::TogglePin => ("p", true),
+            Cmd::New => ("n", false),
+            Cmd::Browse => ("p", false),
+            Cmd::Actions => ("k", false),
+            Cmd::ZoomIn => ("+", false),
+            Cmd::ZoomOut => ("-", false),
+            Cmd::ActualSize => ("0", false),
+            Cmd::Close => ("w", false),
+        }
+    }
+
+    /// The event the host receives, for the commands the host handles.
+    pub(crate) fn event(self) -> Option<Event> {
+        match self {
+            Cmd::Back => Some(Event::Back),
+            Cmd::Forward => Some(Event::Forward),
+            Cmd::TogglePin => Some(Event::TogglePin),
+            Cmd::New => Some(Event::New),
+            Cmd::Browse => Some(Event::Browse),
+            Cmd::Actions => Some(Event::Actions),
+            Cmd::ZoomIn | Cmd::ZoomOut | Cmd::ActualSize | Cmd::Close => None,
+        }
+    }
+
+    /// Menu tag of this command (index in [`Cmd::ALL`]).
+    pub(crate) fn tag(self) -> isize {
+        Cmd::ALL.iter().position(|c| *c == self).unwrap_or(0) as isize
+    }
+
+    pub(crate) fn from_tag(tag: isize) -> Option<Cmd> {
+        usize::try_from(tag).ok().and_then(|i| Cmd::ALL.get(i).copied())
+    }
+}
 
 /// S5: the first non-blank line with leading `#`, `>`, `-`, `*` and spaces stripped, at most
 /// 60 characters; "Untitled" when nothing is left. Lines that are only markers are skipped.
@@ -236,6 +329,49 @@ fn handle_shortcut(panel: &NotesPanel, event: &NSEvent) -> bool {
     true
 }
 
+/// Run a window command from a click (toolbar button or right-click menu); the same paths as
+/// the keyboard shortcuts.
+fn run_cmd(cmd: Cmd) {
+    match cmd {
+        Cmd::Actions => action_panel_requested(),
+        Cmd::ZoomIn => crate::notes_editor::set_zoom(crate::notes_editor::step_zoom(crate::notes_editor::zoom(), 1)),
+        Cmd::ZoomOut => crate::notes_editor::set_zoom(crate::notes_editor::step_zoom(crate::notes_editor::zoom(), -1)),
+        Cmd::ActualSize => crate::notes_editor::set_zoom(1.0),
+        Cmd::Close => hide(),
+        other => {
+            if let Some(e) = other.event() {
+                fire_event(e);
+            }
+        }
+    }
+}
+
+/// Append the window commands to `menu` (after a rule when it already has entries).
+pub(crate) fn append_context_items(menu: &NSMenu, mtm: MainThreadMarker) {
+    let Some(target) = UI.with(|u| u.try_borrow().ok().and_then(|u| u.as_ref().map(|ui| ui._target.clone()))) else { return };
+    for group in Cmd::MENU {
+        if menu.numberOfItems() > 0 {
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+        }
+        for cmd in group {
+            let (key, shift) = cmd.key();
+            let item = unsafe {
+                NSMenuItem::initWithTitle_action_keyEquivalent(
+                    mtm.alloc(),
+                    &NSString::from_str(cmd.label()),
+                    Some(sel!(notesCmd:)),
+                    &NSString::from_str(key),
+                )
+            };
+            let mods = if shift { NSEventModifierFlags::Command | NSEventModifierFlags::Shift } else { NSEventModifierFlags::Command };
+            item.setKeyEquivalentModifierMask(mods);
+            item.setTag(cmd.tag());
+            unsafe { item.setTarget(Some(&target)) };
+            menu.addItem(&item);
+        }
+    }
+}
+
 /// ⌘K: close whatever is open on top of the editor (pop-ups, link prompt), then ask the host
 /// for the action panel.
 fn action_panel_requested() {
@@ -361,6 +497,15 @@ define_class!(
             theme::color(self.ivars().get()).setFill();
             objc2_app_kit::NSBezierPath::fillRect(self.bounds());
         }
+
+        // Right click on the toolbar or the empty parts of the window: the window commands.
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            let mtm = MainThreadMarker::from(self);
+            let menu = NSMenu::new(mtm);
+            append_context_items(&menu, mtm);
+            NSMenu::popUpContextMenu_withEvent_forView(&menu, event, self);
+        }
     }
 );
 
@@ -420,6 +565,16 @@ define_class!(
         #[unsafe(method(notesBrowse:))]
         fn notes_browse(&self, _sender: Option<&AnyObject>) {
             fire_event(Event::Browse);
+        }
+
+        /// Toolbar buttons and context menu entries: the sender's tag is the [`Cmd`].
+        #[unsafe(method(notesCmd:))]
+        fn notes_cmd(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let tag: isize = unsafe { msg_send![sender, tag] };
+            if let Some(cmd) = Cmd::from_tag(tag) {
+                run_cmd(cmd);
+            }
         }
     }
 
@@ -624,17 +779,28 @@ fn build(mtm: MainThreadMarker) -> Ui {
     title.setTextColor(Some(&theme::color(Token::Text)));
     title.setAlignment(NSTextAlignment::Center);
     title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-    title.setFrame(rect(80.0, (TOOLBAR_H - 17.0) / 2.0, DEFAULT_W - 160.0, 17.0));
+    title.setFrame(rect(84.0, (TOOLBAR_H - 17.0) / 2.0, DEFAULT_W - 84.0 - 116.0, 17.0));
     title.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     toolbar.addSubview(&title);
     let hairline = fill_view(mtm, rect(0.0, 0.0, DEFAULT_W, 1.0), Token::Sep);
     hairline.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     toolbar.addSubview(&hairline);
 
-    let browse = icon_button(mtm, "list.bullet", "Browse Notes ⌘P", &target, sel!(notesBrowse:), DEFAULT_W - 76.0);
-    let new = icon_button(mtm, "plus", "New Note ⌘N", &target, sel!(notesNew:), DEFAULT_W - 44.0);
+    let browse = icon_button(mtm, "list.bullet", "Browse Notes ⌘P", &target, sel!(notesBrowse:), DEFAULT_W - 108.0);
+    let new = icon_button(mtm, "plus", "New Note ⌘N", &target, sel!(notesNew:), DEFAULT_W - 76.0);
+    let close = icon_button(mtm, "xmark", "Close Notes ⌘W", &target, sel!(notesCmd:), DEFAULT_W - 44.0);
+    close.setTag(Cmd::Close.tag());
     toolbar.addSubview(&browse);
     toolbar.addSubview(&new);
+    toolbar.addSubview(&close);
+    // History arrows on the left (⌘[ and ⌘]), where the hidden window buttons would be.
+    for (cmd, symbol, x) in [(Cmd::Back, "chevron.left", 12.0), (Cmd::Forward, "chevron.right", 44.0)] {
+        let tip = format!("{} ⌘{}", cmd.label(), cmd.key().0);
+        let b = icon_button(mtm, symbol, &tip, &target, sel!(notesCmd:), x);
+        b.setTag(cmd.tag());
+        b.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMaxXMargin);
+        toolbar.addSubview(&b);
+    }
     content.addSubview(&toolbar);
 
     let name = NSString::from_str(FRAME_NAME);
@@ -1076,7 +1242,53 @@ pub fn snapshot_png(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::title_from_text;
+    use super::{title_from_text, Cmd, Event};
+
+    #[test]
+    fn every_keyboard_window_command_has_a_click_command() {
+        // the window shortcuts of `handle_shortcut`: ⌘N ⌘P ⇧⌘P ⌘K ⌘[ ⌘] ⌘W and the zoom keys
+        let want = [
+            ("n", false),
+            ("p", false),
+            ("p", true),
+            ("k", false),
+            ("[", false),
+            ("]", false),
+            ("w", false),
+            ("+", false),
+            ("-", false),
+            ("0", false),
+        ];
+        for k in want {
+            assert!(Cmd::ALL.iter().any(|c| c.key() == k), "no click command for ⌘{k:?}");
+        }
+        let in_menu: Vec<Cmd> = Cmd::MENU.iter().flat_map(|g| g.iter().copied()).collect();
+        assert_eq!(in_menu.len(), Cmd::ALL.len());
+        for c in Cmd::ALL {
+            assert!(in_menu.contains(&c), "{c:?} missing from the menu");
+        }
+    }
+
+    #[test]
+    fn commands_map_to_the_host_events_of_the_shortcuts() {
+        assert_eq!(Cmd::Back.event(), Some(Event::Back));
+        assert_eq!(Cmd::Forward.event(), Some(Event::Forward));
+        assert_eq!(Cmd::TogglePin.event(), Some(Event::TogglePin));
+        assert_eq!(Cmd::New.event(), Some(Event::New));
+        assert_eq!(Cmd::Browse.event(), Some(Event::Browse));
+        assert_eq!(Cmd::Actions.event(), Some(Event::Actions));
+        assert_eq!(Cmd::Close.event(), None);
+        assert_eq!(Cmd::ZoomIn.event(), None);
+    }
+
+    #[test]
+    fn menu_tags_round_trip() {
+        for c in Cmd::ALL {
+            assert_eq!(Cmd::from_tag(c.tag()), Some(c));
+        }
+        assert_eq!(Cmd::from_tag(-1), None);
+        assert_eq!(Cmd::from_tag(99), None);
+    }
 
     #[test]
     fn empty_is_untitled() {

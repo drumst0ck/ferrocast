@@ -33,6 +33,7 @@ pub enum Builtin {
     SearchQuicklinks,
     CreateQuicklink,
     SearchEmoji,
+    PickColor,
     SearchFiles,
     SwitchWindows,
     KillProcess,
@@ -84,6 +85,7 @@ impl Builtin {
         Builtin::SearchQuicklinks,
         Builtin::CreateQuicklink,
         Builtin::SearchEmoji,
+        Builtin::PickColor,
         Builtin::SearchFiles,
         Builtin::SwitchWindows,
         Builtin::KillProcess,
@@ -135,6 +137,7 @@ impl Builtin {
             Builtin::SearchQuicklinks => "Search Quicklinks",
             Builtin::CreateQuicklink => "Create Quicklink",
             Builtin::SearchEmoji => "Search Emoji & Symbols",
+            Builtin::PickColor => "Pick Color",
             Builtin::SearchFiles => "Search Files",
             Builtin::SwitchWindows => "Switch Windows",
             Builtin::KillProcess => "Kill Process",
@@ -181,6 +184,7 @@ impl Builtin {
             Builtin::SearchSnippets | Builtin::CreateSnippet => "Snippets",
             Builtin::SearchQuicklinks | Builtin::CreateQuicklink => "Quicklinks",
             Builtin::SearchEmoji => "Emoji & Symbols",
+            Builtin::PickColor => "Color",
             Builtin::SearchFiles => "File Search",
             Builtin::SwitchWindows => "Navigation",
             Builtin::KillProcess => "System",
@@ -220,6 +224,7 @@ impl Builtin {
             Builtin::SearchSnippets | Builtin::CreateSnippet => ("sf:scissors", [255, 167, 38]),
             Builtin::SearchQuicklinks | Builtin::CreateQuicklink => ("sf:link", [86, 194, 255]),
             Builtin::SearchEmoji => ("sf:face.smiling", [255, 197, 49]),
+            Builtin::PickColor => ("sf:eyedropper", [255, 99, 99]),
             Builtin::SearchFiles => ("sf:magnifyingglass", [120, 120, 130]),
             Builtin::SwitchWindows => ("sf:macwindow.on.rectangle", [89, 212, 153]),
             Builtin::KillProcess => ("sf:xmark", [240, 83, 95]),
@@ -260,6 +265,7 @@ impl Builtin {
             Builtin::RevealLog => &["debug", "errors", "support"],
             Builtin::ClipboardHistory => &["paste", "copy", "history"],
             Builtin::SearchEmoji => &["emoji", "symbols", "unicode"],
+            Builtin::PickColor => &["color", "colour", "picker", "eyedropper", "hex", "sampler"],
             Builtin::SearchFiles => &["finder", "find"],
             Builtin::SwitchWindows => &["windows", "switch"],
             Builtin::KillProcess => &["kill", "process", "force quit", "task", "cpu", "memory"],
@@ -528,6 +534,17 @@ impl Action {
         self.destructive = true;
         self
     }
+}
+
+/// A small mouse button for an action that also has a keyboard shortcut (hover buttons on rows,
+/// header buttons). It carries the very `Act` the shortcut runs, so both paths behave the same.
+#[derive(Clone, Debug)]
+pub struct RowButton {
+    pub label: &'static str,
+    /// Tooltip: the action name and its shortcut.
+    pub tip: String,
+    pub kind: Act,
+    pub destructive: bool,
 }
 
 pub const CMD: Modifiers = Modifiers::COMMAND;

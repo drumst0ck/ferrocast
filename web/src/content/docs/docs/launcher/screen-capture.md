@@ -158,6 +158,8 @@ The cursor you see is drawn by the editor from the recorded events in `events.js
 | <kbd>⌘</kbd> <kbd>E</kbd> | Export… |
 | <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> | Full screen / Exit full screen |
 
+The strip also has buttons for the keys that had none: **−1 s**, **+1 s**, **Start** and **End** sit after the frame buttons when the strip is wide enough (a window narrower than about 900 pt leaves them out; click the timeline instead). The footer chips **Play**, **Export**, **Full screen**, **Undo** and **Redo** are clickable too.
+
 Click or drag on the timeline to move the playhead. While you type in a number field of the inspector, only <kbd>⌘</kbd> <kbd>E</kbd> and <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> keep working. The one-frame step uses the frame rate of Settings → Capture → **Recording frame rate**.
 
 ### Auto zoom

@@ -27,8 +27,12 @@ fn fixture() -> App {
         ignored_clipboard_count: Default::default(),
         visible: Default::default(),
         keywords: Default::default(),
+        clip_dirty: Default::default(),
     });
     let mut app = App {
+        sync: SyncCtl::default(),
+        chats: vec![],
+        ai_chat: None,
         update_poller: None,
         ctx,
         shared,
@@ -102,6 +106,7 @@ fn fixture() -> App {
         inline: HashMap::new(),
         focus_first: false,
         dark: true,
+        custom_themes: vec![],
         started: true,
         act_item: None,
         scratch: String::new(),
@@ -204,6 +209,7 @@ impl Effects {
             apple_available: || APPLE_AVAILABLE.with(|a| a.get()),
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
+            color_sampler: |_bus| FX_LOG.with(|l| l.borrow_mut().push("color_sampler".into())),
         }
     }
 }
@@ -6826,7 +6832,7 @@ fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
     use ferrocast_core::models::AiProvider as P;
     // (tab, chat provider, translate provider) -> expected (text fields, combos, drag fields)
     let cases: [(usize, P, Option<P>, usize, usize, usize); 13] = [
-        (0, P::OpenAiCompatible, None, 1, 0, 0),
+        (0, P::OpenAiCompatible, None, 1, 1, 0),
         (1, P::OpenAiCompatible, None, 0, 1, 0),
         (2, P::OpenAiCompatible, None, 0, 0, 0),
         (3, P::OpenAiCompatible, None, 2, 1, 0),
@@ -7723,6 +7729,7 @@ fn sd4_scrambled() -> Settings {
     let mut s = Settings::default();
     s.launcher_hotkey = "Ctrl+Shift+K".into();
     s.theme = Theme::Dark;
+    s.custom_theme = Some("Ocean".into());
     s.compact_mode = true;
     s.launch_at_login = true;
     s.drop_wheel = false;
@@ -13924,6 +13931,48 @@ mod editor_redesign {
     }
 
     #[test]
+    fn transport_has_buttons_for_second_steps_and_start_end() {
+        for size in [DEFAULT, LARGE] {
+            let mut app = state(&format!("jump-{}", size.x), Section::Zoom, |_| {});
+            settle(&mut app, size);
+            let lay: Layout = app.ctx.data(|d| d.get_temp(Id::new("editor-layout"))).unwrap();
+            let btns = |app: &App| -> Vec<Rect> {
+                app.ctx.data_mut(|d| d.remove::<Vec<(String, egui::Id, Rect, bool)>>(Id::new("ctl-hits")));
+                Vec::new()
+            };
+            let _ = btns(&app);
+            settle(&mut app, size);
+            let hits: Vec<(String, egui::Id, Rect, bool)> = app.ctx.data(|d| d.get_temp(Id::new("ctl-hits"))).unwrap_or_default();
+            let mut row: Vec<Rect> = hits.iter().filter(|h| h.0 == "small_btn" && lay.transport.contains_rect(h.2)).map(|h| h.2).collect();
+            row.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+            row.dedup();
+            // Play, −1 s, +1 s, Start, End, Undo, Redo
+            assert_eq!(row.len(), 7, "{size:?}: {row:?}");
+            assert!(row.windows(2).all(|w| w[0].max.x <= w[1].min.x + 0.01), "{size:?}: no overlap");
+            let click = |app: &mut App, r: Rect| {
+                let at = r.center();
+                let btn =
+                    |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+                for events in [vec![Event::PointerMoved(at)], vec![btn(true)], vec![btn(false)], vec![]] {
+                    run_at(app, size, events, None);
+                }
+            };
+            let t0 = app.editor.as_ref().unwrap().t;
+            click(&mut app, row[2]);
+            let t1 = app.editor.as_ref().unwrap().t;
+            assert!((t1 - t0 - 1.0).abs() < 0.2, "+1 s moves about a second: {t0} -> {t1}");
+            click(&mut app, row[1]);
+            let t2 = app.editor.as_ref().unwrap().t;
+            assert!((t1 - t2 - 1.0).abs() < 0.2, "−1 s: {t1} -> {t2}");
+            click(&mut app, row[4]);
+            let end = app.editor.as_ref().unwrap().t;
+            assert!(end > t1, "End jumps to the last frame");
+            click(&mut app, row[3]);
+            assert!(app.editor.as_ref().unwrap().t < 0.5, "Start jumps to the first frame");
+        }
+    }
+
+    #[test]
     fn transport_buttons_and_section_headers_are_at_least_24_points_at_the_three_sizes() {
         for size in [SMALL, DEFAULT, LARGE] {
             let mut app = state(&format!("hit-{}", size.x), Section::Zoom, |_| {});
@@ -14997,4 +15046,1068 @@ fn a_tiling_shortcut_that_failed_is_kept_for_the_settings_status_line() {
         assert!(matches!(app.view(), View::Settings));
         assert_eq!(app.tiling_hotkey_issues.len(), 1);
     }
+}
+
+#[test]
+fn ask_ai_answers_persist_as_one_chat_with_a_stable_id() {
+    let mut app = fixture();
+    app.stack.push(View::Ai {
+        prompt: String::new(),
+        asked: "first question".into(),
+        answer: "first answer".into(),
+        history: vec![],
+        busy: false,
+        run: 1,
+    });
+    app.save_ai_chat();
+    let id = app.chats[0].id.clone();
+    if let Some(View::Ai { history, asked, answer, .. }) = app.stack.last_mut() {
+        history.push((std::mem::take(asked), std::mem::take(answer)));
+        *asked = "second".into();
+        *answer = "second answer".into();
+    }
+    app.save_ai_chat();
+    assert_eq!(app.chats.len(), 1, "the same conversation keeps its id");
+    assert_eq!(app.chats[0].id, id);
+    assert_eq!(app.chats[0].turns.len(), 2);
+    let saved: Vec<Chat> = app.store.load("chats.json");
+    assert_eq!(saved, app.chats);
+    // a failed answer is not saved
+    if let Some(View::Ai { answer, .. }) = app.stack.last_mut() {
+        *answer = "⚠ boom".into();
+    }
+    app.save_ai_chat();
+    assert_eq!(app.chats[0].turns.len(), 2);
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
+fn sync_is_off_by_default_and_queues_nothing() {
+    let mut app = fixture();
+    assert!(!app.settings.sync_enabled);
+    app.sync_mark("snippets.json");
+    app.sync_all();
+    app.sync_on_show();
+    app.sync_flush();
+    assert!(!app.sync.in_flight && app.sync.pending.is_empty(), "no run starts while sync is off");
+    assert!(app.sync_status().starts_with("Off"));
+    assert!(!app.store.root.join("sync-device-id").exists() && !app.store.root.join("sync-state").exists());
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
+fn a_merge_is_applied_without_queueing_a_new_run() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let merged = ferrocast_core::sync_io::to_items(&[Snippet::new("remote", "text", "!r")]);
+    let t = ferrocast_core::sync::Tracker::default();
+    let snap = app.sync_snapshot("snippets");
+    assert!(app.sync_apply("snippets", merged, t, &snap).is_some());
+    assert_eq!(app.snippets.len(), 1);
+    assert_eq!(app.store.load::<Vec<Snippet>>("snippets.json").len(), 1);
+    assert!(app.sync.pending.is_empty(), "saving a merge is not a local edit");
+    app.sync_mark("snippets.json");
+    assert!(app.sync.pending.contains("snippets"), "a local save queues its domain once sync is on");
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+fn merged_notes(list: &[Note]) -> Vec<(String, serde_json::Value)> {
+    ferrocast_core::sync_io::to_items(list)
+}
+
+#[test]
+fn a_merged_edit_of_the_open_note_reaches_the_editor_and_typing_continues_from_it() {
+    use crate::notes_ctl::NMsg;
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d));
+    let open = app.notes_ctl.current.clone().unwrap();
+    app.settings.sync_enabled = true;
+    let mut remote = app.notes.clone();
+    remote.iter_mut().find(|n| n.id == open).unwrap().text = "Remote edit".into();
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert_eq!(st.borrow().markdown, "Remote edit", "the editor shows the merged text");
+    app.notes_do(|c, d| c.handle(NMsg::Changed("Remote edit, plus mine".into()), d));
+    assert_eq!(app.notes.iter().find(|n| n.id == open).unwrap().text, "Remote edit, plus mine");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_note_deleted_elsewhere_is_deleted_here_too_when_the_notes_window_is_closed() {
+    let (mut app, _st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d)); // open
+    let open = app.notes_ctl.current.clone().unwrap();
+    app.notes_do(|c, d| c.toggle(d)); // closed again: `current` is kept by the controller
+    app.settings.sync_enabled = true;
+    let remote: Vec<Note> = app.notes.iter().filter(|n| n.id != open).cloned().collect();
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert!(!app.notes.iter().any(|n| n.id == open), "the remote deletion is applied");
+    assert_ne!(app.notes_ctl.current.as_deref(), Some(open.as_str()));
+    // moved to Recently Deleted elsewhere: same
+    let other = app.notes[0].id.clone();
+    app.notes_do(|c, d| c.toggle(d));
+    app.notes_do(|c, d| c.toggle(d));
+    let mut trashed = app.notes.clone();
+    trashed.iter_mut().find(|n| n.id == other).unwrap().deleted_at = Some(99);
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&trashed), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert!(app.notes.iter().find(|n| n.id == other).is_none_or(|n| n.deleted_at.is_some()));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_clipboard_entry_recorded_while_the_run_was_away_is_not_overwritten_by_the_merge() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let entry = |id: &str, c: &str| ClipEntry {
+        id: id.into(),
+        kind: ClipKind::Text,
+        content: c.into(),
+        title: None,
+        copied_at: services::now_secs(),
+        pinned: false,
+        source_app: None,
+        times_copied: 1,
+        width: 0,
+        height: 0,
+    };
+    let snap = app.sync_snapshot("clipboard");
+    // the recorder thread adds an entry after the snapshot was taken
+    app.shared.clipboard.lock().unwrap().push(entry("mine", "just copied"));
+    let merged = ferrocast_core::sync_io::to_items(&[entry("theirs", "from another Mac")]);
+    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), &snap).is_none(), "not applied");
+    let list = app.shared.clipboard.lock().unwrap().clone();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, "mine", "the new entry is still there");
+    // with nothing recorded in between the merge is applied
+    let snap = app.sync_snapshot("clipboard");
+    let merged = ferrocast_core::sync_io::to_items(&[entry("mine", "just copied"), entry("theirs", "from another Mac")]);
+    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert_eq!(app.shared.clipboard.lock().unwrap().len(), 2);
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
+fn turning_sync_on_saves_every_domain_file_first_and_the_status_names_pending_downloads() {
+    let mut app = fixture();
+    app.sync_persist_all(); // what enabling does before the first publish
+    for f in ["snippets.json", "quicklinks.json", "notes.json", "chats.json", "clipboard.json", "settings.json"] {
+        assert!(app.store.path(f).exists(), "{f} is saved before the first publish");
+    }
+    let saved: Vec<Snippet> = app.store.load("snippets.json");
+    assert_eq!(saved, app.snippets);
+    app.settings.sync_enabled = true;
+    app.sync.downloading = 2;
+    assert!(app.sync_status().contains("download") && app.sync_status().contains('2'), "{}", app.sync_status());
+    // turning sync off clears the flag the worker checks before every write
+    app.sync.flag.store(true, Ordering::SeqCst);
+    app.settings.sync_enabled = false;
+    app.save_settings();
+    assert!(!app.sync.flag.load(Ordering::SeqCst));
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
+fn a_note_deleted_elsewhere_while_the_window_is_open_and_idle_moves_the_editor_to_another_note() {
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d));
+    let open = app.notes_ctl.current.clone().unwrap();
+    app.settings.sync_enabled = true;
+    let remote: Vec<Note> = app.notes.iter().filter(|n| n.id != open).cloned().collect();
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    let now = app.notes_ctl.current.clone().unwrap();
+    assert_ne!(now, open, "the editor moved on");
+    assert_eq!(st.borrow().markdown, app.notes.iter().find(|n| n.id == now).unwrap().text);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn notes_are_not_merged_into_the_editor_while_typing_and_are_after_a_short_idle() {
+    use crate::notes_ctl::NMsg;
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d));
+    let open = app.notes_ctl.current.clone().unwrap();
+    app.settings.sync_enabled = true;
+    app.notes_do(|c, d| c.handle(NMsg::Changed("Alpha typed".into()), d));
+    let shown = st.borrow().markdown.clone();
+    let mut remote = app.notes.clone();
+    remote.iter_mut().find(|n| n.id != open).unwrap().text = "Remote edit of another note".into();
+    let snap = app.sync_snapshot("notes");
+    assert!(
+        app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_none(),
+        "deferred while typing"
+    );
+    assert_eq!(st.borrow().markdown, shown, "the editor is not touched (no caret jump)");
+    assert!(app.notes.iter().find(|n| n.id != open).unwrap().text != "Remote edit of another note");
+    assert!(app.notes_ctl.typing_recently(now_millis()));
+    assert!(!app.notes_ctl.typing_recently(now_millis() + 3_000), "idle after 2 s");
+    std::thread::sleep(Duration::from_millis(2_100));
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert_eq!(app.notes.iter().find(|n| n.id != open).unwrap().text, "Remote edit of another note");
+    // a closed window never defers
+    app.notes_do(|c, d| c.handle(NMsg::Changed("Alpha typed again".into()), d));
+    app.notes_do(|c, d| c.toggle(d));
+    assert!(!app.notes_ctl.typing_recently(now_millis()));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_keystroke_the_editor_made_but_the_controller_has_not_processed_yet_still_defers_the_merge() {
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d));
+    let open = app.notes_ctl.current.clone().unwrap();
+    app.settings.sync_enabled = true;
+    // the editor emitted a change just now; its Changed message is still queued on the bus
+    st.borrow_mut().keystroke_ms = now_millis();
+    assert!(app.notes_ctl.typing_recently(now_millis()), "no Changed message was processed, yet typing is seen");
+    let mut remote = app.notes.clone();
+    remote.iter_mut().find(|n| n.id == open).unwrap().text = "Remote edit".into();
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_none());
+    assert!(!app.notes_ctl.typing_recently(now_millis() + 3_000));
+    st.borrow_mut().keystroke_ms = now_millis().saturating_sub(5_000);
+    assert!(!app.notes_ctl.typing_recently(now_millis()), "five seconds ago is idle");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+#[test]
+fn the_sync_note_in_settings_lists_what_stays_on_each_mac() {
+    for what in
+        ["script folders", "Obsidian vault", "screenshot and recordings folders", "camera and microphone", "macOS permissions", "Keychain"]
+    {
+        assert!(draw::SYNC_NOTE.contains(what), "{what}");
+    }
+}
+
+#[test]
+fn a_copy_of_settings_json_is_kept_before_the_first_settings_merge_is_applied() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    app.store.save("settings.json", &app.settings).unwrap();
+    let before = std::fs::read_to_string(app.store.path("settings.json")).unwrap();
+    // another Mac changed the hotkey field
+    let mut theirs = app.settings.clone();
+    theirs.launcher_hotkey = "Ctrl+Space".into();
+    let merged = ferrocast_core::sync_io::settings_items(&theirs);
+    let snap = app.sync_snapshot("settings");
+    assert!(app.sync_apply("settings", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert_eq!(app.settings.launcher_hotkey, "Ctrl+Space");
+    assert_eq!(
+        std::fs::read_to_string(app.store.path("settings.before-sync.json")).unwrap(),
+        before,
+        "the copy has the settings from before the merge"
+    );
+    // not overwritten by a later merge
+    let mut more = app.settings.clone();
+    more.theme = ferrocast_core::models::Theme::Light;
+    let snap = app.sync_snapshot("settings");
+    assert!(app
+        .sync_apply("settings", ferrocast_core::sync_io::settings_items(&more), ferrocast_core::sync::Tracker::default(), &snap)
+        .is_some());
+    assert_eq!(std::fs::read_to_string(app.store.path("settings.before-sync.json")).unwrap(), before);
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
+fn pick_color_is_a_launcher_command_that_starts_the_sampler() {
+    assert!(Builtin::ALL.contains(&Builtin::PickColor));
+    assert_eq!(Builtin::PickColor.title(), "Pick Color");
+    let mut app = fixture();
+    app.run_builtin(Builtin::PickColor);
+    assert!(FX_LOG.with(|l| l.borrow().contains(&"color_sampler".to_string())));
+}
+
+#[test]
+fn a_picked_color_is_copied_as_hex_and_announced() {
+    let mut app = fixture();
+    let _ = notion_io::take_copied();
+    app.bus.send(Msg::ColorPicked(Some(ferrocast_core::color::Rgba::from_unit(1.0, 0.5, 0.0, 1.0))));
+    app.drain();
+    assert_eq!(notion_io::take_copied(), vec!["#FF8000".to_string()]);
+    assert_eq!(toast_text(&app), "Copied #FF8000");
+}
+
+#[test]
+fn a_cancelled_pick_copies_nothing() {
+    let mut app = fixture();
+    let _ = notion_io::take_copied();
+    app.bus.send(Msg::ColorPicked(None));
+    app.drain();
+    assert!(notion_io::take_copied().is_empty());
+}
+
+// ---- mouse parity: every keyboard action also has a click path (odd/tasks/mouse-parity.md)
+mod mouse_parity {
+    use super::*;
+
+    fn clip(id: &str, pinned: bool) -> ClipEntry {
+        ClipEntry {
+            id: id.into(),
+            kind: ClipKind::Text,
+            content: format!("text of {id}"),
+            title: None,
+            copied_at: now_secs(),
+            pinned,
+            source_app: None,
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    fn clipboard_app() -> App {
+        let mut app = fixture();
+        *app.shared.clipboard.lock().unwrap() = vec![clip("a", false), clip("b", true), clip("c", false)];
+        app.push(View::Clipboard);
+        app.nav_at = Instant::now() - Duration::from_secs(1);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        app
+    }
+
+    fn rects(app: &App, id: &str) -> Vec<(String, Rect)> {
+        app.ctx.data(|d| d.get_temp(Id::new(id))).unwrap_or_default()
+    }
+
+    fn rect_of(app: &App, id: &str, name: &str) -> Rect {
+        rects(app, id).into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no {name} in {id}")).1
+    }
+
+    fn click_button(app: &mut App, pos: Pos2, button: egui::PointerButton) {
+        let btn = |pressed| Event::PointerButton { pos, button, pressed, modifiers: Modifiers::NONE };
+        render(app, vec![Event::PointerMoved(pos)]);
+        render(app, vec![btn(true)]);
+        render(app, vec![btn(false)]);
+        render(app, vec![]);
+        render(app, vec![]);
+    }
+
+    fn row_center(n: usize) -> Pos2 {
+        // search bar, 4 pt of padding, then a 26 pt header per section: the fixture has one pinned
+        // entry ("Pinned", first) and two others, so row 0 sits under one header and rows 1-2 under two
+        let headers = if n == 0 { 1.0 } else { 2.0 };
+        Pos2::new(120.0, ui::SEARCH_H + 4.0 + 26.0 * headers + ui::ROW_H * (n as f32 + 0.5))
+    }
+
+    fn ids(app: &App) -> Vec<String> {
+        app.shared.clipboard.lock().unwrap().iter().map(|e| e.id.clone()).collect()
+    }
+
+    fn debug_act(a: &Act) -> String {
+        format!("{a:?}")
+    }
+
+    #[test]
+    fn row_buttons_run_the_same_act_as_the_keyboard_shortcut() {
+        let mut app = clipboard_app();
+        let item = |app: &App, id: &str| {
+            app.sections()[0]
+                .items
+                .iter()
+                .chain(app.sections().iter().flat_map(|s| s.items.iter()))
+                .find(|i| i.id.contains(id))
+                .cloned()
+                .unwrap()
+        };
+        let a = item(&app, "a");
+        let b = item(&app, "b");
+        let by_key = |app: &App, it: &Item, k: (Modifiers, Key)| app.actions_for(it).into_iter().find(|x| x.shortcut == Some(k)).unwrap();
+        // unpinned: Pin + Delete
+        let btns = app.row_buttons(&a);
+        assert_eq!(btns.iter().map(|b| b.label).collect::<Vec<_>>(), ["Pin", "Delete"]);
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &a, (CMD, Key::Period)).kind));
+        assert_eq!(debug_act(&btns[1].kind), debug_act(&by_key(&app, &a, (CTRL, Key::X)).kind));
+        assert!(btns[1].destructive);
+        assert!(btns[0].tip.contains("⌘."), "tooltip names the shortcut: {}", btns[0].tip);
+        assert!(btns[1].tip.starts_with("Delete Entry") && btns[1].tip.contains("⌃X"), "{}", btns[1].tip);
+        // pinned: Unpin
+        let btns = app.row_buttons(&b);
+        assert_eq!(btns[0].label, "Unpin");
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &b, (CMD, Key::Period)).kind));
+
+        // snippets and quicklinks: Edit + Delete
+        app.snippets = vec![ferrocast_core::models::Snippet { id: "s1".into(), ..ferrocast_core::models::Snippet::new("sn", "t", "") }];
+        app.stack = vec![View::Root, View::Snippets];
+        app.invalidate_sections();
+        let s = app.sections()[0].items[0].clone();
+        let btns = app.row_buttons(&s);
+        assert_eq!(btns.iter().map(|b| b.label).collect::<Vec<_>>(), ["Edit", "Delete"]);
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &s, (CMD, Key::E)).kind));
+        assert_eq!(debug_act(&btns[1].kind), debug_act(&by_key(&app, &s, (CTRL, Key::X)).kind));
+        app.quicklinks = vec![ferrocast_core::models::Quicklink {
+            id: "q1".into(),
+            ..ferrocast_core::models::Quicklink::new("ql", "https://example.com")
+        }];
+        app.stack = vec![View::Root, View::Quicklinks];
+        app.invalidate_sections();
+        let q = app.sections()[0].items[0].clone();
+        let btns = app.row_buttons(&q);
+        assert_eq!(btns.iter().map(|b| b.label).collect::<Vec<_>>(), ["Edit", "Delete"]);
+        assert_eq!(debug_act(&btns[0].kind), debug_act(&by_key(&app, &q, (CMD, Key::E)).kind));
+        assert_eq!(debug_act(&btns[1].kind), debug_act(&by_key(&app, &q, (CTRL, Key::X)).kind));
+        // the same rows outside their own view get no buttons (e.g. a snippet found from the root)
+        app.stack = vec![View::Root];
+        assert!(app.row_buttons(&s).is_empty() && app.row_buttons(&q).is_empty());
+    }
+
+    #[test]
+    fn header_buttons_map_to_the_keyboard_acts() {
+        let mut app = clipboard_app();
+        let h = app.header_buttons();
+        assert_eq!(h.iter().map(|b| b.label).collect::<Vec<_>>(), ["Clear History…"]);
+        assert_eq!(debug_act(&h[0].kind), debug_act(&Act::ClipDeleteAll));
+        assert!(h[0].destructive && h[0].tip.contains("⌃⇧X"), "{}", h[0].tip);
+        app.stack = vec![View::Root, View::Snippets];
+        assert_eq!(debug_act(&app.header_buttons()[0].kind), debug_act(&Act::CreateSnippet));
+        assert!(app.header_buttons()[0].tip.contains("⌘N"));
+        app.stack = vec![View::Root, View::Quicklinks];
+        assert_eq!(debug_act(&app.header_buttons()[0].kind), debug_act(&Act::CreateQuicklink));
+        app.stack = vec![View::Root];
+        assert!(app.header_buttons().is_empty());
+    }
+
+    #[test]
+    fn footer_actions_hint_opens_and_closes_the_panel_like_cmd_k() {
+        let mut app = clipboard_app();
+        assert!(app.panel.is_none());
+        let r = rect_of(&app, "footer-hints", "⌘K");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        let p = app.panel.as_ref().expect("the footer Actions hint opens the panel");
+        assert_eq!(p.item.id, app.sections()[0].items[app.selected].id, "for the selected item");
+        // clicking it again toggles, as ⌘K does, instead of the outside-click close + reopen
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(app.panel.is_none());
+    }
+
+    #[test]
+    fn footer_enter_and_back_hints_behave_like_enter_and_escape() {
+        let mut app = clipboard_app();
+        app.perform(Act::ClipDeleteAll, false);
+        assert!(matches!(app.view(), View::Confirm { .. }));
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        let before = app.stack.len();
+        let back = rect_of(&app, "footer-hints", "esc");
+        click_button(&mut app, back.center(), egui::PointerButton::Primary);
+        assert_eq!(app.stack.len(), before - 1, "Back pops the confirmation");
+        assert_eq!(ids(&app), ["a", "b", "c"], "and nothing was deleted");
+
+        app.perform(Act::ClipDeleteAll, false);
+        render(&mut app, vec![]);
+        render(&mut app, vec![]);
+        let confirm = rect_of(&app, "footer-hints", "↵");
+        click_button(&mut app, confirm.center(), egui::PointerButton::Primary);
+        assert_eq!(ids(&app), ["b"], "Confirm clears the history and keeps the pinned entry");
+    }
+
+    #[test]
+    fn right_click_selects_the_row_and_opens_its_actions() {
+        let mut app = clipboard_app();
+        let n = app.sections().iter().map(|s| s.items.len()).sum::<usize>();
+        assert!(n >= 3);
+        click_button(&mut app, row_center(2), egui::PointerButton::Secondary);
+        let want = app.sections().iter().flat_map(|s| s.items.iter()).nth(2).unwrap().id.clone();
+        assert_eq!(app.selected, 2);
+        assert_eq!(app.panel.as_ref().expect("panel opened").item.id, want);
+        assert_eq!(ids(&app).len(), 3, "right click runs nothing");
+    }
+
+    #[test]
+    fn clicking_outside_the_panel_closes_it_without_running_the_row_under_the_pointer() {
+        let mut app = clipboard_app();
+        click_button(&mut app, row_center(0), egui::PointerButton::Secondary);
+        assert!(app.panel.is_some());
+        let hidden_before = app.visible;
+        click_button(&mut app, row_center(1), egui::PointerButton::Primary);
+        assert!(app.panel.is_none(), "outside click closes");
+        assert!(matches!(app.view(), View::Clipboard));
+        assert_eq!(app.visible, hidden_before, "the click did not paste/hide");
+        // a click inside the panel does not close it
+        click_button(&mut app, row_center(0), egui::PointerButton::Secondary);
+        let (w, h) = (ui::WIDTH, ui::HEIGHT);
+        click_button(&mut app, Pos2::new(w - 100.0, h - ui::FOOTER_H - 40.0), egui::PointerButton::Primary);
+        assert!(app.panel.is_some(), "a click on the panel's own search field is not an outside click");
+    }
+
+    #[test]
+    fn hover_buttons_pin_and_delete_one_entry() {
+        let mut app = clipboard_app();
+        let first = app.sections().iter().flat_map(|s| s.items.iter()).next().unwrap().clone();
+        let id = first.id.trim_start_matches("clip:").to_string();
+        let _ = id;
+        // pointer on the first row: it becomes the selected one and shows its buttons
+        render(&mut app, vec![Event::PointerMoved(row_center(0))]);
+        render(&mut app, vec![Event::PointerMoved(row_center(0) + Vec2::new(1.0, 0.0))]);
+        render(&mut app, vec![]);
+        let names: Vec<String> = rects(&app, "row-buttons").into_iter().map(|(n, _)| n).collect();
+        assert!(names.contains(&"Delete".to_string()), "{names:?}");
+        let del = rect_of(&app, "row-buttons", "Delete");
+        let before = ids(&app);
+        click_button(&mut app, del.center(), egui::PointerButton::Primary);
+        let after = ids(&app);
+        assert_eq!(after.len(), before.len() - 1, "Delete removed one entry: {before:?} -> {after:?}");
+        assert!(matches!(app.view(), View::Clipboard), "and stayed in the list");
+    }
+
+    #[test]
+    fn hover_pin_button_toggles_pinned() {
+        let mut app = clipboard_app();
+        render(&mut app, vec![Event::PointerMoved(row_center(0))]);
+        render(&mut app, vec![Event::PointerMoved(row_center(0) + Vec2::new(1.0, 0.0))]);
+        render(&mut app, vec![]);
+        let pinned_before = app.shared.clipboard.lock().unwrap().iter().filter(|e| e.pinned).count();
+        let pin = rects(&app, "row-buttons").into_iter().find(|(n, _)| n == "Pin" || n == "Unpin").expect("pin button").1;
+        click_button(&mut app, pin.center(), egui::PointerButton::Primary);
+        let pinned_after = app.shared.clipboard.lock().unwrap().iter().filter(|e| e.pinned).count();
+        assert_ne!(pinned_before, pinned_after, "the entry's pin state flipped");
+    }
+
+    #[test]
+    fn clear_history_button_confirms_then_keeps_pinned_entries() {
+        let mut app = clipboard_app();
+        let r = rect_of(&app, "header-buttons", "Clear History…");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::Confirm { .. }), "same confirmation as Delete All Entries");
+        assert_eq!(ids(&app).len(), 3, "nothing is deleted before confirming");
+        app.perform(Act::ClipDeleteAll, true);
+        assert_eq!(ids(&app), ["b"], "pinned entries stay");
+    }
+
+    #[test]
+    fn plus_button_creates_a_snippet_and_a_quicklink() {
+        let mut app = fixture();
+        app.push(View::Snippets);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let r = rect_of(&app, "header-buttons", "+ New");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::SnippetForm { id: None, .. }));
+        let mut app = fixture();
+        app.push(View::Quicklinks);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let r = rect_of(&app, "header-buttons", "+ New");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::QuicklinkForm { id: None, .. }));
+    }
+
+    fn note(id: &str, text: &str, pinned: bool) -> ferrocast_core::models::Note {
+        ferrocast_core::models::Note {
+            id: id.into(),
+            text: text.into(),
+            created: 1,
+            modified: 1,
+            pinned_at: pinned.then_some(5),
+            deleted_at: None,
+        }
+    }
+
+    fn notes_app() -> App {
+        let mut app = fixture();
+        app.notes = vec![note("n1", "first note", false), note("n2", "second note", true)];
+        app.push(View::Notes);
+        app.nav_at = Instant::now() - Duration::from_secs(1);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        app
+    }
+
+    #[test]
+    fn note_rows_get_pin_and_delete_buttons_matching_the_keys() {
+        let app = notes_app();
+        let items: Vec<Item> = app.sections().iter().flat_map(|s| s.items.iter().cloned()).collect();
+        let pinned = items.iter().find(|i| matches!(&i.kind, Kind::Note(id) if id == "n2")).unwrap();
+        let plain = items.iter().find(|i| matches!(&i.kind, Kind::Note(id) if id == "n1")).unwrap();
+        let by_key = |it: &Item, k: (Modifiers, Key)| app.actions_for(it).into_iter().find(|x| x.shortcut == Some(k)).unwrap();
+        let b = app.row_buttons(plain);
+        assert_eq!(b.iter().map(|b| b.label).collect::<Vec<_>>(), ["Pin", "Delete"]);
+        assert_eq!(debug_act(&b[0].kind), debug_act(&by_key(plain, (CMD, Key::Period)).kind));
+        assert_eq!(debug_act(&b[1].kind), debug_act(&by_key(plain, (CTRL, Key::X)).kind));
+        assert!(b[1].destructive);
+        assert_eq!(app.row_buttons(pinned)[0].label, "Unpin");
+    }
+
+    #[test]
+    fn notes_view_has_a_new_note_button() {
+        let mut app = notes_app();
+        let h = app.header_buttons();
+        assert_eq!(h.iter().map(|b| b.label).collect::<Vec<_>>(), ["+ New"]);
+        assert_eq!(debug_act(&h[0].kind), debug_act(&Act::CreateNote));
+        assert!(h[0].tip.contains("⌘N"), "{}", h[0].tip);
+        app.stack = vec![View::Root];
+        assert!(app.header_buttons().is_empty());
+    }
+
+    #[test]
+    fn pdf_organizer_buttons_run_the_keyboard_edits() {
+        use ferrocast_core::pdfplan::{PdfPlan, PlanOp};
+        let mut app = fixture();
+        let f = std::env::temp_dir().join(format!("fc-orgbtn-{}.pdf", std::process::id()));
+        let mut plan = PdfPlan::new(4);
+        plan.cursor = 1;
+        app.stack = vec![View::Root, View::PdfOrganize { file: f, n: 4, plan }];
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let names: Vec<String> = rects(&app, "pdf-ops").into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, PlanOp::ALL.map(|o| o.label()).to_vec());
+        let press = |app: &mut App, op: PlanOp| {
+            let r = rect_of(app, "pdf-ops", op.label());
+            click_button(app, r.center(), egui::PointerButton::Primary);
+        };
+        press(&mut app, PlanOp::MoveLater);
+        let p = organizer_plan(&app);
+        assert_eq!((p.pages.iter().map(|x| x.src).collect::<Vec<_>>(), p.cursor), (vec![0, 2, 1, 3], 2));
+        press(&mut app, PlanOp::RotateRight);
+        assert_eq!(organizer_plan(&app).pages[2].turns, 1);
+        press(&mut app, PlanOp::RotateLeft);
+        assert_eq!(organizer_plan(&app).pages[2].turns, 0);
+        press(&mut app, PlanOp::Duplicate);
+        assert_eq!(organizer_plan(&app).pages.len(), 5);
+        press(&mut app, PlanOp::Remove);
+        assert_eq!(organizer_plan(&app).pages.len(), 4);
+        press(&mut app, PlanOp::MoveEarlier);
+        assert!(matches!(app.view(), View::PdfOrganize { .. }), "buttons never leave the view");
+    }
+
+    #[test]
+    fn footer_chip_keys_parse_to_the_keys_they_name() {
+        let k = |s: &str| chip_key(s);
+        assert_eq!(k("space"), Some((Modifiers::NONE, Key::Space)));
+        assert_eq!(k("I"), Some((Modifiers::NONE, Key::I)));
+        assert_eq!(k("⌫"), Some((Modifiers::NONE, Key::Backspace)));
+        assert_eq!(k("⌘Z"), Some((CMD, Key::Z)));
+        assert_eq!(k("⇧⌘Z"), Some((CMD_SHIFT, Key::Z)));
+        assert_eq!(k("⌘⇧A"), Some((CMD_SHIFT, Key::A)));
+        assert_eq!(k("⌘↵"), Some((CMD, Key::Enter)));
+        assert_eq!(k("⌘⌫"), Some((CMD, Key::Backspace)));
+        assert_eq!(k("⌃⌘F"), Some((Modifiers { ctrl: true, ..CMD }, Key::F)));
+        assert_eq!(k("⌘E"), Some((CMD, Key::E)));
+        // ranges name several keys: they have their own controls
+        for r in ["←/→", "⌘↑/↓", "⌘1–0", ""] {
+            assert_eq!(k(r), None, "{r}");
+        }
+    }
+
+    #[test]
+    fn every_tool_window_chip_is_clickable_or_has_its_own_control() {
+        // chips that name a range of keys, with the control that stands in for them
+        const RANGES: [(&str, &str); 3] = [
+            ("←/→", "Frame / Navigate: step and arrow buttons"),
+            ("⌘↑/↓", "Move: the ↑ ↓ buttons on every row"),
+            ("⌘1–0", "Tabs: the Settings sidebar"),
+        ];
+        for (name, view, chips, _) in u2_windows() {
+            for (label, key) in chips {
+                assert!(chip_clickable(key) || RANGES.iter().any(|(r, _)| *r == key), "{name}: chip {label} {key} has no click path");
+            }
+            let _ = view;
+        }
+        for (label, key) in View::Settings.footer_hints() {
+            assert!(chip_clickable(key) || RANGES.iter().any(|(r, _)| *r == key), "Settings: {label} {key}");
+        }
+    }
+
+    #[test]
+    fn clicking_tool_window_chips_presses_their_keys() {
+        use ferrocast_core::pdfplan::PdfPlan;
+        let mut app = fixture();
+        let f = std::env::temp_dir().join(format!("fc-orgchip-{}.pdf", std::process::id()));
+        app.stack = vec![View::Root, View::PdfOrganize { file: f, n: 3, plan: PdfPlan::new(3) }];
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let r = rect_of(&app, "footer-hints", "R");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(organizer_plan(&app).pages[0].turns, 1, "the Rotate chip is the R key");
+        let r = rect_of(&app, "footer-hints", "⌫");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(organizer_plan(&app).pages.len(), 2, "the Remove chip is the ⌫ key");
+        let r = rect_of(&app, "footer-hints", "esc");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::Root), "the Back chip is esc");
+    }
+
+    #[test]
+    fn tour_chips_and_arrows_move_through_the_deck() {
+        let mut app = fixture();
+        app.push(View::Welcome);
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        assert_eq!(app.tour.slide, 0);
+        let r = rect_of(&app, "footer-hints", "↵");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(app.tour.slide, 1, "the Next chip is ↵");
+        let next = rect_of(&app, "tour-arrows", "next");
+        click_button(&mut app, next.center(), egui::PointerButton::Primary);
+        assert_eq!(app.tour.slide, 2, "the › arrow is →");
+        let prev = rect_of(&app, "tour-arrows", "previous");
+        click_button(&mut app, prev.center(), egui::PointerButton::Primary);
+        assert_eq!(app.tour.slide, 1, "the ‹ arrow is ←");
+        click_button(&mut app, prev.center(), egui::PointerButton::Primary);
+        assert_eq!(app.tour.slide, 0);
+        click_button(&mut app, prev.center(), egui::PointerButton::Primary);
+        assert_eq!(app.tour.slide, 0, "no slide before the first");
+    }
+
+    fn trim_app(view: impl FnOnce(PathBuf, ferrocast_core::videoplan::Trim) -> View) -> App {
+        let mut app = fixture();
+        let f = std::env::temp_dir().join(format!("fc-trimbtn-{}.mp4", std::process::id()));
+        let trim = ferrocast_core::videoplan::Trim::new(10.0, 25.0).unwrap();
+        app.stack = vec![View::Root, view(f, trim)];
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        app
+    }
+
+    fn the_trim(app: &App) -> ferrocast_core::videoplan::Trim {
+        match app.view() {
+            View::VideoTrim { trim: Some(t), .. } | View::VideoSplit { trim: Some(t), .. } | View::VideoSnapshot { trim: Some(t), .. } => {
+                *t
+            }
+            other => panic!("unexpected view {}", other.title()),
+        }
+    }
+
+    #[test]
+    fn video_trim_buttons_do_what_their_keys_do() {
+        use ferrocast_core::videoplan::TrimCmd;
+        let mut app = trim_app(|file, trim| View::VideoTrim { file, trim: Some(trim) });
+        let names: Vec<String> = rects(&app, "trim-cmds").into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, TrimCmd::ALL.map(|c| c.label()).to_vec());
+        let press = |app: &mut App, c: TrimCmd| {
+            let r = rect_of(app, "trim-cmds", c.label());
+            click_button(app, r.center(), egui::PointerButton::Primary);
+        };
+        press(&mut app, TrimCmd::SecForward);
+        assert!((the_trim(&app).cursor - 1.0).abs() < 1e-6);
+        press(&mut app, TrimCmd::MarkStart);
+        assert!((the_trim(&app).start - 1.0).abs() < 1e-6, "Set start is I");
+        press(&mut app, TrimCmd::SecForward);
+        press(&mut app, TrimCmd::MarkEnd);
+        assert!((the_trim(&app).end - 2.0).abs() < 1e-6, "Set end is O");
+        press(&mut app, TrimCmd::FrameBack);
+        assert!((the_trim(&app).cursor - 1.96).abs() < 1e-6);
+        press(&mut app, TrimCmd::ToStart);
+        assert!((the_trim(&app).cursor - 1.0).abs() < 1e-6, "Home");
+        press(&mut app, TrimCmd::ToEnd);
+        assert!((the_trim(&app).cursor - 1.96).abs() < 1e-6, "End");
+    }
+
+    #[test]
+    fn snapshot_has_no_marker_buttons_and_split_has_the_cut_buttons() {
+        let app = trim_app(|file, trim| View::VideoSnapshot { file, trim: Some(trim) });
+        let names: Vec<String> = rects(&app, "trim-cmds").into_iter().map(|(n, _)| n).collect();
+        assert!(!names.iter().any(|n| n == "Set start" || n == "Set end"), "{names:?}");
+        assert!(names.iter().any(|n| n == "Frame ▶"));
+
+        let mut app = trim_app(|file, trim| View::VideoSplit { file, trim: Some(trim), points: vec![], parts: 2 });
+        let cut = rect_of(&app, "trim-cmds", "Cut here");
+        // at the very start of the clip there is nothing to cut: same as M
+        click_button(&mut app, cut.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::VideoSplit { points, .. } if points.is_empty()));
+        let fwd = rect_of(&app, "trim-cmds", "+1 s");
+        click_button(&mut app, fwd.center(), egui::PointerButton::Primary);
+        let cut = rect_of(&app, "trim-cmds", "Cut here");
+        click_button(&mut app, cut.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::VideoSplit { points, .. } if points.len() == 1), "Cut here is M");
+        let rm = rect_of(&app, "trim-cmds", "Remove last");
+        click_button(&mut app, rm.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::VideoSplit { points, .. } if points.is_empty()), "Remove last is ⌫");
+    }
+
+    #[test]
+    fn wheel_switcher_chips_change_the_wheel_like_tapping_a_modifier() {
+        use ferrocast_core::wheel::WheelKind;
+        let dir = std::env::temp_dir().join(format!("fc-wheel-switch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("pic.png");
+        image::RgbImage::new(64, 48).save(&png).unwrap();
+        let (mut app, _, _) = wheel_click_fixture(&png);
+        render(&mut app, vec![]);
+        let kind = |app: &App| match app.view() {
+            View::Wheel { kind, .. } => *kind,
+            other => panic!("wheel closed: {}", other.title()),
+        };
+        assert_eq!(kind(&app), WheelKind::Tools);
+        let r = rect_of(&app, "wheel-switch", "Convert");
+        wheel_click_at(&mut app, r.center());
+        assert_eq!(kind(&app), WheelKind::Convert, "the Convert chip is Shift");
+        let r = rect_of(&app, "wheel-switch", "Actions");
+        wheel_click_at(&mut app, r.center());
+        assert_eq!(kind(&app), WheelKind::Actions, "the Actions chip is ⌃");
+        let r = rect_of(&app, "wheel-switch", "Tools");
+        wheel_click_at(&mut app, r.center());
+        assert_eq!(kind(&app), WheelKind::Tools, "the Tools chip is ⌘, and none of these clicks cancelled the wheel");
+    }
+
+    #[test]
+    fn annotate_undo_and_delete_buttons_match_cmd_z_and_delete() {
+        use ferrocast_core::annotate::{Doc, Shape, Style, Tool};
+        let style = Style { color: [255, 0, 0], width: 3.0, fill: false };
+        let mut doc = Doc::default();
+        doc.add(Shape::Line((1.0, 1.0), (20.0, 20.0)), style);
+        doc.add(Shape::Line((2.0, 2.0), (30.0, 30.0)), style);
+        let mut app = fixture();
+        app.stack = vec![
+            View::Root,
+            View::Annotate { file: "/nonexistent/mp.png".into(), size: (100, 80), doc, tool: Tool::Select, color: 0, sel: Some(0) },
+        ];
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let items = |app: &App| match app.view() {
+            View::Annotate { doc, .. } => doc.items.len(),
+            _ => panic!("annotate closed"),
+        };
+        let r = rect_of(&app, "annot-btns", "Delete");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(items(&app), 1, "Delete removes the selected shape");
+        let r = rect_of(&app, "annot-btns", "Undo");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(items(&app), 0, "Undo removes the newest shape");
+        // nothing left: the buttons are inert, like the keys
+        let r = rect_of(&app, "annot-btns", "Undo");
+        click_button(&mut app, r.center(), egui::PointerButton::Primary);
+        assert_eq!(items(&app), 0);
+    }
+
+    #[test]
+    fn redact_remove_chip_deletes_the_selected_area() {
+        let r = ferrocast_core::croprect::Rect { x: 10, y: 10, w: 30, h: 20 };
+        let mut app = fixture();
+        app.stack = vec![
+            View::Root,
+            View::RedactImage {
+                file: "/nonexistent/rd.png".into(),
+                size: (100, 80),
+                areas: vec![r],
+                sel: Some(0),
+                blur: true,
+                radius: 24,
+                color: 5,
+            },
+        ];
+        for _ in 0..3 {
+            render(&mut app, vec![]);
+        }
+        let chip = rect_of(&app, "footer-hints", "⌫");
+        click_button(&mut app, chip.center(), egui::PointerButton::Primary);
+        assert!(matches!(app.view(), View::RedactImage { areas, .. } if areas.is_empty()), "the Remove chip is ⌫");
+    }
+}
+
+// ---- custom themes (S2, S3, S4)
+
+#[test]
+fn custom_themes_default_palette_values_are_unchanged() {
+    use egui::Color32 as C;
+    let d = ui::palette(true);
+    assert_eq!(
+        (d.bg, d.border, d.text, d.sub, d.sub_strong, d.accent_text, d.sel, d.accent, d.field, d.sep, d.danger),
+        (
+            C::from_rgba_unmultiplied(24, 24, 27, 248),
+            C::from_white_alpha(28),
+            C::from_gray(238),
+            C::from_gray(140),
+            C::from_gray(166),
+            C::from_rgb(255, 112, 122),
+            C::from_white_alpha(24),
+            C::from_rgb(240, 83, 95),
+            C::from_white_alpha(14),
+            C::from_white_alpha(20),
+            C::from_rgb(240, 83, 95),
+        )
+    );
+    let l = ui::palette(false);
+    assert_eq!(
+        (l.bg, l.border, l.text, l.sub, l.sub_strong, l.accent_text, l.sel, l.accent, l.field, l.sep, l.danger),
+        (
+            C::from_rgba_unmultiplied(250, 250, 251, 250),
+            C::from_black_alpha(36),
+            C::from_gray(30),
+            C::from_gray(120),
+            C::from_gray(88),
+            C::from_rgb(190, 28, 52),
+            C::from_black_alpha(18),
+            C::from_rgb(232, 54, 75),
+            C::from_black_alpha(10),
+            C::from_black_alpha(22),
+            C::from_rgb(200, 40, 40),
+        )
+    );
+    // the values added for custom themes keep the old look: hover = field x1.6, white on accent, the old popover and disc fills
+    for (p, dark) in [(d, true), (l, false)] {
+        assert_eq!(p.hover, p.field.gamma_multiply(1.6));
+        assert_eq!(p.lift(1.3), p.field.gamma_multiply(1.3));
+        assert_eq!(p.on_accent, C::WHITE);
+        assert!(!p.custom);
+        assert_eq!(p.popover, if dark { C::from_rgb(34, 34, 38) } else { C::from_rgb(246, 246, 248) });
+        assert_eq!(p.disc, if dark { C::from_rgba_unmultiplied(24, 24, 27, 222) } else { C::from_rgba_unmultiplied(250, 250, 251, 226) });
+    }
+}
+
+#[test]
+fn custom_themes_builtin_twin_matches_the_default_palette_where_it_is_opaque() {
+    use ferrocast_core::themes::{builtin, ThemeBase};
+    for (base, dark) in [(ThemeBase::Dark, true), (ThemeBase::Light, false)] {
+        let (c, d) = (ui::palette_custom(&builtin(base)), ui::palette(dark));
+        assert_eq!((c.bg, c.text, c.accent, c.danger), (d.bg, d.text, d.accent, d.danger), "{base:?}");
+        assert!(c.custom);
+    }
+}
+
+fn ocean() -> ferrocast_core::themes::CustomTheme {
+    use ferrocast_core::themes::{CustomTheme, ThemeBase};
+    CustomTheme {
+        name: "Ocean".into(),
+        base: ThemeBase::Dark,
+        accent: "#38BDF8".into(),
+        background: "#0B1220".into(),
+        surface: "#16213A".into(),
+        text: "#E6EEFF".into(),
+        secondary_text: "#9FB0D0".into(),
+        separator: "#26324D".into(),
+    }
+}
+
+#[test]
+fn custom_themes_the_launcher_draws_with_the_selected_theme_and_default_without() {
+    let mut app = fixture();
+    app.custom_themes = vec![ocean()];
+    app.settings.custom_theme = Some("ocean".into());
+    app.ctx.set_theme(egui::ThemePreference::Light);
+    render(&mut app, vec![]);
+    let stamp = |app: &App| app.ctx.data(|d| d.get_temp::<(egui::Color32, egui::Color32)>(Id::new("style-stamp")));
+    let want = ui::palette_custom(&ocean());
+    assert_eq!(stamp(&app), Some((want.accent, want.sel)));
+    assert!(app.dark, "the theme's base decides, whatever egui's theme says");
+    // deselecting returns to the default palette on the next frame
+    app.settings.custom_theme = None;
+    app.ctx.set_theme(egui::ThemePreference::Dark);
+    render(&mut app, vec![]);
+    let d = ui::palette(true);
+    assert_eq!(stamp(&app), Some((d.accent, d.sel)));
+}
+
+#[test]
+fn custom_themes_a_missing_name_falls_back_to_the_default_look() {
+    let mut app = fixture();
+    app.settings.custom_theme = Some("Gone".into());
+    assert!(app.active_theme().is_none());
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn custom_themes_duplicate_select_edit_rename_delete_and_persist() {
+    let (mut app, _) = notes_tab_app(egui::ThemePreference::Dark);
+    app.dark = true;
+    fx_taken();
+    app.duplicate_theme();
+    assert_eq!(app.settings.custom_theme.as_deref(), Some("Dark copy"));
+    assert_eq!(app.custom_themes.len(), 1);
+    assert_eq!(fx_taken(), vec!["appearance Dark".to_string()]);
+    let saved: ferrocast_core::themes::ThemeFile = app.store.load("themes.json");
+    assert_eq!(saved.themes, app.custom_themes, "saved to themes.json");
+    // a second duplicate of the selected one gets a free name
+    app.duplicate_theme();
+    assert_eq!(app.settings.custom_theme.as_deref(), Some("Dark copy copy"));
+    // editing the base reaches the Notes window; a colour edit does not
+    fx_taken();
+    let mut t = app.active_theme().unwrap().clone();
+    t.accent = "#112233".into();
+    app.update_active_theme(t.clone());
+    assert!(fx_taken().is_empty(), "a colour edit leaves the Notes window alone");
+    t.base = ferrocast_core::themes::ThemeBase::Light;
+    app.update_active_theme(t);
+    assert_eq!(fx_taken(), vec!["appearance Light".to_string()]);
+    assert_eq!(app.active_theme().unwrap().accent, "#112233");
+    // rename: collisions and empty names are refused, a good one keeps the selection
+    assert!(app.rename_active_theme("dark copy").is_err());
+    assert!(app.rename_active_theme("   ").is_err());
+    assert_eq!(app.rename_active_theme(" Night ").map_err(|e| e.to_string()), Ok(()));
+    assert_eq!(app.settings.custom_theme.as_deref(), Some("Night"));
+    // the selection is persisted in settings.json
+    let s: Settings = app.store.load("settings.json");
+    assert_eq!(s.custom_theme.as_deref(), Some("Night"));
+    // delete: back to the System / Dark / Light setting (System here)
+    fx_taken();
+    app.delete_active_theme();
+    assert_eq!(app.settings.custom_theme, None);
+    assert_eq!(app.custom_themes.len(), 1);
+    assert_eq!(fx_taken(), vec!["appearance System".to_string()], "the System setting applies again");
+}
+
+#[test]
+fn custom_themes_export_then_import_round_trips_and_bad_files_are_refused() {
+    let mut app = fixture();
+    app.custom_themes = vec![ocean()];
+    app.settings.custom_theme = Some("Ocean".into());
+    let dir = std::env::temp_dir().join(format!("ferrocast-theme-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("Ocean.ferrocast-theme");
+    app.theme_file_picked(true, file.clone());
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!((v["format"].as_str(), v["version"].as_u64()), (Some("ferrocast-theme"), Some(1)));
+    // importing a name that exists keeps both
+    assert_eq!(app.import_theme_file(&file), Ok("Ocean 2".to_string()));
+    assert_eq!(app.custom_themes.len(), 2);
+    assert_eq!(app.settings.custom_theme.as_deref(), Some("Ocean 2"));
+    // garbage, a newer version and a bad colour are refused and change nothing
+    let bad = dir.join("bad.ferrocast-theme");
+    std::fs::write(&bad, "nope").unwrap();
+    assert!(app.import_theme_file(&bad).is_err());
+    std::fs::write(&bad, file_with(&file, |v| v["version"] = 7.into())).unwrap();
+    assert!(app.import_theme_file(&bad).unwrap_err().contains("newer"));
+    std::fs::write(&bad, file_with(&file, |v| v["theme"]["accent"] = "red".into())).unwrap();
+    assert!(app.import_theme_file(&bad).is_err());
+    assert!(app.import_theme_file(&dir.join("missing.ferrocast-theme")).is_err());
+    assert_eq!(app.custom_themes.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn file_with(path: &std::path::Path, f: impl FnOnce(&mut serde_json::Value)) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    f(&mut v);
+    v.to_string()
+}
+
+#[test]
+fn custom_themes_settings_general_renders_with_a_theme_in_both_bases_and_warns_on_low_contrast() {
+    use ferrocast_core::themes::ThemeBase;
+    for base in [ThemeBase::Dark, ThemeBase::Light] {
+        for faint in [false, true] {
+            let mut t = ocean();
+            t.base = base;
+            if faint {
+                t.text = "#16213B".into();
+            }
+            let mut app = settings_app(0, egui::ThemePreference::Dark);
+            app.custom_themes = vec![t.clone()];
+            app.settings.custom_theme = Some("Ocean".into());
+            settle(&mut app);
+            assert_eq!(!t.warnings().is_empty(), faint);
+        }
+    }
+    let w = ferrocast_core::themes::ContrastWarning { pair: ferrocast_core::themes::Pair::TextOnBackground, ratio: 3.04 };
+    assert_eq!(contrast_warning_text(&w), "Text on the background has a contrast of 3.0:1, below 4.5:1. It may be hard to read.");
+}
+
+#[test]
+fn custom_themes_are_indexed_for_settings_search() {
+    let hits = ferrocast_core::settings_index::search("custom theme");
+    assert!(hits.iter().any(|e| e.title == "Custom themes" && e.tab == 0), "no hit");
 }

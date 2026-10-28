@@ -33,7 +33,7 @@ use objc2::{define_class, msg_send, sel, AllocAnyThread, MainThreadMarker, MainT
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventModifierFlags, NSEventType, NSFont,
     NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeight, NSFontWeightBold, NSFontWeightLight, NSFontWeightMedium,
-    NSFontWeightRegular, NSForegroundColorAttributeName, NSKernAttributeName, NSLayoutManager, NSMutableParagraphStyle,
+    NSFontWeightRegular, NSForegroundColorAttributeName, NSKernAttributeName, NSLayoutManager, NSMenu, NSMutableParagraphStyle,
     NSParagraphStyleAttributeName, NSPasteboard, NSPasteboardType, NSPasteboardTypeString, NSPopover, NSPopoverBehavior,
     NSStrikethroughStyleAttributeName, NSTextAlignment, NSTextContainer, NSTextField, NSTextFieldDelegate, NSTextInputClient,
     NSTextStorage, NSTextTab, NSTextView, NSUnderlineStyleAttributeName, NSView, NSViewController, NSWorkspace,
@@ -2389,6 +2389,16 @@ define_class!(
                     let _: () = msg_send![super(self), mouseDown: event];
                 }
             }
+        }
+
+        // Right click: the standard text menu, then the window commands.
+        #[unsafe(method(menuForEvent:))]
+        fn menu_for_event(&self, event: &NSEvent) -> *mut NSMenu {
+            let mtm = MainThreadMarker::from(self);
+            let base: Option<Retained<NSMenu>> = unsafe { msg_send![super(self), menuForEvent: event] };
+            let menu = base.unwrap_or_else(|| NSMenu::new(mtm));
+            crate::notes::append_context_items(&menu, mtm);
+            Retained::autorelease_ptr(menu)
         }
 
         #[unsafe(method(drawRect:))]

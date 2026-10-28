@@ -26,6 +26,11 @@ pub const ENTRIES: &[Entry] = &[
     // 0 General
     e(0, "Launcher hotkey", &["shortcut", "keybinding", "alt space", "record", "open", "global"]),
     e(0, "Appearance", &["theme", "dark", "light", "system", "mode", "color", "colour"]),
+    e(
+        0,
+        "Custom themes",
+        &["theme", "colours", "colors", "accent", "background", "import", "export", "duplicate", "editor", "contrast", "palette"],
+    ),
     e(0, "Compact mode", &["minimal", "search bar", "small", "collapse"]),
     e(0, "Launch at login", &["startup", "start", "boot", "login item", "autostart"]),
     e(0, "Drop wheel", &["drag", "files", "wheel", "convert", "radial"]),
@@ -117,6 +122,8 @@ pub const ENTRIES: &[Entry] = &[
     e(9, "Highlight border", &["outline", "focused window", "tiling", "frame"]),
     e(9, "Border color", &["colour", "highlight", "tiling", "accent"]),
     e(9, "Data folder", &["storage", "files", "open", "settings.json", "backup", "location", "path"]),
+    e(9, "Sync with iCloud", &["icloud", "drive", "sync", "macs", "devices", "backup", "share", "cloud", "opt-in"]),
+    e(9, "Sync now", &["icloud", "sync", "status", "last sync", "other macs", "refresh", "merge"]),
 ];
 
 /// Lower-cases and strips the basic Latin accents, one char to one char (so a match position in

@@ -71,6 +71,37 @@ impl Note {
     }
 }
 
+/// One Ask AI conversation, persisted in `chats.json` so it can sync between Macs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Chat {
+    #[serde(default = "new_id")]
+    pub id: String,
+    /// First question, shortened.
+    pub title: String,
+    /// (question, answer) pairs in order.
+    pub turns: Vec<(String, String)>,
+    /// Unix seconds of the last answer.
+    pub updated: i64,
+}
+
+/// Most conversations kept.
+pub const MAX_CHATS: usize = 200;
+
+impl Chat {
+    pub fn new(id: String, turns: Vec<(String, String)>, updated: i64) -> Chat {
+        let title = turns.first().map(|(q, _)| q.trim().chars().take(80).collect()).unwrap_or_default();
+        Chat { id, title, turns, updated }
+    }
+}
+
+/// Insert or replace the chat with this id, newest first, capped at `MAX_CHATS`.
+pub fn upsert_chat(chats: &mut Vec<Chat>, chat: Chat) {
+    chats.retain(|c| c.id != chat.id);
+    chats.insert(0, chat);
+    chats.sort_by_key(|c| std::cmp::Reverse(c.updated));
+    chats.truncate(MAX_CHATS);
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ClipKind {
     Text,
@@ -224,6 +255,8 @@ pub struct NotionTarget {
 pub struct Settings {
     pub launcher_hotkey: String,
     pub theme: Theme,
+    /// Name of the selected custom theme (see `themes.json`); `None` follows `theme`.
+    pub custom_theme: Option<String>,
     pub compact_mode: bool,
     pub sensitivity: Sensitivity,
     pub clipboard_enabled: bool,
@@ -318,6 +351,9 @@ pub struct Settings {
     pub notes_last: Option<String>,
     /// Screenshots and screen recording.
     pub capture: crate::capture::CaptureSettings,
+    /// Sync data with other Macs through the iCloud Drive folder (off until the user turns it on;
+    /// stays on each Mac).
+    pub sync_enabled: bool,
 }
 
 /// What happens with a finished translation.
@@ -352,6 +388,7 @@ impl Default for Settings {
         Settings {
             launcher_hotkey: "Alt+Space".into(),
             theme: Theme::System,
+            custom_theme: None,
             compact_mode: false,
             sensitivity: Sensitivity::Medium,
             clipboard_enabled: true,
@@ -413,6 +450,7 @@ impl Default for Settings {
             notes_format_bar: default_notes_format_bar(),
             notes_last: None,
             capture: crate::capture::CaptureSettings::default(),
+            sync_enabled: false,
         }
     }
 }
@@ -589,4 +627,24 @@ pub struct CalcEntry {
     pub value: f64,
     pub unit: Option<String>,
     pub at: i64,
+}
+
+#[cfg(test)]
+mod chat_tests {
+    use super::*;
+
+    #[test]
+    fn chats_upsert_by_id_newest_first_and_capped() {
+        let mut v = vec![];
+        upsert_chat(&mut v, Chat::new("a".into(), vec![("q1".into(), "a1".into())], 10));
+        upsert_chat(&mut v, Chat::new("b".into(), vec![("q2".into(), "a2".into())], 20));
+        upsert_chat(&mut v, Chat::new("a".into(), vec![("q1".into(), "a1".into()), ("q3".into(), "a3".into())], 30));
+        assert_eq!(v.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(v[0].turns.len(), 2);
+        assert_eq!(v[0].title, "q1");
+        for i in 0..MAX_CHATS + 5 {
+            upsert_chat(&mut v, Chat::new(format!("x{i}"), vec![], i as i64 + 100));
+        }
+        assert_eq!(v.len(), MAX_CHATS);
+    }
 }

@@ -954,6 +954,12 @@ fn other_panel_visible(mtm: objc2::MainThreadMarker) -> bool {
 }
 
 pub struct App {
+    /// iCloud sync state (see `sync_ctl`).
+    sync: SyncCtl,
+    /// Ask AI conversations (chats.json).
+    chats: Vec<Chat>,
+    /// Id of the chat the open Ask AI view writes to.
+    ai_chat: Option<String>,
     /// The update poller thread once started (never more than one).
     pub(crate) update_poller: Option<std::thread::JoinHandle<()>>,
     ctx: Context,
@@ -1072,6 +1078,8 @@ pub struct App {
     inline: HashMap<PathBuf, (String, Instant)>,
     focus_first: bool,
     dark: bool,
+    /// Saved custom themes (`themes.json`); `settings.custom_theme` names the selected one.
+    pub(crate) custom_themes: Vec<ferrocast_core::themes::CustomTheme>,
     started: bool,
     act_item: Option<Item>,
     scratch: String,
@@ -1181,6 +1189,7 @@ impl App {
         let recent_emoji = store.load("recent-emoji.json");
         let shelf: Vec<PathBuf> = store.load("shelf.json");
         let data = store.load_all();
+        let store_themes = store.load::<ferrocast_core::themes::ThemeFile>("themes.json").themes;
         if prof {
             eprintln!("data {:?}", t.elapsed());
         }
@@ -1196,10 +1205,19 @@ impl App {
             ignored_clipboard_count: Default::default(),
             visible: Default::default(),
             keywords: Default::default(),
+            clip_dirty: Default::default(),
         });
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_wheel(shared.clone(), bus.clone());
         let update_poller = services::start_update_poller(shared.clone(), bus.clone());
+        {
+            // the sync timer; every tick is ignored while sync is off
+            let b = bus.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(sync_ctl::SYNC_EVERY);
+                b.send(Msg::SyncTick);
+            });
+        }
         if let Some(exe) = instance::running_exe() {
             // leftovers of a previous self-update; file removal off the startup path
             let root = store.root.clone();
@@ -1244,6 +1262,9 @@ impl App {
         }
         let notes_ctl = crate::notes_ctl::NotesCtl::new(Box::new(crate::notes_ctl::MacFx::new(bus.clone(), shared.clone())));
         let mut app = App {
+            sync: SyncCtl::default(),
+            chats: store.load("chats.json"),
+            ai_chat: None,
             update_poller,
             icons: IconCache::new(store.images_dir()).with_bus(bus.clone()),
             ctx,
@@ -1325,6 +1346,7 @@ impl App {
             inline: HashMap::new(),
             focus_first: false,
             dark: true,
+            custom_themes: store_themes,
             started: false,
             act_item: None,
             scratch: String::new(),
@@ -1477,14 +1499,36 @@ impl App {
 
     // ------------------------------------------------------------------ data
 
+    /// The selected custom theme, when `settings.custom_theme` names a saved one.
+    pub(crate) fn active_theme(&self) -> Option<&ferrocast_core::themes::CustomTheme> {
+        let name = self.settings.custom_theme.as_deref()?;
+        self.custom_themes.iter().find(|t| t.name.eq_ignore_ascii_case(name))
+    }
+
     fn set_theme(&mut self) {
-        let pref = match self.settings.theme {
-            Theme::System => egui::ThemePreference::System,
-            Theme::Dark => egui::ThemePreference::Dark,
-            Theme::Light => egui::ThemePreference::Light,
+        use ferrocast_core::themes::ThemeBase;
+        // a custom theme forces light or dark from its base (egui's own widgets and the Notes window follow it)
+        let base = self.active_theme().map(|t| t.base);
+        let (pref, notes) = match base {
+            Some(ThemeBase::Dark) => (egui::ThemePreference::Dark, notes_appearance(Theme::Dark)),
+            Some(ThemeBase::Light) => (egui::ThemePreference::Light, notes_appearance(Theme::Light)),
+            None => (
+                match self.settings.theme {
+                    Theme::System => egui::ThemePreference::System,
+                    Theme::Dark => egui::ThemePreference::Dark,
+                    Theme::Light => egui::ThemePreference::Light,
+                },
+                notes_appearance(self.settings.theme),
+            ),
         };
         self.ctx.set_theme(pref);
-        (self.fx.notes_appearance)(notes_appearance(self.settings.theme));
+        (self.fx.notes_appearance)(notes);
+    }
+
+    /// Persist the custom themes (`themes.json`).
+    pub(crate) fn save_themes(&mut self) {
+        let v = ferrocast_core::themes::ThemeFile { themes: self.custom_themes.clone() };
+        self.persist("themes.json", &v);
     }
 
     fn script_dirs(&self) -> Vec<PathBuf> {
@@ -1505,6 +1549,8 @@ impl App {
     }
 
     fn save_settings(&mut self) {
+        // a run in progress stops writing as soon as sync is turned off
+        self.sync.flag.store(self.settings.sync_enabled, Ordering::SeqCst);
         let v = self.settings.clone();
         self.persist("settings.json", &v);
         *self.shared.settings.write().unwrap() = self.settings.clone();
@@ -1907,6 +1953,7 @@ impl App {
 
     fn show(&mut self) {
         self.sec_dirty = true;
+        self.sync_on_show();
         if self.hidden_at.elapsed() > Duration::from_secs(90) {
             self.stack = vec![View::Root];
             self.query.clear();
@@ -2001,6 +2048,7 @@ impl App {
             instance::log(&self.store.root, &format!("saving {name} failed: {e:#}"));
             self.toast(format!("Could not save {name}: {e}"));
         }
+        self.sync_mark(name);
     }
 
     // ------------------------------------------------------------ Notion (Settings → Integrations)
@@ -3760,6 +3808,7 @@ impl App {
                         done: true,
                     });
                 }
+                Msg::ThemePath { export, path } => self.theme_file_picked(export, path),
                 Msg::IconBytes(k, b) => {
                     if !self.icons.map.contains_key(&k) {
                         self.icons.prefetched.insert(k, b);
@@ -3774,7 +3823,14 @@ impl App {
                         }
                     }
                 }
+                Msg::SyncTick => {
+                    if self.sync_on() {
+                        self.sync_all();
+                    }
+                }
+                Msg::SyncDone(done) => self.sync_done(*done),
                 Msg::AiDone { run, error } => {
+                    let ok = error.is_none();
                     for v in self.stack.iter_mut() {
                         if let View::Ai { answer, busy, run: r, .. } = v {
                             if *r == run {
@@ -3787,6 +3843,9 @@ impl App {
                                 }
                             }
                         }
+                    }
+                    if ok {
+                        self.save_ai_chat();
                     }
                 }
                 Msg::ImportFile(path) => {
@@ -3822,6 +3881,13 @@ impl App {
                     let w = self.quick_window;
                     self.run_tiling_on(q.action(), None, w);
                 }
+                Msg::ColorPicked(Some(c)) => {
+                    let hex = c.formats()[0].1.clone();
+                    // Not marked as our own write, so the colour also lands in the clipboard history.
+                    notion_io::write_clipboard(&hex);
+                    self.toast(format!("Copied {hex}"));
+                }
+                Msg::ColorPicked(None) => {}
                 Msg::Tray(id) => match id.as_str() {
                     "open" => self.show(),
                     "tiling_pause" => self.run_tiling(ferrocast_core::tiling::Action::Pause, None),
@@ -4855,6 +4921,105 @@ impl App {
     }
 
     // --------------------------------------------------------------- actions
+
+    /// Open the action panel for `item` (⌘K, the footer "Actions" hint, a right click).
+    pub(crate) fn open_panel(&mut self, item: Item) {
+        let actions = self.actions_for(&item);
+        self.panel = Some(ActionPanel { actions, query: String::new(), sel: 0, item });
+    }
+
+    /// Hover buttons for the common per-item actions of a row; each one carries the `Act` of the
+    /// keyboard shortcut it mirrors, taken from `actions_for` so the two cannot drift apart.
+    pub(crate) fn row_buttons(&self, item: &Item) -> Vec<RowButton> {
+        let own_view = matches!(
+            (&item.kind, self.view()),
+            (Kind::Clip(_), View::Clipboard)
+                | (Kind::Snippet(_), View::Snippets)
+                | (Kind::Quicklink { .. }, View::Quicklinks)
+                | (Kind::Note(_), View::Notes)
+        );
+        if !own_view {
+            return vec![];
+        }
+        let acts = self.actions_for(item);
+        let pick = |label: &'static str, f: fn(&Act) -> bool| {
+            acts.iter().find(|a| f(&a.kind)).map(|a| RowButton {
+                label,
+                tip: match a.shortcut {
+                    Some((m, k)) => format!("{}  {}", a.title, shortcut_label(m, k)),
+                    None => a.title.clone(),
+                },
+                kind: a.kind.clone(),
+                destructive: a.destructive,
+            })
+        };
+        match &item.kind {
+            Kind::Clip(_) => {
+                let unpin = acts.iter().any(|a| a.title == "Unpin Entry");
+                [
+                    pick(if unpin { "Unpin" } else { "Pin" }, |a| matches!(a, Act::ClipPin(_))),
+                    pick("Delete", |a| matches!(a, Act::ClipDelete(_))),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
+            Kind::Note(_) => {
+                let unpin = acts.iter().any(|a| a.title == "Unpin Note");
+                [
+                    pick(if unpin { "Unpin" } else { "Pin" }, |a| matches!(a, Act::NotePin(_))),
+                    pick("Delete", |a| matches!(a, Act::NoteDelete(_))),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
+            Kind::Snippet(_) => {
+                [pick("Edit", |a| matches!(a, Act::EditSnippet(_))), pick("Delete", |a| matches!(a, Act::DeleteSnippet(_)))]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+            }
+            Kind::Quicklink { .. } => {
+                [pick("Edit", |a| matches!(a, Act::EditQuicklink(_))), pick("Delete", |a| matches!(a, Act::DeleteQuicklink(_)))]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+            }
+            _ => vec![],
+        }
+    }
+
+    /// View-level mouse controls: "Clear History…" in the clipboard, "+ New" in snippets and quicklinks.
+    pub(crate) fn header_buttons(&self) -> Vec<RowButton> {
+        match self.view() {
+            View::Clipboard => vec![RowButton {
+                label: "Clear History…",
+                tip: format!("Delete All Entries  {} (pinned entries stay)", shortcut_label(CTRL_SHIFT, Key::X)),
+                kind: Act::ClipDeleteAll,
+                destructive: true,
+            }],
+            View::Snippets => vec![RowButton {
+                label: "+ New",
+                tip: format!("Create Snippet  {}", shortcut_label(CMD, Key::N)),
+                kind: Act::CreateSnippet,
+                destructive: false,
+            }],
+            View::Quicklinks => vec![RowButton {
+                label: "+ New",
+                tip: format!("Create Quicklink  {}", shortcut_label(CMD, Key::N)),
+                kind: Act::CreateQuicklink,
+                destructive: false,
+            }],
+            View::Notes => vec![RowButton {
+                label: "+ New",
+                tip: format!("Create Note  {}", shortcut_label(CMD, Key::N)),
+                kind: Act::CreateNote,
+                destructive: false,
+            }],
+            _ => vec![],
+        }
+    }
 
     fn actions_for(&self, item: &Item) -> Vec<Action> {
         let mut a = vec![];
@@ -6221,14 +6386,17 @@ impl App {
 
     fn run_builtin(&mut self, b: Builtin) {
         match b {
-            Builtin::AskAi => self.push(View::Ai {
-                prompt: String::new(),
-                asked: String::new(),
-                answer: String::new(),
-                history: vec![],
-                busy: false,
-                run: 0,
-            }),
+            Builtin::AskAi => {
+                self.ai_chat = None;
+                self.push(View::Ai {
+                    prompt: String::new(),
+                    asked: String::new(),
+                    answer: String::new(),
+                    history: vec![],
+                    busy: false,
+                    run: 0,
+                })
+            }
             Builtin::Welcome => self.push(View::Welcome),
             Builtin::KeyboardShortcuts => self.push(View::Shortcuts),
             Builtin::About => self.push(View::About),
@@ -6271,6 +6439,12 @@ impl App {
                 self.push(View::QuicklinkForm { id: None, name: String::new(), link: String::new(), open_with: String::new() })
             }
             Builtin::SearchEmoji => self.push(View::Emoji),
+            Builtin::PickColor => {
+                // Hide first so the launcher is not what gets sampled.
+                self.hide();
+                self.reset_to_root();
+                (self.fx.color_sampler)(&self.bus);
+            }
             Builtin::SearchFiles => self.push(View::Files),
             Builtin::SwitchWindows => self.push(View::Windows),
             Builtin::KillProcess => self.push(View::Processes),
@@ -7484,6 +7658,8 @@ pub(crate) struct Effects {
     /// Start the translation request.
     pub(crate) apple_available: fn() -> bool,
     pub(crate) translate_start: fn(&Settings, String, String, Option<i32>, ferrocast_core::models::TranslateOutput, u64, &Bus),
+    /// Show the screen colour picker; the result arrives as `Msg::ColorPicked` (main thread only).
+    pub(crate) color_sampler: fn(&Bus),
 }
 
 impl Effects {
@@ -7520,6 +7696,12 @@ impl Effects {
             web_script: |b, js| services::web_script(b, js.to_string()),
             apple_available: ferrocast_macos::apple_translate::available,
             translate_start: |s, text, lang, pid, out, run, bus| services::translate_text(s, text, lang, pid, out, run, bus.clone()),
+            color_sampler: |bus| {
+                let bus = bus.clone();
+                ferrocast_macos::color_sampler::sample(move |c| {
+                    bus.send(Msg::ColorPicked(c.map(|[r, g, b, a]| ferrocast_core::color::Rgba::from_unit(r, g, b, a))))
+                });
+            },
         }
     }
 }
@@ -7650,6 +7832,11 @@ fn launcher_origin() -> Option<Pos2> {
 mod draw;
 #[path = "intro.rs"]
 mod intro;
+#[path = "sync_ctl.rs"]
+mod sync_ctl;
+#[path = "theme_ctl.rs"]
+mod theme_ctl;
+pub use sync_ctl::{SyncCtl, SyncDone};
 #[path = "tour.rs"]
 mod tour;
 

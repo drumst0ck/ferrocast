@@ -26,6 +26,49 @@ This page lists the shortcuts in the launcher, in the Notes window and in the fi
 | <kbd>⌘</kbd> <kbd>E</kbd> | Edit the selected snippet or quicklink. |
 | <kbd>⌫</kbd> | Go back when the search is empty. |
 
+## With the mouse
+
+Every launcher shortcut above has a click path too, so you can use Ferrocast without the keyboard.
+
+| Click | Action |
+|---|---|
+| Right-click (or two-finger click) a row | Select the row and open its action panel, same as <kbd>⌘</kbd> <kbd>K</kbd>. |
+| Click a row | Run the primary action, same as <kbd>↵</kbd>. A double click does the same. |
+| Click **Actions** in the footer | Open or close the action panel for the selected item. |
+| Click **↵** or **esc** in the footer | Run the primary action, or go back. |
+| Click outside the action panel | Close it. |
+| Hover a clipboard row | **Pin** or **Unpin**, and **Delete** (<kbd>⌘</kbd> <kbd>.</kbd> and <kbd>⌃</kbd> <kbd>X</kbd>). |
+| Hover a snippet or quicklink row | **Edit** and **Delete** (<kbd>⌘</kbd> <kbd>E</kbd> and <kbd>⌃</kbd> <kbd>X</kbd>). |
+| Click **Clear History…** in the Clipboard view | Delete all clipboard entries after a confirmation. Pinned entries stay (<kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>X</kbd>). |
+| Click **+ New** in Snippets or Quicklinks | Create one (<kbd>⌘</kbd> <kbd>N</kbd>). |
+
+| Hover a note row (Search Notes) | **Pin** or **Unpin**, and **Delete** (<kbd>⌘</kbd> <kbd>.</kbd> and <kbd>⌃</kbd> <kbd>X</kbd>). |
+| Click **+ New** in Search Notes | Create a note (<kbd>⌘</kbd> <kbd>N</kbd>). |
+| Click a footer chip in a tool window (**Rotate** `R`, **Undo** `⌘Z`, **Play** `space`, **Remove** `⌫`…) | Press that key. A chip that names a range of keys (`←/→`, `⌘↑/↓`, `⌘1–0`) has its own buttons instead. |
+
+Hover any of these buttons to see its name and shortcut.
+
+### In the Notes window
+
+| Click | Action |
+|---|---|
+| **‹** and **›** at the left of the toolbar | Go back or forward through the notes you opened (<kbd>⌘</kbd> <kbd>[</kbd> <kbd>⌘</kbd> <kbd>]</kbd>). |
+| **×** at the right of the toolbar | Close the window (<kbd>⌘</kbd> <kbd>W</kbd> and <kbd>esc</kbd>). |
+| **Browse** and **+** in the toolbar, **Actions**, **Pin**, **New** in the footer | Browse notes, new note, the action panel, pin or unpin. |
+| Right-click the editor, the toolbar or the empty parts of the window | A menu with New Note, Browse Notes, Pin or Unpin, Back, Forward, Zoom In, Zoom Out, Actual Size, Actions and Close. In the editor it follows the usual Cut, Copy and Paste entries. |
+| Pick a pinned note in **Browse Notes** | Open it (<kbd>⌘</kbd> <kbd>1</kbd> to <kbd>⌘</kbd> <kbd>9</kbd>). |
+
+### In the tool windows
+
+| Window | Click |
+|---|---|
+| Welcome tour | **‹** and **›** next to the dots go to the previous or next slide (<kbd>←</kbd> <kbd>→</kbd>); the dots jump to a slide. |
+| Drag wheel | Click a segment to run it. The **Convert**, **Tools** and **Actions** chips under the ring switch wheel (tapping <kbd>⇧</kbd>, <kbd>⌘</kbd> or <kbd>⌃</kbd>). |
+| PDF organizer | **◀ Move**, **Move ▶**, **↺ Rotate**, **↻ Rotate**, **Duplicate** and **Remove** act on the selected page (<kbd>⌘</kbd> <kbd>←</kbd> <kbd>→</kbd>, <kbd>⇧</kbd> <kbd>R</kbd>, <kbd>R</kbd>, <kbd>D</kbd>, <kbd>⌫</kbd>). |
+| Video trim, split and snapshots; audio trim | **◀ Frame**, **Frame ▶**, **−1 s**, **+1 s**, **Set start**, **Set end**, **To start**, **To end** (not the markers in snapshots), plus **Cut here** and **Remove last** in split. |
+| Annotate | **Undo** and **Delete** next to the colours (<kbd>⌘</kbd> <kbd>Z</kbd>, <kbd>⌫</kbd>). |
+| Recording editor | **−1 s**, **+1 s**, **Start** and **End** after the frame buttons, when the transport strip is wide enough (<kbd>⇧</kbd> <kbd>←</kbd> <kbd>→</kbd>, <kbd>Home</kbd>, <kbd>End</kbd>). |
+
 ## Notes window
 
 These work while the [Notes](/docs/launcher/notes/) window is open.

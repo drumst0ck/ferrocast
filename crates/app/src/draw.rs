@@ -101,6 +101,7 @@ impl eframe::App for App {
         dev_screenshot(ctx, self);
         self.sync_window();
         self.drain();
+        self.sync_flush();
         self.tick_inline();
         self.effect_tick(Instant::now());
         self.sweep_timers();
@@ -871,6 +872,41 @@ fn elide(p: &egui::Painter, text: &str, font: FontId, max_w: f32) -> String {
     chars[..lo].iter().collect::<String>().trim_end().to_string() + "…"
 }
 
+/// What the mouse did on the list this frame.
+#[derive(Default)]
+struct ListMouse {
+    clicked: Option<usize>,
+    double: Option<usize>,
+    /// Right click / two-finger click.
+    secondary: Option<usize>,
+    /// A hover button: the row and the `Act` its keyboard shortcut runs.
+    button: Option<(usize, Act)>,
+}
+
+fn mini_button_width(ui: &Ui, label: &str) -> f32 {
+    ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(11.5), Color32::WHITE).size().x + 16.0
+}
+
+/// A small text button whose right edge sits at `right` and whose centre line is `cy`.
+fn mini_button_rect(ui: &Ui, _pal: &Palette, right: f32, cy: f32, label: &str) -> Rect {
+    let w = mini_button_width(ui, label);
+    Rect::from_min_size(Pos2::new(right - w, cy - 11.0), Vec2::new(w, 22.0))
+}
+
+/// Draw and handle one mini button; same hover/press feedback as the footer hints (Field, then Sel).
+fn mini_button(ui: &Ui, pal: &Palette, r: Rect, b: &RowButton, id: Id) -> bool {
+    let resp = ui.interact(r, id, Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(b.tip.clone());
+    let p = ui.painter();
+    let fill = if resp.is_pointer_button_down_on() { pal.sel } else { pal.field };
+    p.rect_filled(r, 6.0, fill);
+    if resp.hovered() {
+        p.rect_stroke(r, 6.0, Stroke::new(1.0, if b.destructive { pal.danger } else { pal.border }), StrokeKind::Inside);
+    }
+    let col = if b.destructive { pal.danger } else { pal.text };
+    p.text(r.center(), Align2::CENTER_CENTER, b.label, FontId::proportional(11.5), col);
+    resp.clicked()
+}
+
 fn panel_filter(p: &ActionPanel) -> Vec<usize> {
     let q = p.query.trim().to_lowercase();
     p.actions.iter().enumerate().filter(|(_, a)| q.is_empty() || a.title.to_lowercase().contains(&q)).map(|(i, _)| i).collect()
@@ -882,6 +918,8 @@ impl App {
         let shape = view.shape();
         let hotkey = matches!(view, View::Hotkey { .. });
         let tour = matches!(view, View::Welcome);
+        // a click on a footer hint stands in for its key, so both paths run the very same code
+        let footer_key = ctx.data_mut(|d| d.remove_temp::<String>(Id::new("footer-click")));
         let query_empty = self.query.is_empty();
         let panel = self.panel.is_some();
         // egui drops the focus of a text field at the start of the frame in which Escape arrives,
@@ -900,6 +938,10 @@ impl App {
             if hotkey {
                 return k;
             }
+            // a click on a chip with its own key (Rotate R, Undo ⌘Z…) presses that key: the same code runs
+            if let Some((modifiers, key)) = footer_key.as_deref().filter(|c| !matches!(*c, "⌘K" | "↵" | "esc")).and_then(chip_key) {
+                i.events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers });
+            }
             if shape == Shape::List || panel {
                 k.cmd_k = i.consume_key(CMD, Key::K);
                 k.up = i.consume_key(Modifiers::NONE, Key::ArrowUp);
@@ -916,6 +958,15 @@ impl App {
             }
             if !typing {
                 k.esc = i.consume_key(Modifiers::NONE, Key::Escape);
+            }
+            match footer_key.as_deref() {
+                Some("⌘K") if shape == Shape::List || panel => k.cmd_k = true,
+                Some("↵") => {
+                    k.enter = true;
+                    k.cmd_enter = true;
+                }
+                Some("esc") => k.esc = true,
+                _ => {}
             }
             k.backspace = shape == Shape::List
                 && !panel
@@ -977,8 +1028,7 @@ impl App {
             }
             let Some(item) = cur else { return false };
             if k.cmd_k {
-                let actions = self.actions_for(&item);
-                self.panel = Some(ActionPanel { actions, query: String::new(), sel: 0, item });
+                self.open_panel(item);
                 return true;
             }
             if k.enter || k.cmd_enter {
@@ -1632,14 +1682,19 @@ impl App {
     fn draw_main(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.icons.new_frame();
-        self.dark = ctx.theme() == egui::Theme::Dark;
-        let pal = palette(self.dark);
-        // Brand-coloured caret and text selection instead of egui's default blue.
-        if ui.visuals().text_cursor.stroke.color != pal.accent {
-            let accent = pal.accent;
+        let custom = self.active_theme().map(|t| (crate::ui::palette_custom(t), t.base == ferrocast_core::themes::ThemeBase::Dark));
+        self.dark = custom.as_ref().map_or_else(|| ctx.theme() == egui::Theme::Dark, |c| c.1);
+        let pal = custom.map_or_else(|| palette(self.dark), |c| c.0);
+        // Brand-coloured caret and text selection instead of egui's default blue (again when the theme changes).
+        let stamp = (pal.accent, pal.sel);
+        if ui.visuals().text_cursor.stroke.color != pal.accent
+            || ctx.data(|d| d.get_temp::<(Color32, Color32)>(Id::new("style-stamp"))) != Some(stamp)
+        {
+            ctx.data_mut(|d| d.insert_temp(Id::new("style-stamp"), stamp));
+            let (accent, sel) = (pal.accent, pal.sel);
             ctx.all_styles_mut(|st| {
                 // the slider rail is `widgets.inactive.bg_fill`; egui's grey 230 vanishes on a light card
-                st.visuals.widgets.inactive.bg_fill = palette(st.visuals.dark_mode).sel.gamma_multiply(2.0);
+                st.visuals.widgets.inactive.bg_fill = sel.gamma_multiply(2.0);
                 st.visuals.text_cursor.stroke.color = accent;
                 st.visuals.selection.bg_fill = accent.gamma_multiply(0.35);
                 st.visuals.selection.stroke.color = accent;
@@ -1684,6 +1739,11 @@ impl App {
             if ctx.input(|i| i.pointer.primary_clicked()) {
                 if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                     let d = pos - ui.max_rect().center();
+                    // the switcher chips do what tapping Shift, ⌘ or ⌃ does
+                    if let Some((k, ..)) = wheel_switcher(ui.max_rect(), kind).into_iter().find(|(_, _, _, r)| r.contains(pos)) {
+                        self.switch_wheel(k);
+                        return;
+                    }
                     if let Some(i) = wheel_hit(d, n) {
                         self.apply_wheel(Some(i));
                         return;
@@ -1701,6 +1761,25 @@ impl App {
             }
             let sel = if let Some(View::Wheel { sel, .. }) = self.stack.last() { *sel } else { None };
             self.draw_wheel(ui, &pal, center, &segs, &files, kind, sel);
+            let chips = wheel_switcher(ui.max_rect(), kind);
+            #[cfg(test)]
+            ctx.data_mut(|d| {
+                d.insert_temp(Id::new("wheel-switch"), chips.iter().map(|(_, l, _, r)| (l.to_string(), *r)).collect::<Vec<_>>())
+            });
+            let hover = ctx.input(|i| i.pointer.hover_pos());
+            for (k, label, key, r) in chips {
+                let on = k == kind;
+                let hot = hover.is_some_and(|p| r.contains(p));
+                let fill = if on { pal.accent } else { Color32::from_black_alpha(if hot { 200 } else { 140 }) };
+                ui.painter().rect_filled(r, 11.0, fill);
+                ui.painter().text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    format!("{label}  {key}"),
+                    FontId::proportional(11.5),
+                    if on || hot { Color32::WHITE } else { Color32::from_white_alpha(190) },
+                );
+            }
             return;
         }
         // Fade the launcher in when it appears (opacity only; one multiply per shape).
@@ -1837,9 +1916,31 @@ impl App {
         }
         line(footer_rect.min.y);
 
+        // View-level mouse controls ("Clear History…", "+ New"), over the right end of the search bar
+        if shape == Shape::List && !own_bar && self.panel.is_none() {
+            let mut x = search_rect.max.x - 14.0;
+            let mut recs: Vec<(String, Rect)> = vec![];
+            let mut run = None;
+            for b in self.header_buttons().into_iter().rev() {
+                let r = mini_button_rect(ui, &pal, x, search_rect.center().y + 3.0, b.label);
+                x = r.min.x - 6.0;
+                if mini_button(ui, &pal, r, &b, Id::new(("header-button", b.label))) {
+                    run = Some(b.kind.clone());
+                }
+                recs.push((b.label.to_string(), r));
+            }
+            #[cfg(test)]
+            ctx.data_mut(|d| d.insert_temp(Id::new("header-buttons"), recs));
+            #[cfg(not(test))]
+            drop(recs);
+            if let Some(act) = run {
+                self.perform(act, false);
+                ctx.request_repaint();
+                return;
+            }
+        }
         // ---- content
-        let mut clicked = None;
-        let mut double = None;
+        let mut mouse = ListMouse::default();
         match shape {
             Shape::List => {
                 let detail = if matches!(self.view(), View::Clipboard | View::Snippets | View::Notes | View::Quicklinks) {
@@ -1859,7 +1960,7 @@ impl App {
                 } else {
                     content
                 };
-                (clicked, double) = self.draw_list(ui, list_rect, &sections, &pal);
+                mouse = self.draw_list(ui, list_rect, &sections, &pal);
                 if let Some(rel) = note {
                     let r = Rect::from_min_max(Pos2::new(list_rect.max.x, content.min.y), content.max);
                     ui.painter().vline(r.min.x, r.y_range(), Stroke::new(1.0, pal.sep));
@@ -1909,17 +2010,35 @@ impl App {
         self.draw_footer(ui, footer_rect, &pal, primary, shape == Shape::List);
         // Keep the pop-in animation primed at 0 while the panel is closed.
         ctx.animate_bool_with_time(Id::new("panel_pop"), self.panel.is_some(), 0.12);
-        if self.panel.is_some() {
+        let panel_was_open = self.panel.is_some();
+        if panel_was_open {
             self.draw_panel(ui, content, &pal);
+            // a click that closed (or landed on) the panel is never also a click on the row beneath it
+            mouse = ListMouse::default();
         }
 
         // Hovering already selects, so a single click runs the row, as in the original launcher.
         // Clicks right after a view change are ignored: the second half of a habitual double
         // click must not fire the first row of the screen that just opened.
-        let _ = double;
-        if let Some(i) = clicked.filter(|_| self.nav_at.elapsed() > Duration::from_millis(350)) {
+        // A double click already ran the primary action with its first click, so it maps to the same path.
+        let settled = self.nav_at.elapsed() > Duration::from_millis(350);
+        let nth = |i: usize| sections.iter().flat_map(|s| s.items.iter()).nth(i).cloned();
+        if let Some(i) = mouse.secondary {
+            // right click / two-finger click: select the row and open its actions
             self.selected = i;
-            if let Some(item) = sections.iter().flat_map(|s| s.items.iter()).nth(i).cloned() {
+            if let Some(item) = nth(i) {
+                self.open_panel(item);
+                ctx.request_repaint();
+            }
+        } else if let Some((i, act)) = mouse.button.filter(|_| settled) {
+            self.selected = i;
+            if let Some(item) = nth(i) {
+                self.do_action(item, act);
+                ctx.request_repaint();
+            }
+        } else if let Some(i) = mouse.clicked.or(mouse.double).filter(|_| settled) {
+            self.selected = i;
+            if let Some(item) = nth(i) {
                 if let Some(a) = self.actions_for(&item).first() {
                     self.do_action(item, a.kind.clone());
                 }
@@ -2029,6 +2148,10 @@ impl App {
         let mut first = true;
         #[cfg(test)]
         let mut drawn: Vec<(String, String)> = vec![];
+        // Every chip that names one key is a button; a range (`←/→`) stays text, its own controls do it
+        let live = window_chips.is_empty();
+        let mut hit_rects: Vec<(String, Rect)> = vec![];
+        let mut footer_click: Option<String> = None;
         let mut hint = |label: &str, key: &str| {
             #[cfg(test)]
             drawn.insert(0, (label.to_string(), key.to_string()));
@@ -2043,9 +2166,23 @@ impl App {
             record_text(ui.ctx(), pal, "footer-key", pal.text, &[pal.field], 1.0);
             let kw = (kg.size().x + 12.0).max(22.0);
             let kr = Rect::from_min_size(Pos2::new(x - kw, cy - 10.0), Vec2::new(kw, 20.0));
+            let lx = kr.min.x - 8.0 - lg.size().x;
+            if live || chip_clickable(key) {
+                // Same feedback as the Notes HintBar: a Field background on hover, a stronger one while pressed.
+                let hr = Rect::from_min_max(Pos2::new(lx - 6.0, cy - 12.0), Pos2::new(kr.max.x + 6.0, cy + 12.0));
+                let resp = ui.interact(hr, Id::new(("footer-hint", key)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                if resp.is_pointer_button_down_on() {
+                    p.rect_filled(hr, 6.0, pal.sel);
+                } else if resp.hovered() {
+                    p.rect_filled(hr, 6.0, pal.field);
+                }
+                if resp.clicked() {
+                    footer_click = Some(key.to_string());
+                }
+                hit_rects.push((key.to_string(), hr));
+            }
             p.rect_filled(kr, 5.0, pal.field);
             p.galley(Pos2::new(kr.center().x - kg.size().x / 2.0, cy - kg.size().y / 2.0), kg, pal.text);
-            let lx = kr.min.x - 8.0 - lg.size().x;
             p.galley(Pos2::new(lx, cy - lg.size().y / 2.0), lg, pal.text);
             x = lx - 18.0;
         };
@@ -2067,14 +2204,24 @@ impl App {
         }
         #[cfg(test)]
         ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-chips"), drawn));
+        // the panel's outside-click close must not swallow a click on a footer hint
+        ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-hints"), hit_rects));
+        if let Some(k) = footer_click {
+            ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-click"), k));
+            ui.ctx().request_repaint();
+        }
         if undo_clicked {
             self.undo_settings_reset();
         }
     }
 
-    fn draw_list(&mut self, ui: &mut Ui, rect: Rect, sections: &[Section], pal: &Palette) -> (Option<usize>, Option<usize>) {
+    fn draw_list(&mut self, ui: &mut Ui, rect: Rect, sections: &[Section], pal: &Palette) -> ListMouse {
         let mut clicked = None;
         let mut double = None;
+        let mut secondary = None;
+        let mut button = None;
+        #[cfg(test)]
+        let mut btn_rects: Vec<(String, Rect)> = vec![];
         let sel = self.selected;
         let scroll_sel = self.scroll_to_sel;
         let ctx = ui.ctx().clone();
@@ -2122,6 +2269,12 @@ impl App {
                         if resp.double_clicked() {
                             double = Some(idx);
                         }
+                        if resp.secondary_clicked() {
+                            secondary = Some(idx);
+                        }
+                        // hover buttons for the common per-item actions, on the selected (hovered) row
+                        let row_btns = if selected && self.panel.is_none() { self.row_buttons(item) } else { vec![] };
+                        let btn_total: f32 = row_btns.iter().map(|b| mini_button_width(ui, b.label) + 6.0).sum();
                         // Rows scrolled out of view still take part in layout and selection, but
                         // painting them (and fetching their icons) would be wasted work.
                         if !ui.is_rect_visible(r) {
@@ -2182,7 +2335,7 @@ impl App {
                             acc.push(item.accessory.clone());
                         }
                         let acc = acc.join("  ");
-                        let right = r.max.x - 18.0;
+                        let right = r.max.x - 18.0 - if btn_total > 0.0 { btn_total + 4.0 } else { 0.0 };
                         let ag = painter.layout_no_wrap(acc, FontId::proportional(12.0), pal.sub);
                         let aw = ag.size().x;
                         painter.galley(Pos2::new(right - aw, r.center().y - ag.size().y / 2.0), ag, pal.sub);
@@ -2202,6 +2355,16 @@ impl App {
                                 pal.sub,
                             );
                         }
+                        let mut bx = r.max.x - 14.0;
+                        for b in row_btns.iter().rev() {
+                            let br = mini_button_rect(ui, pal, bx, r.center().y, b.label);
+                            bx = br.min.x - 6.0;
+                            if mini_button(ui, pal, br, b, Id::new(("row-button", b.label, idx))) {
+                                button = Some((idx, b.kind.clone()));
+                            }
+                            #[cfg(test)]
+                            btn_rects.push((b.label.to_string(), br));
+                        }
                         idx += 1;
                     }
                 }
@@ -2211,7 +2374,9 @@ impl App {
         if let Some(i) = hover_sel {
             self.selected = i;
         }
-        (clicked, double)
+        #[cfg(test)]
+        ctx.data_mut(|d| d.insert_temp(Id::new("row-buttons"), btn_rects));
+        ListMouse { clicked, double, secondary, button }
     }
 
     /// Search Obsidian's right pane: the note title and path, then the parsed blocks of its first 200 KB.
@@ -2303,9 +2468,17 @@ impl App {
         let rect = Rect::from_min_size(rect.max - rect.size() * (0.96 + 0.04 * t), rect.size() * (0.96 + 0.04 * t))
             .translate(Vec2::new(0.0, (1.0 - t) * 8.0));
         ui.set_opacity(t);
+        // A click anywhere else closes the panel; the footer hints own their clicks (Actions toggles it).
+        let footer_hits = ui.ctx().data(|d| d.get_temp::<Vec<(String, Rect)>>(Id::new("footer-hints"))).unwrap_or_default();
+        let outside = ui.ctx().input(|i| {
+            (i.pointer.primary_clicked() || i.pointer.secondary_clicked())
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|pos| !rect.expand(2.0).contains(pos) && !footer_hits.iter().any(|(_, r)| r.contains(pos)))
+        });
         let painter = ui.painter().clone();
         painter.rect_filled(rect.expand(1.0), 10.0, Color32::from_black_alpha(90));
-        painter.rect_filled(rect, 10.0, if self.dark { Color32::from_rgb(34, 34, 38) } else { Color32::from_rgb(246, 246, 248) });
+        painter.rect_filled(rect, 10.0, pal.popover);
         painter.rect_stroke(rect, 10.0, Stroke::new(1.0, pal.border), StrokeKind::Inside);
         let list_rect = Rect::from_min_max(rect.min + Vec2::new(0.0, 6.0), Pos2::new(rect.max.x, rect.max.y - 44.0));
         let sel = p.sel;
@@ -2361,6 +2534,8 @@ impl App {
             let item = p.item.clone();
             self.panel = None;
             self.do_action(item, act);
+        } else if outside {
+            self.panel = None;
         }
     }
 
@@ -2496,11 +2671,7 @@ impl App {
         for (k, a) in if dark { [(16.0, 10u8), (10.0, 14), (5.0, 20)] } else { [(16.0, 6), (10.0, 9), (5.0, 12)] } {
             p.circle_filled(c + Vec2::new(0.0, 6.0), outer + k * scale, black(a));
         }
-        p.circle_filled(
-            c,
-            outer,
-            if dark { Color32::from_rgba_unmultiplied(24, 24, 27, 222) } else { Color32::from_rgba_unmultiplied(250, 250, 251, 226) },
-        );
+        p.circle_filled(c, outer, pal.disc);
         p.circle_stroke(c, outer - 0.5, Stroke::new(1.0, if dark { white(34) } else { black(40) }));
         let top: Vec<Pos2> = (0..=24)
             .map(|j| {
@@ -3185,7 +3356,7 @@ impl App {
                 std::thread::spawn(move || bus.send(Msg::VideoFrame(f.clone(), at, crate::media_tools::preview_frame(ff, &f, at))));
             }
         }
-        let view = Rect::from_min_max(area_in.min + Vec2::new(24.0, 16.0), Pos2::new(area_in.max.x - 24.0, bar.min.y - 40.0));
+        let view = Rect::from_min_max(area_in.min + Vec2::new(24.0, 16.0), Pos2::new(area_in.max.x - 24.0, bar.min.y - 64.0));
         match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("vt-tex"))) {
             Some(tex) => {
                 let sz = tex.size_vec2();
@@ -3216,6 +3387,25 @@ impl App {
             pal.text,
         );
         note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "click the bar to jump", pal);
+        // the keys as buttons: step, markers, ends, and for Split the cut keys (M, ⌫)
+        {
+            use ferrocast_core::videoplan::TrimCmd;
+            let cmds: Vec<TrimCmd> = TrimCmd::ALL.into_iter().filter(|c| !(snapshot && c.is_marker())).collect();
+            let extra: &[(&str, bool)] = if split { &[("Cut here", true), ("Remove last", true)] } else { &[] };
+            let (cmd, ex) = trim_row(ui, pal, Pos2::new(bar.min.x, bar.min.y - 54.0), &cmds, extra);
+            if let Some(c) = cmd {
+                c.apply(&mut t);
+            }
+            match ex {
+                Some(0) => {
+                    t.add_cut(&mut points);
+                }
+                Some(_) => {
+                    points.pop();
+                }
+                None => {}
+            }
+        }
         if split {
             let clips = ferrocast_core::videoplan::split_ranges(t.duration, &points, parts).len();
             let row = Rect::from_min_size(Pos2::new(bar.min.x, bar.max.y + 8.0), Vec2::new(bar.width(), 24.0));
@@ -3359,6 +3549,9 @@ impl App {
             pal.text,
         );
         note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "click the waveform to jump", pal);
+        if let (Some(c), _) = trim_row(ui, pal, Pos2::new(wave.min.x, wave.max.y + 62.0), &ferrocast_core::videoplan::TrimCmd::ALL, &[]) {
+            c.apply(&mut t);
+        }
         let (mut start, mut end, mut silence) = (t.start, t.end, false);
         let row = Rect::from_min_size(Pos2::new(wave.min.x, wave.max.y + 30.0), Vec2::new(wave.width(), 26.0));
         ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
@@ -4735,7 +4928,7 @@ impl App {
         let playing = ed.playing();
         let (out_t, out_total) = (tl.to_output(ed.t), tl.output_duration());
         let maxed = self.win.is_maximised();
-        let (toggle, step, undo_btn, redo_btn) = {
+        let (toggle, step, undo_btn, redo_btn, jump) = {
             let ctrl = lay.transport;
             let bh = if comfy { 34.0 } else { 28.0 };
             let by = ctrl.center().y - bh / 2.0;
@@ -4752,10 +4945,27 @@ impl App {
             let r_play = place(bar_btn_w(ui, play_label, play_glyph, size));
             let icon_w = bh.max(32.0);
             let (r_prev, r_next) = (place(icon_w), place(icon_w));
-            let left_end = x;
             let (wu, wr) = (bar_btn_w(ui, "Undo", BarGlyph::None, size), bar_btn_w(ui, "Redo", BarGlyph::None, size));
             let r_redo = Rect::from_min_size(Pos2::new(ctrl.max.x - wr, by), Vec2::new(wr, bh));
             let r_undo = Rect::from_min_size(Pos2::new(r_redo.min.x - gap - wu, by), Vec2::new(wu, bh));
+            // the keys without a button: ⇧← / ⇧→ (one second), Home and End. They sit after the step buttons
+            // when all four fit between them and the time; a narrow strip leaves them out (the timeline
+            // still reaches every moment with a click)
+            let jump_labels = ["−1 s", "+1 s", "Start", "End"];
+            let time_w = ui
+                .painter()
+                .layout_no_wrap(
+                    format!("{} / {}", clock(out_t), clock(out_total)),
+                    FontId::proportional(if comfy { 15.0 } else { 13.5 }),
+                    pal.text,
+                )
+                .size()
+                .x;
+            let jump_w: f32 = jump_labels.iter().map(|l| bar_btn_w(ui, l, BarGlyph::None, size) + gap).sum();
+            let room = r_undo.min.x - 8.0 - (r_next.max.x + gap + 8.0 + time_w + 12.0);
+            let r_jumps: Vec<Rect> =
+                if room >= jump_w { jump_labels.iter().map(|l| place(bar_btn_w(ui, l, BarGlyph::None, size))).collect() } else { vec![] };
+            let left_end = x;
             let toggle = bar_btn(ui, pal, r_play, "small_btn", play_label, play_glyph, BarStyle::Soft, size, true);
             let prev = icon_btn(ui, pal, r_prev, "Previous frame", BarGlyph::StepBack, true);
             let next = icon_btn(ui, pal, r_next, "Next frame", BarGlyph::StepForward, true);
@@ -4794,7 +5004,13 @@ impl App {
                 (_, true) => Some(1),
                 _ => None,
             };
-            (toggle, step, undo_btn, redo_btn)
+            let mut jump = None;
+            for (n, (l, r)) in jump_labels.iter().zip(r_jumps).enumerate() {
+                if bar_btn(ui, pal, r, "small_btn", l, BarGlyph::None, BarStyle::Ghost, size, true) {
+                    jump = Some(n);
+                }
+            }
+            (toggle, step, undo_btn, redo_btn, jump)
         };
         // the top bar: back, the project's name and its save state at the left; Export… and Full screen at the right
         let (back_btn, export_btn, full_btn) = {
@@ -4840,6 +5056,18 @@ impl App {
         if let Some(dir) = step {
             ed.play = None;
             let t = crate::editor_ctl::step_frames(&tl, ed.t, dir, fps, proj.duration);
+            ed.seek(t, now, fps);
+        }
+        // the same moves as ⇧←, ⇧→, Home and End
+        if let Some(n) = jump {
+            let t = match n {
+                0 | 1 => {
+                    ed.play = None;
+                    crate::editor_ctl::step_seconds(&tl, ed.t, if n == 0 { -1 } else { 1 }, fps, proj.duration)
+                }
+                2 => crate::editor_ctl::first_time(&tl),
+                _ => ed.last(fps),
+            };
             ed.seek(t, now, fps);
         }
         if undo_btn {
@@ -4942,6 +5170,31 @@ impl App {
                         if resp.clicked() {
                             color = i;
                         }
+                    }
+                    // the keys without a button: ⌘Z and ⌫
+                    ui.add_space(10.0);
+                    #[cfg(test)]
+                    let mut btns: Vec<(String, Rect)> = vec![];
+                    let can_undo = !doc.items.is_empty();
+                    let undo = ui.add_enabled(can_undo, egui::Button::new("Undo"));
+                    record_strip(&ctx, undo.rect);
+                    if undo.clicked() {
+                        doc.undo();
+                        sel = None;
+                    }
+                    let can_delete = sel.is_some_and(|s| s < doc.items.len());
+                    let delete = ui.add_enabled(can_delete, egui::Button::new("Delete"));
+                    record_strip(&ctx, delete.rect);
+                    if delete.clicked() {
+                        if let Some(s) = sel.take() {
+                            doc.remove(s);
+                        }
+                    }
+                    #[cfg(test)]
+                    {
+                        btns.push(("Undo".into(), undo.rect));
+                        btns.push(("Delete".into(), delete.rect));
+                        ctx.data_mut(|d| d.insert_temp(Id::new("annot-btns"), btns));
                     }
                 });
             })
@@ -5297,6 +5550,37 @@ impl App {
                     .size(12.0)
                     .color(pal.sub),
             );
+            ui.add_space(8.0);
+            // the keyboard edits as buttons: the same `PdfPlan` calls the keys make
+            let mut op = None;
+            #[cfg(test)]
+            let mut op_rects: Vec<(String, Rect)> = vec![];
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for o in ferrocast_core::pdfplan::PlanOp::ALL {
+                    let start = ui.cursor().min;
+                    if pill(ui, pal, o.label(), false) {
+                        op = Some(o);
+                    }
+                    #[cfg(test)]
+                    op_rects.push((o.label().to_string(), Rect::from_min_max(start, Pos2::new(ui.cursor().min.x, start.y + 28.0))));
+                    #[cfg(not(test))]
+                    let _ = start;
+                }
+            });
+            #[cfg(test)]
+            ctx.data_mut(|d| d.insert_temp(Id::new("pdf-ops"), op_rects));
+            if let Some(o) = op {
+                let mut edited = plan.clone();
+                o.apply(&mut edited);
+                if edited != plan {
+                    if let Some(View::PdfOrganize { plan: p, .. }) = self.stack.last_mut() {
+                        *p = edited.clone();
+                    }
+                    plan = edited;
+                    ctx.request_repaint();
+                }
+            }
             ui.add_space(8.0);
             let mut res = CellDrag::default();
             egui::ScrollArea::horizontal().id_salt("pdf-strip").auto_shrink([false, true]).show(ui, |ui| {
@@ -6274,9 +6558,14 @@ impl App {
         let (mut rec, mut req_acc, mut open_data, mut add_dir, mut save_key, mut test_ai) = (false, false, false, false, false, false);
         let (mut chatgpt_in, mut chatgpt_out, mut chatgpt_device) = (false, false, false);
         let mut fetch_models = false;
+        let mut sync_now = false;
+        let sync_status = self.sync_status();
         let (mut check_now, mut install_now) = (false, false);
         let (mut new_snippet, mut create_script) = (false, false);
         let mut reset_req: Option<usize> = None;
+        let themes_all = self.custom_themes.clone();
+        let active_theme = self.active_theme().cloned();
+        let mut theme_act: Vec<ThemeAct> = vec![];
         let mut record_capture: Option<(String, String)> = None;
         let update_channel = {
             let id = Id::new("update_channel");
@@ -6452,7 +6741,7 @@ impl App {
             #[cfg(test)]
             ctx.data_mut(|d| d.insert_temp(Id::new("settings-search-rect"), sr.rect));
             let mg = Rect::from_center_size(Pos2::new(sr.rect.min.x + 16.0, sr.rect.center().y), Vec2::splat(15.0));
-            record_text(&ctx, pal, "search-icon", pal.sub_strong, &[pal.field.gamma_multiply(1.6)], 1.0);
+            record_text(&ctx, pal, "search-icon", pal.sub_strong, &[pal.lift(1.6)], 1.0);
             match self.icons.texture(&ctx, &Icon::Glyph("sf:magnifyingglass", [0, 0, 0])) {
                 Some(t) => {
                     ui.painter().image(t.id(), mg, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), pal.sub_strong);
@@ -6465,7 +6754,7 @@ impl App {
                 let xr = Rect::from_center_size(Pos2::new(sr.rect.max.x - 14.0, sr.rect.center().y), Vec2::splat(28.0));
                 let xe = ui.interact(xr, Id::new("settings-search-clear"), Sense::click()).on_hover_text("Clear search");
                 record_ctl(&ctx, "search-clear", xe.id, xr, true);
-                record_text(&ctx, pal, "search-clear", pal.sub_strong, &[pal.field.gamma_multiply(1.6)], 1.0);
+                record_text(&ctx, pal, "search-clear", pal.sub_strong, &[pal.lift(1.6)], 1.0);
                 focus_ring(ui, pal, &xe, xr.shrink(2.0));
                 ui.painter().text(
                     xr.center(),
@@ -6514,7 +6803,7 @@ impl App {
                     }
                     let gr = Rect::from_center_size(Pos2::new(r.min.x + 20.0, r.center().y), Vec2::splat(20.0));
                     ui.painter().rect_filled(gr, 5.0, if on { pal.accent } else { pal.field });
-                    let tint = if on { Color32::WHITE } else { pal.sub_strong };
+                    let tint = if on { pal.on_accent } else { pal.sub_strong };
                     if on {
                         record_text(&ctx, pal, "side-icon-active", tint, &[pal.sel, pal.accent], 1.0);
                         record_text(&ctx, pal, "side-label-active", pal.text, &[pal.sel], 1.0);
@@ -6600,14 +6889,46 @@ impl App {
                         // the three wheel keys only matter while the drop wheel is on
                         let wheel_off = !s.drop_wheel;
                         group(ui, pal, |ui| {
+                            row(ui, pal, "Appearance", "Follow the system, or force dark or light.", |ui| {
+                                segmented(ui, pal, &mut s.theme, &[(Theme::System, "System"), (Theme::Dark, "Dark"), (Theme::Light, "Light")]);
+                            });
+                            row(ui, pal, "Custom themes", "Your own colours. Pick one to use it, or copy the current look to start a new one.", |ui| {
+                                // right-to-left: the last control drawn sits at the left
+                                if small_btn(ui, pal, "Import…") {
+                                    theme_act.push(ThemeAct::Import);
+                                }
+                                if small_btn(ui, pal, if active_theme.is_some() { "Duplicate" } else { "New from current" }) {
+                                    theme_act.push(ThemeAct::Duplicate);
+                                }
+                                let shown = active_theme.as_ref().map_or("None", |t| t.name.as_str());
+                                field_combo(ui, pal, "custom-theme", shown, 150.0, |ui| {
+                                    if ui.selectable_label(active_theme.is_none(), "None").clicked() {
+                                        theme_act.push(ThemeAct::Select(None));
+                                    }
+                                    for t in &themes_all {
+                                        let on = active_theme.as_ref().is_some_and(|a| a.name == t.name);
+                                        if ui.selectable_label(on, &t.name).clicked() {
+                                            theme_act.push(ThemeAct::Select(Some(t.name.clone())));
+                                        }
+                                    }
+                                });
+                            });
+                        });
+                        if let Some(t) = &active_theme {
+                            ui.add_space(12.0);
+                            let mut e = t.clone();
+                            theme_editor(ui, pal, &mut e, &mut theme_act);
+                            if e != *t {
+                                theme_act.push(ThemeAct::Edit(e));
+                            }
+                        }
+                        ui.add_space(12.0);
+                        group(ui, pal, |ui| {
                             row(ui, pal, "Launcher hotkey", "Press it from any app to open or close Ferrocast.", |ui| {
                                 if small_btn(ui, pal, "Record…") {
                                     rec = true;
                                 }
                                 keycap(ui, pal, &services::hotkey_label(&s.launcher_hotkey));
-                            });
-                            row(ui, pal, "Appearance", "Follow the system, or force dark or light.", |ui| {
-                                segmented(ui, pal, &mut s.theme, &[(Theme::System, "System"), (Theme::Dark, "Dark"), (Theme::Light, "Light")]);
                             });
                             row(ui, pal, "Compact mode", "Show only the search bar until you type.", |ui| toggle(ui, pal, &mut s.compact_mode));
                             row(ui, pal, "Launch at login", "Start Ferrocast when you sign in to your Mac.", |ui| toggle(ui, pal, &mut s.launch_at_login));
@@ -6726,7 +7047,7 @@ impl App {
                             });
                         });
                         ui.add_space(10.0);
-                        note(ui, pal, "History lives in clipboard.json inside the data folder and never leaves this Mac. Backups exclude it.");
+                        note(ui, pal, "History lives in clipboard.json inside the data folder and stays on this Mac unless you turn on Sync with iCloud (Advanced). Backups exclude it.");
                     }
                     2 => {
                         group(ui, pal, |ui| {
@@ -7426,6 +7747,20 @@ impl App {
                                 }
                             });
                         });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Sync");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Sync with iCloud", "Keep settings, snippets, quicklinks, notes, clipboard history and Ask AI chats in step between your Macs through iCloud Drive.", |ui| toggle(ui, pal, &mut s.sync_enabled));
+                            row_disabled_if(ui, !self.settings.sync_enabled, |ui| {
+                                row(ui, pal, "Sync now", &sync_status, |ui| {
+                                    if small_btn(ui, pal, "Sync now") {
+                                        sync_now = true;
+                                    }
+                                });
+                            });
+                        });
+                        ui.add_space(10.0);
+                        note(ui, pal, SYNC_NOTE);
                         let disabled: Vec<String> = s.commands.iter().filter(|(_, c)| c.disabled).map(|(k, _)| k.clone()).collect();
                         if !disabled.is_empty() {
                             ui.add_space(14.0);
@@ -7631,8 +7966,21 @@ impl App {
         if let Some(id) = enable {
             s.command_mut(&id).disabled = false;
         }
+        // the System / Dark / Light picker leaves custom themes
+        if s.theme != self.settings.theme {
+            s.custom_theme = None;
+        }
+        if !theme_act.is_empty() {
+            for a in theme_act {
+                self.apply_theme_act(a);
+            }
+            s.custom_theme = self.settings.custom_theme.clone();
+        }
         if req_acc {
             windows::accessibility_trusted(true);
+        }
+        if sync_now {
+            self.sync_all();
         }
         if open_data {
             let _ = std::process::Command::new("/usr/bin/open").arg(&self.store.root).status();
@@ -7811,6 +8159,9 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
         ctx.data_mut(|d| d.remove::<SettingsJump>(id));
     }
 }
+
+/// Note under the Sync rows in Settings.
+pub(crate) const SYNC_NOTE: &str = "Off by default. Hotkeys sync; script folders, the Obsidian vault, the screenshot and recordings folders, login item, camera and microphone choice, update preferences, the window tiling switch and its per-display layouts, and macOS permissions stay on each Mac. API keys in the Keychain do not sync.";
 
 /// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Capture = 5, Power = 6..10.
 const SETTINGS_TABS: [(&str, &str); 10] = [
@@ -8465,7 +8816,7 @@ const FIELD_H: f32 = 28.0;
 /// The Settings field look, applied to the widgets of `ui` (call it inside a scope): the card
 /// field fill, a 1 px border that brightens on hover and turns accent on focus, 8 pt corners.
 fn field_style(ui: &mut Ui, pal: &Palette) {
-    let fill = pal.field.gamma_multiply(1.6);
+    let fill = pal.lift(1.6);
     let radius = egui::CornerRadius::same(8);
     ui.spacing_mut().interact_size.y = FIELD_H;
     ui.spacing_mut().button_padding = Vec2::new(8.0, 4.0);
@@ -8474,9 +8825,9 @@ fn field_style(ui: &mut Ui, pal: &Palette) {
     v.selection.stroke = Stroke::new(1.0, pal.accent);
     for (w, f, line) in [
         (&mut v.widgets.inactive, fill, pal.border),
-        (&mut v.widgets.hovered, pal.field.gamma_multiply(2.4), pal.border.gamma_multiply(2.2)),
-        (&mut v.widgets.active, pal.field.gamma_multiply(2.4), pal.accent),
-        (&mut v.widgets.open, pal.field.gamma_multiply(2.4), pal.border.gamma_multiply(2.2)),
+        (&mut v.widgets.hovered, pal.lift(2.4), pal.border.gamma_multiply(2.2)),
+        (&mut v.widgets.active, pal.lift(2.4), pal.accent),
+        (&mut v.widgets.open, pal.lift(2.4), pal.border.gamma_multiply(2.2)),
     ] {
         w.weak_bg_fill = f;
         w.bg_fill = f;
@@ -8539,7 +8890,7 @@ fn record_field(ctx: &egui::Context, kind: &str, r: Rect) {
 /// The Settings search box: the field look with room for a magnifier on the left and a clear
 /// button on the right (the caller paints both). Not counted in `field-count`.
 fn search_field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, id: Id) -> egui::Response {
-    record_text(ui.ctx(), pal, "hint-sidebar", pal.sub_strong, &[pal.field.gamma_multiply(1.6)], 1.0);
+    record_text(ui.ctx(), pal, "hint-sidebar", pal.sub_strong, &[pal.lift(1.6)], 1.0);
     let r = ui
         .scope(|ui| {
             field_style(ui, pal);
@@ -8562,7 +8913,7 @@ fn search_field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint:
 
 /// A single-line text field in the Settings look; `hint` shows in the sub colour while empty.
 fn field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, password: bool) -> egui::Response {
-    let fill = pal.field.gamma_multiply(1.6);
+    let fill = pal.lift(1.6);
     record_text(ui.ctx(), pal, "hint-card", pal.sub_strong, &[pal.field, fill], ui.opacity());
     record_text(ui.ctx(), pal, "field-text", pal.text, &[pal.field, fill], ui.opacity());
     let r = ui
@@ -8683,9 +9034,9 @@ fn small_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 20.0, 28.0), Sense::click());
     record_ctl(ui.ctx(), "small_btn", resp.id, r, ui.is_enabled());
     focus_ring(ui, pal, &resp, r);
-    record_text(ui.ctx(), pal, "button", pal.text, &[pal.field, pal.field.gamma_multiply(1.6)], ui.opacity());
+    record_text(ui.ctx(), pal, "button", pal.text, &[pal.field, pal.lift(1.6)], ui.opacity());
     let p = ui.painter();
-    p.rect_filled(r, 7.0, if resp.hovered() { pal.sel } else { pal.field.gamma_multiply(1.6) });
+    p.rect_filled(r, 7.0, if resp.hovered() { pal.sel } else { pal.lift(1.6) });
     p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.text);
     resp.clicked()
 }
@@ -8795,11 +9146,9 @@ fn bar_btn(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let (fill, ink) = match style {
-        BarStyle::Primary => (if hover { pal.accent.gamma_multiply(1.12) } else { pal.accent }, Color32::WHITE),
-        BarStyle::Soft => (if hover { pal.sel } else { pal.field.gamma_multiply(1.6) }, pal.text),
-        BarStyle::Ghost => {
-            (if hover { pal.field.gamma_multiply(1.6) } else { Color32::TRANSPARENT }, if enabled { pal.text } else { pal.sub })
-        }
+        BarStyle::Primary => (if hover { pal.accent.gamma_multiply(1.12) } else { pal.accent }, pal.on_accent),
+        BarStyle::Soft => (if hover { pal.sel } else { pal.lift(1.6) }, pal.text),
+        BarStyle::Ghost => (if hover { pal.lift(1.6) } else { Color32::TRANSPARENT }, if enabled { pal.text } else { pal.sub }),
     };
     let ink = if enabled { ink } else { pal.sub };
     let p = ui.painter();
@@ -8810,6 +9159,110 @@ fn bar_btn(
     paint_bar_glyph(p, Pos2::new(x0 + BAR_GLYPH_W / 2.0, r.center().y), glyph, ink);
     p.galley(Pos2::new(x0 + lead, r.center().y - g.size().y / 2.0), g, ink);
     enabled && resp.clicked()
+}
+
+/// The buttons of the trim viewers' keys (`TrimCmd`, plus `extra` pills such as "Cut here"), laid out
+/// from `origin`. Returns the command or the extra pill (index) clicked this frame.
+fn trim_row(
+    ui: &mut Ui,
+    pal: &Palette,
+    origin: Pos2,
+    cmds: &[ferrocast_core::videoplan::TrimCmd],
+    extra: &[(&str, bool)],
+) -> (Option<ferrocast_core::videoplan::TrimCmd>, Option<usize>) {
+    let mut picked = (None, None);
+    #[cfg(test)]
+    let mut recs: Vec<(String, Rect)> = vec![];
+    let row = Rect::from_min_size(origin, Vec2::new(ui::WIDTH - 2.0 * origin.x, 28.0));
+    ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for c in cmds {
+                #[cfg(test)]
+                let x0 = ui.cursor().min.x;
+                if pill(ui, pal, c.label(), false) {
+                    picked.0 = Some(*c);
+                }
+                #[cfg(test)]
+                recs.push((
+                    c.label().to_string(),
+                    Rect::from_min_max(Pos2::new(x0, origin.y), Pos2::new(ui.cursor().min.x - 6.0, origin.y + 28.0)),
+                ));
+            }
+            for (i, (label, enabled)) in extra.iter().enumerate() {
+                #[cfg(test)]
+                let x0 = ui.cursor().min.x;
+                let clicked = ui.add_enabled_ui(*enabled, |ui| pill(ui, pal, label, false)).inner;
+                if clicked {
+                    picked.1 = Some(i);
+                }
+                #[cfg(test)]
+                recs.push((
+                    label.to_string(),
+                    Rect::from_min_max(Pos2::new(x0, origin.y), Pos2::new(ui.cursor().min.x - 6.0, origin.y + 28.0)),
+                ));
+            }
+        });
+    });
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| d.insert_temp(Id::new("trim-cmds"), recs));
+    picked
+}
+
+/// The three chips under the ring that switch wheels (the click path of tapping Shift, ⌘ or ⌃):
+/// `(kind, label, key, rect)`. None for a text wheel, which has nothing to switch to.
+fn wheel_switcher(
+    rect: Rect,
+    current: ferrocast_core::wheel::WheelKind,
+) -> Vec<(ferrocast_core::wheel::WheelKind, &'static str, &'static str, Rect)> {
+    use ferrocast_core::wheel::WheelKind;
+    if current == WheelKind::Translate {
+        return vec![];
+    }
+    let (w, h, gap) = (92.0, 22.0, 8.0);
+    let total = 3.0 * w + 2.0 * gap;
+    let y = rect.max.y - 12.0 - h;
+    [(WheelKind::Convert, "Convert", "⇧"), (WheelKind::Tools, "Tools", "⌘"), (WheelKind::Actions, "Actions", "⌃")]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (k, l, key))| {
+            let x = rect.center().x - total / 2.0 + i as f32 * (w + gap);
+            (k, l, key, Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)))
+        })
+        .collect()
+}
+
+/// The key a footer chip names, for the chips that name exactly one key: `space`, `I`, `⌫`, `⌘Z`,
+/// `⇧⌘Z`, `⌘↵`, `⌃⌘F`. Ranges (`←/→`, `⌘↑/↓`, `⌘1–0`) and `↵`/`esc`/`⌘K` (handled by `read_keys`
+/// itself) are not parsed.
+fn chip_key(label: &str) -> Option<(Modifiers, Key)> {
+    let mut m = Modifiers::NONE;
+    let mut rest = label;
+    loop {
+        let mut chars = rest.chars();
+        match chars.next() {
+            Some('⌘') => m.command = true,
+            Some('⌃') => m.ctrl = true,
+            Some('⌥') => m.alt = true,
+            Some('⇧') => m.shift = true,
+            _ => break,
+        }
+        rest = chars.as_str();
+    }
+    let key = match rest {
+        "space" => Key::Space,
+        "⌫" => Key::Backspace,
+        "↵" => Key::Enter,
+        "esc" => Key::Escape,
+        r if r.chars().count() == 1 && r.chars().all(|c| c.is_ascii_alphabetic()) => Key::from_name(&r.to_uppercase())?,
+        _ => return None,
+    };
+    Some((m, key))
+}
+
+/// A footer chip that a click can press: one named key, or one of the three `read_keys` handles.
+fn chip_clickable(key: &str) -> bool {
+    matches!(key, "⌘K" | "↵" | "esc") || chip_key(key).is_some()
 }
 
 /// A button that is only a drawn shape (`label` is its tooltip and its name for screen readers). Not dimmed
@@ -8824,11 +9277,7 @@ fn icon_btn(ui: &mut Ui, pal: &Palette, r: Rect, label: &str, glyph: BarGlyph, e
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let ink = if enabled { pal.text } else { pal.sub };
-    ui.painter().rect_filled(
-        r,
-        crate::editor_ctl::CONTROL_RADIUS,
-        if hover { pal.field.gamma_multiply(1.6) } else { Color32::TRANSPARENT },
-    );
+    ui.painter().rect_filled(r, crate::editor_ctl::CONTROL_RADIUS, if hover { pal.lift(1.6) } else { Color32::TRANSPARENT });
     paint_bar_glyph(ui.painter(), r.center(), glyph, ink);
     let resp = resp.on_hover_text(label);
     enabled && resp.clicked()
@@ -8840,19 +9289,19 @@ fn accent_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
 
 /// `accent_btn`, also returning the button's rect.
 fn accent_btn_r(ui: &mut Ui, pal: &Palette, label: &str) -> (bool, Rect) {
-    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), Color32::WHITE);
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.on_accent);
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 24.0, 28.0), Sense::click());
     record_ctl(ui.ctx(), "accent_btn", resp.id, r, ui.is_enabled());
     focus_ring(ui, pal, &resp, r);
-    record_text(ui.ctx(), pal, "accent-button", Color32::WHITE, &[pal.accent], ui.opacity());
+    record_text(ui.ctx(), pal, "accent-button", pal.on_accent, &[pal.accent], ui.opacity());
     let p = ui.painter();
     p.rect_filled(r, 7.0, if resp.hovered() { pal.accent.gamma_multiply(1.15) } else { pal.accent });
-    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
+    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.on_accent);
     (resp.clicked(), r)
 }
 
 fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
-    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), if on { Color32::WHITE } else { pal.text });
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), if on { pal.on_accent } else { pal.text });
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 18.0, 28.0), Sense::click());
     record_ctl(ui.ctx(), "pill", resp.id, r, ui.is_enabled());
     focus_ring(ui, pal, &resp, r);
@@ -8865,10 +9314,10 @@ fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
         } else if resp.hovered() {
             pal.sel
         } else {
-            pal.field.gamma_multiply(1.6)
+            pal.lift(1.6)
         },
     );
-    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, if on { Color32::WHITE } else { pal.text });
+    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, if on { pal.on_accent } else { pal.text });
     resp.clicked()
 }
 
@@ -8901,7 +9350,7 @@ fn segmented_bar(ui: &mut Ui, pal: &Palette, sel: Option<usize>, labels: &[&str]
     let (r, base) = ui.allocate_exact_size(Vec2::new(seg_w * labels.len() as f32 + 4.0, 28.0), Sense::hover());
     let id = base.id;
     let p = ui.painter().clone();
-    p.rect_filled(r, 8.0, pal.field.gamma_multiply(1.3));
+    p.rect_filled(r, 8.0, pal.lift(1.3));
     if let Some(idx) = sel {
         let x = ui.ctx().animate_value_with_time(id.with("seg"), idx as f32, 0.14);
         let sr = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + x * seg_w, r.min.y + 2.0), Vec2::new(seg_w, 24.0));
@@ -8924,7 +9373,7 @@ fn segmented_bar(ui: &mut Ui, pal: &Palette, sel: Option<usize>, labels: &[&str]
                 (false, false) => "segment-disabled",
             },
             if sel == Some(i) { pal.text } else { pal.sub_strong },
-            &[pal.field, pal.field.gamma_multiply(1.3), pal.sel.gamma_multiply(1.8)][..if sel == Some(i) { 3 } else { 2 }],
+            &[pal.field, pal.lift(1.3), pal.sel.gamma_multiply(1.8)][..if sel == Some(i) { 3 } else { 2 }],
             ui.opacity(),
         );
         if resp.clicked() {
@@ -8978,7 +9427,7 @@ fn keycap(ui: &mut Ui, pal: &Palette, label: &str) {
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), pal.text);
     let (r, _) = ui.allocate_exact_size(Vec2::new(g.size().x + 16.0, 24.0), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(r, 6.0, pal.field.gamma_multiply(1.6));
+    p.rect_filled(r, 6.0, pal.lift(1.6));
     p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.text);
 }
 
@@ -9188,6 +9637,7 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
         &[
             "launcher_hotkey",
             "theme",
+            "custom_theme",
             "compact_mode",
             "launch_at_login",
             "drop_wheel",
@@ -9279,15 +9729,20 @@ impl App {
         }
         let finder_enter_changed = s.enter_on_finder != self.settings.enter_on_finder;
         let enter_on_finder = s.enter_on_finder;
-        let theme_changed = s.theme != self.settings.theme;
+        let theme_changed = s.theme != self.settings.theme || s.custom_theme != self.settings.custom_theme;
         let hotkey_changed = s.launcher_hotkey != self.settings.launcher_hotkey;
         let dirs_changed = s.script_directories != self.settings.script_directories;
         let start_poller = s.update_check && self.update_poller.is_none();
         let notes_changed = s.notes_zoom != self.settings.notes_zoom
             || s.notes_escape_loses_focus != self.settings.notes_escape_loses_focus
             || s.notes_menu_bar_button != self.settings.notes_menu_bar_button;
+        let sync_turned_on = s.sync_enabled && !self.settings.sync_enabled;
         self.settings = s;
         self.save_settings();
+        if sync_turned_on {
+            self.sync_persist_all();
+            self.sync_all();
+        }
         if notes_changed {
             self.apply_notes_settings();
         }
@@ -9341,3 +9796,154 @@ impl App {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+// ---- custom themes (Settings → General)
+
+/// What the theme controls asked for during a frame; applied after the frame is drawn.
+enum ThemeAct {
+    Select(Option<String>),
+    Edit(ferrocast_core::themes::CustomTheme),
+    Duplicate,
+    Delete,
+    Rename(String),
+    Export,
+    Import,
+}
+
+impl App {
+    fn apply_theme_act(&mut self, a: ThemeAct) {
+        match a {
+            ThemeAct::Select(n) => self.select_theme(n),
+            ThemeAct::Edit(t) => self.update_active_theme(t),
+            ThemeAct::Duplicate => self.duplicate_theme(),
+            ThemeAct::Delete => self.delete_active_theme(),
+            ThemeAct::Rename(n) => {
+                if let Err(e) = self.rename_active_theme(&n) {
+                    self.toast(e);
+                }
+            }
+            ThemeAct::Export => self.export_theme_dialog(),
+            ThemeAct::Import => self.import_theme_dialog(),
+        }
+    }
+}
+
+/// A row of the Settings look that is not a searchable setting (no index entry).
+fn plain_row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
+    let (r, _) = row_flow(ui, pal, RowLook::PANE, false, title, None, desc, control);
+    form_sep(ui, pal, r);
+}
+
+/// The sentence under the editor for a text pair that is too faint.
+fn contrast_warning_text(w: &ferrocast_core::themes::ContrastWarning) -> String {
+    use ferrocast_core::themes::{Pair, MIN_CONTRAST};
+    let what = match w.pair {
+        Pair::TextOnBackground => "Text on the background",
+        Pair::TextOnSurface => "Text on the surface",
+        Pair::SecondaryOnBackground => "Secondary text on the background",
+    };
+    format!("{what} has a contrast of {:.1}:1, below {MIN_CONTRAST}:1. It may be hard to read.", w.ratio)
+}
+
+/// One colour of the editor: a picker button and a hex field that stay in step.
+fn theme_color_row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, value: &mut String) {
+    plain_row(ui, pal, title, desc, |ui| {
+        use ferrocast_core::themes::{parse_hex, to_hex};
+        let id = Id::new(("theme-hex", title));
+        let (synced, mut buf): (String, String) = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| (value.clone(), value.clone()));
+        if synced != *value {
+            buf = value.clone();
+        }
+        let before = buf.clone();
+        field(ui, pal, &mut buf, 84.0, "#RRGGBB", false);
+        if buf != before {
+            if let Some(rgb) = parse_hex(&buf) {
+                *value = to_hex(rgb);
+            }
+        }
+        let mut rgb = parse_hex(value).unwrap_or([128, 128, 128]);
+        let picked = ui.scope(|ui| {
+            field_style(ui, pal);
+            ui.color_edit_button_srgb(&mut rgb).changed()
+        });
+        if picked.inner {
+            *value = to_hex(rgb);
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(id, (value.clone(), buf)));
+    });
+}
+
+/// The editor card for the selected custom theme, its live preview and the contrast warnings.
+fn theme_editor(ui: &mut Ui, pal: &Palette, e: &mut ferrocast_core::themes::CustomTheme, act: &mut Vec<ThemeAct>) {
+    use ferrocast_core::themes::ThemeBase;
+    group(ui, pal, |ui| {
+        plain_row(ui, pal, "Theme name", "Shown in the list and used for the exported file.", |ui| {
+            let id = Id::new("theme-name-buf");
+            let (of, mut buf): (String, String) = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| (e.name.clone(), e.name.clone()));
+            if of != e.name {
+                buf = e.name.clone();
+            }
+            if small_btn(ui, pal, "Rename") {
+                act.push(ThemeAct::Rename(buf.clone()));
+            }
+            field(ui, pal, &mut buf, 170.0, "Name", false);
+            ui.ctx().data_mut(|d| d.insert_temp(id, (e.name.clone(), buf)));
+        });
+        plain_row(ui, pal, "Base", "Light or dark. It sets the shape of the derived colours and the look of the Notes window.", |ui| {
+            segmented(ui, pal, &mut e.base, &[(ThemeBase::Dark, "Dark"), (ThemeBase::Light, "Light")]);
+        });
+        theme_color_row(ui, pal, "Accent", "Buttons, the caret and highlights.", &mut e.accent);
+        theme_color_row(ui, pal, "Background", "The window.", &mut e.background);
+        theme_color_row(ui, pal, "Surface", "Cards, fields and controls.", &mut e.surface);
+        theme_color_row(ui, pal, "Text", "Titles and results.", &mut e.text);
+        theme_color_row(ui, pal, "Secondary text", "Descriptions and hints.", &mut e.secondary_text);
+        theme_color_row(ui, pal, "Separator", "Lines between rows.", &mut e.separator);
+        plain_row(ui, pal, "Theme file", "Share this theme as a .ferrocast-theme file, or remove it.", |ui| {
+            if small_btn(ui, pal, "Delete") {
+                act.push(ThemeAct::Delete);
+            }
+            if small_btn(ui, pal, "Export…") {
+                act.push(ThemeAct::Export);
+            }
+        });
+    });
+    ui.add_space(10.0);
+    for w in e.warnings() {
+        ui.label(RichText::new(contrast_warning_text(&w)).size(12.0).color(status_color(pal, StatusKind::Warn)));
+        ui.add_space(2.0);
+    }
+    ui.add_space(6.0);
+    ui.label(RichText::new("Preview").size(12.0).color(pal.sub_strong));
+    ui.add_space(4.0);
+    theme_preview(ui, e);
+}
+
+/// A small launcher drawn with the edited colours (not the app's current palette).
+fn theme_preview(ui: &mut Ui, t: &ferrocast_core::themes::CustomTheme) {
+    let pal = crate::ui::palette_custom(t);
+    let w = ui.available_width().min(420.0);
+    let (r, _) = ui.allocate_exact_size(Vec2::new(w, 188.0), Sense::hover());
+    let p = ui.painter_at(r);
+    p.rect_filled(r, 12.0, pal.bg);
+    p.rect_stroke(r, 12.0, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+    p.text(Pos2::new(r.min.x + 16.0, r.min.y + 22.0), Align2::LEFT_CENTER, "Search Ferrocast…", FontId::proportional(14.0), pal.sub);
+    p.hline(r.min.x..=r.max.x, r.min.y + 44.0, Stroke::new(1.0, pal.sep));
+    let rows = [("Selected result", "Command", true), ("Another result", "Application", false), ("Third result", "Snippet", false)];
+    for (i, (name, kind, on)) in rows.into_iter().enumerate() {
+        let y = r.min.y + 52.0 + i as f32 * 32.0;
+        let rr = Rect::from_min_size(Pos2::new(r.min.x + 8.0, y), Vec2::new(r.width() - 16.0, 30.0));
+        if on {
+            p.rect_filled(rr, 8.0, pal.sel);
+        }
+        let icon = Rect::from_center_size(Pos2::new(rr.min.x + 18.0, rr.center().y), Vec2::splat(18.0));
+        p.rect_filled(icon, 5.0, if on { pal.accent } else { pal.lift(1.6) });
+        p.text(Pos2::new(rr.min.x + 36.0, rr.center().y), Align2::LEFT_CENTER, name, FontId::proportional(13.0), pal.text);
+        p.text(Pos2::new(rr.max.x - 10.0, rr.center().y), Align2::RIGHT_CENTER, kind, FontId::proportional(11.5), pal.sub);
+    }
+    let fy = r.max.y - 30.0;
+    p.hline(r.min.x..=r.max.x, fy, Stroke::new(1.0, pal.sep));
+    p.text(Pos2::new(r.min.x + 16.0, fy + 15.0), Align2::LEFT_CENTER, "Ferrocast", FontId::proportional(11.5), pal.sub);
+    let chip = Rect::from_center_size(Pos2::new(r.max.x - 40.0, fy + 15.0), Vec2::new(60.0, 20.0));
+    p.rect_filled(chip, 6.0, pal.accent);
+    p.text(chip.center(), Align2::CENTER_CENTER, "Open", FontId::proportional(11.5), pal.on_accent);
+}

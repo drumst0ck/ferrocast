@@ -27,6 +27,8 @@ pub enum EffectKind {
 
 pub enum Msg {
     Hotkey(u32),
+    /// The screen colour picker finished: the colour, or `None` when cancelled.
+    ColorPicked(Option<ferrocast_core::color::Rgba>),
     Tray(String),
     /// From the tiling worker thread; handled on the UI thread like any other message.
     Tiling(ferrocast_macos::tiling::Event),
@@ -112,6 +114,11 @@ pub enum Msg {
     AiDone {
         run: u64,
         error: Option<String>,
+    },
+    /// A theme file was chosen in the native dialog: where to export to, or what to import.
+    ThemePath {
+        export: bool,
+        path: PathBuf,
     },
     /// Icon PNG bytes fetched in the background for the first screen.
     IconBytes(String, Vec<u8>),
@@ -206,6 +213,10 @@ pub enum Msg {
         result: Result<Vec<ferrocast_core::obsidian::Block>, ()>,
     },
     Wake,
+    /// Every 30 s: pull and merge when iCloud sync is on.
+    SyncTick,
+    /// A background sync run finished (see `sync_ctl`).
+    SyncDone(Box<crate::app::SyncDone>),
     /// A screenshot finished (see `capture_ctl`).
     Capture(crate::capture_ctl::Outcome),
     /// Worker thread: the helper listed what can be captured (or failed); the flow continues on the
@@ -464,6 +475,8 @@ pub struct Shared {
     pub ignored_clipboard_count: AtomicI64,
     pub visible: AtomicBool,
     pub keywords: expansion::Keywords,
+    /// The clipboard list changed since the sync last looked (set by the recorder thread).
+    pub clip_dirty: AtomicBool,
 }
 
 /// `just now`, `5 min ago`, `3 h ago`, `2 d ago`.
@@ -513,6 +526,7 @@ impl Shared {
     pub fn save_clipboard(&self) {
         let c = self.clipboard.lock().unwrap();
         let _ = self.store.save("clipboard.json", &*c);
+        self.clip_dirty.store(true, Ordering::Relaxed);
     }
 }
 
@@ -600,6 +614,7 @@ fn record(shared: &Shared, content: clipboard::ClipContent, source: Option<Strin
     });
     storage::prune_images(&shared.store.images_dir(), &list);
     let _ = shared.store.save("clipboard.json", &*list);
+    shared.clip_dirty.store(true, Ordering::Relaxed);
 }
 
 /// Samples mouse, modifiers and the drag pasteboard every 25 ms (no permission needed)
@@ -3727,6 +3742,37 @@ pub fn image_op_files(files: Vec<PathBuf>, op: ferrocast_core::convert::ImageOp,
         notify("Ferrocast", &msg);
         bus.send(Msg::Toast(msg));
     });
+}
+
+/// The save dialog for a theme file: `choose file name` with the default name passed as an
+/// argument (never inside the script text); the result always ends in `.ferrocast-theme`.
+/// `None` when cancelled (blocks; call from a thread).
+pub fn choose_theme_export_path(name: &str) -> Option<PathBuf> {
+    let ext = ferrocast_core::themes::EXTENSION;
+    let out = std::process::Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "on run argv",
+            "-e",
+            "POSIX path of (choose file name with prompt \"Export theme\" default name (item 1 of argv))",
+            "-e",
+            "end run",
+        ])
+        .arg(format!("{name}.{ext}"))
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    path.starts_with('/').then(|| crate::editor_export::force_ext(PathBuf::from(path), ext))
+}
+
+/// The open dialog for a theme file; `None` when cancelled (blocks; call from a thread).
+pub fn choose_theme_import_path() -> Option<PathBuf> {
+    let out = ferrocast_macos::system::osascript("POSIX path of (choose file with prompt \"Import a theme\")").ok()?;
+    let p = out.trim();
+    p.starts_with('/').then(|| PathBuf::from(p))
 }
 
 /// Native multi-file chooser (blocks; call from a thread).
