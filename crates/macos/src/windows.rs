@@ -311,7 +311,9 @@ pub fn request_input_monitoring() -> bool {
 pub(crate) struct AxElement(pub(crate) AXUIElementRef);
 impl Drop for AxElement {
     fn drop(&mut self) {
-        unsafe { CFRelease(self.0 as CFTypeRef) }
+        if !self.0.is_null() {
+            unsafe { CFRelease(self.0 as CFTypeRef) }
+        }
     }
 }
 
@@ -382,8 +384,12 @@ pub(crate) fn set_frame(el: AXUIElementRef, r: Rect) {
 pub(crate) fn focused_window(pid: i32) -> Option<AxElement> {
     unsafe {
         let app = AxElement(AXUIElementCreateApplication(pid));
+        // a hung app must not stall the caller (the tiling worker polls this)
+        AXUIElementSetMessagingTimeout(app.0, 0.25);
         let w = copy_attr(app.0, kAXFocusedWindowAttribute).or_else(|| copy_attr(app.0, "AXMainWindow"))?;
-        Some(AxElement(w as AXUIElementRef))
+        let w = AxElement(w as AXUIElementRef);
+        AXUIElementSetMessagingTimeout(w.0, 0.25);
+        Some(w)
     }
 }
 

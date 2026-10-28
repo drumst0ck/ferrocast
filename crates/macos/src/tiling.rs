@@ -347,6 +347,8 @@ struct Tracked {
     applied: Option<t::Rect>,
     /// We applied a frame since the last read: the next read shows what the app made of it.
     verify: bool,
+    /// The refusal seen on the previous read, waiting to be seen again before it is learned.
+    pending_refusal: Option<(f64, f64)>,
 }
 
 struct Worker {
@@ -362,6 +364,8 @@ struct Worker {
     stage: bool,
     hover: t::Hover,
     clock: Instant,
+    /// Tiling was paused (or Stage Manager on) since windows were last synced.
+    was_idle: bool,
 }
 
 impl Worker {
@@ -378,6 +382,7 @@ impl Worker {
             stage: false,
             hover: Default::default(),
             clock: Instant::now(),
+            was_idle: false,
         }
     }
 
@@ -446,9 +451,11 @@ impl Worker {
 
     fn sync(&mut self, e: Enumerated, screens: &[t::Rect]) {
         self.order = t::reconcile_displays(std::mem::take(&mut self.order), screens.len());
+        // a window's display is the list it is in (windows of a lost display moved to display 0)
         for w in &mut self.wins {
-            w.display = w.display.min(screens.len() - 1);
+            w.display = t::display_index(&self.order, w.id).unwrap_or(0);
         }
+        let resumed = self.active() && std::mem::take(&mut self.was_idle);
         let mut seen = vec![];
         for f in e.found {
             match self.wins.iter().position(|w| w.pid == f.pid && same(&w.el, &f.el)) {
@@ -473,6 +480,7 @@ impl Worker {
                         prev: None,
                         applied: None,
                         verify: false,
+                        pending_refusal: None,
                     });
                     seen.push(id);
                 }
@@ -491,15 +499,19 @@ impl Worker {
         // one that accepted less than a stored minimum shows that value was wrong
         let focus_active = self.focus.is_some();
         let mut changed = false;
-        for w in &self.wins {
+        for w in &mut self.wins {
             if !w.verify || focus_active {
+                w.pending_refusal = None;
                 continue;
             }
             let Some(ap) = w.applied else { continue };
             let cap = screens.get(w.display).map_or((f64::INFINITY, f64::INFINITY), |s| (s.w, s.h));
-            match t::should_learn(focus_active, w.verify, w.applied, w.frame) {
-                Some(got) => changed |= self.mins.learn_capped(&w.app, (ap.w, ap.h), got, cap),
-                None => changed |= self.mins.confirm(&w.app, (ap.w, ap.h), (w.frame.w, w.frame.h)),
+            let seen = t::should_learn(focus_active, w.verify, w.applied, w.frame);
+            // an app that resizes asynchronously shows a transient size: learn only a repeated refusal
+            match (seen, t::confirm_refusal(&mut w.pending_refusal, seen)) {
+                (_, Some(got)) => changed |= self.mins.learn_capped(&w.app, (ap.w, ap.h), got, cap),
+                (None, None) => changed |= self.mins.confirm(&w.app, (ap.w, ap.h), (w.frame.w, w.frame.h)),
+                (Some(_), None) => {}
             }
         }
         if changed {
@@ -509,7 +521,7 @@ impl Worker {
             }
         }
         // the user moved a tiled window: it changes display or swaps with the window it was dropped on
-        if self.active() && !focus_active {
+        if self.active() && !focus_active && !resumed {
             let moved: Vec<(u64, t::Rect)> = self
                 .wins
                 .iter()
@@ -520,8 +532,7 @@ impl Worker {
                 let to = display_of(frame.center(), screens);
                 let from = self.wins.iter().find(|w| w.id == id).map_or(to, |w| w.display);
                 if to != from {
-                    self.order[from].retain(|i| *i != id);
-                    self.order[to].push(id);
+                    t::move_to_display(&mut self.order, id, to);
                     self.set_display(id, to);
                 } else if let Some(other) = self
                     .wins
@@ -562,14 +573,7 @@ impl Worker {
                 (self.emit)(Event::StageManager(stage));
             }
         }
-        // paused or off: windows stay where they are and nothing is read, except for hover
-        if !(self.active() || self.cfg.hover_activate) {
-            self.wins.clear();
-            self.order.clear();
-            self.hover = Default::default();
-            return;
-        }
-        if self.stage && !self.cfg.hover_activate {
+        if self.idle() {
             return;
         }
         if left_button_down() {
@@ -584,6 +588,25 @@ impl Worker {
         if self.active() && self.focus.is_none() {
             self.arrange(&screens);
         }
+    }
+
+    /// Nothing to observe or arrange this tick. Paused or under Stage Manager the tracked windows,
+    /// their order and focus mode are kept (only enumeration and arranging stop); when tiling is
+    /// off altogether the state is dropped.
+    fn idle(&mut self) -> bool {
+        if !self.active() {
+            self.was_idle = true;
+        }
+        if self.active() || self.cfg.hover_activate {
+            return false;
+        }
+        if !self.cfg.enabled {
+            self.wins.clear();
+            self.order.clear();
+            self.focus = None;
+            self.hover = Default::default();
+        }
+        true
     }
 
     fn arrange(&mut self, screens: &[t::Rect]) {
@@ -692,8 +715,7 @@ impl Worker {
                 o.swap(a, b);
             }
         } else if let Some(to) = t::display_in_direction(&screens, d, dir) {
-            self.order[d].retain(|x| *x != id);
-            self.order[to].push(id);
+            t::move_to_display(&mut self.order, id, to);
             self.set_display(id, to);
         } else {
             return;
@@ -714,6 +736,65 @@ mod tests {
         let c = Config::default();
         assert!(!c.enabled && !c.paused && !c.hover_activate);
         assert_eq!(c.gap, 8.0);
+    }
+
+    fn tracked(id: u64) -> Tracked {
+        // no real window: the element is never touched (the worker is never dropped)
+        Tracked {
+            id,
+            pid: 1,
+            app: "a".into(),
+            el: AxElement(std::ptr::null_mut()),
+            frame: t::Rect::new(0.0, 0.0, 100.0, 100.0),
+            display: 0,
+            target: None,
+            tries: 0,
+            prev: None,
+            applied: None,
+            verify: false,
+            pending_refusal: None,
+        }
+    }
+
+    fn worker_with_two_windows() -> std::mem::ManuallyDrop<Worker> {
+        let mut w = Worker::new(Box::new(|_| {}));
+        w.cfg.enabled = true;
+        w.wins = vec![tracked(1), tracked(2)];
+        w.order = vec![vec![2, 1]];
+        w.focus = Some(t::FocusSaved { frames: vec![(1, t::Rect::new(1.0, 2.0, 3.0, 4.0))], focused: 1 });
+        std::mem::ManuallyDrop::new(w)
+    }
+
+    #[test]
+    fn pause_and_stage_manager_keep_the_order_and_focus_mode() {
+        let mut w = worker_with_two_windows();
+        w.cfg.paused = true;
+        assert!(w.idle(), "paused: nothing to do");
+        assert_eq!(w.order, vec![vec![2, 1]]);
+        assert_eq!(w.wins.len(), 2);
+        assert!(w.focus.is_some(), "focus mode survives a pause");
+        w.cfg.paused = false;
+        w.stage = true;
+        assert!(w.idle());
+        assert_eq!(w.order, vec![vec![2, 1]]);
+        assert!(w.focus.is_some());
+        assert!(w.was_idle, "the next sync knows tiling was away");
+        // with hover on, the worker keeps observing (not idle) and still keeps its state
+        w.cfg.hover_activate = true;
+        assert!(!w.idle());
+        assert_eq!(w.order, vec![vec![2, 1]]);
+        // back on: the focus saved before the pause is still there to restore
+        w.stage = false;
+        assert!(!w.idle());
+        assert_eq!(t::focus_restore(w.focus.as_ref().unwrap()).len(), 1);
+    }
+
+    #[test]
+    fn turning_tiling_off_drops_the_tracked_state() {
+        let mut w = worker_with_two_windows();
+        w.cfg.enabled = false;
+        assert!(w.idle());
+        assert!(w.wins.is_empty() && w.order.is_empty() && w.focus.is_none());
     }
 
     #[test]

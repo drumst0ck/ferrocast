@@ -311,6 +311,14 @@ pub fn tile(screen: Rect, gap: f64, layout: Layout, wins: &[Win]) -> Vec<Placed>
         }
         break;
     }
+    // floating windows are centred; each further one is offset a little so they do not coincide
+    let mut floats = 0.0;
+    for p in result.iter_mut().flatten().filter(|p| p.kind == Kind::Floating) {
+        let off = CASCADE_STEP * floats;
+        p.frame.x = (p.frame.x + off).min((area.x + area.w - p.frame.w).max(area.x));
+        p.frame.y = (p.frame.y + off).min((area.y + area.h - p.frame.h).max(area.y));
+        floats += 1.0;
+    }
     result.into_iter().flatten().collect()
 }
 
@@ -335,6 +343,10 @@ pub fn valid_screen(r: Rect) -> bool {
 /// away are appended to the first display, so every window stays in some list.
 pub fn reconcile_displays(mut order: Vec<Vec<u64>>, n: usize) -> Vec<Vec<u64>> {
     let n = n.max(1);
+    let mut seen = std::collections::HashSet::new();
+    for l in order.iter_mut() {
+        l.retain(|id| seen.insert(*id));
+    }
     if order.len() > n {
         let gone: Vec<u64> = order.split_off(n).into_iter().flatten().collect();
         order[0].extend(gone);
@@ -344,6 +356,39 @@ pub fn reconcile_displays(mut order: Vec<Vec<u64>>, n: usize) -> Vec<Vec<u64>> {
 }
 
 const SLACK: f64 = 2.0;
+
+/// Index of the display whose list holds window `id`.
+pub fn display_index(order: &[Vec<u64>], id: u64) -> Option<usize> {
+    order.iter().position(|l| l.contains(&id))
+}
+
+/// Put `id` at the end of display `to`'s list and take it out of every other list (and any
+/// earlier place in that one), so a window is never listed twice.
+pub fn move_to_display(order: &mut [Vec<u64>], id: u64, to: usize) {
+    for l in order.iter_mut() {
+        l.retain(|i| *i != id);
+    }
+    if let Some(l) = order.get_mut(to) {
+        l.push(id);
+    }
+}
+
+/// A refusal counts only when the same one is seen on two consecutive reads: an app that resizes
+/// asynchronously shows a transient size once. `pending` is the previous read's refusal, `seen` the
+/// current one; returns the size to learn.
+pub fn confirm_refusal(pending: &mut Option<(f64, f64)>, seen: Option<(f64, f64)>) -> Option<(f64, f64)> {
+    let Some(s) = seen else {
+        *pending = None;
+        return None;
+    };
+    if pending.is_some_and(|p| (p.0 - s.0).abs() <= SLACK && (p.1 - s.1).abs() <= SLACK) {
+        *pending = None;
+        Some(s)
+    } else {
+        *pending = Some(s);
+        None
+    }
+}
 
 /// The size an app refused to go below: `Some(read size)` when, in the step that applied
 /// `applied`, the window kept its position but came out larger than asked.
@@ -1002,6 +1047,54 @@ mod tests {
             let w = v.iter().find(|w| w.id == q.id).unwrap();
             if let Some(m) = w.min {
                 assert!(q.frame.w + 1e-9 >= m.0 && q.frame.h + 1e-9 >= m.1, "{q:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_window_is_never_listed_twice_after_a_display_goes_away() {
+        let mut order = reconcile_displays(vec![vec![1], vec![2], vec![3]], 2);
+        assert_eq!(order, vec![vec![1, 3], vec![2]]);
+        assert_eq!(display_index(&order, 3), Some(0), "a window of the lost display is on display 0");
+        move_to_display(&mut order, 3, 1);
+        assert_eq!(order, vec![vec![1], vec![2, 3]]);
+        assert_eq!(order.concat().iter().filter(|i| **i == 3).count(), 1);
+        move_to_display(&mut order, 3, 1);
+        assert_eq!(order[1], vec![2, 3], "moving within a display does not duplicate");
+        assert_eq!(display_index(&order, 9), None);
+        // a list that already holds an id twice is cleaned by reconcile
+        let dup = reconcile_displays(vec![vec![1, 2], vec![2, 3]], 2);
+        assert_eq!(dup, vec![vec![1, 2], vec![3]]);
+    }
+
+    #[test]
+    fn a_refusal_must_repeat_before_it_is_learned() {
+        let mut p = None;
+        assert_eq!(confirm_refusal(&mut p, Some((520.0, 300.0))), None, "first sight only waits");
+        assert_eq!(confirm_refusal(&mut p, Some((521.0, 300.0))), Some((521.0, 300.0)), "same again: learn");
+        assert_eq!(p, None);
+        // an async resize that settles on the asked size never teaches anything
+        assert_eq!(confirm_refusal(&mut p, Some((700.0, 500.0))), None);
+        assert_eq!(confirm_refusal(&mut p, None), None);
+        assert_eq!(confirm_refusal(&mut p, Some((700.0, 500.0))), None, "the wait started over");
+        // a different size restarts the wait
+        assert_eq!(confirm_refusal(&mut p, Some((900.0, 500.0))), None);
+    }
+
+    #[test]
+    fn several_floating_windows_do_not_sit_exactly_on_top_of_each_other() {
+        let mut v = ws(4);
+        for i in [0, 1, 2] {
+            v[i].min = Some((1500.0, 800.0));
+        }
+        let p = tile(S, 0.0, Layout::Columns, &v);
+        let floats: Vec<&Placed> = p.iter().filter(|p| p.kind == Kind::Floating).collect();
+        assert!(floats.len() >= 2, "{p:?}");
+        assert_eq!(floats[0].frame, Rect::new(50.0, 75.0, 1500.0, 800.0), "the first stays centred");
+        for (i, a) in floats.iter().enumerate() {
+            assert!(a.frame.x + a.frame.w <= S.x + S.w + 1e-9 && a.frame.y + a.frame.h <= S.y + S.h + 1e-9, "{a:?} inside");
+            for b in &floats[i + 1..] {
+                assert!(a.frame.x != b.frame.x || a.frame.y != b.frame.y, "{a:?} and {b:?} coincide");
             }
         }
     }
