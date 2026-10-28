@@ -50,6 +50,7 @@ fn fixture() -> App {
         apps_at: Instant::now(),
         scripts: vec![],
         base: vec![],
+        ext: Default::default(),
         hotkeys: None,
         tiling: None,
         tiling_paused: false,
@@ -15961,6 +15962,155 @@ fn custom_themes_default_palette_values_are_unchanged() {
 }
 
 #[test]
+fn drain_processes_a_bounded_number_of_messages_per_frame() {
+    let mut app = fixture();
+    for _ in 0..1000 {
+        app.bus.send(Msg::Wake);
+    }
+    app.drain();
+    let left = app.rx.try_iter().count();
+    assert!(left > 0, "one frame must not consume an unbounded backlog");
+    assert_eq!(1000 - left, MAX_MSGS_PER_FRAME);
+}
+
+// ---- Raycast extensions: host-call limits and lifecycle (verifier round, L13)
+
+fn ext_manifest(json: &str) -> ferrocast_core::extensions::manifest::Manifest {
+    ferrocast_core::extensions::manifest::parse_manifest(json).unwrap()
+}
+
+fn is_err_containing(r: &ext_glue::Reply, needle: &str) -> bool {
+    matches!(r, ext_glue::Reply::Now(Err(e)) if e.contains(needle))
+}
+
+#[test]
+fn a_failed_launch_command_leaves_the_running_screens_and_session_alone() {
+    let mut app = fixture();
+    app.ext.test_set_manifests(vec![ext_manifest(r#"{"name":"e","commands":[{"name":"x","mode":"view"},{"name":"y","mode":"no-view"}]}"#)]);
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    app.stack = vec![View::Root, View::ExtList, View::ExtDetail];
+    app.ext.test_set_base(1);
+    let r = app.ext_call("e", 1, 7, "launchCommand", &serde_json::json!({"name":"x"}));
+    assert!(is_err_containing(&r, "launchCommand: Node.js 22"), "the extension is told why (no Node here)");
+    assert_eq!(app.stack.len(), 3, "the screens of the running command are untouched");
+    assert!(app.ext.test_has_session(), "and so is the command");
+}
+
+#[test]
+fn launch_command_is_refused_after_five_in_ten_seconds() {
+    let mut app = fixture();
+    app.ext.test_set_manifests(vec![ext_manifest(r#"{"name":"e","commands":[{"name":"x","mode":"view"}]}"#)]);
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    for i in 0..5 {
+        let r = app.ext_call("e", 1, i, "launchCommand", &serde_json::json!({"name":"x"}));
+        assert!(is_err_containing(&r, "Node.js"), "launch {i} got as far as the checks");
+    }
+    let r = app.ext_call("e", 1, 9, "launchCommand", &serde_json::json!({"name":"x"}));
+    assert!(is_err_containing(&r, "too many launches"));
+}
+
+#[test]
+fn launch_command_with_a_foreign_owner_is_refused() {
+    let mut app = fixture();
+    app.ext.test_set_manifests(vec![ext_manifest(r#"{"name":"e","author":"ann","commands":[{"name":"x","mode":"view"}]}"#)]);
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    let r = app.ext_call("e", 1, 1, "launchCommand", &serde_json::json!({"name":"x","ownerOrAuthorName":"mallory"}));
+    assert!(is_err_containing(&r, "another extension"));
+    let r = app.ext_call("e", 1, 2, "launchCommand", &serde_json::json!({"name":"x","ownerOrAuthorName":"ann"}));
+    assert!(is_err_containing(&r, "Node.js"), "the author's own name passes the owner check");
+}
+
+#[test]
+fn the_in_flight_limit_survives_a_new_session_and_ending_a_session_cancels_its_children() {
+    let mut app = fixture();
+    app.prev_pid = Some(1);
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    let slots: Vec<_> =
+        (0..ferrocast_core::extensions::hostcalls::MAX_PENDING_CALLS).map(|_| app.ext.test_pending().acquire().unwrap()).collect();
+    let r = app.ext_call("e", 1, 1, "selection.text", &serde_json::json!({}));
+    assert!(is_err_containing(&r, "too many requests"));
+    // a relaunch makes a new session; the threads of the old one are still counted
+    let old_cancel = app.ext.test_cancel_flag().unwrap();
+    app.ext.test_install_session(2, true, Duration::ZERO);
+    let r = app.ext_call("e", 2, 2, "selection.text", &serde_json::json!({}));
+    assert!(is_err_containing(&r, "too many requests"), "no fresh budget after a relaunch");
+    assert!(!old_cancel.load(std::sync::atomic::Ordering::SeqCst), "replacing through the test helper does not go through ext_kill");
+    let cancel = app.ext.test_cancel_flag().unwrap();
+    app.ext_kill();
+    assert!(cancel.load(std::sync::atomic::Ordering::SeqCst), "ext_kill tells the session's osascript children to stop");
+    drop(slots);
+    assert_eq!(app.ext.test_pending().in_flight(), 0);
+}
+
+#[test]
+fn a_view_cannot_read_the_selection_or_alert_while_the_launcher_is_hidden() {
+    let mut app = fixture();
+    app.prev_pid = None;
+    app.visible = false;
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    for m in ["selection.text", "alert.confirm"] {
+        let r = app.ext_call("e", 1, 1, m, &serde_json::json!({"title":"t","primary":"OK"}));
+        assert!(is_err_containing(&r, "hidden"), "{m}");
+    }
+    // a no-view command runs hidden on purpose: it reaches the real handler (no previous app here)
+    app.ext.test_install_session(2, false, Duration::ZERO);
+    let r = app.ext_call("e", 2, 2, "selection.text", &serde_json::json!({}));
+    assert!(is_err_containing(&r, "Unable to get selected text"), "not refused as hidden");
+}
+
+#[test]
+fn a_view_hidden_past_the_restore_window_is_stopped_and_a_visible_one_is_not() {
+    let mut app = fixture();
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    app.stack = vec![View::Root, View::ExtList];
+    app.ext.test_set_base(1);
+    app.visible = false;
+    app.hidden_at = Instant::now() - Duration::from_secs(30);
+    app.ext_tick();
+    assert!(app.ext.test_has_session(), "hidden 30 s: still within the restore window");
+    app.hidden_at = Instant::now() - Duration::from_secs(100);
+    app.ext_tick();
+    assert!(!app.ext.test_has_session(), "hidden 100 s: stopped");
+    assert!(matches!(app.view(), View::Root));
+    app.visible = true;
+    app.ext.test_install_session(2, true, Duration::ZERO);
+    app.stack = vec![View::Root, View::ExtList];
+    app.hidden_at = Instant::now() - Duration::from_secs(1000);
+    app.ext_tick();
+    assert!(app.ext.test_has_session(), "a visible launcher keeps its view");
+}
+
+#[test]
+fn the_no_view_time_limit_runs_from_the_original_start() {
+    let mut app = fixture();
+    app.visible = false;
+    app.ext.test_install_session(1, false, Duration::from_secs(61));
+    app.ext_tick();
+    assert!(!app.ext.test_has_session(), "61 s after the original start: stopped, whatever the process's own age");
+}
+
+#[test]
+fn typing_in_a_form_field_nobody_listens_to_sends_nothing() {
+    let mut app = fixture();
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    app.ext.test_set_form(vec![("plain", false, false), ("watched", true, false), ("owned", false, true)]);
+    app.stack = vec![View::Root, View::ExtForm];
+    app.ext.test_set_base(1);
+    assert!(!app.ext_form_changed("plain", serde_json::json!("a")), "no onChange, not controlled: nothing is sent");
+    assert!(app.ext_form_changed("watched", serde_json::json!("b")));
+    assert!(app.ext_form_changed("owned", serde_json::json!("c")));
+    assert_eq!(app.ext.form.get("plain"), serde_json::json!("a"), "the host still remembers what was typed");
+}
+
+#[test]
+fn the_settings_sentence_discloses_everything_extensions_can_reach() {
+    let t = ext_glue::EXT_DISCLOSURE;
+    for must in ["your files", "network", "what you copy", "text you have selected", "apps you use"] {
+        assert!(t.contains(must), "disclosure must mention: {must}");
+    }
+}
+
+#[test]
 fn custom_themes_builtin_twin_matches_the_default_palette_where_it_is_opaque() {
     use ferrocast_core::themes::{builtin, ThemeBase};
     for (base, dark) in [(ThemeBase::Dark, true), (ThemeBase::Light, false)] {
@@ -16110,4 +16260,117 @@ fn custom_themes_settings_general_renders_with_a_theme_in_both_bases_and_warns_o
 fn custom_themes_are_indexed_for_settings_search() {
     let hits = ferrocast_core::settings_index::search("custom theme");
     assert!(hits.iter().any(|e| e.title == "Custom themes" && e.tab == 0), "no hit");
+}
+
+#[test]
+fn the_header_shows_the_command_title_or_the_screens_navigation_title() {
+    let mut app = fixture();
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    app.stack = vec![View::Root, View::ExtList];
+    app.ext.test_set_base(1);
+    assert_eq!(app.view_title(), "E", "no navigationTitle: the command's title");
+    app.ext.test_set_nav_title("Pick one");
+    assert_eq!(app.view_title(), "Pick one");
+    app.stack = vec![View::Root];
+    assert_eq!(app.view_title(), View::Root.title());
+}
+
+#[test]
+fn typing_fast_in_a_controlled_field_keeps_the_local_text_when_echoes_arrive_late() {
+    let mut app = fixture();
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    app.ext.test_set_form(vec![("t", true, true)]);
+    app.stack = vec![View::Root, View::ExtForm];
+    app.ext.test_set_base(1);
+    for t in ["h", "ho", "hol"] {
+        assert!(app.ext_form_changed("t", serde_json::json!(t)));
+    }
+    app.ext.test_render_echo("t", serde_json::json!("h"));
+    app.ext.test_render_echo("t", serde_json::json!("ho"));
+    assert_eq!(app.ext.form.get("t"), serde_json::json!("hol"));
+    app.ext.test_render_echo("t", serde_json::json!("{ \"x\": 1 }"));
+    assert_eq!(app.ext.form.get("t"), serde_json::json!("{ \"x\": 1 }"), "the extension's own change is applied");
+}
+
+const PREFS_EXT: &str = r#"{"name":"e","title":"Tools","preferences":[
+    {"name":"token","type":"password","title":"API token","required":true},
+    {"name":"safe","type":"checkbox","title":"Safe","default":true}],
+  "commands":[{"name":"x","title":"X","mode":"view"}]}"#;
+
+#[test]
+fn a_command_missing_a_required_preference_opens_its_form_instead_of_a_toast_about_a_file() {
+    let mut app = fixture();
+    app.settings.run_raycast_extensions = true;
+    app.ext.test_set_manifests(vec![ext_manifest(PREFS_EXT)]);
+    app.ext_launch("e", "x");
+    assert!(matches!(app.view(), View::Settings), "the preferences are in Settings");
+    let edit = app.ext.prefs_edit().expect("the form of the extension is open");
+    assert_eq!(edit.ext, "e");
+    assert!(edit.notice.contains("API token"), "{}", edit.notice);
+    assert_eq!(edit.values["safe"], serde_json::json!(true), "defaults are filled in");
+    assert!(app.toast.as_ref().is_none_or(|t| !t.0.contains("preferences.json")), "{:?}", app.toast);
+}
+
+#[test]
+fn saved_preferences_land_in_preferences_json_and_unblock_the_command() {
+    let mut app = fixture();
+    app.ext.test_set_manifests(vec![ext_manifest(PREFS_EXT)]);
+    app.ext_open_prefs("e", "");
+    app.ext.prefs_edit_mut().unwrap().values.insert("token".into(), serde_json::json!("s3cr3t"));
+    app.ext.prefs_edit_mut().unwrap().values.insert("safe".into(), serde_json::json!(false));
+    app.ext_save_prefs();
+    let saved = ferrocast_core::extensions::storage::load_preferences(&app.store.root, "e");
+    assert_eq!(saved["token"], serde_json::json!("s3cr3t"));
+    assert_eq!(saved["safe"], serde_json::json!(false));
+    assert!(app.ext.prefs_edit().is_none(), "the form closes after saving");
+    assert!(app.ext_missing_required("e", "x").is_empty());
+}
+
+#[test]
+fn a_switched_off_extension_has_no_launcher_rows_and_cannot_be_launched() {
+    let mut app = fixture();
+    app.settings.run_raycast_extensions = true;
+    app.ext.test_set_manifests(vec![ext_manifest(PREFS_EXT)]);
+    assert_eq!(app.ext_command_items().len(), 1);
+    app.settings.raycast_extensions_disabled = vec!["e".into()];
+    assert!(app.ext_command_items().is_empty());
+    let r = app.ext_launch_with("e", "x", Default::default());
+    assert!(r.is_err_and(|e| e.contains("turned off")));
+}
+
+#[test]
+fn the_integrations_tab_draws_each_extension_and_its_open_preferences_form() {
+    let mut app = fixture();
+    seed_model_lists(&mut app);
+    app.settings.run_raycast_extensions = true;
+    app.ext.test_set_manifests(vec![ext_manifest(PREFS_EXT)]);
+    app.ext_open_prefs("e", "Tools needs a value for: API token");
+    app.stack = vec![View::Root, View::Settings];
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), INTEGRATIONS_TAB));
+    for _ in 0..3 {
+        render(&mut app, vec![]);
+    }
+    assert!(app.ext.prefs_edit().is_some(), "the form survives drawing");
+    assert!(app.ext.prefs_edit().unwrap().values.contains_key("token"));
+    assert!(!ext_glue::EXT_DISCLOSURE.to_lowercase().contains("prototype"));
+}
+
+#[test]
+fn the_open_preferences_form_is_scrolled_into_view_among_many_extensions() {
+    let mut app = fixture();
+    seed_model_lists(&mut app);
+    app.settings.run_raycast_extensions = true;
+    let mut all: Vec<_> = (0..14)
+        .map(|i| ext_manifest(&format!(r#"{{"name":"x{i}","title":"Ext {i}","commands":[{{"name":"c","title":"C","mode":"view"}}]}}"#)))
+        .collect();
+    all.push(ext_manifest(PREFS_EXT));
+    app.ext.test_set_manifests(all);
+    app.ext_open_prefs("e", "Tools needs a value for: API token");
+    app.stack = vec![View::Root, View::Settings];
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("settings_tab"), INTEGRATIONS_TAB));
+    for _ in 0..6 {
+        render(&mut app, vec![]);
+    }
+    let (top, clip): (f32, Rect) = app.ctx.data(|d| d.get_temp(Id::new("ext-form-top"))).expect("the form was drawn");
+    assert!(top >= clip.min.y && top < clip.max.y, "form top {top} outside the visible pane {clip:?}");
 }

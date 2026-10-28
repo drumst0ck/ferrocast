@@ -27,6 +27,12 @@ pub enum EffectKind {
 
 pub enum Msg {
     Hotkey(u32),
+    /// An event of the Raycast extension sidecar with this session number.
+    Ext(u64, ferrocast_core::extensions::sidecar::Event),
+    /// Result of looking for Node.js >= 22 (only started with the extensions setting on).
+    ExtNodeFound(Option<ferrocast_core::extensions::node::NodeInfo>),
+    /// Result of the Settings button that downloads the official Node.js.
+    ExtNodeDownloaded(Result<ferrocast_core::extensions::node::NodeInfo, String>),
     /// The screen colour picker finished: the colour, or `None` when cancelled.
     ColorPicked(Option<ferrocast_core::color::Rgba>),
     Tray(String),
