@@ -125,6 +125,9 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/es/editar-video-mac-sin-imovie') {
       return fileLastmod('src/lib/seo/editar-video-es.ts', 'src/components/seo/GuidePage.astro');
     }
+    if (path === '/es/captura-de-pantalla-con-scroll-mac') {
+      return fileLastmod('src/lib/seo/capture-scroll-es.ts', 'src/components/seo/GuidePage.astro');
+    }
     if (path === '/free-file-converter-mac') {
       return fileLastmod('src/lib/seo/file-converter.ts', 'src/components/seo/GuidePage.astro', 'src/data/conversions.json');
     }

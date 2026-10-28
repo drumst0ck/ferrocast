@@ -148,6 +148,7 @@ export const es: GuideCopy = {
       ['Convertir un vídeo a GIF', '/es/convertir/video-a-gif/'],
       ['Comprimir un vídeo a un tamaño', '/es/comprimir-video-a-un-tamano/'],
       ['¿Sale algo privado en tu grabación? Tápalo', '/es/difuminar-video-mac/'],
+      ['Captura de pantalla con scroll', '/es/captura-de-pantalla-con-scroll-mac/'],
       ['Alternativa gratis a Raycast', '/es/alternativa-a-raycast/'],
       ['Datos clave', '/es/facts/'],
     ],

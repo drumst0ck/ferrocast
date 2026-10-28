@@ -31,6 +31,7 @@ export async function GET() {
     `- [Convertidor de archivos gratis para Mac](${SITE}/es/convertidor-de-archivos-gratis-mac/): la misma comparativa en español, frente a Permute y CloudConvert`,
     `- [Mac launcher with local AI](${SITE}/local-ai-launcher/): Ollama by default, LM Studio, your own keys or Claude Code, and which providers send text off the Mac`,
     `- [Lanzador con IA local en Mac](${SITE}/es/ia-local-mac/): Ollama por defecto, LM Studio, tus claves o Claude Code, y qué proveedores envían texto fuera del Mac`,
+    `- [Captura de pantalla con scroll en Mac](${SITE}/es/captura-de-pantalla-con-scroll-mac/): captura larga y copiar el texto de la captura en local, con los límites (macOS 14, 60 pantallas, solo vertical)`,
     `- [Free Screen Studio alternative](${SITE}/screen-studio-alternative/): screen recording with auto zoom, camera, on-device transcript, MP4 and GIF export`,
     `- [Grabar la pantalla con zoom automático](${SITE}/es/grabar-pantalla-mac-zoom-automatico/): lo mismo en español`,
     `- [Free CleanShot X alternative](${SITE}/cleanshot-alternative/): area, window and scrolling capture, on-device text copy, pin, annotate and auto-zoom recording, with CleanShot prices from its site and what Ferrocast lacks`,
