@@ -7074,7 +7074,7 @@ impl App {
                                         theme_act.push(ThemeAct::Select(None));
                                     }
                                     for t in &themes_all {
-                                        let on = active_theme.as_ref().is_some_and(|a| a.name == t.name);
+                                        let on = active_theme.as_ref().is_some_and(|a| a.id == t.id);
                                         if ui.selectable_label(on, &t.name).clicked() {
                                             theme_act.push(ThemeAct::Select(Some(t.name.clone())));
                                         }

@@ -34,6 +34,11 @@ pub struct SyncCtl {
     pub(crate) flag: Arc<AtomicBool>,
     /// Files of other Macs still being downloaded by iCloud Drive in the last run.
     pub(crate) downloading: usize,
+    /// Merged own documents of applied merges, written by the next background run (iCloud Drive is
+    /// never touched on the main thread).
+    pub(crate) pending_docs: std::collections::BTreeMap<&'static str, ferrocast_core::sync::DeviceDoc>,
+    /// Set once a domain was started over because its data file was unreadable.
+    notice: Option<String>,
     /// When a notes merge that waited for typing to stop may run again.
     notes_retry: Option<Instant>,
 }
@@ -42,8 +47,6 @@ pub struct SyncCtl {
 pub struct SyncDone {
     pub(crate) results: Vec<(&'static str, Items, Result<Outcome, String>)>,
     pub(crate) unavailable: Option<String>,
-    /// The worker's handle on the sync folder, to write the own document once a merge is applied.
-    pub(crate) io: Option<SyncIo>,
 }
 
 impl App {
@@ -71,7 +74,8 @@ impl App {
                     0 => String::new(),
                     n => format!(" · {n} file{} still downloading from iCloud", if n == 1 { "" } else { "s" }),
                 };
-                format!("Last sync {} · {macs}{wait}", services::ago((services::now_secs() - t).max(0)))
+                let note = self.sync.notice.as_deref().map(|n| format!(" · {n}")).unwrap_or_default();
+                format!("Last sync {} · {macs}{wait}{note}", services::ago((services::now_secs() - t).max(0)))
             }
             None if self.sync.downloading > 0 => format!("Waiting for iCloud to download {} file(s)…", self.sync.downloading),
             None => "Waiting for the first sync…".into(),
@@ -173,24 +177,29 @@ impl App {
         self.sync.flag.store(true, Ordering::SeqCst);
         let flag = self.sync.flag.clone();
         self.sync.last_start = Some(Instant::now());
+        let docs = std::mem::take(&mut self.sync.pending_docs);
         let jobs: Vec<(&'static str, Items)> = domains.into_iter().map(|d| (d, self.sync_snapshot(d))).collect();
         let (root, bus) = (self.store.root.clone(), self.bus.clone());
         std::thread::spawn(move || {
             let done = match sync_io::resolve_dir() {
-                Err(e) => SyncDone { results: vec![], unavailable: Some(e.message()), io: None },
+                Err(e) => SyncDone { results: vec![], unavailable: Some(e.message()) },
                 Ok(dir) => {
                     let mut io = SyncIo::new(dir, sync_io::device_id(&root), Store::new(&root).images_dir());
                     io.enabled = flag;
+                    flush_docs(&io, docs);
                     let now = now_ms();
                     let results = jobs
                         .into_iter()
                         .map(|(d, snap)| {
                             let tracker: Tracker = sync_io::load_tracker(&root, d);
-                            let out = sync_io::sync_domain(&io, d, &snap, &tracker, now).map_err(|e| format!("{e:#}"));
+                            // an unreadable data file was set aside since the last sync: start over from
+                            // what is loaded now instead of publishing every missing item as deleted
+                            let recover = sync_io::needs_recovery(&root, d);
+                            let out = sync_io::sync_domain_recovering(&io, d, &snap, &tracker, now, recover).map_err(|e| format!("{e:#}"));
                             (d, snap, out)
                         })
                         .collect();
-                    SyncDone { results, unavailable: None, io: Some(io) }
+                    SyncDone { results, unavailable: None }
                 }
             };
             bus.send(Msg::SyncDone(Box::new(done)));
@@ -201,6 +210,7 @@ impl App {
     pub(crate) fn sync_done(&mut self, done: SyncDone) {
         self.sync.in_flight = false;
         if !self.sync_on() {
+            self.sync.pending_docs.clear();
             return; // switched off while the run was away: apply nothing
         }
         if let Some(e) = done.unavailable {
@@ -229,13 +239,19 @@ impl App {
                 None => None,
             };
             // The own document holds the merged state only once it is what this Mac has (a tracker
-            // rebuilt from it must not take an older local value for a new edit).
+            // rebuilt from it must not take an older local value for a new edit). The next
+            // background run writes it: reading and writing iCloud Drive can block.
             if applied.is_some() {
-                if let (Some(doc), Some(io)) = (&out.applied_doc, &done.io) {
-                    if let Err(e) = io.write_doc(domain, doc) {
-                        instance::log(&root, &format!("sync: writing own document {domain}: {e:#}"));
-                    }
+                if let Some(doc) = out.applied_doc.clone() {
+                    self.sync.pending_docs.insert(domain, doc);
                 }
+            }
+            if out.recovered {
+                instance::log(
+                    &root,
+                    &format!("sync {domain}: the data file was unreadable (kept as .corrupt); started over from the other Macs"),
+                );
+                self.sync.notice = Some(format!("restored {domain} from your other Macs after an unreadable file"));
             }
             let tracker = applied.unwrap_or(out.tracker_published);
             if let Err(e) = sync_io::save_tracker(&root, domain, &tracker) {
@@ -305,7 +321,11 @@ impl App {
                 self.save_themes();
                 if let (None, Some(id)) = (self.active_theme(), active_id) {
                     if let Some(name) = self.custom_themes.iter().find(|t| t.id == id).map(|t| t.name.clone()) {
-                        self.select_theme(Some(name));
+                        // a received value, not an edit: the settings tracker takes it as already synced
+                        let mut s = self.settings.clone();
+                        s.custom_theme = Some(name);
+                        self.commit_settings(s);
+                        sync_io::adopt_setting(&self.store.root, "custom_theme", &self.settings);
                     }
                 }
                 self.set_theme();
@@ -365,6 +385,15 @@ impl App {
         ferrocast_core::models::upsert_chat(&mut self.chats, Chat::new(id, turns, services::now_secs()));
         let v = self.chats.clone();
         self.persist("chats.json", &v);
+    }
+}
+
+/// Write the own documents of merges the app applied (background thread, before the run's own work).
+pub(crate) fn flush_docs(io: &SyncIo, docs: std::collections::BTreeMap<&'static str, ferrocast_core::sync::DeviceDoc>) {
+    for (domain, doc) in docs {
+        if let Err(e) = io.write_doc(domain, &doc) {
+            eprintln!("ferrocast: sync: writing own document {domain}: {e:#}");
+        }
     }
 }
 

@@ -360,13 +360,56 @@ pub struct Outcome {
     /// rebuilt from it cannot turn an older local value into a new edit. `None` for the clipboard
     /// (its document keeps to what was copied here) and when nothing is to be applied.
     pub applied_doc: Option<DeviceDoc>,
+    /// The run started over from this Mac's data as if it had never synced (see [`needs_recovery`]).
+    pub recovered: bool,
 }
 
 /// Publish the snapshot of local items, read the other Macs' documents and merge. Writes only this
 /// Mac's document and images in the sync folder. Pure with respect to local data files: the caller
 /// applies `merged` and persists a tracker.
 pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], tracker: &Tracker, now: i64) -> anyhow::Result<Outcome> {
+    sync_domain_recovering(io, domain, snapshot, tracker, now, false)
+}
+
+/// True when this Mac's data file of `domain` was found unreadable (and set aside as
+/// `<file>.corrupt`) after the last time its sync state was saved. The data now loaded is not what
+/// this Mac had synced, so comparing it with the tracker would publish every missing item as a
+/// deletion on all Macs.
+pub fn needs_recovery(data_dir: &Path, domain: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(bad) = std::fs::metadata(data_dir.join(format!("{}.corrupt", domain_file(domain)))) else { return false };
+    match std::fs::metadata(tracker_path(data_dir, domain)) {
+        Ok(t) => (t.mtime(), t.mtime_nsec()) < (bad.ctime(), bad.ctime_nsec()),
+        Err(_) => true,
+    }
+}
+
+/// A setting this Mac changed because another Mac's data said so (not an edit): record the new
+/// value as the one already synced, keeping its time, so the next run does not stamp it as a local
+/// edit that could beat a newer value from another Mac. Does nothing when the field was never synced.
+pub fn adopt_setting(data_dir: &Path, key: &str, settings: &Settings) {
+    let mut tracker = load_tracker(data_dir, "settings");
+    let Some(value) = settings_items(settings).into_iter().find(|(k, _)| k == key).map(|(_, v)| v) else { return };
+    if let Some(t) = tracker.items.get_mut(key) {
+        t.hash = sync::hash(&value);
+        let _ = save_tracker(data_dir, "settings", &tracker);
+    }
+}
+
+/// [`sync_domain`]; with `recover` the run ignores the tracker and this Mac's own document and
+/// treats the local data as a first sync: nothing is published as a deletion, what the other Macs
+/// have is adopted, and the saved tracker is newer than the `.corrupt` file afterwards.
+pub fn sync_domain_recovering(
+    io: &SyncIo,
+    domain: &str,
+    snapshot: &[(String, Value)],
+    tracker: &Tracker,
+    now: i64,
+    recover: bool,
+) -> anyhow::Result<Outcome> {
     anyhow::ensure!(io.on(), "sync turned off");
+    let fresh = Tracker::default();
+    let tracker = if recover { &fresh } else { tracker };
     if domain == "clipboard" {
         export_images(io, snapshot);
     }
@@ -383,7 +426,7 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
     // A lost or corrupt tracker (and the tracker of the old one-item settings) is rebuilt from this
     // Mac's own document, so edits and deletions made since the last sync are not forgotten.
     let rebuilt;
-    let tracker = if !tracker.seeded || (domain == "settings" && tracker.items.contains_key(SETTINGS_ID)) {
+    let tracker = if !recover && (!tracker.seeded || (domain == "settings" && tracker.items.contains_key(SETTINGS_ID))) {
         match io.read_own_doc(domain) {
             Some(own) => {
                 rebuilt = sync::tracker_from_own_doc(&own);
@@ -447,10 +490,20 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
             corrupt,
             downloading,
             applied_doc: None,
+            recovered: recover,
         });
     }
     let applied_doc = (!clipboard).then_some(doc2);
-    Ok(Outcome { merged: Some(merged), tracker_published: t1, tracker_merged: t3, peers: io.peers(), corrupt, downloading, applied_doc })
+    Ok(Outcome {
+        merged: Some(merged),
+        tracker_published: t1,
+        tracker_merged: t3,
+        peers: io.peers(),
+        corrupt,
+        downloading,
+        applied_doc,
+        recovered: recover,
+    })
 }
 
 /// Pristine = the value is the built-in default of its item (see `sync::Record::pristine`): the
@@ -764,7 +817,9 @@ mod tests {
         /// One full sync cycle of the three domains the tests use, applying the merge like the app.
         fn sync(&mut self, now: i64) {
             let d = &self.store.root;
-            let o = sync_domain(&self.io, "snippets", &to_items(&self.snippets), &load_tracker(d, "snippets"), now).unwrap();
+            let recover = needs_recovery(d, "snippets");
+            let o = sync_domain_recovering(&self.io, "snippets", &to_items(&self.snippets), &load_tracker(d, "snippets"), now, recover)
+                .unwrap();
             save_tracker(d, "snippets", &o.tracker_merged).unwrap();
             if let Some(m) = o.merged {
                 self.snippets = from_items(m);
@@ -1328,6 +1383,38 @@ mod tests {
             run(&a, &mut ta, 5_000);
             assert_eq!(names(&ta), ["Mint", "Sea"], "ids {ida}/{idb}");
             assert_eq!(names(&tb), ["Mint", "Sea"], "ids {ida}/{idb}");
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_corrupt_local_file_does_not_delete_the_items_on_the_other_macs_and_is_restored_from_them() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.snippets = vec![snip("s1", "one"), snip("s2", "two"), snip("s3", "three")];
+            a.sync(1_000);
+            a.sync(1_500);
+            b.sync(2_000);
+            b.sync(2_500);
+            assert!(!needs_recovery(&da, "snippets"));
+            // A's file becomes unreadable: the next launch sets it aside and starts from the defaults
+            std::fs::write(da.join("snippets.json"), "{garbage").unwrap();
+            a.restart();
+            assert!(da.join("snippets.json.corrupt").exists());
+            assert!(needs_recovery(&da, "snippets"), "ids {ida}/{idb}");
+            a.sync(3_000);
+            assert!(!needs_recovery(&da, "snippets"), "one run clears it");
+            b.sync(3_500);
+            a.sync(4_000);
+            for m in [&a, &b] {
+                let mut n: Vec<_> = m.snippets.iter().map(|s| s.id.as_str()).filter(|i| matches!(*i, "s1" | "s2" | "s3")).collect();
+                n.sort();
+                assert_eq!(n, ["s1", "s2", "s3"], "nothing was deleted, ids {ida}/{idb}");
+            }
             for d in [da, db, shared] {
                 std::fs::remove_dir_all(d).unwrap();
             }

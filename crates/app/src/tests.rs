@@ -15131,7 +15131,7 @@ fn snippets_run_with_remote(
     if edit_meanwhile {
         app.snippets.push(Snippet::new("typed", "t", "!t"));
     }
-    let done = crate::app::sync_ctl::SyncDone { results: vec![("snippets", snap, Ok(out))], unavailable: None, io: Some(io.clone()) };
+    let done = crate::app::sync_ctl::SyncDone { results: vec![("snippets", snap, Ok(out))], unavailable: None };
     app.sync.in_flight = true;
     app.sync_done(done);
     io
@@ -15149,6 +15149,11 @@ fn the_own_sync_document_holds_the_merged_state_only_once_the_merge_was_applied(
     app.snippets = vec![Snippet::new("local", "l", "!l")];
     let io = snippets_run_with_remote(&mut app, &shared, Snippet::new("remote", "r", "!r"), false);
     assert_eq!(app.snippets.len(), 2, "the merge was applied");
+    // the main thread does not touch iCloud Drive: the document waits for the next background run
+    assert_eq!(own_ids(&io).len(), 1, "not written by sync_done itself");
+    assert_eq!(app.sync.pending_docs.len(), 1);
+    let waiting = std::mem::take(&mut app.sync.pending_docs);
+    crate::app::sync_ctl::flush_docs(&io, waiting);
     assert_eq!(own_ids(&io).len(), 2);
     // not applied (local data changed while the run was away): the own document keeps what it published
     let shared2 = std::env::temp_dir().join(format!("ferrocast-own-doc-{}", uuid::Uuid::new_v4()));
@@ -15215,6 +15220,82 @@ fn a_settings_merge_that_names_a_theme_before_the_themes_arrive_resolves_once_th
     let merged = ferrocast_core::sync_io::to_items(&[ocean()]);
     assert!(app.sync_apply("themes", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
     assert_eq!(app.active_theme().map(|t| t.name.as_str()), Some("Ocean"));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn delete_rename_and_edit_act_on_the_selected_theme_only_when_two_share_a_name() {
+    let mut app = fixture();
+    let (mut a, mut b) = (ocean(), ocean());
+    (a.id, b.id) = ("t-a".into(), "t-b".into());
+    b.accent = "#FF0000".into();
+    app.custom_themes = vec![a, b];
+    app.settings.custom_theme = Some("Ocean".into());
+    let mut e = app.active_theme().unwrap().clone();
+    e.accent = "#00FF00".into();
+    app.update_active_theme(e);
+    assert_eq!(app.custom_themes.iter().map(|t| t.accent.as_str()).collect::<Vec<_>>(), ["#00FF00", "#FF0000"]);
+    app.rename_active_theme("Sea").unwrap();
+    assert_eq!(app.custom_themes.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Sea", "Ocean"]);
+    app.settings.custom_theme = Some("Ocean".into());
+    app.delete_active_theme();
+    assert_eq!(app.custom_themes.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["t-a"], "the other theme stays");
+    // two with the same name: delete removes only the one in use
+    let (mut c, mut d) = (ocean(), ocean());
+    (c.id, d.id) = ("t-c".into(), "t-d".into());
+    app.custom_themes = vec![c, d];
+    app.settings.custom_theme = Some("Ocean".into());
+    app.delete_active_theme();
+    assert_eq!(app.custom_themes.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["t-d"]);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn following_a_remote_rename_is_not_a_local_settings_edit_so_a_newer_selection_elsewhere_still_wins() {
+    use ferrocast_core::sync::Tracker;
+    use ferrocast_core::sync_io::{load_tracker, save_tracker, settings_items, sync_domain, SyncIo};
+    let shared = std::env::temp_dir().join(format!("ferrocast-follow-{}", uuid::Uuid::new_v4()));
+    let mut app = themes_app();
+    let io = SyncIo::new(shared.clone(), "aa".into(), app.store.images_dir());
+    let o = sync_domain(&io, "settings", &settings_items(&app.settings), &Tracker::default(), 1_000).unwrap();
+    save_tracker(&app.store.root, "settings", &o.tracker_merged).unwrap();
+    // another Mac selected "Mint" later
+    let other = SyncIo::new(shared.clone(), "bb".into(), app.store.images_dir());
+    let mut s2 = app.settings.clone();
+    let first = sync_domain(&other, "settings", &settings_items(&s2), &Tracker::default(), 1_000).unwrap();
+    s2.custom_theme = Some("Mint".into());
+    sync_domain(&other, "settings", &settings_items(&s2), &first.tracker_merged, 4_000).unwrap();
+    // this Mac receives the rename of its selected theme
+    let mut renamed = ocean();
+    renamed.name = "Sea".into();
+    let snap = app.sync_snapshot("themes");
+    let merged = ferrocast_core::sync_io::to_items(&[renamed]);
+    assert!(app.sync_apply("themes", merged, Tracker::default(), &snap).is_some());
+    assert_eq!(app.settings.custom_theme.as_deref(), Some("Sea"));
+    let o = sync_domain(&io, "settings", &settings_items(&app.settings), &load_tracker(&app.store.root, "settings"), 5_000).unwrap();
+    let merged = o.merged.expect("the other Mac's newer selection is offered");
+    let sel = merged.iter().find(|(k, _)| k == "custom_theme").unwrap();
+    assert_eq!(sel.1, serde_json::json!("Mint"), "following a rename did not count as an edit made at 5000");
+    let _ = std::fs::remove_dir_all(&shared);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_run_that_started_over_from_an_unreadable_file_is_named_in_the_sync_status() {
+    use ferrocast_core::sync::Tracker;
+    use ferrocast_core::sync_io::{sync_domain_recovering, SyncIo};
+    let shared = std::env::temp_dir().join(format!("ferrocast-recover-{}", uuid::Uuid::new_v4()));
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let io = SyncIo::new(shared.clone(), "aa".into(), app.store.images_dir());
+    let snap = app.sync_snapshot("snippets");
+    let out = sync_domain_recovering(&io, "snippets", &snap, &Tracker::default(), 6_000, true).unwrap();
+    assert!(out.recovered);
+    let done = crate::app::sync_ctl::SyncDone { results: vec![("snippets", snap, Ok(out))], unavailable: None };
+    app.sync.in_flight = true;
+    app.sync_done(done);
+    assert!(app.sync_status().contains("unreadable"), "{}", app.sync_status());
+    let _ = std::fs::remove_dir_all(&shared);
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
 
