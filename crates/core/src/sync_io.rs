@@ -173,6 +173,8 @@ pub struct SyncIo {
     pub enabled: Arc<AtomicBool>,
     /// Asks iCloud to download an evicted file (`brctl download`).
     pub download: fn(&Path),
+    /// Local `attachments/` of the notes (None: attachments are not synced).
+    pub attachments_dir: Option<PathBuf>,
 }
 
 /// How long `ioreg` and `brctl` may run before they are killed.
@@ -256,7 +258,13 @@ pub struct ReadDocs {
 
 impl SyncIo {
     pub fn new(dir: PathBuf, device: String, images_dir: PathBuf) -> SyncIo {
-        SyncIo { dir, device, images_dir, enabled: Arc::new(AtomicBool::new(true)), download: brctl_download }
+        SyncIo { dir, device, images_dir, enabled: Arc::new(AtomicBool::new(true)), download: brctl_download, attachments_dir: None }
+    }
+
+    /// Also sync the images of notes, kept locally in `dir`.
+    pub fn with_attachments(mut self, dir: PathBuf) -> SyncIo {
+        self.attachments_dir = Some(dir);
+        self
     }
 
     fn on(&self) -> bool {
@@ -292,12 +300,19 @@ impl SyncIo {
                 continue;
             }
             let p = self.device_dir(&dev).join(format!("{domain}.json"));
-            let Ok(bytes) = std::fs::read(&p) else {
-                if is_placeholder(&p) {
-                    (self.download)(&p);
-                    downloading += 1;
+            let bytes = match std::fs::read(&p) {
+                Ok(b) => b,
+                Err(e) => {
+                    if is_placeholder(&p) {
+                        (self.download)(&p);
+                        downloading += 1;
+                    } else if e.kind() != std::io::ErrorKind::NotFound {
+                        // present but unreadable (permissions, I/O): that Mac may have data we cannot see
+                        eprintln!("ferrocast: sync: cannot read {}: {e}", p.display());
+                        bad.push(p.display().to_string());
+                    }
+                    continue;
                 }
-                continue;
             };
             match parse_doc(domain, &bytes) {
                 Ok(mut doc) => {
@@ -362,6 +377,8 @@ pub struct Outcome {
     pub applied_doc: Option<DeviceDoc>,
     /// The run started over from this Mac's data as if it had never synced (see [`needs_recovery`]).
     pub recovered: bool,
+    /// Note images copied from other Macs into the local `attachments/` in this run.
+    pub attachments_added: usize,
 }
 
 /// Publish the snapshot of local items, read the other Macs' documents and merge. Writes only this
@@ -532,8 +549,16 @@ pub fn sync_domain_recovering(
     if !first {
         sync::restamp_baseline(&mut t2);
     }
+    let mut attachments_added = 0;
     if clipboard {
         downloading += import_images(io, &merged, &docs);
+    }
+    if domain == "notes" && io.attachments_dir.is_some() {
+        // Images of notes (see `sync_attachments`). Pruning needs every Mac's notes to be known.
+        let docs_complete = corrupt.is_empty() && downloading == 0 && !recover;
+        let (pending, added) = sync_attachments(io, snapshot, &merged, &docs, docs_complete, now / 1000);
+        downloading += pending;
+        attachments_added = added;
     }
     // what this Mac publishes now: the merged state with the re-stamped baseline
     let (doc2, t3) = sync::publish_opts(&io.device, &merged, &t2, now, &opts);
@@ -553,6 +578,7 @@ pub fn sync_domain_recovering(
             downloading,
             applied_doc: None,
             recovered: recover,
+            attachments_added,
         });
     }
     let applied_doc = (!clipboard || recover).then_some(doc2);
@@ -565,6 +591,7 @@ pub fn sync_domain_recovering(
         downloading,
         applied_doc,
         recovered: recover,
+        attachments_added,
     })
 }
 
@@ -671,6 +698,145 @@ fn import_images(io: &SyncIo, items: &[(String, Value)], docs: &[DeviceDoc]) -> 
         }
     }
     downloading
+}
+
+// ------------------------------------------------------------------------- note attachments
+//
+// Images of notes (`attachments/<hash>.<ext>` in the note text) are separate files in the sync
+// folder, content addressed, kept per device like every other file: a Mac writes only its own
+// `devices/<id>/attachments/`, so two Macs never write the same file and iCloud never makes a
+// conflict copy. Rules:
+//  * a Mac uploads an image only when a note links it, it has the file, and no Mac's folder has it
+//    yet (a downloaded image is never uploaded again);
+//  * an image a merged note links and this Mac lacks is copied from any Mac's folder, after its
+//    content is checked against its name; a placeholder is requested from iCloud and counted;
+//  * a Mac removes from its own folder only a file that no note links (the local notes, the merged
+//    ones and every other Mac's published notes), once it is older than the grace period, and never
+//    in a run that started over from reloaded data or while another Mac's document could not be read.
+
+/// Attachment names the notes in `items` link.
+fn note_attachment_refs<'a>(texts: impl Iterator<Item = &'a Value>) -> std::collections::HashSet<String> {
+    crate::attachments::referenced(texts.filter_map(|v| v.get("text").and_then(Value::as_str)))
+}
+
+impl SyncIo {
+    fn attachments_of(&self, device: &str) -> PathBuf {
+        self.device_dir(device).join(crate::attachments::DIR)
+    }
+
+    fn device_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(self.dir.join("devices"))
+            .map(|rd| rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+}
+
+/// Upload, download and prune the images of notes. Returns how many wanted images are still
+/// placeholders being downloaded from iCloud, and how many were copied here from another Mac.
+fn sync_attachments(
+    io: &SyncIo,
+    snapshot: &[(String, Value)],
+    merged: &[(String, Value)],
+    docs: &[DeviceDoc],
+    docs_complete: bool,
+    now_secs: i64,
+) -> (usize, usize) {
+    let Some(local) = io.attachments_dir.clone() else { return (0, 0) };
+    let mut wanted = note_attachment_refs(merged.iter().map(|(_, v)| v));
+    wanted.extend(note_attachment_refs(snapshot.iter().map(|(_, v)| v)));
+    let devices = io.device_names();
+    let others: Vec<&String> = devices.iter().filter(|d| **d != io.device).collect();
+    let mut names: Vec<&String> = wanted.iter().collect();
+    names.sort();
+    let mut pending = 0;
+    let mut added = 0;
+    for name in names {
+        let mine = local.join(name);
+        let remote = |dev: &str| io.attachments_of(dev).join(name);
+        if mine.is_file() {
+            // upload once: nobody (this Mac included) has it in the sync folder yet
+            let size = std::fs::metadata(&mine).map(|m| m.len()).unwrap_or(u64::MAX);
+            let held = devices.iter().any(|d| remote(d).is_file() || is_placeholder(&remote(d)));
+            if !held && size <= crate::attachments::MAX_BYTES && io.on() {
+                let dst = remote(&io.device);
+                if let Err(e) = std::fs::read(&mine).map_err(anyhow::Error::from).and_then(|b| {
+                    anyhow::ensure!(crate::attachments::content_matches(name, &b), "{name} does not match its name");
+                    write_atomic(&dst, &b)
+                }) {
+                    eprintln!("ferrocast: sync: uploading {name}: {e}");
+                }
+            }
+            continue;
+        }
+        // download: from any Mac (this Mac's own folder too, after a local cleanup)
+        let mut waiting = false;
+        for dev in others.iter().map(|d| d.as_str()).chain(std::iter::once(io.device.as_str())) {
+            let src = remote(dev);
+            if src.is_file() {
+                let ok = std::fs::metadata(&src).is_ok_and(|m| m.len() <= crate::attachments::MAX_BYTES)
+                    && std::fs::read(&src).is_ok_and(|b| {
+                        if !crate::attachments::content_matches(name, &b) || !io.on() {
+                            return false;
+                        }
+                        write_atomic(&mine, &b).is_ok()
+                    });
+                if ok {
+                    waiting = false;
+                    added += 1;
+                    break;
+                }
+            } else if is_placeholder(&src) {
+                (io.download)(&src);
+                waiting = true;
+            }
+        }
+        if waiting {
+            pending += 1;
+        }
+    }
+    if docs_complete && io.on() {
+        let mut keep = wanted;
+        for d in docs {
+            keep.extend(note_attachment_refs(d.items.values().filter(|r| !r.deleted).filter_map(|r| r.value.as_ref())));
+        }
+        // when each file of this Mac's folder was first seen unlinked lives in the data dir, not in iCloud
+        let state = local.parent().unwrap_or(&local).join("sync-state").join("attachments-unlinked.json");
+        let own = io.attachments_of(&io.device);
+        crate::attachments::cleanup_dir(&own, &state, &keep, now_secs, crate::attachments::GRACE_SECS);
+    }
+    (pending, added)
+}
+
+/// Delete local note images that no note links, once they are older than the grace period.
+/// `notes` are all notes (the trash included). Nothing is deleted when there are no notes (a data
+/// file that failed to load must not wipe the images), while the notes domain is marked for recovery,
+/// or, with sync on (`sync_dir`), when any Mac's published notes cannot be read: they may link a file
+/// only they know. Returns how many files were removed.
+pub fn gc_attachments(root: &Path, notes: &[crate::models::Note], sync_dir: Option<&Path>, now_secs: i64) -> usize {
+    if notes.is_empty() || needs_recovery(root, "notes") {
+        return 0;
+    }
+    let mut keep = crate::attachments::referenced(notes.iter().map(|n| n.text.as_str()));
+    if let Some(dir) = sync_dir {
+        let Ok(rd) = std::fs::read_dir(dir.join("devices")) else { return 0 };
+        for dev in rd.flatten().filter(|e| e.path().is_dir()) {
+            let p = dev.path().join("notes.json");
+            match std::fs::read(&p) {
+                Ok(bytes) => match parse_doc("notes", &bytes) {
+                    Ok(doc) => {
+                        keep.extend(note_attachment_refs(doc.items.values().filter(|r| !r.deleted).filter_map(|r| r.value.as_ref())))
+                    }
+                    Err(_) => return 0,
+                },
+                Err(_) if is_placeholder(&p) => return 0,
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return 0,
+                Err(_) => {} // that Mac has not published notes
+            }
+        }
+    }
+    crate::attachments::cleanup(root, &keep, now_secs, crate::attachments::GRACE_SECS)
 }
 
 // ------------------------------------------------------------------------- items <-> files
@@ -842,13 +1008,60 @@ mod tests {
         quicklinks: Vec<Quicklink>,
         settings: Settings,
         clipboard: Vec<ClipEntry>,
+        notes: Vec<Note>,
     }
 
     impl Mac {
         fn new(data: &Path, shared: &Path) -> Mac {
             let store = Store::new(data);
-            let io = SyncIo::new(shared.to_path_buf(), device_id(data), store.images_dir());
-            Mac { store, io, snippets: vec![], quicklinks: vec![], settings: Settings::default(), clipboard: vec![] }
+            let io =
+                SyncIo::new(shared.to_path_buf(), device_id(data), store.images_dir()).with_attachments(data.join(crate::attachments::DIR));
+            Mac { store, io, snippets: vec![], quicklinks: vec![], settings: Settings::default(), clipboard: vec![], notes: vec![] }
+        }
+
+        /// Only the notes domain, applying the merge like the app (`recover` as the app's marker would say).
+        fn sync_notes(&mut self, now: i64) -> Outcome {
+            let d = &self.store.root;
+            let recover = needs_recovery(d, "notes");
+            let o = sync_domain_recovering(&self.io, "notes", &to_items(&self.notes), &load_tracker(d, "notes"), now, recover).unwrap();
+            save_tracker(d, "notes", &o.tracker_merged).unwrap();
+            if o.recovered {
+                clear_recovery(d, "notes");
+            }
+            if let Some(m) = &o.merged {
+                self.notes = from_items(m.clone());
+                self.io.write_doc("notes", o.applied_doc.as_ref().unwrap()).unwrap();
+            }
+            o
+        }
+
+        /// A picture the user added to a note on this Mac: stored locally and linked.
+        fn add_image(&mut self, note_id: &str, bytes: &[u8], modified: i64) -> String {
+            let name = crate::attachments::store(&self.store.root, bytes, Some("png")).unwrap().name;
+            let link = crate::attachments::markdown_link("pic", &name);
+            match self.notes.iter_mut().find(|n| n.id == note_id) {
+                Some(n) => {
+                    n.text = format!("{}\n\n{link}", n.text);
+                    n.modified = modified;
+                }
+                None => self.notes.push(Note {
+                    id: note_id.into(),
+                    text: format!("note\n\n{link}"),
+                    created: modified,
+                    modified,
+                    pinned_at: None,
+                    deleted_at: None,
+                }),
+            }
+            name
+        }
+
+        fn uploaded(&self, shared: &Path, name: &str) -> bool {
+            shared.join("devices").join(&self.io.device).join("attachments").join(name).is_file()
+        }
+
+        fn has_local(&self, name: &str) -> bool {
+            self.store.root.join(crate::attachments::DIR).join(name).is_file()
         }
 
         /// Only the clipboard domain, applying the merge the way the app does (retention, dedupe, cap).
@@ -2155,6 +2368,308 @@ mod tests {
         for d in [da, db, shared] {
             std::fs::remove_dir_all(d).unwrap();
         }
+    }
+
+    // ---- note attachments
+
+    const PNG_A: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3];
+    const PNG_B: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 9, 9, 9];
+
+    fn age_file(path: &Path) {
+        let f = std::fs::File::options().write(true).open(path).unwrap();
+        f.set_modified(std::time::UNIX_EPOCH).unwrap();
+    }
+
+    fn two_macs(ids: (&str, &str)) -> (Mac, Mac, Vec<PathBuf>) {
+        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+        let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        a.io.device = ids.0.into();
+        b.io.device = ids.1.into();
+        (a, b, vec![da, db, shared])
+    }
+
+    fn cleanup_dirs(dirs: Vec<PathBuf>) {
+        for d in dirs {
+            std::fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_note_image_is_uploaded_once_by_the_mac_that_has_it_and_downloaded_by_the_other() {
+        for ids in ID_ORDERS {
+            let (mut a, mut b, dirs) = two_macs(ids);
+            let shared = dirs[2].clone();
+            let name = a.add_image("n1", PNG_A, 100);
+            a.sync_notes(1_000);
+            assert!(a.uploaded(&shared, &name), "{ids:?}");
+            let o = b.sync_notes(2_000);
+            assert_eq!(b.notes.len(), 1);
+            assert!(b.has_local(&name), "downloaded together with the note {ids:?}");
+            assert_eq!(o.downloading, 0);
+            assert_eq!(o.attachments_added, 1);
+            assert_eq!(std::fs::read(b.store.root.join("attachments").join(&name)).unwrap(), PNG_A);
+            // B never uploads what it only downloaded; further runs change nothing
+            b.sync_notes(3_000);
+            a.sync_notes(4_000);
+            assert!(!b.uploaded(&shared, &name), "{ids:?}");
+            assert!(!shared.join("devices").join(&b.io.device).join("attachments").exists());
+            cleanup_dirs(dirs);
+        }
+    }
+
+    #[test]
+    fn only_images_that_notes_link_are_uploaded_and_links_outside_the_folder_are_ignored() {
+        let (mut a, _b, dirs) = two_macs(("aa", "zz"));
+        let shared = dirs[2].clone();
+        let linked = a.add_image("n1", PNG_A, 100);
+        let stray = crate::attachments::store(&a.store.root, PNG_B, Some("png")).unwrap().name;
+        a.notes[0].text.push_str("\n\n![x](../../secret.png) ![y](attachments/../../secret.png)");
+        std::fs::write(a.store.root.join("secret.png"), PNG_B).unwrap();
+        a.sync_notes(1_000);
+        assert!(a.uploaded(&shared, &linked));
+        assert!(!a.uploaded(&shared, &stray), "an unlinked file is not uploaded");
+        let up = shared.join("devices").join("aa").join("attachments");
+        assert_eq!(std::fs::read_dir(up).unwrap().count(), 1);
+        cleanup_dirs(dirs);
+    }
+
+    #[test]
+    fn a_received_file_must_be_whole_and_the_one_the_link_names() {
+        let (mut a, mut b, dirs) = two_macs(("aa", "zz"));
+        let shared = dirs[2].clone();
+        let name = a.add_image("n1", PNG_A, 100);
+        a.sync_notes(1_000);
+        // a half-synced or tampered file in the other Mac's folder
+        let up = shared.join("devices").join("aa").join("attachments").join(&name);
+        std::fs::write(&up, PNG_B).unwrap();
+        b.sync_notes(2_000);
+        assert_eq!(b.notes.len(), 1, "the note itself still arrives");
+        assert!(!b.has_local(&name), "a file that does not hash to its name is not taken");
+        // once the real file is there the next run takes it
+        std::fs::write(&up, PNG_A).unwrap();
+        b.sync_notes(3_000);
+        assert!(b.has_local(&name));
+        cleanup_dirs(dirs);
+    }
+
+    #[test]
+    fn a_file_that_is_still_an_icloud_placeholder_is_requested_and_counted_then_arrives() {
+        let (mut a, mut b, dirs) = two_macs(("aa", "zz"));
+        let shared = dirs[2].clone();
+        let name = a.add_image("n1", PNG_A, 100);
+        a.sync_notes(1_000);
+        let real = shared.join("devices").join("aa").join("attachments").join(&name);
+        let hidden = real.with_file_name(format!(".{name}.icloud"));
+        std::fs::rename(&real, &hidden).unwrap();
+        thread_local!(static ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
+        b.io.download = |_| ASKED.with(|c| c.set(c.get() + 1));
+        let o = b.sync_notes(2_000);
+        assert_eq!(o.downloading, 1);
+        assert_eq!(ASKED.with(|c| c.get()), 1);
+        assert!(!b.has_local(&name));
+        std::fs::rename(&hidden, &real).unwrap();
+        let o = b.sync_notes(3_000);
+        assert_eq!(o.downloading, 0);
+        assert!(b.has_local(&name));
+        cleanup_dirs(dirs);
+    }
+
+    #[test]
+    fn an_image_is_not_deleted_from_icloud_while_any_macs_notes_still_link_it() {
+        for ids in ID_ORDERS {
+            let (mut a, mut b, dirs) = two_macs(ids);
+            let shared = dirs[2].clone();
+            let name = a.add_image("n1", PNG_A, 100);
+            a.sync_notes(1_000);
+            b.sync_notes(2_000);
+            // A removes the picture from the note, but B has not seen that edit: its published note still links it
+            a.notes[0].text = "note".into();
+            a.notes[0].modified = 3_000;
+            let long_after = 90 * 86_400 * 1000;
+            age_file(&shared.join("devices").join(&a.io.device).join("attachments").join(&name));
+            a.sync_notes(long_after);
+            assert!(a.uploaded(&shared, &name), "B's document still links it {ids:?}");
+            // B takes the edit; nobody links it any more, so the next run past the grace period removes it
+            b.sync_notes(long_after + 1_000);
+            assert_eq!(b.notes[0].text, "note");
+            a.sync_notes(long_after + 2_000);
+            assert!(a.uploaded(&shared, &name), "first seen unlinked: only the time is noted {ids:?}");
+            // the link comes back (undo on A) before a week has passed: the clock is dropped
+            a.notes[0].text = format!("note\n\n{}", crate::attachments::markdown_link("pic", &name));
+            a.notes[0].modified = long_after + 3_000;
+            a.sync_notes(long_after + 4 * 86_400 * 1000);
+            a.notes[0].text = "note".into();
+            a.notes[0].modified = long_after + 4 * 86_400 * 1000 + 1;
+            a.sync_notes(long_after + 4 * 86_400 * 1000 + 2);
+            a.sync_notes(long_after + 9 * 86_400 * 1000);
+            assert!(a.uploaded(&shared, &name), "a fresh clock after the relink {ids:?}");
+            a.sync_notes(long_after + 12 * 86_400 * 1000 + 3);
+            assert!(!a.uploaded(&shared, &name), "{ids:?}");
+            cleanup_dirs(dirs);
+        }
+    }
+
+    #[test]
+    fn a_recent_unlinked_upload_stays_so_an_undo_still_finds_it_and_recovery_never_prunes() {
+        let (mut a, _b, dirs) = two_macs(("aa", "zz"));
+        let shared = dirs[2].clone();
+        let name = a.add_image("n1", PNG_A, 100);
+        a.sync_notes(1_000);
+        a.notes[0].text = "note".into();
+        a.notes[0].modified = 2_000;
+        a.sync_notes(3_000);
+        assert!(a.uploaded(&shared, &name), "inside the grace period");
+        // an old, unlinked file is still kept by a run that starts over from reloaded data
+        age_file(&shared.join("devices").join("aa").join("attachments").join(&name));
+        mark_recovery(&a.store.root, "notes");
+        a.sync_notes(90 * 86_400 * 1000);
+        assert!(a.uploaded(&shared, &name), "recovering run");
+        a.sync_notes(90 * 86_400 * 1000 + 1);
+        assert!(!a.uploaded(&shared, &name));
+        cleanup_dirs(dirs);
+    }
+
+    #[test]
+    fn pruning_waits_when_another_macs_documents_cannot_be_read() {
+        let (mut a, mut b, dirs) = two_macs(("aa", "zz"));
+        let shared = dirs[2].clone();
+        let name = a.add_image("n1", PNG_A, 100);
+        a.sync_notes(1_000);
+        b.sync_notes(2_000);
+        a.notes[0].text = "note".into();
+        a.notes[0].modified = 3_000;
+        age_file(&shared.join("devices").join("aa").join("attachments").join(&name));
+        // B's document is corrupt (half uploaded): it might still link the image
+        std::fs::write(shared.join("devices").join("zz").join("notes.json"), b"{ not json").unwrap();
+        a.sync_notes(90 * 86_400 * 1000);
+        assert!(a.uploaded(&shared, &name));
+        cleanup_dirs(dirs);
+    }
+
+    #[test]
+    fn a_file_of_another_mac_that_cannot_be_read_blocks_pruning_but_a_missing_one_does_not() {
+        use std::os::unix::fs::PermissionsExt;
+        for ids in ID_ORDERS {
+            let (mut a, mut b, dirs) = two_macs(ids);
+            let shared = dirs[2].clone();
+            let name = a.add_image("n1", PNG_A, 100);
+            a.sync_notes(1_000);
+            b.sync_notes(2_000);
+            a.notes[0].text = "note".into();
+            a.notes[0].modified = 3_000;
+            age_file(&shared.join("devices").join(&a.io.device).join("attachments").join(&name));
+            let theirs = shared.join("devices").join(&b.io.device).join("notes.json");
+            std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o000)).unwrap();
+            if std::fs::read(&theirs).is_ok() {
+                // running as a user that ignores permissions: nothing to test here
+                std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o644)).unwrap();
+                cleanup_dirs(dirs);
+                return;
+            }
+            let week = 86_400 * 1000;
+            let long_after = 90 * week;
+            let o = a.sync_notes(long_after);
+            assert_eq!(o.corrupt.len(), 1, "an unreadable document is reported {ids:?}");
+            a.sync_notes(long_after + 20 * week);
+            assert!(a.uploaded(&shared, &name), "never pruned while B's notes cannot be read {ids:?}");
+            let root = a.store.root.clone();
+            let none_linked = [Note { id: "x".into(), text: "t".into(), created: 0, modified: 0, pinned_at: None, deleted_at: None }];
+            assert_eq!(gc_attachments(&root, &none_linked, Some(&shared), 200 * 86_400), 0);
+            assert_eq!(gc_attachments(&root, &none_linked, Some(&shared), 300 * 86_400), 0, "{ids:?}");
+            assert!(a.has_local(&name));
+            // readable again: pruning resumes (two runs: the clock starts, then runs out)
+            std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o644)).unwrap();
+            b.sync_notes(long_after + 21 * week);
+            a.sync_notes(long_after + 22 * week);
+            a.sync_notes(long_after + 30 * week);
+            assert!(!a.uploaded(&shared, &name), "{ids:?}");
+            cleanup_dirs(dirs);
+        }
+    }
+
+    #[test]
+    fn nothing_is_copied_when_sync_is_off_and_oversized_files_are_never_uploaded() {
+        let (mut a, _b, dirs) = two_macs(("aa", "zz"));
+        let shared = dirs[2].clone();
+        let name = a.add_image("n1", PNG_A, 100);
+        a.io.enabled.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(sync_domain(&a.io, "notes", &to_items(&a.notes), &Tracker::default(), 1_000).is_err());
+        assert!(!shared.join("devices").exists(), "no file was written");
+        a.io.enabled.store(true, std::sync::atomic::Ordering::SeqCst);
+        // a file over the cap (it cannot come from the editor) stays local
+        let huge = "ffffffffffffffffffffffffffffffff.png";
+        std::fs::File::create(a.store.root.join("attachments").join(huge)).unwrap().set_len(crate::attachments::MAX_BYTES + 1).unwrap();
+        a.notes[0].text.push_str(&format!("\n\n![h](attachments/{huge})"));
+        a.notes[0].modified = 2_000;
+        a.sync_notes(3_000);
+        assert!(a.uploaded(&shared, &name));
+        assert!(!a.uploaded(&shared, huge));
+        cleanup_dirs(dirs);
+    }
+
+    #[test]
+    fn a_third_mac_that_joins_later_gets_the_image_from_the_mac_that_has_it() {
+        for ids in ID_ORDERS {
+            let (mut a, mut b, mut dirs) = two_macs(ids);
+            let shared = dirs[2].clone();
+            let name = a.add_image("n1", PNG_A, 100);
+            a.sync_notes(1_000);
+            b.sync_notes(2_000);
+            let dc = tmp("c");
+            let mut c = Mac::new(&dc, &shared);
+            c.io.device = "mm".into();
+            c.sync_notes(3_000);
+            assert!(c.has_local(&name), "{ids:?}");
+            assert!(!c.uploaded(&shared, &name) && !b.uploaded(&shared, &name));
+            dirs.push(dc);
+            cleanup_dirs(dirs);
+        }
+    }
+
+    #[test]
+    fn local_gc_keeps_what_local_or_other_macs_notes_link_and_does_nothing_when_it_cannot_be_sure() {
+        let (mut a, mut b, dirs) = two_macs(("aa", "zz"));
+        let shared = dirs[2].clone();
+        let mine = a.add_image("n1", PNG_A, 100);
+        let theirs = b.add_image("n2", PNG_B, 100);
+        let orphan = crate::attachments::store(&a.store.root, &[0xff, 0xd8, 0xff, 0xe0, 7, 7], Some("jpg")).unwrap().name;
+        a.sync_notes(1_000);
+        b.sync_notes(2_000);
+        a.sync_notes(3_000);
+        let old = |m: &Mac, n: &str| age_file(&m.store.root.join("attachments").join(n));
+        for n in [&mine, &theirs, &orphan] {
+            old(&a, n);
+        }
+        let now = 90 * 86_400;
+        let root = a.store.root.clone();
+        // B's note is not in A's list (say it is being merged) but its published document links the image
+        let only_mine: Vec<Note> = a.notes.iter().filter(|n| n.id == "n1").cloned().collect();
+        let week = 8 * 86_400;
+        assert_eq!(gc_attachments(&root, &only_mine, Some(&shared), now), 0, "first sight of an unlinked file only notes the time");
+        assert!(a.has_local(&orphan));
+        assert_eq!(gc_attachments(&root, &only_mine, Some(&shared), now + week), 1);
+        assert!(a.has_local(&mine) && a.has_local(&theirs) && !a.has_local(&orphan));
+        // without sync the image only B's document links is not protected: local notes decide
+        old(&a, &theirs);
+        assert_eq!(gc_attachments(&root, &only_mine, None, now + week), 0);
+        assert_eq!(gc_attachments(&root, &only_mine, None, now + 2 * week), 1);
+        assert!(!a.has_local(&theirs));
+        // never with no notes, while a recovery is pending, or when another Mac's notes are unreadable
+        old(&a, &mine);
+        let now = now + 10 * week;
+        assert_eq!(gc_attachments(&root, &[], None, now), 0);
+        mark_recovery(&root, "notes");
+        assert_eq!(gc_attachments(&root, &only_mine[..0], None, now), 0);
+        clear_recovery(&root, "notes");
+        std::fs::write(shared.join("devices").join("zz").join("notes.json"), b"{ not json").unwrap();
+        let other: Vec<Note> =
+            vec![Note { id: "x".into(), text: "no images".into(), created: 0, modified: 0, pinned_at: None, deleted_at: None }];
+        assert_eq!(gc_attachments(&root, &other, Some(&shared), now), 0);
+        assert!(a.has_local(&mine));
+        assert_eq!(gc_attachments(&root, &other, None, now), 0);
+        assert_eq!(gc_attachments(&root, &other, None, now + week), 1, "sync off: only local notes count");
+        assert!(!a.has_local(&mine));
+        cleanup_dirs(dirs);
     }
 
     #[test]

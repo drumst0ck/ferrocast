@@ -104,6 +104,12 @@ pub(crate) fn ns_file_url(p: &std::path::Path) -> Option<Retained<NSURL>> {
     Some(NSURL::fileURLWithPath(&NSString::from_str(&s)))
 }
 
+/// PNG bytes of image data in any format AppKit reads (a TIFF screenshot from the pasteboard).
+pub(crate) fn png_bytes(data: &NSData) -> Option<Retained<NSData>> {
+    let rep = NSBitmapImageRep::imageRepWithData(data)?;
+    unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }
+}
+
 fn png_from_data(data: &NSData) -> Option<(Vec<u8>, u32, u32)> {
     let rep = NSBitmapImageRep::imageRepWithData(data)?;
     let w = rep.pixelsWide() as u32;

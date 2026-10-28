@@ -1,6 +1,6 @@
 ---
 title: "Notes"
-description: "A floating rich-text notes window above your other apps: Markdown, a slash menu, pinning, export, AI commands and dictation, toggled with a hotkey."
+description: "A floating rich-text notes window: Markdown, images, a slash menu, pinning, export, AI commands and dictation, opened with a hotkey."
 sidebar:
   order: 14
 ---
@@ -70,6 +70,22 @@ Links are not in the `/` menu. Links open with <kbd>⌘</kbd>-click.
 
 Type `/` to open a menu of formats and filter it by typing. Type `:` to open an emoji list and filter it the same way.
 
+## Images
+
+Put an image in a note in any of three ways:
+
+- Paste it with <kbd>⌘</kbd> <kbd>V</kbd>: a screenshot, an image copied from a browser, or image files copied in Finder.
+- Drag image files onto the note. They land after the line where you drop them.
+- Choose **Insert Image…** (<kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>I</kbd>, or the right-click menu) and pick files.
+
+PNG, JPEG, GIF, HEIC and WebP work, up to 20 MB each. A bigger file or one that is not an image is refused with a message that names it; the other images you added are still inserted. If you paste text that has a picture beside it (from a web page or a document), the text is pasted as before.
+
+Ferrocast copies each image into the `attachments` folder of the data folder under a name made from its content, so the same image is stored once. The note gets a standard Markdown link on its own line, such as `![name](attachments/3f2a….png)`, and the image is drawn in the note at its own size, up to 480 points wide, with its proportions kept. Notes stay plain Markdown: the link is a relative path and only files in that folder are ever shown.
+
+To remove an image, select it and press Delete. A file that no note links any more is deleted 7 days after its link was removed, however old the file is, so undo and Recently Deleted still find it; linking it again cancels that. If a file is missing (for example it has not reached this Mac yet) a placeholder is shown, and the picture appears once the file is here.
+
+The Notes window edits only Ferrocast's own notes. Notes in your Obsidian vault are not edited here, so Ferrocast never copies an image into your vault, and it never moves images from there into its own folder.
+
 ## Organize notes
 
 - **Browse Notes**: <kbd>⌘</kbd> <kbd>P</kbd> or the toolbar button lists every note.
@@ -87,7 +103,7 @@ In the action panel, **Delete Note** and **Delete All Notes** move notes to **Re
 
 ## With the mouse
 
-Every shortcut of the window has a click path. The toolbar has **‹** and **›** (back and forward through the notes you opened), **Browse**, **+** (new note) and **×** (close). The footer has **Actions**, **Browse**, **Pin** and **New**. Right-click the editor, the toolbar or an empty part of the window for a menu with New Note, Browse Notes, Pin or Unpin, Back, Forward, Zoom In, Zoom Out, Actual Size, Actions and Close; in the editor it comes after the usual Cut, Copy and Paste entries. Pinned notes are listed first in **Browse Notes**: click one to open it, as <kbd>⌘</kbd> <kbd>1</kbd> to <kbd>⌘</kbd> <kbd>9</kbd> does. In **Search Notes**, hover a row for **Pin** or **Unpin** and **Delete**, and click **+ New** for a new note.
+Every shortcut of the window has a click path. The toolbar has **‹** and **›** (back and forward through the notes you opened), **Browse**, **+** (new note) and **×** (close). The footer has **Actions**, **Browse**, **Pin** and **New**. Right-click the editor, the toolbar or an empty part of the window for a menu with New Note, Browse Notes, Pin or Unpin, Insert Image, Back, Forward, Zoom In, Zoom Out, Actual Size, Actions and Close; in the editor it comes after the usual Cut, Copy and Paste entries. Pinned notes are listed first in **Browse Notes**: click one to open it, as <kbd>⌘</kbd> <kbd>1</kbd> to <kbd>⌘</kbd> <kbd>9</kbd> does. In **Search Notes**, hover a row for **Pin** or **Unpin** and **Delete**, and click **+ New** for a new note.
 
 ## The action panel
 
@@ -103,7 +119,7 @@ Actions that do not apply are left out of the list.
 
 ## Export and copy
 
-**Export** writes the note as **Plain Text**, **Markdown** or **HTML**. The file goes to your Downloads folder and is revealed in Finder; there is no save dialog. **Copy As** puts the note on the clipboard in the same three formats.
+**Export** writes the note as **Plain Text**, **Markdown** or **HTML**. The file goes to your Downloads folder and is revealed in Finder; there is no save dialog. **Copy As** puts the note on the clipboard in the same three formats. None of them includes the image files of a note. Markdown and HTML keep the link (`attachments/…`, which only resolves inside Ferrocast's data folder), and Plain Text writes each image as `alt (attachments/…)`. Copying a selection with <kbd>⌘</kbd> <kbd>C</kbd> puts its Markdown on the clipboard when it contains an image, so cutting, copying, dragging and pasting a paragraph inside Notes keeps its picture; pasted into another app it is the Markdown text.
 
 ## Quicklink and URLs
 
@@ -146,6 +162,7 @@ Settings → Notes has three options:
 - <kbd>esc</kbd> closes the window unless you turn on **Escape Key Loses Focus**.
 - <kbd>⌘</kbd> <kbd>0</kbd> means actual size, so pinned notes use <kbd>⌘</kbd> <kbd>1</kbd> to <kbd>⌘</kbd> <kbd>9</kbd>.
 - AI commands and dictation depend on your provider and on macOS permissions.
+- Images are drawn on their own line or inline in a paragraph, never side by side with text wrapping around them, and cannot be resized or cropped in the note.
 :::
 
 ## Related

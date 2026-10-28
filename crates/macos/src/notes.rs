@@ -13,11 +13,12 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 
 pub use crate::notes_editor::{
-    active_formats, append_markdown, apply_format, emoji_commit, insert_at_cursor, insert_markdown_after_selection_line,
-    link_prompt_cancel, link_prompt_open, link_prompt_submit, link_prompt_value, markdown, markdown_of_selection, paragraph_start,
-    replace_range, replace_selection_markdown, select_range, selection, selection_range, set_markdown, set_on_emoji, set_on_slash,
+    active_formats, append_markdown, apply_format, choose_images, drop_markdown, emoji_commit, insert_at_cursor,
+    insert_markdown_after_cursor_line, insert_markdown_after_selection_line, link_prompt_cancel, link_prompt_open, link_prompt_submit,
+    link_prompt_value, markdown, markdown_of_selection, paragraph_start, paste_markdown, replace_range, replace_selection_markdown,
+    select_range, selection, selection_range, set_attachments_root, set_markdown, set_on_emoji, set_on_images, set_on_slash,
     set_on_zoom_change, set_popup_key_handler, set_zoom, slash_commit, text_in_range, toggle_task_at_cursor, window_point_for_char, zoom,
-    Anchor, EmojiEvent, PopupKey, SlashEvent,
+    Anchor, EmojiEvent, ImageInput, PopupKey, SlashEvent,
 };
 use crate::notes_format::Format;
 use crate::notes_hints::{self, Hint, HintBar};
@@ -81,18 +82,19 @@ pub(crate) enum Cmd {
     ZoomOut,
     ActualSize,
     Close,
+    InsertImage,
 }
 
 impl Cmd {
     /// Menu layout: groups separated by a rule.
     pub(crate) const MENU: [&'static [Cmd]; 4] = [
-        &[Cmd::New, Cmd::Browse, Cmd::TogglePin],
+        &[Cmd::New, Cmd::Browse, Cmd::TogglePin, Cmd::InsertImage],
         &[Cmd::Back, Cmd::Forward],
         &[Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ActualSize],
         &[Cmd::Actions, Cmd::Close],
     ];
 
-    pub(crate) const ALL: [Cmd; 10] = [
+    pub(crate) const ALL: [Cmd; 11] = [
         Cmd::New,
         Cmd::Browse,
         Cmd::TogglePin,
@@ -103,6 +105,7 @@ impl Cmd {
         Cmd::ActualSize,
         Cmd::Actions,
         Cmd::Close,
+        Cmd::InsertImage,
     ];
 
     pub(crate) fn label(self) -> &'static str {
@@ -117,6 +120,7 @@ impl Cmd {
             Cmd::ZoomOut => "Zoom Out",
             Cmd::ActualSize => "Actual Size",
             Cmd::Close => "Close Notes",
+            Cmd::InsertImage => "Insert Image…",
         }
     }
 
@@ -133,6 +137,7 @@ impl Cmd {
             Cmd::ZoomOut => ("-", false),
             Cmd::ActualSize => ("0", false),
             Cmd::Close => ("w", false),
+            Cmd::InsertImage => ("i", true),
         }
     }
 
@@ -145,7 +150,7 @@ impl Cmd {
             Cmd::New => Some(Event::New),
             Cmd::Browse => Some(Event::Browse),
             Cmd::Actions => Some(Event::Actions),
-            Cmd::ZoomIn | Cmd::ZoomOut | Cmd::ActualSize | Cmd::Close => None,
+            Cmd::ZoomIn | Cmd::ZoomOut | Cmd::ActualSize | Cmd::Close | Cmd::InsertImage => None,
         }
     }
 
@@ -308,6 +313,10 @@ fn handle_shortcut(panel: &NotesPanel, event: &NSEvent) -> bool {
             fire_event(Event::TogglePin);
             return true;
         }
+        if key == "i" {
+            run_cmd(Cmd::InsertImage);
+            return true;
+        }
         return false;
     }
     if mods != NSEventModifierFlags::Command {
@@ -338,6 +347,7 @@ fn run_cmd(cmd: Cmd) {
         Cmd::ZoomOut => crate::notes_editor::set_zoom(crate::notes_editor::step_zoom(crate::notes_editor::zoom(), -1)),
         Cmd::ActualSize => crate::notes_editor::set_zoom(1.0),
         Cmd::Close => hide(),
+        Cmd::InsertImage => crate::notes_editor::choose_images(),
         other => {
             if let Some(e) = other.event() {
                 fire_event(e);
@@ -1279,6 +1289,7 @@ mod tests {
             ("+", false),
             ("-", false),
             ("0", false),
+            ("i", true),
         ];
         for k in want {
             assert!(Cmd::ALL.iter().any(|c| c.key() == k), "no click command for ⌘{k:?}");

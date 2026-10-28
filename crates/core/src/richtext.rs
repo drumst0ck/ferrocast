@@ -41,6 +41,9 @@ pub struct Style {
     pub code: bool,
     /// Link target, when the span is a link.
     pub link: Option<String>,
+    /// Image source (a relative path such as `attachments/<hash>.png`), when the span is an image;
+    /// the span text is then its alt text and the span is atomic.
+    pub image: Option<String>,
 }
 
 /// A run of text with one style.
@@ -416,8 +419,24 @@ fn inline(ch: &[char], base: &Style, out: &mut Vec<Span>, depth: usize) {
                     i += 1;
                 }
             }
+        } else if c == '!' && depth < MAX_DEPTH && base.link.is_none() && ch.get(i + 1) == Some(&'[') {
+            match try_link(ch, i + 1, true) {
+                Some((close, url, next)) => {
+                    flush(&mut buf, base, out);
+                    let mut style = base.clone();
+                    style.image = Some(url);
+                    // spans are never empty, so an image without alt text gets a generic one
+                    let alt = unescape_alt(&ch[i + 2..close]);
+                    out.push(Span { text: if alt.is_empty() { "image".into() } else { alt }, style });
+                    i = next;
+                }
+                None => {
+                    buf.push('!');
+                    i += 1;
+                }
+            }
         } else if c == '[' && depth < MAX_DEPTH && base.link.is_none() {
-            match try_link(ch, i) {
+            match try_link(ch, i, false) {
                 Some((close, url, next)) => {
                     flush(&mut buf, base, out);
                     let mut style = base.clone();
@@ -511,8 +530,22 @@ fn find_emph_close(ch: &[char], i: usize, m: usize, c: char) -> Option<usize> {
     })
 }
 
-/// Parse `[text](url)` at `i`: (index of `]`, url, index after `)`).
-fn try_link(ch: &[char], i: usize) -> Option<(usize, String, usize)> {
+/// Alt text of an image: the raw text with backslash escapes resolved.
+fn unescape_alt(ch: &[char]) -> String {
+    let mut out = String::new();
+    let mut k = 0;
+    while k < ch.len() {
+        if ch[k] == '\\' && k + 1 < ch.len() && ESCAPABLE.contains(ch[k + 1]) {
+            k += 1;
+        }
+        out.push(ch[k]);
+        k += 1;
+    }
+    out
+}
+
+/// Parse `[text](url)` at `i`: (index of `]`, url, index after `)`). `empty_ok` allows `[]` (images).
+fn try_link(ch: &[char], i: usize, empty_ok: bool) -> Option<(usize, String, usize)> {
     let mut depth = 1usize;
     let close = scan(ch, i + 1, |j| match ch[j] {
         '[' => {
@@ -525,7 +558,7 @@ fn try_link(ch: &[char], i: usize) -> Option<(usize, String, usize)> {
         }
         _ => None,
     })?;
-    if close == i + 1 || ch.get(close + 1) != Some(&'(') {
+    if (close == i + 1 && !empty_ok) || ch.get(close + 1) != Some(&'(') {
         return None;
     }
     let mut k = close + 2;
@@ -740,6 +773,11 @@ fn raw_inline(spans: &[Span]) -> String {
             out.push_str(&s.text);
             continue;
         }
+        if let Some(src) = &s.style.image {
+            close_layers(&mut out, &mut stack, 0);
+            push_image(&s.text, src, &mut out);
+            continue;
+        }
         let target = layers(&s.style);
         let k = stack.iter().zip(&target).take_while(|(a, b)| a == b).count();
         close_layers(&mut out, &mut stack, k);
@@ -750,6 +788,11 @@ fn raw_inline(spans: &[Span]) -> String {
             text = t;
         }
         for l in &target[k..] {
+            if matches!(l, Layer::Link(_)) && out.ends_with('!') && !out.ends_with("\\!") {
+                // a literal `!` right before a link must not read as an image
+                out.pop();
+                out.push_str("\\!");
+            }
             out.push_str(match l {
                 Layer::Link(_) => "[",
                 Layer::Bold => "**",
@@ -768,6 +811,25 @@ fn raw_inline(spans: &[Span]) -> String {
     }
     close_layers(&mut out, &mut stack, 0);
     out
+}
+
+/// `![alt](src)` with the characters that would end the alt or the source escaped.
+fn push_image(alt: &str, src: &str, out: &mut String) {
+    out.push_str("![");
+    for c in alt.chars() {
+        if matches!(c, '\\' | '[' | ']') {
+            out.push('\\');
+        }
+        out.push(if c == '\n' { ' ' } else { c });
+    }
+    out.push_str("](");
+    for c in src.chars() {
+        if matches!(c, '\\' | '(' | ')') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push(')');
 }
 
 fn close_layers(out: &mut String, stack: &mut Vec<Layer>, keep: usize) {
@@ -1666,5 +1728,48 @@ mod tests {
         assert_eq!(indent(2, 100), 4);
         assert_eq!(indent(200, 0), 4);
         assert_eq!(indent(1, -128), 0);
+    }
+
+    // ---------- images ----------
+
+    fn image(alt: &str, src: &str) -> Span {
+        styled(alt, |s| s.image = Some(src.into()))
+    }
+
+    #[test]
+    fn an_image_is_one_atomic_span_with_its_alt_and_source() {
+        assert_eq!(first("![shot](attachments/a.png)").spans, vec![image("shot", "attachments/a.png")]);
+        assert_eq!(first("![](attachments/a.png)").spans, vec![image("image", "attachments/a.png")]);
+        assert_eq!(first("see ![x](a.png) here").spans, vec![plain("see "), image("x", "a.png"), plain(" here")]);
+        // a link is not an image, and an image inside a link text stays text
+        assert_eq!(first("[t](http://a.b)").spans, vec![styled("t", |s| s.link = Some("http://a.b".into()))]);
+        // an unfinished image stays literal
+        assert_eq!(first("![x](").spans, vec![plain("![x](")]);
+    }
+
+    #[test]
+    fn images_round_trip_and_keep_their_text_neighbours() {
+        for src in ["![shot](attachments/a.png)", "text ![x](attachments/a.png) more", "![a\\]b](my pic \\(1\\).png)"] {
+            assert_eq!(md(src), src, "{src}");
+        }
+        let d = Doc { blocks: vec![Block { kind: BlockKind::Paragraph, level: 0, spans: vec![image("a [b]", "p/(x).png")] }] };
+        assert_eq!(parse(&to_markdown(&d)), d);
+    }
+
+    #[test]
+    fn a_literal_bang_before_a_link_does_not_turn_into_an_image() {
+        let d = Doc {
+            blocks: vec![Block {
+                kind: BlockKind::Paragraph,
+                level: 0,
+                spans: vec![plain("wow!"), styled("t", |s| s.link = Some("u".into()))],
+            }],
+        };
+        assert_eq!(parse(&to_markdown(&d)), d);
+    }
+
+    #[test]
+    fn the_plain_text_and_title_of_an_image_use_its_alt() {
+        assert_eq!(parse("![shot](attachments/a.png)").title(), "shot");
     }
 }

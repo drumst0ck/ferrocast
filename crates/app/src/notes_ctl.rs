@@ -66,6 +66,8 @@ pub enum NMsg {
         selection: Option<(usize, usize)>,
         reply: Result<String, String>,
     },
+    /// Images were pasted, dropped on the note or chosen with Insert Image.
+    Images(ferrocast_macos::notes::ImageInput),
     /// The permission prompt of dictation was answered.
     DictationAccess(DictStatus),
     /// The full transcript so far.
@@ -177,6 +179,14 @@ pub trait NotesFx {
     fn dictation_start(&mut self) -> Result<(), String>;
     fn dictation_stop(&mut self);
     fn open_url(&mut self, url: &str);
+    /// The data dir that holds `attachments/` (None: images are not available).
+    fn attachments_dir(&self) -> Option<PathBuf> {
+        None
+    }
+    /// Put Markdown blocks (image links) after the line the cursor is on, as one undoable edit.
+    fn insert_markdown_after_cursor_line(&mut self, _md: &str) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------- pure helpers
@@ -495,6 +505,21 @@ impl NotesCtl {
         out
     }
 
+    /// Note images arrived from another Mac: draw the open note again so placeholders become pictures.
+    /// Skipped while the user is typing or has unsaved text (the next open shows them).
+    pub fn refresh_images(&mut self, d: &mut Data) -> Out {
+        let out = Out::default();
+        if !self.fx.is_visible() || self.dirty || self.typing_recently(d.now_ms) {
+            return out;
+        }
+        if let Some(n) = self.current.as_ref().and_then(|id| d.notes.iter().find(|n| &n.id == id)) {
+            if !ferrocast_core::attachments::referenced([n.text.as_str()]).is_empty() {
+                self.fx.set_markdown(&n.text.clone());
+            }
+        }
+        out
+    }
+
     /// Writes pending text now (app quit).
     pub fn flush(&mut self, d: &mut Data) -> Out {
         let mut out = Out::default();
@@ -509,6 +534,41 @@ impl NotesCtl {
         self.fx.set_escape_loses_focus(d.settings.notes_escape_loses_focus);
         self.fx.set_format_bar(d.settings.notes_format_bar);
         self.ready = true;
+    }
+
+    /// Copy pasted, dropped or chosen images into the attachments folder and link them from the
+    /// note, each on its own line after the cursor line. A refused image (too big, not an image)
+    /// is named in a toast; the others are still added.
+    fn add_images(&mut self, input: ferrocast_macos::notes::ImageInput, out: &mut Out) {
+        use ferrocast_core::attachments;
+        use ferrocast_macos::notes::ImageInput;
+        let Some(root) = self.fx.attachments_dir() else { return };
+        let mut stored = Vec::new();
+        let mut refused = Vec::new();
+        match input {
+            ImageInput::Files(files) => {
+                for f in files {
+                    match attachments::store_file(&root, &f) {
+                        Ok(s) => stored.push(s),
+                        Err(e) => refused.push((f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), e)),
+                    }
+                }
+            }
+            ImageInput::Png(bytes) => match attachments::store(&root, &bytes, Some("png")) {
+                Ok(s) => stored.push(s),
+                Err(e) => refused.push((String::new(), e)),
+            },
+        }
+        if !stored.is_empty() {
+            let md = stored.iter().map(|s| attachments::markdown_link(&s.alt, &s.name)).collect::<Vec<_>>().join("\n\n");
+            if !self.fx.insert_markdown_after_cursor_line(&md) {
+                out.toast = Some("Could not insert the image".into());
+                return;
+            }
+        }
+        if let Some((name, e)) = refused.first() {
+            out.toast = Some(if name.is_empty() { e.message() } else { format!("{name}: {}", e.message()) });
+        }
     }
 
     /// One native callback, delivered through the bus.
@@ -541,6 +601,7 @@ impl NotesCtl {
                 }
             }
             NMsg::Url(route) => out = self.on_url(route, d),
+            NMsg::Images(input) => self.add_images(input, &mut out),
             NMsg::AiDone { request_id, command_id, original_md, selection, reply } => {
                 self.finish_ai(request_id, &command_id, &original_md, selection, reply, d, &mut out)
             }
@@ -1353,6 +1414,12 @@ impl NotesFx for MacFx {
     fn open_url(&mut self, url: &str) {
         let _ = std::process::Command::new("/usr/bin/open").arg(url).spawn();
     }
+    fn attachments_dir(&self) -> Option<PathBuf> {
+        Some(self.shared.store.root.clone())
+    }
+    fn insert_markdown_after_cursor_line(&mut self, md: &str) -> bool {
+        ferrocast_macos::notes::insert_markdown_after_cursor_line(md)
+    }
 }
 
 /// Route every native callback to the bus (the shelf pattern): the callbacks only send.
@@ -1376,6 +1443,8 @@ pub fn install_callbacks(bus: &Bus) {
     notes_palette::set_on_pick(Box::new(move |id| b.send(Msg::Notes(NMsg::Pick(id)))));
     let b = bus.clone();
     notes_palette::set_on_close(Box::new(move || b.send(Msg::Notes(NMsg::PaletteClosed))));
+    let b = bus.clone();
+    notes::set_on_images(Box::new(move |i| b.send(Msg::Notes(NMsg::Images(i)))));
     notes::set_emoji_provider(Box::new(emoji_matches));
     // before the first frame, so a cold launch through a URL still delivers; the closure only sends
     let b = bus.clone();
@@ -1417,6 +1486,8 @@ pub(crate) mod fake {
         pub urls: Vec<String>,
         /// What `last_keystroke_ms` reports.
         pub keystroke_ms: u64,
+        /// What `attachments_dir` reports.
+        pub attachments: Option<PathBuf>,
     }
 
     /// A window that is only a record of what was asked of it.
@@ -1613,6 +1684,18 @@ pub(crate) mod fake {
         }
         fn open_url(&mut self, url: &str) {
             self.0.borrow_mut().urls.push(url.to_string());
+        }
+        fn attachments_dir(&self) -> Option<PathBuf> {
+            self.0.borrow().attachments.clone()
+        }
+        fn insert_markdown_after_cursor_line(&mut self, md: &str) -> bool {
+            let mut s = self.0.borrow_mut();
+            if !s.apply_ok || md.trim().is_empty() {
+                return false;
+            }
+            s.markdown = if s.markdown.is_empty() { md.to_string() } else { format!("{}\n\n{md}", s.markdown) };
+            s.log.push(format!("insert-image:{md}"));
+            true
         }
     }
 }
@@ -2979,5 +3062,92 @@ mod tests {
         let mut w = W::new(vec![note("a", "A", 1)]);
         w.ev(Event::Shown);
         assert_eq!(w.cur(), Some("a"));
+    }
+
+    // ---- images
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ferrocast-notes-img-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3];
+
+    fn with_dir(w: &W, dir: &Path) {
+        w.st.borrow_mut().attachments = Some(dir.to_path_buf());
+    }
+
+    #[test]
+    fn a_pasted_picture_is_copied_and_linked_on_its_own_line() {
+        use ferrocast_macos::notes::ImageInput;
+        let mut w = W::new(vec![note("a", "hello", 1)]);
+        let dir = tmp_dir("paste");
+        with_dir(&w, &dir);
+        w.open("a");
+        let out = w.msg(NMsg::Images(ImageInput::Png(PNG.to_vec())));
+        let name = ferrocast_core::attachments::hash_name(PNG, "png");
+        assert!(dir.join("attachments").join(&name).is_file());
+        assert_eq!(out.toast, None);
+        assert!(w.st.borrow().markdown.ends_with(&format!("![image](attachments/{name})")), "{}", w.st.borrow().markdown);
+    }
+
+    #[test]
+    fn dropped_files_are_copied_with_their_names_and_big_or_wrong_ones_are_refused_by_name() {
+        use ferrocast_macos::notes::ImageInput;
+        let mut w = W::new(vec![note("a", "", 1)]);
+        let dir = tmp_dir("drop");
+        with_dir(&w, &dir);
+        w.open("a");
+        let (good, text, big) = (dir.join("Beach Day.PNG"), dir.join("notes.txt"), dir.join("huge.png"));
+        std::fs::write(&good, PNG).unwrap();
+        std::fs::write(&text, "hello").unwrap();
+        std::fs::File::create(&big).unwrap().set_len(ferrocast_core::attachments::MAX_BYTES + 1).unwrap();
+        let out = w.msg(NMsg::Images(ImageInput::Files(vec![big, good, text])));
+        let name = ferrocast_core::attachments::hash_name(PNG, "png");
+        assert!(w.st.borrow().markdown.contains(&format!("![Beach Day](attachments/{name})")), "{}", w.st.borrow().markdown);
+        let toast = out.toast.expect("the refused image is named");
+        assert!(toast.starts_with("huge.png:") && toast.contains("20 MB"), "{toast}");
+        assert_eq!(std::fs::read_dir(dir.join("attachments")).unwrap().count(), 1);
+        let out = w.msg(NMsg::Images(ImageInput::Files(vec![dir.join("notes.txt")])));
+        assert!(out.toast.unwrap().contains("PNG"));
+    }
+
+    #[test]
+    fn without_a_data_dir_images_change_nothing() {
+        use ferrocast_macos::notes::ImageInput;
+        let mut w = W::new(vec![note("a", "hello", 1)]);
+        w.open("a");
+        let before = w.log().len();
+        let out = w.msg(NMsg::Images(ImageInput::Png(PNG.to_vec())));
+        assert_eq!(out, Out::default());
+        assert_eq!(w.log().len(), before);
+    }
+
+    #[test]
+    fn images_that_arrive_from_another_mac_redraw_the_open_note_only_when_it_is_idle_and_has_images() {
+        let link = "![p](attachments/0123456789abcdef0123456789abcdef.png)";
+        let mut w = W::new(vec![note("a", &format!("hi\n\n{link}"), 1), note("b", "plain", 1)]);
+        w.open("a");
+        let shows = |w: &W| w.log().iter().filter(|l| l.starts_with("markdown:")).count();
+        let before = shows(&w);
+        w.run(|c, d| c.refresh_images(d));
+        assert_eq!(shows(&w), before + 1, "redrawn");
+        // a note without images is left alone
+        w.open("b");
+        let before = shows(&w);
+        w.run(|c, d| c.refresh_images(d));
+        assert_eq!(shows(&w), before);
+        // typing in progress: not now
+        w.open("a");
+        w.st.borrow_mut().keystroke_ms = w.now_ms;
+        let before = shows(&w);
+        w.run(|c, d| c.refresh_images(d));
+        assert_eq!(shows(&w), before);
+        // window closed: nothing to redraw
+        w.st.borrow_mut().keystroke_ms = 0;
+        w.st.borrow_mut().visible = false;
+        w.run(|c, d| c.refresh_images(d));
+        assert_eq!(shows(&w), before);
     }
 }
