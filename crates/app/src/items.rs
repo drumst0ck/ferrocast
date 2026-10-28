@@ -529,6 +529,17 @@ impl Action {
     }
 }
 
+/// A small mouse button for an action that also has a keyboard shortcut (hover buttons on rows,
+/// header buttons). It carries the very `Act` the shortcut runs, so both paths behave the same.
+#[derive(Clone, Debug)]
+pub struct RowButton {
+    pub label: &'static str,
+    /// Tooltip: the action name and its shortcut.
+    pub tip: String,
+    pub kind: Act,
+    pub destructive: bool,
+}
+
 pub const CMD: Modifiers = Modifiers::COMMAND;
 pub const CMD_SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND };
 pub const CTRL: Modifiers = Modifiers::CTRL;

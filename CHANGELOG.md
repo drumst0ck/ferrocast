@@ -7,6 +7,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 ## [Unreleased]
 
 ### Added
+- **Mouse parity in the launcher**: everything the keyboard does now has a click path. Right-click a row to open its actions, click **Actions**, **↵** and **esc** in the footer, click outside the action panel to close it, hover buttons on clipboard rows (Pin, Delete) and snippet and quicklink rows (Edit, Delete), **Clear History…** in the Clipboard view (pinned entries stay), and **+ New** in Snippets and Quicklinks. Keyboard shortcuts are unchanged. (docs: /docs/launcher/keyboard-shortcuts/)
 - **Pick Color**: a launcher command that opens the macOS screen colour sampler; the picked colour is copied as HEX and kept in the clipboard history. (docs: /docs/launcher/calculator/)
 
 ### Changed
