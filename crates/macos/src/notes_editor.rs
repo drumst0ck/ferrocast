@@ -438,10 +438,15 @@ pub(crate) fn emit_images(input: ImageInput) {
 /// `attachments/<hash>.<ext>` shape resolve, see `ferrocast_core::attachments`). `None` when the
 /// file is missing or not readable as an image (not downloaded yet, deleted).
 fn load_image(src: &str) -> Option<Retained<NSImage>> {
-    if let Some(img) = IMAGE_CACHE.with(|c| c.borrow().get(src).cloned()) {
-        return Some(img);
-    }
     let root = ATTACH_ROOT.with(|r| r.borrow().clone())?;
+    if let Some(img) = IMAGE_CACHE.with(|c| c.borrow().get(src).cloned()) {
+        // a file removed since (cleanup, sync) is not drawn from memory any more
+        if ferrocast_core::attachments::resolve_existing(&root, src).is_some() {
+            return Some(img);
+        }
+        IMAGE_CACHE.with(|c| c.borrow_mut().remove(src));
+        return None;
+    }
     let path = ferrocast_core::attachments::resolve_existing(&root, src)?;
     let img = NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(&path.to_string_lossy()))?;
     IMAGE_CACHE.with(|c| c.borrow_mut().insert(src.to_string(), img.clone()));
@@ -1239,7 +1244,7 @@ fn spans_len(spans: &[Span]) -> usize {
 /// whole blocks, with the unselected rest of the first and last paragraph kept around it.
 /// Returns false (nothing changes) for a blank result or without an editor.
 pub fn replace_selection_markdown(md: &str) -> bool {
-    let Some(mut blocks) = result_blocks(md) else { return false };
+    let Some(blocks) = result_blocks(md) else { return false };
     let Some((tv, st)) = handles() else { return false };
     let (u, paras) = read_paras(&st, true);
     let sel = tv.selectedRange();
@@ -1250,9 +1255,29 @@ pub fn replace_selection_markdown(md: &str) -> bool {
         let (lo, hi) = sel_paras(&paras, a, b);
         (lo, hi, a, b)
     };
+    splice_blocks(&u, &paras, blocks, (lo, hi, a, b));
+    true
+}
+
+/// Put Markdown at the cursor, replacing only the selection (nothing is replaced without one):
+/// what pasting a selection that was copied from a note does. One undoable edit; false for a blank text.
+pub fn paste_markdown(md: &str) -> bool {
+    let Some(blocks) = result_blocks(md) else { return false };
+    let Some((tv, st)) = handles() else { return false };
+    let (u, paras) = read_paras(&st, true);
+    let sel = tv.selectedRange();
+    let (a, b) = (sel.location, sel.location + sel.length);
+    let (lo, hi) = sel_paras(&paras, a, b);
+    splice_blocks(&u, &paras, blocks, (lo, hi, a, b));
+    true
+}
+
+/// Replace `a..b` (inside paragraphs `lo..=hi`) with `blocks`, keeping the unselected rest of the
+/// first and last paragraph around them.
+fn splice_blocks(u: &[u16], paras: &[Para], mut blocks: Vec<Block>, (lo, hi, a, b): (usize, usize, usize, usize)) {
     let (lp, hp) = (&paras[lo], &paras[hi]);
-    let left = spans_of(&u, lp, lp.cs, a.clamp(lp.cs, lp.end));
-    let right = spans_of(&u, hp, b.clamp(hp.cs, hp.end), hp.end);
+    let left = spans_of(u, lp, lp.cs, a.clamp(lp.cs, lp.end));
+    let right = spans_of(u, hp, b.clamp(hp.cs, hp.end), hp.end);
     let host = |p: &Para| if p.kind == BlockKind::Rule { (BlockKind::Paragraph, 0) } else { (p.kind.clone(), p.level) };
     let one_paragraph = blocks.len() == 1 && blocks[0].kind == BlockKind::Paragraph;
     if one_paragraph {
@@ -1286,7 +1311,6 @@ pub fn replace_selection_markdown(md: &str) -> bool {
     let last = blocks.len() - 1;
     let caret = spans_len(&blocks[last].spans) - spans_len(&right);
     replace_blocks(lo, hi, &blocks, Some((last, caret)));
-    true
 }
 
 /// Insert `new` as blocks right after paragraph `at` (Markdown separates blocks by a blank line,
@@ -2388,6 +2412,25 @@ fn handle_click(tv: &NSTextView, event: &NSEvent) -> bool {
     false
 }
 
+/// Pasteboard type that carries a copied selection as Markdown, written only when the selection
+/// holds an image (plain text cannot): a paste or drop in a note prefers it, so moving a paragraph
+/// keeps its picture.
+const MD_TYPE: &str = "app.ferrocast.notes.markdown";
+
+fn md_type() -> Retained<NSPasteboardType> {
+    NSString::from_str(MD_TYPE)
+}
+
+/// Does the selection contain an image?
+fn selection_has_image() -> bool {
+    let Some((_, st, a, b)) = selection_bounds() else { return false };
+    if a == b {
+        return false;
+    }
+    let (_, paras) = read_paras(&st, true);
+    paras.iter().filter(|p| in_selection(p, a, b)).any(|p| p.runs.iter().any(|r| r.image.is_some() && r.a < b && r.b > a))
+}
+
 /// "Insert Image…": ask for image files and hand them to the host like a drop.
 pub fn choose_images() {
     let Some(mtm) = MainThreadMarker::new() else { return };
@@ -2641,9 +2684,14 @@ define_class!(
 
         #[unsafe(method(paste:))]
         fn paste(&self, _sender: Option<&AnyObject>) {
-            match pasteboard_images(&NSPasteboard::generalPasteboard()) {
-                Some(input) => emit_images(input),
-                None => paste_plain(self),
+            let pb = NSPasteboard::generalPasteboard();
+            if let Some(md) = pb.stringForType(&md_type()) {
+                paste_markdown(&md.to_string());
+            } else {
+                match pasteboard_images(&pb) {
+                    Some(input) => emit_images(input),
+                    None => paste_plain(self),
+                }
             }
         }
 
@@ -2678,7 +2726,16 @@ define_class!(
 
         #[unsafe(method(performDragOperation:))]
         fn perform_drag(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
+            // a selection dragged from a note (with images) arrives as Markdown
+            let md = sender.draggingPasteboard().stringForType(&md_type());
             match dragged_images(sender) {
+                None if md.is_some() => {
+                    let at = self.convertPoint_fromView(sender.draggingLocation(), None);
+                    let idx: usize = unsafe { msg_send![self, characterIndexForInsertionAtPoint: at] };
+                    self.setSelectedRange(NSRange::new(idx.min(self.string().length()), 0));
+                    paste_markdown(&md.map(|m| m.to_string()).unwrap_or_default());
+                    true
+                }
                 Some(input) => {
                     // the image goes where it was dropped
                     let at = self.convertPoint_fromView(sender.draggingLocation(), None);
@@ -2709,13 +2766,19 @@ define_class!(
 
         #[unsafe(method(writablePasteboardTypes))]
         fn writable_pasteboard_types(&self) -> *mut NSObject {
-            Retained::autorelease_ptr(Retained::into_super(NSArray::from_slice(&[unsafe { NSPasteboardTypeString }])))
+            let mut types: Vec<Retained<NSPasteboardType>> = vec![unsafe { NSPasteboardTypeString }.retain()];
+            if selection_has_image() {
+                types.push(md_type());
+            }
+            Retained::autorelease_ptr(Retained::into_super(NSArray::from_retained_slice(&types)))
         }
 
         #[unsafe(method(writeSelectionToPasteboard:type:))]
-        fn write_selection(&self, pb: &NSPasteboard, _type: &NSPasteboardType) -> bool {
-            let (text, _, _) = selection();
-            pb.setString_forType(&NSString::from_str(&text), unsafe { NSPasteboardTypeString })
+        fn write_selection(&self, pb: &NSPasteboard, ty: &NSPasteboardType) -> bool {
+            // with images the plain string is the Markdown too, so a paste anywhere keeps the links
+            let text = if selection_has_image() { markdown_of_selection() } else { selection().0 };
+            let ty: Retained<NSPasteboardType> = if ty.to_string() == MD_TYPE { md_type() } else { unsafe { NSPasteboardTypeString }.retain() };
+            pb.setString_forType(&NSString::from_str(&text), &ty)
         }
     }
 );

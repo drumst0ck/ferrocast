@@ -207,6 +207,7 @@ fn main() {
     // paste: image data without text goes to the host, text with it stays text, files are images
     let pb = NSPasteboard::generalPasteboard();
     let saved = pb.stringForType(unsafe { NSPasteboardTypeString });
+    let saved_text = saved.clone();
     pb.clearContents();
     let bytes = png(40, 20);
     pb.setData_forType(Some(&NSData::with_bytes(&bytes)), unsafe { NSPasteboardTypePNG });
@@ -238,6 +239,78 @@ fn main() {
             pb.clearContents();
         }
     }
+
+    // copy, cut and paste keep images: the selection travels as Markdown
+    let link = format!("![wide](attachments/{})", wide.name);
+    let both = format!("before\n\n{link}\n\nafter");
+    notes::set_markdown(&both);
+    let all = tv.string().length();
+    tv.setSelectedRange(NSRange::new(0, all));
+    pb.clearContents();
+    unsafe {
+        let _: () = msg_send![&*tv, copy: std::ptr::null::<AnyObject>()];
+    }
+    let copied = pb.stringForType(unsafe { NSPasteboardTypeString }).map(|s| s.to_string()).unwrap_or_default();
+    check("copying a selection with an image puts its Markdown on the pasteboard", copied == both, &copied);
+    notes::set_markdown("zz");
+    tv.setSelectedRange(NSRange::new(2, 0));
+    unsafe {
+        let _: () = msg_send![&*tv, paste: std::ptr::null::<AnyObject>()];
+    }
+    pump(50);
+    check("pasting it back brings the image with it", notes::markdown() == format!("zzbefore\n\n{link}\n\nafter"), &notes::markdown());
+    check("the pasted image is drawn", attachments_of(&tv).len() == 1, &format!("{:?}", attachments_of(&tv)));
+    // cut moves a paragraph with its image
+    notes::set_markdown(&both);
+    tv.setSelectedRange(NSRange::new(0, tv.string().length()));
+    unsafe {
+        let _: () = msg_send![&*tv, cut: std::ptr::null::<AnyObject>()];
+    }
+    pump(50);
+    check("cutting removes the image from the note", !notes::markdown().contains("attachments/"), &notes::markdown());
+    unsafe {
+        let _: () = msg_send![&*tv, paste: std::ptr::null::<AnyObject>()];
+    }
+    pump(50);
+    check("pasting after a cut restores the whole selection", notes::markdown() == both, &notes::markdown());
+    // text without images stays plain text on the pasteboard
+    notes::set_markdown("**bold** word");
+    tv.setSelectedRange(NSRange::new(0, 4));
+    pb.clearContents();
+    unsafe {
+        let _: () = msg_send![&*tv, copy: std::ptr::null::<AnyObject>()];
+    }
+    check(
+        "a selection without images is still copied as plain text",
+        pb.stringForType(unsafe { NSPasteboardTypeString }).map(|s| s.to_string()).as_deref() == Some("bold"),
+        "not plain",
+    );
+    match saved_text {
+        Some(s) => {
+            pb.clearContents();
+            pb.setString_forType(&s, unsafe { NSPasteboardTypeString });
+        }
+        None => {
+            pb.clearContents();
+        }
+    }
+
+    // a file removed from disk is not drawn from the cache
+    let tmp_img = attachments::store(&root, &png(20, 10), Some("png")).expect("store");
+    let line = format!("![t](attachments/{})", tmp_img.name);
+    notes::set_markdown(&line);
+    check(
+        "an image on disk is drawn at its size",
+        attachments_of(&tv).first().is_some_and(|a| (a.1 - 20.0).abs() < 0.01),
+        &format!("{:?}", attachments_of(&tv)),
+    );
+    std::fs::remove_file(root.join(&tmp_img.rel)).unwrap();
+    notes::set_markdown(&line);
+    check(
+        "after the file is deleted the placeholder is drawn, not the cached picture",
+        attachments_of(&tv).first().is_some_and(|a| (a.1 - 48.0).abs() < 0.01),
+        &format!("{:?}", attachments_of(&tv)),
+    );
 
     // a snapshot for the eye
     notes::set_markdown(&format!(
