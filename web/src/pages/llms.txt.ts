@@ -44,6 +44,7 @@ export async function GET() {
     `- [Install](${SITE}/docs/getting-started/install/)`,
     `- [Conversion reference](${SITE}/docs/files/conversions/)`,
     `- [Optional tools (ffmpeg, LibreOffice, …)](${SITE}/docs/files/optional-tools/)`,
+    `- [Organize PDF pages](${SITE}/tools/organize-pdf/): PDF organizer for Mac. Reorder, rotate, duplicate and remove pages offline`,
     `- [Migrating from Raycast](${SITE}/docs/getting-started/migrating-from-raycast/)`,
     `- [Data and privacy](${SITE}/docs/reference/data-and-privacy/)`,
     `- [FAQ in docs](${SITE}/docs/reference/faq/)`,

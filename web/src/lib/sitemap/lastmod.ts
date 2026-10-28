@@ -136,6 +136,9 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/raycast-alternative' || path === '/es/alternativa-a-raycast') {
       return fileLastmod('src/lib/seo/alt-raycast.ts', 'src/components/seo/AlternativePage.astro');
     }
+    if (path === '/tools/organize-pdf') {
+      return fileLastmod('src/lib/seo/organize-pdf.ts', 'src/components/seo/OrganizePdfPage.astro', 'src/content/docs/docs/files/tools/organize-pdf.mdx');
+    }
     if (path === '/tools') return fileLastmod('src/pages/tools/index.astro', 'src/data/tools.json');
     if (path.startsWith('/tools/')) {
       return fileLastmod('src/pages/tools/[slug].astro', 'src/data/tools.json');
