@@ -16,8 +16,7 @@ use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSBackingStoreType, NSBezelStyle, NSButton, NSColor, NSFloatingWindowLevel, NSImage, NSPanel, NSScreen, NSStatusWindowLevel, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowCollectionBehavior,
-    NSWindowStyleMask,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
@@ -64,8 +63,32 @@ define_class!(
     unsafe impl NSObjectProtocol for BarTarget {}
 );
 
+/// Colours of the bar's own background, for a dark or a light system appearance (r, g, b, a).
+#[derive(Debug, PartialEq)]
+struct BarColors {
+    background: [f64; 4],
+    border: [f64; 4],
+    /// Colour of the button symbols.
+    tint: [f64; 3],
+}
+
+fn bar_colors(dark: bool) -> BarColors {
+    if dark {
+        BarColors { background: [0.14, 0.14, 0.16, 0.98], border: [1.0, 1.0, 1.0, 0.18], tint: [0.95, 0.95, 0.97] }
+    } else {
+        BarColors { background: [0.97, 0.97, 0.98, 0.98], border: [0.0, 0.0, 0.0, 0.16], tint: [0.12, 0.12, 0.14] }
+    }
+}
+
+fn is_dark(mtm: MainThreadMarker) -> bool {
+    use objc2_app_kit::NSApplication;
+    NSApplication::sharedApplication(mtm).effectiveAppearance().name().to_string().contains("Dark")
+}
+
 struct BarParts {
     panel: Retained<TilingPanel>,
+    view: Retained<NSView>,
+    buttons: Vec<Retained<NSButton>>,
     /// Kept alive: buttons hold their target weakly.
     _target: Retained<BarTarget>,
 }
@@ -92,7 +115,7 @@ fn cocoa(r: [f64; 4], primary_h: f64) -> NSRect {
     NSRect::new(NSPoint::new(r[0], primary_h - r[1] - r[3]), NSSize::new(r[2], r[3]))
 }
 
-fn new_panel(mtm: MainThreadMarker, level: isize, ignores_mouse: bool) -> Retained<TilingPanel> {
+fn new_panel(mtm: MainThreadMarker, level: isize, ignores_mouse: bool, shadow: bool) -> Retained<TilingPanel> {
     let style = NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel;
     let p: Retained<TilingPanel> = unsafe {
         msg_send![
@@ -108,7 +131,7 @@ fn new_panel(mtm: MainThreadMarker, level: isize, ignores_mouse: bool) -> Retain
     p.setFloatingPanel(true);
     p.setHidesOnDeactivate(false);
     p.setOpaque(false);
-    p.setHasShadow(false);
+    p.setHasShadow(shadow);
     p.setBackgroundColor(Some(&NSColor::clearColor()));
     p.setIgnoresMouseEvents(ignores_mouse);
     p.setExcludedFromWindowsMenu(true);
@@ -124,7 +147,7 @@ fn show_border(mtm: MainThreadMarker, b: &crate::tiling::BorderSpec, primary_h: 
     BORDER.with(|slot| {
         let mut slot = slot.borrow_mut();
         let panel = slot.get_or_insert_with(|| {
-            let p = new_panel(mtm, NSFloatingWindowLevel, true);
+            let p = new_panel(mtm, NSFloatingWindowLevel, true, false);
             let view = NSView::initWithFrame(mtm.alloc::<NSView>(), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(10.0, 10.0)));
             view.setWantsLayer(true);
             p.setContentView(Some(&view));
@@ -147,17 +170,17 @@ const SYMBOLS: [&str; 5] =
 const TIPS: [&str; 5] = ["Focus mode", "Float or tile this window", "Move to next display", "Swap with main slot", "Stop tiling this app"];
 
 fn make_bar(mtm: MainThreadMarker) -> BarParts {
-    let panel = new_panel(mtm, NSStatusWindowLevel, false);
+    // a subtle shadow from the window itself; the content below is a solid rounded pill
+    let panel = new_panel(mtm, NSStatusWindowLevel, false, true);
     let (w, h) = (ferrocast_core::tiling::BAR_W, ferrocast_core::tiling::BAR_H);
-    let fx = NSVisualEffectView::initWithFrame(mtm.alloc::<NSVisualEffectView>(), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, h)));
-    fx.setMaterial(NSVisualEffectMaterial::HUDWindow);
-    fx.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-    fx.setState(NSVisualEffectState::Active);
+    let fx = NSView::initWithFrame(mtm.alloc::<NSView>(), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, h)));
     fx.setWantsLayer(true);
     if let Some(l) = fx.layer() {
         l.setCornerRadius(h / 2.0);
         l.setMasksToBounds(true);
+        l.setBorderWidth(0.5);
     }
+    let mut buttons = vec![];
     let target: Retained<BarTarget> = unsafe { msg_send![super(mtm.alloc::<BarTarget>().set_ivars(())), init] };
     let t: &AnyObject = &target;
     for (i, (sym, tip)) in SYMBOLS.iter().zip(TIPS).enumerate() {
@@ -175,16 +198,31 @@ fn make_bar(mtm: MainThreadMarker) -> BarParts {
         button.setToolTip(Some(&NSString::from_str(tip)));
         button.setFrame(NSRect::new(NSPoint::new(10.0 + 36.0 * i as f64, (h - 24.0) / 2.0), NSSize::new(32.0, 24.0)));
         fx.addSubview(&button);
+        buttons.push(button);
     }
-    let view: &NSView = &fx;
-    panel.setContentView(Some(view));
-    BarParts { panel, _target: target }
+    panel.setContentView(Some(&fx));
+    BarParts { panel, view: fx, buttons, _target: target }
+}
+
+/// Paint the pill for the current system appearance (it can change while Ferrocast runs).
+fn style_bar(mtm: MainThreadMarker, parts: &BarParts) {
+    let c = bar_colors(is_dark(mtm));
+    let color = |a: [f64; 4]| NSColor::colorWithSRGBRed_green_blue_alpha(a[0], a[1], a[2], a[3]);
+    if let Some(l) = parts.view.layer() {
+        l.setBackgroundColor(Some(&color(c.background).CGColor()));
+        l.setBorderColor(Some(&color(c.border).CGColor()));
+    }
+    let tint = color([c.tint[0], c.tint[1], c.tint[2], 1.0]);
+    for b in &parts.buttons {
+        b.setContentTintColor(Some(&tint));
+    }
 }
 
 fn show_bar(mtm: MainThreadMarker, frame: [f64; 4], primary_h: f64) {
     BAR.with(|slot| {
         let mut slot = slot.borrow_mut();
         let parts = slot.get_or_insert_with(|| make_bar(mtm));
+        style_bar(mtm, parts);
         parts.panel.setFrame_display(cocoa(frame, primary_h), true);
         parts.panel.orderFrontRegardless();
     });
@@ -208,5 +246,19 @@ pub fn show(mtm: MainThreadMarker, o: &Overlay) {
                 p.panel.orderOut(None);
             }
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bar_has_its_own_nearly_opaque_background_in_both_appearances() {
+        let (d, l) = (bar_colors(true), bar_colors(false));
+        assert!(d.background[3] >= 0.95 && l.background[3] >= 0.95, "solid, readable over any window");
+        assert!(d.background[0] < 0.3 && l.background[0] > 0.8, "dark pill in dark mode, light pill in light mode");
+        assert!(d.tint[0] > 0.8 && l.tint[0] < 0.3, "symbols contrast with the pill");
+        assert_ne!(d, l);
     }
 }

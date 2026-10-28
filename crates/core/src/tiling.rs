@@ -691,9 +691,8 @@ pub fn border_visible(i: &BorderInputs) -> bool {
 pub const BAR_W: f64 = 196.0;
 pub const BAR_H: f64 = 32.0;
 const BAR_GAP: f64 = 6.0;
-/// Height of the strip along a window's top edge where resting the pointer shows the bar.
+/// Height of the strip along a window's top edge where the pointer (with ⌥ held) shows the bar.
 pub const EDGE_BAND: f64 = 28.0;
-pub const BAR_DWELL: f64 = 0.35;
 pub const BAR_GRACE: f64 = 0.5;
 /// Height of the title bar / tab strip the bar must never cover.
 pub const TOP_STRIP: f64 = 38.0;
@@ -717,63 +716,70 @@ pub fn in_bar_zone(window: Rect, screen: Rect, p: (f64, f64)) -> bool {
     Rect::new(window.x, window.y, window.w, EDGE_BAND.min(window.h)).contains(p) || bar_frame(window, screen).contains(p)
 }
 
-/// When the quick-action bar is shown: after the pointer rests in a window's zone for
-/// `BAR_DWELL`, until it has been out of every zone for `BAR_GRACE`.
+/// When the quick-action bar is shown: only while ⌥ (and no other modifier) is held, with the
+/// pointer on the top band of a tiled window or on the bar itself. No dwell: it appears at once
+/// and goes when ⌥ is released; leaving the zones with ⌥ still down hides it after `BAR_GRACE`
+/// (so the pointer can travel from the band to the bar).
 #[derive(Debug, Default)]
 pub struct QuickBar {
-    over: Option<(u64, f64)>,
     shown: Option<u64>,
     left_at: Option<f64>,
 }
 
 impl QuickBar {
-    /// `wins` are (id, frame, screen) of the tiled windows. Returns the window the bar is for.
-    pub fn step(&mut self, enabled: bool, pointer: Option<(f64, f64)>, pressed: bool, wins: &[(u64, Rect, Rect)], now: f64) -> Option<u64> {
-        if !enabled {
+    /// `wins` are (id, frame, screen) of the tiled windows; `option` is `only_option_held`.
+    /// Returns the window the bar is for.
+    pub fn step(
+        &mut self,
+        enabled: bool,
+        pointer: Option<(f64, f64)>,
+        pressed: bool,
+        option: bool,
+        wins: &[(u64, Rect, Rect)],
+        now: f64,
+    ) -> Option<u64> {
+        if !enabled || !option {
             *self = QuickBar::default();
             return None;
         }
         if pressed {
-            // a press (a tab click, a drag) never starts the bar and hides it, unless the press is on the bar
+            // a press (a tab click, a drag) hides the bar, unless the press is on the bar
             let on_bar = pointer.is_some_and(|p| {
                 self.shown.and_then(|id| wins.iter().find(|w| w.0 == id)).is_some_and(|(_, w, s)| bar_frame(*w, *s).contains(p))
             });
             if !on_bar {
-                self.over = None;
-                self.shown = None;
-                self.left_at = None;
+                *self = QuickBar::default();
             }
             return self.shown;
         }
         let hit = pointer.and_then(|p| wins.iter().find(|(_, w, s)| in_bar_zone(*w, *s, p)).map(|(id, _, _)| *id));
         match hit {
             Some(id) => {
+                self.shown = Some(id);
                 self.left_at = None;
-                if self.shown != Some(id) {
-                    match self.over {
-                        Some((o, since)) if o == id => {
-                            if now - since >= BAR_DWELL {
-                                self.shown = Some(id);
-                                self.over = None;
-                            }
-                        }
-                        _ => self.over = Some((id, now)),
-                    }
-                }
             }
             None => {
-                self.over = None;
                 if self.shown.is_some() {
                     let since = *self.left_at.get_or_insert(now);
                     if now - since >= BAR_GRACE {
-                        self.shown = None;
-                        self.left_at = None;
+                        *self = QuickBar::default();
                     }
                 }
             }
         }
         self.shown
     }
+}
+
+/// CGEventFlags bits.
+pub const FLAG_SHIFT: u64 = 0x2_0000;
+pub const FLAG_CONTROL: u64 = 0x4_0000;
+pub const FLAG_OPTION: u64 = 0x8_0000;
+pub const FLAG_COMMAND: u64 = 0x10_0000;
+
+/// Is ⌥ held with no other modifier? (Caps Lock and the like do not count.)
+pub fn only_option_held(flags: u64) -> bool {
+    flags & FLAG_OPTION != 0 && flags & (FLAG_SHIFT | FLAG_CONTROL | FLAG_COMMAND) == 0
 }
 
 /// The buttons of the quick-action bar, left to right.
@@ -1364,45 +1370,6 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_appears_after_a_dwell_and_hides_after_a_grace_period() {
-        let w = Rect::new(400.0, 300.0, 600.0, 400.0);
-        let wins = [(1, w, S)];
-        let mut q = QuickBar::default();
-        let near = Some((500.0, 305.0));
-        assert_eq!(q.step(true, near, false, &wins, 0.0), None);
-        assert_eq!(q.step(true, near, false, &wins, 0.2), None);
-        assert_eq!(q.step(true, near, false, &wins, 0.4), Some(1));
-        // moving up onto the bar keeps it
-        assert_eq!(q.step(true, Some((700.0, 285.0)), false, &wins, 0.6), Some(1));
-        // leaving: still there during the grace period, gone after it
-        assert_eq!(q.step(true, Some((100.0, 100.0)), false, &wins, 1.0), Some(1));
-        assert_eq!(q.step(true, Some((100.0, 100.0)), false, &wins, 1.6), None);
-        // coming back needs a new dwell
-        assert_eq!(q.step(true, near, false, &wins, 2.0), None);
-        // the setting off hides it at once
-        assert_eq!(q.step(true, near, false, &wins, 2.5), Some(1));
-        assert_eq!(q.step(false, near, false, &wins, 2.6), None);
-        // no pointer: hides after the grace period
-        let mut q = QuickBar::default();
-        q.step(true, near, false, &wins, 0.0);
-        assert_eq!(q.step(true, near, false, &wins, 0.5), Some(1));
-        assert_eq!(q.step(true, None, false, &wins, 0.6), Some(1));
-        assert_eq!(q.step(true, None, false, &wins, 1.2), None);
-    }
-
-    #[test]
-    fn the_bar_switches_windows_only_after_a_dwell_on_the_new_one() {
-        let a = Rect::new(0.0, 300.0, 700.0, 400.0);
-        let b = Rect::new(800.0, 300.0, 700.0, 400.0);
-        let wins = [(1, a, S), (2, b, S)];
-        let mut q = QuickBar::default();
-        q.step(true, Some((100.0, 305.0)), false, &wins, 0.0);
-        assert_eq!(q.step(true, Some((100.0, 305.0)), false, &wins, 0.5), Some(1));
-        assert_eq!(q.step(true, Some((900.0, 305.0)), false, &wins, 0.6), Some(1));
-        assert_eq!(q.step(true, Some((900.0, 305.0)), false, &wins, 1.0), Some(2));
-    }
-
-    #[test]
     fn every_quick_action_sends_the_command_the_launcher_and_hotkeys_use() {
         let ids: Vec<String> = QuickAction::ALL.iter().map(|q| q.action().id()).collect();
         assert_eq!(ids, vec!["tiling:focus-mode", "tiling:float-toggle", "tiling:next-display", "tiling:swap-main", "tiling:exclude-app"]);
@@ -1428,6 +1395,87 @@ mod tests {
     }
 
     #[test]
+    fn only_option_counts_as_the_bar_modifier() {
+        assert!(only_option_held(FLAG_OPTION));
+        assert!(only_option_held(FLAG_OPTION | 0x1_0000), "Caps Lock is ignored");
+        assert!(!only_option_held(0));
+        assert!(!only_option_held(FLAG_OPTION | FLAG_COMMAND));
+        assert!(!only_option_held(FLAG_OPTION | FLAG_SHIFT));
+        assert!(!only_option_held(FLAG_OPTION | FLAG_CONTROL));
+        assert!(!only_option_held(FLAG_COMMAND));
+    }
+
+    #[test]
+    fn the_bar_shows_at_once_while_option_is_held_over_the_top_band_and_hides_on_release() {
+        let w = Rect::new(400.0, 300.0, 600.0, 400.0);
+        let wins = [(1, w, S)];
+        let near = Some((500.0, 305.0));
+        let mut q = QuickBar::default();
+        // no ⌥: never, however long the pointer rests there
+        assert_eq!(q.step(true, near, false, false, &wins, 0.0), None);
+        assert_eq!(q.step(true, near, false, false, &wins, 5.0), None);
+        // ⌥ down: immediately, no dwell
+        assert_eq!(q.step(true, near, false, true, &wins, 5.1), Some(1));
+        assert_eq!(q.step(true, near, false, true, &wins, 5.2), Some(1));
+        // ⌥ released: gone at once
+        assert_eq!(q.step(true, near, false, false, &wins, 5.3), None);
+        // the setting off hides it even with ⌥ held
+        assert_eq!(q.step(true, near, false, true, &wins, 6.0), Some(1));
+        assert_eq!(q.step(false, near, false, true, &wins, 6.1), None);
+    }
+
+    #[test]
+    fn the_pointer_may_travel_to_the_bar_while_option_stays_down() {
+        let w = Rect::new(8.0, 33.0, 800.0, 600.0);
+        let wins = [(1, w, S)];
+        let band = Some((300.0, 40.0));
+        let bar = bar_frame(w, S);
+        let on_bar = Some((bar.x + 20.0, bar.y + 10.0));
+        let between = Some((bar.x + 20.0, w.y + EDGE_BAND + 5.0));
+        let mut q = QuickBar::default();
+        assert_eq!(q.step(true, band, false, true, &wins, 0.0), Some(1));
+        // the gap between the band and the pill: still shown during the grace period
+        assert_eq!(q.step(true, between, false, true, &wins, 0.1), Some(1));
+        assert_eq!(q.step(true, on_bar, false, true, &wins, 0.2), Some(1));
+        // leaving every zone with ⌥ still down: hidden after the grace period, not before
+        let away = Some((50.0, 800.0));
+        assert_eq!(q.step(true, away, false, true, &wins, 1.0), Some(1));
+        assert_eq!(q.step(true, away, false, true, &wins, 1.0 + BAR_GRACE + 0.1), None);
+        // a pointer that is not there at all: the same
+        let mut q = QuickBar::default();
+        q.step(true, band, false, true, &wins, 0.0);
+        assert_eq!(q.step(true, None, false, true, &wins, 0.1), Some(1));
+        assert_eq!(q.step(true, None, false, true, &wins, 0.8), None);
+    }
+
+    #[test]
+    fn the_bar_follows_the_window_the_pointer_is_over_while_option_is_held() {
+        let a = Rect::new(0.0, 300.0, 700.0, 400.0);
+        let b = Rect::new(800.0, 300.0, 700.0, 400.0);
+        let wins = [(1, a, S), (2, b, S)];
+        let mut q = QuickBar::default();
+        assert_eq!(q.step(true, Some((100.0, 305.0)), false, true, &wins, 0.0), Some(1));
+        assert_eq!(q.step(true, Some((900.0, 305.0)), false, true, &wins, 0.1), Some(2), "no dwell to switch");
+    }
+
+    #[test]
+    fn a_press_hides_the_bar_unless_the_press_is_on_the_bar() {
+        let w = Rect::new(400.0, 300.0, 600.0, 400.0);
+        let wins = [(1, w, S)];
+        let near = Some((500.0, 305.0));
+        let mut q = QuickBar::default();
+        assert_eq!(q.step(true, near, false, true, &wins, 0.0), Some(1));
+        // a click on the title bar (a tab, a drag) hides it at once and does not start it again while pressed
+        assert_eq!(q.step(true, near, true, true, &wins, 0.1), None);
+        assert_eq!(q.step(true, near, true, true, &wins, 0.2), None);
+        // a button click on the bar keeps it
+        let mut q = QuickBar::default();
+        q.step(true, near, false, true, &wins, 0.0);
+        let on_bar = Some((bar_frame(w, S).x + 10.0, bar_frame(w, S).y + 10.0));
+        assert_eq!(q.step(true, on_bar, true, true, &wins, 0.1), Some(1));
+    }
+
+    #[test]
     fn the_bar_never_covers_the_title_bar_or_tab_strip() {
         // default gap 8 at the top of the screen: no room above, so a compact pill below the strip
         let w = Rect::new(8.0, 33.0, 800.0, 600.0);
@@ -1442,27 +1490,6 @@ mod tests {
         let short = Rect::new(8.0, 33.0, 400.0, 120.0);
         let sb = bar_frame(short, S);
         assert!(sb.y >= short.y + TOP_STRIP);
-    }
-
-    #[test]
-    fn pressing_the_mouse_never_starts_the_bar_and_hides_it_unless_the_press_is_on_the_bar() {
-        let w = Rect::new(400.0, 300.0, 600.0, 400.0);
-        let wins = [(1, w, S)];
-        let near = Some((500.0, 305.0));
-        let mut q = QuickBar::default();
-        // a press on the title bar (a tab click, a drag) never starts the dwell
-        assert_eq!(q.step(true, near, true, &wins, 0.0), None);
-        assert_eq!(q.step(true, near, true, &wins, 0.6), None);
-        assert_eq!(q.step(true, near, false, &wins, 0.7), None, "the dwell starts only after the release");
-        assert_eq!(q.step(true, near, false, &wins, 1.1), Some(1));
-        // a press on the band hides it at once
-        assert_eq!(q.step(true, near, true, &wins, 1.2), None);
-        // a press on the bar itself (a button click) keeps it
-        let mut q = QuickBar::default();
-        q.step(true, near, false, &wins, 0.0);
-        assert_eq!(q.step(true, near, false, &wins, 0.5), Some(1));
-        let on_bar = Some((bar_frame(w, S).x + 10.0, bar_frame(w, S).y + 10.0));
-        assert_eq!(q.step(true, on_bar, true, &wins, 0.6), Some(1));
     }
 
     #[test]

@@ -7401,7 +7401,7 @@ impl App {
                                 ui,
                                 pal,
                                 "Quick actions above windows",
-                                "A small bar of actions appears above a tiled window when the pointer rests on its top edge.",
+                                "Hold ⌥ over the top of a window to show a small bar of actions for it.",
                                 |ui| toggle(ui, pal, &mut s.tiling_quick_actions),
                             );
                             row(ui, pal, "Highlight border", "Draws a border around the focused tiled window.", |ui| {

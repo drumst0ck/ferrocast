@@ -184,6 +184,7 @@ extern "C" {
     static _dispatch_main_q: u8;
     fn dispatch_sync_f(queue: *const c_void, ctx: *mut c_void, work: extern "C" fn(*mut c_void));
     fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
+    fn CGEventSourceFlagsState(state: i32) -> u64;
     fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> u8;
     fn CFPreferencesCopyAppValue(key: core_foundation::string::CFStringRef, app: core_foundation::string::CFStringRef) -> CFTypeRef;
 }
@@ -205,6 +206,11 @@ fn screens_on_main() -> Vec<t::Rect> {
     let mut out: Vec<windows::Rect> = vec![];
     unsafe { dispatch_sync_f(&raw const _dispatch_main_q as *const c_void, &mut out as *mut _ as *mut c_void, run) };
     out.into_iter().map(conv).filter(|r| t::valid_screen(*r)).collect()
+}
+
+/// The modifier keys held right now (CGEventFlags), read without an event tap.
+fn modifier_flags() -> u64 {
+    unsafe { CGEventSourceFlagsState(0) }
 }
 
 fn left_button_down() -> bool {
@@ -780,7 +786,8 @@ impl Worker {
             self.hover_activate();
         }
         let now = self.clock.elapsed().as_secs_f64();
-        let o = self.overlay(pointer(), down, now);
+        let option = t::only_option_held(modifier_flags());
+        let o = self.overlay(pointer(), down, option, now);
         if o != self.last_overlay {
             self.last_overlay = o.clone();
             (self.emit)(Event::Overlay(o));
@@ -793,7 +800,7 @@ impl Worker {
     }
 
     /// The border and the bar for this moment. Pure given the tracked state, the pointer and `now`.
-    fn overlay(&mut self, pointer: Option<(f64, f64)>, pressed: bool, now: f64) -> Overlay {
+    fn overlay(&mut self, pointer: Option<(f64, f64)>, pressed: bool, option: bool, now: f64) -> Overlay {
         let screens = self.screens.1.clone();
         let screen_of = |d: usize| screens.get(d).copied();
         let settling = self.focus_settle_until.is_some_and(|u| Instant::now() < u);
@@ -821,7 +828,7 @@ impl Worker {
         let bar_on = self.cfg.quick_actions && self.active() && self.focus.is_none() && !settling;
         let wins: Vec<(u64, t::Rect, t::Rect)> =
             self.wins.iter().filter(|w| self.tiled(w.id)).filter_map(|w| screen_of(w.display).map(|s| (w.id, w.frame, s))).collect();
-        if let Some(id) = self.quick.step(bar_on, pointer, false, &wins, now) {
+        if let Some(id) = self.quick.step(bar_on, pointer, pressed, option, &wins, now) {
             if let Some((_, f, s)) = wins.iter().find(|w| w.0 == id) {
                 let b = t::bar_frame(*f, *s);
                 out.bar = Some(BarSpec { window: id, frame: [b.x, b.y, b.w, b.h] });
@@ -1218,54 +1225,56 @@ mod tests {
     #[test]
     fn the_border_hides_during_a_drag_and_uses_the_frame_just_applied() {
         let mut w = overlay_worker();
-        assert!(w.overlay(None, false, 0.0).border.is_some());
-        assert_eq!(w.overlay(None, true, 0.0).border, None, "mouse down: dragging or resizing");
+        assert!(w.overlay(None, false, false, 0.0).border.is_some());
+        assert_eq!(w.overlay(None, true, false, 0.0).border, None, "mouse down: dragging or resizing");
         // just after an arrange step the window is still on its way: draw where it is going
         w.wins[0].applied = Some(t::Rect::new(200.0, 150.0, 500.0, 300.0));
         w.wins[0].verify = true;
-        assert_eq!(w.overlay(None, false, 0.0).border.unwrap().frame, [197.0, 147.0, 506.0, 306.0]);
+        assert_eq!(w.overlay(None, false, false, 0.0).border.unwrap().frame, [197.0, 147.0, 506.0, 306.0]);
         w.wins[0].verify = false;
-        assert_eq!(w.overlay(None, false, 0.0).border.unwrap().frame, [97.0, 97.0, 606.0, 406.0], "settled: the real frame");
+        assert_eq!(w.overlay(None, false, false, 0.0).border.unwrap().frame, [97.0, 97.0, 606.0, 406.0], "settled: the real frame");
     }
 
     #[test]
     fn the_border_follows_the_focused_tiled_window_and_hides_when_it_should() {
         let mut w = overlay_worker();
-        let b = w.overlay(None, false, 0.0).border.expect("border");
+        let b = w.overlay(None, false, false, 0.0).border.expect("border");
         assert_eq!(b.frame, [97.0, 97.0, 606.0, 406.0]);
         assert_eq!(b.color, [10, 20, 30]);
         w.cfg.paused = true;
-        assert_eq!(w.overlay(None, false, 0.0).border, None, "paused");
+        assert_eq!(w.overlay(None, false, false, 0.0).border, None, "paused");
         w.cfg.paused = false;
         w.stage = true;
-        assert_eq!(w.overlay(None, false, 0.0).border, None, "Stage Manager");
+        assert_eq!(w.overlay(None, false, false, 0.0).border, None, "Stage Manager");
         w.stage = false;
         w.focus_settle_until = Some(Instant::now() + Duration::from_secs(5));
-        assert_eq!(w.overlay(None, false, 0.0).border, None, "focus mode transition");
+        assert_eq!(w.overlay(None, false, false, 0.0).border, None, "focus mode transition");
         w.focus_settle_until = None;
         w.floating.push(1);
-        assert_eq!(w.overlay(None, false, 0.0).border, None, "a floating window");
+        assert_eq!(w.overlay(None, false, false, 0.0).border, None, "a floating window");
         w.floating.clear();
         w.cfg.enabled = false;
-        assert_eq!(w.overlay(None, false, 0.0).border, None, "tiling off");
+        assert_eq!(w.overlay(None, false, false, 0.0).border, None, "tiling off");
         w.cfg.enabled = true;
         w.cfg.border = false;
-        assert_eq!(w.overlay(None, false, 0.0).border, None, "setting off");
+        assert_eq!(w.overlay(None, false, false, 0.0).border, None, "setting off");
     }
 
     #[test]
-    fn the_bar_appears_over_the_window_the_pointer_rests_on_and_only_with_the_setting() {
+    fn the_bar_appears_over_the_window_only_while_option_is_held_and_only_with_the_setting() {
         let mut w = overlay_worker();
         let near = Some((300.0, 110.0));
-        assert_eq!(w.overlay(near, false, 0.0).bar, None);
-        let bar = w.overlay(near, false, 0.5).bar.expect("bar after the dwell");
+        assert_eq!(w.overlay(near, false, false, 0.0).bar, None, "no ⌥: no bar");
+        assert_eq!(w.overlay(near, false, false, 3.0).bar, None, "resting does not show it");
+        let bar = w.overlay(near, false, true, 3.1).bar.expect("bar as soon as ⌥ is down");
         assert_eq!(bar.window, 1);
         assert_eq!(bar.frame, [400.0 - t::BAR_W / 2.0 + 0.0, 100.0 - t::BAR_H - 6.0, t::BAR_W, t::BAR_H]);
+        assert_eq!(w.overlay(near, false, false, 3.2).bar, None, "⌥ released");
         w.cfg.quick_actions = false;
-        assert_eq!(w.overlay(near, false, 1.0).bar, None, "setting off");
+        assert_eq!(w.overlay(near, false, true, 4.0).bar, None, "setting off");
         w.cfg.quick_actions = true;
         w.focus = Some(t::FocusSaved { frames: vec![], focused: 1 });
-        assert_eq!(w.overlay(near, false, 2.0).bar, None, "not in focus mode");
+        assert_eq!(w.overlay(near, false, true, 5.0).bar, None, "not in focus mode");
     }
 
     #[test]
@@ -1273,8 +1282,7 @@ mod tests {
         let mut w = overlay_worker();
         w.floating.push(2);
         let near2 = Some((900.0, 110.0));
-        w.overlay(near2, false, 0.0);
-        assert_eq!(w.overlay(near2, false, 0.5).bar, None);
+        assert_eq!(w.overlay(near2, false, true, 0.0).bar, None);
     }
 
     #[test]
