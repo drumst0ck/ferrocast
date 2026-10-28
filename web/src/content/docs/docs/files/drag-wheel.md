@@ -6,7 +6,7 @@ sidebar:
 ---
 The drag wheel is a ring of choices that opens under the pointer while you drag files. There are three wheels, each with one accent colour: **Convert** (orange), **Tools** (blue) and **Actions** (green). No Accessibility permission is needed to open it.
 
-Start dragging files, then tap <kbd>⇧</kbd> for conversions, <kbd>⌘</kbd> for file tools or <kbd>⌃</kbd> for actions. Release over a segment to run it; the wheel stays open until you drop or cancel. Tapping another key switches an open wheel. You can also open it from a file result with <kbd>⌥</kbd> <kbd>↵</kbd>; arrow keys choose, <kbd>↵</kbd> applies and <kbd>esc</kbd> cancels. The keys and an on/off switch are in Settings → General.
+Start dragging files, then tap <kbd>⇧</kbd> for conversions, <kbd>⌘</kbd> for file tools or <kbd>⌃</kbd> for actions. Release over a segment to run it; the wheel stays open until you drop or cancel. Tapping another key switches an open wheel. You can also open it from a file result with <kbd>⌥</kbd> <kbd>↵</kbd>; arrow keys choose, <kbd>↵</kbd> applies and <kbd>esc</kbd> cancels. With the mouse, click a segment to run it, click outside the ring to cancel, and click the **Convert**, **Tools** or **Actions** chip under the ring to switch wheel. The keys and an on/off switch are in Settings → General.
 
 ## Design
 

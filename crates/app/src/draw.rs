@@ -937,6 +937,10 @@ impl App {
             if hotkey {
                 return k;
             }
+            // a click on a chip with its own key (Rotate R, Undo ⌘Z…) presses that key: the same code runs
+            if let Some((modifiers, key)) = footer_key.as_deref().filter(|c| !matches!(*c, "⌘K" | "↵" | "esc")).and_then(chip_key) {
+                i.events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers });
+            }
             if shape == Shape::List || panel {
                 k.cmd_k = i.consume_key(CMD, Key::K);
                 k.up = i.consume_key(Modifiers::NONE, Key::ArrowUp);
@@ -1729,6 +1733,11 @@ impl App {
             if ctx.input(|i| i.pointer.primary_clicked()) {
                 if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                     let d = pos - ui.max_rect().center();
+                    // the switcher chips do what tapping Shift, ⌘ or ⌃ does
+                    if let Some((k, ..)) = wheel_switcher(ui.max_rect(), kind).into_iter().find(|(_, _, _, r)| r.contains(pos)) {
+                        self.switch_wheel(k);
+                        return;
+                    }
                     if let Some(i) = wheel_hit(d, n) {
                         self.apply_wheel(Some(i));
                         return;
@@ -1746,6 +1755,25 @@ impl App {
             }
             let sel = if let Some(View::Wheel { sel, .. }) = self.stack.last() { *sel } else { None };
             self.draw_wheel(ui, &pal, center, &segs, &files, kind, sel);
+            let chips = wheel_switcher(ui.max_rect(), kind);
+            #[cfg(test)]
+            ctx.data_mut(|d| {
+                d.insert_temp(Id::new("wheel-switch"), chips.iter().map(|(_, l, _, r)| (l.to_string(), *r)).collect::<Vec<_>>())
+            });
+            let hover = ctx.input(|i| i.pointer.hover_pos());
+            for (k, label, key, r) in chips {
+                let on = k == kind;
+                let hot = hover.is_some_and(|p| r.contains(p));
+                let fill = if on { pal.accent } else { Color32::from_black_alpha(if hot { 200 } else { 140 }) };
+                ui.painter().rect_filled(r, 11.0, fill);
+                ui.painter().text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    format!("{label}  {key}"),
+                    FontId::proportional(11.5),
+                    if on || hot { Color32::WHITE } else { Color32::from_white_alpha(190) },
+                );
+            }
             return;
         }
         // Fade the launcher in when it appears (opacity only; one multiply per shape).
@@ -2114,7 +2142,7 @@ impl App {
         let mut first = true;
         #[cfg(test)]
         let mut drawn: Vec<(String, String)> = vec![];
-        // `live` hints (the list/form footers) are buttons; tool-window chips stay plain text
+        // Every chip that names one key is a button; a range (`←/→`) stays text, its own controls do it
         let live = window_chips.is_empty();
         let mut hit_rects: Vec<(String, Rect)> = vec![];
         let mut footer_click: Option<String> = None;
@@ -2133,7 +2161,7 @@ impl App {
             let kw = (kg.size().x + 12.0).max(22.0);
             let kr = Rect::from_min_size(Pos2::new(x - kw, cy - 10.0), Vec2::new(kw, 20.0));
             let lx = kr.min.x - 8.0 - lg.size().x;
-            if live {
+            if live || chip_clickable(key) {
                 // Same feedback as the Notes HintBar: a Field background on hover, a stronger one while pressed.
                 let hr = Rect::from_min_max(Pos2::new(lx - 6.0, cy - 12.0), Pos2::new(kr.max.x + 6.0, cy + 12.0));
                 let resp = ui.interact(hr, Id::new(("footer-hint", key)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -3326,7 +3354,7 @@ impl App {
                 std::thread::spawn(move || bus.send(Msg::VideoFrame(f.clone(), at, crate::media_tools::preview_frame(ff, &f, at))));
             }
         }
-        let view = Rect::from_min_max(area_in.min + Vec2::new(24.0, 16.0), Pos2::new(area_in.max.x - 24.0, bar.min.y - 40.0));
+        let view = Rect::from_min_max(area_in.min + Vec2::new(24.0, 16.0), Pos2::new(area_in.max.x - 24.0, bar.min.y - 64.0));
         match ctx.data(|d| d.get_temp::<egui::TextureHandle>(Id::new("vt-tex"))) {
             Some(tex) => {
                 let sz = tex.size_vec2();
@@ -3357,6 +3385,25 @@ impl App {
             pal.text,
         );
         note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "click the bar to jump", pal);
+        // the keys as buttons: step, markers, ends, and for Split the cut keys (M, ⌫)
+        {
+            use ferrocast_core::videoplan::TrimCmd;
+            let cmds: Vec<TrimCmd> = TrimCmd::ALL.into_iter().filter(|c| !(snapshot && c.is_marker())).collect();
+            let extra: &[(&str, bool)] = if split { &[("Cut here", true), ("Remove last", true)] } else { &[] };
+            let (cmd, ex) = trim_row(ui, pal, Pos2::new(bar.min.x, bar.min.y - 54.0), &cmds, extra);
+            if let Some(c) = cmd {
+                c.apply(&mut t);
+            }
+            match ex {
+                Some(0) => {
+                    t.add_cut(&mut points);
+                }
+                Some(_) => {
+                    points.pop();
+                }
+                None => {}
+            }
+        }
         if split {
             let clips = ferrocast_core::videoplan::split_ranges(t.duration, &points, parts).len();
             let row = Rect::from_min_size(Pos2::new(bar.min.x, bar.max.y + 8.0), Vec2::new(bar.width(), 24.0));
@@ -3500,6 +3547,9 @@ impl App {
             pal.text,
         );
         note_line(ui, Pos2::new(area_in.center().x, area_in.max.y - 14.0), "click the waveform to jump", pal);
+        if let (Some(c), _) = trim_row(ui, pal, Pos2::new(wave.min.x, wave.max.y + 62.0), &ferrocast_core::videoplan::TrimCmd::ALL, &[]) {
+            c.apply(&mut t);
+        }
         let (mut start, mut end, mut silence) = (t.start, t.end, false);
         let row = Rect::from_min_size(Pos2::new(wave.min.x, wave.max.y + 30.0), Vec2::new(wave.width(), 26.0));
         ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
@@ -4876,7 +4926,7 @@ impl App {
         let playing = ed.playing();
         let (out_t, out_total) = (tl.to_output(ed.t), tl.output_duration());
         let maxed = self.win.is_maximised();
-        let (toggle, step, undo_btn, redo_btn) = {
+        let (toggle, step, undo_btn, redo_btn, jump) = {
             let ctrl = lay.transport;
             let bh = if comfy { 34.0 } else { 28.0 };
             let by = ctrl.center().y - bh / 2.0;
@@ -4893,10 +4943,27 @@ impl App {
             let r_play = place(bar_btn_w(ui, play_label, play_glyph, size));
             let icon_w = bh.max(32.0);
             let (r_prev, r_next) = (place(icon_w), place(icon_w));
-            let left_end = x;
             let (wu, wr) = (bar_btn_w(ui, "Undo", BarGlyph::None, size), bar_btn_w(ui, "Redo", BarGlyph::None, size));
             let r_redo = Rect::from_min_size(Pos2::new(ctrl.max.x - wr, by), Vec2::new(wr, bh));
             let r_undo = Rect::from_min_size(Pos2::new(r_redo.min.x - gap - wu, by), Vec2::new(wu, bh));
+            // the keys without a button: ⇧← / ⇧→ (one second), Home and End. They sit after the step buttons
+            // when all four fit between them and the time; a narrow strip leaves them out (the timeline
+            // still reaches every moment with a click)
+            let jump_labels = ["−1 s", "+1 s", "Start", "End"];
+            let time_w = ui
+                .painter()
+                .layout_no_wrap(
+                    format!("{} / {}", clock(out_t), clock(out_total)),
+                    FontId::proportional(if comfy { 15.0 } else { 13.5 }),
+                    pal.text,
+                )
+                .size()
+                .x;
+            let jump_w: f32 = jump_labels.iter().map(|l| bar_btn_w(ui, l, BarGlyph::None, size) + gap).sum();
+            let room = r_undo.min.x - 8.0 - (r_next.max.x + gap + 8.0 + time_w + 12.0);
+            let r_jumps: Vec<Rect> =
+                if room >= jump_w { jump_labels.iter().map(|l| place(bar_btn_w(ui, l, BarGlyph::None, size))).collect() } else { vec![] };
+            let left_end = x;
             let toggle = bar_btn(ui, pal, r_play, "small_btn", play_label, play_glyph, BarStyle::Soft, size, true);
             let prev = icon_btn(ui, pal, r_prev, "Previous frame", BarGlyph::StepBack, true);
             let next = icon_btn(ui, pal, r_next, "Next frame", BarGlyph::StepForward, true);
@@ -4935,7 +5002,13 @@ impl App {
                 (_, true) => Some(1),
                 _ => None,
             };
-            (toggle, step, undo_btn, redo_btn)
+            let mut jump = None;
+            for (n, (l, r)) in jump_labels.iter().zip(r_jumps).enumerate() {
+                if bar_btn(ui, pal, r, "small_btn", l, BarGlyph::None, BarStyle::Ghost, size, true) {
+                    jump = Some(n);
+                }
+            }
+            (toggle, step, undo_btn, redo_btn, jump)
         };
         // the top bar: back, the project's name and its save state at the left; Export… and Full screen at the right
         let (back_btn, export_btn, full_btn) = {
@@ -4981,6 +5054,18 @@ impl App {
         if let Some(dir) = step {
             ed.play = None;
             let t = crate::editor_ctl::step_frames(&tl, ed.t, dir, fps, proj.duration);
+            ed.seek(t, now, fps);
+        }
+        // the same moves as ⇧←, ⇧→, Home and End
+        if let Some(n) = jump {
+            let t = match n {
+                0 | 1 => {
+                    ed.play = None;
+                    crate::editor_ctl::step_seconds(&tl, ed.t, if n == 0 { -1 } else { 1 }, fps, proj.duration)
+                }
+                2 => crate::editor_ctl::first_time(&tl),
+                _ => ed.last(fps),
+            };
             ed.seek(t, now, fps);
         }
         if undo_btn {
@@ -5083,6 +5168,31 @@ impl App {
                         if resp.clicked() {
                             color = i;
                         }
+                    }
+                    // the keys without a button: ⌘Z and ⌫
+                    ui.add_space(10.0);
+                    #[cfg(test)]
+                    let mut btns: Vec<(String, Rect)> = vec![];
+                    let can_undo = !doc.items.is_empty();
+                    let undo = ui.add_enabled(can_undo, egui::Button::new("Undo"));
+                    record_strip(&ctx, undo.rect);
+                    if undo.clicked() {
+                        doc.undo();
+                        sel = None;
+                    }
+                    let can_delete = sel.is_some_and(|s| s < doc.items.len());
+                    let delete = ui.add_enabled(can_delete, egui::Button::new("Delete"));
+                    record_strip(&ctx, delete.rect);
+                    if delete.clicked() {
+                        if let Some(s) = sel.take() {
+                            doc.remove(s);
+                        }
+                    }
+                    #[cfg(test)]
+                    {
+                        btns.push(("Undo".into(), undo.rect));
+                        btns.push(("Delete".into(), delete.rect));
+                        ctx.data_mut(|d| d.insert_temp(Id::new("annot-btns"), btns));
                     }
                 });
             })
@@ -5438,6 +5548,37 @@ impl App {
                     .size(12.0)
                     .color(pal.sub),
             );
+            ui.add_space(8.0);
+            // the keyboard edits as buttons: the same `PdfPlan` calls the keys make
+            let mut op = None;
+            #[cfg(test)]
+            let mut op_rects: Vec<(String, Rect)> = vec![];
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for o in ferrocast_core::pdfplan::PlanOp::ALL {
+                    let start = ui.cursor().min;
+                    if pill(ui, pal, o.label(), false) {
+                        op = Some(o);
+                    }
+                    #[cfg(test)]
+                    op_rects.push((o.label().to_string(), Rect::from_min_max(start, Pos2::new(ui.cursor().min.x, start.y + 28.0))));
+                    #[cfg(not(test))]
+                    let _ = start;
+                }
+            });
+            #[cfg(test)]
+            ctx.data_mut(|d| d.insert_temp(Id::new("pdf-ops"), op_rects));
+            if let Some(o) = op {
+                let mut edited = plan.clone();
+                o.apply(&mut edited);
+                if edited != plan {
+                    if let Some(View::PdfOrganize { plan: p, .. }) = self.stack.last_mut() {
+                        *p = edited.clone();
+                    }
+                    plan = edited;
+                    ctx.request_repaint();
+                }
+            }
             ui.add_space(8.0);
             let mut res = CellDrag::default();
             egui::ScrollArea::horizontal().id_salt("pdf-strip").auto_shrink([false, true]).show(ui, |ui| {
@@ -8880,6 +9021,110 @@ fn bar_btn(
     paint_bar_glyph(p, Pos2::new(x0 + BAR_GLYPH_W / 2.0, r.center().y), glyph, ink);
     p.galley(Pos2::new(x0 + lead, r.center().y - g.size().y / 2.0), g, ink);
     enabled && resp.clicked()
+}
+
+/// The buttons of the trim viewers' keys (`TrimCmd`, plus `extra` pills such as "Cut here"), laid out
+/// from `origin`. Returns the command or the extra pill (index) clicked this frame.
+fn trim_row(
+    ui: &mut Ui,
+    pal: &Palette,
+    origin: Pos2,
+    cmds: &[ferrocast_core::videoplan::TrimCmd],
+    extra: &[(&str, bool)],
+) -> (Option<ferrocast_core::videoplan::TrimCmd>, Option<usize>) {
+    let mut picked = (None, None);
+    #[cfg(test)]
+    let mut recs: Vec<(String, Rect)> = vec![];
+    let row = Rect::from_min_size(origin, Vec2::new(ui::WIDTH - 2.0 * origin.x, 28.0));
+    ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for c in cmds {
+                #[cfg(test)]
+                let x0 = ui.cursor().min.x;
+                if pill(ui, pal, c.label(), false) {
+                    picked.0 = Some(*c);
+                }
+                #[cfg(test)]
+                recs.push((
+                    c.label().to_string(),
+                    Rect::from_min_max(Pos2::new(x0, origin.y), Pos2::new(ui.cursor().min.x - 6.0, origin.y + 28.0)),
+                ));
+            }
+            for (i, (label, enabled)) in extra.iter().enumerate() {
+                #[cfg(test)]
+                let x0 = ui.cursor().min.x;
+                let clicked = ui.add_enabled_ui(*enabled, |ui| pill(ui, pal, label, false)).inner;
+                if clicked {
+                    picked.1 = Some(i);
+                }
+                #[cfg(test)]
+                recs.push((
+                    label.to_string(),
+                    Rect::from_min_max(Pos2::new(x0, origin.y), Pos2::new(ui.cursor().min.x - 6.0, origin.y + 28.0)),
+                ));
+            }
+        });
+    });
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| d.insert_temp(Id::new("trim-cmds"), recs));
+    picked
+}
+
+/// The three chips under the ring that switch wheels (the click path of tapping Shift, ⌘ or ⌃):
+/// `(kind, label, key, rect)`. None for a text wheel, which has nothing to switch to.
+fn wheel_switcher(
+    rect: Rect,
+    current: ferrocast_core::wheel::WheelKind,
+) -> Vec<(ferrocast_core::wheel::WheelKind, &'static str, &'static str, Rect)> {
+    use ferrocast_core::wheel::WheelKind;
+    if current == WheelKind::Translate {
+        return vec![];
+    }
+    let (w, h, gap) = (92.0, 22.0, 8.0);
+    let total = 3.0 * w + 2.0 * gap;
+    let y = rect.max.y - 12.0 - h;
+    [(WheelKind::Convert, "Convert", "⇧"), (WheelKind::Tools, "Tools", "⌘"), (WheelKind::Actions, "Actions", "⌃")]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (k, l, key))| {
+            let x = rect.center().x - total / 2.0 + i as f32 * (w + gap);
+            (k, l, key, Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)))
+        })
+        .collect()
+}
+
+/// The key a footer chip names, for the chips that name exactly one key: `space`, `I`, `⌫`, `⌘Z`,
+/// `⇧⌘Z`, `⌘↵`, `⌃⌘F`. Ranges (`←/→`, `⌘↑/↓`, `⌘1–0`) and `↵`/`esc`/`⌘K` (handled by `read_keys`
+/// itself) are not parsed.
+fn chip_key(label: &str) -> Option<(Modifiers, Key)> {
+    let mut m = Modifiers::NONE;
+    let mut rest = label;
+    loop {
+        let mut chars = rest.chars();
+        match chars.next() {
+            Some('⌘') => m.command = true,
+            Some('⌃') => m.ctrl = true,
+            Some('⌥') => m.alt = true,
+            Some('⇧') => m.shift = true,
+            _ => break,
+        }
+        rest = chars.as_str();
+    }
+    let key = match rest {
+        "space" => Key::Space,
+        "⌫" => Key::Backspace,
+        "↵" => Key::Enter,
+        "esc" => Key::Escape,
+        r if r.chars().count() == 1 && r.chars().all(|c| c.is_ascii_alphabetic()) => Key::from_name(&r.to_uppercase())?,
+        _ => return None,
+    };
+    Some((m, key))
+}
+
+/// A footer chip that a click can press: one named key, or one of the three `read_keys` handles.
+fn chip_clickable(key: &str) -> bool {
+    matches!(key, "⌘K" | "↵" | "esc") || chip_key(key).is_some()
 }
 
 /// A button that is only a drawn shape (`label` is its tooltip and its name for screen readers). Not dimmed

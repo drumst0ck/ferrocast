@@ -788,6 +788,48 @@ impl App {
         }
         ctx.data_mut(|d| d.insert_temp(Id::new("tour-dots"), dots));
 
+        // previous / next arrows after the dots: what ← and → do
+        let mut step = 0i32;
+        #[cfg(test)]
+        let mut arrows: Vec<(String, Rect)> = vec![];
+        for (name, glyph, by, enabled) in [("previous", "‹", -1, slide > 0), ("next", "›", 1, slide < LAST)] {
+            let hit = Rect::from_center_size(Pos2::new(cx + 8.0 + if by > 0 { 28.0 } else { 0.0 }, cy), Vec2::new(24.0, 22.0));
+            let resp = ui.interact(hit, Id::new(("tour-arrow", name)), if enabled { Sense::click() } else { Sense::hover() });
+            let base = if light_on_red { Color32::WHITE } else { pal.sub_strong };
+            let col = if !enabled {
+                base.gamma_multiply(0.35)
+            } else if resp.hovered() {
+                if light_on_red {
+                    Color32::WHITE
+                } else {
+                    pal.text
+                }
+            } else {
+                base
+            };
+            if enabled {
+                ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            painter.text(hit.center(), egui::Align2::CENTER_CENTER, glyph, FontId::proportional(18.0), col);
+            let resp = resp.on_hover_text(if by < 0 { "Previous  ←" } else { "Next  →" });
+            if enabled && resp.clicked() {
+                step = by;
+            }
+            #[cfg(test)]
+            arrows.push((name.to_string(), hit));
+        }
+        #[cfg(test)]
+        ctx.data_mut(|d| d.insert_temp(Id::new("tour-arrows"), arrows));
+        match step {
+            -1 => {
+                self.tour.prev();
+            }
+            1 => {
+                self.tour.next();
+            }
+            _ => {}
+        }
+
         if !reduce && now - t0 < REVEAL_DELAY + REVEAL_STEP * 10.0 + REVEAL_TIME + 0.1 {
             ctx.request_repaint_after(Duration::from_millis(16));
         }

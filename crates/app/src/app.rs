@@ -4683,7 +4683,10 @@ impl App {
     pub(crate) fn row_buttons(&self, item: &Item) -> Vec<RowButton> {
         let own_view = matches!(
             (&item.kind, self.view()),
-            (Kind::Clip(_), View::Clipboard) | (Kind::Snippet(_), View::Snippets) | (Kind::Quicklink { .. }, View::Quicklinks)
+            (Kind::Clip(_), View::Clipboard)
+                | (Kind::Snippet(_), View::Snippets)
+                | (Kind::Quicklink { .. }, View::Quicklinks)
+                | (Kind::Note(_), View::Notes)
         );
         if !own_view {
             return vec![];
@@ -4706,6 +4709,16 @@ impl App {
                 [
                     pick(if unpin { "Unpin" } else { "Pin" }, |a| matches!(a, Act::ClipPin(_))),
                     pick("Delete", |a| matches!(a, Act::ClipDelete(_))),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            }
+            Kind::Note(_) => {
+                let unpin = acts.iter().any(|a| a.title == "Unpin Note");
+                [
+                    pick(if unpin { "Unpin" } else { "Pin" }, |a| matches!(a, Act::NotePin(_))),
+                    pick("Delete", |a| matches!(a, Act::NoteDelete(_))),
                 ]
                 .into_iter()
                 .flatten()
@@ -4746,6 +4759,12 @@ impl App {
                 label: "+ New",
                 tip: format!("Create Quicklink  {}", shortcut_label(CMD, Key::N)),
                 kind: Act::CreateQuicklink,
+                destructive: false,
+            }],
+            View::Notes => vec![RowButton {
+                label: "+ New",
+                tip: format!("Create Note  {}", shortcut_label(CMD, Key::N)),
+                kind: Act::CreateNote,
                 destructive: false,
             }],
             _ => vec![],

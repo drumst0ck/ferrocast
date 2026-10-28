@@ -196,6 +196,79 @@ impl Trim {
     }
 }
 
+/// The viewer moves that have a key, so a button runs the same code: ← / → one frame, ⇧← / ⇧→ one
+/// second, I and O the markers, Home and End the ends of the selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrimCmd {
+    FrameBack,
+    FrameForward,
+    SecBack,
+    SecForward,
+    MarkStart,
+    MarkEnd,
+    ToStart,
+    ToEnd,
+}
+
+impl TrimCmd {
+    /// Every command, in the order the row shows them.
+    pub const ALL: [TrimCmd; 8] = [
+        TrimCmd::FrameBack,
+        TrimCmd::FrameForward,
+        TrimCmd::SecBack,
+        TrimCmd::SecForward,
+        TrimCmd::MarkStart,
+        TrimCmd::MarkEnd,
+        TrimCmd::ToStart,
+        TrimCmd::ToEnd,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TrimCmd::FrameBack => "◀ Frame",
+            TrimCmd::FrameForward => "Frame ▶",
+            TrimCmd::SecBack => "−1 s",
+            TrimCmd::SecForward => "+1 s",
+            TrimCmd::MarkStart => "Set start",
+            TrimCmd::MarkEnd => "Set end",
+            TrimCmd::ToStart => "To start",
+            TrimCmd::ToEnd => "To end",
+        }
+    }
+
+    /// The key that does the same.
+    pub fn key(self) -> &'static str {
+        match self {
+            TrimCmd::FrameBack => "←",
+            TrimCmd::FrameForward => "→",
+            TrimCmd::SecBack => "⇧←",
+            TrimCmd::SecForward => "⇧→",
+            TrimCmd::MarkStart => "I",
+            TrimCmd::MarkEnd => "O",
+            TrimCmd::ToStart => "Home",
+            TrimCmd::ToEnd => "End",
+        }
+    }
+
+    /// True for the two marker commands (the snapshot window has no selection to mark).
+    pub fn is_marker(self) -> bool {
+        matches!(self, TrimCmd::MarkStart | TrimCmd::MarkEnd)
+    }
+
+    pub fn apply(self, t: &mut Trim) {
+        match self {
+            TrimCmd::FrameBack => t.step_frames(-1),
+            TrimCmd::FrameForward => t.step_frames(1),
+            TrimCmd::SecBack => t.step_secs(-1.0),
+            TrimCmd::SecForward => t.step_secs(1.0),
+            TrimCmd::MarkStart => t.mark_start(),
+            TrimCmd::MarkEnd => t.mark_end(),
+            TrimCmd::ToStart => t.seek(t.start),
+            TrimCmd::ToEnd => t.seek((t.end - t.frame()).max(0.0)),
+        }
+    }
+}
+
 /// The time of the reference frame to decode for a cursor `t`: clamped to `0..=duration - 0.04`
 /// (one frame short of the end, which a decoder can always seek to). 0 when the numbers are unusable.
 pub fn frame_time(duration: f64, t: f64) -> f64 {
@@ -223,6 +296,35 @@ pub fn parse_rate(s: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn trim_commands_do_what_their_keys_do() {
+        use super::TrimCmd::*;
+        let mut t = Trim::new(10.0, 25.0).unwrap();
+        SecForward.apply(&mut t);
+        assert!((t.cursor - 1.0).abs() < 1e-9);
+        FrameForward.apply(&mut t);
+        assert!((t.cursor - 1.04).abs() < 1e-9);
+        MarkStart.apply(&mut t);
+        assert!((t.start - 1.04).abs() < 1e-9);
+        SecForward.apply(&mut t);
+        SecForward.apply(&mut t);
+        MarkEnd.apply(&mut t);
+        assert!((t.end - 3.04).abs() < 1e-9);
+        ToStart.apply(&mut t);
+        assert!((t.cursor - 1.04).abs() < 1e-9, "Home goes to the start marker");
+        ToEnd.apply(&mut t);
+        assert!((t.cursor - (3.04 - 0.04)).abs() < 1e-9, "End goes to the last frame of the selection");
+        FrameBack.apply(&mut t);
+        SecBack.apply(&mut t);
+        assert!((t.cursor - 1.96).abs() < 1e-9);
+        // never leaves the timeline
+        for _ in 0..30 {
+            SecBack.apply(&mut t);
+        }
+        assert_eq!(t.cursor, 0.0);
+        assert_eq!(TrimCmd::ALL.iter().filter(|c| c.is_marker()).count(), 2);
+    }
+
     use super::*;
 
     fn t() -> Trim {

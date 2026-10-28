@@ -4,7 +4,7 @@ description: "What Ferrocast asks for the first time you open it, why it needs A
 sidebar:
   order: 2
 ---
-The first time you open Ferrocast it shows a nine-slide **welcome tour**: what the app does, including one slide on screen recording and one on the floating Notes window, then a slide that walks you through the permissions it can use. Use <kbd>←</kbd> <kbd>→</kbd> or <kbd>↵</kbd> to move, <kbd>esc</kbd> to skip. Search for “Welcome” to see it again. Permissions are granted by you in System Settings; Ferrocast cannot grant them itself.
+The first time you open Ferrocast it shows a nine-slide **welcome tour**: what the app does, including one slide on screen recording and one on the floating Notes window, then a slide that walks you through the permissions it can use. Use <kbd>←</kbd> <kbd>→</kbd> or <kbd>↵</kbd> to move, <kbd>esc</kbd> to skip; the **‹** **›** arrows and the dots at the bottom, and the **Next** and **Skip** chips in the footer, do the same with the mouse. Search for “Welcome” to see it again. Permissions are granted by you in System Settings; Ferrocast cannot grant them itself.
 
 Open the launcher with <kbd>⌥</kbd> <kbd>Space</kbd> (change it in Settings).
 
