@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Every synced file, as the domain name used in the sync folder and in the tracker file names.
-pub const DOMAINS: [&str; 6] = ["settings", "snippets", "quicklinks", "notes", "clipboard", "chats"];
+pub const DOMAINS: [&str; 7] = ["settings", "snippets", "quicklinks", "notes", "clipboard", "chats", "themes"];
 
 /// The local data file that holds a domain.
 pub fn domain_file(domain: &str) -> &'static str {
@@ -26,6 +26,7 @@ pub fn domain_file(domain: &str) -> &'static str {
         "notes" => "notes.json",
         "clipboard" => "clipboard.json",
         "chats" => "chats.json",
+        "themes" => "themes.json",
         _ => "",
     }
 }
@@ -353,13 +354,85 @@ pub struct Outcome {
     pub corrupt: Vec<String>,
     /// Files (documents or images) still being downloaded from iCloud.
     pub downloading: usize,
+    /// This Mac's document holding the merged state. It is not written by `sync_domain` when there is
+    /// something to apply: the caller writes it (`SyncIo::write_doc`) only once the merge was applied
+    /// to the local data. Until then the own document keeps the published snapshot, so a tracker
+    /// rebuilt from it cannot turn an older local value into a new edit. `None` for the clipboard
+    /// (its document keeps to what was copied here) and when nothing is to be applied.
+    pub applied_doc: Option<DeviceDoc>,
+    /// The run started over from this Mac's data as if it had never synced (see [`needs_recovery`]).
+    pub recovered: bool,
 }
 
 /// Publish the snapshot of local items, read the other Macs' documents and merge. Writes only this
 /// Mac's document and images in the sync folder. Pure with respect to local data files: the caller
 /// applies `merged` and persists a tracker.
 pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], tracker: &Tracker, now: i64) -> anyhow::Result<Outcome> {
+    sync_domain_recovering(io, domain, snapshot, tracker, now, false)
+}
+
+fn recovery_marker(data_dir: &Path, domain: &str) -> PathBuf {
+    data_dir.join("sync-state").join(format!("{domain}.recover"))
+}
+
+/// Record that this Mac's data file of `domain` could not be loaded (unreadable or unparsable, set
+/// aside as `<file>.corrupt` when possible). What is loaded instead is not what this Mac had synced,
+/// so comparing it with the tracker would publish every missing item as a deletion on all Macs: the
+/// next sync of the domain starts over instead (see [`sync_domain_recovering`]). An explicit marker,
+/// not file times, so copying a data folder (with an old `.corrupt` file in it) triggers nothing.
+pub fn mark_recovery(data_dir: &Path, domain: &str) {
+    let p = recovery_marker(data_dir, domain);
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(&p, b"") {
+        eprintln!("ferrocast: could not write {}: {e}", p.display());
+    }
+}
+
+/// [`mark_recovery`] for a data file name (`None` of the files that never sync does nothing).
+pub fn mark_recovery_for_file(data_dir: &Path, file: &str) {
+    if let Some(domain) = domain_of_file(file) {
+        mark_recovery(data_dir, domain);
+    }
+}
+
+/// True while the marker of [`mark_recovery`] exists.
+pub fn needs_recovery(data_dir: &Path, domain: &str) -> bool {
+    recovery_marker(data_dir, domain).exists()
+}
+
+/// Remove the marker once the recovered state is saved (or there was nothing to apply).
+pub fn clear_recovery(data_dir: &Path, domain: &str) {
+    let _ = std::fs::remove_file(recovery_marker(data_dir, domain));
+}
+
+/// A setting this Mac changed because another Mac's data said so (not an edit): record the new
+/// value as the one already synced, keeping its time, so the next run does not stamp it as a local
+/// edit that could beat a newer value from another Mac. Does nothing when the field was never synced.
+pub fn adopt_setting(data_dir: &Path, key: &str, settings: &Settings) {
+    let mut tracker = load_tracker(data_dir, "settings");
+    let Some(value) = settings_items(settings).into_iter().find(|(k, _)| k == key).map(|(_, v)| v) else { return };
+    if let Some(t) = tracker.items.get_mut(key) {
+        t.hash = sync::hash(&value);
+        let _ = save_tracker(data_dir, "settings", &tracker);
+    }
+}
+
+/// [`sync_domain`]; with `recover` the run ignores the tracker and this Mac's own document and
+/// treats the local data as a first sync: nothing is published as a deletion, what the other Macs
+/// have is adopted, and the saved tracker is newer than the `.corrupt` file afterwards.
+pub fn sync_domain_recovering(
+    io: &SyncIo,
+    domain: &str,
+    snapshot: &[(String, Value)],
+    tracker: &Tracker,
+    now: i64,
+    recover: bool,
+) -> anyhow::Result<Outcome> {
     anyhow::ensure!(io.on(), "sync turned off");
+    let fresh = Tracker::default();
+    let tracker = if recover { &fresh } else { tracker };
     if domain == "clipboard" {
         export_images(io, snapshot);
     }
@@ -376,7 +449,7 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
     // A lost or corrupt tracker (and the tracker of the old one-item settings) is rebuilt from this
     // Mac's own document, so edits and deletions made since the last sync are not forgotten.
     let rebuilt;
-    let tracker = if !tracker.seeded || (domain == "settings" && tracker.items.contains_key(SETTINGS_ID)) {
+    let tracker = if !recover && (!tracker.seeded || (domain == "settings" && tracker.items.contains_key(SETTINGS_ID))) {
         match io.read_own_doc(domain) {
             Some(own) => {
                 rebuilt = sync::tracker_from_own_doc(&own);
@@ -401,9 +474,24 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
         max_tombstones: clipboard.then_some(MAX_CLIPBOARD_TOMBSTONES),
         pristine: pristine_check(domain),
     };
+    // A recovering run reads this Mac's own document before anything is written: it is the intact
+    // copy of what this Mac had published (items only it had, edits not pulled yet), and it takes
+    // part in the merge like another Mac's document. It is not overwritten with the loaded data;
+    // the merged document is written once the merge is applied (`Outcome::applied_doc`).
+    let own_copy = if recover { io.read_own_doc(domain) } else { None };
     let (doc, t1) = sync::publish_opts(&io.device, snapshot, tracker, now, &opts);
-    io.write_doc(domain, &doc)?;
+    if !recover {
+        io.write_doc(domain, &doc)?;
+    }
     let ReadDocs { mut docs, corrupt, mut downloading } = io.read_docs(domain);
+    // deletions recorded in the own copy (the merge skips a tombstone for an id this Mac no longer
+    // has, and a tombstone that wins over a loaded item is recorded as someone else's)
+    let own_tombstones: Vec<(String, i64)> =
+        own_copy.iter().flat_map(|o| o.items.iter().filter(|(_, r)| r.deleted).map(|(id, r)| (id.clone(), r.modified))).collect();
+    if let Some(mut own) = own_copy {
+        own.device = io.device.clone();
+        docs.push(own);
+    }
     if clipboard {
         // Clipboard tombstones expire (after the longest retention), so entries from before that
         // horizon cannot be told from deleted ones and are not adopted from other Macs.
@@ -417,6 +505,30 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
     }
     let (merged, t2) = sync::merge_as(&io.device, snapshot, &docs, &t1);
     let mut t2 = t2;
+    // Own deletions survive a recovery: published again as this Mac's own (not `remote`, so the
+    // clipboard, which does not relay others' deletions, still carries them). Done after the merge,
+    // never before: a tombstone in the tracker for an id the reloaded defaults contain would look
+    // like a new edit and bring the item back.
+    let kept: std::collections::HashSet<&str> = merged.iter().map(|(id, _)| id.as_str()).collect();
+    for (id, modified) in own_tombstones.iter().filter(|(id, _)| !kept.contains(id.as_str())) {
+        match t2.items.get_mut(id) {
+            Some(t) if t.deleted => t.remote = false,
+            Some(_) => {}
+            None => {
+                t2.items.insert(
+                    id.clone(),
+                    sync::Tracked {
+                        hash: String::new(),
+                        modified: *modified,
+                        deleted: true,
+                        remote: false,
+                        pristine: false,
+                        adopted: false,
+                    },
+                );
+            }
+        }
+    }
     if !first {
         sync::restamp_baseline(&mut t2);
     }
@@ -425,17 +537,35 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
     }
     // what this Mac publishes now: the merged state with the re-stamped baseline
     let (doc2, t3) = sync::publish_opts(&io.device, &merged, &t2, now, &opts);
-    // Own document = the merged state (unchanged bytes are not rewritten). After an applied merge it
-    // matches the local data, which is what a tracker rebuilt from it needs.
+    // Own document = the merged state (unchanged bytes are not rewritten), but only once it matches
+    // the local data, which is what a tracker rebuilt from it needs: with nothing to apply it is
+    // written now; otherwise it goes out as `applied_doc` and the caller writes it after applying.
     // (The clipboard keeps its document to what was copied here: entries taken over from other Macs
     // are in their documents, and republishing them would double its size.)
-    if !clipboard || merged == snapshot {
-        io.write_doc(domain, &doc2)?;
-    }
     if merged == snapshot {
-        return Ok(Outcome { merged: None, tracker_published: t3.clone(), tracker_merged: t3, peers: io.peers(), corrupt, downloading });
+        io.write_doc(domain, &doc2)?;
+        return Ok(Outcome {
+            merged: None,
+            tracker_published: t3.clone(),
+            tracker_merged: t3,
+            peers: io.peers(),
+            corrupt,
+            downloading,
+            applied_doc: None,
+            recovered: recover,
+        });
     }
-    Ok(Outcome { merged: Some(merged), tracker_published: t1, tracker_merged: t3, peers: io.peers(), corrupt, downloading })
+    let applied_doc = (!clipboard || recover).then_some(doc2);
+    Ok(Outcome {
+        merged: Some(merged),
+        tracker_published: t1,
+        tracker_merged: t3,
+        peers: io.peers(),
+        corrupt,
+        downloading,
+        applied_doc,
+        recovered: recover,
+    })
 }
 
 /// Pristine = the value is the built-in default of its item (see `sync::Record::pristine`): the
@@ -749,23 +879,31 @@ mod tests {
         /// One full sync cycle of the three domains the tests use, applying the merge like the app.
         fn sync(&mut self, now: i64) {
             let d = &self.store.root;
-            let o = sync_domain(&self.io, "snippets", &to_items(&self.snippets), &load_tracker(d, "snippets"), now).unwrap();
+            let recover = needs_recovery(d, "snippets");
+            let o = sync_domain_recovering(&self.io, "snippets", &to_items(&self.snippets), &load_tracker(d, "snippets"), now, recover)
+                .unwrap();
             save_tracker(d, "snippets", &o.tracker_merged).unwrap();
+            if o.recovered {
+                clear_recovery(d, "snippets");
+            }
             if let Some(m) = o.merged {
                 self.snippets = from_items(m);
                 self.store.save("snippets.json", &self.snippets).unwrap();
+                self.io.write_doc("snippets", o.applied_doc.as_ref().unwrap()).unwrap();
             }
             let o = sync_domain(&self.io, "quicklinks", &to_items(&self.quicklinks), &load_tracker(d, "quicklinks"), now).unwrap();
             save_tracker(d, "quicklinks", &o.tracker_merged).unwrap();
             if let Some(m) = o.merged {
                 self.quicklinks = from_items(m);
                 self.store.save("quicklinks.json", &self.quicklinks).unwrap();
+                self.io.write_doc("quicklinks", o.applied_doc.as_ref().unwrap()).unwrap();
             }
             let o = sync_domain(&self.io, "settings", &settings_items(&self.settings), &load_tracker(d, "settings"), now).unwrap();
             save_tracker(d, "settings", &o.tracker_merged).unwrap();
             if let Some(m) = o.merged {
                 self.settings = settings_from_items(&m, &self.settings).unwrap();
                 self.store.save("settings.json", &self.settings).unwrap();
+                self.io.write_doc("settings", o.applied_doc.as_ref().unwrap()).unwrap();
             }
             let o = sync_domain(&self.io, "clipboard", &to_items(&self.clipboard), &load_tracker(d, "clipboard"), now).unwrap();
             save_tracker(d, "clipboard", &o.tracker_merged).unwrap();
@@ -1254,6 +1392,306 @@ mod tests {
                 for d in [da, db, shared] {
                     std::fs::remove_dir_all(d).unwrap();
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn themes_sync_per_theme_with_renames_edits_and_deletions_in_both_id_orders() {
+        use crate::themes::{CustomTheme, ThemeBase};
+        let th = |id: &str, name: &str| CustomTheme {
+            id: id.into(),
+            name: name.into(),
+            base: ThemeBase::Dark,
+            accent: "#38BDF8".into(),
+            background: "#0B1220".into(),
+            surface: "#16213A".into(),
+            text: "#E6EEFF".into(),
+            secondary_text: "#9FB0D0".into(),
+            separator: "#26324D".into(),
+        };
+        let run = |m: &Mac, list: &mut Vec<CustomTheme>, now: i64| {
+            let d = &m.store.root;
+            let o = sync_domain(&m.io, "themes", &to_items(list), &load_tracker(d, "themes"), now).unwrap();
+            save_tracker(d, "themes", &o.tracker_merged).unwrap();
+            if let Some(merged) = o.merged {
+                *list = from_items(merged);
+                m.io.write_doc("themes", o.applied_doc.as_ref().unwrap()).unwrap();
+            }
+        };
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            let (mut ta, mut tb) = (vec![th("t1", "Ocean"), th("t2", "Sunset")], vec![th("t3", "Mint")]);
+            for now in [1_000, 1_500] {
+                run(&a, &mut ta, now);
+            }
+            for now in [2_000, 2_500] {
+                run(&b, &mut tb, now);
+            }
+            run(&a, &mut ta, 2_700);
+            let names = |l: &Vec<CustomTheme>| {
+                let mut n: Vec<_> = l.iter().map(|t| t.name.clone()).collect();
+                n.sort();
+                n
+            };
+            assert_eq!(names(&ta), ["Mint", "Ocean", "Sunset"], "ids {ida}/{idb}");
+            assert_eq!(names(&tb), ["Mint", "Ocean", "Sunset"], "ids {ida}/{idb}");
+            // B renames t1, A deletes t2
+            tb.iter_mut().find(|t| t.id == "t1").unwrap().name = "Sea".into();
+            run(&b, &mut tb, 3_000);
+            ta.retain(|t| t.id != "t2");
+            run(&a, &mut ta, 3_100);
+            run(&a, &mut ta, 4_000);
+            run(&b, &mut tb, 4_500);
+            run(&a, &mut ta, 5_000);
+            assert_eq!(names(&ta), ["Mint", "Sea"], "ids {ida}/{idb}");
+            assert_eq!(names(&tb), ["Mint", "Sea"], "ids {ida}/{idb}");
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_corrupt_local_file_does_not_delete_the_items_on_the_other_macs_and_is_restored_from_them() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.snippets = vec![snip("s1", "one"), snip("s2", "two"), snip("s3", "three")];
+            a.sync(1_000);
+            a.sync(1_500);
+            b.sync(2_000);
+            b.sync(2_500);
+            assert!(!needs_recovery(&da, "snippets"));
+            // A's file becomes unreadable: the next launch sets it aside and starts from the defaults
+            std::fs::write(da.join("snippets.json"), "{garbage").unwrap();
+            a.restart();
+            assert!(da.join("snippets.json.corrupt").exists());
+            assert!(needs_recovery(&da, "snippets"), "ids {ida}/{idb}");
+            a.sync(3_000);
+            assert!(!needs_recovery(&da, "snippets"), "one run clears it");
+            b.sync(3_500);
+            a.sync(4_000);
+            for m in [&a, &b] {
+                let mut n: Vec<_> = m.snippets.iter().map(|s| s.id.as_str()).filter(|i| matches!(*i, "s1" | "s2" | "s3")).collect();
+                n.sort();
+                assert_eq!(n, ["s1", "s2", "s3"], "nothing was deleted, ids {ida}/{idb}");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    /// A Mac whose snippets file became unreadable after it synced `s1..s3` (and, for `peer`, a
+    /// second Mac that has or has not synced since).
+    fn corrupt_a_after_syncing(ida: &str, idb: &str, b_syncs_first: bool) -> (PathBuf, PathBuf, PathBuf, Mac, Mac) {
+        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+        let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        (a.io.device, b.io.device) = (ida.into(), idb.into());
+        a.snippets = vec![snip("s1", "one"), snip("s2", "two"), snip("s3", "three")];
+        a.sync(1_000);
+        a.sync(1_500);
+        if b_syncs_first {
+            b.sync(2_000);
+            b.sync(2_500);
+        }
+        std::fs::write(da.join("snippets.json"), "{garbage").unwrap();
+        a.restart();
+        assert!(needs_recovery(&da, "snippets"));
+        (da, db, shared, a, b)
+    }
+
+    fn custom_ids(m: &Mac) -> Vec<&str> {
+        let mut n: Vec<_> = m.snippets.iter().map(|s| s.id.as_str()).filter(|i| matches!(*i, "s1" | "s2" | "s3")).collect();
+        n.sort();
+        n
+    }
+
+    #[test]
+    fn items_only_this_mac_had_survive_a_recovery_that_no_other_mac_has_seen() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared, mut a, mut b) = corrupt_a_after_syncing(ida, idb, false);
+            a.sync(3_000);
+            assert_eq!(custom_ids(&a), ["s1", "s2", "s3"], "restored from its own document, ids {ida}/{idb}");
+            b.sync(4_000);
+            b.sync(4_500);
+            a.sync(5_000);
+            for m in [&a, &b] {
+                assert_eq!(custom_ids(m), ["s1", "s2", "s3"], "ids {ida}/{idb}");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_single_mac_gets_everything_back_from_its_own_document_after_recovery() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared, mut a, _b) = corrupt_a_after_syncing(ida, idb, false);
+            a.snippets.iter().for_each(|s| assert!(!matches!(s.id.as_str(), "s1" | "s2" | "s3")));
+            a.sync(3_000);
+            a.sync(3_500);
+            assert_eq!(custom_ids(&a), ["s1", "s2", "s3"], "ids {ida}/{idb}");
+            assert!(!needs_recovery(&da, "snippets"));
+            // a recovery whose merge was not applied keeps the marker and the own document intact
+            std::fs::write(da.join("snippets.json"), "{garbage2").unwrap();
+            a.restart();
+            let o = sync_domain_recovering(&a.io, "snippets", &to_items(&a.snippets), &load_tracker(&da, "snippets"), 4_000, true).unwrap();
+            assert!(o.merged.is_some() && o.applied_doc.is_some());
+            let own = a.io.read_own_doc("snippets").unwrap();
+            assert!(own.items.contains_key("s1") && !own.items["s1"].deleted, "own document untouched until the merge is applied");
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_deletion_made_here_while_the_other_mac_was_offline_survives_recovery() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.snippets = vec![snip("s1", "one"), snip("s2", "two"), snip("s3", "three")];
+            a.sync(1_000);
+            a.sync(1_500);
+            b.sync(2_000);
+            b.sync(2_500);
+            // A deletes s2 while B is offline, then A's file is corrupted and recovered
+            a.snippets.retain(|s| s.id != "s2");
+            a.sync(3_000);
+            std::fs::write(da.join("snippets.json"), "{garbage").unwrap();
+            a.restart();
+            a.sync(4_000);
+            a.sync(4_500);
+            b.sync(5_000);
+            a.sync(5_500);
+            b.sync(6_000);
+            for m in [&a, &b] {
+                assert_eq!(custom_ids(m), ["s1", "s3"], "s2 stays deleted, ids {ida}/{idb}");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_clipboard_deletion_made_here_survives_recovery_too() {
+        let entry = |id: &str, at: i64| ClipEntry {
+            id: id.into(),
+            kind: ClipKind::Text,
+            content: id.into(),
+            title: None,
+            copied_at: at,
+            pinned: false,
+            source_app: None,
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        };
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            let now = 1_000_000_i64;
+            a.clipboard = vec![entry("c1", now / 1000 - 30), entry("c2", now / 1000 - 20)];
+            a.sync_clipboard(now);
+            a.sync_clipboard(now + 500);
+            b.sync_clipboard(now + 1_000);
+            b.sync_clipboard(now + 1_500);
+            a.clipboard.retain(|c| c.id != "c2");
+            a.sync_clipboard(now + 2_000);
+            std::fs::write(da.join("clipboard.json"), "{garbage").unwrap();
+            a.store.load_all();
+            a.clipboard = vec![];
+            assert!(needs_recovery(&da, "clipboard"));
+            for step in 3..8 {
+                let recover = needs_recovery(&da, "clipboard");
+                let d = da.clone();
+                let o = sync_domain_recovering(
+                    &a.io,
+                    "clipboard",
+                    &to_items(&a.clipboard),
+                    &load_tracker(&d, "clipboard"),
+                    now + step * 1_000,
+                    recover,
+                )
+                .unwrap();
+                save_tracker(&d, "clipboard", &o.tracker_merged).unwrap();
+                if recover {
+                    clear_recovery(&d, "clipboard");
+                }
+                if let Some(m) = o.merged {
+                    a.clipboard = from_items(m);
+                    if let Some(doc) = &o.applied_doc {
+                        a.io.write_doc("clipboard", doc).unwrap();
+                    }
+                }
+                b.sync_clipboard(now + step * 1_000 + 500);
+            }
+            for m in [&a, &b] {
+                let mut ids: Vec<_> = m.clipboard.iter().map(|c| c.id.as_str()).collect();
+                ids.sort();
+                assert_eq!(ids, ["c1"], "c2 stays deleted, ids {ida}/{idb}");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_stale_corrupt_file_without_a_marker_does_not_trigger_recovery() {
+        let d = tmp("stale");
+        std::fs::write(d.join("snippets.json.corrupt"), "old").unwrap();
+        assert!(!needs_recovery(&d, "snippets"), "a copied data folder with an old .corrupt file");
+        mark_recovery(&d, "snippets");
+        assert!(needs_recovery(&d, "snippets"));
+        clear_recovery(&d, "snippets");
+        assert!(!needs_recovery(&d, "snippets"));
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn a_merge_that_was_offered_but_not_applied_is_not_written_to_the_own_document_so_a_lost_tracker_keeps_the_remote_edit() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.snippets = vec![snip("s1", "one")];
+            a.sync(1_000);
+            a.sync(1_500);
+            b.sync(2_000);
+            b.sync(2_500);
+            // B edits; A's run is offered the merge but the app does not apply it (typing, local change)
+            b.snippets[0].text = "B edit".into();
+            b.sync(3_000);
+            let d = &a.store.root;
+            let o = sync_domain(&a.io, "snippets", &to_items(&a.snippets), &load_tracker(d, "snippets"), 3_500).unwrap();
+            assert!(o.merged.is_some(), "the remote edit is offered");
+            save_tracker(d, "snippets", &o.tracker_published).unwrap();
+            let own = a.io.read_own_doc("snippets").unwrap();
+            assert_eq!(
+                own.items["s1"].value.as_ref().unwrap()["text"],
+                "text of one",
+                "own document still holds what this Mac has, ids {ida}/{idb}"
+            );
+            // the tracker is lost right after; the older local value must not become a new edit
+            std::fs::remove_file(da.join("sync-state").join("snippets.json")).unwrap();
+            a.sync(5_000);
+            b.sync(5_500);
+            a.sync(6_000);
+            for m in [&a, &b] {
+                assert_eq!(m.snippets[0].text, "B edit", "ids {ida}/{idb}");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
             }
         }
     }
@@ -1907,6 +2345,7 @@ mod tests {
         for d in DOMAINS {
             assert_eq!(domain_of_file(domain_file(d)), Some(d));
         }
+        assert_eq!(domain_file("themes"), "themes.json");
         assert_eq!(domain_of_file("frecency.json"), None);
     }
 }

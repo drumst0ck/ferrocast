@@ -7074,7 +7074,7 @@ impl App {
                                         theme_act.push(ThemeAct::Select(None));
                                     }
                                     for t in &themes_all {
-                                        let on = active_theme.as_ref().is_some_and(|a| a.name == t.name);
+                                        let on = active_theme.as_ref().is_some_and(|a| a.id == t.id);
                                         if ui.selectable_label(on, &t.name).clicked() {
                                             theme_act.push(ThemeAct::Select(Some(t.name.clone())));
                                         }
@@ -8027,7 +8027,7 @@ impl App {
                         ui.add_space(14.0);
                         section(ui, pal, "Sync");
                         group(ui, pal, |ui| {
-                            row(ui, pal, "Sync with iCloud", "Keep settings, snippets, quicklinks, notes, clipboard history and Ask AI chats in step between your Macs through iCloud Drive.", |ui| toggle(ui, pal, &mut s.sync_enabled));
+                            row(ui, pal, "Sync with iCloud", "Keep settings, snippets, quicklinks, custom themes, notes, clipboard history and Ask AI chats in step between your Macs through iCloud Drive.", |ui| toggle(ui, pal, &mut s.sync_enabled));
                             row_disabled_if(ui, !self.settings.sync_enabled, |ui| {
                                 row(ui, pal, "Sync now", &sync_status, |ui| {
                                     if small_btn(ui, pal, "Sync now") {

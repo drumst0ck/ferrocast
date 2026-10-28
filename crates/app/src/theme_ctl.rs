@@ -17,8 +17,9 @@ impl App {
 
     /// Store an edited version of the selected theme; colours repaint at once.
     pub(crate) fn update_active_theme(&mut self, edited: CustomTheme) {
-        let Some(name) = self.settings.custom_theme.clone() else { return };
-        let Some(slot) = self.custom_themes.iter_mut().find(|t| t.name.eq_ignore_ascii_case(&name)) else { return };
+        let Some(id) = self.active_theme().map(|t| t.id.clone()) else { return };
+        let Some(slot) = self.custom_themes.iter_mut().find(|t| t.id == id) else { return };
+        let edited = CustomTheme { id: slot.id.clone(), ..edited };
         let base_changed = slot.base != edited.base;
         if *slot == edited {
             return;
@@ -45,17 +46,18 @@ impl App {
 
     /// Remove the selected theme; the built-in setting applies again.
     pub(crate) fn delete_active_theme(&mut self) {
-        let Some(name) = self.settings.custom_theme.clone() else { return };
-        self.custom_themes.retain(|t| !t.name.eq_ignore_ascii_case(&name));
+        // by id: after a sync two themes can share a name, and only the one in use goes
+        let Some(id) = self.active_theme().map(|t| t.id.clone()) else { return };
+        self.custom_themes.retain(|t| t.id != id);
         self.save_themes();
         self.select_theme(None);
     }
 
     /// Rename the selected theme; the name must be 1-60 characters and not used by another theme.
     pub(crate) fn rename_active_theme(&mut self, new: &str) -> Result<(), String> {
-        let Some(old) = self.settings.custom_theme.clone() else { return Err("No custom theme selected".into()) };
+        let Some(id) = self.active_theme().map(|t| t.id.clone()) else { return Err("No custom theme selected".into()) };
         let new = new.trim();
-        let Some(i) = self.custom_themes.iter().position(|t| t.name.eq_ignore_ascii_case(&old)) else {
+        let Some(i) = self.custom_themes.iter().position(|t| t.id == id) else {
             return Err("Theme not found".into());
         };
         let mut renamed = self.custom_themes[i].clone();

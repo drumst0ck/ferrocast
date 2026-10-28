@@ -2,6 +2,7 @@ use super::*;
 
 fn sample() -> CustomTheme {
     CustomTheme {
+        id: "t-ocean".into(),
         name: "Ocean".into(),
         base: ThemeBase::Dark,
         accent: "#38BDF8".into(),
@@ -144,7 +145,8 @@ fn export_import_round_trips_and_carries_the_format_and_version() {
     assert_eq!(v["format"], FORMAT);
     assert_eq!(v["version"], FORMAT_VERSION);
     assert_eq!(v["theme"]["accent"], "#38BDF8");
-    assert_eq!(import_json(&json), Ok(t));
+    let back = import_json(&json).unwrap();
+    assert_eq!(CustomTheme { id: t.id.clone(), ..back }, t, "everything but the id round-trips");
 }
 
 #[test]
@@ -174,4 +176,39 @@ fn theme_file_defaults_to_empty() {
     assert!(ThemeFile::default().themes.is_empty());
     let f: ThemeFile = serde_json::from_str("{}").unwrap();
     assert!(f.themes.is_empty());
+}
+
+#[test]
+fn a_themes_file_without_ids_gets_ids_once_and_keeps_them() {
+    let dir = std::env::temp_dir().join(format!("ferrocast-themes-{}", uuid::Uuid::new_v4()));
+    let store = crate::storage::Store::new(&dir);
+    let old = |name: &str| {
+        serde_json::json!({"name": name, "base": "Dark", "accent": "#38BDF8", "background": "#0B1220", "surface": "#16213A",
+            "text": "#E6EEFF", "secondary_text": "#9FB0D0", "separator": "#26324D"})
+    };
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(store.path("themes.json"), serde_json::json!({"themes": [old("A"), old("B")]}).to_string()).unwrap();
+    let first = load_with_ids(&store);
+    assert_eq!(first.len(), 2);
+    assert!(first.iter().all(|t| !t.id.is_empty()) && first[0].id != first[1].id);
+    let saved: ThemeFile = store.load("themes.json");
+    assert_eq!(saved.themes, first, "the ids were saved at once");
+    assert_eq!(load_with_ids(&store), first, "a second launch sees the same ids");
+    // a file that already has ids is left alone
+    let before = std::fs::read(store.path("themes.json")).unwrap();
+    load_with_ids(&store);
+    assert_eq!(std::fs::read(store.path("themes.json")).unwrap(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_theme_file_never_carries_an_id_and_import_and_duplicate_make_new_ones() {
+    let t = sample();
+    let json = export_json(&t);
+    assert!(!json.contains("\"id\""), "the shared file has no id: {json}");
+    let imported = import_json(&json).unwrap();
+    assert!(!imported.id.is_empty() && imported.id != t.id);
+    assert_ne!(import_json(&json).unwrap().id, imported.id, "every import is a new theme");
+    let copy = t.duplicate_of(std::slice::from_ref(&t));
+    assert!(!copy.id.is_empty() && copy.id != t.id);
 }
