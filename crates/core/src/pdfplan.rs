@@ -99,9 +99,94 @@ impl PdfPlan {
     }
 }
 
+/// The edits the keyboard offers on the current page, so a button can run exactly the same
+/// code as the key: ⌘← / ⌘→ move, ⇧R / R rotate, D duplicate, ⌫ remove.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanOp {
+    MoveEarlier,
+    MoveLater,
+    RotateLeft,
+    RotateRight,
+    Duplicate,
+    Remove,
+}
+
+impl PlanOp {
+    pub const ALL: [PlanOp; 6] =
+        [PlanOp::MoveEarlier, PlanOp::MoveLater, PlanOp::RotateLeft, PlanOp::RotateRight, PlanOp::Duplicate, PlanOp::Remove];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PlanOp::MoveEarlier => "◀ Move",
+            PlanOp::MoveLater => "Move ▶",
+            PlanOp::RotateLeft => "↺ Rotate",
+            PlanOp::RotateRight => "↻ Rotate",
+            PlanOp::Duplicate => "Duplicate",
+            PlanOp::Remove => "Remove",
+        }
+    }
+
+    /// The key that does the same.
+    pub fn key(self) -> &'static str {
+        match self {
+            PlanOp::MoveEarlier => "⌘←",
+            PlanOp::MoveLater => "⌘→",
+            PlanOp::RotateLeft => "⇧R",
+            PlanOp::RotateRight => "R",
+            PlanOp::Duplicate => "D",
+            PlanOp::Remove => "⌫",
+        }
+    }
+
+    /// Run the edit; the same calls the key handler makes.
+    pub fn apply(self, plan: &mut PdfPlan) {
+        match self {
+            PlanOp::MoveEarlier => plan.shift(-1),
+            PlanOp::MoveLater => plan.shift(1),
+            PlanOp::RotateLeft => plan.rotate(-1),
+            PlanOp::RotateRight => plan.rotate(1),
+            PlanOp::Duplicate => plan.duplicate(),
+            PlanOp::Remove => {
+                plan.remove();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plan_ops_match_the_keyboard_edits() {
+        let mut p = PdfPlan::new(3);
+        p.cursor = 1;
+        PlanOp::MoveLater.apply(&mut p);
+        assert_eq!((p.pages.iter().map(|x| x.src).collect::<Vec<_>>(), p.cursor), (vec![0, 2, 1], 2));
+        PlanOp::MoveEarlier.apply(&mut p);
+        assert_eq!((p.pages.iter().map(|x| x.src).collect::<Vec<_>>(), p.cursor), (vec![0, 1, 2], 1));
+        PlanOp::RotateRight.apply(&mut p);
+        assert_eq!(p.pages[1].turns, 1);
+        PlanOp::RotateLeft.apply(&mut p);
+        PlanOp::RotateLeft.apply(&mut p);
+        assert_eq!(p.pages[1].turns, 3, "⇧R turns the other way");
+        PlanOp::Duplicate.apply(&mut p);
+        assert_eq!((p.pages.len(), p.cursor), (4, 2));
+        PlanOp::Remove.apply(&mut p);
+        assert_eq!(p.pages.len(), 3);
+    }
+
+    #[test]
+    fn plan_ops_at_the_edges_do_nothing_harmful() {
+        let mut p = PdfPlan::new(1);
+        PlanOp::MoveEarlier.apply(&mut p);
+        PlanOp::MoveLater.apply(&mut p);
+        PlanOp::Remove.apply(&mut p);
+        assert_eq!(p.pages.len(), 1, "the last page cannot be removed");
+        assert!(p.is_identity(1));
+        assert_eq!(PlanOp::ALL.len(), 6);
+        assert!(PlanOp::ALL.iter().all(|o| !o.label().is_empty() && !o.key().is_empty()));
+    }
 
     fn srcs(p: &PdfPlan) -> Vec<usize> {
         p.pages.iter().map(|x| x.src).collect()

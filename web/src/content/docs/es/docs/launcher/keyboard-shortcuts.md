@@ -26,6 +26,26 @@ Esta página lista los atajos del lanzador, de la ventana de Notes y de las vent
 | <kbd>⌘</kbd> <kbd>E</kbd> | Editar el snippet o quicklink seleccionado. |
 | <kbd>⌫</kbd> | Volver cuando la búsqueda está vacía. |
 
+## Con el ratón
+
+Cada atajo del lanzador tiene también un camino con clic, así que puedes usar Ferrocast sin teclado.
+
+| Clic | Acción |
+|---|---|
+| Clic derecho (o clic con dos dedos) en una fila | Selecciona la fila y abre su panel de acciones, igual que <kbd>⌘</kbd> <kbd>K</kbd>. |
+| Clic en una fila | Ejecuta la acción principal, igual que <kbd>↵</kbd>. El doble clic hace lo mismo. |
+| Clic en **Actions** del pie | Abre o cierra el panel de acciones del elemento seleccionado. |
+| Clic en **↵** o **esc** del pie | Ejecuta la acción principal o vuelve. |
+| Clic fuera del panel de acciones | Lo cierra. |
+| Pasar el ratón por una fila del portapapeles | **Pin** o **Unpin**, y **Delete** (<kbd>⌘</kbd> <kbd>.</kbd> y <kbd>⌃</kbd> <kbd>X</kbd>). |
+| Pasar el ratón por una fila de snippets o quicklinks | **Edit** y **Delete** (<kbd>⌘</kbd> <kbd>E</kbd> y <kbd>⌃</kbd> <kbd>X</kbd>). |
+| Pasar el ratón por una nota (Search Notes) | **Pin** o **Unpin**, y **Delete**. |
+| Clic en **Clear History…** en el portapapeles | Borra todas las entradas tras una confirmación. Las fijadas se quedan (<kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>X</kbd>). |
+| Clic en **+ New** en Snippets, Quicklinks o Search Notes | Crea uno (<kbd>⌘</kbd> <kbd>N</kbd>). |
+| Clic en un chip del pie de una ventana de herramientas (**Rotate** `R`, **Undo** `⌘Z`, **Play** `space`…) | Pulsa esa tecla. Los chips con un rango de teclas (`←/→`, `⌘↑/↓`, `⌘1–0`) tienen sus propios botones. |
+
+En la ventana de Notes: **‹** y **›** (atrás y adelante), **×** (cerrar) y un menú con clic derecho en el editor, la barra de herramientas o el fondo, con New Note, Browse Notes, Pin, Back, Forward, el zoom, Actions y Close. En las ventanas de herramientas: flechas **‹** **›** en el tour, chips **Convert**, **Tools** y **Actions** bajo la rueda, botones de mover, rotar, duplicar y quitar en el organizador de PDF, y botones de fotograma, segundos y marcadores en el recorte de vídeo y audio.
+
 ## Ventana de Notes
 
 Funcionan mientras la ventana de [Notes](/es/docs/launcher/notes/) está abierta.
