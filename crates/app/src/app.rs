@@ -1274,6 +1274,7 @@ impl App {
         if store_rates.is_stale(now_secs()) {
             services::refresh_rates(bus.clone());
         }
+        ferrocast_macos::notes::set_attachments_root(store.root.clone());
         let notes_ctl = crate::notes_ctl::NotesCtl::new(Box::new(crate::notes_ctl::MacFx::new(bus.clone(), shared.clone())));
         let mut app = App {
             sync: SyncCtl::default(),
