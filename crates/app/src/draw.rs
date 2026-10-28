@@ -1682,14 +1682,19 @@ impl App {
     fn draw_main(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.icons.new_frame();
-        self.dark = ctx.theme() == egui::Theme::Dark;
-        let pal = palette(self.dark);
-        // Brand-coloured caret and text selection instead of egui's default blue.
-        if ui.visuals().text_cursor.stroke.color != pal.accent {
-            let accent = pal.accent;
+        let custom = self.active_theme().map(|t| (crate::ui::palette_custom(t), t.base == ferrocast_core::themes::ThemeBase::Dark));
+        self.dark = custom.as_ref().map_or_else(|| ctx.theme() == egui::Theme::Dark, |c| c.1);
+        let pal = custom.map_or_else(|| palette(self.dark), |c| c.0);
+        // Brand-coloured caret and text selection instead of egui's default blue (again when the theme changes).
+        let stamp = (pal.accent, pal.sel);
+        if ui.visuals().text_cursor.stroke.color != pal.accent
+            || ctx.data(|d| d.get_temp::<(Color32, Color32)>(Id::new("style-stamp"))) != Some(stamp)
+        {
+            ctx.data_mut(|d| d.insert_temp(Id::new("style-stamp"), stamp));
+            let (accent, sel) = (pal.accent, pal.sel);
             ctx.all_styles_mut(|st| {
                 // the slider rail is `widgets.inactive.bg_fill`; egui's grey 230 vanishes on a light card
-                st.visuals.widgets.inactive.bg_fill = palette(st.visuals.dark_mode).sel.gamma_multiply(2.0);
+                st.visuals.widgets.inactive.bg_fill = sel.gamma_multiply(2.0);
                 st.visuals.text_cursor.stroke.color = accent;
                 st.visuals.selection.bg_fill = accent.gamma_multiply(0.35);
                 st.visuals.selection.stroke.color = accent;
@@ -2473,7 +2478,7 @@ impl App {
         });
         let painter = ui.painter().clone();
         painter.rect_filled(rect.expand(1.0), 10.0, Color32::from_black_alpha(90));
-        painter.rect_filled(rect, 10.0, if self.dark { Color32::from_rgb(34, 34, 38) } else { Color32::from_rgb(246, 246, 248) });
+        painter.rect_filled(rect, 10.0, pal.popover);
         painter.rect_stroke(rect, 10.0, Stroke::new(1.0, pal.border), StrokeKind::Inside);
         let list_rect = Rect::from_min_max(rect.min + Vec2::new(0.0, 6.0), Pos2::new(rect.max.x, rect.max.y - 44.0));
         let sel = p.sel;
@@ -2666,11 +2671,7 @@ impl App {
         for (k, a) in if dark { [(16.0, 10u8), (10.0, 14), (5.0, 20)] } else { [(16.0, 6), (10.0, 9), (5.0, 12)] } {
             p.circle_filled(c + Vec2::new(0.0, 6.0), outer + k * scale, black(a));
         }
-        p.circle_filled(
-            c,
-            outer,
-            if dark { Color32::from_rgba_unmultiplied(24, 24, 27, 222) } else { Color32::from_rgba_unmultiplied(250, 250, 251, 226) },
-        );
+        p.circle_filled(c, outer, pal.disc);
         p.circle_stroke(c, outer - 0.5, Stroke::new(1.0, if dark { white(34) } else { black(40) }));
         let top: Vec<Pos2> = (0..=24)
             .map(|j| {
@@ -6561,6 +6562,9 @@ impl App {
         let (mut check_now, mut install_now) = (false, false);
         let (mut new_snippet, mut create_script) = (false, false);
         let mut reset_req: Option<usize> = None;
+        let themes_all = self.custom_themes.clone();
+        let active_theme = self.active_theme().cloned();
+        let mut theme_act: Vec<ThemeAct> = vec![];
         let mut record_capture: Option<(String, String)> = None;
         let update_channel = {
             let id = Id::new("update_channel");
@@ -6736,7 +6740,7 @@ impl App {
             #[cfg(test)]
             ctx.data_mut(|d| d.insert_temp(Id::new("settings-search-rect"), sr.rect));
             let mg = Rect::from_center_size(Pos2::new(sr.rect.min.x + 16.0, sr.rect.center().y), Vec2::splat(15.0));
-            record_text(&ctx, pal, "search-icon", pal.sub_strong, &[pal.field.gamma_multiply(1.6)], 1.0);
+            record_text(&ctx, pal, "search-icon", pal.sub_strong, &[pal.lift(1.6)], 1.0);
             match self.icons.texture(&ctx, &Icon::Glyph("sf:magnifyingglass", [0, 0, 0])) {
                 Some(t) => {
                     ui.painter().image(t.id(), mg, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), pal.sub_strong);
@@ -6749,7 +6753,7 @@ impl App {
                 let xr = Rect::from_center_size(Pos2::new(sr.rect.max.x - 14.0, sr.rect.center().y), Vec2::splat(28.0));
                 let xe = ui.interact(xr, Id::new("settings-search-clear"), Sense::click()).on_hover_text("Clear search");
                 record_ctl(&ctx, "search-clear", xe.id, xr, true);
-                record_text(&ctx, pal, "search-clear", pal.sub_strong, &[pal.field.gamma_multiply(1.6)], 1.0);
+                record_text(&ctx, pal, "search-clear", pal.sub_strong, &[pal.lift(1.6)], 1.0);
                 focus_ring(ui, pal, &xe, xr.shrink(2.0));
                 ui.painter().text(
                     xr.center(),
@@ -6798,7 +6802,7 @@ impl App {
                     }
                     let gr = Rect::from_center_size(Pos2::new(r.min.x + 20.0, r.center().y), Vec2::splat(20.0));
                     ui.painter().rect_filled(gr, 5.0, if on { pal.accent } else { pal.field });
-                    let tint = if on { Color32::WHITE } else { pal.sub_strong };
+                    let tint = if on { pal.on_accent } else { pal.sub_strong };
                     if on {
                         record_text(&ctx, pal, "side-icon-active", tint, &[pal.sel, pal.accent], 1.0);
                         record_text(&ctx, pal, "side-label-active", pal.text, &[pal.sel], 1.0);
@@ -6884,14 +6888,46 @@ impl App {
                         // the three wheel keys only matter while the drop wheel is on
                         let wheel_off = !s.drop_wheel;
                         group(ui, pal, |ui| {
+                            row(ui, pal, "Appearance", "Follow the system, or force dark or light.", |ui| {
+                                segmented(ui, pal, &mut s.theme, &[(Theme::System, "System"), (Theme::Dark, "Dark"), (Theme::Light, "Light")]);
+                            });
+                            row(ui, pal, "Custom themes", "Your own colours. Pick one to use it, or copy the current look to start a new one.", |ui| {
+                                // right-to-left: the last control drawn sits at the left
+                                if small_btn(ui, pal, "Import…") {
+                                    theme_act.push(ThemeAct::Import);
+                                }
+                                if small_btn(ui, pal, if active_theme.is_some() { "Duplicate" } else { "New from current" }) {
+                                    theme_act.push(ThemeAct::Duplicate);
+                                }
+                                let shown = active_theme.as_ref().map_or("None", |t| t.name.as_str());
+                                field_combo(ui, pal, "custom-theme", shown, 150.0, |ui| {
+                                    if ui.selectable_label(active_theme.is_none(), "None").clicked() {
+                                        theme_act.push(ThemeAct::Select(None));
+                                    }
+                                    for t in &themes_all {
+                                        let on = active_theme.as_ref().is_some_and(|a| a.name == t.name);
+                                        if ui.selectable_label(on, &t.name).clicked() {
+                                            theme_act.push(ThemeAct::Select(Some(t.name.clone())));
+                                        }
+                                    }
+                                });
+                            });
+                        });
+                        if let Some(t) = &active_theme {
+                            ui.add_space(12.0);
+                            let mut e = t.clone();
+                            theme_editor(ui, pal, &mut e, &mut theme_act);
+                            if e != *t {
+                                theme_act.push(ThemeAct::Edit(e));
+                            }
+                        }
+                        ui.add_space(12.0);
+                        group(ui, pal, |ui| {
                             row(ui, pal, "Launcher hotkey", "Press it from any app to open or close Ferrocast.", |ui| {
                                 if small_btn(ui, pal, "Record…") {
                                     rec = true;
                                 }
                                 keycap(ui, pal, &services::hotkey_label(&s.launcher_hotkey));
-                            });
-                            row(ui, pal, "Appearance", "Follow the system, or force dark or light.", |ui| {
-                                segmented(ui, pal, &mut s.theme, &[(Theme::System, "System"), (Theme::Dark, "Dark"), (Theme::Light, "Light")]);
                             });
                             row(ui, pal, "Compact mode", "Show only the search bar until you type.", |ui| toggle(ui, pal, &mut s.compact_mode));
                             row(ui, pal, "Launch at login", "Start Ferrocast when you sign in to your Mac.", |ui| toggle(ui, pal, &mut s.launch_at_login));
@@ -7864,6 +7900,16 @@ impl App {
         if let Some(id) = enable {
             s.command_mut(&id).disabled = false;
         }
+        // the System / Dark / Light picker leaves custom themes
+        if s.theme != self.settings.theme {
+            s.custom_theme = None;
+        }
+        if !theme_act.is_empty() {
+            for a in theme_act {
+                self.apply_theme_act(a);
+            }
+            s.custom_theme = self.settings.custom_theme.clone();
+        }
         if req_acc {
             windows::accessibility_trusted(true);
         }
@@ -8704,7 +8750,7 @@ const FIELD_H: f32 = 28.0;
 /// The Settings field look, applied to the widgets of `ui` (call it inside a scope): the card
 /// field fill, a 1 px border that brightens on hover and turns accent on focus, 8 pt corners.
 fn field_style(ui: &mut Ui, pal: &Palette) {
-    let fill = pal.field.gamma_multiply(1.6);
+    let fill = pal.lift(1.6);
     let radius = egui::CornerRadius::same(8);
     ui.spacing_mut().interact_size.y = FIELD_H;
     ui.spacing_mut().button_padding = Vec2::new(8.0, 4.0);
@@ -8713,9 +8759,9 @@ fn field_style(ui: &mut Ui, pal: &Palette) {
     v.selection.stroke = Stroke::new(1.0, pal.accent);
     for (w, f, line) in [
         (&mut v.widgets.inactive, fill, pal.border),
-        (&mut v.widgets.hovered, pal.field.gamma_multiply(2.4), pal.border.gamma_multiply(2.2)),
-        (&mut v.widgets.active, pal.field.gamma_multiply(2.4), pal.accent),
-        (&mut v.widgets.open, pal.field.gamma_multiply(2.4), pal.border.gamma_multiply(2.2)),
+        (&mut v.widgets.hovered, pal.lift(2.4), pal.border.gamma_multiply(2.2)),
+        (&mut v.widgets.active, pal.lift(2.4), pal.accent),
+        (&mut v.widgets.open, pal.lift(2.4), pal.border.gamma_multiply(2.2)),
     ] {
         w.weak_bg_fill = f;
         w.bg_fill = f;
@@ -8778,7 +8824,7 @@ fn record_field(ctx: &egui::Context, kind: &str, r: Rect) {
 /// The Settings search box: the field look with room for a magnifier on the left and a clear
 /// button on the right (the caller paints both). Not counted in `field-count`.
 fn search_field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, id: Id) -> egui::Response {
-    record_text(ui.ctx(), pal, "hint-sidebar", pal.sub_strong, &[pal.field.gamma_multiply(1.6)], 1.0);
+    record_text(ui.ctx(), pal, "hint-sidebar", pal.sub_strong, &[pal.lift(1.6)], 1.0);
     let r = ui
         .scope(|ui| {
             field_style(ui, pal);
@@ -8801,7 +8847,7 @@ fn search_field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint:
 
 /// A single-line text field in the Settings look; `hint` shows in the sub colour while empty.
 fn field(ui: &mut Ui, pal: &Palette, text: &mut String, width: f32, hint: &str, password: bool) -> egui::Response {
-    let fill = pal.field.gamma_multiply(1.6);
+    let fill = pal.lift(1.6);
     record_text(ui.ctx(), pal, "hint-card", pal.sub_strong, &[pal.field, fill], ui.opacity());
     record_text(ui.ctx(), pal, "field-text", pal.text, &[pal.field, fill], ui.opacity());
     let r = ui
@@ -8917,9 +8963,9 @@ fn small_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 20.0, 28.0), Sense::click());
     record_ctl(ui.ctx(), "small_btn", resp.id, r, ui.is_enabled());
     focus_ring(ui, pal, &resp, r);
-    record_text(ui.ctx(), pal, "button", pal.text, &[pal.field, pal.field.gamma_multiply(1.6)], ui.opacity());
+    record_text(ui.ctx(), pal, "button", pal.text, &[pal.field, pal.lift(1.6)], ui.opacity());
     let p = ui.painter();
-    p.rect_filled(r, 7.0, if resp.hovered() { pal.sel } else { pal.field.gamma_multiply(1.6) });
+    p.rect_filled(r, 7.0, if resp.hovered() { pal.sel } else { pal.lift(1.6) });
     p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.text);
     resp.clicked()
 }
@@ -9029,11 +9075,9 @@ fn bar_btn(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let (fill, ink) = match style {
-        BarStyle::Primary => (if hover { pal.accent.gamma_multiply(1.12) } else { pal.accent }, Color32::WHITE),
-        BarStyle::Soft => (if hover { pal.sel } else { pal.field.gamma_multiply(1.6) }, pal.text),
-        BarStyle::Ghost => {
-            (if hover { pal.field.gamma_multiply(1.6) } else { Color32::TRANSPARENT }, if enabled { pal.text } else { pal.sub })
-        }
+        BarStyle::Primary => (if hover { pal.accent.gamma_multiply(1.12) } else { pal.accent }, pal.on_accent),
+        BarStyle::Soft => (if hover { pal.sel } else { pal.lift(1.6) }, pal.text),
+        BarStyle::Ghost => (if hover { pal.lift(1.6) } else { Color32::TRANSPARENT }, if enabled { pal.text } else { pal.sub }),
     };
     let ink = if enabled { ink } else { pal.sub };
     let p = ui.painter();
@@ -9162,11 +9206,7 @@ fn icon_btn(ui: &mut Ui, pal: &Palette, r: Rect, label: &str, glyph: BarGlyph, e
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let ink = if enabled { pal.text } else { pal.sub };
-    ui.painter().rect_filled(
-        r,
-        crate::editor_ctl::CONTROL_RADIUS,
-        if hover { pal.field.gamma_multiply(1.6) } else { Color32::TRANSPARENT },
-    );
+    ui.painter().rect_filled(r, crate::editor_ctl::CONTROL_RADIUS, if hover { pal.lift(1.6) } else { Color32::TRANSPARENT });
     paint_bar_glyph(ui.painter(), r.center(), glyph, ink);
     let resp = resp.on_hover_text(label);
     enabled && resp.clicked()
@@ -9178,19 +9218,19 @@ fn accent_btn(ui: &mut Ui, pal: &Palette, label: &str) -> bool {
 
 /// `accent_btn`, also returning the button's rect.
 fn accent_btn_r(ui: &mut Ui, pal: &Palette, label: &str) -> (bool, Rect) {
-    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), Color32::WHITE);
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.5), pal.on_accent);
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 24.0, 28.0), Sense::click());
     record_ctl(ui.ctx(), "accent_btn", resp.id, r, ui.is_enabled());
     focus_ring(ui, pal, &resp, r);
-    record_text(ui.ctx(), pal, "accent-button", Color32::WHITE, &[pal.accent], ui.opacity());
+    record_text(ui.ctx(), pal, "accent-button", pal.on_accent, &[pal.accent], ui.opacity());
     let p = ui.painter();
     p.rect_filled(r, 7.0, if resp.hovered() { pal.accent.gamma_multiply(1.15) } else { pal.accent });
-    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
+    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.on_accent);
     (resp.clicked(), r)
 }
 
 fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
-    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), if on { Color32::WHITE } else { pal.text });
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), if on { pal.on_accent } else { pal.text });
     let (r, resp) = ui.allocate_exact_size(Vec2::new(g.size().x + 18.0, 28.0), Sense::click());
     record_ctl(ui.ctx(), "pill", resp.id, r, ui.is_enabled());
     focus_ring(ui, pal, &resp, r);
@@ -9203,10 +9243,10 @@ fn pill(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
         } else if resp.hovered() {
             pal.sel
         } else {
-            pal.field.gamma_multiply(1.6)
+            pal.lift(1.6)
         },
     );
-    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, if on { Color32::WHITE } else { pal.text });
+    p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, if on { pal.on_accent } else { pal.text });
     resp.clicked()
 }
 
@@ -9239,7 +9279,7 @@ fn segmented_bar(ui: &mut Ui, pal: &Palette, sel: Option<usize>, labels: &[&str]
     let (r, base) = ui.allocate_exact_size(Vec2::new(seg_w * labels.len() as f32 + 4.0, 28.0), Sense::hover());
     let id = base.id;
     let p = ui.painter().clone();
-    p.rect_filled(r, 8.0, pal.field.gamma_multiply(1.3));
+    p.rect_filled(r, 8.0, pal.lift(1.3));
     if let Some(idx) = sel {
         let x = ui.ctx().animate_value_with_time(id.with("seg"), idx as f32, 0.14);
         let sr = Rect::from_min_size(Pos2::new(r.min.x + 2.0 + x * seg_w, r.min.y + 2.0), Vec2::new(seg_w, 24.0));
@@ -9262,7 +9302,7 @@ fn segmented_bar(ui: &mut Ui, pal: &Palette, sel: Option<usize>, labels: &[&str]
                 (false, false) => "segment-disabled",
             },
             if sel == Some(i) { pal.text } else { pal.sub_strong },
-            &[pal.field, pal.field.gamma_multiply(1.3), pal.sel.gamma_multiply(1.8)][..if sel == Some(i) { 3 } else { 2 }],
+            &[pal.field, pal.lift(1.3), pal.sel.gamma_multiply(1.8)][..if sel == Some(i) { 3 } else { 2 }],
             ui.opacity(),
         );
         if resp.clicked() {
@@ -9316,7 +9356,7 @@ fn keycap(ui: &mut Ui, pal: &Palette, label: &str) {
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), pal.text);
     let (r, _) = ui.allocate_exact_size(Vec2::new(g.size().x + 16.0, 24.0), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(r, 6.0, pal.field.gamma_multiply(1.6));
+    p.rect_filled(r, 6.0, pal.lift(1.6));
     p.galley(Pos2::new(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.text);
 }
 
@@ -9526,6 +9566,7 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
         &[
             "launcher_hotkey",
             "theme",
+            "custom_theme",
             "compact_mode",
             "launch_at_login",
             "drop_wheel",
@@ -9602,7 +9643,7 @@ impl App {
         }
         let finder_enter_changed = s.enter_on_finder != self.settings.enter_on_finder;
         let enter_on_finder = s.enter_on_finder;
-        let theme_changed = s.theme != self.settings.theme;
+        let theme_changed = s.theme != self.settings.theme || s.custom_theme != self.settings.custom_theme;
         let hotkey_changed = s.launcher_hotkey != self.settings.launcher_hotkey;
         let dirs_changed = s.script_directories != self.settings.script_directories;
         let start_poller = s.update_check && self.update_poller.is_none();
@@ -9669,3 +9710,154 @@ impl App {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+// ---- custom themes (Settings → General)
+
+/// What the theme controls asked for during a frame; applied after the frame is drawn.
+enum ThemeAct {
+    Select(Option<String>),
+    Edit(ferrocast_core::themes::CustomTheme),
+    Duplicate,
+    Delete,
+    Rename(String),
+    Export,
+    Import,
+}
+
+impl App {
+    fn apply_theme_act(&mut self, a: ThemeAct) {
+        match a {
+            ThemeAct::Select(n) => self.select_theme(n),
+            ThemeAct::Edit(t) => self.update_active_theme(t),
+            ThemeAct::Duplicate => self.duplicate_theme(),
+            ThemeAct::Delete => self.delete_active_theme(),
+            ThemeAct::Rename(n) => {
+                if let Err(e) = self.rename_active_theme(&n) {
+                    self.toast(e);
+                }
+            }
+            ThemeAct::Export => self.export_theme_dialog(),
+            ThemeAct::Import => self.import_theme_dialog(),
+        }
+    }
+}
+
+/// A row of the Settings look that is not a searchable setting (no index entry).
+fn plain_row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
+    let (r, _) = row_flow(ui, pal, RowLook::PANE, false, title, None, desc, control);
+    form_sep(ui, pal, r);
+}
+
+/// The sentence under the editor for a text pair that is too faint.
+fn contrast_warning_text(w: &ferrocast_core::themes::ContrastWarning) -> String {
+    use ferrocast_core::themes::{Pair, MIN_CONTRAST};
+    let what = match w.pair {
+        Pair::TextOnBackground => "Text on the background",
+        Pair::TextOnSurface => "Text on the surface",
+        Pair::SecondaryOnBackground => "Secondary text on the background",
+    };
+    format!("{what} has a contrast of {:.1}:1, below {MIN_CONTRAST}:1. It may be hard to read.", w.ratio)
+}
+
+/// One colour of the editor: a picker button and a hex field that stay in step.
+fn theme_color_row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, value: &mut String) {
+    plain_row(ui, pal, title, desc, |ui| {
+        use ferrocast_core::themes::{parse_hex, to_hex};
+        let id = Id::new(("theme-hex", title));
+        let (synced, mut buf): (String, String) = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| (value.clone(), value.clone()));
+        if synced != *value {
+            buf = value.clone();
+        }
+        let before = buf.clone();
+        field(ui, pal, &mut buf, 84.0, "#RRGGBB", false);
+        if buf != before {
+            if let Some(rgb) = parse_hex(&buf) {
+                *value = to_hex(rgb);
+            }
+        }
+        let mut rgb = parse_hex(value).unwrap_or([128, 128, 128]);
+        let picked = ui.scope(|ui| {
+            field_style(ui, pal);
+            ui.color_edit_button_srgb(&mut rgb).changed()
+        });
+        if picked.inner {
+            *value = to_hex(rgb);
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(id, (value.clone(), buf)));
+    });
+}
+
+/// The editor card for the selected custom theme, its live preview and the contrast warnings.
+fn theme_editor(ui: &mut Ui, pal: &Palette, e: &mut ferrocast_core::themes::CustomTheme, act: &mut Vec<ThemeAct>) {
+    use ferrocast_core::themes::ThemeBase;
+    group(ui, pal, |ui| {
+        plain_row(ui, pal, "Theme name", "Shown in the list and used for the exported file.", |ui| {
+            let id = Id::new("theme-name-buf");
+            let (of, mut buf): (String, String) = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| (e.name.clone(), e.name.clone()));
+            if of != e.name {
+                buf = e.name.clone();
+            }
+            if small_btn(ui, pal, "Rename") {
+                act.push(ThemeAct::Rename(buf.clone()));
+            }
+            field(ui, pal, &mut buf, 170.0, "Name", false);
+            ui.ctx().data_mut(|d| d.insert_temp(id, (e.name.clone(), buf)));
+        });
+        plain_row(ui, pal, "Base", "Light or dark. It sets the shape of the derived colours and the look of the Notes window.", |ui| {
+            segmented(ui, pal, &mut e.base, &[(ThemeBase::Dark, "Dark"), (ThemeBase::Light, "Light")]);
+        });
+        theme_color_row(ui, pal, "Accent", "Buttons, the caret and highlights.", &mut e.accent);
+        theme_color_row(ui, pal, "Background", "The window.", &mut e.background);
+        theme_color_row(ui, pal, "Surface", "Cards, fields and controls.", &mut e.surface);
+        theme_color_row(ui, pal, "Text", "Titles and results.", &mut e.text);
+        theme_color_row(ui, pal, "Secondary text", "Descriptions and hints.", &mut e.secondary_text);
+        theme_color_row(ui, pal, "Separator", "Lines between rows.", &mut e.separator);
+        plain_row(ui, pal, "Theme file", "Share this theme as a .ferrocast-theme file, or remove it.", |ui| {
+            if small_btn(ui, pal, "Delete") {
+                act.push(ThemeAct::Delete);
+            }
+            if small_btn(ui, pal, "Export…") {
+                act.push(ThemeAct::Export);
+            }
+        });
+    });
+    ui.add_space(10.0);
+    for w in e.warnings() {
+        ui.label(RichText::new(contrast_warning_text(&w)).size(12.0).color(status_color(pal, StatusKind::Warn)));
+        ui.add_space(2.0);
+    }
+    ui.add_space(6.0);
+    ui.label(RichText::new("Preview").size(12.0).color(pal.sub_strong));
+    ui.add_space(4.0);
+    theme_preview(ui, e);
+}
+
+/// A small launcher drawn with the edited colours (not the app's current palette).
+fn theme_preview(ui: &mut Ui, t: &ferrocast_core::themes::CustomTheme) {
+    let pal = crate::ui::palette_custom(t);
+    let w = ui.available_width().min(420.0);
+    let (r, _) = ui.allocate_exact_size(Vec2::new(w, 188.0), Sense::hover());
+    let p = ui.painter_at(r);
+    p.rect_filled(r, 12.0, pal.bg);
+    p.rect_stroke(r, 12.0, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+    p.text(Pos2::new(r.min.x + 16.0, r.min.y + 22.0), Align2::LEFT_CENTER, "Search Ferrocast…", FontId::proportional(14.0), pal.sub);
+    p.hline(r.min.x..=r.max.x, r.min.y + 44.0, Stroke::new(1.0, pal.sep));
+    let rows = [("Selected result", "Command", true), ("Another result", "Application", false), ("Third result", "Snippet", false)];
+    for (i, (name, kind, on)) in rows.into_iter().enumerate() {
+        let y = r.min.y + 52.0 + i as f32 * 32.0;
+        let rr = Rect::from_min_size(Pos2::new(r.min.x + 8.0, y), Vec2::new(r.width() - 16.0, 30.0));
+        if on {
+            p.rect_filled(rr, 8.0, pal.sel);
+        }
+        let icon = Rect::from_center_size(Pos2::new(rr.min.x + 18.0, rr.center().y), Vec2::splat(18.0));
+        p.rect_filled(icon, 5.0, if on { pal.accent } else { pal.lift(1.6) });
+        p.text(Pos2::new(rr.min.x + 36.0, rr.center().y), Align2::LEFT_CENTER, name, FontId::proportional(13.0), pal.text);
+        p.text(Pos2::new(rr.max.x - 10.0, rr.center().y), Align2::RIGHT_CENTER, kind, FontId::proportional(11.5), pal.sub);
+    }
+    let fy = r.max.y - 30.0;
+    p.hline(r.min.x..=r.max.x, fy, Stroke::new(1.0, pal.sep));
+    p.text(Pos2::new(r.min.x + 16.0, fy + 15.0), Align2::LEFT_CENTER, "Ferrocast", FontId::proportional(11.5), pal.sub);
+    let chip = Rect::from_center_size(Pos2::new(r.max.x - 40.0, fy + 15.0), Vec2::new(60.0, 20.0));
+    p.rect_filled(chip, 6.0, pal.accent);
+    p.text(chip.center(), Align2::CENTER_CENTER, "Open", FontId::proportional(11.5), pal.on_accent);
+}

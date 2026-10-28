@@ -6,6 +6,16 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Custom themes**: Settings → General has a colour editor for your own themes (accent, background, surface, text, secondary text and separator on a light or dark base) with colour pickers, hex fields, a live preview and warnings when text contrast falls below 4.5:1. Themes can be duplicated (the built-in ones are copied, not edited), renamed, deleted, exported as `.ferrocast-theme` files and imported. System, Dark and Light keep working, and the default look is unchanged. (docs: /docs/launcher/themes/) #settings
+- **Sync with iCloud**: opt-in in Settings → Advanced (off by default). Settings (hotkeys included), snippets, quicklinks, notes, clipboard history with its images and Ask AI chats stay in step between your Macs through the iCloud Drive folder, merged item by item with the newest edit winning and deletions included. Script folders, the Obsidian vault, Launch at login, camera and microphone choices, update preferences and macOS permissions stay on each Mac, and Keychain API keys do not sync. Ask AI conversations are now saved so they can sync. (docs: /docs/launcher/sync/)
+- **Mouse parity in the launcher**: everything the keyboard does now has a click path. Right-click a row to open its actions, click **Actions**, **↵** and **esc** in the footer, click outside the action panel to close it, hover buttons on clipboard rows (Pin, Delete) and snippet and quicklink rows (Edit, Delete), **Clear History…** in the Clipboard view (pinned entries stay), and **+ New** in Snippets and Quicklinks. Keyboard shortcuts are unchanged. (docs: /docs/launcher/keyboard-shortcuts/)
+- **Mouse parity everywhere else**: the Notes window has back and forward arrows and a close button in the toolbar and a right-click menu (New, Browse, Pin, Back, Forward, zoom, Actions, Close); Search Notes rows get Pin and Delete on hover and a **+ New** button; the PDF organizer has buttons to move, rotate, duplicate and remove a page; the video and audio trim, split and snapshot windows have buttons for frame and second steps, markers, jumps and cuts; Annotate has **Undo** and **Delete**; the recording editor has **−1 s**, **+1 s**, **Start** and **End**; the welcome tour has **‹** **›** arrows; the drag wheel has **Convert**, **Tools** and **Actions** chips to switch wheel; and every footer chip that names one key (**Rotate R**, **Undo ⌘Z**, **Play space**…) now presses that key when clicked. Keyboard shortcuts are unchanged. (docs: /docs/launcher/keyboard-shortcuts/)
+- **Pick Color**: a launcher command that opens the macOS screen colour sampler; the picked colour is copied as HEX and kept in the clipboard history. (docs: /docs/launcher/calculator/)
+
+### Changed
+- **Menu bar icon**: the menu bar shows Ferrocast's own app icon (the red square with the white bolt) instead of the drawn ring, and goes back to it after a recording stops.
+
 ## [0.3.0] - 2026-10-27
 
 ### Changed

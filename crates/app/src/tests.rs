@@ -99,6 +99,7 @@ fn fixture() -> App {
         inline: HashMap::new(),
         focus_first: false,
         dark: true,
+        custom_themes: vec![],
         started: true,
         act_item: None,
         scratch: String::new(),
@@ -6813,7 +6814,7 @@ fn every_settings_text_field_and_combo_goes_through_the_field_helper() {
     use ferrocast_core::models::AiProvider as P;
     // (tab, chat provider, translate provider) -> expected (text fields, combos, drag fields)
     let cases: [(usize, P, Option<P>, usize, usize, usize); 13] = [
-        (0, P::OpenAiCompatible, None, 1, 0, 0),
+        (0, P::OpenAiCompatible, None, 1, 1, 0),
         (1, P::OpenAiCompatible, None, 0, 1, 0),
         (2, P::OpenAiCompatible, None, 0, 0, 0),
         (3, P::OpenAiCompatible, None, 2, 1, 0),
@@ -7710,6 +7711,7 @@ fn sd4_scrambled() -> Settings {
     let mut s = Settings::default();
     s.launcher_hotkey = "Ctrl+Shift+K".into();
     s.theme = Theme::Dark;
+    s.custom_theme = Some("Ocean".into());
     s.compact_mode = true;
     s.launch_at_login = true;
     s.drop_wheel = false;
@@ -15599,4 +15601,206 @@ mod mouse_parity {
         click_button(&mut app, chip.center(), egui::PointerButton::Primary);
         assert!(matches!(app.view(), View::RedactImage { areas, .. } if areas.is_empty()), "the Remove chip is ⌫");
     }
+}
+
+// ---- custom themes (S2, S3, S4)
+
+#[test]
+fn custom_themes_default_palette_values_are_unchanged() {
+    use egui::Color32 as C;
+    let d = ui::palette(true);
+    assert_eq!(
+        (d.bg, d.border, d.text, d.sub, d.sub_strong, d.accent_text, d.sel, d.accent, d.field, d.sep, d.danger),
+        (
+            C::from_rgba_unmultiplied(24, 24, 27, 248),
+            C::from_white_alpha(28),
+            C::from_gray(238),
+            C::from_gray(140),
+            C::from_gray(166),
+            C::from_rgb(255, 112, 122),
+            C::from_white_alpha(24),
+            C::from_rgb(240, 83, 95),
+            C::from_white_alpha(14),
+            C::from_white_alpha(20),
+            C::from_rgb(240, 83, 95),
+        )
+    );
+    let l = ui::palette(false);
+    assert_eq!(
+        (l.bg, l.border, l.text, l.sub, l.sub_strong, l.accent_text, l.sel, l.accent, l.field, l.sep, l.danger),
+        (
+            C::from_rgba_unmultiplied(250, 250, 251, 250),
+            C::from_black_alpha(36),
+            C::from_gray(30),
+            C::from_gray(120),
+            C::from_gray(88),
+            C::from_rgb(190, 28, 52),
+            C::from_black_alpha(18),
+            C::from_rgb(232, 54, 75),
+            C::from_black_alpha(10),
+            C::from_black_alpha(22),
+            C::from_rgb(200, 40, 40),
+        )
+    );
+    // the values added for custom themes keep the old look: hover = field x1.6, white on accent, the old popover and disc fills
+    for (p, dark) in [(d, true), (l, false)] {
+        assert_eq!(p.hover, p.field.gamma_multiply(1.6));
+        assert_eq!(p.lift(1.3), p.field.gamma_multiply(1.3));
+        assert_eq!(p.on_accent, C::WHITE);
+        assert!(!p.custom);
+        assert_eq!(p.popover, if dark { C::from_rgb(34, 34, 38) } else { C::from_rgb(246, 246, 248) });
+        assert_eq!(p.disc, if dark { C::from_rgba_unmultiplied(24, 24, 27, 222) } else { C::from_rgba_unmultiplied(250, 250, 251, 226) });
+    }
+}
+
+#[test]
+fn custom_themes_builtin_twin_matches_the_default_palette_where_it_is_opaque() {
+    use ferrocast_core::themes::{builtin, ThemeBase};
+    for (base, dark) in [(ThemeBase::Dark, true), (ThemeBase::Light, false)] {
+        let (c, d) = (ui::palette_custom(&builtin(base)), ui::palette(dark));
+        assert_eq!((c.bg, c.text, c.accent, c.danger), (d.bg, d.text, d.accent, d.danger), "{base:?}");
+        assert!(c.custom);
+    }
+}
+
+fn ocean() -> ferrocast_core::themes::CustomTheme {
+    use ferrocast_core::themes::{CustomTheme, ThemeBase};
+    CustomTheme {
+        name: "Ocean".into(),
+        base: ThemeBase::Dark,
+        accent: "#38BDF8".into(),
+        background: "#0B1220".into(),
+        surface: "#16213A".into(),
+        text: "#E6EEFF".into(),
+        secondary_text: "#9FB0D0".into(),
+        separator: "#26324D".into(),
+    }
+}
+
+#[test]
+fn custom_themes_the_launcher_draws_with_the_selected_theme_and_default_without() {
+    let mut app = fixture();
+    app.custom_themes = vec![ocean()];
+    app.settings.custom_theme = Some("ocean".into());
+    app.ctx.set_theme(egui::ThemePreference::Light);
+    render(&mut app, vec![]);
+    let stamp = |app: &App| app.ctx.data(|d| d.get_temp::<(egui::Color32, egui::Color32)>(Id::new("style-stamp")));
+    let want = ui::palette_custom(&ocean());
+    assert_eq!(stamp(&app), Some((want.accent, want.sel)));
+    assert!(app.dark, "the theme's base decides, whatever egui's theme says");
+    // deselecting returns to the default palette on the next frame
+    app.settings.custom_theme = None;
+    app.ctx.set_theme(egui::ThemePreference::Dark);
+    render(&mut app, vec![]);
+    let d = ui::palette(true);
+    assert_eq!(stamp(&app), Some((d.accent, d.sel)));
+}
+
+#[test]
+fn custom_themes_a_missing_name_falls_back_to_the_default_look() {
+    let mut app = fixture();
+    app.settings.custom_theme = Some("Gone".into());
+    assert!(app.active_theme().is_none());
+    render(&mut app, vec![]);
+}
+
+#[test]
+fn custom_themes_duplicate_select_edit_rename_delete_and_persist() {
+    let (mut app, _) = notes_tab_app(egui::ThemePreference::Dark);
+    app.dark = true;
+    fx_taken();
+    app.duplicate_theme();
+    assert_eq!(app.settings.custom_theme.as_deref(), Some("Dark copy"));
+    assert_eq!(app.custom_themes.len(), 1);
+    assert_eq!(fx_taken(), vec!["appearance Dark".to_string()]);
+    let saved: ferrocast_core::themes::ThemeFile = app.store.load("themes.json");
+    assert_eq!(saved.themes, app.custom_themes, "saved to themes.json");
+    // a second duplicate of the selected one gets a free name
+    app.duplicate_theme();
+    assert_eq!(app.settings.custom_theme.as_deref(), Some("Dark copy copy"));
+    // editing the base reaches the Notes window; a colour edit does not
+    fx_taken();
+    let mut t = app.active_theme().unwrap().clone();
+    t.accent = "#112233".into();
+    app.update_active_theme(t.clone());
+    assert!(fx_taken().is_empty(), "a colour edit leaves the Notes window alone");
+    t.base = ferrocast_core::themes::ThemeBase::Light;
+    app.update_active_theme(t);
+    assert_eq!(fx_taken(), vec!["appearance Light".to_string()]);
+    assert_eq!(app.active_theme().unwrap().accent, "#112233");
+    // rename: collisions and empty names are refused, a good one keeps the selection
+    assert!(app.rename_active_theme("dark copy").is_err());
+    assert!(app.rename_active_theme("   ").is_err());
+    assert_eq!(app.rename_active_theme(" Night ").map_err(|e| e.to_string()), Ok(()));
+    assert_eq!(app.settings.custom_theme.as_deref(), Some("Night"));
+    // the selection is persisted in settings.json
+    let s: Settings = app.store.load("settings.json");
+    assert_eq!(s.custom_theme.as_deref(), Some("Night"));
+    // delete: back to the System / Dark / Light setting (System here)
+    fx_taken();
+    app.delete_active_theme();
+    assert_eq!(app.settings.custom_theme, None);
+    assert_eq!(app.custom_themes.len(), 1);
+    assert_eq!(fx_taken(), vec!["appearance System".to_string()], "the System setting applies again");
+}
+
+#[test]
+fn custom_themes_export_then_import_round_trips_and_bad_files_are_refused() {
+    let mut app = fixture();
+    app.custom_themes = vec![ocean()];
+    app.settings.custom_theme = Some("Ocean".into());
+    let dir = std::env::temp_dir().join(format!("ferrocast-theme-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("Ocean.ferrocast-theme");
+    app.theme_file_picked(true, file.clone());
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!((v["format"].as_str(), v["version"].as_u64()), (Some("ferrocast-theme"), Some(1)));
+    // importing a name that exists keeps both
+    assert_eq!(app.import_theme_file(&file), Ok("Ocean 2".to_string()));
+    assert_eq!(app.custom_themes.len(), 2);
+    assert_eq!(app.settings.custom_theme.as_deref(), Some("Ocean 2"));
+    // garbage, a newer version and a bad colour are refused and change nothing
+    let bad = dir.join("bad.ferrocast-theme");
+    std::fs::write(&bad, "nope").unwrap();
+    assert!(app.import_theme_file(&bad).is_err());
+    std::fs::write(&bad, file_with(&file, |v| v["version"] = 7.into())).unwrap();
+    assert!(app.import_theme_file(&bad).unwrap_err().contains("newer"));
+    std::fs::write(&bad, file_with(&file, |v| v["theme"]["accent"] = "red".into())).unwrap();
+    assert!(app.import_theme_file(&bad).is_err());
+    assert!(app.import_theme_file(&dir.join("missing.ferrocast-theme")).is_err());
+    assert_eq!(app.custom_themes.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn file_with(path: &std::path::Path, f: impl FnOnce(&mut serde_json::Value)) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    f(&mut v);
+    v.to_string()
+}
+
+#[test]
+fn custom_themes_settings_general_renders_with_a_theme_in_both_bases_and_warns_on_low_contrast() {
+    use ferrocast_core::themes::ThemeBase;
+    for base in [ThemeBase::Dark, ThemeBase::Light] {
+        for faint in [false, true] {
+            let mut t = ocean();
+            t.base = base;
+            if faint {
+                t.text = "#16213B".into();
+            }
+            let mut app = settings_app(0, egui::ThemePreference::Dark);
+            app.custom_themes = vec![t.clone()];
+            app.settings.custom_theme = Some("Ocean".into());
+            settle(&mut app);
+            assert_eq!(!t.warnings().is_empty(), faint);
+        }
+    }
+    let w = ferrocast_core::themes::ContrastWarning { pair: ferrocast_core::themes::Pair::TextOnBackground, ratio: 3.04 };
+    assert_eq!(contrast_warning_text(&w), "Text on the background has a contrast of 3.0:1, below 4.5:1. It may be hard to read.");
+}
+
+#[test]
+fn custom_themes_are_indexed_for_settings_search() {
+    let hits = ferrocast_core::settings_index::search("custom theme");
+    assert!(hits.iter().any(|e| e.title == "Custom themes" && e.tab == 0), "no hit");
 }

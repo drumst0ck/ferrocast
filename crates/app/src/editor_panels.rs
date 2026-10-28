@@ -1644,9 +1644,7 @@ pub(crate) fn panel_style(ui: &mut Ui, pal: &Palette, comfy: bool) {
     let v = &mut st.visuals;
     v.selection.bg_fill = pal.accent.gamma_multiply(ACCENT_TINT);
     v.selection.stroke = egui::Stroke::new(1.0, pal.accent_text);
-    for (w, fill) in
-        [(&mut v.widgets.inactive, pal.field.gamma_multiply(1.6)), (&mut v.widgets.hovered, pal.sel), (&mut v.widgets.active, pal.sel)]
-    {
+    for (w, fill) in [(&mut v.widgets.inactive, pal.lift(1.6)), (&mut v.widgets.hovered, pal.sel), (&mut v.widgets.active, pal.sel)] {
         w.weak_bg_fill = fill;
         w.bg_stroke = egui::Stroke::NONE;
         w.corner_radius = r;
@@ -2203,7 +2201,7 @@ fn secondary_button_tip(ui: &mut Ui, pal: &Palette, label: &str, width: f32, ena
     let resp = cell(ui, pal, rect, ui.id().with(("btn", label)), label, None);
     let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tip) };
     let hover = enabled && resp.hovered();
-    ui.painter().rect_filled(rect, crate::editor_ctl::CONTROL_RADIUS, if hover { pal.sel } else { pal.field.gamma_multiply(1.6) });
+    ui.painter().rect_filled(rect, crate::editor_ctl::CONTROL_RADIUS, if hover { pal.sel } else { pal.lift(1.6) });
     let color = if enabled { pal.text } else { pal.sub };
     ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(12.5), color);
     enabled && resp.clicked()
@@ -2220,7 +2218,7 @@ pub(crate) fn primary_button_w(ui: &mut Ui, pal: &Palette, label: &str, width: f
     let resp = cell(ui, pal, rect, ui.id().with(("primary", label)), label, None);
     let hover = enabled && resp.hovered();
     let fill = if !enabled {
-        pal.field.gamma_multiply(1.6)
+        pal.lift(1.6)
     } else if hover {
         pal.accent.gamma_multiply(1.15)
     } else {
@@ -2301,7 +2299,7 @@ fn paint_glyph(p: &egui::Painter, at: egui::Pos2, g: Glyph, color: egui::Color32
 fn shape_segments(ui: &mut Ui, pal: &Palette, items: &[(Glyph, &str)], current: usize) -> Option<usize> {
     let (track, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), HIT_H), egui::Sense::hover());
     let seg_w = (track.width() - 4.0) / items.len() as f32;
-    ui.painter().rect_filled(track, 8.0, pal.field.gamma_multiply(1.3));
+    ui.painter().rect_filled(track, 8.0, pal.lift(1.3));
     let mut clicked = None;
     for (i, (glyph, label)) in items.iter().enumerate() {
         let hit = Rect::from_min_size(egui::pos2(track.min.x + 2.0 + i as f32 * seg_w, track.min.y), egui::vec2(seg_w, HIT_H));
@@ -2349,7 +2347,7 @@ fn corner_picker(ui: &mut Ui, pal: &Palette, current: Corner) -> Option<Corner> 
         } else if resp.hovered() {
             pal.sel
         } else {
-            pal.field.gamma_multiply(1.3)
+            pal.lift(1.3)
         };
         let p = ui.painter();
         p.rect_filled(hit, 7.0, fill);
@@ -2395,7 +2393,7 @@ fn side_picker(ui: &mut Ui, pal: &Palette, current: SplitSide) -> Option<SplitSi
         } else if resp.hovered() {
             pal.sel
         } else {
-            pal.field.gamma_multiply(1.3)
+            pal.lift(1.3)
         };
         let p = ui.painter();
         p.rect_filled(hit, 7.0, fill);
@@ -2661,7 +2659,7 @@ fn mute_pill(ui: &mut Ui, pal: &Palette, track: &str, muted: bool) -> bool {
     } else if resp.hovered() {
         (pal.sel, pal.sub_strong)
     } else {
-        (pal.field.gamma_multiply(1.3), pal.sub_strong)
+        (pal.lift(1.3), pal.sub_strong)
     };
     ui.painter().rect_filled(rect, 12.0, fill);
     if muted {
