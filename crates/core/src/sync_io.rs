@@ -371,17 +371,40 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
     sync_domain_recovering(io, domain, snapshot, tracker, now, false)
 }
 
-/// True when this Mac's data file of `domain` was found unreadable (and set aside as
-/// `<file>.corrupt`) after the last time its sync state was saved. The data now loaded is not what
-/// this Mac had synced, so comparing it with the tracker would publish every missing item as a
-/// deletion on all Macs.
-pub fn needs_recovery(data_dir: &Path, domain: &str) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    let Ok(bad) = std::fs::metadata(data_dir.join(format!("{}.corrupt", domain_file(domain)))) else { return false };
-    match std::fs::metadata(tracker_path(data_dir, domain)) {
-        Ok(t) => (t.mtime(), t.mtime_nsec()) < (bad.ctime(), bad.ctime_nsec()),
-        Err(_) => true,
+fn recovery_marker(data_dir: &Path, domain: &str) -> PathBuf {
+    data_dir.join("sync-state").join(format!("{domain}.recover"))
+}
+
+/// Record that this Mac's data file of `domain` could not be loaded (unreadable or unparsable, set
+/// aside as `<file>.corrupt` when possible). What is loaded instead is not what this Mac had synced,
+/// so comparing it with the tracker would publish every missing item as a deletion on all Macs: the
+/// next sync of the domain starts over instead (see [`sync_domain_recovering`]). An explicit marker,
+/// not file times, so copying a data folder (with an old `.corrupt` file in it) triggers nothing.
+pub fn mark_recovery(data_dir: &Path, domain: &str) {
+    let p = recovery_marker(data_dir, domain);
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
     }
+    if let Err(e) = std::fs::write(&p, b"") {
+        eprintln!("ferrocast: could not write {}: {e}", p.display());
+    }
+}
+
+/// [`mark_recovery`] for a data file name (`None` of the files that never sync does nothing).
+pub fn mark_recovery_for_file(data_dir: &Path, file: &str) {
+    if let Some(domain) = domain_of_file(file) {
+        mark_recovery(data_dir, domain);
+    }
+}
+
+/// True while the marker of [`mark_recovery`] exists.
+pub fn needs_recovery(data_dir: &Path, domain: &str) -> bool {
+    recovery_marker(data_dir, domain).exists()
+}
+
+/// Remove the marker once the recovered state is saved (or there was nothing to apply).
+pub fn clear_recovery(data_dir: &Path, domain: &str) {
+    let _ = std::fs::remove_file(recovery_marker(data_dir, domain));
 }
 
 /// A setting this Mac changed because another Mac's data said so (not an edit): record the new
@@ -451,9 +474,20 @@ pub fn sync_domain_recovering(
         max_tombstones: clipboard.then_some(MAX_CLIPBOARD_TOMBSTONES),
         pristine: pristine_check(domain),
     };
+    // A recovering run reads this Mac's own document before anything is written: it is the intact
+    // copy of what this Mac had published (items only it had, edits not pulled yet), and it takes
+    // part in the merge like another Mac's document. It is not overwritten with the loaded data;
+    // the merged document is written once the merge is applied (`Outcome::applied_doc`).
+    let own_copy = if recover { io.read_own_doc(domain) } else { None };
     let (doc, t1) = sync::publish_opts(&io.device, snapshot, tracker, now, &opts);
-    io.write_doc(domain, &doc)?;
+    if !recover {
+        io.write_doc(domain, &doc)?;
+    }
     let ReadDocs { mut docs, corrupt, mut downloading } = io.read_docs(domain);
+    if let Some(mut own) = own_copy {
+        own.device = io.device.clone();
+        docs.push(own);
+    }
     if clipboard {
         // Clipboard tombstones expire (after the longest retention), so entries from before that
         // horizon cannot be told from deleted ones and are not adopted from other Macs.
@@ -493,7 +527,7 @@ pub fn sync_domain_recovering(
             recovered: recover,
         });
     }
-    let applied_doc = (!clipboard).then_some(doc2);
+    let applied_doc = (!clipboard || recover).then_some(doc2);
     Ok(Outcome {
         merged: Some(merged),
         tracker_published: t1,
@@ -821,6 +855,9 @@ mod tests {
             let o = sync_domain_recovering(&self.io, "snippets", &to_items(&self.snippets), &load_tracker(d, "snippets"), now, recover)
                 .unwrap();
             save_tracker(d, "snippets", &o.tracker_merged).unwrap();
+            if o.recovered {
+                clear_recovery(d, "snippets");
+            }
             if let Some(m) = o.merged {
                 self.snippets = from_items(m);
                 self.store.save("snippets.json", &self.snippets).unwrap();
@@ -1419,6 +1456,83 @@ mod tests {
                 std::fs::remove_dir_all(d).unwrap();
             }
         }
+    }
+
+    /// A Mac whose snippets file became unreadable after it synced `s1..s3` (and, for `peer`, a
+    /// second Mac that has or has not synced since).
+    fn corrupt_a_after_syncing(ida: &str, idb: &str, b_syncs_first: bool) -> (PathBuf, PathBuf, PathBuf, Mac, Mac) {
+        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+        let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        (a.io.device, b.io.device) = (ida.into(), idb.into());
+        a.snippets = vec![snip("s1", "one"), snip("s2", "two"), snip("s3", "three")];
+        a.sync(1_000);
+        a.sync(1_500);
+        if b_syncs_first {
+            b.sync(2_000);
+            b.sync(2_500);
+        }
+        std::fs::write(da.join("snippets.json"), "{garbage").unwrap();
+        a.restart();
+        assert!(needs_recovery(&da, "snippets"));
+        (da, db, shared, a, b)
+    }
+
+    fn custom_ids(m: &Mac) -> Vec<&str> {
+        let mut n: Vec<_> = m.snippets.iter().map(|s| s.id.as_str()).filter(|i| matches!(*i, "s1" | "s2" | "s3")).collect();
+        n.sort();
+        n
+    }
+
+    #[test]
+    fn items_only_this_mac_had_survive_a_recovery_that_no_other_mac_has_seen() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared, mut a, mut b) = corrupt_a_after_syncing(ida, idb, false);
+            a.sync(3_000);
+            assert_eq!(custom_ids(&a), ["s1", "s2", "s3"], "restored from its own document, ids {ida}/{idb}");
+            b.sync(4_000);
+            b.sync(4_500);
+            a.sync(5_000);
+            for m in [&a, &b] {
+                assert_eq!(custom_ids(m), ["s1", "s2", "s3"], "ids {ida}/{idb}");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_single_mac_gets_everything_back_from_its_own_document_after_recovery() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared, mut a, _b) = corrupt_a_after_syncing(ida, idb, false);
+            a.snippets.iter().for_each(|s| assert!(!matches!(s.id.as_str(), "s1" | "s2" | "s3")));
+            a.sync(3_000);
+            a.sync(3_500);
+            assert_eq!(custom_ids(&a), ["s1", "s2", "s3"], "ids {ida}/{idb}");
+            assert!(!needs_recovery(&da, "snippets"));
+            // a recovery whose merge was not applied keeps the marker and the own document intact
+            std::fs::write(da.join("snippets.json"), "{garbage2").unwrap();
+            a.restart();
+            let o = sync_domain_recovering(&a.io, "snippets", &to_items(&a.snippets), &load_tracker(&da, "snippets"), 4_000, true).unwrap();
+            assert!(o.merged.is_some() && o.applied_doc.is_some());
+            let own = a.io.read_own_doc("snippets").unwrap();
+            assert!(own.items.contains_key("s1") && !own.items["s1"].deleted, "own document untouched until the merge is applied");
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_stale_corrupt_file_without_a_marker_does_not_trigger_recovery() {
+        let d = tmp("stale");
+        std::fs::write(d.join("snippets.json.corrupt"), "old").unwrap();
+        assert!(!needs_recovery(&d, "snippets"), "a copied data folder with an old .corrupt file");
+        mark_recovery(&d, "snippets");
+        assert!(needs_recovery(&d, "snippets"));
+        clear_recovery(&d, "snippets");
+        assert!(!needs_recovery(&d, "snippets"));
+        std::fs::remove_dir_all(d).unwrap();
     }
 
     #[test]

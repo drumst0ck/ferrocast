@@ -46,7 +46,7 @@ Ferrocast merges item by item, and the newest edit wins.
 - If two Macs turn sync on for the first time before either has synced twice, with different versions of the same item, the one with the greater device id wins on both, so they still end up the same.
 - Ferrocast keeps a copy of this Mac's settings as `settings.before-sync.json` in the data folder before the first merge changes them.
 - If the sync state of a Mac is lost, Ferrocast rebuilds it from that Mac's own file in iCloud Drive, so edits and deletions made since its last sync are kept.
-- If a data file on one Mac cannot be read (Ferrocast keeps it next to the original as `.corrupt`), that Mac starts over from what your other Macs have instead of telling them everything was deleted. The status line says so.
+- If a data file on one Mac cannot be read (Ferrocast keeps it next to the original as `.corrupt`), that Mac starts over from its own file in iCloud Drive and what your other Macs have, instead of telling them everything was deleted. The same happens when Ferrocast cannot read the file at all. The status line says so.
 
 ## When it syncs
 

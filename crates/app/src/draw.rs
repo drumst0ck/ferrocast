@@ -8027,7 +8027,7 @@ impl App {
                         ui.add_space(14.0);
                         section(ui, pal, "Sync");
                         group(ui, pal, |ui| {
-                            row(ui, pal, "Sync with iCloud", "Keep settings, snippets, quicklinks, notes, clipboard history and Ask AI chats in step between your Macs through iCloud Drive.", |ui| toggle(ui, pal, &mut s.sync_enabled));
+                            row(ui, pal, "Sync with iCloud", "Keep settings, snippets, quicklinks, custom themes, notes, clipboard history and Ask AI chats in step between your Macs through iCloud Drive.", |ui| toggle(ui, pal, &mut s.sync_enabled));
                             row_disabled_if(ui, !self.settings.sync_enabled, |ui| {
                                 row(ui, pal, "Sync now", &sync_status, |ui| {
                                     if small_btn(ui, pal, "Sync now") {

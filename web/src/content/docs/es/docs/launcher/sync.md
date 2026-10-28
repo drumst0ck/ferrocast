@@ -46,7 +46,7 @@ Ferrocast fusiona elemento por elemento y gana la edición más reciente.
 - Si dos Mac activan la sincronización por primera vez antes de que alguno haya sincronizado dos veces, con versiones distintas del mismo elemento, gana en ambos el de id de dispositivo mayor, así que terminan iguales.
 - Ferrocast guarda una copia de los ajustes de este Mac como `settings.before-sync.json` en la carpeta de datos antes de que la primera fusión los cambie.
 - Si se pierde el estado de sincronización de un Mac, Ferrocast lo reconstruye a partir del propio archivo de ese Mac en iCloud Drive, así que se conservan las ediciones y los borrados hechos desde su última sincronización.
-- Si un archivo de datos de un Mac no se puede leer (Ferrocast lo guarda junto al original como `.corrupt`), ese Mac parte de lo que tienen tus otros Mac en lugar de decirles que se borró todo. La línea de estado lo indica.
+- Si un archivo de datos de un Mac no se puede leer (Ferrocast lo guarda junto al original como `.corrupt`), ese Mac parte de su propio archivo en iCloud Drive y de lo que tienen tus otros Mac, en lugar de decirles que se borró todo. Lo mismo ocurre si Ferrocast no puede leer el archivo en absoluto. La línea de estado lo indica.
 
 ## Cuándo se sincroniza
 

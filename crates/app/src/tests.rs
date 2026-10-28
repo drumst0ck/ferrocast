@@ -15119,6 +15119,7 @@ fn snippets_run_with_remote(
     shared: &std::path::Path,
     remote: Snippet,
     edit_meanwhile: bool,
+    recover: bool,
 ) -> ferrocast_core::sync_io::SyncIo {
     use ferrocast_core::sync::Tracker;
     use ferrocast_core::sync_io::{sync_domain, SyncIo};
@@ -15126,7 +15127,7 @@ fn snippets_run_with_remote(
     sync_domain(&other, "snippets", &ferrocast_core::sync_io::to_items(&[remote]), &Tracker::default(), 5_000).unwrap();
     let io = SyncIo::new(shared.to_path_buf(), "aa".into(), app.store.images_dir());
     let snap = app.sync_snapshot("snippets");
-    let out = sync_domain(&io, "snippets", &snap, &Tracker::default(), 6_000).unwrap();
+    let out = ferrocast_core::sync_io::sync_domain_recovering(&io, "snippets", &snap, &Tracker::default(), 6_000, recover).unwrap();
     assert!(out.merged.is_some());
     if edit_meanwhile {
         app.snippets.push(Snippet::new("typed", "t", "!t"));
@@ -15147,20 +15148,20 @@ fn the_own_sync_document_holds_the_merged_state_only_once_the_merge_was_applied(
     let mut app = fixture();
     app.settings.sync_enabled = true;
     app.snippets = vec![Snippet::new("local", "l", "!l")];
-    let io = snippets_run_with_remote(&mut app, &shared, Snippet::new("remote", "r", "!r"), false);
+    let io = snippets_run_with_remote(&mut app, &shared, Snippet::new("remote", "r", "!r"), false, false);
     assert_eq!(app.snippets.len(), 2, "the merge was applied");
     // the main thread does not touch iCloud Drive: the document waits for the next background run
     assert_eq!(own_ids(&io).len(), 1, "not written by sync_done itself");
     assert_eq!(app.sync.pending_docs.len(), 1);
     let waiting = std::mem::take(&mut app.sync.pending_docs);
-    crate::app::sync_ctl::flush_docs(&io, waiting);
+    crate::app::sync_ctl::flush_docs(&io, waiting, &app.store.root);
     assert_eq!(own_ids(&io).len(), 2);
     // not applied (local data changed while the run was away): the own document keeps what it published
     let shared2 = std::env::temp_dir().join(format!("ferrocast-own-doc-{}", uuid::Uuid::new_v4()));
     let mut app2 = fixture();
     app2.settings.sync_enabled = true;
     app2.snippets = vec![Snippet::new("local", "l", "!l")];
-    let io2 = snippets_run_with_remote(&mut app2, &shared2, Snippet::new("remote", "r", "!r"), true);
+    let io2 = snippets_run_with_remote(&mut app2, &shared2, Snippet::new("remote", "r", "!r"), true, false);
     assert_eq!(app2.snippets.len(), 2, "the merge was not applied: local + the typed one");
     assert!(app2.snippets.iter().all(|s| s.name != "r"));
     assert_eq!(own_ids(&io2), vec![app2.snippets[0].id.clone()], "own document has only the published snapshot");
@@ -15296,6 +15297,63 @@ fn a_run_that_started_over_from_an_unreadable_file_is_named_in_the_sync_status()
     app.sync_done(done);
     assert!(app.sync_status().contains("unreadable"), "{}", app.sync_status());
     let _ = std::fs::remove_dir_all(&shared);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn the_recovery_marker_is_cleared_only_once_the_recovered_state_was_applied_or_needed_no_apply() {
+    use ferrocast_core::sync_io::{mark_recovery, needs_recovery};
+    for edit_meanwhile in [false, true] {
+        let shared = std::env::temp_dir().join(format!("ferrocast-marker-{}", uuid::Uuid::new_v4()));
+        let mut app = fixture();
+        app.settings.sync_enabled = true;
+        mark_recovery(&app.store.root, "snippets");
+        snippets_run_with_remote(&mut app, &shared, Snippet::new("remote", "r", "!r"), edit_meanwhile, true);
+        assert_eq!(
+            needs_recovery(&app.store.root, "snippets"),
+            edit_meanwhile,
+            "applied: cleared; not applied (typed meanwhile): kept so the next run recovers again"
+        );
+        let _ = std::fs::remove_dir_all(&shared);
+        let _ = std::fs::remove_dir_all(&app.store.root);
+    }
+}
+
+#[test]
+fn the_recovery_note_names_every_recovered_domain_and_clears_after_a_later_successful_run() {
+    let shared = std::env::temp_dir().join(format!("ferrocast-note-{}", uuid::Uuid::new_v4()));
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    snippets_run_with_remote(&mut app, &shared, Snippet::new("remote", "r", "!r"), false, true);
+    let notes_done = |app: &mut App, recover: bool| {
+        use ferrocast_core::sync::Tracker;
+        let io = ferrocast_core::sync_io::SyncIo::new(shared.clone(), "aa".into(), app.store.images_dir());
+        let snap = app.sync_snapshot("notes");
+        let out = ferrocast_core::sync_io::sync_domain_recovering(&io, "notes", &snap, &Tracker::default(), 7_000, recover).unwrap();
+        let done = crate::app::sync_ctl::SyncDone { results: vec![("notes", snap, Ok(out))], unavailable: None };
+        app.sync.in_flight = true;
+        app.sync_done(done);
+    };
+    notes_done(&mut app, true);
+    let status = app.sync_status();
+    assert!(status.contains("snippets") && status.contains("notes") && status.contains("unreadable"), "{status}");
+    notes_done(&mut app, false);
+    let status = app.sync_status();
+    assert!(status.contains("snippets") && !status.contains("notes,") && !status.contains(" notes "), "{status}");
+    snippets_run_with_remote(&mut app, &shared, Snippet::new("remote2", "r2", "!r2"), false, false);
+    assert!(!app.sync_status().contains("unreadable"), "{}", app.sync_status());
+    let _ = std::fs::remove_dir_all(&shared);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn turning_sync_off_drops_the_own_documents_waiting_to_be_written() {
+    let mut app = fixture();
+    app.settings.sync_enabled = false;
+    let doc = ferrocast_core::sync::DeviceDoc::default();
+    app.sync.pending_docs.insert("snippets", doc);
+    app.sync_flush();
+    assert!(app.sync.pending_docs.is_empty());
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
 

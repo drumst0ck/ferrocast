@@ -40,10 +40,20 @@ impl Store {
         match std::fs::read(&p) {
             Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
                 eprintln!("ferrocast: failed to parse {}: {e}; backing up", p.display());
-                let _ = std::fs::rename(&p, p.with_extension("json.corrupt"));
+                if let Err(e) = std::fs::rename(&p, p.with_extension("json.corrupt")) {
+                    eprintln!("ferrocast: could not set {} aside: {e}", p.display());
+                }
+                // defaults are loaded instead of the user's data: sync must not read that as deletions
+                crate::sync_io::mark_recovery_for_file(&self.root, name);
                 T::default()
             }),
-            Err(_) => T::default(),
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("ferrocast: could not read {}: {e}", p.display());
+                    crate::sync_io::mark_recovery_for_file(&self.root, name);
+                }
+                T::default()
+            }
         }
     }
 
@@ -210,6 +220,37 @@ mod tests {
         let notes: Vec<Note> = store.load("notes.json");
         assert!(notes.is_empty());
         assert!(store.path("notes.json.corrupt").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_loaded_marks_its_sync_domain_for_recovery() {
+        let dir = std::env::temp_dir().join(format!("ferrocast-store-{}", uuid::Uuid::new_v4()));
+        let store = Store::new(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = |d: &str| dir.join("sync-state").join(format!("{d}.recover"));
+        // a missing file is a fresh install: nothing to recover
+        let _: Vec<Note> = store.load("notes.json");
+        assert!(!marker("notes").exists());
+        // unparsable
+        std::fs::write(store.path("notes.json"), "{bad").unwrap();
+        let _: Vec<Note> = store.load("notes.json");
+        assert!(marker("notes").exists());
+        // unreadable (a directory where the file should be): no .corrupt file, still marked
+        std::fs::create_dir(store.path("snippets.json")).unwrap();
+        let _: Vec<Snippet> = store.load("snippets.json");
+        assert!(marker("snippets").exists());
+        assert!(!store.path("snippets.json.corrupt").exists());
+        // unparsable and the rename fails (a non-empty directory is in the way)
+        std::fs::write(store.path("settings.json"), "{bad").unwrap();
+        std::fs::create_dir_all(store.path("settings.json.corrupt")).unwrap();
+        std::fs::write(store.path("settings.json.corrupt").join("x"), "x").unwrap();
+        let _: crate::models::Settings = store.load("settings.json");
+        assert!(marker("settings").exists());
+        // files that never sync leave no marker
+        std::fs::write(store.path("frecency.json"), "{bad").unwrap();
+        let _: Frecency = store.load("frecency.json");
+        assert!(!dir.join("sync-state").join("frecency.recover").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
