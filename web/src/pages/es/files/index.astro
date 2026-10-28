@@ -1,0 +1,106 @@
+---
+import Base from '../../../layouts/Base.astro';
+import '../../../styles/files.css';
+import SiteHeader from '../../../components/SiteHeader.astro';
+import SiteFooter from '../../../components/SiteFooter.astro';
+import SeoNav from '../../../components/seo/SeoNav.astro';
+import Section from '../../../components/Section.astro';
+import KeysExplainer from '../../../components/KeysExplainer.astro';
+import Counters from '../../../components/Counters.astro';
+import WheelDemo from '../../../components/WheelDemo.astro';
+import MatrixExplorer from '../../../components/MatrixExplorer.astro';
+import ToolCards from '../../../components/ToolCards.astro';
+import Gallery from '../../../components/Gallery.astro';
+import tools from '../../../data/tools.json';
+import { es as homeEs } from '../../../i18n/home.es';
+import { filesEs, filesEsActions, filesEsFaq, filesEsMeta } from '../../../i18n/files-es';
+import { SITE } from '../../../lib/seo/jsonld';
+
+const { title, description, n } = filesEsMeta();
+const canonical = `${SITE}/es/files/`;
+const alternates = { en: `${SITE}/files/`, es: canonical, 'x-default': `${SITE}/files/` };
+const actions = tools.actions.map((id) => {
+  const copy = filesEsActions[id];
+  if (!copy) throw new Error(`no Spanish copy for action ${id}`);
+  return { id, name: copy[0], text: copy[1] };
+});
+const faq = filesEsFaq(n);
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Ferrocast',
+    applicationCategory: 'UtilitiesApplication',
+    operatingSystem: 'macOS',
+    inLanguage: 'es',
+    description,
+    url: canonical,
+    license: 'https://opensource.org/licenses/MIT',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    inLanguage: 'es',
+    mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: a } })),
+  },
+];
+---
+<Base title={title} description={description} canonical={canonical} jsonLd={jsonLd} lang="es" alternates={alternates}>
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <SiteHeader lang="es" current="files" switchHref="/files/" switchLabel="EN" switchAria="Read this page in English">
+    <SeoNav slot="nav" lang="es" />
+    <span slot="cta">Instalar</span>
+  </SiteHeader>
+  <main id="main" class="fx-main">
+    <section class="fx-hero" aria-label="Introducción">
+      <h1>{filesEs.h1}</h1>
+      <p class="fx-lead">{filesEs.lead}</p>
+      <Counters lang="es" />
+    </section>
+
+    <Section id="keys" title={filesEs.keysTitle} lead={filesEs.keysLead}>
+      <KeysExplainer lang="es" />
+    </Section>
+
+    <Section id="wheel" title={filesEs.wheelTitle} lead={filesEs.wheelLead}>
+      <WheelDemo files={homeEs.files} lang="es" />
+    </Section>
+
+    <Section id="conversions" title={filesEs.conversionsTitle} lead={filesEs.conversionsLead}>
+      <MatrixExplorer lang="es" />
+      <p class="fx-note">{filesEs.conversionsNote}</p>
+    </Section>
+
+    <Section id="tools" title={`${n.tools} herramientas de archivo`} lead={filesEs.toolsLead}>
+      <ToolCards lang="es" />
+      <p class="fx-note"><a class="tl" href="/es/tools/">{filesEs.toolsIndex}</a></p>
+    </Section>
+
+    <Section id="actions" title={filesEs.actionsTitle} lead={filesEs.actionsLead}>
+      <ul class="fa">
+        {actions.map((a) => <li><h3>{a.name}</h3><p>{a.text}</p></li>)}
+      </ul>
+      <p class="fx-note">{filesEs.actionsNote}</p>
+    </Section>
+
+    <Section id="gallery" title={filesEs.galleryTitle} lead={filesEs.galleryLead}>
+      <p class="fx-note gl-note">{filesEs.galleryNote}</p>
+      <Gallery lang="es" />
+    </Section>
+
+    <Section id="faq" title={filesEs.faqTitle}>
+      <div class="fx-faq">
+        {faq.map(([q, a]) => <details><summary>{q}</summary><p>{a}</p></details>)}
+      </div>
+      <p class="fx-links">
+        <a class="tl" href="/es/difuminar-video-mac/">Difuminar parte de un vídeo en Mac</a>
+        <a class="tl" href="/es/">{filesEs.backHome}</a>
+        <a class="tl" href="/changelog/">{filesEs.changelog}</a>
+        <a class="tl" href="/es/convertir/">{filesEs.popular}</a>
+        <a class="tl" href="/es/docs/files/">{filesEs.docs}</a>
+      </p>
+    </Section>
+  </main>
+  <SiteFooter lang="es" />
+</Base>

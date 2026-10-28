@@ -81,7 +81,7 @@ for (const fam of families) if (!f.convert.families[fam.id]) throw new Error(`no
     </div>
     <p class="fh-never">{f.never}</p>
     <div class="fh-cta">
-      <a class="btn big" href={`${base}/files/`}>{f.ctaExplore} →</a>
+      <a class="btn big" href={`${base}${lang === 'es' ? '/es/files/' : '/files/'}`}>{f.ctaExplore} →</a>
       <a class="tl" href={lang === 'es' ? '/es/convertidor-de-archivos-gratis-mac/' : '/free-file-converter-mac/'}>{f.ctaCompare} →</a>
       <a class="tl" href={docs('/files/')}>{f.ctaDocs} →</a>
     </div>

@@ -52,6 +52,8 @@ export function factsCopy(lang: 'en' | 'es'): FactsCopy {
       linksH: 'Más información',
       links: [
         ['Inicio e instalación', '/es/'],
+        ['Explorar las conversiones', '/es/files/'],
+        ['Herramientas de archivo', '/es/tools/'],
         ['Convertir archivos en Mac', '/es/convertir/'],
         ['Alternativa gratis a Raycast', '/es/alternativa-a-raycast/'],
         ['Raycast vs Alfred vs Spotlight', '/es/raycast-vs-alfred-vs-spotlight/'],

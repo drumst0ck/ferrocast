@@ -6,9 +6,12 @@ import type { HomeCopy } from '../i18n/home.en';
 interface Props {
   /** Home copy `files` block (wheel labels for the active locale). */
   files: HomeCopy['files'];
+  /** English chrome unless the page is the Spanish explorer. */
+  lang?: 'en' | 'es';
 }
 
-const { files } = Astro.props;
+const { files, lang = 'en' } = Astro.props;
+const es = lang === 'es';
 const wd = files.wheelDemo;
 const nameById = Object.fromEntries(files.keys.map(([, name, , id]) => [id, name])) as Record<string, string>;
 
@@ -16,7 +19,11 @@ const MAX = 8;
 type Seg = { label: string; needs?: string | null };
 const labelOf: Record<string, string> = {};
 for (const t of tools.tools) labelOf[t.id] = t.name;
-const actionNames: Record<string, string> = { airDrop: 'AirDrop', float: 'Float shelf', copy: 'Copy', move: 'Move to…', copyPath: 'Copy Path', openTerminal: 'Terminal', zip: 'Zip' };
+const actionNames: Record<string, string> = es
+  ? { airDrop: 'AirDrop', float: 'Estante flotante', copy: 'Copiar', move: 'Mover a…', copyPath: 'Copiar ruta', openTerminal: 'Terminal', zip: 'ZIP' }
+  : { airDrop: 'AirDrop', float: 'Float shelf', copy: 'Copy', move: 'Move to…', copyPath: 'Copy Path', openTerminal: 'Terminal', zip: 'Zip' };
+const needsWord = es ? 'necesita' : 'needs';
+const alsoWord = es ? 'también' : 'also';
 
 // Samples: a PDF for conversions (9 targets), an MP4 for tools, the seven actions.
 const pdf = conversions.families.flatMap((f) => f.inputs).find((i) => i.ext === 'pdf');
@@ -51,7 +58,7 @@ function lines(label: string): string[] {
 
 const built = wheels.map((w) => {
   const hidden = w.all.length > MAX ? w.all.length - (MAX - 1) : 0;
-  const shown: Seg[] = hidden ? [...w.all.slice(0, MAX - 1), { label: `+${hidden} more` }] : w.all;
+  const shown: Seg[] = hidden ? [...w.all.slice(0, MAX - 1), { label: es ? `+${hidden} más` : `+${hidden} more` }] : w.all;
   const extra = hidden ? w.all.slice(MAX - 1) : [];
   const segs = shown.map((s, i) => {
     const mid = (i + 0.5) * (360 / shown.length);
@@ -62,7 +69,7 @@ const built = wheels.map((w) => {
 });
 ---
 <div class="wd" data-wheel-demo>
-  <div class="wd-tabs" role="tablist" aria-label="Wheel keys">
+  <div class="wd-tabs" role="tablist" aria-label={es ? 'Teclas de la rueda' : 'Wheel keys'}>
     {built.map((w, i) => (
       <button type="button" role="tab" id={`wd-tab-${w.id}`} aria-controls={`wd-p-${w.id}`} aria-selected={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1} data-wheel={w.id} style={`--wc:${w.color}`}><kbd aria-hidden="true">{w.sym}</kbd>{w.key} <span>{w.name}</span></button>
     ))}
@@ -70,10 +77,10 @@ const built = wheels.map((w) => {
   <div class="wd-stage">
     {built.map((w, i) => (
       <div class="wd-panel" id={`wd-p-${w.id}`} role="tabpanel" aria-labelledby={`wd-tab-${w.id}`} data-wheel={w.id} data-on={i === 0 ? 'true' : 'false'} style={`--wc:${w.color}`}>
-        <svg viewBox="0 0 400 400" role="group" aria-label={`${w.key} wheel: ${w.name.toLowerCase()} for ${w.sample}, ${w.segs.length} segments`} class="wd-svg">
+        <svg viewBox="0 0 400 400" role="group" aria-label={es ? `Rueda ${w.key}: ${w.name.toLowerCase()} para ${w.sample}, ${w.segs.length} segmentos` : `${w.key} wheel: ${w.name.toLowerCase()} for ${w.sample}, ${w.segs.length} segments`} class="wd-svg">
           <circle cx={C} cy={C} r={R_OUT + 6} class="wd-disc" />
           {w.segs.map((s, k) => (
-            <g class:list={['wd-seg', { 'wd-needs': !!s.needs, 'wd-more': s.more }]} role="img" tabindex={k === 0 ? 0 : -1} aria-label={s.needs ? `${s.label}, needs ${s.needs}` : s.label} data-label={s.label} data-note={s.needs ? `needs ${s.needs}` : s.more ? `also ${w.extra.map((x) => x.label).join(', ')}` : ''}>
+            <g class:list={['wd-seg', { 'wd-needs': !!s.needs, 'wd-more': s.more }]} role="img" tabindex={k === 0 ? 0 : -1} aria-label={s.needs ? `${s.label}, ${needsWord} ${s.needs}` : s.label} data-label={s.label} data-note={s.needs ? `${needsWord} ${s.needs}` : s.more ? `${alsoWord} ${w.extra.map((x) => x.label).join(', ')}` : ''}>
               <path d={s.d} />
               <text x={s.tx} y={s.ty} text-anchor="middle" aria-hidden="true">
                 {s.lines.map((l, j) => <tspan x={s.tx} dy={j === 0 ? (s.lines.length === 2 ? '-0.3em' : '0.35em') : '1.15em'}>{l}</tspan>)}
@@ -85,18 +92,18 @@ const built = wheels.map((w) => {
           <text x={C} y={C - 6} text-anchor="middle" class="wd-hub-name" aria-hidden="true">{w.name}</text>
           <text x={C} y={C + 16} text-anchor="middle" class="wd-hub-sub" aria-hidden="true" data-default={`${w.key} · ${w.sample}`}>{w.key} · {w.sample}</text>
         </svg>
-        <p class="wd-cap" aria-live="polite" data-default={`Sample: ${w.sample}. Drag a file, tap ${w.key}.`}>Sample: {w.sample}. Drag a file, tap {w.key}.</p>
+        <p class="wd-cap" aria-live="polite" data-default={es ? `Ejemplo: ${w.sample}. Arrastra un archivo y pulsa ${w.key}.` : `Sample: ${w.sample}. Drag a file, tap ${w.key}.`}>{es ? `Ejemplo: ${w.sample}. Arrastra un archivo y pulsa ${w.key}.` : `Sample: ${w.sample}. Drag a file, tap ${w.key}.`}</p>
       </div>
     ))}
   </div>
-  <p class="wd-note small muted">This is a picture of the wheel built from the same lists the app uses, not a recording of the app. Hover or focus a segment, press <kbd>Shift</kbd>, <kbd>⌘</kbd> or <kbd>Ctrl</kbd>, and use the arrow keys. Segments marked with a dot need an optional tool installed.</p>
+  <p class="wd-note small muted">{es ? <>Esto es una imagen de la rueda, hecha con las mismas listas que usa la app, no una grabación de la app. Pasa el cursor o enfoca un segmento, pulsa <kbd>Mayús</kbd>, <kbd>⌘</kbd> o <kbd>Ctrl</kbd>, y usa las flechas. Los segmentos con un punto necesitan una herramienta opcional.</> : <>This is a picture of the wheel built from the same lists the app uses, not a recording of the app. Hover or focus a segment, press <kbd>Shift</kbd>, <kbd>⌘</kbd> or <kbd>Ctrl</kbd>, and use the arrow keys. Segments marked with a dot need an optional tool installed.</>}</p>
   <noscript>
     <div class="wd-nojs">
       {built.map((w) => (
         <div>
           <h3>{w.key}: {w.name} ({w.sample})</h3>
           <ul>
-            {[...w.segs.filter((s) => !s.more), ...w.extra].map((s) => <li>{s.label}{s.needs ? ` (needs ${s.needs})` : ''}</li>)}
+            {[...w.segs.filter((s) => !s.more), ...w.extra].map((s) => <li>{s.label}{s.needs ? ` (${needsWord} ${s.needs})` : ''}</li>)}
           </ul>
         </div>
       ))}

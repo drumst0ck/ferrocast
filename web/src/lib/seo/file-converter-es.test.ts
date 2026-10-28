@@ -36,8 +36,11 @@ describe('Spanish free file converter page', () => {
     const text = JSON.stringify(page);
     expect(text).not.toMatch(/el único|el mejor|sin límites/i);
     expect(text).not.toMatch(/\b(vos|tenés|podés|querés|pulsá|arrastrá|hacé|mirá|elegí|soltá)\b/i);
-    expect(text).not.toMatch(/iCloud|Clear History|Camomilla|AltFormr|nxtconvert|difuminar-video/i);
-    expect(text).not.toMatch(/\/es\/files\/|\/es\/tools\//);
+    expect(text).not.toMatch(/iCloud|Clear History|Camomilla|AltFormr|nxtconvert/i);
+    expect(text).toMatch(/\/es\/difuminar-video-mac\//);
+    expect(text).toMatch(/\/es\/files\//);
+    expect(text).toMatch(/\/es\/tools\//);
+    expect(text).not.toMatch(/las 275 conversiones, en inglés|todas las herramientas\]\(\/tools\//);
   });
 
   it('keeps the citable answers and the checked prices', () => {

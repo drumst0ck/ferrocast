@@ -1,14 +1,20 @@
 ---
 import tools from '../data/tools.json';
+import { toolCardAboutEs, toolCardGroupEs, toolCardUiEs } from '../i18n/tool-cards-es';
+
+interface Props { lang?: 'en' | 'es' }
+const { lang = 'en' } = Astro.props;
+const es = lang === 'es';
 
 const byId = new Map(tools.tools.map((t) => [t.id, t]));
-const groups: { name: string; blurb: string; ids: string[] }[] = [
-  { name: 'Image editors', blurb: 'For JPEG, PNG, WebP, HEIC and TIFF. Originals are never overwritten.', ids: ['editImage', 'annotateImage', 'frameImage', 'cropImage', 'redactImage', 'createCollage', 'createPdf'] },
-  { name: 'Video windows', blurb: 'For MP4, MOV and MKV. Preview frames and re-encoding need ffmpeg.', ids: ['trimVideo', 'cropVideo', 'changeVideoSpeed', 'videoSnapshots', 'splitVideo', 'redactVideo', 'joinVideos', 'muteVideo'] },
-  { name: 'PDF organizer and metadata', blurb: 'Reorder, split and merge PDFs, and read or change tags on files.', ids: ['organizePdf', 'mergePdf', 'splitPdf', 'removeMetadata'] },
-  { name: 'Audio tools', blurb: 'For MP3, M4A, WAV and FLAC. These use ffmpeg.', ids: ['normalizeAudio', 'trimAudio', 'audioChannels', 'audioToVideo', 'redactAudio'] },
-  { name: 'Archives and compression', blurb: 'Make files smaller, or unpack an archive into a new folder next to it.', ids: ['compress', 'extractArchive'] },
+const groups: { key: string; name: string; blurb: string; ids: string[] }[] = [
+  { key: 'image', name: 'Image editors', blurb: 'For JPEG, PNG, WebP, HEIC and TIFF. Originals are never overwritten.', ids: ['editImage', 'annotateImage', 'frameImage', 'cropImage', 'redactImage', 'createCollage', 'createPdf'] },
+  { key: 'video', name: 'Video windows', blurb: 'For MP4, MOV and MKV. Preview frames and re-encoding need ffmpeg.', ids: ['trimVideo', 'cropVideo', 'changeVideoSpeed', 'videoSnapshots', 'splitVideo', 'redactVideo', 'joinVideos', 'muteVideo'] },
+  { key: 'pdf', name: 'PDF organizer and metadata', blurb: 'Reorder, split and merge PDFs, and read or change tags on files.', ids: ['organizePdf', 'mergePdf', 'splitPdf', 'removeMetadata'] },
+  { key: 'audio', name: 'Audio tools', blurb: 'For MP3, M4A, WAV and FLAC. These use ffmpeg.', ids: ['normalizeAudio', 'trimAudio', 'audioChannels', 'audioToVideo', 'redactAudio'] },
+  { key: 'archive', name: 'Archives and compression', blurb: 'Make files smaller, or unpack an archive into a new folder next to it.', ids: ['compress', 'extractArchive'] },
 ];
+if (es) for (const g of groups) if (!toolCardGroupEs[g.key]) throw new Error(`no Spanish card group ${g.key}`);
 const grouped = new Set(groups.flatMap((g) => g.ids));
 for (const t of tools.tools) if (!grouped.has(t.id)) throw new Error(`tool ${t.id} is not in any card group`);
 for (const id of grouped) if (!byId.has(id)) throw new Error(`card group names unknown tool ${id}`);
@@ -56,21 +62,41 @@ const typed: Record<string, string> = {
 
 const names = Object.fromEntries(tools.tools.map((t) => [t.id, t.name]));
 const rows = tools.byFormat.map((b) => ({ ext: b.ext, single: b.single.map((id) => names[id] ?? id), multi: b.multi.map((id) => names[id] ?? id) }));
+const aboutOf = (id: string) => {
+  if (!es) return about[id];
+  const line = toolCardAboutEs[id];
+  if (!line) throw new Error(`no Spanish card line for ${id}`);
+  return line;
+};
+const groupOf = (g: (typeof groups)[number]) => (es ? toolCardGroupEs[g.key] : g);
+const ui = es
+  ? toolCardUiEs
+  : {
+      type: 'Type',
+      shortcut: 'on a selected file in the launcher list',
+      byFormat: 'Which tools appear for which format',
+      byFormatLead: 'The wheel and the Convert list offer these tools. “Several files” is what you get with a multi-file selection.',
+      tableAria: 'Tools by format, scrollable',
+      tableCaption: 'Tools offered for each file format',
+      format: 'Format',
+      oneFile: 'One file',
+      several: 'Several files',
+    };
 ---
 <div class="tc">
   {groups.map((g) => (
     <div class="tc-group">
-      <h3>{g.name}</h3>
-      <p class="muted">{g.blurb}</p>
+      <h3>{groupOf(g).name}</h3>
+      <p class="muted">{groupOf(g).blurb}</p>
       <ul class="tc-cards">
         {g.ids.map((id) => {
           const t = byId.get(id)!;
           return (
             <li class="tc-card">
               <div class="tc-top"><h4>{t.name}</h4></div>
-              <p>{about[id]}</p>
-              {t.shortcut && <p class="tc-key"><kbd>{t.shortcut}</kbd> <span>on a selected file in the launcher list</span></p>}
-              {typed[id] && <p class="tc-typed"><span>Type</span> <code>{typed[id]}</code></p>}
+              <p>{aboutOf(id)}</p>
+              {t.shortcut && <p class="tc-key"><kbd>{t.shortcut}</kbd> <span>{ui.shortcut}</span></p>}
+              {typed[id] && <p class="tc-typed"><span>{ui.type}</span> <code>{typed[id]}</code></p>}
               <p class="tc-fmt">{t.formats.map((e) => <span>.{e}</span>)}</p>
             </li>
           );
@@ -80,12 +106,12 @@ const rows = tools.byFormat.map((b) => ({ ext: b.ext, single: b.single.map((id) 
   ))}
 
   <div class="tc-group" id="by-format">
-    <h3>Which tools appear for which format</h3>
-    <p class="muted">The wheel and the Convert list offer these tools. “Several files” is what you get with a multi-file selection.</p>
-    <div class="tc-table" tabindex="0" role="region" aria-label="Tools by format, scrollable">
+    <h3>{ui.byFormat}</h3>
+    <p class="muted">{ui.byFormatLead}</p>
+    <div class="tc-table" tabindex="0" role="region" aria-label={ui.tableAria}>
       <table>
-        <caption class="sr-only">Tools offered for each file format</caption>
-        <thead><tr><th scope="col">Format</th><th scope="col">One file</th><th scope="col">Several files</th></tr></thead>
+        <caption class="sr-only">{ui.tableCaption}</caption>
+        <thead><tr><th scope="col">{ui.format}</th><th scope="col">{ui.oneFile}</th><th scope="col">{ui.several}</th></tr></thead>
         <tbody>
           {rows.map((r) => (
             <tr><th scope="row">.{r.ext}</th><td>{r.single.join(', ') || '—'}</td><td>{r.multi.join(', ') || '—'}</td></tr>

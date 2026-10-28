@@ -10,7 +10,6 @@ import { esPairs, hub } from '../../../lib/seo/convert-es';
 import '../../../styles/seo.css';
 
 const canonical = `${SITE}${hub.path}`;
-const alternates = { en: `${SITE}/files/`, es: canonical, 'x-default': `${SITE}/files/` };
 const crumbs: [string, string][] = [['Inicio', '/es/'], ['Convertir', '/es/convertir/']];
 const FAMILY_ES: Record<string, string> = {
   images: 'Imágenes', video: 'Vídeo', audio: 'Audio', documents: 'Documentos', pdf: 'PDF', slides: 'Presentaciones',
@@ -23,7 +22,7 @@ const jsonLd = [
   { '@context': 'https://schema.org', '@type': 'ItemList', itemListElement: esPairs.map((e, i) => ({ '@type': 'ListItem', position: i + 1, name: e.h1, url: `${SITE}/es/convertir/${e.slug}/` })) },
 ];
 ---
-<Base title={hub.title} description={hub.description} canonical={canonical} jsonLd={jsonLd} lang="es" alternates={alternates}>
+<Base title={hub.title} description={hub.description} canonical={canonical} jsonLd={jsonLd} lang="es">
   <SiteHeader lang="es" current="files" switchHref="/files/" switchLabel="EN" switchAria="Read this page in English">
     <SeoNav slot="nav" lang="es" />
     <span slot="cta">Instalar</span>
@@ -47,7 +46,7 @@ const jsonLd = [
     <p>Las páginas de cada par están en inglés por ahora.</p>
     <ul class="chips">{families.map((f) => <li><a href={`/convert/${f.id}/`} hreflang="en">{FAMILY_ES[f.id]}</a></li>)}</ul>
     <p><a class="tl" href="/es/convertidor-de-archivos-gratis-mac/">Comparativa con Permute y CloudConvert</a></p>
-    <p><a class="tl" href="/files/" hreflang="en">Explorar las 275 conversiones</a> · <a class="tl" href="/es/comprimir-video-a-un-tamano/">Comprimir un vídeo a un tamaño</a></p>
+    <p><a class="tl" href="/es/files/">Explorar las 275 conversiones</a> · <a class="tl" href="/es/tools/">Herramientas de archivo</a> · <a class="tl" href="/es/comprimir-video-a-un-tamano/">Comprimir un vídeo a un tamaño</a></p>
   </main>
   <SiteFooter lang="es" />
 </Base>

@@ -7,7 +7,7 @@ import { repo } from '../../data/install';
 interface Props { lang: 'en' | 'es' }
 const { lang } = Astro.props;
 const links: [string, string][] = lang === 'es'
-  ? [['Funciones', '/es/#features'], ['Convertir', '/es/convertir/'], ['Instalar', '/es/#install'], ['Documentación', '/es/docs/'], ['Cambios', '/changelog/'], ['GitHub', repo]]
+  ? [['Funciones', '/es/#features'], ['Archivos', '/es/files/'], ['Instalar', '/es/#install'], ['Documentación', '/es/docs/'], ['Cambios', '/changelog/'], ['GitHub', repo]]
   : [['Features', '/#features'], ['Files', '/files/'], ['Install', '/#install'], ['Docs', '/docs/'], ['Changelog', '/changelog/'], ['GitHub', repo]];
 ---
 {links.map(([label, href]) => <a href={href}>{label}</a>)}

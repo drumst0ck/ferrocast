@@ -1,6 +1,9 @@
 ---
 // Screenshots made by the app's own screenshot mode (FERROCAST_SCREENSHOT) on sample files.
 // Captions say what each window does.
+import { galleryEs } from '../i18n/gallery-es';
+interface Props { lang?: 'en' | 'es' }
+const { lang = 'en' } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const W = 1500;
 const H = 950;
@@ -34,14 +37,21 @@ const shots: { id: string; name: string; alt: string; caption: string }[] = [
   { id: 'organize', name: 'Organize PDF', alt: 'The Organize PDF window with page thumbnails of a three-page PDF, one rotated and one duplicated', caption: 'Organize PDF: page thumbnails you can rotate, duplicate, remove and reorder. Here page 2 was rotated and duplicated.' },
   { id: 'annotate', name: 'Annotate Image', alt: 'The Annotate Image window with a picture marked with an arrow, a box, a number, a callout, a text label and a magnifier, and a row of tools', caption: 'Annotate Image: arrows, boxes, numbers, callouts, text and a magnifier, shown here with sample marks already placed.' },
 ];
+if (lang === 'es') {
+  for (const s of shots) if (!galleryEs[s.id]) throw new Error(`no Spanish gallery copy for ${s.id}`);
+}
+const shown = (s: (typeof shots)[number]) => (lang === 'es' ? galleryEs[s.id] : s);
 ---
 <ul class="gl">
-  {shots.map((s) => (
-    <li>
-      <figure class="gl-fig">
-        <img src={`${base}/img/files-${s.id}.jpg`} width={W} height={H} loading="lazy" decoding="async" alt={s.alt} />
-        <figcaption><b>{s.name}</b><span>{s.caption}</span></figcaption>
-      </figure>
-    </li>
-  ))}
+  {shots.map((s) => {
+    const t = shown(s);
+    return (
+      <li>
+        <figure class="gl-fig">
+          <img src={`${base}/img/files-${s.id}.jpg`} width={W} height={H} loading="lazy" decoding="async" alt={t.alt} />
+          <figcaption><b>{t.name}</b><span>{t.caption}</span></figcaption>
+        </figure>
+      </li>
+    );
+  })}
 </ul>

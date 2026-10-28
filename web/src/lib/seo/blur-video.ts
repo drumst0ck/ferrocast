@@ -225,7 +225,7 @@ export const es: BlurCopy = {
       ['Redactar una foto', '/tools/redact-image/'],
       ['Herramientas opcionales, ffmpeg (en inglés)', '/docs/files/optional-tools/'],
       ['Comprimir un vídeo a un tamaño', '/es/comprimir-video-a-un-tamano/'],
-      ['Todas las herramientas de archivos (en inglés)', '/files/'],
+      ['Todas las herramientas de archivos', '/es/files/'],
       ['Datos clave', '/es/facts/'],
     ],
   },

@@ -50,7 +50,7 @@ export const page = {
       ['Spotlight en macOS Tahoe', 'Se abre con ⌘ Espacio. Además de apps y archivos, tiene una sección de acciones (⌘3) en la que puedes asignar quick keys, por ejemplo «ft» para iniciar una llamada de FaceTime, y el historial del portapapeles (⌘4), que se borra con Clear History. Lo que la guía de Apple no recoge en Spotlight: snippets (para eso están las Sustituciones de texto de macOS), comandos de ventanas desde el buscador y extensiones de terceros más allá de las acciones de las apps y la app Atajos.'],
       ['Raycast', 'El plan Free incluye portapapeles, snippets y ventanas. La IA, el historial ilimitado del portapapeles y Cloud Sync son de pago (Pro desde 10 $ al mes). Su punto fuerte es la Store de extensiones. Raycast 2 pide macOS Tahoe y Apple Silicon y también funciona en Windows (beta pública) e iOS.'],
       ['Alfred', 'La app es gratis; el portapapeles, los snippets y los Workflows forman parte del Powerpack, un pago único de 34 £. El portapapeles ignora por defecto las apps de contraseñas. Alfred 5 funciona desde macOS 10.14, así que es la opción para Macs con Intel o sistemas antiguos.'],
-      ['Ferrocast', 'Gratis y de código abierto (MIT), escrito en Rust, solo para Apple Silicon. Trae portapapeles que salta los gestores de contraseñas, snippets, unos 40 comandos de ventanas, Script Commands de Raycast, IA con Ollama en tu Mac por defecto, [275 conversiones de archivos sin subirlos](/files/) y grabación de pantalla con zoom automático. No tiene tienda de extensiones ni sincronización entre Macs. Más detalle en [Alternativa a Raycast](/es/alternativa-a-raycast/).'],
+      ['Ferrocast', 'Gratis y de código abierto (MIT), escrito en Rust, solo para Apple Silicon. Trae portapapeles que salta los gestores de contraseñas, snippets, unos 40 comandos de ventanas, Script Commands de Raycast, IA con Ollama en tu Mac por defecto, [275 conversiones de archivos sin subirlos](/es/files/) y grabación de pantalla con zoom automático. No tiene tienda de extensiones ni sincronización entre Macs. Más detalle en [Alternativa a Raycast](/es/alternativa-a-raycast/).'],
     ] as [string, string][],
   },
   enough: {
@@ -89,7 +89,8 @@ export const page = {
       ['Historial del portapapeles que ignora contraseñas', '/es/historial-portapapeles-mac/'],
       ['Migrar desde Raycast', '/es/docs/getting-started/migrating-from-raycast/'],
       ['Comprimir un vídeo a un tamaño', '/es/comprimir-video-a-un-tamano/'],
-      ['Todas las conversiones', '/files/'],
+      ['Todas las conversiones', '/es/files/'],
+      ['Herramientas de archivo', '/es/tools/'],
     ] as [string, string][],
   },
   disclaimer: 'Ferrocast es independiente y no está afiliado a Apple, Raycast ni Alfred.',

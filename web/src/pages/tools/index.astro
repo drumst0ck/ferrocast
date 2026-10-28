@@ -16,9 +16,11 @@ const crumbs: [string, string][] = [['Home', '/'], ['Tools', '/tools/']];
 const title = 'File tools for Mac: compress, crop, trim, redact · Ferrocast';
 const description = `${tools.length} local file tools for images, video, audio and PDF: compress, crop, trim, split, merge, redact and more. Nothing is uploaded.`;
 if (title.length > 60 || description.length < 120 || description.length > 155) throw new Error(`tools hub meta out of range: ${title.length}/${description.length}`);
+const canonical = `${SITE}/tools/`;
+const alternates = { en: canonical, es: `${SITE}/es/tools/`, 'x-default': canonical };
 ---
-<Base title={title} description={description} canonical={`${SITE}/tools/`} jsonLd={breadcrumbs(crumbs)}>
-  <SiteHeader current="files" />
+<Base title={title} description={description} canonical={canonical} jsonLd={breadcrumbs(crumbs)} alternates={alternates}>
+  <SiteHeader current="files" switchHref="/es/tools/" switchAria="Leer esta página en español" />
   <main class="seo" id="main">
     <Crumbs items={crumbs} />
     <h1>File tools for your Mac</h1>

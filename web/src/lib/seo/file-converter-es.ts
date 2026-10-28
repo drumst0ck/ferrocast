@@ -5,7 +5,7 @@
  * the Spanish conversion reference. Permute and CloudConvert cells were read on CHECKED from
  * software.charliemonroe.net/permute/ and cloudconvert.com/pricing.
  * Camomilla, AltFormr, The Converter and nxtconvert are left out: they were not opened.
- * iCloud sync is not mentioned. The blur-video page is a separate branch, so it is not linked.
+ * iCloud sync is not mentioned. The Spanish blur guide is linked now that it is published.
  */
 import type { GuideCopy } from './compress-video';
 import { counts } from '../../data/status';
@@ -121,7 +121,7 @@ export const page: GuideCopy = {
         '[Convertir HEIC a JPG](/es/convertir/heic-a-jpg/) · [Convertir WebP a JPG](/es/convertir/webp-a-jpg/)',
         '[Convertir MOV a MP4](/es/convertir/mov-a-mp4/) · [Convertir un vídeo a GIF](/es/convertir/video-a-gif/)',
         '[Convertir PDF a Word](/es/convertir/pdf-a-word/)',
-        '[El hub de convertir](/es/convertir/) · [las 275 conversiones, en inglés](/files/)',
+        '[El hub de convertir](/es/convertir/) · [las 275 conversiones](/es/files/)',
       ],
     },
     {
@@ -134,7 +134,7 @@ export const page: GuideCopy = {
       h: 'Más que un convertidor: 26 herramientas',
       paras: [
         `Además de convertir, hay ${c.tools} herramientas en la rueda de ⌘: comprimir un vídeo a un tamaño, recortar, unir o dividir PDF, organizar páginas dentro de un PDF, y tapar zonas de una foto o de un vídeo. El resultado también se guarda junto al original.`,
-        'En español: [comprimir un vídeo a un tamaño](/es/comprimir-video-a-un-tamano/). En inglés: [unir PDF](/tools/merge-pdf/), [dividir PDF](/tools/split-pdf/), [organizar páginas](/tools/organize-pdf/), [tapar zonas de una foto](/tools/redact-image/), [tapar zonas de un vídeo](/tools/redact-video/) y [todas las herramientas](/tools/).',
+        'En español: [comprimir un vídeo a un tamaño](/es/comprimir-video-a-un-tamano/), [difuminar parte de un vídeo](/es/difuminar-video-mac/) y [todas las herramientas](/es/tools/). En inglés: [unir PDF](/tools/merge-pdf/), [dividir PDF](/tools/split-pdf/), [organizar páginas](/tools/organize-pdf/), [tapar zonas de una foto](/tools/redact-image/) y [tapar zonas de un vídeo](/tools/redact-video/).',
       ],
     },
     {
@@ -179,6 +179,9 @@ export const page: GuideCopy = {
     h: 'Relacionado',
     links: [
       ['Convertir archivos', '/es/convertir/'],
+      ['Difuminar parte de un vídeo', '/es/difuminar-video-mac/'],
+      ['Las 275 conversiones', '/es/files/'],
+      ['Herramientas de archivo', '/es/tools/'],
       ['Referencia de conversiones', '/es/docs/files/conversions/'],
       ['Herramientas opcionales (en inglés)', '/docs/files/optional-tools/'],
       ['Datos clave', '/es/facts/'],
