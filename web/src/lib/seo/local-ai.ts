@@ -79,6 +79,7 @@ export const page: GuideCopy = {
       ['Ask AI docs', '/docs/launcher/ask-ai/'],
       ['En español: IA local en Mac', '/es/ia-local-mac/'],
       ['Translate selected text', '/docs/launcher/translate/'],
+      ['Guide: translate selected text on a Mac', '/translate-selected-text-mac/'],
       ['Ferrocast vs Raycast: free vs Pro', '/ferrocast-vs-raycast/'],
       ['A free Raycast alternative', '/raycast-alternative/'],
     ],

@@ -119,6 +119,15 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/text-expander-mac' || path === '/es/expansor-de-texto-mac') {
       return fileLastmod('src/lib/seo/text-expander.ts', 'src/components/seo/GuidePage.astro');
     }
+    if (path === '/remove-metadata-mac' || path === '/es/quitar-metadatos-mac') {
+      return fileLastmod('src/lib/seo/remove-metadata.ts', 'src/components/seo/GuidePage.astro');
+    }
+    if (path === '/es/unir-pdf-mac') {
+      return fileLastmod('src/lib/seo/pdf-es.ts', 'src/components/seo/GuidePage.astro');
+    }
+    if (path === '/translate-selected-text-mac' || path === '/es/traducir-texto-seleccionado-mac') {
+      return fileLastmod('src/lib/seo/translate-selection.ts', 'src/components/seo/GuidePage.astro');
+    }
     if (path === '/cleanshot-alternative') {
       return fileLastmod('src/lib/seo/cleanshot-alt.ts', 'src/components/seo/GuidePage.astro');
     }
@@ -140,7 +149,7 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/screen-studio-alternative' || path === '/es/grabar-pantalla-mac-zoom-automatico') {
       return fileLastmod('src/lib/seo/screen-recorder.ts', 'src/components/seo/GuidePage.astro');
     }
-    if (path === '/alfred-alternative') {
+    if (path === '/alfred-alternative' || path === '/es/alternativa-a-alfred') {
       return fileLastmod('src/lib/seo/alfred-alt.ts', 'src/components/seo/GuidePage.astro');
     }
     if (path === '/ferrocast-vs-raycast') {

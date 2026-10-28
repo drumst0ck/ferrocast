@@ -106,3 +106,4 @@ With the Apple engine the log line reads `translate Spanish via Apple ok chars=â
 - [Ask AI](/docs/launcher/ask-ai/)
 - [Settings](/docs/launcher/settings/)
 - [The drag wheel](/docs/files/drag-wheel/)
+- [Guide: translate selected text on a Mac](/translate-selected-text-mac/)

@@ -79,6 +79,7 @@ export const page: GuideCopy = {
     links: [
       ['Documentación de Ask AI (en inglés)', '/docs/launcher/ask-ai/'],
       ['English version', '/local-ai-launcher/'],
+      ['Traducir el texto seleccionado en Mac', '/es/traducir-texto-seleccionado-mac/'],
       ['Alternativa gratis a Raycast', '/es/alternativa-a-raycast/'],
       ['Raycast vs Alfred vs Spotlight', '/es/raycast-vs-alfred-vs-spotlight/'],
       ['Datos clave', '/es/facts/'],
