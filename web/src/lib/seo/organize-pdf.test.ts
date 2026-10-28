@@ -17,12 +17,12 @@ describe('organize PDF page', () => {
     expect(page.description.length).toBeLessThanOrEqual(160);
   });
 
-  it('says the mouse buttons are coming in the next version', () => {
-    expect(page.can.buttons).toMatch(/coming in the next version/i);
-    expect(page.can.buttons).not.toMatch(/available now/i);
+  it('says the mouse buttons shipped with the organizer', () => {
+    expect(page.can.buttons).toMatch(/◀ Move/);
+    expect(page.can.buttons).not.toMatch(/coming in the next version/i);
     const docs = readFileSync('src/content/docs/docs/files/tools/organize-pdf.mdx', 'utf8');
-    expect(docs).toMatch(/coming in the next version/);
-    expect(docs).not.toMatch(/Every key has a button/);
+    expect(docs).toMatch(/◀ Move/);
+    expect(docs).not.toMatch(/coming in the next version/i);
     expect(docs).toMatch(/\[PDF organizer for Mac\]\(\/tools\/organize-pdf\/\)/);
     const description = docs.match(/description: "([^"]+)"/)?.[1] ?? '';
     expect(description.length).toBeGreaterThanOrEqual(120);

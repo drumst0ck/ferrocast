@@ -89,18 +89,19 @@ Ferrocast es **independiente** y no está afiliado a [Raycast](https://www.rayca
 | **Script Commands** | Metadatos compatibles con Raycast (full, compact, silent, inline) | Los Script Commands existentes funcionan tal cual ([guía de migración](https://ferrocast.app/es/docs/getting-started/migrating-from-raycast/)) |
 | **Snippets** | Importación desde una exportación JSON de Raycast | Los quicklinks se recrean a mano |
 | **Conversión y herramientas de archivo** | 275 pares de conversión en local y 26 herramientas de archivo integradas | No está documentado en este repositorio para Raycast ni para Alfred |
-| **Extensiones y sincronización** | Sin tienda de extensiones; sin sincronización entre Macs | Tampoco se incluye: extensiones React, Search Menu Bar Items ni contexto de IA desde la selección o la pantalla ([guía de migración](https://ferrocast.app/es/docs/getting-started/migrating-from-raycast/)) |
+| **Extensiones y sincronización** | Sin tienda de extensiones propia. Las extensiones que ya instalaste con Raycast pueden ejecutarse (parcial, desactivado por defecto, Node.js 22+). Sincronización opcional por iCloud Drive, desactivada por defecto | Aún no están soportados: comandos de la barra de menús, OAuth, funciones de IA de las extensiones, selector de archivos y accesorio de enlace. Tampoco se incluye: Search Menu Bar Items ni contexto de IA desde la selección o la pantalla ([guía de migración](https://ferrocast.app/es/docs/getting-started/migrating-from-raycast/), [extensiones](https://ferrocast.app/es/docs/launcher/raycast-extensions/), [sincronización](https://ferrocast.app/es/docs/launcher/sync/)) |
 
-## Qué falta hoy
+## Qué falta todavía
 
-- **Tienda de extensiones** y **sincronización** entre Macs.
-- **Extensiones React**, **Search Menu Bar Items** y **contexto de IA** desde la selección o la pantalla (funciones al estilo Raycast que Ferrocast aún no incluye).
+- Una **tienda de extensiones propia**. Ferrocast no contacta con la Store de Raycast y no está afiliado a Raycast.
+- **Compatibilidad completa con las extensiones de Raycast.** En una prueba, funcionaron 34 de 40 comandos de vista de 20 extensiones populares. Aún no están soportados los comandos de la barra de menús, el inicio de sesión OAuth, las funciones de IA, el selector de archivos y el accesorio de enlace.
+- **Search Menu Bar Items** y **contexto de IA** desde la selección o la pantalla.
 
 ## Ask AI y privacidad
 
 De serie, Ask AI habla con Ollama en tu propio Mac. Puedes apuntarlo a LM Studio, OpenAI o la API de Anthropic (las claves van al Keychain), o usar Claude Code con tu plan de Claude. Sign in with ChatGPT usa el mismo flujo que la CLI Codex de OpenAI; OpenAI no ha autorizado el uso por terceros, así que la API con clave es la vía correcta.
 
-Los datos viven en `~/Library/Application Support/Ferrocast` como JSON sin cifrar (`FERROCAST_DATA_DIR` cambia la ruta).
+Los datos viven en `~/Library/Application Support/Ferrocast` como JSON sin cifrar (`FERROCAST_DATA_DIR` cambia la ruta). Con la sincronización con iCloud activada (Ajustes → Advanced, desactivada por defecto), los ajustes, snippets, quicklinks, notas, el historial del portapapeles, los chats de Ask AI y los temas propios también se copian a iCloud Drive. Las claves del Llavero se quedan en cada Mac.
 
 ## Compilar desde el código
 

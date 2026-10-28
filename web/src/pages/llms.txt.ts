@@ -7,7 +7,7 @@ export async function GET() {
   const lines = [
     '# Ferrocast',
     '',
-    '> Fast, open-source launcher for macOS (Rust, MIT). Search, calculate, clipboard, snippets, Ask AI (Ollama by default), Raycast-compatible Script Commands, ~40 window commands, screen recording with auto zoom, floating Markdown notes, and local file work: {pairs} conversions across {inputs} input formats and {tools} file tools. Apple Silicon only; no account.'.replace(
+    '> Fast, open-source launcher for macOS (Rust, MIT). Search, calculate, clipboard, snippets, Ask AI (Ollama by default), Raycast-compatible Script Commands, partial support for Raycast extensions you already installed (off by default, no store of its own), opt-in iCloud Drive sync (off by default), ~40 window commands, optional window tiling, screen recording with auto zoom, floating Markdown notes, custom themes, and local file work: {pairs} conversions across {inputs} input formats and {tools} file tools. Apple Silicon only; no Ferrocast account.'.replace(
       '{pairs}',
       String(pairs),
     ).replace('{inputs}', String(inputs)).replace('{tools}', String(tools)),
@@ -49,7 +49,11 @@ export async function GET() {
     `- [Install](${SITE}/docs/getting-started/install/)`,
     `- [Conversion reference](${SITE}/docs/files/conversions/)`,
     `- [Optional tools (ffmpeg, LibreOffice, …)](${SITE}/docs/files/optional-tools/)`,
-    `- [Organize PDF pages](${SITE}/tools/organize-pdf/): PDF organizer for Mac. Reorder, rotate, duplicate and remove pages offline`,
+    `- [Organize PDF pages](${SITE}/tools/organize-pdf/): PDF organizer for Mac. Reorder, rotate, duplicate and remove pages offline, with buttons as well as keys`,
+    `- [Sync with iCloud](${SITE}/docs/launcher/sync/): opt-in, off by default. Settings, snippets, quicklinks, notes, clipboard history, Ask AI chats and custom themes through iCloud Drive. Keychain API keys stay on each Mac`,
+    `- [Run Raycast extensions](${SITE}/docs/launcher/raycast-extensions/): extensions already installed with Raycast, off by default, Node.js 22 or newer. Does not contact Raycast's Store. Not every command works`,
+    `- [Custom themes](${SITE}/docs/launcher/themes/)`,
+    `- [Window tiling](${SITE}/docs/launcher/tiling/): optional, off by default`,
     `- [Migrating from Raycast](${SITE}/docs/getting-started/migrating-from-raycast/)`,
     `- [Data and privacy](${SITE}/docs/reference/data-and-privacy/)`,
     `- [FAQ in docs](${SITE}/docs/reference/faq/)`,

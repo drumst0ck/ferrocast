@@ -32,7 +32,7 @@ export const page: GuideCopy = {
       ['Snippets with auto-expansion', 'Powerpack', 'Included, with placeholders such as `{date}`, `{clipboard}` and `{cursor}`; imports Raycast snippet JSON'],
       ['Automation', 'Workflows (Powerpack), with thousands from the community', 'Raycast-compatible [Script Commands](/raycast-script-commands/); no visual workflow editor'],
       ['Shell commands', 'Run in Terminal from Alfred (Powerpack)', 'Script Commands run without opening Terminal'],
-      ['Settings sync between Macs', 'Through Dropbox or another file sync service (Powerpack)', 'No sync; backup export in Settings'],
+      ['Settings sync between Macs', 'Through Dropbox or another file sync service (Powerpack)', 'Opt-in through iCloud Drive (Settings → Advanced, off by default). Keychain API keys stay on each Mac. Backup export is still in Settings'],
       ['AI', 'No built-in AI stated on its website', 'Ask AI with your provider; Ollama on your Mac by default'],
       ['File conversion', 'File actions, and custom ones through Workflows', '275 local conversions and 26 file tools'],
       ['Window management', 'Not stated on its website', 'About 40 commands'],
@@ -59,7 +59,7 @@ export const page: GuideCopy = {
         'rely on Workflows, your own or from the community;',
         'use an Intel Mac or a macOS version older than 13;',
         'want Alfred 6, which the shop says is a free upgrade for new Alfred 5 Powerpack buyers;',
-        'sync your settings between Macs.',
+        'want settings sync through Dropbox rather than iCloud Drive.',
       ],
     },
     {

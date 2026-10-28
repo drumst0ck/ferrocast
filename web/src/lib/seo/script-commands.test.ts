@@ -15,6 +15,7 @@ describe('Raycast Script Commands page copy', () => {
 
   it('never claims full Raycast compatibility', () => {
     expect(JSON.stringify(page)).not.toMatch(/100 ?%|fully compatible|full compatibility|every Raycast/i);
+    expect(JSON.stringify(page)).toMatch(/not in full|not supported yet/);
   });
 
   it('keeps the example script valid for the parser rules (schemaVersion 1, title, mode)', () => {
