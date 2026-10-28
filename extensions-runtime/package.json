@@ -1,0 +1,19 @@
+{
+  "name": "ferrocast-extensions-runtime",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "description": "Node sidecar that lets Ferrocast run Raycast extensions: a @raycast/api implementation plus a react-reconciler host that emits a JSON render tree over stdio.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test scripts/runtime.test.mjs",
+    "measure": "node scripts/measure.mjs"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-reconciler": "0.33.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10"
+  }
+}
