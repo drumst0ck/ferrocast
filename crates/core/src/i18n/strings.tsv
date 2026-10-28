@@ -98,6 +98,7 @@ Bottom Left Quarter	Cuarto inferior izquierdo	Unteres linkes Viertel	Quart infé
 Bottom Left Sixth	Sexto inferior izquierdo	Unteres linkes Sechstel	Sixième bas gauche	Sexto inferior esquerdo	左下の1/6	左下六分之一
 Bottom Right Quarter	Cuarto inferior derecho	Unteres rechtes Viertel	Quart inférieur droit	Quarto inferior direito	右下の1/4	右下四分之一
 Bottom Right Sixth	Sexto inferior derecho	Unteres rechtes Sechstel	Sixième bas droit	Sexto inferior direito	右下の1/6	右下六分之一
+Browse	Explorar	Durchsuchen	Parcourir	Navegar	参照	浏览
 Browse Notes	Explorar notas	Notizen durchsuchen	Parcourir les notes	Navegar pelas notas	ノートを参照	浏览笔记
 CONVERT	CONVERTIR	KONVERTIEREN	CONVERTIR	CONVERTER	変換	转换
 Calculator	Calculadora	Rechner	Calculatrice	Calculadora	計算機	计算器
@@ -472,6 +473,7 @@ Navigation	Navegación	Navigation	Navigation	Navegação	ナビゲーション	�
 Needed	Necesario	Erforderlich	Requis	Necessário	必要	需要
 Needed for window management, pasting and snippet expansion.	Necesario para gestionar ventanas, pegar y expandir fragmentos.	Erforderlich für Fensterverwaltung, Einfügen und Baustein-Erweiterung.	Nécessaire à la gestion des fenêtres, au collage et au développement des extraits.	Necessário para gerenciar janelas, colar e expandir trechos.	ウインドウ管理、ペースト、スニペットの展開に必要です。	窗口管理、粘贴和文本片段展开都需要此权限。
 Needs {n}. Install command copied: {cmd}	Necesita {n}. Comando de instalación copiado: {cmd}	Benötigt {n}. Installationsbefehl kopiert: {cmd}	Nécessite {n}. Commande d’installation copiée : {cmd}	Requer {n}. Comando de instalação copiado: {cmd}	{n}が必要です。インストールコマンドをコピーしました:{cmd}	需要 {n}。安装命令已拷贝:{cmd}
+New	Nueva	Neu	Nouvelle	Nova	新規	新建
 New Obsidian Note	Nueva nota de Obsidian	Neue Obsidian-Notiz	Nouvelle note Obsidian	Nova nota do Obsidian	新規Obsidianノート	新建 Obsidian 笔记
 New from current	Nuevo desde el actual	Neu aus aktuellem	Nouveau depuis l’actuel	Novo a partir do atual	現在のテーマから新規作成	基于当前新建
 New note	Nueva nota	Neue Notiz	Nouvelle note	Nova nota	新規ノート	新建笔记
@@ -898,6 +900,7 @@ Turn Volume Down	Bajar el volumen	Leiser stellen	Baisser le volume	Diminuir o vo
 Turn Volume Up	Subir el volumen	Lauter stellen	Augmenter le volume	Aumentar o volume	音量を上げる	调高音量
 Turn on automatic tiling in Settings → Advanced first	Activa antes el mosaico automático en Ajustes → Avanzado	Aktiviere zuerst das automatische Kacheln unter Einstellungen → Erweitert	Activez d’abord la mosaïque automatique dans Réglages → Avancé	Ative primeiro o mosaico automático em Ajustes → Avançado	先に設定 → 詳細で自動タイル表示をオンにしてください	请先在 设置 → 高级 中开启自动平铺
 Type	Tipo	Typ	Type	Tipo	種類	类型
+Type / for formats · : for emoji	Escribe / para formatos · : para emojis	/ für Formate · : für Emoji	Tapez / pour les formats · : pour les émojis	Digite / para formatos · : para emojis	/でフォーマット · :で絵文字	输入 / 选择格式 · 输入 : 插入表情
 Type / for formats, : for emoji.	Escribe / para formatos, : para emojis.	Tippe / für Formate, : für Emoji.	Tapez / pour les formats, : pour les émojis.	Digite / para formatos, : para emojis.	/でフォーマット、:で絵文字。	输入 / 选择格式,输入 : 插入表情。
 Type a keyword such as !sig anywhere and it turns into the snippet.	Escribe una palabra clave como !sig en cualquier sitio y se convierte en el fragmento.	Tippe irgendwo ein Kürzel wie !sig, und es wird zum Textbaustein.	Saisissez un mot-clé comme !sig n’importe où et il devient l’extrait.	Digite uma palavra-chave como !sig em qualquer lugar e ela vira o trecho.	!sigのようなキーワードをどこで入力しても、スニペットに置き換わります。	在任何位置输入 !sig 之类的关键词,它就会变成对应的文本片段。
 Type at least 2 characters	Escribe al menos 2 caracteres	Gib mindestens 2 Zeichen ein	Saisissez au moins 2 caractères	Digite pelo menos 2 caracteres	2文字以上入力してください	请至少输入 2 个字符

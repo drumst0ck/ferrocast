@@ -52,6 +52,11 @@ impl Hint {
         }
     }
 
+    /// The label in the interface language (the bar is built when the Notes window opens).
+    pub fn shown_label(self) -> String {
+        ferrocast_core::i18n::tr(self.label()).into_owned()
+    }
+
     pub fn keys(self) -> &'static str {
         match self {
             Hint::Actions => "⌘K",
@@ -163,7 +168,7 @@ define_class!(
                 NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(b, HOVER_RADIUS, HOVER_RADIUS).fill();
             }
             let lf = label_font();
-            let label = NSString::from_str(iv.hint.label());
+            let label = NSString::from_str(&iv.hint.shown_label());
             let lh = unsafe { label.sizeWithAttributes(Some(&attrs(&lf, Token::Sub))) }.height;
             unsafe {
                 label.drawAtPoint_withAttributes(
@@ -256,17 +261,17 @@ impl HintBar {
         top.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin);
         root.addSubview(&top);
 
-        let typing = NSTextField::labelWithString(&NSString::from_str(TYPING_HINT), mtm);
+        let typing = NSTextField::labelWithString(&NSString::from_str(&ferrocast_core::i18n::tr(TYPING_HINT)), mtm);
         typing.setFont(Some(&label_font()));
         typing.setTextColor(Some(&theme::color(Token::Sub)));
-        let typing_w = text_size(TYPING_HINT, &label_font()).width.ceil();
+        let typing_w = text_size(&ferrocast_core::i18n::tr(TYPING_HINT), &label_font()).width.ceil();
         root.addSubview(&typing);
 
         let cb: Rc<RefCell<Option<HintCb>>> = Rc::default();
         let mut groups = Vec::new();
         let mut widths = [0.0; 4];
         for (i, hint) in Hint::ALL.iter().copied().enumerate() {
-            let label_w = text_size(hint.label(), &label_font()).width.ceil();
+            let label_w = text_size(&hint.shown_label(), &label_font()).width.ceil();
             let keys_w = text_size(hint.keys(), &keys_font()).width.ceil();
             let w = group_width(label_w, keys_w);
             widths[i] = w;
@@ -278,7 +283,7 @@ impl HintBar {
                 ]
             };
             g.setAutoresizingMask(NSAutoresizingMaskOptions::empty());
-            g.setToolTip(Some(&NSString::from_str(&format!("{} {}", hint.label(), hint.keys()))));
+            g.setToolTip(Some(&NSString::from_str(&format!("{} {}", hint.shown_label(), hint.keys()))));
             let area = unsafe {
                 NSTrackingArea::initWithRect_options_owner_userInfo(
                     mtm.alloc(),
