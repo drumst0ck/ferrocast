@@ -127,6 +127,11 @@ pub trait NotesFx {
     fn is_visible(&self) -> bool;
     fn focus_editor(&mut self);
     fn set_markdown(&mut self, md: &str);
+    /// Unix milliseconds of the last change the editor emitted (0 = none), stamped where the editor
+    /// calls back, before the `Changed` message reaches the controller.
+    fn last_keystroke_ms(&self) -> u64 {
+        0
+    }
     fn apply_format(&mut self, f: Format);
     fn has_selection(&self) -> bool;
     fn zoom(&self) -> f64;
@@ -318,6 +323,12 @@ pub const MAX_EMOJI: usize = 30;
 
 // ---------------------------------------------------------------- controller
 
+/// Unix milliseconds of the last editor change, written by the native callback itself.
+static LAST_KEYSTROKE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Without a keystroke for this long the open note counts as idle for sync merges.
+pub const TYPING_IDLE_MS: u64 = 2_000;
+
 pub struct NotesCtl {
     fx: Box<dyn NotesFx>,
     /// The note shown in the editor (kept while the window is hidden).
@@ -327,6 +338,8 @@ pub struct NotesCtl {
     ready: bool,
     dirty: bool,
     last_save_ms: Option<u64>,
+    /// Time of the last keystroke that changed the open note.
+    last_typed_ms: Option<u64>,
     tick_pending: bool,
     /// The running AI request, if any.
     ai: Option<AiJob>,
@@ -376,6 +389,7 @@ impl NotesCtl {
             ready: false,
             dirty: false,
             last_save_ms: None,
+            last_typed_ms: None,
             tick_pending: false,
             ai: None,
             next_request: 0,
@@ -449,6 +463,35 @@ impl NotesCtl {
     pub fn delete_id(&mut self, d: &mut Data, id: &str) -> Out {
         let mut out = Out::default();
         self.delete_note(d, id, &mut out);
+        out
+    }
+
+    /// The window is open and the user is typing: text is unsaved or was typed less than
+    /// `TYPING_IDLE_MS` ago. A sync merge waits, so it cannot jump the caret or be overwritten by a
+    /// keystroke the editor still has queued.
+    pub fn typing_recently(&self, now_ms: u64) -> bool {
+        let recent = |t: u64| t > 0 && now_ms.saturating_sub(t) < TYPING_IDLE_MS;
+        self.fx.is_visible() && (self.dirty || self.last_typed_ms.is_some_and(recent) || recent(self.fx.last_keystroke_ms()))
+    }
+
+    /// After a sync merge replaced the notes. A deleted or trashed open note leaves the editor
+    /// (another note opens when the window is showing); otherwise the editor shows the merged text
+    /// when it differs from `previous` (what the editor had).
+    pub fn after_merge(&mut self, d: &mut Data, previous: &str) -> Out {
+        let mut out = Out::default();
+        let Some(id) = self.current.clone() else { return out };
+        if !Self::live(d, &id) {
+            self.stop_dictation();
+            self.history.forget(&id);
+            self.current = None;
+            if self.fx.is_visible() {
+                self.open_initial(d, &mut out);
+            }
+        } else if let Some(n) = d.notes.iter().find(|n| n.id == id) {
+            if n.text != previous {
+                self.fx.set_markdown(&n.text.clone());
+            }
+        }
         out
     }
 
@@ -547,6 +590,7 @@ impl NotesCtl {
         }
         notes::set_text(d.notes, &id, text, d.now);
         self.dirty = true;
+        self.last_typed_ms = Some(d.now_ms);
         if debounce_due(self.last_save_ms, d.now_ms) {
             self.save(d, out);
         } else {
@@ -1154,6 +1198,9 @@ impl NotesFx for MacFx {
     fn focus_editor(&mut self) {
         ferrocast_macos::notes::focus_editor();
     }
+    fn last_keystroke_ms(&self) -> u64 {
+        LAST_KEYSTROKE_MS.load(std::sync::atomic::Ordering::Relaxed)
+    }
     fn set_markdown(&mut self, md: &str) {
         ferrocast_macos::notes::set_markdown(md);
     }
@@ -1305,7 +1352,13 @@ impl NotesFx for MacFx {
 pub fn install_callbacks(bus: &Bus) {
     use ferrocast_macos::{notes, notes_palette};
     let b = bus.clone();
-    notes::set_on_change(Box::new(move |t| b.send(Msg::Notes(NMsg::Changed(t)))));
+    notes::set_on_change(Box::new(move |t| {
+        // stamped here, not when the queued message is handled: a first keystroke after a pause
+        // must already hold a sync merge back
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        LAST_KEYSTROKE_MS.store(now, std::sync::atomic::Ordering::Relaxed);
+        b.send(Msg::Notes(NMsg::Changed(t)))
+    }));
     let b = bus.clone();
     notes::set_on_event(Box::new(move |e| b.send(Msg::Notes(NMsg::Event(e)))));
     let b = bus.clone();
@@ -1355,6 +1408,8 @@ pub(crate) mod fake {
         pub dict_active: bool,
         pub access_requests: usize,
         pub urls: Vec<String>,
+        /// What `last_keystroke_ms` reports.
+        pub keystroke_ms: u64,
     }
 
     /// A window that is only a record of what was asked of it.
@@ -1391,6 +1446,9 @@ pub(crate) mod fake {
         }
         fn focus_editor(&mut self) {
             self.0.borrow_mut().focus += 1;
+        }
+        fn last_keystroke_ms(&self) -> u64 {
+            self.0.borrow().keystroke_ms
         }
         fn set_markdown(&mut self, md: &str) {
             self.0.borrow_mut().markdown = md.into();

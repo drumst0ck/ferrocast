@@ -1,6 +1,6 @@
 ---
 title: "Data and privacy"
-description: "Where Ferrocast keeps its data, what is stored unencrypted, which items live in the Keychain, and what leaves your Mac: nothing unless you ask it to."
+description: "Where Ferrocast keeps its data, what is stored unencrypted, what lives in the Keychain, and what leaves your Mac: nothing unless you turn on iCloud sync."
 sidebar:
   order: 1
 ---
@@ -16,7 +16,7 @@ Ferrocast keeps its data in JSON files in `~/Library/Application Support/Ferroca
 ## What leaves your Mac
 
 - File conversions and file tools never upload anything; they run locally with macOS tools first and optional ffmpeg, LibreOffice, cwebp, Ghostscript and unrar when installed.
-- The clipboard history never leaves your Mac, and entries copied from a password manager such as 1Password are skipped on purpose.
+- The clipboard history stays on your Mac unless you turn on [Sync with iCloud](/docs/launcher/sync/) (off by default); then it is copied to your iCloud Drive to reach your other Macs. Entries copied from a password manager such as 1Password are never recorded, so they are never synced either.
 - Currency rates come from frankfurter.dev (ECB data, cached 12 hours).
 - Ask AI talks to Ollama on your own Mac by default. It only contacts the cloud if you point it at LM Studio, OpenAI, the Anthropic API, Sign in with ChatGPT or Claude Code.
 - Notes AI commands (Fix Spelling and Grammar, Summarize and the rest) send the selected text, or the whole note, to the provider set in Settings → AI. With Ollama it stays on your Mac.

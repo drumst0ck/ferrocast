@@ -45,6 +45,8 @@ pub mod script;
 pub mod settings_index;
 pub mod storage;
 pub mod subs;
+pub mod sync;
+pub mod sync_io;
 pub mod timer;
 pub mod timezones;
 pub mod tools;

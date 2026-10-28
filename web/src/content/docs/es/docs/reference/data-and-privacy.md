@@ -1,6 +1,6 @@
 ---
 title: "Datos y privacidad"
-description: "Dónde guarda Ferrocast sus datos, qué se guarda sin cifrar, qué vive en el Keychain y qué sale de tu Mac: nada, salvo que tú lo pidas."
+description: "Dónde guarda Ferrocast sus datos, qué se guarda sin cifrar, qué va al Llavero y qué sale de tu Mac: nada, salvo que actives la sincronización con iCloud."
 sidebar:
   order: 1
 ---
@@ -16,7 +16,7 @@ Ferrocast guarda sus datos en archivos JSON en `~/Library/Application Support/Fe
 ## Qué sale de tu Mac
 
 - Las conversiones y herramientas de archivo nunca suben nada; se ejecutan en local, primero con herramientas de macOS y, si están instalados, ffmpeg, LibreOffice, cwebp, Ghostscript y unrar.
-- El historial del portapapeles nunca sale de tu Mac, y las entradas copiadas desde un gestor de contraseñas como 1Password se omiten a propósito.
+- El historial del portapapeles se queda en tu Mac salvo que actives [Sincronizar con iCloud](/es/docs/launcher/sync/) (desactivado por defecto); entonces se copia a tu iCloud Drive para llegar a tus otros Macs. Lo copiado desde un gestor de contraseñas como 1Password nunca se guarda, así que tampoco se sincroniza.
 - Las tasas de cambio vienen de frankfurter.dev (datos del BCE, en caché 12 horas).
 - Ask AI habla por defecto con Ollama en tu propio Mac. Solo contacta con la nube si lo apuntas a LM Studio, OpenAI, la API de Anthropic, Sign in with ChatGPT o Claude Code.
 - Los comandos de IA de Notes (Fix Spelling and Grammar, Summarize y los demás) envían el texto seleccionado, o la nota entera, al proveedor configurado en Ajustes → AI. Con Ollama se queda en tu Mac.

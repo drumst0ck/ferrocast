@@ -101,6 +101,7 @@ impl eframe::App for App {
         dev_screenshot(ctx, self);
         self.sync_window();
         self.drain();
+        self.sync_flush();
         self.tick_inline();
         self.effect_tick(Instant::now());
         self.sweep_timers();
@@ -6555,6 +6556,8 @@ impl App {
         let (mut rec, mut req_acc, mut open_data, mut add_dir, mut save_key, mut test_ai) = (false, false, false, false, false, false);
         let (mut chatgpt_in, mut chatgpt_out, mut chatgpt_device) = (false, false, false);
         let mut fetch_models = false;
+        let mut sync_now = false;
+        let sync_status = self.sync_status();
         let (mut check_now, mut install_now) = (false, false);
         let (mut new_snippet, mut create_script) = (false, false);
         let mut reset_req: Option<usize> = None;
@@ -7007,7 +7010,7 @@ impl App {
                             });
                         });
                         ui.add_space(10.0);
-                        note(ui, pal, "History lives in clipboard.json inside the data folder and never leaves this Mac. Backups exclude it.");
+                        note(ui, pal, "History lives in clipboard.json inside the data folder and stays on this Mac unless you turn on Sync with iCloud (Advanced). Backups exclude it.");
                     }
                     2 => {
                         group(ui, pal, |ui| {
@@ -7642,6 +7645,20 @@ impl App {
                                 }
                             });
                         });
+                        ui.add_space(14.0);
+                        section(ui, pal, "Sync");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Sync with iCloud", "Keep settings, snippets, quicklinks, notes, clipboard history and Ask AI chats in step between your Macs through iCloud Drive.", |ui| toggle(ui, pal, &mut s.sync_enabled));
+                            row_disabled_if(ui, !self.settings.sync_enabled, |ui| {
+                                row(ui, pal, "Sync now", &sync_status, |ui| {
+                                    if small_btn(ui, pal, "Sync now") {
+                                        sync_now = true;
+                                    }
+                                });
+                            });
+                        });
+                        ui.add_space(10.0);
+                        note(ui, pal, SYNC_NOTE);
                         let disabled: Vec<String> = s.commands.iter().filter(|(_, c)| c.disabled).map(|(k, _)| k.clone()).collect();
                         if !disabled.is_empty() {
                             ui.add_space(14.0);
@@ -7850,6 +7867,9 @@ impl App {
         if req_acc {
             windows::accessibility_trusted(true);
         }
+        if sync_now {
+            self.sync_all();
+        }
         if open_data {
             let _ = std::process::Command::new("/usr/bin/open").arg(&self.store.root).status();
         }
@@ -8027,6 +8047,9 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
         ctx.data_mut(|d| d.remove::<SettingsJump>(id));
     }
 }
+
+/// Note under the Sync rows in Settings.
+pub(crate) const SYNC_NOTE: &str = "Off by default. Hotkeys sync; script folders, the Obsidian vault, the screenshot and recordings folders, login item, camera and microphone choice, update preferences and macOS permissions stay on each Mac. API keys in the Keychain do not sync.";
 
 /// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Capture = 5, Power = 6..10.
 const SETTINGS_TABS: [(&str, &str); 10] = [
@@ -9586,8 +9609,13 @@ impl App {
         let notes_changed = s.notes_zoom != self.settings.notes_zoom
             || s.notes_escape_loses_focus != self.settings.notes_escape_loses_focus
             || s.notes_menu_bar_button != self.settings.notes_menu_bar_button;
+        let sync_turned_on = s.sync_enabled && !self.settings.sync_enabled;
         self.settings = s;
         self.save_settings();
+        if sync_turned_on {
+            self.sync_persist_all();
+            self.sync_all();
+        }
         if notes_changed {
             self.apply_notes_settings();
         }
