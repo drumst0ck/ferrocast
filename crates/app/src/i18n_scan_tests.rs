@@ -202,6 +202,27 @@ fn sources() -> Vec<(String, String)> {
     v
 }
 
+/// The native (AppKit) files of `ferrocast-macos` that draw text or report to the user; their
+/// English sentences must be in the table too.
+fn native_sources() -> Vec<(String, String)> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../macos/src");
+    let files = [
+        "glow.rs",
+        "hud.rs",
+        "notes.rs",
+        "notes_format.rs",
+        "notes_hints.rs",
+        "notes_palette.rs",
+        "notes_popups.rs",
+        "shelf.rs",
+        "system.rs",
+        "tiling.rs",
+        "tiling_overlay.rs",
+        "windows.rs",
+    ];
+    files.iter().map(|f| (format!("macos/{f}"), std::fs::read_to_string(dir.join(f)).unwrap())).collect()
+}
+
 /// Calls to a sink in `text`: (line, sink, literals, saw_format).
 fn sink_calls(text: &str) -> Vec<(usize, &'static str, Vec<String>, bool)> {
     let mut out = vec![];
@@ -285,13 +306,14 @@ fn every_english_sentence_in_the_code_has_a_translation() {
         "Connection refused",
         "Failed to connect",
         "Invalid argument",
+        "Hardware Port:",
         "Compress: ",
         "Sample text",
     ];
     let table: HashSet<&str> = i18n::rows().map(|(k, _)| k).collect();
     let mut missing = String::new();
     let mut count = 0;
-    for (name, text) in sources() {
+    for (name, text) in sources().into_iter().chain(native_sources()) {
         let code = production_part(&text);
         // the dev screenshot fixture is sample content, never shown to users
         let (from, to) = (code.find("fn dev_screenshot"), code.find("fn dev_fixture_path"));

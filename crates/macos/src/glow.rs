@@ -302,7 +302,7 @@ pub fn show(mtm: MainThreadMarker, target: Target, reduce_motion: bool) {
             l.setCornerRadius(layout.radius);
             l.setMasksToBounds(true);
         }
-        let label = NSTextField::labelWithString(&NSString::from_str("Translating\u{2026}"), mtm);
+        let label = NSTextField::labelWithString(&NSString::from_str(&ferrocast_core::i18n::tr("Translating\u{2026}")), mtm);
         label.setFont(Some(&NSFont::systemFontOfSize(13.0)));
         label.setAlignment(NSTextAlignment::Center);
         label.sizeToFit();

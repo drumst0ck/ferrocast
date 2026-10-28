@@ -1674,3 +1674,42 @@ window	ventana	Fenster	fenêtre	janela	ウインドウ	窗口
 ≈ about {est} KB ({share} % of {orig} KB) · rough estimate, not measured{note}	≈ unos {est} KB ({share} % de {orig} KB) · estimación aproximada, no medida{note}	≈ etwa {est} KB ({share} % von {orig} KB) · grobe Schätzung, nicht gemessen{note}	≈ environ {est} Ko ({share} % de {orig} Ko) · estimation approximative, non mesurée{note}	≈ cerca de {est} KB ({share}% de {orig} KB) · estimativa aproximada, não medida{note}	約{est} KB(元の{orig} KBの{share}%)· 概算で、実測ではありません{note}	≈ 约 {est} KB(占 {orig} KB 的 {share}%)· 粗略估算,并非实测{note}
 ◀ Move	◀ Mover	◀ Bewegen	◀ Déplacer	◀ Mover	◀ 移動	◀ 移动
 ⚠ Shortcut: {issue}	⚠ Atajo: {issue}	⚠ Kurzbefehl: {issue}	⚠ Raccourci : {issue}	⚠ Atalho: {issue}	⚠ ショートカット:{issue}	⚠ 快捷键:{issue}
+Select	Seleccionar	Auswählen	Sélectionner	Selecionar	選択	选择
+Arrow	Flecha	Pfeil	Flèche	Seta	矢印	箭头
+Line	Línea	Linie	Ligne	Linha	線	线条
+Box	Recuadro	Rechteck	Rectangle	Retângulo	四角形	矩形
+Ellipse	Elipse	Ellipse	Ellipse	Elipse	楕円	椭圆
+Highlight	Resaltar	Hervorheben	Surligner	Realçar	ハイライト	高亮
+Pen	Lápiz	Stift	Crayon	Caneta	ペン	画笔
+Number	Número	Nummer	Numéro	Número	番号	编号
+Magnifier	Lupa	Lupe	Loupe	Lupa	拡大鏡	放大镜
+Callout	Llamada	Beschriftung	Bulle	Balão	吹き出し	标注框
+Background…	Fondo…	Hintergrund …	Arrière-plan…	Plano de fundo…	背景…	背景…
+Translating…	Traduciendo…	Übersetzen …	Traduction…	Traduzindo…	翻訳中…	正在翻译…
+Focus mode	Modo foco	Fokusmodus	Mode focus	Modo foco	フォーカスモード	专注模式
+Float or tile this window	Dejar esta ventana flotante o en mosaico	Dieses Fenster schweben lassen oder kacheln	Laisser cette fenêtre flottante ou la mettre en mosaïque	Deixar esta janela flutuante ou em mosaico	このウインドウをフローティングまたはタイル表示	将此窗口设为浮动或平铺
+Move to next display	Mover a la pantalla siguiente	Auf nächsten Bildschirm bewegen	Déplacer vers l’écran suivant	Mover para a próxima tela	次のディスプレイへ移動	移到下一个显示器
+Swap with main slot	Intercambiar con la posición principal	Mit der Hauptposition tauschen	Échanger avec l’emplacement principal	Trocar com a posição principal	メインの位置と入れ替え	与主位置交换
+Stop tiling this app	Dejar de enmosaicar esta app	Diese App nicht mehr kacheln	Ne plus mettre cette app en mosaïque	Parar de organizar este app em mosaico	このAppをタイル表示しない	停止平铺此 App
+Focus mode is paused while Stage Manager is on	El modo foco está en pausa mientras el Organizador visual está activado	Der Fokusmodus ist pausiert, solange Stage Manager an ist	Le mode focus est suspendu tant que Stage Manager est activé	O modo foco fica em pausa enquanto o Organizador de Janelas está ativado	ステージマネージャがオンの間、フォーカスモードは一時停止します	台前调度开启期间,专注模式已暂停
+Turn on automatic tiling in Settings first	Activa primero el mosaico automático en Ajustes	Aktiviere zuerst das automatische Kacheln in den Einstellungen	Activez d’abord la mosaïque automatique dans les réglages	Ative primeiro o mosaico automático nos Ajustes	先に設定でタイル表示の自動化をオンにしてください	请先在设置中开启自动平铺
+No window to focus	No hay ninguna ventana para enfocar	Kein Fenster zum Fokussieren	Aucune fenêtre sur laquelle se concentrer	Nenhuma janela para focar	フォーカスするウインドウがありません	没有可专注的窗口
+Muted	Silenciado	Stumm	Son coupé	Sem som	消音中	已静音
+Unmuted	Sonido activado	Ton ein	Son activé	Som ativado	消音を解除	已取消静音
+Volume {v}%	Volumen {v} %	Lautstärke {v} %	Volume {v} %	Volume {v}%	音量 {v}%	音量 {v}%
+Trash emptied	Papelera vaciada	Papierkorb geleert	Corbeille vidée	Lixeira esvaziada	ゴミ箱を空にしました	已清倒废纸篓
+Ejected all disks	Todos los discos expulsados	Alle Volumes ausgeworfen	Tous les disques ont été éjectés	Todos os discos ejetados	すべてのディスクを取り出しました	已推出所有磁盘
+Hidden files hidden	Archivos ocultos ocultados	Unsichtbare Dateien ausgeblendet	Fichiers cachés masqués	Arquivos ocultos escondidos	不可視ファイルを非表示にしました	已隐藏隐藏文件
+Hidden files shown	Archivos ocultos visibles	Unsichtbare Dateien eingeblendet	Fichiers cachés affichés	Arquivos ocultos visíveis	不可視ファイルを表示しました	已显示隐藏文件
+Quit all apps	Todas las apps cerradas	Alle Apps beendet	Toutes les apps ont été quittées	Todos os apps encerrados	すべてのAppを終了しました	已退出所有 App
+Wi-Fi off	Wi-Fi desactivado	WLAN aus	Wi-Fi désactivé	Wi-Fi desativado	Wi-Fiをオフにしました	Wi-Fi 已关闭
+Wi-Fi on	Wi-Fi activado	WLAN ein	Wi-Fi activé	Wi-Fi ativado	Wi-Fiをオンにしました	Wi-Fi 已开启
+Sleep allowed again	Reposo permitido de nuevo	Ruhezustand wieder erlaubt	Mise en veille de nouveau autorisée	Repouso permitido novamente	スリープを再び許可しました	已再次允许睡眠
+Keeping the Mac awake	Manteniendo el Mac activo	Mac wird wach gehalten	Le Mac reste activé	Mantendo o Mac ativo	Macをスリープさせません	保持 Mac 唤醒
+no Wi-Fi interface	no hay interfaz Wi-Fi	keine WLAN-Schnittstelle	aucune interface Wi-Fi	nenhuma interface Wi-Fi	Wi-Fiインターフェースがありません	没有 Wi-Fi 接口
+Grant Accessibility permission in System Settings → Privacy & Security → Accessibility	Concede el permiso de Accesibilidad en Ajustes del Sistema → Privacidad y seguridad → Accesibilidad	Erlaube die Bedienungshilfen in den Systemeinstellungen → Datenschutz & Sicherheit → Bedienungshilfen	Autorisez l’accessibilité dans Réglages Système → Confidentialité et sécurité → Accessibilité	Conceda a permissão de Acessibilidade em Ajustes do Sistema → Privacidade e Segurança → Acessibilidade	システム設定 → プライバシーとセキュリティ → アクセシビリティで許可してください	请在“系统设置”→“隐私与安全性”→“辅助功能”中允许
+No focused window	No hay ninguna ventana activa	Kein aktives Fenster	Aucune fenêtre active	Nenhuma janela em foco	フォーカスされたウインドウがありません	没有处于焦点的窗口
+Window has no frame	La ventana no tiene marco	Das Fenster hat keinen Rahmen	La fenêtre n’a pas de cadre	A janela não tem moldura	ウインドウにフレームがありません	窗口没有边框
+No screens	No hay pantallas	Keine Bildschirme	Aucun écran	Nenhuma tela	ディスプレイがありません	没有显示器
+Nothing to restore	Nada que restaurar	Nichts wiederherzustellen	Rien à restaurer	Nada para restaurar	復元するものがありません	没有可恢复的内容
+Only one display	Solo hay una pantalla	Nur ein Bildschirm	Un seul écran	Apenas uma tela	ディスプレイが1台のみです	只有一个显示器

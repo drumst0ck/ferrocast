@@ -17051,6 +17051,10 @@ mod i18n_ui {
                 settle(&mut a);
                 v.push(a);
             }
+            for tool in [ferrocast_core::annotate::Tool::Arrow, ferrocast_core::annotate::Tool::Text] {
+                v.push(view_app(View::Annotate { file: f.clone(), size: (100, 80), doc: Default::default(), tool, color: 0, sel: None }));
+            }
+            v.push(capture_app(&f));
             let pdf = std::path::PathBuf::from("/tmp/ferrocast-i18n.pdf");
             v.push(view_app(View::PdfOrganize { file: pdf.clone(), n: 3, plan: ferrocast_core::pdfplan::PdfPlan::new(3) }));
             for purpose in [ReorderPurpose::JoinVideos, ReorderPurpose::CreatePdf, ReorderPurpose::MergePdf] {

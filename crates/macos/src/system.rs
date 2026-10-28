@@ -247,11 +247,11 @@ impl SystemCommand {
                 let cur: i32 = osascript("output volume of (get volume settings)")?.parse().unwrap_or(50);
                 let v = (cur + if *self == VolumeUp { 6 } else { -6 }).clamp(0, 100);
                 osascript(&format!("set volume output volume {v}"))?;
-                return Ok(format!("Volume {v}%"));
+                return Ok(ferrocast_core::i18n::trf("Volume {v}%", &[("v", &v.to_string())]));
             }
             Volume(v) => {
                 osascript(&format!("set volume output volume {v}"))?;
-                return Ok(format!("Volume {v}%"));
+                return Ok(ferrocast_core::i18n::trf("Volume {v}%", &[("v", &v.to_string())]));
             }
             ShowDesktop => {
                 // F11 (Mission Control "Show Desktop")

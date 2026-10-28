@@ -184,6 +184,7 @@ fn make_bar(mtm: MainThreadMarker) -> BarParts {
     let target: Retained<BarTarget> = unsafe { msg_send![super(mtm.alloc::<BarTarget>().set_ivars(())), init] };
     let t: &AnyObject = &target;
     for (i, (sym, tip)) in SYMBOLS.iter().zip(TIPS).enumerate() {
+        let tip = &*ferrocast_core::i18n::tr(tip);
         let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(sym), Some(&NSString::from_str(tip)));
         let button = unsafe {
             match image {

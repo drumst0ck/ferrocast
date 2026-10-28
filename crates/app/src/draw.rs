@@ -4752,7 +4752,7 @@ impl App {
                 }
             });
         });
-        let hints: Vec<String> = specs.iter().map(|s| format!("{} {}", s.hint, s.label.trim_end_matches('…'))).collect();
+        let hints: Vec<String> = specs.iter().map(|s| format!("{} {}", s.hint, tr(s.label).trim_end_matches('…'))).collect();
         note_line(ui, Pos2::new(rect.center().x, rect.max.y - 14.0), hints.join(" · "), pal);
         if let Some(b) = run {
             self.capture_result_run(b);
@@ -5234,7 +5234,7 @@ impl App {
                         (Tool::Callout, "Callout"),
                         (Tool::Stamp, "Image"),
                     ] {
-                        let resp = ui.selectable_label(tool == t, l);
+                        let resp = ui.selectable_label(tool == t, tr(l));
                         record_strip(&ctx, resp.rect);
                         if resp.clicked() {
                             tool = t;
@@ -5259,14 +5259,14 @@ impl App {
                     #[cfg(test)]
                     let mut btns: Vec<(String, Rect)> = vec![];
                     let can_undo = !doc.items.is_empty();
-                    let undo = ui.add_enabled(can_undo, egui::Button::new("Undo"));
+                    let undo = ui.add_enabled(can_undo, egui::Button::new(tr("Undo")));
                     record_strip(&ctx, undo.rect);
                     if undo.clicked() {
                         doc.undo();
                         sel = None;
                     }
                     let can_delete = sel.is_some_and(|s| s < doc.items.len());
-                    let delete = ui.add_enabled(can_delete, egui::Button::new("Delete"));
+                    let delete = ui.add_enabled(can_delete, egui::Button::new(tr("Delete")));
                     record_strip(&ctx, delete.rect);
                     if delete.clicked() {
                         if let Some(s) = sel.take() {
