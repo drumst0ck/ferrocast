@@ -23,20 +23,24 @@
 //! have unit tests; the AppKit behavior is verified by `examples/notes_demo.rs --check`.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::ptr::{self, NonNull};
 use std::rc::Rc;
 
 use ferrocast_core::richtext::{self, Block, BlockKind, Doc, ListEnter, Span, Style, MAX_LEVEL};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
-use objc2::{define_class, msg_send, sel, AllocAnyThread, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, AllocAnyThread, MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventModifierFlags, NSEventType, NSFont,
-    NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeight, NSFontWeightBold, NSFontWeightLight, NSFontWeightMedium,
-    NSFontWeightRegular, NSForegroundColorAttributeName, NSKernAttributeName, NSLayoutManager, NSMenu, NSMutableParagraphStyle,
-    NSParagraphStyleAttributeName, NSPasteboard, NSPasteboardType, NSPasteboardTypeString, NSPopover, NSPopoverBehavior,
-    NSStrikethroughStyleAttributeName, NSTextAlignment, NSTextContainer, NSTextField, NSTextFieldDelegate, NSTextInputClient,
-    NSTextStorage, NSTextTab, NSTextView, NSUnderlineStyleAttributeName, NSView, NSViewController, NSWorkspace,
+    NSAttachmentAttributeName, NSBezierPath, NSColor, NSControl, NSControlTextEditingDelegate, NSDragOperation, NSDraggingInfo, NSEvent,
+    NSEventModifierFlags, NSEventType, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeight, NSFontWeightBold,
+    NSFontWeightLight, NSFontWeightMedium, NSFontWeightRegular, NSForegroundColorAttributeName, NSImage, NSKernAttributeName,
+    NSLayoutManager, NSMenu, NSModalResponseOK, NSMutableParagraphStyle, NSOpenPanel, NSParagraphStyleAttributeName, NSPasteboard,
+    NSPasteboardType, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSPopover,
+    NSPopoverBehavior, NSStrikethroughStyleAttributeName, NSTextAlignment, NSTextAttachment, NSTextContainer, NSTextField,
+    NSTextFieldDelegate, NSTextInputClient, NSTextStorage, NSTextTab, NSTextView, NSUnderlineStyleAttributeName, NSView, NSViewController,
+    NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSAttributedStringKey, NSDictionary, NSMutableAttributedString, NSMutableDictionary, NSNumber, NSObject,
@@ -51,6 +55,8 @@ pub const ZOOM_MAX: f64 = 3.0;
 
 const LINE_SEP: char = '\u{2028}';
 const ZWSP: char = '\u{200B}';
+/// The character an image attachment occupies in the storage.
+const OBJECT_CHAR: char = '\u{FFFC}';
 const ZWSP_U16: u16 = 0x200B;
 const BASE_SIZE: f64 = 14.0;
 /// Space above a code block (the line fragment of its first line includes it).
@@ -359,7 +365,113 @@ fn utf16_len(s: &str) -> usize {
 
 fn clean_text(units: &[u16], code: bool) -> String {
     let s: String = String::from_utf16_lossy(units);
-    s.chars().filter(|&c| c != ZWSP).map(|c| if code && c == LINE_SEP { '\n' } else { c }).collect()
+    s.chars().filter(|&c| c != ZWSP && c != OBJECT_CHAR).map(|c| if code && c == LINE_SEP { '\n' } else { c }).collect()
+}
+
+// ------------------------------------------------------------------ images
+
+const IMG_MARK: &str = "\u{1}img\u{1}";
+/// Widest an image is drawn at zoom 1, in points.
+const IMAGE_MAX_WIDTH: f64 = 480.0;
+
+/// Value of the `fcImage` attribute: the link target and the alt text.
+fn encode_image(src: &str, alt: &str) -> String {
+    format!("{IMG_MARK}{src}\u{1}{alt}")
+}
+
+fn decode_image(v: &str) -> Option<(&str, &str)> {
+    v.strip_prefix(IMG_MARK)?.split_once('\u{1}')
+}
+
+/// Size an image is drawn at: its natural size in points, scaled down (aspect ratio kept) to `max_w`.
+fn fit_image(natural: (f64, f64), max_w: f64) -> (f64, f64) {
+    let (w, h) = natural;
+    if !(w > 0.0 && h > 0.0) {
+        return (max_w.min(120.0), max_w.min(120.0));
+    }
+    if w <= max_w {
+        (w, h)
+    } else {
+        (max_w, h * max_w / w)
+    }
+}
+
+/// What the host does with images the user pastes, drops or inserts.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImageInput {
+    /// Image files (drop, paste of copied files, the open panel).
+    Files(Vec<PathBuf>),
+    /// Image data from the pasteboard (a screenshot): PNG bytes.
+    Png(Vec<u8>),
+}
+
+type ImagesCb = Rc<dyn Fn(ImageInput)>;
+
+thread_local! {
+    static ATTACH_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static IMAGE_CACHE: RefCell<HashMap<String, Retained<NSImage>>> = RefCell::new(HashMap::new());
+    static ON_IMAGES: RefCell<Option<ImagesCb>> = const { RefCell::new(None) };
+    /// Set while a paragraph that holds an image is styled: its lines are not stretched by the body
+    /// line-height multiple (that would add a tall blank band above a picture).
+    static LINE_FLAT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The data dir the `attachments/` links of notes are relative to.
+pub fn set_attachments_root(root: PathBuf) {
+    ATTACH_ROOT.with(|r| *r.borrow_mut() = Some(root));
+    IMAGE_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// Register the host callback for pasted, dropped and inserted images.
+pub fn set_on_images(cb: Box<dyn Fn(ImageInput)>) {
+    ON_IMAGES.with(|c| *c.borrow_mut() = Some(Rc::from(cb)));
+}
+
+pub(crate) fn emit_images(input: ImageInput) {
+    let cb = ON_IMAGES.with(|c| c.borrow().clone());
+    if let Some(cb) = cb {
+        cb(input);
+    }
+}
+
+/// The image of an attachment link, loaded from the attachments folder (only links of the exact
+/// `attachments/<hash>.<ext>` shape resolve, see `ferrocast_core::attachments`). `None` when the
+/// file is missing or not readable as an image (not downloaded yet, deleted).
+fn load_image(src: &str) -> Option<Retained<NSImage>> {
+    if let Some(img) = IMAGE_CACHE.with(|c| c.borrow().get(src).cloned()) {
+        return Some(img);
+    }
+    let root = ATTACH_ROOT.with(|r| r.borrow().clone())?;
+    let path = ferrocast_core::attachments::resolve_existing(&root, src)?;
+    let img = NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(&path.to_string_lossy()))?;
+    IMAGE_CACHE.with(|c| c.borrow_mut().insert(src.to_string(), img.clone()));
+    Some(img)
+}
+
+/// The attachment that draws image `src`: its picture at a sensible width (never wider than the
+/// text column, `IMAGE_MAX_WIDTH` at zoom 1), or a placeholder symbol while the file is missing.
+fn image_attachment(src: &str, alt: &str) -> Retained<NSTextAttachment> {
+    let z = zoom();
+    let column = handles()
+        .and_then(|(tv, _)| container_of(&tv).map(|c| c.size().width - 2.0 * c.lineFragmentPadding()))
+        .filter(|w| *w > 60.0)
+        .unwrap_or(IMAGE_MAX_WIDTH);
+    let max_w = (IMAGE_MAX_WIDTH * z).min(column);
+    let att = NSTextAttachment::new();
+    let (image, natural) = match load_image(src) {
+        Some(img) => {
+            let s = img.size();
+            (Some(img), (s.width, s.height))
+        }
+        None => (
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("photo"), Some(&NSString::from_str(alt))),
+            (48.0 * z, 36.0 * z),
+        ),
+    };
+    let (w, h) = fit_image(natural, max_w);
+    att.setImage(image.as_deref());
+    att.setBounds(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w, h)));
+    att
 }
 
 // ------------------------------------------------------------------ state
@@ -409,6 +521,7 @@ struct Keys {
     style: Retained<NSString>,
     link: Retained<NSString>,
     marker: Retained<NSString>,
+    image: Retained<NSString>,
 }
 
 impl Keys {
@@ -418,6 +531,7 @@ impl Keys {
             style: NSString::from_str("fcStyle"),
             link: NSString::from_str("fcLink"),
             marker: NSString::from_str("fcMarker"),
+            image: NSString::from_str("fcImage"),
         }
     }
 }
@@ -469,6 +583,12 @@ fn tab_stop(location: f64) -> Retained<NSTextTab> {
 
 /// Every attribute of one run, semantic and visual, for the current zoom.
 fn attrs(kind: &BlockKind, level: u8, bits: u8, link: Option<&str>, marker: bool) -> Retained<AttrDict> {
+    attrs_img(kind, level, bits, link, marker, None)
+}
+
+/// [`attrs`] for a run that may be an image: `image` is the encoded source and alt text
+/// ([`encode_image`]); the run's single character then carries the attachment that draws it.
+fn attrs_img(kind: &BlockKind, level: u8, bits: u8, link: Option<&str>, marker: bool, image: Option<&str>) -> Retained<AttrDict> {
     let z = zoom();
     let d: Retained<AttrDict> = NSMutableDictionary::new();
     let (code_block, rule, heading) =
@@ -483,7 +603,13 @@ fn attrs(kind: &BlockKind, level: u8, bits: u8, link: Option<&str>, marker: bool
         if marker {
             put(&d, &k.marker, &NSNumber::new_isize(1));
         }
+        if let Some(img) = image {
+            put(&d, &k.image, &NSString::from_str(img));
+        }
     });
+    if let Some((src, alt)) = image.and_then(decode_image) {
+        unsafe { put(&d, NSAttachmentAttributeName, &image_attachment(src, alt)) };
+    }
 
     let base = match kind {
         BlockKind::Heading(1) => 24.0,
@@ -554,7 +680,7 @@ fn attrs(kind: &BlockKind, level: u8, bits: u8, link: Option<&str>, marker: bool
         BlockKind::Rule => ps.setLineSpacing(2.0 * z),
         _ => {
             ps.setLineSpacing(0.0);
-            ps.setLineHeightMultiple(1.4);
+            ps.setLineHeightMultiple(if image.is_some() || LINE_FLAT.get() { 1.0 } else { 1.4 });
         }
     }
     ps.setParagraphSpacing(match kind {
@@ -605,6 +731,8 @@ struct Run {
     b: usize,
     bits: u8,
     link: Option<String>,
+    /// Encoded source and alt text when the run is one image character ([`encode_image`]).
+    image: Option<String>,
 }
 
 /// One paragraph of the storage. `start..cs` is the marker, `cs..end` the content.
@@ -677,15 +805,18 @@ fn read_paras(st: &NSAttributedString, with_runs: bool) -> (Vec<u16>, Vec<Para>)
         if with_runs {
             let mut i = cs;
             while i < end {
-                let (bits, link, e1, e2) = KEYS.with(|k| {
+                let (bits, link, image, e1, e2, e3) = KEYS.with(|k| {
                     let mut r1 = NSRange::new(0, 0);
                     let mut r2 = NSRange::new(0, 0);
+                    let mut r3 = NSRange::new(0, 0);
                     let bits = attr_int(st, &k.style, i, &mut r1).unwrap_or(0) as u8;
                     let link = attr_string(st, &k.link, i, &mut r2);
-                    (bits, link, r1.location + r1.length, r2.location + r2.length)
+                    let image = attr_string(st, &k.image, i, &mut r3);
+                    (bits, link, image, r1.location + r1.length, r2.location + r2.length, r3.location + r3.length)
                 });
-                let e = e1.min(e2).min(end).max(i + 1);
-                runs.push(Run { a: i, b: e, bits, link });
+                // an image is always one character of its own
+                let e = if image.is_some() { i + 1 } else { e1.min(e2).min(e3) }.min(end).max(i + 1);
+                runs.push(Run { a: i, b: e, bits, link, image });
                 i = e;
             }
         }
@@ -710,13 +841,19 @@ fn spans_of(u: &[u16], p: &Para, a: usize, b: usize) -> Vec<Span> {
         if x >= y {
             continue;
         }
+        if let Some((src, alt)) = r.image.as_deref().and_then(decode_image) {
+            let mut style = bits_style(0, None);
+            style.image = Some(src.to_string());
+            out.push(Span { text: alt.to_string(), style });
+            continue;
+        }
         let text = clean_text(&u[x..y], code);
         if text.is_empty() {
             continue;
         }
         let style = bits_style(r.bits, r.link.clone());
         match out.last_mut() {
-            Some(last) if last.style == style => last.text.push_str(&text),
+            Some(last) if last.style == style && last.style.image.is_none() => last.text.push_str(&text),
             _ => out.push(Span { text, style }),
         }
     }
@@ -766,12 +903,19 @@ fn render(blocks: &[Block], trailing: bool) -> (Retained<NSMutableAttributedStri
         // The level is kept as given: `normalize` clamps it against the whole document.
         let level = if is_list(&b.kind) { b.level.min(MAX_LEVEL) } else { 0 };
         starts.push(out.length());
+        LINE_FLAT.set(b.spans.iter().any(|s| s.style.image.is_some()));
         if is_list(&b.kind) {
             out.appendAttributedString(&attributed(&marker_text(&b.kind, level, number), &attrs(&b.kind, level, 0, None, true)));
         }
         let mut wrote = false;
         for s in &b.spans {
             if s.text.is_empty() {
+                continue;
+            }
+            if let Some(src) = &s.style.image {
+                let a = attrs_img(&b.kind, level, 0, None, false, Some(&encode_image(src, &s.text)));
+                out.appendAttributedString(&attributed(&OBJECT_CHAR.to_string(), &a));
+                wrote = true;
                 continue;
             }
             let text = if matches!(b.kind, BlockKind::Code { .. }) {
@@ -790,6 +934,7 @@ fn render(blocks: &[Block], trailing: bool) -> (Retained<NSMutableAttributedStri
             out.appendAttributedString(&attributed("\n", &attrs(&b.kind, level, 0, None, false)));
         }
     }
+    LINE_FLAT.set(false);
     (out, starts)
 }
 
@@ -802,11 +947,17 @@ fn apply_attrs(st: &NSTextStorage, a: &AttrDict, r: NSRange) {
 
 /// Rewrite every attribute of a paragraph from its semantic state (zoom, kind, level).
 fn restyle(st: &NSTextStorage, p: &Para, kind: &BlockKind, level: u8) {
+    LINE_FLAT.set(p.runs.iter().any(|r| r.image.is_some()));
+    restyle_runs(st, p, kind, level);
+    LINE_FLAT.set(false);
+}
+
+fn restyle_runs(st: &NSTextStorage, p: &Para, kind: &BlockKind, level: u8) {
     if p.cs > p.start {
         apply_attrs(st, &attrs(kind, level, 0, None, true), range(p.start, p.cs - p.start));
     }
     for r in &p.runs {
-        apply_attrs(st, &attrs(kind, level, r.bits, r.link.as_deref(), false), range(r.a, r.b - r.a));
+        apply_attrs(st, &attrs_img(kind, level, r.bits, r.link.as_deref(), false, r.image.as_deref()), range(r.a, r.b - r.a));
     }
     if p.nl {
         apply_attrs(st, &attrs(kind, level, 0, None, false), range(p.end, 1));
@@ -1176,6 +1327,18 @@ pub fn insert_markdown_after_selection_line(md: &str) -> bool {
     true
 }
 
+/// Insert Markdown blocks after the line the cursor (or the end of the selection) is on: where an
+/// image dropped, pasted or inserted should land. One undoable edit; false for a blank result.
+pub fn insert_markdown_after_cursor_line(md: &str) -> bool {
+    let Some(blocks) = result_blocks(md) else { return false };
+    let Some((tv, st)) = handles() else { return false };
+    let (_, paras) = read_paras(&st, false);
+    let sel = tv.selectedRange();
+    let at = para_at(&paras, sel.location + sel.length);
+    insert_blocks_after(at, blocks);
+    true
+}
+
 // ------------------------------------------------------------------ normalization
 
 fn from_units(u: &[u16]) -> String {
@@ -1248,6 +1411,14 @@ fn fix_link_inheritance(typed: (usize, usize)) {
     if len == 0 || loc + len > st.length() {
         return;
     }
+    // typed text is never an image, whatever it inherited from the character before it
+    KEYS.with(|k| {
+        let mut eff = NSRange::new(0, 0);
+        if attr_string(&st, &k.image, loc, &mut eff).is_some() {
+            st.removeAttribute_range(&k.image, range(loc, len));
+            unsafe { st.removeAttribute_range(NSAttachmentAttributeName, range(loc, len)) };
+        }
+    });
     let mut eff = NSRange::new(0, 0);
     let (mine, next) = KEYS.with(|k| (attr_string(&st, &k.link, loc, &mut eff), attr_string(&st, &k.link, loc + len, &mut eff)));
     if mine.is_some() && mine != next {
@@ -1638,7 +1809,7 @@ fn toggle_inline(bit: u8) {
         for (k, x, y, r) in &runs {
             let p = &paras[*k];
             let bits = if all { r.bits & !bit } else { r.bits | bit };
-            apply_attrs(st, &attrs(&p.kind, p.level, bits, r.link.as_deref(), false), range(*x, y - x));
+            apply_attrs(st, &attrs_img(&p.kind, p.level, bits, r.link.as_deref(), false, r.image.as_deref()), range(*x, y - x));
         }
     });
 }
@@ -2217,6 +2388,64 @@ fn handle_click(tv: &NSTextView, event: &NSEvent) -> bool {
     false
 }
 
+/// "Insert Image…": ask for image files and hand them to the host like a drop.
+pub fn choose_images() {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let panel = NSOpenPanel::openPanel(mtm);
+    panel.setCanChooseFiles(true);
+    panel.setCanChooseDirectories(false);
+    panel.setAllowsMultipleSelection(true);
+    panel.setMessage(Some(&NSString::from_str("Choose images to insert")));
+    let types: Vec<Retained<NSString>> = ["png", "jpg", "jpeg", "gif", "heic", "webp"].iter().map(|e| NSString::from_str(e)).collect();
+    #[allow(deprecated)]
+    panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&types)));
+    if panel.runModal() != NSModalResponseOK {
+        return;
+    }
+    let files: Vec<PathBuf> =
+        panel.URLs().iter().filter_map(|u| u.path()).map(|p| PathBuf::from(p.to_string())).filter(|p| is_image_path(p)).collect();
+    if !files.is_empty() {
+        emit_images(ImageInput::Files(files));
+    }
+}
+
+/// Image files among the file URLs of a pasteboard.
+fn image_files(pb: &NSPasteboard) -> Vec<PathBuf> {
+    let Some(items) = pb.pasteboardItems() else { return vec![] };
+    items
+        .iter()
+        .filter_map(|it| unsafe { it.stringForType(NSPasteboardTypeFileURL) })
+        .filter_map(|s| crate::clipboard::file_url_to_path(&s.to_string()))
+        .filter(|p| is_image_path(p))
+        .collect()
+}
+
+fn is_image_path(p: &std::path::Path) -> bool {
+    p.extension()
+        .is_some_and(|e| matches!(e.to_string_lossy().to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "heic" | "webp"))
+}
+
+/// What a paste brings in as images: copied image files, else a picture without text (a screenshot,
+/// an image copied from a browser). Text with a picture beside it (Word, web selections) stays text.
+fn pasteboard_images(pb: &NSPasteboard) -> Option<ImageInput> {
+    let files = image_files(pb);
+    if !files.is_empty() {
+        return Some(ImageInput::Files(files));
+    }
+    let has_text = pb.stringForType(unsafe { NSPasteboardTypeString }).is_some_and(|t| !t.to_string().trim().is_empty());
+    if has_text {
+        return None;
+    }
+    let png = unsafe { pb.dataForType(NSPasteboardTypePNG) }
+        .or_else(|| unsafe { pb.dataForType(NSPasteboardTypeTIFF) }.and_then(|d| crate::clipboard::png_bytes(&d)))?;
+    Some(ImageInput::Png(png.to_vec()))
+}
+
+fn dragged_images(sender: &ProtocolObject<dyn NSDraggingInfo>) -> Option<ImageInput> {
+    let files = image_files(&sender.draggingPasteboard());
+    (!files.is_empty()).then_some(ImageInput::Files(files))
+}
+
 fn paste_plain(tv: &NSTextView) {
     let pb = NSPasteboard::generalPasteboard();
     if let Some(s) = pb.stringForType(unsafe { NSPasteboardTypeString }) {
@@ -2412,7 +2641,65 @@ define_class!(
 
         #[unsafe(method(paste:))]
         fn paste(&self, _sender: Option<&AnyObject>) {
-            paste_plain(self);
+            match pasteboard_images(&NSPasteboard::generalPasteboard()) {
+                Some(input) => emit_images(input),
+                None => paste_plain(self),
+            }
+        }
+
+        // Image files dragged onto the note are copied into it; anything else drops as before.
+        #[unsafe(method(draggingEntered:))]
+        fn dragging_entered(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {
+            if dragged_images(sender).is_some() {
+                NSDragOperation::Copy
+            } else {
+                unsafe { msg_send![super(self), draggingEntered: sender] }
+            }
+        }
+
+        #[unsafe(method(draggingUpdated:))]
+        fn dragging_updated(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {
+            if dragged_images(sender).is_some() {
+                NSDragOperation::Copy
+            } else {
+                unsafe { msg_send![super(self), draggingUpdated: sender] }
+            }
+        }
+
+        #[unsafe(method(prepareForDragOperation:))]
+        fn prepare_for_drag(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
+            if dragged_images(sender).is_some() {
+                true
+            } else {
+                let ok: bool = unsafe { msg_send![super(self), prepareForDragOperation: sender] };
+                ok
+            }
+        }
+
+        #[unsafe(method(performDragOperation:))]
+        fn perform_drag(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
+            match dragged_images(sender) {
+                Some(input) => {
+                    // the image goes where it was dropped
+                    let at = self.convertPoint_fromView(sender.draggingLocation(), None);
+                    let idx: usize = unsafe { msg_send![self, characterIndexForInsertionAtPoint: at] };
+                    self.setSelectedRange(NSRange::new(idx.min(self.string().length()), 0));
+                    emit_images(input);
+                    true
+                }
+                None => {
+                    let ok: bool = unsafe { msg_send![super(self), performDragOperation: sender] };
+                    ok
+                }
+            }
+        }
+
+        #[unsafe(method(acceptableDragTypes))]
+        fn acceptable_drag_types(&self) -> *mut NSObject {
+            let base: Option<Retained<NSArray<NSPasteboardType>>> = unsafe { msg_send![super(self), acceptableDragTypes] };
+            let mut types: Vec<Retained<NSPasteboardType>> = base.map(|a| a.to_vec()).unwrap_or_default();
+            types.push(unsafe { NSPasteboardTypeFileURL }.retain());
+            Retained::autorelease_ptr(Retained::into_super(NSArray::from_retained_slice(&types)))
         }
 
         #[unsafe(method(pasteAsRichText:))]
@@ -2441,6 +2728,7 @@ pub(crate) fn new_text_view(mtm: MainThreadMarker, frame: NSRect) -> Retained<NS
     let _ = layout_of(&tv);
     tv.setSmartInsertDeleteEnabled(false);
     tv.setImportsGraphics(false);
+    tv.registerForDraggedTypes(&NSArray::from_slice(&[unsafe { NSPasteboardTypeFileURL }]));
     tv.setUsesFontPanel(false);
     // S4: the coral accent for the caret and the selection (28% alpha, text colour unchanged).
     tv.setInsertionPointColor(Some(&notes_theme::color(Token::Accent)));
@@ -2486,6 +2774,36 @@ pub fn paragraph_start(n: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_attribute_round_trips_source_and_alt() {
+        let v = encode_image("attachments/a.png", "my shot");
+        assert_eq!(decode_image(&v), Some(("attachments/a.png", "my shot")));
+        assert_eq!(decode_image(&encode_image("attachments/a.png", "")), Some(("attachments/a.png", "")));
+        assert_eq!(decode_image("https://example.com"), None);
+        assert_eq!(decode_image(""), None);
+    }
+
+    #[test]
+    fn images_are_drawn_at_their_size_up_to_the_max_width_keeping_the_aspect_ratio() {
+        assert_eq!(fit_image((200.0, 100.0), 480.0), (200.0, 100.0));
+        assert_eq!(fit_image((960.0, 480.0), 480.0), (480.0, 240.0));
+        assert_eq!(fit_image((1000.0, 2000.0), 400.0), (400.0, 800.0));
+        // an image that reports no size still gets a visible box
+        let (w, h) = fit_image((0.0, 0.0), 480.0);
+        assert!(w > 0.0 && h > 0.0);
+    }
+
+    #[test]
+    fn only_image_files_count_as_images() {
+        for ok in ["/a/b.png", "/a/b.JPG", "/a/b.jpeg", "/a/b.gif", "/a/b.HEIC", "/a/b.webp"] {
+            assert!(is_image_path(std::path::Path::new(ok)), "{ok}");
+        }
+        for no in ["/a/b.pdf", "/a/b", "/a/b.png.exe", "/a/.png"] {
+            assert!(!is_image_path(std::path::Path::new(no)), "{no}");
+        }
+    }
+
     use ferrocast_core::richtext::{parse, Style};
 
     fn blocks(md: &str) -> Vec<Block> {
