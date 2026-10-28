@@ -19,6 +19,7 @@ Actívala en Ajustes → Advanced → Sync with iCloud. La línea de estado bajo
 ## Qué se queda en cada Mac
 
 - Las carpetas de scripts, la bóveda de Obsidian, Launch at login, la cámara y el micrófono que elegiste para grabar, las carpetas de capturas y de grabaciones, las preferencias y el estado de las actualizaciones, el interruptor del mosaico automático y la disposición de cada pantalla (los demás ajustes del mosaico sí se sincronizan), y el estado de ventanas y notas, como la última nota abierta y el zoom de Notas.
+- Los interruptores de las extensiones de Raycast: ejecutar extensiones de Raycast y el interruptor de cada extensión. Las preferencias y los datos de las extensiones también se quedan en cada Mac.
 - El propio interruptor de sincronización: lo activas por separado en cada Mac.
 - Los **permisos de macOS** (Accesibilidad, Grabación de pantalla, Monitorización de entrada, etc.). Pertenecen a cada Mac y Ferrocast no puede copiarlos. Concédelos de nuevo en cada Mac.
 - Las **claves de API** del llavero. Ferrocast está firmada ad hoc, lo que no permite el llavero de iCloud, así que introduce cada clave en cada Mac.
