@@ -563,8 +563,9 @@ pub fn from_items<T: DeserializeOwned>(items: Vec<(String, Value)>) -> Vec<T> {
 
 /// Settings fields that stay on each Mac (S6): machine paths, login item, onboarding, update state,
 /// UI state, the sync switch itself, and the two tiling fields that depend on the Mac (the switch
-/// that moves windows and the layout per display index).
-pub const LOCAL_ONLY: [&str; 13] = [
+/// that moves windows and the layout per display index), and the Raycast extensions switches (Node and
+/// the installed extensions exist per Mac).
+pub const LOCAL_ONLY: [&str; 15] = [
     "script_directories",
     "obsidian_vault",
     "launch_at_login",
@@ -578,6 +579,8 @@ pub const LOCAL_ONLY: [&str; 13] = [
     "sync_enabled",
     "tiling_enabled",
     "tiling_display_layouts",
+    "run_raycast_extensions",
+    "raycast_extensions_disabled",
 ];
 /// Local-only fields inside `capture`: the devices and the folders differ per Mac.
 pub const LOCAL_ONLY_CAPTURE: [&str; 4] = ["camera_id", "mic_id", "folder", "recordings_folder"];
@@ -1583,6 +1586,15 @@ mod tests {
         let mut echo = std::process::Command::new("/bin/echo");
         echo.arg("hello");
         assert_eq!(run_with_timeout(&mut echo, std::time::Duration::from_secs(5)).unwrap().trim(), "hello");
+    }
+
+    #[test]
+    fn raycast_extension_settings_are_device_local() {
+        let mut s = Settings::default();
+        let before = settings_items(&s);
+        s.run_raycast_extensions = true;
+        s.raycast_extensions_disabled.push("json-format".into());
+        assert_eq!(settings_items(&s), before, "Node and the installed extensions are per Mac");
     }
 
     #[test]

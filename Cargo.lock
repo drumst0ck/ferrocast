@@ -896,6 +896,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "dirs 6.0.0",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
