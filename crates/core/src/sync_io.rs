@@ -349,6 +349,7 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
         baseline_deleted: if first { default_ids(domain) } else { vec![] },
         relay_tombstones: !clipboard,
         max_tombstones: clipboard.then_some(MAX_CLIPBOARD_TOMBSTONES),
+        pristine: pristine_check(domain),
     };
     let (doc, t1) = sync::publish_opts(&io.device, snapshot, tracker, now, &opts);
     io.write_doc(domain, &doc)?;
@@ -379,6 +380,22 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
         return Ok(Outcome { merged: None, tracker_published: t3.clone(), tracker_merged: t3, peers: io.peers(), corrupt, downloading });
     }
     Ok(Outcome { merged: Some(merged), tracker_published: t1, tracker_merged: t3, peers: io.peers(), corrupt, downloading })
+}
+
+/// Pristine = the value is the built-in default of its item (see `sync::Record::pristine`): the
+/// shared part of the settings (local-only fields removed) equals `Settings::default()`, a built-in
+/// snippet or quicklink equals its default content. Everything else is never pristine.
+fn pristine_check(domain: &str) -> Option<fn(&str, &Value) -> bool> {
+    match domain {
+        "settings" => Some(|_, v| settings_items(&Settings::default()).first().is_some_and(|(_, d)| d == v)),
+        "snippets" => {
+            Some(|id, v| crate::storage::default_snippets().iter().any(|d| d.id == id && serde_json::to_value(d).ok().as_ref() == Some(v)))
+        }
+        "quicklinks" => Some(|id, v| {
+            crate::storage::default_quicklinks().iter().any(|d| d.id == id && serde_json::to_value(d).ok().as_ref() == Some(v))
+        }),
+        _ => None,
+    }
 }
 
 /// Ids of the built-in default items of a domain (present on every fresh install).
@@ -965,6 +982,74 @@ mod tests {
     }
 
     #[test]
+    fn a_customised_mac_joining_later_beats_a_fresh_mac_that_synced_first() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::launch(&da, &shared), Mac::launch(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            // the old Mac is customised before it ever syncs
+            a.settings.launcher_hotkey = "Ctrl+Space".into();
+            a.settings.theme = crate::models::Theme::Dark;
+            a.snippets.iter_mut().find(|s| s.id == "default-snippet-shrug").unwrap().text = "my shrug".into();
+            a.quicklinks.retain(|q| q.id != "default-quicklink-google");
+            // the new Mac, still pristine, turns sync on first and syncs twice
+            b.sync(1_000);
+            b.sync(1_500);
+            a.sync(2_000);
+            b.sync(3_000);
+            a.sync(3_500);
+            b.sync(4_000);
+            for m in [&a, &b] {
+                assert_eq!(m.settings.launcher_hotkey, "Ctrl+Space", "ids {ida}/{idb}");
+                assert_eq!(m.settings.theme, crate::models::Theme::Dark, "ids {ida}/{idb}");
+                assert_eq!(m.snippets.iter().find(|s| s.id == "default-snippet-shrug").unwrap().text, "my shrug", "ids {ida}/{idb}");
+                assert!(!m.quicklinks.iter().any(|q| q.id == "default-quicklink-google"), "ids {ida}/{idb}");
+            }
+            // a genuine edit on B afterwards wins
+            b.settings.theme = crate::models::Theme::Light;
+            b.sync(9_000);
+            a.sync(9_500);
+            for m in [&a, &b] {
+                assert_eq!(m.settings.theme, crate::models::Theme::Light, "ids {ida}/{idb}");
+            }
+            // setting a value back to its default on purpose is a real edit and wins as usual
+            a.settings.launcher_hotkey = Settings::default().launcher_hotkey;
+            a.sync(10_000);
+            b.sync(10_500);
+            a.sync(11_000);
+            for m in [&a, &b] {
+                assert_eq!(m.settings.launcher_hotkey, Settings::default().launcher_hotkey, "ids {ida}/{idb}");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn two_pristine_macs_still_end_up_the_same_and_a_default_edited_later_wins() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::launch(&da, &shared), Mac::launch(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.sync(1_000);
+            a.sync(1_500);
+            b.sync(2_000);
+            b.sync(2_500);
+            b.snippets.iter_mut().find(|s| s.id == "default-snippet-today").unwrap().text = "edited on b".into();
+            b.sync(3_000);
+            a.sync(3_500);
+            for m in [&a, &b] {
+                assert_eq!(m.snippets.iter().find(|s| s.id == "default-snippet-today").unwrap().text, "edited on b", "ids {ida}/{idb}");
+                assert_eq!((m.snippets.len(), m.quicklinks.len()), (3, 6));
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn two_fresh_installs_end_with_three_snippets_and_six_quicklinks() {
         let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
         let (mut a, mut b) = (Mac::launch(&da, &shared), Mac::launch(&db, &shared));
@@ -1056,7 +1141,10 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         let old = image_entry("old", "x.png", 5);
         let mut doc = DeviceDoc { device: "other".into(), items: Default::default() };
-        doc.items.insert("old".into(), sync::Record { modified: 10, deleted: false, value: Some(serde_json::to_value(&old).unwrap()) });
+        doc.items.insert(
+            "old".into(),
+            sync::Record { modified: 10, deleted: false, value: Some(serde_json::to_value(&old).unwrap()), pristine: false },
+        );
         std::fs::write(other.join("clipboard.json"), serde_json::to_vec(&doc).unwrap()).unwrap();
         let o = sync_domain(&a.io, "clipboard", &[], &Tracker::default(), 500 * DAY).unwrap();
         assert!(o.merged.is_none(), "an entry last edited before the horizon is not adopted");
@@ -1362,8 +1450,11 @@ mod tests {
         let entry = image_entry("c1", "pic.png", 5);
         let doc = DeviceDoc {
             device: "other".into(),
-            items: [("c1".to_string(), sync::Record { modified: 9, deleted: false, value: Some(serde_json::to_value(&entry).unwrap()) })]
-                .into(),
+            items: [(
+                "c1".to_string(),
+                sync::Record { modified: 9, deleted: false, value: Some(serde_json::to_value(&entry).unwrap()), pristine: false },
+            )]
+            .into(),
         };
         std::fs::write(other.join("clipboard.json"), serde_json::to_vec(&doc).unwrap()).unwrap();
         let o = sync_domain(&a.io, "clipboard", &[], &Tracker::default(), 2).unwrap();
@@ -1396,7 +1487,12 @@ mod tests {
             device: "other".into(),
             items: [(
                 "c1".to_string(),
-                sync::Record { modified: 9, deleted: false, value: Some(serde_json::to_value(image_entry("c1", "pic.png", 5)).unwrap()) },
+                sync::Record {
+                    modified: 9,
+                    deleted: false,
+                    value: Some(serde_json::to_value(image_entry("c1", "pic.png", 5)).unwrap()),
+                    pristine: false,
+                },
             )]
             .into(),
         };

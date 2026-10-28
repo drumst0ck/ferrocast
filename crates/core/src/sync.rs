@@ -22,6 +22,19 @@ pub struct Record {
     /// The item itself; `None` for tombstones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
+    /// "This value is the built-in default and was never edited on the Mac that published it."
+    /// A record that is not pristine beats a pristine one whatever their times, so a Mac that was
+    /// customised before it ever synced is not overwritten by a fresh Mac that synced first.
+    /// Documents without the flag (older versions) count as not pristine.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pristine: bool,
+}
+
+impl Record {
+    /// Rank before time: a live pristine record is 0, everything else (edited items, deletions) is 1.
+    fn rank(&self) -> u8 {
+        u8::from(self.deleted || !self.pristine)
+    }
 }
 
 /// What one device publishes for one domain.
@@ -54,6 +67,10 @@ pub struct Tracked {
     /// A deletion this Mac only learned from another Mac (it did not originate here).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remote: bool,
+    /// The record is pristine (see `Record::pristine`): set on the first publish when the value is a
+    /// built-in default, lost with the first edit, carried over from the record that was adopted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pristine: bool,
 }
 
 /// Default tombstone lifetime of `publish`/`publish_with` (90 days). The app keeps tombstones for
@@ -90,7 +107,7 @@ pub fn publish_ttl(
     first_stamp: i64,
     ttl: Option<i64>,
 ) -> (DeviceDoc, Tracker) {
-    let opts = PublishOpts { first_stamp, ttl, baseline_deleted: vec![], relay_tombstones: true, max_tombstones: None };
+    let opts = PublishOpts { first_stamp, ttl, baseline_deleted: vec![], relay_tombstones: true, max_tombstones: None, pristine: None };
     publish_opts(device, items, prev, now, &opts)
 }
 
@@ -111,6 +128,9 @@ pub struct PublishOpts {
     pub relay_tombstones: bool,
     /// Keep at most this many tombstones (the newest).
     pub max_tombstones: Option<usize>,
+    /// Tells whether a value is the built-in default of its item. Called for items this Mac publishes
+    /// for the first time on its first sync; `None` = nothing is pristine.
+    pub pristine: Option<fn(&str, &Value) -> bool>,
 }
 
 /// The general form of `publish`: see `PublishOpts`.
@@ -125,13 +145,14 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
             continue; // duplicate id: the first one wins
         }
         let h = hash(value);
-        let modified = match prev.items.get(id) {
-            Some(t) if !t.deleted && t.hash == h => t.modified,
-            Some(_) => now,
-            None => unseen,
+        // an edit (a changed hash, even back to the default) is a real change: not pristine, now
+        let (modified, pristine) = match prev.items.get(id) {
+            Some(t) if !t.deleted && t.hash == h => (t.modified, t.pristine),
+            Some(_) => (now, false),
+            None => (unseen, !prev.seeded && opts.pristine.is_some_and(|f| f(id, value))),
         };
-        doc.items.insert(id.clone(), Record { modified, deleted: false, value: Some(value.clone()) });
-        next.items.insert(id.clone(), Tracked { hash: h, modified, deleted: false, remote: false });
+        doc.items.insert(id.clone(), Record { modified, deleted: false, value: Some(value.clone()), pristine });
+        next.items.insert(id.clone(), Tracked { hash: h, modified, deleted: false, remote: false, pristine });
     }
     for (id, t) in &prev.items {
         if seen.contains(id) {
@@ -144,16 +165,19 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
         if opts.ttl.is_some_and(|ttl| now - modified > ttl) {
             continue;
         }
-        doc.items.insert(id.clone(), Record { modified, deleted: true, value: None });
-        next.items.insert(id.clone(), Tracked { hash: t.hash.clone(), modified, deleted: true, remote: t.remote });
+        doc.items.insert(id.clone(), Record { modified, deleted: true, value: None, pristine: false });
+        next.items.insert(id.clone(), Tracked { hash: t.hash.clone(), modified, deleted: true, remote: t.remote, pristine: false });
     }
     if !prev.seeded {
         for id in &opts.baseline_deleted {
             if seen.contains(id) || prev.items.contains_key(id) {
                 continue;
             }
-            doc.items.insert(id.clone(), Record { modified: opts.first_stamp, deleted: true, value: None });
-            next.items.insert(id.clone(), Tracked { hash: String::new(), modified: opts.first_stamp, deleted: true, remote: false });
+            doc.items.insert(id.clone(), Record { modified: opts.first_stamp, deleted: true, value: None, pristine: false });
+            next.items.insert(
+                id.clone(),
+                Tracked { hash: String::new(), modified: opts.first_stamp, deleted: true, remote: false, pristine: false },
+            );
         }
     }
     if let Some(max) = opts.max_tombstones {
@@ -186,15 +210,15 @@ pub fn restamp_baseline(tracker: &mut Tracker) -> bool {
     changed
 }
 
-/// The winning record for every id across all documents: newest `modified`, then the greater device
-/// id, so every Mac picks the same winner.
+/// The winning record for every id across all documents: a record that is not pristine beats a
+/// pristine one, then the newest `modified`, then the greater device id, so every Mac picks the same winner.
 pub fn winners(docs: &[DeviceDoc]) -> BTreeMap<String, (String, Record)> {
     let mut out: BTreeMap<String, (String, Record)> = BTreeMap::new();
     for doc in docs {
         for (id, rec) in &doc.items {
             let better = match out.get(id) {
                 None => true,
-                Some((dev, cur)) => (rec.modified, doc.device.as_str()) > (cur.modified, dev.as_str()),
+                Some((dev, cur)) => (rec.rank(), rec.modified, doc.device.as_str()) > (cur.rank(), cur.modified, dev.as_str()),
             };
             if better {
                 out.insert(id.clone(), (doc.device.clone(), rec.clone()));
@@ -225,18 +249,24 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
         match win.get(id) {
             Some((dev, rec)) if rec.deleted => {
                 // Deleted elsewhere after our last edit.
-                if local_is_newer(tracker, id, value, rec.modified, dev, own) {
+                if local_wins(tracker, id, value, rec, dev, own) {
                     out.push((id.clone(), value.clone()));
                 } else {
-                    next.items.insert(id.clone(), Tracked { hash: hash(value), modified: rec.modified, deleted: true, remote: true });
+                    next.items.insert(
+                        id.clone(),
+                        Tracked { hash: hash(value), modified: rec.modified, deleted: true, remote: true, pristine: false },
+                    );
                 }
             }
             Some((dev, rec)) => {
                 let theirs = rec.value.clone().unwrap_or(Value::Null);
-                if local_is_newer(tracker, id, value, rec.modified, dev, own) || hash(&theirs) == hash(value) {
+                if local_wins(tracker, id, value, rec, dev, own) || hash(&theirs) == hash(value) {
                     out.push((id.clone(), value.clone()));
                 } else {
-                    next.items.insert(id.clone(), Tracked { hash: hash(&theirs), modified: rec.modified, deleted: false, remote: false });
+                    next.items.insert(
+                        id.clone(),
+                        Tracked { hash: hash(&theirs), modified: rec.modified, deleted: false, remote: false, pristine: rec.pristine },
+                    );
                     out.push((id.clone(), theirs));
                 }
             }
@@ -249,23 +279,25 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
     for (id, rec) in fresh {
         // Deleted here since the other Mac's edit: our tombstone is newer, keep it deleted.
         if let Some(t) = tracker.items.get(id) {
-            if t.deleted && t.modified >= rec.modified {
+            if t.deleted && (rec.rank() == 0 || t.modified >= rec.modified) {
                 continue;
             }
         }
         let v = rec.value.clone().unwrap_or(Value::Null);
-        next.items.insert(id.clone(), Tracked { hash: hash(&v), modified: rec.modified, deleted: false, remote: false });
+        next.items
+            .insert(id.clone(), Tracked { hash: hash(&v), modified: rec.modified, deleted: false, remote: false, pristine: rec.pristine });
         out.push((id.clone(), v));
     }
     (out, next)
 }
 
-/// True when this Mac edited `id` after `their_modified`: the local value differs from what the
-/// tracker last published (an unpublished edit counts as now) or was published later.
-fn local_is_newer(tracker: &Tracker, id: &str, value: &Value, their_modified: i64, their_device: &str, own: &str) -> bool {
+/// True when this Mac's record of `id` beats the winning remote record `rec` (from `their_device`):
+/// not pristine beats pristine, then the later time, then the greater device id. A local value that
+/// differs from what the tracker last published is an edit nobody has seen: it always wins.
+fn local_wins(tracker: &Tracker, id: &str, value: &Value, rec: &Record, their_device: &str, own: &str) -> bool {
     match tracker.items.get(id) {
         Some(t) if t.hash == hash(value) && !t.deleted => {
-            t.modified > their_modified || (t.modified == their_modified && own > their_device)
+            (u8::from(!t.pristine), t.modified, own) > (rec.rank(), rec.modified, their_device)
         }
         // Never published or changed since: an edit nobody else has seen yet.
         _ => true,
@@ -294,7 +326,7 @@ mod tests {
     fn a_removed_item_becomes_a_tombstone_once() {
         let (_, t1) = publish("a", &items(&[("1", json!("x"))]), &Tracker::default(), 100);
         let (doc, t2) = publish("a", &[], &t1, 200);
-        assert_eq!(doc.items["1"], Record { modified: 200, deleted: true, value: None });
+        assert_eq!(doc.items["1"], Record { modified: 200, deleted: true, value: None, pristine: false });
         let (doc, _) = publish("a", &[], &t2, 300);
         assert_eq!(doc.items["1"].modified, 200, "the deletion time does not move");
     }
@@ -312,15 +344,15 @@ mod tests {
     fn the_newest_edit_wins_and_ties_go_to_the_greater_device() {
         let a = DeviceDoc {
             device: "a".into(),
-            items: [("1".to_string(), Record { modified: 5, deleted: false, value: Some(json!("a")) })].into(),
+            items: [("1".to_string(), Record { modified: 5, deleted: false, value: Some(json!("a")), pristine: false })].into(),
         };
         let b = DeviceDoc {
             device: "b".into(),
-            items: [("1".to_string(), Record { modified: 5, deleted: false, value: Some(json!("b")) })].into(),
+            items: [("1".to_string(), Record { modified: 5, deleted: false, value: Some(json!("b")), pristine: false })].into(),
         };
         let c = DeviceDoc {
             device: "c".into(),
-            items: [("1".to_string(), Record { modified: 4, deleted: false, value: Some(json!("c")) })].into(),
+            items: [("1".to_string(), Record { modified: 4, deleted: false, value: Some(json!("c")), pristine: false })].into(),
         };
         assert_eq!(winners(&[a.clone(), b.clone(), c.clone()])["1"].1.value, Some(json!("b")));
         assert_eq!(winners(&[c, b, a])["1"].1.value, Some(json!("b")), "order of documents does not matter");
@@ -328,7 +360,7 @@ mod tests {
 
     #[test]
     fn a_tie_at_the_same_time_goes_to_the_greater_device_on_both_macs() {
-        let rec = |v: &str| Record { modified: 0, deleted: false, value: Some(json!(v)) };
+        let rec = |v: &str| Record { modified: 0, deleted: false, value: Some(json!(v)), pristine: false };
         let (da, ta) = publish_with("zz", &items(&[("1", json!("zz value"))]), &Tracker::default(), 5, 0);
         let (db, tb) = publish_with("aa", &items(&[("1", json!("aa value"))]), &Tracker::default(), 5, 0);
         assert_eq!(da.items["1"], rec("zz value"));
@@ -348,20 +380,68 @@ mod tests {
 
     #[test]
     fn restamping_moves_baseline_records_once_and_a_received_deletion_is_not_republished_when_relaying_is_off() {
-        let opts =
-            |relay| PublishOpts { first_stamp: 0, ttl: None, baseline_deleted: vec![], relay_tombstones: relay, max_tombstones: None };
+        let opts = |relay| PublishOpts {
+            first_stamp: 0,
+            ttl: None,
+            baseline_deleted: vec![],
+            relay_tombstones: relay,
+            max_tombstones: None,
+            pristine: None,
+        };
         let (_, mut t) = publish_opts("a", &items(&[("1", json!("x")), ("2", json!("y"))]), &Tracker::default(), 500, &opts(true));
         assert_eq!((t.items["1"].modified, t.first_sync_at), (0, Some(500)));
         assert!(restamp_baseline(&mut t));
         assert_eq!(t.items["1"].modified, 500);
         assert!(!restamp_baseline(&mut t), "once");
         // a deletion learned from another Mac
-        let theirs =
-            DeviceDoc { device: "b".into(), items: [("2".to_string(), Record { modified: 900, deleted: true, value: None })].into() };
+        let theirs = DeviceDoc {
+            device: "b".into(),
+            items: [("2".to_string(), Record { modified: 900, deleted: true, value: None, pristine: false })].into(),
+        };
         let (merged, t2) = merge_as("a", &items(&[("1", json!("x")), ("2", json!("y"))]), &[theirs], &t);
         assert_eq!(merged, items(&[("1", json!("x"))]));
         assert!(publish_opts("a", &merged, &t2, 1_000, &opts(true)).0.items.contains_key("2"));
         assert!(!publish_opts("a", &merged, &t2, 1_000, &opts(false)).0.items.contains_key("2"));
+    }
+
+    #[test]
+    fn a_record_that_is_not_pristine_beats_a_pristine_one_whatever_the_time_and_old_documents_count_as_not_pristine() {
+        let doc = |dev: &str, modified, pristine, v: &str| DeviceDoc {
+            device: dev.into(),
+            items: [("1".to_string(), Record { modified, deleted: false, value: Some(json!(v)), pristine })].into(),
+        };
+        let w = winners(&[doc("a", 9_000, true, "default"), doc("b", 1, false, "custom")]);
+        assert_eq!(w["1"].1.value, Some(json!("custom")));
+        // an old document has no `pristine` key
+        let old: DeviceDoc = serde_json::from_str(r#"{"device":"c","items":{"1":{"modified":2,"value":"old"}}}"#).unwrap();
+        assert!(!old.items["1"].pristine);
+        let w = winners(&[doc("a", 9_000, true, "default"), old]);
+        assert_eq!(w["1"].1.value, Some(json!("old")));
+        // among equal statuses time decides
+        let w = winners(&[doc("a", 5, false, "older"), doc("b", 6, false, "newer")]);
+        assert_eq!(w["1"].1.value, Some(json!("newer")));
+    }
+
+    #[test]
+    fn an_edit_makes_a_pristine_record_not_pristine_even_when_it_goes_back_to_the_default() {
+        let opts = PublishOpts {
+            first_stamp: 0,
+            ttl: None,
+            baseline_deleted: vec![],
+            relay_tombstones: true,
+            max_tombstones: None,
+            pristine: Some(|_, v| v == &json!("default")),
+        };
+        let (doc, t1) = publish_opts("a", &items(&[("1", json!("default"))]), &Tracker::default(), 10, &opts);
+        assert!(doc.items["1"].pristine && t1.items["1"].pristine);
+        let (doc, t2) = publish_opts("a", &items(&[("1", json!("edited"))]), &t1, 20, &opts);
+        assert!(!doc.items["1"].pristine && doc.items["1"].modified == 20);
+        let (doc, _) = publish_opts("a", &items(&[("1", json!("default"))]), &t2, 30, &opts);
+        assert!(!doc.items["1"].pristine, "back to the default on purpose is an edit");
+        assert_eq!(doc.items["1"].modified, 30);
+        // a new item on a later run is never pristine
+        let (doc, _) = publish_opts("a", &items(&[("1", json!("default")), ("2", json!("default"))]), &t2, 40, &opts);
+        assert!(!doc.items["2"].pristine);
     }
 
     #[test]
@@ -377,7 +457,9 @@ mod tests {
             items: doc
                 .items
                 .iter()
-                .map(|(k, r)| (k.clone(), Tracked { hash: String::new(), modified: r.modified, deleted: r.deleted, remote: false }))
+                .map(|(k, r)| {
+                    (k.clone(), Tracked { hash: String::new(), modified: r.modified, deleted: r.deleted, remote: false, pristine: false })
+                })
                 .collect(),
             seeded: true,
             first_sync_at: None,
@@ -397,7 +479,7 @@ mod tests {
         let (da, ta) = publish("a", &items(&[("1", json!("old"))]), &Tracker::default(), 100);
         let mut db = da.clone();
         db.device = "b".into();
-        db.items.insert("1".into(), Record { modified: 200, deleted: false, value: Some(json!("new")) });
+        db.items.insert("1".into(), Record { modified: 200, deleted: false, value: Some(json!("new")), pristine: false });
         let (merged, t) = merge(&items(&[("1", json!("old"))]), &[da, db], &ta);
         assert_eq!(merged, items(&[("1", json!("new"))]));
         let (doc, _) = publish("a", &merged, &t, 300);
@@ -409,7 +491,7 @@ mod tests {
         let (da, ta) = publish("a", &items(&[("1", json!("v1"))]), &Tracker::default(), 100);
         let db = DeviceDoc {
             device: "b".into(),
-            items: [("1".to_string(), Record { modified: 150, deleted: false, value: Some(json!("theirs")) })].into(),
+            items: [("1".to_string(), Record { modified: 150, deleted: false, value: Some(json!("theirs")), pristine: false })].into(),
         };
         // Local edit made after the last publish, not yet published.
         let (merged, _) = merge(&items(&[("1", json!("mine"))]), &[da, db], &ta);
@@ -419,11 +501,18 @@ mod tests {
     #[test]
     fn a_remote_deletion_newer_than_the_local_edit_removes_the_item() {
         let (da, ta) = publish("a", &items(&[("1", json!("x")), ("2", json!("y"))]), &Tracker::default(), 100);
-        let db = DeviceDoc { device: "b".into(), items: [("1".to_string(), Record { modified: 200, deleted: true, value: None })].into() };
+        let db = DeviceDoc {
+            device: "b".into(),
+            items: [("1".to_string(), Record { modified: 200, deleted: true, value: None, pristine: false })].into(),
+        };
         let (merged, t) = merge(&items(&[("1", json!("x")), ("2", json!("y"))]), &[da, db], &ta);
         assert_eq!(merged, items(&[("2", json!("y"))]));
         let (doc, _) = publish("a", &merged, &t, 300);
-        assert_eq!(doc.items["1"], Record { modified: 200, deleted: true, value: None }, "the tombstone is kept, not renewed");
+        assert_eq!(
+            doc.items["1"],
+            Record { modified: 200, deleted: true, value: None, pristine: false },
+            "the tombstone is kept, not renewed"
+        );
     }
 
     #[test]
@@ -432,7 +521,7 @@ mod tests {
         let (da, t2) = publish("a", &[], &t1, 200);
         let db = DeviceDoc {
             device: "b".into(),
-            items: [("1".to_string(), Record { modified: 100, deleted: false, value: Some(json!("x")) })].into(),
+            items: [("1".to_string(), Record { modified: 100, deleted: false, value: Some(json!("x")), pristine: false })].into(),
         };
         let (merged, _) = merge(&[], &[da, db], &t2);
         assert!(merged.is_empty());
@@ -444,7 +533,7 @@ mod tests {
         let (da, t2) = publish("a", &[], &t1, 200);
         let db = DeviceDoc {
             device: "b".into(),
-            items: [("1".to_string(), Record { modified: 300, deleted: false, value: Some(json!("x2")) })].into(),
+            items: [("1".to_string(), Record { modified: 300, deleted: false, value: Some(json!("x2")), pristine: false })].into(),
         };
         let (merged, _) = merge(&[], &[da, db], &t2);
         assert_eq!(merged, items(&[("1", json!("x2"))]));
