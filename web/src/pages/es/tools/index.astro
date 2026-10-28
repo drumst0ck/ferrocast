@@ -1,0 +1,47 @@
+---
+import Base from '../../../layouts/Base.astro';
+import SiteHeader from '../../../components/SiteHeader.astro';
+import SiteFooter from '../../../components/SiteFooter.astro';
+import Crumbs from '../../../components/seo/Crumbs.astro';
+import SeoNav from '../../../components/seo/SeoNav.astro';
+import { counts } from '../../../data/status';
+import { allTools } from '../../../lib/seo/tools';
+import { breadcrumbs, SITE } from '../../../lib/seo/jsonld';
+import { toolDescriptionsEs, toolGroupLabelsEs, toolsEsMeta } from '../../../i18n/tools-es';
+import '../../../styles/seo.css';
+
+const tools = allTools();
+const n = counts();
+const { title, description } = toolsEsMeta(tools.length);
+const groups = Object.entries(toolGroupLabelsEs);
+for (const t of tools) {
+  if (!toolDescriptionsEs[t.docSlug]) throw new Error(`no Spanish tool line for ${t.docSlug}`);
+  if (!toolGroupLabelsEs[t.media]) throw new Error(`no Spanish group for ${t.media}`);
+}
+const crumbs: [string, string][] = [['Inicio', '/es/'], ['Herramientas', '/es/tools/']];
+const canonical = `${SITE}/es/tools/`;
+const alternates = { en: `${SITE}/tools/`, es: canonical, 'x-default': `${SITE}/tools/` };
+---
+<Base title={title} description={description} canonical={canonical} jsonLd={breadcrumbs(crumbs)} lang="es" alternates={alternates}>
+  <SiteHeader lang="es" current="files" switchHref="/tools/" switchLabel="EN" switchAria="Read this page in English">
+    <SeoNav slot="nav" lang="es" />
+    <span slot="cta">Instalar</span>
+  </SiteHeader>
+  <main class="seo" id="main">
+    <Crumbs items={crumbs} />
+    <h1>Herramientas de archivo para tu Mac</h1>
+    <p class="lead">{tools.length} herramientas que se ejecutan en tu Mac. Arrastra un archivo, pulsa <kbd>⌘</kbd> y elige una. El resultado se guarda junto al original y nunca lo sobrescribe.</p>
+    <p>El nombre de cada herramienta es el de la app. La guía de cada una está en inglés.</p>
+    {groups.map(([key, label]) => {
+      const list = tools.filter((t) => t.media === key);
+      return list.length > 0 && (
+        <section>
+          <h2>{label}</h2>
+          <ul>{list.map((t) => <li><a class="tl" href={`/tools/${t.slug}/`} hreflang="en">{t.name}</a>: {toolDescriptionsEs[t.docSlug]}</li>)}</ul>
+        </section>
+      );
+    })}
+    <p><a class="tl" href="/es/files/">Explorar las {n.pairs} conversiones</a> · <a class="tl" href="/es/docs/files/">Documentación</a></p>
+  </main>
+  <SiteFooter lang="es" />
+</Base>

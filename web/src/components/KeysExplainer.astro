@@ -1,11 +1,20 @@
 ---
-const keys = [
-  ['⇧', 'Shift', 'Convert', 'A wheel of the formats this file can become.', 'convert'],
-  ['⌘', 'Command', 'Tools', 'Windows and presets for the file: crop, trim, compress, organize pages…', 'tools'],
-  ['⌃', 'Control', 'Actions', 'AirDrop, shelf, copy, move, copy path, Terminal, zip.', 'actions'],
-];
+interface Props { lang?: 'en' | 'es' }
+const { lang = 'en' } = Astro.props;
+const keys = lang === 'es'
+  ? [
+      ['⇧', 'Mayús', 'Convertir', 'Una rueda con los formatos a los que puede pasar este archivo.', 'convert'],
+      ['⌘', 'Comando', 'Herramientas', 'Ventanas y ajustes para el archivo: recortar, cortar, comprimir, organizar páginas…', 'tools'],
+      ['⌃', 'Control', 'Acciones', 'AirDrop, estante, copiar, mover, copiar ruta, Terminal, zip.', 'actions'],
+    ]
+  : [
+      ['⇧', 'Shift', 'Convert', 'A wheel of the formats this file can become.', 'convert'],
+      ['⌘', 'Command', 'Tools', 'Windows and presets for the file: crop, trim, compress, organize pages…', 'tools'],
+      ['⌃', 'Control', 'Actions', 'AirDrop, shelf, copy, move, copy path, Terminal, zip.', 'actions'],
+    ];
+const aria = lang === 'es' ? 'Las tres teclas' : 'The three keys';
 ---
-<ol class="kx" aria-label="The three keys">
+<ol class="kx" aria-label={aria}>
   {keys.map(([sym, name, what, d, id]) => (
     <li class={`kx-${id}`}><kbd aria-hidden="true">{sym}</kbd><div><h3>{name} <span>→ {what}</span></h3><p>{d}</p></div></li>
   ))}

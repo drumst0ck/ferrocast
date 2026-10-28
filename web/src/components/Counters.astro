@@ -1,5 +1,10 @@
 ---
 import { counts } from '../data/status';
+interface Props { lang?: 'en' | 'es' }
+const { lang = 'en' } = Astro.props;
 const c = counts();
+const labels = lang === 'es'
+  ? ['formatos de entrada', 'pares de conversión', 'herramientas de archivo', 'acciones de archivo']
+  : ['input formats', 'conversion pairs', 'file tools', 'file actions'];
 ---
-<p class="ctr"><span><b class="nums">{c.inputs}</b> input formats</span> · <span><b class="nums">{c.pairs}</b> conversion pairs</span> · <span><b class="nums">{c.tools}</b> file tools</span> · <span><b class="nums">{c.actions}</b> file actions</span></p>
+<p class="ctr"><span><b class="nums">{c.inputs}</b> {labels[0]}</span> · <span><b class="nums">{c.pairs}</b> {labels[1]}</span> · <span><b class="nums">{c.tools}</b> {labels[2]}</span> · <span><b class="nums">{c.actions}</b> {labels[3]}</span></p>

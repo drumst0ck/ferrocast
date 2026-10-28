@@ -37,6 +37,8 @@ export async function GET() {
     `- [Alternativa a Raycast](${SITE}/es/alternativa-a-raycast/): la misma comparativa en español, con qué conservas y qué falta`,
     `- [Convert and file tools](${SITE}/files/): interactive explorer of every conversion pair`,
     `- [File tools index](${SITE}/tools/): all local file tools`,
+    `- [Explorador de archivos](${SITE}/es/files/): el explorador de conversiones y herramientas en español`,
+    `- [Herramientas de archivo](${SITE}/es/tools/): el índice de herramientas en español`,
     `- [Documentation](${SITE}/docs/): install, launcher features, file tools reference`,
     `- [Changelog](${SITE}/changelog/): release notes`,
     '',

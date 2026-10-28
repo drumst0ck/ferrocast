@@ -1,50 +1,104 @@
 ---
 import conversions from '../data/conversions.json';
 
+interface Props { lang?: 'en' | 'es' }
+const { lang = 'en' } = Astro.props;
+const es = lang === 'es';
+
 const families = conversions.families;
 const total = families.reduce((n, f) => n + f.inputs.reduce((m, i) => m + i.outputs.length, 0), 0);
 const froms = families.flatMap((f) => f.inputs.map((i) => ({ ext: i.ext, label: i.label })));
 const toMap = new Map<string, string>();
 for (const f of families) for (const i of f.inputs) for (const o of i.outputs) toMap.set(o.ext, o.label);
-const tos = [...toMap].map(([ext, label]) => ({ ext, label })).sort((a, b) => a.label.localeCompare(b.label));
+const familyEs: Record<string, string> = {
+  images: 'Imágenes', video: 'Vídeo', audio: 'Audio', documents: 'Documentos', pdf: 'PDF', slides: 'Presentaciones',
+  spreadsheets: 'Hojas de cálculo', subtitles: 'Subtítulos', archives: 'Archivos comprimidos',
+};
+const labelEs: Record<string, string> = { 'Plain text': 'Texto sin formato', Other: 'Otro' };
+const showLabel = (label: string) => (es ? labelEs[label] ?? label : label);
+const famName = (id: string, name: string) => {
+  if (!es) return name;
+  const translated = familyEs[id];
+  if (!translated) throw new Error(`no Spanish name for family ${id}`);
+  return translated;
+};
+const tos = [...toMap]
+  .map(([ext, label]) => ({ ext, label }))
+  .sort((a, b) => (es ? showLabel(a.label).localeCompare(showLabel(b.label), 'es') : a.label.localeCompare(b.label)));
 const needNames = ['ffmpeg', 'LibreOffice', 'cwebp', 'unrar'];
+const ui = es
+  ? {
+      filter: 'Filtrar conversiones',
+      search: 'Busca un formato',
+      placeholder: 'jpg, markdown, hoja de cálculo…',
+      from: 'De',
+      to: 'A',
+      any: 'Cualquiera',
+      free: 'No necesita nada más',
+      family: 'Familia',
+      all: 'Todas',
+      empty: 'Ninguna conversión coincide. Quita un filtro para ver más.',
+      convertsTo: 'se convierte en',
+      needs: 'necesita',
+      fine: `Las pastillas marcadas con «necesita» dependen de una herramienta opcional (${needNames.join(', ')}); el resto usa herramientas que vienen con macOS.`,
+      countRest: ' de {total} pares de conversión visibles',
+    }
+  : {
+      filter: 'Filter conversions',
+      search: 'Search a format',
+      placeholder: 'jpg, markdown, spreadsheet…',
+      from: 'From',
+      to: 'To',
+      any: 'Any',
+      free: 'Needs nothing extra',
+      family: 'Family',
+      all: 'All',
+      empty: 'No conversion matches. Clear a filter to see more.',
+      convertsTo: 'converts to',
+      needs: 'needs',
+      fine: `Chips marked “needs” depend on an optional tool (${needNames.join(', ')}); everything else uses tools that ship with macOS.`,
+      countRest: '',
+    };
 ---
-<div class="mx" data-matrix data-total={total}>
-  <form class="mx-controls" role="search" aria-label="Filter conversions" onsubmit="return false">
+<div class="mx" data-matrix data-total={total} data-count-rest={ui.countRest || undefined}>
+  <form class="mx-controls" role="search" aria-label={ui.filter} onsubmit="return false">
     <div class="mx-field">
-      <label for="mx-q">Search a format</label>
-      <input id="mx-q" class="mx-in" type="search" placeholder="jpg, markdown, spreadsheet…" autocomplete="off" spellcheck="false" />
+      <label for="mx-q">{ui.search}</label>
+      <input id="mx-q" class="mx-in" type="search" placeholder={ui.placeholder} autocomplete="off" spellcheck="false" />
     </div>
     <div class="mx-field">
-      <label for="mx-from">From</label>
-      <select id="mx-from" class="mx-in"><option value="">Any</option>{froms.map((f) => <option value={f.ext}>{f.label} (.{f.ext})</option>)}</select>
+      <label for="mx-from">{ui.from}</label>
+      <select id="mx-from" class="mx-in"><option value="">{ui.any}</option>{froms.map((f) => <option value={f.ext}>{showLabel(f.label)} (.{f.ext})</option>)}</select>
     </div>
     <div class="mx-field">
-      <label for="mx-to">To</label>
-      <select id="mx-to" class="mx-in"><option value="">Any</option>{tos.map((f) => <option value={f.ext}>{f.label} (.{f.ext})</option>)}</select>
+      <label for="mx-to">{ui.to}</label>
+      <select id="mx-to" class="mx-in"><option value="">{ui.any}</option>{tos.map((f) => <option value={f.ext}>{showLabel(f.label)} (.{f.ext})</option>)}</select>
     </div>
-    <label class="mx-check"><input type="checkbox" id="mx-free" /> Needs nothing extra</label>
-    <div class="mx-fams" role="group" aria-label="Family">
-      <button type="button" data-fam="" aria-pressed="true">All</button>
-      {families.map((f) => <button type="button" data-fam={f.id} aria-pressed="false">{f.name}</button>)}
+    <label class="mx-check"><input type="checkbox" id="mx-free" /> {ui.free}</label>
+    <div class="mx-fams" role="group" aria-label={ui.family}>
+      <button type="button" data-fam="" aria-pressed="true">{ui.all}</button>
+      {families.map((f) => <button type="button" data-fam={f.id} aria-pressed="false">{famName(f.id, f.name)}</button>)}
     </div>
   </form>
-  <p class="mx-count" id="mx-count" role="status" aria-live="polite" data-total={total}><b class="nums">{total}</b> of {total} conversion pairs shown</p>
+  <p class="mx-count" id="mx-count" role="status" aria-live="polite" data-total={total}>{es ? <><b class="nums">{total}</b> de {total} pares de conversión visibles</> : <><b class="nums">{total}</b> of {total} conversion pairs shown</>}</p>
 
   <div class="mx-list">
     {families.map((f) => {
-      const n = f.inputs.reduce((m, i) => m + i.outputs.length, 0);
+      const pairCount = f.inputs.reduce((m, i) => m + i.outputs.length, 0);
+      const summary = es
+        ? `${pairCount} pares de ${f.inputs.length} ${f.inputs.length === 1 ? 'formato' : 'formatos'}`
+        : `${pairCount} pairs from ${f.inputs.length} ${f.inputs.length === 1 ? 'format' : 'formats'}`;
       return (
         <details open class="mx-fam" data-fam={f.id}>
-          <summary><h3>{f.name}</h3><span class="nums">{n} pairs from {f.inputs.length} {f.inputs.length === 1 ? 'format' : 'formats'}</span></summary>
+          <summary><h3>{famName(f.id, f.name)}</h3><span class="nums">{summary}</span></summary>
           <ul class="mx-rows">
             {f.inputs.map((i) => (
-              <li class="mx-row" data-from={i.ext} data-text={`${i.ext} ${i.label}`.toLowerCase()}>
-                <span class="mx-from"><b>{i.label}</b><i>.{i.ext}</i></span>
-                <span class="mx-arrow" aria-label="converts to">→</span>
+              <li class="mx-row" data-from={i.ext} data-text={`${i.ext} ${i.label}${es && showLabel(i.label) !== i.label ? ` ${showLabel(i.label)}` : ''}`.toLowerCase()}>
+                <span class="mx-from"><b>{showLabel(i.label)}</b><i>.{i.ext}</i></span>
+                <span class="mx-arrow" aria-label={ui.convertsTo}>→</span>
                 <ul class="mx-outs">
                   {i.outputs.map((o) => (
-                    <li class:list={['mx-chip', { 'mx-needs': !!o.needs }]} data-to={o.ext} data-needs={o.needs ?? ''} data-text={`${o.ext} ${o.label}`.toLowerCase()}>{o.label}{o.needs && <small>needs {o.needs}</small>}</li>
+                    <li class:list={['mx-chip', { 'mx-needs': !!o.needs }]} data-to={o.ext} data-needs={o.needs ?? ''} data-text={`${o.ext} ${o.label}${es && showLabel(o.label) !== o.label ? ` ${showLabel(o.label)}` : ''}`.toLowerCase()}>{showLabel(o.label)}{o.needs && <small>{ui.needs} {o.needs}</small>}</li>
                   ))}
                 </ul>
               </li>
@@ -54,7 +108,7 @@ const needNames = ['ffmpeg', 'LibreOffice', 'cwebp', 'unrar'];
       );
     })}
   </div>
-  <p class="mx-empty" id="mx-empty" hidden>No conversion matches. Clear a filter to see more.</p>
-  <p class="fine">Chips marked “needs” depend on an optional tool ({needNames.join(', ')}); everything else uses tools that ship with macOS.</p>
+  <p class="mx-empty" id="mx-empty" hidden>{ui.empty}</p>
+  <p class="fine">{ui.fine}</p>
 </div>
 <script>import '../scripts/matrix-filter.js';</script>

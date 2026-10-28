@@ -40,7 +40,8 @@ if (root) {
       f.el.hidden = famShown === 0;
       shown += famShown;
     }
-    count.innerHTML = `<b class="nums">${shown}</b> of ${total} conversion pairs shown`;
+    const rest = (root.dataset.countRest || ' of {total} conversion pairs shown').split('{total}').join(String(total));
+    count.innerHTML = `<b class="nums">${shown}</b>${rest}`;
     empty.hidden = shown !== 0;
     if (writeHash) {
       const h = text ? '#q=' + encodeURIComponent(q.value.trim()) : '';

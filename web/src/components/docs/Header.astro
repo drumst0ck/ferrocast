@@ -8,7 +8,7 @@ const es = locale === 'es';
 const prefix = es ? '/es' : '';
 const links = [
   ['/', es ? 'Inicio' : 'Home'],
-  ['/files/', es ? 'Archivos' : 'Files'],
+  [es ? '/es/files/' : '/files/', es ? 'Archivos' : 'Files'],
   [`${prefix}/docs/`, 'Docs'],
   ['/changelog/', es ? 'Cambios' : 'Changelog'],
 ];
