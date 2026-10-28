@@ -15164,6 +15164,60 @@ fn the_own_sync_document_holds_the_merged_state_only_once_the_merge_was_applied(
     }
 }
 
+fn themes_app() -> App {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    app.custom_themes = vec![ocean()];
+    app.settings.custom_theme = Some("Ocean".into());
+    app
+}
+
+#[test]
+fn synced_themes_are_applied_saved_and_the_active_one_follows_a_remote_rename() {
+    let mut app = themes_app();
+    let mut renamed = ocean();
+    renamed.name = "Sea".into();
+    let mut other = ocean();
+    other.id = "t-other".into();
+    other.name = "Other".into();
+    let snap = app.sync_snapshot("themes");
+    assert_eq!(snap.len(), 1);
+    let merged = ferrocast_core::sync_io::to_items(&[renamed, other]);
+    assert!(app.sync_apply("themes", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert_eq!(app.custom_themes.len(), 2);
+    assert_eq!(app.settings.custom_theme.as_deref(), Some("Sea"), "the selection follows the theme by id");
+    assert_eq!(app.active_theme().map(|t| t.id.as_str()), Some("t-ocean"));
+    let saved: ferrocast_core::themes::ThemeFile = app.store.load("themes.json");
+    assert_eq!(saved.themes, app.custom_themes);
+    assert!(app.sync.pending.is_empty(), "saving a merge is not a local edit");
+    app.sync_mark("themes.json");
+    assert!(app.sync.pending.contains("themes"));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_theme_deleted_elsewhere_while_selected_falls_back_to_the_default_look() {
+    let mut app = themes_app();
+    let snap = app.sync_snapshot("themes");
+    assert!(app.sync_apply("themes", vec![], ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert!(app.custom_themes.is_empty());
+    assert!(app.active_theme().is_none(), "a missing theme draws the default look");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_settings_merge_that_names_a_theme_before_the_themes_arrive_resolves_once_they_do() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    app.settings.custom_theme = Some("Ocean".into());
+    assert!(app.active_theme().is_none());
+    let snap = app.sync_snapshot("themes");
+    let merged = ferrocast_core::sync_io::to_items(&[ocean()]);
+    assert!(app.sync_apply("themes", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert_eq!(app.active_theme().map(|t| t.name.as_str()), Some("Ocean"));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
 fn merged_notes(list: &[Note]) -> Vec<(String, serde_json::Value)> {
     ferrocast_core::sync_io::to_items(list)
 }
@@ -16175,6 +16229,7 @@ fn custom_themes_builtin_twin_matches_the_default_palette_where_it_is_opaque() {
 fn ocean() -> ferrocast_core::themes::CustomTheme {
     use ferrocast_core::themes::{CustomTheme, ThemeBase};
     CustomTheme {
+        id: "t-ocean".into(),
         name: "Ocean".into(),
         base: ThemeBase::Dark,
         accent: "#38BDF8".into(),

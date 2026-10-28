@@ -1203,7 +1203,7 @@ impl App {
         let recent_emoji = store.load("recent-emoji.json");
         let shelf: Vec<PathBuf> = store.load("shelf.json");
         let data = store.load_all();
-        let store_themes = store.load::<ferrocast_core::themes::ThemeFile>("themes.json").themes;
+        let store_themes = ferrocast_core::themes::load_with_ids(&store);
         if prof {
             eprintln!("data {:?}", t.elapsed());
         }

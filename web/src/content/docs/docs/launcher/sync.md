@@ -1,6 +1,6 @@
 ---
 title: "Sync with iCloud"
-description: "Keep Ferrocast's settings, snippets, quicklinks, notes, clipboard history and Ask AI chats in step between your Macs through iCloud Drive. Off by default."
+description: "Keep Ferrocast's settings, snippets, quicklinks, notes, clipboard, chats and custom themes in step between your Macs with iCloud Drive."
 sidebar:
   order: 20
 ---
@@ -12,6 +12,7 @@ Turn it on in Settings → Advanced → Sync with iCloud. The status line under 
 
 - **Settings**, hotkeys included.
 - **Snippets** and **quicklinks**.
+- **Custom themes**. Each theme is its own item, so a theme you edit, rename or delete reaches your other Macs. If you rename the selected theme on one Mac, the other Macs keep it selected. Two themes with the same name made on different Macs both stay; rename one of them.
 - **Notes**, including pinned notes and Recently Deleted.
 - **Clipboard history**, with the images of image entries. Only what Ferrocast recorded on a Mac is shared. Entries from password managers are never recorded, so they are never shared. Your history retention setting still applies.
 - **Ask AI chats**. Ferrocast now saves each conversation so it can reach your other Macs.
@@ -28,7 +29,7 @@ Turn it on in Settings → Advanced → Sync with iCloud. The status line under 
 
 Ferrocast merges item by item, and the newest edit wins.
 
-- Every snippet, quicklink, note, clipboard entry and chat is its own item.
+- Every snippet, quicklink, custom theme, note, clipboard entry and chat is its own item.
 - **Every setting is its own item** (and every nested setting, such as one capture option or one command's options). If one Mac changes the theme and another changes the hotkey, both changes are kept.
 - An item added on one Mac is never lost because another Mac did not have it.
 - A deletion reaches your other Macs. If another Mac edits the item after the deletion, the item comes back.

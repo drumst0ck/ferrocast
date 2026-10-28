@@ -129,6 +129,9 @@ impl App {
         if missing("clipboard.json") {
             let _ = store.save("clipboard.json", &*self.shared.clipboard.lock().unwrap());
         }
+        if missing("themes.json") {
+            let _ = store.save("themes.json", &ferrocast_core::themes::ThemeFile { themes: self.custom_themes.clone() });
+        }
         if missing("settings.json") {
             let _ = store.save("settings.json", &self.settings);
         }
@@ -158,6 +161,7 @@ impl App {
             "notes" => sync_io::to_items(&self.notes),
             "clipboard" => sync_io::to_items(&self.shared.clipboard.lock().unwrap()),
             "chats" => sync_io::to_items(&self.chats),
+            "themes" => sync_io::to_items(&self.custom_themes),
             _ => vec![],
         }
     }
@@ -292,6 +296,19 @@ impl App {
                 self.save_notes();
                 let previous = open_before.unwrap_or_default();
                 self.notes_do(|c, d| c.after_merge(d, &previous));
+            }
+            "themes" => {
+                // the selection is stored by name: when the selected theme was renamed elsewhere,
+                // find it again by id and follow the new name (a missing theme draws the default look)
+                let active_id = self.active_theme().map(|t| t.id.clone());
+                self.custom_themes = sync_io::from_items(merged);
+                self.save_themes();
+                if let (None, Some(id)) = (self.active_theme(), active_id) {
+                    if let Some(name) = self.custom_themes.iter().find(|t| t.id == id).map(|t| t.name.clone()) {
+                        self.select_theme(Some(name));
+                    }
+                }
+                self.set_theme();
             }
             "chats" => {
                 let mut chats: Vec<Chat> = sync_io::from_items(merged);

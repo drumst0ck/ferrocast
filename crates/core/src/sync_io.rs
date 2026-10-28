@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Every synced file, as the domain name used in the sync folder and in the tracker file names.
-pub const DOMAINS: [&str; 6] = ["settings", "snippets", "quicklinks", "notes", "clipboard", "chats"];
+pub const DOMAINS: [&str; 7] = ["settings", "snippets", "quicklinks", "notes", "clipboard", "chats", "themes"];
 
 /// The local data file that holds a domain.
 pub fn domain_file(domain: &str) -> &'static str {
@@ -26,6 +26,7 @@ pub fn domain_file(domain: &str) -> &'static str {
         "notes" => "notes.json",
         "clipboard" => "clipboard.json",
         "chats" => "chats.json",
+        "themes" => "themes.json",
         _ => "",
     }
 }
@@ -1276,6 +1277,64 @@ mod tests {
     }
 
     #[test]
+    fn themes_sync_per_theme_with_renames_edits_and_deletions_in_both_id_orders() {
+        use crate::themes::{CustomTheme, ThemeBase};
+        let th = |id: &str, name: &str| CustomTheme {
+            id: id.into(),
+            name: name.into(),
+            base: ThemeBase::Dark,
+            accent: "#38BDF8".into(),
+            background: "#0B1220".into(),
+            surface: "#16213A".into(),
+            text: "#E6EEFF".into(),
+            secondary_text: "#9FB0D0".into(),
+            separator: "#26324D".into(),
+        };
+        let run = |m: &Mac, list: &mut Vec<CustomTheme>, now: i64| {
+            let d = &m.store.root;
+            let o = sync_domain(&m.io, "themes", &to_items(list), &load_tracker(d, "themes"), now).unwrap();
+            save_tracker(d, "themes", &o.tracker_merged).unwrap();
+            if let Some(merged) = o.merged {
+                *list = from_items(merged);
+                m.io.write_doc("themes", o.applied_doc.as_ref().unwrap()).unwrap();
+            }
+        };
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            let (mut ta, mut tb) = (vec![th("t1", "Ocean"), th("t2", "Sunset")], vec![th("t3", "Mint")]);
+            for now in [1_000, 1_500] {
+                run(&a, &mut ta, now);
+            }
+            for now in [2_000, 2_500] {
+                run(&b, &mut tb, now);
+            }
+            run(&a, &mut ta, 2_700);
+            let names = |l: &Vec<CustomTheme>| {
+                let mut n: Vec<_> = l.iter().map(|t| t.name.clone()).collect();
+                n.sort();
+                n
+            };
+            assert_eq!(names(&ta), ["Mint", "Ocean", "Sunset"], "ids {ida}/{idb}");
+            assert_eq!(names(&tb), ["Mint", "Ocean", "Sunset"], "ids {ida}/{idb}");
+            // B renames t1, A deletes t2
+            tb.iter_mut().find(|t| t.id == "t1").unwrap().name = "Sea".into();
+            run(&b, &mut tb, 3_000);
+            ta.retain(|t| t.id != "t2");
+            run(&a, &mut ta, 3_100);
+            run(&a, &mut ta, 4_000);
+            run(&b, &mut tb, 4_500);
+            run(&a, &mut ta, 5_000);
+            assert_eq!(names(&ta), ["Mint", "Sea"], "ids {ida}/{idb}");
+            assert_eq!(names(&tb), ["Mint", "Sea"], "ids {ida}/{idb}");
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn a_merge_that_was_offered_but_not_applied_is_not_written_to_the_own_document_so_a_lost_tracker_keeps_the_remote_edit() {
         for (ida, idb) in ID_ORDERS {
             let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
@@ -1962,6 +2021,7 @@ mod tests {
         for d in DOMAINS {
             assert_eq!(domain_of_file(domain_file(d)), Some(d));
         }
+        assert_eq!(domain_file("themes"), "themes.json");
         assert_eq!(domain_of_file("frecency.json"), None);
     }
 }

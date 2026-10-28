@@ -20,6 +20,10 @@ pub enum ThemeBase {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CustomTheme {
+    /// Stable key of the theme (survives renames); what iCloud sync merges by. Empty only before
+    /// [`load_with_ids`] or a constructor assigned one. Never part of a `.ferrocast-theme` file.
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     pub base: ThemeBase,
     pub accent: String,
@@ -151,6 +155,7 @@ fn readable(from: [u8; 3], toward: [u8; 3], on: &[[u8; 3]]) -> [u8; 3] {
 /// The two built-in themes written as editable values (what "Duplicate" copies); they match the default palette.
 pub fn builtin(base: ThemeBase) -> CustomTheme {
     let t = |name: &str, accent: &str, background: &str, surface: &str, text: &str, secondary: &str, sep: &str| CustomTheme {
+        id: String::new(),
         name: name.into(),
         base,
         accent: accent.into(),
@@ -166,6 +171,29 @@ pub fn builtin(base: ThemeBase) -> CustomTheme {
     }
 }
 
+/// A new random theme id.
+pub fn new_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// `themes.json` with an id on every theme. A file written before ids existed gets them assigned and
+/// is saved at once, so the ids are the same on every launch (sync keys themes by id; a new id per
+/// launch would look like a deletion plus an addition).
+pub fn load_with_ids(store: &crate::storage::Store) -> Vec<CustomTheme> {
+    let mut themes = store.load::<ThemeFile>("themes.json").themes;
+    let mut changed = false;
+    for t in themes.iter_mut().filter(|t| t.id.is_empty()) {
+        t.id = new_id();
+        changed = true;
+    }
+    if changed {
+        if let Err(e) = store.save("themes.json", &ThemeFile { themes: themes.clone() }) {
+            eprintln!("ferrocast: could not save ids to themes.json: {e}");
+        }
+    }
+    themes
+}
+
 /// `wanted`, or `wanted 2`, `wanted 3`… when a theme with that name (any case) exists.
 pub fn unique_name(existing: &[CustomTheme], wanted: &str) -> String {
     let wanted = wanted.trim();
@@ -178,7 +206,12 @@ pub fn unique_name(existing: &[CustomTheme], wanted: &str) -> String {
 
 /// The `.ferrocast-theme` file: `{"format","version","theme"}`.
 pub fn export_json(t: &CustomTheme) -> String {
-    let v = serde_json::json!({ "format": FORMAT, "version": FORMAT_VERSION, "theme": t });
+    let shared = CustomTheme { id: String::new(), ..t.clone() };
+    let mut theme = serde_json::to_value(&shared).unwrap_or_default();
+    if let Some(o) = theme.as_object_mut() {
+        o.remove("id");
+    }
+    let v = serde_json::json!({ "format": FORMAT, "version": FORMAT_VERSION, "theme": theme });
     serde_json::to_string_pretty(&v).unwrap_or_default()
 }
 
@@ -195,7 +228,7 @@ pub fn import_json(s: &str) -> Result<CustomTheme, ThemeError> {
     let theme = v.get("theme").cloned().ok_or(ThemeError::Format)?;
     let t: CustomTheme = serde_json::from_value(theme).map_err(|e| ThemeError::Parse(e.to_string()))?;
     t.validate()?;
-    Ok(t.normalized())
+    Ok(CustomTheme { id: new_id(), ..t.normalized() })
 }
 
 impl CustomTheme {
@@ -227,6 +260,7 @@ impl CustomTheme {
     pub fn normalized(&self) -> CustomTheme {
         let fix = |s: &str| parse_hex(s).map(to_hex).unwrap_or_else(|| s.to_string());
         CustomTheme {
+            id: self.id.clone(),
             name: self.name.trim().to_string(),
             base: self.base,
             accent: fix(&self.accent),
@@ -287,7 +321,7 @@ impl CustomTheme {
 
     /// An editable copy named "<name> copy" (or "copy 2"…), unique among `existing`.
     pub fn duplicate_of(&self, existing: &[CustomTheme]) -> CustomTheme {
-        CustomTheme { name: unique_name(existing, &format!("{} copy", self.name.trim())), ..self.clone() }
+        CustomTheme { id: new_id(), name: unique_name(existing, &format!("{} copy", self.name.trim())), ..self.clone() }
     }
 }
 

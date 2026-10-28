@@ -38,7 +38,7 @@ El texto debe seguir siendo legible. Cuando el texto sobre el fondo, el texto so
 
 **Export…** guarda el tema seleccionado como archivo `.ferrocast-theme` (JSON con un nombre de formato y una versión). **Import…** lee uno; si el nombre ya existe, el tema importado recibe un número ("Ocean 2"). Los archivos de una versión de formato más reciente, los que no son temas y los que tienen un color no válido se rechazan con un mensaje.
 
-Los temas se guardan en `themes.json`, en la carpeta de datos; el tema seleccionado se guarda en `settings.json`.
+Los temas se guardan en `themes.json`, en la carpeta de datos; el tema seleccionado se guarda en `settings.json`. Con [Sync with iCloud](/es/docs/launcher/sync/) activado, tus temas y el seleccionado llegan a tus otros Mac.
 
 :::caution[Límites]
 - Los colores que tienen significado no cambian: los indicadores de estado en verde, ámbar y rojo, la superficie de vista previa del vídeo en el editor de grabaciones y las diapositivas del tour de bienvenida.

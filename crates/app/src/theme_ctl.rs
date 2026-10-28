@@ -19,6 +19,7 @@ impl App {
     pub(crate) fn update_active_theme(&mut self, edited: CustomTheme) {
         let Some(name) = self.settings.custom_theme.clone() else { return };
         let Some(slot) = self.custom_themes.iter_mut().find(|t| t.name.eq_ignore_ascii_case(&name)) else { return };
+        let edited = CustomTheme { id: slot.id.clone(), ..edited };
         let base_changed = slot.base != edited.base;
         if *slot == edited {
             return;
