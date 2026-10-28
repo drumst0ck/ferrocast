@@ -51,7 +51,19 @@ if (!heic) throw new Error('heic input missing from conversions.json');
 const fileOuts = heic.outputs.map((o) => ({ ext: o.ext, label: o.label, needs: o.needs }));
 
 // Changelog teaser: read ../CHANGELOG.md at build time when reachable; otherwise render a plain link block.
-type Teaser = { version: string; date: string; titles: string[] } | null;
+type Teaser = { version: string; date: string; titles: string[]; upcoming: string[] } | null;
+function addedTitles(lines: string[], from: number, to: number): string[] {
+  const titles: string[] = [];
+  let inAdded = false;
+  for (const l of lines.slice(from, to)) {
+    if (l.startsWith('### ')) inAdded = l.trim() === '### Added';
+    else if (inAdded && titles.length < 3) {
+      const m = l.match(/^- \*\*(.+?)\*\*/);
+      if (m) titles.push(m[1].replace(/[:.]$/, ''));
+    }
+  }
+  return titles;
+}
 function readTeaser(): Teaser {
   try {
     const file = [path.resolve(process.cwd(), 'CHANGELOG.md'), path.resolve(process.cwd(), '..', 'CHANGELOG.md')].find((p) => existsSync(p));
@@ -61,16 +73,9 @@ function readTeaser(): Teaser {
     const rel = heads.find(([m]) => m![1].toLowerCase() !== 'unreleased');
     const unrel = heads.find(([m]) => m![1].toLowerCase() === 'unreleased');
     if (!rel) return null;
-    const titles: string[] = [];
-    if (unrel) {
-      const end = heads.find(([, i]) => i > unrel[1])?.[1] ?? lines.length;
-      let inAdded = false;
-      for (const l of lines.slice(unrel[1] + 1, end)) {
-        if (l.startsWith('### ')) inAdded = l.trim() === '### Added';
-        else if (inAdded && titles.length < 3) { const m = l.match(/^- \*\*(.+?)\*\*/); if (m) titles.push(m[1].replace(/[:.]$/, '')); }
-      }
-    }
-    return { version: rel[0]![1], date: rel[0]![2] ?? '', titles };
+    const relEnd = heads.find(([, i]) => i > rel[1])?.[1] ?? lines.length;
+    const upcoming = unrel ? addedTitles(lines, unrel[1] + 1, heads.find(([, i]) => i > unrel[1])?.[1] ?? lines.length) : [];
+    return { version: rel[0]![1], date: rel[0]![2] ?? '', titles: addedTitles(lines, rel[1] + 1, relEnd), upcoming };
   } catch { return null; }
 }
 const teaser = readTeaser();
@@ -282,7 +287,8 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
           <p>{t.changelog.latest}: <b class="nums">{teaser.version}</b>{teaser.date && <span class="muted"> · {teaser.date}</span>}</p>
           <ul class="clog-list">{teaser.titles.map((x) => <li>{x}</li>)}</ul>
         ) : <p>{t.changelog.fallback}</p>}
-        {teaser && teaser.titles.length > 0 && <p class="fine">{t.changelog.unreleased}: {teaser.titles.join(' · ')}</p>}
+        {teaser && teaser.titles.length > 0 && <p class="fine">{fill(t.changelog.newIn, { version: teaser.version })}: {teaser.titles.join(' · ')}</p>}
+        {teaser && teaser.upcoming.length > 0 && <p class="fine">{t.changelog.unreleased}: {teaser.upcoming.join(' · ')}</p>}
       </div>
       <div class="fh-cta"><a class="tl" href={`${base}/changelog/`}>{t.changelog.all} →</a><a class="tl" href={`${base}/changelog/rss.xml`} aria-label={t.changelog.rssAria}>{t.changelog.rss}</a></div>
     </section>

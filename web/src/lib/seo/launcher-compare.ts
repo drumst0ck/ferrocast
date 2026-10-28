@@ -23,7 +23,7 @@ export const page = {
       '**Spotlight** basta si quieres abrir apps y archivos, consultar el portapapeles y lanzar acciones del sistema, sin instalar nada.',
       '**Alfred** encaja si quieres automatizar con Workflows y prefieres un pago único (Powerpack) a una suscripción.',
       '**Raycast** encaja si dependes de extensiones de su Store, de la sincronización entre Macs o de su IA de pago.',
-      '**Ferrocast** encaja si quieres un lanzador gratis y de código abierto que además convierta archivos sin subirlos y grabe la pantalla, y puedes vivir sin tienda de extensiones ni sync.',
+      '**Ferrocast** encaja si quieres un lanzador gratis y de código abierto que además convierta archivos sin subirlos y grabe la pantalla. La sincronización con iCloud es opcional y está desactivada por defecto. No tiene tienda de extensiones propia, y puede ejecutar extensiones que ya tengas instaladas con Raycast, con límites.',
     ],
   },
   table: {
@@ -35,10 +35,10 @@ export const page = {
       ['Portapapeles', 'Sí, con ⌘4. Apple avisa de que puede aparecer información sensible', 'Incluido en Free; historial ilimitado en planes de pago', 'Con Powerpack; ignora apps de contraseñas por defecto', 'Incluido; salta lo copiado desde gestores de contraseñas'],
       ['Snippets', 'No consta en la guía de Spotlight; macOS tiene Sustituciones de texto en Ajustes → Teclado', 'Incluidos en Free', 'Con Powerpack', 'Incluidos; importación desde Raycast'],
       ['Ventanas', 'No consta en la guía de Spotlight; macOS coloca ventanas con el botón verde, el menú Ventana y Fn-Control-flechas', 'Incluido en Free; comandos personalizados en Pro', 'No consta en su web', 'Unos 40 comandos'],
-      ['Acciones y extensiones', 'Acciones del sistema y de apps, quick keys y atajos de la app Atajos', 'Store de extensiones y Script Commands', 'Workflows (Powerpack) y Alfred Gallery', 'Script Commands compatibles con Raycast; sin tienda'],
+      ['Acciones y extensiones', 'Acciones del sistema y de apps, quick keys y atajos de la app Atajos', 'Store de extensiones y Script Commands', 'Workflows (Powerpack) y Alfred Gallery', 'Script Commands, y extensiones ya instaladas con Raycast (parcial, desactivado por defecto); sin tienda propia'],
       ['IA', 'Más acciones con Apple Intelligence', 'No incluida en Free; en Pro, con créditos mensuales', 'No consta IA integrada en su web', 'Con tu proveedor; Ollama en local por defecto'],
       ['Archivos', 'En el Finder, la acción rápida Convertir imagen (formato y tamaño)', 'No integrada según su web', 'No integrada según su web', '275 conversiones y 26 herramientas, en local'],
-      ['Sync entre Macs', 'No consta para el portapapeles en la guía de Apple', 'Cloud Sync en planes de pago', 'Con Dropbox u otro servicio de archivos (Powerpack)', 'No'],
+      ['Sync entre Macs', 'No consta para el portapapeles en la guía de Apple', 'Cloud Sync en planes de pago', 'Con Dropbox u otro servicio de archivos (Powerpack)', 'Opcional, por iCloud Drive (desactivada por defecto). No es la Cloud Sync de Raycast'],
       ['Código abierto', 'No, es parte de macOS', 'No consta una licencia abierta en su web', 'No consta una licencia abierta en su web', 'Sí, MIT'],
       ['Requisitos', 'macOS Tahoe para portapapeles y acciones', 'Raycast 2: macOS Tahoe y Apple Silicon', 'Alfred 5: macOS 10.14 o posterior', 'Apple Silicon'],
     ] as [string, string, string, string, string][],
@@ -50,7 +50,7 @@ export const page = {
       ['Spotlight en macOS Tahoe', 'Se abre con ⌘ Espacio. Además de apps y archivos, tiene una sección de acciones (⌘3) en la que puedes asignar quick keys, por ejemplo «ft» para iniciar una llamada de FaceTime, y el historial del portapapeles (⌘4), que se borra con Clear History. Lo que la guía de Apple no recoge en Spotlight: snippets (para eso están las Sustituciones de texto de macOS), comandos de ventanas desde el buscador y extensiones de terceros más allá de las acciones de las apps y la app Atajos.'],
       ['Raycast', 'El plan Free incluye portapapeles, snippets y ventanas. La IA, el historial ilimitado del portapapeles y Cloud Sync son de pago (Pro desde 10 $ al mes). Su punto fuerte es la Store de extensiones. Raycast 2 pide macOS Tahoe y Apple Silicon y también funciona en Windows (beta pública) e iOS.'],
       ['Alfred', 'La app es gratis; el portapapeles, los snippets y los Workflows forman parte del Powerpack, un pago único de 34 £. El portapapeles ignora por defecto las apps de contraseñas. Alfred 5 funciona desde macOS 10.14, así que es la opción para Macs con Intel o sistemas antiguos.'],
-      ['Ferrocast', 'Gratis y de código abierto (MIT), escrito en Rust, solo para Apple Silicon. Trae portapapeles que salta los gestores de contraseñas, snippets, unos 40 comandos de ventanas, Script Commands de Raycast, IA con Ollama en tu Mac por defecto, [275 conversiones de archivos sin subirlos](/es/files/) y grabación de pantalla con zoom automático. No tiene tienda de extensiones ni sincronización entre Macs. Más detalle en [Alternativa a Raycast](/es/alternativa-a-raycast/).'],
+      ['Ferrocast', 'Gratis y de código abierto (MIT), escrito en Rust, solo para Apple Silicon. Trae portapapeles que salta los gestores de contraseñas, snippets, unos 40 comandos de ventanas, Script Commands de Raycast, IA con Ollama en tu Mac por defecto, [275 conversiones de archivos sin subirlos](/es/files/) y grabación de pantalla con zoom automático. La sincronización con iCloud es opcional y está desactivada por defecto. No tiene tienda de extensiones propia; las extensiones que ya instalaste con Raycast pueden ejecutarse, en parte. Más detalle en [Alternativa a Raycast](/es/alternativa-a-raycast/).'],
     ] as [string, string][],
   },
   enough: {
@@ -86,6 +86,7 @@ export const page = {
     h: 'Sigue leyendo',
     links: [
       ['Alternativa gratis a Raycast', '/es/alternativa-a-raycast/'],
+      ['Alternativa gratis a Alfred sin Powerpack', '/es/alternativa-a-alfred/'],
       ['Historial del portapapeles que ignora contraseñas', '/es/historial-portapapeles-mac/'],
       ['Migrar desde Raycast', '/es/docs/getting-started/migrating-from-raycast/'],
       ['Comprimir un vídeo a un tamaño', '/es/comprimir-video-a-un-tamano/'],

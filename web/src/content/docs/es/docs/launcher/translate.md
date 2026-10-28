@@ -106,3 +106,4 @@ Con el motor de Apple la línea dice `translate Spanish via Apple ok chars=… m
 - [Ask AI](/es/docs/launcher/ask-ai/)
 - [Ajustes](/es/docs/launcher/settings/)
 - [La rueda de arrastre](/es/docs/files/drag-wheel/)
+- [Guía: traducir el texto seleccionado en Mac](/es/traducir-texto-seleccionado-mac/)

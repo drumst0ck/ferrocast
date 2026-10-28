@@ -25,7 +25,7 @@ Because moving windows, pasting for you and expanding snippets all need it. Sear
 It stays on your Mac unless you turn on [Sync with iCloud](/docs/launcher/sync/) (off by default), which copies it to your iCloud Drive for your other Macs. It sits in a JSON file in Application Support, and anything copied from a password manager like 1Password is skipped on purpose.
 
 ### What is missing today?
-An extension store and sync between Macs.
+An extension store of its own, Search Menu Bar Items, and AI context from the selection or the screen. [Raycast extensions](/docs/launcher/raycast-extensions/) are only the ones you already installed with Raycast, and not every part of them. [Sync between Macs](/docs/launcher/sync/) is opt-in through iCloud Drive.
 
 ## AI and migration
 

@@ -89,18 +89,19 @@ Ferrocast is **independent** and not affiliated with [Raycast](https://www.rayca
 | **Script Commands** | Raycast-compatible metadata (full, compact, silent, inline) | Existing Script Commands run as they are ([migration guide](https://ferrocast.app/docs/getting-started/migrating-from-raycast/)) |
 | **Snippets** | Import from a Raycast JSON export | Quicklinks are recreated by hand |
 | **File conversion & tools** | 275 local conversion pairs and 26 file tools built in | Not documented in this repo for Raycast or Alfred |
-| **Extensions & sync** | No extension store; no sync between Macs | Also not included: React extensions, Search Menu Bar Items, AI context from selection or screen ([migration guide](https://ferrocast.app/docs/getting-started/migrating-from-raycast/)) |
+| **Extensions & sync** | No extension store of its own. Extensions you already installed with Raycast can run (partial, off by default, Node.js 22+). Opt-in iCloud Drive sync, off by default | Not supported yet: menu bar commands, OAuth, AI extension features, file picker, link accessory. Also not included: Search Menu Bar Items, AI context from selection or screen ([migration guide](https://ferrocast.app/docs/getting-started/migrating-from-raycast/), [extensions](https://ferrocast.app/docs/launcher/raycast-extensions/), [sync](https://ferrocast.app/docs/launcher/sync/)) |
 
-## What's missing today
+## What's still missing
 
-- An **extension store** and **sync** between Macs.
-- **React extensions**, **Search Menu Bar Items**, and **AI context** from selection or screen (Raycast-style features Ferrocast does not include yet).
+- An **extension store of its own**. Ferrocast does not contact Raycast’s Store and is not affiliated with Raycast.
+- **Full Raycast extension support.** In a test, 34 of 40 view commands from 20 popular extensions worked. Menu bar commands, OAuth sign-in, AI features, the file picker and the link accessory are not supported yet.
+- **Search Menu Bar Items** and **AI context** from selection or screen.
 
 ## Ask AI and privacy
 
 Out of the box Ask AI talks to Ollama on your own Mac. You can point it at LM Studio, OpenAI or the Anthropic API (keys go to the Keychain), or use Claude Code with your Claude plan. Sign in with ChatGPT uses the same flow as OpenAI's Codex CLI; OpenAI has not blessed third-party use of it, so the API with a key is the by-the-book route.
 
-Data lives in `~/Library/Application Support/Ferrocast` as plain, unencrypted JSON (`FERROCAST_DATA_DIR` changes the path).
+Data lives in `~/Library/Application Support/Ferrocast` as plain, unencrypted JSON (`FERROCAST_DATA_DIR` changes the path). With Sync with iCloud on (Settings → Advanced, off by default), settings, snippets, quicklinks, notes, clipboard history, Ask AI chats and custom themes are also copied to iCloud Drive. Keychain API keys stay on each Mac.
 
 ## Build from source
 

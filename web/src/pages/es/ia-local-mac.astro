@@ -1,0 +1,6 @@
+---
+import GuidePage from '../../components/seo/GuidePage.astro';
+import { page } from '../../lib/seo/local-ai-es';
+import { page as en } from '../../lib/seo/local-ai';
+---
+<GuidePage t={page} other={en} />

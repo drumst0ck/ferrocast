@@ -6,6 +6,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-28
+
 ### Added
 - **Interface languages**: Ferrocast now speaks Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese besides English. It follows the language order of macOS and you can pick another one in Settings → General → Language (System, English, Español, Deutsch, Français, Português (Brasil), 日本語, 简体中文); the change applies at once and is kept on each Mac, not synced. The launcher, built-in commands, Settings (search finds rows by their translated title and in English), the tour, the menu bar menu, notifications, the tool windows, the recording editor and the messages are translated; anything not translated yet shows in English. What you type (snippet, quicklink, note and script names) and what Raycast extensions show is never translated. (docs: /docs/launcher/settings/#language) #settings
 
