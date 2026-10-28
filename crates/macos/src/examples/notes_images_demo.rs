@@ -67,10 +67,7 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     }
     let mut raw = Vec::new();
     for _ in 0..h {
-        raw.push(0u8);
-        for x in 0..w {
-            raw.extend([(x * 255 / w) as u8, 120, 200]);
-        }
+        raw.extend(std::iter::once(0u8).chain((0..w).flat_map(|x| [(x * 255 / w) as u8, 120, 200])));
     }
     let mut z = vec![0x78, 0x01];
     let mut chunks = raw.chunks(65535).peekable();
