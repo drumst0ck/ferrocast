@@ -1717,3 +1717,86 @@ Translating to {lang} with {engine}…	Traduciendo a {lang} con {engine}…	Übe
 Converting {file} to {format}…	Convirtiendo {file} a {format}…	{file} wird in {format} konvertiert …	Conversion de {file} en {format}…	Convertendo {file} para {format}…	{file}を{format}に変換中…	正在将 {file} 转换为 {format}…
 {title} finished	{title} ha terminado	{title} ist fertig	{title} est terminé	{title} terminou	{title}が完了しました	{title} 已完成
 shelf|Clear	Vaciar	Leeren	Vider	Esvaziar	空にする	清空
+Compress · JPEG {q}%	Comprimir · JPEG {q}%	Komprimieren · JPEG {q}%	Compresser · JPEG {q}%	Comprimir · JPEG {q}%	圧縮 · JPEG {q}%	压缩 · JPEG {q}%
+Resize · fit {px} px	Redimensionar · ajustar a {px} px	Größe ändern · auf {px} px einpassen	Redimensionner · adapter à {px} px	Redimensionar · ajustar a {px} px	リサイズ · {px} pxに収める	调整大小 · 适应 {px} px
+Crop · {w}:{h}	Recortar · {w}:{h}	Zuschneiden · {w}:{h}	Recadrer · {w}:{h}	Cortar · {w}:{h}	切り抜き · {w}:{h}	裁剪 · {w}:{h}
+Remove metadata	Quitar metadatos	Metadaten entfernen	Supprimer les métadonnées	Remover metadados	メタデータを削除	移除元数据
+Combine into one PDF	Combinar en un solo PDF	In einem PDF zusammenführen	Combiner en un seul PDF	Combinar em um único PDF	1つのPDFにまとめる	合并为一个 PDF
+Rotate · {d}°	Girar · {d}°	Drehen · {d}°	Pivoter · {d}°	Girar · {d}°	回転 · {d}°	旋转 · {d}°
+Flip horizontally	Voltear horizontalmente	Horizontal spiegeln	Retourner horizontalement	Inverter horizontalmente	左右反転	水平翻转
+Flip vertically	Voltear verticalmente	Vertikal spiegeln	Retourner verticalement	Inverter verticalmente	上下反転	垂直翻转
+Square on white background	Cuadrado sobre fondo blanco	Quadrat auf weißem Hintergrund	Carré sur fond blanc	Quadrado em fundo branco	白背景で正方形に	白色背景正方形
+Square on black background	Cuadrado sobre fondo negro	Quadrat auf schwarzem Hintergrund	Carré sur fond noir	Quadrado em fundo preto	黒背景で正方形に	黑色背景正方形
+Make a collage	Hacer un collage	Collage erstellen	Créer un collage	Criar uma colagem	コラージュを作成	制作拼贴
+Edit photo	Editar foto	Foto bearbeiten	Modifier la photo	Editar foto	写真を編集	编辑照片
+Redact photo	Censurar foto	Foto schwärzen	Masquer des zones de la photo	Ocultar partes da foto	写真を伏せ字にする	遮挡照片内容
+Add a background	Añadir un fondo	Hintergrund hinzufügen	Ajouter un arrière-plan	Adicionar um fundo	背景を追加	添加背景
+Collage · grid	Collage · cuadrícula	Collage · Raster	Collage · grille	Colagem · grade	コラージュ · グリッド	拼贴 · 网格
+Collage · row	Collage · fila	Collage · Zeile	Collage · rangée	Colagem · linha	コラージュ · 横並び	拼贴 · 单行
+Collage · column	Collage · columna	Collage · Spalte	Collage · colonne	Colagem · coluna	コラージュ · 縦並び	拼贴 · 单列
+Collage · featured	Collage · destacada	Collage · Hauptbild	Collage · mise en avant	Colagem · destaque	コラージュ · フィーチャー	拼贴 · 主图
+Redact faces	Censurar caras	Gesichter schwärzen	Masquer les visages	Ocultar rostos	顔を伏せ字にする	遮挡人脸
+Redact text	Censurar texto	Text schwärzen	Masquer le texte	Ocultar texto	文字を伏せ字にする	遮挡文字
+Edit · Black & white	Editar · Blanco y negro	Bearbeiten · Schwarzweiß	Modifier · Noir et blanc	Editar · Preto e branco	編集 · 白黒	编辑 · 黑白
+Edit · Brighter	Editar · Más brillo	Bearbeiten · Heller	Modifier · Plus lumineux	Editar · Mais brilho	編集 · 明るく	编辑 · 更亮
+Edit · Darker	Editar · Más oscuro	Bearbeiten · Dunkler	Modifier · Plus sombre	Editar · Mais escuro	編集 · 暗く	编辑 · 更暗
+Edit · More contrast	Editar · Más contraste	Bearbeiten · Mehr Kontrast	Modifier · Plus de contraste	Editar · Mais contraste	編集 · コントラストを上げる	编辑 · 更高对比度
+Annotate in Preview	Anotar en Vista Previa	In Vorschau markieren	Annoter dans Aperçu	Anotar no Pré-visualização	プレビューで注釈を付ける	在“预览”中标注
+Compress · under {size}	Comprimir · menos de {size}	Komprimieren · unter {size}	Compresser · moins de {size}	Comprimir · abaixo de {size}	圧縮 · {size}未満	压缩 · 小于 {size}
+Compress · {p}% smaller	Comprimir · {p}% más pequeño	Komprimieren · {p}% kleiner	Compresser · {p}% plus petit	Comprimir · {p}% menor	圧縮 · {p}%小さく	压缩 · 缩小 {p}%
+Crop · exactly {w}×{h} px	Recortar · exactamente {w}×{h} px	Zuschneiden · genau {w}×{h} px	Recadrer · exactement {w}×{h} px	Cortar · exatamente {w}×{h} px	切り抜き · ちょうど{w}×{h} px	裁剪 · 精确 {w}×{h} px
+Crop · {w}×{h} px	Recortar · {w}×{h} px	Zuschneiden · {w}×{h} px	Recadrer · {w}×{h} px	Cortar · {w}×{h} px	切り抜き · {w}×{h} px	裁剪 · {w}×{h} px
+make {v}	marca {v}	Hersteller {v}	marque {v}	marca {v}	メーカー {v}	品牌 {v}
+model {v}	modelo {v}	Modell {v}	modèle {v}	modelo {v}	モデル {v}	型号 {v}
+Set metadata · {parts}	Establecer metadatos · {parts}	Metadaten setzen · {parts}	Définir les métadonnées · {parts}	Definir metadados · {parts}	メタデータを設定 · {parts}	设置元数据 · {parts}
+Compress · {size}	Comprimir · {size}	Komprimieren · {size}	Compresser · {size}	Comprimir · {size}	圧縮 · {size}	压缩 · {size}
+Compress · {p} % smaller	Comprimir · {p} % más pequeño	Komprimieren · {p} % kleiner	Compresser · {p} % plus petit	Comprimir · {p} % menor	圧縮 · {p} %小さく	压缩 · 缩小 {p} %
+Compress · light	Comprimir · ligero	Komprimieren · leicht	Compresser · léger	Comprimir · leve	圧縮 · 軽め	压缩 · 轻度
+Compress · balanced	Comprimir · equilibrado	Komprimieren · ausgewogen	Compresser · équilibré	Comprimir · equilibrado	圧縮 · バランス	压缩 · 均衡
+Compress · strong	Comprimir · fuerte	Komprimieren · stark	Compresser · fort	Comprimir · forte	圧縮 · 強め	压缩 · 强力
+max {e} px	máx. {e} px	max. {e} px	max. {e} px	máx. {e} px	最大 {e} px	最大 {e} px
+{p} % size	{p} % del tamaño	{p} % der Größe	{p} % de la taille	{p} % do tamanho	サイズの {p} %	尺寸的 {p} %
+Trim · {a} to {b}	Recortar · de {a} a {b}	Kürzen · {a} bis {b}	Couper · de {a} à {b}	Cortar · de {a} a {b}	トリム · {a}〜{b}	裁切 · {a} 至 {b}
+Trim (exact frames) · {a} to {b}	Recortar (fotogramas exactos) · de {a} a {b}	Kürzen (exakte Frames) · {a} bis {b}	Couper (images exactes) · de {a} à {b}	Cortar (quadros exatos) · de {a} a {b}	トリム(フレーム単位)· {a}〜{b}	裁切(精确帧)· {a} 至 {b}
+Split · every {n} min	Dividir · cada {n} min	Teilen · alle {n} Min.	Diviser · toutes les {n} min	Dividir · a cada {n} min	分割 · {n}分ごと	拆分 · 每 {n} 分钟
+Split · every {n} s	Dividir · cada {n} s	Teilen · alle {n} s	Diviser · toutes les {n} s	Dividir · a cada {n} s	分割 · {n}秒ごと	拆分 · 每 {n} 秒
+Split · {n} parts	Dividir · {n} partes	Teilen · {n} Teile	Diviser · {n} parties	Dividir · {n} partes	分割 · {n}パート	拆分 · {n} 段
+Merge into one file	Unir en un solo archivo	In einer Datei zusammenführen	Fusionner en un seul fichier	Mesclar em um único arquivo	1つのファイルに結合	合并为一个文件
+Split into one PDF per page	Dividir en un PDF por página	In ein PDF pro Seite aufteilen	Diviser en un PDF par page	Dividir em um PDF por página	ページごとにPDFを分割	按页拆分为多个 PDF
+Remove audio	Quitar el audio	Audio entfernen	Supprimer l’audio	Remover o áudio	音声を削除	移除音频
+Speed · {f}×	Velocidad · {f}×	Tempo · {f}×	Vitesse · {f}×	Velocidade · {f}×	速度 · {f}×	速度 · {f}×
+Save frame at {t}	Guardar fotograma en {t}	Frame bei {t} sichern	Enregistrer l’image à {t}	Salvar quadro em {t}	{t}のフレームを保存	保存 {t} 处的帧
+Crop video · {w}×{h}	Recortar vídeo · {w}×{h}	Video zuschneiden · {w}×{h}	Recadrer la vidéo · {w}×{h}	Cortar vídeo · {w}×{h}	ビデオを切り抜き · {w}×{h}	裁剪视频 · {w}×{h}
+Redact video · {a} to {b}	Censurar vídeo · de {a} a {b}	Video schwärzen · {a} bis {b}	Masquer la vidéo · de {a} à {b}	Ocultar partes do vídeo · de {a} a {b}	ビデオを伏せ字にする · {a}〜{b}	遮挡视频 · {a} 至 {b}
+Redact video · {a} to {b} (blur)	Censurar vídeo · de {a} a {b} (desenfoque)	Video schwärzen · {a} bis {b} (Weichzeichner)	Masquer la vidéo · de {a} à {b} (flou)	Ocultar partes do vídeo · de {a} a {b} (desfoque)	ビデオを伏せ字にする · {a}〜{b}(ぼかし)	遮挡视频 · {a} 至 {b}(模糊)
+Redact · {n} area	Censurar · {n} zona	Schwärzen · {n} Bereich	Masquer · {n} zone	Ocultar · {n} área	伏せ字 · {n}か所	遮挡 · {n} 个区域
+Redact · {n} areas	Censurar · {n} zonas	Schwärzen · {n} Bereiche	Masquer · {n} zones	Ocultar · {n} áreas	伏せ字 · {n}か所	遮挡 · {n} 个区域
+Normalize volume · {i} LUFS	Normalizar volumen · {i} LUFS	Lautstärke normalisieren · {i} LUFS	Normaliser le volume · {i} LUFS	Normalizar volume · {i} LUFS	音量を正規化 · {i} LUFS	标准化音量 · {i} LUFS
+Audio visualizer · landscape	Visualizador de audio · horizontal	Audio-Visualizer · Querformat	Visualiseur audio · paysage	Visualizador de áudio · paisagem	オーディオビジュアライザー · 横向き	音频可视化 · 横向
+Audio visualizer · portrait	Visualizador de audio · vertical	Audio-Visualizer · Hochformat	Visualiseur audio · portrait	Visualizador de áudio · retrato	オーディオビジュアライザー · 縦向き	音频可视化 · 竖向
+Audio visualizer · square	Visualizador de audio · cuadrado	Audio-Visualizer · quadratisch	Visualiseur audio · carré	Visualizador de áudio · quadrado	オーディオビジュアライザー · 正方形	音频可视化 · 方形
+Audio visualizer · landscape · {file}	Visualizador de audio · horizontal · {file}	Audio-Visualizer · Querformat · {file}	Visualiseur audio · paysage · {file}	Visualizador de áudio · paisagem · {file}	オーディオビジュアライザー · 横向き · {file}	音频可视化 · 横向 · {file}
+Audio visualizer · portrait · {file}	Visualizador de audio · vertical · {file}	Audio-Visualizer · Hochformat · {file}	Visualiseur audio · portrait · {file}	Visualizador de áudio · retrato · {file}	オーディオビジュアライザー · 縦向き · {file}	音频可视化 · 竖向 · {file}
+Audio visualizer · square · {file}	Visualizador de audio · cuadrado · {file}	Audio-Visualizer · quadratisch · {file}	Visualiseur audio · carré · {file}	Visualizador de áudio · quadrado · {file}	オーディオビジュアライザー · 正方形 · {file}	音频可视化 · 方形 · {file}
+Trim silence at both ends	Recortar el silencio en ambos extremos	Stille an beiden Enden entfernen	Couper le silence aux deux extrémités	Cortar o silêncio nas duas pontas	両端の無音をトリム	裁掉两端的静音
+Convert to stereo	Convertir a estéreo	In Stereo umwandeln	Convertir en stéréo	Converter para estéreo	ステレオに変換	转换为立体声
+Convert to mono	Convertir a mono	In Mono umwandeln	Convertir en mono	Converter para mono	モノラルに変換	转换为单声道
+Bleep · {a} to {b}	Pitido · de {a} a {b}	Piepton · {a} bis {b}	Bip · de {a} à {b}	Bipe · de {a} a {b}	ピー音 · {a}〜{b}	消音哔声 · {a} 至 {b}
+Bleep · {n} range	Pitido · {n} intervalo	Piepton · {n} Bereich	Bip · {n} plage	Bipe · {n} intervalo	ピー音 · {n}区間	消音哔声 · {n} 个范围
+Bleep · {n} ranges	Pitido · {n} intervalos	Piepton · {n} Bereiche	Bip · {n} plages	Bipe · {n} intervalos	ピー音 · {n}区間	消音哔声 · {n} 个范围
+Join videos into one MP4	Unir vídeos en un MP4	Videos zu einer MP4 verbinden	Assembler les vidéos en un MP4	Juntar vídeos em um MP4	ビデオを1つのMP4に結合	将视频合并为一个 MP4
+Organize PDF · {n} page	Organizar PDF · {n} página	PDF organisieren · {n} Seite	Organiser le PDF · {n} page	Organizar PDF · {n} página	PDFを整理 · {n}ページ	整理 PDF · {n} 页
+Organize PDF · {n} pages	Organizar PDF · {n} páginas	PDF organisieren · {n} Seiten	Organiser le PDF · {n} pages	Organizar PDF · {n} páginas	PDFを整理 · {n}ページ	整理 PDF · {n} 页
+Extract	Extraer	Entpacken	Extraire	Extrair	展開	解压
+Edit metadata	Editar metadatos	Metadaten bearbeiten	Modifier les métadonnées	Editar metadados	メタデータを編集	编辑元数据
+Compress PDF · light	Comprimir PDF · ligero	PDF komprimieren · leicht	Compresser le PDF · léger	Comprimir PDF · leve	PDFを圧縮 · 軽め	压缩 PDF · 轻度
+Compress PDF · balanced	Comprimir PDF · equilibrado	PDF komprimieren · ausgewogen	Compresser le PDF · équilibré	Comprimir PDF · equilibrado	PDFを圧縮 · バランス	压缩 PDF · 均衡
+Compress PDF · strong	Comprimir PDF · fuerte	PDF komprimieren · stark	Compresser le PDF · fort	Comprimir PDF · forte	PDFを圧縮 · 強め	压缩 PDF · 强力
+Hotkey error: {e}	Error de atajo: {e}	Kurzbefehl-Fehler: {e}	Erreur de raccourci : {e}	Erro de atalho: {e}	ショートカットのエラー:{e}	快捷键错误:{e}
+{n} files · {names}	{n} archivos · {names}	{n} Dateien · {names}	{n} fichiers · {names}	{n} arquivos · {names}	{n}個のファイル · {names}	{n} 个文件 · {names}
+Compress…	Comprimir…	Komprimieren …	Compresser…	Comprimir…	圧縮…	压缩…
+MP3 (audio only)	MP3 (solo audio)	MP3 (nur Audio)	MP3 (audio uniquement)	MP3 (somente áudio)	MP3(音声のみ)	MP3(仅音频)
+Bleep…	Pitido…	Piepton …	Bip…	Bipe…	ピー音…	消音哔声…
+Channels…	Canales…	Kanäle …	Canaux…	Canais…	チャンネル…	声道…
+Normalize…	Normalizar…	Normalisieren …	Normaliser…	Normalizar…	正規化…	标准化…
+M4A (audio only)	M4A (solo audio)	M4A (nur Audio)	M4A (audio uniquement)	M4A (somente áudio)	M4A(音声のみ)	M4A(仅音频)

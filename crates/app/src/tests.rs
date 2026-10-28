@@ -8346,7 +8346,14 @@ fn apple_engine_translates_with_apple_when_it_is_available() {
 fn language_names_in_the_translate_toast_and_wheel_follow_the_interface_language() {
     use ferrocast_core::i18n::{with_language, Lang};
     APPLE_AVAILABLE.with(|a| a.set(true));
-    for (lang, name) in [(Lang::Es, "inglés"), (Lang::De, "Englisch"), (Lang::Fr, "anglais")] {
+    for (lang, name) in [
+        (Lang::Es, "inglés"),
+        (Lang::De, "Englisch"),
+        (Lang::Fr, "anglais"),
+        (Lang::PtBr, "inglês"),
+        (Lang::Ja, "英語"),
+        (Lang::ZhHans, "英语"),
+    ] {
         with_language(lang, || {
             let mut app = effect_app();
             app.settings.translate_apple = true;
@@ -8365,6 +8372,9 @@ fn language_names_in_the_translate_toast_and_wheel_follow_the_interface_language
     with_language(Lang::En, || assert_eq!(crate::services::language_label("Spanish", false), "Spanish"));
     with_language(Lang::Es, || assert_eq!(crate::services::language_label("Spanish", true), "Español"));
     with_language(Lang::De, || assert_eq!(crate::services::language_label("Chinese", false), "Chinesisch"));
+    with_language(Lang::ZhHans, || assert_eq!(crate::services::language_label("Chinese", false), "中文"));
+    with_language(Lang::ZhHans, || assert_eq!(crate::services::language_label("Chinese (Traditional)", false), "繁体中文"));
+    with_language(Lang::Ja, || assert_eq!(crate::services::language_label("Spanish", false), "スペイン語"));
 }
 
 #[test]
@@ -16897,7 +16907,7 @@ mod i18n_ui {
             app.settings.run_raycast_extensions = true;
             app.ext.test_set_manifests(vec![
                 ext_manifest(r#"{"name":"n","title":"Notes","preferences":[{"name":"k","type":"textfield","title":"K"}],"commands":[{"name":"x","title":"X","mode":"view"}]}"#),
-                ext_manifest(r#"{"name":"t","title":"Timers","commands":[{"name":"x","title":"X","mode":"view"}]}"#),
+                ext_manifest(r#"{"name":"t","title":"Timers","preferences":[{"name":"k","type":"textfield","title":"K"}],"commands":[{"name":"x","title":"X","mode":"view"}]}"#),
             ]);
             // opening its form scrolls the extension's row into view
             app.ext_open_prefs("n", "");
@@ -16909,6 +16919,13 @@ mod i18n_ui {
             }
             assert!(texts.iter().any(|t| t == "Notes"), "extension \"Notes\" shows as installed: {texts:?}");
             assert!(texts.iter().any(|t| t == "Cerrar"), "its button is still translated: {texts:?}");
+            // the second extension, scrolled into view the same way
+            app.ext_open_prefs("t", "");
+            for _ in 0..3 {
+                texts = render_texts(&mut app, vec![]).into_iter().map(|(t, _)| t).collect::<Vec<_>>();
+            }
+            assert!(texts.iter().any(|t| t == "Timers"), "extension \"Timers\" shows as installed: {texts:?}");
+            assert!(!texts.iter().any(|t| t == "Temporizadores"), "{texts:?}");
         });
     }
 
@@ -17030,6 +17047,49 @@ mod i18n_ui {
         let mut app = fixture();
         app.stack = vec![View::Root, view];
         app
+    }
+
+    /// The launcher's Image tools and File tools rows (titles and the multi-file subtitle) read
+    /// in the interface language: no English label survives, and nothing is missing from the table.
+    #[test]
+    fn image_and_file_tool_rows_are_translated_in_every_language() {
+        use ferrocast_core::convert::{Family, FileTool, ImageOp};
+        let sets: [(Vec<std::path::PathBuf>, Vec<String>); 4] = [
+            (vec!["/tmp/ferrocast-ui-test.png".into()], ImageOp::offered(1).iter().map(|o| o.label()).collect()),
+            (vec!["/tmp/a.png".into(), "/tmp/b.png".into()], ImageOp::offered(2).iter().map(|o| o.label()).collect()),
+            (vec!["/tmp/ferrocast-ui-test.mp4".into()], FileTool::offered(Family::Video, 1).iter().map(|o| o.label()).collect()),
+            (vec!["/tmp/ferrocast-ui-test.mp3".into()], FileTool::offered(Family::Audio, 1).iter().map(|o| o.label()).collect()),
+        ];
+        for lang in NON_ENGLISH {
+            for (files, english) in &sets {
+                let mut shown = vec![];
+                let gaps = missing(lang, || {
+                    let mut app = view_app(View::Convert(files.clone()));
+                    for s in app.sections_cached() {
+                        for it in s.items {
+                            // the list translates what it draws
+                            shown.push(ferrocast_core::i18n::tr(&it.title).into_owned());
+                            shown.push(ferrocast_core::i18n::tr(&it.subtitle).into_owned());
+                        }
+                    }
+                });
+                assert!(shown.len() > 4, "{lang:?} {files:?}: rows were built");
+                for e in english {
+                    assert!(!shown.contains(e), "{lang:?}: {e:?} is shown in English");
+                }
+                assert!(!shown.iter().any(|t| t.contains(" files · ")), "{lang:?}: {shown:?}");
+                // format names (JPEG, AVIF…) are the same in every language
+                let gaps: Vec<_> = gaps
+                    .into_iter()
+                    .filter(|g| {
+                        !(g.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                            || ["WebP", "WebM", "M4A (AAC)", "OGG Vorbis", "Opus", "FLAC", "WAV", "AIFF", "MPEG-4", "GIF"]
+                                .contains(&g.as_str()))
+                    })
+                    .collect();
+                assert!(gaps.is_empty(), "{lang:?}: tool labels without a translation:\n{}", gaps.join("\n"));
+            }
+        }
     }
 
     #[test]

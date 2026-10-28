@@ -787,6 +787,16 @@ impl View {
     }
 }
 
+/// Search keywords plus the English label when the interface is not English, so the English
+/// words still find a tool whose title is translated.
+fn english_too(keywords: &str, english: &str) -> String {
+    if ferrocast_core::i18n::language() == ferrocast_core::i18n::Lang::En {
+        keywords.to_string()
+    } else {
+        format!("{keywords} {english}")
+    }
+}
+
 enum RunKind {
     Output,
     Compact(String),
@@ -1277,7 +1287,7 @@ impl App {
         if let Some(h) = hotkeys.as_mut() {
             let errs = h.apply(&data.settings);
             if let Some(e) = errs.first() {
-                toast = Some((format!("Hotkey error: {e}"), Instant::now()));
+                toast = Some((trf("Hotkey error: {e}", &[("e", &e.to_string())]), Instant::now()));
             }
         }
         let tray = if data.settings.show_menu_bar_icon { services::make_tray(bus.clone()) } else { None };
@@ -1810,7 +1820,7 @@ impl App {
         if let Some(h) = self.hotkeys.as_mut() {
             let errors = h.apply(&self.settings);
             if let Some(e) = errors.first() {
-                self.toast = Some((format!("Hotkey error: {e}"), Instant::now()));
+                self.toast = Some((trf("Hotkey error: {e}", &[("e", &e.to_string())]), Instant::now()));
             }
             let (log, mut failed) = services::tiling_hotkey_report(&h.results);
             failed.extend(h.skipped.iter().cloned());
@@ -3228,7 +3238,7 @@ impl App {
             }
             WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(trf("{label}: not available yet", &[("label", &label)])),
             WheelPick::File(tool) => {
-                self.toast(format!("{}…", tr(&tool.label())));
+                self.toast(format!("{}…", tool.label_tr()));
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
             }
             WheelPick::Image(ferrocast_core::convert::ImageOp::Collage) if files.len() >= 2 => {
@@ -3238,7 +3248,7 @@ impl App {
                 self.perform(Act::AnnotateCanvas(files[0].clone()), false);
             }
             WheelPick::Image(op) => {
-                self.toast(format!("{}…", tr(&op.label())));
+                self.toast(format!("{}…", op.label_tr()));
                 services::image_op_files(files, op, self.bus.clone());
             }
             WheelPick::Convert(t) if t.needs.is_some() => {
@@ -4584,7 +4594,11 @@ impl App {
                 let files = files.clone();
                 let Some(first) = files.first() else { return vec![] };
                 let names: Vec<String> = files.iter().filter_map(|f| f.file_name().map(|n| n.to_string_lossy().to_string())).collect();
-                let sub = if files.len() == 1 { names[0].clone() } else { format!("{} files · {}", files.len(), names.join(", ")) };
+                let sub = if files.len() == 1 {
+                    names[0].clone()
+                } else {
+                    trf("{n} files · {names}", &[("n", &files.len().to_string()), ("names", &names.join(", "))])
+                };
                 let v: Vec<(i64, Item)> = ferrocast_core::convert::targets(first, &self.tools)
                     .into_iter()
                     .filter_map(|t| {
@@ -4625,17 +4639,18 @@ impl App {
                     // a typed size or dimensions ("500kb", "40%", "800x600") becomes a tool of its own
                     let typed = ferrocast_core::convert::parse_image_query(&q);
                     let typed_op = typed.clone();
-                    let tools: Vec<Item> = typed
-                        .into_iter()
-                        .chain(ImageOp::offered(files.len()))
-                        // a query that parsed as a tool is shown as typed; fuzzy matching would hide any with parameters
-                        .filter(|op| {
-                            typed_op.as_ref() == Some(op)
+                    let tools: Vec<Item> =
+                        typed
+                            .into_iter()
+                            .chain(ImageOp::offered(files.len()))
+                            // a query that parsed as a tool is shown as typed; fuzzy matching would hide any with parameters
+                            .filter(|op| {
+                                typed_op.as_ref() == Some(op)
                                 || self
                                     .matches(
                                         &q,
-                                        &op.label(),
-                                        match op {
+                                        &op.label_tr(),
+                                        &english_too(match op {
                                             ImageOp::Compress(_) => "compress smaller jpeg",
                                             ImageOp::Resize(_) => "resize scale",
                                             ImageOp::Crop(..) => "crop aspect",
@@ -4658,44 +4673,44 @@ impl App {
                                             }
                                             ImageOp::CropExact(..) | ImageOp::CropRect(..) => "crop exact dimensions pixels",
                                             ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
-                                        },
+                                        }, &op.label()),
                                     )
                                     .is_some()
-                        })
-                        .map(|op| Item {
-                            id: format!("imgtool:{}", op.suffix()),
-                            title: op.label(),
-                            subtitle: sub.clone(),
-                            icon: Icon::Glyph(
-                                match op {
-                                    ImageOp::Compress(_) => "sf:arrow.down.right.and.arrow.up.left",
-                                    ImageOp::Resize(_) => "sf:arrow.up.left.and.down.right.magnifyingglass",
-                                    ImageOp::Crop(..) => "sf:crop",
-                                    ImageOp::StripMetadata => "sf:eye.slash",
-                                    ImageOp::CombinePdf => "sf:doc.richtext",
-                                    ImageOp::Rotate(_) => "sf:rotate.right",
-                                    ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
-                                    ImageOp::Background(_) => "sf:square.dashed",
-                                    ImageOp::Collage | ImageOp::CollageWith(_) => "sf:square.grid.2x2",
-                                    ImageOp::FrameWith(_) => "sf:square.dashed",
-                                    ImageOp::RedactWith(_) => "sf:eye.slash.fill",
-                                    ImageOp::EditWith(_) => "sf:slider.horizontal.3",
-                                    ImageOp::Redact(_) => "sf:eye.slash.fill",
-                                    ImageOp::Adjust(_) => "sf:slider.horizontal.3",
-                                    ImageOp::Annotate => "sf:pencil.tip.crop.circle",
-                                    ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) | ImageOp::CompressWith(..) => {
-                                        "sf:arrow.down.right.and.arrow.up.left"
-                                    }
-                                    ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
-                                    ImageOp::SetMeta(_) => "sf:tag",
-                                },
-                                [255, 140, 60],
-                            ),
-                            accessory: tr("Image tool").into_owned(),
-                            keywords: vec![],
-                            kind: Kind::ImageTool(files.clone(), op),
-                        })
-                        .collect();
+                            })
+                            .map(|op| Item {
+                                id: format!("imgtool:{}", op.suffix()),
+                                title: op.label_tr(),
+                                subtitle: sub.clone(),
+                                icon: Icon::Glyph(
+                                    match op {
+                                        ImageOp::Compress(_) => "sf:arrow.down.right.and.arrow.up.left",
+                                        ImageOp::Resize(_) => "sf:arrow.up.left.and.down.right.magnifyingglass",
+                                        ImageOp::Crop(..) => "sf:crop",
+                                        ImageOp::StripMetadata => "sf:eye.slash",
+                                        ImageOp::CombinePdf => "sf:doc.richtext",
+                                        ImageOp::Rotate(_) => "sf:rotate.right",
+                                        ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
+                                        ImageOp::Background(_) => "sf:square.dashed",
+                                        ImageOp::Collage | ImageOp::CollageWith(_) => "sf:square.grid.2x2",
+                                        ImageOp::FrameWith(_) => "sf:square.dashed",
+                                        ImageOp::RedactWith(_) => "sf:eye.slash.fill",
+                                        ImageOp::EditWith(_) => "sf:slider.horizontal.3",
+                                        ImageOp::Redact(_) => "sf:eye.slash.fill",
+                                        ImageOp::Adjust(_) => "sf:slider.horizontal.3",
+                                        ImageOp::Annotate => "sf:pencil.tip.crop.circle",
+                                        ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) | ImageOp::CompressWith(..) => {
+                                            "sf:arrow.down.right.and.arrow.up.left"
+                                        }
+                                        ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
+                                        ImageOp::SetMeta(_) => "sf:tag",
+                                    },
+                                    [255, 140, 60],
+                                ),
+                                accessory: tr("Image tool").into_owned(),
+                                keywords: vec![],
+                                kind: Kind::ImageTool(files.clone(), op),
+                            })
+                            .collect();
                     if !tools.is_empty() {
                         out.push(Section { title: tr("Image tools").into_owned(), items: tools });
                     }
@@ -4710,10 +4725,13 @@ impl App {
                         .iter()
                         .cloned()
                         .chain(FileTool::offered(fam, files.len()))
-                        .filter(|t| typed.as_ref() == Some(t) || self.matches(&q, &t.label(), "trim split merge cut join").is_some())
+                        .filter(|t| {
+                            typed.as_ref() == Some(t)
+                                || self.matches(&q, &t.label_tr(), &english_too("trim split merge cut join", &t.label())).is_some()
+                        })
                         .map(|t| Item {
                             id: format!("filetool:{}", t.label()),
-                            title: t.label(),
+                            title: t.label_tr(),
                             subtitle: sub.clone(),
                             icon: Icon::Glyph(
                                 match t {
@@ -5597,7 +5615,7 @@ impl App {
             }
             Kind::FileTool(files, tool) => {
                 let (files, tool) = (files.clone(), tool.clone());
-                self.toast(format!("{}…", tr(&tool.label())));
+                self.toast(format!("{}…", tool.label_tr()));
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
                 self.hide();
                 self.reset_to_root();
@@ -5612,7 +5630,7 @@ impl App {
             }
             Kind::ImageTool(files, op) => {
                 let (files, op) = (files.clone(), op.clone());
-                self.toast(format!("{}…", tr(&op.label())));
+                self.toast(format!("{}…", op.label_tr()));
                 services::image_op_files(files, op, self.bus.clone());
                 self.hide();
                 self.reset_to_root();

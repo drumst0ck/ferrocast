@@ -1093,7 +1093,7 @@ impl App {
                     Ok(tool) => match self.tools.ffmpeg {
                         None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
                         Some(_) => {
-                            self.toast(format!("{}…", tr(&tool.label())));
+                            self.toast(format!("{}…", tool.label_tr()));
                             services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
                             self.pop();
                         }
@@ -1107,7 +1107,7 @@ impl App {
                     Err(e) => self.toast(e),
                     Ok((goal, r)) => {
                         let op = ferrocast_core::convert::ImageOp::CompressWith(goal, r);
-                        self.toast(format!("{}…", tr(&op.label())));
+                        self.toast(format!("{}…", op.label_tr()));
                         services::image_op_files(files, op, self.bus.clone());
                         self.pop();
                     }

@@ -669,54 +669,74 @@ pub enum Adjust {
     MoreContrast,
 }
 
+/// Builds a label from a key with `{name}` slots: English fill or the interface language.
+type Tr<'a> = &'a dyn Fn(&str, &[(&str, &str)]) -> String;
+
 impl ImageOp {
+    /// English label; also the identity of a tool in logs and tests.
     pub fn label(&self) -> String {
+        self.label_with(&|k, a| crate::i18n::fill(k, a))
+    }
+    /// The label in the interface language.
+    pub fn label_tr(&self) -> String {
+        self.label_with(&crate::i18n::trf)
+    }
+    fn label_with(&self, t: Tr) -> String {
         match self {
-            ImageOp::Compress(q) => format!("Compress · JPEG {q}%"),
-            ImageOp::Resize(px) => format!("Resize · fit {px} px"),
-            ImageOp::Crop(w, h) => format!("Crop · {w}:{h}"),
-            ImageOp::StripMetadata => "Remove metadata".into(),
-            ImageOp::CombinePdf => "Combine into one PDF".into(),
-            ImageOp::Rotate(d) => format!("Rotate · {d}°"),
-            ImageOp::Flip(true) => "Flip horizontally".into(),
-            ImageOp::Flip(false) => "Flip vertically".into(),
-            ImageOp::Background(c) => format!("Square on {} background", if *c == "FFFFFF" { "white" } else { "black" }),
-            ImageOp::Collage => "Make a collage".into(),
-            ImageOp::EditWith(_) => "Edit photo".into(),
-            ImageOp::RedactWith(_) => "Redact photo".into(),
-            ImageOp::FrameWith(_) => "Add a background".into(),
-            ImageOp::CollageWith(o) => format!(
-                "Collage · {}{}",
-                format!("{:?}", o.layout).to_lowercase(),
-                o.width.map(|w| format!(" · {w} px")).unwrap_or_default()
-            ),
-            ImageOp::Redact(true) => "Redact faces".into(),
-            ImageOp::Redact(false) => "Redact text".into(),
-            ImageOp::Adjust(a) => match a {
-                Adjust::BlackAndWhite => "Edit · Black & white",
-                Adjust::Brighter => "Edit · Brighter",
-                Adjust::Darker => "Edit · Darker",
-                Adjust::MoreContrast => "Edit · More contrast",
+            ImageOp::Compress(q) => t("Compress · JPEG {q}%", &[("q", &q.to_string())]),
+            ImageOp::Resize(px) => t("Resize · fit {px} px", &[("px", &px.to_string())]),
+            ImageOp::Crop(w, h) => t("Crop · {w}:{h}", &[("w", &w.to_string()), ("h", &h.to_string())]),
+            ImageOp::StripMetadata => t("Remove metadata", &[]),
+            ImageOp::CombinePdf => t("Combine into one PDF", &[]),
+            ImageOp::Rotate(d) => t("Rotate · {d}°", &[("d", &d.to_string())]),
+            ImageOp::Flip(true) => t("Flip horizontally", &[]),
+            ImageOp::Flip(false) => t("Flip vertically", &[]),
+            ImageOp::Background(c) => t(if *c == "FFFFFF" { "Square on white background" } else { "Square on black background" }, &[]),
+            ImageOp::Collage => t("Make a collage", &[]),
+            ImageOp::EditWith(_) => t("Edit photo", &[]),
+            ImageOp::RedactWith(_) => t("Redact photo", &[]),
+            ImageOp::FrameWith(_) => t("Add a background", &[]),
+            ImageOp::CollageWith(o) => {
+                let layout = t(
+                    match o.layout {
+                        crate::collage::Layout::Grid => "Collage · grid",
+                        crate::collage::Layout::Row => "Collage · row",
+                        crate::collage::Layout::Column => "Collage · column",
+                        crate::collage::Layout::Featured => "Collage · featured",
+                    },
+                    &[],
+                );
+                format!("{layout}{}", o.width.map(|w| format!(" · {w} px")).unwrap_or_default())
             }
-            .into(),
-            ImageOp::Annotate => "Annotate in Preview".into(),
-            ImageOp::CompressToKb(kb) => format!("Compress · under {}", format_kb(*kb)),
-            ImageOp::CompressByPercent(p) => format!("Compress · {p}% smaller"),
-            ImageOp::CompressWith(goal, r) => compress_label(goal, r),
-            ImageOp::CropExact(w, h) => format!("Crop · exactly {w}×{h} px"),
-            ImageOp::CropRect(_, _, w, h) => format!("Crop · {w}×{h} px"),
+            ImageOp::Redact(true) => t("Redact faces", &[]),
+            ImageOp::Redact(false) => t("Redact text", &[]),
+            ImageOp::Adjust(a) => t(
+                match a {
+                    Adjust::BlackAndWhite => "Edit · Black & white",
+                    Adjust::Brighter => "Edit · Brighter",
+                    Adjust::Darker => "Edit · Darker",
+                    Adjust::MoreContrast => "Edit · More contrast",
+                },
+                &[],
+            ),
+            ImageOp::Annotate => t("Annotate in Preview", &[]),
+            ImageOp::CompressToKb(kb) => t("Compress · under {size}", &[("size", &format_kb(*kb))]),
+            ImageOp::CompressByPercent(p) => t("Compress · {p}% smaller", &[("p", &p.to_string())]),
+            ImageOp::CompressWith(goal, r) => compress_label(goal, r, t),
+            ImageOp::CropExact(w, h) => t("Crop · exactly {w}×{h} px", &[("w", &w.to_string()), ("h", &h.to_string())]),
+            ImageOp::CropRect(_, _, w, h) => t("Crop · {w}×{h} px", &[("w", &w.to_string()), ("h", &h.to_string())]),
             ImageOp::SetMeta(m) => {
                 let mut parts = vec![];
                 if !m.make.is_empty() {
-                    parts.push(format!("make {}", m.make));
+                    parts.push(t("make {v}", &[("v", &m.make)]));
                 }
                 if !m.model.is_empty() {
-                    parts.push(format!("model {}", m.model));
+                    parts.push(t("model {v}", &[("v", &m.model)]));
                 }
                 if let Some((la, lo)) = m.gps {
                     parts.push(format!("GPS {la:.4}, {lo:.4}"));
                 }
-                format!("Set metadata · {}", parts.join(", "))
+                t("Set metadata · {parts}", &[("parts", &parts.join(", "))])
             }
         }
     }
@@ -797,20 +817,20 @@ pub fn output_with_suffix(input: &Path, suffix: &str, ext: &str, exists: impl Fn
 }
 
 /// "Compress · 2 MB", "Compress · 40 % smaller", "Compress · balanced", plus the resize.
-fn compress_label(goal: &crate::compress::Goal, r: &crate::compress::Resize) -> String {
+fn compress_label(goal: &crate::compress::Goal, r: &crate::compress::Resize, t: Tr) -> String {
     use crate::compress::{Goal, Preset};
     let mut l = match goal {
-        Goal::TargetBytes(b) => format!("Compress · {}", format_kb((*b / 1024).clamp(1, u32::MAX as u64) as u32)),
-        Goal::Percent(p) => format!("Compress · {} % smaller", crate::compress::clamp_percent(*p)),
-        Goal::Preset(Preset::Light) => "Compress · light".into(),
-        Goal::Preset(Preset::Balanced) => "Compress · balanced".into(),
-        Goal::Preset(Preset::Strong) => "Compress · strong".into(),
+        Goal::TargetBytes(b) => t("Compress · {size}", &[("size", &format_kb((*b / 1024).clamp(1, u32::MAX as u64) as u32))]),
+        Goal::Percent(p) => t("Compress · {p} % smaller", &[("p", &crate::compress::clamp_percent(*p).to_string())]),
+        Goal::Preset(Preset::Light) => t("Compress · light", &[]),
+        Goal::Preset(Preset::Balanced) => t("Compress · balanced", &[]),
+        Goal::Preset(Preset::Strong) => t("Compress · strong", &[]),
     };
     if let Some(e) = r.max_edge {
-        l.push_str(&format!(" · max {e} px"));
+        l.push_str(&format!(" · {}", t("max {e} px", &[("e", &e.to_string())])));
     }
     if let Some(p) = r.percent {
-        l.push_str(&format!(" · {p} % size"));
+        l.push_str(&format!(" · {}", t("{p} % size", &[("p", &p.to_string())])));
     }
     l
 }
@@ -1107,55 +1127,81 @@ pub fn format_secs(s: f64) -> String {
 }
 
 impl FileTool {
+    /// English label; also the identity of a tool in logs and tests.
     pub fn label(&self) -> String {
+        self.label_with(&|k, a| crate::i18n::fill(k, a))
+    }
+    /// The label in the interface language.
+    pub fn label_tr(&self) -> String {
+        self.label_with(&crate::i18n::trf)
+    }
+    fn label_with(&self, t: Tr) -> String {
+        let span = |a: &f64, b: &f64| [("a", format_secs(*a)), ("b", format_secs(*b))];
+        let n = |v: usize| v.to_string();
         match self {
-            FileTool::Trim(a, b) => format!("Trim · {} to {}", format_secs(*a), format_secs(*b)),
-            FileTool::TrimExact(a, b) => format!("Trim (exact frames) · {} to {}", format_secs(*a), format_secs(*b)),
-            FileTool::SplitEvery(n) if n % 60 == 0 => format!("Split · every {} min", n / 60),
-            FileTool::SplitEvery(n) => format!("Split · every {n} s"),
-            FileTool::SplitPoints(r, _) => format!("Split · {} parts", r.len()),
-            FileTool::Merge => "Merge into one file".into(),
-            FileTool::SplitPages => "Split into one PDF per page".into(),
-            FileTool::Mute => "Remove audio".into(),
-            FileTool::Speed(f) => format!("Speed · {f}×"),
-            FileTool::Snapshot(t) => format!("Save frame at {}", format_secs(*t)),
-            FileTool::CropVideo(_, _, w, h) => format!("Crop video · {w}×{h}"),
-            FileTool::RedactVideo(_, _, _, _, a, b, blur) => {
-                format!("Redact video · {} to {}{}", format_secs(*a), format_secs(*b), if *blur { " (blur)" } else { "" })
+            FileTool::Trim(a, b) => {
+                let s = span(a, b);
+                t("Trim · {a} to {b}", &[("a", &s[0].1), ("b", &s[1].1)])
             }
-            FileTool::RedactVideoMany(r) => format!("Redact · {} area{}", r.len(), if r.len() == 1 { "" } else { "s" }),
-            FileTool::Normalize(i, ..) => format!("Normalize volume · {i} LUFS"),
-            FileTool::Visualize(c) => format!(
-                "Audio visualizer · {}",
+            FileTool::TrimExact(a, b) => {
+                let s = span(a, b);
+                t("Trim (exact frames) · {a} to {b}", &[("a", &s[0].1), ("b", &s[1].1)])
+            }
+            FileTool::SplitEvery(s) if s % 60 == 0 => t("Split · every {n} min", &[("n", &(s / 60).to_string())]),
+            FileTool::SplitEvery(s) => t("Split · every {n} s", &[("n", &s.to_string())]),
+            FileTool::SplitPoints(r, _) => t("Split · {n} parts", &[("n", &n(r.len()))]),
+            FileTool::Merge => t("Merge into one file", &[]),
+            FileTool::SplitPages => t("Split into one PDF per page", &[]),
+            FileTool::Mute => t("Remove audio", &[]),
+            FileTool::Speed(f) => t("Speed · {f}×", &[("f", &f.to_string())]),
+            FileTool::Snapshot(at) => t("Save frame at {t}", &[("t", &format_secs(*at))]),
+            FileTool::CropVideo(_, _, w, h) => t("Crop video · {w}×{h}", &[("w", &w.to_string()), ("h", &h.to_string())]),
+            FileTool::RedactVideo(_, _, _, _, a, b, blur) => {
+                let s = span(a, b);
+                t(if *blur { "Redact video · {a} to {b} (blur)" } else { "Redact video · {a} to {b}" }, &[("a", &s[0].1), ("b", &s[1].1)])
+            }
+            FileTool::RedactVideoMany(r) => t(if r.len() == 1 { "Redact · {n} area" } else { "Redact · {n} areas" }, &[("n", &n(r.len()))]),
+            FileTool::Normalize(i, ..) => t("Normalize volume · {i} LUFS", &[("i", &i.to_string())]),
+            FileTool::Visualize(c) => t(
                 match c {
-                    crate::media::Canvas::Landscape => "landscape",
-                    crate::media::Canvas::Portrait => "portrait",
-                    crate::media::Canvas::Square => "square",
-                }
+                    crate::media::Canvas::Landscape => "Audio visualizer · landscape",
+                    crate::media::Canvas::Portrait => "Audio visualizer · portrait",
+                    crate::media::Canvas::Square => "Audio visualizer · square",
+                },
+                &[],
             ),
-            FileTool::VisualizeImage(c, img) => format!(
-                "Audio visualizer · {} · {}",
-                format!("{c:?}").to_lowercase(),
-                std::path::Path::new(img).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
-            ),
-            FileTool::TrimSilence => "Trim silence at both ends".into(),
-            FileTool::Channels(true, ..) => "Convert to stereo".into(),
-            FileTool::Channels(false, ..) => "Convert to mono".into(),
-            FileTool::Bleep(a, b) => format!("Bleep · {} to {}", format_secs(*a), format_secs(*b)),
-            FileTool::BleepMany(r) => format!("Bleep · {} range{}", r.len(), if r.len() == 1 { "" } else { "s" }),
-            FileTool::Join => "Join videos into one MP4".into(),
-            FileTool::OrganizePdf(p) => format!("Organize PDF · {} page{}", p.len(), if p.len() == 1 { "" } else { "s" }),
-            FileTool::Extract => "Extract".into(),
-            FileTool::Compress(goal, r) => compress_label(goal, r),
-            FileTool::EditMetadata(_, true) => "Remove metadata".into(),
-            FileTool::EditMetadata(_, false) => "Edit metadata".into(),
-            FileTool::CompressPdf(p) => format!(
-                "Compress PDF · {}",
+            FileTool::VisualizeImage(c, img) => {
+                let file = std::path::Path::new(img).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let key = match c {
+                    crate::media::Canvas::Landscape => "Audio visualizer · landscape · {file}",
+                    crate::media::Canvas::Portrait => "Audio visualizer · portrait · {file}",
+                    crate::media::Canvas::Square => "Audio visualizer · square · {file}",
+                };
+                t(key, &[("file", &file)])
+            }
+            FileTool::TrimSilence => t("Trim silence at both ends", &[]),
+            FileTool::Channels(true, ..) => t("Convert to stereo", &[]),
+            FileTool::Channels(false, ..) => t("Convert to mono", &[]),
+            FileTool::Bleep(a, b) => {
+                let s = span(a, b);
+                t("Bleep · {a} to {b}", &[("a", &s[0].1), ("b", &s[1].1)])
+            }
+            FileTool::BleepMany(r) => t(if r.len() == 1 { "Bleep · {n} range" } else { "Bleep · {n} ranges" }, &[("n", &n(r.len()))]),
+            FileTool::Join => t("Join videos into one MP4", &[]),
+            FileTool::OrganizePdf(p) => {
+                t(if p.len() == 1 { "Organize PDF · {n} page" } else { "Organize PDF · {n} pages" }, &[("n", &n(p.len()))])
+            }
+            FileTool::Extract => t("Extract", &[]),
+            FileTool::Compress(goal, r) => compress_label(goal, r, t),
+            FileTool::EditMetadata(_, true) => t("Remove metadata", &[]),
+            FileTool::EditMetadata(_, false) => t("Edit metadata", &[]),
+            FileTool::CompressPdf(p) => t(
                 match p {
-                    crate::compress::Preset::Light => "light",
-                    crate::compress::Preset::Balanced => "balanced",
-                    crate::compress::Preset::Strong => "strong",
-                }
+                    crate::compress::Preset::Light => "Compress PDF · light",
+                    crate::compress::Preset::Balanced => "Compress PDF · balanced",
+                    crate::compress::Preset::Strong => "Compress PDF · strong",
+                },
+                &[],
             ),
         }
     }
