@@ -14902,6 +14902,25 @@ fn notes_are_not_merged_into_the_editor_while_typing_and_are_after_a_short_idle(
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
 
+#[test]
+fn a_keystroke_the_editor_made_but_the_controller_has_not_processed_yet_still_defers_the_merge() {
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d));
+    let open = app.notes_ctl.current.clone().unwrap();
+    app.settings.sync_enabled = true;
+    // the editor emitted a change just now; its Changed message is still queued on the bus
+    st.borrow_mut().keystroke_ms = now_millis();
+    assert!(app.notes_ctl.typing_recently(now_millis()), "no Changed message was processed, yet typing is seen");
+    let mut remote = app.notes.clone();
+    remote.iter_mut().find(|n| n.id == open).unwrap().text = "Remote edit".into();
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_none());
+    assert!(!app.notes_ctl.typing_recently(now_millis() + 3_000));
+    st.borrow_mut().keystroke_ms = now_millis().saturating_sub(5_000);
+    assert!(!app.notes_ctl.typing_recently(now_millis()), "five seconds ago is idle");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
 fn now_millis() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }

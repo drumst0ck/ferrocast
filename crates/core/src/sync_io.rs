@@ -331,18 +331,29 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
     if domain == "clipboard" {
         export_images(io, snapshot);
     }
-    // First sync of this domain on this Mac (also a missing or corrupt tracker) while other Macs
-    // exist: local items are a baseline that anything already published beats.
-    // A Mac that never synced this domain stamps what it has with 0 whether or not iCloud has listed
-    // the other Macs' folders yet, so anything another Mac published (at a real time) beats it, now
-    // or when it shows up later. Two Macs that both start this way tie at 0 and the greater device id
-    // wins on both. Items only this Mac has are still kept and published.
-    let first_stamp = 0;
-    let ttl = tombstone_ttl(domain);
-    let (doc, t1) = sync::publish_ttl(&io.device, snapshot, tracker, now, first_stamp, ttl);
+    // First-sync rule (see `sync::restamp_baseline`):
+    //  1. On this Mac's first sync of a domain (also after a missing or corrupt tracker) its items,
+    //     and deletions of built-in defaults it lacks, are published at modified 0, whether or not
+    //     iCloud has listed the other Macs' folders yet. Any real time beats 0.
+    //  2. On every later run, after merging, records still at 0 (they are the winner or nobody else
+    //     has them) are moved once to the time of this Mac's first sync and published.
+    //  3. A tie at 0 (two Macs that first-sync before either has run twice) goes to the greater
+    //     device id on both Macs, so they still converge.
+    // Net effect: the Mac that synced first keeps its data, a Mac that joins later adopts it, items
+    // only the newcomer has are added, and genuine edits made afterwards win by their time.
+    let first = !tracker.seeded;
+    let clipboard = domain == "clipboard";
+    let opts = sync::PublishOpts {
+        first_stamp: 0,
+        ttl: tombstone_ttl(domain),
+        baseline_deleted: if first { default_ids(domain) } else { vec![] },
+        relay_tombstones: !clipboard,
+        max_tombstones: clipboard.then_some(MAX_CLIPBOARD_TOMBSTONES),
+    };
+    let (doc, t1) = sync::publish_opts(&io.device, snapshot, tracker, now, &opts);
     io.write_doc(domain, &doc)?;
     let ReadDocs { mut docs, corrupt, mut downloading } = io.read_docs(domain);
-    if domain == "clipboard" {
+    if clipboard {
         // Clipboard tombstones expire (after the longest retention), so entries from before that
         // horizon cannot be told from deleted ones and are not adopted from other Macs.
         let horizon = CLIPBOARD_HORIZON_MS / 1000;
@@ -354,15 +365,36 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
         }
     }
     let (merged, t2) = sync::merge_as(&io.device, snapshot, &docs, &t1);
-    if domain == "clipboard" {
+    let mut t2 = t2;
+    if !first {
+        sync::restamp_baseline(&mut t2);
+    }
+    if clipboard {
         downloading += import_images(io, &merged, &docs);
     }
+    // what this Mac publishes now: the merged state with the re-stamped baseline
+    let (doc2, t3) = sync::publish_opts(&io.device, &merged, &t2, now, &opts);
     if merged == snapshot {
-        return Ok(Outcome { merged: None, tracker_published: t1, tracker_merged: t2, peers: io.peers(), corrupt, downloading });
+        io.write_doc(domain, &doc2)?; // identical bytes are not rewritten
+        return Ok(Outcome { merged: None, tracker_published: t3.clone(), tracker_merged: t3, peers: io.peers(), corrupt, downloading });
     }
-    let (_, t3) = sync::publish_ttl(&io.device, &merged, &t2, now, first_stamp, ttl);
     Ok(Outcome { merged: Some(merged), tracker_published: t1, tracker_merged: t3, peers: io.peers(), corrupt, downloading })
 }
+
+/// Ids of the built-in default items of a domain (present on every fresh install).
+fn default_ids(domain: &str) -> Vec<String> {
+    match domain {
+        "snippets" => crate::storage::default_snippets().into_iter().map(|s| s.id).collect(),
+        "quicklinks" => crate::storage::default_quicklinks().into_iter().map(|q| q.id).collect(),
+        _ => vec![],
+    }
+}
+
+/// The clipboard document keeps at most this many deletions (the newest): heavy copying would
+/// otherwise grow it for ever. An entry whose deletion was forgotten can come back only from a
+/// device that was offline longer than the oldest kept deletion, and the retention and cap remove it
+/// again.
+const MAX_CLIPBOARD_TOMBSTONES: usize = 3000;
 
 fn safe_name(name: &str) -> bool {
     !name.is_empty() && !name.contains('/') && !name.contains('\\') && !name.contains("..")
@@ -561,6 +593,9 @@ mod tests {
         d
     }
 
+    /// Both orders of two device ids: the outcome must not depend on which id is greater.
+    const ID_ORDERS: [(&str, &str); 2] = [("aa", "zz"), ("zz", "aa")];
+
     /// One simulated Mac: its own data dir and device id, sharing the sync dir.
     struct Mac {
         store: Store,
@@ -576,6 +611,16 @@ mod tests {
             let store = Store::new(data);
             let io = SyncIo::new(shared.to_path_buf(), device_id(data), store.images_dir());
             Mac { store, io, snippets: vec![], quicklinks: vec![], settings: Settings::default(), clipboard: vec![] }
+        }
+
+        /// Only the clipboard domain, applying the merge the way the app does (retention, dedupe, cap).
+        fn sync_clipboard(&mut self, now: i64) {
+            let d = &self.store.root;
+            let o = sync_domain(&self.io, "clipboard", &to_items(&self.clipboard), &load_tracker(d, "clipboard"), now).unwrap();
+            save_tracker(d, "clipboard", &o.tracker_merged).unwrap();
+            if let Some(m) = o.merged {
+                self.clipboard = clipboard_normalize(from_items(m), now / 1000, Some(30 * 86_400));
+            }
         }
 
         /// A Mac that loads its data like the app does at launch (defaults on a fresh install).
@@ -678,115 +723,244 @@ mod tests {
 
     #[test]
     fn settings_sync_but_local_only_fields_stay_on_each_mac() {
-        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
-        let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
-        a.io.device = "zz-a".into(); // two first syncs tie at 0: the greater device id wins
-        b.io.device = "aa-b".into();
-        a.settings.theme = crate::models::Theme::Dark;
-        a.settings.launcher_hotkey = "Ctrl+Space".into();
-        a.settings.script_directories = vec!["/Users/a/scripts".into()];
-        a.settings.launch_at_login = true;
-        a.settings.onboarded = true;
-        a.settings.capture.camera_id = "cam-a".into();
-        a.settings.capture.mic_id = "mic-a".into();
-        a.settings.capture.fps = 30;
-        a.settings.notes_last = Some("note-a".into());
-        a.settings.sync_enabled = true;
-        a.settings.capture.folder = "/Users/a/Shots".into();
-        a.settings.capture.recordings_folder = "/Users/a/Recs".into();
-        b.settings.script_directories = vec!["/Users/b/scripts".into()];
-        b.settings.capture.camera_id = "cam-b".into();
-        b.settings.capture.folder = "/Users/b/Shots".into();
-        b.settings.capture.recordings_folder = "/Users/b/Recs".into();
-        b.settings.notes_last = Some("note-b".into());
-        // A customises and syncs; B still has the defaults and turns sync on later
-        a.sync(1_000);
-        b.sync(2_000);
-        assert_eq!(b.settings.theme, crate::models::Theme::Dark, "B adopts A's settings on its first sync");
-        assert_eq!(b.settings.launcher_hotkey, "Ctrl+Space", "hotkeys sync");
-        assert_eq!(b.settings.capture.fps, 30);
-        a.sync(3_000);
-        assert_eq!(a.settings.launcher_hotkey, "Ctrl+Space", "A keeps its own settings");
-        assert_eq!(a.settings.theme, crate::models::Theme::Dark);
-        assert_eq!(b.settings.capture.folder, "/Users/b/Shots", "capture folders are per Mac");
-        assert_eq!(b.settings.capture.recordings_folder, "/Users/b/Recs");
-        // local-only values of B are untouched
-        assert_eq!(b.settings.script_directories, vec!["/Users/b/scripts".to_string()]);
-        assert_eq!(b.settings.capture.camera_id, "cam-b");
-        assert_eq!(b.settings.capture.mic_id, "");
-        assert_eq!(b.settings.notes_last.as_deref(), Some("note-b"));
-        assert!(!b.settings.launch_at_login && !b.settings.onboarded && !b.settings.sync_enabled);
-        // and none of them ever reached the shared folder
-        let doc = std::fs::read_to_string(shared.join("devices").join(&a.io.device).join("settings.json")).unwrap();
-        for leaked in [
-            "/Users/a/scripts",
-            "/Users/a/Shots",
-            "/Users/a/Recs",
-            "cam-a",
-            "mic-a",
-            "note-a",
-            "launch_at_login",
-            "sync_enabled",
-            "onboarded",
-        ] {
-            assert!(!doc.contains(leaked), "{leaked} leaked into the sync folder");
-        }
-        for d in [da, db, shared] {
-            std::fs::remove_dir_all(d).unwrap();
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.io.device = ida.into();
+            b.io.device = idb.into();
+            a.settings.theme = crate::models::Theme::Dark;
+            a.settings.launcher_hotkey = "Ctrl+Space".into();
+            a.settings.script_directories = vec!["/Users/a/scripts".into()];
+            a.settings.launch_at_login = true;
+            a.settings.onboarded = true;
+            a.settings.capture.camera_id = "cam-a".into();
+            a.settings.capture.mic_id = "mic-a".into();
+            a.settings.capture.fps = 30;
+            a.settings.notes_last = Some("note-a".into());
+            a.settings.sync_enabled = true;
+            a.settings.capture.folder = "/Users/a/Shots".into();
+            a.settings.capture.recordings_folder = "/Users/a/Recs".into();
+            b.settings.script_directories = vec!["/Users/b/scripts".into()];
+            b.settings.capture.camera_id = "cam-b".into();
+            b.settings.capture.folder = "/Users/b/Shots".into();
+            b.settings.capture.recordings_folder = "/Users/b/Recs".into();
+            b.settings.notes_last = Some("note-b".into());
+            // A customises and syncs; B still has the defaults and turns sync on later
+            a.sync(1_000);
+            a.sync(1_500); // A has run twice before B joins
+            b.sync(2_000);
+            assert_eq!(b.settings.theme, crate::models::Theme::Dark, "B adopts A's settings on its first sync");
+            assert_eq!(b.settings.launcher_hotkey, "Ctrl+Space", "hotkeys sync");
+            assert_eq!(b.settings.capture.fps, 30);
+            a.sync(3_000);
+            assert_eq!(a.settings.launcher_hotkey, "Ctrl+Space", "A keeps its own settings");
+            assert_eq!(a.settings.theme, crate::models::Theme::Dark);
+            assert_eq!(b.settings.capture.folder, "/Users/b/Shots", "capture folders are per Mac");
+            assert_eq!(b.settings.capture.recordings_folder, "/Users/b/Recs");
+            // local-only values of B are untouched
+            assert_eq!(b.settings.script_directories, vec!["/Users/b/scripts".to_string()]);
+            assert_eq!(b.settings.capture.camera_id, "cam-b");
+            assert_eq!(b.settings.capture.mic_id, "");
+            assert_eq!(b.settings.notes_last.as_deref(), Some("note-b"));
+            assert!(!b.settings.launch_at_login && !b.settings.onboarded && !b.settings.sync_enabled);
+            // and none of them ever reached the shared folder
+            let doc = std::fs::read_to_string(shared.join("devices").join(&a.io.device).join("settings.json")).unwrap();
+            for leaked in [
+                "/Users/a/scripts",
+                "/Users/a/Shots",
+                "/Users/a/Recs",
+                "cam-a",
+                "mic-a",
+                "note-a",
+                "launch_at_login",
+                "sync_enabled",
+                "onboarded",
+            ] {
+                assert!(!doc.contains(leaked), "{leaked} leaked into the sync folder");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
         }
     }
 
     #[test]
     fn first_sync_never_beats_what_other_macs_published_but_keeps_new_items() {
-        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
-        let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
-        a.io.device = "zz-a".into();
-        b.io.device = "aa-b".into();
-        a.snippets = vec![snip("s1", "from a")];
-        a.sync(5_000);
-        // B has a different version of s1 (older or newer by its own clock) and an item of its own
-        let mut theirs = snip("s1", "b version");
-        theirs.text = "b edit".into();
-        b.snippets = vec![theirs, snip("s9", "only on b")];
-        b.sync(9_000_000); // B's clock is far ahead: still a first sync, so A's record wins
-        assert_eq!(b.snippets.iter().find(|s| s.id == "s1").unwrap().name, "from a");
-        assert!(b.snippets.iter().any(|s| s.id == "s9"), "items nobody else has are kept");
-        a.sync(10_000_000);
-        assert!(a.snippets.iter().any(|s| s.id == "s9"), "and published");
-        assert_eq!(a.snippets.iter().find(|s| s.id == "s1").unwrap().name, "from a");
-        // a missing or corrupt tracker is a first sync again
-        std::fs::write(db.join("sync-state").join("snippets.json"), "garbage").unwrap();
-        a.snippets.iter_mut().find(|s| s.id == "s1").unwrap().name = "a later".into();
-        a.sync(20_000_000);
-        b.sync(30_000_000);
-        assert_eq!(b.snippets.iter().find(|s| s.id == "s1").unwrap().name, "a later");
-        for d in [da, db, shared] {
-            std::fs::remove_dir_all(d).unwrap();
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.io.device = ida.into();
+            b.io.device = idb.into();
+            a.snippets = vec![snip("s1", "from a")];
+            a.sync(5_000);
+            a.sync(6_000); // A has run twice before B joins
+                           // B has a different version of s1 (older or newer by its own clock) and an item of its own
+            let mut theirs = snip("s1", "b version");
+            theirs.text = "b edit".into();
+            b.snippets = vec![theirs, snip("s9", "only on b")];
+            b.sync(9_000_000); // B's clock is far ahead: still a first sync, so A's record wins
+            assert_eq!(b.snippets.iter().find(|s| s.id == "s1").unwrap().name, "from a");
+            assert!(b.snippets.iter().any(|s| s.id == "s9"), "items nobody else has are kept");
+            a.sync(10_000_000);
+            assert!(a.snippets.iter().any(|s| s.id == "s9"), "and published");
+            assert_eq!(a.snippets.iter().find(|s| s.id == "s1").unwrap().name, "from a");
+            // a missing or corrupt tracker is a first sync again
+            std::fs::write(db.join("sync-state").join("snippets.json"), "garbage").unwrap();
+            a.snippets.iter_mut().find(|s| s.id == "s1").unwrap().name = "a later".into();
+            a.sync(20_000_000);
+            b.sync(30_000_000);
+            assert_eq!(b.snippets.iter().find(|s| s.id == "s1").unwrap().name, "a later");
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
         }
     }
 
     #[test]
     fn a_first_sync_before_icloud_lists_the_other_mac_still_adopts_its_settings() {
-        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
-        let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
-        a.io.device = "zz-a".into();
-        b.io.device = "aa-b".into();
-        a.settings.launcher_hotkey = "Ctrl+Space".into();
-        a.settings.theme = crate::models::Theme::Dark;
-        a.sync(1_000);
-        // iCloud has not listed A's folder on B yet
-        let hidden = shared.join("hidden");
-        std::fs::rename(shared.join("devices").join("zz-a"), &hidden).unwrap();
-        b.sync(2_000);
-        std::fs::rename(&hidden, shared.join("devices").join("zz-a")).unwrap();
-        b.sync(3_000);
-        a.sync(4_000);
-        for m in [&a, &b] {
-            assert_eq!(m.settings.launcher_hotkey, "Ctrl+Space");
-            assert_eq!(m.settings.theme, crate::models::Theme::Dark);
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.io.device = ida.into();
+            b.io.device = idb.into();
+            a.settings.launcher_hotkey = "Ctrl+Space".into();
+            a.settings.theme = crate::models::Theme::Dark;
+            a.sync(1_000);
+            a.sync(1_500); // A has run twice before B joins
+                           // iCloud has not listed A's folder on B yet
+            let hidden = shared.join("hidden");
+            std::fs::rename(shared.join("devices").join(ida), &hidden).unwrap();
+            b.sync(2_000);
+            std::fs::rename(&hidden, shared.join("devices").join(ida)).unwrap();
+            b.sync(3_000);
+            a.sync(4_000);
+            for m in [&a, &b] {
+                assert_eq!(m.settings.launcher_hotkey, "Ctrl+Space");
+                assert_eq!(m.settings.theme, crate::models::Theme::Dark);
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
         }
-        for d in [da, db, shared] {
-            std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn a_later_mac_never_overwrites_an_older_macs_customised_settings_whatever_the_device_ids() {
+        for (ida, idb) in ID_ORDERS {
+            for idc in ["00", "mm", "zzz"] {
+                let (da, db, dc, shared) = (tmp("a"), tmp("b"), tmp("c"), tmp("shared"));
+                let (mut a, mut b, mut c) = (Mac::launch(&da, &shared), Mac::launch(&db, &shared), Mac::launch(&dc, &shared));
+                (a.io.device, b.io.device, c.io.device) = (ida.into(), idb.into(), idc.into());
+                a.settings.launcher_hotkey = "Ctrl+Space".into();
+                a.settings.theme = crate::models::Theme::Dark;
+                a.sync(1_000);
+                a.sync(1_500);
+                b.sync(2_000); // fresh Mac, defaults
+                a.sync(3_000);
+                b.sync(3_500);
+                for m in [&a, &b] {
+                    assert_eq!(m.settings.launcher_hotkey, "Ctrl+Space", "ids {ida}/{idb}");
+                    assert_eq!(m.settings.theme, crate::models::Theme::Dark, "ids {ida}/{idb}");
+                }
+                // a third Mac with any id and a snippet of its own
+                c.snippets.push(snip("only-c", "unique to c"));
+                c.sync(4_000);
+                a.sync(5_000);
+                b.sync(5_500);
+                c.sync(6_000);
+                for m in [&a, &b, &c] {
+                    assert_eq!(m.settings.launcher_hotkey, "Ctrl+Space", "ids {ida}/{idb}/{idc}");
+                    assert_eq!(m.settings.theme, crate::models::Theme::Dark);
+                    assert!(m.snippets.iter().any(|s| s.id == "only-c"), "C's own snippet is kept");
+                }
+                // B's genuine edit after joining wins
+                b.settings.theme = crate::models::Theme::Light;
+                b.sync(9_000);
+                a.sync(9_500);
+                c.sync(9_600);
+                for m in [&a, &b, &c] {
+                    assert_eq!(m.settings.theme, crate::models::Theme::Light);
+                }
+                for d in [da, db, dc, shared] {
+                    std::fs::remove_dir_all(d).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_edited_default_snippet_on_the_older_mac_survives_a_new_mac_joining() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::launch(&da, &shared), Mac::launch(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.snippets.iter_mut().find(|s| s.id == "default-snippet-shrug").unwrap().text = "my shrug".into();
+            a.sync(1_000);
+            a.sync(1_500);
+            b.sync(2_000);
+            a.sync(3_000);
+            b.sync(3_500);
+            for m in [&a, &b] {
+                assert_eq!(m.snippets.iter().find(|s| s.id == "default-snippet-shrug").unwrap().text, "my shrug", "ids {ida}/{idb}");
+                assert_eq!(m.snippets.len(), 3);
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn two_macs_that_first_sync_together_converge_on_one_value_and_real_edits_still_win() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.settings.launcher_hotkey = "Ctrl+A".into();
+            b.settings.launcher_hotkey = "Ctrl+B".into();
+            // neither has run twice before the other starts: a tie at 0
+            a.sync(1_000);
+            b.sync(1_100);
+            a.sync(2_000);
+            b.sync(2_100);
+            for t in [3_000, 4_000, 5_000] {
+                a.sync(t);
+                b.sync(t + 50);
+            }
+            assert_eq!(a.settings.launcher_hotkey, b.settings.launcher_hotkey, "converged, ids {ida}/{idb}");
+            let winner = if ida > idb { "Ctrl+A" } else { "Ctrl+B" };
+            assert_eq!(a.settings.launcher_hotkey, winner, "the greater device id wins the tie");
+            b.settings.launcher_hotkey = "Ctrl+Z".into();
+            b.sync(9_000);
+            a.sync(9_500);
+            assert_eq!(a.settings.launcher_hotkey, "Ctrl+Z");
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_default_the_user_deleted_before_syncing_does_not_come_back_with_a_new_mac() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::launch(&da, &shared), Mac::launch(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.snippets.retain(|s| s.id != "default-snippet-shrug");
+            a.quicklinks.retain(|q| q.id != "default-quicklink-google");
+            a.sync(1_000);
+            a.sync(1_500);
+            b.sync(2_000);
+            a.sync(3_000);
+            b.sync(3_500);
+            for m in [&a, &b] {
+                assert!(!m.snippets.iter().any(|s| s.id == "default-snippet-shrug"), "ids {ida}/{idb}");
+                assert!(!m.quicklinks.iter().any(|q| q.id == "default-quicklink-google"));
+                assert_eq!((m.snippets.len(), m.quicklinks.len()), (2, 5));
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
         }
     }
 
@@ -895,6 +1069,45 @@ mod tests {
         assert!(o.merged.is_some(), "an entry 300 days old is still inside the horizon");
         for p in [da, shared] {
             std::fs::remove_dir_all(p).unwrap();
+        }
+    }
+
+    #[test]
+    fn clipboard_documents_stay_under_a_megabyte_over_400_days_of_heavy_copying() {
+        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+        let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        let text = |id: String, at: i64| ClipEntry {
+            id: id.clone(),
+            kind: ClipKind::Text,
+            content: format!("copied text {id}"),
+            title: None,
+            copied_at: at,
+            pinned: false,
+            source_app: None,
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        };
+        let mut n = 0;
+        for day in 0..400i64 {
+            for m in [&mut a, &mut b] {
+                for k in 0..100 {
+                    n += 1;
+                    m.clipboard.insert(0, text(format!("{:08}-{n}", day), day * 86_400 + k));
+                }
+                m.clipboard = clipboard_normalize(std::mem::take(&mut m.clipboard), day * 86_400 + 99, Some(30 * 86_400));
+            }
+            if day % 20 == 19 {
+                let now = (day * 86_400 + 100) * 1000;
+                a.sync_clipboard(now);
+                b.sync_clipboard(now + 1);
+            }
+        }
+        let size = |m: &Mac| std::fs::metadata(shared.join("devices").join(&m.io.device).join("clipboard.json")).unwrap().len();
+        eprintln!("clipboard document sizes after 400 days: a = {} bytes, b = {} bytes", size(&a), size(&b));
+        assert!(size(&a) < 1_000_000 && size(&b) < 1_000_000, "a = {}, b = {}", size(&a), size(&b));
+        for d in [da, db, shared] {
+            std::fs::remove_dir_all(d).unwrap();
         }
     }
 

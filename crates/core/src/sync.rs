@@ -39,6 +39,10 @@ pub struct Tracker {
     /// has no history to compare with.
     #[serde(default)]
     pub seeded: bool,
+    /// Time of this Mac's first sync of the domain. Records this Mac published at 0 (the baseline of
+    /// that first sync) are re-stamped once to this time by `restamp_baseline`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_sync_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -47,6 +51,9 @@ pub struct Tracked {
     pub modified: i64,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deleted: bool,
+    /// A deletion this Mac only learned from another Mac (it did not originate here).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remote: bool,
 }
 
 /// Default tombstone lifetime of `publish`/`publish_with` (90 days). The app keeps tombstones for
@@ -83,9 +90,35 @@ pub fn publish_ttl(
     first_stamp: i64,
     ttl: Option<i64>,
 ) -> (DeviceDoc, Tracker) {
-    let unseen = if prev.seeded { now } else { first_stamp };
+    let opts = PublishOpts { first_stamp, ttl, baseline_deleted: vec![], relay_tombstones: true, max_tombstones: None };
+    publish_opts(device, items, prev, now, &opts)
+}
+
+/// How `publish_opts` treats the first sync and tombstones.
+#[derive(Debug, Clone)]
+pub struct PublishOpts {
+    /// Time given to local items on this Mac's first sync of the domain (0 = baseline: any real time
+    /// beats it).
+    pub first_stamp: i64,
+    /// Lifetime of tombstones; `None` = for ever.
+    pub ttl: Option<i64>,
+    /// Ids that exist on every fresh install (built-in defaults). On a first sync those missing
+    /// locally are published as deletions (at `first_stamp`), so a default the user removed does not
+    /// come back when another Mac is added.
+    pub baseline_deleted: Vec<String>,
+    /// Republish deletions learned from other Macs. Off keeps the document small: every Mac reads
+    /// every other Mac's document, so only the deleting Mac needs to publish its deletion.
+    pub relay_tombstones: bool,
+    /// Keep at most this many tombstones (the newest).
+    pub max_tombstones: Option<usize>,
+}
+
+/// The general form of `publish`: see `PublishOpts`.
+pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64, opts: &PublishOpts) -> (DeviceDoc, Tracker) {
+    let unseen = if prev.seeded { now } else { opts.first_stamp };
     let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new() };
-    let mut next = Tracker { items: BTreeMap::new(), seeded: true };
+    let first_sync_at = if prev.seeded { prev.first_sync_at } else { Some(now) };
+    let mut next = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at };
     let mut seen = HashSet::new();
     for (id, value) in items {
         if !seen.insert(id.clone()) {
@@ -98,20 +131,59 @@ pub fn publish_ttl(
             None => unseen,
         };
         doc.items.insert(id.clone(), Record { modified, deleted: false, value: Some(value.clone()) });
-        next.items.insert(id.clone(), Tracked { hash: h, modified, deleted: false });
+        next.items.insert(id.clone(), Tracked { hash: h, modified, deleted: false, remote: false });
     }
     for (id, t) in &prev.items {
         if seen.contains(id) {
             continue;
         }
+        if t.deleted && t.remote && !opts.relay_tombstones {
+            continue; // someone else's deletion: their document carries it
+        }
         let modified = if t.deleted { t.modified } else { now };
-        if ttl.is_some_and(|ttl| now - modified > ttl) {
+        if opts.ttl.is_some_and(|ttl| now - modified > ttl) {
             continue;
         }
         doc.items.insert(id.clone(), Record { modified, deleted: true, value: None });
-        next.items.insert(id.clone(), Tracked { hash: t.hash.clone(), modified, deleted: true });
+        next.items.insert(id.clone(), Tracked { hash: t.hash.clone(), modified, deleted: true, remote: t.remote });
+    }
+    if !prev.seeded {
+        for id in &opts.baseline_deleted {
+            if seen.contains(id) || prev.items.contains_key(id) {
+                continue;
+            }
+            doc.items.insert(id.clone(), Record { modified: opts.first_stamp, deleted: true, value: None });
+            next.items.insert(id.clone(), Tracked { hash: String::new(), modified: opts.first_stamp, deleted: true, remote: false });
+        }
+    }
+    if let Some(max) = opts.max_tombstones {
+        let mut dead: Vec<(i64, String)> = doc.items.iter().filter(|(_, r)| r.deleted).map(|(id, r)| (r.modified, id.clone())).collect();
+        if dead.len() > max {
+            dead.sort();
+            for (_, id) in dead.into_iter().take(doc.items.values().filter(|r| r.deleted).count() - max) {
+                doc.items.remove(&id);
+                next.items.remove(&id);
+            }
+        }
     }
     (doc, next)
+}
+
+/// First-sync rule, second half. A record this Mac published at 0 (the baseline of its first sync)
+/// and that survived the merge (it is the winner, or no other Mac has the item) is moved once to the
+/// time of this Mac's first sync, not to now. From then on it beats the 0 baseline of every Mac that
+/// joins later, whatever the device ids, and still loses to any genuine edit made after that time.
+/// Returns true when something changed. Call it after `merge` on every run but the first.
+pub fn restamp_baseline(tracker: &mut Tracker) -> bool {
+    let Some(first) = tracker.first_sync_at.filter(|f| *f > 0) else { return false };
+    let mut changed = false;
+    for t in tracker.items.values_mut() {
+        if t.modified == 0 {
+            t.modified = first;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// The winning record for every id across all documents: newest `modified`, then the greater device
@@ -156,7 +228,7 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
                 if local_is_newer(tracker, id, value, rec.modified, dev, own) {
                     out.push((id.clone(), value.clone()));
                 } else {
-                    next.items.insert(id.clone(), Tracked { hash: hash(value), modified: rec.modified, deleted: true });
+                    next.items.insert(id.clone(), Tracked { hash: hash(value), modified: rec.modified, deleted: true, remote: true });
                 }
             }
             Some((dev, rec)) => {
@@ -164,7 +236,7 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
                 if local_is_newer(tracker, id, value, rec.modified, dev, own) || hash(&theirs) == hash(value) {
                     out.push((id.clone(), value.clone()));
                 } else {
-                    next.items.insert(id.clone(), Tracked { hash: hash(&theirs), modified: rec.modified, deleted: false });
+                    next.items.insert(id.clone(), Tracked { hash: hash(&theirs), modified: rec.modified, deleted: false, remote: false });
                     out.push((id.clone(), theirs));
                 }
             }
@@ -182,7 +254,7 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
             }
         }
         let v = rec.value.clone().unwrap_or(Value::Null);
-        next.items.insert(id.clone(), Tracked { hash: hash(&v), modified: rec.modified, deleted: false });
+        next.items.insert(id.clone(), Tracked { hash: hash(&v), modified: rec.modified, deleted: false, remote: false });
         out.push((id.clone(), v));
     }
     (out, next)
@@ -267,6 +339,32 @@ mod tests {
     }
 
     #[test]
+    fn trackers_written_before_the_first_sync_time_and_the_remote_flag_still_load() {
+        let old = r#"{"items":{"1":{"hash":"h","modified":5}},"seeded":true}"#;
+        let t: Tracker = serde_json::from_str(old).unwrap();
+        assert_eq!(t.first_sync_at, None);
+        assert!(!t.items["1"].remote);
+    }
+
+    #[test]
+    fn restamping_moves_baseline_records_once_and_a_received_deletion_is_not_republished_when_relaying_is_off() {
+        let opts =
+            |relay| PublishOpts { first_stamp: 0, ttl: None, baseline_deleted: vec![], relay_tombstones: relay, max_tombstones: None };
+        let (_, mut t) = publish_opts("a", &items(&[("1", json!("x")), ("2", json!("y"))]), &Tracker::default(), 500, &opts(true));
+        assert_eq!((t.items["1"].modified, t.first_sync_at), (0, Some(500)));
+        assert!(restamp_baseline(&mut t));
+        assert_eq!(t.items["1"].modified, 500);
+        assert!(!restamp_baseline(&mut t), "once");
+        // a deletion learned from another Mac
+        let theirs =
+            DeviceDoc { device: "b".into(), items: [("2".to_string(), Record { modified: 900, deleted: true, value: None })].into() };
+        let (merged, t2) = merge_as("a", &items(&[("1", json!("x")), ("2", json!("y"))]), &[theirs], &t);
+        assert_eq!(merged, items(&[("1", json!("x"))]));
+        assert!(publish_opts("a", &merged, &t2, 1_000, &opts(true)).0.items.contains_key("2"));
+        assert!(!publish_opts("a", &merged, &t2, 1_000, &opts(false)).0.items.contains_key("2"));
+    }
+
+    #[test]
     fn tombstones_can_be_kept_without_expiry() {
         let (_, t1) = publish_ttl("a", &items(&[("1", json!("x"))]), &Tracker::default(), 0, 0, None);
         let (doc, _) = publish_ttl("a", &[], &t1, 10, 10, None);
@@ -279,9 +377,10 @@ mod tests {
             items: doc
                 .items
                 .iter()
-                .map(|(k, r)| (k.clone(), Tracked { hash: String::new(), modified: r.modified, deleted: r.deleted }))
+                .map(|(k, r)| (k.clone(), Tracked { hash: String::new(), modified: r.modified, deleted: r.deleted, remote: false }))
                 .collect(),
             seeded: true,
+            first_sync_at: None,
         }
     }
 
