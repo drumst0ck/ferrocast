@@ -1,5 +1,6 @@
 ---
 import GuidePage from '../../components/seo/GuidePage.astro';
 import { page } from '../../lib/seo/clipboard-es';
+import { page as en } from '../../lib/seo/clipboard-manager';
 ---
-<GuidePage t={page} />
+<GuidePage t={page} other={en} />

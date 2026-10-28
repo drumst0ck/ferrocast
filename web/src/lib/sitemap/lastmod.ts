@@ -113,6 +113,9 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/es/historial-portapapeles-mac') {
       return fileLastmod('src/lib/seo/clipboard-es.ts', 'src/components/seo/GuidePage.astro');
     }
+    if (path === '/clipboard-manager-mac') {
+      return fileLastmod('src/lib/seo/clipboard-manager.ts', 'src/components/seo/GuidePage.astro');
+    }
     if (path === '/free-file-converter-mac') {
       return fileLastmod('src/lib/seo/file-converter.ts', 'src/components/seo/GuidePage.astro', 'src/data/conversions.json');
     }

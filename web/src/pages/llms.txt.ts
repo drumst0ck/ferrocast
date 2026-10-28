@@ -21,6 +21,7 @@ export async function GET() {
     `- [Key facts and FAQ](${SITE}/facts/): plain facts for citations`,
     `- [Datos clave](${SITE}/es/facts/): los mismos datos en español`,
     `- [Raycast alternative](${SITE}/raycast-alternative/): what you keep, what is missing, and a sourced Ferrocast vs Raycast vs Alfred table`,
+    `- [Free clipboard manager for Mac](${SITE}/clipboard-manager-mac/): history that skips password-manager copies, compared with Spotlight in macOS Tahoe, Maccy and Paste`,
     `- [Historial del portapapeles que ignora contraseñas](${SITE}/es/historial-portapapeles-mac/): portapapeles de Ferrocast frente al de Spotlight en macOS Tahoe`,
     `- [Mac window management](${SITE}/mac-window-management/): the 40 window commands, compared with macOS tiling and Rectangle`,
     `- [Free file converter for Mac](${SITE}/free-file-converter-mac/): local conversion without uploads, compared with Permute and CloudConvert`,
