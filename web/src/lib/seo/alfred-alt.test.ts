@@ -11,7 +11,8 @@ describe('Alfred alternative copy', () => {
   it('has a cell for every column and keeps Ferrocast gaps in the table', () => {
     for (const row of page.limits.rows) expect(row).toHaveLength(page.limits.cols.length);
     const ferrocast = Object.fromEntries(page.limits.rows.map((r) => [r[0], r[2]]));
-    expect(ferrocast['Settings sync between Macs']).toMatch(/^No sync/);
+    expect(ferrocast['Settings sync between Macs']).toMatch(/iCloud Drive/);
+    expect(ferrocast['Settings sync between Macs']).not.toMatch(/^No sync/);
     expect(ferrocast['Automation']).toMatch(/no visual workflow editor/);
   });
 

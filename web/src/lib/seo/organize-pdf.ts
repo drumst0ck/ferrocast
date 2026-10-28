@@ -4,7 +4,7 @@
  * (PlanOp labels, on master but not in release v0.3.0), crates/macos/src/pdf.rs (organize writes a new
  * file, refuses a locked PDF), crates/app/src/draw.rs (keys and drag). Preview facts from Apple Support,
  * checked 28 October 2026. Browser organizers are omitted: their price and upload claims were not opened.
- * The mouse buttons exist on master and are not in v0.3.0, so the page says they are coming in the next version.
+ * The mouse buttons shipped in v0.4.0 (PlanOp labels in crates/core/src/pdfplan.rs).
  */
 
 export const CHECKED = '2026-10-28';
@@ -27,7 +27,7 @@ export const page = {
   lead: "Ferrocast's PDF organizer shows a PDF's pages as thumbnails. Reorder them by dragging, rotate, duplicate or remove a page with one key, then press ↵ to save a new copy next to the original. It runs on your Mac and uploads nothing.",
   can: {
     h: 'What you can do',
-    intro: 'The current release is keyboard and drag. One page is selected at a time; the keys below act on that page.',
+    intro: 'One page is selected at a time. The keys below act on that page, and each of those actions also has a button.',
     cols: ['Key', 'Action'],
     rows: [
       ['Drag a thumbnail', 'Reorder pages'],
@@ -39,7 +39,7 @@ export const page = {
       ['`↵`', 'Save a new copy next to the original'],
     ],
     buttons:
-      'Buttons for each action (◀ Move, Move ▶, ↺ Rotate, ↻ Rotate, Duplicate, Remove) are coming in the next version. Today: keyboard and drag.',
+      'Buttons for each action (◀ Move, Move ▶, ↺ Rotate, ↻ Rotate, Duplicate and Remove) are in this version. The keyboard shortcuts still do the same thing, and you can still drag a thumbnail to reorder.',
   },
   steps: {
     h: 'How to organize a PDF on Mac',
@@ -48,7 +48,7 @@ export const page = {
       ['Install Ferrocast', 'Download the DMG or install it with Homebrew. Organizing a PDF does not need Ghostscript or any other optional tool.'],
       ['Open the PDF', 'Drag the PDF from Finder, or select it in the launcher.'],
       ['Open Organize PDF pages', 'Press ⇧⌘O on the PDF result. Or tap ⌘ while dragging to open the Tools wheel and choose Organize PDF pages. The same window is in the Convert view’s editors.'],
-      ['Edit the pages', 'Drag thumbnails, or select a page and use the keys in the table above.'],
+      ['Edit the pages', 'Drag thumbnails, or select a page and use the keys or the buttons (◀ Move, Move ▶, ↺ Rotate, ↻ Rotate, Duplicate, Remove).'],
       ['Press ↵', 'Ferrocast writes a new file next to the original, named with “organized” before .pdf, and never overwrites the original. If nothing changed, it does not write a file.'],
     ] as [string, string][],
   },

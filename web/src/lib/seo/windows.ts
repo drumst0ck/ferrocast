@@ -63,7 +63,8 @@ export const page: GuideCopy = {
       h: 'Limits',
       list: [
         'Needs the Accessibility permission.',
-        'No snap areas: windows are moved with commands, not by dragging them to an edge (macOS does that on its own).',
+        'No snap areas: dragging a window to an edge does not tile it (macOS does that on its own).',
+        'Automatic window tiling is included and off by default (Settings → Advanced → Window tiling). A new window is placed on its display in one of four layouts. It pauses while Stage Manager is on. The on/off switch and each display’s layout stay on that Mac. See the [tiling reference](/docs/launcher/tiling/).',
         'Apple Silicon Macs only.',
       ],
     },

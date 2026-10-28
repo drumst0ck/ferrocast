@@ -11,7 +11,8 @@ describe('Ferrocast vs Raycast copy', () => {
   it('has four cells in every table row and keeps Ferrocast gaps in the table', () => {
     for (const row of page.limits.rows) expect(row).toHaveLength(page.limits.cols.length);
     const ferrocast = Object.fromEntries(page.limits.rows.map((r) => [r[0], r[3]]));
-    expect(ferrocast['Cloud Sync']).toBe('No');
+    expect(ferrocast['Cloud Sync']).toMatch(/iCloud Drive/);
+    expect(ferrocast['Cloud Sync']).not.toMatch(/^No$/);
     expect(ferrocast['AI with screen or selection context']).toBe('No');
     expect(ferrocast['Extensions']).toMatch(/no store/);
   });
