@@ -37,7 +37,7 @@ export const page: GuideCopy = {
     rows: [
       ['Cómo se usa', 'Botón verde, menú Ventana, atajos con Fn-Control', 'Atajos de teclado o zonas de anclaje al arrastrar', 'Arrastrar a los bordes, atajos personalizables o menú de la barra', 'Escribes el comando en el lanzador o le das un atajo'],
       ['Disposiciones', 'Mitades, cuartos, rellenar, centrar, volver al tamaño anterior y colocaciones de varias ventanas; los tercios y sextos no aparecen en su lista', 'No comparado aquí', 'Pantalla completa, mitades, cuartos y tercios; hasta seis pantallas externas', 'Mitades, tercios, cuartos, sextos, maximizar, centrar, desplazar y pantallas'],
-      ['Precio', 'Incluido en macOS', 'Gratis y de código abierto según su web; Rectangle Pro es de pago, con 10 días de prueba', 'No consta en su web (se ofrece en la Mac App Store)', 'Gratis (MIT)'],
+      ['Precio', 'Incluido en macOS', 'Descarga gratis; Rectangle Pro es de pago, con 10 días de prueba', 'No consta en su web (se ofrece en la Mac App Store)', 'Gratis (MIT)'],
       ['Requisitos', 'macOS', 'macOS 14 o posterior según su web', 'No consta en su web', 'Mac con Apple Silicon'],
       ['Además', '—', 'Gestión de ventanas', 'Gestión de ventanas', 'Lanzador, portapapeles, snippets, conversión de archivos, grabación de pantalla, chat con IA'],
     ],
