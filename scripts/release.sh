@@ -36,6 +36,8 @@ awk -v v="$version" '!done && /^version = "/ { print "version = \"" v "\""; done
 # keep a fresh empty Unreleased section above the new version heading
 awk -v v="$version" -v d="$today" '/^## \[Unreleased\]/ && !done { print; print ""; print "## [" v "] - " d; done = 1; next } { print }' CHANGELOG.md > CHANGELOG.md.new && mv CHANGELOG.md.new CHANGELOG.md
 if [ -f Cargo.lock ]; then cargo update --workspace --offline >/dev/null; fi
+# the website reads web/CHANGELOG.md (changelog pages, sitemap, changelog:push): keep it identical
+if [ -d web ]; then cp CHANGELOG.md web/CHANGELOG.md; git add web/CHANGELOG.md; fi
 git add Cargo.toml CHANGELOG.md
 [ -f Cargo.lock ] && git add Cargo.lock
 git commit -qm "release: $tag"
