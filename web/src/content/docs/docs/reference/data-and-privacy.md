@@ -1,6 +1,6 @@
 ---
 title: "Data and privacy"
-description: "Where Ferrocast keeps its data, what is stored unencrypted, which items live in the Keychain, and what leaves your Mac: nothing unless you ask it to, for example by turning on iCloud sync."
+description: "Where Ferrocast keeps its data, what is stored unencrypted, what lives in the Keychain, and what leaves your Mac: nothing unless you turn on iCloud sync."
 sidebar:
   order: 1
 ---

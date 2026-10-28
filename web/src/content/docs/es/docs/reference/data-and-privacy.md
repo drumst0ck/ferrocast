@@ -1,6 +1,6 @@
 ---
 title: "Datos y privacidad"
-description: "Dónde guarda Ferrocast sus datos, qué se guarda sin cifrar, qué vive en el Keychain y qué sale de tu Mac: nada, salvo que tú lo pidas, por ejemplo al activar la sincronización con iCloud."
+description: "Dónde guarda Ferrocast sus datos, qué se guarda sin cifrar, qué va al Llavero y qué sale de tu Mac: nada, salvo que actives la sincronización con iCloud."
 sidebar:
   order: 1
 ---

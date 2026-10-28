@@ -1,6 +1,6 @@
 ---
 title: "Sincronizar con iCloud"
-description: "Mantén los ajustes, snippets, quicklinks, notas, historial del portapapeles y chats de Ask AI de Ferrocast iguales entre tus Mac a través de iCloud Drive. Desactivado por defecto."
+description: "Sincroniza ajustes, snippets, quicklinks, notas, portapapeles y chats entre tus Mac con iCloud Drive. Desactivado por defecto; se fusiona por elemento."
 sidebar:
   order: 20
 ---
