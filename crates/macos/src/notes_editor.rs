@@ -2967,8 +2967,7 @@ mod tests {
 
     #[test]
     fn an_image_span_is_one_storage_unit_and_is_never_split_by_its_alt_text() {
-        let mut style = Style::default();
-        style.image = Some("attachments/a.png".into());
+        let style = Style { image: Some("attachments/a.png".into()), ..Style::default() };
         let img = Span { text: "image".into(), style };
         let text = |t: &str| Span { text: t.into(), style: Style::default() };
         assert_eq!(span_units(&img), 1);
@@ -2977,7 +2976,7 @@ mod tests {
         assert_eq!((l, r), (vec![text("ab"), img.clone()], vec![text("cd")]));
         let (l, r) = split_spans(&spans, 2);
         assert_eq!((l, r), (vec![text("ab")], vec![img.clone(), text("cd")]));
-        let (l, r) = split_spans(&[img.clone()], 1);
+        let (l, r) = split_spans(std::slice::from_ref(&img), 1);
         assert_eq!((l, r), (vec![img], vec![]));
     }
 
