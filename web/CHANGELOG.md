@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Images in Notes**: paste a screenshot or image, drag image files onto a note, or choose Insert Image… (⇧⌘I or the right-click menu). PNG, JPEG, GIF, HEIC and WebP up to 20 MB are copied into an `attachments` folder in the data folder (named by content, so a repeated image is stored once), the note gets a standard relative Markdown link on its own line and the picture is drawn in the note up to 480 points wide. A bigger file or one that is not an image is refused with a message. Files no note links any more are deleted 7 days after their link was removed, so undo and Recently Deleted still find them. With sync on, note images travel through iCloud Drive as separate files: each Mac uploads only its own, a missing one is downloaded when a synced note links it, and an image is never removed while any Mac's notes link it. Notes in your Obsidian vault are not edited in this window, so nothing is copied into the vault. (docs: /docs/launcher/notes/) #notes
+
 ## [0.4.0] - 2026-10-28
 
 ### Added

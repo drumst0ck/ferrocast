@@ -42,6 +42,8 @@ pub struct SyncCtl {
     restored: BTreeSet<&'static str>,
     /// When a notes merge that waited for typing to stop may run again.
     notes_retry: Option<Instant>,
+    /// Last time unlinked note images were looked for.
+    last_gc: Option<Instant>,
 }
 
 /// Result of one background run.
@@ -148,6 +150,47 @@ impl App {
         }
     }
 
+    /// The open note was saved: images it links are linked, so their unlink countdown (see
+    /// `attachments::cleanup_dir`) starts over the next time they are unlinked. Cheap: it returns
+    /// at once unless a countdown is recorded.
+    pub(crate) fn forget_unlinked_images(&self) {
+        let Some(text) = self.notes_ctl.current.as_ref().and_then(|id| self.notes.iter().find(|n| &n.id == id)).map(|n| n.text.as_str())
+        else {
+            return;
+        };
+        let linked = ferrocast_core::attachments::referenced([text]);
+        if !linked.is_empty() {
+            ferrocast_core::attachments::forget_unlinked(&self.store.root, &linked);
+        }
+    }
+
+    /// Remove note images nothing links any more (older than a week), at most once an hour and off
+    /// the main thread. With sync on, every Mac's published notes count too (`gc_attachments`).
+    pub(crate) fn attachments_gc(&mut self) {
+        if self.sync.last_gc.is_some_and(|t| t.elapsed() < Duration::from_secs(3600)) {
+            return;
+        }
+        self.sync.last_gc = Some(Instant::now());
+        // A pending recovery marker (a data file was set aside) means the notes in memory may be
+        // incomplete. Only turning sync on again clears it, so with sync off nothing is cleaned up
+        // until then: images are kept, never lost.
+        if sync_io::needs_recovery(&self.store.root, "notes") {
+            return;
+        }
+        let (notes, root, sync_on) = (self.notes.clone(), self.store.root.clone(), self.sync_on());
+        std::thread::spawn(move || {
+            let dir = if sync_on {
+                match sync_io::resolve_dir() {
+                    Ok(d) => Some(d),
+                    Err(_) => return,
+                }
+            } else {
+                None
+            };
+            sync_io::gc_attachments(&root, &notes, dir.as_deref(), services::now_secs());
+        });
+    }
+
     /// Pull and merge every domain (timer, opening the launcher, "Sync now", turning sync on).
     pub(crate) fn sync_all(&mut self) {
         if !self.sync_on() {
@@ -159,6 +202,7 @@ impl App {
 
     /// When the launcher opens: pull unless a run just started.
     pub(crate) fn sync_on_show(&mut self) {
+        self.attachments_gc();
         if self.sync_on() && self.sync.last_start.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
             self.sync_all();
         }
@@ -194,7 +238,8 @@ impl App {
             let done = match sync_io::resolve_dir() {
                 Err(e) => SyncDone { results: vec![], unavailable: Some(e.message()) },
                 Ok(dir) => {
-                    let mut io = SyncIo::new(dir, sync_io::device_id(&root), Store::new(&root).images_dir());
+                    let mut io = SyncIo::new(dir, sync_io::device_id(&root), Store::new(&root).images_dir())
+                        .with_attachments(root.join(ferrocast_core::attachments::DIR));
                     io.enabled = flag;
                     flush_docs(&io, docs, &root);
                     let now = now_ms();
@@ -228,6 +273,7 @@ impl App {
             return;
         }
         self.sync.error = None;
+        self.attachments_gc();
         let root = self.store.root.clone();
         let mut downloading = 0;
         for (domain, snapshot, result) in done.results {
@@ -244,6 +290,10 @@ impl App {
             }
             self.sync.peers = out.peers;
             downloading += out.downloading;
+            if domain == "notes" && out.attachments_added > 0 {
+                // images that were missing (placeholders in the editor) are here now
+                self.notes_do(|c, d| c.refresh_images(d));
+            }
             let had_merge = out.merged.is_some();
             let applied = match out.merged {
                 Some(merged) => self.sync_apply(domain, merged, out.tracker_merged.clone(), &snapshot),

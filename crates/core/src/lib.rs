@@ -4,6 +4,7 @@
 pub mod ai;
 pub mod annotate;
 pub mod apple_translate;
+pub mod attachments;
 pub mod calc;
 pub mod capture;
 pub mod chatgpt;

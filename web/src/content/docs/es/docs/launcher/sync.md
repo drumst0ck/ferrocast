@@ -1,6 +1,6 @@
 ---
 title: "Sincronizar con iCloud"
-description: "Sincroniza ajustes, snippets, quicklinks, notas, portapapeles, chats y temas propios entre tus Mac con iCloud Drive. Desactivado por defecto."
+description: "Sincroniza ajustes, snippets, quicklinks, notas con sus imágenes, portapapeles, chats y temas entre tus Mac con iCloud Drive."
 sidebar:
   order: 20
 ---
@@ -13,7 +13,7 @@ Actívala en Ajustes → Advanced → Sync with iCloud. La línea de estado bajo
 - Los **ajustes**, incluidos los atajos de teclado.
 - Los **snippets** y los **quicklinks**.
 - Los **temas propios**. Cada tema es un elemento, así que un tema que edites, renombres o borres llega a tus otros Mac. Si renombras el tema seleccionado en un Mac, los demás lo siguen teniendo seleccionado. Dos temas con el mismo nombre creados en Macs distintos se conservan los dos; renombra uno.
-- Las **notas**, incluidas las fijadas y las de Eliminadas recientemente.
+- Las **notas**, incluidas las fijadas y las de Eliminadas recientemente, y las imágenes que contienen (ver abajo).
 - El **historial del portapapeles**, con las imágenes de las entradas de imagen. Solo se comparte lo que Ferrocast grabó en un Mac. Las entradas de gestores de contraseñas nunca se graban, así que nunca se comparten. Se sigue aplicando tu ajuste de retención del historial.
 - Los **chats de Ask AI**. Ferrocast ahora guarda cada conversación para que pueda llegar a tus otros Mac.
 
@@ -24,6 +24,15 @@ Actívala en Ajustes → Advanced → Sync with iCloud. La línea de estado bajo
 - El propio interruptor de sincronización: lo activas por separado en cada Mac.
 - Los **permisos de macOS** (Accesibilidad, Grabación de pantalla, Monitorización de entrada, etc.). Pertenecen a cada Mac y Ferrocast no puede copiarlos. Concédelos de nuevo en cada Mac.
 - Las **claves de API** del llavero. Ferrocast está firmada ad hoc, lo que no permite el llavero de iCloud, así que introduce cada clave en cada Mac.
+
+## Imágenes de las notas
+
+Las imágenes de las notas viajan como archivos aparte, junto a los registros de las notas, en la misma carpeta `Ferrocast` de iCloud Drive.
+
+- Cada Mac escribe solo su propia carpeta, `devices/<id>/attachments/`, así que dos Mac nunca escriben el mismo archivo. Una imagen se sube una sola vez, desde el Mac que la tiene, y solo cuando una nota la enlaza. Un Mac que descargó una imagen no la vuelve a subir.
+- Cuando una nota sincronizada enlaza una imagen que este Mac no tiene, Ferrocast la copia de la carpeta del otro Mac, tras comprobar que el archivo está completo y es el que nombra la nota. Hasta que llega (iCloud puede estar descargándola) la nota muestra un marcador, el estado de la sincronización cuenta el archivo y la imagen aparece cuando ya está aquí.
+- Una imagen nunca se elimina de iCloud Drive mientras las notas de algún Mac la enlacen, y un Mac nunca elimina ninguna mientras las notas de otro Mac no se puedan leer. Una imagen que nada enlaza se elimina 7 días después de que desapareciera el último enlace.
+- Cada imagen pesa como máximo 20 MB. Al desactivar la sincronización se detiene todo el copiado; no se sube ni se elimina nada.
 
 ## Conflictos
 
