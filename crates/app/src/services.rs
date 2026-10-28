@@ -1320,6 +1320,29 @@ pub fn run_script(cmd: &ScriptCommand, args: Vec<String>, run: u64, bus: Bus) {
 }
 
 /// `notify` for text that is not Ferrocast's own (an extension's): shown as written.
+/// A language of the translate list ("English", "Chinese") as the interface language writes it,
+/// from macOS's own names; the name as stored when the language is unknown or the UI is English.
+/// `capitalize` is for lists and labels, off inside a sentence.
+pub fn language_label(name: &str, capitalize: bool) -> String {
+    use ferrocast_core::i18n::{language, Lang};
+    use ferrocast_core::translate::{apple_code, language_code};
+    let lang = language();
+    let Some(code) = language_code(name).filter(|_| lang != Lang::En) else { return name.to_string() };
+    // plain Chinese is just "Chinese"; a named script keeps it
+    let n = name.to_lowercase();
+    let tag = if code == "zh" && (n.contains("simplified") || n.contains("traditional")) {
+        apple_code(name).unwrap_or(code.into())
+    } else {
+        code.to_string()
+    };
+    let Some(out) = ferrocast_macos::apps::language_name_in(&tag, lang.code()) else { return name.to_string() };
+    if !capitalize {
+        return out;
+    }
+    let mut c = out.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or(out)
+}
+
 pub fn notify_verbatim(title: &str, msg: &str) {
     ferrocast_core::i18n::with_verbatim(|| notify(title, msg));
 }

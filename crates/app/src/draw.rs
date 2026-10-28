@@ -7641,7 +7641,7 @@ impl App {
                                     let frame = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 9)).show(ui, |ui| {
                                         ui.set_width(w - 28.0);
                                         ui.horizontal(|ui| {
-                                            ui.label(RichText::new(&lang).size(13.5).color(pal.text));
+                                            ui.label(RichText::new(services::language_label(&lang, true)).size(13.5).color(pal.text));
                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| status_chip(ui, pal, kind, state.chip()));
                                         });
                                     });

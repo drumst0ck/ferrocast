@@ -108,6 +108,18 @@ fn read_strings_file(path: &Path) -> Option<std::collections::HashMap<String, St
     Some(map)
 }
 
+/// The name of language `code` ("es", "zh-Hans") as macOS writes it in the interface language
+/// `locale` ("de", "pt-BR"), e.g. "Englisch". `None` when macOS only knows the code itself.
+pub fn language_name_in(code: &str, locale: &str) -> Option<String> {
+    use objc2::runtime::AnyObject;
+    use objc2::AnyThread;
+    use objc2_foundation::{NSLocale, NSLocaleIdentifier, NSString};
+    let loc = NSLocale::initWithLocaleIdentifier(NSLocale::alloc(), &NSString::from_str(locale));
+    let value = NSString::from_str(code);
+    let name = unsafe { loc.displayNameForKey_value(NSLocaleIdentifier, &*value as &AnyObject) }?.to_string();
+    (!name.is_empty() && name != code).then_some(name)
+}
+
 /// The user's preferred languages, most preferred first (e.g. ["es-ES", "en-US"]).
 pub fn preferred_languages() -> Vec<String> {
     objc2_foundation::NSLocale::preferredLanguages().iter().map(|s| s.to_string()).collect()
@@ -661,5 +673,16 @@ mod file_action_tests {
         assert_eq!(std::fs::read_to_string(&out[0]).unwrap(), "new");
         assert_eq!(terminal_dir(&dst.join("a.txt")), dst);
         assert_eq!(terminal_dir(&dst), dst);
+    }
+
+    #[test]
+    fn language_names_follow_the_requested_locale() {
+        let n = |c, l| super::language_name_in(c, l).unwrap_or_default().to_lowercase();
+        assert_eq!(n("en", "es"), "inglés");
+        assert_eq!(n("en", "de"), "englisch");
+        assert_eq!(n("ja", "fr"), "japonais");
+        assert_eq!(n("en", "en"), "english");
+        assert!(n("zh-Hans", "es").contains("chino"), "{}", n("zh-Hans", "es"));
+        assert!(super::language_name_in("xx-nope", "es").is_none());
     }
 }

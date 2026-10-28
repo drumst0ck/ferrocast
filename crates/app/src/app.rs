@@ -3049,7 +3049,12 @@ impl App {
         if kind == ferrocast_core::wheel::WheelKind::Translate {
             return ferrocast_core::translate::languages(&self.settings.translate_languages)
                 .into_iter()
-                .map(|l| WheelSeg { label: l.clone(), symbol: "sf:globe", needs: None, pick: WheelPick::Translate(l) })
+                .map(|l| WheelSeg {
+                    label: services::language_label(&l, true),
+                    symbol: "sf:globe",
+                    needs: None,
+                    pick: WheelPick::Translate(l),
+                })
                 .collect();
         }
         let Some(first) = files.first() else { return vec![] };
@@ -3215,7 +3220,7 @@ impl App {
                     }
                     let working = trf(
                         "Translating to {lang} with {engine}…",
-                        &[("lang", &lang), ("engine", &ferrocast_core::translate::engine_label(&chosen))],
+                        &[("lang", &services::language_label(&lang, false)), ("engine", &ferrocast_core::translate::engine_label(&chosen))],
                     );
                     self.toast(fallback_note.unwrap_or(working));
                     (self.fx.translate_start)(&engine, text, lang, self.prev_pid, self.settings.translate_output, run, &self.bus);

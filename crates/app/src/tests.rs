@@ -8343,6 +8343,31 @@ fn apple_engine_translates_with_apple_when_it_is_available() {
 }
 
 #[test]
+fn language_names_in_the_translate_toast_and_wheel_follow_the_interface_language() {
+    use ferrocast_core::i18n::{with_language, Lang};
+    APPLE_AVAILABLE.with(|a| a.set(true));
+    for (lang, name) in [(Lang::Es, "inglés"), (Lang::De, "Englisch"), (Lang::Fr, "anglais")] {
+        with_language(lang, || {
+            let mut app = effect_app();
+            app.settings.translate_apple = true;
+            open_translate_wheel(&mut app);
+            let Some(View::Wheel { segs, .. }) = app.stack.last().cloned() else { panic!("a wheel") };
+            assert_eq!(segs[0].label.to_lowercase(), name.to_lowercase(), "{lang:?} wheel label");
+            assert!(matches!(&segs[0].pick, WheelPick::Translate(l) if l == "English"), "the pick keeps the stored name");
+            app.apply_wheel(Some(0));
+            let t = toast_text(&app);
+            assert!(t.contains(name) && !t.contains("English"), "{lang:?}: {t}");
+        });
+    }
+    // an unknown name is shown as typed; English is unchanged
+    assert_eq!(crate::services::language_label("Klingon", false), "Klingon");
+    with_language(Lang::Es, || assert_eq!(crate::services::language_label("Klingon", false), "Klingon"));
+    with_language(Lang::En, || assert_eq!(crate::services::language_label("Spanish", false), "Spanish"));
+    with_language(Lang::Es, || assert_eq!(crate::services::language_label("Spanish", true), "Español"));
+    with_language(Lang::De, || assert_eq!(crate::services::language_label("Chinese", false), "Chinesisch"));
+}
+
+#[test]
 fn apple_engine_falls_back_to_the_chat_provider_and_says_so_once_per_session() {
     APPLE_AVAILABLE.with(|a| a.set(false));
     let mut app = effect_app();
