@@ -16620,3 +16620,27 @@ fn the_open_preferences_form_is_scrolled_into_view_among_many_extensions() {
     let (top, clip): (f32, Rect) = app.ctx.data(|d| d.get_temp(Id::new("ext-form-top"))).expect("the form was drawn");
     assert!(top >= clip.min.y && top < clip.max.y, "form top {top} outside the visible pane {clip:?}");
 }
+
+#[test]
+fn saving_a_note_that_links_an_image_resets_its_unlink_countdown() {
+    use ferrocast_core::attachments;
+    let mut app = fixture();
+    let name = "0123456789abcdef0123456789abcdef.png";
+    let other = "fedcba9876543210fedcba9876543210.png";
+    let dir = app.store.root.join(attachments::DIR);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(attachments::UNLINKED_FILE), format!("{{\"{name}\":1,\"{other}\":2}}")).unwrap();
+    app.notes = vec![ferrocast_core::models::Note {
+        id: "a".into(),
+        text: format!("hi\n\n![p](attachments/{name})"),
+        created: 0,
+        modified: 0,
+        pinned_at: None,
+        deleted_at: None,
+    }];
+    app.notes_ctl.current = Some("a".into());
+    app.notes_do(|_, _| crate::notes_ctl::Out { save_notes: true, ..Default::default() });
+    let rec = std::fs::read_to_string(dir.join(attachments::UNLINKED_FILE)).unwrap();
+    assert!(!rec.contains(name), "linked again: {rec}");
+    assert!(rec.contains(other), "still unlinked: {rec}");
+}

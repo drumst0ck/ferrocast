@@ -150,6 +150,20 @@ impl App {
         }
     }
 
+    /// The open note was saved: images it links are linked, so their unlink countdown (see
+    /// `attachments::cleanup_dir`) starts over the next time they are unlinked. Cheap: it returns
+    /// at once unless a countdown is recorded.
+    pub(crate) fn forget_unlinked_images(&self) {
+        let Some(text) = self.notes_ctl.current.as_ref().and_then(|id| self.notes.iter().find(|n| &n.id == id)).map(|n| n.text.as_str())
+        else {
+            return;
+        };
+        let linked = ferrocast_core::attachments::referenced([text]);
+        if !linked.is_empty() {
+            ferrocast_core::attachments::forget_unlinked(&self.store.root, &linked);
+        }
+    }
+
     /// Remove note images nothing links any more (older than a week), at most once an hour and off
     /// the main thread. With sync on, every Mac's published notes count too (`gc_attachments`).
     pub(crate) fn attachments_gc(&mut self) {

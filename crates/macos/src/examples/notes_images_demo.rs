@@ -2,6 +2,9 @@
 //! `cargo run -p ferrocast-macos --example notes_images_demo [-- --out <dir>]`
 //! Opens the real Notes window, drives it programmatically and asserts the behavior. Exit code 0
 //! only when every assertion holds. Writes a snapshot of the note with an image.
+//!
+//! Careful: it overwrites the general clipboard (the paste checks clear it); only the plain text it
+//! held before is put back at the end, any other content (images, files, rich text) is lost.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};

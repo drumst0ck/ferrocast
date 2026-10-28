@@ -217,6 +217,25 @@ pub fn cleanup(root: &Path, referenced: &HashSet<String>, now_secs: i64, grace: 
     cleanup_dir(&dir, &dir.join(UNLINKED_FILE), referenced, now_secs, grace)
 }
 
+/// Forget when the files in `linked` were first seen unlinked (they are linked again). Call it
+/// whenever notes that link them are saved, so a later unlink starts a fresh 7 days even if no
+/// cleanup ran in between. Does nothing when no record exists or none of them is in it.
+pub fn forget_unlinked(root: &Path, linked: &HashSet<String>) {
+    let state = root.join(DIR).join(UNLINKED_FILE);
+    let Some(mut rec) = std::fs::read(&state).ok().and_then(|b| serde_json::from_slice::<std::collections::BTreeMap<String, i64>>(&b).ok())
+    else {
+        return;
+    };
+    let n = rec.len();
+    rec.retain(|name, _| !linked.contains(name));
+    if rec.len() != n {
+        if let Ok(bytes) = serde_json::to_vec(&rec) {
+            let tmp = state.with_extension("tmp");
+            let _ = std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &state));
+        }
+    }
+}
+
 /// Delete attachment files in `dir` that no note links, `grace` seconds after they were first seen
 /// unlinked (not after the file's own age: a picture linked for a year is kept a week after its
 /// link is removed, so an undo still finds it). `state` is a JSON file with that first time per
@@ -447,6 +466,26 @@ mod tests {
         assert_eq!(cleanup(&root, &refs(&[&keep]), now + 8 * DAY + 10, GRACE_SECS), 0);
         assert!(root.join(DIR).join(&back).exists());
         assert_eq!(cleanup(&root, &refs(&[&keep]), now + 16 * DAY, GRACE_SECS), 1);
+    }
+
+    #[test]
+    fn a_relink_and_a_new_unlink_between_two_cleanups_start_a_fresh_week() {
+        let root = tmp("relink");
+        let name = store(&root, PNG, Some("png")).unwrap().name;
+        set_age(&root.join(DIR).join(&name), 30);
+        let now = now_secs();
+        let none = HashSet::new();
+        let linked: HashSet<String> = [name.clone()].into_iter().collect();
+        assert_eq!(cleanup(&root, &none, now, GRACE_SECS), 0, "unlinked on day 0: the clock starts");
+        // undo relinks it and the note is saved; on day 6 it is unlinked again, no cleanup in between
+        forget_unlinked(&root, &linked);
+        assert_eq!(cleanup(&root, &none, now + 6 * DAY, GRACE_SECS), 0, "the second week starts now");
+        assert_eq!(cleanup(&root, &none, now + 7 * DAY, GRACE_SECS), 0, "one day after the second unlink: kept");
+        assert!(root.join(DIR).join(&name).exists());
+        assert_eq!(cleanup(&root, &none, now + 14 * DAY, GRACE_SECS), 1);
+        // forgetting names that were never recorded, or with no record at all, is harmless
+        forget_unlinked(&root, &linked);
+        forget_unlinked(&tmp("norecord"), &linked);
     }
 
     #[test]

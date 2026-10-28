@@ -2838,6 +2838,7 @@ impl App {
         self.sec_dirty = true;
         if out.save_notes {
             self.save_notes();
+            self.forget_unlinked_images();
         }
         if out.save_quicklinks {
             self.save_quicklinks();
