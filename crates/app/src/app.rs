@@ -954,6 +954,12 @@ fn other_panel_visible(mtm: objc2::MainThreadMarker) -> bool {
 }
 
 pub struct App {
+    /// iCloud sync state (see `sync_ctl`).
+    sync: SyncCtl,
+    /// Ask AI conversations (chats.json).
+    chats: Vec<Chat>,
+    /// Id of the chat the open Ask AI view writes to.
+    ai_chat: Option<String>,
     /// The update poller thread once started (never more than one).
     pub(crate) update_poller: Option<std::thread::JoinHandle<()>>,
     ctx: Context,
@@ -1188,10 +1194,19 @@ impl App {
             ignored_clipboard_count: Default::default(),
             visible: Default::default(),
             keywords: Default::default(),
+            clip_dirty: Default::default(),
         });
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_wheel(shared.clone(), bus.clone());
         let update_poller = services::start_update_poller(shared.clone(), bus.clone());
+        {
+            // the sync timer; every tick is ignored while sync is off
+            let b = bus.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(sync_ctl::SYNC_EVERY);
+                b.send(Msg::SyncTick);
+            });
+        }
         if let Some(exe) = instance::running_exe() {
             // leftovers of a previous self-update; file removal off the startup path
             let root = store.root.clone();
@@ -1236,6 +1251,9 @@ impl App {
         }
         let notes_ctl = crate::notes_ctl::NotesCtl::new(Box::new(crate::notes_ctl::MacFx::new(bus.clone(), shared.clone())));
         let mut app = App {
+            sync: SyncCtl::default(),
+            chats: store.load("chats.json"),
+            ai_chat: None,
             update_poller,
             icons: IconCache::new(store.images_dir()).with_bus(bus.clone()),
             ctx,
@@ -1512,6 +1530,8 @@ impl App {
     }
 
     fn save_settings(&mut self) {
+        // a run in progress stops writing as soon as sync is turned off
+        self.sync.flag.store(self.settings.sync_enabled, Ordering::SeqCst);
         let v = self.settings.clone();
         self.persist("settings.json", &v);
         *self.shared.settings.write().unwrap() = self.settings.clone();
@@ -1755,6 +1775,7 @@ impl App {
 
     fn show(&mut self) {
         self.sec_dirty = true;
+        self.sync_on_show();
         if self.hidden_at.elapsed() > Duration::from_secs(90) {
             self.stack = vec![View::Root];
             self.query.clear();
@@ -1849,6 +1870,7 @@ impl App {
             instance::log(&self.store.root, &format!("saving {name} failed: {e:#}"));
             self.toast(format!("Could not save {name}: {e}"));
         }
+        self.sync_mark(name);
     }
 
     // ------------------------------------------------------------ Notion (Settings → Integrations)
@@ -3623,7 +3645,14 @@ impl App {
                         }
                     }
                 }
+                Msg::SyncTick => {
+                    if self.sync_on() {
+                        self.sync_all();
+                    }
+                }
+                Msg::SyncDone(done) => self.sync_done(*done),
                 Msg::AiDone { run, error } => {
+                    let ok = error.is_none();
                     for v in self.stack.iter_mut() {
                         if let View::Ai { answer, busy, run: r, .. } = v {
                             if *r == run {
@@ -3636,6 +3665,9 @@ impl App {
                                 }
                             }
                         }
+                    }
+                    if ok {
+                        self.save_ai_chat();
                     }
                 }
                 Msg::ImportFile(path) => {
@@ -6156,14 +6188,17 @@ impl App {
 
     fn run_builtin(&mut self, b: Builtin) {
         match b {
-            Builtin::AskAi => self.push(View::Ai {
-                prompt: String::new(),
-                asked: String::new(),
-                answer: String::new(),
-                history: vec![],
-                busy: false,
-                run: 0,
-            }),
+            Builtin::AskAi => {
+                self.ai_chat = None;
+                self.push(View::Ai {
+                    prompt: String::new(),
+                    asked: String::new(),
+                    answer: String::new(),
+                    history: vec![],
+                    busy: false,
+                    run: 0,
+                })
+            }
             Builtin::Welcome => self.push(View::Welcome),
             Builtin::KeyboardShortcuts => self.push(View::Shortcuts),
             Builtin::About => self.push(View::About),
@@ -7584,7 +7619,10 @@ fn launcher_origin() -> Option<Pos2> {
 mod draw;
 #[path = "intro.rs"]
 mod intro;
+#[path = "sync_ctl.rs"]
+mod sync_ctl;
 #[path = "theme_ctl.rs"]
 mod theme_ctl;
+pub use sync_ctl::{SyncCtl, SyncDone};
 #[path = "tour.rs"]
 mod tour;

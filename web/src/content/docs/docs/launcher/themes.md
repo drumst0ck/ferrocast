@@ -1,6 +1,6 @@
 ---
 title: "Custom themes"
-description: "Make your own Ferrocast colours in Settings → General: accent, background, surface and text, with a live preview, contrast warnings, and export or import as a file."
+description: "Make your own Ferrocast colours in Settings: accent, background, surface and text, with a live preview, contrast warnings and export or import as a file."
 sidebar:
   order: 13
 ---

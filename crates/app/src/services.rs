@@ -209,6 +209,10 @@ pub enum Msg {
         result: Result<Vec<ferrocast_core::obsidian::Block>, ()>,
     },
     Wake,
+    /// Every 30 s: pull and merge when iCloud sync is on.
+    SyncTick,
+    /// A background sync run finished (see `sync_ctl`).
+    SyncDone(Box<crate::app::SyncDone>),
     /// A screenshot finished (see `capture_ctl`).
     Capture(crate::capture_ctl::Outcome),
     /// Worker thread: the helper listed what can be captured (or failed); the flow continues on the
@@ -467,6 +471,8 @@ pub struct Shared {
     pub ignored_clipboard_count: AtomicI64,
     pub visible: AtomicBool,
     pub keywords: expansion::Keywords,
+    /// The clipboard list changed since the sync last looked (set by the recorder thread).
+    pub clip_dirty: AtomicBool,
 }
 
 /// `just now`, `5 min ago`, `3 h ago`, `2 d ago`.
@@ -516,6 +522,7 @@ impl Shared {
     pub fn save_clipboard(&self) {
         let c = self.clipboard.lock().unwrap();
         let _ = self.store.save("clipboard.json", &*c);
+        self.clip_dirty.store(true, Ordering::Relaxed);
     }
 }
 
@@ -603,6 +610,7 @@ fn record(shared: &Shared, content: clipboard::ClipContent, source: Option<Strin
     });
     storage::prune_images(&shared.store.images_dir(), &list);
     let _ = shared.store.save("clipboard.json", &*list);
+    shared.clip_dirty.store(true, Ordering::Relaxed);
 }
 
 /// Samples mouse, modifiers and the drag pasteboard every 25 ms (no permission needed)

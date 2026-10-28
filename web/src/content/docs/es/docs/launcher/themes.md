@@ -1,6 +1,6 @@
 ---
 title: "Temas personalizados"
-description: "Crea tus propios colores de Ferrocast en Ajustes → General: acento, fondo, superficie y texto, con vista previa, avisos de contraste y exportación o importación como archivo."
+description: "Crea tus propios colores de Ferrocast en Ajustes: acento, fondo, superficie y texto, con vista previa, avisos de contraste y exportación a archivo."
 sidebar:
   order: 13
 ---

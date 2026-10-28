@@ -110,6 +110,8 @@ pub const ENTRIES: &[Entry] = &[
     e(9, "1 rem", &["px", "pixels", "css", "calculator", "em", "units"]),
     e(9, "Window gap", &["spacing", "margin", "snap", "tiling", "edges", "pt"]),
     e(9, "Data folder", &["storage", "files", "open", "settings.json", "backup", "location", "path"]),
+    e(9, "Sync with iCloud", &["icloud", "drive", "sync", "macs", "devices", "backup", "share", "cloud", "opt-in"]),
+    e(9, "Sync now", &["icloud", "sync", "status", "last sync", "other macs", "refresh", "merge"]),
 ];
 
 /// Lower-cases and strips the basic Latin accents, one char to one char (so a match position in

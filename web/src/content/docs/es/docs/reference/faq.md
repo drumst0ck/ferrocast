@@ -22,7 +22,7 @@ No, pero tienes que abrir Terminal una vez y pegar cuatro líneas. Homebrew hace
 Porque mover ventanas, pegar por ti y expandir snippets lo necesitan. La búsqueda, la calculadora y la IA funcionan sin él. Una pantalla de bienvenida te guía.
 
 ### ¿Mi historial del portapapeles es privado?
-Nunca sale de tu Mac. Está en un archivo JSON en Application Support, y lo que se copia desde un gestor de contraseñas como 1Password se ignora a propósito.
+Se queda en tu Mac salvo que actives [Sincronizar con iCloud](/es/docs/launcher/sync/) (desactivado por defecto), que lo copia a tu iCloud Drive para tus otros Macs. Está en un archivo JSON en Application Support, y lo que se copia desde un gestor de contraseñas como 1Password se ignora a propósito.
 
 ### ¿Qué falta hoy?
 Faltan una tienda de extensiones y la sincronización entre Macs.

@@ -47,6 +47,52 @@ impl Store {
         }
     }
 
+    /// Load a list whose items have an `id`. A file written before ids existed (items without one)
+    /// gets its ids assigned and is saved right away, so the ids are the same on every launch:
+    /// sync keys items by id and a new id per launch would look like a deletion plus an addition.
+    pub fn load_with_ids<T: DeserializeOwned + Serialize>(&self, name: &str) -> Vec<T> {
+        let list: Vec<T> = self.load(name);
+        let missing = std::fs::read(self.path(name))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Vec<serde_json::Value>>(&b).ok())
+            .is_some_and(|items| items.iter().any(|v| v.get("id").and_then(|i| i.as_str()).is_none_or(str::is_empty)));
+        if missing {
+            if let Err(e) = self.save(name, &list) {
+                eprintln!("ferrocast: could not save ids to {name}: {e}");
+            }
+        }
+        list
+    }
+
+    /// `load_with_ids` for snippets and quicklinks, then an item that is one of the built-in defaults
+    /// (same content) but has another id, from a version that saved the defaults with random ids,
+    /// takes the default's fixed id and the file is saved. Without it a Mac that starts fresh would
+    /// add the defaults again on top of the renamed ones when syncing.
+    fn load_default_ids<T: DeserializeOwned + Serialize + HasId>(
+        &self,
+        name: &str,
+        defaults: Vec<T>,
+        same: impl Fn(&T, &T) -> bool,
+    ) -> Vec<T> {
+        let mut list = self.load_with_ids::<T>(name);
+        let mut changed = false;
+        for d in &defaults {
+            if list.iter().any(|x| x.id() == d.id()) {
+                continue;
+            }
+            if let Some(x) = list.iter_mut().find(|x| same(x, d)) {
+                x.set_id(d.id());
+                changed = true;
+            }
+        }
+        if changed {
+            if let Err(e) = self.save(name, &list) {
+                eprintln!("ferrocast: could not save ids to {name}: {e}");
+            }
+        }
+        list
+    }
+
     /// Atomic write (temp file + rename).
     pub fn save<T: Serialize>(&self, name: &str, value: &T) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.root)?;
@@ -60,10 +106,14 @@ impl Store {
     pub fn load_all(&self) -> Data {
         let mut d = Data {
             settings: self.load("settings.json"),
-            snippets: self.load("snippets.json"),
-            quicklinks: self.load("quicklinks.json"),
-            notes: self.load("notes.json"),
-            clipboard: self.load("clipboard.json"),
+            snippets: self.load_default_ids("snippets.json", default_snippets(), |s: &Snippet, d: &Snippet| {
+                s.name == d.name && s.text == d.text && s.keyword == d.keyword
+            }),
+            quicklinks: self.load_default_ids("quicklinks.json", default_quicklinks(), |q: &Quicklink, d: &Quicklink| {
+                q.name == d.name && q.link == d.link
+            }),
+            notes: self.load_with_ids("notes.json"),
+            clipboard: self.load_with_ids("clipboard.json"),
             frecency: self.load::<Frecency>("frecency.json"),
         };
         if !self.path("quicklinks.json").exists() {
@@ -76,14 +126,46 @@ impl Store {
     }
 }
 
+/// Built-in items have fixed ids so every Mac (and every launch) means the same item.
+fn with_id<T>(mut item: T, set: impl FnOnce(&mut T, String), id: &str) -> T {
+    set(&mut item, id.to_string());
+    item
+}
+
+/// Items with an `id` field.
+pub trait HasId {
+    fn id(&self) -> &str;
+    fn set_id(&mut self, id: &str);
+}
+
+impl HasId for Snippet {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn set_id(&mut self, id: &str) {
+        self.id = id.to_string();
+    }
+}
+
+impl HasId for Quicklink {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn set_id(&mut self, id: &str) {
+        self.id = id.to_string();
+    }
+}
+
 pub fn default_quicklinks() -> Vec<Quicklink> {
+    let q = |id: &str, name: &str, link: &str| with_id(Quicklink::new(name, link), |q, id| q.id = id, id);
     vec![
-        Quicklink::new("Search Google", "https://www.google.com/search?q={argument name=\"query\"}"),
-        Quicklink::new("Search GitHub", "https://github.com/search?q={argument name=\"query\"}"),
-        Quicklink::new("Search YouTube", "https://www.youtube.com/results?search_query={argument name=\"query\"}"),
-        Quicklink::new("Search crates.io", "https://crates.io/search?q={argument name=\"crate\"}"),
-        Quicklink::new("Rust Docs", "https://docs.rs/{argument name=\"crate\"}"),
-        Quicklink::new(
+        q("default-quicklink-google", "Search Google", "https://www.google.com/search?q={argument name=\"query\"}"),
+        q("default-quicklink-github", "Search GitHub", "https://github.com/search?q={argument name=\"query\"}"),
+        q("default-quicklink-youtube", "Search YouTube", "https://www.youtube.com/results?search_query={argument name=\"query\"}"),
+        q("default-quicklink-crates", "Search crates.io", "https://crates.io/search?q={argument name=\"crate\"}"),
+        q("default-quicklink-docsrs", "Rust Docs", "https://docs.rs/{argument name=\"crate\"}"),
+        q(
+            "default-quicklink-translate",
             "Translate",
             "https://translate.google.com/?sl=auto&tl={argument name=\"to\" default=\"en\"}&text={argument name=\"text\"}",
         ),
@@ -91,10 +173,11 @@ pub fn default_quicklinks() -> Vec<Quicklink> {
 }
 
 pub fn default_snippets() -> Vec<Snippet> {
+    let s = |id: &str, name: &str, text: &str, kw: &str| with_id(Snippet::new(name, text, kw), |s, id| s.id = id, id);
     vec![
-        Snippet::new("Shrug", "¯\\_(ツ)_/¯", "!shrug"),
-        Snippet::new("Today's date", "{date format=\"yyyy-MM-dd\"}", "!today"),
-        Snippet::new("Console log", "console.log({cursor})", ";;log"),
+        s("default-snippet-shrug", "Shrug", "¯\\_(ツ)_/¯", "!shrug"),
+        s("default-snippet-today", "Today's date", "{date format=\"yyyy-MM-dd\"}", "!today"),
+        s("default-snippet-console-log", "Console log", "console.log({cursor})", ";;log"),
     ]
 }
 
