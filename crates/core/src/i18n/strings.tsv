@@ -1449,13 +1449,17 @@ at {time}   ·   start {start}   ·   end {end}   ·   clip {clip} s	en {time}  
 at {time} · PNG saves at original resolution	en {time} · el PNG se guarda en la resolución original	bei {time} · PNG wird in Originalauflösung gesichert	à {time} · le PNG est enregistré à la résolution d’origine	em {time} · o PNG é salvo na resolução original	{time} · PNGは元の解像度で保存されます	于 {time} · PNG 以原始分辨率存储
 blur	desenfoque	Weichzeichnung	flou	desfoque	ぼかし	模糊
 browses your notes	explora tus notas	durchsucht deine Notizen	parcourt vos notes	navega pelas suas notas	ノートを参照	浏览你的笔记
+camera	cámara	Kamera	caméra	câmera	カメラ	摄像头
 clear	borrar	löschen	effacer	limpar	クリア	清除
 click a shaded range to select it · overlapping ranges are merged	haz clic en un rango sombreado para seleccionarlo · los rangos que se solapan se fusionan	schattierten Bereich anklicken, um ihn auszuwählen · überlappende Bereiche werden zusammengeführt	cliquez sur une plage grisée pour la sélectionner · les plages qui se chevauchent sont fusionnées	clique em um intervalo sombreado para selecioná-lo · intervalos sobrepostos são mesclados	影のある範囲をクリックして選択 · 重なった範囲は結合されます	点按阴影范围可选择它 · 重叠的范围会合并
 click the bar to jump	haz clic en la barra para saltar	Leiste anklicken, um zu springen	cliquez sur la barre pour y aller	clique na barra para saltar	バーをクリックしてジャンプ	点按进度条跳转
 click the waveform to jump	haz clic en la forma de onda para saltar	Wellenform anklicken, um zu springen	cliquez sur la forme d’onde pour y aller	clique na forma de onda para saltar	波形をクリックしてジャンプ	点按波形跳转
+clipboard	portapapeles	Zwischenablage	presse-papiers	área de transferência	クリップボード	剪贴板
+color	color	Farbe	couleur	cor	カラー	颜色
 conversions	conversiones	Konvertierungen	conversions	conversões	種類の変換	种转换
 could not be measured · target {target} LUFS	no se pudo medir · objetivo {target} LUFS	konnte nicht gemessen werden · Ziel {target} LUFS	mesure impossible · cible {target} LUFS	não foi possível medir · alvo {target} LUFS	測定できませんでした · 目標 {target} LUFS	无法测量 · 目标 {target} LUFS
 could not read the file	no se pudo leer el archivo	Datei konnte nicht gelesen werden	impossible de lire le fichier	não foi possível ler o arquivo	ファイルを読み込めませんでした	无法读取文件
+dark	oscuro	dunkel	sombre	escuro	ダーク	深色
 database	base de datos	Datenbank	base de données	banco de dados	データベース	数据库
 default	predeterminado	Standard	par défaut	padrão	デフォルト	默认
 drag a slider · the preview is a reduced copy	mueve un control deslizante · la vista previa es una copia reducida	Regler ziehen · die Vorschau ist eine verkleinerte Kopie	faites glisser un curseur · l’aperçu est une copie réduite	arraste um controle deslizante · a pré-visualização é uma cópia reduzida	スライダをドラッグ · プレビューは縮小コピーです	拖动滑块 · 预览是缩小的副本
@@ -1476,33 +1480,59 @@ esc closes the editor	esc cierra el editor	esc schließt den Editor	esc ferme l�
 esc to cancel · include ⌘ ⌥ ⌃ or ⇧	esc para cancelar · incluye ⌘ ⌥ ⌃ o ⇧	esc zum Abbrechen · mit ⌘ ⌥ ⌃ oder ⇧	esc pour annuler · incluez ⌘ ⌥ ⌃ ou ⇧	esc para cancelar · inclua ⌘ ⌥ ⌃ ou ⇧	escでキャンセル · ⌘ ⌥ ⌃ ⇧を含めてください	esc 取消 · 请包含 ⌘ ⌥ ⌃ 或 ⇧
 ffmpeg is not installed (brew install ffmpeg)	ffmpeg no está instalado (brew install ffmpeg)	ffmpeg ist nicht installiert (brew install ffmpeg)	ffmpeg n’est pas installé (brew install ffmpeg)	O ffmpeg não está instalado (brew install ffmpeg)	ffmpegがインストールされていません(brew install ffmpeg)	未安装 ffmpeg(brew install ffmpeg)
 file tools	herramientas de archivo	Dateiwerkzeuge	outils de fichier	ferramentas de arquivo	個のファイルツール	个文件工具
+folder	carpeta	Ordner	dossier	pasta	フォルダ	文件夹
 gradient	degradado	Verlauf	dégradé	gradiente	グラデーション	渐变
+history	historial	Verlauf	historique	histórico	履歴	历史记录
+hotkey	atajo de teclado	Tastenkürzel	raccourci clavier	atalho de teclado	ホットキー	热键
 just now	ahora mismo	gerade eben	à l’instant	agora mesmo	たった今	刚刚
+keybinding	combinación de teclas	Tastenkombination	combinaison de touches	combinação de teclas	キーの組み合わせ	组合键
+language	idioma	Sprache	langue	idioma	言語	语言
+light	claro	hell	clair	claro	ライト	浅色
+login	inicio de sesión	Anmeldung	ouverture de session	login	ログイン	登录
 longest edge	lado más largo	längste Kante	plus grand côté	lado mais longo	最長辺	最长边
 measuring…	midiendo…	wird gemessen …	mesure en cours…	medindo…	測定中…	正在测量…
+menu bar	barra de menús	Menüleiste	barre des menus	barra de menus	メニューバー	菜单栏
 mic	micrófono	Mikrofon	micro	microfone	マイク	麦克风
+microphone	micrófono	Mikrofon	microphone	microfone	マイク	麦克风
+model	modelo	Modell	modèle	modelo	モデル	模型
 modifier key|Command	Comando	Befehl	Commande	Comando	command	Command
 modifier key|Control	Control	Control	Contrôle	Control	control	Control
 no sound	sin sonido	kein Ton	sans son	sem som	音声なし	无声音
 not yet	aún no	noch nicht	pas encore	ainda não	未実行	尚未
+notes	notas	Notizen	notes	notas	ノート	笔记
 now {now} LUFS → target {target} LUFS ({diff} dB)	ahora {now} LUFS → objetivo {target} LUFS ({diff} dB)	jetzt {now} LUFS → Ziel {target} LUFS ({diff} dB)	actuel {now} LUFS → cible {target} LUFS ({diff} dB)	agora {now} LUFS → alvo {target} LUFS ({diff} dB)	現在 {now} LUFS → 目標 {target} LUFS({diff} dB)	当前 {now} LUFS → 目标 {target} LUFS({diff} dB)
 off	desactivada	aus	désactivée	desativada	オフ	关
 open it from anywhere	ábrelo desde cualquier sitio	von überall öffnen	ouvrez-le de partout	abra de qualquer lugar	どこからでも開けます	随处可开
 optional	opcional	optional	facultatif	opcional	任意	可选
 overlay	superpuesta	Überlagerung	en incrustation	sobreposta	オーバーレイ	叠加
 page	página	Seite	page	página	ページ	页面
+password	contraseña	Passwort	mot de passe	senha	パスワード	密码
 pick Mono or Stereo, set the volumes	elige Mono o Estéreo y ajusta los volúmenes	Mono oder Stereo wählen, Lautstärken einstellen	choisissez Mono ou Stéréo, réglez les volumes	escolha Mono ou Estéreo e ajuste os volumes	モノラルかステレオを選び、音量を設定します	选择单声道或立体声,并设置音量
 pick a preset or drag the slider	elige un preajuste o arrastra el control deslizante	Voreinstellung wählen oder Regler ziehen	choisissez un préréglage ou faites glisser le curseur	escolha uma predefinição ou arraste o controle deslizante	プリセットを選ぶか、スライダをドラッグ	选择预设或拖动滑块
 pick a target or type one	elige un objetivo o escribe uno	Ziel wählen oder eingeben	choisissez une cible ou saisissez-en une	escolha um valor ou digite um	目標を選ぶか入力します	选择目标或自行输入
 pick the picture and the shape	elige la imagen y la forma	Bild und Form wählen	choisissez l’image et la forme	escolha a imagem e o formato	画像と形状を選びます	选择图片和形状
+privacy	privacidad	Datenschutz	confidentialité	privacidade	プライバシー	隐私
 reading size…	leyendo tamaño…	Größe wird gelesen …	lecture de la taille…	lendo tamanho…	サイズを読み込み中…	正在读取大小…
 reading the file…	leyendo el archivo…	Datei wird gelesen …	lecture du fichier…	lendo o arquivo…	ファイルを読み込み中…	正在读取文件…
 reset	restablecer	zurücksetzen	réinitialiser	redefinir	リセット	重置
 resizing may make it smaller	cambiar el tamaño puede reducirlo más	Größe ändern kann es kleiner machen	le redimensionnement peut le réduire davantage	redimensionar pode deixá-lo menor	サイズ変更でさらに小さくなる場合があります	调整大小可能会让它更小
+screen recording	grabación de pantalla	Bildschirmaufnahme	enregistrement d’écran	gravação de tela	画面収録	屏幕录制
+screenshot	captura de pantalla	Bildschirmfoto	capture d’écran	captura de tela	スクリーンショット	截图
+server	servidor	Server	serveur	servidor	サーバ	服务器
+shortcut	atajo	Kurzbefehl	raccourci	atalho	ショートカット	快捷键
 smaller	más pequeño	kleiner	plus petit	menor	小さく	更小
+snippet	fragmento	Textbaustein	extrait	trecho	スニペット	文本片段
 solid	sólido	einfarbig	uni	sólido	ベタ塗り	纯色
 split	dividida	geteilt	séparée	dividida	分割	分屏
+startup	inicio	Start	démarrage	inicialização	起動	启动
+sync	sincronizar	synchronisieren	synchroniser	sincronizar	同期	同步
 system	sistema	System	système	sistema	システム	系统
+theme	tema	Thema	thème	tema	テーマ	主题
+tiling	mosaico	Kacheln	mosaïque	mosaico	タイル表示	平铺
+token	token	Token	jeton	token	トークン	令牌
+translate	traducir	übersetzen	traduire	traduzir	翻訳	翻译
+update	actualización	Update	mise à jour	atualização	アップデート	更新
+window	ventana	Fenster	fenêtre	janela	ウインドウ	窗口
 {app} is no longer tiled	{app} ya no se organiza en mosaico	{app} wird nicht mehr gekachelt	{app} n’est plus en mosaïque	{app} não é mais organizado em mosaico	{app}はタイル表示されなくなりました	{app} 不再被平铺
 {file} is missing from the project folder. It is left out of the preview and the export.	Falta {file} en la carpeta del proyecto. Se omite de la vista previa y de la exportación.	{file} fehlt im Projektordner. Es wird in Vorschau und Export ausgelassen.	{file} est absent du dossier du projet. Il est exclu de l’aperçu et de l’export.	{file} não está na pasta do projeto. Ele fica de fora da pré-visualização e da exportação.	{file}がプロジェクトフォルダにありません。プレビューと書き出しから除外されます。	项目文件夹中缺少 {file}。它将不会出现在预览和导出中。
 {from} → {to} after the edits	{from} → {to} tras las ediciones	{from} → {to} nach den Änderungen	{from} → {to} après les modifications	{from} → {to} após as edições	編集後は{from} → {to}	编辑后:{from} → {to}

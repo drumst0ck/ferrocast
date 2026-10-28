@@ -180,7 +180,11 @@ fn rank_in(entry: &Entry, q: &str, terms: &[&str], lang: crate::i18n::Lang) -> O
     let english = normalize(entry.title);
     let shown = normalize(&crate::i18n::tr_in(entry.title, lang));
     let titles: Vec<&str> = if shown == english { vec![&english] } else { vec![&shown, &english] };
-    let keywords: Vec<String> = entry.keywords.iter().map(|k| normalize(k)).collect();
+    // keywords match in English and, where the table has them, in the interface language
+    let mut keywords: Vec<String> = entry.keywords.iter().map(|k| normalize(k)).collect();
+    if lang != crate::i18n::Lang::En {
+        keywords.extend(entry.keywords.iter().filter_map(|k| crate::i18n::lookup(k, lang)).map(normalize));
+    }
     if !terms.iter().all(|t| titles.iter().any(|ti| ti.contains(t)) || keywords.iter().any(|k| k.contains(t))) {
         return None;
     }
@@ -357,6 +361,22 @@ mod tests {
         assert_eq!(rank_in(launcher, "launcher", &terms("launcher"), Lang::De), Some(0), "English still works");
         assert_eq!(rank_in(launcher, &q, &qt, Lang::En), None, "a German query finds nothing in English");
         with_language(Lang::De, || assert!(search(&de).iter().any(|e| e.title == "Launcher hotkey")));
+    }
+
+    #[test]
+    fn keywords_match_in_the_interface_language_when_the_table_has_them() {
+        use crate::i18n::{with_language, Lang};
+        let launcher = ENTRIES.iter().find(|e| e.title == "Appearance").unwrap();
+        let es = crate::i18n::lookup("dark", Lang::Es).expect("a Spanish keyword");
+        let q = normalize(es);
+        let qt: Vec<&str> = q.split_whitespace().collect();
+        assert_eq!(rank_in(launcher, &q, &qt, Lang::Es), Some(2), "the Spanish keyword finds the row");
+        assert_eq!(rank_in(launcher, &q, &qt, Lang::En), None, "not in English");
+        assert_eq!(rank_in(launcher, "dark", &["dark"], Lang::Es), Some(2), "English keywords still work");
+        with_language(Lang::De, || {
+            let de = normalize(crate::i18n::lookup("dark", Lang::De).unwrap());
+            assert!(search(&de).iter().any(|e| e.title == "Appearance"));
+        });
     }
 
     #[test]
