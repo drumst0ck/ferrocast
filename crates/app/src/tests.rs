@@ -14921,3 +14921,27 @@ fn stop_tiling_this_app_adds_it_to_the_exclusions_once() {
     app.drain();
     assert_eq!(app.settings.tiling_excluded, vec!["com.example.app".to_string()]);
 }
+
+#[test]
+fn a_layout_event_reaches_the_worker_in_the_next_config_so_it_does_not_revert() {
+    let mut app = fixture();
+    app.settings.tiling_enabled = true;
+    app.sync_tiling();
+    let _ = FX_TILING_RX.with(|r| r.borrow().as_ref().unwrap().try_iter().count());
+    app.bus.send(Msg::Tiling(ferrocast_macos::tiling::Event::DisplayLayout { display: 1, layout: 3 }));
+    app.drain();
+    assert_eq!(app.settings.tiling_display_layouts.get("1"), Some(&3));
+    let last = FX_TILING_RX.with(|r| {
+        r.borrow()
+            .as_ref()
+            .unwrap()
+            .try_iter()
+            .filter_map(|c| match c {
+                ferrocast_macos::tiling::Cmd::Config(c) => Some(c),
+                _ => None,
+            })
+            .last()
+    });
+    let last = last.expect("a config was sent after the layout event");
+    assert_eq!(last.display_layouts.get(&1), Some(&3), "the config the worker gets next holds the new layout");
+}

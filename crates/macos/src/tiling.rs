@@ -240,6 +240,24 @@ fn truthy(v: core_foundation::base::CFType) -> bool {
     v.downcast::<CFNumber>().and_then(|n| n.to_i64()).is_some_and(|n| n != 0)
 }
 
+/// How a command finds its window.
+#[derive(Debug, PartialEq, Eq)]
+enum Pick {
+    /// The named window, at this index.
+    Index(usize),
+    /// A window was named but is gone: the command does nothing (it must not act on another app's window).
+    Gone,
+    /// No window named: the focused one.
+    Focused,
+}
+
+fn pick_window(window: Option<u64>, ids: &[u64]) -> Pick {
+    match window {
+        None => Pick::Focused,
+        Some(id) => ids.iter().position(|i| *i == id).map_or(Pick::Gone, Pick::Index),
+    }
+}
+
 /// Bound every Accessibility call on `el` so a hung app cannot stall the worker.
 fn bound(el: AXUIElementRef) {
     unsafe { AXUIElementSetMessagingTimeout(el, 0.25) };
@@ -663,15 +681,24 @@ impl Worker {
 
     /// The pointer-driven parts, between full polls: hover raise, the bar, and the overlay.
     fn fast(&mut self) {
+        if !self.fast_needed() {
+            // nothing needs the pointer: clear what is drawn, once, and do no work
+            if self.last_overlay != Overlay::default() {
+                self.last_overlay = Overlay::default();
+                self.quick = Default::default();
+                (self.emit)(Event::Overlay(Overlay::default()));
+            }
+            return;
+        }
         if !windows::accessibility_trusted(false) {
             return;
         }
-        if !left_button_down() {
+        let down = left_button_down();
+        if !down {
             self.hover_activate();
         }
         let now = self.clock.elapsed().as_secs_f64();
-        let p = if left_button_down() { None } else { pointer() };
-        let o = self.overlay(p, now);
+        let o = self.overlay(pointer(), down, now);
         if o != self.last_overlay {
             self.last_overlay = o.clone();
             (self.emit)(Event::Overlay(o));
@@ -684,7 +711,7 @@ impl Worker {
     }
 
     /// The border and the bar for this moment. Pure given the tracked state, the pointer and `now`.
-    fn overlay(&mut self, pointer: Option<(f64, f64)>, now: f64) -> Overlay {
+    fn overlay(&mut self, pointer: Option<(f64, f64)>, pressed: bool, now: f64) -> Overlay {
         let screens = self.screens.1.clone();
         let screen_of = |d: usize| screens.get(d).copied();
         let settling = self.focus_settle_until.is_some_and(|u| Instant::now() < u);
@@ -696,10 +723,13 @@ impl Worker {
             stage_manager: self.stage,
             focus_settling: settling,
             focused_tiled: self.focused_id.is_some_and(|id| self.tiled(id)),
+            dragging: pressed,
         };
         if t::border_visible(&inputs) {
             if let Some(w) = self.focused_id.and_then(|id| self.wins.iter().find(|w| w.id == id)) {
-                if let Some(g) = screen_of(w.display).and_then(|s| t::border_geometry(w.frame, s, t::BORDER_WIDTH)) {
+                // right after an arrange step the window is on its way: draw where it is going
+                let frame = if w.verify { w.applied.unwrap_or(w.frame) } else { w.frame };
+                if let Some(g) = screen_of(w.display).and_then(|s| t::border_geometry(frame, s, t::BORDER_WIDTH)) {
                     let f = g.frame;
                     out.border =
                         Some(BorderSpec { frame: [f.x, f.y, f.w, f.h], radius: g.radius, width: g.width, color: self.cfg.border_color });
@@ -709,7 +739,7 @@ impl Worker {
         let bar_on = self.cfg.quick_actions && self.active() && self.focus.is_none() && !settling;
         let wins: Vec<(u64, t::Rect, t::Rect)> =
             self.wins.iter().filter(|w| self.tiled(w.id)).filter_map(|w| screen_of(w.display).map(|s| (w.id, w.frame, s))).collect();
-        if let Some(id) = self.quick.step(bar_on, pointer, &wins, now) {
+        if let Some(id) = self.quick.step(bar_on, pointer, false, &wins, now) {
             if let Some((_, f, s)) = wins.iter().find(|w| w.0 == id) {
                 let b = t::bar_frame(*f, *s);
                 out.bar = Some(BarSpec { window: id, frame: [b.x, b.y, b.w, b.h] });
@@ -828,7 +858,17 @@ impl Worker {
 
     /// The window a command is for: the one named (quick-action bar) or else the focused one.
     fn resolve(&self, window: Option<u64>, pid: Option<i32>) -> Option<usize> {
-        window.and_then(|id| self.wins.iter().position(|w| w.id == id)).or_else(|| self.focused(pid))
+        let ids: Vec<u64> = self.wins.iter().map(|w| w.id).collect();
+        match pick_window(window, &ids) {
+            Pick::Index(i) => Some(i),
+            Pick::Gone => None,
+            Pick::Focused => self.focused(pid),
+        }
+    }
+
+    /// Does the pointer loop (hover raise, bar, border) have anything to do?
+    fn fast_needed(&self) -> bool {
+        (self.active() && (self.cfg.quick_actions || self.cfg.border)) || (self.cfg.hover_activate && !self.stage)
     }
 
     fn act(&mut self, action: t::Action, window: Option<u64>, pid: Option<i32>) {
@@ -989,43 +1029,93 @@ mod tests {
     }
 
     #[test]
+    fn a_command_for_a_window_that_is_gone_does_nothing_instead_of_acting_on_the_focused_one() {
+        assert_eq!(pick_window(Some(7), &[3, 7, 9]), Pick::Index(1));
+        assert_eq!(pick_window(Some(99), &[3, 7, 9]), Pick::Gone);
+        assert_eq!(pick_window(None, &[3, 7, 9]), Pick::Focused);
+        let w = overlay_worker();
+        assert_eq!(w.resolve(Some(99), Some(1)), None, "a vanished bar window: nothing");
+        assert_eq!(w.resolve(Some(2), Some(1)), Some(1));
+    }
+
+    #[test]
+    fn the_pointer_loop_runs_only_when_a_feature_needs_it() {
+        let mut w = overlay_worker();
+        assert!(w.fast_needed(), "tiling active with the border and the bar on");
+        w.cfg.paused = true;
+        assert!(!w.fast_needed(), "paused");
+        w.cfg.paused = false;
+        w.stage = true;
+        assert!(!w.fast_needed(), "Stage Manager");
+        w.stage = false;
+        w.cfg.border = false;
+        w.cfg.quick_actions = false;
+        assert!(!w.fast_needed(), "nothing that needs the pointer is on");
+        w.cfg.quick_actions = true;
+        assert!(w.fast_needed());
+        w.cfg.quick_actions = false;
+        w.cfg.border = true;
+        assert!(w.fast_needed());
+        // hover raise works without tiling, but not under Stage Manager
+        w.cfg.border = false;
+        w.cfg.enabled = false;
+        w.cfg.hover_activate = true;
+        assert!(w.fast_needed());
+        w.stage = true;
+        assert!(!w.fast_needed());
+    }
+
+    #[test]
+    fn the_border_hides_during_a_drag_and_uses_the_frame_just_applied() {
+        let mut w = overlay_worker();
+        assert!(w.overlay(None, false, 0.0).border.is_some());
+        assert_eq!(w.overlay(None, true, 0.0).border, None, "mouse down: dragging or resizing");
+        // just after an arrange step the window is still on its way: draw where it is going
+        w.wins[0].applied = Some(t::Rect::new(200.0, 150.0, 500.0, 300.0));
+        w.wins[0].verify = true;
+        assert_eq!(w.overlay(None, false, 0.0).border.unwrap().frame, [197.0, 147.0, 506.0, 306.0]);
+        w.wins[0].verify = false;
+        assert_eq!(w.overlay(None, false, 0.0).border.unwrap().frame, [97.0, 97.0, 606.0, 406.0], "settled: the real frame");
+    }
+
+    #[test]
     fn the_border_follows_the_focused_tiled_window_and_hides_when_it_should() {
         let mut w = overlay_worker();
-        let b = w.overlay(None, 0.0).border.expect("border");
+        let b = w.overlay(None, false, 0.0).border.expect("border");
         assert_eq!(b.frame, [97.0, 97.0, 606.0, 406.0]);
         assert_eq!(b.color, [10, 20, 30]);
         w.cfg.paused = true;
-        assert_eq!(w.overlay(None, 0.0).border, None, "paused");
+        assert_eq!(w.overlay(None, false, 0.0).border, None, "paused");
         w.cfg.paused = false;
         w.stage = true;
-        assert_eq!(w.overlay(None, 0.0).border, None, "Stage Manager");
+        assert_eq!(w.overlay(None, false, 0.0).border, None, "Stage Manager");
         w.stage = false;
         w.focus_settle_until = Some(Instant::now() + Duration::from_secs(5));
-        assert_eq!(w.overlay(None, 0.0).border, None, "focus mode transition");
+        assert_eq!(w.overlay(None, false, 0.0).border, None, "focus mode transition");
         w.focus_settle_until = None;
         w.floating.push(1);
-        assert_eq!(w.overlay(None, 0.0).border, None, "a floating window");
+        assert_eq!(w.overlay(None, false, 0.0).border, None, "a floating window");
         w.floating.clear();
         w.cfg.enabled = false;
-        assert_eq!(w.overlay(None, 0.0).border, None, "tiling off");
+        assert_eq!(w.overlay(None, false, 0.0).border, None, "tiling off");
         w.cfg.enabled = true;
         w.cfg.border = false;
-        assert_eq!(w.overlay(None, 0.0).border, None, "setting off");
+        assert_eq!(w.overlay(None, false, 0.0).border, None, "setting off");
     }
 
     #[test]
     fn the_bar_appears_over_the_window_the_pointer_rests_on_and_only_with_the_setting() {
         let mut w = overlay_worker();
         let near = Some((300.0, 110.0));
-        assert_eq!(w.overlay(near, 0.0).bar, None);
-        let bar = w.overlay(near, 0.5).bar.expect("bar after the dwell");
+        assert_eq!(w.overlay(near, false, 0.0).bar, None);
+        let bar = w.overlay(near, false, 0.5).bar.expect("bar after the dwell");
         assert_eq!(bar.window, 1);
         assert_eq!(bar.frame, [400.0 - t::BAR_W / 2.0 + 0.0, 100.0 - t::BAR_H - 6.0, t::BAR_W, t::BAR_H]);
         w.cfg.quick_actions = false;
-        assert_eq!(w.overlay(near, 1.0).bar, None, "setting off");
+        assert_eq!(w.overlay(near, false, 1.0).bar, None, "setting off");
         w.cfg.quick_actions = true;
         w.focus = Some(t::FocusSaved { frames: vec![], focused: 1 });
-        assert_eq!(w.overlay(near, 2.0).bar, None, "not in focus mode");
+        assert_eq!(w.overlay(near, false, 2.0).bar, None, "not in focus mode");
     }
 
     #[test]
@@ -1033,8 +1123,8 @@ mod tests {
         let mut w = overlay_worker();
         w.floating.push(2);
         let near2 = Some((900.0, 110.0));
-        w.overlay(near2, 0.0);
-        assert_eq!(w.overlay(near2, 0.5).bar, None);
+        w.overlay(near2, false, 0.0);
+        assert_eq!(w.overlay(near2, false, 0.5).bar, None);
     }
 
     #[test]

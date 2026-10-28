@@ -365,12 +365,14 @@ pub fn display_index(order: &[Vec<u64>], id: u64) -> Option<usize> {
 /// Put `id` at the end of display `to`'s list and take it out of every other list (and any
 /// earlier place in that one), so a window is never listed twice.
 pub fn move_to_display(order: &mut [Vec<u64>], id: u64, to: usize) {
+    if order.is_empty() {
+        return;
+    }
+    let to = to.min(order.len() - 1);
     for l in order.iter_mut() {
         l.retain(|i| *i != id);
     }
-    if let Some(l) = order.get_mut(to) {
-        l.push(id);
-    }
+    order[to].push(id);
 }
 
 /// A refusal counts only when the same one is seen on two consecutive reads: an app that resizes
@@ -677,11 +679,13 @@ pub struct BorderInputs {
     pub focus_settling: bool,
     /// The focused window is one of the tiled ones.
     pub focused_tiled: bool,
+    /// The mouse button is down (the user may be dragging or resizing the window).
+    pub dragging: bool,
 }
 
 /// Is the highlight border shown?
 pub fn border_visible(i: &BorderInputs) -> bool {
-    i.tiling_on && i.border_on && !i.paused && !i.stage_manager && !i.focus_settling && i.focused_tiled
+    i.tiling_on && i.border_on && !i.paused && !i.stage_manager && !i.focus_settling && i.focused_tiled && !i.dragging
 }
 
 pub const BAR_W: f64 = 196.0;
@@ -691,14 +695,21 @@ const BAR_GAP: f64 = 6.0;
 pub const EDGE_BAND: f64 = 28.0;
 pub const BAR_DWELL: f64 = 0.35;
 pub const BAR_GRACE: f64 = 0.5;
+/// Height of the title bar / tab strip the bar must never cover.
+pub const TOP_STRIP: f64 = 38.0;
 
-/// Frame of the quick-action bar for `window`: centred above its top edge, or just inside the
-/// top edge when there is no room above on `screen`; always inside `screen` horizontally.
+/// Frame of the quick-action bar for `window`: centred above its top edge when there is room on
+/// `screen`; otherwise a compact pill at the window's top-right corner, below the title bar / tab
+/// strip (`TOP_STRIP`) so it never covers tabs or window buttons. Always inside `screen`
+/// horizontally.
 pub fn bar_frame(window: Rect, screen: Rect) -> Rect {
-    let x = (window.center().0 - BAR_W / 2.0).min(screen.x + screen.w - BAR_W).max(screen.x);
     let above = window.y - BAR_H - BAR_GAP;
-    let y = if above >= screen.y { above } else { window.y + BAR_GAP };
-    Rect::new(x, y, BAR_W, BAR_H)
+    let (x, y) = if above >= screen.y {
+        (window.center().0 - BAR_W / 2.0, above)
+    } else {
+        ((window.x + window.w - BAR_W - BAR_GAP).max(window.x), window.y + TOP_STRIP + BAR_GAP)
+    };
+    Rect::new(x.min(screen.x + screen.w - BAR_W).max(screen.x), y, BAR_W, BAR_H)
 }
 
 /// Is `p` in the place that shows (and keeps) the bar of `window`: the top band or the bar itself.
@@ -717,10 +728,22 @@ pub struct QuickBar {
 
 impl QuickBar {
     /// `wins` are (id, frame, screen) of the tiled windows. Returns the window the bar is for.
-    pub fn step(&mut self, enabled: bool, pointer: Option<(f64, f64)>, wins: &[(u64, Rect, Rect)], now: f64) -> Option<u64> {
+    pub fn step(&mut self, enabled: bool, pointer: Option<(f64, f64)>, pressed: bool, wins: &[(u64, Rect, Rect)], now: f64) -> Option<u64> {
         if !enabled {
             *self = QuickBar::default();
             return None;
+        }
+        if pressed {
+            // a press (a tab click, a drag) never starts the bar and hides it, unless the press is on the bar
+            let on_bar = pointer.is_some_and(|p| {
+                self.shown.and_then(|id| wins.iter().find(|w| w.0 == id)).is_some_and(|(_, w, s)| bar_frame(*w, *s).contains(p))
+            });
+            if !on_bar {
+                self.over = None;
+                self.shown = None;
+                self.left_at = None;
+            }
+            return self.shown;
         }
         let hit = pointer.and_then(|p| wins.iter().find(|(_, w, s)| in_bar_zone(*w, *s, p)).map(|(id, _, _)| *id));
         match hit {
@@ -1301,6 +1324,7 @@ mod tests {
             stage_manager: false,
             focus_settling: false,
             focused_tiled: true,
+            dragging: false,
         };
         assert!(border_visible(&on));
         assert!(!border_visible(&BorderInputs { tiling_on: false, ..on }), "tiling off");
@@ -1318,9 +1342,9 @@ mod tests {
         assert_eq!((b.w, b.h), (BAR_W, BAR_H));
         assert_eq!(b.x, 400.0 + 300.0 - BAR_W / 2.0);
         assert_eq!(b.y, 300.0 - BAR_H - 6.0, "above the top edge");
-        // no room above: just inside the top edge
+        // no room above: a pill below the title bar strip
         let top = Rect::new(400.0, 25.0, 600.0, 400.0);
-        assert_eq!(bar_frame(top, S).y, 25.0 + 6.0);
+        assert_eq!(bar_frame(top, S).y, 25.0 + TOP_STRIP + 6.0);
         // a narrow window at the screen edge keeps the bar on screen
         let edge = Rect::new(0.0, 300.0, 100.0, 300.0);
         let e = bar_frame(edge, S);
@@ -1345,25 +1369,25 @@ mod tests {
         let wins = [(1, w, S)];
         let mut q = QuickBar::default();
         let near = Some((500.0, 305.0));
-        assert_eq!(q.step(true, near, &wins, 0.0), None);
-        assert_eq!(q.step(true, near, &wins, 0.2), None);
-        assert_eq!(q.step(true, near, &wins, 0.4), Some(1));
+        assert_eq!(q.step(true, near, false, &wins, 0.0), None);
+        assert_eq!(q.step(true, near, false, &wins, 0.2), None);
+        assert_eq!(q.step(true, near, false, &wins, 0.4), Some(1));
         // moving up onto the bar keeps it
-        assert_eq!(q.step(true, Some((700.0, 285.0)), &wins, 0.6), Some(1));
+        assert_eq!(q.step(true, Some((700.0, 285.0)), false, &wins, 0.6), Some(1));
         // leaving: still there during the grace period, gone after it
-        assert_eq!(q.step(true, Some((100.0, 100.0)), &wins, 1.0), Some(1));
-        assert_eq!(q.step(true, Some((100.0, 100.0)), &wins, 1.6), None);
+        assert_eq!(q.step(true, Some((100.0, 100.0)), false, &wins, 1.0), Some(1));
+        assert_eq!(q.step(true, Some((100.0, 100.0)), false, &wins, 1.6), None);
         // coming back needs a new dwell
-        assert_eq!(q.step(true, near, &wins, 2.0), None);
+        assert_eq!(q.step(true, near, false, &wins, 2.0), None);
         // the setting off hides it at once
-        assert_eq!(q.step(true, near, &wins, 2.5), Some(1));
-        assert_eq!(q.step(false, near, &wins, 2.6), None);
+        assert_eq!(q.step(true, near, false, &wins, 2.5), Some(1));
+        assert_eq!(q.step(false, near, false, &wins, 2.6), None);
         // no pointer: hides after the grace period
         let mut q = QuickBar::default();
-        q.step(true, near, &wins, 0.0);
-        assert_eq!(q.step(true, near, &wins, 0.5), Some(1));
-        assert_eq!(q.step(true, None, &wins, 0.6), Some(1));
-        assert_eq!(q.step(true, None, &wins, 1.2), None);
+        q.step(true, near, false, &wins, 0.0);
+        assert_eq!(q.step(true, near, false, &wins, 0.5), Some(1));
+        assert_eq!(q.step(true, None, false, &wins, 0.6), Some(1));
+        assert_eq!(q.step(true, None, false, &wins, 1.2), None);
     }
 
     #[test]
@@ -1372,10 +1396,10 @@ mod tests {
         let b = Rect::new(800.0, 300.0, 700.0, 400.0);
         let wins = [(1, a, S), (2, b, S)];
         let mut q = QuickBar::default();
-        q.step(true, Some((100.0, 305.0)), &wins, 0.0);
-        assert_eq!(q.step(true, Some((100.0, 305.0)), &wins, 0.5), Some(1));
-        assert_eq!(q.step(true, Some((900.0, 305.0)), &wins, 0.6), Some(1));
-        assert_eq!(q.step(true, Some((900.0, 305.0)), &wins, 1.0), Some(2));
+        q.step(true, Some((100.0, 305.0)), false, &wins, 0.0);
+        assert_eq!(q.step(true, Some((100.0, 305.0)), false, &wins, 0.5), Some(1));
+        assert_eq!(q.step(true, Some((900.0, 305.0)), false, &wins, 0.6), Some(1));
+        assert_eq!(q.step(true, Some((900.0, 305.0)), false, &wins, 1.0), Some(2));
     }
 
     #[test]
@@ -1401,5 +1425,71 @@ mod tests {
         assert_eq!(next_display(3, 2), Some(0));
         assert_eq!(next_display(1, 0), None);
         assert_eq!(next_display(0, 0), None);
+    }
+
+    #[test]
+    fn the_bar_never_covers_the_title_bar_or_tab_strip() {
+        // default gap 8 at the top of the screen: no room above, so a compact pill below the strip
+        let w = Rect::new(8.0, 33.0, 800.0, 600.0);
+        let b = bar_frame(w, S);
+        assert!(b.y >= w.y + TOP_STRIP, "{b:?} is below the top strip");
+        assert!(b.x + b.w <= w.x + w.w, "inside the window's right edge");
+        assert!(b.x > w.x + w.w / 2.0, "at the top-right corner, not centred over the tabs");
+        // with room above it still goes above, centred
+        let low = Rect::new(400.0, 300.0, 600.0, 400.0);
+        assert_eq!(bar_frame(low, S).y, 300.0 - BAR_H - 6.0);
+        // every window height keeps it inside the window when below
+        let short = Rect::new(8.0, 33.0, 400.0, 120.0);
+        let sb = bar_frame(short, S);
+        assert!(sb.y >= short.y + TOP_STRIP);
+    }
+
+    #[test]
+    fn pressing_the_mouse_never_starts_the_bar_and_hides_it_unless_the_press_is_on_the_bar() {
+        let w = Rect::new(400.0, 300.0, 600.0, 400.0);
+        let wins = [(1, w, S)];
+        let near = Some((500.0, 305.0));
+        let mut q = QuickBar::default();
+        // a press on the title bar (a tab click, a drag) never starts the dwell
+        assert_eq!(q.step(true, near, true, &wins, 0.0), None);
+        assert_eq!(q.step(true, near, true, &wins, 0.6), None);
+        assert_eq!(q.step(true, near, false, &wins, 0.7), None, "the dwell starts only after the release");
+        assert_eq!(q.step(true, near, false, &wins, 1.1), Some(1));
+        // a press on the band hides it at once
+        assert_eq!(q.step(true, near, true, &wins, 1.2), None);
+        // a press on the bar itself (a button click) keeps it
+        let mut q = QuickBar::default();
+        q.step(true, near, false, &wins, 0.0);
+        assert_eq!(q.step(true, near, false, &wins, 0.5), Some(1));
+        let on_bar = Some((bar_frame(w, S).x + 10.0, bar_frame(w, S).y + 10.0));
+        assert_eq!(q.step(true, on_bar, true, &wins, 0.6), Some(1));
+    }
+
+    #[test]
+    fn the_border_hides_while_the_mouse_is_down() {
+        let on = BorderInputs {
+            tiling_on: true,
+            border_on: true,
+            paused: false,
+            stage_manager: false,
+            focus_settling: false,
+            focused_tiled: true,
+            dragging: false,
+        };
+        assert!(border_visible(&on));
+        assert!(!border_visible(&BorderInputs { dragging: true, ..on }));
+    }
+
+    #[test]
+    fn moving_to_a_display_that_does_not_exist_loses_no_window() {
+        let mut order = vec![vec![1, 2], vec![3]];
+        move_to_display(&mut order, 2, 7);
+        let mut all = order.concat();
+        all.sort();
+        assert_eq!(all, vec![1, 2, 3], "{order:?}");
+        assert_eq!(order, vec![vec![1], vec![3, 2]], "clamped to the last display");
+        let mut none: Vec<Vec<u64>> = vec![];
+        move_to_display(&mut none, 1, 0);
+        assert!(none.is_empty());
     }
 }

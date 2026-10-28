@@ -1610,9 +1610,10 @@ impl App {
         use ferrocast_macos::tiling::Event;
         match e {
             Event::DisplayLayout { display, layout } => {
+                // store first: the config sent to the worker must carry the new layout, or it reverts
+                self.settings.tiling_display_layouts.insert(display.to_string(), layout);
                 self.tray_layout = layout;
                 self.sync_tiling();
-                self.settings.tiling_display_layouts.insert(display.to_string(), layout);
                 let v = self.settings.clone();
                 self.persist("settings.json", &v);
                 *self.shared.settings.write().unwrap() = self.settings.clone();
