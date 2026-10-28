@@ -1,0 +1,139 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../SiteHeader.astro';
+import SiteFooter from '../SiteFooter.astro';
+import Crumbs from './Crumbs.astro';
+import SeoNav from './SeoNav.astro';
+import { dmgUrl, installCommand } from '../../data/install';
+import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
+import { inline, plain } from '../../lib/seo/markup';
+import type { BlurCopy } from '../../lib/seo/blur-video';
+import '../../styles/seo.css';
+
+/** Task page for Redact Video. Order follows the blur brief, which is not the GuidePage order. */
+interface Props { t: BlurCopy; other: BlurCopy }
+const { t, other } = Astro.props;
+const isEs = t.lang === 'es';
+const canonical = `${SITE}${t.path}`;
+const en = isEs ? other : t;
+const es = isEs ? t : other;
+const alternates = { en: `${SITE}${en.path}`, es: `${SITE}${es.path}`, 'x-default': `${SITE}${en.path}` };
+const shotAlt = isEs
+  ? 'Ventana Redact Video con tres zonas y tiempos distintos. La imagen solo marca las zonas; no muestra el desenfoque terminado.'
+  : 'Redact Video window with three areas, each with its own time. The picture only outlines the areas; it does not show the finished blur.';
+const shotCap = isEs
+  ? 'La vista previa solo marca las zonas. El desenfoque y el bloque negro aparecen en el archivo exportado.'
+  : 'The preview only marks the areas. The blur and the black box appear in the exported file.';
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Ferrocast',
+    operatingSystem: 'macOS 13+',
+    applicationCategory: 'MultimediaApplication',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    url: SITE,
+    inLanguage: t.lang,
+  },
+  { ...howTo(t.steps.howToName, t.description, t.steps.items.map(([name, text]) => [name, plain(text)] as [string, string])), inLanguage: t.lang },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    inLanguage: t.lang,
+    mainEntity: t.faq.items.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: plain(a) } })),
+  },
+  breadcrumbs(t.crumbs),
+];
+---
+<Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd} lang={t.lang} alternates={alternates}>
+  <SiteHeader lang={t.lang} current="files" switchHref={other.path} switchLabel={isEs ? 'EN' : 'ES'} switchAria={isEs ? 'Read this page in English' : 'Leer esta página en español'}>
+    <SeoNav slot="nav" lang={t.lang} />
+    <span slot="cta">{isEs ? 'Instalar' : 'Install'}</span>
+  </SiteHeader>
+  <main class="seo guide blur" id="main">
+    <Crumbs items={t.crumbs} />
+    <h1>{t.h1}</h1>
+    {t.lead.map((p) => <p class="lead" set:html={inline(p)} />)}
+    <p class="g-cta"><a class="btn" href={dmgUrl}>{t.cta.dmg}</a><span class="fine">{t.cta.note}</span></p>
+
+    <h2>{t.before.h}</h2>
+    <div class="g-split">
+      <div>
+        <h3>{t.before.yesLabel}</h3>
+        <ul>{t.before.yes.map((item) => <li set:html={inline(item)} />)}</ul>
+      </div>
+      <div>
+        <h3>{t.before.noLabel}</h3>
+        <ul>{t.before.no.map((item) => <li set:html={inline(item)} />)}</ul>
+      </div>
+    </div>
+
+    <h2 id="steps">{t.steps.h}</h2>
+    <ol>{t.steps.items.map(([name, text]) => <li><strong>{name}.</strong> <span set:html={inline(text)} /></li>)}</ol>
+    <figure>
+      <img class="shot" src="/img/files-vredact.jpg" alt={shotAlt} width="1500" height="950" loading="lazy" decoding="async" />
+      <figcaption class="fine">{shotCap}</figcaption>
+    </figure>
+    <details class="g-brew">
+      <summary>{isEs ? 'Instalar Ferrocast con Homebrew' : 'Install Ferrocast with Homebrew'}</summary>
+      <pre><code>{installCommand}</code></pre>
+    </details>
+
+    <h2>{t.command.h}</h2>
+    {t.command.paras.map((p) => <p set:html={inline(p)} />)}
+
+    <h2>{t.moving.h}</h2>
+    {t.moving.paras.map((p) => <p set:html={inline(p)} />)}
+
+    <h2>{t.photos.h}</h2>
+    {t.photos.paras.map((p) => <p set:html={inline(p)} />)}
+
+    <h2>{t.table.h}</h2>
+    <div class="g-table">
+      <table>
+        <caption class="sr-only">{t.table.caption}</caption>
+        <thead><tr>{t.table.cols.map((c) => <th scope="col">{c}</th>)}</tr></thead>
+        <tbody>{t.table.rows.map(([head, ...cells]) => (<tr><th scope="row">{head}</th>{cells.map((c) => <td set:html={inline(c)} />)}</tr>))}</tbody>
+      </table>
+    </div>
+    <p class="fine" set:html={inline(t.table.note)} />
+
+    <h2>{t.faq.h}</h2>
+    <div class="g-faq">
+      {t.faq.items.map(([q, a]) => (<details><summary>{q}</summary><p set:html={inline(a)} /></details>))}
+    </div>
+
+    <p class="g-cta"><a class="btn" href={dmgUrl}>{t.cta.dmg}</a></p>
+    <p set:html={inline(t.closing)} />
+
+    <h2>{t.more.h}</h2>
+    <ul class="chips">{t.more.links.map(([label, href]) => <li><a href={href}>{label}</a></li>)}</ul>
+  </main>
+  <SiteFooter lang={t.lang} />
+</Base>
+
+<style>
+  .blur .g-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .blur .fine { font-size: var(--step-small); color: var(--muted); }
+  .blur h2[id] { scroll-margin-top: 110px; }
+  .blur .g-split { display: grid; gap: 8px 28px; }
+  @media (min-width: 720px) { .blur .g-split { grid-template-columns: 1fr 1fr; } }
+  .blur .g-split h3 { font-size: var(--step-body); margin-bottom: 0; }
+  .blur figure { margin: 18px 0; }
+  .blur figcaption { margin-top: 8px; }
+  .blur .g-table { overflow-x: auto; border-radius: var(--radius); box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); }
+  .blur table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: var(--step-small); line-height: 1.5; }
+  .blur th, .blur td { text-align: left; vertical-align: top; padding: 12px 14px; border-top: 1px solid rgba(255,255,255,.06); }
+  .blur thead th { border-top: 0; background: var(--surface); font-weight: 500; }
+  .blur tbody th { font-weight: 500; color: var(--ink); }
+  .blur td { color: var(--muted); }
+  .blur .g-brew summary, .blur .g-faq summary { cursor: pointer; font-weight: 500; }
+  .blur .g-brew pre { margin-top: 10px; }
+  .blur .g-faq details { padding: 14px 0; border-top: 1px solid rgba(255,255,255,.06); }
+  .blur .g-faq p { margin-top: 8px; }
+  .blur .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (prefers-color-scheme: light) {
+    .blur .g-table { box-shadow: inset 0 0 0 1px rgba(0,0,0,.07); }
+    .blur th, .blur td, .blur .g-faq details { border-top-color: rgba(0,0,0,.07); }
+  }
+</style>

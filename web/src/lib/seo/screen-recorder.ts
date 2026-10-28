@@ -75,6 +75,7 @@ export const en: GuideCopy = {
       ['Screen capture docs', '/docs/launcher/screen-capture/'],
       ['MOV to GIF', '/convert/mov-to-gif/'],
       ['Compress a video to a target size', '/compress-video-to-size/'],
+      ['Something private in the recording? Cover it', '/blur-video-mac/'],
       ['Key facts', '/facts/'],
     ],
   },
@@ -145,6 +146,7 @@ export const es: GuideCopy = {
     links: [
       ['Convertir un vídeo a GIF', '/es/convertir/video-a-gif/'],
       ['Comprimir un vídeo a un tamaño', '/es/comprimir-video-a-un-tamano/'],
+      ['¿Sale algo privado en tu grabación? Tápalo', '/es/difuminar-video-mac/'],
       ['Alternativa gratis a Raycast', '/es/alternativa-a-raycast/'],
       ['Datos clave', '/es/facts/'],
     ],
