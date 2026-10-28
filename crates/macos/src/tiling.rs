@@ -91,6 +91,10 @@ pub enum Event {
 pub struct Handle(Sender<Cmd>);
 
 impl Handle {
+    /// A handle on an existing channel (the app's tests use one without a worker behind it).
+    pub fn from_sender(tx: Sender<Cmd>) -> Handle {
+        Handle(tx)
+    }
     pub fn send(&self, c: Cmd) {
         let _ = self.0.send(c);
     }
@@ -144,7 +148,7 @@ fn screens_on_main() -> Vec<t::Rect> {
     }
     let mut out: Vec<windows::Rect> = vec![];
     unsafe { dispatch_sync_f(&raw const _dispatch_main_q as *const c_void, &mut out as *mut _ as *mut c_void, run) };
-    out.into_iter().map(conv).collect()
+    out.into_iter().map(conv).filter(|r| t::valid_screen(*r)).collect()
 }
 
 fn left_button_down() -> bool {
@@ -168,8 +172,23 @@ pub fn stage_manager_on() -> bool {
         if v.is_null() {
             return false;
         }
-        core_foundation::boolean::CFBoolean::wrap_under_create_rule(v as _) == core_foundation::boolean::CFBoolean::true_value()
+        truthy(core_foundation::base::CFType::wrap_under_create_rule(v))
     }
+}
+
+/// A preference value read as a flag: a boolean, or a number other than 0.
+fn truthy(v: core_foundation::base::CFType) -> bool {
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::number::CFNumber;
+    if let Some(b) = v.downcast::<CFBoolean>() {
+        return b == CFBoolean::true_value();
+    }
+    v.downcast::<CFNumber>().and_then(|n| n.to_i64()).is_some_and(|n| n != 0)
+}
+
+/// Bound every Accessibility call on `el` so a hung app cannot stall the worker.
+fn bound(el: AXUIElementRef) {
+    unsafe { AXUIElementSetMessagingTimeout(el, 0.25) };
 }
 
 fn same(a: &AxElement, b: &AxElement) -> bool {
@@ -205,9 +224,21 @@ struct Found {
     frame: t::Rect,
 }
 
-fn enumerate(excluded: &[String]) -> Vec<Found> {
+struct Enumerated {
+    found: Vec<Found>,
+    /// Apps whose window list could not be read this time: their tracked windows are kept.
+    failed: Vec<i32>,
+}
+
+/// Ids that stay tracked: seen this time, or belonging to an app that could not be read.
+fn survivors(tracked: &[(u64, i32)], seen: &[u64], failed: &[i32]) -> Vec<u64> {
+    tracked.iter().filter(|(id, pid)| seen.contains(id) || failed.contains(pid)).map(|(id, _)| *id).collect()
+}
+
+fn enumerate(excluded: &[String]) -> Enumerated {
     let me = std::process::id() as i32;
     let mut out = vec![];
+    let mut failed = vec![];
     for app in running::running_apps() {
         let key = app.bundle_id.clone().unwrap_or_else(|| app.name.clone());
         if app.pid == me || excluded.iter().any(|e| *e == key || *e == app.name) {
@@ -215,15 +246,22 @@ fn enumerate(excluded: &[String]) -> Vec<Found> {
         }
         unsafe {
             let ax = AxElement(AXUIElementCreateApplication(app.pid));
-            AXUIElementSetMessagingTimeout(ax.0, 0.25);
-            let Some(list) = copy_attr(ax.0, kAXWindowsAttribute) else { continue };
+            bound(ax.0);
+            let Some(list) = copy_attr(ax.0, kAXWindowsAttribute) else {
+                failed.push(app.pid);
+                continue;
+            };
             let arr: core_foundation::array::CFArray<*const c_void> = core_foundation::array::CFArray::wrap_under_create_rule(list as _);
             for w in arr.iter() {
                 let el = *w as AXUIElementRef;
+                bound(el);
                 if !tileable(el) {
                     continue;
                 }
-                let Some(f) = frame_of(el) else { continue };
+                let Some(f) = frame_of(el) else {
+                    failed.push(app.pid);
+                    continue;
+                };
                 if f.w < 120.0 || f.h < 80.0 {
                     continue;
                 }
@@ -232,7 +270,7 @@ fn enumerate(excluded: &[String]) -> Vec<Found> {
             }
         }
     }
-    out
+    Enumerated { found: out, failed }
 }
 
 fn display_of(p: (f64, f64), screens: &[t::Rect]) -> usize {
@@ -259,10 +297,36 @@ fn far(a: t::Rect, b: t::Rect, tol: f64) -> bool {
 fn raise(w: &AxElement, pid: i32) {
     let action = CFString::new(kAXRaiseAction);
     unsafe {
+        bound(w.0);
         AXUIElementPerformAction(w.0, action.as_concrete_TypeRef());
         let app = AxElement(AXUIElementCreateApplication(pid));
+        bound(app.0);
         set_bool(app.0, "AXFrontmost", true);
     }
+}
+
+/// On-screen windows front to back as (pid, bounds, layer).
+fn window_stack() -> Vec<(i32, t::Rect, i64)> {
+    use core_foundation::base::CFType;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_graphics::window::*;
+    let Some(arr) = copy_window_info(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID) else {
+        return vec![];
+    };
+    let mut out = vec![];
+    for item in arr.iter() {
+        let dict: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_get_rule(*item as _) };
+        let num = |d: &CFDictionary<CFString, CFType>, k: &str| {
+            d.find(CFString::new(k)).and_then(|v| v.downcast::<CFNumber>()).and_then(|n| n.to_f64())
+        };
+        let (Some(layer), Some(pid)) = (num(&dict, "kCGWindowLayer"), num(&dict, "kCGWindowOwnerPID")) else { continue };
+        let Some(b) = dict.find(CFString::new("kCGWindowBounds")) else { continue };
+        let b: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_get_rule(b.as_CFTypeRef() as _) };
+        let (Some(x), Some(y), Some(w), Some(h)) = (num(&b, "X"), num(&b, "Y"), num(&b, "Width"), num(&b, "Height")) else { continue };
+        out.push((pid as i32, t::Rect::new(x, y, w, h), layer as i64));
+    }
+    out
 }
 
 // --------------------------------------------------------------------------- worker
@@ -277,6 +341,12 @@ struct Tracked {
     display: usize,
     target: Option<t::Rect>,
     tries: u8,
+    /// The frame at the previous read.
+    prev: Option<t::Rect>,
+    /// The frame our last arrange step asked for.
+    applied: Option<t::Rect>,
+    /// We applied a frame since the last read: the next read shows what the app made of it.
+    verify: bool,
 }
 
 struct Worker {
@@ -290,8 +360,8 @@ struct Worker {
     emit: Box<dyn Fn(Event) + Send>,
     screens: (Option<Instant>, Vec<t::Rect>),
     stage: bool,
-    hover: Option<(u64, Instant)>,
-    hovered: Option<u64>,
+    hover: t::Hover,
+    clock: Instant,
 }
 
 impl Worker {
@@ -306,8 +376,8 @@ impl Worker {
             emit,
             screens: (None, vec![]),
             stage: false,
-            hover: None,
-            hovered: None,
+            hover: Default::default(),
+            clock: Instant::now(),
         }
     }
 
@@ -359,6 +429,7 @@ impl Worker {
     fn focused(&self, pid: Option<i32>) -> Option<usize> {
         let pid = pid.or_else(|| running::frontmost().map(|f| f.pid))?;
         let f = windows::focused_window(pid)?;
+        bound(f.0);
         self.wins.iter().position(|w| w.pid == pid && same(&w.el, &f))
     }
 
@@ -368,39 +439,47 @@ impl Worker {
             return screens;
         }
         let excluded = self.cfg.excluded.clone();
-        let found = enumerate(&excluded);
-        self.sync(found, &screens);
+        let e = enumerate(&excluded);
+        self.sync(e, &screens);
         screens
     }
 
-    fn sync(&mut self, found: Vec<Found>, screens: &[t::Rect]) {
-        self.order.resize(screens.len(), vec![]);
-        // a display went away: its windows move to the first one
-        for d in screens.len()..self.order.len() {
-            let gone: Vec<u64> = self.order[d].drain(..).collect();
-            self.order[0].extend(gone);
-        }
-        self.order.truncate(screens.len());
+    fn sync(&mut self, e: Enumerated, screens: &[t::Rect]) {
+        self.order = t::reconcile_displays(std::mem::take(&mut self.order), screens.len());
         for w in &mut self.wins {
             w.display = w.display.min(screens.len() - 1);
         }
-        let mut alive = vec![];
-        for f in found {
+        let mut seen = vec![];
+        for f in e.found {
             match self.wins.iter().position(|w| w.pid == f.pid && same(&w.el, &f.el)) {
                 Some(i) => {
                     self.wins[i].frame = f.frame;
-                    alive.push(self.wins[i].id);
+                    seen.push(self.wins[i].id);
                 }
                 None => {
                     let id = self.next_id;
                     self.next_id += 1;
                     let display = display_of(f.frame.center(), screens);
                     self.order[display].push(id);
-                    self.wins.push(Tracked { id, pid: f.pid, app: f.app, el: f.el, frame: f.frame, display, target: None, tries: 0 });
-                    alive.push(id);
+                    self.wins.push(Tracked {
+                        id,
+                        pid: f.pid,
+                        app: f.app,
+                        el: f.el,
+                        frame: f.frame,
+                        display,
+                        target: None,
+                        tries: 0,
+                        prev: None,
+                        applied: None,
+                        verify: false,
+                    });
+                    seen.push(id);
                 }
             }
         }
+        let tracked: Vec<(u64, i32)> = self.wins.iter().map(|w| (w.id, w.pid)).collect();
+        let alive = survivors(&tracked, &seen, &e.failed);
         self.wins.retain(|w| alive.contains(&w.id));
         for o in &mut self.order {
             o.retain(|id| alive.contains(id));
@@ -408,25 +487,33 @@ impl Worker {
         if self.focus.as_ref().is_some_and(|f| !alive.contains(&f.focused)) {
             self.focus = None;
         }
-        // an app that came out larger than asked has taught us its minimum size
-        let mut learned = false;
+        // an app that came out larger than the frame we asked for has taught us its minimum size;
+        // one that accepted less than a stored minimum shows that value was wrong
+        let focus_active = self.focus.is_some();
+        let mut changed = false;
         for w in &self.wins {
-            if let (Some(tg), true) = (w.target, w.tries > 0) {
-                learned |= self.mins.learn(&w.app, (tg.w, tg.h), (w.frame.w, w.frame.h));
+            if !w.verify || focus_active {
+                continue;
+            }
+            let Some(ap) = w.applied else { continue };
+            let cap = screens.get(w.display).map_or((f64::INFINITY, f64::INFINITY), |s| (s.w, s.h));
+            match t::should_learn(focus_active, w.verify, w.applied, w.frame) {
+                Some(got) => changed |= self.mins.learn_capped(&w.app, (ap.w, ap.h), got, cap),
+                None => changed |= self.mins.confirm(&w.app, (ap.w, ap.h), (w.frame.w, w.frame.h)),
             }
         }
-        if learned {
+        if changed {
             (self.emit)(Event::MinSizes(self.mins.clone()));
             for w in &mut self.wins {
                 w.tries = 0;
             }
         }
         // the user moved a tiled window: it changes display or swaps with the window it was dropped on
-        if self.active() && self.focus.is_none() {
+        if self.active() && !focus_active {
             let moved: Vec<(u64, t::Rect)> = self
                 .wins
                 .iter()
-                .filter(|w| w.target.is_some_and(|tg| (w.frame.x - tg.x).abs() > 4.0 || (w.frame.y - tg.y).abs() > 4.0))
+                .filter(|w| w.target.is_some_and(|tg| t::user_moved(w.prev, w.frame, tg, w.verify)))
                 .map(|w| (w.id, w.frame))
                 .collect();
             for (id, frame) in moved {
@@ -452,6 +539,10 @@ impl Worker {
                 }
             }
         }
+        for w in &mut self.wins {
+            w.prev = Some(w.frame);
+            w.verify = false;
+        }
     }
 
     fn set_display(&mut self, id: u64, d: usize) {
@@ -471,13 +562,18 @@ impl Worker {
                 (self.emit)(Event::StageManager(stage));
             }
         }
-        if !(self.cfg.enabled || self.cfg.hover_activate) {
+        // paused or off: windows stay where they are and nothing is read, except for hover
+        if !(self.active() || self.cfg.hover_activate) {
             self.wins.clear();
             self.order.clear();
+            self.hover = Default::default();
             return;
         }
-        if self.stage || left_button_down() {
-            // Stage Manager owns the layout; a pressed button means the user is dragging
+        if self.stage && !self.cfg.hover_activate {
+            return;
+        }
+        if left_button_down() {
+            // a pressed button means the user is dragging
             return;
         }
         let screens = self.refresh();
@@ -497,7 +593,7 @@ impl Worker {
                 .filter_map(|id| self.wins.iter().find(|w| w.id == *id))
                 .map(|w| t::Win { id: w.id, min: self.mins.get(&w.app) })
                 .collect();
-            for p in t::tile(*screen, self.cfg.gap, self.layout_of(d), &list) {
+            for p in t::tile(*screen, t::clamp_gap(self.cfg.gap), self.layout_of(d), &list) {
                 if let Some(w) = self.wins.iter_mut().find(|w| w.id == p.id) {
                     if w.target.is_none_or(|tg| far(tg, p.frame, 1.0)) {
                         w.tries = 0;
@@ -507,6 +603,8 @@ impl Worker {
                         w.tries = 0;
                     } else if w.tries < MAX_TRIES {
                         w.tries += 1;
+                        w.applied = Some(p.frame);
+                        w.verify = true;
                         set_frame(w.el.0, unconv(p.frame));
                     }
                 }
@@ -515,28 +613,30 @@ impl Worker {
     }
 
     fn hover_activate(&mut self) {
-        if !self.cfg.hover_activate {
+        if !self.cfg.hover_activate || self.stage {
             return;
         }
-        let Some(p) = pointer() else { return };
-        let Some(hit) = self.wins.iter().rev().find(|w| w.frame.contains(p)).map(|w| w.id) else {
-            self.hover = None;
-            return;
-        };
-        match self.hover {
-            Some((id, since)) if id == hit => {
-                if since.elapsed() >= HOVER_DWELL && self.hovered != Some(hit) {
-                    if let Some(w) = self.wins.iter().find(|w| w.id == hit) {
-                        raise(&w.el, w.pid);
-                    }
-                    self.hovered = Some(hit);
-                }
+        let hit = pointer().and_then(|p| {
+            let stack = window_stack();
+            let top = t::top_window_at(&stack, p)?;
+            let (pid, bounds, _) = stack[top];
+            let mine: Vec<&Tracked> = self.wins.iter().filter(|w| w.pid == pid && w.frame.contains(p)).collect();
+            mine.iter().find(|w| !far(w.frame, bounds, 6.0)).or(mine.first()).map(|w| w.id)
+        });
+        if let Some(id) = self.hover.step(hit, self.clock.elapsed().as_secs_f64(), HOVER_DWELL.as_secs_f64()) {
+            if let Some(w) = self.wins.iter().find(|w| w.id == id) {
+                raise(&w.el, w.pid);
             }
-            _ => self.hover = Some((hit, Instant::now())),
         }
     }
 
     fn toggle_focus(&mut self, pid: Option<i32>) {
+        self.stage = stage_manager_on();
+        if self.stage {
+            // Stage Manager owns the layout: focus mode does nothing
+            (self.emit)(Event::Notice("Focus mode is paused while Stage Manager is on".into()));
+            return;
+        }
         if !self.cfg.enabled {
             (self.emit)(Event::Notice("Turn on automatic tiling in Settings first".into()));
             return;
@@ -546,6 +646,8 @@ impl Worker {
                 if let Some(w) = self.wins.iter_mut().find(|w| w.id == id) {
                     set_frame(w.el.0, unconv(r));
                     w.tries = 0;
+                    w.applied = None;
+                    w.verify = false;
                 }
             }
             return;
@@ -560,7 +662,12 @@ impl Worker {
         }
         let current: Vec<(u64, t::Rect)> = self.wins.iter().map(|w| (w.id, w.frame)).collect();
         let screen = screens[self.wins[i].display.min(screens.len() - 1)];
-        if let Some((saved, full)) = t::focus_enter(&current, self.wins[i].id, screen, self.cfg.gap) {
+        if let Some((saved, full)) = t::focus_enter(&current, self.wins[i].id, screen, t::clamp_gap(self.cfg.gap)) {
+            for w in &mut self.wins {
+                // whatever the frames do from now on is not the apps' minimum sizes
+                w.applied = None;
+                w.verify = false;
+            }
             set_frame(self.wins[i].el.0, unconv(full));
             raise(&self.wins[i].el, self.wins[i].pid);
             self.focus = Some(saved);
@@ -615,6 +722,26 @@ mod tests {
         assert_eq!(display_of((150.0, 50.0), &s), 1);
         assert_eq!(display_of((-30.0, 50.0), &s), 0);
         assert_eq!(display_of((400.0, 50.0), &s), 1);
+    }
+
+    #[test]
+    fn windows_of_an_app_that_timed_out_keep_their_ids() {
+        let tracked = [(1, 10), (2, 10), (3, 20)];
+        assert_eq!(survivors(&tracked, &[3], &[10]), vec![1, 2, 3]);
+        assert_eq!(survivors(&tracked, &[3], &[]), vec![3], "closed windows go");
+        assert_eq!(survivors(&tracked, &[1, 2, 3], &[]), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn a_stage_manager_preference_can_be_a_boolean_or_a_number() {
+        use core_foundation::base::TCFType;
+        use core_foundation::boolean::CFBoolean;
+        use core_foundation::number::CFNumber;
+        assert!(truthy(CFBoolean::true_value().as_CFType()));
+        assert!(!truthy(CFBoolean::false_value().as_CFType()));
+        assert!(truthy(CFNumber::from(1i32).as_CFType()));
+        assert!(!truthy(CFNumber::from(0i32).as_CFType()));
+        assert!(!truthy(CFString::new("yes").as_CFType()));
     }
 
     #[test]

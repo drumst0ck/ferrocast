@@ -842,6 +842,8 @@ impl Hotkeys {
         }
         self.map.clear();
         let mut errors = vec![];
+        let (plan, skipped) = plan_hotkeys(s);
+        errors.extend(skipped);
         let mut add = |this: &mut Hotkeys, spec: &str, target: &str| match HotKey::from_str(spec) {
             Ok(h) => match this.manager.register(h) {
                 Ok(()) => {
@@ -852,24 +854,62 @@ impl Hotkeys {
             },
             Err(e) => errors.push(format!("{spec}: {e}")),
         };
-        add(self, &s.launcher_hotkey, "__launcher");
-        let ids: std::collections::BTreeSet<&str> = s
-            .commands
-            .keys()
-            .map(String::as_str)
-            .chain(ferrocast_core::models::DEFAULT_HOTKEYS.iter().chain(ferrocast_core::tiling::DEFAULT_HOTKEYS).map(|(id, _)| *id))
-            .collect();
-        for id in ids {
-            // tiling shortcuts grab global keys: only while tiling is on
-            if id.starts_with("tiling:") && !s.tiling_enabled {
-                continue;
-            }
-            if let Some(h) = s.hotkey(id) {
-                add(self, h, id);
-            }
+        for (spec, target) in &plan {
+            add(self, spec, target);
         }
         errors
     }
+}
+
+/// Every (hotkey, target) to register, in registration order, and the messages for the tiling
+/// defaults that were left out. The launcher and the user's own bindings come first; the tiling
+/// defaults (only while tiling is on) never take a shortcut that is already planned. The user's
+/// own `tiling:toggle` binding is kept while tiling is off, because it is what turns tiling on.
+pub fn plan_hotkeys(s: &Settings) -> (Vec<(String, String)>, Vec<String>) {
+    use ferrocast_core::tiling::Action;
+    let key_id = |spec: &str| HotKey::from_str(spec).ok().map(|h| h.id());
+    let mut plan: Vec<(String, String)> = vec![(s.launcher_hotkey.clone(), "__launcher".into())];
+    let tiling_ids: Vec<String> = Action::ALL.iter().map(|a| a.id()).collect();
+    let ids: std::collections::BTreeSet<&str> = s
+        .commands
+        .keys()
+        .map(String::as_str)
+        .chain(ferrocast_core::models::DEFAULT_HOTKEYS.iter().map(|(id, _)| *id))
+        .filter(|id| !id.starts_with("tiling:"))
+        .collect();
+    for id in ids {
+        if let Some(h) = s.hotkey(id) {
+            plan.push((h.to_string(), id.to_string()));
+        }
+    }
+    let explicit = |id: &str| s.commands.get(id).and_then(|c| c.hotkey.as_deref()).filter(|h| !h.is_empty());
+    for id in &tiling_ids {
+        if let Some(h) = explicit(id) {
+            if s.tiling_enabled || *id == Action::Toggle.id() {
+                plan.push((h.to_string(), id.clone()));
+            }
+        }
+    }
+    let mut skipped = vec![];
+    if s.tiling_enabled {
+        for id in &tiling_ids {
+            if explicit(id).is_some() || s.commands.get(id).is_some_and(|c| c.hotkey.is_some()) {
+                continue;
+            }
+            let Some(h) = s.hotkey(id) else { continue };
+            let taken = key_id(h).is_some_and(|k| plan.iter().any(|(p, _)| key_id(p) == Some(k)));
+            if taken {
+                skipped.push(format!(
+                    "{} is already in use, so {} has no shortcut",
+                    hotkey_label(h),
+                    Action::from_id(id).map_or(id.clone(), |a| a.title())
+                ));
+            } else {
+                plan.push((h.to_string(), id.clone()));
+            }
+        }
+    }
+    (plan, skipped)
 }
 
 /// Human readable hotkey: `Alt+Shift+KeyL` → `⌥⇧L`.
@@ -931,30 +971,56 @@ pub fn key_code_name(k: egui::Key) -> Option<String> {
 // Tray
 
 /// Tray entries above the separator, as (id, label).
-pub fn tray_items() -> [(&'static str, &'static str); 5] {
-    [
-        ("open", "Open Ferrocast"),
-        ("clipboard", "Clipboard History"),
-        ("tiling_pause", "Pause or Resume Tiling"),
-        ("settings", "Settings…"),
-        ("check_updates", "Check for Updates…"),
-    ]
+pub fn tray_items() -> [(&'static str, &'static str); 4] {
+    [("open", "Open Ferrocast"), ("clipboard", "Clipboard History"), ("settings", "Settings…"), ("check_updates", "Check for Updates…")]
 }
 
-/// Tray entries above the separator: `Stop Recording` leads while a recording runs.
-pub fn tray_menu_items(recording: bool) -> Vec<(&'static str, &'static str)> {
+/// Tray entries above the separator: `Stop Recording` leads while a recording runs, and the
+/// tiling switch (`Some(paused)`) shows only while tiling is on, as Pause or Resume by state.
+pub fn tray_menu_items(recording: bool, tiling: Option<bool>) -> Vec<(&'static str, &'static str)> {
     let mut items = Vec::new();
     if recording {
         items.push(("stop_recording", "Stop Recording"));
     }
-    items.extend(tray_items());
+    let base = tray_items();
+    items.extend(&base[..2]);
+    match tiling {
+        Some(false) => items.push(("tiling_pause", "Pause Tiling")),
+        Some(true) => items.push(("tiling_pause", "Resume Tiling")),
+        None => {}
+    }
+    items.extend(&base[2..]);
     items
+}
+
+/// 0: no tiling item, 1: running (offers Pause), 2: paused (offers Resume).
+static TRAY_TILING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn tray_tiling() -> Option<bool> {
+    match TRAY_TILING.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
+}
+
+/// Show the tiling item in the menu bar menu (`None` hides it). Rebuilds the menu only on a change.
+pub fn set_tray_tiling(tray: Option<&tray_icon::TrayIcon>, state: Option<bool>, recording: bool) {
+    if tray_tiling() == state {
+        return;
+    }
+    TRAY_TILING.store(state.map_or(0, |p| if p { 2 } else { 1 }), std::sync::atomic::Ordering::Relaxed);
+    if let Some(tray) = tray {
+        if let Some(menu) = build_tray_menu(recording) {
+            tray.set_menu(Some(Box::new(menu)));
+        }
+    }
 }
 
 fn build_tray_menu(recording: bool) -> Option<tray_icon::menu::Menu> {
     use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
     let menu = Menu::new();
-    for (id, label) in tray_menu_items(recording) {
+    for (id, label) in tray_menu_items(recording, tray_tiling()) {
         menu.append(&MenuItem::with_id(id, label, true, None)).ok()?;
     }
     menu.append(&PredefinedMenuItem::separator()).ok()?;

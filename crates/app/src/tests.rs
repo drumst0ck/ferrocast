@@ -137,6 +137,7 @@ thread_local! {
     static APPLE_AVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FX_FRONT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
     /// Scripts the web effect asked a browser to run (replace and unmark), in order.
+    static FX_TILING_RX: std::cell::RefCell<Option<std::sync::mpsc::Receiver<ferrocast_macos::tiling::Cmd>>> = const { std::cell::RefCell::new(None) };
     static FX_SCRIPTS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Arguments of every `effect_probe` call: (source pid, drop point, run).
     static FX_PROBE: std::cell::RefCell<Vec<ProbeCall>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -183,6 +184,13 @@ impl Effects {
             notes_tray: |_bus| {
                 FX_LOG.with(|l| l.borrow_mut().push("notes_tray on".into()));
                 Some(Box::new(FakeNotesTray))
+            },
+            tiling_spawn: |_bus| {
+                // a channel with nothing behind it: the Accessibility worker is never started
+                let (tx, rx) = std::sync::mpsc::channel();
+                FX_TILING_RX.with(|r| *r.borrow_mut() = Some(rx));
+                FX_LOG.with(|l| l.borrow_mut().push("tiling spawn".into()));
+                Some(ferrocast_macos::tiling::Handle::from_sender(tx))
             },
             notes_appearance: |a| FX_LOG.with(|l| l.borrow_mut().push(format!("appearance {a:?}"))),
             web_script: |_b, js| FX_SCRIPTS.with(|l| l.borrow_mut().push(js.to_string())),
@@ -6452,8 +6460,8 @@ fn tray_menu_has_check_for_updates_before_the_separator() {
 
 #[test]
 fn tray_menu_offers_stop_recording_first_only_while_recording() {
-    assert_eq!(services::tray_menu_items(false), services::tray_items().to_vec());
-    let rec = services::tray_menu_items(true);
+    assert_eq!(services::tray_menu_items(false, None), services::tray_items().to_vec());
+    let rec = services::tray_menu_items(true, None);
     assert_eq!(rec[0], ("stop_recording", "Stop Recording"));
     assert_eq!(rec[1..], services::tray_items());
 }
@@ -14723,27 +14731,118 @@ fn tiling_commands_are_launcher_items_and_the_existing_window_commands_remain() 
 }
 
 #[test]
-fn pause_toggles_without_starting_a_worker_and_toggle_flips_the_setting() {
+fn the_default_fixture_never_spawns_the_tiling_worker() {
     let mut app = fixture();
-    app.run_tiling(ferrocast_core::tiling::Action::Pause, None);
-    assert!(app.tiling_paused);
-    app.run_tiling(ferrocast_core::tiling::Action::Pause, None);
-    assert!(!app.tiling_paused);
-    app.settings.tiling_enabled = false;
-    app.run_tiling(ferrocast_core::tiling::Action::Toggle, None);
-    assert!(app.settings.tiling_enabled);
-    app.run_tiling(ferrocast_core::tiling::Action::Toggle, None);
-    assert!(!app.settings.tiling_enabled);
+    app.sync_tiling();
+    app.save_settings();
+    assert!(!fx_taken().iter().any(|l| l == "tiling spawn"));
+    assert!(app.tiling.is_none());
 }
 
 #[test]
-fn tiling_hotkeys_are_registered_only_while_tiling_is_on() {
+fn toggle_and_pause_use_the_spawn_seam_and_the_worker_stops_when_everything_is_off() {
+    use ferrocast_core::tiling::Action;
+    let mut app = fixture();
+    app.run_tiling(Action::Pause, None);
+    assert!(app.tiling_paused);
+    app.run_tiling(Action::Pause, None);
+    assert!(!app.tiling_paused);
+    assert!(app.tiling.is_none(), "pausing alone starts nothing");
+    app.run_tiling(Action::Toggle, None);
+    assert!(app.settings.tiling_enabled);
+    assert_eq!(fx_taken().iter().filter(|l| *l == "tiling spawn").count(), 1);
+    assert!(app.tiling.is_some());
+    // the worker got its minimum sizes and a configuration
+    let got = FX_TILING_RX.with(|r| {
+        let r = r.borrow();
+        let r = r.as_ref().unwrap();
+        let mut v = vec![];
+        while let Ok(c) = r.try_recv() {
+            v.push(c);
+        }
+        v
+    });
+    assert!(got.iter().any(|c| matches!(c, ferrocast_macos::tiling::Cmd::MinSizes(_))));
+    assert!(got.iter().any(|c| matches!(c, ferrocast_macos::tiling::Cmd::Config(c) if c.enabled)));
+    // off again (hover is off too): the handle is dropped, the worker's channel disconnects
+    app.run_tiling(Action::Toggle, None);
+    assert!(!app.settings.tiling_enabled);
+    assert!(app.tiling.is_none());
+    FX_TILING_RX.with(|r| {
+        let r = r.borrow();
+        assert!(matches!(r.as_ref().unwrap().try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected)));
+    });
+    // hover alone keeps a worker
+    app.settings.tiling_hover_activate = true;
+    app.sync_tiling();
+    assert!(app.tiling.is_some());
+}
+
+#[test]
+fn the_worker_is_told_a_clamped_gap() {
+    let mut app = fixture();
+    app.settings.tiling_enabled = true;
+    app.settings.tiling_gap = 5000.0;
+    app.sync_tiling();
+    let gap = FX_TILING_RX.with(|r| {
+        let r = r.borrow();
+        let mut gap = None;
+        while let Ok(c) = r.as_ref().unwrap().try_recv() {
+            if let ferrocast_macos::tiling::Cmd::Config(c) = c {
+                gap = Some(c.gap);
+            }
+        }
+        gap
+    });
+    assert_eq!(gap, Some(64.0));
+}
+
+#[test]
+fn tiling_defaults_are_not_registered_while_tiling_is_off_or_on_top_of_the_users_shortcuts() {
+    let mut s = ferrocast_core::models::Settings::default();
+    let targets = |s: &ferrocast_core::models::Settings| services::plan_hotkeys(s).0.into_iter().map(|p| p.1).collect::<Vec<_>>();
+    assert!(!targets(&s).iter().any(|t| t.starts_with("tiling:")), "off: no tiling shortcut");
+    s.tiling_enabled = true;
+    let t = targets(&s);
+    for id in ["tiling:layout-1", "tiling:layout-4", "tiling:focus-mode", "tiling:move-left", "tiling:move-down"] {
+        assert!(t.iter().any(|x| x == id), "{id}");
+    }
+    // the user already bound ⌃⌥⌘1 and ⌃⌥Z to their own commands
+    s.command_mut("calc").hotkey = Some("Control+Alt+Super+Digit1".into());
+    s.command_mut("builtin:clipboard-history").hotkey = Some("Alt+Control+KeyZ".into());
+    let (plan, skipped) = services::plan_hotkeys(&s);
+    assert!(plan.iter().any(|(h, t)| t == "calc" && h == "Control+Alt+Super+Digit1"));
+    assert!(!plan.iter().any(|(_, t)| t == "tiling:layout-1" || t == "tiling:focus-mode"));
+    assert!(plan.iter().any(|(_, t)| t == "tiling:layout-2"), "the other defaults stay");
+    assert_eq!(skipped.len(), 2, "{skipped:?}");
+    assert!(skipped.iter().all(|m| m.contains("already in use")));
+}
+
+#[test]
+fn a_users_own_tiling_toggle_shortcut_is_kept_while_tiling_is_off() {
+    let mut s = ferrocast_core::models::Settings::default();
+    s.command_mut("tiling:toggle").hotkey = Some("Control+Alt+KeyT".into());
+    s.command_mut("tiling:layout-2").hotkey = Some("Control+Alt+KeyL".into());
+    let plan = services::plan_hotkeys(&s).0;
+    assert!(plan.iter().any(|(h, t)| t == "tiling:toggle" && h == "Control+Alt+KeyT"));
+    assert!(!plan.iter().any(|(_, t)| t == "tiling:layout-2"), "other tiling shortcuts wait for tiling to be on");
+    s.tiling_enabled = true;
+    let plan = services::plan_hotkeys(&s).0;
+    assert!(plan.iter().any(|(h, t)| t == "tiling:layout-2" && h == "Control+Alt+KeyL"));
+}
+
+#[test]
+fn tiling_hotkey_defaults_exist() {
     let s = ferrocast_core::models::Settings::default();
     assert_eq!(s.hotkey("tiling:focus-mode"), Some("Control+Alt+KeyZ"));
     assert_eq!(s.hotkey("tiling:layout-1"), Some("Control+Alt+Super+Digit1"));
 }
 
 #[test]
-fn the_tray_menu_has_a_tiling_pause_item() {
-    assert!(services::tray_items().iter().any(|(id, _)| *id == "tiling_pause"));
+fn the_tray_offers_pause_or_resume_by_state_and_only_while_tiling_is_on() {
+    let ids = |t: Option<bool>| services::tray_menu_items(false, t);
+    assert!(!ids(None).iter().any(|(id, _)| *id == "tiling_pause"));
+    assert!(ids(Some(false)).contains(&("tiling_pause", "Pause Tiling")));
+    assert!(ids(Some(true)).contains(&("tiling_pause", "Resume Tiling")));
+    assert_eq!(ids(None), services::tray_items().to_vec());
 }

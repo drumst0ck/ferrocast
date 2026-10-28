@@ -32,7 +32,8 @@ Pick one in Settings, from the launcher (**Tiling Layout 1â€“4**) or with <kbd>â
 - When an app refuses a size, Ferrocast learns the smallest size it accepts, moves the split lines to make room and floats the window in the middle when it cannot fit. The list is stored on your Mac in the data folder, by app, and never contains window titles.
 - When the screen is full, the extra windows stack in the last slot as an overlapping cascade.
 - While **Stage Manager** is on, tiling pauses; it resumes when you turn Stage Manager off.
-- **Pause or Resume Tiling** in the menu bar menu stops it without moving any window.
+- **Pause Tiling** / **Resume Tiling** in the menu bar menu (shown while tiling is on) stops it without moving any window.
+- Focus mode does nothing while Stage Manager is on. The tiling shortcuts never replace a shortcut you already set; if one collides, Ferrocast tells you and leaves that tiling command without a shortcut.
 
 ## Other options
 

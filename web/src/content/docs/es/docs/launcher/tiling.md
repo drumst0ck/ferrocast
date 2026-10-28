@@ -32,7 +32,8 @@ Elígela en Ajustes, desde el lanzador (**Tiling Layout 1–4**) o con <kbd>⌃<
 - Si una app rechaza un tamaño, Ferrocast aprende el mínimo que acepta, mueve las divisiones y flota la ventana en el centro si no cabe. La lista se guarda en tu Mac, por app, sin títulos de ventana.
 - Con la pantalla llena, las ventanas sobrantes se apilan en el último hueco en cascada.
 - Con **Stage Manager** activo el mosaico se pausa y se reanuda al apagarlo.
-- **Pause or Resume Tiling** en el menú de la barra de menús lo detiene sin mover ventanas.
+- **Pause Tiling** / **Resume Tiling** en el menú de la barra de menús (visible con el mosaico activo) lo detiene sin mover ventanas.
+- El modo foco no hace nada con Stage Manager activo. Los atajos del mosaico nunca sustituyen uno que ya tengas; si chocan, Ferrocast te avisa y deja ese comando sin atajo.
 
 :::caution[Límites]
 Necesita el permiso de Accesibilidad. El borde resaltado se guarda como ajuste pero aún no se dibuja.

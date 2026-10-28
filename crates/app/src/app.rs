@@ -1507,25 +1507,31 @@ impl App {
         let s = &self.settings;
         let on = s.tiling_enabled || s.tiling_hover_activate;
         if self.tiling.is_none() && on {
-            let b = self.bus.clone();
-            let h = ferrocast_macos::tiling::spawn(Box::new(move |e| b.send(Msg::Tiling(e))));
-            h.send(ferrocast_macos::tiling::Cmd::MinSizes(self.store.load("tiling-min-sizes.json")));
-            self.tiling = Some(h);
+            self.tiling = (self.fx.tiling_spawn)(&self.bus);
+            if let Some(h) = &self.tiling {
+                h.send(ferrocast_macos::tiling::Cmd::MinSizes(self.store.load("tiling-min-sizes.json")));
+            }
+        } else if !on {
+            // dropping the handle ends the worker: nothing observes windows while tiling is off
+            self.tiling = None;
         }
+        let s = &self.settings;
         let cfg = ferrocast_macos::tiling::Config {
             enabled: s.tiling_enabled,
             paused: self.tiling_paused,
             layout: s.tiling_layout,
             display_layouts: s.tiling_display_layouts.iter().filter_map(|(k, v)| Some((k.parse().ok()?, *v))).collect(),
-            gap: s.tiling_gap,
+            gap: ferrocast_core::tiling::clamp_gap(s.tiling_gap),
             excluded: s.tiling_excluded.clone(),
             hover_activate: s.tiling_hover_activate,
         };
         if let Some(h) = &self.tiling {
             h.send(ferrocast_macos::tiling::Cmd::Config(cfg));
         }
-        if self.tiling_hotkeys != s.tiling_enabled {
-            self.tiling_hotkeys = s.tiling_enabled;
+        let (enabled, paused) = (s.tiling_enabled, self.tiling_paused);
+        services::set_tray_tiling(self._tray.as_ref(), enabled.then_some(paused), self.tray_rec_shown);
+        if self.tiling_hotkeys != enabled {
+            self.tiling_hotkeys = enabled;
             self.apply_hotkeys();
         }
     }
@@ -7390,6 +7396,8 @@ pub(crate) struct Effects {
     pub(crate) glow_hide: fn(),
     /// Create the Notes toggle item in the menu bar (main thread only); dropping it removes it.
     pub(crate) notes_tray: fn(&Bus) -> Option<Box<dyn std::any::Any>>,
+    /// Start the window tiling worker (it drives the Accessibility API: never in tests).
+    pub(crate) tiling_spawn: fn(&Bus) -> Option<ferrocast_macos::tiling::Handle>,
     /// Make the Notes windows follow the theme setting (main thread only).
     pub(crate) notes_appearance: fn(ferrocast_macos::notes_theme::Appearance),
     /// Run a script in a browser page, ignoring the result (clean-up).
@@ -7418,6 +7426,10 @@ impl Effects {
                 }
             },
             notes_tray: |bus| services::make_notes_tray(bus.clone()).map(|t| Box::new(t) as Box<dyn std::any::Any>),
+            tiling_spawn: |bus| {
+                let b = bus.clone();
+                Some(ferrocast_macos::tiling::spawn(Box::new(move |e| b.send(Msg::Tiling(e)))))
+            },
             notes_appearance: |a| ferrocast_macos::notes_theme::set_appearance(a),
             web_script: |b, js| services::web_script(b, js.to_string()),
             apple_available: ferrocast_macos::apple_translate::available,

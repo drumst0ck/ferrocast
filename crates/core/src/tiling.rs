@@ -251,6 +251,10 @@ pub fn capacity(screen: Rect, gap: f64, layout: Layout, windows: usize) -> usize
 
 /// Frames for `wins` (in the same order) on `screen`. See the module docs for the rules.
 pub fn tile(screen: Rect, gap: f64, layout: Layout, wins: &[Win]) -> Vec<Placed> {
+    if !valid_screen(screen) {
+        return vec![];
+    }
+    let gap = clamp_gap(gap);
     let area = screen.inset(gap);
     let mut result: Vec<Option<Placed>> = vec![None; wins.len()];
     let mut live: Vec<usize> = (0..wins.len()).collect();
@@ -277,19 +281,135 @@ pub fn tile(screen: Rect, gap: f64, layout: Layout, wins: &[Win]) -> Vec<Placed>
             result[*i] = Some(Placed { id: wins[*i].id, frame: slots[s], kind });
         }
         if k < live.len() {
-            let group = &live[k - 1..];
+            // the cascade shrinks each frame: a window whose learned minimum no longer fits floats
+            let mut group: Vec<usize> = live[k - 1..].to_vec();
             let slot = slots[k - 1];
-            let step = CASCADE_STEP.min(slot.w.min(slot.h) / (2.0 * group.len() as f64));
-            let total = step * (group.len() - 1) as f64;
-            for (j, i) in group.iter().enumerate() {
-                let off = step * j as f64;
-                let frame = Rect::new(slot.x + off, slot.y + off, (slot.w - total).max(1.0), (slot.h - total).max(1.0));
-                result[*i] = Some(Placed { id: wins[*i].id, frame, kind: Kind::Stacked });
+            loop {
+                let step = CASCADE_STEP.min(slot.w.min(slot.h) / (2.0 * group.len() as f64));
+                let total = step * (group.len() - 1) as f64;
+                let (fw, fh) = ((slot.w - total).max(1.0), (slot.h - total).max(1.0));
+                let too_big = group.iter().position(|i| wins[*i].min.is_some_and(|m| m.0 > fw + 0.5 || m.1 > fh + 0.5));
+                if let Some(g) = too_big {
+                    let i = group.remove(g);
+                    let m = wins[i].min.unwrap();
+                    let (w, h) = (m.0.min(area.w), m.1.min(area.h));
+                    let c = area.center();
+                    result[i] = Some(Placed { id: wins[i].id, frame: Rect::new(c.0 - w / 2.0, c.1 - h / 2.0, w, h), kind: Kind::Floating });
+                    if group.is_empty() {
+                        break;
+                    }
+                    continue;
+                }
+                let kind = if group.len() == 1 { Kind::Tiled } else { Kind::Stacked };
+                for (j, i) in group.iter().enumerate() {
+                    let off = step * j as f64;
+                    let frame = Rect::new(slot.x + off, slot.y + off, fw, fh);
+                    result[*i] = Some(Placed { id: wins[*i].id, frame, kind });
+                }
+                break;
             }
         }
         break;
     }
     result.into_iter().flatten().collect()
+}
+
+/// Largest Space accepted, in points.
+pub const MAX_GAP: f64 = 64.0;
+
+/// `gap` limited to `0..=MAX_GAP`; a non-finite value counts as 0.
+pub fn clamp_gap(gap: f64) -> f64 {
+    if gap.is_finite() {
+        gap.clamp(0.0, MAX_GAP)
+    } else {
+        0.0
+    }
+}
+
+/// A display rect the engine can use: finite and at least 1 pt in each direction.
+pub fn valid_screen(r: Rect) -> bool {
+    [r.x, r.y, r.w, r.h].iter().all(|v| v.is_finite()) && r.w >= 1.0 && r.h >= 1.0
+}
+
+/// `order` (window ids per display) for `n` displays (at least 1): the lists of displays that went
+/// away are appended to the first display, so every window stays in some list.
+pub fn reconcile_displays(mut order: Vec<Vec<u64>>, n: usize) -> Vec<Vec<u64>> {
+    let n = n.max(1);
+    if order.len() > n {
+        let gone: Vec<u64> = order.split_off(n).into_iter().flatten().collect();
+        order[0].extend(gone);
+    }
+    order.resize(n, vec![]);
+    order
+}
+
+const SLACK: f64 = 2.0;
+
+/// The size an app refused to go below: `Some(read size)` when, in the step that applied
+/// `applied`, the window kept its position but came out larger than asked.
+pub fn refusal(applied: Rect, read: Rect) -> Option<(f64, f64)> {
+    let kept = (read.x - applied.x).abs() <= 4.0 && (read.y - applied.y).abs() <= 4.0;
+    (kept && (read.w > applied.w + SLACK || read.h > applied.h + SLACK)).then_some((read.w, read.h))
+}
+
+/// Whether a read-back may teach a minimum size: never during focus mode, only on the first read
+/// after our own arrange step (`verify`), and only for a refusal of the frame we applied.
+pub fn should_learn(focus_active: bool, verify: bool, applied: Option<Rect>, read: Rect) -> Option<(f64, f64)> {
+    if focus_active || !verify {
+        return None;
+    }
+    refusal(applied?, read)
+}
+
+/// Did the user move or resize the window? Only when it changed since the previous read (so an app
+/// that keeps refusing our frame is not mistaken for a user) and not because we applied a frame.
+pub fn user_moved(prev: Option<Rect>, now: Rect, target: Rect, applied_since_read: bool) -> bool {
+    let differs =
+        |a: Rect, b: Rect| (a.x - b.x).abs() > 4.0 || (a.y - b.y).abs() > 4.0 || (a.w - b.w).abs() > 4.0 || (a.h - b.h).abs() > 4.0;
+    !applied_since_read && differs(now, target) && prev.is_some_and(|p| differs(p, now))
+}
+
+/// Hover activation: raise a window once the pointer has rested on it, again after the pointer
+/// left it.
+#[derive(Debug, Default)]
+pub struct Hover {
+    over: Option<(u64, f64)>,
+    raised: Option<u64>,
+}
+
+impl Hover {
+    /// `hit` is the window on top under the pointer; returns the window to raise now, if any.
+    pub fn step(&mut self, hit: Option<u64>, now: f64, dwell: f64) -> Option<u64> {
+        let Some(hit) = hit else {
+            self.over = None;
+            self.raised = None;
+            return None;
+        };
+        if self.raised == Some(hit) {
+            return None;
+        }
+        match self.over {
+            Some((id, since)) if id == hit => {
+                if now - since >= dwell {
+                    self.raised = Some(hit);
+                    Some(hit)
+                } else {
+                    None
+                }
+            }
+            _ => {
+                self.over = Some((hit, now));
+                self.raised = None;
+                None
+            }
+        }
+    }
+}
+
+/// The first entry (front to back) whose bounds hold `p`, if it is an ordinary (layer 0) window.
+pub fn top_window_at(entries: &[(i32, Rect, i64)], p: (f64, f64)) -> Option<usize> {
+    let i = entries.iter().position(|(_, r, _)| r.contains(p))?;
+    (entries[i].2 == 0).then_some(i)
 }
 
 /// What focus mode remembers: every frame, and the window that was expanded.
@@ -372,19 +492,33 @@ impl MinSizes {
     }
     /// An app was asked for `asked` and ended up at `got`: when it came out larger, that is its
     /// minimum. Returns whether the stored minimum grew.
-    pub fn learn(&mut self, app: &str, asked: (f64, f64), got: (f64, f64)) -> bool {
-        const SLACK: f64 = 2.0;
+    pub fn learn_capped(&mut self, app: &str, asked: (f64, f64), got: (f64, f64), cap: (f64, f64)) -> bool {
         let (gw, gh) = (got.0 > asked.0 + SLACK, got.1 > asked.1 + SLACK);
         if !gw && !gh {
             return false;
         }
         let old = self.get(app).unwrap_or((0.0, 0.0));
-        let new = (if gw { old.0.max(got.0) } else { old.0 }, if gh { old.1.max(got.1) } else { old.1 });
+        let new = (if gw { old.0.max(got.0.min(cap.0)) } else { old.0 }, if gh { old.1.max(got.1.min(cap.1)) } else { old.1 });
         let changed = new != old;
         if changed {
             self.0.insert(app.to_string(), new);
         }
         changed
+    }
+    /// The app was asked for `asked` and accepted it (`got` is no larger): a stored minimum above
+    /// what it accepted was wrong and is lowered. Returns whether anything changed.
+    pub fn confirm(&mut self, app: &str, asked: (f64, f64), got: (f64, f64)) -> bool {
+        let Some(old) = self.get(app) else { return false };
+        let (aw, ah) = (got.0 <= asked.0 + SLACK, got.1 <= asked.1 + SLACK);
+        let new = (if aw && got.0 < old.0 { got.0 } else { old.0 }, if ah && got.1 < old.1 { got.1 } else { old.1 });
+        if new == old {
+            return false;
+        }
+        self.0.insert(app.to_string(), new);
+        true
+    }
+    pub fn learn(&mut self, app: &str, asked: (f64, f64), got: (f64, f64)) -> bool {
+        self.learn_capped(app, asked, got, (f64::INFINITY, f64::INFINITY))
     }
 }
 
@@ -729,6 +863,146 @@ mod tests {
         assert_eq!(get("tiling:move-left"), Some("Control+Alt+ArrowLeft"));
         for (id, _) in DEFAULT_HOTKEYS {
             assert!(Action::from_id(id).is_some(), "{id}");
+        }
+    }
+
+    #[test]
+    fn gap_is_clamped_and_screens_validated() {
+        assert_eq!(clamp_gap(5000.0), 64.0);
+        assert_eq!(clamp_gap(-9.0), 0.0);
+        assert_eq!(clamp_gap(f64::NAN), 0.0);
+        assert_eq!(clamp_gap(8.0), 8.0);
+        assert!(!valid_screen(Rect::new(0.0, 0.0, 0.0, 900.0)));
+        assert!(!valid_screen(Rect::new(f64::NAN, 0.0, 100.0, 100.0)));
+        assert!(!valid_screen(Rect::new(0.0, 0.0, f64::INFINITY, 100.0)));
+        assert!(valid_screen(S));
+    }
+
+    #[test]
+    fn an_absurd_gap_or_a_bad_screen_never_puts_frames_off_screen() {
+        for gap in [5000.0, -50.0, f64::NAN] {
+            let p = tile(S, gap, Layout::Columns, &ws(3));
+            assert_eq!(p.len(), 3, "gap {gap}");
+            assert_disjoint_inside(&p, S.inset(clamp_gap(gap)));
+        }
+        assert!(tile(Rect::new(0.0, 0.0, 0.0, 0.0), 8.0, Layout::Grid, &ws(2)).is_empty());
+        assert!(tile(Rect::new(f64::NAN, 0.0, 10.0, 10.0), 8.0, Layout::Grid, &ws(2)).is_empty());
+    }
+
+    #[test]
+    fn displays_going_away_keep_every_window() {
+        let order = vec![vec![1, 2], vec![3, 4], vec![5]];
+        let r = reconcile_displays(order.clone(), 1);
+        assert_eq!(r, vec![vec![1, 2, 3, 4, 5]]);
+        let r2 = reconcile_displays(order.clone(), 2);
+        assert_eq!(r2, vec![vec![1, 2, 5], vec![3, 4]]);
+        let grown = reconcile_displays(vec![vec![1]], 3);
+        assert_eq!(grown, vec![vec![1], vec![], vec![]]);
+        let mut all: Vec<u64> = reconcile_displays(order, 1).concat();
+        all.sort();
+        assert_eq!(all, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn only_a_refusal_of_our_own_frame_teaches_a_minimum() {
+        let applied = Rect::new(100.0, 100.0, 400.0, 300.0);
+        // the app kept the position and came out larger: a refusal
+        assert_eq!(should_learn(false, true, Some(applied), Rect::new(100.0, 100.0, 520.0, 300.0)), Some((520.0, 300.0)));
+        // focus mode: the window is full screen, never a minimum
+        assert_eq!(should_learn(true, true, Some(applied), Rect::new(8.0, 33.0, 1584.0, 884.0)), None);
+        // not the first read after our own apply (the user or focus mode resized it since)
+        assert_eq!(should_learn(false, false, Some(applied), Rect::new(8.0, 33.0, 1584.0, 884.0)), None);
+        // nothing applied yet
+        assert_eq!(should_learn(false, true, None, Rect::new(8.0, 33.0, 1584.0, 884.0)), None);
+        // smaller or equal is not a refusal
+        assert_eq!(should_learn(false, true, Some(applied), Rect::new(100.0, 100.0, 400.0, 300.0)), None);
+        assert_eq!(should_learn(false, true, Some(applied), Rect::new(100.0, 100.0, 300.0, 200.0)), None);
+        // moved: not a refusal of the size
+        assert_eq!(should_learn(false, true, Some(applied), Rect::new(600.0, 100.0, 520.0, 300.0)), None);
+    }
+
+    #[test]
+    fn learned_minimums_are_capped_by_the_display_and_decay_when_an_app_accepts_less() {
+        let mut m = MinSizes::default();
+        assert!(m.learn_capped("a", (300.0, 300.0), (5000.0, 400.0), (1600.0, 900.0)));
+        assert_eq!(m.get("a"), Some((1600.0, 400.0)));
+        // the app later accepted 500 x 400: the stored width was wrong
+        assert!(m.confirm("a", (500.0, 400.0), (500.0, 400.0)));
+        assert_eq!(m.get("a"), Some((500.0, 400.0)));
+        assert!(!m.confirm("a", (500.0, 400.0), (500.0, 400.0)), "nothing more to lower");
+        // a refused frame is not an acceptance
+        assert!(!m.confirm("a", (300.0, 300.0), (500.0, 400.0)));
+        assert_eq!(m.get("a"), Some((500.0, 400.0)));
+    }
+
+    #[test]
+    fn a_refused_position_is_not_a_user_move_but_a_real_drag_is() {
+        let target = Rect::new(0.0, 25.0, 800.0, 900.0);
+        // the app keeps the same off-target frame tick after tick: refusal
+        let off = Rect::new(40.0, 25.0, 800.0, 900.0);
+        assert!(!user_moved(Some(off), off, target, false));
+        // we applied a frame since the last read and the app only half obeyed
+        assert!(!user_moved(Some(Rect::new(300.0, 300.0, 500.0, 500.0)), off, target, true));
+        // the frame changed since the last read and is not on target: the user
+        assert!(user_moved(Some(target), Rect::new(300.0, 300.0, 800.0, 900.0), target, false));
+        // on target is never a move
+        assert!(!user_moved(Some(off), target, target, false));
+        // no previous read: cannot tell
+        assert!(!user_moved(None, off, target, false));
+    }
+
+    #[test]
+    fn hover_raises_after_the_dwell_and_again_after_leaving() {
+        let mut h = Hover::default();
+        assert_eq!(h.step(Some(1), 0.0, 0.25), None);
+        assert_eq!(h.step(Some(1), 0.1, 0.25), None);
+        assert_eq!(h.step(Some(1), 0.3, 0.25), Some(1));
+        assert_eq!(h.step(Some(1), 0.9, 0.25), None, "already raised");
+        assert_eq!(h.step(None, 1.0, 0.25), None);
+        assert_eq!(h.step(Some(1), 1.1, 0.25), None);
+        assert_eq!(h.step(Some(1), 1.5, 0.25), Some(1), "raised again after the pointer left");
+        // moving to another window restarts the dwell
+        assert_eq!(h.step(Some(2), 1.6, 0.25), None);
+        assert_eq!(h.step(Some(2), 1.9, 0.25), Some(2));
+    }
+
+    #[test]
+    fn hover_uses_the_window_on_top_not_the_first_that_contains_the_pointer() {
+        let a = Rect::new(0.0, 0.0, 500.0, 500.0);
+        let b = Rect::new(100.0, 100.0, 200.0, 200.0);
+        // front to back: b is on top of a
+        let entries = [(2, b, 0), (1, a, 0)];
+        assert_eq!(top_window_at(&entries, (150.0, 150.0)), Some(0));
+        assert_eq!(top_window_at(&entries, (10.0, 10.0)), Some(1));
+        assert_eq!(top_window_at(&entries, (900.0, 10.0)), None);
+        // a menu or panel (layer > 0) on top means nothing to raise
+        let with_menu = [(9, b, 25), (1, a, 0)];
+        assert_eq!(top_window_at(&with_menu, (150.0, 150.0)), None);
+    }
+
+    #[test]
+    fn a_stacked_window_whose_minimum_does_not_fit_the_cascade_floats() {
+        // 7 columns on a 1600 screen: the last slot is 320 wide and holds a 3-window cascade
+        let mut v = ws(7);
+        v[6].min = Some((320.0, 200.0));
+        let plain = tile(S, 0.0, Layout::Columns, &v);
+        // a minimum equal to the slot still fits the cascade frame? the cascade shrinks the frame
+        let cascaded = plain.iter().find(|p| p.id == 7).unwrap();
+        assert!(cascaded.frame.w >= 1.0);
+        let mut v = ws(7);
+        v[5].min = Some((315.0, 300.0));
+        let p = tile(S, 0.0, Layout::Columns, &v);
+        let f = p.iter().find(|p| p.id == 6).unwrap();
+        assert_eq!(f.kind, Kind::Floating, "{f:?}");
+        let area = S;
+        let c = area.center();
+        assert!((f.frame.center().0 - c.0).abs() < 1e-6 && (f.frame.center().1 - c.1).abs() < 1e-6);
+        // the others still stack, and nothing stacked is smaller than its minimum
+        for q in p.iter().filter(|q| q.kind == Kind::Stacked) {
+            let w = v.iter().find(|w| w.id == q.id).unwrap();
+            if let Some(m) = w.min {
+                assert!(q.frame.w + 1e-9 >= m.0 && q.frame.h + 1e-9 >= m.1, "{q:?}");
+            }
         }
     }
 }
