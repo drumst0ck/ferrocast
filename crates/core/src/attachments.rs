@@ -240,11 +240,10 @@ pub fn cleanup_dir(dir: &Path, state: &Path, referenced: &HashSet<String>, now_s
             continue;
         }
         let since = before.get(&name).copied().unwrap_or(now_secs);
-        if before.contains_key(&name) && now_secs - since >= grace && old_enough(meta.modified().ok(), now_secs, grace) {
-            if std::fs::remove_file(e.path()).is_ok() {
-                removed += 1;
-                continue;
-            }
+        let due = before.contains_key(&name) && now_secs - since >= grace && old_enough(meta.modified().ok(), now_secs, grace);
+        if due && std::fs::remove_file(e.path()).is_ok() {
+            removed += 1;
+            continue;
         }
         after.insert(name, since);
     }
