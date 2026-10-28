@@ -242,14 +242,14 @@ pub fn stagger_ms(i: usize) -> f32 {
 /// Hub text for the files being dragged: a count line and a kind line.
 pub fn hub_text(files: &[std::path::PathBuf]) -> (String, String) {
     use crate::convert::{ext, family_of, Family};
-    let count = format!("{} file{}", files.len(), if files.len() == 1 { "" } else { "s" });
+    let count = crate::i18n::trn("{n} file", "{n} files", files.len() as u64);
     let Some(first) = files.first() else { return (count, String::new()) };
     let fam = family_of(first);
     if files.iter().any(|f| family_of(f) != fam) {
-        return (count, "Mixed".to_string());
+        return (count, crate::i18n::tr("Mixed").into_owned());
     }
     let sub = if fam == Family::Folder {
-        "Folder".to_string()
+        crate::i18n::tr("Folder").into_owned()
     } else if files.len() == 1 {
         let e = ext(first).to_ascii_uppercase();
         match fam {

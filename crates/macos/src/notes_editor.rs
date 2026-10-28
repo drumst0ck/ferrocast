@@ -982,7 +982,7 @@ pub fn markdown() -> String {
 pub fn title() -> String {
     let t = handles().map(|(_, st)| doc_of(&st).title()).unwrap_or_default();
     if t.is_empty() {
-        "Untitled".to_string()
+        ferrocast_core::i18n::tr("Untitled").into_owned()
     } else {
         t
     }

@@ -1093,7 +1093,7 @@ impl App {
                     Ok(tool) => match self.tools.ffmpeg {
                         None => self.toast("ffmpeg is not installed (brew install ffmpeg)"),
                         Some(_) => {
-                            self.toast(format!("{}…", tool.label()));
+                            self.toast(format!("{}…", tr(&tool.label())));
                             services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
                             self.pop();
                         }
@@ -1107,7 +1107,7 @@ impl App {
                     Err(e) => self.toast(e),
                     Ok((goal, r)) => {
                         let op = ferrocast_core::convert::ImageOp::CompressWith(goal, r);
-                        self.toast(format!("{}…", op.label()));
+                        self.toast(format!("{}…", tr(&op.label())));
                         services::image_op_files(files, op, self.bus.clone());
                         self.pop();
                     }
@@ -1796,7 +1796,7 @@ impl App {
                 ui.painter().text(
                     r.center(),
                     Align2::CENTER_CENTER,
-                    format!("{label}  {key}"),
+                    format!("{}  {key}", tr(label)),
                     FontId::proportional(11.5),
                     if on || hot { Color32::WHITE } else { Color32::from_white_alpha(190) },
                 );
@@ -2151,7 +2151,7 @@ impl App {
             None => {
                 // Settings shows the app name next to the icon (the header's breadcrumb already says "Settings")
                 if settings {
-                    p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, tr("Ferrocast"), FontId::proportional(12.5), fsub);
+                    p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, "Ferrocast", FontId::proportional(12.5), fsub);
                     record_text(ui.ctx(), pal, "footer-left", fsub, &[], 1.0);
                 } else {
                     p.text(Pos2::new(tx, cy), Align2::LEFT_CENTER, self.view_title(), FontId::proportional(12.5), pal.sub);
@@ -2620,9 +2620,13 @@ impl App {
             (WheelKind::Translate, Some(t)) => ferrocast_core::translate::hub_text(t),
             _ => hub_text(files),
         };
+        // the Translate wheel lists the user's own language names: shown as written
+        let seg_text = |l: &str| if kind == WheelKind::Translate { l.to_string() } else { tr(l).into_owned() };
         let hub_label = match hover.and_then(|i| segs.get(i)) {
-            Some(sg) if sg.label.chars().count() > 16 => format!("{}…", sg.label.chars().take(15).collect::<String>()),
-            Some(sg) => sg.label.clone(),
+            Some(sg) if seg_text(&sg.label).chars().count() > 16 => {
+                format!("{}…", seg_text(&sg.label).chars().take(15).collect::<String>())
+            }
+            Some(sg) => seg_text(&sg.label),
             None => count,
         };
 
@@ -2767,7 +2771,7 @@ impl App {
             let pop = lerp(0.85, 1.0, sa) * scale;
             let r_mid = (g.r_in + g.r_out) / 2.0;
             let mid = at(segment_center(i, n, r_mid));
-            let ring_text = ring_label(&seg.label, n, (g0.r_in + g0.r_out) / 2.0);
+            let ring_text = ring_label(&seg_text(&seg.label), n, (g0.r_in + g0.r_out) / 2.0);
             let fits = ring_text.is_some();
             let tile = (if n > 8 { 24.0 } else { 28.0 }) * lerp(1.0, 1.12, h) * pop;
             let ir = Rect::from_center_size(if fits { mid - Vec2::new(0.0, 8.0 * pop) } else { mid }, Vec2::splat(tile));
@@ -2789,7 +2793,7 @@ impl App {
         let hub_font = FontId::proportional(13.0 * scale);
         p.circle_filled(c, g.r_in - 6.0 * scale, if dark { white(10) } else { black(6) });
         p.circle_stroke(c, g.r_in - 6.0 * scale, Stroke::new(1.0, pal.border));
-        p.text(c - Vec2::new(0.0, 30.0 * scale), Align2::CENTER_CENTER, name, FontId::proportional(9.5 * scale), accent);
+        p.text(c - Vec2::new(0.0, 30.0 * scale), Align2::CENTER_CENTER, tr(name), FontId::proportional(9.5 * scale), accent);
         if hub_out > 0.0 {
             p.text(c, Align2::CENTER_CENTER, &st.hub_prev, hub_font.clone(), pal.text.gamma_multiply(hub_out));
         }
@@ -5472,7 +5476,7 @@ impl App {
                 _ => "Drag a row to move",
             };
             record_note(ui.ctx(), hint);
-            ui.label(RichText::new(hint).size(12.0).color(pal.sub));
+            ui.label(RichText::new(tr(hint)).size(12.0).color(pal.sub));
             ui.add_space(6.0);
             egui::ScrollArea::vertical().id_salt("reorder-list").auto_shrink([false, false]).show(ui, |ui| {
                 let res = drag_reorder_cells(
@@ -7227,7 +7231,7 @@ impl App {
                             });
                             row(ui, pal, "Compact mode", "Show only the search bar until you type.", |ui| toggle(ui, pal, &mut s.compact_mode));
                             row(ui, pal, "Launch at login", "Start Ferrocast when you sign in to your Mac.", |ui| toggle(ui, pal, &mut s.launch_at_login));
-                            row(ui, pal, "Language", "The language of Ferrocast. System follows macOS; this Mac only, not synced.", |ui| {
+                            row(ui, pal, "Language", "The language of Ferrocast. System follows macOS; this Mac only, not synced. The Notes window changes after a restart.", |ui| {
                                 use ferrocast_core::i18n::Lang;
                                 let current = ferrocast_core::i18n::Lang::ALL.into_iter().find(|l| l.code() == s.language);
                                 let shown = current.map_or_else(|| tr("System").to_string(), |l| l.native_name().to_string());
@@ -7350,9 +7354,9 @@ impl App {
                             let history_off = !s.clipboard_enabled;
                             row_disabled_if(ui, history_off, |ui| {
                                 row(ui, pal, "Keep history for", "Older entries are removed automatically. Pinned entries stay.", |ui| {
-                                    field_combo(ui, pal, "retention", s.clipboard_retention.label(), 120.0, |ui| {
+                                    field_combo(ui, pal, "retention", &tr(s.clipboard_retention.label()), 120.0, |ui| {
                                         for r in Retention::ALL {
-                                            ui.selectable_value(&mut s.clipboard_retention, r, r.label());
+                                            ui.selectable_value(&mut s.clipboard_retention, r, tr(r.label()));
                                         }
                                     });
                                 });
@@ -7874,7 +7878,7 @@ impl App {
                             row_disabled_if(ui, !has_notion, |ui| {
                                 let shown = match &notion_target {
                                     Some(t) => format!("{} ({})", t.title, if t.kind == "page" { "page" } else { "database" }),
-                                    None => "Not set".to_string(),
+                                    None => tr("Not set").into_owned(),
                                 };
                                 row(ui, pal, "Capture target", "Where Add to Notion writes. Search below to choose.", |ui| {
                                     if notion_target.is_some() && small_btn(ui, pal, "Clear") {
@@ -10409,7 +10413,7 @@ fn theme_preview(ui: &mut Ui, t: &ferrocast_core::themes::CustomTheme) {
     }
     let fy = r.max.y - 30.0;
     p.hline(r.min.x..=r.max.x, fy, Stroke::new(1.0, pal.sep));
-    p.text(Pos2::new(r.min.x + 16.0, fy + 15.0), Align2::LEFT_CENTER, tr("Ferrocast"), FontId::proportional(11.5), pal.sub);
+    p.text(Pos2::new(r.min.x + 16.0, fy + 15.0), Align2::LEFT_CENTER, "Ferrocast", FontId::proportional(11.5), pal.sub);
     let chip = Rect::from_center_size(Pos2::new(r.max.x - 40.0, fy + 15.0), Vec2::new(60.0, 20.0));
     p.rect_filled(chip, 6.0, pal.accent);
     p.text(chip.center(), Align2::CENTER_CENTER, tr("Open"), FontId::proportional(11.5), pal.on_accent);

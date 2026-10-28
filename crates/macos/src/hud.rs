@@ -75,7 +75,7 @@ pub fn disk_level(free_bytes: u64) -> DiskLevel {
 pub fn low_disk_message(free_bytes: u64) -> Option<String> {
     (disk_level(free_bytes) != DiskLevel::Ok).then(|| {
         let tenths = free_bytes / 100_000_000;
-        format!("Low disk space: {}.{} GB left", tenths / 10, tenths % 10)
+        ferrocast_core::i18n::trf("Low disk space: {gb} GB left", &[("gb", &format!("{}.{}", tenths / 10, tenths % 10))])
     })
 }
 
@@ -365,13 +365,27 @@ pub fn hud_show(mtm: MainThreadMarker, display: Option<[f64; 4]>, on_pause_toggl
     time.setFrame(rect([36.0, (HUD_H - th) / 2.0, 76.0, th]));
     fx.addSubview(&time);
 
-    let pause = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str("Pause"), Some(t), Some(sel!(pauseClicked:)), mtm) };
+    let pause = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str(&ferrocast_core::i18n::tr("Pause")),
+            Some(t),
+            Some(sel!(pauseClicked:)),
+            mtm,
+        )
+    };
     pause.setBezelStyle(NSBezelStyle::Push);
     pause.setRefusesFirstResponder(true);
     pause.setFrame(rect([116.0, (HUD_H - 24.0) / 2.0, 70.0, 24.0]));
     fx.addSubview(&pause);
 
-    let stop = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str("Stop"), Some(t), Some(sel!(stopClicked:)), mtm) };
+    let stop = unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str(&ferrocast_core::i18n::tr("Stop")),
+            Some(t),
+            Some(sel!(stopClicked:)),
+            mtm,
+        )
+    };
     stop.setBezelStyle(NSBezelStyle::Push);
     stop.setRefusesFirstResponder(true);
     stop.setFrame(rect([192.0, (HUD_H - 24.0) / 2.0, 58.0, 24.0]));
@@ -388,7 +402,7 @@ pub fn hud_update(elapsed_secs: f64, paused: bool) {
     HUD.with(|slot| {
         if let Some(h) = slot.borrow().as_ref() {
             h.time.setStringValue(&NSString::from_str(&format_elapsed(elapsed_secs)));
-            h.pause.setTitle(&NSString::from_str(if paused { "Resume" } else { "Pause" }));
+            h.pause.setTitle(&NSString::from_str(&ferrocast_core::i18n::tr(if paused { "Resume" } else { "Pause" })));
         }
     });
 }

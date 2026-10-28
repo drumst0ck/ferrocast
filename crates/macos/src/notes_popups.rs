@@ -132,13 +132,20 @@ pub fn slash_items(query: &str) -> Vec<(Format, Item)> {
     let needle = query.trim().to_lowercase();
     let mut hits: Vec<(u8, usize, Format, Item)> = Vec::new();
     for (idx, (format, glyph, aliases)) in slash_table().into_iter().enumerate() {
+        // the menu shows the name in the interface language and matches it as well as the English one
+        let shown_name = ferrocast_core::i18n::tr(format.name()).into_owned();
+        let shown_name = shown_name.as_str();
         let rank = if needle.is_empty() {
             Some(0)
         } else {
-            std::iter::once(format.name()).chain(aliases.iter().copied()).filter_map(|c| match_rank(&needle, c)).min()
+            std::iter::once(format.name())
+                .chain(std::iter::once(shown_name))
+                .chain(aliases.iter().copied())
+                .filter_map(|c| match_rank(&needle, c))
+                .min()
         };
         if let Some(rank) = rank {
-            let item = Item { glyph: glyph.to_string(), title: format.name().to_string(), detail: format.shortcut().map(str::to_string) };
+            let item = Item { glyph: glyph.to_string(), title: shown_name.to_string(), detail: format.shortcut().map(str::to_string) };
             hits.push((rank, idx, format, item));
         }
     }
@@ -191,8 +198,8 @@ fn bar_icon(f: Format) -> (Option<&'static str>, &'static str) {
 /// Tooltip: name plus shortcut.
 fn bar_tooltip(f: Format) -> String {
     match f.shortcut() {
-        Some(s) => format!("{} {s}", f.name()),
-        None => f.name().to_string(),
+        Some(s) => format!("{} {s}", ferrocast_core::i18n::tr(f.name())),
+        None => ferrocast_core::i18n::tr(f.name()).into_owned(),
     }
 }
 

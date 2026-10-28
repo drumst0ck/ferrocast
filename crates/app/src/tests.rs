@@ -16910,10 +16910,14 @@ mod i18n_ui {
                 t.chars().filter(|c| c.is_alphabetic()).count() >= 3
                     && !same_everywhere(t)
                     && !(t.chars().all(|c| c.is_ascii_digit() || ":.–-×·%/ ".contains(c)))
+                    // a wheel chip: "Actions  ⌃" is the label and its key
+                    && !t.rsplit_once("  ").is_some_and(|(label, key)| {
+                        key.chars().count() == 1 && ferrocast_core::i18n::lookup(label, lang) == Some(label)
+                    })
                     // a time in it: a file's data line, not a sentence
                     && !t.as_bytes().windows(3).any(|w| w[0].is_ascii_digit() && w[1] == b':' && w[2].is_ascii_digit())
                     // names and key names that read the same in every language
-                    && !["Demo", "hola", "ferrocast-i18n.mp4", concat!("Version ", env!("CARGO_PKG_VERSION")), "!sig", "Best regards", "Docs", "Sig", "clip", "ferrocast", "Local · llama3.2", " LUFS", " dBTP", "MIT", "space", "Space", "⌥ Space", "Control", "calc 2+2", "5pm ldn in sf", "Aurora", "Dusk", "Forest", "Graphite", "Lilac", "Ocean", "Rose", "Sand"].contains(&t.as_str())
+                    && !["Demo", "hola", "ferrocast-i18n.mp4", "English, Spanish, French, German, Portuguese, Italian, Japanese, Chinese", "llama3.2", "clip 1.mp4", "clip 2.mp4", "ferrocast-i18n.pdf", "images", "AVIF", "BMP", "HEIC", "JPEG", "PDF", "TIFF", "WebP", "clip 0.mp4", concat!("Version ", env!("CARGO_PKG_VERSION")), "!sig", "Best regards", "Docs", "Sig", "clip", "ferrocast", "Local · llama3.2", " LUFS", " dBTP", "MIT", "space", "Space", "⌥ Space", "Control", "calc 2+2", "5pm ldn in sf", "Aurora", "Dusk", "Forest", "Graphite", "Lilac", "Ocean", "Rose", "Sand"].contains(&t.as_str())
                     // a row that says the same in this language on purpose ("Zoom", "Mono")
                     && ferrocast_core::i18n::lookup(t, lang) != Some(t.as_str())
                     // "1 zoom" is "{n} zoom" with a number in it
@@ -17040,6 +17044,27 @@ mod i18n_ui {
                 a.stack = vec![View::Root, view];
                 render(&mut a, vec![]);
                 render(&mut a, vec![cmd_key(Key::K)]);
+                v.push(a);
+            }
+            for tab in 0..SETTINGS_TABS.len() {
+                let mut a = settings_app(tab, egui::ThemePreference::Dark);
+                settle(&mut a);
+                v.push(a);
+            }
+            let pdf = std::path::PathBuf::from("/tmp/ferrocast-i18n.pdf");
+            v.push(view_app(View::PdfOrganize { file: pdf.clone(), n: 3, plan: ferrocast_core::pdfplan::PdfPlan::new(3) }));
+            for purpose in [ReorderPurpose::JoinVideos, ReorderPurpose::CreatePdf, ReorderPurpose::MergePdf] {
+                let mut a = fixture();
+                open_reorder(&mut a, purpose, reorder_files(3));
+                v.push(a);
+            }
+            for kind in [
+                ferrocast_core::wheel::WheelKind::Convert,
+                ferrocast_core::wheel::WheelKind::Tools,
+                ferrocast_core::wheel::WheelKind::Actions,
+            ] {
+                let mut a = fixture();
+                open_wheel(&mut a, kind, 2);
                 v.push(a);
             }
             for q in ["calc 2+2", "zz", "5pm ldn in sf"] {

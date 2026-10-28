@@ -226,7 +226,7 @@ pub fn clean_reply(s: &str) -> String {
 /// Hub lines of the wheel: a word count and a one-line preview of 24 characters.
 pub fn hub_text(text: &str) -> (String, String) {
     let words = text.split_whitespace().count();
-    let count = format!("{words} word{}", if words == 1 { "" } else { "s" });
+    let count = crate::i18n::trn("{n} word", "{n} words", words as u64);
     let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let preview =
         if one_line.chars().count() > 24 { format!("{}\u{2026}", one_line.chars().take(23).collect::<String>()) } else { one_line };

@@ -3221,7 +3221,7 @@ impl App {
             }
             WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(trf("{label}: not available yet", &[("label", &label)])),
             WheelPick::File(tool) => {
-                self.toast(format!("{}…", tool.label()));
+                self.toast(format!("{}…", tr(&tool.label())));
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
             }
             WheelPick::Image(ferrocast_core::convert::ImageOp::Collage) if files.len() >= 2 => {
@@ -5588,7 +5588,7 @@ impl App {
             }
             Kind::FileTool(files, tool) => {
                 let (files, tool) = (files.clone(), tool.clone());
-                self.toast(format!("{}…", tool.label()));
+                self.toast(format!("{}…", tr(&tool.label())));
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
                 self.hide();
                 self.reset_to_root();

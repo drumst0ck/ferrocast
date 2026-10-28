@@ -252,7 +252,7 @@ pub fn browse_items(rows: &[BrowseRow], current_first: bool) -> Vec<PaletteItem>
             subtitle: Some(r.subtitle.clone()),
             glyph: r.pinned.then(|| "sf:pin.fill".to_string()),
             accessory: r.slot.map(|n| format!("⌘{n}")),
-            section: Some(if r.pinned { "Pinned" } else { "Notes" }.to_string()),
+            section: Some(ferrocast_core::i18n::tr(if r.pinned { "Pinned" } else { "Notes" }).into_owned()),
             danger: false,
             has_children: false,
         })
@@ -265,11 +265,11 @@ pub fn action_items(entries: &[Entry]) -> Vec<PaletteItem> {
         .iter()
         .map(|e| PaletteItem {
             id: e.action.id(),
-            title: e.title.clone(),
-            subtitle: e.subtitle.clone(),
+            title: ferrocast_core::i18n::tr(&e.title).into_owned(),
+            subtitle: e.subtitle.as_deref().map(|s| ferrocast_core::i18n::tr(s).into_owned()),
             glyph: None,
             accessory: e.shortcut.map(str::to_string),
-            section: Some(e.section.to_string()),
+            section: Some(ferrocast_core::i18n::tr(e.section).into_owned()),
             danger: e.danger,
             has_children: e.has_children,
         })
@@ -554,7 +554,7 @@ impl NotesCtl {
             NMsg::DictationError(e) => {
                 if self.dictating.is_some() {
                     self.stop_dictation();
-                    out.toast = Some(format!("Dictation stopped: {e}"));
+                    out.toast = Some(ferrocast_core::i18n::trf("Dictation stopped: {e}", &[("e", &e.to_string())]));
                 }
             }
         }
@@ -787,8 +787,8 @@ impl NotesCtl {
     fn open_browse(&mut self, d: &Data) {
         let rows = note_actions::browse_rows(d.notes, "", self.current.as_deref(), d.now);
         self.close_palette();
-        self.fx.palette_show("Browse notes…", browse_items(&rows, true));
-        self.fx.palette_empty_text("No notes found");
+        self.fx.palette_show(&ferrocast_core::i18n::tr("Browse notes…"), browse_items(&rows, true));
+        self.fx.palette_empty_text(&ferrocast_core::i18n::tr("No notes found"));
         self.mode = Mode::Browse;
     }
 
@@ -812,8 +812,8 @@ impl NotesCtl {
     fn open_actions(&mut self, d: &Data) {
         let items = action_items(&note_actions::top_level(&self.act_ctx(d)));
         self.close_palette();
-        self.fx.palette_show("Search actions…", items);
-        self.fx.palette_empty_text("No actions found");
+        self.fx.palette_show(&ferrocast_core::i18n::tr("Search actions…"), items);
+        self.fx.palette_empty_text(&ferrocast_core::i18n::tr("No actions found"));
         self.mode = Mode::Actions;
     }
 
@@ -860,14 +860,14 @@ impl NotesCtl {
                 let ctx = self.act_ctx(d);
                 if action == NoteAction::RecentlyDeleted {
                     let items = deleted_items(&Self::deleted_rows(d, ""));
-                    self.fx.palette_push("Recently deleted…", items);
-                    self.fx.palette_empty_text("Nothing was deleted");
+                    self.fx.palette_push(&ferrocast_core::i18n::tr("Recently deleted…"), items);
+                    self.fx.palette_empty_text(&ferrocast_core::i18n::tr("Nothing was deleted"));
                     self.mode = Mode::RecentlyDeleted;
                     return;
                 }
                 let kids = note_actions::children(action, &ctx);
                 if !kids.is_empty() {
-                    self.fx.palette_push("Search…", action_items(&kids));
+                    self.fx.palette_push(&ferrocast_core::i18n::tr("Search…"), action_items(&kids));
                     self.mode = Mode::Submenu(action);
                 } else if action == NoteAction::BrowseNotes {
                     self.open_browse(d);
@@ -907,7 +907,7 @@ impl NotesCtl {
                 if let Some(n) = cur.and_then(|c| d.notes.iter().find(|n| n.id == c)) {
                     let text = export_text(n, f);
                     self.fx.set_clipboard(&text);
-                    out.toast = Some(format!("Copied as {}", f.title()));
+                    out.toast = Some(ferrocast_core::i18n::trf("Copied as {format}", &[("format", &ferrocast_core::i18n::tr(f.title()))]));
                 }
             }
             Export(f) => {
@@ -987,7 +987,10 @@ impl NotesCtl {
             return;
         }
         if note_ai::too_long(&text) {
-            out.toast = Some(format!("The text is too long for an AI command (over {} characters)", note_ai::MAX_CHARS));
+            out.toast = Some(ferrocast_core::i18n::trf(
+                "The text is too long for an AI command (over {n} characters)",
+                &[("n", &note_ai::MAX_CHARS.to_string())],
+            ));
             return;
         }
         self.next_request += 1;
@@ -1002,7 +1005,7 @@ impl NotesCtl {
             prompt: note_ai::prompt(&cmd, &text),
             settings: ferrocast_core::translate::engine_settings(d.settings),
         });
-        out.toast = Some(format!("Running {}…", cmd.title));
+        out.toast = Some(ferrocast_core::i18n::trf("Running {title}…", &[("title", &ferrocast_core::i18n::tr(cmd.title))]));
     }
 
     /// The answer of the worker: applies it only when the note is exactly what it was.
@@ -1021,7 +1024,7 @@ impl NotesCtl {
         let reply = match reply {
             Ok(r) => r,
             Err(e) => {
-                out.toast = Some(format!("The AI command failed: {e}"));
+                out.toast = Some(ferrocast_core::i18n::trf("The AI command failed: {e}", &[("e", &e.to_string())]));
                 return;
             }
         };
@@ -1057,7 +1060,11 @@ impl NotesCtl {
                 self.fx.replace_selection_markdown(&text)
             }
         };
-        out.toast = Some(if applied { format!("Done: {}", cmd.title) } else { "The AI result could not be applied".into() });
+        out.toast = Some(if applied {
+            ferrocast_core::i18n::trf("Done: {title}", &[("title", &ferrocast_core::i18n::tr(cmd.title))])
+        } else {
+            "The AI result could not be applied".into()
+        });
     }
 
     // ------------------------------------------------------------ dictation
@@ -1105,7 +1112,7 @@ impl NotesCtl {
 
     fn start_dictation(&mut self, out: &mut Out) {
         if let Err(e) = self.fx.dictation_start() {
-            out.toast = Some(format!("Dictation could not start: {e}"));
+            out.toast = Some(ferrocast_core::i18n::trf("Dictation could not start: {e}", &[("e", &e.to_string())]));
             return;
         }
         let (_, cursor) = self.fx.selection_range();
@@ -1146,9 +1153,9 @@ impl NotesCtl {
         match self.fx.write_file(&path, &export_text(n, f)) {
             Ok(()) => {
                 self.fx.reveal(&path);
-                format!("Exported {name} to Downloads")
+                ferrocast_core::i18n::trf("Exported {name} to Downloads", &[("name", &name)])
             }
-            Err(e) => format!("Export failed: {e}"),
+            Err(e) => ferrocast_core::i18n::trf("Export failed: {e}", &[("e", &e.to_string())]),
         }
     }
 }

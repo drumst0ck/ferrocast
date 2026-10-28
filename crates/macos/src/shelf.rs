@@ -417,17 +417,17 @@ fn build(mtm: MainThreadMarker) -> Ui {
             initWithFrame: rect(10.0, 8.0, 150.0, 24.0)
         ]
     };
-    let title = NSTextField::labelWithString(&NSString::from_str("Shelf"), mtm);
+    let title = NSTextField::labelWithString(&NSString::from_str(&ferrocast_core::i18n::tr("Shelf")), mtm);
     title.setFrame(rect(4.0, 3.0, 142.0, 18.0));
     title_row.addSubview(&title);
     content.addSubview(&title_row);
 
-    let clear = small_button(mtm, "Clear", &target, sel!(shelfClear:), rect(164.0, 10.0, 50.0, 20.0));
+    let clear = small_button(mtm, &ferrocast_core::i18n::tr("Clear"), &target, sel!(shelfClear:), rect(164.0, 10.0, 50.0, 20.0));
     content.addSubview(&clear);
     let close = small_button(mtm, "×", &target, sel!(shelfClose:), rect(222.0, 10.0, 28.0, 20.0));
     content.addSubview(&close);
 
-    let empty = NSTextField::labelWithString(&NSString::from_str("Drop files here"), mtm);
+    let empty = NSTextField::labelWithString(&NSString::from_str(&ferrocast_core::i18n::tr("Drop files here")), mtm);
     empty.setFrame(rect(PAD, HEADER + 12.0, WIDTH - 2.0 * PAD, 18.0));
     empty.setAlignment(objc2_app_kit::NSTextAlignment::Center);
     content.addSubview(&empty);
@@ -446,9 +446,9 @@ fn refresh(mtm: MainThreadMarker) {
         }
         ui.empty.setHidden(!list.is_empty());
         let label = match list.len() {
-            0 => "Shelf".to_string(),
-            1 => "Shelf · 1 item".to_string(),
-            n => format!("Shelf · {n} items (drag all)"),
+            0 => ferrocast_core::i18n::tr("Shelf").into_owned(),
+            1 => ferrocast_core::i18n::tr("Shelf · 1 item").into_owned(),
+            n => ferrocast_core::i18n::trf("Shelf · {n} items (drag all)", &[("n", &n.to_string())]),
         };
         ui.title.setStringValue(&NSString::from_str(&label));
         let _ = &ui.title_row;
