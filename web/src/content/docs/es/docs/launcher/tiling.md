@@ -1,6 +1,6 @@
 ---
 title: "Mosaico automático de ventanas"
-description: "Mosaico opcional y siempre activo en Ferrocast: cada ventana nueva tiene su sitio, cuatro disposiciones, modo foco, una disposición por pantalla y pausa con Stage Manager."
+description: "Mosaico automático y opcional en Ferrocast: cada ventana nueva tiene su sitio, cuatro disposiciones, modo foco y una disposición por pantalla."
 sidebar:
   order: 9
 ---
