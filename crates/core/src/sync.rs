@@ -49,8 +49,8 @@ pub struct Tracked {
     pub deleted: bool,
 }
 
-/// Tombstones older than this are dropped from documents (90 days): every Mac that syncs in that
-/// time has seen the deletion.
+/// Default tombstone lifetime of `publish`/`publish_with` (90 days). The app keeps tombstones for
+/// ever (`publish_ttl` with `None`), except in the clipboard, see `sync_io`.
 pub const TOMBSTONE_TTL_MS: i64 = 90 * 24 * 3600 * 1000;
 
 pub fn hash(value: &Value) -> String {
@@ -68,6 +68,21 @@ pub fn publish(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64
 /// items are a baseline stamped `first_stamp` instead of `now`: pass 0 when other Macs already
 /// published, so what they published wins and only items nobody has are added.
 pub fn publish_with(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64, first_stamp: i64) -> (DeviceDoc, Tracker) {
+    publish_ttl(device, items, prev, now, first_stamp, Some(TOMBSTONE_TTL_MS))
+}
+
+/// Like `publish_with`, with the lifetime of tombstones chosen by the caller: `None` keeps them for
+/// ever. Without that, a device document that was not touched for longer than the lifetime (an old
+/// Mac, a folder left by a migration) would bring a deleted item back, because nothing remembers
+/// the deletion any more. A tombstone is only an id and a time, so keeping them costs little.
+pub fn publish_ttl(
+    device: &str,
+    items: &[(String, Value)],
+    prev: &Tracker,
+    now: i64,
+    first_stamp: i64,
+    ttl: Option<i64>,
+) -> (DeviceDoc, Tracker) {
     let unseen = if prev.seeded { now } else { first_stamp };
     let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new() };
     let mut next = Tracker { items: BTreeMap::new(), seeded: true };
@@ -90,7 +105,7 @@ pub fn publish_with(device: &str, items: &[(String, Value)], prev: &Tracker, now
             continue;
         }
         let modified = if t.deleted { t.modified } else { now };
-        if now - modified > TOMBSTONE_TTL_MS {
+        if ttl.is_some_and(|ttl| now - modified > ttl) {
             continue;
         }
         doc.items.insert(id.clone(), Record { modified, deleted: true, value: None });
@@ -121,6 +136,12 @@ pub fn winners(docs: &[DeviceDoc]) -> BTreeMap<String, (String, Record)> {
 /// are appended oldest first. Returns the merged items and a tracker that already knows the winners,
 /// so the next `publish` does not resend them as local edits.
 pub fn merge(local: &[(String, Value)], docs: &[DeviceDoc], tracker: &Tracker) -> (Vec<(String, Value)>, Tracker) {
+    merge_as("", local, docs, tracker)
+}
+
+/// `merge` for the Mac `own`: when this Mac's record and the winning remote one have exactly the same
+/// time (two Macs that both stamped a first sync with 0), the greater device id wins on both Macs.
+pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracker: &Tracker) -> (Vec<(String, Value)>, Tracker) {
     let win = winners(docs);
     let mut out: Vec<(String, Value)> = Vec::new();
     let mut next = tracker.clone();
@@ -130,17 +151,17 @@ pub fn merge(local: &[(String, Value)], docs: &[DeviceDoc], tracker: &Tracker) -
             continue;
         }
         match win.get(id) {
-            Some((_, rec)) if rec.deleted => {
+            Some((dev, rec)) if rec.deleted => {
                 // Deleted elsewhere after our last edit.
-                if local_is_newer(tracker, id, value, rec.modified) {
+                if local_is_newer(tracker, id, value, rec.modified, dev, own) {
                     out.push((id.clone(), value.clone()));
                 } else {
                     next.items.insert(id.clone(), Tracked { hash: hash(value), modified: rec.modified, deleted: true });
                 }
             }
-            Some((_, rec)) => {
+            Some((dev, rec)) => {
                 let theirs = rec.value.clone().unwrap_or(Value::Null);
-                if local_is_newer(tracker, id, value, rec.modified) || hash(&theirs) == hash(value) {
+                if local_is_newer(tracker, id, value, rec.modified, dev, own) || hash(&theirs) == hash(value) {
                     out.push((id.clone(), value.clone()));
                 } else {
                     next.items.insert(id.clone(), Tracked { hash: hash(&theirs), modified: rec.modified, deleted: false });
@@ -169,9 +190,11 @@ pub fn merge(local: &[(String, Value)], docs: &[DeviceDoc], tracker: &Tracker) -
 
 /// True when this Mac edited `id` after `their_modified`: the local value differs from what the
 /// tracker last published (an unpublished edit counts as now) or was published later.
-fn local_is_newer(tracker: &Tracker, id: &str, value: &Value, their_modified: i64) -> bool {
+fn local_is_newer(tracker: &Tracker, id: &str, value: &Value, their_modified: i64, their_device: &str, own: &str) -> bool {
     match tracker.items.get(id) {
-        Some(t) if t.hash == hash(value) && !t.deleted => t.modified > their_modified,
+        Some(t) if t.hash == hash(value) && !t.deleted => {
+            t.modified > their_modified || (t.modified == their_modified && own > their_device)
+        }
         // Never published or changed since: an edit nobody else has seen yet.
         _ => true,
     }
@@ -229,6 +252,37 @@ mod tests {
         };
         assert_eq!(winners(&[a.clone(), b.clone(), c.clone()])["1"].1.value, Some(json!("b")));
         assert_eq!(winners(&[c, b, a])["1"].1.value, Some(json!("b")), "order of documents does not matter");
+    }
+
+    #[test]
+    fn a_tie_at_the_same_time_goes_to_the_greater_device_on_both_macs() {
+        let rec = |v: &str| Record { modified: 0, deleted: false, value: Some(json!(v)) };
+        let (da, ta) = publish_with("zz", &items(&[("1", json!("zz value"))]), &Tracker::default(), 5, 0);
+        let (db, tb) = publish_with("aa", &items(&[("1", json!("aa value"))]), &Tracker::default(), 5, 0);
+        assert_eq!(da.items["1"], rec("zz value"));
+        let (on_zz, _) = merge_as("zz", &items(&[("1", json!("zz value"))]), std::slice::from_ref(&db), &ta);
+        let (on_aa, _) = merge_as("aa", &items(&[("1", json!("aa value"))]), std::slice::from_ref(&da), &tb);
+        assert_eq!(on_zz, items(&[("1", json!("zz value"))]));
+        assert_eq!(on_aa, items(&[("1", json!("zz value"))]), "both Macs end with the greater device's value");
+    }
+
+    #[test]
+    fn tombstones_can_be_kept_without_expiry() {
+        let (_, t1) = publish_ttl("a", &items(&[("1", json!("x"))]), &Tracker::default(), 0, 0, None);
+        let (doc, _) = publish_ttl("a", &[], &t1, 10, 10, None);
+        let (doc2, t3) = publish_ttl("a", &[], &doc_tracker(&doc), 10 + 1000 * TOMBSTONE_TTL_MS, 0, None);
+        assert!(doc2.items["1"].deleted && t3.items["1"].deleted);
+    }
+
+    fn doc_tracker(doc: &DeviceDoc) -> Tracker {
+        Tracker {
+            items: doc
+                .items
+                .iter()
+                .map(|(k, r)| (k.clone(), Tracked { hash: String::new(), modified: r.modified, deleted: r.deleted }))
+                .collect(),
+            seeded: true,
+        }
     }
 
     #[test]

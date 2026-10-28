@@ -14781,27 +14781,26 @@ fn a_merged_edit_of_the_open_note_reaches_the_editor_and_typing_continues_from_i
 }
 
 #[test]
-fn a_note_deleted_elsewhere_while_open_is_kept_and_typing_is_not_dropped() {
-    use crate::notes_ctl::NMsg;
-    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
-    app.notes_do(|c, d| c.toggle(d));
+fn a_note_deleted_elsewhere_is_deleted_here_too_when_the_notes_window_is_closed() {
+    let (mut app, _st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d)); // open
     let open = app.notes_ctl.current.clone().unwrap();
+    app.notes_do(|c, d| c.toggle(d)); // closed again: `current` is kept by the controller
     app.settings.sync_enabled = true;
-    // the merge removed the open note (a deletion on another Mac)
     let remote: Vec<Note> = app.notes.iter().filter(|n| n.id != open).cloned().collect();
     let snap = app.sync_snapshot("notes");
     assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
-    assert!(app.notes.iter().any(|n| n.id == open), "the open note stays");
-    assert_eq!(app.notes_ctl.current.as_deref(), Some(open.as_str()));
-    app.notes_do(|c, d| c.handle(NMsg::Changed("still typing".into()), d));
-    assert_eq!(app.notes.iter().find(|n| n.id == open).unwrap().text, "still typing");
+    assert!(!app.notes.iter().any(|n| n.id == open), "the remote deletion is applied");
+    assert_ne!(app.notes_ctl.current.as_deref(), Some(open.as_str()));
     // moved to Recently Deleted elsewhere: same
+    let other = app.notes[0].id.clone();
+    app.notes_do(|c, d| c.toggle(d));
+    app.notes_do(|c, d| c.toggle(d));
     let mut trashed = app.notes.clone();
-    trashed.iter_mut().find(|n| n.id == open).unwrap().deleted_at = Some(99);
+    trashed.iter_mut().find(|n| n.id == other).unwrap().deleted_at = Some(99);
     let snap = app.sync_snapshot("notes");
     assert!(app.sync_apply("notes", merged_notes(&trashed), ferrocast_core::sync::Tracker::default(), &snap).is_some());
-    assert!(app.notes.iter().find(|n| n.id == open).unwrap().deleted_at.is_none());
-    let _ = st;
+    assert!(app.notes.iter().find(|n| n.id == other).is_none_or(|n| n.deleted_at.is_some()));
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
 
@@ -14855,4 +14854,63 @@ fn turning_sync_on_saves_every_domain_file_first_and_the_status_names_pending_do
     app.save_settings();
     assert!(!app.sync.flag.load(Ordering::SeqCst));
     std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
+fn a_note_deleted_elsewhere_while_the_window_is_open_and_idle_moves_the_editor_to_another_note() {
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d));
+    let open = app.notes_ctl.current.clone().unwrap();
+    app.settings.sync_enabled = true;
+    let remote: Vec<Note> = app.notes.iter().filter(|n| n.id != open).cloned().collect();
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    let now = app.notes_ctl.current.clone().unwrap();
+    assert_ne!(now, open, "the editor moved on");
+    assert_eq!(st.borrow().markdown, app.notes.iter().find(|n| n.id == now).unwrap().text);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn notes_are_not_merged_into_the_editor_while_typing_and_are_after_a_short_idle() {
+    use crate::notes_ctl::NMsg;
+    let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes_do(|c, d| c.toggle(d));
+    let open = app.notes_ctl.current.clone().unwrap();
+    app.settings.sync_enabled = true;
+    app.notes_do(|c, d| c.handle(NMsg::Changed("Alpha typed".into()), d));
+    let shown = st.borrow().markdown.clone();
+    let mut remote = app.notes.clone();
+    remote.iter_mut().find(|n| n.id != open).unwrap().text = "Remote edit of another note".into();
+    let snap = app.sync_snapshot("notes");
+    assert!(
+        app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_none(),
+        "deferred while typing"
+    );
+    assert_eq!(st.borrow().markdown, shown, "the editor is not touched (no caret jump)");
+    assert!(app.notes.iter().find(|n| n.id != open).unwrap().text != "Remote edit of another note");
+    assert!(app.notes_ctl.typing_recently(now_millis()));
+    assert!(!app.notes_ctl.typing_recently(now_millis() + 3_000), "idle after 2 s");
+    std::thread::sleep(Duration::from_millis(2_100));
+    let snap = app.sync_snapshot("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert_eq!(app.notes.iter().find(|n| n.id != open).unwrap().text, "Remote edit of another note");
+    // a closed window never defers
+    app.notes_do(|c, d| c.handle(NMsg::Changed("Alpha typed again".into()), d));
+    app.notes_do(|c, d| c.toggle(d));
+    assert!(!app.notes_ctl.typing_recently(now_millis()));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+#[test]
+fn the_sync_note_in_settings_lists_what_stays_on_each_mac() {
+    for what in
+        ["script folders", "Obsidian vault", "screenshot and recordings folders", "camera and microphone", "macOS permissions", "Keychain"]
+    {
+        assert!(draw::SYNC_NOTE.contains(what), "{what}");
+    }
 }

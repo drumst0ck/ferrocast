@@ -318,6 +318,9 @@ pub const MAX_EMOJI: usize = 30;
 
 // ---------------------------------------------------------------- controller
 
+/// Without a keystroke for this long the open note counts as idle for sync merges.
+pub const TYPING_IDLE_MS: u64 = 2_000;
+
 pub struct NotesCtl {
     fx: Box<dyn NotesFx>,
     /// The note shown in the editor (kept while the window is hidden).
@@ -327,6 +330,8 @@ pub struct NotesCtl {
     ready: bool,
     dirty: bool,
     last_save_ms: Option<u64>,
+    /// Time of the last keystroke that changed the open note.
+    last_typed_ms: Option<u64>,
     tick_pending: bool,
     /// The running AI request, if any.
     ai: Option<AiJob>,
@@ -376,6 +381,7 @@ impl NotesCtl {
             ready: false,
             dirty: false,
             last_save_ms: None,
+            last_typed_ms: None,
             tick_pending: false,
             ai: None,
             next_request: 0,
@@ -452,20 +458,32 @@ impl NotesCtl {
         out
     }
 
-    /// After a sync merge replaced the notes: show the open note's merged text in the editor when it
-    /// differs from `previous` (what the editor had), so the next keystroke builds on it.
-    pub fn reload_current(&mut self, d: &Data, previous: &str) {
-        let Some(id) = self.current.clone() else { return };
-        if let Some(n) = d.notes.iter().find(|n| n.id == id && n.deleted_at.is_none()) {
+    /// The window is open and the user is typing: text is unsaved or was typed less than
+    /// `TYPING_IDLE_MS` ago. A sync merge waits, so it cannot jump the caret or be overwritten by a
+    /// keystroke the editor still has queued.
+    pub fn typing_recently(&self, now_ms: u64) -> bool {
+        self.fx.is_visible() && (self.dirty || self.last_typed_ms.is_some_and(|t| now_ms.saturating_sub(t) < TYPING_IDLE_MS))
+    }
+
+    /// After a sync merge replaced the notes. A deleted or trashed open note leaves the editor
+    /// (another note opens when the window is showing); otherwise the editor shows the merged text
+    /// when it differs from `previous` (what the editor had).
+    pub fn after_merge(&mut self, d: &mut Data, previous: &str) -> Out {
+        let mut out = Out::default();
+        let Some(id) = self.current.clone() else { return out };
+        if !Self::live(d, &id) {
+            self.stop_dictation();
+            self.history.forget(&id);
+            self.current = None;
+            if self.fx.is_visible() {
+                self.open_initial(d, &mut out);
+            }
+        } else if let Some(n) = d.notes.iter().find(|n| n.id == id) {
             if n.text != previous {
                 self.fx.set_markdown(&n.text.clone());
             }
         }
-    }
-
-    /// True while typed text is not saved yet (a sync merge waits for it).
-    pub fn has_pending(&self) -> bool {
-        self.dirty
+        out
     }
 
     /// Writes pending text now (app quit).
@@ -563,6 +581,7 @@ impl NotesCtl {
         }
         notes::set_text(d.notes, &id, text, d.now);
         self.dirty = true;
+        self.last_typed_ms = Some(d.now_ms);
         if debounce_due(self.last_save_ms, d.now_ms) {
             self.save(d, out);
         } else {

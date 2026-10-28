@@ -29,7 +29,7 @@ Ferrocast merges item by item. Each snippet, quicklink, note, clipboard entry an
 
 Each Mac writes only its own files in the `Ferrocast` folder of iCloud Drive (`devices/<id>/`), so iCloud has no conflicting copies to create. A file another Mac wrote that Ferrocast cannot read is skipped.
 
-The first time you turn sync on in a Mac, what other Macs already published wins: that Mac takes on their settings and items, and anything only it has is added to the rest. Merging happens every 30 seconds, when you open the launcher and when you press **Sync now**. Turning sync off stops all reading and writing but leaves the folder in iCloud Drive as it is.
+The first time you turn sync on in a Mac, everything it already has counts as older than what other Macs published, even if iCloud has not shown their files yet: it takes on their settings and the newer version of each item, and anything only it has is added to the rest. If two Macs turn sync on for the first time with different versions of the same item, the Mac with the greater device id wins on both. A deletion is remembered for good, so an old Mac or a leftover folder in iCloud Drive cannot bring a deleted item back (clipboard deletions are remembered for 400 days, longer than the longest history setting). While you are typing in the Notes window, merged notes wait until you pause for two seconds. Merging happens every 30 seconds, when you open the launcher and when you press **Sync now**. Turning sync off stops all reading and writing but leaves the folder in iCloud Drive as it is.
 
 :::note[Clipboard history]
 The history now leaves the Mac when sync is on, and it is not encrypted in iCloud Drive beyond what iCloud itself provides. Leave sync off if you do not want that.

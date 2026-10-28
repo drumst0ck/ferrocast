@@ -34,6 +34,8 @@ pub struct SyncCtl {
     pub(crate) flag: Arc<AtomicBool>,
     /// Files of other Macs still being downloaded by iCloud Drive in the last run.
     pub(crate) downloading: usize,
+    /// When a notes merge that waited for typing to stop may run again.
+    notes_retry: Option<Instant>,
 }
 
 /// Result of one background run.
@@ -86,6 +88,10 @@ impl App {
 
     /// Start a run for everything queued (and the clipboard when the recorder changed it).
     pub(crate) fn sync_flush(&mut self) {
+        if self.sync.notes_retry.is_some_and(|t| t <= Instant::now()) {
+            self.sync.notes_retry = None;
+            self.sync.pending.insert("notes");
+        }
         let dirty = self.shared.clip_dirty.swap(false, Ordering::Relaxed);
         if !self.sync_on() {
             self.sync.pending.clear();
@@ -226,7 +232,7 @@ impl App {
 
     /// Local data still equals what the run saw (and no Notes text is waiting to be saved).
     fn sync_can_apply(&self, domain: &str, snapshot: &Items) -> bool {
-        (domain != "notes" || !self.notes_ctl.has_pending()) && self.sync_snapshot(domain) == *snapshot
+        (domain != "notes" || !self.notes_ctl.typing_recently(now_ms() as u64)) && self.sync_snapshot(domain) == *snapshot
     }
 
     /// Replace local data with the merge and save it. Returns the tracker to persist, with hashes
@@ -236,11 +242,15 @@ impl App {
         // Local data must still be what the run saw. The clipboard (written by the recorder thread
         // too) is compared and replaced under one lock below.
         if domain != "clipboard" && !self.sync_can_apply(domain, snapshot) {
+            if domain == "notes" && self.notes_ctl.typing_recently(now_ms() as u64) {
+                // try again once the typing has stopped
+                self.sync.notes_retry = Some(Instant::now() + Duration::from_millis(crate::notes_ctl::TYPING_IDLE_MS + 200));
+                self.ctx.request_repaint_after(Duration::from_millis(crate::notes_ctl::TYPING_IDLE_MS + 300));
+            }
             return None;
         }
         self.sync.applying = true;
         let mut again = false;
-        let mut kept_local: Vec<String> = Vec::new();
         match domain {
             "settings" => {
                 let Some(s) = sync_io::settings_from_items(&merged, &self.settings) else {
@@ -258,31 +268,15 @@ impl App {
                 self.save_quicklinks();
             }
             "notes" => {
-                // The open note is the one being typed in: a merge that deletes or trashes it
-                // elsewhere does not take it from under the editor, it counts as a local edit and
-                // the next run publishes it again.
-                let open = self.notes_ctl.current.clone();
-                let local_open = open.and_then(|id| self.notes.iter().find(|n| n.id == id).cloned());
-                let mut list: Vec<Note> = sync_io::from_items(merged);
-                if let Some(l) = &local_open {
-                    match list.iter().position(|n| n.id == l.id) {
-                        None => list.push(l.clone()),
-                        Some(i) if list[i].deleted_at.is_some() && l.deleted_at.is_none() => list[i] = l.clone(),
-                        _ => {}
-                    }
-                    if list.iter().find(|n| n.id == l.id) == Some(l) {
-                        kept_local.push(l.id.clone());
-                    }
-                }
-                self.notes = list;
+                // Typing in the open window waits (see `sync_can_apply`); with the window closed or
+                // idle a deletion made elsewhere is applied like any other change, and the editor
+                // moves off a note that is gone.
+                let open_before =
+                    self.notes_ctl.current.clone().and_then(|id| self.notes.iter().find(|n| n.id == id).map(|n| n.text.clone()));
+                self.notes = sync_io::from_items(merged);
                 self.save_notes();
-                if let Some(l) = local_open {
-                    // the editor shows what was merged when the open note changed
-                    self.notes_do(|c, d| {
-                        c.reload_current(d, &l.text);
-                        crate::notes_ctl::Out::default()
-                    });
-                }
+                let previous = open_before.unwrap_or_default();
+                self.notes_do(|c, d| c.after_merge(d, &previous));
             }
             "chats" => {
                 let mut chats: Vec<Chat> = sync_io::from_items(merged);
@@ -318,7 +312,7 @@ impl App {
         // the applied form of each item is what the next run will see
         for (id, v) in self.sync_snapshot(domain) {
             if let Some(t) = tracker.items.get_mut(&id) {
-                if !t.deleted && !kept_local.contains(&id) {
+                if !t.deleted {
                     t.hash = ferrocast_core::sync::hash(&v);
                 }
             }

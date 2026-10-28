@@ -7376,7 +7376,7 @@ impl App {
                             });
                         });
                         ui.add_space(10.0);
-                        note(ui, pal, "Off by default. Hotkeys sync; script folders, the Obsidian vault, login item, camera and microphone choice, update preferences and macOS permissions stay on each Mac. API keys in the Keychain do not sync.");
+                        note(ui, pal, SYNC_NOTE);
                         let disabled: Vec<String> = s.commands.iter().filter(|(_, c)| c.disabled).map(|(k, _)| k.clone()).collect();
                         if !disabled.is_empty() {
                             ui.add_space(14.0);
@@ -7765,6 +7765,9 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
         ctx.data_mut(|d| d.remove::<SettingsJump>(id));
     }
 }
+
+/// Note under the Sync rows in Settings.
+pub(crate) const SYNC_NOTE: &str = "Off by default. Hotkeys sync; script folders, the Obsidian vault, the screenshot and recordings folders, login item, camera and microphone choice, update preferences and macOS permissions stay on each Mac. API keys in the Keychain do not sync.";
 
 /// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Capture = 5, Power = 6..10.
 const SETTINGS_TABS: [(&str, &str); 10] = [

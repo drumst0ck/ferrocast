@@ -78,8 +78,8 @@ pub fn resolve_icloud_under(home: &Path) -> Result<PathBuf, Unavailable> {
 pub fn hardware_id() -> Option<String> {
     static ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     ID.get_or_init(|| {
-        let out = std::process::Command::new("/usr/sbin/ioreg").args(["-rd1", "-c", "IOPlatformExpertDevice"]).output().ok()?;
-        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let text =
+            run_with_timeout(std::process::Command::new("/usr/sbin/ioreg").args(["-rd1", "-c", "IOPlatformExpertDevice"]), TOOL_TIMEOUT)?;
         let line = text.lines().find(|l| l.contains("IOPlatformUUID"))?;
         line.split('"').nth(3).map(str::to_string).filter(|s| !s.is_empty())
     })
@@ -174,14 +174,40 @@ pub struct SyncIo {
     pub download: fn(&Path),
 }
 
+/// How long `ioreg` and `brctl` may run before they are killed.
+const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Run a tool and return its stdout; `None` when it could not start or was still running after
+/// `limit` (then it is killed), so a hung tool can never stop sync.
+pub fn run_with_timeout(cmd: &mut std::process::Command, limit: std::time::Duration) -> Option<String> {
+    use std::io::Read;
+    let mut child =
+        cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
+    let mut out = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    rx.recv_timeout(std::time::Duration::from_secs(1)).ok().map(|b| String::from_utf8_lossy(&b).to_string())
+}
+
 /// Ask iCloud Drive to download a file that is only a placeholder here.
 pub fn brctl_download(path: &Path) {
-    let _ = std::process::Command::new("/usr/bin/brctl")
-        .arg("download")
-        .arg(path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    let _ = run_with_timeout(std::process::Command::new("/usr/bin/brctl").arg("download").arg(path), TOOL_TIMEOUT);
 }
 
 /// `dir/name` has not been downloaded when iCloud left `dir/.name.icloud` in its place.
@@ -272,6 +298,14 @@ impl SyncIo {
     }
 }
 
+/// The clipboard keeps its deletions for 400 days, longer than the longest retention (a year);
+/// everything else keeps them for ever (see `sync::publish_ttl`).
+const CLIPBOARD_HORIZON_MS: i64 = 400 * 24 * 3600 * 1000;
+
+fn tombstone_ttl(domain: &str) -> Option<i64> {
+    (domain == "clipboard").then_some(CLIPBOARD_HORIZON_MS)
+}
+
 /// What one sync of one domain produced.
 #[derive(Debug, Clone)]
 pub struct Outcome {
@@ -299,18 +333,34 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
     }
     // First sync of this domain on this Mac (also a missing or corrupt tracker) while other Macs
     // exist: local items are a baseline that anything already published beats.
-    let first_stamp = if !tracker.seeded && io.peers() > 0 { 0 } else { now };
-    let (doc, t1) = sync::publish_with(&io.device, snapshot, tracker, now, first_stamp);
+    // A Mac that never synced this domain stamps what it has with 0 whether or not iCloud has listed
+    // the other Macs' folders yet, so anything another Mac published (at a real time) beats it, now
+    // or when it shows up later. Two Macs that both start this way tie at 0 and the greater device id
+    // wins on both. Items only this Mac has are still kept and published.
+    let first_stamp = 0;
+    let ttl = tombstone_ttl(domain);
+    let (doc, t1) = sync::publish_ttl(&io.device, snapshot, tracker, now, first_stamp, ttl);
     io.write_doc(domain, &doc)?;
-    let ReadDocs { docs, corrupt, mut downloading } = io.read_docs(domain);
-    let (merged, t2) = sync::merge(snapshot, &docs, &t1);
+    let ReadDocs { mut docs, corrupt, mut downloading } = io.read_docs(domain);
+    if domain == "clipboard" {
+        // Clipboard tombstones expire (after the longest retention), so entries from before that
+        // horizon cannot be told from deleted ones and are not adopted from other Macs.
+        let horizon = CLIPBOARD_HORIZON_MS / 1000;
+        for d in docs.iter_mut() {
+            d.items.retain(|_, r| {
+                r.deleted
+                    || r.value.as_ref().and_then(|v| v.get("copied_at")).and_then(Value::as_i64).is_none_or(|at| now / 1000 - at <= horizon)
+            });
+        }
+    }
+    let (merged, t2) = sync::merge_as(&io.device, snapshot, &docs, &t1);
     if domain == "clipboard" {
         downloading += import_images(io, &merged, &docs);
     }
     if merged == snapshot {
         return Ok(Outcome { merged: None, tracker_published: t1, tracker_merged: t2, peers: io.peers(), corrupt, downloading });
     }
-    let (_, t3) = sync::publish(&io.device, &merged, &t2, now);
+    let (_, t3) = sync::publish_ttl(&io.device, &merged, &t2, now, first_stamp, ttl);
     Ok(Outcome { merged: Some(merged), tracker_published: t1, tracker_merged: t3, peers: io.peers(), corrupt, downloading })
 }
 
@@ -630,6 +680,8 @@ mod tests {
     fn settings_sync_but_local_only_fields_stay_on_each_mac() {
         let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
         let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        a.io.device = "zz-a".into(); // two first syncs tie at 0: the greater device id wins
+        b.io.device = "aa-b".into();
         a.settings.theme = crate::models::Theme::Dark;
         a.settings.launcher_hotkey = "Ctrl+Space".into();
         a.settings.script_directories = vec!["/Users/a/scripts".into()];
@@ -688,6 +740,8 @@ mod tests {
     fn first_sync_never_beats_what_other_macs_published_but_keeps_new_items() {
         let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
         let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        a.io.device = "zz-a".into();
+        b.io.device = "aa-b".into();
         a.snippets = vec![snip("s1", "from a")];
         a.sync(5_000);
         // B has a different version of s1 (older or newer by its own clock) and an item of its own
@@ -706,6 +760,31 @@ mod tests {
         a.sync(20_000_000);
         b.sync(30_000_000);
         assert_eq!(b.snippets.iter().find(|s| s.id == "s1").unwrap().name, "a later");
+        for d in [da, db, shared] {
+            std::fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_first_sync_before_icloud_lists_the_other_mac_still_adopts_its_settings() {
+        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+        let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        a.io.device = "zz-a".into();
+        b.io.device = "aa-b".into();
+        a.settings.launcher_hotkey = "Ctrl+Space".into();
+        a.settings.theme = crate::models::Theme::Dark;
+        a.sync(1_000);
+        // iCloud has not listed A's folder on B yet
+        let hidden = shared.join("hidden");
+        std::fs::rename(shared.join("devices").join("zz-a"), &hidden).unwrap();
+        b.sync(2_000);
+        std::fs::rename(&hidden, shared.join("devices").join("zz-a")).unwrap();
+        b.sync(3_000);
+        a.sync(4_000);
+        for m in [&a, &b] {
+            assert_eq!(m.settings.launcher_hotkey, "Ctrl+Space");
+            assert_eq!(m.settings.theme, crate::models::Theme::Dark);
+        }
         for d in [da, db, shared] {
             std::fs::remove_dir_all(d).unwrap();
         }
@@ -762,6 +841,110 @@ mod tests {
         for d in [da, db, shared] {
             std::fs::remove_dir_all(d).unwrap();
         }
+    }
+
+    const DAY: i64 = 24 * 3600 * 1000;
+
+    #[test]
+    fn an_item_deleted_on_any_mac_does_not_come_back_from_a_stale_device_folder_after_92_days() {
+        let (da, db, dc, shared) = (tmp("a"), tmp("b"), tmp("c"), tmp("shared"));
+        let (mut a, mut b, mut c) = (Mac::new(&da, &shared), Mac::new(&db, &shared), Mac::new(&dc, &shared));
+        a.snippets = vec![snip("s1", "one"), snip("s2", "two")];
+        a.sync(1_000);
+        c.sync(1_500); // C holds s1 and then is never opened again
+        b.sync(2_000);
+        b.snippets.retain(|s| s.id != "s1");
+        b.sync(3_000);
+        a.sync(4_000);
+        assert_eq!(a.snippets.len(), 1);
+        for t in [92 * DAY, 200 * DAY, 400 * DAY] {
+            b.sync(t);
+            a.sync(t + 1);
+            b.sync(t + 2);
+            for m in [&a, &b] {
+                assert_eq!(m.snippets.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["s2"], "day {}", t / DAY);
+            }
+        }
+        // a fresh Mac that meets the stale folder after a year does not get it either
+        let (dd, mut d) = (tmp("d"), None);
+        d.get_or_insert_with(|| Mac::new(&dd, &shared)).sync(401 * DAY);
+        assert_eq!(d.unwrap().snippets.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["s2"]);
+        for p in [da, db, dc, dd, shared] {
+            std::fs::remove_dir_all(p).unwrap();
+        }
+    }
+
+    #[test]
+    fn clipboard_tombstones_outlive_the_longest_retention_and_older_remote_entries_are_ignored() {
+        let (da, shared) = (tmp("a"), tmp("shared"));
+        let a = Mac::new(&da, &shared);
+        let other = shared.join("devices").join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let old = image_entry("old", "x.png", 5);
+        let mut doc = DeviceDoc { device: "other".into(), items: Default::default() };
+        doc.items.insert("old".into(), sync::Record { modified: 10, deleted: false, value: Some(serde_json::to_value(&old).unwrap()) });
+        std::fs::write(other.join("clipboard.json"), serde_json::to_vec(&doc).unwrap()).unwrap();
+        let o = sync_domain(&a.io, "clipboard", &[], &Tracker::default(), 500 * DAY).unwrap();
+        assert!(o.merged.is_none(), "an entry last edited before the horizon is not adopted");
+        // a deletion made 300 days ago is still published (retention can be a year)
+        let (_, t) = sync::publish_ttl(&a.io.device, &[("e".into(), json!(1))], &Tracker::default(), 0, 0, None);
+        let o = sync_domain(&a.io, "clipboard", &[], &t, 300 * DAY).unwrap();
+        let mine: DeviceDoc =
+            serde_json::from_slice(&std::fs::read(shared.join("devices").join(&a.io.device).join("clipboard.json")).unwrap()).unwrap();
+        assert!(mine.items["e"].deleted);
+        assert!(o.merged.is_some(), "an entry 300 days old is still inside the horizon");
+        for p in [da, shared] {
+            std::fs::remove_dir_all(p).unwrap();
+        }
+    }
+
+    #[test]
+    fn built_in_defaults_saved_with_random_ids_are_renamed_so_a_fresh_mac_adds_no_duplicates() {
+        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+        // an existing user: defaults saved by an older version with random ids, plus own items
+        let store = Store::new(&da);
+        let mut snippets: Vec<Snippet> = crate::storage::default_snippets();
+        let mut quicklinks: Vec<Quicklink> = crate::storage::default_quicklinks();
+        for s in snippets.iter_mut() {
+            s.id = uuid::Uuid::new_v4().to_string();
+        }
+        for q in quicklinks.iter_mut() {
+            q.id = uuid::Uuid::new_v4().to_string();
+        }
+        snippets.push(snip("mine", "my own"));
+        store.save("snippets.json", &snippets).unwrap();
+        store.save("quicklinks.json", &quicklinks).unwrap();
+        let (mut a, mut b) = (Mac::launch(&da, &shared), Mac::launch(&db, &shared));
+        a.sync(1_000);
+        b.sync(2_000);
+        a.sync(3_000);
+        for m in [&a, &b] {
+            assert_eq!((m.snippets.len(), m.quicklinks.len()), (4, 6), "3 defaults + 1 own, 6 quicklinks");
+        }
+        // the renaming was saved: the next launch keeps the ids
+        let again = Store::new(&da).load_all();
+        assert!(again.snippets.iter().any(|s| s.id == "default-snippet-shrug"));
+        // an edited default is not matched (it is the user's own item now)
+        let mut edited = crate::storage::default_snippets();
+        edited[0].id = "random-edited".into();
+        edited[0].text = "changed".into();
+        store.save("snippets.json", &edited).unwrap();
+        assert!(Store::new(&da).load_all().snippets.iter().any(|s| s.id == "random-edited"));
+        for d in [da, db, shared] {
+            std::fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn external_tools_that_hang_are_killed_after_the_timeout() {
+        let t = std::time::Instant::now();
+        let mut cmd = std::process::Command::new("/bin/sleep");
+        cmd.arg("30");
+        assert!(run_with_timeout(&mut cmd, std::time::Duration::from_millis(300)).is_none());
+        assert!(t.elapsed() < std::time::Duration::from_secs(5));
+        let mut echo = std::process::Command::new("/bin/echo");
+        echo.arg("hello");
+        assert_eq!(run_with_timeout(&mut echo, std::time::Duration::from_secs(5)).unwrap().trim(), "hello");
     }
 
     #[test]

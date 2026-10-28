@@ -64,6 +64,35 @@ impl Store {
         list
     }
 
+    /// `load_with_ids` for snippets and quicklinks, then an item that is one of the built-in defaults
+    /// (same content) but has another id, from a version that saved the defaults with random ids,
+    /// takes the default's fixed id and the file is saved. Without it a Mac that starts fresh would
+    /// add the defaults again on top of the renamed ones when syncing.
+    fn load_default_ids<T: DeserializeOwned + Serialize + HasId>(
+        &self,
+        name: &str,
+        defaults: Vec<T>,
+        same: impl Fn(&T, &T) -> bool,
+    ) -> Vec<T> {
+        let mut list = self.load_with_ids::<T>(name);
+        let mut changed = false;
+        for d in &defaults {
+            if list.iter().any(|x| x.id() == d.id()) {
+                continue;
+            }
+            if let Some(x) = list.iter_mut().find(|x| same(x, d)) {
+                x.set_id(d.id());
+                changed = true;
+            }
+        }
+        if changed {
+            if let Err(e) = self.save(name, &list) {
+                eprintln!("ferrocast: could not save ids to {name}: {e}");
+            }
+        }
+        list
+    }
+
     /// Atomic write (temp file + rename).
     pub fn save<T: Serialize>(&self, name: &str, value: &T) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.root)?;
@@ -77,8 +106,12 @@ impl Store {
     pub fn load_all(&self) -> Data {
         let mut d = Data {
             settings: self.load("settings.json"),
-            snippets: self.load_with_ids("snippets.json"),
-            quicklinks: self.load_with_ids("quicklinks.json"),
+            snippets: self.load_default_ids("snippets.json", default_snippets(), |s: &Snippet, d: &Snippet| {
+                s.name == d.name && s.text == d.text && s.keyword == d.keyword
+            }),
+            quicklinks: self.load_default_ids("quicklinks.json", default_quicklinks(), |q: &Quicklink, d: &Quicklink| {
+                q.name == d.name && q.link == d.link
+            }),
             notes: self.load_with_ids("notes.json"),
             clipboard: self.load_with_ids("clipboard.json"),
             frecency: self.load::<Frecency>("frecency.json"),
@@ -97,6 +130,30 @@ impl Store {
 fn with_id<T>(mut item: T, set: impl FnOnce(&mut T, String), id: &str) -> T {
     set(&mut item, id.to_string());
     item
+}
+
+/// Items with an `id` field.
+pub trait HasId {
+    fn id(&self) -> &str;
+    fn set_id(&mut self, id: &str);
+}
+
+impl HasId for Snippet {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn set_id(&mut self, id: &str) {
+        self.id = id.to_string();
+    }
+}
+
+impl HasId for Quicklink {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn set_id(&mut self, id: &str) {
+        self.id = id.to_string();
+    }
 }
 
 pub fn default_quicklinks() -> Vec<Quicklink> {
