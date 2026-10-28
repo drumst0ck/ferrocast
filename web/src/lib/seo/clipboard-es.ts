@@ -30,7 +30,7 @@ export const page: GuideCopy = {
       ['Contraseñas', 'Ignora lo marcado como oculto o temporal (estándar de nspasteboard.org) y lo copiado desde 1Password y KeeWeb', 'Apple avisa: «puede aparecer información sensible en el portapapeles»'],
       ['Cuánto tiempo', 'Eliges: 1 día, 1 semana, 1 mes, 3 meses, 1 año o sin límite; lo fijado se queda', 'Se borra con Clear History'],
       ['Fijar entradas', 'Sí, con ⌘.', 'No consta en la guía de Apple'],
-      ['Dónde se guarda', 'En clipboard.json, en tu Mac, sin cifrar; las copias de seguridad no lo incluyen', 'No consta en la guía de Apple'],
+      ['Dónde se guarda', 'En clipboard.json, en tu Mac, sin cifrar; las copias de seguridad no lo incluyen; solo sale del Mac si activas la sincronización con iCloud', 'No consta en la guía de Apple'],
       ['Precio', 'Gratis, código abierto (MIT)', 'Incluido en macOS'],
     ],
     note: 'Ferrocast: [documentación del portapapeles](/docs/launcher/clipboard/) (en inglés) y el código de la app. Spotlight: [guía de Apple](https://support.apple.com/es-es/guide/mac-help/mchl40d5b86b/mac), comprobada el 27 de octubre de 2026.',
@@ -56,7 +56,7 @@ export const page: GuideCopy = {
     {
       h: 'Límites',
       list: [
-        'El historial se guarda en un archivo JSON sin cifrar dentro de la carpeta de datos de Ferrocast, en tu Mac. No sale del Mac.',
+        'El historial se guarda en un archivo JSON sin cifrar dentro de la carpeta de datos de Ferrocast, en tu Mac. No sale del Mac salvo que actives la sincronización con iCloud (desde la versión 0.4.0, desactivada por defecto): entonces pasa por tu carpeta de iCloud Drive sin más cifrado que el del propio iCloud. Lo copiado desde gestores de contraseñas nunca se guarda, así que tampoco se sincroniza.',
         'Solo Mac con Apple Silicon.',
         'Pegar directamente en otra app necesita el permiso de Accesibilidad.',
       ],
@@ -69,7 +69,7 @@ export const page: GuideCopy = {
       ['¿Ferrocast guarda las contraseñas que copio?', 'No las que vienen de gestores de contraseñas: ignora las copias marcadas como ocultas o temporales y las de 1Password y KeeWeb. Si una app no marca sus copias, puedes borrar la entrada a mano.'],
       ['¿El portapapeles de Spotlight guarda contraseñas?', 'La guía de Apple avisa de que puede aparecer información sensible en el portapapeles. Puedes borrar el historial con Clear History.'],
       ['¿Cuánto tiempo guarda Ferrocast el historial?', 'Lo eliges en Ajustes: 1 día, 1 semana, 1 mes, 3 meses, 1 año o sin límite. Las entradas fijadas se conservan.'],
-      ['¿Dónde se guarda el historial?', 'En un archivo clipboard.json en tu Mac, sin cifrar. No se sube a ningún sitio y las copias de seguridad de Ferrocast no lo incluyen.'],
+      ['¿Dónde se guarda el historial?', 'En un archivo clipboard.json en tu Mac, sin cifrar. No se sube a ningún sitio salvo que actives la sincronización con iCloud, que viene desactivada, y las copias de seguridad de Ferrocast no lo incluyen.'],
     ],
   },
   more: {
@@ -79,6 +79,7 @@ export const page: GuideCopy = {
       ['Alternativa gratis a Raycast', '/es/alternativa-a-raycast/'],
       ['Datos y privacidad', '/es/docs/reference/data-and-privacy/'],
       ['Datos clave', '/es/facts/'],
+      ['Clipboard manager for Mac (English)', '/clipboard-manager-mac/'],
     ],
   },
 };

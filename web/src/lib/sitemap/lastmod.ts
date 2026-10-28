@@ -107,11 +107,26 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/es/raycast-vs-alfred-vs-spotlight') {
       return fileLastmod('src/lib/seo/launcher-compare.ts', 'src/pages/es/raycast-vs-alfred-vs-spotlight.astro');
     }
-    if (path === '/mac-window-management') {
-      return fileLastmod('src/lib/seo/windows.ts', 'src/components/seo/GuidePage.astro');
+    if (path === '/mac-window-management' || path === '/es/gestion-de-ventanas-mac') {
+      return fileLastmod('src/lib/seo/windows.ts', 'src/lib/seo/windows-es.ts', 'src/components/seo/GuidePage.astro');
     }
     if (path === '/es/historial-portapapeles-mac') {
       return fileLastmod('src/lib/seo/clipboard-es.ts', 'src/components/seo/GuidePage.astro');
+    }
+    if (path === '/clipboard-manager-mac') {
+      return fileLastmod('src/lib/seo/clipboard-manager.ts', 'src/components/seo/GuidePage.astro');
+    }
+    if (path === '/text-expander-mac' || path === '/es/expansor-de-texto-mac') {
+      return fileLastmod('src/lib/seo/text-expander.ts', 'src/components/seo/GuidePage.astro');
+    }
+    if (path === '/cleanshot-alternative') {
+      return fileLastmod('src/lib/seo/cleanshot-alt.ts', 'src/components/seo/GuidePage.astro');
+    }
+    if (path === '/es/editar-video-mac-sin-imovie') {
+      return fileLastmod('src/lib/seo/editar-video-es.ts', 'src/components/seo/GuidePage.astro');
+    }
+    if (path === '/es/captura-de-pantalla-con-scroll-mac') {
+      return fileLastmod('src/lib/seo/capture-scroll-es.ts', 'src/components/seo/GuidePage.astro');
     }
     if (path === '/free-file-converter-mac') {
       return fileLastmod('src/lib/seo/file-converter.ts', 'src/components/seo/GuidePage.astro', 'src/data/conversions.json');
@@ -119,8 +134,8 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/es/convertidor-de-archivos-gratis-mac') {
       return fileLastmod('src/lib/seo/file-converter-es.ts', 'src/components/seo/FileConverterEsPage.astro');
     }
-    if (path === '/local-ai-launcher') {
-      return fileLastmod('src/lib/seo/local-ai.ts', 'src/components/seo/GuidePage.astro');
+    if (path === '/local-ai-launcher' || path === '/es/ia-local-mac') {
+      return fileLastmod('src/lib/seo/local-ai.ts', 'src/lib/seo/local-ai-es.ts', 'src/components/seo/GuidePage.astro');
     }
     if (path === '/screen-studio-alternative' || path === '/es/grabar-pantalla-mac-zoom-automatico') {
       return fileLastmod('src/lib/seo/screen-recorder.ts', 'src/components/seo/GuidePage.astro');

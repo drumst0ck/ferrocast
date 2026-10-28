@@ -86,6 +86,8 @@ export const page: GuideCopy = {
   more: {
     h: 'Related',
     links: [
+      ['Free clipboard manager for Mac', '/clipboard-manager-mac/'],
+      ['Free text expander for Mac', '/text-expander-mac/'],
       ['Clipboard history docs', '/docs/launcher/clipboard/'],
       ['Snippets docs', '/docs/launcher/snippets/'],
       ['Run Raycast Script Commands', '/raycast-script-commands/'],

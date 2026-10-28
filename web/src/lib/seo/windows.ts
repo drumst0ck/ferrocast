@@ -82,6 +82,7 @@ export const page: GuideCopy = {
     h: 'Related',
     links: [
       ['Window management docs', '/docs/launcher/window-management/'],
+      ['En español: gestión de ventanas', '/es/gestion-de-ventanas-mac/'],
       ['A free Raycast alternative', '/raycast-alternative/'],
       ['Ferrocast vs Raycast', '/ferrocast-vs-raycast/'],
       ['Key facts', '/facts/'],
