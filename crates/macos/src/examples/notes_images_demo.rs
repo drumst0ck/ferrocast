@@ -524,7 +524,7 @@ fn main() {
         undo("2");
         check(
             "the next undo undoes typing, never leaving an empty paragraph with lost text",
-            !notes::markdown().contains("<br>") || notes::markdown() == "",
+            !notes::markdown().contains("<br>") || notes::markdown().is_empty(),
             &notes::markdown(),
         );
     }
