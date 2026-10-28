@@ -161,6 +161,8 @@ impl App {
     }
 
     fn sync_start(&mut self, domains: Vec<&'static str>) {
+        self.sync_persist_all();
+        sync_io::backup_settings_once(&self.store.root);
         self.sync.in_flight = true;
         self.sync.flag.store(true, Ordering::SeqCst);
         let flag = self.sync.flag.clone();
@@ -253,6 +255,8 @@ impl App {
         let mut again = false;
         match domain {
             "settings" => {
+                // safety net: the settings as they were before sync changed them (kept once)
+                sync_io::backup_settings_once(&self.store.root);
                 let Some(s) = sync_io::settings_from_items(&merged, &self.settings) else {
                     self.sync.applying = false;
                     return None;

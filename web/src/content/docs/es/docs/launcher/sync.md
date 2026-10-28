@@ -25,11 +25,31 @@ Actívala en Ajustes → Advanced → Sync with iCloud. La línea de estado bajo
 
 ## Conflictos
 
-Ferrocast fusiona elemento por elemento. Cada snippet, quicklink, nota, entrada del portapapeles y chat se compara por separado y gana la edición más reciente. Un elemento nuevo en un Mac nunca se pierde porque otro Mac no lo tenga. Un borrado también llega a tus otros Mac; si otro Mac edita el elemento después del borrado, el elemento vuelve. Los ajustes son un solo elemento: gana el cambio más reciente en cualquier Mac.
+Ferrocast fusiona elemento por elemento y gana la edición más reciente.
 
-Cada Mac escribe solo sus propios archivos en la carpeta `Ferrocast` de iCloud Drive (`devices/<id>/`), así que iCloud no tiene copias en conflicto que crear. Un archivo de otro Mac que Ferrocast no pueda leer se omite.
+- Cada snippet, quicklink, nota, entrada del portapapeles y chat es un elemento propio.
+- **Cada ajuste es un elemento propio** (y cada ajuste anidado, como una opción de captura o las opciones de un comando). Si un Mac cambia el tema y otro cambia el atajo, se conservan ambos cambios.
+- Un elemento nuevo en un Mac nunca se pierde porque otro Mac no lo tenga.
+- Un borrado llega a tus otros Mac. Si otro Mac edita el elemento después del borrado, el elemento vuelve.
+- Un borrado se recuerda para siempre, así que un Mac antiguo o una carpeta sobrante en iCloud Drive no puede devolver un elemento borrado.
+- Los borrados del portapapeles se recuerdan 400 días (los 3000 más recientes), más que el ajuste de historial más largo. Una entrada fijada del portapapeles de más de 400 días no se sincroniza, así que las ediciones sobre ella se quedan en el Mac donde las hiciste.
+- Cada Mac escribe solo sus propios archivos en la carpeta `Ferrocast` de iCloud Drive (`devices/<id>/`), así que iCloud no tiene copias en conflicto que crear. Un archivo que Ferrocast no pueda leer se omite.
 
-La primera vez que activas la sincronización en un Mac, lo que ya tiene cuenta como la versión más antigua de cada elemento, aunque iCloud todavía no haya mostrado los archivos de los otros Mac. Un Mac que se une después adopta, por tanto, los ajustes y la versión más reciente de cada elemento que tienen tus otros Mac, y lo que solo tiene él se añade al conjunto. Si un Mac todavía tiene un ajuste o un snippet o quicklink integrado exactamente como venía con Ferrocast y nunca lo cambió, esa versión cuenta como sin modificar: una versión que personalizaste en otro Mac gana a esa sea cual sea la hora, así que añadir un Mac nuevo que sincronizó primero no puede borrar las personalizaciones de tu Mac antiguo. Volver a poner un valor en su valor por defecto a propósito cuenta como una edición más. El Mac que sincronizó primero conserva sus datos: tras su segunda sincronización (unos 30 segundos) sus elementos cuentan como hechos en su primera sincronización, lo que gana a cualquier Mac que se una después, sean cuales sean sus ids de dispositivo, y cualquier edición posterior sigue ganando por su hora. Un snippet o quicklink integrado que borraste antes de activar la sincronización sigue borrado cuando añades un Mac. Solo si dos Mac activan la sincronización por primera vez antes de que alguno haya sincronizado dos veces, con versiones distintas del mismo elemento, gana en ambos el de id de dispositivo mayor, así que terminan iguales. Un borrado se recuerda para siempre, así que un Mac antiguo o una carpeta sobrante en iCloud Drive no puede devolver un elemento borrado. Los borrados del portapapeles se recuerdan 400 días (se guardan como máximo los 3000 más recientes), más que el ajuste de historial más largo, y una entrada fijada del portapapeles de más de 400 días no se sincroniza, así que las ediciones sobre ella se quedan en el Mac donde las hiciste. Mientras escribes en la ventana de Notas, las notas fusionadas esperan hasta que haces una pausa de dos segundos. La fusión se hace cada 30 segundos, al abrir el launcher y al pulsar **Sync now**. Al desactivarla se detiene toda lectura y escritura, pero la carpeta queda en iCloud Drive tal como está.
+## Activar la sincronización por primera vez
+
+- Lo que un Mac ya tiene cuenta como la versión más antigua, aunque iCloud todavía no haya mostrado los archivos de los otros Mac. Un Mac que se une después adopta la versión más reciente de cada elemento que tienen tus otros Mac, y lo que solo tiene él se añade.
+- Un elemento que nunca cambiaste (un ajuste, snippet o quicklink tal como venía con Ferrocast) cuenta como sin modificar. Una versión que cambiaste en cualquier Mac gana a esa sea cual sea la hora, así que un Mac nuevo que sincronizó primero no puede borrar las personalizaciones de tu Mac antiguo. Volver a poner un valor por defecto a propósito es una edición como cualquier otra.
+- Un snippet o quicklink integrado que borraste antes de activar la sincronización sigue borrado cuando añades un Mac.
+- El Mac que sincronizó primero conserva sus datos. Tras su segunda sincronización (unos 30 segundos) sus elementos cuentan como hechos en su primera sincronización, lo que gana a cualquier Mac que se una después. Los elementos que un Mac solo tomó de otro Mac no reciben esa hora, así que una edición hecha en otro sitio entre tanto sigue ganando.
+- Si dos Mac activan la sincronización por primera vez antes de que alguno haya sincronizado dos veces, con versiones distintas del mismo elemento, gana en ambos el de id de dispositivo mayor, así que terminan iguales.
+- Ferrocast guarda una copia de los ajustes de este Mac como `settings.before-sync.json` en la carpeta de datos antes de que la primera fusión los cambie.
+- Si se pierde el estado de sincronización de un Mac, Ferrocast lo reconstruye a partir del propio archivo de ese Mac en iCloud Drive, así que se conservan las ediciones y los borrados hechos desde su última sincronización.
+
+## Cuándo se sincroniza
+
+- Cada 30 segundos, al abrir el launcher y al pulsar **Sync now**.
+- Mientras escribes en la ventana de Notas, las notas fusionadas esperan hasta que haces una pausa de dos segundos.
+- Al desactivarla se detiene toda lectura y escritura, pero la carpeta queda en iCloud Drive tal como está.
 
 :::note[Historial del portapapeles]
 Con la sincronización activada, el historial sale del Mac y en iCloud Drive solo tiene el cifrado que ofrece el propio iCloud. Déjala desactivada si no quieres eso.

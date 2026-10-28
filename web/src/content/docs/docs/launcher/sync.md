@@ -25,11 +25,31 @@ Turn it on in Settings → Advanced → Sync with iCloud. The status line under 
 
 ## Conflicts
 
-Ferrocast merges item by item. Each snippet, quicklink, note, clipboard entry and chat is compared on its own, and the newest edit wins. An item added on one Mac is never lost because another Mac did not have it. A deletion reaches your other Macs too; if another Mac edits the item later than the deletion, the item comes back. The settings are one item: the most recent change to them on any Mac wins.
+Ferrocast merges item by item, and the newest edit wins.
 
-Each Mac writes only its own files in the `Ferrocast` folder of iCloud Drive (`devices/<id>/`), so iCloud has no conflicting copies to create. A file another Mac wrote that Ferrocast cannot read is skipped.
+- Every snippet, quicklink, note, clipboard entry and chat is its own item.
+- **Every setting is its own item** (and every nested setting, such as one capture option or one command's options). If one Mac changes the theme and another changes the hotkey, both changes are kept.
+- An item added on one Mac is never lost because another Mac did not have it.
+- A deletion reaches your other Macs. If another Mac edits the item after the deletion, the item comes back.
+- A deletion is remembered for good, so an old Mac or a leftover folder in iCloud Drive cannot bring a deleted item back.
+- Clipboard deletions are remembered for 400 days (the 3,000 newest), longer than the longest history setting. A pinned clipboard entry older than 400 days is not synced, so edits to it stay on the Mac where you made them.
+- Each Mac writes only its own files in the `Ferrocast` folder of iCloud Drive (`devices/<id>/`), so iCloud has no conflicting copies to create. A file Ferrocast cannot read is skipped.
 
-The first time you turn sync on in a Mac, what it already has counts as the oldest version of each item, even if iCloud has not shown the other Macs' files yet. A Mac that joins later therefore takes on the settings and the newer version of each item that your other Macs have, and anything only it has is added to the rest. If a Mac still has a setting or a built-in snippet or quicklink exactly as it came with Ferrocast and never changed it, that version counts as unchanged: a version you customised on another Mac beats it whatever the times, so adding a new Mac that synced first cannot wipe the customisations of your old one. Changing a value back to its default on purpose counts as an edit like any other. The Mac that synced first keeps its data: after its second sync (about 30 seconds) its items count as made at its first sync, which beats every Mac that joins later whatever their device ids, while any edit made after that still wins by its time. A built-in snippet or quicklink you deleted before turning sync on stays deleted when you add a Mac. Only if two Macs turn sync on for the first time before either has synced twice, with different versions of the same item, the one with the greater device id wins on both, so they still end up the same. A deletion is remembered for good, so an old Mac or a leftover folder in iCloud Drive cannot bring a deleted item back. Clipboard deletions are remembered for 400 days (at most 3,000 of the newest are kept), longer than the longest history setting, and a pinned clipboard entry older than 400 days is not synced, so edits to it stay on the Mac where you made them. While you are typing in the Notes window, merged notes wait until you pause for two seconds. Merging happens every 30 seconds, when you open the launcher and when you press **Sync now**. Turning sync off stops all reading and writing but leaves the folder in iCloud Drive as it is.
+## Turning sync on for the first time
+
+- What a Mac already has counts as the oldest version, even if iCloud has not shown the other Macs' files yet. A Mac that joins later takes on the newer version of each item your other Macs have, and anything only it has is added.
+- An item you never changed (a setting, snippet or quicklink exactly as it came with Ferrocast) counts as unchanged. A version you changed on any Mac beats it whatever the times, so a new Mac that synced first cannot wipe the customisations of your old one. Changing a value back to its default on purpose is an edit like any other.
+- A built-in snippet or quicklink you deleted before turning sync on stays deleted when you add a Mac.
+- The Mac that synced first keeps its data. After its second sync (about 30 seconds) its items count as made at its first sync, which beats every Mac that joins later. Items a Mac only took over from another Mac do not get that time, so an edit made elsewhere in between still wins.
+- If two Macs turn sync on for the first time before either has synced twice, with different versions of the same item, the one with the greater device id wins on both, so they still end up the same.
+- Ferrocast keeps a copy of this Mac's settings as `settings.before-sync.json` in the data folder before the first merge changes them.
+- If the sync state of a Mac is lost, Ferrocast rebuilds it from that Mac's own file in iCloud Drive, so edits and deletions made since its last sync are kept.
+
+## When it syncs
+
+- Every 30 seconds, when you open the launcher, and when you press **Sync now**.
+- While you are typing in the Notes window, merged notes wait until you pause for two seconds.
+- Turning sync off stops all reading and writing but leaves the folder in iCloud Drive as it is.
 
 :::note[Clipboard history]
 The history now leaves the Mac when sync is on, and it is not encrypted in iCloud Drive beyond what iCloud itself provides. Leave sync off if you do not want that.

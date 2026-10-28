@@ -218,6 +218,32 @@ fn is_placeholder(path: &Path) -> bool {
     }
 }
 
+/// Parse a device document; the old settings document (all settings as the one item `settings`)
+/// is read as one record per field.
+fn parse_doc(domain: &str, bytes: &[u8]) -> serde_json::Result<DeviceDoc> {
+    let mut doc: DeviceDoc = serde_json::from_slice(bytes)?;
+    if domain == "settings" {
+        expand_legacy_settings(&mut doc);
+    }
+    Ok(doc)
+}
+
+/// Replace the single `settings` item of an old document by one record per field, each with the old
+/// record's time, pristine and adopted flags. An old deletion of the whole item is dropped.
+pub fn expand_legacy_settings(doc: &mut DeviceDoc) {
+    let Some(rec) = doc.items.remove(SETTINGS_ID) else { return };
+    let Some(value) = rec.value.filter(|_| !rec.deleted) else { return };
+    for (id, v) in flatten_settings(&value) {
+        doc.items.entry(id).or_insert(sync::Record {
+            modified: rec.modified,
+            deleted: false,
+            value: Some(v),
+            pristine: rec.pristine,
+            adopted: rec.adopted,
+        });
+    }
+}
+
 /// What reading the other Macs' documents found.
 pub struct ReadDocs {
     pub docs: Vec<DeviceDoc>,
@@ -272,7 +298,7 @@ impl SyncIo {
                 }
                 continue;
             };
-            match serde_json::from_slice::<DeviceDoc>(&bytes) {
+            match parse_doc(domain, &bytes) {
                 Ok(mut doc) => {
                     doc.device = dev; // the folder name is the authority
                     docs.push(doc);
@@ -284,6 +310,12 @@ impl SyncIo {
             }
         }
         ReadDocs { docs, corrupt: bad, downloading }
+    }
+
+    /// This Mac's own published document of a domain, if it exists and can be read.
+    pub fn read_own_doc(&self, domain: &str) -> Option<DeviceDoc> {
+        let bytes = std::fs::read(self.device_dir(&self.device).join(format!("{domain}.json"))).ok()?;
+        parse_doc(domain, &bytes).ok()
     }
 
     /// Write this Mac's document; an identical one is left alone (no needless iCloud uploads).
@@ -341,6 +373,24 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
     //     device id on both Macs, so they still converge.
     // Net effect: the Mac that synced first keeps its data, a Mac that joins later adopts it, items
     // only the newcomer has are added, and genuine edits made afterwards win by their time.
+    // A lost or corrupt tracker (and the tracker of the old one-item settings) is rebuilt from this
+    // Mac's own document, so edits and deletions made since the last sync are not forgotten.
+    let rebuilt;
+    let tracker = if !tracker.seeded || (domain == "settings" && tracker.items.contains_key(SETTINGS_ID)) {
+        match io.read_own_doc(domain) {
+            Some(own) => {
+                rebuilt = sync::tracker_from_own_doc(&own);
+                &rebuilt
+            }
+            None if tracker.seeded => {
+                rebuilt = Tracker::default();
+                &rebuilt
+            }
+            None => tracker,
+        }
+    } else {
+        tracker
+    };
     let first = !tracker.seeded;
     let clipboard = domain == "clipboard";
     let opts = sync::PublishOpts {
@@ -375,8 +425,14 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
     }
     // what this Mac publishes now: the merged state with the re-stamped baseline
     let (doc2, t3) = sync::publish_opts(&io.device, &merged, &t2, now, &opts);
+    // Own document = the merged state (unchanged bytes are not rewritten). After an applied merge it
+    // matches the local data, which is what a tracker rebuilt from it needs.
+    // (The clipboard keeps its document to what was copied here: entries taken over from other Macs
+    // are in their documents, and republishing them would double its size.)
+    if !clipboard || merged == snapshot {
+        io.write_doc(domain, &doc2)?;
+    }
     if merged == snapshot {
-        io.write_doc(domain, &doc2)?; // identical bytes are not rewritten
         return Ok(Outcome { merged: None, tracker_published: t3.clone(), tracker_merged: t3, peers: io.peers(), corrupt, downloading });
     }
     Ok(Outcome { merged: Some(merged), tracker_published: t1, tracker_merged: t3, peers: io.peers(), corrupt, downloading })
@@ -387,7 +443,7 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
 /// snippet or quicklink equals its default content. Everything else is never pristine.
 fn pristine_check(domain: &str) -> Option<fn(&str, &Value) -> bool> {
     match domain {
-        "settings" => Some(|_, v| settings_items(&Settings::default()).first().is_some_and(|(_, d)| d == v)),
+        "settings" => Some(|id, v| default_settings_items().get(id) == Some(v)),
         "snippets" => {
             Some(|id, v| crate::storage::default_snippets().iter().any(|d| d.id == id && serde_json::to_value(d).ok().as_ref() == Some(v)))
         }
@@ -396,6 +452,11 @@ fn pristine_check(domain: &str) -> Option<fn(&str, &Value) -> bool> {
         }),
         _ => None,
     }
+}
+
+fn default_settings_items() -> &'static std::collections::BTreeMap<String, Value> {
+    static D: std::sync::OnceLock<std::collections::BTreeMap<String, Value>> = std::sync::OnceLock::new();
+    D.get_or_init(|| settings_items(&Settings::default()).into_iter().collect())
 }
 
 /// Ids of the built-in default items of a domain (present on every fresh install).
@@ -518,45 +579,68 @@ pub const LOCAL_ONLY: [&str; 11] = [
 /// Local-only fields inside `capture`: the devices and the folders differ per Mac.
 pub const LOCAL_ONLY_CAPTURE: [&str; 4] = ["camera_id", "mic_id", "folder", "recordings_folder"];
 
+/// Id of the single item the first version synced all settings as; still read from old documents.
 pub const SETTINGS_ID: &str = "settings";
 
-/// The settings as one sync item without the local-only fields.
+/// The shared settings, one sync item per field, without the local-only fields. Top-level fields are
+/// items named after the field; the nested `capture` settings and the per-command `commands` map get
+/// one item per nested key (`capture.fps`, `commands.<id>`). Per-field items let two Macs that
+/// changed different settings keep both.
 pub fn settings_items(s: &Settings) -> Vec<(String, Value)> {
-    let mut v = serde_json::to_value(s).unwrap_or(Value::Null);
-    if let Some(o) = v.as_object_mut() {
-        for k in LOCAL_ONLY {
-            o.remove(k);
-        }
-        if let Some(c) = o.get_mut("capture").and_then(Value::as_object_mut) {
-            for k in LOCAL_ONLY_CAPTURE {
-                c.remove(k);
-            }
-        }
-    }
-    vec![(SETTINGS_ID.to_string(), v)]
+    flatten_settings(&serde_json::to_value(s).unwrap_or(Value::Null))
 }
 
-/// Merged settings with this Mac's local-only values put back. `None` when the merged value does not
-/// deserialize (then nothing is applied).
-pub fn settings_from_items(merged: &[(String, Value)], local: &Settings) -> Option<Settings> {
-    let (_, remote) = merged.iter().find(|(id, _)| id == SETTINGS_ID)?;
-    let mut v = remote.clone();
-    let mine = serde_json::to_value(local).ok()?;
-    let o = v.as_object_mut()?;
-    for k in LOCAL_ONLY {
-        match mine.get(k) {
-            Some(x) => o.insert(k.to_string(), x.clone()),
-            None => o.remove(k),
-        };
+fn flatten_settings(v: &Value) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
+    let Some(o) = v.as_object() else { return out };
+    for (k, val) in o {
+        if LOCAL_ONLY.contains(&k.as_str()) {
+            continue;
+        }
+        match (k.as_str(), val.as_object()) {
+            ("capture", Some(c)) => out.extend(
+                c.iter().filter(|(ck, _)| !LOCAL_ONLY_CAPTURE.contains(&ck.as_str())).map(|(ck, cv)| (format!("capture.{ck}"), cv.clone())),
+            ),
+            ("commands", Some(c)) => out.extend(c.iter().map(|(ck, cv)| (format!("commands.{ck}"), cv.clone()))),
+            _ => out.push((k.clone(), val.clone())),
+        }
     }
+    out
+}
+
+/// Merged settings with this Mac's local-only values kept. Fields missing from `merged` keep this
+/// Mac's value, except the per-command map, which is exactly what was merged. `None` when the result
+/// does not deserialize (then nothing is applied).
+pub fn settings_from_items(merged: &[(String, Value)], local: &Settings) -> Option<Settings> {
+    let mut o = serde_json::to_value(local).ok()?.as_object()?.clone();
     let mut capture = o.get("capture").and_then(Value::as_object).cloned().unwrap_or_default();
-    for k in LOCAL_ONLY_CAPTURE {
-        if let Some(x) = mine.get("capture").and_then(|c| c.get(k)) {
-            capture.insert(k.to_string(), x.clone());
+    let mut commands = serde_json::Map::new();
+    for (id, v) in merged {
+        if let Some(k) = id.strip_prefix("capture.") {
+            if !LOCAL_ONLY_CAPTURE.contains(&k) {
+                capture.insert(k.to_string(), v.clone());
+            }
+        } else if let Some(k) = id.strip_prefix("commands.") {
+            commands.insert(k.to_string(), v.clone());
+        } else if id != SETTINGS_ID && !LOCAL_ONLY.contains(&id.as_str()) {
+            o.insert(id.clone(), v.clone());
         }
     }
     o.insert("capture".into(), Value::Object(capture));
-    serde_json::from_value(v).ok()
+    o.insert("commands".into(), Value::Object(commands));
+    serde_json::from_value(Value::Object(o)).ok()
+}
+
+/// Keep a copy of this Mac's `settings.json` as `settings.before-sync.json` the first time sync is
+/// about to merge, as a safety net. An existing copy is never overwritten; nothing is made up when
+/// there is no settings file.
+pub fn backup_settings_once(data_dir: &Path) {
+    let (from, to) = (data_dir.join("settings.json"), data_dir.join("settings.before-sync.json"));
+    if from.is_file() && !to.exists() {
+        if let Err(e) = std::fs::copy(&from, &to) {
+            eprintln!("ferrocast: sync: could not back up settings.json: {e}");
+        }
+    }
 }
 
 /// Clipboard list after a merge: entries past the retention go (pinned stay), Macs that copied the
@@ -1049,6 +1133,210 @@ mod tests {
         }
     }
 
+    /// All orders in which three Macs can join.
+    const JOIN_ORDERS: [[usize; 3]; 6] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+
+    #[test]
+    fn a_late_joiner_does_not_claim_another_macs_old_baseline_at_its_own_time() {
+        for ids in [["aa", "mm", "zz"], ["zz", "mm", "aa"], ["mm", "zz", "aa"], ["mm", "aa", "zz"], ["aa", "zz", "mm"], ["zz", "aa", "mm"]]
+        {
+            for hide in [true, false] {
+                let (da, db, dc, shared) = (tmp("a"), tmp("b"), tmp("c"), tmp("shared"));
+                let (mut a, mut b, mut c) = (Mac::new(&da, &shared), Mac::new(&db, &shared), Mac::new(&dc, &shared));
+                (a.io.device, b.io.device, c.io.device) = (ids[0].into(), ids[1].into(), ids[2].into());
+                a.snippets = vec![snip("x", "A text")];
+                a.sync(1_000); // A syncs once and sleeps
+                c.sync(2_000); // C adopts x
+                c.sync(2_500);
+                c.snippets.iter_mut().find(|s| s.id == "x").unwrap().text = "C edit".into();
+                c.sync(2 * DAY);
+                let away = shared.join("away");
+                if hide {
+                    std::fs::rename(shared.join("devices").join(ids[2]), &away).unwrap();
+                    // C's document is not visible yet
+                }
+                b.sync(3 * DAY); // B joins on day 3
+                b.sync(3 * DAY + 500);
+                if hide {
+                    std::fs::rename(&away, shared.join("devices").join(ids[2])).unwrap();
+                }
+                for round in 0..3 {
+                    let t = 4 * DAY + round * 1_000;
+                    a.sync(t);
+                    b.sync(t + 100);
+                    c.sync(t + 200);
+                }
+                for m in [&a, &b, &c] {
+                    assert_eq!(m.snippets.iter().find(|s| s.id == "x").unwrap().text, "C edit", "ids {ids:?} hidden {hide}");
+                }
+                for d in [da, db, dc, shared] {
+                    std::fs::remove_dir_all(d).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_lost_or_corrupt_tracker_keeps_this_macs_unsynced_edits_and_deletions() {
+        for (ida, idb) in ID_ORDERS {
+            for corrupt in [false, true] {
+                let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+                let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+                (a.io.device, b.io.device) = (ida.into(), idb.into());
+                a.snippets = vec![snip("s1", "one"), snip("s2", "two"), snip("s3", "three")];
+                a.sync(1_000);
+                a.sync(1_500);
+                b.sync(2_000);
+                b.sync(2_500);
+                // edits and a deletion made on A but not synced yet, then the tracker is lost
+                a.snippets.iter_mut().find(|s| s.id == "s1").unwrap().text = "A edit".into();
+                a.snippets.retain(|s| s.id != "s2");
+                let tracker = da.join("sync-state").join("snippets.json");
+                if corrupt {
+                    std::fs::write(&tracker, "{garbage").unwrap();
+                } else {
+                    std::fs::remove_file(&tracker).unwrap();
+                }
+                a.sync(3_000);
+                b.sync(3_500);
+                a.sync(4_000);
+                for m in [&a, &b] {
+                    assert_eq!(m.snippets.iter().find(|s| s.id == "s1").unwrap().text, "A edit", "ids {ida}/{idb} corrupt {corrupt}");
+                    assert!(!m.snippets.iter().any(|s| s.id == "s2"), "the deletion survives, ids {ida}/{idb}");
+                    assert_eq!(m.snippets.len(), 2);
+                }
+                for d in [da, db, shared] {
+                    std::fs::remove_dir_all(d).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_later_joining_customised_mac_keeps_its_settings_when_the_first_mac_changed_one_setting() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::launch(&da, &shared), Mac::launch(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.settings.launcher_hotkey = "Ctrl+Space".into();
+            a.settings.theme = crate::models::Theme::Dark;
+            b.sync(1_000);
+            b.sync(1_500);
+            b.settings.capture.fps = 30;
+            b.sync(3_000);
+            a.sync(4_000);
+            b.sync(5_000);
+            a.sync(6_000);
+            for m in [&a, &b] {
+                assert_eq!(m.settings.launcher_hotkey, "Ctrl+Space", "ids {ida}/{idb}");
+                assert_eq!(m.settings.theme, crate::models::Theme::Dark, "ids {ida}/{idb}");
+                assert_eq!(m.settings.capture.fps, 30, "B's later edit of another setting is kept, ids {ida}/{idb}");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn two_customised_macs_and_a_fresh_one_keep_every_customisation_in_every_join_order() {
+        for ids in [["aa", "mm", "zz"], ["zz", "mm", "aa"]] {
+            for order in JOIN_ORDERS {
+                let dirs = [tmp("a"), tmp("b"), tmp("c"), tmp("shared")];
+                let shared = dirs[3].clone();
+                let mut macs: Vec<Mac> = (0..3).map(|i| Mac::launch(&dirs[i], &shared)).collect();
+                for (i, m) in macs.iter_mut().enumerate() {
+                    m.io.device = ids[i].into();
+                }
+                macs[0].settings.theme = crate::models::Theme::Dark; // A
+                macs[1].settings.launcher_hotkey = "Ctrl+Space".into(); // B; C stays fresh
+                for (step, &i) in order.iter().enumerate() {
+                    macs[i].sync(1_000 + step as i64 * 1_000);
+                    macs[i].sync(1_500 + step as i64 * 1_000);
+                }
+                for round in 0..3 {
+                    for (i, m) in macs.iter_mut().enumerate() {
+                        m.sync(10_000 + round * 1_000 + i as i64);
+                    }
+                }
+                for m in &macs {
+                    assert_eq!(m.settings.theme, crate::models::Theme::Dark, "ids {ids:?} order {order:?}");
+                    assert_eq!(m.settings.launcher_hotkey, "Ctrl+Space", "ids {ids:?} order {order:?}");
+                }
+                for d in dirs {
+                    std::fs::remove_dir_all(d).unwrap();
+                }
+            }
+        }
+    }
+
+    /// The settings item of a version that synced all settings as one item.
+    fn legacy_settings_value(s: &Settings) -> Value {
+        let mut v = serde_json::to_value(s).unwrap();
+        let o = v.as_object_mut().unwrap();
+        for k in LOCAL_ONLY {
+            o.remove(k);
+        }
+        for k in LOCAL_ONLY_CAPTURE {
+            o.get_mut("capture").unwrap().as_object_mut().unwrap().remove(k);
+        }
+        v
+    }
+
+    #[test]
+    fn a_document_with_the_old_single_settings_item_is_read_field_by_field_and_old_trackers_do_not_claim_now() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            // B wrote its document with the old version: one item, customised hotkey, at time 2000
+            let theirs = Settings { launcher_hotkey: "Ctrl+B".into(), ..Settings::default() };
+            let old =
+                format!(r#"{{"device":"{idb}","items":{{"settings":{{"modified":2000,"value":{}}}}}}}"#, legacy_settings_value(&theirs));
+            std::fs::create_dir_all(shared.join("devices").join(idb)).unwrap();
+            std::fs::write(shared.join("devices").join(idb).join("settings.json"), old).unwrap();
+            // A, upgraded, has its own old document and tracker (one item, time 1000) and edited nothing since
+            let mine = Settings::default();
+            let own_doc =
+                format!(r#"{{"device":"{ida}","items":{{"settings":{{"modified":1000,"value":{}}}}}}}"#, legacy_settings_value(&mine));
+            std::fs::create_dir_all(shared.join("devices").join(ida)).unwrap();
+            std::fs::write(shared.join("devices").join(ida).join("settings.json"), own_doc).unwrap();
+            std::fs::create_dir_all(da.join("sync-state")).unwrap();
+            std::fs::write(
+                da.join("sync-state").join("settings.json"),
+                r#"{"items":{"settings":{"hash":"old","modified":1000}},"seeded":true}"#,
+            )
+            .unwrap();
+            a.sync(3_000);
+            assert_eq!(
+                a.settings.launcher_hotkey, "Ctrl+B",
+                "B's newer value is adopted, A's migrated fields do not claim now; ids {ida}/{idb}"
+            );
+            let doc = std::fs::read_to_string(shared.join("devices").join(ida).join("settings.json")).unwrap();
+            assert!(doc.contains("launcher_hotkey") && !doc.contains("\"settings\""), "published field by field: {doc}");
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn this_macs_settings_file_is_copied_once_before_the_first_merge() {
+        let dir = tmp("backup");
+        std::fs::write(dir.join("settings.json"), r#"{"theme":"Dark"}"#).unwrap();
+        backup_settings_once(&dir);
+        std::fs::write(dir.join("settings.json"), r#"{"theme":"Light"}"#).unwrap();
+        backup_settings_once(&dir);
+        assert_eq!(std::fs::read_to_string(dir.join("settings.before-sync.json")).unwrap(), r#"{"theme":"Dark"}"#);
+        // nothing to copy: nothing is made up
+        let empty = tmp("nobackup");
+        backup_settings_once(&empty);
+        assert!(!empty.join("settings.before-sync.json").exists());
+        for d in [dir, empty] {
+            std::fs::remove_dir_all(d).unwrap();
+        }
+    }
+
     #[test]
     fn two_fresh_installs_end_with_three_snippets_and_six_quicklinks() {
         let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
@@ -1140,10 +1428,16 @@ mod tests {
         let other = shared.join("devices").join("other");
         std::fs::create_dir_all(&other).unwrap();
         let old = image_entry("old", "x.png", 5);
-        let mut doc = DeviceDoc { device: "other".into(), items: Default::default() };
+        let mut doc = DeviceDoc { device: "other".into(), items: Default::default(), ..Default::default() };
         doc.items.insert(
             "old".into(),
-            sync::Record { modified: 10, deleted: false, value: Some(serde_json::to_value(&old).unwrap()), pristine: false },
+            sync::Record {
+                modified: 10,
+                deleted: false,
+                value: Some(serde_json::to_value(&old).unwrap()),
+                pristine: false,
+                adopted: false,
+            },
         );
         std::fs::write(other.join("clipboard.json"), serde_json::to_vec(&doc).unwrap()).unwrap();
         let o = sync_domain(&a.io, "clipboard", &[], &Tracker::default(), 500 * DAY).unwrap();
@@ -1452,9 +1746,16 @@ mod tests {
             device: "other".into(),
             items: [(
                 "c1".to_string(),
-                sync::Record { modified: 9, deleted: false, value: Some(serde_json::to_value(&entry).unwrap()), pristine: false },
+                sync::Record {
+                    modified: 9,
+                    deleted: false,
+                    value: Some(serde_json::to_value(&entry).unwrap()),
+                    pristine: false,
+                    adopted: false,
+                },
             )]
             .into(),
+            ..Default::default()
         };
         std::fs::write(other.join("clipboard.json"), serde_json::to_vec(&doc).unwrap()).unwrap();
         let o = sync_domain(&a.io, "clipboard", &[], &Tracker::default(), 2).unwrap();
@@ -1492,9 +1793,11 @@ mod tests {
                     deleted: false,
                     value: Some(serde_json::to_value(image_entry("c1", "pic.png", 5)).unwrap()),
                     pristine: false,
+                    adopted: false,
                 },
             )]
             .into(),
+            ..Default::default()
         };
         std::fs::write(other.join("clipboard.json"), serde_json::to_vec(&doc).unwrap()).unwrap();
         // the run reads documents (placeholder download turns sync off), then must not copy the image

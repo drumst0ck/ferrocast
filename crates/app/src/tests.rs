@@ -14933,3 +14933,32 @@ fn the_sync_note_in_settings_lists_what_stays_on_each_mac() {
         assert!(draw::SYNC_NOTE.contains(what), "{what}");
     }
 }
+
+#[test]
+fn a_copy_of_settings_json_is_kept_before_the_first_settings_merge_is_applied() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    app.store.save("settings.json", &app.settings).unwrap();
+    let before = std::fs::read_to_string(app.store.path("settings.json")).unwrap();
+    // another Mac changed the hotkey field
+    let mut theirs = app.settings.clone();
+    theirs.launcher_hotkey = "Ctrl+Space".into();
+    let merged = ferrocast_core::sync_io::settings_items(&theirs);
+    let snap = app.sync_snapshot("settings");
+    assert!(app.sync_apply("settings", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert_eq!(app.settings.launcher_hotkey, "Ctrl+Space");
+    assert_eq!(
+        std::fs::read_to_string(app.store.path("settings.before-sync.json")).unwrap(),
+        before,
+        "the copy has the settings from before the merge"
+    );
+    // not overwritten by a later merge
+    let mut more = app.settings.clone();
+    more.theme = ferrocast_core::models::Theme::Light;
+    let snap = app.sync_snapshot("settings");
+    assert!(app
+        .sync_apply("settings", ferrocast_core::sync_io::settings_items(&more), ferrocast_core::sync::Tracker::default(), &snap)
+        .is_some());
+    assert_eq!(std::fs::read_to_string(app.store.path("settings.before-sync.json")).unwrap(), before);
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
