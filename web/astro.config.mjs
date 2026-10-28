@@ -18,7 +18,10 @@ export default defineConfig({
   adapter: node({ mode: 'standalone' }),
   trailingSlash: 'always',
   // Old slug from the SEO idea board; the brief asks for a redirect to the published URL.
-  redirects: { '/es/alternativa-raycast/': '/es/alternativa-a-raycast/' },
+  redirects: {
+    '/es/alternativa-raycast/': '/es/alternativa-a-raycast/',
+    '/organize-pdf-mac/': '/tools/organize-pdf/',
+  },
   build: {
     inlineStylesheets: 'auto',
   },

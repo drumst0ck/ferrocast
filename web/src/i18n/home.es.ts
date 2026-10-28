@@ -94,6 +94,7 @@ export const es: HomeCopy = {
     },
     never: 'El resultado se guarda junto al original, nunca encima.',
     ctaExplore: 'Explorar todas las conversiones',
+    ctaCompare: 'Comparar con Permute y CloudConvert',
     ctaDocs: 'Leer la documentación',
   },
   record: {

@@ -116,6 +116,9 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/free-file-converter-mac') {
       return fileLastmod('src/lib/seo/file-converter.ts', 'src/components/seo/GuidePage.astro', 'src/data/conversions.json');
     }
+    if (path === '/es/convertidor-de-archivos-gratis-mac') {
+      return fileLastmod('src/lib/seo/file-converter-es.ts', 'src/components/seo/FileConverterEsPage.astro');
+    }
     if (path === '/local-ai-launcher') {
       return fileLastmod('src/lib/seo/local-ai.ts', 'src/components/seo/GuidePage.astro');
     }
@@ -134,8 +137,14 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/compress-video-to-size' || path === '/es/comprimir-video-a-un-tamano') {
       return fileLastmod('src/lib/seo/compress-video.ts', 'src/components/seo/GuidePage.astro');
     }
+    if (path === '/blur-video-mac' || path === '/es/difuminar-video-mac') {
+      return fileLastmod('src/lib/seo/blur-video.ts', 'src/components/seo/BlurVideoPage.astro');
+    }
     if (path === '/raycast-alternative' || path === '/es/alternativa-a-raycast') {
       return fileLastmod('src/lib/seo/alt-raycast.ts', 'src/components/seo/AlternativePage.astro');
+    }
+    if (path === '/tools/organize-pdf') {
+      return fileLastmod('src/lib/seo/organize-pdf.ts', 'src/components/seo/OrganizePdfPage.astro', 'src/content/docs/docs/files/tools/organize-pdf.mdx');
     }
     if (path === '/tools') return fileLastmod('src/pages/tools/index.astro', 'src/data/tools.json');
     if (path === '/es/tools') return fileLastmod('src/pages/es/tools/index.astro', 'src/i18n/tools-es.ts', 'src/data/tools.json');

@@ -112,6 +112,7 @@ export const en: GuideCopy = {
       ['Video conversions', '/convert/video/'],
       ['Optional tools (ffmpeg)', '/docs/files/optional-tools/'],
       ['A free Raycast alternative', '/raycast-alternative/'],
+      ['Blur part of a video', '/blur-video-mac/'],
     ],
   },
 };
@@ -198,6 +199,7 @@ export const es: GuideCopy = {
       ['Conversiones de vídeo', '/convert/video/'],
       ['Herramientas opcionales (ffmpeg)', '/docs/files/optional-tools/'],
       ['Alternativa gratis a Raycast', '/es/alternativa-a-raycast/'],
+      ['Difuminar parte de un vídeo', '/es/difuminar-video-mac/'],
     ],
   },
 };

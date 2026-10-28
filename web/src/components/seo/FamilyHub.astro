@@ -28,6 +28,7 @@ if (title.length > 60 || description.length < 120 || description.length > 155) t
         <ul class="chips">{i.outputs.map((o) => <li><a href={`/convert/${i.ext.toLowerCase()}-to-${o.ext.toLowerCase()}/`}>{i.label} to {o.label}</a></li>)}</ul>
       </section>
     ))}
+    {hub.id === 'pdf' && <p><a class="tl" href="/tools/organize-pdf/">Reorder pages inside one PDF</a></p>}
     <p><a class="tl" href="/files/">Explore all 275 conversions</a> · <a class="tl" href="/#install">Install Ferrocast</a></p>
   </main>
   <SiteFooter />
