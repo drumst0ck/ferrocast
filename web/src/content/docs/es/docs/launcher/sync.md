@@ -11,6 +11,7 @@ Actívala en Ajustes → Advanced → Sync with iCloud. La línea de estado bajo
 ## Qué se sincroniza
 
 - Los **ajustes**, incluidos los atajos de teclado.
+- Los **snippets** y los **quicklinks**.
 - Los **temas propios**. Cada tema es un elemento, así que un tema que edites, renombres o borres llega a tus otros Mac. Si renombras el tema seleccionado en un Mac, los demás lo siguen teniendo seleccionado. Dos temas con el mismo nombre creados en Macs distintos se conservan los dos; renombra uno.
 - Las **notas**, incluidas las fijadas y las de Eliminadas recientemente.
 - El **historial del portapapeles**, con las imágenes de las entradas de imagen. Solo se comparte lo que Ferrocast grabó en un Mac. Las entradas de gestores de contraseñas nunca se graban, así que nunca se comparten. Se sigue aplicando tu ajuste de retención del historial.
@@ -45,6 +46,7 @@ Ferrocast fusiona elemento por elemento y gana la edición más reciente.
 - Si dos Mac activan la sincronización por primera vez antes de que alguno haya sincronizado dos veces, con versiones distintas del mismo elemento, gana en ambos el de id de dispositivo mayor, así que terminan iguales.
 - Ferrocast guarda una copia de los ajustes de este Mac como `settings.before-sync.json` en la carpeta de datos antes de que la primera fusión los cambie.
 - Si se pierde el estado de sincronización de un Mac, Ferrocast lo reconstruye a partir del propio archivo de ese Mac en iCloud Drive, así que se conservan las ediciones y los borrados hechos desde su última sincronización.
+- Si un archivo de datos de un Mac no se puede leer (Ferrocast lo guarda junto al original como `.corrupt`), ese Mac parte de lo que tienen tus otros Mac en lugar de decirles que se borró todo. La línea de estado lo indica.
 
 ## Cuándo se sincroniza
 
