@@ -8,6 +8,7 @@ use crate::ui::{self, palette, IconCache, Palette};
 use egui::{Align2, Color32, Context, FontId, Id, Key, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2};
 use ferrocast_core::calc;
 use ferrocast_core::color::Rgba;
+use ferrocast_core::i18n::{tr, trf, trn};
 use ferrocast_core::models::*;
 use ferrocast_core::placeholders::{self, Target};
 use ferrocast_core::ranking::{self, Frecency, Rankable};
@@ -130,7 +131,7 @@ pub fn frame_job(opts: &ferrocast_core::frame::FrameOpts) -> Result<ferrocast_co
         }
         let p = std::path::Path::new(path);
         if !p.is_file() {
-            return Err(format!("Background: {path} was not found"));
+            return Err(trf("Background: {path} was not found", &[("path", path)]));
         }
         if services::image_size(p).is_none() {
             return Err("Background: could not read that picture".into());
@@ -786,6 +787,16 @@ impl View {
     }
 }
 
+/// Search keywords plus the English label when the interface is not English, so the English
+/// words still find a tool whose title is translated.
+fn english_too(keywords: &str, english: &str) -> String {
+    if ferrocast_core::i18n::language() == ferrocast_core::i18n::Lang::En {
+        keywords.to_string()
+    } else {
+        format!("{keywords} {english}")
+    }
+}
+
 enum RunKind {
     Output,
     Compact(String),
@@ -1032,6 +1043,8 @@ pub struct App {
     scroll_to_sel: bool,
     panel: Option<ActionPanel>,
     toast: Option<(String, Instant)>,
+    /// The toast is user or extension text: shown as typed.
+    toast_user: bool,
     /// The last "Reset this tab": (tab, the settings before it, when); Undo restores that tab's fields.
     settings_undo: Option<(usize, Settings, Instant)>,
     prev_pid: Option<i32>,
@@ -1149,6 +1162,20 @@ fn load_fonts(ctx: &Context, wide: bool) {
     ctx.set_fonts(fonts);
 }
 
+/// The language the `language` setting stands for on this Mac (`"system"` follows macOS).
+pub(crate) fn resolve_language(setting: &str) -> ferrocast_core::i18n::Lang {
+    ferrocast_core::i18n::resolve(setting, &ferrocast_macos::apps::preferred_languages())
+}
+
+/// `keywords` plus the English `title` when the interface language shows another one, so a search
+/// in English still finds a command whose title is translated.
+fn with_english_title(mut keywords: Vec<String>, title: &str) -> Vec<String> {
+    if tr(title) != title {
+        keywords.push(title.to_string());
+    }
+    keywords
+}
+
 /// Scripts outside what San Francisco and Apple Symbols cover.
 pub(crate) fn needs_wide_font(text: &str) -> bool {
     text.chars().any(|c| {
@@ -1203,6 +1230,13 @@ impl App {
         let recent_emoji = store.load("recent-emoji.json");
         let shelf: Vec<PathBuf> = store.load("shelf.json");
         let data = store.load_all();
+        // the interface language, and the wide font its glyphs need (CJK)
+        let language = resolve_language(&data.settings.language);
+        ferrocast_core::i18n::set_language(language);
+        let wide_font = language.needs_wide_font();
+        if wide_font {
+            load_fonts(&ctx, true);
+        }
         let store_themes = ferrocast_core::themes::load_with_ids(&store);
         if prof {
             eprintln!("data {:?}", t.elapsed());
@@ -1253,7 +1287,7 @@ impl App {
         if let Some(h) = hotkeys.as_mut() {
             let errs = h.apply(&data.settings);
             if let Some(e) = errs.first() {
-                toast = Some((format!("Hotkey error: {e}"), Instant::now()));
+                toast = Some((trf("Hotkey error: {e}", &[("e", &e.to_string())]), Instant::now()));
             }
         }
         let tray = if data.settings.show_menu_bar_icon { services::make_tray(bus.clone()) } else { None };
@@ -1323,6 +1357,7 @@ impl App {
             scroll_to_sel: false,
             panel: None,
             toast,
+            toast_user: false,
             settings_undo: None,
             prev_pid: None,
             fx: Effects::real(),
@@ -1350,7 +1385,7 @@ impl App {
             recent_emoji,
             shelf,
             app_icon: None,
-            wide_font: false,
+            wide_font,
             show_t: None,
             nav_at: Instant::now(),
             claude: None,
@@ -1641,13 +1676,13 @@ impl App {
                 self.settings.tiling_enabled = !self.settings.tiling_enabled;
                 self.save_settings();
                 let msg = if self.settings.tiling_enabled { "Tiling on" } else { "Tiling off" };
-                self.toast = Some((msg.into(), Instant::now()));
+                self.toast(msg);
             }
             Action::Pause => {
                 self.tiling_paused = !self.tiling_paused;
                 self.sync_tiling();
                 let msg = if self.tiling_paused { "Tiling paused" } else { "Tiling resumed" };
-                self.toast = Some((msg.into(), Instant::now()));
+                self.toast(msg);
             }
             _ if !self.settings.tiling_enabled => {
                 services::notify("Window Tiling", "Turn on automatic tiling in Settings → Advanced first");
@@ -1687,7 +1722,7 @@ impl App {
                 self.persist("settings.json", &v);
                 *self.shared.settings.write().unwrap() = self.settings.clone();
                 let name = ferrocast_core::tiling::Layout::from_number(layout).map_or("", |l| l.name());
-                self.toast = Some((format!("Layout {layout}: {name}"), Instant::now()));
+                self.toast(trf("Layout {layout}: {name}", &[("layout", &layout.to_string()), ("name", &tr(name))]));
             }
             Event::MinSizes(m) => self.persist("tiling-min-sizes.json", &m),
             Event::Overlay(o) => self.apply_overlay(o),
@@ -1697,12 +1732,12 @@ impl App {
                     self.settings.tiling_excluded.push(app.clone());
                     self.save_settings();
                 }
-                self.toast = Some((format!("{app} is no longer tiled"), Instant::now()));
+                self.toast(trf("{app} is no longer tiled", &[("app", &app)]));
             }
             Event::Notice(m) => services::notify("Window Tiling", &m),
             Event::StageManager(on) => {
                 let m = if on { "Stage Manager is on: tiling is paused" } else { "Stage Manager is off: tiling resumed" };
-                self.toast = Some((m.into(), Instant::now()));
+                self.toast(m);
             }
         }
     }
@@ -1786,7 +1821,7 @@ impl App {
         if let Some(h) = self.hotkeys.as_mut() {
             let errors = h.apply(&self.settings);
             if let Some(e) = errors.first() {
-                self.toast = Some((format!("Hotkey error: {e}"), Instant::now()));
+                self.toast = Some((trf("Hotkey error: {e}", &[("e", &e.to_string())]), Instant::now()));
             }
             let (log, mut failed) = services::tiling_hotkey_report(&h.results);
             failed.extend(h.skipped.iter().cloned());
@@ -1812,6 +1847,25 @@ impl App {
         }
     }
 
+    /// Switch the interface language now: strings are looked up each frame, so only what is cached
+    /// (launcher rows, menus) is rebuilt, and the wide font is added for Japanese and Chinese.
+    pub(crate) fn apply_language(&mut self) {
+        let lang = resolve_language(&self.settings.language);
+        if lang == ferrocast_core::i18n::language() {
+            return;
+        }
+        ferrocast_core::i18n::set_language(lang);
+        if lang.needs_wide_font() && !self.wide_font {
+            self.wide_font = true;
+            load_fonts(&self.ctx, true);
+        }
+        if let Some(tray) = self._tray.as_ref() {
+            services::refresh_tray_menu(tray, self.tray_rec_shown);
+        }
+        self.rebuild();
+        self.ctx.request_repaint();
+    }
+
     fn rebuild(&mut self) {
         self.sec_dirty = true;
         let mut v = vec![];
@@ -1821,7 +1875,7 @@ impl App {
                 title: a.name.clone(),
                 subtitle: String::new(),
                 icon: Icon::App(a.path.to_string_lossy().to_string()),
-                accessory: "Application".into(),
+                accessory: tr("Application").into_owned(),
                 keywords: a.keywords.clone(),
                 kind: Kind::App { path: a.path.to_string_lossy().to_string() },
             });
@@ -1833,44 +1887,44 @@ impl App {
             let (g, c) = b.glyph();
             v.push(Item {
                 id: b.id(),
-                title: b.title().into(),
-                subtitle: if b.extension() == b.title() { String::new() } else { b.extension().into() },
+                title: tr(b.title()).into_owned(),
+                subtitle: if b.extension() == b.title() { String::new() } else { tr(b.extension()).into_owned() },
                 icon: Icon::Glyph(g, c),
-                accessory: "Command".into(),
-                keywords: b.keywords(),
+                accessory: tr("Command").into_owned(),
+                keywords: with_english_title(b.keywords(), b.title()),
                 kind: Kind::Builtin(*b),
             });
         }
         for c in windows::WindowCommand::ALL {
             v.push(Item {
                 id: c.id(),
-                title: c.title().into(),
-                subtitle: "Window Management".into(),
+                title: tr(c.title()).into_owned(),
+                subtitle: tr("Window Management").into_owned(),
                 icon: Icon::Glyph("sf:rectangle.lefthalf.filled", [89, 212, 153]),
-                accessory: "Command".into(),
-                keywords: vec!["window".into(), "resize".into(), "move".into()],
+                accessory: tr("Command").into_owned(),
+                keywords: with_english_title(vec!["window".into(), "resize".into(), "move".into()], c.title()),
                 kind: Kind::Window(*c),
             });
         }
         for a in ferrocast_core::tiling::Action::ALL {
             v.push(Item {
                 id: a.id(),
-                title: a.title(),
-                subtitle: "Window Tiling".into(),
+                title: tr(&a.title()).into_owned(),
+                subtitle: tr("Window Tiling").into_owned(),
                 icon: Icon::Glyph("sf:rectangle.split.2x2", [89, 212, 153]),
-                accessory: "Command".into(),
-                keywords: vec!["window".into(), "tile".into(), "tiling".into(), "layout".into()],
+                accessory: tr("Command").into_owned(),
+                keywords: with_english_title(vec!["window".into(), "tile".into(), "tiling".into(), "layout".into()], &a.title()),
                 kind: Kind::Tiling(a),
             });
         }
         for c in system::SystemCommand::ALL {
             v.push(Item {
                 id: c.id(),
-                title: c.title(),
-                subtitle: "System".into(),
+                title: tr(&c.title()).into_owned(),
+                subtitle: tr("System").into_owned(),
                 icon: Icon::Glyph(system_symbol(c), [90, 90, 105]),
-                accessory: "Command".into(),
-                keywords: c.keywords().iter().map(|s| s.to_string()).collect(),
+                accessory: tr("Command").into_owned(),
+                keywords: with_english_title(c.keywords().iter().map(|s| s.to_string()).collect(), &c.title()),
                 kind: Kind::System(*c),
             });
         }
@@ -1880,7 +1934,7 @@ impl App {
                 title: q.name.clone(),
                 subtitle: q.link.clone(),
                 icon: Icon::Glyph("sf:link", [86, 194, 255]),
-                accessory: "Quicklink".into(),
+                accessory: tr("Quicklink").into_owned(),
                 keywords: vec![],
                 kind: Kind::Quicklink { id: q.id.clone(), arg: None },
             });
@@ -1895,7 +1949,7 @@ impl App {
                     Some(e) => Icon::Emoji(e),
                     None => Icon::Glyph("sf:terminal", [60, 60, 70]),
                 },
-                accessory: "Script Command".into(),
+                accessory: tr("Script Command").into_owned(),
                 keywords: s.description.iter().cloned().collect(),
                 kind: Kind::Script(i),
             });
@@ -2064,7 +2118,7 @@ impl App {
     fn persist<T: serde::Serialize>(&mut self, name: &str, value: &T) {
         if let Err(e) = self.store.save(name, value) {
             instance::log(&self.store.root, &format!("saving {name} failed: {e:#}"));
-            self.toast(format!("Could not save {name}: {e}"));
+            self.toast(trf("Could not save {name}: {e}", &[("name", name), ("e", &e.to_string())]));
         }
         self.sync_mark(name);
     }
@@ -2102,8 +2156,8 @@ impl App {
     fn handle_notion_tested(&mut self, r: Result<ferrocast_core::notion::BotInfo, String>) {
         self.toast(match r {
             Ok(b) => match b.workspace.filter(|w| !w.is_empty()) {
-                Some(w) => format!("Connected to Notion as {} · {w}", b.name),
-                None => format!("Connected to Notion as {}", b.name),
+                Some(w) => trf("Connected to Notion as {name} · {workspace}", &[("name", &b.name), ("workspace", &w)]),
+                None => trf("Connected to Notion as {name}", &[("name", &b.name)]),
             },
             Err(e) => e,
         });
@@ -2154,7 +2208,7 @@ impl App {
         let mut s = self.settings.clone();
         s.notion_target = Some(ferrocast_core::models::NotionTarget { id: item.id, kind: kind.into(), title: item.title.clone() });
         self.commit_settings(s);
-        self.toast(format!("Capture target set to {}", item.title));
+        self.toast(trf("Capture target set to {name}", &[("name", &item.title)]));
     }
 
     // ------------------------------------------------------------ Search Notion (command)
@@ -2267,10 +2321,10 @@ impl App {
     fn notion_view_sections(&self) -> Vec<Section> {
         if self.nv.connected == Some(false) {
             return vec![Section {
-                title: "Connect Notion to search your pages".into(),
+                title: tr("Connect Notion to search your pages").into_owned(),
                 items: vec![Item {
                     id: "notion:connect".into(),
-                    title: "Open Settings → Integrations".into(),
+                    title: tr("Open Settings → Integrations").into_owned(),
                     subtitle: String::new(),
                     icon: Icon::Glyph("sf:gearshape", [120, 120, 130]),
                     accessory: String::new(),
@@ -2304,7 +2358,7 @@ impl App {
         if self.nv.has_more {
             items.push(Item {
                 id: "notion:more".into(),
-                title: "Load more".into(),
+                title: tr("Load more").into_owned(),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:ellipsis", [120, 120, 130]),
                 accessory: String::new(),
@@ -2315,7 +2369,7 @@ impl App {
         if items.is_empty() {
             return vec![];
         }
-        vec![Section { title: if self.nv.shown.is_empty() { "Recently edited" } else { "Results" }.into(), items }]
+        vec![Section { title: tr(if self.nv.shown.is_empty() { "Recently edited" } else { "Results" }).into_owned(), items }]
     }
 
     // ------------------------------------------------------------ Search Obsidian (command)
@@ -2481,10 +2535,10 @@ impl App {
     fn obsidian_view_sections(&self) -> Vec<Section> {
         let setup = |title: &str| {
             vec![Section {
-                title: title.into(),
+                title: tr(title).into_owned(),
                 items: vec![Item {
                     id: "obsidian:setup".into(),
-                    title: "Open Settings → Integrations".into(),
+                    title: tr("Open Settings → Integrations").into_owned(),
                     subtitle: String::new(),
                     icon: Icon::Glyph("sf:gearshape", [120, 120, 130]),
                     accessory: String::new(),
@@ -2515,7 +2569,7 @@ impl App {
         let mut out = vec![];
         if !found.is_empty() {
             out.push(Section {
-                title: if q.is_empty() { "Recent" } else { "Notes" }.into(),
+                title: tr(if q.is_empty() { "Recent" } else { "Notes" }).into_owned(),
                 items: found.iter().map(|&i| row(&entries[i])).collect(),
             });
         }
@@ -2529,7 +2583,7 @@ impl App {
                     .map(row)
                     .collect();
                 if !items.is_empty() {
-                    out.push(Section { title: "In notes".into(), items });
+                    out.push(Section { title: tr("In notes").into_owned(), items });
                 }
             }
         }
@@ -2619,7 +2673,7 @@ impl App {
     /// Send on a thread; the answer comes back as `Msg::NotionAdded`.
     fn notion_add_start(&mut self, capture: notion_io::Capture) {
         self.na.sending = true;
-        self.toast(format!("Adding to {}…", capture.target.title));
+        self.toast(trf("Adding to {name}…", &[("name", &capture.target.title)]));
         let (read, map, schema, bus) = (notion_io::token_reader(), notion_io::url_mapper(), self.na.schema.clone(), self.bus.clone());
         std::thread::spawn(move || {
             let result = match read() {
@@ -2637,7 +2691,7 @@ impl App {
         match result {
             Ok(done) => {
                 // the toast has no action button, so there is no "Open" link here
-                self.toast(format!("Added to {}", done.target_title));
+                self.toast(trf("Added to {name}", &[("name", &done.target_title)]));
                 if let View::NotionAdd { title, text, .. } = self.stack.last_mut().unwrap() {
                     title.clear();
                     text.clear();
@@ -2772,7 +2826,7 @@ impl App {
         let mut s = self.settings.clone();
         s.obsidian_vault = Some(path);
         self.commit_settings(s);
-        self.toast(format!("Obsidian vault set to {name}"));
+        self.toast(trf("Obsidian vault set to {name}", &[("name", &name)]));
     }
 
     fn obsidian_pick(&mut self, i: usize) {
@@ -2819,7 +2873,14 @@ impl App {
         self.toast("Capture target cleared");
     }
 
+    /// A toast made of text the user (or an extension) wrote: shown as typed.
+    pub(crate) fn toast_verbatim(&mut self, s: impl Into<String>) {
+        self.toast(s);
+        self.toast_user = true;
+    }
+
     fn toast(&mut self, s: impl Into<String>) {
+        self.toast_user = false;
         self.toast = Some((s.into(), Instant::now()));
         self.ctx.request_repaint_after(Duration::from_millis(2600));
     }
@@ -3000,7 +3061,12 @@ impl App {
         if kind == ferrocast_core::wheel::WheelKind::Translate {
             return ferrocast_core::translate::languages(&self.settings.translate_languages)
                 .into_iter()
-                .map(|l| WheelSeg { label: l.clone(), symbol: "sf:globe", needs: None, pick: WheelPick::Translate(l) })
+                .map(|l| WheelSeg {
+                    label: services::language_label(&l, true),
+                    symbol: "sf:globe",
+                    needs: None,
+                    pick: WheelPick::Translate(l),
+                })
                 .collect();
         }
         let Some(first) = files.first() else { return vec![] };
@@ -3164,14 +3230,17 @@ impl App {
                         let drop = effect_drop_point(center);
                         (self.fx.effect_probe)(self.prev_pid, drop, run, &self.bus);
                     }
-                    let working = format!("Translating to {lang} with {}…", ferrocast_core::translate::engine_label(&chosen));
+                    let working = trf(
+                        "Translating to {lang} with {engine}…",
+                        &[("lang", &services::language_label(&lang, false)), ("engine", &ferrocast_core::translate::engine_label(&chosen))],
+                    );
                     self.toast(fallback_note.unwrap_or(working));
                     (self.fx.translate_start)(&engine, text, lang, self.prev_pid, self.settings.translate_output, run, &self.bus);
                 }
             }
-            WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(format!("{label}: not available yet")),
+            WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(trf("{label}: not available yet", &[("label", &label)])),
             WheelPick::File(tool) => {
-                self.toast(format!("{}…", tool.label()));
+                self.toast(format!("{}…", tool.label_tr()));
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
             }
             WheelPick::Image(ferrocast_core::convert::ImageOp::Collage) if files.len() >= 2 => {
@@ -3181,17 +3250,17 @@ impl App {
                 self.perform(Act::AnnotateCanvas(files[0].clone()), false);
             }
             WheelPick::Image(op) => {
-                self.toast(format!("{}…", op.label()));
+                self.toast(format!("{}…", op.label_tr()));
                 services::image_op_files(files, op, self.bus.clone());
             }
             WheelPick::Convert(t) if t.needs.is_some() => {
                 let n = t.needs.unwrap_or_default();
                 let cmd = n.split_once('(').map(|(_, c)| c.trim_end_matches(')').to_string()).unwrap_or_else(|| n.to_string());
                 self.copy_text(&cmd);
-                self.toast(format!("Needs {n}. Install command copied: {cmd}"));
+                self.toast(trf("Needs {n}. Install command copied: {cmd}", &[("n", n), ("cmd", &cmd)]));
             }
             WheelPick::Convert(t) => {
-                self.toast(format!("Converting to {}…", t.label));
+                self.toast(trf("Converting to {label}…", &[("label", t.label)]));
                 services::convert_files(files, t, self.tools, self.bus.clone());
             }
             WheelPick::Act(a) => self.perform(a, false),
@@ -3235,7 +3304,7 @@ impl App {
                     }
                     Err(e) => {
                         self.ext.downloading = false;
-                        self.toast(format!("Node.js download failed: {e}"));
+                        self.toast(trf("Node.js download failed: {e}", &[("e", &e.to_string())]));
                     }
                 },
                 // a URL comes from outside: the launcher steps aside like for any Notes command
@@ -3273,7 +3342,7 @@ impl App {
                 }
                 Msg::UpdateFailed(e) => {
                     instance::log(&self.store.root, &format!("update failed: {e}"));
-                    self.toast(format!("Update failed: {e}"));
+                    self.toast(trf("Update failed: {e}", &[("e", &e.to_string())]));
                 }
                 Msg::NotionTested(r) => self.handle_notion_tested(r),
                 Msg::NotionSearched { request, result } => self.handle_notion_searched(request, result),
@@ -3443,7 +3512,7 @@ impl App {
                             }
                             Err(e) => {
                                 self.pop();
-                                self.toast(format!("Trim Audio: {e}"));
+                                self.toast(trf("Trim Audio: {e}", &[("e", &e.to_string())]));
                             }
                         }
                     }
@@ -3466,7 +3535,7 @@ impl App {
                             }
                             Err(e) => {
                                 self.pop();
-                                self.toast(format!("Bleep Audio: {e}"));
+                                self.toast(trf("Bleep Audio: {e}", &[("e", &e.to_string())]));
                             }
                         }
                     }
@@ -3657,7 +3726,7 @@ impl App {
                             }
                         }
                     }
-                    self.toast(format!("Moved {} item{}", pairs.len(), if pairs.len() == 1 { "" } else { "s" }));
+                    self.toast(trn("Moved {n} item", "Moved {n} items", pairs.len() as u64));
                 }
                 Msg::WheelOpen(kind, files) => {
                     self.wheel_text = None;
@@ -3818,7 +3887,7 @@ impl App {
                     }
                     Err(e) => {
                         self.show();
-                        self.toast(format!("Finder selection: {e} (allow Automation for Finder in System Settings)"));
+                        self.toast(trf("Finder selection: {e} (allow Automation for Finder in System Settings)", &[("e", &e.to_string())]));
                     }
                 },
                 Msg::FinderEnter => self.on_finder_enter(),
@@ -3838,7 +3907,7 @@ impl App {
                     self.show();
                     self.push(View::Output {
                         run: 0,
-                        title: "Sign in with ChatGPT".into(),
+                        title: tr("Sign in with ChatGPT").into_owned(),
                         text: format!(
                             "Your code:\n\n    {code}\n\nIt is already on your clipboard. A browser tab with {} should be open; paste the code there and approve. This screen can be closed; Ferrocast keeps waiting in the background and will tell you when it is done.",
                             ferrocast_core::chatgpt::DEVICE_VERIFICATION_URL
@@ -3888,16 +3957,20 @@ impl App {
                 }
                 Msg::ImportFile(path) => {
                     let outcome = std::fs::read_to_string(&path)
-                        .map_err(|e| format!("Could not read the file: {e}"))
+                        .map_err(|e| trf("Could not read the file: {e}", &[("e", &e.to_string())]))
                         .and_then(|t| ferrocast_core::import::parse_snippets(&t));
                     let text = match outcome {
                         Ok(incoming) => {
                             let (added, conflicts) = ferrocast_core::import::merge_snippets(&mut self.snippets, incoming);
                             self.save_snippets();
-                            format!(
-                                "Imported {added} snippet(s){}",
-                                if conflicts > 0 { format!(", {conflicts} keyword(s) already in use were cleared") } else { String::new() }
-                            )
+                            if conflicts > 0 {
+                                trf(
+                                    "Imported {added} snippet(s), {conflicts} keyword(s) already in use were cleared",
+                                    &[("added", &added.to_string()), ("conflicts", &conflicts.to_string())],
+                                )
+                            } else {
+                                trf("Imported {added} snippet(s)", &[("added", &added.to_string())])
+                            }
                         }
                         Err(e) => {
                             instance::log(&self.store.root, &format!("snippet import failed: {e}"));
@@ -3923,7 +3996,7 @@ impl App {
                     let hex = c.formats()[0].1.clone();
                     // Not marked as our own write, so the colour also lands in the clipboard history.
                     notion_io::write_clipboard(&hex);
-                    self.toast(format!("Copied {hex}"));
+                    self.toast(trf("Copied {hex}", &[("hex", &hex)]));
                 }
                 Msg::ColorPicked(None) => {}
                 Msg::Tray(id) => match id.as_str() {
@@ -4023,18 +4096,20 @@ impl App {
                             }
                         }
                     }
+                    // the script's title and output are the user's: shown as printed
                     Some(RunKind::Compact(title)) => {
                         let line = script::last_line(&text);
-                        let line = if line.is_empty() { format!("{title} finished") } else { line };
+                        let line = if line.is_empty() { trf("{title} finished", &[("title", &title)]) } else { line };
                         if self.visible {
-                            self.toast(line);
+                            self.toast_verbatim(line);
                         } else {
-                            services::notify(&title, &line);
+                            services::notify_verbatim(&title, &line);
                         }
                     }
                     Some(RunKind::Silent(title)) => {
                         let line = script::last_line(&text);
-                        services::notify(&title, if line.is_empty() { "Done" } else { &line });
+                        let line = if line.is_empty() { tr("Done").into_owned() } else { line };
+                        services::notify_verbatim(&title, &line);
                     }
                     Some(RunKind::Inline(p)) => {
                         self.inline.insert(p, (script::first_line(&text), Instant::now()));
@@ -4088,14 +4163,14 @@ impl App {
         if q.is_empty() {
             let favs: Vec<Item> = self.settings.favorites.iter().filter_map(|f| self.base.iter().find(|i| &i.id == f).cloned()).collect();
             if !favs.is_empty() {
-                out.push(Section { title: "Favorites".into(), items: favs });
+                out.push(Section { title: tr("Favorites").into_owned(), items: favs });
             }
             let mut recent: Vec<&Item> =
                 self.base.iter().filter(|i| !self.settings.is_favorite(&i.id) && self.frecency.last_used(&i.id).is_some()).collect();
             recent.sort_by(|a, b| self.frecency.score(&b.id, now).total_cmp(&self.frecency.score(&a.id, now)));
             recent.truncate(8);
             if !recent.is_empty() {
-                out.push(Section { title: "Suggestions".into(), items: recent.into_iter().cloned().collect() });
+                out.push(Section { title: tr("Suggestions").into_owned(), items: recent.into_iter().cloned().collect() });
             }
             let cmds: Vec<Item> = self
                 .base
@@ -4104,7 +4179,7 @@ impl App {
                 .take(10)
                 .cloned()
                 .collect();
-            out.push(Section { title: "Commands".into(), items: cmds });
+            out.push(Section { title: tr("Commands").into_owned(), items: cmds });
             let apps: Vec<Item> = self
                 .base
                 .iter()
@@ -4113,7 +4188,7 @@ impl App {
                 .cloned()
                 .collect();
             if !apps.is_empty() {
-                out.push(Section { title: "Applications".into(), items: apps });
+                out.push(Section { title: tr("Applications").into_owned(), items: apps });
             }
             return out;
         }
@@ -4126,7 +4201,7 @@ impl App {
                 title: r.display.clone(),
                 subtitle: r.question.clone(),
                 icon: Icon::Glyph("sf:timer", [255, 99, 99]),
-                accessory: "Time".into(),
+                accessory: tr("Time").into_owned(),
                 keywords: vec![],
                 kind: Kind::Calc(r),
             });
@@ -4137,7 +4212,7 @@ impl App {
                 title: r.display.clone(),
                 subtitle: r.question.clone(),
                 icon: Icon::Glyph("sf:equal", [255, 99, 99]),
-                accessory: "Calculator".into(),
+                accessory: tr("Calculator").into_owned(),
                 keywords: vec![],
                 kind: Kind::Calc(r),
             });
@@ -4148,7 +4223,7 @@ impl App {
                 title: c.formats()[0].1.clone(),
                 subtitle: q.into(),
                 icon: Icon::Color(c),
-                accessory: "Color".into(),
+                accessory: tr("Color").into_owned(),
                 keywords: vec![],
                 kind: Kind::Color(c),
             });
@@ -4156,10 +4231,10 @@ impl App {
         if let Some(u) = looks_like_url(q) {
             top.push(Item {
                 id: "url".into(),
-                title: format!("Open {u}"),
+                title: trf("Open {u}", &[("u", &u)]),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:globe", [86, 194, 255]),
-                accessory: "URL".into(),
+                accessory: tr("URL").into_owned(),
                 keywords: vec![],
                 kind: Kind::Url(u),
             });
@@ -4172,16 +4247,16 @@ impl App {
             };
             top.push(Item {
                 id: "timer".into(),
-                title: format!("Start {what} timer"),
+                title: trf("Start {what} timer", &[("what", &what)]),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:timer", [245, 165, 36]),
-                accessory: "Timer".into(),
+                accessory: tr("Timer").into_owned(),
                 keywords: vec![],
                 kind: Kind::Timer(t.secs, t.label),
             });
         }
         if !top.is_empty() {
-            out.push(Section { title: "Result".into(), items: top });
+            out.push(Section { title: tr("Result").into_owned(), items: top });
         }
         // alias + argument: "g rust"
         if let Some((first, rest)) = q.split_once(' ') {
@@ -4192,7 +4267,7 @@ impl App {
                 if let Kind::Quicklink { id, .. } = &it.kind {
                     it.kind = Kind::Quicklink { id: id.clone(), arg: Some(rest.trim().to_string()) };
                 }
-                out.push(Section { title: "Quicklink".into(), items: vec![it] });
+                out.push(Section { title: tr("Quicklink").into_owned(), items: vec![it] });
             }
         }
         let mut scored: Vec<(f64, &Item)> = self
@@ -4203,59 +4278,59 @@ impl App {
         scored.sort_by(|a, b| b.0.total_cmp(&a.0));
         scored.truncate(40);
         if !scored.is_empty() {
-            out.push(Section { title: "Results".into(), items: scored.into_iter().map(|(_, i)| i.clone()).collect() });
+            out.push(Section { title: tr("Results").into_owned(), items: scored.into_iter().map(|(_, i)| i.clone()).collect() });
         }
         if self.settings.file_search_in_root && self.files.0 == q && !self.files.1.is_empty() {
-            out.push(Section { title: "Files".into(), items: self.files.1.iter().take(8).map(|p| file_item(p)).collect() });
+            out.push(Section { title: tr("Files").into_owned(), items: self.files.1.iter().take(8).map(|p| file_item(p)).collect() });
         }
         let mut fb = vec![Item {
             id: "fallback:web".into(),
-            title: format!("Search the web for “{q}”"),
+            title: trf("Search the web for “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:magnifyingglass", [120, 120, 130]),
-            accessory: "Fallback".into(),
+            accessory: tr("Fallback").into_owned(),
             keywords: vec![],
             kind: Kind::WebSearch(q.to_string()),
         }];
         fb.push(Item {
             id: "fallback:files".into(),
-            title: format!("Search files for “{q}”"),
+            title: trf("Search files for “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:magnifyingglass", [120, 120, 130]),
-            accessory: "Fallback".into(),
+            accessory: tr("Fallback").into_owned(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchFiles, q.to_string()),
         });
         fb.push(Item {
             id: "fallback:emoji".into(),
-            title: format!("Search emoji for “{q}”"),
+            title: trf("Search emoji for “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:face.smiling", [255, 197, 49]),
-            accessory: "Fallback".into(),
+            accessory: tr("Fallback").into_owned(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::SearchEmoji, q.to_string()),
         });
         if q.split_whitespace().count() <= 3 && q.chars().all(|c| c.is_alphabetic() || c == ' ' || c == '-' || c == '\'') {
             fb.push(Item {
                 id: "fallback:dict".into(),
-                title: format!("Look up “{q}” in Dictionary"),
+                title: trf("Look up “{q}” in Dictionary", &[("q", q)]),
                 subtitle: String::new(),
                 icon: Icon::Glyph("sf:character.book.closed", [120, 120, 130]),
-                accessory: "Fallback".into(),
+                accessory: tr("Fallback").into_owned(),
                 keywords: vec![],
                 kind: Kind::Url(format!("dict://{}", q.replace(' ', "%20"))),
             });
         }
         fb.push(Item {
             id: "fallback:ai".into(),
-            title: format!("Ask AI: “{q}”"),
+            title: trf("Ask AI: “{q}”", &[("q", q)]),
             subtitle: String::new(),
             icon: Icon::Glyph("sf:sparkles", [168, 110, 255]),
-            accessory: "Fallback".into(),
+            accessory: tr("Fallback").into_owned(),
             keywords: vec![],
             kind: Kind::Prefilled(Builtin::AskAi, q.to_string()),
         });
-        out.push(Section { title: "Use with…".into(), items: fb });
+        out.push(Section { title: tr("Use with…").into_owned(), items: fb });
         out
     }
 
@@ -4273,7 +4348,7 @@ impl App {
         if !self.query.trim().is_empty() {
             v.sort_by_key(|a| std::cmp::Reverse(a.0));
         }
-        vec![Section { title: title.into(), items: v.into_iter().map(|(_, i)| i).collect() }]
+        vec![Section { title: tr(title).into_owned(), items: v.into_iter().map(|(_, i)| i).collect() }]
     }
 
     /// Anything that can change the result list calls this; the next frame recomputes.
@@ -4370,7 +4445,7 @@ impl App {
                 [("Pinned", pinned), ("Today", today), ("Yesterday", yest), ("Earlier", older)]
                     .into_iter()
                     .filter(|(_, v)| !v.is_empty())
-                    .map(|(t, items)| Section { title: t.into(), items })
+                    .map(|(t, items)| Section { title: tr(t).into_owned(), items })
                     .collect()
             }
             View::Snippets => {
@@ -4436,7 +4511,7 @@ impl App {
                             title: e.name().to_string(),
                             subtitle: e.shortcode().map(|s| format!(":{s}:")).unwrap_or_default(),
                             icon: Icon::Emoji(e.as_str().to_string()),
-                            accessory: "Recent".into(),
+                            accessory: tr("Recent").into_owned(),
                             keywords: vec![],
                             kind: Kind::Emoji(e.as_str()),
                         })
@@ -4454,7 +4529,7 @@ impl App {
                                 title: e.name().to_string(),
                                 subtitle: e.shortcode().map(|s| format!(":{s}:")).unwrap_or_default(),
                                 icon: Icon::Emoji(e.as_str().to_string()),
-                                accessory: humanize_group(&format!("{:?}", e.group())),
+                                accessory: tr(&humanize_group(&format!("{:?}", e.group()))).into_owned(),
                                 keywords: vec![],
                                 kind: Kind::Emoji(e.as_str()),
                             },
@@ -4463,13 +4538,13 @@ impl App {
                     .collect();
                 let mut out = self.sorted(v, "Emoji");
                 if !recent.is_empty() {
-                    out.insert(0, Section { title: "Recently used".into(), items: recent });
+                    out.insert(0, Section { title: tr("Recently used").into_owned(), items: recent });
                 }
                 out
             }
             View::Files => {
                 if self.files.0 == q && !self.files.1.is_empty() {
-                    vec![Section { title: "Files".into(), items: self.files.1.iter().map(|p| file_item(p)).collect() }]
+                    vec![Section { title: tr("Files").into_owned(), items: self.files.1.iter().map(|p| file_item(p)).collect() }]
                 } else {
                     vec![]
                 }
@@ -4525,7 +4600,11 @@ impl App {
                 let files = files.clone();
                 let Some(first) = files.first() else { return vec![] };
                 let names: Vec<String> = files.iter().filter_map(|f| f.file_name().map(|n| n.to_string_lossy().to_string())).collect();
-                let sub = if files.len() == 1 { names[0].clone() } else { format!("{} files · {}", files.len(), names.join(", ")) };
+                let sub = if files.len() == 1 {
+                    names[0].clone()
+                } else {
+                    trf("{n} files · {names}", &[("n", &files.len().to_string()), ("names", &names.join(", "))])
+                };
                 let v: Vec<(i64, Item)> = ferrocast_core::convert::targets(first, &self.tools)
                     .into_iter()
                     .filter_map(|t| {
@@ -4549,7 +4628,7 @@ impl App {
                                         [255, 140, 60],
                                     ),
                                     accessory: match t.needs {
-                                        Some(n) => format!("Needs {}", n.split(' ').next().unwrap_or(n)),
+                                        Some(n) => trf("Needs {tool}", &[("tool", n.split(' ').next().unwrap_or(n))]),
                                         None => format!(".{} · {}", t.ext, t.engine.label()),
                                     },
                                     keywords: vec![],
@@ -4566,17 +4645,18 @@ impl App {
                     // a typed size or dimensions ("500kb", "40%", "800x600") becomes a tool of its own
                     let typed = ferrocast_core::convert::parse_image_query(&q);
                     let typed_op = typed.clone();
-                    let tools: Vec<Item> = typed
-                        .into_iter()
-                        .chain(ImageOp::offered(files.len()))
-                        // a query that parsed as a tool is shown as typed; fuzzy matching would hide any with parameters
-                        .filter(|op| {
-                            typed_op.as_ref() == Some(op)
+                    let tools: Vec<Item> =
+                        typed
+                            .into_iter()
+                            .chain(ImageOp::offered(files.len()))
+                            // a query that parsed as a tool is shown as typed; fuzzy matching would hide any with parameters
+                            .filter(|op| {
+                                typed_op.as_ref() == Some(op)
                                 || self
                                     .matches(
                                         &q,
-                                        &op.label(),
-                                        match op {
+                                        &op.label_tr(),
+                                        &english_too(match op {
                                             ImageOp::Compress(_) => "compress smaller jpeg",
                                             ImageOp::Resize(_) => "resize scale",
                                             ImageOp::Crop(..) => "crop aspect",
@@ -4599,46 +4679,46 @@ impl App {
                                             }
                                             ImageOp::CropExact(..) | ImageOp::CropRect(..) => "crop exact dimensions pixels",
                                             ImageOp::SetMeta(_) => "metadata exif camera make model gps location tag",
-                                        },
+                                        }, &op.label()),
                                     )
                                     .is_some()
-                        })
-                        .map(|op| Item {
-                            id: format!("imgtool:{}", op.suffix()),
-                            title: op.label(),
-                            subtitle: sub.clone(),
-                            icon: Icon::Glyph(
-                                match op {
-                                    ImageOp::Compress(_) => "sf:arrow.down.right.and.arrow.up.left",
-                                    ImageOp::Resize(_) => "sf:arrow.up.left.and.down.right.magnifyingglass",
-                                    ImageOp::Crop(..) => "sf:crop",
-                                    ImageOp::StripMetadata => "sf:eye.slash",
-                                    ImageOp::CombinePdf => "sf:doc.richtext",
-                                    ImageOp::Rotate(_) => "sf:rotate.right",
-                                    ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
-                                    ImageOp::Background(_) => "sf:square.dashed",
-                                    ImageOp::Collage | ImageOp::CollageWith(_) => "sf:square.grid.2x2",
-                                    ImageOp::FrameWith(_) => "sf:square.dashed",
-                                    ImageOp::RedactWith(_) => "sf:eye.slash.fill",
-                                    ImageOp::EditWith(_) => "sf:slider.horizontal.3",
-                                    ImageOp::Redact(_) => "sf:eye.slash.fill",
-                                    ImageOp::Adjust(_) => "sf:slider.horizontal.3",
-                                    ImageOp::Annotate => "sf:pencil.tip.crop.circle",
-                                    ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) | ImageOp::CompressWith(..) => {
-                                        "sf:arrow.down.right.and.arrow.up.left"
-                                    }
-                                    ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
-                                    ImageOp::SetMeta(_) => "sf:tag",
-                                },
-                                [255, 140, 60],
-                            ),
-                            accessory: "Image tool".into(),
-                            keywords: vec![],
-                            kind: Kind::ImageTool(files.clone(), op),
-                        })
-                        .collect();
+                            })
+                            .map(|op| Item {
+                                id: format!("imgtool:{}", op.suffix()),
+                                title: op.label_tr(),
+                                subtitle: sub.clone(),
+                                icon: Icon::Glyph(
+                                    match op {
+                                        ImageOp::Compress(_) => "sf:arrow.down.right.and.arrow.up.left",
+                                        ImageOp::Resize(_) => "sf:arrow.up.left.and.down.right.magnifyingglass",
+                                        ImageOp::Crop(..) => "sf:crop",
+                                        ImageOp::StripMetadata => "sf:eye.slash",
+                                        ImageOp::CombinePdf => "sf:doc.richtext",
+                                        ImageOp::Rotate(_) => "sf:rotate.right",
+                                        ImageOp::Flip(_) => "sf:arrow.left.and.right.righttriangle.left.righttriangle.right",
+                                        ImageOp::Background(_) => "sf:square.dashed",
+                                        ImageOp::Collage | ImageOp::CollageWith(_) => "sf:square.grid.2x2",
+                                        ImageOp::FrameWith(_) => "sf:square.dashed",
+                                        ImageOp::RedactWith(_) => "sf:eye.slash.fill",
+                                        ImageOp::EditWith(_) => "sf:slider.horizontal.3",
+                                        ImageOp::Redact(_) => "sf:eye.slash.fill",
+                                        ImageOp::Adjust(_) => "sf:slider.horizontal.3",
+                                        ImageOp::Annotate => "sf:pencil.tip.crop.circle",
+                                        ImageOp::CompressToKb(_) | ImageOp::CompressByPercent(_) | ImageOp::CompressWith(..) => {
+                                            "sf:arrow.down.right.and.arrow.up.left"
+                                        }
+                                        ImageOp::CropExact(..) | ImageOp::CropRect(..) => "sf:crop",
+                                        ImageOp::SetMeta(_) => "sf:tag",
+                                    },
+                                    [255, 140, 60],
+                                ),
+                                accessory: tr("Image tool").into_owned(),
+                                keywords: vec![],
+                                kind: Kind::ImageTool(files.clone(), op),
+                            })
+                            .collect();
                     if !tools.is_empty() {
-                        out.push(Section { title: "Image tools".into(), items: tools });
+                        out.push(Section { title: tr("Image tools").into_owned(), items: tools });
                     }
                 }
                 // trim, split and merge for audio, video and PDF
@@ -4651,10 +4731,13 @@ impl App {
                         .iter()
                         .cloned()
                         .chain(FileTool::offered(fam, files.len()))
-                        .filter(|t| typed.as_ref() == Some(t) || self.matches(&q, &t.label(), "trim split merge cut join").is_some())
+                        .filter(|t| {
+                            typed.as_ref() == Some(t)
+                                || self.matches(&q, &t.label_tr(), &english_too("trim split merge cut join", &t.label())).is_some()
+                        })
                         .map(|t| Item {
                             id: format!("filetool:{}", t.label()),
-                            title: t.label(),
+                            title: t.label_tr(),
                             subtitle: sub.clone(),
                             icon: Icon::Glyph(
                                 match t {
@@ -4689,7 +4772,7 @@ impl App {
                         })
                         .collect();
                     if !items.is_empty() {
-                        out.push(Section { title: "File tools".into(), items });
+                        out.push(Section { title: tr("File tools").into_owned(), items });
                     }
                 }
                 out.extend(self.editor_section(&files, &q, &sub));
@@ -4774,8 +4857,11 @@ impl App {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, t)| {
-                        let title =
-                            if t.label.is_empty() { format!("{} timer", ferrocast_core::timer::describe(t.secs)) } else { t.label.clone() };
+                        let title = if t.label.is_empty() {
+                            trf("{what} timer", &[("what", &ferrocast_core::timer::describe(t.secs))])
+                        } else {
+                            t.label.clone()
+                        };
                         self.matches(&q, &title, "").map(|sc| {
                             let left = t.ends_at.saturating_duration_since(now).as_secs();
                             (
@@ -4816,17 +4902,17 @@ impl App {
                 let (pinned, rest): (Vec<_>, Vec<_>) = rows.iter().partition(|r| r.pinned);
                 let mut out = vec![];
                 if !pinned.is_empty() {
-                    out.push(Section { title: "Pinned".into(), items: pinned.into_iter().map(item).collect() });
+                    out.push(Section { title: tr("Pinned").into_owned(), items: pinned.into_iter().map(item).collect() });
                 }
                 if !rest.is_empty() {
-                    out.push(Section { title: "Notes".into(), items: rest.into_iter().map(item).collect() });
+                    out.push(Section { title: tr("Notes").into_owned(), items: rest.into_iter().map(item).collect() });
                 }
                 out
             }
             View::NotionSearch => self.notion_view_sections(),
             View::ObsidianSearch => self.obsidian_view_sections(),
             View::Colors(c) => vec![Section {
-                title: "Formats".into(),
+                title: tr("Formats").into_owned(),
                 items: c
                     .formats()
                     .into_iter()
@@ -4916,12 +5002,12 @@ impl App {
                 title: title.to_string(),
                 subtitle: sub.to_string(),
                 icon: Icon::Glyph("sf:slider.horizontal.3", [255, 140, 60]),
-                accessory: "Editor".into(),
+                accessory: tr("Editor").into_owned(),
                 keywords: vec![],
                 kind: Kind::Editor(act),
             })
             .collect();
-        (!items.is_empty()).then_some(Section { title: "Editors".into(), items })
+        (!items.is_empty()).then_some(Section { title: tr("Editors").into_owned(), items })
     }
 
     /// Tools the format table lists but Ferrocast cannot do yet; shown, not hidden (parity plan A2).
@@ -4955,12 +5041,12 @@ impl App {
                 title: tool_label(t).to_string(),
                 subtitle: sub.to_string(),
                 icon: Icon::Glyph(tool_symbol(t), [255, 140, 60]),
-                accessory: "Not available yet".into(),
+                accessory: tr("Not available yet").into_owned(),
                 keywords: vec![],
                 kind: Kind::Editor(Act::Convert(files.to_vec())),
             })
             .collect();
-        (!items.is_empty()).then_some(Section { title: "Tools".into(), items })
+        (!items.is_empty()).then_some(Section { title: tr("Tools").into_owned(), items })
     }
 
     // --------------------------------------------------------------- actions
@@ -4989,8 +5075,8 @@ impl App {
             acts.iter().find(|a| f(&a.kind)).map(|a| RowButton {
                 label,
                 tip: match a.shortcut {
-                    Some((m, k)) => format!("{}  {}", a.title, shortcut_label(m, k)),
-                    None => a.title.clone(),
+                    Some((m, k)) => format!("{}  {}", tr(&a.title), shortcut_label(m, k)),
+                    None => tr(&a.title).into_owned(),
                 },
                 kind: a.kind.clone(),
                 destructive: a.destructive,
@@ -5038,25 +5124,25 @@ impl App {
         match self.view() {
             View::Clipboard => vec![RowButton {
                 label: "Clear History…",
-                tip: format!("Delete All Entries  {} (pinned entries stay)", shortcut_label(CTRL_SHIFT, Key::X)),
+                tip: trf("Delete All Entries  {shortcut} (pinned entries stay)", &[("shortcut", &shortcut_label(CTRL_SHIFT, Key::X))]),
                 kind: Act::ClipDeleteAll,
                 destructive: true,
             }],
             View::Snippets => vec![RowButton {
                 label: "+ New",
-                tip: format!("Create Snippet  {}", shortcut_label(CMD, Key::N)),
+                tip: trf("Create Snippet  {shortcut}", &[("shortcut", &shortcut_label(CMD, Key::N))]),
                 kind: Act::CreateSnippet,
                 destructive: false,
             }],
             View::Quicklinks => vec![RowButton {
                 label: "+ New",
-                tip: format!("Create Quicklink  {}", shortcut_label(CMD, Key::N)),
+                tip: trf("Create Quicklink  {shortcut}", &[("shortcut", &shortcut_label(CMD, Key::N))]),
                 kind: Act::CreateQuicklink,
                 destructive: false,
             }],
             View::Notes => vec![RowButton {
                 label: "+ New",
-                tip: format!("Create Note  {}", shortcut_label(CMD, Key::N)),
+                tip: trf("Create Note  {shortcut}", &[("shortcut", &shortcut_label(CMD, Key::N))]),
                 kind: Act::CreateNote,
                 destructive: false,
             }],
@@ -5383,7 +5469,7 @@ impl App {
 
     fn open_target(&mut self, target: &str, with: Option<&str>) {
         if let Err(e) = apps::open(target, with) {
-            self.toast(format!("Could not open: {e}"));
+            self.toast(trf("Could not open: {e}", &[("e", &e.to_string())]));
         }
         self.hide();
         self.reset_to_root();
@@ -5538,7 +5624,7 @@ impl App {
             }
             Kind::FileTool(files, tool) => {
                 let (files, tool) = (files.clone(), tool.clone());
-                self.toast(format!("{}…", tool.label()));
+                self.toast(format!("{}…", tool.label_tr()));
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
                 self.hide();
                 self.reset_to_root();
@@ -5553,7 +5639,7 @@ impl App {
             }
             Kind::ImageTool(files, op) => {
                 let (files, op) = (files.clone(), op.clone());
-                self.toast(format!("{}…", op.label()));
+                self.toast(format!("{}…", op.label_tr()));
                 services::image_op_files(files, op, self.bus.clone());
                 self.hide();
                 self.reset_to_root();
@@ -5563,19 +5649,17 @@ impl App {
                     // "ffmpeg (brew install ffmpeg)" → copy the command in parentheses
                     let cmd = n.split_once('(').map(|(_, c)| c.trim_end_matches(')').to_string()).unwrap_or_else(|| n.to_string());
                     self.copy_text(&cmd);
-                    self.toast(format!("Install command copied: {cmd}"));
+                    self.toast(trf("Install command copied: {cmd}", &[("cmd", &cmd)]));
                     return;
                 }
                 let (files, t) = (files.clone(), t.clone());
-                self.toast(format!(
-                    "Converting {} to {}…",
-                    if files.len() == 1 {
-                        files[0].file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
-                    } else {
-                        format!("{} files", files.len())
-                    },
-                    t.label
-                ));
+                let what = if files.len() == 1 {
+                    files[0].file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                } else {
+                    trn("{n} file", "{n} files", files.len() as u64)
+                };
+                // the file name is the user's; the sentence around it is translated
+                self.toast_verbatim(trf("Converting {file} to {format}…", &[("file", &what), ("format", t.label)]));
                 services::convert_files(files, t, self.tools, self.bus.clone());
                 self.hide();
                 self.reset_to_root();
@@ -5669,12 +5753,14 @@ impl App {
                 Ok(o) if o.status.success() => {
                     let out = String::from_utf8_lossy(&o.stdout);
                     match out.lines().find(|l| l.starts_with("ferrocast")) {
-                        Some(l) => format!("Update available: {} · run brew upgrade ferrocast", l.trim_start_matches("ferrocast").trim()),
-                        None => format!("Ferrocast {} is up to date", env!("CARGO_PKG_VERSION")),
+                        Some(l) => {
+                            trf("Update available: {v} · run brew upgrade ferrocast", &[("v", l.trim_start_matches("ferrocast").trim())])
+                        }
+                        None => trf("Ferrocast {version} is up to date", &[("version", env!("CARGO_PKG_VERSION"))]),
                     }
                 }
-                Ok(o) => format!("brew: {}", String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("unknown error")),
-                Err(e) => format!("Could not run brew: {e}"),
+                Ok(o) => trf("brew: {e}", &[("e", String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("unknown error"))]),
+                Err(e) => trf("Could not run brew: {e}", &[("e", &e.to_string())]),
             };
             bus.send(Msg::Toast(msg));
         });
@@ -5712,7 +5798,7 @@ impl App {
         let release = match decision {
             Decision::UpToDate => {
                 if manual {
-                    self.toast(format!("Ferrocast {} is up to date", env!("CARGO_PKG_VERSION")));
+                    self.toast(trf("Ferrocast {version} is up to date", &[("version", env!("CARGO_PKG_VERSION"))]));
                 }
                 return;
             }
@@ -5738,11 +5824,11 @@ impl App {
         match ferrocast_core::update::plan_for(channel, writable) {
             Plan::Refuse(reason) => self.toast(reason),
             Plan::Download => {
-                self.toast(format!("Updating to {ver}…"));
+                self.toast(trf("Updating to {version}…", &[("version", &ver)]));
                 services::update_install(release, self.store.root.clone(), self.bus.clone());
             }
             Plan::BrewUpgrade => {
-                self.toast(format!("Updating to {ver} with Homebrew…"));
+                self.toast(trf("Updating to {version} with Homebrew…", &[("version", &ver)]));
                 services::brew_upgrade(self.bus.clone());
             }
         }
@@ -5758,7 +5844,7 @@ impl App {
         use std::sync::atomic::{AtomicBool, Ordering};
         let cancelled = std::sync::Arc::new(AtomicBool::new(false));
         let flag = cancelled.clone();
-        let what = if label.is_empty() { format!("{} timer", ferrocast_core::timer::describe(secs)) } else { label.clone() };
+        let what = if label.is_empty() { trf("{what} timer", &[("what", &ferrocast_core::timer::describe(secs))]) } else { label.clone() };
         let bus = self.bus.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(secs));
@@ -5770,7 +5856,7 @@ impl App {
             bus.send(Msg::Wake);
         });
         self.timers.push(RunningTimer { ends_at: Instant::now() + Duration::from_secs(secs), secs, label, cancelled });
-        self.toast(format!("Timer started · {}", ferrocast_core::timer::clock(secs)));
+        self.toast(trf("Timer started · {time}", &[("time", &ferrocast_core::timer::clock(secs))]));
         self.hide();
         self.reset_to_root();
     }
@@ -5798,9 +5884,9 @@ impl App {
     fn kill_process(&mut self, pid: i32, force: bool) {
         let name = self.proc_cache.iter().find(|p| p.pid == pid).map(|p| p.name.clone()).unwrap_or_else(|| pid.to_string());
         if ferrocast_macos::process::kill(pid, force) {
-            self.toast(format!("{} {name}", if force { "Force killed" } else { "Killed" }));
+            self.toast(trf(if force { "Force killed {name}" } else { "Killed {name}" }, &[("name", &name)]));
         } else {
-            self.toast(format!("Could not kill {name}"));
+            self.toast(trf("Could not kill {name}", &[("name", &name)]));
         }
         self.proc_cache.retain(|p| p.pid != pid);
         self.sec_dirty = true;
@@ -5845,7 +5931,7 @@ impl App {
                 self.hide();
                 self.reset_to_root();
             }
-            Err(e) => self.toast(format!("Pin failed: {e}")),
+            Err(e) => self.toast(trf("Pin failed: {e}", &[("e", &e.to_string())])),
         }
     }
 
@@ -5947,7 +6033,7 @@ impl App {
                 self.capture_say(crate::capture_ctl::PERMISSION_TOAST.into());
                 crate::capture_ctl::open_screen_recording_pane();
             }
-            (Flow::Record(_), Outcome::Failed(e)) => self.capture_say(format!("Recording failed: {e}")),
+            (Flow::Record(_), Outcome::Failed(e)) => self.capture_say(trf("Recording failed: {e}", &[("e", &e.to_string())])),
         }
     }
 
@@ -6069,7 +6155,7 @@ impl App {
             EditorMsg::Export { dir, msg } if dir == ed.dir => {
                 if let crate::editor_export::Outcome::Finished(path) = ed.export.apply(msg) {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.toast(format!("Exported {name}"));
+                    self.toast(trf("Exported {name}", &[("name", &name)]));
                     if path.exists() {
                         let _ = ferrocast_macos::apps::reveal(&path);
                     }
@@ -6270,7 +6356,7 @@ impl App {
             discard_unfinished(&project);
             let effect = self.record.on_stopped();
             self.perform_record(effect);
-            return self.capture_say(format!("Recording failed: cannot create the project folder: {e}"));
+            return self.capture_say(trf("Recording failed: cannot create the project folder: {e}", &[("e", &e.to_string())]));
         }
         let (pause_bus, stop_bus) = (self.bus.clone(), self.bus.clone());
         ferrocast_macos::hud::hud_show(
@@ -6372,7 +6458,7 @@ impl App {
                         if let Some(p) = self.rt.project.take() {
                             discard_unfinished(&p);
                         }
-                        self.capture_say(format!("Recording failed: {e}"));
+                        self.capture_say(trf("Recording failed: {e}", &[("e", &e.to_string())]));
                     }
                 }
             }
@@ -6398,13 +6484,13 @@ impl App {
                     self.hide();
                     self.reset_to_root();
                 }
-                Err(e) => self.toast(format!("Copy failed: {e}")),
+                Err(e) => self.toast(trf("Copy failed: {e}", &[("e", &e.to_string())])),
             },
             // the picture is already in the Capture folder: Save shows it in Finder
             ResultButton::Save => {
                 let _ = apps::reveal(&file);
                 let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                self.toast(format!("Saved: {name}"));
+                self.toast(trf("Saved: {name}", &[("name", &name)]));
             }
             ResultButton::Annotate => self.perform(Act::AnnotateCanvas(file), false),
             ResultButton::Background => self.perform(Act::FrameImage(file), false),
@@ -6433,7 +6519,7 @@ impl App {
                         clipboard::write_png(&png);
                         self.capture_say("Screenshot copied".into());
                     }
-                    Err(e) => self.capture_say(format!("Capture failed: {e}")),
+                    Err(e) => self.capture_say(trf("Capture failed: {e}", &[("e", &e.to_string())])),
                 },
                 AfterAction::Nothing => {}
             },
@@ -6467,7 +6553,7 @@ impl App {
                     }
                     Err(e) => {
                         instance::log(&self.store.root, &format!("export failed: {e}"));
-                        self.toast(format!("Backup failed: {e}"));
+                        self.toast(trf("Backup failed: {e}", &[("e", &e.to_string())]));
                     }
                 }
             }
@@ -6570,7 +6656,7 @@ impl App {
             }
             Builtin::ReloadScripts => {
                 self.reload_scripts();
-                self.toast(format!("{} script commands loaded", self.scripts.len()));
+                self.toast(trn("{n} script command loaded", "{n} script commands loaded", self.scripts.len() as u64));
             }
             Builtin::Settings => self.push(View::Settings),
             Builtin::Quit => self.quit(),
@@ -6625,7 +6711,7 @@ impl App {
                     services::notify("Ferrocast", &msg);
                 }
             }
-            Err(e) => bus.send(Msg::Toast(format!("{}: {e}", c.title()))),
+            Err(e) => bus.send(Msg::Toast(trf("{title}: {e}", &[("title", &tr(&c.title())), ("e", &e.to_string())]))),
         });
     }
 
@@ -6713,7 +6799,7 @@ impl App {
         let Some(s) = self.scripts.get(idx).cloned() else { return };
         if s.needs_confirmation {
             self.push(View::Confirm {
-                msg: format!("Run script “{}”? Scripts have your user account's permissions.", s.title),
+                msg: trf("Run script “{name}”? Scripts have your user account's permissions.", &[("name", &s.title)]),
                 act: Act::RunScript { index: idx, args },
             });
             return;
@@ -6849,7 +6935,7 @@ impl App {
                 self.persist("shelf.json", &v);
                 // Float: the always-on-top panel pinned to the screen edge
                 ferrocast_macos::shelf::show(&v);
-                self.toast(format!("{n} item{} on the shelf", if n == 1 { "" } else { "s" }));
+                self.toast(trn("{n} item on the shelf", "{n} items on the shelf", n as u64));
             }
             Act::RemoveFromShelf(p) => {
                 ferrocast_macos::shelf::remove(&p);
@@ -6882,9 +6968,9 @@ impl App {
                 ferrocast_macos::clipboard::write_files(&files);
                 self.shared.mark_clipboard_write();
                 self.toast(if files.len() == 1 {
-                    "File copied, paste it in Finder".to_string()
+                    tr("File copied, paste it in Finder").into_owned()
                 } else {
-                    format!("{} files copied", files.len())
+                    trf("{n} files copied", &[("n", &files.len().to_string())])
                 });
             }
             Act::ZipFiles(files) => {
@@ -6895,7 +6981,7 @@ impl App {
                     self.toast(if files.len() == 1 {
                         "Compressing to ZIP…".to_string()
                     } else {
-                        format!("Compressing {} items to ZIP…", files.len())
+                        trf("Compressing {n} items to ZIP…", &[("n", &files.len().to_string())])
                     });
                     services::convert_files(files, zip_target(), self.tools, self.bus.clone());
                 }
@@ -6911,7 +6997,7 @@ impl App {
                             bus.send(Msg::Moved(pairs));
                             let _ = apps::reveal(&new[0]);
                         }
-                        Err(e) => bus.send(Msg::Toast(format!("Move failed: {e}"))),
+                        Err(e) => bus.send(Msg::Toast(trf("Move failed: {e}", &[("e", &e.to_string())]))),
                     }
                 });
             }
@@ -6920,13 +7006,13 @@ impl App {
                     self.hide();
                     self.reset_to_root();
                 }
-                Err(e) => self.toast(format!("Could not open a terminal: {e}")),
+                Err(e) => self.toast(trf("Could not open a terminal: {e}", &[("e", &e.to_string())])),
             },
             Act::AirDrop(files) => {
                 // the picker attaches to the frontmost app; hide first so it is not hidden with us
                 self.hide();
                 if let Err(e) = apps::airdrop(&files) {
-                    self.toast(format!("AirDrop: {e}"));
+                    self.toast(trf("AirDrop: {e}", &[("e", &e.to_string())]));
                 }
             }
             Act::Convert(files) => {
@@ -7290,7 +7376,7 @@ impl App {
                     self.push(View::PdfOrganize { file, n, plan: ferrocast_core::pdfplan::PdfPlan::new(n) });
                 }
                 Ok(_) => self.toast("This PDF has no pages"),
-                Err(e) => self.toast(format!("Organize PDF: {e}")),
+                Err(e) => self.toast(trf("Organize PDF: {e}", &[("e", &e.to_string())])),
             },
             Act::OpenWheel(files) => {
                 let kind = ferrocast_core::wheel::WheelKind::Convert;
@@ -7452,7 +7538,7 @@ impl App {
             Act::Trash(p) => {
                 match apps::trash(&p) {
                     Ok(()) => self.toast("Moved to Trash"),
-                    Err(e) => self.toast(format!("Trash failed: {e}")),
+                    Err(e) => self.toast(trf("Trash failed: {e}", &[("e", &e.to_string())])),
                 }
                 self.files.1.retain(|f| f != &p);
                 if self.stack.iter().any(|v| matches!(v, View::Recordings)) {
@@ -7485,7 +7571,7 @@ fn file_item(p: &std::path::Path) -> Item {
             .map(|d| d.to_string_lossy().replace(&dirs::home_dir().unwrap_or_default().to_string_lossy().to_string(), "~"))
             .unwrap_or_default(),
         icon: Icon::App(p.to_string_lossy().to_string()),
-        accessory: "File".into(),
+        accessory: tr("File").into_owned(),
         keywords: vec![],
         kind: Kind::File(p.to_path_buf()),
     }

@@ -20,7 +20,7 @@ describe('PDF page (ES)', () => {
     expect(services).toContain('&format!("page {i}")');
     const convert = read('crates/core/src/convert.rs');
     expect(convert).toContain('FileTool::Merge => "merged".into()');
-    expect(convert).toContain('FileTool::SplitPages => "Split into one PDF per page"');
+    expect(convert).toMatch(/FileTool::SplitPages => (t\()?"Split into one PDF per page"/);
     const compress = read('crates/core/src/compress.rs');
     for (const s of ['/printer', '/ebook', '/screen']) expect(compress).toContain(`"${s}"`);
     expect(read('crates/app/src/route.rs')).toContain('name compressed.pdf');

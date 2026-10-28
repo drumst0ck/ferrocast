@@ -101,7 +101,25 @@ const LANGUAGES: &[(&str, &[&str])] = &[
 /// of the result is never checked).
 pub fn language_code(name: &str) -> Option<&'static str> {
     let n = name.trim().to_lowercase();
-    LANGUAGES.iter().find(|(_, names)| names.contains(&n.as_str())).map(|(c, _)| *c)
+    let find = |n: &str| LANGUAGES.iter().find(|(_, names)| names.contains(&n)).map(|(c, _)| *c);
+    // "Chinese (Traditional)", "Portuguese (Brazil)": the language before the qualifier
+    find(&n).or_else(|| find(n.split('(').next().unwrap_or("").trim()))
+}
+
+/// The locale tag that names `name` precisely, for asking the system how it is written: the
+/// plain ISO code, or with the script/region the name spells out ("Chinese (Traditional)" is
+/// `zh-Hant`, "Portuguese (Brazil)" is `pt-BR`). `None` when the name is unknown.
+pub fn language_tag(name: &str) -> Option<String> {
+    let code = language_code(name)?;
+    let n = name.trim().to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
+    Some(match code {
+        "zh" if has(&["traditional", "tradicional", "繁"]) => "zh-Hant".into(),
+        "zh" if has(&["simplified", "simplificado", "简"]) => "zh-Hans".into(),
+        "pt" if has(&["brazil", "brasil"]) => "pt-BR".into(),
+        "pt" if has(&["portugal", "european"]) => "pt-PT".into(),
+        other => other.to_string(),
+    })
 }
 
 fn language_name(code: &str) -> String {
@@ -226,7 +244,7 @@ pub fn clean_reply(s: &str) -> String {
 /// Hub lines of the wheel: a word count and a one-line preview of 24 characters.
 pub fn hub_text(text: &str) -> (String, String) {
     let words = text.split_whitespace().count();
-    let count = format!("{words} word{}", if words == 1 { "" } else { "s" });
+    let count = crate::i18n::trn("{n} word", "{n} words", words as u64);
     let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let preview =
         if one_line.chars().count() > 24 { format!("{}\u{2026}", one_line.chars().take(23).collect::<String>()) } else { one_line };
@@ -388,7 +406,7 @@ pub fn engine_label(s: &Settings) -> String {
     match s.translate_provider {
         Some(p) if !s.translate_model.is_empty() => format!("{} · {}", provider_name(p), s.translate_model),
         Some(p) => provider_name(p).to_string(),
-        None => format!("Same as chat ({})", provider_name(s.ai_provider)),
+        None => crate::i18n::trf("Same as chat ({provider})", &[("provider", provider_name(s.ai_provider))]),
     }
 }
 
@@ -816,6 +834,21 @@ mod tests {
         // Same as chat ignores translate_model
         let t = Settings { translate_model: "picked".into(), ..chat.clone() };
         assert_eq!(engine_settings(&t), t);
+    }
+
+    #[test]
+    fn qualified_language_names_resolve_to_a_code_and_a_precise_tag() {
+        assert_eq!(language_code("Chinese (Traditional)"), Some("zh"));
+        assert_eq!(language_code("Portuguese (Brazil)"), Some("pt"));
+        assert_eq!(language_code("Klingon (Tlhingan)"), None);
+        assert_eq!(language_tag("Chinese (Traditional)").as_deref(), Some("zh-Hant"));
+        assert_eq!(language_tag("Chinese (Simplified)").as_deref(), Some("zh-Hans"));
+        assert_eq!(language_tag("Traditional Chinese").as_deref(), Some("zh-Hant"));
+        assert_eq!(language_tag("Chinese").as_deref(), Some("zh"));
+        assert_eq!(language_tag("Portuguese (Brazil)").as_deref(), Some("pt-BR"));
+        assert_eq!(language_tag("Portuguese").as_deref(), Some("pt"));
+        assert_eq!(apple_code("Chinese (Traditional)").as_deref(), Some("zh-Hant"));
+        assert_eq!(apple_code("Portuguese (Brazil)").as_deref(), Some("pt-BR"));
     }
 
     #[test]

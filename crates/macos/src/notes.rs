@@ -173,7 +173,7 @@ pub fn title_from_text(text: &str) -> String {
             return stripped.chars().take(MAX_TITLE_CHARS).collect::<String>().trim_end().to_string();
         }
     }
-    "Untitled".to_string()
+    ferrocast_core::i18n::tr("Untitled").into_owned()
 }
 
 // ------------------------------------------------------------------ state
@@ -368,7 +368,7 @@ pub(crate) fn append_context_items(menu: &NSMenu, mtm: MainThreadMarker) {
             let item = unsafe {
                 NSMenuItem::initWithTitle_action_keyEquivalent(
                     mtm.alloc(),
-                    &NSString::from_str(cmd.label()),
+                    &NSString::from_str(&ferrocast_core::i18n::tr(cmd.label())),
                     Some(sel!(notesCmd:)),
                     &NSString::from_str(key),
                 )
@@ -784,7 +784,7 @@ fn build(mtm: MainThreadMarker) -> Ui {
     let toolbar = fill_view(mtm, rect(0.0, DEFAULT_H - TOOLBAR_H, DEFAULT_W, TOOLBAR_H), Token::Bg);
     toolbar.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin);
 
-    let title = NSTextField::labelWithString(&NSString::from_str("Untitled"), mtm);
+    let title = NSTextField::labelWithString(&NSString::from_str(&ferrocast_core::i18n::tr("Untitled")), mtm);
     title.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, unsafe { NSFontWeightMedium })));
     title.setTextColor(Some(&theme::color(Token::Text)));
     title.setAlignment(NSTextAlignment::Center);
@@ -796,16 +796,37 @@ fn build(mtm: MainThreadMarker) -> Ui {
     hairline.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     toolbar.addSubview(&hairline);
 
-    let browse = icon_button(mtm, "list.bullet", "Browse Notes ⌘P", &target, sel!(notesBrowse:), DEFAULT_W - 108.0);
-    let new = icon_button(mtm, "plus", "New Note ⌘N", &target, sel!(notesNew:), DEFAULT_W - 76.0);
-    let close = icon_button(mtm, "xmark", "Close Notes ⌘W", &target, sel!(notesCmd:), DEFAULT_W - 44.0);
+    let browse = icon_button(
+        mtm,
+        "list.bullet",
+        &ferrocast_core::i18n::trf("Browse Notes {key}", &[("key", "⌘P")]),
+        &target,
+        sel!(notesBrowse:),
+        DEFAULT_W - 108.0,
+    );
+    let new = icon_button(
+        mtm,
+        "plus",
+        &ferrocast_core::i18n::trf("New Note {key}", &[("key", "⌘N")]),
+        &target,
+        sel!(notesNew:),
+        DEFAULT_W - 76.0,
+    );
+    let close = icon_button(
+        mtm,
+        "xmark",
+        &ferrocast_core::i18n::trf("Close Notes {key}", &[("key", "⌘W")]),
+        &target,
+        sel!(notesCmd:),
+        DEFAULT_W - 44.0,
+    );
     close.setTag(Cmd::Close.tag());
     toolbar.addSubview(&browse);
     toolbar.addSubview(&new);
     toolbar.addSubview(&close);
     // History arrows on the left (⌘[ and ⌘]), where the hidden window buttons would be.
     for (cmd, symbol, x) in [(Cmd::Back, "chevron.left", 12.0), (Cmd::Forward, "chevron.right", 44.0)] {
-        let tip = format!("{} ⌘{}", cmd.label(), cmd.key().0);
+        let tip = format!("{} ⌘{}", ferrocast_core::i18n::tr(cmd.label()), cmd.key().0);
         let b = icon_button(mtm, symbol, &tip, &target, sel!(notesCmd:), x);
         b.setTag(cmd.tag());
         b.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMaxXMargin);

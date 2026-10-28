@@ -253,6 +253,8 @@ pub struct NotionTarget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
+    /// Interface language: `"system"` (follow macOS) or a `crate::i18n::Lang` code. Local to this Mac.
+    pub language: String,
     pub launcher_hotkey: String,
     pub theme: Theme,
     /// Name of the selected custom theme (see `themes.json`); `None` follows `theme`.
@@ -392,6 +394,7 @@ fn default_notes_format_bar() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            language: "system".into(),
             launcher_hotkey: "Alt+Space".into(),
             theme: Theme::System,
             custom_theme: None,

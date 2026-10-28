@@ -32,11 +32,12 @@ impl Error {
     /// Text for the user.
     pub fn message(&self) -> String {
         match self {
-            Error::TooLarge { bytes } => {
-                format!("Image too large ({} MB). The limit is {} MB.", bytes.div_ceil(1024 * 1024), MAX_BYTES / (1024 * 1024))
-            }
-            Error::NotAnImage => "Not a supported image. Use PNG, JPEG, GIF, HEIC or WebP.".to_string(),
-            Error::Io(e) => format!("Could not save the image: {e}"),
+            Error::TooLarge { bytes } => crate::i18n::trf(
+                "Image too large ({size} MB). The limit is {max} MB.",
+                &[("size", &bytes.div_ceil(1024 * 1024).to_string()), ("max", &(MAX_BYTES / (1024 * 1024)).to_string())],
+            ),
+            Error::NotAnImage => crate::i18n::tr("Not a supported image. Use PNG, JPEG, GIF, HEIC or WebP.").into_owned(),
+            Error::Io(e) => crate::i18n::trf("Could not save the image: {e}", &[("e", e)]),
         }
     }
 }

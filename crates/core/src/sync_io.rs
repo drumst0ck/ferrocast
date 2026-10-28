@@ -861,7 +861,8 @@ pub fn from_items<T: DeserializeOwned>(items: Vec<(String, Value)>) -> Vec<T> {
 /// UI state, the sync switch itself, and the two tiling fields that depend on the Mac (the switch
 /// that moves windows and the layout per display index), and the Raycast extensions switches (Node and
 /// the installed extensions exist per Mac).
-pub const LOCAL_ONLY: [&str; 15] = [
+pub const LOCAL_ONLY: [&str; 16] = [
+    "language",
     "script_directories",
     "obsidian_vault",
     "launch_at_login",
@@ -1230,6 +1231,7 @@ mod tests {
             a.settings.launcher_hotkey = "Ctrl+Space".into();
             a.settings.script_directories = vec!["/Users/a/scripts".into()];
             a.settings.launch_at_login = true;
+            a.settings.language = "de".into();
             a.settings.onboarded = true;
             a.settings.capture.camera_id = "cam-a".into();
             a.settings.capture.mic_id = "mic-a".into();
@@ -1260,6 +1262,7 @@ mod tests {
             assert_eq!(b.settings.capture.camera_id, "cam-b");
             assert_eq!(b.settings.capture.mic_id, "");
             assert_eq!(b.settings.notes_last.as_deref(), Some("note-b"));
+            assert_eq!(b.settings.language, "system", "the interface language is per Mac");
             assert!(!b.settings.launch_at_login && !b.settings.onboarded && !b.settings.sync_enabled);
             // and none of them ever reached the shared folder
             let doc = std::fs::read_to_string(shared.join("devices").join(&a.io.device).join("settings.json")).unwrap();
@@ -2255,6 +2258,7 @@ mod tests {
         s.script_directories.push("/x".into());
         s.capture.mic_id = "m".into();
         s.notes_zoom = 2.0;
+        s.language = "ja".into();
         assert_eq!(settings_items(&s), before);
         s.theme = crate::models::Theme::Dark;
         assert_ne!(settings_items(&s), before);

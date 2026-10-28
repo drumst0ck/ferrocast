@@ -540,6 +540,44 @@ pub fn deleted_rows(notes_list: &[Note], now: i64) -> Vec<BrowseRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every title, subtitle and section the action panel can show is in the translation table.
+    #[test]
+    fn every_text_of_the_action_panel_is_translated() {
+        use crate::i18n::{lookup, Lang};
+        let mut seen = std::collections::BTreeSet::new();
+        for mask in 0u32..(1 << 7) {
+            let ctx = Context {
+                has_note: mask & 1 != 0,
+                has_selection: mask & 2 != 0,
+                is_pinned: mask & 4 != 0,
+                can_back: true,
+                can_forward: true,
+                note_count: 3,
+                deleted_count: 1,
+                dictating: mask & 8 != 0,
+                ai_available: true,
+                quicklinks_available: true,
+                format_bar: mask & 16 != 0,
+            };
+            let mut all = top_level(&ctx);
+            for e in top_level(&ctx) {
+                for c in children(e.action, &ctx) {
+                    all.extend(children(c.action, &ctx));
+                    all.push(c);
+                }
+            }
+            all.extend(search_all(&ctx, ""));
+            for e in all {
+                seen.insert(e.title.clone());
+                seen.insert(e.section.to_string());
+                seen.extend(e.subtitle.clone());
+            }
+        }
+        let missing: Vec<&String> =
+            seen.iter().filter(|t| !["Markdown", "HTML"].contains(&t.as_str()) && lookup(t, Lang::De).is_none()).collect();
+        assert!(missing.is_empty(), "action panel texts without a translation: {missing:#?}");
+    }
     use std::collections::HashSet;
 
     fn titles(v: &[Entry]) -> Vec<&str> {

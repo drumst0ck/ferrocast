@@ -280,9 +280,12 @@ pub(crate) fn normalize_report(ff: &str, before: &Path, after: &Path) -> Option<
 pub(crate) fn normalize_line(loudness: Option<f64>, target: f64) -> String {
     let t = if target.fract() == 0.0 { format!("{target:.0}") } else { format!("{target:.1}") };
     match loudness {
-        None => "measuring…".into(),
-        Some(l) if !l.is_finite() => format!("could not be measured · target {t} LUFS"),
-        Some(l) => format!("now {l:.1} LUFS → target {t} LUFS ({:+.1} dB)", target - l),
+        None => ferrocast_core::i18n::tr("measuring…").into_owned(),
+        Some(l) if !l.is_finite() => ferrocast_core::i18n::trf("could not be measured · target {target} LUFS", &[("target", &t)]),
+        Some(l) => ferrocast_core::i18n::trf(
+            "now {now} LUFS → target {target} LUFS ({diff} dB)",
+            &[("now", &format!("{l:.1}")), ("target", &t), ("diff", &format!("{:+.1}", target - l))],
+        ),
     }
 }
 

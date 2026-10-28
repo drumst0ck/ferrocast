@@ -98,12 +98,12 @@ impl App {
         if export {
             let Some(t) = self.active_theme().cloned() else { return };
             match std::fs::write(&path, themes::export_json(&t)) {
-                Ok(()) => self.toast(format!("Exported \"{}\"", t.name)),
-                Err(e) => self.toast(format!("Could not export the theme: {e}")),
+                Ok(()) => self.toast(trf("Exported \"{name}\"", &[("name", &t.name)])),
+                Err(e) => self.toast(trf("Could not export the theme: {e}", &[("e", &e.to_string())])),
             }
         } else {
             match self.import_theme_file(&path) {
-                Ok(name) => self.toast(format!("Imported \"{name}\"")),
+                Ok(name) => self.toast(trf("Imported \"{name}\"", &[("name", &name)])),
                 Err(e) => self.toast(e),
             }
         }

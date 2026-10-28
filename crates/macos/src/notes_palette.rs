@@ -253,7 +253,7 @@ struct Ui {
 }
 
 thread_local! {
-    static STATE: RefCell<State> = RefCell::new(State { empty_text: "No results".to_string(), ..State::default() });
+    static STATE: RefCell<State> = RefCell::new(State { empty_text: ferrocast_core::i18n::tr("No results").into_owned(), ..State::default() });
     static UI: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
 }
 

@@ -1,12 +1,18 @@
 ---
 title: "Ajustes y copia de seguridad"
-description: "Ajustes de Ferrocast tiene diez pestañas: General, Clipboard, Snippets, AI, Translate, Capture, Notes, Scripts, Integrations y Advanced. Atajos e inicio."
+description: "Ajustes de Ferrocast tiene diez pestañas, de General a Avanzado. Elige el idioma, define atajos e inicio al abrir sesión y haz copias de seguridad."
 sidebar:
   order: 12
 ---
-Ajustes es una barra lateral con diez pestañas: General, Clipboard, Snippets, AI, Translate, Capture, Notes, Scripts, Integrations y Advanced. <kbd>⌘</kbd> <kbd>1</kbd> a <kbd>⌘</kbd> <kbd>9</kbd> y <kbd>⌘</kbd> <kbd>0</kbd> saltan a ellas en ese orden. Cada ajuste es una fila con un título, una descripción en lenguaje sencillo y su control (interruptores animados, selectores segmentados, teclas).
+Ajustes es una barra lateral con diez pestañas: General, Portapapeles, Fragmentos, IA, Traducir, Captura, Notas, Scripts, Integraciones y Avanzado (los nombres siguen el idioma de la interfaz). <kbd>⌘</kbd> <kbd>1</kbd> a <kbd>⌘</kbd> <kbd>9</kbd> y <kbd>⌘</kbd> <kbd>0</kbd> saltan a ellas en ese orden. Cada ajuste es una fila con un título, una descripción en lenguaje sencillo y su control (interruptores animados, selectores segmentados, teclas).
 
 Ábrelos con <kbd>⌘</kbd> <kbd>,</kbd>. También hay un icono en la barra de menús.
+
+## Idioma
+
+Ferrocast habla inglés, español, alemán, francés, portugués de Brasil, japonés y chino simplificado. Por defecto sigue el orden de idiomas de macOS (Ajustes del Sistema → General → Idioma y región); el portugués de Portugal usa el texto brasileño y un idioma sin traducción, como el chino tradicional, vuelve al inglés.
+
+Para elegirlo tú, abre Ajustes → General → **Idioma** y selecciona Sistema o uno de los siete idiomas. Se aplica al instante, sin reiniciar, al lanzador, los Ajustes, el tour, el menú de la barra de menús y las notificaciones; la ventana de Notas cambia al reiniciar Ferrocast. La elección se guarda solo en este Mac: no se sincroniza con iCloud. Un texto sin traducir aparece en inglés. Los nombres que escribes (fragmentos, enlaces rápidos, notas, scripts) y los títulos de las extensiones de Raycast nunca se traducen.
 
 ## Qué puedes configurar
 

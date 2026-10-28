@@ -337,7 +337,7 @@ impl App {
                 self.toast("Preferences saved");
             }
             Err(e) => {
-                self.toast(format!("Could not save the preferences: {e}"));
+                self.toast(trf("Could not save the preferences: {e}", &[("e", &e.to_string())]));
                 self.ext.prefs = Some(edit);
             }
         }
@@ -358,7 +358,7 @@ impl App {
                     title: c.title.clone(),
                     subtitle: m.title.clone(),
                     icon: Icon::Glyph("sf:puzzlepiece.extension", EXT_GLYPH_COLOR),
-                    accessory: "Raycast Extension".into(),
+                    accessory: tr("Raycast Extension").into_owned(),
                     keywords: vec![m.title.clone(), m.name.clone()],
                     kind: Kind::ExtCommand { ext: m.name.clone(), cmd: c.name.clone() },
                 })
@@ -555,7 +555,7 @@ impl App {
         if (!view_mode && age > NO_VIEW_LIMIT) || (view_mode && !got && age > FIRST_RENDER_LIMIT) {
             let title = s.title.clone();
             self.ext_kill();
-            self.toast(format!("{title} did not finish in time and was stopped"));
+            self.toast(trf("{title} did not finish in time and was stopped", &[("title", &title)]));
             return;
         }
         if view_mode && self.ext_top_depth().is_none() {
@@ -596,7 +596,7 @@ impl App {
             Event::TooLong => {
                 self.ext_log(&format!("{name}: stdout line over 16 MB, stopping the command"));
                 self.ext_kill();
-                self.toast(format!("{name} sent a message that was too large and was stopped"));
+                self.toast(trf("{name} sent a message that was too large and was stopped", &[("name", &name)]));
             }
             Event::Closed => {
                 self.ext_log(&format!("{name}: process ended"));
@@ -610,13 +610,13 @@ impl App {
                     let text = format!("{title}{sep}{message}");
                     let text = if style == "failure" { format!("⚠ {text}") } else { text };
                     if self.visible {
-                        self.toast(text);
+                        self.toast_verbatim(text);
                     } else {
-                        services::notify("Ferrocast", &text);
+                        services::notify_verbatim("Ferrocast", &text);
                     }
                 }
                 RuntimeMsg::Hud { title } => {
-                    self.toast(title);
+                    self.toast_verbatim(title);
                     self.hide();
                     self.reset_to_root();
                 }
@@ -667,13 +667,13 @@ impl App {
         let Some(s) = self.ext.sess.take() else { return };
         if s.mode == Mode::View && self.ext_top_depth().is_some() {
             if !s.got_render {
-                self.toast(format!("{} stopped without showing anything", s.title));
+                self.toast(trf("{title} stopped without showing anything", &[("title", &s.title)]));
                 self.ext.views.clear();
                 self.stack.truncate(self.ext.base.max(1));
                 self.query.clear();
                 self.selected = 0;
             } else {
-                self.toast(format!("{} stopped", s.title));
+                self.toast(trf("{title} stopped", &[("title", &s.title)]));
             }
         }
     }
@@ -922,7 +922,7 @@ impl App {
     fn ext_to_actions(&self, v: &[view::ActionModel]) -> Vec<Action> {
         v.iter()
             .map(|a| {
-                let mut x = Action::new(a.title.clone(), Act::ExtAction(a.id.clone()));
+                let mut x = Action::new(a.title.clone(), Act::ExtAction(a.id.clone())).verbatim();
                 if let Some((m, k)) = a.shortcut.as_ref().and_then(map_shortcut) {
                     x = x.key(m, k);
                 }
@@ -962,7 +962,7 @@ impl App {
             .iter()
             .map(|o| {
                 let tick = if &o.value == current { "✓ " } else { "" };
-                Action::new(format!("{tick}{label}: {}", o.title), Act::ExtAction(view::dropdown_action_id(&d.id, &o.value)))
+                Action::new(format!("{tick}{label}: {}", o.title), Act::ExtAction(view::dropdown_action_id(&d.id, &o.value))).verbatim()
             })
             .collect()
     }
@@ -1024,13 +1024,13 @@ impl App {
     pub(crate) fn view_title(&self) -> String {
         match self.view() {
             View::ExtList | View::ExtDetail | View::ExtForm => self.ext_header_title(),
-            v => v.title().to_string(),
+            v => tr(v.title()).into_owned(),
         }
     }
 
     /// Label of the Enter action of a row.
     pub(crate) fn ext_primary(&self, item_id: &str) -> String {
-        self.ext_actions(item_id).first().map(|a| a.title.clone()).unwrap_or_else(|| "No actions".into())
+        self.ext_actions(item_id).first().map(|a| a.title.clone()).unwrap_or_else(|| tr("No actions").into_owned())
     }
 
     /// Tell the runtime the user triggered an action.
@@ -1047,7 +1047,7 @@ impl App {
         match self.ext.sess.as_mut() {
             Some(s) => {
                 if let Err(e) = s.sc.send(&HostMsg::Action { id, values }) {
-                    self.toast(format!("The extension is not running: {e}"));
+                    self.toast(trf("The extension is not running: {e}", &[("e", &e.to_string())]));
                 }
             }
             None => self.toast("The extension is not running"),

@@ -1,12 +1,18 @@
 ---
 title: "Settings and backup"
-description: "Ferrocast Settings has ten tabs, from General and Clipboard to Capture, Integrations and Advanced. Set hotkeys, login launch and backups."
+description: "Ferrocast Settings has ten tabs, from General to Advanced. Pick the language, set hotkeys and launch at login, and back up your data."
 sidebar:
   order: 12
 ---
 Settings is a sidebar with ten tabs: General, Clipboard, Snippets, AI, Translate, Capture, Notes, Scripts, Integrations and Advanced. <kbd>⌘</kbd> <kbd>1</kbd> to <kbd>⌘</kbd> <kbd>9</kbd> and <kbd>⌘</kbd> <kbd>0</kbd> jump to them in that order. Each setting is a row with a title, a plain-language description and its control (animated switches, segmented pickers, key caps).
 
 Open it with <kbd>⌘</kbd> <kbd>,</kbd>. There is also a menu bar icon.
+
+## Language
+
+Ferrocast speaks English, Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese. By default it follows the language order of macOS (System Settings → General → Language & Region); European Portuguese uses the Brazilian text, and a language without a translation, such as Traditional Chinese, falls back to English.
+
+To choose one yourself, open Settings → General → **Language** and pick System or one of the seven languages. It applies at once, with no restart, to the launcher, Settings, the tour, the menu bar menu and notifications; the Notes window changes after you restart Ferrocast. The choice is kept on this Mac only: it is not synced with iCloud. A text that is not translated yet shows in English. Names you type (snippets, quicklinks, notes, scripts) and the titles of Raycast extensions are never translated.
 
 ## What you can set
 

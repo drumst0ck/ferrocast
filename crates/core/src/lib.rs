@@ -22,6 +22,7 @@ pub mod extensions;
 pub mod finder_enter;
 pub mod frame;
 pub mod fuzzy;
+pub mod i18n;
 pub mod import;
 pub mod launch;
 pub mod markdown;
