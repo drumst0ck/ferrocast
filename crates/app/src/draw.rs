@@ -7396,8 +7396,14 @@ impl App {
                             row(ui, pal, "Activate windows on hover", "Raises the window under the pointer once it rests there.", |ui| {
                                 toggle(ui, pal, &mut s.tiling_hover_activate)
                             });
-                            // TODO(T4): the border overlay around the focused window is not drawn yet; the choice is stored.
-                            row(ui, pal, "Highlight border", "Border around the focused window. Stored; drawing it comes in a later update.", |ui| {
+                            row(
+                                ui,
+                                pal,
+                                "Quick actions above windows",
+                                "A small bar of actions appears above a tiled window when the pointer rests on its top edge.",
+                                |ui| toggle(ui, pal, &mut s.tiling_quick_actions),
+                            );
+                            row(ui, pal, "Highlight border", "Draws a border around the focused tiled window.", |ui| {
                                 toggle(ui, pal, &mut s.tiling_border)
                             });
                             row(ui, pal, "Border color", "Colour of the highlight border.", |ui| {
@@ -8599,7 +8605,7 @@ fn field_combo(
 }
 
 /// A number box (drag or type) in the Settings look.
-fn parse_hex(s: &str) -> Option<[u8; 3]> {
+pub(crate) fn parse_hex(s: &str) -> Option<[u8; 3]> {
     let h = s.strip_prefix('#')?;
     (h.len() == 6).then(|| u32::from_str_radix(h, 16).ok()).flatten().map(|v| [(v >> 16) as u8, (v >> 8) as u8, v as u8])
 }
@@ -9218,6 +9224,7 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
             "tiling_excluded",
             "tiling_hover_activate",
             "tiling_border",
+            "tiling_quick_actions",
             "tiling_border_color",
         ],
     ),

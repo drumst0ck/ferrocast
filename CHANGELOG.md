@@ -8,9 +8,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ### Added
 - **Automatic window tiling**: optional and off by default (Settings → Advanced → Window tiling). Every new window gets a place on its display in one of four layouts (⌃⌥⌘1–4), with a configurable Space, a layout per display, focus mode (⌃⌥Z), ⌃⌥+arrow to move a window to the next slot or display, per-app exclusions, activate on hover, learned minimum sizes kept on your Mac, and a pause switch in the menu bar menu. It pauses while Stage Manager is on. (docs: /docs/launcher/tiling/)
-
-### Known limitations
-- The highlight border around the focused window and the quick actions above windows are not drawn yet; the border choice is stored.
+- **Tiling border, quick actions and layout menu**: a highlight border in the colour you choose around the focused tiled window, an optional bar of actions above a tiled window (focus mode, float or tile, next display, swap with main, stop tiling this app) and a Tiling Layout submenu in the menu bar menu. (docs: /docs/launcher/tiling/)
 
 ### Changed
 - **Menu bar icon**: the menu bar shows Ferrocast's own app icon (the red square with the white bolt) instead of the drawn ring, and goes back to it after a recording stops.

@@ -247,8 +247,10 @@ pub struct Settings {
     pub tiling_excluded: Vec<String>,
     /// Raise the window under the pointer after the pointer rests on it.
     pub tiling_hover_activate: bool,
-    /// Draw a border around the focused window (not drawn yet).
+    /// Draw a border around the focused tiled window.
     pub tiling_border: bool,
+    /// Show a small bar of actions above a tiled window when the pointer rests on its top edge.
+    pub tiling_quick_actions: bool,
     /// Colour of that border, `#rrggbb`.
     pub tiling_border_color: String,
     pub fallback_search_url: String,
@@ -372,6 +374,7 @@ impl Default for Settings {
             tiling_excluded: vec![],
             tiling_hover_activate: false,
             tiling_border: false,
+            tiling_quick_actions: false,
             tiling_border_color: "#59d499".into(),
             fallback_search_url: "https://www.google.com/search?q={argument name=\"query\"}".into(),
             favorites: vec![],

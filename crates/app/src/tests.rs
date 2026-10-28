@@ -49,6 +49,9 @@ fn fixture() -> App {
         hotkeys: None,
         tiling: None,
         tiling_paused: false,
+        quick_window: None,
+        tray_layout: 1,
+        layout_seen: 1,
         tiling_hotkeys: false,
         capture: crate::capture_ctl::CaptureState::with(std::path::PathBuf::new(), crate::capture_ctl::Availability::Available),
         selection: Default::default(),
@@ -191,6 +194,9 @@ impl Effects {
                 FX_TILING_RX.with(|r| *r.borrow_mut() = Some(rx));
                 FX_LOG.with(|l| l.borrow_mut().push("tiling spawn".into()));
                 Some(ferrocast_macos::tiling::Handle::from_sender(tx))
+            },
+            tiling_overlay: |o| {
+                FX_LOG.with(|l| l.borrow_mut().push(format!("overlay border={} bar={}", o.border.is_some(), o.bar.is_some())))
             },
             notes_appearance: |a| FX_LOG.with(|l| l.borrow_mut().push(format!("appearance {a:?}"))),
             web_script: |_b, js| FX_SCRIPTS.with(|l| l.borrow_mut().push(js.to_string())),
@@ -7747,6 +7753,7 @@ fn sd4_scrambled() -> Settings {
     s.tiling_excluded = vec!["com.example.app".into()];
     s.tiling_hover_activate = true;
     s.tiling_border = true;
+    s.tiling_quick_actions = true;
     s.tiling_border_color = "#112233".into();
     // not on any resettable tab
     s.ai_model = "other-model".into();
@@ -14845,4 +14852,72 @@ fn the_tray_offers_pause_or_resume_by_state_and_only_while_tiling_is_on() {
     assert!(ids(Some(false)).contains(&("tiling_pause", "Pause Tiling")));
     assert!(ids(Some(true)).contains(&("tiling_pause", "Resume Tiling")));
     assert_eq!(ids(None), services::tray_items().to_vec());
+}
+
+#[test]
+fn the_tray_layout_submenu_lists_four_layouts_and_checks_the_current_one() {
+    let items = services::tray_layout_items(3);
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[0].0, "tiling_layout_1");
+    assert_eq!(items[2].1, "3 Grid");
+    assert_eq!(items.iter().filter(|i| i.2).count(), 1);
+    assert!(items[2].2);
+}
+
+#[test]
+fn the_defaults_for_the_new_tiling_settings_are_off() {
+    let s = ferrocast_core::models::Settings::default();
+    assert!(!s.tiling_quick_actions && !s.tiling_border);
+}
+
+#[test]
+fn a_quick_action_button_sends_the_same_command_the_launcher_uses_for_its_window() {
+    use ferrocast_core::tiling::QuickAction;
+    let mut app = fixture();
+    app.settings.tiling_enabled = true;
+    app.sync_tiling();
+    let _ = FX_TILING_RX.with(|r| r.borrow().as_ref().unwrap().try_iter().count());
+    app.quick_window = Some(7);
+    app.bus.send(Msg::TilingQuick(QuickAction::Swap));
+    app.drain();
+    let got: Vec<_> = FX_TILING_RX.with(|r| r.borrow().as_ref().unwrap().try_iter().collect());
+    assert!(
+        got.iter()
+            .any(|c| matches!(c, ferrocast_macos::tiling::Cmd::Act { action, window: Some(7), .. } if action.id() == "tiling:swap-main")),
+        "a bar click is an Act on the bar's window"
+    );
+    // the launcher command for the same action has no window: the focused one
+    app.run_tiling(ferrocast_core::tiling::Action::SwapMain, None);
+    let got: Vec<_> = FX_TILING_RX.with(|r| r.borrow().as_ref().unwrap().try_iter().collect());
+    assert!(got.iter().any(|c| matches!(c, ferrocast_macos::tiling::Cmd::Act { window: None, .. })));
+}
+
+#[test]
+fn the_overlay_is_drawn_through_the_seam_and_cleared_when_tiling_stops() {
+    let mut app = fixture();
+    app.settings.tiling_enabled = true;
+    app.sync_tiling();
+    fx_taken();
+    let o = ferrocast_macos::tiling::Overlay {
+        border: Some(ferrocast_macos::tiling::BorderSpec { frame: [0.0, 0.0, 10.0, 10.0], radius: 10.0, width: 3.0, color: [1, 2, 3] }),
+        bar: Some(ferrocast_macos::tiling::BarSpec { window: 4, frame: [0.0, 0.0, 10.0, 10.0] }),
+    };
+    app.bus.send(Msg::Tiling(ferrocast_macos::tiling::Event::Overlay(o)));
+    app.drain();
+    assert_eq!(app.quick_window, Some(4));
+    assert!(fx_taken().iter().any(|l| l == "overlay border=true bar=true"));
+    app.settings.tiling_enabled = false;
+    app.sync_tiling();
+    assert!(app.tiling.is_none());
+    assert!(fx_taken().iter().any(|l| l == "overlay border=false bar=false"), "hidden when tiling is off");
+    assert_eq!(app.quick_window, None);
+}
+
+#[test]
+fn stop_tiling_this_app_adds_it_to_the_exclusions_once() {
+    let mut app = fixture();
+    app.bus.send(Msg::Tiling(ferrocast_macos::tiling::Event::Exclude("com.example.app".into())));
+    app.bus.send(Msg::Tiling(ferrocast_macos::tiling::Event::Exclude("com.example.app".into())));
+    app.drain();
+    assert_eq!(app.settings.tiling_excluded, vec!["com.example.app".to_string()]);
 }

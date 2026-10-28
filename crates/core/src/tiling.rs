@@ -577,10 +577,18 @@ pub enum Action {
     Layout(u8),
     FocusMode,
     Move(Dir),
+    /// Take the focused window out of the layout (it floats) or put it back.
+    FloatToggle,
+    /// Send the focused window to the next display.
+    NextDisplay,
+    /// Swap the focused window with the main slot (or the next slot when it is the main one).
+    SwapMain,
+    /// Stop tiling the focused window's app (adds it to the exclusion list).
+    ExcludeApp,
 }
 
 impl Action {
-    pub const ALL: [Action; 11] = [
+    pub const ALL: [Action; 15] = [
         Action::Toggle,
         Action::Pause,
         Action::Layout(1),
@@ -592,6 +600,10 @@ impl Action {
         Action::Move(Dir::Right),
         Action::Move(Dir::Up),
         Action::Move(Dir::Down),
+        Action::FloatToggle,
+        Action::NextDisplay,
+        Action::SwapMain,
+        Action::ExcludeApp,
     ];
     pub fn id(self) -> String {
         match self {
@@ -600,6 +612,10 @@ impl Action {
             Action::Layout(n) => format!("tiling:layout-{n}"),
             Action::FocusMode => "tiling:focus-mode".into(),
             Action::Move(d) => format!("tiling:move-{}", d.name().to_lowercase()),
+            Action::FloatToggle => "tiling:float-toggle".into(),
+            Action::NextDisplay => "tiling:next-display".into(),
+            Action::SwapMain => "tiling:swap-main".into(),
+            Action::ExcludeApp => "tiling:exclude-app".into(),
         }
     }
     pub fn from_id(id: &str) -> Option<Action> {
@@ -612,8 +628,170 @@ impl Action {
             Action::Layout(n) => format!("Tiling Layout {n}: {}", Layout::from_number(n).map_or("", Layout::name)),
             Action::FocusMode => "Tiling Focus Mode".into(),
             Action::Move(d) => format!("Move Window {}", d.name()),
+            Action::FloatToggle => "Float or Tile This Window".into(),
+            Action::NextDisplay => "Move Window to Next Display (Tiling)".into(),
+            Action::SwapMain => "Swap Window with Main Slot".into(),
+            Action::ExcludeApp => "Stop Tiling This App".into(),
         }
     }
+}
+
+/// Width of the highlight border, in points.
+pub const BORDER_WIDTH: f64 = 3.0;
+/// Corner radius of a macOS window; the border follows it.
+pub const WINDOW_RADIUS: f64 = 10.0;
+
+/// Where the border overlay goes: a frame just outside the window, and the corner radius.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BorderGeom {
+    pub frame: Rect,
+    pub radius: f64,
+    pub width: f64,
+}
+
+/// The border overlay for `window` on `screen` (both top-left points); `None` when the window is
+/// not on that screen or has no usable size.
+pub fn border_geometry(window: Rect, screen: Rect, width: f64) -> Option<BorderGeom> {
+    if !valid_screen(window) || !valid_screen(screen) {
+        return None;
+    }
+    let apart = window.x >= screen.x + screen.w
+        || window.x + window.w <= screen.x
+        || window.y >= screen.y + screen.h
+        || window.y + window.h <= screen.y;
+    if apart {
+        return None;
+    }
+    let width = width.clamp(1.0, 12.0);
+    let frame = Rect::new(window.x - width, window.y - width, window.w + 2.0 * width, window.h + 2.0 * width);
+    Some(BorderGeom { frame, radius: WINDOW_RADIUS + width, width })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BorderInputs {
+    pub tiling_on: bool,
+    pub border_on: bool,
+    pub paused: bool,
+    pub stage_manager: bool,
+    /// Focus mode was just entered or left and the frames have not settled.
+    pub focus_settling: bool,
+    /// The focused window is one of the tiled ones.
+    pub focused_tiled: bool,
+}
+
+/// Is the highlight border shown?
+pub fn border_visible(i: &BorderInputs) -> bool {
+    i.tiling_on && i.border_on && !i.paused && !i.stage_manager && !i.focus_settling && i.focused_tiled
+}
+
+pub const BAR_W: f64 = 196.0;
+pub const BAR_H: f64 = 32.0;
+const BAR_GAP: f64 = 6.0;
+/// Height of the strip along a window's top edge where resting the pointer shows the bar.
+pub const EDGE_BAND: f64 = 28.0;
+pub const BAR_DWELL: f64 = 0.35;
+pub const BAR_GRACE: f64 = 0.5;
+
+/// Frame of the quick-action bar for `window`: centred above its top edge, or just inside the
+/// top edge when there is no room above on `screen`; always inside `screen` horizontally.
+pub fn bar_frame(window: Rect, screen: Rect) -> Rect {
+    let x = (window.center().0 - BAR_W / 2.0).min(screen.x + screen.w - BAR_W).max(screen.x);
+    let above = window.y - BAR_H - BAR_GAP;
+    let y = if above >= screen.y { above } else { window.y + BAR_GAP };
+    Rect::new(x, y, BAR_W, BAR_H)
+}
+
+/// Is `p` in the place that shows (and keeps) the bar of `window`: the top band or the bar itself.
+pub fn in_bar_zone(window: Rect, screen: Rect, p: (f64, f64)) -> bool {
+    Rect::new(window.x, window.y, window.w, EDGE_BAND.min(window.h)).contains(p) || bar_frame(window, screen).contains(p)
+}
+
+/// When the quick-action bar is shown: after the pointer rests in a window's zone for
+/// `BAR_DWELL`, until it has been out of every zone for `BAR_GRACE`.
+#[derive(Debug, Default)]
+pub struct QuickBar {
+    over: Option<(u64, f64)>,
+    shown: Option<u64>,
+    left_at: Option<f64>,
+}
+
+impl QuickBar {
+    /// `wins` are (id, frame, screen) of the tiled windows. Returns the window the bar is for.
+    pub fn step(&mut self, enabled: bool, pointer: Option<(f64, f64)>, wins: &[(u64, Rect, Rect)], now: f64) -> Option<u64> {
+        if !enabled {
+            *self = QuickBar::default();
+            return None;
+        }
+        let hit = pointer.and_then(|p| wins.iter().find(|(_, w, s)| in_bar_zone(*w, *s, p)).map(|(id, _, _)| *id));
+        match hit {
+            Some(id) => {
+                self.left_at = None;
+                if self.shown != Some(id) {
+                    match self.over {
+                        Some((o, since)) if o == id => {
+                            if now - since >= BAR_DWELL {
+                                self.shown = Some(id);
+                                self.over = None;
+                            }
+                        }
+                        _ => self.over = Some((id, now)),
+                    }
+                }
+            }
+            None => {
+                self.over = None;
+                if self.shown.is_some() {
+                    let since = *self.left_at.get_or_insert(now);
+                    if now - since >= BAR_GRACE {
+                        self.shown = None;
+                        self.left_at = None;
+                    }
+                }
+            }
+        }
+        self.shown
+    }
+}
+
+/// The buttons of the quick-action bar, left to right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickAction {
+    Focus,
+    Float,
+    NextDisplay,
+    Swap,
+    Exclude,
+}
+
+impl QuickAction {
+    pub const ALL: [QuickAction; 5] =
+        [QuickAction::Focus, QuickAction::Float, QuickAction::NextDisplay, QuickAction::Swap, QuickAction::Exclude];
+    /// The command the button sends: the very one the launcher and the hotkeys use.
+    pub fn action(self) -> Action {
+        match self {
+            QuickAction::Focus => Action::FocusMode,
+            QuickAction::Float => Action::FloatToggle,
+            QuickAction::NextDisplay => Action::NextDisplay,
+            QuickAction::Swap => Action::SwapMain,
+            QuickAction::Exclude => Action::ExcludeApp,
+        }
+    }
+}
+
+/// Swap `id` with the main (first) slot, or with the second one when it already is the main.
+pub fn swap_with_main(list: &mut [u64], id: u64) -> bool {
+    let Some(at) = list.iter().position(|i| *i == id) else { return false };
+    let with = if at == 0 { 1 } else { 0 };
+    if with >= list.len() {
+        return false;
+    }
+    list.swap(at, with);
+    true
+}
+
+/// The display after `from` among `n`, wrapping; `None` with a single display.
+pub fn next_display(n: usize, from: usize) -> Option<usize> {
+    (n > 1).then(|| (from + 1) % n)
 }
 
 /// Hotkeys bound out of the box (global-hotkey syntax). They are only registered while tiling is
@@ -1097,5 +1275,131 @@ mod tests {
                 assert!(a.frame.x != b.frame.x || a.frame.y != b.frame.y, "{a:?} and {b:?} coincide");
             }
         }
+    }
+
+    #[test]
+    fn the_border_sits_just_outside_the_window_and_follows_its_radius() {
+        let w = Rect::new(100.0, 100.0, 600.0, 400.0);
+        let g = border_geometry(w, S, BORDER_WIDTH).unwrap();
+        assert_eq!(g.frame, Rect::new(97.0, 97.0, 606.0, 406.0), "entirely outside the window");
+        assert_eq!(g.width, 3.0);
+        assert_eq!(g.radius, WINDOW_RADIUS + 3.0);
+        // off this screen, or nothing to outline
+        assert_eq!(border_geometry(Rect::new(5000.0, 0.0, 100.0, 100.0), S, 3.0), None);
+        assert_eq!(border_geometry(Rect::new(0.0, 0.0, 0.0, 100.0), S, 3.0), None);
+        assert_eq!(border_geometry(Rect::new(f64::NAN, 0.0, 10.0, 10.0), S, 3.0), None);
+        // a window partly off the screen is still outlined
+        assert!(border_geometry(Rect::new(1500.0, 800.0, 400.0, 300.0), S, 3.0).is_some());
+    }
+
+    #[test]
+    fn the_border_shows_only_for_a_focused_tiled_window_while_tiling_runs() {
+        let on = BorderInputs {
+            tiling_on: true,
+            border_on: true,
+            paused: false,
+            stage_manager: false,
+            focus_settling: false,
+            focused_tiled: true,
+        };
+        assert!(border_visible(&on));
+        assert!(!border_visible(&BorderInputs { tiling_on: false, ..on }), "tiling off");
+        assert!(!border_visible(&BorderInputs { border_on: false, ..on }), "setting off");
+        assert!(!border_visible(&BorderInputs { paused: true, ..on }), "paused");
+        assert!(!border_visible(&BorderInputs { stage_manager: true, ..on }), "Stage Manager");
+        assert!(!border_visible(&BorderInputs { focus_settling: true, ..on }), "focus mode transition");
+        assert!(!border_visible(&BorderInputs { focused_tiled: false, ..on }), "floating or untiled window");
+    }
+
+    #[test]
+    fn the_bar_goes_above_the_window_or_inside_it_and_stays_on_screen() {
+        let w = Rect::new(400.0, 300.0, 600.0, 400.0);
+        let b = bar_frame(w, S);
+        assert_eq!((b.w, b.h), (BAR_W, BAR_H));
+        assert_eq!(b.x, 400.0 + 300.0 - BAR_W / 2.0);
+        assert_eq!(b.y, 300.0 - BAR_H - 6.0, "above the top edge");
+        // no room above: just inside the top edge
+        let top = Rect::new(400.0, 25.0, 600.0, 400.0);
+        assert_eq!(bar_frame(top, S).y, 25.0 + 6.0);
+        // a narrow window at the screen edge keeps the bar on screen
+        let edge = Rect::new(0.0, 300.0, 100.0, 300.0);
+        let e = bar_frame(edge, S);
+        assert!(e.x >= S.x && e.x + e.w <= S.x + S.w);
+        let right = Rect::new(1550.0, 300.0, 50.0, 300.0);
+        let r = bar_frame(right, S);
+        assert!(r.x + r.w <= S.x + S.w + 1e-9);
+    }
+
+    #[test]
+    fn the_zone_is_the_top_band_and_the_bar_but_not_the_rest_of_the_window() {
+        let w = Rect::new(400.0, 300.0, 600.0, 400.0);
+        assert!(in_bar_zone(w, S, (500.0, 310.0)), "top band");
+        assert!(in_bar_zone(w, S, (700.0, 300.0 - 20.0)), "the bar itself, above the window");
+        assert!(!in_bar_zone(w, S, (500.0, 300.0 + EDGE_BAND + 20.0)), "inside the window, below the band");
+        assert!(!in_bar_zone(w, S, (100.0, 310.0)), "beside the window");
+    }
+
+    #[test]
+    fn the_bar_appears_after_a_dwell_and_hides_after_a_grace_period() {
+        let w = Rect::new(400.0, 300.0, 600.0, 400.0);
+        let wins = [(1, w, S)];
+        let mut q = QuickBar::default();
+        let near = Some((500.0, 305.0));
+        assert_eq!(q.step(true, near, &wins, 0.0), None);
+        assert_eq!(q.step(true, near, &wins, 0.2), None);
+        assert_eq!(q.step(true, near, &wins, 0.4), Some(1));
+        // moving up onto the bar keeps it
+        assert_eq!(q.step(true, Some((700.0, 285.0)), &wins, 0.6), Some(1));
+        // leaving: still there during the grace period, gone after it
+        assert_eq!(q.step(true, Some((100.0, 100.0)), &wins, 1.0), Some(1));
+        assert_eq!(q.step(true, Some((100.0, 100.0)), &wins, 1.6), None);
+        // coming back needs a new dwell
+        assert_eq!(q.step(true, near, &wins, 2.0), None);
+        // the setting off hides it at once
+        assert_eq!(q.step(true, near, &wins, 2.5), Some(1));
+        assert_eq!(q.step(false, near, &wins, 2.6), None);
+        // no pointer: hides after the grace period
+        let mut q = QuickBar::default();
+        q.step(true, near, &wins, 0.0);
+        assert_eq!(q.step(true, near, &wins, 0.5), Some(1));
+        assert_eq!(q.step(true, None, &wins, 0.6), Some(1));
+        assert_eq!(q.step(true, None, &wins, 1.2), None);
+    }
+
+    #[test]
+    fn the_bar_switches_windows_only_after_a_dwell_on_the_new_one() {
+        let a = Rect::new(0.0, 300.0, 700.0, 400.0);
+        let b = Rect::new(800.0, 300.0, 700.0, 400.0);
+        let wins = [(1, a, S), (2, b, S)];
+        let mut q = QuickBar::default();
+        q.step(true, Some((100.0, 305.0)), &wins, 0.0);
+        assert_eq!(q.step(true, Some((100.0, 305.0)), &wins, 0.5), Some(1));
+        assert_eq!(q.step(true, Some((900.0, 305.0)), &wins, 0.6), Some(1));
+        assert_eq!(q.step(true, Some((900.0, 305.0)), &wins, 1.0), Some(2));
+    }
+
+    #[test]
+    fn every_quick_action_sends_the_command_the_launcher_and_hotkeys_use() {
+        let ids: Vec<String> = QuickAction::ALL.iter().map(|q| q.action().id()).collect();
+        assert_eq!(ids, vec!["tiling:focus-mode", "tiling:float-toggle", "tiling:next-display", "tiling:swap-main", "tiling:exclude-app"]);
+        for q in QuickAction::ALL {
+            assert!(Action::ALL.contains(&q.action()), "{q:?} is a launcher command");
+        }
+    }
+
+    #[test]
+    fn swap_with_main_and_next_display_are_pure_list_moves() {
+        let mut l = vec![1, 2, 3];
+        assert!(swap_with_main(&mut l, 3));
+        assert_eq!(l, vec![3, 2, 1]);
+        assert!(swap_with_main(&mut l, 3), "the main window swaps with the next slot");
+        assert_eq!(l, vec![2, 3, 1]);
+        assert!(!swap_with_main(&mut l, 9));
+        let mut single = vec![5];
+        assert!(!swap_with_main(&mut single, 5));
+        assert_eq!(next_display(3, 0), Some(1));
+        assert_eq!(next_display(3, 2), Some(0));
+        assert_eq!(next_display(1, 0), None);
+        assert_eq!(next_display(0, 0), None);
     }
 }

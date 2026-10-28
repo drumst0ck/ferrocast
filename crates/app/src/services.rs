@@ -30,6 +30,8 @@ pub enum Msg {
     Tray(String),
     /// From the tiling worker thread; handled on the UI thread like any other message.
     Tiling(ferrocast_macos::tiling::Event),
+    /// A button of the quick-action bar was clicked (main thread).
+    TilingQuick(ferrocast_core::tiling::QuickAction),
     /// Result of a feed check: `Ok(None)` means no stable release was found.
     UpdateChecked {
         manual: bool,
@@ -994,6 +996,17 @@ pub fn tray_menu_items(recording: bool, tiling: Option<bool>) -> Vec<(&'static s
 }
 
 /// 0: no tiling item, 1: running (offers Pause), 2: paused (offers Resume).
+/// The layout (1-4) the menu bar's Layout submenu shows as chosen.
+static TRAY_LAYOUT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
+
+/// Entries of the menu bar's "Tiling Layout" submenu: (id, label, checked).
+pub fn tray_layout_items(current: u8) -> Vec<(String, String, bool)> {
+    ferrocast_core::tiling::Layout::ALL
+        .iter()
+        .map(|l| (format!("tiling_layout_{}", l.number()), format!("{} {}", l.number(), l.name()), l.number() == current))
+        .collect()
+}
+
 static TRAY_TILING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 pub fn tray_tiling() -> Option<bool> {
@@ -1005,10 +1018,12 @@ pub fn tray_tiling() -> Option<bool> {
 }
 
 /// Show the tiling item in the menu bar menu (`None` hides it). Rebuilds the menu only on a change.
-pub fn set_tray_tiling(tray: Option<&tray_icon::TrayIcon>, state: Option<bool>, recording: bool) {
-    if tray_tiling() == state {
+pub fn set_tray_tiling(tray: Option<&tray_icon::TrayIcon>, state: Option<bool>, layout: u8, recording: bool) {
+    let layout_now = TRAY_LAYOUT.load(std::sync::atomic::Ordering::Relaxed);
+    if tray_tiling() == state && layout_now == layout {
         return;
     }
+    TRAY_LAYOUT.store(layout, std::sync::atomic::Ordering::Relaxed);
     TRAY_TILING.store(state.map_or(0, |p| if p { 2 } else { 1 }), std::sync::atomic::Ordering::Relaxed);
     if let Some(tray) = tray {
         if let Some(menu) = build_tray_menu(recording) {
@@ -1022,6 +1037,14 @@ fn build_tray_menu(recording: bool) -> Option<tray_icon::menu::Menu> {
     let menu = Menu::new();
     for (id, label) in tray_menu_items(recording, tray_tiling()) {
         menu.append(&MenuItem::with_id(id, label, true, None)).ok()?;
+    }
+    if tray_tiling().is_some() {
+        use tray_icon::menu::{CheckMenuItem, Submenu};
+        let sub = Submenu::new("Tiling Layout", true);
+        for (id, label, checked) in tray_layout_items(TRAY_LAYOUT.load(std::sync::atomic::Ordering::Relaxed)) {
+            sub.append(&CheckMenuItem::with_id(id, label, true, checked, None)).ok()?;
+        }
+        menu.append(&sub).ok()?;
     }
     menu.append(&PredefinedMenuItem::separator()).ok()?;
     menu.append(&MenuItem::with_id("quit", "Quit Ferrocast", true, None)).ok()?;

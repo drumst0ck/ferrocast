@@ -109,6 +109,7 @@ pub const ENTRIES: &[Entry] = &[
     e(9, "Space", &["gap", "spacing", "margin", "tiling", "pt", "windows"]),
     e(9, "Apps that are not tiled", &["exclude", "exclusion", "tile", "ignore", "float", "app", "dialogs"]),
     e(9, "Activate windows on hover", &["focus follows mouse", "pointer", "raise", "tiling", "mouse"]),
+    e(9, "Quick actions above windows", &["bar", "toolbar", "buttons", "hover", "tiling", "focus", "float", "swap", "exclude"]),
     e(9, "Highlight border", &["outline", "focused window", "tiling", "frame"]),
     e(9, "Border color", &["colour", "highlight", "tiling", "accent"]),
     e(9, "Data folder", &["storage", "files", "open", "settings.json", "backup", "location", "path"]),

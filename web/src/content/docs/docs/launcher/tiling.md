@@ -32,13 +32,14 @@ Pick one in Settings, from the launcher (**Tiling Layout 1â€“4**) or with <kbd>â
 - When an app refuses a size, Ferrocast learns the smallest size it accepts, moves the split lines to make room and floats the window in the middle when it cannot fit. The list is stored on your Mac in the data folder, by app, and never contains window titles.
 - When the screen is full, the extra windows stack in the last slot as an overlapping cascade.
 - While **Stage Manager** is on, tiling pauses; it resumes when you turn Stage Manager off.
-- **Pause Tiling** / **Resume Tiling** in the menu bar menu (shown while tiling is on) stops it without moving any window.
+- **Pause Tiling** / **Resume Tiling** in the menu bar menu (shown while tiling is on) stops it without moving any window. The same menu has a **Tiling Layout** submenu with the four layouts.
 - Focus mode does nothing while Stage Manager is on. The tiling shortcuts never replace a shortcut you already set; if one collides, Ferrocast tells you and leaves that tiling command without a shortcut.
 
 ## Other options
 
 - **Activate windows on hover** raises the window under the pointer after it rests there.
-- **Highlight border** and **Border color** are stored; the border itself is not drawn yet.
+- **Highlight border** draws a 3 pt border in **Border color** around the focused tiled window. It is hidden while tiling is paused or off, under Stage Manager, for floating windows, and for a moment after focus mode starts or ends.
+- **Quick actions above windows** (off by default) shows a small bar above a tiled window when the pointer rests on the window's top edge for a moment (inside the window's top 28 pt, or on the bar itself). Its buttons are the same commands you can run from the launcher or a shortcut: **Focus mode**, **Float or tile this window**, **Move to next display**, **Swap with main slot** and **Stop tiling this app**. A floating window is outside the layout and stays where you put it until you tile it again.
 
 :::caution[Limits]
 Needs the Accessibility permission. Ferrocast checks windows about every half second, so a new window takes a moment to find its place.

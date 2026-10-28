@@ -23,6 +23,11 @@ use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 const POLL: Duration = Duration::from_millis(400);
+/// Pointer-driven features (hover raise, the quick-action bar) are sampled this often, from the
+/// windows read at the last full poll.
+const FAST: Duration = Duration::from_millis(100);
+/// How long the highlight border stays hidden after focus mode is entered or left.
+const FOCUS_SETTLE: Duration = Duration::from_millis(1200);
 /// How long the pointer rests on a window before hover activation raises it.
 const HOVER_DWELL: Duration = Duration::from_millis(250);
 /// How often a refused frame is retried before the window is left alone until its target changes.
@@ -40,6 +45,11 @@ pub struct Config {
     /// Bundle ids (or app names) whose windows are not tiled.
     pub excluded: Vec<String>,
     pub hover_activate: bool,
+    /// Draw the highlight border around the focused tiled window.
+    pub border: bool,
+    pub border_color: [u8; 3],
+    /// Show the quick-action bar above a tiled window the pointer rests on.
+    pub quick_actions: bool,
 }
 
 impl Default for Config {
@@ -52,6 +62,9 @@ impl Default for Config {
             gap: 8.0,
             excluded: vec![],
             hover_activate: false,
+            border: false,
+            border_color: [89, 212, 153],
+            quick_actions: false,
         }
     }
 }
@@ -74,6 +87,37 @@ pub enum Cmd {
         dir: t::Dir,
         pid: Option<i32>,
     },
+    /// A tiling command that works on one window: from the quick-action bar `window` is the
+    /// window it hangs above; from a hotkey it is `None` (the focused window of `pid`).
+    Act {
+        action: t::Action,
+        window: Option<u64>,
+        pid: Option<i32>,
+    },
+}
+
+/// The highlight border, in global top-left points.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BorderSpec {
+    pub frame: [f64; 4],
+    pub radius: f64,
+    pub width: f64,
+    pub color: [u8; 3],
+}
+
+/// The quick-action bar and the window it belongs to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BarSpec {
+    pub window: u64,
+    pub frame: [f64; 4],
+}
+
+/// What the app should draw on top of the windows. The worker only describes it; the app draws it
+/// on the main thread.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Overlay {
+    pub border: Option<BorderSpec>,
+    pub bar: Option<BarSpec>,
 }
 
 pub enum Event {
@@ -85,6 +129,10 @@ pub enum Event {
     Notice(String),
     /// Stage Manager turned on (tiling pauses) or off.
     StageManager(bool),
+    /// The border and bar to draw changed.
+    Overlay(Overlay),
+    /// The user chose "Stop Tiling This App": the bundle id (or app name) to add to the exclusions.
+    Exclude(String),
 }
 
 #[derive(Clone)]
@@ -106,15 +154,21 @@ pub fn spawn(emit: Box<dyn Fn(Event) + Send>) -> Handle {
     let _ = std::thread::Builder::new().name("tiling".into()).spawn(move || {
         let mut w = Worker::new(emit);
         loop {
-            match rx.recv_timeout(POLL) {
+            match rx.recv_timeout(FAST) {
                 Ok(c) => {
                     w.command(c);
                     while let Ok(c) = rx.try_recv() {
                         w.command(c);
                     }
                     w.tick();
+                    w.fast();
                 }
-                Err(RecvTimeoutError::Timeout) => w.tick(),
+                Err(RecvTimeoutError::Timeout) => {
+                    if w.last_full.elapsed() >= POLL {
+                        w.tick();
+                    }
+                    w.fast();
+                }
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
@@ -366,6 +420,14 @@ struct Worker {
     clock: Instant,
     /// Tiling was paused (or Stage Manager on) since windows were last synced.
     was_idle: bool,
+    /// Windows the user took out of the layout (they float where they are).
+    floating: Vec<u64>,
+    quick: t::QuickBar,
+    last_overlay: Overlay,
+    /// The focused window as of the last full poll.
+    focused_id: Option<u64>,
+    focus_settle_until: Option<Instant>,
+    last_full: Instant,
 }
 
 impl Worker {
@@ -383,6 +445,12 @@ impl Worker {
             hover: Default::default(),
             clock: Instant::now(),
             was_idle: false,
+            floating: vec![],
+            quick: Default::default(),
+            last_overlay: Overlay::default(),
+            focused_id: None,
+            focus_settle_until: None,
+            last_full: Instant::now(),
         }
     }
 
@@ -425,7 +493,8 @@ impl Worker {
                     w.tries = 0;
                 }
             }
-            Cmd::Focus { pid } => self.toggle_focus(pid),
+            Cmd::Focus { pid } => self.toggle_focus(pid, None),
+            Cmd::Act { action, window, pid } => self.act(action, window, pid),
             Cmd::Move { dir, pid } => self.move_window(dir, pid),
         }
     }
@@ -453,7 +522,7 @@ impl Worker {
         self.order = t::reconcile_displays(std::mem::take(&mut self.order), screens.len());
         // a window's display is the list it is in (windows of a lost display moved to display 0)
         for w in &mut self.wins {
-            w.display = t::display_index(&self.order, w.id).unwrap_or(0);
+            w.display = t::display_index(&self.order, w.id).unwrap_or(w.display.min(screens.len() - 1));
         }
         let resumed = self.active() && std::mem::take(&mut self.was_idle);
         let mut seen = vec![];
@@ -489,6 +558,7 @@ impl Worker {
         let tracked: Vec<(u64, i32)> = self.wins.iter().map(|w| (w.id, w.pid)).collect();
         let alive = survivors(&tracked, &seen, &e.failed);
         self.wins.retain(|w| alive.contains(&w.id));
+        self.floating.retain(|id| alive.contains(id));
         for o in &mut self.order {
             o.retain(|id| alive.contains(id));
         }
@@ -563,6 +633,7 @@ impl Worker {
     }
 
     fn tick(&mut self) {
+        self.last_full = Instant::now();
         if !windows::accessibility_trusted(false) {
             return;
         }
@@ -584,10 +655,67 @@ impl Worker {
         if screens.is_empty() {
             return;
         }
-        self.hover_activate();
         if self.active() && self.focus.is_none() {
             self.arrange(&screens);
         }
+        self.focused_id = if self.cfg.border { self.focused(None).map(|i| self.wins[i].id) } else { None };
+    }
+
+    /// The pointer-driven parts, between full polls: hover raise, the bar, and the overlay.
+    fn fast(&mut self) {
+        if !windows::accessibility_trusted(false) {
+            return;
+        }
+        if !left_button_down() {
+            self.hover_activate();
+        }
+        let now = self.clock.elapsed().as_secs_f64();
+        let p = if left_button_down() { None } else { pointer() };
+        let o = self.overlay(p, now);
+        if o != self.last_overlay {
+            self.last_overlay = o.clone();
+            (self.emit)(Event::Overlay(o));
+        }
+    }
+
+    /// Whether the focused window is one of the tiled ones (in a layout list, not floating).
+    fn tiled(&self, id: u64) -> bool {
+        !self.floating.contains(&id) && self.order.iter().any(|l| l.contains(&id))
+    }
+
+    /// The border and the bar for this moment. Pure given the tracked state, the pointer and `now`.
+    fn overlay(&mut self, pointer: Option<(f64, f64)>, now: f64) -> Overlay {
+        let screens = self.screens.1.clone();
+        let screen_of = |d: usize| screens.get(d).copied();
+        let settling = self.focus_settle_until.is_some_and(|u| Instant::now() < u);
+        let mut out = Overlay::default();
+        let inputs = t::BorderInputs {
+            tiling_on: self.cfg.enabled,
+            border_on: self.cfg.border,
+            paused: self.cfg.paused,
+            stage_manager: self.stage,
+            focus_settling: settling,
+            focused_tiled: self.focused_id.is_some_and(|id| self.tiled(id)),
+        };
+        if t::border_visible(&inputs) {
+            if let Some(w) = self.focused_id.and_then(|id| self.wins.iter().find(|w| w.id == id)) {
+                if let Some(g) = screen_of(w.display).and_then(|s| t::border_geometry(w.frame, s, t::BORDER_WIDTH)) {
+                    let f = g.frame;
+                    out.border =
+                        Some(BorderSpec { frame: [f.x, f.y, f.w, f.h], radius: g.radius, width: g.width, color: self.cfg.border_color });
+                }
+            }
+        }
+        let bar_on = self.cfg.quick_actions && self.active() && self.focus.is_none() && !settling;
+        let wins: Vec<(u64, t::Rect, t::Rect)> =
+            self.wins.iter().filter(|w| self.tiled(w.id)).filter_map(|w| screen_of(w.display).map(|s| (w.id, w.frame, s))).collect();
+        if let Some(id) = self.quick.step(bar_on, pointer, &wins, now) {
+            if let Some((_, f, s)) = wins.iter().find(|w| w.0 == id) {
+                let b = t::bar_frame(*f, *s);
+                out.bar = Some(BarSpec { window: id, frame: [b.x, b.y, b.w, b.h] });
+            }
+        }
+        out
     }
 
     /// Nothing to observe or arrange this tick. Paused or under Stage Manager the tracked windows,
@@ -653,7 +781,7 @@ impl Worker {
         }
     }
 
-    fn toggle_focus(&mut self, pid: Option<i32>) {
+    fn toggle_focus(&mut self, pid: Option<i32>, window: Option<u64>) {
         self.stage = stage_manager_on();
         if self.stage {
             // Stage Manager owns the layout: focus mode does nothing
@@ -664,6 +792,7 @@ impl Worker {
             (self.emit)(Event::Notice("Turn on automatic tiling in Settings first".into()));
             return;
         }
+        self.focus_settle_until = Some(Instant::now() + FOCUS_SETTLE);
         if let Some(saved) = self.focus.take() {
             for (id, r) in t::focus_restore(&saved) {
                 if let Some(w) = self.wins.iter_mut().find(|w| w.id == id) {
@@ -676,7 +805,7 @@ impl Worker {
             return;
         }
         let screens = self.refresh();
-        let Some(i) = self.focused(pid) else {
+        let Some(i) = self.resolve(window, pid) else {
             (self.emit)(Event::Notice("No window to focus".into()));
             return;
         };
@@ -697,6 +826,59 @@ impl Worker {
         }
     }
 
+    /// The window a command is for: the one named (quick-action bar) or else the focused one.
+    fn resolve(&self, window: Option<u64>, pid: Option<i32>) -> Option<usize> {
+        window.and_then(|id| self.wins.iter().position(|w| w.id == id)).or_else(|| self.focused(pid))
+    }
+
+    fn act(&mut self, action: t::Action, window: Option<u64>, pid: Option<i32>) {
+        use t::Action;
+        if matches!(action, Action::FocusMode) {
+            return self.toggle_focus(pid, window);
+        }
+        if !self.cfg.enabled || self.stage || self.focus.is_some() {
+            return;
+        }
+        let screens = self.refresh();
+        let Some(i) = self.resolve(window, pid) else { return };
+        let (id, d) = (self.wins[i].id, self.wins[i].display);
+        match action {
+            Action::FloatToggle => {
+                if let Some(at) = self.floating.iter().position(|f| *f == id) {
+                    self.floating.remove(at);
+                    t::move_to_display(&mut self.order, id, d);
+                } else {
+                    self.floating.push(id);
+                    for l in &mut self.order {
+                        l.retain(|x| *x != id);
+                    }
+                    self.wins[i].target = None;
+                }
+            }
+            Action::NextDisplay => {
+                let Some(to) = t::next_display(screens.len(), d) else { return };
+                t::move_to_display(&mut self.order, id, to);
+                self.set_display(id, to);
+                self.floating.retain(|f| *f != id);
+            }
+            Action::SwapMain => {
+                if !self.tiled(id) || !t::swap_with_main(&mut self.order[d], id) {
+                    return;
+                }
+            }
+            Action::ExcludeApp => {
+                let app = self.wins[i].app.clone();
+                (self.emit)(Event::Exclude(app));
+                return;
+            }
+            _ => return,
+        }
+        for w in &mut self.wins {
+            w.tries = 0;
+        }
+        self.arrange(&screens);
+    }
+
     fn move_window(&mut self, dir: t::Dir, pid: Option<i32>) {
         if !self.active() || self.focus.is_some() {
             return;
@@ -704,6 +886,9 @@ impl Worker {
         let screens = self.refresh();
         let Some(i) = self.focused(pid) else { return };
         let (id, d) = (self.wins[i].id, self.wins[i].display);
+        if !self.tiled(id) {
+            return;
+        }
         let frames: Vec<(u64, t::Rect)> = self.order[d]
             .iter()
             .filter_map(|id| self.wins.iter().find(|w| w.id == *id))
@@ -787,6 +972,69 @@ mod tests {
         w.stage = false;
         assert!(!w.idle());
         assert_eq!(t::focus_restore(w.focus.as_ref().unwrap()).len(), 1);
+    }
+
+    fn overlay_worker() -> std::mem::ManuallyDrop<Worker> {
+        let mut w = worker_with_two_windows();
+        w.focus = None;
+        w.cfg.border = true;
+        w.cfg.quick_actions = true;
+        w.cfg.border_color = [10, 20, 30];
+        w.order = vec![vec![1, 2]];
+        w.wins[0].frame = t::Rect::new(100.0, 100.0, 600.0, 400.0);
+        w.wins[1].frame = t::Rect::new(800.0, 100.0, 600.0, 400.0);
+        w.screens = (Some(Instant::now()), vec![t::Rect::new(0.0, 25.0, 1600.0, 900.0)]);
+        w.focused_id = Some(1);
+        w
+    }
+
+    #[test]
+    fn the_border_follows_the_focused_tiled_window_and_hides_when_it_should() {
+        let mut w = overlay_worker();
+        let b = w.overlay(None, 0.0).border.expect("border");
+        assert_eq!(b.frame, [97.0, 97.0, 606.0, 406.0]);
+        assert_eq!(b.color, [10, 20, 30]);
+        w.cfg.paused = true;
+        assert_eq!(w.overlay(None, 0.0).border, None, "paused");
+        w.cfg.paused = false;
+        w.stage = true;
+        assert_eq!(w.overlay(None, 0.0).border, None, "Stage Manager");
+        w.stage = false;
+        w.focus_settle_until = Some(Instant::now() + Duration::from_secs(5));
+        assert_eq!(w.overlay(None, 0.0).border, None, "focus mode transition");
+        w.focus_settle_until = None;
+        w.floating.push(1);
+        assert_eq!(w.overlay(None, 0.0).border, None, "a floating window");
+        w.floating.clear();
+        w.cfg.enabled = false;
+        assert_eq!(w.overlay(None, 0.0).border, None, "tiling off");
+        w.cfg.enabled = true;
+        w.cfg.border = false;
+        assert_eq!(w.overlay(None, 0.0).border, None, "setting off");
+    }
+
+    #[test]
+    fn the_bar_appears_over_the_window_the_pointer_rests_on_and_only_with_the_setting() {
+        let mut w = overlay_worker();
+        let near = Some((300.0, 110.0));
+        assert_eq!(w.overlay(near, 0.0).bar, None);
+        let bar = w.overlay(near, 0.5).bar.expect("bar after the dwell");
+        assert_eq!(bar.window, 1);
+        assert_eq!(bar.frame, [400.0 - t::BAR_W / 2.0 + 0.0, 100.0 - t::BAR_H - 6.0, t::BAR_W, t::BAR_H]);
+        w.cfg.quick_actions = false;
+        assert_eq!(w.overlay(near, 1.0).bar, None, "setting off");
+        w.cfg.quick_actions = true;
+        w.focus = Some(t::FocusSaved { frames: vec![], focused: 1 });
+        assert_eq!(w.overlay(near, 2.0).bar, None, "not in focus mode");
+    }
+
+    #[test]
+    fn floating_windows_get_no_bar_and_no_border() {
+        let mut w = overlay_worker();
+        w.floating.push(2);
+        let near2 = Some((900.0, 110.0));
+        w.overlay(near2, 0.0);
+        assert_eq!(w.overlay(near2, 0.5).bar, None);
     }
 
     #[test]

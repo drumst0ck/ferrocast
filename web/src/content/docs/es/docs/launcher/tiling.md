@@ -32,9 +32,11 @@ Elígela en Ajustes, desde el lanzador (**Tiling Layout 1–4**) o con <kbd>⌃<
 - Si una app rechaza un tamaño, Ferrocast aprende el mínimo que acepta, mueve las divisiones y flota la ventana en el centro si no cabe. La lista se guarda en tu Mac, por app, sin títulos de ventana.
 - Con la pantalla llena, las ventanas sobrantes se apilan en el último hueco en cascada.
 - Con **Stage Manager** activo el mosaico se pausa y se reanuda al apagarlo.
-- **Pause Tiling** / **Resume Tiling** en el menú de la barra de menús (visible con el mosaico activo) lo detiene sin mover ventanas.
+- **Pause Tiling** / **Resume Tiling** en el menú de la barra de menús (visible con el mosaico activo) lo detiene sin mover ventanas. El mismo menú tiene un submenú **Tiling Layout** con las cuatro disposiciones.
+- **Highlight border** dibuja un borde de 3 pt, del color de **Border color**, alrededor de la ventana enfocada que está en el mosaico. Se oculta con el mosaico en pausa o apagado, con Stage Manager, en ventanas flotantes y un instante al entrar o salir del modo foco.
+- **Quick actions above windows** (desactivado por defecto) muestra una barra pequeña sobre una ventana cuando el puntero se queda en su borde superior (en los 28 pt superiores de la ventana o sobre la propia barra). Sus botones son los mismos comandos del lanzador y los atajos: **modo foco**, **flotar o volver al mosaico**, **mover a la siguiente pantalla**, **intercambiar con el hueco principal** y **dejar de colocar esta app**.
 - El modo foco no hace nada con Stage Manager activo. Los atajos del mosaico nunca sustituyen uno que ya tengas; si chocan, Ferrocast te avisa y deja ese comando sin atajo.
 
 :::caution[Límites]
-Necesita el permiso de Accesibilidad. El borde resaltado se guarda como ajuste pero aún no se dibuja.
+Necesita el permiso de Accesibilidad.
 :::

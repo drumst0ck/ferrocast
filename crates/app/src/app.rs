@@ -977,6 +977,11 @@ pub struct App {
     hotkeys: Option<Hotkeys>,
     tiling: Option<ferrocast_macos::tiling::Handle>,
     tiling_paused: bool,
+    /// The window the quick-action bar currently hangs above.
+    quick_window: Option<u64>,
+    /// Layout the menu bar submenu shows as chosen, and the settings layout it last followed.
+    tray_layout: u8,
+    layout_seen: u8,
     /// Whether the tiling hotkeys are currently registered.
     tiling_hotkeys: bool,
     /// Screenshot commands: availability and the once-per-session shortcut sentence.
@@ -1258,6 +1263,9 @@ impl App {
             hotkeys,
             tiling: None,
             tiling_paused: false,
+            quick_window: None,
+            tray_layout: 1,
+            layout_seen: 1,
             tiling_hotkeys: false,
             capture: crate::capture_ctl::CaptureState::detect(instance::running_exe().unwrap_or_default()),
             selection: Default::default(),
@@ -1513,7 +1521,9 @@ impl App {
             }
         } else if !on {
             // dropping the handle ends the worker: nothing observes windows while tiling is off
-            self.tiling = None;
+            if self.tiling.take().is_some() {
+                self.apply_overlay(ferrocast_macos::tiling::Overlay::default());
+            }
         }
         let s = &self.settings;
         let cfg = ferrocast_macos::tiling::Config {
@@ -1524,19 +1534,37 @@ impl App {
             gap: ferrocast_core::tiling::clamp_gap(s.tiling_gap),
             excluded: s.tiling_excluded.clone(),
             hover_activate: s.tiling_hover_activate,
+            border: s.tiling_border,
+            border_color: draw::parse_hex(&s.tiling_border_color).unwrap_or([89, 212, 153]),
+            quick_actions: s.tiling_quick_actions,
         };
         if let Some(h) = &self.tiling {
             h.send(ferrocast_macos::tiling::Cmd::Config(cfg));
         }
         let (enabled, paused) = (s.tiling_enabled, self.tiling_paused);
-        services::set_tray_tiling(self._tray.as_ref(), enabled.then_some(paused), self.tray_rec_shown);
+        if self.settings.tiling_layout != self.layout_seen {
+            self.layout_seen = self.settings.tiling_layout;
+            self.tray_layout = self.layout_seen;
+        }
+        services::set_tray_tiling(self._tray.as_ref(), enabled.then_some(paused), self.tray_layout, self.tray_rec_shown);
         if self.tiling_hotkeys != enabled {
             self.tiling_hotkeys = enabled;
             self.apply_hotkeys();
         }
     }
 
+    /// Draw (or clear) the border and the quick-action bar; also remembers which window the bar is for.
+    fn apply_overlay(&mut self, o: ferrocast_macos::tiling::Overlay) {
+        self.quick_window = o.bar.as_ref().map(|b| b.window);
+        (self.fx.tiling_overlay)(&o);
+    }
+
     pub(crate) fn run_tiling(&mut self, a: ferrocast_core::tiling::Action, pid: Option<i32>) {
+        self.run_tiling_on(a, pid, None);
+    }
+
+    /// `window` is the tracked window a quick-action button was clicked on (`None`: the focused one).
+    pub(crate) fn run_tiling_on(&mut self, a: ferrocast_core::tiling::Action, pid: Option<i32>, window: Option<u64>) {
         use ferrocast_core::tiling::Action;
         use ferrocast_macos::tiling::Cmd;
         match a {
@@ -1560,9 +1588,14 @@ impl App {
                     h.send(Cmd::Layout { n, pid });
                 }
             }
-            Action::FocusMode => {
+            Action::FocusMode if window.is_none() => {
                 if let Some(h) = &self.tiling {
                     h.send(Cmd::Focus { pid });
+                }
+            }
+            Action::FocusMode | Action::FloatToggle | Action::NextDisplay | Action::SwapMain | Action::ExcludeApp => {
+                if let Some(h) = &self.tiling {
+                    h.send(Cmd::Act { action: a, window, pid });
                 }
             }
             Action::Move(d) => {
@@ -1577,6 +1610,8 @@ impl App {
         use ferrocast_macos::tiling::Event;
         match e {
             Event::DisplayLayout { display, layout } => {
+                self.tray_layout = layout;
+                self.sync_tiling();
                 self.settings.tiling_display_layouts.insert(display.to_string(), layout);
                 let v = self.settings.clone();
                 self.persist("settings.json", &v);
@@ -1585,6 +1620,14 @@ impl App {
                 self.toast = Some((format!("Layout {layout}: {name}"), Instant::now()));
             }
             Event::MinSizes(m) => self.persist("tiling-min-sizes.json", &m),
+            Event::Overlay(o) => self.apply_overlay(o),
+            Event::Exclude(app) => {
+                if !self.settings.tiling_excluded.contains(&app) {
+                    self.settings.tiling_excluded.push(app.clone());
+                    self.save_settings();
+                }
+                self.toast = Some((format!("{app} is no longer tiled"), Instant::now()));
+            }
             Event::Notice(m) => services::notify("Window Tiling", &m),
             Event::StageManager(on) => {
                 let m = if on { "Stage Manager is on: tiling is paused" } else { "Stage Manager is off: tiling resumed" };
@@ -3752,9 +3795,20 @@ impl App {
                     self.rates = r;
                 }
                 Msg::Tiling(e) => self.tiling_event(e),
+                Msg::TilingQuick(q) => {
+                    let w = self.quick_window;
+                    self.run_tiling_on(q.action(), None, w);
+                }
                 Msg::Tray(id) => match id.as_str() {
                     "open" => self.show(),
                     "tiling_pause" => self.run_tiling(ferrocast_core::tiling::Action::Pause, None),
+                    id if id.starts_with("tiling_layout_") => {
+                        if let Some(n) = id.strip_prefix("tiling_layout_").and_then(|n| n.parse::<u8>().ok()) {
+                            self.tray_layout = n;
+                            self.sync_tiling();
+                            self.run_tiling(ferrocast_core::tiling::Action::Layout(n), None);
+                        }
+                    }
                     "clipboard" => {
                         self.show();
                         self.reset_to_root();
@@ -7398,6 +7452,8 @@ pub(crate) struct Effects {
     pub(crate) notes_tray: fn(&Bus) -> Option<Box<dyn std::any::Any>>,
     /// Start the window tiling worker (it drives the Accessibility API: never in tests).
     pub(crate) tiling_spawn: fn(&Bus) -> Option<ferrocast_macos::tiling::Handle>,
+    /// Draw the highlight border and the quick-action bar (main thread only).
+    pub(crate) tiling_overlay: fn(&ferrocast_macos::tiling::Overlay),
     /// Make the Notes windows follow the theme setting (main thread only).
     pub(crate) notes_appearance: fn(ferrocast_macos::notes_theme::Appearance),
     /// Run a script in a browser page, ignoring the result (clean-up).
@@ -7428,7 +7484,14 @@ impl Effects {
             notes_tray: |bus| services::make_notes_tray(bus.clone()).map(|t| Box::new(t) as Box<dyn std::any::Any>),
             tiling_spawn: |bus| {
                 let b = bus.clone();
+                let clicks = bus.clone();
+                ferrocast_macos::tiling_overlay::set_on_action(Box::new(move |q| clicks.send(Msg::TilingQuick(q))));
                 Some(ferrocast_macos::tiling::spawn(Box::new(move |e| b.send(Msg::Tiling(e)))))
+            },
+            tiling_overlay: |o| {
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    ferrocast_macos::tiling_overlay::show(mtm, o);
+                }
             },
             notes_appearance: |a| ferrocast_macos::notes_theme::set_appearance(a),
             web_script: |b, js| services::web_script(b, js.to_string()),
