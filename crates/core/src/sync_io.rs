@@ -562,8 +562,9 @@ pub fn from_items<T: DeserializeOwned>(items: Vec<(String, Value)>) -> Vec<T> {
 }
 
 /// Settings fields that stay on each Mac (S6): machine paths, login item, onboarding, update state,
-/// UI state and the sync switch itself.
-pub const LOCAL_ONLY: [&str; 11] = [
+/// UI state, the sync switch itself, and the two tiling fields that depend on the Mac (the switch
+/// that moves windows and the layout per display index).
+pub const LOCAL_ONLY: [&str; 13] = [
     "script_directories",
     "obsidian_vault",
     "launch_at_login",
@@ -575,6 +576,8 @@ pub const LOCAL_ONLY: [&str; 11] = [
     "notes_last",
     "notes_zoom",
     "sync_enabled",
+    "tiling_enabled",
+    "tiling_display_layouts",
 ];
 /// Local-only fields inside `capture`: the devices and the folders differ per Mac.
 pub const LOCAL_ONLY_CAPTURE: [&str; 4] = ["camera_id", "mic_id", "folder", "recordings_folder"];
@@ -819,6 +822,46 @@ mod tests {
 
         for d in [da, db, shared] {
             std::fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_tiling_switch_and_display_layouts_stay_on_each_mac_but_tiling_preferences_sync() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.io.device = ida.into();
+            b.io.device = idb.into();
+            a.settings.tiling_enabled = true;
+            a.settings.tiling_display_layouts.insert("1".into(), 3);
+            a.settings.tiling_layout = 2;
+            a.settings.tiling_gap = 14.0;
+            a.settings.tiling_excluded = vec!["com.example.app".into()];
+            a.settings.tiling_border = true;
+            a.settings.tiling_border_color = "#112233".into();
+            a.settings.tiling_quick_actions = true;
+            a.settings.tiling_hover_activate = true;
+            a.sync(1_000);
+            a.sync(1_500);
+            b.sync(2_000);
+            // preferences travel
+            assert_eq!(b.settings.tiling_layout, 2);
+            assert_eq!(b.settings.tiling_gap, 14.0);
+            assert_eq!(b.settings.tiling_excluded, vec!["com.example.app".to_string()]);
+            assert!(b.settings.tiling_border && b.settings.tiling_quick_actions && b.settings.tiling_hover_activate);
+            assert_eq!(b.settings.tiling_border_color, "#112233");
+            // moving windows is switched on per Mac, and display indices differ per Mac
+            assert!(!b.settings.tiling_enabled, "tiling is never switched on by another Mac");
+            assert!(b.settings.tiling_display_layouts.is_empty(), "display layouts are per Mac");
+            a.sync(3_000);
+            assert!(a.settings.tiling_enabled && a.settings.tiling_display_layouts.get("1") == Some(&3));
+            // the shared item list has neither field
+            let names: Vec<String> = settings_items(&a.settings).into_iter().map(|i| i.0).collect();
+            assert!(!names.iter().any(|n| n == "tiling_enabled" || n == "tiling_display_layouts"), "{names:?}");
+            assert!(names.iter().any(|n| n == "tiling_gap"));
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
+            }
         }
     }
 

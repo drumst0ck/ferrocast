@@ -18,7 +18,7 @@ Turn it on in Settings → Advanced → Sync with iCloud. The status line under 
 
 ## What stays on each Mac
 
-- Script folders, the Obsidian vault, Launch at login, the camera and microphone you picked for recording, the screenshot and recordings folders, update preferences and state, and window and note state such as the last open note and the Notes zoom.
+- Script folders, the Obsidian vault, Launch at login, the camera and microphone you picked for recording, the screenshot and recordings folders, update preferences and state, the automatic tiling switch and the layout of each display (the other tiling settings do sync), and window and note state such as the last open note and the Notes zoom.
 - The Sync switch itself: you turn it on separately on each Mac.
 - **macOS permissions** (Accessibility, Screen Recording, Input Monitoring and so on). They belong to each Mac and Ferrocast cannot copy them. Grant them again on every Mac.
 - **API keys** in the Keychain. Ferrocast is signed ad hoc, which does not allow iCloud Keychain, so enter each key on every Mac.

@@ -268,6 +268,24 @@ pub struct Settings {
     pub file_search_in_root: bool,
     pub rem_px: f64,
     pub window_gap: f64,
+    /// Automatic window tiling. Off until the user turns it on: it moves their windows.
+    pub tiling_enabled: bool,
+    /// Layout 1-4 used on displays without their own (see `tiling_display_layouts`).
+    pub tiling_layout: u8,
+    /// Layout 1-4 per display, keyed by the display's index in the screen list.
+    pub tiling_display_layouts: HashMap<String, u8>,
+    /// "Space": margin and gap between tiled windows, in points.
+    pub tiling_gap: f64,
+    /// Bundle ids of apps whose windows are never tiled.
+    pub tiling_excluded: Vec<String>,
+    /// Raise the window under the pointer after the pointer rests on it.
+    pub tiling_hover_activate: bool,
+    /// Draw a border around the focused tiled window.
+    pub tiling_border: bool,
+    /// Show a small bar of actions above a tiled window when the pointer rests on its top edge.
+    pub tiling_quick_actions: bool,
+    /// Colour of that border, `#rrggbb`.
+    pub tiling_border_color: String,
     pub fallback_search_url: String,
     pub favorites: Vec<String>,
     pub commands: HashMap<String, CommandConfig>,
@@ -386,6 +404,15 @@ impl Default for Settings {
             file_search_in_root: true,
             rem_px: 16.0,
             window_gap: 0.0,
+            tiling_enabled: false,
+            tiling_layout: 1,
+            tiling_display_layouts: HashMap::new(),
+            tiling_gap: 8.0,
+            tiling_excluded: vec![],
+            tiling_hover_activate: false,
+            tiling_border: false,
+            tiling_quick_actions: false,
+            tiling_border_color: "#59d499".into(),
             fallback_search_url: "https://www.google.com/search?q={argument name=\"query\"}".into(),
             favorites: vec![],
             commands: HashMap::new(),
@@ -437,7 +464,7 @@ impl Settings {
     pub fn hotkey(&self, id: &str) -> Option<&str> {
         match self.commands.get(id).and_then(|c| c.hotkey.as_deref()) {
             Some(h) => Some(h).filter(|a| !a.is_empty()),
-            None => DEFAULT_HOTKEYS.iter().find(|(c, _)| *c == id).map(|(_, h)| *h),
+            None => DEFAULT_HOTKEYS.iter().chain(crate::tiling::DEFAULT_HOTKEYS).find(|(c, _)| *c == id).map(|(_, h)| *h),
         }
     }
     pub fn is_disabled(&self, id: &str) -> bool {

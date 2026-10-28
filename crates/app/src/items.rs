@@ -311,6 +311,7 @@ pub enum Kind {
     },
     System(SystemCommand),
     Window(WindowCommand),
+    Tiling(ferrocast_core::tiling::Action),
     Builtin(Builtin),
     /// A builtin opened with a prefilled query.
     Prefilled(Builtin, String),
@@ -374,7 +375,13 @@ impl Item {
     pub fn is_command(&self) -> bool {
         matches!(
             self.kind,
-            Kind::App { .. } | Kind::System(_) | Kind::Window(_) | Kind::Builtin(_) | Kind::Quicklink { .. } | Kind::Script(_)
+            Kind::App { .. }
+                | Kind::System(_)
+                | Kind::Window(_)
+                | Kind::Tiling(_)
+                | Kind::Builtin(_)
+                | Kind::Quicklink { .. }
+                | Kind::Script(_)
         )
     }
 }

@@ -6554,6 +6554,7 @@ impl App {
         let tab_before = tab;
         let mut s = self.settings.clone();
         let trusted = windows::accessibility_trusted(false);
+        let hotkey_issues = self.tiling_hotkey_issues.clone();
         let (mut rec, mut req_acc, mut open_data, mut add_dir, mut save_key, mut test_ai) = (false, false, false, false, false, false);
         let (mut chatgpt_in, mut chatgpt_out, mut chatgpt_device) = (false, false, false);
         let mut fetch_models = false;
@@ -7673,6 +7674,71 @@ impl App {
                             });
                         });
                         ui.add_space(14.0);
+                        section(ui, pal, "Window tiling");
+                        group(ui, pal, |ui| {
+                            row(ui, pal, "Automatic tiling", "Gives every new window a place on its display. Off until you turn it on; it moves your windows.", |ui| {
+                                toggle(ui, pal, &mut s.tiling_enabled)
+                            });
+                            row(ui, pal, "Tiling layout", "Used on every display. ⌃⌥⌘1–4 change the layout of the focused window's display.", |ui| {
+                                let before = s.tiling_layout;
+                                segmented(
+                                    ui,
+                                    pal,
+                                    &mut s.tiling_layout,
+                                    &[(1u8, "Columns"), (2, "Main + stack"), (3, "Grid"), (4, "Spiral")],
+                                );
+                                if s.tiling_layout != before {
+                                    s.tiling_display_layouts.clear();
+                                }
+                            });
+                            row(ui, pal, "Space", "Margin and gap between tiled windows.", |ui| {
+                                field_drag(ui, pal, &mut s.tiling_gap, 0.0..=64.0, " pt");
+                            });
+                            row(ui, pal, "Apps that are not tiled", "Windows of these apps stay where you put them. Dialogs, sheets and panels are never tiled.", |ui| {
+                                ui.menu_button("Add app", |ui| {
+                                    for a in crate::app::running_tileable_apps() {
+                                        if !s.tiling_excluded.contains(&a.0) && ui.button(&a.1).clicked() {
+                                            s.tiling_excluded.push(a.0);
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            });
+                            let mut drop_at = None;
+                            for (i, id) in s.tiling_excluded.iter().enumerate() {
+                                row(ui, pal, id, "Not tiled", |ui| {
+                                    if small_btn(ui, pal, "Tile again") {
+                                        drop_at = Some(i);
+                                    }
+                                });
+                            }
+                            if let Some(i) = drop_at {
+                                s.tiling_excluded.remove(i);
+                            }
+                            row(ui, pal, "Activate windows on hover", "Raises the window under the pointer once it rests there.", |ui| {
+                                toggle(ui, pal, &mut s.tiling_hover_activate)
+                            });
+                            row(
+                                ui,
+                                pal,
+                                "Quick actions above windows",
+                                "Hold ⌥ over the top of a window to show a small bar of actions for it.",
+                                |ui| toggle(ui, pal, &mut s.tiling_quick_actions),
+                            );
+                            row(ui, pal, "Highlight border", "Draws a border around the focused tiled window.", |ui| {
+                                toggle(ui, pal, &mut s.tiling_border)
+                            });
+                            row(ui, pal, "Border color", "Colour of the highlight border.", |ui| {
+                                let mut rgb = parse_hex(&s.tiling_border_color).unwrap_or([89, 212, 153]);
+                                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                    s.tiling_border_color = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+                                }
+                            });
+                        });
+                        for issue in &hotkey_issues {
+                            note(ui, pal, &format!("⚠ Shortcut: {issue}"));
+                        }
+                        ui.add_space(14.0);
                         section(ui, pal, "Data");
                         group(ui, pal, |ui| {
                             row(ui, pal, "Data folder", &self.store.root.display().to_string(), |ui| {
@@ -8095,7 +8161,7 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
 }
 
 /// Note under the Sync rows in Settings.
-pub(crate) const SYNC_NOTE: &str = "Off by default. Hotkeys sync; script folders, the Obsidian vault, the screenshot and recordings folders, login item, camera and microphone choice, update preferences and macOS permissions stay on each Mac. API keys in the Keychain do not sync.";
+pub(crate) const SYNC_NOTE: &str = "Off by default. Hotkeys sync; script folders, the Obsidian vault, the screenshot and recordings folders, login item, camera and microphone choice, update preferences, the window tiling switch and its per-display layouts, and macOS permissions stay on each Mac. API keys in the Keychain do not sync.";
 
 /// Settings tabs: (name, SF Symbol). Everyday = 0..3, Intelligence = 3..5, Capture = 5, Power = 6..10.
 const SETTINGS_TABS: [(&str, &str); 10] = [
@@ -8894,6 +8960,11 @@ fn field_combo(
 }
 
 /// A number box (drag or type) in the Settings look.
+pub(crate) fn parse_hex(s: &str) -> Option<[u8; 3]> {
+    let h = s.strip_prefix('#')?;
+    (h.len() == 6).then(|| u32::from_str_radix(h, 16).ok()).flatten().map(|v| [(v >> 16) as u8, (v >> 8) as u8, v as u8])
+}
+
 fn field_drag(ui: &mut Ui, pal: &Palette, value: &mut f64, range: std::ops::RangeInclusive<f64>, suffix: &str) {
     let r = ui
         .scope(|ui| {
@@ -9595,7 +9666,22 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
             "translate_apple",
         ],
     ),
-    (9, &["rem_px", "window_gap"]),
+    (
+        9,
+        &[
+            "rem_px",
+            "window_gap",
+            "tiling_enabled",
+            "tiling_layout",
+            "tiling_display_layouts",
+            "tiling_gap",
+            "tiling_excluded",
+            "tiling_hover_activate",
+            "tiling_border",
+            "tiling_quick_actions",
+            "tiling_border_color",
+        ],
+    ),
 ];
 
 /// `s` with the fields of `tab` (see `RESET_FIELDS`) copied from `from`; a tab without an entry,

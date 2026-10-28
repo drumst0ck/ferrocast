@@ -31,6 +31,8 @@ pub mod scroll;
 pub mod selector;
 pub mod shelf;
 pub mod system;
+pub mod tiling;
+pub mod tiling_overlay;
 pub mod url_scheme;
 pub mod vision;
 pub mod windows;
