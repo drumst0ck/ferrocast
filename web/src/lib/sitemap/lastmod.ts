@@ -116,6 +116,9 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/clipboard-manager-mac') {
       return fileLastmod('src/lib/seo/clipboard-manager.ts', 'src/components/seo/GuidePage.astro');
     }
+    if (path === '/text-expander-mac' || path === '/es/expansor-de-texto-mac') {
+      return fileLastmod('src/lib/seo/text-expander.ts', 'src/components/seo/GuidePage.astro');
+    }
     if (path === '/free-file-converter-mac') {
       return fileLastmod('src/lib/seo/file-converter.ts', 'src/components/seo/GuidePage.astro', 'src/data/conversions.json');
     }
