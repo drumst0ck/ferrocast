@@ -15112,6 +15112,58 @@ fn a_merge_is_applied_without_queueing_a_new_run() {
     std::fs::remove_dir_all(&app.store.root).ok();
 }
 
+/// Run one `snippets` sync of `app` against `shared` with another Mac "bb" that has `remote`, and
+/// hand the result to `sync_done`; `edit_meanwhile` changes local data while the run is away.
+fn snippets_run_with_remote(
+    app: &mut App,
+    shared: &std::path::Path,
+    remote: Snippet,
+    edit_meanwhile: bool,
+) -> ferrocast_core::sync_io::SyncIo {
+    use ferrocast_core::sync::Tracker;
+    use ferrocast_core::sync_io::{sync_domain, SyncIo};
+    let other = SyncIo::new(shared.to_path_buf(), "bb".into(), app.store.images_dir());
+    sync_domain(&other, "snippets", &ferrocast_core::sync_io::to_items(&[remote]), &Tracker::default(), 5_000).unwrap();
+    let io = SyncIo::new(shared.to_path_buf(), "aa".into(), app.store.images_dir());
+    let snap = app.sync_snapshot("snippets");
+    let out = sync_domain(&io, "snippets", &snap, &Tracker::default(), 6_000).unwrap();
+    assert!(out.merged.is_some());
+    if edit_meanwhile {
+        app.snippets.push(Snippet::new("typed", "t", "!t"));
+    }
+    let done = crate::app::sync_ctl::SyncDone { results: vec![("snippets", snap, Ok(out))], unavailable: None, io: Some(io.clone()) };
+    app.sync.in_flight = true;
+    app.sync_done(done);
+    io
+}
+
+#[test]
+fn the_own_sync_document_holds_the_merged_state_only_once_the_merge_was_applied() {
+    let shared = std::env::temp_dir().join(format!("ferrocast-own-doc-{}", uuid::Uuid::new_v4()));
+    let own_ids = |io: &ferrocast_core::sync_io::SyncIo| -> Vec<String> {
+        io.read_own_doc("snippets").unwrap().items.iter().filter(|(_, r)| !r.deleted).map(|(k, _)| k.clone()).collect()
+    };
+    // applied: the own document now has the remote snippet too
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    app.snippets = vec![Snippet::new("local", "l", "!l")];
+    let io = snippets_run_with_remote(&mut app, &shared, Snippet::new("remote", "r", "!r"), false);
+    assert_eq!(app.snippets.len(), 2, "the merge was applied");
+    assert_eq!(own_ids(&io).len(), 2);
+    // not applied (local data changed while the run was away): the own document keeps what it published
+    let shared2 = std::env::temp_dir().join(format!("ferrocast-own-doc-{}", uuid::Uuid::new_v4()));
+    let mut app2 = fixture();
+    app2.settings.sync_enabled = true;
+    app2.snippets = vec![Snippet::new("local", "l", "!l")];
+    let io2 = snippets_run_with_remote(&mut app2, &shared2, Snippet::new("remote", "r", "!r"), true);
+    assert_eq!(app2.snippets.len(), 2, "the merge was not applied: local + the typed one");
+    assert!(app2.snippets.iter().all(|s| s.name != "r"));
+    assert_eq!(own_ids(&io2), vec![app2.snippets[0].id.clone()], "own document has only the published snapshot");
+    for d in [shared, shared2, app.store.root.clone(), app2.store.root.clone()] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
 fn merged_notes(list: &[Note]) -> Vec<(String, serde_json::Value)> {
     ferrocast_core::sync_io::to_items(list)
 }

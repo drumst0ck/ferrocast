@@ -40,8 +40,10 @@ pub struct SyncCtl {
 
 /// Result of one background run.
 pub struct SyncDone {
-    results: Vec<(&'static str, Items, Result<Outcome, String>)>,
-    unavailable: Option<String>,
+    pub(crate) results: Vec<(&'static str, Items, Result<Outcome, String>)>,
+    pub(crate) unavailable: Option<String>,
+    /// The worker's handle on the sync folder, to write the own document once a merge is applied.
+    pub(crate) io: Option<SyncIo>,
 }
 
 impl App {
@@ -171,7 +173,7 @@ impl App {
         let (root, bus) = (self.store.root.clone(), self.bus.clone());
         std::thread::spawn(move || {
             let done = match sync_io::resolve_dir() {
-                Err(e) => SyncDone { results: vec![], unavailable: Some(e.message()) },
+                Err(e) => SyncDone { results: vec![], unavailable: Some(e.message()), io: None },
                 Ok(dir) => {
                     let mut io = SyncIo::new(dir, sync_io::device_id(&root), Store::new(&root).images_dir());
                     io.enabled = flag;
@@ -184,7 +186,7 @@ impl App {
                             (d, snap, out)
                         })
                         .collect();
-                    SyncDone { results, unavailable: None }
+                    SyncDone { results, unavailable: None, io: Some(io) }
                 }
             };
             bus.send(Msg::SyncDone(Box::new(done)));
@@ -222,6 +224,15 @@ impl App {
                 Some(merged) => self.sync_apply(domain, merged, out.tracker_merged.clone(), &snapshot),
                 None => None,
             };
+            // The own document holds the merged state only once it is what this Mac has (a tracker
+            // rebuilt from it must not take an older local value for a new edit).
+            if applied.is_some() {
+                if let (Some(doc), Some(io)) = (&out.applied_doc, &done.io) {
+                    if let Err(e) = io.write_doc(domain, doc) {
+                        instance::log(&root, &format!("sync: writing own document {domain}: {e:#}"));
+                    }
+                }
+            }
             let tracker = applied.unwrap_or(out.tracker_published);
             if let Err(e) = sync_io::save_tracker(&root, domain, &tracker) {
                 instance::log(&root, &format!("sync: saving tracker {domain}: {e:#}"));

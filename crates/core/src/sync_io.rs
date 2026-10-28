@@ -353,6 +353,12 @@ pub struct Outcome {
     pub corrupt: Vec<String>,
     /// Files (documents or images) still being downloaded from iCloud.
     pub downloading: usize,
+    /// This Mac's document holding the merged state. It is not written by `sync_domain` when there is
+    /// something to apply: the caller writes it (`SyncIo::write_doc`) only once the merge was applied
+    /// to the local data. Until then the own document keeps the published snapshot, so a tracker
+    /// rebuilt from it cannot turn an older local value into a new edit. `None` for the clipboard
+    /// (its document keeps to what was copied here) and when nothing is to be applied.
+    pub applied_doc: Option<DeviceDoc>,
 }
 
 /// Publish the snapshot of local items, read the other Macs' documents and merge. Writes only this
@@ -425,17 +431,25 @@ pub fn sync_domain(io: &SyncIo, domain: &str, snapshot: &[(String, Value)], trac
     }
     // what this Mac publishes now: the merged state with the re-stamped baseline
     let (doc2, t3) = sync::publish_opts(&io.device, &merged, &t2, now, &opts);
-    // Own document = the merged state (unchanged bytes are not rewritten). After an applied merge it
-    // matches the local data, which is what a tracker rebuilt from it needs.
+    // Own document = the merged state (unchanged bytes are not rewritten), but only once it matches
+    // the local data, which is what a tracker rebuilt from it needs: with nothing to apply it is
+    // written now; otherwise it goes out as `applied_doc` and the caller writes it after applying.
     // (The clipboard keeps its document to what was copied here: entries taken over from other Macs
     // are in their documents, and republishing them would double its size.)
-    if !clipboard || merged == snapshot {
-        io.write_doc(domain, &doc2)?;
-    }
     if merged == snapshot {
-        return Ok(Outcome { merged: None, tracker_published: t3.clone(), tracker_merged: t3, peers: io.peers(), corrupt, downloading });
+        io.write_doc(domain, &doc2)?;
+        return Ok(Outcome {
+            merged: None,
+            tracker_published: t3.clone(),
+            tracker_merged: t3,
+            peers: io.peers(),
+            corrupt,
+            downloading,
+            applied_doc: None,
+        });
     }
-    Ok(Outcome { merged: Some(merged), tracker_published: t1, tracker_merged: t3, peers: io.peers(), corrupt, downloading })
+    let applied_doc = (!clipboard).then_some(doc2);
+    Ok(Outcome { merged: Some(merged), tracker_published: t1, tracker_merged: t3, peers: io.peers(), corrupt, downloading, applied_doc })
 }
 
 /// Pristine = the value is the built-in default of its item (see `sync::Record::pristine`): the
@@ -754,18 +768,21 @@ mod tests {
             if let Some(m) = o.merged {
                 self.snippets = from_items(m);
                 self.store.save("snippets.json", &self.snippets).unwrap();
+                self.io.write_doc("snippets", o.applied_doc.as_ref().unwrap()).unwrap();
             }
             let o = sync_domain(&self.io, "quicklinks", &to_items(&self.quicklinks), &load_tracker(d, "quicklinks"), now).unwrap();
             save_tracker(d, "quicklinks", &o.tracker_merged).unwrap();
             if let Some(m) = o.merged {
                 self.quicklinks = from_items(m);
                 self.store.save("quicklinks.json", &self.quicklinks).unwrap();
+                self.io.write_doc("quicklinks", o.applied_doc.as_ref().unwrap()).unwrap();
             }
             let o = sync_domain(&self.io, "settings", &settings_items(&self.settings), &load_tracker(d, "settings"), now).unwrap();
             save_tracker(d, "settings", &o.tracker_merged).unwrap();
             if let Some(m) = o.merged {
                 self.settings = settings_from_items(&m, &self.settings).unwrap();
                 self.store.save("settings.json", &self.settings).unwrap();
+                self.io.write_doc("settings", o.applied_doc.as_ref().unwrap()).unwrap();
             }
             let o = sync_domain(&self.io, "clipboard", &to_items(&self.clipboard), &load_tracker(d, "clipboard"), now).unwrap();
             save_tracker(d, "clipboard", &o.tracker_merged).unwrap();
@@ -1254,6 +1271,44 @@ mod tests {
                 for d in [da, db, shared] {
                     std::fs::remove_dir_all(d).unwrap();
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn a_merge_that_was_offered_but_not_applied_is_not_written_to_the_own_document_so_a_lost_tracker_keeps_the_remote_edit() {
+        for (ida, idb) in ID_ORDERS {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            (a.io.device, b.io.device) = (ida.into(), idb.into());
+            a.snippets = vec![snip("s1", "one")];
+            a.sync(1_000);
+            a.sync(1_500);
+            b.sync(2_000);
+            b.sync(2_500);
+            // B edits; A's run is offered the merge but the app does not apply it (typing, local change)
+            b.snippets[0].text = "B edit".into();
+            b.sync(3_000);
+            let d = &a.store.root;
+            let o = sync_domain(&a.io, "snippets", &to_items(&a.snippets), &load_tracker(d, "snippets"), 3_500).unwrap();
+            assert!(o.merged.is_some(), "the remote edit is offered");
+            save_tracker(d, "snippets", &o.tracker_published).unwrap();
+            let own = a.io.read_own_doc("snippets").unwrap();
+            assert_eq!(
+                own.items["s1"].value.as_ref().unwrap()["text"],
+                "text of one",
+                "own document still holds what this Mac has, ids {ida}/{idb}"
+            );
+            // the tracker is lost right after; the older local value must not become a new edit
+            std::fs::remove_file(da.join("sync-state").join("snippets.json")).unwrap();
+            a.sync(5_000);
+            b.sync(5_500);
+            a.sync(6_000);
+            for m in [&a, &b] {
+                assert_eq!(m.snippets[0].text, "B edit", "ids {ida}/{idb}");
+            }
+            for d in [da, db, shared] {
+                std::fs::remove_dir_all(d).unwrap();
             }
         }
     }
