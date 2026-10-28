@@ -51,7 +51,7 @@ export default defineConfig({
         ThemeSelect: './src/components/docs/ThemeSelect.astro',
       },
       head: [
-        { tag: 'meta', attrs: { property: 'og:image', content: 'https://ferrocast.app/og.jpg' } },
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://ferrocast.app/og-welcome.jpg' } },
         { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
         { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
         { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
