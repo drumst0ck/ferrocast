@@ -131,6 +131,8 @@ pub enum Event {
     StageManager(bool),
     /// The border and bar to draw changed.
     Overlay(Overlay),
+    /// A line for ferrocast.log: what the worker received and decided (never window titles).
+    Log(String),
     /// The user chose "Stop Tiling This App": the bundle id (or app name) to add to the exclusions.
     Exclude(String),
 }
@@ -249,6 +251,28 @@ enum Pick {
     Gone,
     /// No window named: the focused one.
     Focused,
+}
+
+/// Windows of this process (the border and the bar are on screen too) never count as what the
+/// pointer is over.
+fn drop_own(stack: Vec<(i32, t::Rect, i64)>, me: i32) -> Vec<(i32, t::Rect, i64)> {
+    stack.into_iter().filter(|(pid, _, _)| *pid != me).collect()
+}
+
+/// At most one event per `every` seconds.
+#[derive(Default)]
+struct RateLimit {
+    last: Option<f64>,
+}
+
+impl RateLimit {
+    fn allow(&mut self, now: f64, every: f64) -> bool {
+        if self.last.is_some_and(|l| now - l < every) {
+            return false;
+        }
+        self.last = Some(now);
+        true
+    }
 }
 
 fn pick_window(window: Option<u64>, ids: &[u64]) -> Pick {
@@ -371,10 +395,15 @@ fn raise(w: &AxElement, pid: i32) {
     unsafe {
         bound(w.0);
         AXUIElementPerformAction(w.0, action.as_concrete_TypeRef());
+        // make it the app's main and focused window, then bring the app forward: AXRaise alone
+        // leaves another app's window without keyboard focus
+        set_bool(w.0, kAXMainAttribute, true);
+        set_bool(w.0, kAXFocusedAttribute, true);
         let app = AxElement(AXUIElementCreateApplication(pid));
         bound(app.0);
         set_bool(app.0, "AXFrontmost", true);
     }
+    running::activate(pid);
 }
 
 /// On-screen windows front to back as (pid, bounds, layer).
@@ -393,6 +422,10 @@ fn window_stack() -> Vec<(i32, t::Rect, i64)> {
             d.find(CFString::new(k)).and_then(|v| v.downcast::<CFNumber>()).and_then(|n| n.to_f64())
         };
         let (Some(layer), Some(pid)) = (num(&dict, "kCGWindowLayer"), num(&dict, "kCGWindowOwnerPID")) else { continue };
+        // fully transparent windows (other tools' overlays) are not what the pointer is over
+        if num(&dict, "kCGWindowAlpha").is_some_and(|a| a < 0.05) {
+            continue;
+        }
         let Some(b) = dict.find(CFString::new("kCGWindowBounds")) else { continue };
         let b: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_get_rule(b.as_CFTypeRef() as _) };
         let (Some(x), Some(y), Some(w), Some(h)) = (num(&b, "X"), num(&b, "Y"), num(&b, "Width"), num(&b, "Height")) else { continue };
@@ -446,6 +479,8 @@ struct Worker {
     focused_id: Option<u64>,
     focus_settle_until: Option<Instant>,
     last_full: Instant,
+    hover_log: RateLimit,
+    last_cfg_line: String,
 }
 
 impl Worker {
@@ -469,6 +504,8 @@ impl Worker {
             focused_id: None,
             focus_settle_until: None,
             last_full: Instant::now(),
+            hover_log: RateLimit::default(),
+            last_cfg_line: String::new(),
         }
     }
 
@@ -493,6 +530,21 @@ impl Worker {
             Cmd::Config(c) => {
                 let was = self.cfg.enabled;
                 self.cfg = c;
+                let line = format!(
+                    "tiling config: enabled={} paused={} layout={} gap={} hover={} border={} quick_actions={} excluded={}",
+                    self.cfg.enabled,
+                    self.cfg.paused,
+                    self.cfg.layout,
+                    self.cfg.gap,
+                    self.cfg.hover_activate,
+                    self.cfg.border,
+                    self.cfg.quick_actions,
+                    self.cfg.excluded.len()
+                );
+                if line != self.last_cfg_line {
+                    self.log(line.clone());
+                    self.last_cfg_line = line;
+                }
                 if !self.cfg.enabled && was {
                     self.focus = None;
                 }
@@ -500,20 +552,50 @@ impl Worker {
             Cmd::MinSizes(m) => self.mins = m,
             Cmd::Layout { n, pid } => {
                 if !self.cfg.enabled || t::Layout::from_number(n).is_none() {
+                    self.log(format!("layout {n}: ignored (tiling on: {})", self.cfg.enabled));
                     return;
                 }
                 let screens = self.screens();
-                let display =
-                    self.focused(pid).map(|i| self.wins[i].display).or_else(|| pointer().map(|p| display_of(p, &screens))).unwrap_or(0);
+                let from_window = self.focused(pid).map(|i| self.wins[i].display);
+                let display = from_window.or_else(|| pointer().map(|p| display_of(p, &screens))).unwrap_or(0);
+                self.log(format!(
+                    "layout {n}: display {display} ({})",
+                    if from_window.is_some() { "focused window".to_string() } else { format!("pointer; {}", self.focused_why(pid)) }
+                ));
                 self.cfg.display_layouts.insert(display, n);
                 (self.emit)(Event::DisplayLayout { display, layout: n });
                 for w in &mut self.wins {
                     w.tries = 0;
                 }
             }
-            Cmd::Focus { pid } => self.toggle_focus(pid, None),
-            Cmd::Act { action, window, pid } => self.act(action, window, pid),
-            Cmd::Move { dir, pid } => self.move_window(dir, pid),
+            Cmd::Focus { pid } => {
+                self.log(format!("focus: command received (pid {pid:?})"));
+                self.toggle_focus(pid, None)
+            }
+            Cmd::Act { action, window, pid } => {
+                self.log(format!("{}: command received (pid {pid:?}, window {window:?})", action.id()));
+                self.act(action, window, pid)
+            }
+            Cmd::Move { dir, pid } => {
+                self.log(format!("move {}: command received (pid {pid:?})", dir.name()));
+                self.move_window(dir, pid)
+            }
+        }
+    }
+
+    fn log(&self, line: impl Into<String>) {
+        (self.emit)(Event::Log(line.into()));
+    }
+
+    /// Why no tracked window is focused for `pid`, in a few words (for the log).
+    fn focused_why(&self, pid: Option<i32>) -> String {
+        let Some(pid) = pid.or_else(|| running::frontmost().map(|f| f.pid)) else { return "no frontmost app".into() };
+        match windows::focused_window(pid) {
+            None => format!("pid {pid} has no focused window (Accessibility)"),
+            Some(_) => format!(
+                "pid {pid}'s focused window is not tiled (dialog, excluded app, minimized, full screen or not yet seen); {} tracked",
+                self.wins.len()
+            ),
         }
     }
 
@@ -797,16 +879,39 @@ impl Worker {
         if !self.cfg.hover_activate || self.stage {
             return;
         }
+        let now = self.clock.elapsed().as_secs_f64();
+        let mut why = String::new();
         let hit = pointer().and_then(|p| {
-            let stack = window_stack();
-            let top = t::top_window_at(&stack, p)?;
+            let stack = drop_own(window_stack(), std::process::id() as i32);
+            let Some(top) = t::top_window_at(&stack, p) else {
+                why = match stack.iter().find(|(_, r, _)| r.contains(p)) {
+                    Some((pid, _, layer)) => {
+                        format!("the window on top at the pointer is pid {pid}, layer {layer} (only layer 0 windows count)")
+                    }
+                    None => "no window at the pointer".into(),
+                };
+                return None;
+            };
             let (pid, bounds, _) = stack[top];
             let mine: Vec<&Tracked> = self.wins.iter().filter(|w| w.pid == pid && w.frame.contains(p)).collect();
-            mine.iter().find(|w| !far(w.frame, bounds, 6.0)).or(mine.first()).map(|w| w.id)
+            let found = mine.iter().find(|w| !far(w.frame, bounds, 6.0)).or(mine.first()).map(|w| w.id);
+            if found.is_none() {
+                why = format!(
+                    "the window on top is pid {pid}, which has no tracked tiled window under the pointer ({} tracked)",
+                    self.wins.len()
+                );
+            }
+            found
         });
-        if let Some(id) = self.hover.step(hit, self.clock.elapsed().as_secs_f64(), HOVER_DWELL.as_secs_f64()) {
+        if hit.is_none() && !why.is_empty() && self.hover_log.allow(now, 5.0) {
+            self.log(format!("hover: nothing to raise: {why}"));
+        }
+        if let Some(id) = self.hover.step(hit, now, HOVER_DWELL.as_secs_f64()) {
             if let Some(w) = self.wins.iter().find(|w| w.id == id) {
                 raise(&w.el, w.pid);
+                if self.hover_log.allow(now, 1.0) {
+                    self.log(format!("hover: raised window {id} of {} (pid {})", w.app, w.pid));
+                }
             }
         }
     }
@@ -815,15 +920,18 @@ impl Worker {
         self.stage = stage_manager_on();
         if self.stage {
             // Stage Manager owns the layout: focus mode does nothing
+            self.log("focus: ignored, Stage Manager is on");
             (self.emit)(Event::Notice("Focus mode is paused while Stage Manager is on".into()));
             return;
         }
         if !self.cfg.enabled {
+            self.log("focus: ignored, tiling is off");
             (self.emit)(Event::Notice("Turn on automatic tiling in Settings first".into()));
             return;
         }
         self.focus_settle_until = Some(Instant::now() + FOCUS_SETTLE);
         if let Some(saved) = self.focus.take() {
+            self.log(format!("focus: restoring {} windows", saved.frames.len()));
             for (id, r) in t::focus_restore(&saved) {
                 if let Some(w) = self.wins.iter_mut().find(|w| w.id == id) {
                     set_frame(w.el.0, unconv(r));
@@ -836,6 +944,8 @@ impl Worker {
         }
         let screens = self.refresh();
         let Some(i) = self.resolve(window, pid) else {
+            let why = self.focused_why(pid);
+            self.log(format!("focus: no focused tracked window ({why})"));
             (self.emit)(Event::Notice("No window to focus".into()));
             return;
         };
@@ -852,6 +962,7 @@ impl Worker {
             }
             set_frame(self.wins[i].el.0, unconv(full));
             raise(&self.wins[i].el, self.wins[i].pid);
+            self.log(format!("focus: entered for window {} of {}", self.wins[i].id, self.wins[i].app));
             self.focus = Some(saved);
         }
     }
@@ -877,10 +988,21 @@ impl Worker {
             return self.toggle_focus(pid, window);
         }
         if !self.cfg.enabled || self.stage || self.focus.is_some() {
+            self.log(format!(
+                "{}: ignored (tiling on: {}, Stage Manager: {}, focus mode: {})",
+                action.id(),
+                self.cfg.enabled,
+                self.stage,
+                self.focus.is_some()
+            ));
             return;
         }
         let screens = self.refresh();
-        let Some(i) = self.resolve(window, pid) else { return };
+        let Some(i) = self.resolve(window, pid) else {
+            let why = if window.is_some() { "that window is gone".to_string() } else { self.focused_why(pid) };
+            self.log(format!("{}: no window ({why})", action.id()));
+            return;
+        };
         let (id, d) = (self.wins[i].id, self.wins[i].display);
         match action {
             Action::FloatToggle => {
@@ -921,10 +1043,15 @@ impl Worker {
 
     fn move_window(&mut self, dir: t::Dir, pid: Option<i32>) {
         if !self.active() || self.focus.is_some() {
+            self.log(format!("move {}: ignored (tiling active: {}, focus mode: {})", dir.name(), self.active(), self.focus.is_some()));
             return;
         }
         let screens = self.refresh();
-        let Some(i) = self.focused(pid) else { return };
+        let Some(i) = self.focused(pid) else {
+            let why = self.focused_why(pid);
+            self.log(format!("move {}: no focused tracked window ({why})", dir.name()));
+            return;
+        };
         let (id, d) = (self.wins[i].id, self.wins[i].display);
         if !self.tiled(id) {
             return;
@@ -1026,6 +1153,29 @@ mod tests {
         w.screens = (Some(Instant::now()), vec![t::Rect::new(0.0, 25.0, 1600.0, 900.0)]);
         w.focused_id = Some(1);
         w
+    }
+
+    #[test]
+    fn hover_looks_through_ferrocasts_own_overlay_windows() {
+        let me = 100;
+        let win = t::Rect::new(0.0, 0.0, 800.0, 600.0);
+        // the border panel (layer 3, ours) covers the whole window and is the topmost entry
+        let stack = vec![(me, t::Rect::new(-3.0, -3.0, 806.0, 606.0), 3), (42, win, 0)];
+        let p = (400.0, 300.0);
+        assert_eq!(t::top_window_at(&stack, p), None, "unfiltered, our own panel blocks the hover");
+        let clean = drop_own(stack, me);
+        assert_eq!(clean.len(), 1);
+        assert_eq!(t::top_window_at(&clean, p).map(|i| clean[i].0), Some(42));
+    }
+
+    #[test]
+    fn a_rate_limit_lets_one_event_through_per_interval() {
+        let mut r = RateLimit::default();
+        assert!(r.allow(0.0, 2.0));
+        assert!(!r.allow(1.0, 2.0));
+        assert!(!r.allow(1.9, 2.0));
+        assert!(r.allow(2.0, 2.0));
+        assert!(!r.allow(2.5, 2.0));
     }
 
     #[test]

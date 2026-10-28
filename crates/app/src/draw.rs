@@ -6270,6 +6270,7 @@ impl App {
         let tab_before = tab;
         let mut s = self.settings.clone();
         let trusted = windows::accessibility_trusted(false);
+        let hotkey_issues = self.tiling_hotkey_issues.clone();
         let (mut rec, mut req_acc, mut open_data, mut add_dir, mut save_key, mut test_ai) = (false, false, false, false, false, false);
         let (mut chatgpt_in, mut chatgpt_out, mut chatgpt_device) = (false, false, false);
         let mut fetch_models = false;
@@ -7413,6 +7414,9 @@ impl App {
                                 }
                             });
                         });
+                        for issue in &hotkey_issues {
+                            note(ui, pal, &format!("⚠ Shortcut: {issue}"));
+                        }
                         ui.add_space(14.0);
                         section(ui, pal, "Data");
                         group(ui, pal, |ui| {

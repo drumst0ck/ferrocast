@@ -979,6 +979,8 @@ pub struct App {
     tiling_paused: bool,
     /// The window the quick-action bar currently hangs above.
     quick_window: Option<u64>,
+    /// Tiling shortcuts that could not be registered, shown in Settings.
+    pub(crate) tiling_hotkey_issues: Vec<String>,
     /// Layout the menu bar submenu shows as chosen, and the settings layout it last followed.
     tray_layout: u8,
     layout_seen: u8,
@@ -1264,6 +1266,7 @@ impl App {
             tiling: None,
             tiling_paused: false,
             quick_window: None,
+            tiling_hotkey_issues: vec![],
             tray_layout: 1,
             layout_seen: 1,
             tiling_hotkeys: false,
@@ -1566,6 +1569,10 @@ impl App {
     /// `window` is the tracked window a quick-action button was clicked on (`None`: the focused one).
     pub(crate) fn run_tiling_on(&mut self, a: ferrocast_core::tiling::Action, pid: Option<i32>, window: Option<u64>) {
         use ferrocast_core::tiling::Action;
+        instance::log(
+            &self.store.root,
+            &format!("tiling command {} (pid {pid:?}, window {window:?}, worker running: {})", a.id(), self.tiling.is_some()),
+        );
         use ferrocast_macos::tiling::Cmd;
         match a {
             Action::Toggle => {
@@ -1622,6 +1629,7 @@ impl App {
             }
             Event::MinSizes(m) => self.persist("tiling-min-sizes.json", &m),
             Event::Overlay(o) => self.apply_overlay(o),
+            Event::Log(l) => instance::log(&self.store.root, &l),
             Event::Exclude(app) => {
                 if !self.settings.tiling_excluded.contains(&app) {
                     self.settings.tiling_excluded.push(app.clone());
@@ -1712,10 +1720,24 @@ impl App {
         }
     }
     fn apply_hotkeys(&mut self) {
+        let mut lines = vec![];
         if let Some(h) = self.hotkeys.as_mut() {
-            if let Some(e) = h.apply(&self.settings).first() {
+            let errors = h.apply(&self.settings);
+            if let Some(e) = errors.first() {
                 self.toast = Some((format!("Hotkey error: {e}"), Instant::now()));
             }
+            let (log, mut failed) = services::tiling_hotkey_report(&h.results);
+            failed.extend(h.skipped.iter().cloned());
+            if self.settings.tiling_enabled || !failed.is_empty() {
+                lines.push(log);
+            }
+            for e in &errors {
+                lines.push(format!("hotkey error: {e}"));
+            }
+            self.tiling_hotkey_issues = failed;
+        }
+        for l in lines {
+            instance::log(&self.store.root, &l);
         }
     }
 

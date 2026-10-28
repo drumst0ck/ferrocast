@@ -824,6 +824,37 @@ pub struct Hotkeys {
     manager: GlobalHotKeyManager,
     registered: Vec<HotKey>,
     pub map: HashMap<u32, String>,
+    /// What the last `apply` did with every planned shortcut.
+    pub results: Vec<HotkeyResult>,
+    /// Defaults left out because the shortcut was already in use (see `plan_hotkeys`).
+    pub skipped: Vec<String>,
+}
+
+/// The outcome of registering one shortcut.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HotkeyResult {
+    pub target: String,
+    pub spec: String,
+    pub error: Option<String>,
+}
+
+/// The log line for the tiling shortcuts of `results`, and one readable line per failure (for the
+/// Settings status line). Targets are `tiling:…` ids; others are ignored.
+pub fn tiling_hotkey_report(results: &[HotkeyResult]) -> (String, Vec<String>) {
+    let short = |t: &str| t.trim_start_matches("tiling:").to_string();
+    let tiling: Vec<&HotkeyResult> = results.iter().filter(|r| r.target.starts_with("tiling:")).collect();
+    let ok: Vec<String> =
+        tiling.iter().filter(|r| r.error.is_none()).map(|r| format!("{} {}", short(&r.target), hotkey_label(&r.spec))).collect();
+    let failed: Vec<String> = tiling
+        .iter()
+        .filter_map(|r| {
+            r.error
+                .as_ref()
+                .map(|e| format!("{} {} could not be registered ({e}); another app may use it", short(&r.target), hotkey_label(&r.spec)))
+        })
+        .collect();
+    let log = format!("tiling hotkeys: registered [{}]; failed [{}]", ok.join(", "), failed.join("; "));
+    (log, failed)
 }
 
 impl Hotkeys {
@@ -834,7 +865,7 @@ impl Hotkeys {
                 bus.send(Msg::Hotkey(e.id));
             }
         }));
-        Some(Hotkeys { manager, registered: vec![], map: HashMap::new() })
+        Some(Hotkeys { manager, registered: vec![], map: HashMap::new(), results: vec![], skipped: vec![] })
     }
 
     /// Re-register every hotkey from settings; returns error strings.
@@ -845,20 +876,27 @@ impl Hotkeys {
         self.map.clear();
         let mut errors = vec![];
         let (plan, skipped) = plan_hotkeys(s);
-        errors.extend(skipped);
-        let mut add = |this: &mut Hotkeys, spec: &str, target: &str| match HotKey::from_str(spec) {
-            Ok(h) => match this.manager.register(h) {
-                Ok(()) => {
-                    this.map.insert(h.id(), target.to_string());
-                    this.registered.push(h);
-                }
-                Err(e) => errors.push(format!("{spec}: {e}")),
-            },
-            Err(e) => errors.push(format!("{spec}: {e}")),
-        };
+        errors.extend(skipped.iter().cloned());
+        let mut results = vec![];
         for (spec, target) in &plan {
-            add(self, spec, target);
+            let error = match HotKey::from_str(spec) {
+                Ok(h) => match self.manager.register(h) {
+                    Ok(()) => {
+                        self.map.insert(h.id(), target.to_string());
+                        self.registered.push(h);
+                        None
+                    }
+                    Err(e) => Some(e.to_string()),
+                },
+                Err(e) => Some(e.to_string()),
+            };
+            if let Some(e) = &error {
+                errors.push(format!("{spec}: {e}"));
+            }
+            results.push(HotkeyResult { target: target.clone(), spec: spec.clone(), error });
         }
+        self.results = results;
+        self.skipped = skipped;
         errors
     }
 }

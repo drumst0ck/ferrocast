@@ -50,6 +50,7 @@ fn fixture() -> App {
         tiling: None,
         tiling_paused: false,
         quick_window: None,
+        tiling_hotkey_issues: vec![],
         tray_layout: 1,
         layout_seen: 1,
         tiling_hotkeys: false,
@@ -14944,4 +14945,56 @@ fn a_layout_event_reaches_the_worker_in_the_next_config_so_it_does_not_revert() 
     });
     let last = last.expect("a config was sent after the layout event");
     assert_eq!(last.display_layouts.get(&1), Some(&3), "the config the worker gets next holds the new layout");
+}
+
+#[test]
+fn the_tiling_hotkey_report_names_what_registered_and_what_failed_and_why() {
+    use services::HotkeyResult;
+    let r = |t: &str, s: &str, e: Option<&str>| HotkeyResult { target: t.into(), spec: s.into(), error: e.map(String::from) };
+    let results = vec![
+        r("__launcher", "Alt+Space", None),
+        r("calc", "Alt+KeyC", Some("not a tiling shortcut")),
+        r("tiling:layout-1", "Control+Alt+Super+Digit1", None),
+        r("tiling:focus-mode", "Control+Alt+KeyZ", Some("hotkey already registered")),
+    ];
+    let (log, failed) = services::tiling_hotkey_report(&results);
+    assert!(log.starts_with("tiling hotkeys: registered ["), "{log}");
+    assert!(log.contains("layout-1 ⌃⌥⌘1"), "{log}");
+    assert!(log.contains("failed [focus-mode ⌃⌥Z could not be registered (hotkey already registered)"), "{log}");
+    assert!(!log.contains("calc") && !log.contains("launcher"), "{log}");
+    assert_eq!(failed.len(), 1);
+    assert!(failed[0].contains("focus-mode") && failed[0].contains("another app may use it"), "{failed:?}");
+    let (log, failed) = services::tiling_hotkey_report(&[]);
+    assert_eq!(log, "tiling hotkeys: registered []; failed []");
+    assert!(failed.is_empty());
+}
+
+#[test]
+fn the_focus_mode_command_item_reaches_the_worker_with_the_target_app_pid() {
+    let mut app = fixture();
+    app.settings.tiling_enabled = true;
+    app.sync_tiling();
+    let _ = FX_TILING_RX.with(|r| r.borrow().as_ref().unwrap().try_iter().count());
+    let item = app.base.iter().find(|i| i.id == "tiling:focus-mode").cloned().expect("the focus mode command is listed");
+    app.prev_pid = Some(4242);
+    app.run_item(&item);
+    let got: Vec<_> = FX_TILING_RX.with(|r| r.borrow().as_ref().unwrap().try_iter().collect());
+    assert!(got.iter().any(|c| matches!(c, ferrocast_macos::tiling::Cmd::Focus { pid: Some(4242) })), "the hotkey path runs this item");
+    // the default shortcut points at this very item
+    let plan = {
+        let s = ferrocast_core::models::Settings { tiling_enabled: true, ..Default::default() };
+        services::plan_hotkeys(&s).0
+    };
+    assert!(plan.iter().any(|(h, t)| t == "tiling:focus-mode" && h == "Control+Alt+KeyZ"));
+}
+
+#[test]
+fn a_tiling_shortcut_that_failed_is_kept_for_the_settings_status_line() {
+    for theme in BOTH_THEMES {
+        let mut app = settings_app(9, theme);
+        app.tiling_hotkey_issues = vec!["focus-mode ⌃⌥Z could not be registered (x); another app may use it".into()];
+        settle(&mut app);
+        assert!(matches!(app.view(), View::Settings));
+        assert_eq!(app.tiling_hotkey_issues.len(), 1);
+    }
 }
