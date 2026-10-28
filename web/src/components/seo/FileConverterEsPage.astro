@@ -1,0 +1,124 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../SiteHeader.astro';
+import SiteFooter from '../SiteFooter.astro';
+import Crumbs from './Crumbs.astro';
+import SeoNav from './SeoNav.astro';
+import { dmgUrl, installCommand } from '../../data/install';
+import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
+import { inline, plain } from '../../lib/seo/markup';
+import { H3_COUNT, OPTIONAL_H, optionalTools, page as t } from '../../lib/seo/file-converter-es';
+import { page as en } from '../../lib/seo/file-converter';
+import '../../styles/seo.css';
+
+const canonical = `${SITE}${t.path}`;
+const alternates = { en: `${SITE}${en.path}`, es: canonical, 'x-default': `${SITE}${en.path}` };
+const h3s = t.sections.slice(0, H3_COUNT);
+const sections = t.sections.slice(H3_COUNT);
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Ferrocast',
+    operatingSystem: 'macOS 13+',
+    applicationCategory: 'UtilitiesApplication',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    url: SITE,
+    inLanguage: 'es',
+  },
+  { ...howTo(t.steps.howToName, t.description, t.steps.items), inLanguage: 'es' },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    inLanguage: 'es',
+    mainEntity: t.faq.items.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: plain(a) } })),
+  },
+  breadcrumbs(t.crumbs),
+];
+---
+<Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd} lang="es" alternates={alternates}>
+  <SiteHeader lang="es" current="files" switchHref={en.path} switchLabel="EN" switchAria="Read this page in English">
+    <SeoNav slot="nav" lang="es" />
+    <span slot="cta">Instalar</span>
+  </SiteHeader>
+  <main class="seo guide conv" id="main">
+    <Crumbs items={t.crumbs} />
+    <h1>{t.h1}</h1>
+    {t.lead.map((p, i) => <p class={i === 0 ? 'lead' : undefined} set:html={inline(p)} />)}
+    <p class="g-cta"><a class="btn" href={dmgUrl}>{t.cta.dmg}</a><span class="fine">{t.cta.note}</span></p>
+
+    <h2>{t.limits.h}</h2>
+    <div class="g-table">
+      <table>
+        <caption class="sr-only">{t.limits.caption}</caption>
+        <thead><tr>{t.limits.cols.map((c) => <th scope="col">{c}</th>)}</tr></thead>
+        <tbody>{t.limits.rows.map(([head, ...cells]) => (<tr><th scope="row" set:html={inline(head)} />{cells.map((c) => <td set:html={inline(c)} />)}</tr>))}</tbody>
+      </table>
+    </div>
+    <p class="fine" set:html={inline(t.limits.note)} />
+
+    <h2 id="steps">{t.steps.h}</h2>
+    <ol>{t.steps.items.map(([name, text]) => <li><strong>{name}.</strong> <span set:html={inline(text)} /></li>)}</ol>
+    {h3s.map((s) => (
+      <>
+        <h3>{s.h}</h3>
+        {s.paras?.map((p) => <p set:html={inline(p)} />)}
+      </>
+    ))}
+    <details class="g-brew">
+      <summary>Instalar Ferrocast con Homebrew</summary>
+      <pre><code>{installCommand}</code></pre>
+    </details>
+
+    {sections.map((s) => (
+      <>
+        <h2>{s.h}</h2>
+        {s.paras?.map((p) => <p set:html={inline(p)} />)}
+        {s.list && <ul>{s.list.map((l) => <li set:html={inline(l)} />)}</ul>}
+        {s.h === OPTIONAL_H && (
+          <div class="g-table">
+            <table>
+              <caption class="sr-only">Herramientas opcionales y la línea de Homebrew que muestra Ferrocast</caption>
+              <thead><tr>{optionalTools.cols.map((c) => <th scope="col">{c}</th>)}</tr></thead>
+              <tbody>
+                {optionalTools.rows.map(([tool, use, cmd]) => (
+                  <tr><th scope="row">{tool}</th><td>{use}</td><td set:html={inline(cmd)} /></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </>
+    ))}
+
+    <h2>{t.faq.h}</h2>
+    <div class="g-faq">
+      {t.faq.items.map(([q, a]) => (<details><summary>{q}</summary><p set:html={inline(a)} /></details>))}
+    </div>
+
+    <h2>{t.more.h}</h2>
+    <ul class="chips">{t.more.links.map(([label, href]) => <li><a href={href}>{label}</a></li>)}</ul>
+  </main>
+  <SiteFooter lang="es" />
+</Base>
+
+<style>
+  .conv .g-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .conv .fine { font-size: var(--step-small); color: var(--muted); }
+  .conv h2[id] { scroll-margin-top: 110px; }
+  .conv .g-table { overflow-x: auto; border-radius: var(--radius); box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); margin: 12px 0 18px; }
+  .conv table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: var(--step-small); line-height: 1.5; }
+  .conv th, .conv td { text-align: left; vertical-align: top; padding: 12px 14px; border-top: 1px solid rgba(255,255,255,.06); }
+  .conv thead th { border-top: 0; background: var(--surface); font-weight: 500; }
+  .conv tbody th { font-weight: 500; color: var(--ink); }
+  .conv td { color: var(--muted); }
+  .conv .g-brew summary, .conv .g-faq summary { cursor: pointer; font-weight: 500; }
+  .conv .g-brew pre { margin-top: 10px; }
+  .conv .g-faq details { padding: 14px 0; border-top: 1px solid rgba(255,255,255,.06); }
+  .conv .g-faq p { margin-top: 8px; }
+  .conv .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (prefers-color-scheme: light) {
+    .conv .g-table { box-shadow: inset 0 0 0 1px rgba(0,0,0,.07); }
+    .conv th, .conv td, .conv .g-faq details { border-top-color: rgba(0,0,0,.07); }
+  }
+</style>
