@@ -4,6 +4,8 @@ mod clipboard_policy;
 mod editor_ctl;
 mod editor_export;
 mod editor_panels;
+#[cfg(test)]
+mod i18n_scan_tests;
 mod instance;
 mod items;
 #[cfg(test)]

@@ -23,6 +23,7 @@ use ferrocast_core::capture::zoom::{
     self, ZoomOpts, LOUPE_EASE_MAX, LOUPE_RADIUS_MAX, LOUPE_RADIUS_MIN, LOUPE_SCALE_MAX, LOUPE_SCALE_MIN, MAX_SCALE,
 };
 use ferrocast_core::capture::MIN_SEGMENT;
+use ferrocast_core::i18n::{tr, trf, trn};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -84,33 +85,34 @@ impl Section {
     /// What the header says about the section at its right while it is closed or open: a short state,
     /// never the same text as a control of the section (those are clicked by their label).
     pub fn summary(self, p: &Project) -> String {
-        let plural = |n: usize, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "s" });
         match self {
-            Section::Zoom => plural(p.zooms.len(), "zoom"),
-            Section::Loupe => plural(p.loupes.len(), "loupe"),
+            Section::Zoom => trn("{n} zoom", "{n} zooms", p.zooms.len() as u64),
+            Section::Loupe => trn("{n} loupe", "{n} loupes", p.loupes.len() as u64),
             Section::Cursor => {
                 let style = CURSOR_STYLES.iter().find(|(id, _)| p.cursor.style == *id).map_or("custom", |(_, l)| *l);
-                format!("{:.1}× · {}", p.cursor.size, style.to_lowercase())
+                format!("{:.1}× · {}", p.cursor.size, tr(&style.to_lowercase()))
             }
-            Section::Style => format!("{} · {}", p.style.aspect, p.style.background.kind),
-            Section::Clips => plural(Timeline::new(p).pieces().len(), "clip"),
+            Section::Style => format!("{} · {}", p.style.aspect, tr(&p.style.background.kind)),
+            Section::Clips => trn("{n} clip", "{n} clips", Timeline::new(p).pieces().len() as u64),
             Section::Camera => match p.camera.as_ref() {
-                Some(c) if c.visible => format!("{} · on", if c.layout == CameraPlacement::Split { "split" } else { "overlay" }),
-                _ => "off".into(),
+                Some(c) if c.visible => {
+                    trf("{layout} · on", &[("layout", &tr(if c.layout == CameraPlacement::Split { "split" } else { "overlay" }))])
+                }
+                _ => tr("off").into_owned(),
             },
             Section::Audio => {
                 let mut v = vec![];
                 if p.sources.mic.is_some() {
-                    v.push("mic");
+                    v.push(tr("mic").into_owned());
                 }
                 if p.sources.system.is_some() {
-                    v.push("system");
+                    v.push(tr("system").into_owned());
                 }
                 v.join(" + ")
             }
             Section::Transcript => match p.transcript.as_ref() {
-                Some(t) => plural(t.words.len(), "word"),
-                None => "not yet".into(),
+                Some(t) => trn("{n} word", "{n} words", t.words.len() as u64),
+                None => tr("not yet").into_owned(),
             },
         }
     }
@@ -690,7 +692,10 @@ impl SourceInfo {
     /// `camera.mov · 1:05 · 12 MB · +0.10 s`, or the missing-file sentence.
     pub fn text(&self) -> String {
         if self.missing {
-            return format!("{} is missing from the project folder. It is left out of the preview and the export.", self.file);
+            return trf(
+                "{file} is missing from the project folder. It is left out of the preview and the export.",
+                &[("file", &self.file)],
+            );
         }
         let size = self.bytes.map(|b| format!(" · {}", crate::record_ctl::format_size(b))).unwrap_or_default();
         format!("{} · {}{size} · {:+.2} s", self.file, crate::record_ctl::format_duration(self.duration), self.offset)
@@ -1507,8 +1512,8 @@ impl Editor {
     /// `Saved`, `Saving…` or the error text.
     pub fn save_label(&self) -> String {
         match self.st.autosave.status() {
-            SaveStatus::Saved => "Saved".into(),
-            SaveStatus::Saving => "Saving…".into(),
+            SaveStatus::Saved => tr("Saved").into_owned(),
+            SaveStatus::Saving => tr("Saving…").into_owned(),
             SaveStatus::Failed(e) => e,
         }
     }
@@ -1532,15 +1537,21 @@ pub fn rgb_to_hex(c: [u8; 3]) -> String {
 /// `Auto 0:02.00–0:04.00 · 2.0×`.
 pub fn zoom_label(z: &Zoom) -> String {
     use crate::editor_ctl::clock;
-    let kind = if z.mode == "auto" { "Auto" } else { "Manual" };
-    format!("{kind}  {}–{}  ·  {:.1}×", clock(z.start), clock(z.end), z.scale)
+    let kind = tr(if z.mode == "auto" { "Auto" } else { "Manual" });
+    trf(
+        "{kind}  {from}–{to}  ·  {scale}×",
+        &[("kind", &kind), ("from", &clock(z.start)), ("to", &clock(z.end)), ("scale", &format!("{:.1}", z.scale))],
+    )
 }
 
 /// `0:02.00–0:05.00 · 2.0× · Cursor` (or `Fixed` for a picked focus).
 pub fn loupe_label(l: &Loupe) -> String {
     use crate::editor_ctl::clock;
-    let focus = if l.x.is_some() && l.y.is_some() { "Fixed" } else { "Cursor" };
-    format!("{}–{}  ·  {:.1}×  ·  {focus}", clock(l.start), clock(l.end), l.scale)
+    let focus = tr(if l.x.is_some() && l.y.is_some() { "Fixed" } else { "Cursor" });
+    trf(
+        "{from}–{to}  ·  {scale}×  ·  {focus}",
+        &[("from", &clock(l.start)), ("to", &clock(l.end)), ("scale", &format!("{:.1}", l.scale)), ("focus", &focus)],
+    )
 }
 
 /// A labelled slider: the label in a fixed column at the left, the rail across the middle and the
@@ -1560,7 +1571,7 @@ fn row_slider(
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(SLIDER_LABEL_W, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(SLIDER_LABEL_W);
-            ui.label(egui::RichText::new(label).size(12.5).color(pal.sub_strong));
+            ui.label(egui::RichText::new(tr(label)).size(12.5).color(pal.sub_strong));
         });
         let gap = ui.spacing().item_spacing.x;
         let width = (ui.available_width() - SLIDER_VALUE_W - gap - 2.0).max(60.0);
@@ -1578,6 +1589,7 @@ fn row_slider(
 
 /// A labelled number box (a time) in the label column of [`row_slider`], so the rows of a card line up.
 fn row_drag(ui: &mut Ui, pal: &Palette, label: &str, v: f64, range: std::ops::RangeInclusive<f64>, step: f64, suffix: &str) -> Option<f64> {
+    let label = &*tr(label);
     let mut x = v;
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(SLIDER_LABEL_W, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -1624,7 +1636,7 @@ const SLIDER_LABEL_W: f32 = 74.0;
 const SLIDER_VALUE_W: f32 = 58.0;
 
 fn note(ui: &mut Ui, pal: &Palette, text: &str) {
-    ui.label(egui::RichText::new(text).size(11.5).color(pal.sub));
+    ui.label(egui::RichText::new(tr(text)).size(11.5).color(pal.sub));
 }
 
 /// The look of every plain egui widget inside the panel (buttons, chips made of selectable labels, number
@@ -1748,7 +1760,7 @@ fn section_header(
         (false, true) => 14.0,
         (false, false) => 13.0,
     };
-    let name = p.layout_no_wrap(section.label().into(), font(size), pal.text);
+    let name = p.layout_no_wrap(tr(section.label()).into_owned(), font(size), pal.text);
     let name_w = name.size().x;
     p.galley(egui::pos2(rect.min.x + 20.0, rect.center().y - name.size().y / 2.0), name, pal.text);
     let room = rect.width() - 20.0 - name_w - 14.0;
@@ -1787,10 +1799,10 @@ pub fn draw_panel(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor, auto:
         ui.add_space(4.0);
         // the reason an edit was refused, or a failed save, stays in view above the sections
         if let Some(e) = ed.st.edit_error.clone() {
-            ui.label(egui::RichText::new(e).size(12.0).color(pal.danger));
+            ui.label(egui::RichText::new(tr(&e)).size(12.0).color(pal.danger));
         }
         if let SaveStatus::Failed(e) = ed.st.autosave.status() {
-            ui.label(egui::RichText::new(e).size(12.0).color(pal.danger));
+            ui.label(egui::RichText::new(tr(&e)).size(12.0).color(pal.danger));
         }
         let mut area = egui::ScrollArea::vertical().id_salt("editor-panel").auto_shrink([false, false]);
         // a section that just opened puts its header at the top of the column (once)
@@ -2124,6 +2136,7 @@ fn font(size: f32) -> egui::FontId {
 
 /// A button-like painted cell: the response, with the keyboard focus ring and the screen-reader label.
 fn cell(ui: &mut Ui, pal: &Palette, rect: Rect, id: egui::Id, label: &str, selected: Option<bool>) -> egui::Response {
+    let label = &*tr(label);
     let resp = ui.interact(rect, id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let enabled = ui.is_enabled();
     resp.widget_info(|| match selected {
@@ -2139,7 +2152,8 @@ fn cell(ui: &mut Ui, pal: &Palette, rect: Rect, id: egui::Id, label: &str, selec
 /// Chips with the look of the tabs (the Look picker uses it too): `current` is the selected one.
 /// Returns the clicked index.
 fn chip_strip(ui: &mut Ui, pal: &Palette, salt: &str, labels: &[&str], current: Option<usize>) -> Option<usize> {
-    let widths: Vec<f32> = labels.iter().map(|t| ui.painter().layout_no_wrap((*t).into(), font(12.5), pal.text).size().x).collect();
+    let shown: Vec<std::borrow::Cow<str>> = labels.iter().map(|t| tr(t)).collect();
+    let widths: Vec<f32> = shown.iter().map(|t| ui.painter().layout_no_wrap(t.to_string(), font(12.5), pal.text).size().x).collect();
     let avail = ui.available_width();
     let mut clicked = None;
     let mut i = 0;
@@ -2163,7 +2177,7 @@ fn chip_strip(ui: &mut Ui, pal: &Palette, salt: &str, labels: &[&str], current: 
             };
             ui.painter().rect_filled(hit, crate::editor_ctl::CONTROL_RADIUS, fill);
             let color = if on { pal.accent_text } else { pal.sub_strong };
-            ui.painter().text(hit.center(), egui::Align2::CENTER_CENTER, label, font(12.5), color);
+            ui.painter().text(hit.center(), egui::Align2::CENTER_CENTER, &*shown[idx], font(12.5), color);
             if resp.clicked() {
                 clicked = Some(idx);
             }
@@ -2174,7 +2188,7 @@ fn chip_strip(ui: &mut Ui, pal: &Palette, salt: &str, labels: &[&str], current: 
 
 /// A small caption above a control group.
 fn caption(ui: &mut Ui, pal: &Palette, text: &str) {
-    ui.label(egui::RichText::new(text).size(12.0).color(pal.sub_strong));
+    ui.label(egui::RichText::new(tr(text)).size(12.0).color(pal.sub_strong));
 }
 
 /// A group of controls under a selected row: no box of its own (a box inside the inspector would be a card
@@ -2199,11 +2213,11 @@ pub(crate) fn secondary_button(ui: &mut Ui, pal: &Palette, label: &str, width: f
 fn secondary_button_tip(ui: &mut Ui, pal: &Palette, label: &str, width: f32, enabled: bool, tip: &str) -> bool {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, HIT_H), egui::Sense::hover());
     let resp = cell(ui, pal, rect, ui.id().with(("btn", label)), label, None);
-    let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tip) };
+    let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tr(tip)) };
     let hover = enabled && resp.hovered();
     ui.painter().rect_filled(rect, crate::editor_ctl::CONTROL_RADIUS, if hover { pal.sel } else { pal.lift(1.6) });
     let color = if enabled { pal.text } else { pal.sub };
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(12.5), color);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, tr(label), font(12.5), color);
     enabled && resp.clicked()
 }
 
@@ -2225,7 +2239,13 @@ pub(crate) fn primary_button_w(ui: &mut Ui, pal: &Palette, label: &str, width: f
         pal.accent
     };
     ui.painter().rect_filled(rect, crate::editor_ctl::CONTROL_RADIUS + 2.0, fill);
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font(13.0), if enabled { egui::Color32::WHITE } else { pal.sub });
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        tr(label),
+        font(13.0),
+        if enabled { egui::Color32::WHITE } else { pal.sub },
+    );
     enabled && resp.clicked()
 }
 
@@ -2238,6 +2258,7 @@ pub(crate) fn text_width(ui: &Ui, text: &str, size: f32) -> f32 {
 fn toggle_row(ui: &mut Ui, pal: &Palette, label: &str, on: bool) -> bool {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), HIT_H), egui::Sense::hover());
     let resp = ui.interact(rect, ui.id().with(("toggle", label)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let label = &*tr(label);
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label));
     let p = ui.painter();
@@ -2422,7 +2443,7 @@ fn side_picker(ui: &mut Ui, pal: &Palette, current: SplitSide) -> Option<SplitSi
 fn progress_card(ui: &mut Ui, pal: &Palette, text: &str, frac: f32, cancel_enabled: bool) -> bool {
     let mut cancel = false;
     card(ui, pal, |ui| {
-        ui.label(egui::RichText::new(text).size(13.0).color(pal.text));
+        ui.label(egui::RichText::new(tr(text)).size(13.0).color(pal.text));
         let (bar, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
         ui.painter().rect_filled(bar, 3.0, pal.sep);
         if frac > 0.0 {
@@ -2437,7 +2458,7 @@ fn progress_card(ui: &mut Ui, pal: &Palette, text: &str, frac: f32, cancel_enabl
 /// The recorded side files of the project, as quiet secondary text (a missing file in the danger colour).
 fn source_rows(ui: &mut Ui, pal: &Palette, ed: &Editor, proj: &Project, only: &[&str]) {
     for info in source_infos(proj, &ed.dir).iter().filter(|i| only.contains(&i.label)) {
-        ui.label(egui::RichText::new(info.label).size(11.5).color(pal.sub_strong));
+        ui.label(egui::RichText::new(tr(info.label)).size(11.5).color(pal.sub_strong));
         let color = if info.missing { pal.danger } else { pal.sub_strong };
         ui.label(egui::RichText::new(info.text()).size(11.5).color(color));
     }
@@ -2499,7 +2520,7 @@ fn camera_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, n
         ed.apply(EditKind::Other, now, |p| set_camera(p, CameraField::Look(name)));
     }
     if let Some(file) = custom_look_file(&c) {
-        note(ui, pal, &format!("Custom look: {file}"));
+        note(ui, pal, &trf("Custom look: {file}", &[("file", file)]));
     }
     if let Some(look) = &c.look {
         if let Some(v) = row_slider(ui, pal, "Intensity", look.intensity, 0.0..=1.0, 100.0, " %") {
@@ -2722,7 +2743,7 @@ fn error_card(ui: &mut Ui, pal: &Palette, text: &str) {
         .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(text).size(12.0).color(pal.text));
+            ui.label(egui::RichText::new(tr(text)).size(12.0).color(pal.text));
         });
 }
 
@@ -2972,7 +2993,7 @@ fn clips_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, fp
             ed.seek(b.start, now, fps);
         }
     }
-    note(ui, pal, &format!("{} → {} after the edits", clock(proj.duration), clock(tl.output_duration())));
+    note(ui, pal, &trf("{from} → {to} after the edits", &[("from", &clock(proj.duration)), ("to", &clock(tl.output_duration()))]));
 }
 
 #[cfg(test)]

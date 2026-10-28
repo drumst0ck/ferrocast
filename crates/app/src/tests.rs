@@ -16648,7 +16648,9 @@ mod i18n_ui {
         ];
         NAMES.contains(&s)
             || ["http", "~/", "/", "sk-", "ntn_"].iter().any(|p| s.starts_with(p))
-            || ["#!", "abc →", ":)", "md", "10m", "K", "P", "esc", "⌘", "⌘ V", "⌘ Y"].contains(&s)
+            || ["#!", "abc →", ":)", "md", "10m", "K", "P", "esc", "⌘", "⌘ V", "⌘ Y", "+1 s", "−1 s"].contains(&s)
+            || s.starts_with('≈') && s.contains("kbit/s")
+            || s.starts_with("Auto ") && s.contains('×')
             || s.chars().all(|c| !c.is_alphabetic() || c.is_ascii_digit()) && !s.is_empty()
             || s.ends_with(" fps")
             || (s.ends_with(" s") && s.starts_with(|c: char| c.is_ascii_digit()))
@@ -16852,6 +16854,205 @@ mod i18n_ui {
             let texts = render_texts(&mut app, vec![]);
             assert!(texts.iter().any(|(t, _)| t == "Settings"), "{texts:?}");
         });
+    }
+
+    /// Every tool window, the video editor and the Annotate, Reorder and PDF screens draw nothing
+    /// that is missing from the table, in any language.
+    #[test]
+    fn the_tool_windows_and_the_editor_are_translated_in_every_language() {
+        use ferrocast_core::models::Settings as _S;
+        let _ = std::marker::PhantomData::<_S>;
+        for lang in NON_ENGLISH {
+            let gaps = missing(lang, || {
+                let mut apps: Vec<App> = vec![
+                    compress_app(0, 500),
+                    compress_app(1, 500),
+                    compress_app(2, 500),
+                    media_app(true, 0, 500),
+                    media_app(false, 0, 500),
+                    crop_app(),
+                    frame_app(ferrocast_core::frame::Backdrop::Color([20, 20, 20])),
+                    redact_img_app(true, 10, vec![], None),
+                    bleep_app(vec![(1.0, 2.0)], 0),
+                ];
+                apps.push(editor_app().0);
+                for app in &mut apps {
+                    for _ in 0..3 {
+                        render(app, vec![]);
+                    }
+                }
+            });
+            assert!(gaps.is_empty(), "{lang:?}: tool window strings without a translation:\n{}", gaps.join("\n"));
+        }
+    }
+
+    /// Texts painted by `build`'s screens in `lang`.
+    fn painted(lang: Lang, build: &dyn Fn() -> Vec<App>) -> std::collections::BTreeSet<String> {
+        with_language(lang, || {
+            let mut out = std::collections::BTreeSet::new();
+            for mut app in build() {
+                for _ in 0..3 {
+                    out.extend(render_texts(&mut app, vec![]).into_iter().map(|(t, _)| t));
+                }
+            }
+            out
+        })
+    }
+
+    /// What a screen paints identically in English and in `lang` although it is English text:
+    /// the texts nobody routed through the catalog, wherever they are drawn from.
+    fn untouched_by(lang: Lang, build: &dyn Fn() -> Vec<App>) -> Vec<String> {
+        let english = painted(Lang::En, build);
+        let other = painted(lang, build);
+        english
+            .intersection(&other)
+            .filter(|t| {
+                t.chars().filter(|c| c.is_alphabetic()).count() >= 3
+                    && !same_everywhere(t)
+                    && !(t.chars().all(|c| c.is_ascii_digit() || ":.–-×·%/ ".contains(c)))
+                    // a time in it: a file's data line, not a sentence
+                    && !t.as_bytes().windows(3).any(|w| w[0].is_ascii_digit() && w[1] == b':' && w[2].is_ascii_digit())
+                    // names and key names that read the same in every language
+                    && !["Demo", "hola", "ferrocast-i18n.mp4", concat!("Version ", env!("CARGO_PKG_VERSION")), "!sig", "Best regards", "Docs", "Sig", "clip", "ferrocast", "Local · llama3.2", " LUFS", " dBTP", "MIT", "space", "Space", "⌥ Space", "Control", "calc 2+2", "5pm ldn in sf", "Aurora", "Dusk", "Forest", "Graphite", "Lilac", "Ocean", "Rose", "Sand"].contains(&t.as_str())
+                    // a row that says the same in this language on purpose ("Zoom", "Mono")
+                    && ferrocast_core::i18n::lookup(t, lang) != Some(t.as_str())
+                    // "1 zoom" is "{n} zoom" with a number in it
+                    && {
+                        let mut pattern = String::new();
+                        let mut digits = false;
+                        for c in t.chars() {
+                            if c.is_ascii_digit() {
+                                if !digits {
+                                    pattern.push_str("{n}");
+                                }
+                                digits = true;
+                            } else {
+                                digits = false;
+                                pattern.push(c);
+                            }
+                        }
+                        ferrocast_core::i18n::lookup(&pattern, lang) != Some(pattern.as_str())
+                    }
+                    && t.split_whitespace().any(|w| w.chars().filter(|c| c.is_alphabetic()).count() >= 3)
+            })
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn what_the_editor_paints_is_translated_in_every_language() {
+        use crate::editor_panels::Section;
+        let secs = [
+            Section::Zoom,
+            Section::Loupe,
+            Section::Cursor,
+            Section::Style,
+            Section::Clips,
+            Section::Camera,
+            Section::Audio,
+            Section::Transcript,
+        ];
+        for lang in NON_ENGLISH {
+            let mut left = std::collections::BTreeSet::new();
+            for sec in secs {
+                let build = move || {
+                    let (mut app, _rx, _dir) = editor_app_in(&format!("i18n-paint-{}", sec.label()));
+                    set_tab(&mut app, sec);
+                    vec![app]
+                };
+                left.extend(untouched_by(lang, &build));
+            }
+            assert!(left.is_empty(), "{lang:?}: painted in English:\n{}", left.into_iter().collect::<Vec<_>>().join("\n"));
+        }
+    }
+
+    fn view_app(view: View) -> App {
+        let mut app = fixture();
+        app.stack = vec![View::Root, view];
+        app
+    }
+
+    #[test]
+    fn what_every_screen_paints_is_translated_in_every_language() {
+        let build = || -> Vec<App> {
+            let mut v: Vec<App> = [
+                View::Shortcuts,
+                View::About,
+                View::Clipboard,
+                View::Snippets,
+                View::Quicklinks,
+                View::Files,
+                View::Windows,
+                View::Processes,
+                View::Timers,
+                View::CalcHistory,
+                View::Shelf,
+                View::Notes,
+                View::Recordings,
+                View::NotionSearch,
+                View::ObsidianSearch,
+                View::Settings,
+            ]
+            .into_iter()
+            .map(view_app)
+            .collect();
+            let f = std::path::PathBuf::from("/tmp/ferrocast-i18n.mp4");
+            for view in [
+                View::SnippetForm { id: None, name: String::new(), text: String::new(), keyword: String::new() },
+                View::QuicklinkForm { id: None, name: String::new(), link: String::new(), open_with: String::new() },
+                View::Alias { id: "x".into(), name: "x".into(), value: String::new() },
+                View::Hotkey { id: "x".into(), name: "x".into(), err: String::new() },
+                View::CreateScript { title: String::new(), mode: 0 },
+                View::NotionAdd { title: String::new(), text: String::new(), target: Default::default() },
+                View::ObsidianNew { title: String::new(), text: String::new() },
+                View::ObsidianDaily { text: String::new() },
+                View::Output { run: 1, title: "Out".into(), text: String::new(), done: false },
+                View::Confirm { msg: "Delete all clipboard history?".into(), act: Act::ClipDeleteAll },
+                View::Translation { lang: "Spanish".into(), text: "hola".into() },
+                View::Ai { prompt: String::new(), asked: String::new(), answer: String::new(), history: vec![], busy: false, run: 0 },
+                View::VideoSpeed { file: f.clone(), duration: Some(8.0), factor: 0.5 },
+                View::NormalizeAudio { file: f.clone(), loudness: None, target: -16.0, range: 11.0, peak: -1.5 },
+                View::ChannelsAudio { file: f.clone(), in_channels: Some(1), stereo: true, left_db: 0.0, right_db: 0.0 },
+                View::CollageImage { files: vec![f.clone(), f.clone()], opts: Default::default(), color: 0 },
+                View::EditPhoto { file: f.clone(), size: (100, 80), opts: Default::default() },
+            ] {
+                v.push(view_app(view));
+            }
+            v.extend([compress_app(0, 500), compress_app(1, 500), media_app(true, 0, 500), media_app(false, 0, 500), crop_app()]);
+            v.extend([
+                frame_app(ferrocast_core::frame::Backdrop::Color([20, 20, 20])),
+                redact_img_app(true, 10, vec![], None),
+                bleep_app(vec![(1.0, 2.0)], 0),
+            ]);
+            // the actions panel of a few kinds of row
+            for q in ["", "clip", "calc 2+2", "ferrocast"] {
+                let mut a = fixture();
+                a.query = q.into();
+                render(&mut a, vec![]);
+                render(&mut a, vec![cmd_key(Key::K)]);
+                v.push(a);
+            }
+            for view in [View::Snippets, View::Quicklinks, View::Clipboard] {
+                let mut a = fixture();
+                a.snippets = vec![ferrocast_core::models::Snippet::new("Sig", "Best regards", "!sig")];
+                a.quicklinks = vec![ferrocast_core::models::Quicklink::new("Docs", "https://example.com")];
+                a.rebuild();
+                a.stack = vec![View::Root, view];
+                render(&mut a, vec![]);
+                render(&mut a, vec![cmd_key(Key::K)]);
+                v.push(a);
+            }
+            for q in ["calc 2+2", "zz", "5pm ldn in sf"] {
+                let mut a = fixture();
+                a.query = q.into();
+                v.push(a);
+            }
+            v
+        };
+        for lang in NON_ENGLISH {
+            let left = untouched_by(lang, &build);
+            assert!(left.is_empty(), "{lang:?}: painted in English:\n{}", left.join("\n"));
+        }
     }
 
     #[test]

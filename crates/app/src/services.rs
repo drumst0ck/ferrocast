@@ -1748,7 +1748,7 @@ pub fn chatgpt_sign_in_device(bus: Bus) {
         let d = match start {
             Ok(d) => d,
             Err(e) => {
-                bus.send(Msg::Toast(format!("ChatGPT sign-in: {e}")));
+                bus.send(Msg::Toast(trf("ChatGPT sign-in: {e}", &[("e", &e.to_string())])));
                 return;
             }
         };

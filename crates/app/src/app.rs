@@ -2108,7 +2108,7 @@ impl App {
     fn persist<T: serde::Serialize>(&mut self, name: &str, value: &T) {
         if let Err(e) = self.store.save(name, value) {
             instance::log(&self.store.root, &format!("saving {name} failed: {e:#}"));
-            self.toast(format!("Could not save {name}: {e}"));
+            self.toast(trf("Could not save {name}: {e}", &[("name", name), ("e", &e.to_string())]));
         }
         self.sync_mark(name);
     }
@@ -3219,7 +3219,7 @@ impl App {
                     (self.fx.translate_start)(&engine, text, lang, self.prev_pid, self.settings.translate_output, run, &self.bus);
                 }
             }
-            WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(format!("{label}: not available yet")),
+            WheelPick::Act(Act::Convert(_)) if needs.is_some() => self.toast(trf("{label}: not available yet", &[("label", &label)])),
             WheelPick::File(tool) => {
                 self.toast(format!("{}…", tool.label()));
                 services::file_tool_files(files, tool, self.tools.ffmpeg, self.bus.clone());
@@ -3241,7 +3241,7 @@ impl App {
                 self.toast(trf("Needs {n}. Install command copied: {cmd}", &[("n", n), ("cmd", &cmd)]));
             }
             WheelPick::Convert(t) => {
-                self.toast(format!("Converting to {}…", t.label));
+                self.toast(trf("Converting to {label}…", &[("label", t.label)]));
                 services::convert_files(files, t, self.tools, self.bus.clone());
             }
             WheelPick::Act(a) => self.perform(a, false),
@@ -3285,7 +3285,7 @@ impl App {
                     }
                     Err(e) => {
                         self.ext.downloading = false;
-                        self.toast(format!("Node.js download failed: {e}"));
+                        self.toast(trf("Node.js download failed: {e}", &[("e", &e.to_string())]));
                     }
                 },
                 // a URL comes from outside: the launcher steps aside like for any Notes command
@@ -3493,7 +3493,7 @@ impl App {
                             }
                             Err(e) => {
                                 self.pop();
-                                self.toast(format!("Trim Audio: {e}"));
+                                self.toast(trf("Trim Audio: {e}", &[("e", &e.to_string())]));
                             }
                         }
                     }
@@ -3516,7 +3516,7 @@ impl App {
                             }
                             Err(e) => {
                                 self.pop();
-                                self.toast(format!("Bleep Audio: {e}"));
+                                self.toast(trf("Bleep Audio: {e}", &[("e", &e.to_string())]));
                             }
                         }
                     }
@@ -3707,7 +3707,7 @@ impl App {
                             }
                         }
                     }
-                    self.toast(format!("Moved {} item{}", pairs.len(), if pairs.len() == 1 { "" } else { "s" }));
+                    self.toast(trn("Moved {n} item", "Moved {n} items", pairs.len() as u64));
                 }
                 Msg::WheelOpen(kind, files) => {
                     self.wheel_text = None;
@@ -3868,7 +3868,7 @@ impl App {
                     }
                     Err(e) => {
                         self.show();
-                        self.toast(format!("Finder selection: {e} (allow Automation for Finder in System Settings)"));
+                        self.toast(trf("Finder selection: {e} (allow Automation for Finder in System Settings)", &[("e", &e.to_string())]));
                     }
                 },
                 Msg::FinderEnter => self.on_finder_enter(),
@@ -3973,7 +3973,7 @@ impl App {
                     let hex = c.formats()[0].1.clone();
                     // Not marked as our own write, so the colour also lands in the clipboard history.
                     notion_io::write_clipboard(&hex);
-                    self.toast(format!("Copied {hex}"));
+                    self.toast(trf("Copied {hex}", &[("hex", &hex)]));
                 }
                 Msg::ColorPicked(None) => {}
                 Msg::Tray(id) => match id.as_str() {
@@ -4504,7 +4504,7 @@ impl App {
                                 title: e.name().to_string(),
                                 subtitle: e.shortcode().map(|s| format!(":{s}:")).unwrap_or_default(),
                                 icon: Icon::Emoji(e.as_str().to_string()),
-                                accessory: humanize_group(&format!("{:?}", e.group())),
+                                accessory: tr(&humanize_group(&format!("{:?}", e.group()))).into_owned(),
                                 keywords: vec![],
                                 kind: Kind::Emoji(e.as_str()),
                             },
@@ -5792,7 +5792,7 @@ impl App {
                 services::update_install(release, self.store.root.clone(), self.bus.clone());
             }
             Plan::BrewUpgrade => {
-                self.toast(format!("Updating to {ver} with Homebrew…"));
+                self.toast(trf("Updating to {version} with Homebrew…", &[("version", &ver)]));
                 services::brew_upgrade(self.bus.clone());
             }
         }
@@ -5895,7 +5895,7 @@ impl App {
                 self.hide();
                 self.reset_to_root();
             }
-            Err(e) => self.toast(format!("Pin failed: {e}")),
+            Err(e) => self.toast(trf("Pin failed: {e}", &[("e", &e.to_string())])),
         }
     }
 
@@ -5997,7 +5997,7 @@ impl App {
                 self.capture_say(crate::capture_ctl::PERMISSION_TOAST.into());
                 crate::capture_ctl::open_screen_recording_pane();
             }
-            (Flow::Record(_), Outcome::Failed(e)) => self.capture_say(format!("Recording failed: {e}")),
+            (Flow::Record(_), Outcome::Failed(e)) => self.capture_say(trf("Recording failed: {e}", &[("e", &e.to_string())])),
         }
     }
 
@@ -6119,7 +6119,7 @@ impl App {
             EditorMsg::Export { dir, msg } if dir == ed.dir => {
                 if let crate::editor_export::Outcome::Finished(path) = ed.export.apply(msg) {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.toast(format!("Exported {name}"));
+                    self.toast(trf("Exported {name}", &[("name", &name)]));
                     if path.exists() {
                         let _ = ferrocast_macos::apps::reveal(&path);
                     }
@@ -6320,7 +6320,7 @@ impl App {
             discard_unfinished(&project);
             let effect = self.record.on_stopped();
             self.perform_record(effect);
-            return self.capture_say(format!("Recording failed: cannot create the project folder: {e}"));
+            return self.capture_say(trf("Recording failed: cannot create the project folder: {e}", &[("e", &e.to_string())]));
         }
         let (pause_bus, stop_bus) = (self.bus.clone(), self.bus.clone());
         ferrocast_macos::hud::hud_show(
@@ -6422,7 +6422,7 @@ impl App {
                         if let Some(p) = self.rt.project.take() {
                             discard_unfinished(&p);
                         }
-                        self.capture_say(format!("Recording failed: {e}"));
+                        self.capture_say(trf("Recording failed: {e}", &[("e", &e.to_string())]));
                     }
                 }
             }
@@ -6483,7 +6483,7 @@ impl App {
                         clipboard::write_png(&png);
                         self.capture_say("Screenshot copied".into());
                     }
-                    Err(e) => self.capture_say(format!("Capture failed: {e}")),
+                    Err(e) => self.capture_say(trf("Capture failed: {e}", &[("e", &e.to_string())])),
                 },
                 AfterAction::Nothing => {}
             },
@@ -6620,7 +6620,7 @@ impl App {
             }
             Builtin::ReloadScripts => {
                 self.reload_scripts();
-                self.toast(format!("{} script commands loaded", self.scripts.len()));
+                self.toast(trn("{n} script command loaded", "{n} script commands loaded", self.scripts.len() as u64));
             }
             Builtin::Settings => self.push(View::Settings),
             Builtin::Quit => self.quit(),
@@ -6899,7 +6899,7 @@ impl App {
                 self.persist("shelf.json", &v);
                 // Float: the always-on-top panel pinned to the screen edge
                 ferrocast_macos::shelf::show(&v);
-                self.toast(format!("{n} item{} on the shelf", if n == 1 { "" } else { "s" }));
+                self.toast(trn("{n} item on the shelf", "{n} items on the shelf", n as u64));
             }
             Act::RemoveFromShelf(p) => {
                 ferrocast_macos::shelf::remove(&p);
@@ -6932,9 +6932,9 @@ impl App {
                 ferrocast_macos::clipboard::write_files(&files);
                 self.shared.mark_clipboard_write();
                 self.toast(if files.len() == 1 {
-                    "File copied, paste it in Finder".to_string()
+                    tr("File copied, paste it in Finder").into_owned()
                 } else {
-                    format!("{} files copied", files.len())
+                    trf("{n} files copied", &[("n", &files.len().to_string())])
                 });
             }
             Act::ZipFiles(files) => {
@@ -6945,7 +6945,7 @@ impl App {
                     self.toast(if files.len() == 1 {
                         "Compressing to ZIP…".to_string()
                     } else {
-                        format!("Compressing {} items to ZIP…", files.len())
+                        trf("Compressing {n} items to ZIP…", &[("n", &files.len().to_string())])
                     });
                     services::convert_files(files, zip_target(), self.tools, self.bus.clone());
                 }
@@ -6970,13 +6970,13 @@ impl App {
                     self.hide();
                     self.reset_to_root();
                 }
-                Err(e) => self.toast(format!("Could not open a terminal: {e}")),
+                Err(e) => self.toast(trf("Could not open a terminal: {e}", &[("e", &e.to_string())])),
             },
             Act::AirDrop(files) => {
                 // the picker attaches to the frontmost app; hide first so it is not hidden with us
                 self.hide();
                 if let Err(e) = apps::airdrop(&files) {
-                    self.toast(format!("AirDrop: {e}"));
+                    self.toast(trf("AirDrop: {e}", &[("e", &e.to_string())]));
                 }
             }
             Act::Convert(files) => {
@@ -7340,7 +7340,7 @@ impl App {
                     self.push(View::PdfOrganize { file, n, plan: ferrocast_core::pdfplan::PdfPlan::new(n) });
                 }
                 Ok(_) => self.toast("This PDF has no pages"),
-                Err(e) => self.toast(format!("Organize PDF: {e}")),
+                Err(e) => self.toast(trf("Organize PDF: {e}", &[("e", &e.to_string())])),
             },
             Act::OpenWheel(files) => {
                 let kind = ferrocast_core::wheel::WheelKind::Convert;

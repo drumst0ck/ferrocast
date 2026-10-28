@@ -16,6 +16,7 @@ use ferrocast_core::capture::events::Events;
 use ferrocast_core::capture::export::{self, Codec, ExportOptions, Format, Quality};
 use ferrocast_core::capture::project::Project;
 use ferrocast_core::capture::protocol::ExportDone;
+use ferrocast_core::i18n::tr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -579,7 +580,7 @@ pub fn draw_sheet(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor) -> Sh
         ui.painter().text(
             Pos2::new(row.min.x, row.center().y),
             Align2::LEFT_CENTER,
-            "esc closes",
+            tr("esc closes"),
             FontId::proportional(12.0),
             pal.sub_strong,
         );
@@ -600,6 +601,7 @@ pub fn split_audio(summary: &str) -> (&str, Option<&str>) {
 
 /// A small rounded read-only tag in secondary text.
 fn info_chip(ui: &mut Ui, pal: &Palette, text: &str) {
+    let text = &*tr(text);
     let g = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(11.5), pal.sub_strong);
     let (r, _) = ui.allocate_exact_size(egui::vec2(g.size().x + 16.0, 22.0), egui::Sense::hover());
     ui.painter().rect_filled(r, 11.0, pal.lift(1.6));
