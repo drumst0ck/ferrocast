@@ -86,6 +86,7 @@ export const page = {
     h: 'Sigue leyendo',
     links: [
       ['Alternativa gratis a Raycast', '/es/alternativa-a-raycast/'],
+      ['Alternativa gratis a Alfred sin Powerpack', '/es/alternativa-a-alfred/'],
       ['Historial del portapapeles que ignora contraseñas', '/es/historial-portapapeles-mac/'],
       ['Migrar desde Raycast', '/es/docs/getting-started/migrating-from-raycast/'],
       ['Comprimir un vídeo a un tamaño', '/es/comprimir-video-a-un-tamano/'],
