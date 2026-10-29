@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import SiteFooter from '../SiteFooter.astro';
 import Crumbs from './Crumbs.astro';
+import RelatedGuides from './RelatedGuides.astro';
 import SeoNav from './SeoNav.astro';
 import { dmgUrl, installCommand, repo } from '../../data/install';
 import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
@@ -92,6 +93,8 @@ const isEs = t.lang === 'es';
     <ol>{t.install.steps.map(([name, text], i) => <li><strong>{name}.</strong> {i === 0 ? <><a class="tl" href={dmgUrl}>{text}</a></> : text}</li>)}</ol>
     <p>{t.install.brew}</p>
     <pre><code>{installCommand}</code></pre>
+
+    <RelatedGuides path={t.path} lang={t.lang} body={{ ...t, more: undefined }} />
 
     <h2>{t.faq.h}</h2>
     <div class="alt-faq">

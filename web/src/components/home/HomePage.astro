@@ -9,6 +9,8 @@ import path from 'node:path';
 import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import FilesBlock from './FilesBlock.astro';
+import GuidesNav from '../GuidesNav.astro';
+import { featuredGuides } from '../../lib/seo/guides';
 import RecordBlock from './RecordBlock.astro';
 import NotesBlock from './NotesBlock.astro';
 import '../../styles/files.css';
@@ -293,6 +295,14 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
       <div class="fh-cta"><a class="tl" href={`${base}/changelog/`}>{t.changelog.all} →</a><a class="tl" href={`${base}/changelog/rss.xml`} aria-label={t.changelog.rssAria}>{t.changelog.rss}</a></div>
     </section>
 
+    <section class="more-list wrap guides" aria-labelledby="h-guides">
+      <h2 id="h-guides" data-reveal>{t.guides.title}</h2>
+      <ul class="chips" data-reveal>
+        {featuredGuides(lang).map((x) => <li><a href={`${base}${x.path}`}>{x.label}</a></li>)}
+      </ul>
+      <p data-reveal><a href="#all-guides">{t.guides.all}</a>{es && <> · <a href={`${base}/es/convertir/`}>{t.guides.convert}</a></>}</p>
+    </section>
+
     <section class="cta" aria-labelledby="h-cta">
       <div class="l">
         <h2 id="h-cta" class="lines"><span class="line"><span data-line style="--i:0">{t.cta.title1}</span></span><span class="line"><span data-line style="--i:1">{t.cta.title2}</span></span></h2>
@@ -308,6 +318,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
 
   <FootMark />
   <footer class="foot">
+    <GuidesNav lang={lang} />
     <span data-reveal>{t.footer.tagline}</span>
     <nav aria-label={t.footer.linksAria}><a href="#install">{t.nav.install}</a><a href={docs('/')}>{t.nav.docs}</a><a href={`${base}/changelog/`}>{t.nav.changelog}</a><a href={`${base}${es ? '/es/alternativa-a-raycast/' : '/raycast-alternative/'}`}>{t.footer.alternative}</a><a href={repo}>{t.nav.github}</a><a href={`${repo}/blob/master/LICENSE`}>{t.footer.license}</a></nav>
     <span class="r">{t.footer.copyright}</span>

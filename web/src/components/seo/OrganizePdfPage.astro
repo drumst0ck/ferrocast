@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import SiteFooter from '../SiteFooter.astro';
 import Crumbs from './Crumbs.astro';
+import RelatedGuides from './RelatedGuides.astro';
 import { dmgUrl, installCommand } from '../../data/install';
 import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
 import { inline, plain } from '../../lib/seo/markup';
@@ -87,6 +88,8 @@ const jsonLd = [
 
     <h2>{t.related.h}</h2>
     <ul class="chips">{t.related.links.map(([label, href]) => <li><a href={href}>{label}</a></li>)}</ul>
+
+    <RelatedGuides path={t.path} lang="en" body={t} />
 
     <h2>{t.faq.h}</h2>
     <div class="g-faq">

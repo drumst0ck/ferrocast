@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import SiteFooter from '../SiteFooter.astro';
 import Crumbs from './Crumbs.astro';
+import RelatedGuides from './RelatedGuides.astro';
 import SeoNav from './SeoNav.astro';
 import { dmgUrl, installCommand } from '../../data/install';
 import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
@@ -90,6 +91,8 @@ const jsonLd = [
         )}
       </>
     ))}
+
+    <RelatedGuides path={t.path} lang="es" body={{ ...t, more: undefined }} />
 
     <h2>{t.faq.h}</h2>
     <div class="g-faq">

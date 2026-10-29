@@ -1,0 +1,22 @@
+---
+/* Footer "Guides" column: every guide and comparison page, grouped by block, in one language. */
+import { guideBlocks, factsGuide, type GuideLang } from '../lib/seo/guides';
+interface Props { lang?: GuideLang; label?: string }
+const { lang = 'en', label } = Astro.props;
+const es = lang === 'es';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const facts = factsGuide(lang);
+---
+<nav class="foot-guides" id="all-guides" aria-label={label ?? (es ? 'Guías' : 'Guides')}>
+  <b>{es ? 'Guías' : 'Guides'}</b>
+  {guideBlocks(lang).map((b) => (
+    <div>
+      <small>{b.title}</small>
+      <ul>{b.guides.map((x) => <li><a href={`${base}${x.path}`}>{x.label}</a></li>)}</ul>
+    </div>
+  ))}
+  <div>
+    <small>{es ? 'Más' : 'More'}</small>
+    <ul><li><a href={`${base}${facts.path}`}>{facts.label}</a></li></ul>
+  </div>
+</nav>
