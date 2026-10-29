@@ -115,7 +115,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
       <div class="copy">
         <h1 class="lines"><span class="line"><span data-line style="--i:0">{t.hero.line1}</span></span><span class="line"><span data-line style="--i:1">{t.hero.line2}</span></span></h1>
         <p class="sub" data-rise style="--i:3">{t.hero.sub}</p>
-        <div class="acts" data-rise style="--i:4"><a class="btn big" href={dmgUrl} data-dmg>{t.hero.ctaInstall}</a><a class="btn alt big" href="#files">{t.hero.ctaFiles}</a></div>
+        <div class="acts" data-rise style="--i:4"><a class="btn big" href={dmgUrl} data-dmg data-cta="hero">{t.hero.ctaInstall}</a><a class="btn alt big" href="#files">{t.hero.ctaFiles}</a></div>
         <p class="proof" data-rise style="--i:5">{fill(t.hero.proof, vars)}</p>
       </div>
       <div class="hero-3d" data-rise style="--i:2">
@@ -259,7 +259,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
       <h2 id="h-how" data-reveal>{t.install.title}</h2>
       <div class="ex" data-reveal>
         <h3>{t.install.step1}</h3>
-        <p class="dmgrow"><a class="btn" href={dmgUrl} data-dmg>{t.install.dmg}</a> <span>{t.install.dmgNote}</span></p>
+        <p class="dmgrow"><a class="btn" href={dmgUrl} data-dmg data-cta="install">{t.install.dmg}</a> <span>{t.install.dmgNote}</span></p>
         <p class="note">{t.install.note} <a class="tl" href={docs('/getting-started/install/')}>{t.install.docs} →</a></p>
       </div>
       <div class="ex" data-reveal>
@@ -310,7 +310,7 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
       </div>
       <div class="dlg" data-ui data-reveal>
         <h3>{t.cta.dialogTitle}</h3>
-        <a class="btn" href={dmgUrl} data-dmg>{t.install.dmg}</a>
+        <a class="btn" href={dmgUrl} data-dmg data-cta="final">{t.install.dmg}</a>
         <small>{t.cta.small}</small>
       </div>
     </section>
