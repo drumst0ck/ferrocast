@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import SiteFooter from '../SiteFooter.astro';
 import Crumbs from './Crumbs.astro';
+import Shots from './Shots.astro';
 import RelatedGuides from './RelatedGuides.astro';
 import SeoNav from './SeoNav.astro';
 import { dmgUrl, installCommand } from '../../data/install';
@@ -39,6 +40,7 @@ const jsonLd = [
     <Crumbs items={t.crumbs} />
     <h1>{t.h1}</h1>
     {t.lead.map((p, i) => <p class={i === 0 ? 'lead' : undefined} set:html={inline(p)} />)}
+    <Shots path={t.path} where="lead" />
     <p class="g-cta"><a class="btn" href={dmgUrl}>{t.cta.dmg}</a><span class="fine">{t.cta.note}</span></p>
 
     <h2>{t.limits.h}</h2>
@@ -53,6 +55,7 @@ const jsonLd = [
 
     <h2 id="steps">{t.steps.h}</h2>
     <ol>{t.steps.items.map(([name, text]) => <li><strong>{name}.</strong> {text}</li>)}</ol>
+    <Shots path={t.path} where="steps" />
     {t.steps.code && <pre><code>{t.steps.code}</code></pre>}
     <details class="g-brew">
       <summary>{isEs ? 'Instalar Ferrocast con Homebrew' : 'Install Ferrocast with Homebrew'}</summary>

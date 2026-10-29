@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import SiteFooter from '../SiteFooter.astro';
 import Crumbs from './Crumbs.astro';
+import Shots from './Shots.astro';
 import RelatedGuides from './RelatedGuides.astro';
 import SeoNav from './SeoNav.astro';
 import { dmgUrl, installCommand } from '../../data/install';
@@ -55,6 +56,7 @@ const jsonLd = [
     <Crumbs items={t.crumbs} />
     <h1>{t.h1}</h1>
     {t.lead.map((p) => <p class="lead" set:html={inline(p)} />)}
+    <Shots path={t.path} where="lead" />
     <p class="g-cta"><a class="btn" href={dmgUrl}>{t.cta.dmg}</a><span class="fine">{t.cta.note}</span></p>
 
     <h2>{t.before.h}</h2>
