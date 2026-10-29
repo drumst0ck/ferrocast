@@ -8,7 +8,7 @@ Fast, open-source launcher for macOS, written in Rust. Search, calculate, paste 
 
 [![CI](https://github.com/drumst0ck/ferrocast/actions/workflows/ci.yml/badge.svg)](https://github.com/drumst0ck/ferrocast/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[Website](https://ferrocast.app) · [Docs](https://ferrocast.app/docs/) · [Changelog](https://ferrocast.app/changelog/) · [Español](README.es.md)
+[Website](https://ferrocast.app) · [Docs](https://ferrocast.app/docs/) · [Changelog](https://ferrocast.app/changelog/) · [Raycast alternative](https://ferrocast.app/raycast-alternative/) · [Español](README.es.md)
 
 <p align="center"><img src="web/public/img/home.jpg" alt="Ferrocast launcher" width="46%"> <img src="web/public/img/files-wheel-convert.jpg" alt="Ferrocast conversion wheel" width="46%"></p>
 
@@ -49,13 +49,13 @@ Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not 
 
 - **Search** apps, commands and files with frecency, aliases, favorites and a hotkey per command.
 - **Calculate** in the search box: math, percentages, units, currencies (ECB rates) and time zones.
-- **Clipboard history** for text, files and images; password-manager entries are skipped.
-- **Snippets** with placeholders and auto-expansion, and **quicklinks** with arguments.
+- **[Clipboard history](https://ferrocast.app/clipboard-manager-mac/)** for text, files and images; password-manager entries are skipped.
+- **[Snippets](https://ferrocast.app/text-expander-mac/)** with placeholders and auto-expansion, and **quicklinks** with arguments.
 - **Script Commands** compatible with Raycast metadata (full, compact, silent, inline).
-- **Window management** with about 40 layouts, plus Kill Process, timers, notes, emoji and Quick Look.
+- **[Window management](https://ferrocast.app/mac-window-management/)** with about 40 layouts, plus Kill Process, timers, notes, emoji and Quick Look.
 - **Notes**: floating Markdown notes with images (paste, drag or Insert Image…; PNG, JPEG, GIF, HEIC and WebP up to 20 MB), a `/` menu, pinning, export, `ferrocast://` links, AI commands and dictation. Obsidian vault notes are not edited in that window.
 - **Interface languages**: English, Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese. Follows the macOS language order, or Settings → General → Language. Kept on each Mac, not synced. Untranslated text falls back to English. Names you type and Raycast extension UI are never translated.
-- **Ask AI** with Ollama, any OpenAI-compatible server, the Anthropic API, Claude Code, or Sign in with ChatGPT.
+- **[Ask AI](https://ferrocast.app/local-ai-launcher/)** with Ollama, any OpenAI-compatible server, the Anthropic API, Claude Code, or Sign in with ChatGPT.
 
 ## File tools
 
@@ -66,7 +66,7 @@ Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not 
 - **Translate wheel**: drag selected text, tap <kbd>⌘</kbd>, and drop on a language. The translation replaces the selection in place where the app allows it and opens in a window otherwise. It runs through your Ask AI provider (Ollama stays local; ChatGPT and Claude subscriptions work too).
 - Local only. macOS tools come first; ffmpeg, LibreOffice, cwebp, unrar and Ghostscript are optional. Results go next to the original and never overwrite it.
 
-Browse every pair at <https://ferrocast.app/files/>.
+Browse every pair at <https://ferrocast.app/files/> · [Free file converter for Mac](https://ferrocast.app/free-file-converter-mac/) · [Remove metadata](https://ferrocast.app/remove-metadata-mac/) · [Blur part of a video](https://ferrocast.app/blur-video-mac/)
 
 ## Screenshots
 
@@ -91,6 +91,8 @@ Ferrocast is **independent** and not affiliated with [Raycast](https://www.rayca
 | **Snippets** | Import from a Raycast JSON export | Quicklinks are recreated by hand |
 | **File conversion & tools** | 275 local conversion pairs and 26 file tools built in | Not documented in this repo for Raycast or Alfred |
 | **Extensions & sync** | No extension store of its own. Extensions you already installed with Raycast can run (partial, off by default, Node.js 22+). Opt-in iCloud Drive sync, off by default | Not supported yet: menu bar commands, OAuth, AI extension features, file picker, link accessory. Also not included: Search Menu Bar Items, AI context from selection or screen ([migration guide](https://ferrocast.app/docs/getting-started/migrating-from-raycast/), [extensions](https://ferrocast.app/docs/launcher/raycast-extensions/), [sync](https://ferrocast.app/docs/launcher/sync/)) |
+
+More: [Ferrocast vs Raycast](https://ferrocast.app/ferrocast-vs-raycast/) · [Raycast alternative](https://ferrocast.app/raycast-alternative/) · [Alfred alternative](https://ferrocast.app/alfred-alternative/) · [Script Commands](https://ferrocast.app/raycast-script-commands/)
 
 ## What's still missing
 
