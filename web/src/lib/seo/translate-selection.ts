@@ -15,6 +15,7 @@
  * Studio and Apple keep it on the Mac); no quality, speed or memory comparison.
  */
 import type { GuideCopy } from './compress-video';
+import { languageFaqEs, languageFaqEn } from './interface-language';
 
 export const CHECKED = '2026-10-28';
 
@@ -98,6 +99,8 @@ export const en: GuideCopy = {
       ['Which languages can I use?', 'Up to 12 on the wheel, in the order you list them in Settings → Translate. The defaults are English, Spanish, French, German, Portuguese, Italian, Japanese and Chinese.'],
       ['Is there a size limit?', 'Yes. Selections over 20,000 characters are refused.'],
       ['Is it free?', 'Ferrocast is free and open source (MIT). A local model costs nothing; a cloud provider bills you directly for your own key.'],
+    
+      languageFaqEn,
     ],
   },
   more: {
@@ -122,7 +125,7 @@ export const es: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['Traducir texto seleccionado', '/es/traducir-texto-seleccionado-mac/']],
   h1: 'Traducir el texto seleccionado en Mac y reemplazarlo en su sitio',
   lead: [
-    'Selecciona texto en cualquier app, empieza a arrastrarlo, toca ⌘ y suéltalo sobre un idioma. Ferrocast envía el texto al proveedor de IA que hayas elegido y deja la traducción donde estaba el texto: en campos de texto y en páginas de Safari y de navegadores Chromium. Si no puede reemplazarlo, muestra la traducción en una ventana y la copia. Con Ollama o con la traducción de Apple en el propio Mac, el texto no sale de él. Gratis y de código abierto (MIT).',
+    'Selecciona texto en cualquier app, empieza a arrastrarlo, toca ⌘ y suéltalo sobre un idioma. Ferrocast envía el texto al proveedor de IA que hayas elegido y deja la traducción donde estaba el texto: en campos de texto y en páginas de Safari y de navegadores Chromium. Si no puede reemplazarlo, muestra la traducción en una ventana y la copia. Con Ollama o con la traducción de Apple en el propio Mac, el texto no sale de él. Gratis y de código abierto (MIT). Puedes usarlo con la interfaz en español.',
     'macOS ya traduce texto por sí solo: haz clic con la tecla Control pulsada en la selección, elige Traducir y luego «Reemplazar por la traducción». Ferrocast sirve cuando quieres otro recorrido: un único gesto de arrastre, tu propio modelo o proveedor y el reemplazo dentro de páginas web. Escribo Ferrocast, así que la tabla enlaza la página de Apple.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
@@ -190,6 +193,8 @@ export const es: GuideCopy = {
       ['¿Qué idiomas puedo usar?', 'Hasta 12 en la rueda, en el orden en que los pongas en Ajustes → Translate. Por defecto son inglés, español, francés, alemán, portugués, italiano, japonés y chino.'],
       ['¿Hay un límite de tamaño?', 'Sí. Se rechazan las selecciones de más de 20 000 caracteres.'],
       ['¿Es gratis?', 'Ferrocast es gratis y de código abierto (MIT). Un modelo local no cuesta nada; un proveedor en la nube te factura directamente por tu propia clave.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

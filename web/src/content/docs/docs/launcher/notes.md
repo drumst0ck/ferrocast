@@ -86,6 +86,8 @@ To remove an image, select it and press Delete. A file that no note links any mo
 
 The Notes window edits only Ferrocast's own notes. Notes in your Obsidian vault are not edited here, so Ferrocast never copies an image into your vault, and it never moves images from there into its own folder.
 
+With Sync with iCloud on, note images travel through iCloud Drive as separate files. Each Mac uploads only its own. A missing image is downloaded when a synced note links it, and an image is not removed while any Mac's notes still link it.
+
 ## Organize notes
 
 - **Browse Notes**: <kbd>⌘</kbd> <kbd>P</kbd> or the toolbar button lists every note.

@@ -45,7 +45,7 @@ describe('blur video pages', () => {
     for (const t of [en, es]) {
       const n = body(t);
       expect(n).toBeGreaterThanOrEqual(900);
-      expect(n).toBeLessThanOrEqual(1300);
+      expect(n).toBeLessThanOrEqual(1450);
     }
     expect(es.steps.items).toHaveLength(en.steps.items.length);
     expect(es.faq.items).toHaveLength(en.faq.items.length);

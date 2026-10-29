@@ -19,9 +19,9 @@ describe('Raycast alternative copy', () => {
     }
   });
 
-  it('has the ten brief FAQ entries and matching structure in both languages', () => {
-    expect(es.faq.items).toHaveLength(10);
-    expect(en.faq.items).toHaveLength(10);
+  it('has matching FAQ entries and table structure in both languages', () => {
+    expect(es.faq.items).toHaveLength(11);
+    expect(en.faq.items).toHaveLength(11);
     expect(en.table.rows).toHaveLength(es.table.rows.length);
     expect(en.install.steps).toHaveLength(es.install.steps.length);
     for (const row of [...en.table.rows, ...es.table.rows]) expect(row).toHaveLength(4);

@@ -6,6 +6,7 @@
  * have" without a source, and say plainly who should stay on Alfred.
  */
 import type { GuideCopy } from './compress-video';
+import { languageFaqEs, languageFaqEn } from './interface-language';
 
 export const CHECKED = '2026-10-28';
 
@@ -37,6 +38,7 @@ export const page: GuideCopy = {
       ['File conversion', 'File actions, and custom ones through Workflows', '275 local conversions and 26 file tools'],
       ['Window management', 'Not stated on its website', 'About 40 commands'],
       ['Requirements', 'Alfred 5: macOS 10.14 or later', 'Apple Silicon, macOS 13 or later'],
+      ['Interface language', 'Not compared here', 'English plus six more: Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese. Per Mac, not synced'],
       ['Source code', 'No open licence stated', 'MIT'],
     ],
     note: 'Alfred column from [alfredapp.com/powerpack](https://www.alfredapp.com/powerpack/), [the shop](https://www.alfredapp.com/shop/), [clipboard help](https://www.alfredapp.com/help/features/clipboard/) and [minimum requirements](https://www.alfredapp.com/help/getting-started/minimum-requirements/), checked 28 October 2026. Ferrocast column from its [key facts](/facts/) and docs.',
@@ -81,6 +83,8 @@ export const page: GuideCopy = {
       ['Does Ferrocast run Alfred Workflows?', 'No. Ferrocast runs Raycast-compatible Script Commands, which are plain scripts with metadata comments.'],
       ['Does Ferrocast work on Intel Macs?', 'No. Ferrocast needs an Apple Silicon Mac and macOS 13 or later. Alfred 5 runs from macOS 10.14.'],
       ['Is Ferrocast affiliated with Alfred?', 'No. Ferrocast is independent and not affiliated with Alfred or Raycast.'],
+    
+      languageFaqEn,
     ],
   },
   more: {
@@ -107,7 +111,7 @@ export const es: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['Alternativa a Alfred', '/es/alternativa-a-alfred/']],
   h1: 'Una alternativa gratis a Alfred, con portapapeles y snippets sin Powerpack',
   lead: [
-    'En Alfred, el historial del portapapeles, los snippets con autoexpansión y los Workflows forman parte del Powerpack, una compra única (34 £ por una licencia individual de Alfred 5, que según su tienda incluye la actualización gratis a Alfred 6). Ferrocast incluye gratis el historial del portapapeles y los snippets que se expanden, como lanzador de código abierto (MIT) para Mac con Apple Silicon.',
+    'En Alfred, el historial del portapapeles, los snippets con autoexpansión y los Workflows forman parte del Powerpack, una compra única (34 £ por una licencia individual de Alfred 5, que según su tienda incluye la actualización gratis a Alfred 6). Ferrocast incluye gratis el historial del portapapeles y los snippets que se expanden, como lanzador de código abierto (MIT) para Mac con Apple Silicon. Puedes usarlo con la interfaz en español.',
     'Alfred tiene detrás una década de Workflows y funciona en Macs más antiguos; Ferrocast no intenta sustituir eso. Si lo que quieres del Powerpack es el portapapeles y los snippets, sigue leyendo. Escribo Ferrocast, así que comprueba las fuentes.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
@@ -126,6 +130,7 @@ export const es: GuideCopy = {
       ['Conversión de archivos', 'Acciones de archivo y, a medida, con Workflows', '275 conversiones locales y 26 herramientas de archivo'],
       ['Gestión de ventanas', 'No consta en su web', 'Unos 40 comandos'],
       ['Requisitos', 'Alfred 5: macOS 10.14 o posterior', 'Apple Silicon, macOS 13 o posterior'],
+      ['Idioma de la interfaz', 'No se compara aquí', 'Inglés y seis más: español, alemán, francés, portugués de Brasil, japonés y chino simplificado. Por Mac, no se sincroniza'],
       ['Código fuente', 'No consta una licencia abierta', 'MIT'],
     ],
     note: 'Columna de Alfred: [alfredapp.com/powerpack](https://www.alfredapp.com/powerpack/), [la tienda](https://www.alfredapp.com/shop/), [ayuda del portapapeles](https://www.alfredapp.com/help/features/clipboard/) y [requisitos mínimos](https://www.alfredapp.com/help/getting-started/minimum-requirements/), consultados el 28 de octubre de 2026. Columna de Ferrocast: sus [datos clave](/es/facts/) y la documentación (en inglés).',
@@ -176,6 +181,8 @@ export const es: GuideCopy = {
       ['¿Ferrocast ejecuta Workflows de Alfred?', 'No. Ferrocast ejecuta Script Commands compatibles con Raycast, que son scripts normales con comentarios de metadatos.'],
       ['¿Funciona Ferrocast en Mac con Intel?', 'No. Ferrocast necesita un Mac con Apple Silicon y macOS 13 o posterior. Alfred 5 funciona desde macOS 10.14.'],
       ['¿Ferrocast está afiliado a Alfred?', 'No. Ferrocast es independiente y no está afiliado a Alfred ni a Raycast.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

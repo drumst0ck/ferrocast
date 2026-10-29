@@ -30,7 +30,7 @@ const alternates = { en: `${SITE}/tools/`, es: canonical, 'x-default': `${SITE}/
   <main class="seo" id="main">
     <Crumbs items={crumbs} />
     <h1>Herramientas de archivo para tu Mac</h1>
-    <p class="lead">{tools.length} herramientas que se ejecutan en tu Mac. Arrastra un archivo, pulsa <kbd>⌘</kbd> y elige una. El resultado se guarda junto al original y nunca lo sobrescribe.</p>
+    <p class="lead">{tools.length} herramientas que se ejecutan en tu Mac, con la interfaz en español. Arrastra un archivo, pulsa <kbd>⌘</kbd> y elige una. El resultado se guarda junto al original y nunca lo sobrescribe.</p>
     <p>El nombre de cada herramienta es el de la app. La guía de cada una está en inglés.</p>
     {groups.map(([key, label]) => {
       const list = tools.filter((t) => t.media === key);

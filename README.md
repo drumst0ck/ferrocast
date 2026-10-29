@@ -53,7 +53,8 @@ Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not 
 - **Snippets** with placeholders and auto-expansion, and **quicklinks** with arguments.
 - **Script Commands** compatible with Raycast metadata (full, compact, silent, inline).
 - **Window management** with about 40 layouts, plus Kill Process, timers, notes, emoji and Quick Look.
-- **Notes**: a floating rich-text window with Markdown, a `/` menu, pinning, export, `ferrocast://` links, AI commands and dictation.
+- **Notes**: floating Markdown notes with images (paste, drag or Insert Image…; PNG, JPEG, GIF, HEIC and WebP up to 20 MB), a `/` menu, pinning, export, `ferrocast://` links, AI commands and dictation. Obsidian vault notes are not edited in that window.
+- **Interface languages**: English, Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese. Follows the macOS language order, or Settings → General → Language. Kept on each Mac, not synced. Untranslated text falls back to English. Names you type and Raycast extension UI are never translated.
 - **Ask AI** with Ollama, any OpenAI-compatible server, the Anthropic API, Claude Code, or Sign in with ChatGPT.
 
 ## File tools

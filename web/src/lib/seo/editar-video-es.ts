@@ -8,6 +8,7 @@
  * never promise the same quality after a re-encode; neutral Spanish from Spain, tú.
  */
 import type { GuideCopy } from './compress-video';
+import { languageFaqEs } from './interface-language';
 
 export const page: GuideCopy = {
   lang: 'es',
@@ -18,7 +19,7 @@ export const page: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['Editar vídeo sin iMovie', '/es/editar-video-mac-sin-imovie/']],
   h1: 'Editar un vídeo en Mac sin iMovie y sin subirlo a ningún sitio',
   lead: [
-    'Ferrocast hace seis ediciones rápidas de vídeo en tu Mac, desde el mismo menú de herramientas: recortar, dividir, unir, cambiar la velocidad (de 0,25× a 4×, manteniendo el tono), recortar el encuadre y quitar el sonido. Todo se hace en tu Mac con ffmpeg y no se sube nada.',
+    'Ferrocast hace seis ediciones rápidas de vídeo en tu Mac, desde el mismo menú de herramientas: recortar, dividir, unir, cambiar la velocidad (de 0,25× a 4×, manteniendo el tono), recortar el encuadre y quitar el sonido. Todo se hace en tu Mac con ffmpeg y no se sube nada. Puedes usarlo con la interfaz en español.',
     'Es para ediciones sueltas, no para montar una película: no hay línea de tiempo con varias pistas ni transiciones. Necesita ffmpeg (`brew install ffmpeg`). Escribo Ferrocast, así que esta página solo describe lo que hace Ferrocast.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · necesita ffmpeg' },
@@ -93,6 +94,8 @@ export const page: GuideCopy = {
       ['¿Cómo quito el sonido a un vídeo?', 'Elige Mute video en la rueda de herramientas o escribe `mute`. Ferrocast crea una copia sin sonido y no toca el original.'],
       ['¿Puedo unir varios vídeos en uno?', 'Sí. Selecciona los vídeos, elige Join y ordénalos. El resultado es un MP4 y el primer clip fija el tamaño del lienzo.'],
       ['¿Qué necesito instalar?', 'Ferrocast y ffmpeg, que se instala con `brew install ffmpeg`. Funciona solo en Mac con Apple Silicon.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

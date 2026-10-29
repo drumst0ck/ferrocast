@@ -7,6 +7,7 @@
  * quality that was not checked.
  */
 import { allPairs, type Pair } from './convert';
+import { languageFaqEs } from './interface-language';
 
 export interface EsPair {
   slug: string;
@@ -40,7 +41,7 @@ export const esPairs: EsPair[] = [
     title: 'Convertir HEIC a JPG en Mac, gratis y sin subir fotos | Ferrocast',
     description: 'Convierte fotos HEIC del iPhone a JPG en tu Mac sin subirlas. Ferrocast usa sips de macOS: arrastra las fotos, pulsa ⇧ y elige JPEG. Gratis y de código abierto.',
     h1: 'Convertir HEIC a JPG en tu Mac, sin subir las fotos',
-    answer: 'Arrastra las fotos HEIC, pulsa ⇧ para abrir la rueda de conversión y suelta sobre JPEG. Ferrocast usa sips, la herramienta de imágenes de macOS, así que no hay que instalar nada más y las fotos no salen de tu Mac.',
+    answer: 'Arrastra las fotos HEIC, pulsa ⇧ para abrir la rueda de conversión y suelta sobre JPEG. Ferrocast usa sips, la herramienta de imágenes de macOS, así que no hay que instalar nada más y las fotos no salen de tu Mac. Puedes usarlo con la interfaz en español.',
     engine: 'sips (incluido en macOS)',
     needs: null,
     notes: [
@@ -52,6 +53,7 @@ export const esPairs: EsPair[] = [
       ['¿Se suben mis fotos a algún servidor?', 'No. Ferrocast convierte las fotos en tu Mac con sips; no se sube nada.'],
       ['¿Puedo convertir muchas fotos HEIC a la vez?', 'Sí. Selecciona o arrastra varias fotos y elige JPEG: cada una se guarda como JPG junto a su original.'],
       ['¿Necesito instalar algo además de Ferrocast?', 'No. La conversión de HEIC a JPG usa herramientas que ya vienen con macOS.'],
+      languageFaqEs,
     ],
   },
   {
@@ -62,7 +64,7 @@ export const esPairs: EsPair[] = [
     title: 'Convertir WebP a JPG en Mac sin subir la imagen | Ferrocast',
     description: 'Convierte imágenes WebP descargadas de la web a JPG en tu Mac, sin subirlas. Ferrocast usa sips de macOS: arrastra, pulsa ⇧ y elige JPEG. Gratis y MIT.',
     h1: 'Convertir WebP a JPG en tu Mac, sin subir la imagen',
-    answer: 'Arrastra la imagen WebP, pulsa ⇧ y suelta sobre JPEG. Ferrocast usa sips de macOS para leer el WebP y escribir el JPG, sin instalar nada más y sin subir el archivo.',
+    answer: 'Arrastra la imagen WebP, pulsa ⇧ y suelta sobre JPEG. Ferrocast usa sips de macOS para leer el WebP y escribir el JPG, sin instalar nada más y sin subir el archivo. Puedes usarlo con la interfaz en español.',
     engine: 'sips (incluido en macOS)',
     needs: null,
     notes: [
@@ -74,6 +76,7 @@ export const esPairs: EsPair[] = [
       ['¿Por qué las imágenes de la web vienen en WebP?', 'WebP es un formato de imagen pensado para la web que muchas páginas usan para que carguen más rápido. Algunas apps esperan JPG, de ahí la conversión.'],
       ['¿Necesito instalar algo?', 'No para pasar de WebP a JPG: Ferrocast usa sips, que viene con macOS. Solo para crear WebP hace falta cwebp (brew install webp).'],
       ['¿Se sube la imagen?', 'No. La conversión se hace en tu Mac.'],
+      languageFaqEs,
     ],
   },
   {
@@ -84,7 +87,7 @@ export const esPairs: EsPair[] = [
     title: 'Convertir MOV a MP4 en Mac, gratis y sin subir el vídeo | Ferrocast',
     description: 'Convierte un vídeo MOV a MP4 en tu Mac sin subirlo. Ferrocast usa avconvert de macOS con el ajuste de máxima calidad: arrastra, pulsa ⇧ y elige MP4. Gratis.',
     h1: 'Convertir MOV a MP4 en tu Mac, sin subir el vídeo',
-    answer: 'Arrastra el vídeo MOV, pulsa ⇧ y suelta sobre MP4. Ferrocast usa avconvert, la herramienta de vídeo de macOS, con su ajuste de máxima calidad. No hace falta ffmpeg y el vídeo no sale de tu Mac.',
+    answer: 'Arrastra el vídeo MOV, pulsa ⇧ y suelta sobre MP4. Ferrocast usa avconvert, la herramienta de vídeo de macOS, con su ajuste de máxima calidad. No hace falta ffmpeg y el vídeo no sale de tu Mac. Puedes usarlo con la interfaz en español.',
     engine: 'avconvert de macOS, ajuste PresetHighestQuality',
     needs: null,
     notes: [
@@ -95,6 +98,7 @@ export const esPairs: EsPair[] = [
       ['¿Necesito ffmpeg para pasar de MOV a MP4?', 'No. Ferrocast usa avconvert, que viene con macOS. ffmpeg solo hace falta para formatos que macOS no escribe, como MKV o WebM.'],
       ['¿Pierde calidad el vídeo?', 'Ferrocast usa el ajuste de máxima calidad de macOS (PresetHighestQuality). Cualquier recodificación cambia el archivo, pero ese ajuste prioriza la calidad sobre el tamaño.'],
       ['¿Se sube el vídeo?', 'No. Todo ocurre en tu Mac.'],
+      languageFaqEs,
     ],
   },
   {
@@ -106,7 +110,7 @@ export const esPairs: EsPair[] = [
     title: 'Convertir un vídeo a GIF en Mac (MOV o MP4), sin subirlo | Ferrocast',
     description: 'Convierte un vídeo MOV o MP4, como una grabación de pantalla, a GIF en tu Mac sin subirlo. Ferrocast usa ffmpeg: 12 fps y 640 px de ancho. Gratis y MIT.',
     h1: 'Convertir un vídeo a GIF en tu Mac, sin subirlo',
-    answer: 'Arrastra el vídeo (MOV o MP4), pulsa ⇧ y suelta sobre GIF. Ferrocast usa ffmpeg y crea un GIF a 12 fotogramas por segundo y 640 píxeles de ancho, junto al vídeo original.',
+    answer: 'Arrastra el vídeo (MOV o MP4), pulsa ⇧ y suelta sobre GIF. Ferrocast usa ffmpeg y crea un GIF a 12 fotogramas por segundo y 640 píxeles de ancho, junto al vídeo original. Puedes usarlo con la interfaz en español.',
     engine: 'ffmpeg, a 12 fps y 640 px de ancho',
     needs: 'ffmpeg',
     notes: [
@@ -118,6 +122,7 @@ export const esPairs: EsPair[] = [
       ['¿Necesito ffmpeg para convertir un vídeo a GIF?', 'Sí. Instálalo con brew install ffmpeg. Si falta, Ferrocast te muestra el comando.'],
       ['¿Puedo elegir los fotogramas por segundo o el tamaño?', 'No en esta conversión: el GIF sale a 12 fps y 640 px de ancho.'],
       ['¿Funciona con una grabación de pantalla del Mac?', 'Sí. Las grabaciones de pantalla de macOS son .mov, y MOV a GIF es una de las conversiones de Ferrocast.'],
+      languageFaqEs,
     ],
   },
   {
@@ -128,7 +133,7 @@ export const esPairs: EsPair[] = [
     title: 'Convertir PDF a Word (DOCX) en Mac, gratis y sin subirlo | Ferrocast',
     description: 'Convierte un PDF a Word (.docx) en tu Mac sin subirlo a ninguna web. Ferrocast usa LibreOffice, gratis y opcional: arrastra el PDF, pulsa ⇧ y elige DOCX.',
     h1: 'Convertir PDF a Word en tu Mac, sin subir el archivo',
-    answer: 'Arrastra el PDF, pulsa ⇧ y suelta sobre DOCX. Ferrocast usa LibreOffice, gratuito y de código abierto, para crear un documento de Word junto al PDF. El archivo no se sube a ningún sitio.',
+    answer: 'Arrastra el PDF, pulsa ⇧ y suelta sobre DOCX. Ferrocast usa LibreOffice, gratuito y de código abierto, para crear un documento de Word junto al PDF. El archivo no se sube a ningún sitio. Puedes usarlo con la interfaz en español.',
     engine: 'LibreOffice (opcional y gratuito)',
     needs: 'LibreOffice',
     notes: [
@@ -140,6 +145,7 @@ export const esPairs: EsPair[] = [
       ['¿Se sube mi PDF a algún servidor?', 'No. LibreOffice convierte el PDF en tu Mac; no se sube nada. Es la diferencia con los convertidores web.'],
       ['¿Necesito Microsoft Word?', 'No para convertir: Ferrocast usa LibreOffice. Para abrir el .docx puedes usar Word, Pages o LibreOffice.'],
       ['¿Necesito instalar algo?', 'Sí, LibreOffice: brew install --cask libreoffice. Es gratuito.'],
+      languageFaqEs,
     ],
   },
 ];
@@ -149,7 +155,7 @@ export const hub = {
   title: 'Convertir archivos en Mac sin subirlos: HEIC, MOV, PDF y más | Ferrocast',
   description: 'Convierte archivos en tu Mac sin subirlos a ninguna web: HEIC a JPG, MOV a MP4, vídeo a GIF, PDF a Word y 275 conversiones más. Gratis y de código abierto.',
   h1: 'Convertir archivos en tu Mac, sin subirlos',
-  lead: 'Ferrocast convierte archivos en tu propio Mac: arrastras el archivo, pulsas ⇧ y eliges el formato. El resultado se guarda junto al original y nunca lo sobrescribe. Son 275 conversiones entre 46 formatos de entrada; primero usa herramientas de macOS y, para algunos formatos, ffmpeg, LibreOffice o cwebp si los tienes instalados.',
+  lead: 'Ferrocast convierte archivos en tu propio Mac: arrastras el archivo, pulsas ⇧ y eliges el formato. El resultado se guarda junto al original y nunca lo sobrescribe. Son 275 conversiones entre 46 formatos de entrada; primero usa herramientas de macOS y, para algunos formatos, ffmpeg, LibreOffice o cwebp si los tienes instalados. Puedes usarlo con la interfaz en español.',
 };
 
 const PAIRS = new Map(allPairs().map((p) => [p.slug, p]));

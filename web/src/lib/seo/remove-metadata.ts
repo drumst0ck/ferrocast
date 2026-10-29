@@ -12,6 +12,7 @@
  * gone, say that HEIC, WebP and TIFF are not handled, no speed numbers, no rival speed or memory claims.
  */
 import type { GuideCopy } from './compress-video';
+import { languageFaqEs, languageFaqEn } from './interface-language';
 
 export const CHECKED = '2026-10-28';
 
@@ -99,6 +100,8 @@ export const en: GuideCopy = {
       ['Does “Remove all” remove everything?', 'No. Some container tags stay in video, audio and GIF, Creator and Producer are not written back in a PDF, and a PNG keeps chunks other than its text and EXIF ones. Open the copy and check before you share it.'],
       ['Can I share a photo from an iPhone without its location?', 'Apple’s Personal Safety guide says to select the photos in Photos, tap Share, tap Options and turn off Location, then share as usual.'],
       ['Is anything uploaded?', 'No. Ferrocast works on your Mac with its own code, ffmpeg and PDFKit.'],
+    
+      languageFaqEn,
     ],
   },
   more: {
@@ -124,7 +127,7 @@ export const es: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['Archivos', '/es/files/'], ['Quitar metadatos', '/es/quitar-metadatos-mac/']],
   h1: 'Quitar la ubicación y los metadatos de fotos, vídeos, audio y PDF en Mac',
   lead: [
-    'Ferrocast quita los metadatos en tu Mac y guarda una copia junto al original. En un JPEG elimina el bloque EXIF (donde viven el GPS y los datos de la cámara), XMP, IPTC y los comentarios, y copia los datos de la imagen sin tocarlos, así que no hay recompresión. En un PNG elimina los fragmentos de texto y EXIF. Con ffmpeg instalado quita etiquetas y capítulos de vídeo, audio y GIF sin recodificar, y vacía las propiedades de un PDF. No se sube nada.',
+    'Ferrocast quita los metadatos en tu Mac y guarda una copia junto al original. En un JPEG elimina el bloque EXIF (donde viven el GPS y los datos de la cámara), XMP, IPTC y los comentarios, y copia los datos de la imagen sin tocarlos, así que no hay recompresión. En un PNG elimina los fragmentos de texto y EXIF. Con ffmpeg instalado quita etiquetas y capítulos de vídeo, audio y GIF sin recodificar, y vacía las propiedades de un PDF. No se sube nada. Puedes usarlo con la interfaz en español.',
     'No es un limpiador forense. Las fotos HEIC, WebP y TIFF no se tratan directamente y «Remove all» deja algunas etiquetas del contenedor; la tabla y los límites de abajo dicen cuáles. Ferrocast es gratis y de código abierto (MIT). Lo escribo yo, por eso cada fila de Apple enlaza a la página de Apple.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · ffmpeg solo para vídeo, audio y GIF' },
@@ -190,6 +193,8 @@ export const es: GuideCopy = {
       ['¿«Remove all» quita absolutamente todo?', 'No. En vídeo, audio y GIF se quedan algunas etiquetas del contenedor; en un PDF, Creator y Producer no se escriben de vuelta, y un PNG conserva los fragmentos que no son de texto ni EXIF. Abre la copia y compruébalo antes de compartirla.'],
       ['¿Puedo compartir una foto desde el iPhone sin su ubicación?', 'La guía de seguridad personal de Apple indica que selecciones las fotos en Fotos, toques Compartir, toques Opciones y desactives Ubicación, y que compartas como siempre.'],
       ['¿Se sube algo?', 'No. Ferrocast trabaja en tu Mac con su propio código, ffmpeg y PDFKit.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

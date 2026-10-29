@@ -6,6 +6,7 @@
  * caveat, and never claim AI context from the screen or selection.
  */
 import type { GuideCopy } from './compress-video';
+import { languageFaqEn } from './interface-language';
 
 export const page: GuideCopy = {
   lang: 'en',
@@ -71,6 +72,8 @@ export const page: GuideCopy = {
       ['Can I use my Claude subscription?', 'Yes, through Claude Code, the official CLI, if it is installed. Ferrocast runs it with tools off and keeps one session warm while the chat is open.'],
       ['Do I need a subscription for AI in Ferrocast?', 'No. Ferrocast has no paid plan. A local model is free; cloud providers bill you directly for your own key.'],
       ['Are my API keys safe?', 'Keys are stored in the macOS Keychain, not in Ferrocast’s settings files.'],
+    
+      languageFaqEn,
     ],
   },
   more: {

@@ -20,7 +20,7 @@ export const page: GuideCopy = {
   h1: 'Ferrocast vs Raycast: what is free, what is paid',
   lead: [
     '**Is Raycast free?** Yes, for its core: clipboard history, quicklinks, calculator, snippets, window management and thousands of extensions. Raycast AI, Cloud Sync, Translator, Dictation and unlimited notes and clipboard history are in the paid plans, from $10 a month or $96 a year ([raycast.com/pricing](https://www.raycast.com/pricing), checked 27 October 2026).',
-    'Ferrocast is a free, open-source (MIT) launcher for Apple Silicon Macs with no paid plan. It covers several of the things Raycast charges for, with your own AI provider. Sync is opt-in through iCloud Drive, not Raycast Cloud Sync, and extensions you already installed with Raycast can run with limits. Ferrocast has no store of its own. The table below shows both sides. I make Ferrocast, so check the sources.',
+    'Ferrocast is a free, open-source (MIT) launcher for Apple Silicon Macs with no paid plan. It covers several of the things Raycast charges for, with your own AI provider, and floating Markdown notes with images. The interface is in English plus six more languages: Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese. Sync is opt-in through iCloud Drive, not Raycast Cloud Sync, and extensions you already installed with Raycast can run with limits. Ferrocast has no store of its own. The table below shows both sides. I make Ferrocast, so check the sources.',
   ],
   cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · no account' },
   limits: {
@@ -32,7 +32,8 @@ export const page: GuideCopy = {
       ['Clipboard history', 'Yes, 3 months', 'Unlimited', 'Yes; you choose how long to keep it, and it skips password managers'],
       ['Snippets, quicklinks, calculator', 'Yes', 'Yes', 'Yes'],
       ['Window management', 'Yes', 'Yes, plus custom commands', 'About 40 built-in commands'],
-      ['Notes', '5 notes', 'Unlimited', 'Floating Markdown notes'],
+      ['Notes', '5 notes', 'Unlimited', 'Floating Markdown notes with images'],
+      ['Interface language', 'Not compared here', 'Not compared here', 'English plus six more: Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese. Per Mac, not synced'],
       ['AI chat', 'Not included', 'Included, with 500 monthly credits', 'Ask AI with your provider: Ollama on your Mac by default, or your own key'],
       ['Bring your own AI key', 'Not included', 'Included', 'Yes (OpenAI-compatible servers, Anthropic, Claude Code)'],
       ['AI with screen or selection context', 'Not included', 'Included (Screen Awareness)', 'No'],

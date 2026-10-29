@@ -47,7 +47,7 @@ describe('Spanish files and tools hubs', () => {
     ];
     expect(Object.keys(galleryEs).sort()).toEqual(galleryIds);
     for (const id of Object.keys(filesEsActions)) expect(filesEsActions[id][0].length).toBeGreaterThan(0);
-    expect(filesEsFaq({ inputs: 46, pairs: 275 })).toHaveLength(4);
+    expect(filesEsFaq({ inputs: 46, pairs: 275 })).toHaveLength(5);
     expect(filesEs.h1).toMatch(/Arrastra/);
   });
 

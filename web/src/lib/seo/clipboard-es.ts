@@ -6,6 +6,7 @@
  * stores passwords; quote Apple's own warning instead; keep the "unencrypted JSON" caveat.
  */
 import type { GuideCopy } from './compress-video';
+import { languageFaqEs } from './interface-language';
 
 export const page: GuideCopy = {
   lang: 'es',
@@ -16,7 +17,7 @@ export const page: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['Historial del portapapeles', '/es/historial-portapapeles-mac/']],
   h1: 'Un historial del portapapeles para Mac que se salta las contraseñas',
   lead: [
-    'Ferrocast guarda lo que copias (texto, enlaces, colores, archivos e imágenes) para que puedas pegarlo después desde el lanzador. Lo que copias desde un gestor de contraseñas no se guarda: las apps como 1Password marcan esas copias como ocultas o temporales, y Ferrocast las ignora.',
+    'Ferrocast guarda lo que copias (texto, enlaces, colores, archivos e imágenes) para que puedas pegarlo después desde el lanzador. Lo que copias desde un gestor de contraseñas no se guarda: las apps como 1Password marcan esas copias como ocultas o temporales, y Ferrocast las ignora. Puedes usarlo con la interfaz en español.',
     'Spotlight tiene historial del portapapeles desde macOS Tahoe, y la propia guía de Apple avisa de que «puede aparecer información sensible» en él. Esta página compara los dos con lo que dice cada documentación. Aviso: escribo Ferrocast.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
@@ -70,6 +71,8 @@ export const page: GuideCopy = {
       ['¿El portapapeles de Spotlight guarda contraseñas?', 'La guía de Apple avisa de que puede aparecer información sensible en el portapapeles. Puedes borrar el historial con Clear History.'],
       ['¿Cuánto tiempo guarda Ferrocast el historial?', 'Lo eliges en Ajustes: 1 día, 1 semana, 1 mes, 3 meses, 1 año o sin límite. Las entradas fijadas se conservan.'],
       ['¿Dónde se guarda el historial?', 'En un archivo clipboard.json en tu Mac, sin cifrar. No se sube a ningún sitio salvo que actives la sincronización con iCloud, que viene desactivada, y las copias de seguridad de Ferrocast no lo incluyen.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

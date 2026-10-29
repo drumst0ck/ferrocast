@@ -12,6 +12,7 @@
  * page says so first; no speed claims; no third-party apps (their pages were not opened).
  */
 import type { GuideCopy } from './compress-video';
+import { languageFaqEs } from './interface-language';
 
 export const CHECKED = '2026-10-28';
 
@@ -28,7 +29,7 @@ export const page: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['Archivos', '/es/files/'], ['Unir PDF', '/es/unir-pdf-mac/']],
   h1: 'Unir, separar y reordenar páginas de PDF en Mac sin subirlos',
   lead: [
-    'Vista Previa, que ya viene con el Mac, une, reordena y borra páginas de un PDF. Ferrocast hace lo mismo en local con otro recorrido. Arrastras los PDF, tocas ⌘ y los sueltas sobre Merge PDF. Una ventana te deja elegir el orden y un organizador con miniaturas (⇧⌘O) reordena las páginas. Siempre se guarda una copia nueva junto al original. No se sube nada. Es gratis y de código abierto (MIT).',
+    'Vista Previa, que ya viene con el Mac, une, reordena y borra páginas de un PDF. Ferrocast hace lo mismo en local con otro recorrido. Arrastras los PDF, tocas ⌘ y los sueltas sobre Merge PDF. Una ventana te deja elegir el orden y un organizador con miniaturas (⇧⌘O) reordena las páginas. Siempre se guarda una copia nueva junto al original. No se sube nada. Es gratis y de código abierto (MIT). Puedes usarlo con la interfaz en español.',
     'Dos límites desde el principio: Ferrocast separa un PDF solo en una página por archivo (no por intervalos) y comprimir necesita Ghostscript, que no viene con el Mac. Escribo Ferrocast; no está afiliado a Apple.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
@@ -97,6 +98,8 @@ export const page: GuideCopy = {
       ['¿Cómo comprimo un PDF en Mac?', 'En Ferrocast elige Compress con un PDF; necesita Ghostscript y ofrece tres ajustes. En Vista Previa, elige Archivo > Exportar y el filtro Quartz «Reducción del tamaño de archivo»; Apple avisa de que la calidad puede bajar.'],
       ['¿Sobrescribe el PDF original?', 'No. Ferrocast siempre escribe un archivo nuevo junto al original, con «merged», «page N», «organized» o «compressed» en el nombre.'],
       ['¿Funciona con PDF con contraseña?', 'El organizador rechaza un PDF bloqueado con el aviso «PDF is locked». Ferrocast no desbloquea PDF.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

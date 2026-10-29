@@ -1,4 +1,5 @@
 import { counts } from '../data/status';
+import { languageFaqEs } from '../lib/seo/interface-language';
 
 export function filesEsMeta() {
   const n = counts();
@@ -12,7 +13,7 @@ export function filesEsMeta() {
 
 export const filesEs = {
   h1: 'Arrastra un archivo. Pulsa una tecla. Suéltalo.',
-  lead: 'Mantén un archivo, pulsa Mayús para conversiones, Comando para herramientas o Control para acciones. La rueda sigue abierta hasta que lo sueltas. Todo ocurre en tu Mac; no se sube nada.',
+  lead: 'Mantén un archivo, pulsa Mayús para conversiones, Comando para herramientas o Control para acciones. La rueda sigue abierta hasta que lo sueltas. Todo ocurre en tu Mac; no se sube nada. Puedes usarlo con la interfaz en español.',
   keysTitle: 'Tres teclas, tres ruedas',
   keysLead: 'Empieza a arrastrar un archivo y pulsa una tecla. Pulsa otra para cambiar de rueda; la rueda sigue abierta hasta que sueltas o cancelas.',
   wheelTitle: 'Prueba la rueda',
@@ -51,5 +52,6 @@ export function filesEsFaq(n: { inputs: number; pairs: number }): [string, strin
     ['¿Qué puede convertir?', `Hay ${n.inputs} formatos de entrada y ${n.pairs} pares de conversión entre imágenes, audio, vídeo, PDF, documentos, presentaciones, hojas de cálculo, subtítulos y archivos comprimidos. Usa el explorador de arriba para buscarlos.`],
     ['¿Sobrescribe mis archivos?', 'No. El resultado se escribe junto al original, con el mismo nombre y la extensión nueva. Si ese nombre está ocupado, añade 2, 3 y así sucesivamente.'],
     ['¿Puedo pulsar Intro sobre un archivo en el Finder?', 'Sí, como ajuste opcional. En Ajustes > General, activa «Enter on Finder selection» (desactivado por defecto, necesita Accesibilidad) y pulsar Retorno sobre archivos seleccionados en el Finder abre la rueda Convertir en lugar de renombrar. La orden Convert Finder Selection también funciona, y Opción-Intro sobre un resultado de archivo en el lanzador hace lo mismo.'],
+    languageFaqEs,
   ];
 }

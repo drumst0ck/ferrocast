@@ -8,6 +8,7 @@
  * no comparison with other apps; Spanish from Spain, tú.
  */
 import type { GuideCopy } from './compress-video';
+import { languageFaqEs } from './interface-language';
 
 export const CHECKED = '2026-10-28';
 
@@ -22,7 +23,7 @@ export const page: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['Captura con scroll', '/es/captura-de-pantalla-con-scroll-mac/']],
   h1: 'Cómo hacer una captura de pantalla con scroll en Mac, gratis',
   lead: [
-    'Con Ferrocast eliges el área que se desplaza, la app la desplaza por ti, toma una tira tras cada paso y las une en una sola imagen alta. Se detiene cuando el contenido deja de moverse o tras 60 pantallas. Después puedes copiar el texto de la imagen sin que salga de tu Mac.',
+    'Con Ferrocast eliges el área que se desplaza, la app la desplaza por ti, toma una tira tras cada paso y las une en una sola imagen alta. Se detiene cuando el contenido deja de moverse o tras 60 pantallas. Después puedes copiar el texto de la imagen sin que salga de tu Mac. Puedes usarlo con la interfaz en español.',
     'La guía de Apple sobre capturas de pantalla ([Apple](' + APPLE + ')) describe ⇧⌘3, ⇧⌘4, ⇧⌘5 y ⇧⌘6, y no menciona la captura con desplazamiento. Ferrocast es gratis y de código abierto (MIT); escribo Ferrocast y no está afiliado a Apple.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · macOS 14 o posterior' },
@@ -86,6 +87,8 @@ export const page: GuideCopy = {
       ['¿Puedo copiar el texto de una captura?', 'Sí. En la ventana de captura pulsa ⌘T: Ferrocast lee el texto con Vision en tu Mac y lo copia al portapapeles. La imagen no se sube a ningún sitio.'],
       ['¿Hay un atajo de teclado?', 'No por defecto. Puedes asignar uno a cada comando de captura en Ajustes → Capture → Shortcuts.'],
       ['¿Funciona en un Mac con macOS 13 o con Intel?', 'No. La captura necesita macOS 14 o posterior y un Mac con Apple Silicon.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

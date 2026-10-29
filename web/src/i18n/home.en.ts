@@ -6,6 +6,7 @@
  * Headline alternatives for a later A/B test: "Launch, calculate, paste, convert." (closer to the
  * previous headline). Not used: anything built on third-party product names.
  */
+import { languageFaqEn } from '../lib/seo/interface-language';
 export const en = {
   lang: 'en',
   meta: {
@@ -121,7 +122,7 @@ export const en = {
   notes: {
     aria: 'Notes',
     title: 'Notes above every app',
-    lead: 'A floating window you open with a hotkey. Type Markdown and it becomes formatting; changes are saved as you stop typing.',
+    lead: 'A floating window you open with a hotkey. Type Markdown and it becomes formatting, and you can paste or drop images. Changes are saved as you stop typing.',
     imgAlt: 'The Ferrocast Notes window with a heading, a bullet list and a task list',
     fieldLabel: 'Try Markdown typing in a sample note',
     fieldAria: 'Sample note you can edit',
@@ -148,6 +149,7 @@ export const en = {
       ['Export', 'Plain text, Markdown or HTML, saved to your Downloads folder.'],
       ['AI commands', 'Fix, shorten, change the tone or summarize, with the provider you set in Settings → AI.'],
       ['Dictation', 'Speak a note. It uses on-device recognition when your system supports it.'],
+      ['Images', 'Paste, drag or Insert Image… (⇧⌘I). PNG, JPEG, GIF, HEIC and WebP up to 20 MB, drawn up to 480 pt wide.'],
     ],
     docs: 'Docs',
   },
@@ -164,7 +166,7 @@ export const en = {
       ['Script Commands', 'Raycast-compatible: full, compact, silent and inline modes. Turn any script into a command.', '/launcher/script-commands/'],
       ['System tools', 'Kill Process by CPU or memory, timers and pomodoro, Wi-Fi and Keep Awake toggles, Quick Look.', '/launcher/system-commands/'],
       ['Screen recording', 'Record a screen, area or window with a countdown and pause. Auto zoom, camera, audio, a transcript you can cut, and export to MP4 or GIF.', '/launcher/screen-capture/'],
-      ['Notes', 'A floating Markdown window above your other apps. Pin, search, export, AI commands and dictation.', '/launcher/notes/'],
+      ['Notes', 'Floating Markdown notes with images, above your other apps. Pin, search, export, AI commands and dictation.', '/launcher/notes/'],
     ],
     calcQ: '18% of 240',
     aliasQ: 'gh',
@@ -278,8 +280,9 @@ export const en = {
       ['Can I use my ChatGPT or Claude subscription?', 'Yes, with caveats we spell out in the app. Claude: if Claude Code is installed and signed in, Ferrocast uses it as a provider, since it is Anthropic’s own tool. ChatGPT: Ferrocast can sign in with your account the way OpenAI’s Codex CLI does; it works, but OpenAI has not blessed third-party apps doing that, so the API with a key is the by-the-book route.'],
       ['Coming from Raycast. Will my stuff work?', 'Your Script Commands run as they are, and snippets import from a JSON export. Quicklinks you recreate in a minute. Extensions you already installed with Raycast can run if you turn that on: it is partial, off by default, and Ferrocast has no store of its own. Sync between Macs is opt-in through iCloud Drive.'],
       ['Does screen recording leave my Mac?', 'No. A recording is a folder on your Mac with the video and a log of your mouse, and the transcript is made on your Mac too. It needs macOS 14 or later and the Screen Recording permission.'],
-      ['Where are recordings and notes saved?', 'Recordings are folders in ~/Movies/Ferrocast Recordings and screenshots go to ~/Pictures/Ferrocast Captures. Notes are stored as Markdown in notes.json in the data folder, and exports go to Downloads.'],
+      ['Where are recordings and notes saved?', 'Recordings are folders in ~/Movies/Ferrocast Recordings and screenshots go to ~/Pictures/Ferrocast Captures. Notes are stored as Markdown in notes.json in the data folder. Images you paste or drop are copied into an attachments folder and linked from the note. Exports go to Downloads.'],
       ['What is missing today?', 'An extension store of its own, Search Menu Bar Items, and AI context from the selection or the screen. Raycast extensions are only the ones you already installed with Raycast, and not every part of them. Sync between Macs is opt-in through iCloud Drive.'],
+      languageFaqEn,
     ],
   },
   changelog: {

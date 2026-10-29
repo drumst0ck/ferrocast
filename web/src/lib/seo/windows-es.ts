@@ -8,6 +8,7 @@
  */
 import type { GuideCopy } from './compress-video';
 import { COMMANDS } from './windows';
+import { languageFaqEs } from './interface-language';
 
 export const CHECKED = '2026-10-28';
 
@@ -26,7 +27,7 @@ export const page: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['Gestión de ventanas', '/es/gestion-de-ventanas-mac/']],
   h1: `Organizar ventanas en Mac con atajos: ${COMMANDS.length} comandos en tu lanzador`,
   lead: [
-    `Ferrocast tiene ${COMMANDS.length} comandos que mueven y redimensionan la ventana de delante: mitades, tercios, cuartos, sextos, maximizar, centrar, desplazar y pasar a otra pantalla. Escribes su nombre en el lanzador o le asignas un atajo propio con ⇧⌘, sobre el comando. Es gratis y de código abierto (MIT).`,
+    `Ferrocast tiene ${COMMANDS.length} comandos que mueven y redimensionan la ventana de delante: mitades, tercios, cuartos, sextos, maximizar, centrar, desplazar y pasar a otra pantalla. Escribes su nombre en el lanzador o le asignas un atajo propio con ⇧⌘, sobre el comando. Es gratis y de código abierto (MIT). Puedes usarlo con la interfaz en español.`,
     `Puede que no necesites otra app: macOS ya tiene mosaico de ventanas con el botón verde, el menú Ventana y atajos con Fn-Control ([Apple](${TILING})). Rectangle y Magnet son gestores de ventanas dedicados. Ferrocast es para quien prefiere tenerlo dentro del lanzador. Escribo Ferrocast y no está afiliado a Apple, Rectangle ni Magnet.`,
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
@@ -83,6 +84,8 @@ export const page: GuideCopy = {
       ['¿Puedo poner mis propios atajos?', 'Sí. Selecciona un comando de ventana en el lanzador y pulsa ⇧⌘, para asignarle un atajo.'],
       ['¿Qué trae macOS de serie para dividir la pantalla?', 'Según la guía de Apple, el mosaico de ventanas está en el botón verde y en el menú Ventana, con atajos de Fn-Control. Incluye mitades, cuartos, rellenar, centrar y colocaciones de varias ventanas.'],
       ['¿Ferrocast es gratis?', 'Sí. Ferrocast es gratis y de código abierto con licencia MIT.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

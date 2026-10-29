@@ -8,6 +8,7 @@
  * Inline markup in strings: [text](href) for links and **text** for bold. Nothing else is parsed.
  */
 
+import { languageFaqEs, languageFaqEn } from './interface-language';
 export const CHECKED = '2026-10-27';
 
 export type Lang = 'en' | 'es';
@@ -55,7 +56,7 @@ export const es: AltCopy = {
   crumbs: [['Inicio', '/es/'], ['Alternativa a Raycast', '/es/alternativa-a-raycast/']],
   h1: 'Una alternativa a Raycast gratis y de código abierto para Mac',
   lead: [
-    'Ferrocast es un lanzador para Mac gratis y de código abierto (licencia MIT), escrito en Rust. Solo funciona en Mac con Apple Silicon, ocupa unos 8,5 MB y no pide cuenta.',
+    'Ferrocast es un lanzador para Mac gratis y de código abierto (licencia MIT), escrito en Rust. Solo funciona en Mac con Apple Silicon, ocupa unos 8,5 MB y no pide cuenta. Puedes usarlo con la interfaz en español.',
     'Tus Script Commands de Raycast funcionan tal cual y tus snippets se importan desde JSON. Las extensiones que ya instalaste con Raycast también pueden ejecutarse, desactivadas por defecto y no por completo. La sincronización entre Macs es opcional por iCloud Drive. Ferrocast no tiene tienda de extensiones propia.',
   ],
   cta: { dmg: 'Descargar el DMG', brew: 'Instalar con Homebrew', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
@@ -97,7 +98,7 @@ export const es: AltCopy = {
       ['Convertir y editar archivos sin subirlos', '275 conversiones entre 46 formatos de entrada, 26 herramientas de archivo y 7 acciones, desde una rueda de arrastrar y soltar. Todo se hace en tu Mac y el resultado queda junto al original, sin sobrescribirlo. Por ejemplo: [HEIC a JPG](/convert/heic-to-jpg/), [MOV a GIF](/convert/mov-to-gif/), [PDF a DOCX](/convert/pdf-to-docx/), [todas las conversiones](/es/files/) y [las herramientas](/es/tools/). La [comparativa con Permute y CloudConvert](/es/convertidor-de-archivos-gratis-mac/) está en español.'],
       ['Grabar la pantalla con zoom automático', 'La grabación sigue tus clics con zoom automático y la transcripción se hace en el Mac. Requiere macOS 14 o posterior y el permiso de Grabación de pantalla. [Cómo funciona](/es/docs/launcher/screen-capture/).'],
       ['Ask AI con tu propio modelo', 'Usa Ollama en tu Mac por defecto. También LM Studio y otros servidores compatibles con OpenAI, la API de Anthropic con tu clave y Claude Code. Sign in with ChatGPT funciona, pero OpenAI no lo ha autorizado para apps de terceros; la vía oficial es una API con clave. Las claves se guardan en el Llavero.'],
-      ['Ventanas, portapapeles y notas', 'Unos 40 comandos para colocar ventanas. El historial del portapapeles ignora las entradas de los gestores de contraseñas. Y notas Markdown que flotan sobre las demás ventanas.'],
+      ['Ventanas, portapapeles y notas', 'Unos 40 comandos para colocar ventanas. El historial del portapapeles ignora las entradas de los gestores de contraseñas. Y notas flotantes en Markdown con imágenes.'],
     ],
   },
   table: {
@@ -115,6 +116,7 @@ export const es: AltCopy = {
       ['Extensiones', 'Script Commands, y extensiones ya instaladas con Raycast (parcial, desactivado por defecto); sin tienda propia', 'Store de extensiones y Script Commands', 'Workflows (Powerpack) y Alfred Gallery'],
       ['Sync entre Macs', 'Opcional, por iCloud Drive (desactivada por defecto)', 'Cloud Sync en planes de pago', 'Con Dropbox u otro servicio de archivos (Powerpack)'],
       ['Conversión de archivos local', '275 pares, 46 formatos', 'No integrada según su web', 'No integrada según su web'],
+      ['Idioma de la interfaz', 'Inglés y seis más: español, alemán, francés, portugués de Brasil, japonés y chino simplificado. Por Mac, no se sincroniza', 'No se compara aquí', 'No se compara aquí'],
       ['Plataformas', 'macOS (Apple Silicon)', 'macOS, Windows (beta pública) e iOS', 'macOS'],
     ],
     checked: 'Datos de Raycast y Alfred comprobados el 27 de octubre de 2026 en sus webs oficiales. «No consta» significa que no lo encontramos en esas páginas, no que no exista. Los datos de Ferrocast salen de este proyecto y de [datos clave](/facts/).',
@@ -154,6 +156,8 @@ export const es: AltCopy = {
       ['¿Necesito ffmpeg?', 'No para muchas conversiones, porque Ferrocast usa primero herramientas de macOS. ffmpeg, LibreOffice, Ghostscript, cwebp y unrar son opcionales: Ferrocast solo los usa si están instalados, y las conversiones que los necesitan lo indican.'],
       ['¿Raycast es gratis?', 'Raycast tiene un plan Free para uso personal sin IA. Raycast Pro cuesta 10 $ al mes o 96 $ al año, según raycast.com/pricing (comprobado el 27 de octubre de 2026).'],
       ['¿Ferrocast está afiliado a Raycast?', 'No. Ferrocast es independiente y no está afiliado a Raycast ni a Alfred.'],
+    
+      languageFaqEs,
     ],
   },
   close: {
@@ -228,7 +232,7 @@ export const en: AltCopy = {
       ['A file converter that never uploads', '275 conversions across 46 input formats, 26 file tools and 7 actions, from a drag-and-drop wheel. Everything runs on your Mac and the result lands next to the original without overwriting it. For example [HEIC to JPG](/convert/heic-to-jpg/), [MOV to GIF](/convert/mov-to-gif/), [PDF to DOCX](/convert/pdf-to-docx/) or [every conversion](/files/).'],
       ['A screen recorder with auto zoom', 'Recordings follow your clicks with auto zoom, and the transcript is made on your Mac. Needs macOS 14 or later and the Screen Recording permission. [How it works](/docs/launcher/screen-capture/).'],
       ['Ask AI with your own model', 'Ollama on your Mac by default. Also LM Studio and other OpenAI-compatible servers, the Anthropic API with your key, and Claude Code. Sign in with ChatGPT works, but OpenAI has not approved it for third-party apps; the sanctioned route is an API key. Keys are stored in the Keychain.'],
-      ['Windows, clipboard and notes', 'About 40 window commands. Clipboard history skips entries from password managers. And Markdown notes that float above your other windows.'],
+      ['Windows, clipboard and notes', 'About 40 window commands. Clipboard history skips entries from password managers. And floating Markdown notes with images.'],
     ],
   },
   table: {
@@ -246,6 +250,7 @@ export const en: AltCopy = {
       ['Extensions', 'Script Commands, plus extensions already installed with Raycast (partial, off by default); no store of its own', 'Extension Store and Script Commands', 'Workflows (Powerpack) and Alfred Gallery'],
       ['Sync between Macs', 'Opt-in, through iCloud Drive (off by default)', 'Cloud Sync on paid plans', 'Through Dropbox or another file sync service (Powerpack)'],
       ['Local file conversion', '275 pairs, 46 formats', 'Not built in, per its website', 'Not built in, per its website'],
+      ['Interface language', 'English plus six more: Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese. Per Mac, not synced', 'Not compared here', 'Not compared here'],
       ['Platforms', 'macOS (Apple Silicon)', 'macOS, Windows (public beta) and iOS', 'macOS'],
     ],
     checked: 'Raycast and Alfred facts checked on 27 October 2026 on their official websites. “Not stated” means we did not find it on those pages, not that it does not exist. Ferrocast facts come from this project and its [key facts](/facts/).',
@@ -285,6 +290,7 @@ export const en: AltCopy = {
       ['Do I need ffmpeg?', 'Not for many conversions, because Ferrocast tries macOS tools first. ffmpeg, LibreOffice, Ghostscript, cwebp and unrar are optional: Ferrocast uses them only when they are installed, and the conversions that need them say so.'],
       ['Is Raycast free?', 'Raycast has a Free plan for personal use without AI. Raycast Pro costs $10 a month or $96 a year, according to raycast.com/pricing (checked on 27 October 2026).'],
       ['Is Ferrocast affiliated with Raycast?', 'No. Ferrocast is independent and not affiliated with Raycast or Alfred.'],
+      languageFaqEn,
     ],
   },
   close: {

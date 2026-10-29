@@ -6,6 +6,7 @@
  * claim AI context from the screen or selection, no subjective comparison with Raycast AI.
  */
 import type { GuideCopy } from './compress-video';
+import { languageFaqEs } from './interface-language';
 
 export const page: GuideCopy = {
   lang: 'es',
@@ -16,7 +17,7 @@ export const page: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['IA local en Mac', '/es/ia-local-mac/']],
   h1: 'Un lanzador para Mac con IA local, y tus propias claves cuando quieras',
   lead: [
-    'Ask AI en Ferrocast es un chat con respuestas en streaming y historial de conversaciones. De serie habla con **Ollama en tu propio Mac**, así que nada sale de él. Desde un menú del chat puedes cambiar a LM Studio, a cualquier servidor compatible con OpenAI, a la API de Anthropic con tu clave o a Claude Code con tu suscripción de Claude.',
+    'Ask AI en Ferrocast es un chat con respuestas en streaming y historial de conversaciones. De serie habla con **Ollama en tu propio Mac**, así que nada sale de él. Desde un menú del chat puedes cambiar a LM Studio, a cualquier servidor compatible con OpenAI, a la API de Anthropic con tu clave o a Claude Code con tu suscripción de Claude. Puedes usarlo con la interfaz en español.',
     'Ferrocast es gratis y de código abierto (MIT) y no hay un plan de IA que comprar. En Raycast la IA forma parte de los planes de pago y no está disponible en el plan Free ([raycast.com/pricing](https://www.raycast.com/pricing), comprobado el 28 de octubre de 2026). Escribo Ferrocast; no está afiliado a Raycast, Ollama ni LM Studio.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
@@ -72,6 +73,8 @@ export const page: GuideCopy = {
       ['¿Puedo usar mi suscripción de Claude?', 'Sí, a través de Claude Code, la CLI oficial, si la tienes instalada. Ferrocast la ejecuta sin herramientas y mantiene una sesión en caliente mientras el chat está abierto.'],
       ['¿Necesito una suscripción para la IA de Ferrocast?', 'No. Ferrocast no tiene plan de pago. Un modelo local es gratis; los proveedores en la nube te facturan directamente por tu propia clave.'],
       ['¿Están seguras mis claves de API?', 'Las claves se guardan en el Llavero de macOS, no en los archivos de ajustes de Ferrocast.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

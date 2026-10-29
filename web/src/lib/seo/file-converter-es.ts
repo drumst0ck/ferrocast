@@ -9,6 +9,7 @@
  */
 import type { GuideCopy } from './compress-video';
 import { counts } from '../../data/status';
+import { languageFaqEs } from './interface-language';
 
 export const CHECKED = '2026-10-28';
 
@@ -46,7 +47,7 @@ export const page: GuideCopy = {
   ],
   h1: 'Un convertidor de archivos gratis para Mac que no sube tus archivos',
   lead: [
-    `Ferrocast convierte archivos en tu Mac: arrastras, pulsas ⇧ y sueltas sobre un formato. Son ${c.pairs} conversiones entre ${c.inputs} formatos de entrada, y ${c.tools} herramientas (comprimir, recortar, tapar zonas, unir PDF). El resultado se guarda junto al original. Es gratis, de código abierto (MIT) y no pide cuenta.`,
+    `Ferrocast convierte archivos en tu Mac: arrastras, pulsas ⇧ y sueltas sobre un formato. Son ${c.pairs} conversiones entre ${c.inputs} formatos de entrada, y ${c.tools} herramientas (comprimir, recortar, tapar zonas, unir PDF). El resultado se guarda junto al original. Es gratis, de código abierto (MIT) y no pide cuenta. Puedes usarlo con la interfaz en español.`,
     'Permute es un convertidor de pago para Mac, con narración, OCR y transcripción. CloudConvert es una web, con un plan gratis diario. La tabla dice lo que publica cada web, con la fecha en que lo leí.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · macOS 13 o posterior · sin cuenta' },
@@ -173,6 +174,8 @@ export const page: GuideCopy = {
         '¿Cuánto cuesta CloudConvert?',
         'El plan gratis son 10 conversiones al día, archivos de hasta 1 GB y 5 minutos de proceso. Un paquete cuesta 17 $ por 1000 créditos. La suscripción son 9 $ al mes por 1000 créditos al mes. Lo leí en su página de precios el 28 de octubre de 2026.',
       ],
+    
+      languageFaqEs,
     ],
   },
   more: {

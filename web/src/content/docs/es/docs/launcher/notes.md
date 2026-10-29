@@ -86,6 +86,8 @@ Para quitar una imagen, selecciónala y pulsa Borrar. Un archivo que ninguna not
 
 La ventana de Notes edita solo las notas de Ferrocast. Las notas de tu bóveda de Obsidian no se editan aquí, así que Ferrocast nunca copia una imagen a tu bóveda ni mueve imágenes de ella a su carpeta.
 
+Con la sincronización con iCloud activada, las imágenes de las notas viajan por iCloud Drive como archivos aparte. Cada Mac sube solo las suyas. Una imagen que falta se descarga cuando una nota sincronizada la enlaza, y no se borra mientras las notas de algún Mac sigan enlazándola.
+
 ## Organizar las notas
 
 - **Browse Notes**: <kbd>⌘</kbd> <kbd>P</kbd> o el botón de la barra de herramientas lista todas las notas.

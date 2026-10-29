@@ -8,6 +8,7 @@
  * were not on the page that day and are not used. Cutscript's price was not on the blur doc.
  */
 
+import { languageFaqEs, languageFaqEn } from './interface-language';
 export const CHECKED = '2026-10-28';
 
 const KOI = 'https://koiscribe.com/guides/blur-part-of-video-mac';
@@ -118,6 +119,7 @@ export const en: BlurCopy = {
       ['Which formats does it accept, and does it overwrite the original?', 'It accepts mp4, mov and mkv. The copy is an H.264 MP4 named with “redacted”, next to the original. It never overwrites the original. The picture is re-encoded; if the file has audio, that audio is copied.'],
       ['Do I need ffmpeg?', 'Yes. Install it with brew install ffmpeg. If it is missing, Ferrocast shows that command.'],
       ['What about a photo?', 'Redact photo (⇧⌘R) can detect faces and text on the Mac, or you draw areas, with a solid colour or a blur from 2 to 80 pixels. That is for jpg, png, webp, heic and tiff, not for video.'],
+      languageFaqEn,
     ],
   },
   more: {
@@ -144,7 +146,7 @@ export const es: BlurCopy = {
   crumbs: [['Inicio', '/es/'], ['Difuminar parte de un vídeo', '/es/difuminar-video-mac/']],
   h1: 'Difuminar parte de un vídeo en Mac sin subirlo a internet',
   lead: [
-    'Ferrocast tapa hasta 64 zonas de un vídeo, cada una con su inicio y su fin, con desenfoque o un bloque negro sólido. Lo hace en tu Mac y no sube el archivo. Necesita ffmpeg (`brew install ffmpeg`). No sigue una cara ni un objeto que se mueve: la zona se queda donde la pones.',
+    'Ferrocast tapa hasta 64 zonas de un vídeo, cada una con su inicio y su fin, con desenfoque o un bloque negro sólido. Lo hace en tu Mac y no sube el archivo. Necesita ffmpeg (`brew install ffmpeg`). No sigue una cara ni un objeto que se mueve: la zona se queda donde la pones. Puedes usarlo con la interfaz en español.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · macOS 13 o posterior · necesita ffmpeg' },
   before: {
@@ -215,6 +217,8 @@ export const es: BlurCopy = {
       ['¿Qué formatos acepta y sobrescribe el original?', 'Acepta mp4, mov y mkv. La copia es un MP4 en H.264, con «redacted» en el nombre, junto al original. Nunca lo sobrescribe. La imagen se recodifica; si hay audio, ese audio se copia.'],
       ['¿Necesito ffmpeg?', 'Sí. Instálalo con brew install ffmpeg. Si falta, Ferrocast muestra ese comando.'],
       ['¿Y en una foto?', 'Redactar imagen (⇧⌘R) puede detectar caras y texto en el Mac, o dibujas las zonas, con un color sólido o un desenfoque de 2 a 80 píxeles. Es para jpg, png, webp, heic y tiff, no para vídeo.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

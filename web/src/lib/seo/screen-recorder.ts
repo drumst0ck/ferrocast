@@ -6,6 +6,7 @@
  * comparison with Screen Studio; its prices only as its website states them.
  */
 import type { GuideCopy } from './compress-video';
+import { languageFaqEs, languageFaqEn } from './interface-language';
 
 export const CHECKED = '2026-10-27';
 
@@ -67,6 +68,8 @@ export const en: GuideCopy = {
       ['Can I add my webcam?', 'Yes. Turn on Camera in Settings → Capture → Sources; in the editor it can be an overlay or a split layout.'],
       ['Which macOS do I need?', 'macOS 14 or later on an Apple Silicon Mac, with the Screen Recording permission.'],
       ['Can I export a GIF?', 'Yes, at 480, 720 or 960 px wide and 10 or 15 fps, for clips up to about 20 seconds at 960 px.'],
+    
+      languageFaqEn,
     ],
   },
   more: {
@@ -91,7 +94,7 @@ export const es: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['Grabar la pantalla con zoom', '/es/grabar-pantalla-mac-zoom-automatico/']],
   h1: 'Grabar la pantalla del Mac con zoom automático, gratis',
   lead: [
-    'Ferrocast graba la pantalla, un área o una ventana y abre la grabación en un editor que hace zoom hacia tus clics automáticamente. Puedes añadir tu cámara, ajustar el cursor, transcribir lo que dices en tu propio Mac y exportar a MP4 o GIF. Es gratis y de código abierto (MIT), y vive en el mismo lanzador que usas para apps, portapapeles y archivos.',
+    'Ferrocast graba la pantalla, un área o una ventana y abre la grabación en un editor que hace zoom hacia tus clics automáticamente. Puedes añadir tu cámara, ajustar el cursor, transcribir lo que dices en tu propio Mac y exportar a MP4 o GIF. Es gratis y de código abierto (MIT), y vive en el mismo lanzador que usas para apps, portapapeles y archivos. Puedes usarlo con la interfaz en español.',
     'Screen Studio es una app de pago: su web indica 9 $ al mes con pago anual o 29 $ al mes (comprobado el 27 de octubre de 2026), con funciones como enlaces para compartir y transcripción en la nube que Ferrocast no tiene. Si las necesitas, es mejor opción.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · macOS 14 o posterior' },
@@ -140,6 +143,8 @@ export const es: GuideCopy = {
       ['¿Puedo añadir mi cámara?', 'Sí. Activa Camera en Ajustes → Capture → Sources; en el editor puede ir superpuesta o en vista dividida.'],
       ['¿Qué versión de macOS necesito?', 'macOS 14 o posterior en un Mac con Apple Silicon, con el permiso de Grabación de pantalla.'],
       ['¿Puedo exportar un GIF?', 'Sí, de 480, 720 o 960 px de ancho y a 10 o 15 fps, con clips de hasta unos 20 segundos a 960 px.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

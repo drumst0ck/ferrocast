@@ -3,6 +3,7 @@
  * (home.test.ts lo comprueba). Vocabulario: convertir, comprimir, recortar (crop), cortar (trim),
  * dividir, unir, redactar/ocultar, anotar, organizar páginas.
  */
+import { languageFaqEs } from '../lib/seo/interface-language';
 import type { HomeCopy } from './home.en';
 
 export const es: HomeCopy = {
@@ -17,7 +18,7 @@ export const es: HomeCopy = {
     aria: 'Introducción',
     line1: 'El lanzador rápido',
     line2: 'que además convierte tus archivos.',
-    sub: 'Busca, calcula, pega y consulta a una IA desde el teclado. Arrastra cualquier archivo, pulsa una tecla y conviértelo, comprímelo, recórtalo, córtalo u oculta partes en tu Mac. Código abierto, 8,5 MB y nada sale de tu disco.',
+    sub: 'Busca, calcula, pega y consulta a una IA desde el teclado, con la interfaz en español. Arrastra cualquier archivo, pulsa una tecla y conviértelo, comprímelo, recórtalo, córtalo u oculta partes en tu Mac. Código abierto, 8,5 MB y nada sale de tu disco.',
     ctaInstall: 'Descargar',
     ctaFiles: 'Ver las herramientas de archivos',
     proof: 'MIT · Apple Silicon · sin cuenta · {pairs} conversiones',
@@ -120,7 +121,7 @@ export const es: HomeCopy = {
   notes: {
     aria: 'Notas',
     title: 'Notas sobre cualquier app',
-    lead: 'Una ventana flotante que abres con un atajo. Escribe Markdown y se convierte en formato; los cambios se guardan al dejar de escribir.',
+    lead: 'Una ventana flotante que abres con un atajo. Escribe Markdown y se convierte en formato, y puedes pegar o soltar imágenes. Los cambios se guardan al dejar de escribir.',
     imgAlt: 'La ventana de Notas de Ferrocast con un título, una lista con viñetas y una lista de tareas',
     fieldLabel: 'Prueba la escritura con Markdown en una nota de ejemplo',
     fieldAria: 'Nota de ejemplo que puedes editar',
@@ -147,6 +148,7 @@ export const es: HomeCopy = {
       ['Exportar', 'Texto plano, Markdown o HTML, en tu carpeta de Descargas.'],
       ['Comandos de IA', 'Corrige, acorta, cambia el tono o resume, con el proveedor que elijas en Ajustes → AI.'],
       ['Dictado', 'Dicta una nota. Usa reconocimiento en el dispositivo cuando tu sistema lo admite.'],
+      ['Imágenes', 'Pega, arrastra o Insert Image… (⇧⌘I). PNG, JPEG, GIF, HEIC y WebP de hasta 20 MB, dibujadas hasta 480 pt de ancho.'],
     ],
     docs: 'Documentación',
   },
@@ -163,7 +165,7 @@ export const es: HomeCopy = {
       ['Script Commands', 'Compatibles con Raycast: modos full, compact, silent e inline. Convierte cualquier script en un comando.', '/launcher/script-commands/'],
       ['Herramientas del sistema', 'Kill Process por CPU o memoria, temporizadores y pomodoro, interruptores de Wi-Fi y Keep Awake, Quick Look.', '/launcher/system-commands/'],
       ['Grabación de pantalla', 'Graba una pantalla, un área o una ventana con cuenta atrás y pausa. Zoom automático, cámara, audio, una transcripción que puedes cortar y exportación a MP4 o GIF.', '/launcher/screen-capture/'],
-      ['Notas', 'Una ventana flotante con Markdown sobre tus otras apps. Fija, busca, exporta, usa comandos de IA y dicta.', '/launcher/notes/'],
+      ['Notas', 'Notas flotantes en Markdown con imágenes, sobre tus otras apps. Fija, busca, exporta, usa comandos de IA y dicta.', '/launcher/notes/'],
     ],
     calcQ: '18% of 240',
     aliasQ: 'gh',
@@ -277,8 +279,9 @@ export const es: HomeCopy = {
       ['¿Puedo usar mi suscripción de ChatGPT o de Claude?', 'Sí, con matices que explicamos en la app. Claude: si Claude Code está instalado y con sesión iniciada, Ferrocast lo usa como proveedor, ya que es la herramienta oficial de Anthropic. ChatGPT: Ferrocast puede iniciar sesión con tu cuenta como lo hace la CLI Codex de OpenAI; funciona, pero OpenAI no ha respaldado que apps de terceros lo hagan, por lo que la API con clave es la vía correcta.'],
       ['Vengo de Raycast. ¿Funcionará lo mío?', 'Tus Script Commands se ejecutan tal cual y los snippets se importan desde una exportación JSON. Los quicklinks los recreas en un minuto. Las extensiones que ya instalaste con Raycast pueden ejecutarse si lo activas: es parcial, está desactivado por defecto y Ferrocast no tiene tienda propia. La sincronización entre Macs es opcional por iCloud Drive.'],
       ['¿La grabación de pantalla sale de mi Mac?', 'No. Una grabación es una carpeta en tu Mac con el vídeo y un registro de tu ratón, y la transcripción también se hace en tu Mac. Requiere macOS 14 o posterior y el permiso de Grabación de pantalla.'],
-      ['¿Dónde se guardan las grabaciones y las notas?', 'Las grabaciones son carpetas en ~/Movies/Ferrocast Recordings y las capturas van a ~/Pictures/Ferrocast Captures. Las notas se guardan como Markdown en notes.json, en la carpeta de datos, y las exportaciones van a Descargas.'],
+      ['¿Dónde se guardan las grabaciones y las notas?', 'Las grabaciones son carpetas en ~/Movies/Ferrocast Recordings y las capturas van a ~/Pictures/Ferrocast Captures. Las notas se guardan como Markdown en notes.json, en la carpeta de datos. Las imágenes que pegas o sueltas se copian a una carpeta attachments y se enlazan desde la nota. Las exportaciones van a Descargas.'],
       ['¿Qué falta hoy?', 'Una tienda de extensiones propia, Search Menu Bar Items y contexto de IA desde la selección o la pantalla. Las extensiones de Raycast son solo las que ya instalaste con Raycast, y no todas sus partes. La sincronización entre Macs es opcional por iCloud Drive.'],
+      languageFaqEs,
     ],
   },
   changelog: {

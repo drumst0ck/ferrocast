@@ -8,6 +8,7 @@
  * comparisons with other apps; no platform limit without an official source.
  */
 
+import { languageFaqEs, languageFaqEn } from './interface-language';
 export const CHECKED = '2026-10-27';
 
 /** Measured with Ferrocast's own ffmpeg arguments on a noisy 60 s 1080p60 test clip (see the feature log). */
@@ -101,6 +102,7 @@ export const en: GuideCopy = {
       ['Does it overwrite my original?', 'No. The smaller copy is saved next to the original as “name compressed.mp4”.'],
       ['Can I compress several videos at once?', 'Yes. Select several videos and open Compress…; each one is compressed to the same target size.'],
       ['Is Ferrocast free?', 'Yes. Ferrocast is free and open source under the MIT licence, with no account and no paid plan.'],
+      languageFaqEn,
     ],
   },
   more: {
@@ -126,7 +128,7 @@ export const es: GuideCopy = {
   crumbs: [['Inicio', '/es/'], ['Comprimir un vídeo a un tamaño', '/es/comprimir-video-a-un-tamano/']],
   h1: 'Comprimir un vídeo a un tamaño concreto en tu Mac',
   lead: [
-    'Escribe el tamaño que necesitas y Ferrocast calcula el bitrate a partir de la duración del vídeo; después guarda un MP4 más pequeño junto al original. No se sube nada. Ferrocast es gratis y de código abierto (MIT) y usa ffmpeg en tu Mac para el vídeo.',
+    'Escribe el tamaño que necesitas y Ferrocast calcula el bitrate a partir de la duración del vídeo; después guarda un MP4 más pequeño junto al original. No se sube nada. Ferrocast es gratis y de código abierto (MIT) y usa ffmpeg en tu Mac para el vídeo. Puedes usarlo con la interfaz en español.',
     'Apunta a ese tamaño, pero no lo garantiza al byte. En nuestra prueba el resultado quedó hasta un 0,7 % por encima del objetivo, así que deja un pequeño margen bajo el límite.',
   ],
   cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · necesita ffmpeg para vídeo' },
@@ -188,6 +190,8 @@ export const es: GuideCopy = {
       ['¿Sobrescribe el original?', 'No. La copia más pequeña se guarda junto al original como «nombre compressed.mp4».'],
       ['¿Puedo comprimir varios vídeos a la vez?', 'Sí. Selecciona varios vídeos y abre Compress…; cada uno se comprime al mismo tamaño objetivo.'],
       ['¿Ferrocast es gratis?', 'Sí. Ferrocast es gratis y de código abierto con licencia MIT, sin cuenta ni plan de pago.'],
+    
+      languageFaqEs,
     ],
   },
   more: {

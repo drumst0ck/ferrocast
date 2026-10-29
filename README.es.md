@@ -53,7 +53,8 @@ Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no 
 - **Snippets** con placeholders y auto-expansión, y **quicklinks** con argumentos.
 - **Script Commands** compatibles con los metadatos de Raycast (full, compact, silent, inline).
 - **Gestión de ventanas** con unos 40 diseños, más Kill Process, temporizadores, notas, emoji y Quick Look.
-- **Notas**: una ventana flotante de texto enriquecido con Markdown, menú `/`, notas fijadas, exportación, enlaces `ferrocast://`, comandos de IA y dictado.
+- **Notas**: notas flotantes en Markdown con imágenes (pegar, arrastrar o Insert Image…; PNG, JPEG, GIF, HEIC y WebP de hasta 20 MB), menú `/`, notas fijadas, exportación, enlaces `ferrocast://`, comandos de IA y dictado. Las notas de una bóveda de Obsidian no se editan en esa ventana.
+- **Idiomas de la interfaz**: inglés, español, alemán, francés, portugués de Brasil, japonés y chino simplificado. Sigue el orden de idiomas de macOS, o Ajustes → General → Idioma. Se guarda en cada Mac y no se sincroniza. Lo que no está traducido vuelve al inglés. Los nombres que escribes y la interfaz de las extensiones de Raycast no se traducen.
 - **Ask AI** con Ollama, cualquier servidor compatible con OpenAI, la API de Anthropic, Claude Code o Sign in with ChatGPT.
 
 ## Herramientas de archivo
