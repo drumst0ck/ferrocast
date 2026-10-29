@@ -4,6 +4,7 @@ import SiteHeader from '../../components/SiteHeader.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
 import Crumbs from '../../components/seo/Crumbs.astro';
 import SeoNav from '../../components/seo/SeoNav.astro';
+import Shots from '../../components/seo/Shots.astro';
 import RelatedGuides from '../../components/seo/RelatedGuides.astro';
 import { dmgUrl } from '../../data/install';
 import { breadcrumbs, SITE } from '../../lib/seo/jsonld';
@@ -31,6 +32,7 @@ const jsonLd = [
     <Crumbs items={t.crumbs} />
     <h1>{t.h1}</h1>
     <p class="lead">{t.lead}</p>
+    <Shots path={t.path} where="lead" />
 
     <h2>{t.short.h}</h2>
     <ul>{t.short.items.map((s) => <li set:html={inline(s)} />)}</ul>

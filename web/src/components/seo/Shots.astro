@@ -1,0 +1,8 @@
+---
+/** Existing screenshots for a guide (lib/seo/shots.ts), with the same markup the home page uses. */
+import { shotsFor, type ShotPlace } from '../../lib/seo/shots';
+interface Props { path: string; where: ShotPlace }
+const { path, where } = Astro.props;
+const shots = shotsFor(path).filter((s) => s.where === where);
+---
+{shots.map((s) => <img class="shot" src={s.src} alt={s.alt} width={s.w} height={s.h} loading="lazy" decoding="async" />)}

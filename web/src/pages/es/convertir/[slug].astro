@@ -4,6 +4,7 @@ import SiteHeader from '../../../components/SiteHeader.astro';
 import SiteFooter from '../../../components/SiteFooter.astro';
 import Crumbs from '../../../components/seo/Crumbs.astro';
 import SeoNav from '../../../components/seo/SeoNav.astro';
+import Shots from '../../../components/seo/Shots.astro';
 import { installCommand as brewBlock } from '../../../data/install';
 import { installCommand } from '../../../lib/seo/convert';
 import { breadcrumbs, howTo, SITE } from '../../../lib/seo/jsonld';
@@ -45,6 +46,7 @@ const others = esPairs.filter((x) => x.slug !== e.slug);
     <p class="lead">{e.answer}</p>
     <h2>Cómo convertir {e.inLabel} a {e.outLabel}</h2>
     <ol>{steps.map(([n, t]) => <li><strong>{n}.</strong> {t}</li>)}</ol>
+    <Shots path={`/es/convertir/${e.slug}/`} where="steps" />
     <h2>Qué usa y qué necesita</h2>
     <dl>
       <dt>Herramienta</dt><dd>{e.engine}</dd>

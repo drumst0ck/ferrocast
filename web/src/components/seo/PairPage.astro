@@ -9,6 +9,7 @@ import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
 import { esFor } from '../../lib/seo/convert-es';
 import { pairGuides } from '../../lib/seo/pair-guides';
 import { inline, plain } from '../../lib/seo/markup';
+import Shots from './Shots.astro';
 import '../../styles/seo.css';
 
 interface Props { pair: Pair }
@@ -51,6 +52,7 @@ if (guide) jsonLd.push({ '@context': 'https://schema.org', '@type': 'FAQPage', m
       <li>Tap <kbd>⇧</kbd> for the conversion wheel (or press <kbd>⌥</kbd><kbd>↵</kbd> on a file result).</li>
       <li>Release over <strong>{p.outLabel}</strong>. The copy is saved beside the original.</li>
     </ol>
+    <Shots path={`/convert/${p.slug}/`} where="steps" />
     <h2>What this pair needs</h2>
     <p>{facts.requirement}</p>
     {facts.limits.length > 0 && (<>
