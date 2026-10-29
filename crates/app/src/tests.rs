@@ -9065,6 +9065,26 @@ fn the_menu_bar_icon_setting_shows_and_hides_the_icon_without_a_restart() {
 }
 
 #[test]
+fn the_language_picker_loads_the_cjk_font_for_the_japanese_and_chinese_names() {
+    let mut app = settings_app(0, egui::ThemePreference::Dark);
+    app.settings.language = "es".into();
+    render(&mut app, vec![]);
+    assert!(!app.wide_font, "a Spanish interface does not load it up front");
+    // the language picker is the 170 pt combo (the theme picker comes first); scroll it into view
+    let language_combo =
+        |app: &mut App| notes_tab_hits(app, "combo").into_iter().find(|r| (r.width() - 170.0).abs() < 1.0).map(|r| r.center());
+    scroll_until(&mut app, language_combo).expect("language combo in view");
+    for _ in 0..30 {
+        render(&mut app, vec![]);
+    }
+    let combo = language_combo(&mut app).expect("language combo");
+    assert!(!app.wide_font, "scrolling past it does not load it");
+    click_at(&mut app, combo);
+    render(&mut app, vec![]);
+    assert!(app.wide_font, "日本語 and 简体中文 in the open list need the CJK glyphs");
+}
+
+#[test]
 fn a_menu_bar_click_toggles_the_notes_window() {
     let (mut app, st) = notes_app(vec![notes_note("a", "Alpha", 1)]);
     app.bus.send(Msg::Tray("notes_toggle".into()));
