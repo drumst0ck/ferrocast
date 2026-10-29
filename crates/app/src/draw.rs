@@ -7279,7 +7279,7 @@ impl App {
                                     ui.ctx().data_mut(|d| d.insert_temp(Id::new("enter-on-finder-toggle"), ui.min_rect()));
                                 },
                             );
-                            row(ui, pal, "Menu bar icon", "A small icon to open Ferrocast with the mouse. Needs a restart.", |ui| toggle(ui, pal, &mut s.show_menu_bar_icon));
+                            row(ui, pal, "Menu bar icon", "A small icon to open Ferrocast with the mouse.", |ui| toggle(ui, pal, &mut s.show_menu_bar_icon));
                         });
                         ui.add_space(14.0);
                         section(ui, pal, "Updates");
@@ -10202,6 +10202,7 @@ impl App {
         let notes_changed = s.notes_zoom != self.settings.notes_zoom
             || s.notes_escape_loses_focus != self.settings.notes_escape_loses_focus
             || s.notes_menu_bar_button != self.settings.notes_menu_bar_button;
+        let menu_bar_icon_changed = s.show_menu_bar_icon != self.settings.show_menu_bar_icon;
         let sync_turned_on = s.sync_enabled && !self.settings.sync_enabled;
         let language_changed = s.language != self.settings.language;
         self.settings = s;
@@ -10218,6 +10219,9 @@ impl App {
         }
         if notes_changed {
             self.apply_notes_settings();
+        }
+        if menu_bar_icon_changed {
+            self.sync_main_tray();
         }
         if start_poller {
             // the poller only exists once the check was on: turning it on later starts it now
