@@ -38,7 +38,7 @@ export const esPairs: EsPair[] = [
     en: 'heic-to-jpg',
     inLabel: 'HEIC',
     outLabel: 'JPG',
-    title: 'Convertir HEIC a JPG en Mac, gratis y sin subir fotos | Ferrocast',
+    title: 'Convertir HEIC a JPG en Mac gratis | Ferrocast',
     description: 'Convierte fotos HEIC del iPhone a JPG en tu Mac sin subirlas. Ferrocast usa sips de macOS: arrastra las fotos, pulsa ⇧ y elige JPEG. Gratis y de código abierto.',
     h1: 'Convertir HEIC a JPG en tu Mac, sin subir las fotos',
     answer: 'Arrastra las fotos HEIC, pulsa ⇧ para abrir la rueda de conversión y suelta sobre JPEG. Ferrocast usa sips, la herramienta de imágenes de macOS, así que no hay que instalar nada más y las fotos no salen de tu Mac. Puedes usarlo con la interfaz en español.',
