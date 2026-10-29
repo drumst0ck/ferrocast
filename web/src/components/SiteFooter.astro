@@ -1,5 +1,6 @@
 ---
 import FootMark from './FootMark.astro';
+import GuidesNav from './GuidesNav.astro';
 interface Props { lang?: 'en' | 'es' }
 const { lang = 'en' } = Astro.props;
 const es = lang === 'es';
@@ -8,6 +9,7 @@ const repo = 'https://github.com/drumst0ck/ferrocast';
 ---
 <FootMark />
 <footer class="foot">
+  <GuidesNav lang={lang} />
   <span>{es ? 'Un lanzador rápido para macOS' : 'A fast launcher for macOS'}</span>
   <nav aria-label={es ? 'Enlaces' : 'Links'}><a href={`${base}${es ? '/es/' : '/'}`}>{es ? 'Inicio' : 'Home'}</a><a href={`${base}${es ? '/es/files/' : '/files/'}`}>{es ? 'Convertir archivos' : 'Convert & file tools'}</a><a href={`${base}${es ? '/es/alternativa-a-raycast/' : '/raycast-alternative/'}`}>{es ? 'Alternativa a Raycast' : 'Raycast alternative'}</a><a href={`${base}${es ? '/es' : ''}/docs/`}>{es ? 'Documentación' : 'Docs'}</a><a href={`${base}/changelog/`}>Changelog</a><a href={repo}>GitHub</a><a href={`${repo}/blob/master/LICENSE`}>{es ? 'Licencia' : 'License'}</a></nav>
   <span class="r">2026 · MIT</span>

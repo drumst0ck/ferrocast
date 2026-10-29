@@ -4,6 +4,7 @@ import SiteHeader from '../../components/SiteHeader.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
 import Crumbs from '../../components/seo/Crumbs.astro';
 import SeoNav from '../../components/seo/SeoNav.astro';
+import RelatedGuides from '../../components/seo/RelatedGuides.astro';
 import { dmgUrl } from '../../data/install';
 import { breadcrumbs, SITE } from '../../lib/seo/jsonld';
 import { inline, plain } from '../../lib/seo/markup';
@@ -49,6 +50,8 @@ const jsonLd = [
 
     <h2>{t.enough.h}</h2>
     {t.enough.paras.map((p) => <p set:html={inline(p)} />)}
+
+    <RelatedGuides path={t.path} lang="es" body={{ ...t, more: undefined }} />
 
     <h2>{t.faq.h}</h2>
     <div class="c-faq">

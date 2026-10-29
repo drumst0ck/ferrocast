@@ -1,0 +1,16 @@
+---
+/*
+ * "Related guides": 3-4 links to pages of the same block (see lib/seo/guides.ts), in the page's own language.
+ * `body` is the page copy, so a page does not repeat links it already has in its text.
+ */
+import { relatedGuides, type GuideLang } from '../../lib/seo/guides';
+interface Props { path: string; lang: GuideLang; body?: unknown }
+const { path, lang, body } = Astro.props;
+const items = relatedGuides(path, lang, body ? JSON.stringify(body) : '');
+---
+{items.length > 0 && (
+  <>
+    <h2>{lang === 'es' ? 'Guías relacionadas' : 'Related guides'}</h2>
+    <ul class="chips">{items.map((x) => <li><a href={x.path}>{x.label}</a></li>)}</ul>
+  </>
+)}

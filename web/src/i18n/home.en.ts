@@ -302,6 +302,7 @@ export const en = {
     dialogTitle: 'Install Ferrocast',
     small: 'MIT licence. The whole thing is on GitHub, issues welcome.',
   },
+  guides: { title: 'Compare and guides', all: 'All guides', convert: 'Convert files' },
   footer: { alternative: 'Raycast alternative', tagline: 'A fast launcher for macOS', linksAria: 'Links', license: 'License', copyright: '2026 · MIT' },
   json: { appDescription: 'A fast, open-source launcher for macOS that also converts files: search, calculate, paste, ask AI and file tools, all on your Mac.' },
 };
