@@ -1,0 +1,95 @@
+---
+/*
+ * A /tools/<slug>/ page with its own content (lib/seo/tool-guides.ts). The tool's shortcut and input formats still
+ * come from tools.json, and the docs page stays the reference: it is linked from here and links back.
+ */
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../SiteHeader.astro';
+import SiteFooter from '../SiteFooter.astro';
+import Crumbs from './Crumbs.astro';
+import { getCollection } from 'astro:content';
+import { dmgUrl, installCommand } from '../../data/install';
+import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
+import { inline, plain } from '../../lib/seo/markup';
+import type { ToolPage } from '../../lib/seo/tools';
+import type { ToolGuide } from '../../lib/seo/tool-guides';
+import '../../styles/seo.css';
+
+interface Props { tool: ToolPage; t: ToolGuide }
+const { tool, t } = Astro.props;
+const docs = await getCollection('docs');
+if (!docs.some((d) => d.id === `docs/files/tools/${tool.docSlug}`)) throw new Error(`no docs page for tool ${tool.id}`);
+const canonical = `${SITE}/tools/${tool.slug}/`;
+const crumbs: [string, string][] = [['Home', '/'], ['Tools', '/tools/'], [tool.name, `/tools/${tool.slug}/`]];
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Ferrocast',
+    operatingSystem: 'macOS 13+',
+    applicationCategory: 'UtilitiesApplication',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    url: canonical,
+  },
+  { ...howTo(t.howToName, t.description, t.steps.map(([name, text]) => [name, plain(text)] as [string, string])), inLanguage: 'en' },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    inLanguage: 'en',
+    mainEntity: t.faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: plain(a) } })),
+  },
+  breadcrumbs(crumbs),
+];
+---
+<Base title={t.title} description={t.description} canonical={canonical} jsonLd={jsonLd}>
+  <SiteHeader current="files" />
+  <main class="seo guide" id="main">
+    <Crumbs items={crumbs} />
+    <h1>{t.h1}</h1>
+    <p class="lead">{t.lead}</p>
+    <p class="g-cta"><a class="btn" href={dmgUrl}>Download Ferrocast</a><span class="fine">Free · MIT · Apple Silicon · no upload</span></p>
+    <dl>
+      <dt>Shortcut</dt><dd>{tool.shortcut ? <kbd>{tool.shortcut}</kbd> : 'None; open it from the Tools wheel or the Convert view'}</dd>
+      <dt>Input formats</dt><dd>{tool.formats.map((f, i) => <><code>{f}</code>{i < tool.formats.length - 1 ? ' ' : ''}</>)}</dd>
+    </dl>
+    {tool.screenshot && <img class="shot" src={tool.screenshot} alt={`${tool.name} window in Ferrocast`} width="1500" height="950" loading="lazy" decoding="async" />}
+
+    <h2 id="steps">{t.stepsH}</h2>
+    <ol>{t.steps.map(([name, text]) => <li><strong>{name}.</strong> <Fragment set:html={inline(text)} /></li>)}</ol>
+    <details class="g-brew">
+      <summary>Install Ferrocast with Homebrew</summary>
+      <pre><code>{installCommand}</code></pre>
+    </details>
+
+    {t.sections.map((s) => (
+      <>
+        <h2>{s.h}</h2>
+        {s.paras?.map((p) => <p set:html={inline(p)} />)}
+        {s.list && <ul>{s.list.map((l) => <li set:html={inline(l)} />)}</ul>}
+      </>
+    ))}
+
+    <h2>Questions</h2>
+    <div class="g-faq">
+      {t.faq.map(([q, a]) => (<details><summary>{q}</summary><p set:html={inline(a)} /></details>))}
+    </div>
+
+    <h2>Related tools and guides</h2>
+    <ul class="chips">{t.related.map(([label, href]) => <li><a href={href}>{label}</a></li>)}</ul>
+    <p>Full reference, with every limit: <a class="tl" href={`/docs/files/tools/${tool.docSlug}/`}>{tool.name} in the docs</a> · <a class="tl" href="/tools/">All file tools</a></p>
+  </main>
+  <SiteFooter />
+</Base>
+
+<style>
+  .guide .g-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .guide .fine { font-size: var(--step-small); color: var(--muted); }
+  .guide h2[id] { scroll-margin-top: 110px; }
+  .guide .g-brew summary, .guide .g-faq summary { cursor: pointer; font-weight: 500; }
+  .guide .g-brew pre { margin-top: 10px; }
+  .guide .g-faq details { padding: 14px 0; border-top: 1px solid rgba(255,255,255,.06); }
+  .guide .g-faq p { margin-top: 8px; }
+  @media (prefers-color-scheme: light) {
+    .guide .g-faq details { border-top-color: rgba(0,0,0,.07); }
+  }
+</style>
