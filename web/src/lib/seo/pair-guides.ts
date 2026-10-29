@@ -14,8 +14,16 @@ export interface GuideSection {
 }
 
 export interface PairGuide {
+  /** Replaces the page <title> (see pairMeta). */
+  title?: string;
+  /** Replaces the meta description (120-155 characters). */
+  description?: string;
+  /** Replaces the template <h1>. */
+  h1?: string;
   /** Replaces the template lead sentence. */
   lead: string;
+  /** The question the lead answers; shown as the first FAQ entry (and in the FAQPage JSON-LD) with `lead` as its answer. */
+  question?: string;
   sections: GuideSection[];
   /** Extra FAQ entries, appended to the template ones. */
   faq: [string, string][];
@@ -24,7 +32,63 @@ export interface PairGuide {
 const FINDER = 'https://support.apple.com/guide/mac-help/perform-quick-actions-in-the-finder-on-mac-mchl97ff9142/mac';
 const PREVIEW = 'https://support.apple.com/guide/preview/convert-image-file-types-prvw1012/mac';
 
+const TEXTEDIT = 'https://support.apple.com/guide/textedit/txtee6663a0e/mac';
+const TEXTUTIL = 'https://keith.github.io/xcode-man-pages/textutil.1.html';
+
 export const pairGuides: Record<string, PairGuide> = {
+  // Search Console 22-27 Oct 2026: near the top 10 with no clicks. Native routes are only quoted where Apple's
+  // TextEdit guide or the textutil man page say so; the other pairs name Ferrocast alone.
+  'rtf-to-txt': {
+    title: 'How to Convert RTF to TXT on Mac (Free, No Upload) | Ferrocast',
+    description: 'Turn an RTF into a plain .txt file on your Mac: drag it into Ferrocast and pick Plain text, or use TextEdit. Free, open source, nothing uploaded.',
+    h1: 'How to convert RTF to TXT on a Mac',
+    question: 'How do I convert an RTF file to TXT on a Mac?',
+    lead: `To convert an RTF file to TXT on a Mac, drag it onto Ferrocast, tap ⇧ and choose Plain text; the .txt is saved next to the original and nothing is uploaded. Without extra apps, open it in TextEdit and choose Format → Make Plain Text, then save ([Apple](${TEXTEDIT})).`,
+    sections: [
+      {
+        h: 'Convert RTF to TXT in Terminal',
+        paras: [`Ferrocast runs macOS's own \`textutil\` for this pair ([man page](${TEXTUTIL})). To do the same yourself:`],
+        code: 'textutil -convert txt file.rtf',
+      },
+    ],
+    faq: [],
+  },
+  'md-to-pages': {
+    title: 'Convert Markdown (.md) to Pages on Mac, Free and Offline | Ferrocast',
+    description: 'Turn a Markdown file into a Pages document on your Mac without uploading it. Drag the .md into Ferrocast and pick Pages. Free and open source.',
+    h1: 'Convert Markdown to Pages on a Mac',
+    question: 'How do I convert a Markdown file to Pages on a Mac?',
+    lead: 'To convert a Markdown file to Pages on a Mac, drag the .md onto Ferrocast, tap ⇧ and release over Pages; the .pages document is saved next to the original and nothing is uploaded. It needs no extra tool.',
+    sections: [],
+    faq: [],
+  },
+  'rtf-to-html': {
+    title: 'Convert RTF to HTML on Mac for Free, Offline | Ferrocast',
+    description: 'Turn an RTF document into an HTML file on your Mac. Drag it into Ferrocast and pick HTML, or use textutil. Free, open source, nothing uploaded.',
+    h1: 'How to convert RTF to HTML on a Mac',
+    question: 'How do I convert an RTF file to HTML on a Mac?',
+    lead: `To convert an RTF file to HTML on a Mac, drag it onto Ferrocast, tap ⇧ and choose HTML; the .html is saved next to the original and nothing is uploaded. Without extra apps, run \`textutil -convert html file.rtf\` in Terminal ([man page](${TEXTUTIL})).`,
+    sections: [],
+    faq: [],
+  },
+  'flac-to-wav': {
+    title: 'Convert FLAC to WAV on Mac for Free, Offline | Ferrocast',
+    description: 'Turn FLAC audio into WAV on your Mac without uploading it. Drag the files into Ferrocast and pick WAV; batches work too. Free and open source.',
+    h1: 'Convert FLAC to WAV on a Mac',
+    question: 'How do I convert FLAC to WAV on a Mac?',
+    lead: 'To convert FLAC to WAV on a Mac, drag the files onto Ferrocast, tap ⇧ and release over WAV; each .wav is saved next to its original and nothing is uploaded. It needs no extra tool.',
+    sections: [],
+    faq: [],
+  },
+  'flac-to-mp3': {
+    title: 'Convert FLAC to MP3 on Mac for Free, Offline | Ferrocast',
+    description: 'Turn FLAC audio into MP3 on your Mac without uploading it. Drag the files into Ferrocast and pick MP3. Needs the free ffmpeg. Free and open source.',
+    h1: 'Convert FLAC to MP3 on a Mac',
+    question: 'How do I convert FLAC to MP3 on a Mac?',
+    lead: 'To convert FLAC to MP3 on a Mac, drag the files onto Ferrocast, tap ⇧ and release over MP3; each .mp3 is saved next to its original and nothing is uploaded. This pair needs the free ffmpeg (`brew install ffmpeg`); Ferrocast shows the command if it is missing.',
+    sections: [],
+    faq: [],
+  },
   'heic-to-jpg': {
     lead: 'iPhone photos arrive on the Mac as HEIC, and some apps and websites still want JPG. There are four ways to convert them on a Mac without uploading anything; Ferrocast is the one that also does it in bulk from a drag.',
     sections: [

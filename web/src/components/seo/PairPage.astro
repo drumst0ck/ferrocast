@@ -13,7 +13,8 @@ import '../../styles/seo.css';
 
 interface Props { pair: Pair }
 const { pair: p } = Astro.props;
-const meta = pairMeta(p);
+const guide = pairGuides[p.slug];
+const meta = { ...pairMeta(p), ...(guide?.title && { title: guide.title }), ...(guide?.description && { description: guide.description }) };
 const facts = pairFacts(p);
 const rel = relatedPairs(p);
 const canonical = `${SITE}/convert/${p.slug}/`;
@@ -26,13 +27,13 @@ const steps: [string, string][] = [
   ['Tap Shift', `Tap ⇧ to open the conversion wheel, or press ⌥↵ on a file result in the launcher.`],
   [`Release over ${p.outLabel}`, 'The result is saved next to the original and never overwrites it.'],
 ];
-const guide = pairGuides[p.slug];
 const faq: [string, string][] = [
   [`Is my ${p.inLabel} file uploaded anywhere?`, 'No. Conversions run on your Mac; nothing is uploaded.'],
   ['Will it overwrite my original?', 'No. The result is written next to the original with the same name and the new extension. If that name is taken it adds 2, 3 and so on.'],
   ['Do I need to install anything besides Ferrocast?', facts.requirement],
 ];
 if (guide) faq.push(...guide.faq);
+if (guide?.question) faq.unshift([guide.question, guide.lead]);
 const jsonLd: object[] = [breadcrumbs(crumbs), howTo(`Convert ${p.inLabel} to ${p.outLabel} on Mac`, meta.description, steps)];
 // The FAQ block is marked up only on pages with a written guide, where the answers were checked by hand.
 if (guide) jsonLd.push({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: plain(a) } })) });
@@ -41,7 +42,7 @@ if (guide) jsonLd.push({ '@context': 'https://schema.org', '@type': 'FAQPage', m
   <SiteHeader current="files" switchHref={es ? `/es/convertir/${es.slug}/` : undefined} switchAria="Leer esta página en español" />
   <main class="seo" id="main">
     <Crumbs items={crumbs} />
-    <h1 class="pair-title">{p.inLabel} to {p.outLabel} on your Mac, without uploading</h1>
+    <h1 class="pair-title">{guide?.h1 ?? `${p.inLabel} to ${p.outLabel} on your Mac, without uploading`}</h1>
     {guide ? <p class="lead" set:html={inline(guide.lead)} /> : <p class="lead">Convert {p.inLabel} files to {p.outLabel} with Ferrocast. The conversion runs on your Mac and the result is saved next to the original.</p>}
     <h2>How to convert {p.inLabel} to {p.outLabel}</h2>
     <ol>
