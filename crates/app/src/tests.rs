@@ -175,6 +175,15 @@ impl Drop for FakeNotesTray {
     }
 }
 
+/// The main menu-bar icon of the tests: only records that it was created and removed.
+struct FakeMainTray;
+
+impl Drop for FakeMainTray {
+    fn drop(&mut self) {
+        FX_LOG.with(|l| l.borrow_mut().push("menu_bar_icon off".into()));
+    }
+}
+
 impl Effects {
     /// No process, AX or keyboard: every side effect is only recorded in `FX_LOG`.
     fn recording() -> Effects {
@@ -195,6 +204,10 @@ impl Effects {
             notes_tray: |_bus| {
                 FX_LOG.with(|l| l.borrow_mut().push("notes_tray on".into()));
                 Some(Box::new(FakeNotesTray))
+            },
+            main_tray: |_bus| {
+                FX_LOG.with(|l| l.borrow_mut().push("menu_bar_icon on".into()));
+                Some(Box::new(FakeMainTray))
             },
             tiling_spawn: |_bus| {
                 // a channel with nothing behind it: the Accessibility worker is never started
@@ -9022,6 +9035,53 @@ fn the_menu_bar_item_follows_the_saved_setting_at_startup_and_every_change() {
     s.notes_menu_bar_button = true;
     app.commit_settings(s);
     assert!(app.notes_tray.is_some());
+}
+
+#[test]
+fn the_menu_bar_icon_setting_shows_and_hides_the_icon_without_a_restart() {
+    let (mut app, _) = notes_app(vec![]);
+    // the test App starts without an icon: begin from the matching saved setting
+    app.settings.show_menu_bar_icon = false;
+    assert!(app._tray.is_none());
+    fx_taken();
+    let mut s = app.settings.clone();
+    s.show_menu_bar_icon = true;
+    app.commit_settings(s);
+    assert!(app._tray.is_some());
+    assert_eq!(fx_taken(), vec!["menu_bar_icon on".to_string()]);
+    // an unrelated change neither recreates nor removes it
+    let mut s = app.settings.clone();
+    s.compact_mode = !s.compact_mode;
+    app.commit_settings(s);
+    assert!(app._tray.is_some());
+    assert!(fx_taken().is_empty(), "created once, not per settings change");
+    let mut s = app.settings.clone();
+    s.show_menu_bar_icon = false;
+    app.commit_settings(s);
+    assert!(app._tray.is_none());
+    assert_eq!(fx_taken(), vec!["menu_bar_icon off".to_string()]);
+    let saved: Settings = app.store.load("settings.json");
+    assert!(!saved.show_menu_bar_icon, "saved with the other settings");
+}
+
+#[test]
+fn the_language_picker_loads_the_cjk_font_for_the_japanese_and_chinese_names() {
+    let mut app = settings_app(0, egui::ThemePreference::Dark);
+    app.settings.language = "es".into();
+    render(&mut app, vec![]);
+    assert!(!app.wide_font, "a Spanish interface does not load it up front");
+    // the language picker is the 170 pt combo (the theme picker comes first); scroll it into view
+    let language_combo =
+        |app: &mut App| notes_tab_hits(app, "combo").into_iter().find(|r| (r.width() - 170.0).abs() < 1.0).map(|r| r.center());
+    scroll_until(&mut app, language_combo).expect("language combo in view");
+    for _ in 0..30 {
+        render(&mut app, vec![]);
+    }
+    let combo = language_combo(&mut app).expect("language combo");
+    assert!(!app.wide_font, "scrolling past it does not load it");
+    click_at(&mut app, combo);
+    render(&mut app, vec![]);
+    assert!(app.wide_font, "日本語 and 简体中文 in the open list need the CJK glyphs");
 }
 
 #[test]
