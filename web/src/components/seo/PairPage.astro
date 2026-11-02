@@ -1,4 +1,5 @@
 ---
+import { isConversionNoindex } from '../../../convert-indexability.mjs';
 import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import SiteFooter from '../SiteFooter.astro';
@@ -38,7 +39,7 @@ const jsonLd: object[] = [breadcrumbs(crumbs), howTo(`Convert ${p.inLabel} to ${
 // The FAQ block is marked up only on pages with a written guide, where the answers were checked by hand.
 if (guide) jsonLd.push({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: faq.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: plain(a) } })) });
 ---
-<Base title={meta.title} description={meta.description} canonical={canonical} jsonLd={jsonLd} alternates={alternates}>
+<Base robots={isConversionNoindex(canonical) ? "noindex,follow" : undefined} title={meta.title} description={meta.description} canonical={canonical} jsonLd={jsonLd} alternates={alternates}>
   <SiteHeader current="files" switchHref={es ? `/es/convertir/${es.slug}/` : undefined} switchAria="Leer esta página en español" />
   <main class="seo" id="main">
     <Crumbs items={crumbs} />
