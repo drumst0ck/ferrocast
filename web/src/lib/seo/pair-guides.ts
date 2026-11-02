@@ -54,7 +54,7 @@ export const pairGuides: Record<string, PairGuide> = {
     faq: [],
   },
   'md-to-pages': {
-    title: 'Convert Markdown (.md) to Pages on Mac, Free and Offline | Ferrocast',
+    title: 'Convert Markdown (.md) to Pages on Mac, Free | Ferrocast',
     description: 'Turn a Markdown file into a Pages document on your Mac without uploading it. Drag the .md into Ferrocast and pick Pages. Free and open source.',
     h1: 'Convert Markdown to Pages on a Mac',
     question: 'How do I convert a Markdown file to Pages on a Mac?',

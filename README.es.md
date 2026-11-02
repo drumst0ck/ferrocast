@@ -8,7 +8,7 @@ Lanzador de código abierto para macOS, escrito en Rust. Busca, calcula, pega y 
 
 [![CI](https://github.com/drumst0ck/ferrocast/actions/workflows/ci.yml/badge.svg)](https://github.com/drumst0ck/ferrocast/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[Website](https://ferrocast.app) · [Docs](https://ferrocast.app/docs/) · [Changelog](https://ferrocast.app/changelog/) · [English](README.md)
+[Website](https://ferrocast.app) · [Docs](https://ferrocast.app/docs/) · [Changelog](https://ferrocast.app/changelog/) · [Alternativa a Raycast](https://ferrocast.app/es/alternativa-a-raycast/) · [English](README.md)
 
 <p align="center"><img src="web/public/img/home.jpg" alt="Lanzador de Ferrocast" width="46%"> <img src="web/public/img/files-wheel-convert.jpg" alt="Rueda de conversión de Ferrocast" width="46%"></p>
 
@@ -49,13 +49,13 @@ Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no 
 
 - **Buscar** apps, comandos y archivos con frecency, alias, favoritos y un atajo por comando.
 - **Calcular** en la caja de búsqueda: operaciones, porcentajes, unidades, divisas (tasas del BCE) y husos horarios.
-- **Historial del portapapeles** de texto, archivos e imágenes; ignora las entradas de gestores de contraseñas.
-- **Snippets** con placeholders y auto-expansión, y **quicklinks** con argumentos.
+- **[Historial del portapapeles](https://ferrocast.app/es/historial-portapapeles-mac/)** de texto, archivos e imágenes; ignora las entradas de gestores de contraseñas.
+- **[Snippets](https://ferrocast.app/es/expansor-de-texto-mac/)** con placeholders y auto-expansión, y **quicklinks** con argumentos.
 - **Script Commands** compatibles con los metadatos de Raycast (full, compact, silent, inline).
-- **Gestión de ventanas** con unos 40 diseños, más Kill Process, temporizadores, notas, emoji y Quick Look.
+- **[Gestión de ventanas](https://ferrocast.app/es/gestion-de-ventanas-mac/)** con unos 40 diseños, más Kill Process, temporizadores, notas, emoji y Quick Look.
 - **Notas**: notas flotantes en Markdown con imágenes (pegar, arrastrar o Insert Image…; PNG, JPEG, GIF, HEIC y WebP de hasta 20 MB), menú `/`, notas fijadas, exportación, enlaces `ferrocast://`, comandos de IA y dictado. Las notas de una bóveda de Obsidian no se editan en esa ventana.
 - **Idiomas de la interfaz**: inglés, español, alemán, francés, portugués de Brasil, japonés y chino simplificado. Sigue el orden de idiomas de macOS, o Ajustes → General → Idioma. Se guarda en cada Mac y no se sincroniza. Lo que no está traducido vuelve al inglés. Los nombres que escribes y la interfaz de las extensiones de Raycast no se traducen.
-- **Ask AI** con Ollama, cualquier servidor compatible con OpenAI, la API de Anthropic, Claude Code o Sign in with ChatGPT.
+- **[Ask AI](https://ferrocast.app/es/ia-local-mac/)** con Ollama, cualquier servidor compatible con OpenAI, la API de Anthropic, Claude Code o Sign in with ChatGPT.
 
 ## Herramientas de archivo
 
@@ -66,7 +66,7 @@ Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no 
 - **Rueda de traducción**: arrastra texto seleccionado, pulsa <kbd>⌘</kbd> y suelta sobre un idioma. La traducción sustituye la selección en su sitio donde la app lo permite y, si no, se abre en una ventana. Usa tu proveedor de Ask AI (Ollama se queda en local; también sirven las suscripciones de ChatGPT y Claude).
 - Todo en local. Primero las herramientas de macOS; ffmpeg, LibreOffice, cwebp, unrar y Ghostscript son opcionales. El resultado queda junto al original y nunca lo sobrescribe.
 
-Explora todos los pares en <https://ferrocast.app/files/>.
+Explora todos los pares en <https://ferrocast.app/files/> · [Convertidor de archivos gratis para Mac](https://ferrocast.app/es/convertidor-de-archivos-gratis-mac/) · [Quitar metadatos](https://ferrocast.app/es/quitar-metadatos-mac/) · [Difuminar parte de un vídeo](https://ferrocast.app/es/difuminar-video-mac/)
 
 ## Capturas de pantalla
 
@@ -91,6 +91,8 @@ Ferrocast es **independiente** y no está afiliado a [Raycast](https://www.rayca
 | **Snippets** | Importación desde una exportación JSON de Raycast | Los quicklinks se recrean a mano |
 | **Conversión y herramientas de archivo** | 275 pares de conversión en local y 26 herramientas de archivo integradas | No está documentado en este repositorio para Raycast ni para Alfred |
 | **Extensiones y sincronización** | Sin tienda de extensiones propia. Las extensiones que ya instalaste con Raycast pueden ejecutarse (parcial, desactivado por defecto, Node.js 22+). Sincronización opcional por iCloud Drive, desactivada por defecto | Aún no están soportados: comandos de la barra de menús, OAuth, funciones de IA de las extensiones, selector de archivos y accesorio de enlace. Tampoco se incluye: Search Menu Bar Items ni contexto de IA desde la selección o la pantalla ([guía de migración](https://ferrocast.app/es/docs/getting-started/migrating-from-raycast/), [extensiones](https://ferrocast.app/es/docs/launcher/raycast-extensions/), [sincronización](https://ferrocast.app/es/docs/launcher/sync/)) |
+
+Más: [Alternativa a Raycast](https://ferrocast.app/es/alternativa-a-raycast/) · [Raycast vs Alfred vs Spotlight](https://ferrocast.app/es/raycast-vs-alfred-vs-spotlight/) · [Alternativa a Alfred](https://ferrocast.app/es/alternativa-a-alfred/)
 
 ## Qué falta todavía
 

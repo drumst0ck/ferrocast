@@ -1,6 +1,15 @@
 import { familyHubs } from '../lib/seo/convert';
 import { SITE } from '../lib/seo/jsonld';
 import { counts } from '../data/status';
+import { allTools, toolMeta } from '../lib/seo/tools';
+import { toolGuides } from '../lib/seo/tool-guides';
+import { page as organizePdf } from '../lib/seo/organize-pdf';
+
+/** The meta description each /tools/<slug>/ page renders (see pages/tools/[slug].astro). */
+function toolDescription(t: ReturnType<typeof allTools>[number]): string {
+  if (t.id === 'organizePdf') return organizePdf.description;
+  return toolGuides[t.slug]?.description ?? toolMeta(t).description;
+}
 
 export async function GET() {
   const { pairs, inputs, tools } = counts();
@@ -73,6 +82,9 @@ export async function GET() {
     `- [Migrating from Raycast](${SITE}/docs/getting-started/migrating-from-raycast/)`,
     `- [Data and privacy](${SITE}/docs/reference/data-and-privacy/)`,
     `- [FAQ in docs](${SITE}/docs/reference/faq/)`,
+    '',
+    '## File tools',
+    ...allTools().map((t) => `- [${t.name}](${SITE}/tools/${t.slug}/): ${toolDescription(t)}`),
     '',
     '## Conversions by family',
     ...familyHubs().map((f) => `- [${f.name}](${SITE}/convert/${f.id}/)`),

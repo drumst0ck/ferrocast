@@ -13,7 +13,7 @@ export const CHECKED = '2026-10-28';
 export const page: GuideCopy = {
   lang: 'en',
   path: '/alfred-alternative/',
-  title: 'Free Alfred alternative: clipboard and snippets, no Powerpack | Ferrocast',
+  title: 'Free Alfred alternative for Mac, no Powerpack | Ferrocast',
   description:
     'Ferrocast is a free, open-source Mac launcher with clipboard history and expanding snippets built in, the two features Alfred keeps in its paid Powerpack.',
   crumbs: [['Home', '/'], ['Alfred alternative', '/alfred-alternative/']],

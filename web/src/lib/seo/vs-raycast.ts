@@ -13,7 +13,7 @@ export const CHECKED = '2026-10-27';
 export const page: GuideCopy = {
   lang: 'en',
   path: '/ferrocast-vs-raycast/',
-  title: 'Ferrocast vs Raycast: is Raycast free, and what Pro adds | Ferrocast',
+  title: 'Ferrocast vs Raycast: Free vs Pro, Compared | Ferrocast',
   description:
     'Raycast Free vs Raycast Pro vs Ferrocast, feature by feature: AI, sync, translator, dictation, clipboard, notes and extensions, with Raycast prices and sources.',
   crumbs: [['Home', '/'], ['Ferrocast vs Raycast', '/ferrocast-vs-raycast/']],

@@ -4,7 +4,7 @@ import { en, es, inline, plain } from './alt-raycast';
 describe('Raycast alternative copy', () => {
   it('uses the brief title, meta description, H1 and URL for the Spanish page', () => {
     expect(es.path).toBe('/es/alternativa-a-raycast/');
-    expect(es.title).toBe('Alternativa gratis a Raycast para Mac, de código abierto | Ferrocast');
+    expect(es.title).toBe('Alternativa gratis a Raycast para Mac | Ferrocast');
     expect(es.description).toBe(
       'Ferrocast es un lanzador gratis y MIT para Mac: Script Commands de Raycast, IA local con Ollama y 275 conversiones sin subir archivos. Lo que falta, también.',
     );
