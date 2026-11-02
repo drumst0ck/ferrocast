@@ -9,6 +9,8 @@ import { homeCriticalCss } from './integrations/home-critical-css.mjs';
 import { pageCriticalCss } from './integrations/page-critical-css.mjs';
 import { titleLength } from './integrations/title-length.mjs';
 
+import { isConversionNoindex } from './convert-indexability.mjs';
+
 const site = 'https://ferrocast.app';
 const changelogPages = changelogSitemapEntries(site);
 
@@ -70,6 +72,7 @@ export default defineConfig({
     // Starlight does not add its own sitemap; this is the only sitemap integration.
     sitemap({
       filter: (page) => {
+        if (isConversionNoindex(page)) return false;
         if (isEsDocsFallbackUrl(page)) return false;
         if (page.includes('/changelog/unreleased/')) return false;
         return true;
