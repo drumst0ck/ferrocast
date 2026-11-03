@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Move an app to the Trash**: right-click an application in the launcher (or press ⌘K) and choose Move to Trash (⌘⌫). Ferrocast asks first, moves only the app itself so Finder's Put Back works, and refuses system apps, protected Apple apps, Ferrocast itself and apps that are running. (docs: /docs/launcher/actions-panel/) #launcher
+
 ### Changed
 - **Website conversion indexability**: 152 generic English conversion pages remain accessible with self canonicals but use noindex,follow and leave the sitemap; an explicit manifest restores both together.
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
