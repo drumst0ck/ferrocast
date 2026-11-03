@@ -7,6 +7,8 @@ import { getCollection } from 'astro:content';
 import { installCommand as brewBlock } from '../../data/install';
 import { toolMeta, type ToolPage } from '../../lib/seo/tools';
 import { breadcrumbs, howTo, SITE } from '../../lib/seo/jsonld';
+import { inline } from '../../lib/seo/markup';
+import { docContentBlocks, kbdSafe } from '../../lib/seo/doc-body';
 import '../../styles/seo.css';
 
 interface Props { tool: ToolPage }
@@ -15,6 +17,7 @@ const meta = toolMeta(t);
 const docs = await getCollection('docs');
 const doc = docs.find((d) => d.id === `docs/files/tools/${t.docSlug}`);
 if (!doc) throw new Error(`no docs page for tool ${t.id}`);
+const blocks = docContentBlocks(doc.body ?? '');
 const canonical = `${SITE}/tools/${t.slug}/`;
 const crumbs: [string, string][] = [['Home', '/'], ['Tools', '/tools/'], [t.name, `/tools/${t.slug}/`]];
 const steps: [string, string][] = [
@@ -36,13 +39,17 @@ const jsonLd = [breadcrumbs(crumbs), howTo(`${t.name} on Mac with Ferrocast`, me
       <dt>Input formats</dt><dd>{t.formats.map((f, i) => <><code>{f}</code>{i < t.formats.length - 1 ? ' ' : ''}</>)}</dd>
     </dl>
     {t.screenshot && <img class="shot" src={t.screenshot} alt={`${t.name} window in Ferrocast`} width="1500" height="950" loading="lazy" decoding="async" />}
+    {blocks.map((b) => b.kind === 'p' ? <p set:html={kbdSafe(inline(b.text))} />
+      : b.kind === 'h2' ? <h2>{b.text}</h2>
+      : b.kind === 'ul' ? <ul>{b.items.map((l) => <li set:html={kbdSafe(inline(l))} />)}</ul>
+      : <><h2>{b.title}</h2><p set:html={kbdSafe(inline(b.text))} /></>)}
     <h2>How to use it</h2>
     <ol>
       <li>Drag a file, or select it in the launcher.</li>
       <li>{t.shortcut ? <>Press <kbd>{t.shortcut}</kbd> on the file result, or</> : <>Open the Tools wheel:</>} tap <kbd>⌘</kbd> while dragging.</li>
       <li>Choose <strong>{t.name}</strong>. The result is saved beside the original.</li>
     </ol>
-    <p><a class="tl" href={`/docs/files/tools/${t.docSlug}/`}>Read the full guide, with limits</a></p>
+    <p><a class="tl" href={`/docs/files/tools/${t.docSlug}/`}>{t.name} in the docs</a> · <a class="tl" href="/tools/">All file tools</a></p>
     {t.id === 'redactVideo' && <p><a class="tl" href="/blur-video-mac/">Guide: blur part of a video on a Mac</a> · <a class="tl" href="/es/difuminar-video-mac/">Guía: difuminar parte de un vídeo en Mac</a></p>}
     {t.id === 'removeMetadata' && <p><a class="tl" href="/remove-metadata-mac/">Guide: remove location and metadata on a Mac</a> · <a class="tl" href="/es/quitar-metadatos-mac/">Guía: quitar ubicación y metadatos en Mac</a></p>}
     {t.id === 'compress' && <p><a class="tl" href="/compress-video-to-size/">Compress a video to fit Discord or email</a></p>}

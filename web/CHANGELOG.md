@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Changed
+- **Website conversion indexability**: 152 generic English conversion pages remain accessible with self canonicals but use noindex,follow and leave the sitemap; an explicit manifest restores both together.
+
 ## [0.5.0] - 2026-10-29
 
 ### Added

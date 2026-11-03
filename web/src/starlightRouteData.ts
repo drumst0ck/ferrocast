@@ -1,6 +1,8 @@
 import { defineRouteMiddleware } from '@astrojs/starlight/route-data';
 import { rewriteStarlightHead } from './lib/docs/fallback-head';
 import { hasEsTranslation } from './lib/docs/es-translations';
+import { applyToolDocIndexability } from './lib/docs/tool-doc-head';
+import { toolDocEntry } from '../tool-docs-indexability.mjs';
 
 export const onRequest = defineRouteMiddleware(async (context, next) => {
   await next();
@@ -18,4 +20,6 @@ export const onRequest = defineRouteMiddleware(async (context, next) => {
     (entry.slug.startsWith('es/') ? undefined : canonical);
 
   route.head = rewriteStarlightHead(head, { isFallback, esAvailable, enCanonical });
+  const toolDoc = toolDocEntry(`/${entry.slug}/`);
+  if (toolDoc) route.head = applyToolDocIndexability(route.head, toolDoc);
 });
