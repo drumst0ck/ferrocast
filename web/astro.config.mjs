@@ -10,6 +10,7 @@ import { pageCriticalCss } from './integrations/page-critical-css.mjs';
 import { titleLength } from './integrations/title-length.mjs';
 
 import { isConversionNoindex } from './convert-indexability.mjs';
+import { isToolDocExcluded } from './tool-docs-indexability.mjs';
 
 const site = 'https://ferrocast.app';
 const changelogPages = changelogSitemapEntries(site);
@@ -73,6 +74,7 @@ export default defineConfig({
     sitemap({
       filter: (page) => {
         if (isConversionNoindex(page)) return false;
+        if (isToolDocExcluded(page)) return false;
         if (isEsDocsFallbackUrl(page)) return false;
         if (page.includes('/changelog/unreleased/')) return false;
         return true;
