@@ -21,9 +21,9 @@ function fontSizeFor(text: string): number {
   return n <= 28 ? 84 : n <= 44 ? 72 : n <= 62 ? 62 : 54;
 }
 
-export async function renderOgImage(text: string): Promise<Buffer> {
+export async function ogSvg(text: string): Promise<string> {
   const tree = h('div', {
-    display: 'flex', flexDirection: 'column', justifyContent: 'space-between', width: OG_WIDTH, height: OG_HEIGHT, padding: '64px 72px',
+    display: 'flex', flexDirection: 'column', justifyContent: 'space-between', width: OG_WIDTH, height: OG_HEIGHT, boxSizing: 'border-box', padding: '64px 72px',
     color: '#fff', fontFamily: 'Inter', backgroundColor: '#050506',
     backgroundImage: 'radial-gradient(circle 400px at 50% 112%, rgba(255,130,118,1) 0%, rgba(232,70,86,0.8) 30%, rgba(120,20,40,0.35) 65%, rgba(5,5,6,0) 100%)',
   }, [
@@ -42,5 +42,10 @@ export async function renderOgImage(text: string): Promise<Buffer> {
       { name: 'Inter', data: font(700), weight: 700, style: 'normal' },
     ],
   });
+  return svg;
+}
+
+export async function renderOgImage(text: string): Promise<Buffer> {
+  const svg = await ogSvg(text);
   return sharp(Buffer.from(svg)).png({ compressionLevel: 9, palette: true, quality: 90, dither: 1 }).toBuffer();
 }
