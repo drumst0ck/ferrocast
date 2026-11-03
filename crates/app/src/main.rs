@@ -1,4 +1,5 @@
 mod app;
+mod app_trash;
 mod capture_ctl;
 mod clipboard_policy;
 mod editor_ctl;

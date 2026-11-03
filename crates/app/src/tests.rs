@@ -47,6 +47,7 @@ fn fixture() -> App {
         frecency: Frecency::default(),
         update_available: None,
         apps: vec![],
+        trashed: Default::default(),
         apps_at: Instant::now(),
         scripts: vec![],
         base: vec![],
@@ -146,6 +147,8 @@ thread_local! {
     static FX_LOG: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     /// What `apple_available` answers in this test thread.
     static APPLE_AVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// What the fake `trash_app` answers in this test thread.
+    static FX_TRASH_RESULT: std::cell::RefCell<Result<(), ferrocast_macos::apps::TrashAppError>> = const { std::cell::RefCell::new(Ok(())) };
     static FX_FRONT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
     /// Scripts the web effect asked a browser to run (replace and unmark), in order.
     static FX_TILING_RX: std::cell::RefCell<Option<std::sync::mpsc::Receiver<ferrocast_macos::tiling::Cmd>>> = const { std::cell::RefCell::new(None) };
@@ -189,6 +192,7 @@ impl Effects {
     fn recording() -> Effects {
         FX_LOG.with(|l| l.borrow_mut().clear());
         FX_FRONT.with(|f| f.set(None));
+        FX_TRASH_RESULT.with(|r| *r.borrow_mut() = Ok(()));
         FX_SCRIPTS.with(|l| l.borrow_mut().clear());
         FX_PROBE.with(|l| l.borrow_mut().clear());
         Effects {
@@ -225,6 +229,10 @@ impl Effects {
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
             color_sampler: |_bus| FX_LOG.with(|l| l.borrow_mut().push("color_sampler".into())),
+            trash_app: |p| {
+                FX_LOG.with(|l| l.borrow_mut().push(format!("trash_app {}", p.display())));
+                FX_TRASH_RESULT.with(|r| r.borrow().clone())
+            },
         }
     }
 }
@@ -345,6 +353,280 @@ fn force_quit_asks_for_confirmation() {
     let mut app = fixture();
     app.perform(Act::ForceQuitApp(1), false);
     assert!(matches!(app.view(), View::Confirm { act: Act::ForceQuitApp(1), .. }), "must not kill the process before confirming");
+}
+
+// ---- Move to Trash for applications (mejoras-oct30 T2) ----
+
+/// A scratch folder; its path is already canonical (macOS temp dirs sit behind a symlink).
+fn trash_root() -> std::path::PathBuf {
+    let p = std::env::temp_dir().join(format!("ferrocast-trash-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&p).unwrap();
+    std::fs::canonicalize(p).unwrap()
+}
+
+/// A real, empty `.app` folder named `name` in `root`.
+fn bundle(root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let p = root.join(name);
+    std::fs::create_dir_all(&p).unwrap();
+    p
+}
+
+fn trash_fixture(apps: &[(&str, &std::path::Path, Option<&str>)]) -> App {
+    let mut app = fixture();
+    app.apps = apps
+        .iter()
+        .map(|(n, p, id)| ferrocast_macos::apps::AppInfo {
+            name: n.to_string(),
+            path: p.to_path_buf(),
+            bundle_id: id.map(str::to_string),
+            keywords: vec![],
+        })
+        .collect();
+    app.rebuild();
+    app
+}
+
+fn app_item(app: &App, name: &str) -> Item {
+    app.base.iter().find(|i| matches!(i.kind, Kind::App { .. }) && i.title == name).cloned().expect("app item")
+}
+
+fn app_titles(app: &App) -> Vec<String> {
+    app.base.iter().filter(|i| matches!(i.kind, Kind::App { .. })).map(|i| i.title.clone()).collect()
+}
+
+fn trash_action(app: &App, name: &str) -> Act {
+    let item = app_item(app, name);
+    app.actions_for(&item).into_iter().find(|a| a.title == "Move to Trash").expect("Move to Trash action").kind
+}
+
+/// Choose "Move to Trash" in the actions of the app item, like the ⌘K panel or the right-click menu.
+fn choose_trash(app: &mut App, name: &str) {
+    let act = trash_action(app, name);
+    app.perform(act, false);
+}
+
+/// Enter on the open confirmation.
+fn confirm_trash(app: &mut App) {
+    let Some(View::Confirm { act, .. }) = app.stack.last().cloned() else { panic!("no confirmation is open") };
+    app.perform(act, true);
+}
+
+fn toast_is(app: &App, key: &str, name: &str) {
+    let want = ferrocast_core::i18n::trf(key, &[("name", name)]);
+    assert_eq!(toast_text(app), want);
+}
+
+#[test]
+fn an_app_offers_move_to_trash_and_enter_still_opens_it() {
+    let root = trash_root();
+    let foo = bundle(&root, "Foo.app");
+    let app = trash_fixture(&[("Foo", &foo, Some("com.example.foo"))]);
+    let item = app_item(&app, "Foo");
+    let actions = app.actions_for(&item);
+    assert_eq!(actions[0].title, "Open Application", "the first action, the one Enter runs, stays Open");
+    assert!(matches!(actions[0].kind, Act::Run));
+    let trash = actions.iter().find(|a| a.title == "Move to Trash").expect("trash");
+    assert!(trash.destructive);
+    assert_eq!(trash.shortcut, Some((crate::items::CMD, egui::Key::Backspace)));
+    assert!(matches!(&trash.kind, Act::TrashApp(p) if p == &foo));
+}
+
+#[test]
+fn move_to_trash_asks_first_naming_the_app_then_moves_once() {
+    let root = trash_root();
+    let foo = bundle(&root, "Foo.app");
+    let bar = bundle(&root, "Bar.app");
+    let mut app = trash_fixture(&[("Foo", &foo, Some("com.example.foo")), ("Bar", &bar, None)]);
+    choose_trash(&mut app, "Foo");
+    match app.view() {
+        View::Confirm { msg, act: Act::TrashApp(_) } => {
+            assert_eq!(
+                msg,
+                &ferrocast_core::i18n::trf(
+                    "Move “{name}” to the Trash? Only the app is moved; you can put it back from the Trash.",
+                    &[("name", "Foo")]
+                )
+            );
+        }
+        _ => panic!("must ask before moving"),
+    }
+    assert!(fx_taken().is_empty(), "nothing is moved before the confirmation");
+    assert_eq!(app_titles(&app), ["Foo", "Bar"]);
+    confirm_trash(&mut app);
+    assert_eq!(fx_taken(), [format!("trash_app {}", foo.display())], "exactly one call, for the bundle only");
+    assert_eq!(app_titles(&app), ["Bar"], "gone from the results without a restart");
+    assert!(!matches!(app.view(), View::Confirm { .. }));
+    toast_is(&app, "Moved “{name}” to the Trash", "Foo");
+    app.query = "foo".into();
+    assert!(app.sections().iter().flat_map(|s| s.items.iter()).all(|i| i.title != "Foo"));
+}
+
+#[test]
+fn cancelling_the_confirmation_with_escape_changes_nothing() {
+    let root = trash_root();
+    let foo = bundle(&root, "Foo.app");
+    let mut app = trash_fixture(&[("Foo", &foo, None)]);
+    choose_trash(&mut app, "Foo");
+    assert!(matches!(app.view(), View::Confirm { .. }));
+    render(&mut app, vec![key_event(egui::Key::Escape)]);
+    assert!(!matches!(app.view(), View::Confirm { .. }), "Esc closes the confirmation");
+    assert!(fx_taken().is_empty());
+    assert_eq!(app_titles(&app), ["Foo"]);
+    assert!(app.toast.is_none(), "cancelling says nothing: {:?}", app.toast);
+}
+
+#[test]
+fn protected_apps_are_refused_with_their_message_and_never_reach_the_effect() {
+    let root = trash_root();
+    let calc = std::path::PathBuf::from("/System/Applications/Calculator.app");
+    let safari = bundle(&root, "Safari.app");
+    let me = bundle(&root, "Ferrocast.app");
+    let notes = bundle(&root, "notes");
+    let mut app = trash_fixture(&[
+        ("Calculator", &calc, Some("com.apple.calculator")),
+        ("Safari", &safari, Some("com.apple.Safari")),
+        ("Ferrocast", &me, Some("dev.ferrocast.launcher")),
+        ("Notes", &notes, None),
+    ]);
+    let cases = [
+        ("Calculator", "“{name}” is part of macOS and cannot be moved to the Trash."),
+        ("Safari", "“{name}” is protected by macOS and cannot be moved to the Trash."),
+        ("Ferrocast", "“{name}” is the app you are using right now, so it cannot be moved to the Trash."),
+        ("Notes", "“{name}” is not an application bundle, so it cannot be moved to the Trash."),
+    ];
+    for (name, key) in cases {
+        app.toast = None;
+        choose_trash(&mut app, name);
+        assert!(!matches!(app.view(), View::Confirm { .. }), "{name}: refused, nothing to confirm");
+        toast_is(&app, key, name);
+        // even a forced, already-confirmed act is checked again
+        app.toast = None;
+        let act = trash_action(&app, name);
+        app.perform(act, true);
+        toast_is(&app, key, name);
+    }
+    assert!(fx_taken().is_empty(), "the Trash is never called for a protected app");
+    assert_eq!(app_titles(&app).len(), 4);
+}
+
+#[test]
+fn a_path_that_is_gone_is_refused_clearly() {
+    let root = trash_root();
+    let gone = root.join("Gone.app");
+    let mut app = trash_fixture(&[("Gone", &gone, None)]);
+    choose_trash(&mut app, "Gone");
+    assert!(!matches!(app.view(), View::Confirm { .. }));
+    toast_is(&app, "“{name}” could not be found, so it cannot be moved to the Trash.", "Gone");
+    assert!(fx_taken().is_empty());
+}
+
+#[test]
+fn lowercase_system_paths_are_refused_too() {
+    // APFS is case-insensitive: /system/... is the same folder as /System/...
+    let mut app = trash_fixture(&[("Calculator", std::path::Path::new("/system/applications/calculator.app"), None)]);
+    choose_trash(&mut app, "Calculator");
+    assert!(!matches!(app.view(), View::Confirm { .. }));
+    assert!(fx_taken().is_empty());
+    assert!(
+        toast_text(&app)
+            == ferrocast_core::i18n::trf("“{name}” is part of macOS and cannot be moved to the Trash.", &[("name", "Calculator")])
+            || toast_text(&app)
+                == ferrocast_core::i18n::trf("“{name}” could not be found, so it cannot be moved to the Trash.", &[("name", "Calculator")]),
+        "{}",
+        toast_text(&app)
+    );
+}
+
+#[test]
+fn a_symlink_into_a_protected_place_is_refused() {
+    let root = trash_root();
+    let link = root.join("Calc.app");
+    std::os::unix::fs::symlink("/System/Applications/Calculator.app", &link).unwrap();
+    let mut app = trash_fixture(&[("Calc", &link, None)]);
+    choose_trash(&mut app, "Calc");
+    assert!(!matches!(app.view(), View::Confirm { .. }), "the link is judged by where it points");
+    assert!(fx_taken().is_empty());
+    assert!(toast_text(&app).contains("macOS"), "{}", toast_text(&app));
+}
+
+#[test]
+fn a_symlinked_app_trashes_the_real_bundle_and_says_so() {
+    let root = trash_root();
+    let real = bundle(&root, "Real.app");
+    let link = root.join("Link.app");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let mut app = trash_fixture(&[("Link", &link, None)]);
+    choose_trash(&mut app, "Link");
+    match app.view() {
+        View::Confirm { msg, act: Act::TrashApp(p) } => {
+            assert_eq!(p, &real, "the confirmation carries the resolved path");
+            assert!(msg.contains("Real"), "it names what really moves: {msg}");
+        }
+        _ => panic!("must ask"),
+    }
+    confirm_trash(&mut app);
+    assert_eq!(fx_taken(), [format!("trash_app {}", real.display())], "the bundle, never just the link");
+    toast_is(&app, "Moved “{name}” to the Trash", "Real");
+    assert!(app_titles(&app).is_empty(), "the link entry goes too");
+}
+
+#[test]
+fn a_running_app_or_a_system_error_keeps_the_app_and_says_why() {
+    use ferrocast_macos::apps::TrashAppError as E;
+    let root = trash_root();
+    let foo = bundle(&root, "Foo.app");
+    let mut app = trash_fixture(&[("Foo", &foo, None)]);
+    FX_TRASH_RESULT.with(|r| *r.borrow_mut() = Err(E::Running));
+    choose_trash(&mut app, "Foo");
+    confirm_trash(&mut app);
+    toast_is(&app, "“{name}” is running. Quit it first, then move it to the Trash.", "Foo");
+    assert_eq!(app_titles(&app), ["Foo"]);
+    assert!(!matches!(app.view(), View::Confirm { .. }));
+    FX_TRASH_RESULT.with(|r| *r.borrow_mut() = Err(E::Failed("permission denied".into())));
+    app.perform(Act::TrashApp(foo.clone()), true);
+    assert_eq!(
+        toast_text(&app),
+        ferrocast_core::i18n::trf("Could not move “{name}” to the Trash: {e}", &[("name", "Foo"), ("e", "permission denied")])
+    );
+    assert_eq!(app_titles(&app), ["Foo"]);
+    FX_TRASH_RESULT.with(|r| *r.borrow_mut() = Err(E::NotABundle));
+    app.perform(Act::TrashApp(foo), true);
+    toast_is(&app, "“{name}” is not an application bundle, so it cannot be moved to the Trash.", "Foo");
+}
+
+#[test]
+fn a_rescan_does_not_bring_a_trashed_app_back() {
+    let root = trash_root();
+    let foo = bundle(&root, "Foo.app");
+    let bar = bundle(&root, "Bar.app");
+    let mut app = trash_fixture(&[("Foo", &foo, None), ("Bar", &bar, None)]);
+    let stale = app.apps.clone();
+    choose_trash(&mut app, "Foo");
+    confirm_trash(&mut app);
+    assert_eq!(app_titles(&app), ["Bar"]);
+    // a scan that started before the move (or a cache) still lists it
+    app.bus.tx.send(Msg::Apps(stale)).unwrap();
+    app.drain();
+    assert_eq!(app_titles(&app), ["Bar"], "it stays gone");
+}
+
+#[test]
+fn command_backspace_on_a_selected_app_opens_the_confirmation_and_on_other_items_trashes_nothing() {
+    let root = trash_root();
+    let foo = bundle(&root, "Foo.app");
+    let mut app = trash_fixture(&[("Foo", &foo, None)]);
+    app.query = "Foo".into();
+    render(&mut app, vec![]);
+    render_mods(&mut app, vec![Event::Key { key: Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: CMD }], CMD);
+    assert!(matches!(app.view(), View::Confirm { act: Act::TrashApp(_), .. }), "{:?}", app.stack.len());
+    assert!(fx_taken().is_empty(), "asking moves nothing");
+    app.pop();
+    // a command result: ⌘⌫ must not reach the Trash
+    app.query = "Clipboard History".into();
+    render(&mut app, vec![]);
+    render_mods(&mut app, vec![Event::Key { key: Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: CMD }], CMD);
+    assert!(!matches!(app.view(), View::Confirm { act: Act::TrashApp(_), .. }));
+    assert!(fx_taken().is_empty());
 }
 
 #[test]

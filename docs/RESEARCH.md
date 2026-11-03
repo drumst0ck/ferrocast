@@ -23,7 +23,7 @@ extensiones (`developers.raycast.com`) y repo `raycast/script-commands`.
 
 | Función | Raycast | Ferrocast (alcance) |
 |---|---|---|
-| Applications | Lanza apps (fuzzy), Show in Finder, Quit, Copy path | ✅ escaneo de `/Applications`, `/System/Applications`, `~/Applications`, iconos |
+| Applications | Lanza apps (fuzzy), Show in Finder, Quit, Copy path, Move to Trash | ✅ escaneo de `/Applications`, `/System/Applications`, `~/Applications`, iconos; Mover a la papelera (⌘⌫, con confirmación; reversible con Put Back) |
 | Calculator | Math, %, unidades, divisas, fechas, zonas horarias, colores | ✅ math + funciones + `% of` / `% off` + unidades (longitud, masa, temperatura, datos, tiempo, volumen, área, velocidad, CSS px/rem) + colores. ⏳ divisas/zonas horarias |
 | Color conversion | hex/rgb/hsl/… → copia en otros formatos | ✅ hex, rgb(a), hsl(a) → hex/rgb/hsl/NSColor/UIColor |
 | Clipboard History | Texto, imágenes, archivos, links, colores; pin, borrar, pegar, ignorar password managers | ✅ texto + archivos + imágenes (PNG), pin, borrar, pegar, copiar, ignora tipos *concealed/transient* |
