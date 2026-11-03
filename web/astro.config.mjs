@@ -7,6 +7,7 @@ import { lastmodForPageUrl } from './src/lib/sitemap/lastmod.ts';
 import { isEsDocsFallbackUrl } from './sitemap-helpers.mjs';
 import { homeCriticalCss } from './integrations/home-critical-css.mjs';
 import { pageCriticalCss } from './integrations/page-critical-css.mjs';
+import { ogImages } from './integrations/og-images.mjs';
 import { titleLength } from './integrations/title-length.mjs';
 
 import { isConversionNoindex } from './convert-indexability.mjs';
@@ -32,6 +33,7 @@ export default defineConfig({
   integrations: [
     homeCriticalCss(),
     pageCriticalCss(),
+    ogImages(),
     titleLength(),
     starlight({
       title: 'Ferrocast Docs',

@@ -1,0 +1,22 @@
+# SEO board, fourth round (29-oct briefs)
+Branches: one per task off origin/master · Status: done (PRs #100, #101 and the T3 PR); 301 pending on Jose (Coolify)
+Three "brief hecho" cards from the Notion "Ferrocast · SEO/AEO" board (created 2026-10-29). Briefs copied verbatim under odd/tasks/seo-board-4/; each brief is one PR.
+
+## Specs
+- S1 User (verbatim): "hay 3 nuevas ideas para hacer en el tablero del notion".
+- S2 README brief (odd/tasks/seo-board-4/brief-readme.md), acceptance verbatim: "1. Todos los enlaces nuevos devuelven 200 (comprobar con `curl -s -o /dev/null -w '%{http_code}'`). 2. Ningún texto o dato existente cambia, salvo convertir palabras en enlaces. 3. Sin enlaces EN en el README ES ni al revés (salvo el selector de idioma). 4. Texto de enlace descriptivo, nunca «here» o «aquí»."
+- S3 Technical brief (odd/tasks/seo-board-4/brief-technical.md), acceptance verbatim: "1. HTTP → HTTPS responde 301/308 (o el PR explica qué ajuste debe hacer Jose y dónde). 2. Los 6 titles miden ≤ 60 caracteres en producción. 3. `curl -s https://ferrocast.app/llms.txt | grep -c '/tools/'` ≥ 20. 4. Ningún otro title, URL o canonical cambia." Plus: "Añadir al build o a los tests un aviso (warning, no error) si un title de página no-docs pasa de 60 caracteres." and "si se genera en build, cambiar el generador, no el archivo de salida."
+- S4 Images brief (odd/tasks/seo-board-4/brief-images.md), acceptance verbatim: "1. Cada página de la tabla §1 tiene ≥ 1 `<img>` de `/img/` con `alt` no vacío, en su idioma. 2. `curl -s https://ferrocast.app/clipboard-manager-mac/ | grep og:image` devuelve una URL distinta de `og-welcome.jpg`, y esa URL responde 200 con `image/png` o `image/jpeg`. 3. Dos páginas distintas tienen `og:image` distinta. 4. Lighthouse: sin CLS nuevo (las imágenes llevan `width`/`height`). 5. El PR lista las páginas sin captura disponible." Plus: "Solo se usan capturas que ya existen en `web/public/img/`; no inventar ni editar capturas." and "elegir lo que menos dependencias añada."
+- S5 Rules carried from odd/tasks/seo-notion-ideas.md: never invent facts or metrics; docs descriptions 120–155 characters; FAQ JSON-LD equals visible text.
+
+## Tasks
+- T1 S2 README links (README.md, README.es.md) — inline — done, commit 50cd8b5, PR #100
+- T2 S3 301 + titles ≤ 60 + /tools/* in llms.txt + title warning — worker (context backstop) — done, commit 5acde42, PR #101 (301 left to Jose, instructions in the PR)
+- T3 S4 screenshots in guides + per-page og:image — worker (context backstop) + independent verifier (item 5) — done, PR (see L5)
+
+## Log
+- L1 User: "hay 3 nuevas ideas para hacer en el tablero del notion"
+- L2 T1: 27 link targets return 200; screen recording, screenshots and translate not linked (words absent from What it does); ES has no Script Commands page. PR #100.
+- L3 T2 §1 (read-only check, 29-oct): `curl -sI http://ferrocast.app/raycast-alternative/` → 307 Temporary Redirect (brief saw 302). Server is Coolify 4.5.3 with Traefik (proxy_type TRAEFIK, redirect_enabled true) shared by 13 apps; app ferrocast-web (jrmyqzdkgi4zmljn53fxwqqr) redirect=non-www. The Coolify MCP has no tool to edit an app's container labels and the global proxy config affects other apps, so the PR describes the change for Jose: in Coolify → ferrocast-web → Configuration → Container Labels, make the generated `redirectscheme` middleware permanent (`...redirectscheme.permanent=true`), redeploy, check 301/308.
+- L4 T2: 6 titles 46-57 chars, only those 6 titles differ in dist; llms.txt 29 /tools/ lines; build warns about 28 pre-existing long titles (out of scope). vitest 196 passed. PR #101.
+- L5 T3: shots.ts + Shots.astro add existing /img/ screenshots (real pixel sizes, EN/ES alt) to 313 pages; og-images.mjs writes 353 per-page 1200×630 PNGs (satori + sharp + @fontsource/inter, devDependencies; +~20-40 s build, 5.7 MB, dist only). Verifier (item 5) found one blocker: server-rendered /changelog/ routes pointed at PNGs never written; fixed with hasOwnOgImage(canonical, Astro.isPrerendered) + test (RED seen). Local server: /changelog/ → og-welcome.jpg, /clipboard-manager-mac/ → own PNG, 200 image/png. Not checked: Docker build on node:22-alpine (Docker not running; lockfile has linuxmusl sharp binaries), Lighthouse. Should-fix left as note: glow dimmer than og-welcome.jpg and the ferrocast.app footer line does not show. No screenshot: /mac-window-management/, /es/gestion-de-ventanas-mac/, /translate-selected-text-mac/, /es/traducir-texto-seleccionado-mac/, /raycast-script-commands/.

@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import SiteHeader from '../SiteHeader.astro';
 import SiteFooter from '../SiteFooter.astro';
 import Crumbs from './Crumbs.astro';
+import Shots from './Shots.astro';
 import RelatedGuides from './RelatedGuides.astro';
 import SeoNav from './SeoNav.astro';
 import { dmgUrl, installCommand, repo } from '../../data/install';
@@ -48,6 +49,7 @@ const isEs = t.lang === 'es';
     <Crumbs items={t.crumbs} />
     <h1>{t.h1}</h1>
     {t.lead.map((p, i) => <p class={i === 0 ? 'lead' : undefined} set:html={inline(p)} />)}
+    <Shots path={t.path} where="lead" />
     <p class="alt-cta">
       <a class="btn" href={dmgUrl}>{t.cta.dmg}</a>
       <a class="tl" href="#install">{t.cta.brew}</a>
@@ -91,6 +93,7 @@ const isEs = t.lang === 'es';
 
     <h2 id="install">{t.install.h}</h2>
     <ol>{t.install.steps.map(([name, text], i) => <li><strong>{name}.</strong> {i === 0 ? <><a class="tl" href={dmgUrl}>{text}</a></> : text}</li>)}</ol>
+    <Shots path={t.path} where="steps" />
     <p>{t.install.brew}</p>
     <pre><code>{installCommand}</code></pre>
 
