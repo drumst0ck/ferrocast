@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// S4: shown verbatim when the helper reports `permission-screen`.
 pub const PERMISSION_TOAST: &str = "Screen Recording is off for Ferrocast. Turn it on in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.";
 /// Pane opened together with the S4 toast.
-pub const SCREEN_RECORDING_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+pub const SCREEN_RECORDING_PANE: &str = ferrocast_macos::permission_helper::SCREEN_RECORDING_PANE;
 /// S3 when the helper is not shipped.
 pub const NO_HELPER_MESSAGE: &str = "Screen capture is not available in this build.";
 
@@ -205,18 +205,27 @@ pub fn outcome_toast(o: &Outcome) -> Option<String> {
 }
 
 /// Speech Recognition pane of System Settings (the editor's Transcript tab).
-pub const SPEECH_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition";
+pub const SPEECH_PANE: &str = ferrocast_macos::permission_helper::SPEECH_PANE;
 
 /// Opens the Screen Recording pane of System Settings (never in tests).
 pub fn open_screen_recording_pane() {
     open_pane(SCREEN_RECORDING_PANE);
 }
 
-/// Opens a Privacy pane of System Settings by its URL (never in tests).
+/// Opens a Privacy pane of System Settings by its URL (never in tests). Panes with a list to add
+/// apps to (Accessibility, Screen Recording, Input Monitoring) also get the drag helper: a small
+/// floating window with the Ferrocast icon to drop into that list.
 pub fn open_pane(url: &str) {
-    if !cfg!(test) {
-        // spawn, do not wait: this runs on the main thread inside a winit callback
-        let _ = std::process::Command::new("/usr/bin/open").arg(url).spawn();
+    if cfg!(test) {
+        return;
+    }
+    use ferrocast_macos::permission_helper::{open_pane_with_helper, Permission};
+    match Permission::from_pane_url(url) {
+        // spawns `open` without waiting: this runs on the main thread inside a winit callback
+        Some(perm) => open_pane_with_helper(perm),
+        None => {
+            let _ = std::process::Command::new("/usr/bin/open").arg(url).spawn();
+        }
     }
 }
 

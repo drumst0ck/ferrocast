@@ -24,6 +24,7 @@ pub mod notes_palette;
 pub mod notes_popups;
 pub mod notes_theme;
 pub mod pdf;
+pub mod permission_helper;
 pub mod pin;
 pub mod process;
 pub mod running;

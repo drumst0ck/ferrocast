@@ -931,8 +931,7 @@ impl App {
 
 /// Opens a Privacy & Security pane in System Settings.
 fn open_pane(pane: &str) {
-    let _ =
-        std::process::Command::new("/usr/bin/open").arg(format!("x-apple.systempreferences:com.apple.preference.security?{pane}")).status();
+    crate::capture_ctl::open_pane(&format!("x-apple.systempreferences:com.apple.preference.security?{pane}"));
 }
 
 #[cfg(test)]
