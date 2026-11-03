@@ -6849,6 +6849,8 @@ impl App {
         let (mut chatgpt_in, mut chatgpt_out, mut chatgpt_device) = (false, false, false);
         let mut fetch_models = false;
         let mut sync_now = false;
+        // the language list shows each language in its own script (日本語, 简体中文)
+        let mut lang_names_shown = false;
         let sync_status = self.sync_status();
         let (mut check_now, mut install_now) = (false, false);
         let (mut new_snippet, mut create_script) = (false, false);
@@ -7235,7 +7237,8 @@ impl App {
                                 use ferrocast_core::i18n::Lang;
                                 let current = ferrocast_core::i18n::Lang::ALL.into_iter().find(|l| l.code() == s.language);
                                 let shown = current.map_or_else(|| tr("System").to_string(), |l| l.native_name().to_string());
-                                field_combo(ui, pal, "language", &shown, 170.0, |ui| {
+                                let combo = field_combo(ui, pal, "language", &shown, 170.0, |ui| {
+                                    lang_names_shown = true;
                                     if ui.selectable_label(current.is_none(), tr("System")).clicked() {
                                         s.language = "system".into();
                                     }
@@ -7245,6 +7248,8 @@ impl App {
                                         }
                                     }
                                 });
+                                // hovering loads the font before the list opens, so it never flashes boxes
+                                lang_names_shown |= combo.hovered();
                             });
                             row(ui, pal, "Drop wheel", "While dragging files, tap a key to open a wheel of conversions or actions.", |ui| toggle(ui, pal, &mut s.drop_wheel));
                             row_disabled_if(ui, wheel_off, |ui| {
@@ -7279,7 +7284,7 @@ impl App {
                                     ui.ctx().data_mut(|d| d.insert_temp(Id::new("enter-on-finder-toggle"), ui.min_rect()));
                                 },
                             );
-                            row(ui, pal, "Menu bar icon", "A small icon to open Ferrocast with the mouse. Needs a restart.", |ui| toggle(ui, pal, &mut s.show_menu_bar_icon));
+                            row(ui, pal, "Menu bar icon", "A small icon to open Ferrocast with the mouse.", |ui| toggle(ui, pal, &mut s.show_menu_bar_icon));
                         });
                         ui.add_space(14.0);
                         section(ui, pal, "Updates");
@@ -8226,6 +8231,11 @@ impl App {
             });
         });
         let _ = acc;
+        if lang_names_shown && !self.wide_font {
+            let names: String = ferrocast_core::i18n::Lang::ALL.into_iter().map(|l| l.native_name()).collect();
+            self.ensure_wide_font(&names);
+            ctx.request_repaint();
+        }
         if obs_pick.is_some() || obs_choose || obs_clear {
             // choosing a vault commits on its own, like the Notion target
             self.scratch = scratch;
@@ -10202,6 +10212,7 @@ impl App {
         let notes_changed = s.notes_zoom != self.settings.notes_zoom
             || s.notes_escape_loses_focus != self.settings.notes_escape_loses_focus
             || s.notes_menu_bar_button != self.settings.notes_menu_bar_button;
+        let menu_bar_icon_changed = s.show_menu_bar_icon != self.settings.show_menu_bar_icon;
         let sync_turned_on = s.sync_enabled && !self.settings.sync_enabled;
         let language_changed = s.language != self.settings.language;
         self.settings = s;
@@ -10218,6 +10229,9 @@ impl App {
         }
         if notes_changed {
             self.apply_notes_settings();
+        }
+        if menu_bar_icon_changed {
+            self.sync_main_tray();
         }
         if start_poller {
             // the poller only exists once the check was on: turning it on later starts it now

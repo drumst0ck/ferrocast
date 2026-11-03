@@ -1023,7 +1023,9 @@ pub struct App {
     selection: crate::capture_ctl::PendingSelection,
     /// Opt-in Enter on a Finder selection (tap, in-flight guard, injectable system hooks).
     finder: services::FinderEnterState,
-    _tray: Option<tray_icon::TrayIcon>,
+    /// The main menu-bar icon (a `tray_icon::TrayIcon` outside tests); present while
+    /// `show_menu_bar_icon` is on. Dropping it removes it.
+    _tray: Option<Box<dyn std::any::Any>>,
     /// Recording lifecycle (S13); T19 drives it, the tray mirrors it.
     record: crate::record_ctl::RecordCtl,
     /// Whether the tray currently shows the recording icon and `Stop Recording` item.
@@ -1290,7 +1292,11 @@ impl App {
                 toast = Some((trf("Hotkey error: {e}", &[("e", &e.to_string())]), Instant::now()));
             }
         }
-        let tray = if data.settings.show_menu_bar_icon { services::make_tray(bus.clone()) } else { None };
+        let tray = if data.settings.show_menu_bar_icon {
+            services::make_tray(bus.clone()).map(|t| Box::new(t) as Box<dyn std::any::Any>)
+        } else {
+            None
+        };
         let b2 = bus.clone();
         let apps_cache = store.path("apps-cache.plist");
         if prof {
@@ -1646,7 +1652,7 @@ impl App {
             self.layout_seen = self.settings.tiling_layout;
             self.tray_layout = self.layout_seen;
         }
-        services::set_tray_tiling(self._tray.as_ref(), enabled.then_some(paused), self.tray_layout, self.tray_rec_shown);
+        services::set_tray_tiling(self.tray(), enabled.then_some(paused), self.tray_layout, self.tray_rec_shown);
         if self.tiling_hotkeys != enabled {
             self.tiling_hotkeys = enabled;
             self.apply_hotkeys();
@@ -1859,7 +1865,7 @@ impl App {
             self.wide_font = true;
             load_fonts(&self.ctx, true);
         }
-        if let Some(tray) = self._tray.as_ref() {
+        if let Some(tray) = self.tray() {
             services::refresh_tray_menu(tray, self.tray_rec_shown);
         }
         self.rebuild();
@@ -2932,8 +2938,31 @@ impl App {
     /// Mirror the recording state in the menu bar: `●  mm:ss`, red-dot icon, `Stop Recording`.
     pub(crate) fn sync_recording_tray(&mut self) {
         let (title, stop) = (self.record.tray_title(), self.record.shows_stop_item());
-        if let Some(tray) = self._tray.as_ref() {
+        if let Some(tray) = self._tray.as_ref().and_then(|t| t.downcast_ref::<tray_icon::TrayIcon>()) {
             services::set_tray_recording(tray, title.as_deref(), stop, &mut self.tray_rec_shown);
+        }
+    }
+
+    /// The real main menu-bar icon, when there is one (tests hold a stand-in).
+    fn tray(&self) -> Option<&tray_icon::TrayIcon> {
+        self._tray.as_ref().and_then(|t| t.downcast_ref::<tray_icon::TrayIcon>())
+    }
+
+    /// Creates the main menu-bar icon when `show_menu_bar_icon` is on and none exists, removes it
+    /// (by dropping it) when the setting is off. A new icon starts from the normal menu (which
+    /// already reflects the tiling state), then takes on a running recording. Main thread only.
+    pub(crate) fn sync_main_tray(&mut self) {
+        match (self.settings.show_menu_bar_icon, self._tray.is_some()) {
+            (true, false) => {
+                self._tray = (self.fx.main_tray)(&self.bus);
+                self.tray_rec_shown = false;
+                self.sync_recording_tray();
+            }
+            (false, true) => {
+                self._tray = None;
+                self.tray_rec_shown = false;
+            }
+            _ => {}
         }
     }
 
@@ -7791,6 +7820,8 @@ pub(crate) struct Effects {
     pub(crate) glow_hide: fn(),
     /// Create the Notes toggle item in the menu bar (main thread only); dropping it removes it.
     pub(crate) notes_tray: fn(&Bus) -> Option<Box<dyn std::any::Any>>,
+    /// Create the main menu-bar icon (main thread only); dropping it removes it.
+    pub(crate) main_tray: fn(&Bus) -> Option<Box<dyn std::any::Any>>,
     /// Start the window tiling worker (it drives the Accessibility API: never in tests).
     pub(crate) tiling_spawn: fn(&Bus) -> Option<ferrocast_macos::tiling::Handle>,
     /// Draw the highlight border and the quick-action bar (main thread only).
@@ -7825,6 +7856,7 @@ impl Effects {
                 }
             },
             notes_tray: |bus| services::make_notes_tray(bus.clone()).map(|t| Box::new(t) as Box<dyn std::any::Any>),
+            main_tray: |bus| services::make_tray(bus.clone()).map(|t| Box::new(t) as Box<dyn std::any::Any>),
             tiling_spawn: |bus| {
                 let b = bus.clone();
                 let clicks = bus.clone();
