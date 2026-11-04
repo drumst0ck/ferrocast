@@ -45,6 +45,7 @@ Ferrocast merges item by item, and the newest edit wins.
 - A deletion is remembered for good, so an old Mac or a leftover folder in iCloud Drive cannot bring a deleted item back.
 - Clipboard deletions are remembered for 400 days (the 3,000 newest), longer than the longest history setting. A pinned clipboard entry older than 400 days is not synced, so edits to it stay on the Mac where you made them.
 - Each Mac writes only its own files in the `Ferrocast` folder of iCloud Drive (`devices/<id>/`), so iCloud has no conflicting copies to create. A file Ferrocast cannot read is skipped.
+- An item written by a newer Ferrocast that this Mac's version cannot read is left alone: this Mac does not show it and never publishes it as deleted, so your other Macs keep it as the Mac that wrote it published it. It appears once this Mac is updated.
 
 ## Turning sync on for the first time
 

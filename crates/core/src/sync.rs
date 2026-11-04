@@ -82,6 +82,21 @@ pub struct Tracked {
     /// Taken over from another Mac's record (see `Record::adopted`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub adopted: bool,
+    /// This Mac holds the item's value in its tracker but could not read it into local data (a newer
+    /// build wrote it). It is absent from the local items on purpose, so `publish` neither tombstones
+    /// nor writes it, and the record the other Mac published stays the one that counts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unparsed: bool,
+}
+
+/// Flag the items of `ids` that this Mac could not read into its local data (see `Tracked::unparsed`).
+/// Ids the tracker does not know, or knows as deleted, are left alone.
+pub fn mark_unparsed(tracker: &mut Tracker, ids: &[String]) {
+    for id in ids {
+        if let Some(t) = tracker.items.get_mut(id).filter(|t| !t.deleted) {
+            t.unparsed = true;
+        }
+    }
 }
 
 /// Default tombstone lifetime of `publish`/`publish_with` (90 days). The app keeps tombstones for
@@ -163,10 +178,16 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
             None => (unseen, !prev.seeded && opts.pristine.is_some_and(|f| f(id, value)), false),
         };
         doc.items.insert(id.clone(), Record { modified, deleted: false, value: Some(value.clone()), pristine, adopted });
-        next.items.insert(id.clone(), Tracked { hash: h, modified, deleted: false, remote: false, pristine, adopted });
+        next.items.insert(id.clone(), Tracked { hash: h, modified, deleted: false, remote: false, pristine, adopted, unparsed: false });
     }
     for (id, t) in &prev.items {
         if seen.contains(id) {
+            continue;
+        }
+        if t.unparsed && !t.deleted {
+            // not readable here, so absent from the local items without being deleted: keep
+            // remembering it, publish nothing (the Mac that wrote it still carries its value)
+            next.items.insert(id.clone(), t.clone());
             continue;
         }
         if t.deleted && t.remote && !opts.relay_tombstones {
@@ -179,7 +200,7 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
         doc.items.insert(id.clone(), Record { modified, deleted: true, value: None, pristine: false, adopted: false });
         next.items.insert(
             id.clone(),
-            Tracked { hash: t.hash.clone(), modified, deleted: true, remote: t.remote, pristine: false, adopted: false },
+            Tracked { hash: t.hash.clone(), modified, deleted: true, remote: t.remote, pristine: false, adopted: false, unparsed: false },
         );
     }
     if !prev.seeded {
@@ -191,7 +212,15 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
                 .insert(id.clone(), Record { modified: opts.first_stamp, deleted: true, value: None, pristine: false, adopted: false });
             next.items.insert(
                 id.clone(),
-                Tracked { hash: String::new(), modified: opts.first_stamp, deleted: true, remote: false, pristine: false, adopted: false },
+                Tracked {
+                    hash: String::new(),
+                    modified: opts.first_stamp,
+                    deleted: true,
+                    remote: false,
+                    pristine: false,
+                    adopted: false,
+                    unparsed: false,
+                },
             );
         }
     }
@@ -217,7 +246,15 @@ pub fn tracker_from_own_doc(doc: &DeviceDoc) -> Tracker {
         let hash = r.value.as_ref().map(hash).unwrap_or_default();
         t.items.insert(
             id.clone(),
-            Tracked { hash, modified: r.modified, deleted: r.deleted, remote: false, pristine: r.pristine, adopted: r.adopted },
+            Tracked {
+                hash,
+                modified: r.modified,
+                deleted: r.deleted,
+                remote: false,
+                pristine: r.pristine,
+                adopted: r.adopted,
+                unparsed: false,
+            },
         );
     }
     t
@@ -284,7 +321,15 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
                 } else {
                     next.items.insert(
                         id.clone(),
-                        Tracked { hash: hash(value), modified: rec.modified, deleted: true, remote: true, pristine: false, adopted: false },
+                        Tracked {
+                            hash: hash(value),
+                            modified: rec.modified,
+                            deleted: true,
+                            remote: true,
+                            pristine: false,
+                            adopted: false,
+                            unparsed: false,
+                        },
                     );
                 }
             }
@@ -302,6 +347,7 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
                             remote: false,
                             pristine: rec.pristine,
                             adopted: true,
+                            unparsed: false,
                         },
                     );
                     out.push((id.clone(), theirs));
@@ -321,12 +367,24 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
             }
         }
         let v = rec.value.clone().unwrap_or(Value::Null);
+        // an item that was unreadable here stays flagged until the caller finds it still unreadable
+        let unparsed = tracker.items.get(id).is_some_and(|t| t.unparsed && !t.deleted);
         next.items.insert(
             id.clone(),
-            Tracked { hash: hash(&v), modified: rec.modified, deleted: false, remote: false, pristine: rec.pristine, adopted: true },
+            Tracked {
+                hash: hash(&v),
+                modified: rec.modified,
+                deleted: false,
+                remote: false,
+                pristine: rec.pristine,
+                adopted: true,
+                unparsed,
+            },
         );
         out.push((id.clone(), v));
     }
+    // an unreadable item that no Mac has any more (or whose winner is a deletion) is forgotten
+    next.items.retain(|id, t| !t.unparsed || t.deleted || win.get(id).is_some_and(|(_, r)| !r.deleted));
     (out, next)
 }
 
@@ -514,6 +572,7 @@ mod tests {
                             remote: false,
                             pristine: false,
                             adopted: false,
+                            unparsed: false,
                         },
                     )
                 })
@@ -621,5 +680,69 @@ mod tests {
         assert_eq!(back, doc);
         let back: Tracker = serde_json::from_str(&serde_json::to_string(&tracker).unwrap()).unwrap();
         assert_eq!(back, tracker);
+    }
+
+    fn rec(modified: i64, v: Value) -> Record {
+        Record { modified, deleted: false, value: Some(v), pristine: false, adopted: false }
+    }
+
+    #[test]
+    fn an_unparsed_item_missing_from_the_snapshot_is_not_published_as_deleted() {
+        let remote = DeviceDoc {
+            device: "b".into(),
+            items: BTreeMap::from([("x".to_string(), rec(5000, json!({"kind": "RichText"})))]),
+            first_sync_at: None,
+        };
+        let (_, mut t) = merge_as("a", &[], &[remote], &Tracker { seeded: true, ..Default::default() });
+        assert!(t.items.contains_key("x"));
+        mark_unparsed(&mut t, &["x".to_string()]);
+        let (doc, t2) = publish("a", &[], &t, 9000);
+        assert!(!doc.items.contains_key("x"), "no tombstone and no rewrite: {:?}", doc.items.get("x"));
+        assert!(t2.items["x"].unparsed && !t2.items["x"].deleted, "still remembered as unparsed");
+    }
+
+    #[test]
+    fn an_item_that_is_parsed_later_publishes_normally_and_a_remote_deletion_forgets_it() {
+        let remote = DeviceDoc { device: "b".into(), items: BTreeMap::from([("x".to_string(), rec(5000, json!(1)))]), first_sync_at: None };
+        let (_, mut t) = merge_as("a", &[], std::slice::from_ref(&remote), &Tracker { seeded: true, ..Default::default() });
+        mark_unparsed(&mut t, &["x".to_string()]);
+        // a newer build reads it: it is in the local items, flag gone, the unchanged value keeps its time
+        let (doc, t2) = publish("a", &items(&[("x", json!(1))]), &t, 9000);
+        assert_eq!(doc.items["x"].modified, 5000);
+        assert!(!t2.items["x"].unparsed);
+        // the other Mac deletes it: nothing is carried
+        let gone = DeviceDoc {
+            device: "b".into(),
+            items: BTreeMap::from([(
+                "x".to_string(),
+                Record { modified: 7000, deleted: true, value: None, pristine: false, adopted: false },
+            )]),
+            first_sync_at: None,
+        };
+        let (_, t3) = merge_as("a", &[], &[gone], &t);
+        let (doc, _) = publish("a", &[], &t3, 9000);
+        assert!(!doc.items.contains_key("x"), "A publishes nothing for x: no tombstone of its own, no copy: {:?}", doc.items.get("x"));
+        assert!(!t3.items.get("x").is_some_and(|t| t.unparsed && !t.deleted), "a deleted unparsed item is not kept live");
+    }
+
+    #[test]
+    fn tracked_unparsed_round_trips_and_false_is_not_written() {
+        let mut t =
+            Tracked { hash: "h".into(), modified: 1, deleted: false, remote: false, pristine: false, adopted: false, unparsed: true };
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains("\"unparsed\":true"), "{json}");
+        assert!(serde_json::from_str::<Tracked>(&json).unwrap().unparsed);
+        t.unparsed = false;
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(!json.contains("unparsed"), "{json}");
+        assert!(!serde_json::from_str::<Tracked>(&json).unwrap().unparsed, "an old tracker loads as false");
+    }
+
+    #[test]
+    fn a_normal_local_deletion_and_edit_still_publish_as_before() {
+        let (_, t1) = publish("a", &items(&[("1", json!("x")), ("2", json!("y"))]), &Tracker::default(), 100);
+        let (doc, _) = publish("a", &items(&[("2", json!("y2"))]), &t1, 200);
+        assert!(doc.items["1"].deleted && doc.items["1"].modified == 200);
+        assert_eq!(doc.items["2"].modified, 200);
     }
 }

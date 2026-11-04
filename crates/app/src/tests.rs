@@ -15497,6 +15497,24 @@ fn sync_is_off_by_default_and_queues_nothing() {
 }
 
 #[test]
+fn a_merged_item_this_build_cannot_read_is_flagged_in_the_tracker_and_readable_ones_are_not() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let good = Snippet::new("ok", "text", "!r");
+    let mut merged = ferrocast_core::sync_io::to_items(std::slice::from_ref(&good));
+    merged.push(("bad".into(), serde_json::json!({"id": "bad", "name": 5})));
+    let (_, t) = ferrocast_core::sync::publish("a", &merged, &ferrocast_core::sync::Tracker::default(), 5000);
+    let snap = app.sync_snapshot("snippets");
+    let t = app.sync_apply("snippets", merged, t, &snap).expect("applied");
+    assert_eq!(app.snippets.len(), 1, "only the readable snippet is local");
+    assert!(t.items["bad"].unparsed, "never to be published as deleted");
+    assert!(!t.items[&good.id].unparsed);
+    let (doc, _) = ferrocast_core::sync::publish("a", &ferrocast_core::sync_io::to_items(&app.snippets), &t, 9000);
+    assert!(!doc.items.contains_key("bad"), "no tombstone for the unreadable item");
+    std::fs::remove_dir_all(&app.store.root).ok();
+}
+
+#[test]
 fn a_merge_is_applied_without_queueing_a_new_run() {
     let mut app = fixture();
     app.settings.sync_enabled = true;
