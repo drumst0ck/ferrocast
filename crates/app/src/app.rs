@@ -999,6 +999,8 @@ pub struct App {
     frecency: Frecency,
     /// Newest release found by a check that is newer than the running version (drives Settings).
     update_available: Option<ferrocast_core::update::Release>,
+    /// An exit waiting for the recording to be saved (Quit) or for it and any export to end (update).
+    pending_exit: Option<PendingExit>,
     apps: Vec<apps::AppInfo>,
     /// Bundles moved to the Trash in this session (real and index paths): a rescan must not bring them back.
     trashed: std::collections::HashSet<PathBuf>,
@@ -1339,6 +1341,7 @@ impl App {
             notes_ctl,
             frecency: data.frecency,
             update_available: None,
+            pending_exit: None,
             apps: vec![],
             trashed: Default::default(),
             apps_at: Instant::now(),
@@ -3010,15 +3013,68 @@ impl App {
         }
     }
 
-    /// Writes pending notes and exits.
-    fn quit(&mut self) -> ! {
+    /// Longest Quit waits for the helper to save the recording before it exits anyway.
+    const QUIT_WAIT: Duration = Duration::from_secs(15);
+
+    /// True while an exit would lose work: a recording that is not saved yet or a running export.
+    fn exit_blocked(&self) -> bool {
+        !self.record.is_idle() || self.editor.as_ref().is_some_and(|e| e.export.running())
+    }
+
+    /// Quit from the tray or the launcher. A recording is stopped and saved first (the exit follows
+    /// its `Finished` event, or the bounded wait), so `project.json` always gets its duration and sources.
+    fn quit(&mut self) {
+        if !self.record.is_idle() {
+            let effect = self.record.request_stop();
+            self.perform_record(effect);
+        }
+        if self.record.is_idle() {
+            return self.exit_now(None);
+        }
+        // a Quit beats a pending update relaunch: the user chose to leave, not to restart
+        let since = self.pending_exit.as_ref().map_or_else(Instant::now, |p| p.since);
+        self.pending_exit = Some(PendingExit { relaunch: None, quit: true, since });
+    }
+
+    /// The update is installed: relaunch it, but never under a recording or an export.
+    fn update_installed(&mut self, path: PathBuf) {
+        if self.exit_blocked() {
+            let quit = self.pending_exit.as_ref().is_some_and(|p| p.quit);
+            let since = self.pending_exit.as_ref().map_or_else(Instant::now, |p| p.since);
+            let relaunch = if quit { None } else { Some(path) };
+            self.pending_exit = Some(PendingExit { relaunch, quit, since });
+            return;
+        }
+        self.exit_now(Some(path));
+    }
+
+    /// Run the exit that was waiting, once nothing is left to lose (or the Quit wait ran out).
+    pub(crate) fn exit_tick(&mut self, now: Instant) {
+        let Some(p) = &self.pending_exit else { return };
+        let waited_out = p.quit && now.saturating_duration_since(p.since) >= Self::QUIT_WAIT;
+        let export = self.editor.as_ref().is_some_and(|e| e.export.running());
+        // Quit abandons an export (the user chose Quit); an update waits for it
+        let blocked = if p.quit { !self.record.is_idle() } else { !self.record.is_idle() || export };
+        if blocked && !waited_out {
+            return;
+        }
+        let relaunch = p.relaunch.clone();
+        self.pending_exit = None;
+        self.exit_now(relaunch);
+    }
+
+    /// Writes pending notes and exits (after starting the relaunch of an updated copy, if any).
+    fn exit_now(&mut self, relaunch: Option<PathBuf>) {
         self.editor_flush();
         self.notes_do(|c, d| c.flush(d));
+        if let Some(path) = relaunch {
+            (self.fx.relaunch)(&path);
+        }
         // process::exit skips destructors: stop the extension sidecar (and its children) by hand
         self.ext_kill();
         // the now-playing helper too: dropping the poller kills it
         self.np_poller = None;
-        std::process::exit(0)
+        (self.fx.exit)(0)
     }
 
     // ------------------------------------------------------------ navigation
@@ -3394,19 +3450,7 @@ impl App {
                         }
                     }
                 }
-                Msg::UpdateInstalled { path } => {
-                    // exit first: it releases the instance lock the relaunched copy needs
-                    let _ = std::process::Command::new("/bin/sh")
-                        .arg("-c")
-                        .arg("sleep 1; open -n \"$1\"")
-                        .arg("ferrocast-relaunch")
-                        .arg(&path)
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn();
-                    self.quit();
-                }
+                Msg::UpdateInstalled { path } => self.update_installed(path),
                 Msg::UpdateFailed(e) => {
                     instance::log(&self.store.root, &format!("update failed: {e}"));
                     self.toast(trf("Update failed: {e}", &[("e", &e.to_string())]));
@@ -5880,6 +5924,7 @@ impl App {
                 return;
             }
         };
+        let previous_check = self.settings.update_last_check;
         self.settings.update_last_check = Some(now_secs());
         self.save_settings();
         let current = update::Version::parse(env!("CARGO_PKG_VERSION")).expect("CARGO_PKG_VERSION is semver");
@@ -5901,6 +5946,12 @@ impl App {
         };
         match self.settings.update_install {
             UpdateInstall::AskFirst => self.push(View::Update { release }),
+            UpdateInstall::Automatic if self.exit_blocked() => {
+                // never restart under a recording or an export: the next poll asks again, and
+                // the Update view (update_available) stays reachable meanwhile
+                self.settings.update_last_check = previous_check;
+                self.save_settings();
+            }
             UpdateInstall::Automatic => self.start_update(release, channel, writable),
         }
     }
@@ -6554,6 +6605,7 @@ impl App {
                         self.capture_say(trf("Recording failed: {e}", &[("e", &e.to_string())]));
                     }
                 }
+                self.exit_tick(Instant::now());
             }
             _ => {}
         }
@@ -7948,6 +8000,15 @@ pub(crate) fn notes_appearance(theme: Theme) -> ferrocast_macos::notes_theme::Ap
 
 /// Side effects of delivering a translation, behind function pointers so tests never spawn a
 /// process or touch Accessibility.
+/// An exit that waits for the recording to be saved or an export to end.
+pub(crate) struct PendingExit {
+    /// The updated bundle to open once this process is gone.
+    relaunch: Option<PathBuf>,
+    /// The user chose Quit: stop the recording, then leave without waiting for an export.
+    quit: bool,
+    since: Instant,
+}
+
 pub(crate) struct Effects {
     /// pid of the app in front now.
     pub(crate) frontmost: fn() -> Option<i32>,
@@ -7992,6 +8053,10 @@ pub(crate) struct Effects {
     pub(crate) np_seek: fn(f64),
     /// Bring the app with this bundle id forward, without blocking the UI thread.
     pub(crate) np_open: fn(String),
+    /// End the process (real: `process::exit`, which skips destructors).
+    pub(crate) exit: fn(i32),
+    /// Start the relaunch of the updated bundle at this path (it waits for this process to exit).
+    pub(crate) relaunch: fn(&std::path::Path),
 }
 
 impl Effects {
@@ -8066,6 +8131,19 @@ impl Effects {
                 std::thread::spawn(move || {
                     ferrocast_macos::nowplaying::open_app(&id);
                 });
+            },
+            exit: |code| std::process::exit(code),
+            relaunch: |path| {
+                // exit first: it releases the instance lock the relaunched copy needs
+                let _ = std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg("sleep 1; open -n \"$1\"")
+                    .arg("ferrocast-relaunch")
+                    .arg(path)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
             },
         }
     }

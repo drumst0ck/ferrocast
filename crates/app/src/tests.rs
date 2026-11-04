@@ -46,6 +46,7 @@ fn fixture() -> App {
         notes_ctl: crate::notes_ctl::NotesCtl::new(Box::new(crate::notes_ctl::fake::FakeFx::new().0)),
         frecency: Frecency::default(),
         update_available: None,
+        pending_exit: None,
         apps: vec![],
         trashed: Default::default(),
         apps_at: Instant::now(),
@@ -254,6 +255,8 @@ impl Effects {
             np_command: |c| FX_LOG.with(|l| l.borrow_mut().push(format!("np cmd {c:?}"))),
             np_seek: |s| FX_LOG.with(|l| l.borrow_mut().push(format!("np seek {s}"))),
             np_open: |id| FX_LOG.with(|l| l.borrow_mut().push(format!("np open {id}"))),
+            exit: |code| FX_LOG.with(|l| l.borrow_mut().push(format!("exit {code}"))),
+            relaunch: |p| FX_LOG.with(|l| l.borrow_mut().push(format!("relaunch {}", p.display()))),
         }
     }
 }
@@ -17856,4 +17859,133 @@ mod now_playing {
         assert!(app.np_poller.is_none());
         assert_eq!(fx_taken(), vec!["np stop".to_string(), "np render hidden".to_string()]);
     }
+}
+
+// ---- Quit and auto-update while a recording is active or an export runs (S1) ----
+
+fn exits(log: &[String]) -> Vec<&String> {
+    log.iter().filter(|l| l.starts_with("exit") || l.starts_with("relaunch")).collect()
+}
+
+fn recording_app() -> (App, std::sync::mpsc::Receiver<crate::record_ctl::Cmd>) {
+    let mut app = fixture();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.rt.cmds = Some(tx);
+    app.rt.gen = 1;
+    app.record.begin(0);
+    (app, rx)
+}
+
+fn saved_msg() -> crate::record_ctl::RecordMsg {
+    let saved = crate::record_ctl::Saved { project: "/r/Recording 1.ferrocast".into(), duration: 5.0, interrupted: false, message: None };
+    crate::record_ctl::RecordMsg::Finished(1, Ok(saved))
+}
+
+#[test]
+fn quit_while_idle_exits_at_once() {
+    let mut app = fixture();
+    fx_taken();
+    app.bus.send(Msg::Tray("quit".into()));
+    app.drain();
+    assert_eq!(exits(&fx_taken()), vec!["exit 0"]);
+}
+
+#[test]
+fn quit_during_a_recording_stops_it_first_and_exits_after_the_project_is_finalized() {
+    use crate::record_ctl::{Cmd, Phase};
+    let (mut app, rx) = recording_app();
+    fx_taken();
+    app.bus.send(Msg::Tray("quit".into()));
+    app.drain();
+    assert_eq!(rx.try_recv().ok(), Some(Cmd::Stop), "the helper is asked to finish the file");
+    assert_eq!(app.record.phase(), Phase::Stopping);
+    assert!(exits(&fx_taken()).is_empty(), "no exit before the Finished event");
+    app.handle_record(saved_msg());
+    assert!(app.record.is_idle());
+    assert_eq!(exits(&fx_taken()), vec!["exit 0"], "exits once, after Finished");
+}
+
+#[test]
+fn quit_command_in_the_launcher_during_a_recording_also_waits_for_the_stop() {
+    let (mut app, rx) = recording_app();
+    fx_taken();
+    app.run_builtin(Builtin::Quit);
+    assert_eq!(rx.try_recv().ok(), Some(crate::record_ctl::Cmd::Stop));
+    assert!(exits(&fx_taken()).is_empty());
+}
+
+#[test]
+fn quit_during_the_countdown_cancels_it_and_exits() {
+    let mut app = fixture();
+    app.record.begin(3);
+    fx_taken();
+    app.bus.send(Msg::Tray("quit".into()));
+    app.drain();
+    assert_eq!(exits(&fx_taken()), vec!["exit 0"]);
+}
+
+#[test]
+fn quit_waits_a_bounded_time_for_a_helper_that_never_finishes() {
+    let (mut app, _rx) = recording_app();
+    fx_taken();
+    app.bus.send(Msg::Tray("quit".into()));
+    app.drain();
+    app.exit_tick(Instant::now() + Duration::from_secs(2));
+    assert!(exits(&fx_taken()).is_empty(), "still waiting");
+    app.exit_tick(Instant::now() + Duration::from_secs(60));
+    assert_eq!(exits(&fx_taken()), vec!["exit 0"], "gives up after the bound");
+}
+
+#[test]
+fn automatic_install_is_postponed_while_recording_and_resumes_when_idle() {
+    use ferrocast_core::update::Channel;
+    let (mut app, _rx) = recording_app();
+    app.settings.update_install = UpdateInstall::Automatic;
+    app.settings.update_last_check = Some(1);
+    app.handle_update_checked(false, Ok(Some(fake_release("99.0.0"))), Channel::Dev, true);
+    assert!(toast_text(&app).is_empty(), "nothing started: {}", toast_text(&app));
+    assert_eq!(app.settings.update_last_check, Some(1), "the next poll checks again");
+    assert!(app.update_available.is_some(), "the Update view stays available");
+    app.handle_record(saved_msg());
+    app.handle_update_checked(false, Ok(Some(fake_release("99.0.0"))), Channel::Dev, true);
+    assert!(toast_text(&app).contains("Development build"), "{}", toast_text(&app));
+    assert_ne!(app.settings.update_last_check, Some(1));
+}
+
+#[test]
+fn update_installed_during_a_recording_does_not_exit_until_it_ends() {
+    let (mut app, rx) = recording_app();
+    fx_taken();
+    app.bus.send(Msg::UpdateInstalled { path: "/Apps/Ferrocast.app".into() });
+    app.drain();
+    assert!(exits(&fx_taken()).is_empty(), "the recording keeps running");
+    assert!(rx.try_recv().is_err(), "an update never stops a recording by itself");
+    assert_eq!(app.record.phase(), crate::record_ctl::Phase::Recording);
+    app.handle_record(crate::record_ctl::RecordMsg::Stop);
+    app.handle_record(saved_msg());
+    assert_eq!(exits(&fx_taken()), vec!["relaunch /Apps/Ferrocast.app", "exit 0"]);
+}
+
+#[test]
+fn update_installed_while_idle_relaunches_then_exits() {
+    let mut app = fixture();
+    fx_taken();
+    app.bus.send(Msg::UpdateInstalled { path: "/Apps/Ferrocast.app".into() });
+    app.drain();
+    assert_eq!(exits(&fx_taken()), vec!["relaunch /Apps/Ferrocast.app", "exit 0"]);
+}
+
+#[test]
+fn update_installed_during_an_export_waits_for_it() {
+    use crate::editor_export::ExportRun;
+    let (mut app, _rx, _dir) = editor_app_in("update-vs-export");
+    app.editor.as_mut().unwrap().export.run =
+        Some(ExportRun { cancel: Default::default(), done: 0, total: 0, eta: None, cancelling: false });
+    fx_taken();
+    app.bus.send(Msg::UpdateInstalled { path: "/Apps/Ferrocast.app".into() });
+    app.drain();
+    assert!(exits(&fx_taken()).is_empty());
+    app.editor.as_mut().unwrap().export.run = None;
+    app.exit_tick(Instant::now());
+    assert_eq!(exits(&fx_taken()), vec!["relaunch /Apps/Ferrocast.app", "exit 0"]);
 }

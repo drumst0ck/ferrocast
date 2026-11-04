@@ -17,6 +17,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Recording survives Quit and updates**: Quit from the menu bar or the launcher during a recording now stops and saves it first, with a 15 second limit, so the recording keeps its length, camera and microphone. An automatic update waits for the recording (and for a running export) to end and tries again at the next check; an installed update restarts the app only after that. #recording
 - **Language picker**: with an English or other Latin-script interface, Japanese and Simplified Chinese showed as empty boxes in Settings → General → Language; their names now display correctly. #settings
 
 ## [0.5.0] - 2026-10-29
