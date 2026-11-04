@@ -39,6 +39,16 @@ pub enum Msg {
     Tray(String),
     /// From the tiling worker thread; handled on the UI thread like any other message.
     Tiling(ferrocast_macos::tiling::Event),
+    /// Something the now-playing feed reported (its thread).
+    NowPlaying(ferrocast_core::nowplaying::Event),
+    /// The pointer entered or left the notch player (main thread).
+    NowPlayingHover(bool),
+    /// A button of the notch player was clicked (main thread).
+    NowPlayingCommand(ferrocast_core::nowplaying::Command),
+    /// The progress bar was released at this many seconds (main thread).
+    NowPlayingSeek(f64),
+    /// The title was clicked: bring the app that plays forward (main thread).
+    NowPlayingOpen,
     /// A button of the quick-action bar was clicked (main thread).
     TilingQuick(ferrocast_core::tiling::QuickAction),
     /// Result of a feed check: `Ok(None)` means no stable release was found.

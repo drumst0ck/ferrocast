@@ -1008,6 +1008,9 @@ pub struct App {
     hotkeys: Option<Hotkeys>,
     tiling: Option<ferrocast_macos::tiling::Handle>,
     tiling_paused: bool,
+    /// The notch player's state machine and its polling thread (only while the setting is on).
+    now_playing: ferrocast_core::nowplaying::Ctl,
+    np_poller: Option<ferrocast_macos::nowplaying::Poller>,
     /// The window the quick-action bar currently hangs above.
     quick_window: Option<u64>,
     /// Tiling shortcuts that could not be registered, shown in Settings.
@@ -1342,6 +1345,8 @@ impl App {
             hotkeys,
             tiling: None,
             tiling_paused: false,
+            now_playing: ferrocast_core::nowplaying::Ctl::new(),
+            np_poller: None,
             quick_window: None,
             tiling_hotkey_issues: vec![],
             tray_layout: 1,
@@ -1438,6 +1443,7 @@ impl App {
         }
         app.reload_scripts();
         app.sync_tiling();
+        app.sync_now_playing();
         app.set_theme();
         // Recently Deleted notes past their retention go once per start
         app.notes_do(|c, d| c.startup(d));
@@ -1613,6 +1619,33 @@ impl App {
         *self.shared.settings.write().unwrap() = self.settings.clone();
         self.rebuild();
         self.sync_tiling();
+        self.sync_now_playing();
+    }
+
+    /// Start or stop the notch player to match the setting; a no-op while it already does.
+    /// Nothing runs while the setting is off: no helper process, no thread, no panel.
+    fn sync_now_playing(&mut self) {
+        let on = self.settings.now_playing;
+        if on && self.np_poller.is_none() {
+            self.np_poller = (self.fx.np_spawn)(&self.bus);
+        } else if !on {
+            if let Some(p) = self.np_poller.take() {
+                // ends the helper process
+                (self.fx.np_stop)(p);
+            }
+        }
+        let out = self.now_playing.set_enabled(on, ferrocast_core::nowplaying::mono_secs());
+        self.apply_now_playing(out);
+    }
+
+    /// Draw what the player's state machine asked for and say once when the helper gave up.
+    fn apply_now_playing(&mut self, out: ferrocast_core::nowplaying::Out) {
+        if let Some(m) = out.render {
+            (self.fx.np_render)(&m);
+        }
+        if out.unavailable {
+            self.toast(tr("Now playing is not available on this version of macOS"));
+        }
     }
 
     /// Tell the tiling worker the current settings; the worker is only started once tiling or
@@ -2980,6 +3013,8 @@ impl App {
         self.notes_do(|c, d| c.flush(d));
         // process::exit skips destructors: stop the extension sidecar (and its children) by hand
         self.ext_kill();
+        // the now-playing helper too: dropping the poller kills it
+        self.np_poller = None;
         std::process::exit(0)
     }
 
@@ -4017,6 +4052,31 @@ impl App {
                     self.rates = r;
                 }
                 Msg::Tiling(e) => self.tiling_event(e),
+                Msg::NowPlaying(e) => {
+                    let out = self.now_playing.on_event(ferrocast_core::nowplaying::mono_secs(), e);
+                    self.apply_now_playing(out);
+                }
+                Msg::NowPlayingHover(h) => {
+                    let out = self.now_playing.set_hover(h, ferrocast_core::nowplaying::mono_secs());
+                    self.apply_now_playing(out);
+                }
+                Msg::NowPlayingCommand(c) => {
+                    if self.now_playing.can_command() {
+                        (self.fx.np_command)(c);
+                    }
+                }
+                Msg::NowPlayingSeek(secs) => {
+                    // the bar moves at once; the helper is told off the main thread
+                    if let Some((secs, out)) = self.now_playing.seek_to(ferrocast_core::nowplaying::mono_secs(), secs) {
+                        self.apply_now_playing(out);
+                        (self.fx.np_seek)(secs);
+                    }
+                }
+                Msg::NowPlayingOpen => {
+                    if let Some(id) = self.now_playing.source_bundle() {
+                        (self.fx.np_open)(id);
+                    }
+                }
                 Msg::TilingQuick(q) => {
                     let w = self.quick_window;
                     self.run_tiling_on(q.action(), None, w);
@@ -7835,6 +7895,18 @@ pub(crate) struct Effects {
     pub(crate) translate_start: fn(&Settings, String, String, Option<i32>, ferrocast_core::models::TranslateOutput, u64, &Bus),
     /// Show the screen colour picker; the result arrives as `Msg::ColorPicked` (main thread only).
     pub(crate) color_sampler: fn(&Bus),
+    /// Start the now-playing feed and register the notch player's callbacks (main thread only).
+    pub(crate) np_spawn: fn(&Bus) -> Option<ferrocast_macos::nowplaying::Poller>,
+    /// Draw (or hide) the notch player (main thread only).
+    pub(crate) np_render: fn(&ferrocast_core::nowplaying::Model),
+    /// Stop the helper behind the poller (main thread; real: drop it, which kills the process).
+    pub(crate) np_stop: fn(ferrocast_macos::nowplaying::Poller),
+    /// Send a transport button to whatever plays, without blocking the UI thread.
+    pub(crate) np_command: fn(ferrocast_core::nowplaying::Command),
+    /// Seek the player to this many seconds, without blocking the UI thread.
+    pub(crate) np_seek: fn(f64),
+    /// Bring the app with this bundle id forward, without blocking the UI thread.
+    pub(crate) np_open: fn(String),
 }
 
 impl Effects {
@@ -7876,6 +7948,37 @@ impl Effects {
                 let bus = bus.clone();
                 ferrocast_macos::color_sampler::sample(move |c| {
                     bus.send(Msg::ColorPicked(c.map(|[r, g, b, a]| ferrocast_core::color::Rgba::from_unit(r, g, b, a))))
+                });
+            },
+            np_spawn: |bus| {
+                let (hover, command, seek, open, events) = (bus.clone(), bus.clone(), bus.clone(), bus.clone(), bus.clone());
+                ferrocast_macos::notch_player::set_callbacks(ferrocast_macos::notch_player::Callbacks {
+                    on_hover: Box::new(move |h| hover.send(Msg::NowPlayingHover(h))),
+                    on_command: Box::new(move |c| command.send(Msg::NowPlayingCommand(c))),
+                    on_seek: Box::new(move |s| seek.send(Msg::NowPlayingSeek(s))),
+                    on_open: Box::new(move || open.send(Msg::NowPlayingOpen)),
+                });
+                Some(ferrocast_macos::nowplaying::spawn(std::sync::Arc::new(move |e| events.send(Msg::NowPlaying(e)))))
+            },
+            np_stop: drop,
+            np_render: |m| {
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    ferrocast_macos::notch_player::render(mtm, m, ferrocast_macos::system::reduce_motion());
+                }
+            },
+            np_command: |command| {
+                std::thread::spawn(move || {
+                    ferrocast_macos::nowplaying::send_command(command);
+                });
+            },
+            np_seek: |secs| {
+                std::thread::spawn(move || {
+                    ferrocast_macos::nowplaying::send_seek(secs);
+                });
+            },
+            np_open: |id| {
+                std::thread::spawn(move || {
+                    ferrocast_macos::nowplaying::open_app(&id);
                 });
             },
         }

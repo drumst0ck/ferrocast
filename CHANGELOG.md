@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Notch player**: optional and off by default (Settings → General → Notch player). What is playing on your Mac (a browser tab, Spotify, Music, Podcasts or any app that reports to macOS Now Playing) shows in a black pill at the notch, or at the top centre on Macs without one, with the cover and a small equalizer; hover to see the title, artist, source app, progress and previous, play/pause and next. It hides when nothing plays for a while and over full-screen apps. It uses the open-source mediaremote-adapter helper through macOS's own perl, needs no permission and may stop working after a macOS update; Ferrocast then says so once. (docs: /docs/launcher/notch-player/) #notch
+
 ### Changed
 - **Website conversion indexability**: 152 generic English conversion pages remain accessible with self canonicals but use noindex,follow and leave the sitemap; an explicit manifest restores both together.
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.

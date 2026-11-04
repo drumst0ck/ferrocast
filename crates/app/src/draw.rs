@@ -7287,6 +7287,19 @@ impl App {
                             row(ui, pal, "Menu bar icon", "A small icon to open Ferrocast with the mouse.", |ui| toggle(ui, pal, &mut s.show_menu_bar_icon));
                         });
                         ui.add_space(14.0);
+                        section(ui, pal, "Notch player");
+                        group(ui, pal, |ui| {
+                            row(
+                                ui,
+                                pal,
+                                "Now playing in the notch",
+                                "Shows what is playing on your Mac (browser, Spotify, Music, Podcasts, VLC…) in a pill at the notch. Hover it to open the player. Off by default.",
+                                |ui| toggle(ui, pal, &mut s.now_playing),
+                            );
+                        });
+                        ui.add_space(10.0);
+                        note(ui, pal, NOW_PLAYING_NOTE);
+                        ui.add_space(14.0);
                         section(ui, pal, "Updates");
                         group(ui, pal, |ui| {
                             row(
@@ -10098,6 +10111,9 @@ fn empty_state(ui: &mut Ui, pal: &Palette, tab: usize, title: &str, line: &str, 
     clicked
 }
 
+/// Under the notch player setting: what it shows and how.
+const NOW_PLAYING_NOTE: &str = "Shows any app that reports to macOS Now Playing. It uses an open-source helper that runs through macOS's own perl and needs no permission; it may stop working after a macOS update. The pill hides while nothing plays and when an app is full screen.";
+
 /// Toast shown after "Reset this tab"; the footer turns its "Undo" into a link.
 const RESET_TOAST: &str = "Tab reset · Undo";
 /// How long Undo stays available.
@@ -10120,6 +10136,7 @@ const RESET_FIELDS: [(usize, &[&str]); 4] = [
             "wheel_actions_key",
             "enter_on_finder",
             "show_menu_bar_icon",
+            "now_playing",
             "update_check",
             "update_install",
             "sensitivity",
