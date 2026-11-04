@@ -24,6 +24,10 @@ An optional tool is missing. The message includes the install command, for examp
 
 They need Accessibility (snippets may also need Input Monitoring). Open the Welcome & Permissions screen or System Settings and grant it. See [First run](/docs/getting-started/first-run/).
 
+## The permission helper window does not appear
+
+It shows next to System Settings for Accessibility, Input Monitoring and Screen Recording, and only when Ferrocast runs from an app bundle. Builds run with `cargo run` just open the pane; use the **+** button there instead. If you close the helper, click the grant button again. See [First run](/docs/getting-started/first-run/).
+
 ## Convert Finder Selection shows a toast or nothing
 
 The Finder read needs Automation permission for Finder; while the prompt is pending, the call gives up after 15 seconds with a toast instead of hanging.

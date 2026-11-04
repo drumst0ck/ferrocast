@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Permission helper**: when Ferrocast opens the Accessibility, Screen Recording or Input Monitoring settings, a small panel with the Ferrocast icon appears next to System Settings; drag the icon into the list to add Ferrocast. It closes when the permission is granted, when System Settings closes or with its close button. Camera, microphone and speech settings open as before. (docs: /docs/getting-started/first-run/) #permissions
+
 ### Changed
 - **Menu bar icon**: the Menu bar icon switch in Settings → General now shows or hides the icon at once, without a restart. (docs: /docs/launcher/settings/) #settings
 - **Website conversion indexability**: 152 generic English conversion pages remain accessible with self canonicals but use noindex,follow and leave the sitemap; an explicit manifest restores both together.

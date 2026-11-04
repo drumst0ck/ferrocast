@@ -32,6 +32,8 @@ Sirven para las capturas y para las grabaciones.
 
   `Screen Recording is off for Ferrocast. Turn it on in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.`
 
+  Ajustes del Sistema se abre en el panel de Grabación de pantalla con una pequeña ventana de ayuda al lado: arrastra desde ella el icono de Ferrocast a la lista. La ayuda se cierra al conceder el permiso. Consulta [Primer arranque](/es/docs/getting-started/first-run/).
+
 Capture Scrolling necesita además Accesibilidad, porque Ferrocast envía los eventos de scroll. Si está desactivada, el mensaje es `Scrolling capture needs Accessibility. Turn Ferrocast on in System Settings → Privacy & Security → Accessibility, then try again.`
 
 Grabar también necesita Grabación de pantalla. Sin ella aparece el mismo mensaje, se abre Ajustes del Sistema y se elimina la carpeta de proyecto a medias.
