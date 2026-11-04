@@ -1,6 +1,6 @@
 ---
 title: "Notch player"
-description: "A now-playing pill at the notch for whatever plays on your Mac (browser, Spotify, Music, Podcasts, VLC…): a spinning vinyl with the cover, and on hover a card with the title, progress ring and previous, play/pause and next."
+description: "Show what plays on your Mac (a browser tab, Spotify, Music, Podcasts) at the notch as a spinning vinyl, with title, seek bar and controls on hover."
 sidebar:
   order: 21
 ---

@@ -1,6 +1,6 @@
 ---
 title: "Reproductor en el notch"
-description: "Una píldora en el notch con lo que suena en tu Mac (navegador, Spotify, Música, Podcasts, VLC…): un vinilo giratorio con la carátula y, al pasar el puntero, una tarjeta con título, anillo de progreso y anterior, pausa/reproducir y siguiente."
+description: "Muestra en el notch lo que suena en tu Mac (navegador, Spotify, Música, Podcasts) como un vinilo que gira, con título, barra de tiempo y controles."
 sidebar:
   order: 21
 ---
