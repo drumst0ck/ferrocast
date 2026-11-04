@@ -17,6 +17,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Confirmations and updates**: holding ↵ no longer confirms a confirmation (Empty Trash, Shut Down, Restart, Log Out, Quit All Apps, Delete All, Move to Trash) or installs an update through key auto-repeat; they need a fresh press. #launcher
+- **Create Script Command**: a new script never replaces an existing one (a second "Test" becomes `test 2.sh`), and a title without ASCII letters or digits is saved as `script.sh` instead of a hidden `.sh` file. #scripts
 - **Language picker**: with an English or other Latin-script interface, Japanese and Simplified Chinese showed as empty boxes in Settings → General → Language; their names now display correctly. #settings
 
 ## [0.5.0] - 2026-10-29

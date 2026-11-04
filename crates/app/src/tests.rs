@@ -17857,3 +17857,86 @@ mod now_playing {
         assert_eq!(fx_taken(), vec!["np stop".to_string(), "np render hidden".to_string()]);
     }
 }
+
+fn confirm_app() -> (App, std::path::PathBuf) {
+    let root = trash_root();
+    let foo = bundle(&root, "Foo.app");
+    let mut app = trash_fixture(&[("Foo", &foo, None)]);
+    choose_trash(&mut app, "Foo");
+    assert!(matches!(app.view(), View::Confirm { .. }));
+    (app, foo)
+}
+
+fn held_enter() -> Event {
+    Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: true, modifiers: Modifiers::NONE }
+}
+
+#[test]
+fn a_held_enter_does_not_confirm_a_confirmation() {
+    let (mut app, _) = confirm_app();
+    render(&mut app, vec![held_enter(), held_enter()]);
+    assert!(matches!(app.view(), View::Confirm { .. }), "auto-repeat must not confirm");
+    assert!(fx_taken().is_empty(), "nothing is performed by auto-repeat");
+}
+
+#[test]
+fn a_fresh_enter_press_still_confirms() {
+    let (mut app, foo) = confirm_app();
+    render(&mut app, vec![held_enter(), held_enter()]);
+    render(&mut app, vec![release(Key::Enter)]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert_eq!(fx_taken(), [format!("trash_app {}", foo.display())]);
+    assert!(!matches!(app.view(), View::Confirm { .. }));
+}
+
+#[test]
+fn escape_still_cancels_a_confirmation_after_held_enter() {
+    let (mut app, _) = confirm_app();
+    render(&mut app, vec![held_enter(), held_enter()]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(!matches!(app.view(), View::Confirm { .. }));
+    assert_eq!(fx_taken(), Vec::<String>::new());
+}
+
+#[test]
+fn a_held_enter_does_not_start_an_update() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::Update { release: fake_release("99.0.0") }];
+    render(&mut app, vec![held_enter(), held_enter()]);
+    assert!(matches!(app.view(), View::Update { .. }), "auto-repeat must not install the update");
+}
+
+fn scripts_tmp() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("ferrocast-script-test-{}", uuid::Uuid::new_v4()))
+}
+
+#[test]
+fn creating_a_script_twice_keeps_the_first_untouched() {
+    let dir = scripts_tmp();
+    let first = write_new_script(&dir, "Test", "compact").unwrap();
+    assert_eq!(first.file_name().unwrap(), "test.sh");
+    std::fs::write(&first, "my edits").unwrap();
+    let second = write_new_script(&dir, "Test", "compact").unwrap();
+    assert_ne!(first, second);
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), "my edits");
+    assert!(std::fs::read_to_string(&second).unwrap().contains("Test"));
+    let third = write_new_script(&dir, "test", "compact").unwrap();
+    assert!(third != first && third != second);
+}
+
+#[test]
+fn a_first_script_keeps_its_slug_name() {
+    let dir = scripts_tmp();
+    let p = write_new_script(&dir, "Back Up!", "silent").unwrap();
+    assert_eq!(p.file_name().unwrap(), "back-up.sh");
+    assert!(std::fs::read_to_string(&p).unwrap().contains("Back Up!"));
+}
+
+#[test]
+fn a_non_ascii_title_falls_back_to_script_sh() {
+    let dir = scripts_tmp();
+    let p = write_new_script(&dir, "日記", "compact").unwrap();
+    assert_eq!(p.file_name().unwrap(), "script.sh");
+    let q = write_new_script(&dir, "日記", "compact").unwrap();
+    assert_ne!(p, q);
+}
