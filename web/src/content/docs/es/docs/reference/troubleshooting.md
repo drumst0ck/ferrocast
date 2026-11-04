@@ -24,6 +24,10 @@ Falta una herramienta opcional. El mensaje incluye la orden de instalación, por
 
 Necesitan Accesibilidad (los snippets pueden necesitar también Input Monitoring). Abre la pantalla Welcome & Permissions o Ajustes del Sistema y concédela. Consulta [Primer arranque](/es/docs/getting-started/first-run/).
 
+## No aparece la ventana del ayudante de permisos
+
+Aparece junto a Ajustes del Sistema para Accesibilidad, Monitorización de entrada y Grabación de pantalla, y solo cuando Ferrocast se ejecuta desde un paquete de app. Las compilaciones lanzadas con `cargo run` solo abren el panel; usa allí el botón **+**. Si cierras el ayudante, pulsa de nuevo el botón de conceder. Consulta [Primer arranque](/es/docs/getting-started/first-run/).
+
 ## Convert Finder Selection muestra un aviso o no hace nada
 
 La lectura de Finder necesita permiso de Automatización para Finder; mientras el aviso de permiso está pendiente, la llamada vence a los 15 segundos y muestra un aviso en lugar de quedarse colgada.

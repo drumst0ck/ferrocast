@@ -32,6 +32,8 @@ These apply to both screenshots and recordings.
 
   `Screen Recording is off for Ferrocast. Turn it on in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.`
 
+  System Settings opens on the Screen Recording pane with a small helper window next to it: drag the Ferrocast icon from it into the list. The helper closes when the permission is granted. See [First run](/docs/getting-started/first-run/).
+
 Capture Scrolling also needs Accessibility, because Ferrocast sends the scroll events. If it is off, the message is `Scrolling capture needs Accessibility. Turn Ferrocast on in System Settings → Privacy & Security → Accessibility, then try again.`
 
 Recording also needs Screen Recording. Without it you get the same message, System Settings opens and the half-made project folder is removed.

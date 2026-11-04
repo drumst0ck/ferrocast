@@ -18,6 +18,10 @@ Open the launcher with <kbd>⌥</kbd> <kbd>Space</kbd> (change it in Settings).
 
 Search, the calculator and Ask AI work without Accessibility. The drag wheel needs no Accessibility permission either.
 
+### The permission helper
+
+When Ferrocast opens the Accessibility, Input Monitoring or Screen Recording pane of System Settings, it also shows a small dark floating window with the Ferrocast icon and the hint “Drag Ferrocast into the list”. Drag that icon into the list in System Settings and Ferrocast is added; you can also use the **+** button there. The window closes by itself once the permission is granted or System Settings is closed, or with its **✕** button. Only one is shown at a time. It appears only when Ferrocast runs from an app bundle (`/Applications/Ferrocast.app`); a build run straight from `cargo run` just opens the pane. Camera, Microphone, Speech Recognition and Automation panes list only apps that already asked, so they open without the helper.
+
 ## Permissions and signing
 
 Permissions (Accessibility / Input Monitoring) are granted by the user. After recompiling with an ad-hoc signature macOS may ask for them again. Distributing to other Macs would need Developer ID signing and notarization.
