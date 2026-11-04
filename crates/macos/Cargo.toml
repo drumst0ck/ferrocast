@@ -28,3 +28,7 @@ objc2-avf-audio = { version = "0.3", default-features = false, features = ["std"
 [[example]]
 name = "notes_images_demo"
 path = "src/examples/notes_images_demo.rs"
+
+[[example]]
+name = "notch_player_demo"
+path = "src/examples/notch_player_demo.rs"

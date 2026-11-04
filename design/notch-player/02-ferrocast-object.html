@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1200">
+<title>Notch player · 02 Ferrocast object</title>
+<style>
+:root{--ac:#F0535F;--tx:#EEEEEE;--soft:#a1a1a1;--tint:#F0535F;--ease:cubic-bezier(.32,.72,0,1);--wall:radial-gradient(900px 380px at 15% 115%,#3d1f72 0,transparent 62%),radial-gradient(700px 380px at 92% -10%,#0f3f63 0,transparent 60%),#0a0c18}
+*{box-sizing:border-box;margin:0}
+html,body{width:1200px;height:700px;background:#09090a;color:var(--tx);font:13px/1.35 ui-sans-serif,-apple-system,"SF Pro Text","Geist",system-ui,sans-serif;overflow:hidden;-webkit-font-smoothing:antialiased}
+button{padding:0;font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid #fff;outline-offset:2px}
+/* ---- fake MacBook ---- */
+.mock{position:absolute;left:40px;top:14px;width:1120px;height:338px;padding:10px 10px 0;background:#020203;border-radius:24px 24px 0 0;box-shadow:inset 0 0 0 1px #2b2b30,0 0 0 1px #000}
+.screen{position:relative;overflow:hidden;background:var(--wall)}
+.mock .screen{height:328px;border-radius:14px 14px 0 0}
+.menubar{position:absolute;left:0;right:0;top:0;height:32px;background:rgba(0,0,0,.34);display:flex;align-items:center;padding:0 16px;gap:18px;font-size:13px;color:#f2f2f2;white-space:nowrap}
+.menubar b{font-weight:700}.menubar .r{margin-left:auto;display:flex;gap:14px}
+.notch{position:absolute;top:0;left:50%;width:200px;margin-left:-100px;height:32px;background:#000;border-radius:0 0 12px 12px;z-index:1}
+.win{position:absolute;left:70px;bottom:26px;width:330px;height:150px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.07)}
+.hint{position:absolute;left:0;right:0;bottom:12px;text-align:center;font-size:11px;color:#b5b5ba}
+.tag{position:absolute;left:18px;top:46px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#d0d0d6}
+.tag b{color:var(--ac)}
+.mini{position:absolute;border:1px solid #26262a;border-bottom:0;border-radius:12px 12px 0 0}
+.lbl{position:absolute;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--soft)}
+.note{position:absolute;font-size:12px;color:#c4c4c8;line-height:1.5}
+.note b{color:var(--tx);font-weight:600}
+/* ---- control panel ---- */
+.panel{position:absolute;left:860px;top:372px;width:300px;padding:10px 14px 12px;background:#0f0f11;border:1px solid #242428;border-radius:12px}
+.panel h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--soft);font-weight:600;display:flex;justify-content:space-between;margin-bottom:4px}.panel h2 span+span{text-transform:none;letter-spacing:0}
+.row{display:grid;grid-template-columns:128px 1fr 36px;align-items:center;gap:8px;height:22px;font-size:11px;color:#c4c4c8}
+.row output{text-align:right;font-variant-numeric:tabular-nums;color:var(--tx)}
+input[type=range]{width:100%;accent-color:var(--ac);height:16px}
+.btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.btns button,.btns label{height:28px;padding:0 10px;border-radius:8px;background:#1b1b1e;border:1px solid #2c2c31;font-size:11.5px;display:inline-flex;align-items:center;gap:6px}
+.btns button:hover{background:#232327}
+.btns .cp{background:var(--ac);border-color:var(--ac);color:#000;font-weight:650}
+.btns .cp:hover{background:#f56a74}
+#toast{position:absolute;left:860px;top:680px;width:300px;font-size:11px;color:var(--soft);opacity:0;transition:opacity .3s}
+#toast.on,#rm{opacity:1}
+#rm{position:absolute;left:380px;top:640px;font-size:11px;color:var(--ac)}
+/* ---- player base ---- */
+.pl{position:absolute;top:0;left:50%;z-index:2;transform-origin:50% 0}
+.pl:focus{outline:none}.pl:focus-visible .clip{box-shadow:0 0 0 2px #fff}
+.goo,.body,.clip{position:absolute;left:0;top:0}
+.body,.clip{left:12px}.clip{overflow:hidden}
+.cx{position:absolute;top:0}.cx>*{position:absolute}
+[data-s]{pointer-events:none;transform-origin:0 50%}.pl.open [data-s]{pointer-events:auto}
+.pl[data-mode=c],.pl[data-mode=o]{pointer-events:none}
+.ctl{display:flex;align-items:center;gap:4px}
+.ctl button{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;transition:transform .3s var(--ease),background .2s}
+.ctl button:hover{background:rgba(255,255,255,.12)}.ctl button:active{transform:scale(.86)}
+.ctl .pp{width:44px;height:44px;background:#fff;color:#000}.ctl .pp:hover{background:#fff;transform:scale(1.06)}.ctl .pp:active{transform:scale(.9)}
+.t-ic{display:inline-flex}.t-ic svg{display:block}
+.art{width:100%;height:100%}.art svg{display:block;width:100%;height:100%}
+/* ---- 02 ferrocast object ---- */
+:root{--mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace;--wall:#101012}
+html,body{font-family:"Geist","SF Pro Display",ui-sans-serif,-apple-system,system-ui,sans-serif}
+.body,.clip{background:#000}
+.clip::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 -1px 0 rgba(255,255,255,.1);pointer-events:none}
+.cover{overflow:hidden;box-shadow:0 0 0 1px rgba(255,255,255,.1)}
+.eq{display:flex;gap:3px;align-items:center}.eq i{width:2px;flex:none;height:100%;background:var(--ac);border-radius:1px}
+.src{display:flex;gap:6px;align-items:center;font:500 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:#a1a1a1;height:14px;white-space:nowrap}
+.title{display:flex;align-items:center;gap:6px;font-size:16px;font-weight:600;letter-spacing:-.015em;line-height:1.25;max-width:214px;text-align:left;border-radius:4px}
+.title .t-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.title svg{flex:none;opacity:0;transform:translate(-4px,4px);transition:.25s var(--ease)}
+.title:hover svg,.title:focus-visible svg{opacity:.8;transform:none}
+.title:hover .t-title{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px}
+.artist{font-size:12.5px;color:#a1a1a1;white-space:nowrap}
+.line{background:rgba(255,255,255,.16);overflow:hidden;border-radius:1px;transform-origin:50% 100%}
+.line .fill{display:block;height:100%;width:0;position:relative;background:var(--ac)}
+.line .fill::after{content:"";position:absolute;right:0;top:0;bottom:0;width:16px;background:linear-gradient(90deg,transparent,#ff9aa1)}
+.tm{display:flex;justify-content:space-between;font:500 10px/1 var(--mono);color:#a1a1a1;font-variant-numeric:tabular-nums}
+.ctl{gap:2px}.ctl button{width:32px;height:30px;border-radius:15px}
+.ctl .pp{width:44px;height:30px;border-radius:15px}
+.tag b{color:var(--ac)}
+</style>
+</head>
+<body>
+
+<main>
+<section class="mock" aria-label="Borde superior de un MacBook con notch">
+  <div class="screen" id="live">
+    <div class="win" aria-hidden="true"></div>
+    <div class="menubar" aria-hidden="true"><b>Ferrocast</b><span>Archivo</span><span>Edición</span><span>Ventana</span><span class="r"><span>100%</span><span>Mié 30 oct&nbsp; 21:41</span></span></div>
+    <div class="notch" aria-hidden="true"></div>
+    <p class="tag"><b>02</b> · Ferrocast object</p>
+    <p class="hint">Pasa el ratón por el notch · demo automática en bucle (se pausa al hacer hover)</p>
+  </div>
+</section>
+
+<p class="lbl" style="left:40px;top:374px">Colapsado</p>
+<div class="screen mini" id="fc" style="left:40px;top:394px;width:320px;height:88px"><div class="menubar" aria-hidden="true"></div><div class="notch" aria-hidden="true"></div></div>
+<p class="note" style="left:40px;top:496px;width:320px"><b>Tradeoff.</b> El más sobrio y rápido: la identidad Ferrocast es una sola línea de acento sobre negro puro. Menos «wow» y menos burbuja; depende de la calidad del muelle y del detalle tipográfico para no parecer plano.<br><b>AppKit:</b> fácil. NSView/CALayer con CASpringAnimation (bounds, cornerRadius), línea como CALayer de 2 pt; sin filtros ni blur. Coste bajo, 120 fps seguros.</p>
+
+<p class="lbl" style="left:380px;top:374px">Expandido (Spotify)</p>
+<div class="screen mini" id="fo" style="left:380px;top:394px;width:460px;height:244px"><div class="menubar" aria-hidden="true"></div><div class="notch" aria-hidden="true"></div></div>
+<p id="rm" hidden>Reduce Motion activo: cambios instantáneos, sin muelles</p>
+
+<aside class="panel" aria-label="Controles de movimiento"><h2><span>Movimiento</span><span id="zeta"></span></h2><div id="ctl"></div>
+  <div class="btns"><button id="replay">Repetir</button><button id="nx">Siguiente pista</button><button id="pp2">Pausa / play</button><label><input type="checkbox" id="auto" checked> Auto</label><button id="rs">Restablecer</button><button class="cp" id="cp">Copy as prompt</button></div></aside>
+<output id="toast" aria-live="polite"></output>
+</main>
+
+<script>
+const CFG={
+ name:'02 Ferrocast object',
+ note:'Pure black field, no glass, no glow, no shadows at rest. One accent line is the hero: it runs along the bottom edge of the pill (collapsed) and of the card (expanded) as the progress, and flashes on a new track. Mono micro-labels, tight Geist-like type, one white pill action (play/pause). The accent colour appears only on the line and the equalizer.',
+ d:{Wc:268,Hc:32,We:440,He:122,Rc:14,Re:24,rt:0,ext:0},
+ rects:[{s:'.cover',c:[8,5,22,22,6],e:[20,42,56,56,12]},{s:'.eq',c:[246,9,14,14],e:[404,10,16,12]},{s:'.line',c:[14,29,240,2],e:[20,116,400,2]}],
+ defaults:{k:320,c:26,ov:.3,sq:.02,stag:35,lead:30,hold:250,pulse:1},
+ html:(I)=>`<div class="body"></div>
+ <div class="clip"><div class="cx">
+  <div class="cover"><div class="art"></div></div>
+  <div class="eq" aria-hidden="true">${EQ(3)}</div>
+  <div class="line"><i class="fill"></i></div>
+  <div data-s="0" class="src" style="left:20px;top:10px"><span class="t-ic"></span><span class="t-src"></span></div>
+  <div data-s="1" class="rn" style="left:88px;top:41px;width:214px"><button class="title" data-a="open" aria-label="Abrir la app de origen"><span class="t-title"></span><svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 10l6-6M5 4h5v5"/></svg></button></div>
+  <div data-s="2" class="rn artist t-artist" style="left:88px;top:63px"></div>
+  <div data-s="3" class="ctl" style="left:308px;top:44px">${CTL()}</div>
+  <div data-s="4" class="tm" style="left:88px;top:100px;width:332px"><span class="t-el"></span><span class="t-rem"></span></div>
+ </div></div>`,
+ tick:(I,dt,tm)=>{const l=I.q('.line'),f=I.q('.line .fill'),a=cl(I.am.x);
+  l.style.transform=`scaleY(${1+(RM?0:cl(I.pulse.x,0,1.2)*2.4)})`;f.style.filter=`saturate(${a})`;f.style.opacity=lerp(.55,1,a)},
+ promptExtra:'No blur, no filters, no gradients except the 16 pt bright head on the progress line. Progress is a 2 pt CALayer line along the bottom edge (collapsed: inside the pill; expanded: card bottom); on new track it thickens to ~6 pt and eases back. When paused the line desaturates to grey. White pill = the only filled action. Accent #F0535F is used only on the line and equalizer.'
+};
+</script>
+<script>
+(()=>{
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+window.RM=RM;
+window.$=(s,r=document)=>r.querySelector(s);window.$$=(s,r=document)=>[...r.querySelectorAll(s)];
+window.lerp=(a,b,t)=>a+(b-a)*t;window.cl=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const fmt=s=>{s=Math.max(0,Math.floor(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
+class Sp{constructor(x=0){this.x=x;this.v=0;this.t=x}
+ step(dt,k,c){if(RM){this.x=this.t;this.v=0;return}let n=Math.max(1,Math.ceil(dt*240)),h=dt/n;while(n--){this.v+=(k*(this.t-this.x)-c*this.v)*h;this.x+=this.v*h}}}
+window.Sp=Sp;
+const P={...CFG.defaults,ty:10};const D0={...P};
+const svg=(b,w=14)=>`<svg viewBox="0 0 16 16" width="${w}" height="${w}" aria-hidden="true">${b}</svg>`;
+const IC={
+ brave:svg('<path d="M8 1.2l4.6 1.6 1.1 3.4-1.1 5.3L8 14.6 3.4 11.5 2.3 6.2 3.4 2.8z" fill="#fb542b"/><path d="M8 4.2l2.6 1-.4 3.5L8 10.4 5.8 8.7l-.4-3.5z" fill="#fff" fill-opacity=".9"/>'),
+ spotify:svg('<circle cx="8" cy="8" r="7" fill="#1ed760"/><path d="M4.3 6.2c2.4-.8 5.2-.6 7.4.7M4.8 8.4c2-.6 4.2-.4 6 .6M5.2 10.4c1.6-.4 3.3-.3 4.7.5" stroke="#000" stroke-width="1.1" stroke-linecap="round" fill="none"/>'),
+ podcasts:svg('<rect x="1" y="1" width="14" height="14" rx="4" fill="#b150e8"/><circle cx="8" cy="6.2" r="1.5" fill="#fff"/><path d="M4.8 6.4a3.2 3.2 0 016.4 0M8 8.2v4" stroke="#fff" stroke-width="1.2" stroke-linecap="round" fill="none"/>')};
+const ART=[
+ u=>`<svg viewBox="0 0 160 90" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Portada: balón sobre fondo rojo"><defs><linearGradient id="a${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2a0b10"/><stop offset="1" stop-color="#F0535F"/></linearGradient><radialGradient id="b${u}" cx=".4" cy=".35" r=".7"><stop offset="0" stop-color="#ffb36b"/><stop offset="1" stop-color="#d8481f"/></radialGradient></defs><rect width="160" height="90" fill="url(#a${u})"/><path d="M0 70L40 20 60 90H0zM160 10L120 60 110 0h50z" fill="#000" fill-opacity=".22"/><g transform="translate(80 45)"><circle r="33" fill="url(#b${u})"/><g stroke="#1a0a08" stroke-width="2.2" fill="none"><path d="M-33 0H33M0-33V33"/><path d="M-23-23Q-8 0-23 23M23-23Q8 0 23 23"/></g></g><text x="8" y="82" font-size="9" font-weight="800" fill="#fff" fill-opacity=".85" font-family="system-ui">ZELL</text></svg>`,
+ u=>`<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Portada: sol synthwave"><defs><linearGradient id="a${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14062e"/><stop offset="1" stop-color="#6a1b9a"/></linearGradient><linearGradient id="b${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd86b"/><stop offset="1" stop-color="#ff3d94"/></linearGradient></defs><rect width="100" height="100" fill="url(#a${u})"/><circle cx="50" cy="48" r="26" fill="url(#b${u})"/><g fill="#14062e"><rect y="52" width="100" height="2.2"/><rect y="58" width="100" height="3"/><rect y="65" width="100" height="4"/></g><rect y="72" width="100" height="28" fill="#0d0420"/><path d="M0 76H100M0 84H100M0 94H100M50 72V100M30 72L8 100M70 72L92 100M10 72L-20 100M90 72L120 100" stroke="#ff3d94" stroke-opacity=".7" stroke-width=".7" fill="none"/></svg>`,
+ u=>`<svg viewBox="0 0 90 120" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Portada: ondas de un pódcast"><defs><linearGradient id="a${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#062b2b"/><stop offset="1" stop-color="#2fd1b0"/></linearGradient></defs><rect width="90" height="120" fill="url(#a${u})"/><g fill="none" stroke="#fff" stroke-opacity=".35"><circle cx="45" cy="60" r="14"/><circle cx="45" cy="60" r="26"/><circle cx="45" cy="60" r="38"/></g><g fill="#fff"><rect x="30" y="54" width="4" height="12" rx="2"/><rect x="38" y="46" width="4" height="28" rx="2"/><rect x="46" y="50" width="4" height="20" rx="2"/><rect x="54" y="40" width="4" height="40" rx="2"/></g><text x="8" y="108" font-size="9" font-weight="800" fill="#fff" font-family="system-ui">EP. 87</text></svg>`];
+const TRACKS=[
+ {t:'ballin de verdad',a:'Zell',src:'Brave',ic:'brave',dur:192,el:74,tint:'#F0535F',art:0},
+ {t:'Nightcall',a:'Kavinsky',src:'Spotify',ic:'spotify',dur:258,el:131,tint:'#b06bff',art:1},
+ {t:'Rust sin miedo',a:'Código Fuente · Ep. 87',src:'Podcasts',ic:'podcasts',dur:2712,el:612,tint:'#2fd1b0',art:2}];
+window.EQ=n=>'<i></i>'.repeat(n);
+const ar=d=>`<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="${d}" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+window.CTL=()=>`<button data-a="prev" aria-label="Anterior">${ar('M6 5v14M19 5.5v13L9 12z')}</button><button data-a="pp" class="pp" aria-label="Pausar"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path class="ppm" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></button><button data-a="next" aria-label="Siguiente">${ar('M18 5v14M5 5.5v13L15 12z')}</button>`;
+const PAUSE=[6,5,10,5,10,19,6,19,14,5,18,5,18,19,14,19],PLAY=[7,5,12,8,12,16,7,19,12,8,18,12,18,12,12,16];
+const ppd=t=>{const a=PLAY.map((v,i)=>lerp(v,PAUSE[i],t));return `M${a[0]} ${a[1]}L${a[2]} ${a[3]}L${a[4]} ${a[5]}L${a[6]} ${a[7]}ZM${a[8]} ${a[9]}L${a[10]} ${a[11]}L${a[12]} ${a[13]}L${a[14]} ${a[15]}Z`};
+const toast=m=>{const o=$('#toast');o.textContent=m;o.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>o.classList.remove('on'),1800)};
+let uid=0;
+function createPlayer(screen,mode){
+ const I={mode,pw:new Sp(0),ph:new Sp(0),pm:new Sp(1),pulse:new Sp(0),am:new Sp(1),trk:0,el:TRACKS[0].el,playing:true,open:false,hover:false,focus:false,timers:[]};
+ const root=document.createElement('div');root.className='pl';root.tabIndex=mode==='live'?0:-1;root.dataset.mode=mode;
+ root.setAttribute('role','group');root.setAttribute('aria-label','Reproduciendo ahora');
+ root.innerHTML=CFG.html(I);screen.appendChild(root);I.root=root;I.q=s=>root.querySelector(s);
+ I.items=$$('[data-s]',root).map(e=>({e,i:+e.dataset.s,rn:e.classList.contains('rn'),sp:new Sp(0)}));
+ const later=(ms,f)=>{if(RM||ms<=0)f();else I.timers.push(setTimeout(f,ms))};
+ const clear=()=>{I.timers.forEach(clearTimeout);I.timers=[]};
+ I.set=o=>{if(I.open===o)return;I.open=o;clear();root.classList.toggle('open',o);
+  const n=I.items.length;
+  if(o){I.pw.t=1;I.pw.v+=P.ov*4;later(P.lead,()=>{I.ph.t=1;I.ph.v+=P.ov*3});
+   I.items.forEach(it=>later(P.lead*.6+it.i*P.stag,()=>{it.sp.t=1;it.sp.v+=2.5}))}
+  else{I.items.forEach(it=>later((n-it.i)*10,()=>{it.sp.t=0}));I.ph.t=0;later(P.lead,()=>{I.pw.t=0})}};
+ I.track=i=>{I.trk=(i+TRACKS.length)%TRACKS.length;const T=TRACKS[I.trk];I.el=T.el;
+  $$('.t-title',root).forEach(e=>e.textContent=T.t);$$('.t-artist',root).forEach(e=>e.textContent=T.a);
+  $$('.t-src',root).forEach(e=>e.textContent=T.src);$$('.t-ic',root).forEach(e=>e.innerHTML=IC[T.ic]);
+  $$('.art',root).forEach(e=>e.innerHTML=ART[T.art](++uid));root.style.setProperty('--tint',T.tint);
+  $$('[data-a=open]',root).forEach(e=>e.setAttribute('aria-label','Abrir '+T.src));
+  if(I.mode==='live')I.pulse.v+=6*P.pulse;
+  if(I.open)I.items.forEach(it=>{if(it.rn){it.sp.x=.1;it.sp.v=0}});
+  CFG.onTrack&&CFG.onTrack(I)};
+ I.setPlay=p=>{I.playing=p;I.pm.t=p?1:0;I.am.t=p?1:0;$$('[data-a=pp]',root).forEach(b=>{b.setAttribute('aria-label',p?'Pausar':'Reproducir');b.setAttribute('aria-pressed',String(!p))})};
+ I.layout=()=>{const d=CFG.d,pw=I.pw.x,ph=I.ph.x;
+  const W=Math.max(60,lerp(d.Wc,d.We,pw)),H=Math.max(d.Hc*.92,lerp(d.Hc,d.He,ph)),e=cl(Math.max(pw,ph)),R=lerp(d.Rc,d.Re,e),ex=pw;
+  I.W=W;I.H=H;I.ex=ex;
+  const s=RM?0:cl(I.pw.v*P.sq*.4,-P.sq,P.sq),pu=RM?0:I.pulse.x*.025*P.pulse;
+  const rs=root.style;rs.width=W+24+'px';rs.height=H+14+'px';rs.marginLeft=-(W+24)/2+'px';rs.transform=`scale(${1+s+pu},${1-s+pu*.6})`;
+  const rad=`${d.rt}px ${d.rt}px ${R}px ${R}px`,ext=d.ext||0;
+  const b=I.q('.body');if(b){b.style.width=W+'px';b.style.height=H+ext+'px';b.style.top=-ext+'px';b.style.borderRadius=rad}
+  const c=I.q('.clip');c.style.width=W+'px';c.style.height=H+'px';c.style.borderRadius=rad;
+  const cx=I.q('.cx');cx.style.left=(W-d.We)/2+'px';cx.style.width=d.We+'px';cx.style.height=d.He+'px';
+  CFG.rects.forEach(r=>{const el=I.q(r.s);if(!el)return;const o=(d.We-d.Wc)/2,a=[r.c[0]+o,r.c[1],r.c[2],r.c[3]],z=r.e;
+   el.style.left=lerp(a[0],z[0],ex)+'px';el.style.top=lerp(a[1],z[1],ex)+'px';el.style.width=Math.max(0,lerp(a[2],z[2],ex))+'px';el.style.height=Math.max(0,lerp(a[3],z[3],ex))+'px';
+   if(r.c[4]!=null)el.style.borderRadius=Math.max(0,lerp(r.c[4],z[4],cl(ex)))+'px'})};
+ I.tick=(dt,tm)=>{
+  I.pw.step(dt,P.k,P.c);I.ph.step(dt,P.k,P.c);I.pm.step(dt,320,26);I.pulse.t=0;I.pulse.step(dt,P.k*1.3,P.c*.8);I.am.step(dt,60,14);
+  I.items.forEach(it=>{it.sp.step(dt,P.k*1.5,P.c*1.2);const x=it.sp.x,o=cl(x);
+   it.e.style.opacity=o;it.e.style.transform=RM?'':`translateY(${(1-x)*P.ty}px) scale(${.9+.1*x})`;it.e.style.filter=(o<1&&!RM)?`blur(${(1-o)*5}px)`:''});
+  const T=TRACKS[I.trk];if(I.playing&&mode!=='c')I.el+=dt;if(I.el>=T.dur&&I.mode==='live')I.track(I.trk+1);
+  const p=cl(I.el/T.dur);I.pct=p;$$('.fill',root).forEach(f=>f.style.width=p*100+'%');
+  const s1=fmt(I.el),s2='\u2212'+fmt(T.dur-I.el);if(s1!==I._1){I._1=s1;$$('.t-el',root).forEach(e=>e.textContent=s1)}if(s2!==I._2){I._2=s2;$$('.t-rem',root).forEach(e=>e.textContent=s2)}
+  const am=I.am.x;$$('.eq',root).forEach(eq=>[...eq.children].forEach((b,i)=>{const w=Math.sin(tm*(5+i*1.7)+i*2)*Math.cos(tm*(2.3+i*.8))*.5+.5;
+   b.style.transform=`scaleY(${RM?.16+.44*cl(am):lerp(.16,.22+.78*w,cl(am))})`}));
+  const pd=ppd(cl(I.pm.x,-.1,1.1));$$('.ppm',root).forEach(e=>e.setAttribute('d',pd));
+  I.layout();CFG.tick&&CFG.tick(I,dt,tm)};
+ if(mode==='live'){
+  root.addEventListener('pointerenter',()=>{I.hover=true;clearTimeout(I.ht);I.set(true)});
+  root.addEventListener('pointerleave',()=>{I.hover=false;clearTimeout(I.ht);I.ht=setTimeout(()=>{if(!I.hover&&!I.focus)I.set(false)},P.hold)});
+  root.addEventListener('focusin',()=>{I.focus=true;I.set(true)});
+  root.addEventListener('focusout',()=>{setTimeout(()=>{I.focus=root.contains(document.activeElement);if(!I.focus&&!I.hover)I.set(false)},0)});
+ }
+ root.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(!b||mode!=='live')return;const a=b.dataset.a;
+  if(a==='prev')I.track(I.trk-1);else if(a==='next')I.track(I.trk+1);else if(a==='pp')I.setPlay(!I.playing);else toast('→ Abre '+TRACKS[I.trk].src+' y lo trae al frente')});
+ I.track(0);
+ if(mode==='c'){}else if(mode==='o'){I.open=true;root.classList.add('open');I.pw.x=I.pw.t=I.ph.x=I.ph.t=1;I.items.forEach(it=>it.sp.x=it.sp.t=1);I.track(1)}
+ I.tick(.016,0);return I}
+/* ---- boot ---- */
+const live=createPlayer($('#live'),'live'),sc=createPlayer($('#fc'),'c'),so=createPlayer($('#fo'),'o');
+let last=performance.now();
+const frame=now=>{const dt=Math.min(.05,(now-last)/1000);last=now;[live,sc,so].forEach(I=>I.tick(dt,now/1000));requestAnimationFrame(frame)};requestAnimationFrame(frame);
+/* auto demo */
+const SEQ=[[1,I=>I.set(true)],[3.4,I=>I.track(I.trk+1)],[5.6,I=>I.setPlay(false)],[6.8,I=>I.setPlay(true)],[8.4,I=>I.set(false)]],LOOP=10.6;
+let T=0,si=0;const auto=$('#auto');
+setInterval(()=>{if(!auto.checked||live.hover||live.focus)return;T+=.1;
+ while(si<SEQ.length&&T>=SEQ[si][0]){SEQ[si][1](live);si++}
+ if(T>=LOOP){T=0;si=0}},100);
+$('#replay').onclick=()=>{live.set(false);T=0;si=0};
+$('#nx').onclick=()=>live.track(live.trk+1);
+$('#pp2').onclick=()=>live.setPlay(!live.playing);
+/* controls */
+const defs=[['k','Rigidez',60,500,1],['c','Amortiguación',4,40,.5],['ov','Overshoot (impulso)',0,3,.05],['sq','Squash / stretch máx.',0,.08,.005],['lead','Alto retrasado (ms)',0,200,5],['stag','Stagger contenido (ms)',0,150,5],['pulse','Pulso nueva pista',0,3,.1],['hold','Cierre tras salir (ms)',0,1000,25]];
+const host=$('#ctl'),outs={};
+const zeta=()=>$('#zeta').textContent='ζ '+(P.c/(2*Math.sqrt(P.k))).toFixed(2);
+const show=(k,v)=>outs[k].textContent=k==='sq'?Math.round(v*1000)/10+'%':(Math.round(v*100)/100);
+defs.forEach(([k,l,mn,mx,st])=>{const r=document.createElement('label');r.className='row';r.innerHTML=`<span>${l}</span><input type="range" min="${mn}" max="${mx}" step="${st}" value="${P[k]}" aria-label="${l}"><output></output>`;
+ const i=$('input',r);outs[k]=$('output',r);show(k,P[k]);i.oninput=()=>{P[k]=+i.value;show(k,P[k]);zeta()};r._i=i;r.dataset.k=k;host.appendChild(r)});zeta();
+$('#rs').onclick=()=>{Object.assign(P,D0);$$('.row',host).forEach(r=>{r._i.value=P[r.dataset.k];show(r.dataset.k,P[r.dataset.k])});zeta();toast('Valores restablecidos')};
+$('#cp').onclick=()=>{const d=CFG.d,z=(P.c/(2*Math.sqrt(P.k))).toFixed(2);
+ const txt=`Implement the Ferrocast notch now-playing player (macOS, AppKit + Core Animation) following design direction "${CFG.name}".
+${CFG.note}
+Geometry (pt): collapsed pill ${d.Wc}x${d.Hc} (physical notch is 200x32, cover left, equalizer right); expanded ${d.We}x${d.He}; bottom radius ${d.Rc} -> ${d.Re}. The top 32 pt of the expanded card is the notch zone: keep only the source chip and equalizer there.
+Motion values: spring stiffness ${P.k}, damping ${P.c} (damping ratio ${z}); overshoot kick ${P.ov}; max squash/stretch ${(P.sq*100).toFixed(1)}%; height lags width by ${P.lead} ms; content stagger ${P.stag} ms per item (reverse and faster on close); new-track pulse ${P.pulse}; collapse ${P.hold} ms after the pointer leaves.
+Also: play/pause icon morphs between two bars and a triangle; equalizer bars fall to a flat line when paused; progress with elapsed/remaining; covers are aspect-fill (never stretched); clicking the title opens the source app; with Reduce Motion use cross-fades and no springs.
+${CFG.promptExtra}`;
+ const done=()=>toast('Prompt copiado al portapapeles');
+ const fb=()=>{const t=document.createElement('textarea');t.value=txt;document.body.appendChild(t);t.select();try{document.execCommand('copy')}catch(e){}t.remove();done()};
+ (navigator.clipboard&&navigator.clipboard.writeText?navigator.clipboard.writeText(txt).then(done,fb):fb())};
+if(RM)$('#rm').hidden=false;
+})();
+</script>
+</body>
+</html>

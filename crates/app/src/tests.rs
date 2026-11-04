@@ -55,6 +55,8 @@ fn fixture() -> App {
         hotkeys: None,
         tiling: None,
         tiling_paused: false,
+        now_playing: ferrocast_core::nowplaying::Ctl::new(),
+        np_poller: None,
         quick_window: None,
         tiling_hotkey_issues: vec![],
         tray_layout: 1,
@@ -233,6 +235,25 @@ impl Effects {
                 FX_LOG.with(|l| l.borrow_mut().push(format!("trash_app {}", p.display())));
                 FX_TRASH_RESULT.with(|r| r.borrow().clone())
             },
+            np_spawn: |_bus| {
+                FX_LOG.with(|l| l.borrow_mut().push("np spawn".into()));
+                Some(ferrocast_macos::nowplaying::Poller::detached())
+            },
+            np_stop: |p| {
+                // the real one drops it, which kills the helper process
+                drop(p);
+                FX_LOG.with(|l| l.borrow_mut().push("np stop".into()))
+            },
+            np_render: |m| {
+                let line = match (&m.snapshot, m.visible) {
+                    (Some(s), true) => format!("np render {} expanded={} {:?}", s.title, m.expanded, s.state),
+                    _ => "np render hidden".to_string(),
+                };
+                FX_LOG.with(|l| l.borrow_mut().push(line))
+            },
+            np_command: |c| FX_LOG.with(|l| l.borrow_mut().push(format!("np cmd {c:?}"))),
+            np_seek: |s| FX_LOG.with(|l| l.borrow_mut().push(format!("np seek {s}"))),
+            np_open: |id| FX_LOG.with(|l| l.borrow_mut().push(format!("np open {id}"))),
         }
     }
 }
@@ -8035,6 +8056,7 @@ fn sd4_scrambled() -> Settings {
     s.wheel_actions_key = "Command".into();
     s.enter_on_finder = true;
     s.show_menu_bar_icon = false;
+    s.now_playing = true;
     s.update_check = false;
     s.update_install = UpdateInstall::Automatic;
     s.sensitivity = ferrocast_core::fuzzy::Sensitivity::High;
@@ -17621,4 +17643,217 @@ fn saving_a_note_that_links_an_image_resets_its_unlink_countdown() {
     let rec = std::fs::read_to_string(dir.join(attachments::UNLINKED_FILE)).unwrap();
     assert!(!rec.contains(name), "linked again: {rec}");
     assert!(rec.contains(other), "still unlinked: {rec}");
+}
+
+// ---------------------------------------------------------------- notch player (S3)
+
+mod now_playing {
+    use super::*;
+    use ferrocast_core::nowplaying::{Command, Event, PlayState, Snapshot};
+
+    fn snap(title: &str, state: PlayState) -> Snapshot {
+        Snapshot {
+            bundle_id: "com.brave.Browser".into(),
+            state,
+            title: title.into(),
+            artist: "Band".into(),
+            album: "Record".into(),
+            duration: 200.0,
+            position: 10.0,
+            artwork: None,
+        }
+    }
+
+    fn media(s: Snapshot) -> Msg {
+        Msg::NowPlaying(Event::Media(Some(s)))
+    }
+
+    fn turn_on(app: &mut App) {
+        let mut s = app.settings.clone();
+        s.now_playing = true;
+        app.commit_settings(s);
+    }
+
+    fn feed(app: &mut App, m: Msg) {
+        app.bus.send(m);
+        app.drain();
+    }
+
+    #[test]
+    fn it_is_off_by_default_and_nothing_starts() {
+        let mut app = fixture();
+        assert!(!app.settings.now_playing);
+        app.save_settings();
+        assert!(app.np_poller.is_none());
+        assert!(fx_taken().is_empty(), "no thread, no panel");
+        // a stray poll does nothing while it is off
+        feed(&mut app, media(snap("a", PlayState::Playing)));
+        assert!(fx_taken().is_empty());
+    }
+
+    #[test]
+    fn the_setting_starts_and_stops_it_live_and_is_saved() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        assert!(app.np_poller.is_some());
+        assert_eq!(fx_taken(), vec!["np spawn".to_string()]);
+        let saved: Settings = app.store.load("settings.json");
+        assert!(saved.now_playing, "saved with the other settings");
+        // an unrelated change neither restarts nor stops it
+        let mut s = app.settings.clone();
+        s.compact_mode = !s.compact_mode;
+        app.commit_settings(s);
+        assert!(fx_taken().is_empty(), "started once, not per settings change");
+        // off: the poller is handed to np_stop, which kills the helper process
+        let mut s = app.settings.clone();
+        s.now_playing = false;
+        app.commit_settings(s);
+        assert!(app.np_poller.is_none());
+        assert_eq!(fx_taken(), vec!["np stop".to_string()]);
+        // and off again does not stop twice
+        let s = app.settings.clone();
+        app.commit_settings(s);
+        assert!(fx_taken().is_empty());
+    }
+
+    #[test]
+    fn a_poll_shows_the_pill_and_turning_it_off_hides_it() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        fx_taken();
+        feed(&mut app, media(snap("Song", PlayState::Playing)));
+        assert_eq!(fx_taken(), vec!["np render Song expanded=false Playing".to_string()]);
+        let mut s = app.settings.clone();
+        s.now_playing = false;
+        app.commit_settings(s);
+        assert_eq!(fx_taken(), vec!["np stop".to_string(), "np render hidden".to_string()]);
+        // late events from the dying thread are ignored
+        feed(&mut app, media(snap("Song", PlayState::Playing)));
+        assert!(fx_taken().is_empty());
+    }
+
+    #[test]
+    fn unchanged_polls_do_not_redraw() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        feed(&mut app, media(snap("Song", PlayState::Playing)));
+        fx_taken();
+        feed(&mut app, media(snap("Song", PlayState::Playing)));
+        assert!(fx_taken().is_empty());
+        feed(&mut app, media(snap("Other", PlayState::Playing)));
+        assert_eq!(fx_taken(), vec!["np render Other expanded=false Playing".to_string()]);
+    }
+
+    #[test]
+    fn hover_opens_and_closes_the_player() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        feed(&mut app, media(snap("Song", PlayState::Paused)));
+        fx_taken();
+        feed(&mut app, Msg::NowPlayingHover(true));
+        assert_eq!(fx_taken(), vec!["np render Song expanded=true Paused".to_string()]);
+        feed(&mut app, Msg::NowPlayingHover(false));
+        assert_eq!(fx_taken(), vec!["np render Song expanded=false Paused".to_string()]);
+    }
+
+    #[test]
+    fn buttons_act_on_the_player_on_screen() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        fx_taken();
+        feed(&mut app, Msg::NowPlayingCommand(Command::Next));
+        assert!(fx_taken().is_empty(), "nothing on screen: nothing to control");
+        feed(&mut app, media(snap("Song", PlayState::Playing)));
+        fx_taken();
+        feed(&mut app, Msg::NowPlayingCommand(Command::PlayPause));
+        assert_eq!(fx_taken(), vec!["np cmd PlayPause".to_string()]);
+        feed(&mut app, Msg::NowPlayingCommand(Command::Previous));
+        assert_eq!(fx_taken(), vec!["np cmd Previous".to_string()]);
+        // the helper stopped: no pill, no button
+        feed(&mut app, Msg::NowPlaying(Event::Media(None)));
+        fx_taken();
+        feed(&mut app, Msg::NowPlayingCommand(Command::Next));
+        assert!(fx_taken().is_empty());
+    }
+
+    #[test]
+    fn a_seek_moves_the_bar_at_once_and_is_sent_once_off_the_main_thread() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        feed(&mut app, media(snap("Song", PlayState::Paused)));
+        fx_taken();
+        feed(&mut app, Msg::NowPlayingSeek(150.0));
+        assert_eq!(fx_taken(), vec!["np render Song expanded=false Paused".to_string(), "np seek 150".to_string()]);
+        // past the end: clamped to the 200 s duration
+        feed(&mut app, Msg::NowPlayingSeek(900.0));
+        assert!(fx_taken().contains(&"np seek 200".to_string()));
+    }
+
+    #[test]
+    fn a_seek_without_a_duration_or_a_track_is_dropped() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        fx_taken();
+        feed(&mut app, Msg::NowPlayingSeek(10.0));
+        assert!(fx_taken().is_empty(), "nothing on screen");
+        let mut live = snap("Radio", PlayState::Playing);
+        live.duration = 0.0;
+        feed(&mut app, media(live));
+        fx_taken();
+        feed(&mut app, Msg::NowPlayingSeek(10.0));
+        assert!(fx_taken().is_empty(), "a live stream has nothing to seek");
+    }
+
+    #[test]
+    fn clicking_the_title_opens_the_app_that_plays() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        fx_taken();
+        feed(&mut app, Msg::NowPlayingOpen);
+        assert!(fx_taken().is_empty(), "no pill, no app");
+        feed(&mut app, media(snap("Song", PlayState::Playing)));
+        fx_taken();
+        feed(&mut app, Msg::NowPlayingOpen);
+        assert_eq!(fx_taken(), vec!["np open com.brave.Browser".to_string()]);
+    }
+
+    #[test]
+    fn giving_up_shows_one_toast_and_keeps_the_pill_hidden() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        feed(&mut app, media(snap("Song", PlayState::Playing)));
+        fx_taken();
+        feed(&mut app, Msg::NowPlaying(Event::Unavailable));
+        let (text, _) = app.toast.clone().expect("the user is told");
+        assert_eq!(text, "Now playing is not available on this version of macOS");
+        assert_eq!(fx_taken(), vec!["np render hidden".to_string()]);
+        app.toast = None;
+        feed(&mut app, Msg::NowPlaying(Event::Unavailable));
+        feed(&mut app, media(snap("Song", PlayState::Playing)));
+        assert!(app.toast.is_none(), "once, not on every failure");
+    }
+
+    #[test]
+    fn full_screen_hides_the_pill() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        feed(&mut app, media(snap("Song", PlayState::Playing)));
+        fx_taken();
+        feed(&mut app, Msg::NowPlaying(Event::Fullscreen(true)));
+        assert_eq!(fx_taken(), vec!["np render hidden".to_string()]);
+        feed(&mut app, Msg::NowPlaying(Event::Fullscreen(false)));
+        assert_eq!(fx_taken(), vec!["np render Song expanded=false Playing".to_string()]);
+    }
+
+    #[test]
+    fn the_toggle_is_part_of_the_general_tab_and_resets_with_it() {
+        let mut app = fixture();
+        turn_on(&mut app);
+        feed(&mut app, media(snap("Song", PlayState::Playing)));
+        fx_taken();
+        assert!(app.reset_settings_tab(0));
+        assert!(!app.settings.now_playing);
+        assert!(app.np_poller.is_none());
+        assert_eq!(fx_taken(), vec!["np stop".to_string(), "np render hidden".to_string()]);
+    }
 }

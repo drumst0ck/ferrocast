@@ -1,0 +1,10 @@
+{
+  "title": "Notch now-playing player",
+  "brief": "Redesign of Ferrocast's macOS notch now-playing player (L11: 'un poco sosa'): collapsed pill, expanded card, liquid bubble open/close springs, new-track pulse, play/pause morph, progress, equalizer, aspect-fill covers; with live motion sliders and Copy as prompt.",
+  "feature": "odd/tasks/mejoras-oct30.md",
+  "artboards": [
+    { "file": "01-liquid-glass.html", "title": "Liquid glass", "tradeoff": "Most expressive: gooey metaball bubble with droplets, cover-tinted glow and sheen; costs a goo filter per frame and is the hardest to reproduce natively (CAShapeLayer path morph plus 3-5 droplet layers, or a Metal/CIFilter shader).", "width": 1200, "height": 700 },
+    { "file": "02-ferrocast-object.html", "title": "Ferrocast object", "tradeoff": "Sober and fast: pure black, one accent progress line as the hero, mono micro-labels, one white pill action; less wow and less bubble feel. Easy in AppKit (CALayer plus CASpringAnimation, no blur).", "width": 1200, "height": 700 },
+    { "file": "03-vinyl-ambient.html", "title": "Vinyl / ambient", "tradeoff": "Most emotional and legible: spinning vinyl disc with progress ring, ambient artwork halo and bold title; tallest card (216 pt) and colour competes with the desktop. Medium AppKit effort (masked rotating layer, CAShapeLayer arc, cached blur).", "width": 1200, "height": 700 }
+  ]
+}

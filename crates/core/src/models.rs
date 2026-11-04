@@ -292,6 +292,10 @@ pub struct Settings {
     pub favorites: Vec<String>,
     pub commands: HashMap<String, CommandConfig>,
     pub show_menu_bar_icon: bool,
+    /// Show what any app plays (macOS Now Playing: browsers, Spotify, Music, Podcasts, VLC...) in a
+    /// pill at the notch, read through the bundled mediaremote-adapter helper. Off until the user
+    /// turns it on; the helper runs only while it is on and needs no permission.
+    pub now_playing: bool,
     pub quit_all_excluded: Vec<String>,
     pub ai_provider: AiProvider,
     pub ai_base_url: String,
@@ -426,6 +430,7 @@ impl Default for Settings {
             favorites: vec![],
             commands: HashMap::new(),
             show_menu_bar_icon: true,
+            now_playing: false,
             quit_all_excluded: vec!["Finder".into()],
             ai_provider: AiProvider::default(),
             ai_base_url: crate::ai::DEFAULT_BASE_URL.into(),
