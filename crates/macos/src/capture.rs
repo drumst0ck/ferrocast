@@ -27,8 +27,8 @@ pub const CAMERA_PERMISSION_TOAST: &str =
 pub const MICROPHONE_PERMISSION_TOAST: &str =
     "Microphone is off for Ferrocast. Turn it on in System Settings \u{2192} Privacy & Security \u{2192} Microphone.";
 /// Settings panes for the S12 toasts.
-pub const CAMERA_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera";
-pub const MICROPHONE_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
+pub const CAMERA_PANE: &str = crate::permission_helper::CAMERA_PANE;
+pub const MICROPHONE_PANE: &str = crate::permission_helper::MICROPHONE_PANE;
 
 /// Where the helper lives: next to the running executable. Pass the exe already resolved through
 /// `instance::resolve_exe` (that function lives in the app crate).

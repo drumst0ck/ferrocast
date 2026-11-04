@@ -8441,8 +8441,9 @@ impl App {
             }
             s.custom_theme = self.settings.custom_theme.clone();
         }
-        if req_acc {
-            windows::accessibility_trusted(true);
+        if req_acc && !windows::accessibility_trusted(true) {
+            // the system prompt shows once; the pane and the drag helper cover every later click
+            crate::capture_ctl::open_pane(ferrocast_macos::permission_helper::ACCESSIBILITY_PANE);
         }
         if sync_now {
             self.sync_all();

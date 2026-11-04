@@ -375,6 +375,39 @@ pub fn finder_selection() -> anyhow::Result<Vec<PathBuf>> {
     Ok(parse_finder_selection(&out))
 }
 
+/// Why an app bundle was not moved to the Trash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrashAppError {
+    /// The app is running: the user has to quit it first (we never kill processes).
+    Running,
+    /// The path is not an application bundle.
+    NotABundle,
+    /// macOS refused (permissions, protected volume…): its own description.
+    Failed(String),
+}
+
+/// Move one `.app` bundle to the Trash with `NSFileManager trashItemAtURL`, which records the
+/// original location so Finder's "Put Back" works. Never deletes permanently and never touches
+/// anything but the bundle itself.
+pub fn trash_app(path: &Path) -> Result<(), TrashAppError> {
+    use objc2_foundation::{NSFileManager, NSString, NSURL};
+    let is_app = path.extension().is_some_and(|e| e == "app") && path.is_dir();
+    if !is_app {
+        return Err(TrashAppError::NotABundle);
+    }
+    let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let running = crate::running::running_apps().into_iter().any(|r| {
+        r.path.as_deref().is_some_and(|p| Path::new(p.trim_end_matches('/')) == real || Path::new(p.trim_end_matches('/')) == path)
+    });
+    if running {
+        return Err(TrashAppError::Running);
+    }
+    let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&path.to_string_lossy()), true);
+    NSFileManager::defaultManager()
+        .trashItemAtURL_resultingItemURL_error(&url, None)
+        .map_err(|e| TrashAppError::Failed(e.localizedDescription().to_string()))
+}
+
 /// Move a path to the Trash through Finder (recoverable).
 pub fn trash(path: &Path) -> anyhow::Result<()> {
     let p = path.to_string_lossy().replace('"', "\\\"");

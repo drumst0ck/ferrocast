@@ -27,6 +27,7 @@ pub mod notes_theme;
 pub mod nowplaying;
 pub mod nowplaying_art;
 pub mod pdf;
+pub mod permission_helper;
 pub mod pin;
 pub mod process;
 pub mod running;

@@ -1000,6 +1000,8 @@ pub struct App {
     /// Newest release found by a check that is newer than the running version (drives Settings).
     update_available: Option<ferrocast_core::update::Release>,
     apps: Vec<apps::AppInfo>,
+    /// Bundles moved to the Trash in this session (real and index paths): a rescan must not bring them back.
+    trashed: std::collections::HashSet<PathBuf>,
     apps_at: Instant,
     scripts: Vec<ScriptCommand>,
     base: Vec<Item>,
@@ -1338,6 +1340,7 @@ impl App {
             frecency: data.frecency,
             update_available: None,
             apps: vec![],
+            trashed: Default::default(),
             apps_at: Instant::now(),
             scripts: vec![],
             base: vec![],
@@ -3424,7 +3427,7 @@ impl App {
                     self.toast(t)
                 }
                 Msg::Apps(a) => {
-                    self.apps = a;
+                    self.apps = crate::app_trash::without_trashed(a, &self.trashed);
                     self.rebuild();
                 }
                 Msg::Files(q, f) => self.files = (q, f),
@@ -5246,6 +5249,7 @@ impl App {
                 a.push(Action::new("Open Application", Act::Run));
                 a.push(Action::new("Show in Finder", Act::Reveal(PathBuf::from(path))).key(CMD, Key::Enter));
                 a.push(Action::new("Copy Path", Act::CopyText(path.clone())).key(CMD_SHIFT, Key::C));
+                a.push(Action::new("Move to Trash", Act::TrashApp(PathBuf::from(path))).key(CMD, Key::Backspace).danger());
                 if let Some(r) = running::running_apps()
                     .into_iter()
                     .find(|r| r.path.as_deref().is_some_and(|p| p.trim_end_matches('/') == path.trim_end_matches('/')))
@@ -6958,11 +6962,29 @@ impl App {
             act,
             Act::ClipDeleteAll
                 | Act::Trash(_)
+                | Act::TrashApp(_)
                 | Act::DeleteSnippet(_)
                 | Act::DeleteQuicklink(_)
                 | Act::DisableCommand
                 | Act::ForceQuitApp(_)
         );
+        if let Act::TrashApp(p) = &act {
+            // judge the real bundle: the same resolved path is confirmed, re-checked and moved
+            let (canon, name) = match self.trash_target(p) {
+                Ok(t) => t,
+                Err((r, name)) => {
+                    self.panel = None;
+                    self.toast(r.message(&name));
+                    self.pop_if_confirm();
+                    return;
+                }
+            };
+            if !confirmed {
+                let msg = crate::app_trash::confirm_text(&name);
+                self.push(View::Confirm { msg, act: Act::TrashApp(canon) });
+                return;
+            }
+        }
         if destructive && !confirmed {
             let msg = match &act {
                 Act::ClipDeleteAll => "Delete all clipboard history?",
@@ -7634,6 +7656,7 @@ impl App {
                     self.reload_recordings();
                 }
             }
+            Act::TrashApp(p) => self.trash_app(&p),
             Act::EditScript(p) => {
                 let _ = std::process::Command::new("/usr/bin/open").arg("-t").arg(&p).status();
                 self.hide();
@@ -7642,6 +7665,66 @@ impl App {
             Act::RunSystem(c) => self.run_system(c),
             Act::RunScript { index, args } => self.execute_script_cmd(index, args),
         }
+    }
+
+    /// The index entries that are the bundle at `canon`: by their own path or through a symlink.
+    fn index_paths_of(&self, canon: &std::path::Path) -> Vec<PathBuf> {
+        self.apps
+            .iter()
+            .filter(|a| a.path == canon || std::fs::canonicalize(&a.path).is_ok_and(|c| c == canon))
+            .map(|a| a.path.clone())
+            .collect()
+    }
+
+    /// The real bundle behind `path` and the name to show for it, or why it may not be moved.
+    /// A bundle reached through a link is named by what really moves.
+    fn trash_target(&self, path: &std::path::Path) -> Result<(PathBuf, String), (crate::app_trash::Refusal, String)> {
+        use crate::app_trash::{display_name, Refusal};
+        let indexed = |p: &std::path::Path| self.apps.iter().find(|a| a.path == p);
+        let Ok(canon) = std::fs::canonicalize(path) else {
+            let name = indexed(path).map(|a| a.name.clone()).unwrap_or_else(|| display_name(&path.to_string_lossy()));
+            return Err((Refusal::Gone, name));
+        };
+        let name = indexed(&canon).map(|a| a.name.clone()).unwrap_or_else(|| display_name(&canon.to_string_lossy()));
+        let id = indexed(&canon).or_else(|| indexed(path)).and_then(|a| a.bundle_id.clone());
+        let own = crate::instance::running_exe().and_then(|e| crate::instance::bundle_of(&e));
+        match crate::app_trash::eligibility(&canon.to_string_lossy(), id.as_deref(), own.as_deref()) {
+            Ok(()) => Ok((canon, name)),
+            Err(r) => Err((r, name)),
+        }
+    }
+
+    /// Confirmed: move the resolved bundle, then drop it from the index so the results update at once.
+    fn trash_app(&mut self, path: &std::path::Path) {
+        // the rules are checked again here: nothing reaches the effect without them
+        let (canon, name) = match self.trash_target(path) {
+            Ok(t) => t,
+            Err((r, name)) => {
+                self.toast(r.message(&name));
+                self.pop_if_confirm();
+                return;
+            }
+        };
+        match (self.fx.trash_app)(&canon) {
+            Ok(()) => {
+                let listed = self.index_paths_of(&canon);
+                for p in &listed {
+                    self.apps = crate::app_trash::without_app(std::mem::take(&mut self.apps), &p.to_string_lossy());
+                }
+                self.trashed.extend(listed);
+                self.trashed.insert(canon);
+                self.rebuild();
+                self.toast(trf("Moved “{name}” to the Trash", &[("name", &name)]));
+            }
+            Err(apps::TrashAppError::Running) => {
+                self.toast(trf("“{name}” is running. Quit it first, then move it to the Trash.", &[("name", &name)]))
+            }
+            Err(apps::TrashAppError::NotABundle) => self.toast(crate::app_trash::Refusal::NotAnApp.message(&name)),
+            Err(apps::TrashAppError::Failed(e)) => {
+                self.toast(trf("Could not move “{name}” to the Trash: {e}", &[("name", &name), ("e", &e)]))
+            }
+        }
+        self.pop_if_confirm();
     }
 
     fn pop_if_confirm(&mut self) {
@@ -7895,6 +7978,8 @@ pub(crate) struct Effects {
     pub(crate) translate_start: fn(&Settings, String, String, Option<i32>, ferrocast_core::models::TranslateOutput, u64, &Bus),
     /// Show the screen colour picker; the result arrives as `Msg::ColorPicked` (main thread only).
     pub(crate) color_sampler: fn(&Bus),
+    /// Move an application bundle to the Trash (the real one is recoverable with Put Back).
+    pub(crate) trash_app: fn(&std::path::Path) -> Result<(), apps::TrashAppError>,
     /// Start the now-playing feed and register the notch player's callbacks (main thread only).
     pub(crate) np_spawn: fn(&Bus) -> Option<ferrocast_macos::nowplaying::Poller>,
     /// Draw (or hide) the notch player (main thread only).
@@ -7944,6 +8029,7 @@ impl Effects {
             web_script: |b, js| services::web_script(b, js.to_string()),
             apple_available: ferrocast_macos::apple_translate::available,
             translate_start: |s, text, lang, pid, out, run, bus| services::translate_text(s, text, lang, pid, out, run, bus.clone()),
+            trash_app: apps::trash_app,
             color_sampler: |bus| {
                 let bus = bus.clone();
                 ferrocast_macos::color_sampler::sample(move |c| {
