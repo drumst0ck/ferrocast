@@ -18,6 +18,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ### Fixed
 - **Language picker**: with an English or other Latin-script interface, Japanese and Simplified Chinese showed as empty boxes in Settings → General → Language; their names now display correctly. #settings
+- **Trash and scripts**: Move to Trash on a file now uses the system Trash API (Put Back still works) instead of a Finder script, so a file name with quotes or backslashes can no longer run script code; a failed move keeps the file in the results and shows the error. Quit All Apps and the folder chooser escape names the same way. #security
 - **Extension screens**: when a Raycast extension updated the screen below the one you were looking at (a list refreshing its data after you opened a detail), Ferrocast closed the open screen and later actions did nothing or ran the wrong handler; the open screen now stays and only an extension's own back closes it. #extensions
 - **Extension cache**: two caches of one Raycast extension (for example from two data hooks) erased each other's saved keys and did not notify each other; they now share one cache per extension namespace, which is written in one step so a crash cannot leave a half-written file. #extensions
 

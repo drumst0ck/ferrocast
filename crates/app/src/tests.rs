@@ -151,6 +151,8 @@ thread_local! {
     static APPLE_AVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// What the fake `trash_app` answers in this test thread.
     static FX_TRASH_RESULT: std::cell::RefCell<Result<(), ferrocast_macos::apps::TrashAppError>> = const { std::cell::RefCell::new(Ok(())) };
+    /// What the fake `trash_file` answers in this test thread.
+    static FX_TRASH_FILE_RESULT: std::cell::RefCell<Result<(), String>> = const { std::cell::RefCell::new(Ok(())) };
     static FX_FRONT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
     /// Scripts the web effect asked a browser to run (replace and unmark), in order.
     static FX_TILING_RX: std::cell::RefCell<Option<std::sync::mpsc::Receiver<ferrocast_macos::tiling::Cmd>>> = const { std::cell::RefCell::new(None) };
@@ -231,6 +233,10 @@ impl Effects {
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
             color_sampler: |_bus| FX_LOG.with(|l| l.borrow_mut().push("color_sampler".into())),
+            trash_file: |p| {
+                FX_LOG.with(|l| l.borrow_mut().push(format!("trash_file {}", p.display())));
+                FX_TRASH_FILE_RESULT.with(|r| r.borrow().clone())
+            },
             trash_app: |p| {
                 FX_LOG.with(|l| l.borrow_mut().push(format!("trash_app {}", p.display())));
                 FX_TRASH_RESULT.with(|r| r.borrow().clone())
@@ -17909,4 +17915,21 @@ mod now_playing {
         assert!(app.np_poller.is_none());
         assert_eq!(fx_taken(), vec!["np stop".to_string(), "np render hidden".to_string()]);
     }
+}
+
+#[test]
+fn trashing_a_file_removes_it_from_results_only_on_success() {
+    let a = std::path::PathBuf::from("/tmp/fc-a.txt");
+    let b = std::path::PathBuf::from("/tmp/fc-b.txt");
+    let mut app = fixture();
+    app.files = ("q".into(), vec![a.clone(), b.clone()]);
+    FX_TRASH_FILE_RESULT.with(|r| *r.borrow_mut() = Err("permission denied".into()));
+    app.perform(Act::Trash(a.clone()), true);
+    assert_eq!(fx_taken(), [format!("trash_file {}", a.display())]);
+    assert_eq!(app.files.1, vec![a.clone(), b.clone()], "a failed trash keeps the entry");
+    assert_eq!(toast_text(&app), ferrocast_core::i18n::trf("Trash failed: {e}", &[("e", "permission denied")]));
+    FX_TRASH_FILE_RESULT.with(|r| *r.borrow_mut() = Ok(()));
+    app.perform(Act::Trash(a.clone()), true);
+    assert_eq!(app.files.1, vec![b], "a successful trash removes only that entry");
+    assert_eq!(toast_text(&app), ferrocast_core::i18n::tr("Moved to Trash"));
 }
