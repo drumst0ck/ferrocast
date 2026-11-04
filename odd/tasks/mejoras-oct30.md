@@ -1,5 +1,5 @@
 # Mejoras Ferrocast: permissions helper, move app to Trash, notch now playing
-Branches: one per task off origin/master, each in its own worktree; one PR each · Status: in progress
+Branches: one per task off origin/master, each in its own worktree; one PR each · Status: done (PRs #105, #106, #108 merged; changelog for #99 in #107)
 Three "Idea" cards from the Notion "Mejoras Ferrocast / Ideas de Ferrocast" board (created 2026-10-29/30).
 
 ## Specs
@@ -11,8 +11,8 @@ Three "Idea" cards from the Notion "Mejoras Ferrocast / Ideas de Ferrocast" boar
 ## Tasks
 - T1 S1, S4 permissions helper window — worker in ../raycast-permissions (feat/permissions-helper) — done, commit 4109032, PR #105
 - T2 S2, S4 move app to Trash from the launcher right-click menu — worker in ../raycast-trash-app (feat/move-app-to-trash) + independent verifier (item 1) — done, commit d89a116, PR #106
-- T3 S3, S4 notch now-playing player — worker in ../raycast-notch (feat/notch-now-playing) — reopened for the mediaremote-adapter source (L6-L7) — commit: pending
-- T3c S3 implement the chosen design design/notch-player/03-vinyl-ambient.html natively (AppKit/Core Animation) — worker in ../raycast-notch — commit: pending
+- T3 S3, S4 notch now-playing player — worker in ../raycast-notch (feat/notch-now-playing) — reopened for the mediaremote-adapter source (L6-L7) — done, commits 819852d 47a343f 1efe57d e7dbecd, PR #108
+- T3c S3 implement the chosen design design/notch-player/03-vinyl-ambient.html natively (AppKit/Core Animation) — worker in ../raycast-notch — done, commits 47a343f 1efe57d (design docs 3e9b575), PR #108
 
 ## Log
 - L1 User: "hay mas tareas en notion?"
@@ -30,3 +30,6 @@ Three "Idea" cards from the Notion "Mejoras Ferrocast / Ideas de Ferrocast" boar
 - L13 Design (T3, L11): three notch player directions in design/notch-player/ (01-liquid-glass.html, 02-ferrocast-object.html, 03-vinyl-ambient.html; 1200x700 artboards with live spring demo, motion sliders and Copy as prompt); pending the user choosing one before implementation.
 - L14 Design handoff: the user chose design/notch-player/03-vinyl-ambient.html (Vinyl / ambient: spinning vinyl disc with progress ring, ambient artwork halo, bold title; 216 pt card). 01-liquid-glass and 02-ferrocast-object stay as alternatives. Implementation tracked as T3c; the seekable bar (L12) and title click (L11) carry over into it.
 - L15 T3 L11+L12 done: title/artist click opens the source app (NSWorkspace, only running apps), cover aspect-fill crop, seekable linear bar (click/drag, one seek in µs on release, optimistic hold 3 s, not seekable without duration). T3c done: vinyl/ambient drawn natively in drawRect (disc with grooves and spin 60°/s, coast on pause, 420°/s flick on new track; accent progress ring; cached box-blur halo + dominant tint; 430×216 card; artboard springs k150 c14, stagger 70 ms, height lag 90 ms, squash 3.5%; Reduce Motion static). Tests: app 1092, core 1147, macos 291, 0 failed; clippy/fmt clean; temp bundle verifies. Deviations: ring display-only (linear bar seeks), source name truncated left of the notch, 44 pt bleed strip click-through unverified, draw ~6-8.6 ms per expanded frame (spin at 30 Hz). Screenshots /tmp/notch-shots/. Rebuilt dist for the user.
+- L16 User: "haz commit y pr". Five commits on feat/notch-now-playing (packaging 819852d alone, core 47a343f, macos 1efe57d, app e7dbecd, design+doc 3e9b575), each cargo-checks on its own; full suite app 1092, core 1147, macos 291, 0 failed; clippy -D warnings and fmt clean. PR #108. Design handoff marked implemented.
+- L17 User: "no va a haber developerid no voy a pagar". Releases stay ad-hoc (release.yml already signs ad-hoc without secrets). Checked: Homebrew formula runs scripts/bundle.sh (framework built on the user's Mac); a quarantined copy of the bundle (Safari quarantine flag on every file) still lets /usr/bin/perl load the ad-hoc framework (get exit 0 with the current track); spctl rejects the app itself as for every ad-hoc release (documented Open Anyway). PR #108 description updated.
+- L18 User: "mergea cuando puedas". Merged in order #107, #105, #106 (CHANGELOG conflict resolved, both entries kept), #108 (conflicts in CHANGELOG.md, app.rs Effects, tests.rs fakes and strings.tsv resolved keeping both sides; no new duplicate i18n keys; fmt, clippy -D warnings, 2600 tests passed, changelog dry-run ok; #108 web build first fixed: notch-player descriptions 223/241 → 147 characters, c38a92e). All four with green CI. Notion cards set to Hecho (Hecha por IA). Worktrees ../raycast-permissions and ../raycast-trash-app removed; ../raycast-notch kept while the owner runs its dist/Ferrocast.app.
