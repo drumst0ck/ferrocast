@@ -52,6 +52,33 @@ build_swift_helper() {
 
 build_swift_helper ferrocast-capture crates/macos/swift/capture ScreenCaptureKit
 
+# MediaRemoteAdapter.framework (third_party/mediaremote-adapter, BSD-3) for the notch player: compiled
+# with clang for the arch of the Ferrocast binary (cargo builds the host arch), no cmake. It is
+# bundled but never linked: Ferrocast runs /usr/bin/perl, which loads it. A copy is left in
+# target/mediaremote-adapter for `cargo run` (the app looks there when it is not in a bundle).
+mra_src=third_party/mediaremote-adapter
+mra_out="${CARGO_TARGET_DIR:-$PWD/target}/mediaremote-adapter"
+mra_fw="$mra_out/MediaRemoteAdapter.framework"
+mkdir -p "$mra_out"
+find "$mra_fw" -mindepth 1 -delete 2>/dev/null || true
+mkdir -p "$mra_fw/Versions/A/Resources"
+xcrun clang -dynamiclib -arch "$(uname -m)" -mmacosx-version-min=13.0 -fobjc-arc -fvisibility=default -O2 \
+  -I "$mra_src/include" -I "$mra_src/src" \
+  -install_name @rpath/MediaRemoteAdapter.framework/Versions/A/MediaRemoteAdapter \
+  -framework Foundation -framework AppKit -weak_framework UniformTypeIdentifiers \
+  "$mra_src"/src/adapter/*.m "$mra_src"/src/private/*.m "$mra_src"/src/utility/*.m \
+  -o "$mra_fw/Versions/A/MediaRemoteAdapter"
+cp "$mra_src/Info.plist" "$mra_fw/Versions/A/Resources/Info.plist"
+ln -s A "$mra_fw/Versions/Current"
+ln -s Versions/Current/MediaRemoteAdapter "$mra_fw/MediaRemoteAdapter"
+ln -s Versions/Current/Resources "$mra_fw/Resources"
+cp "$mra_src/bin/mediaremote-adapter.pl" "$mra_out/mediaremote-adapter.pl"
+mkdir -p "$app/Contents/Frameworks"
+ditto "$mra_fw" "$app/Contents/Frameworks/MediaRemoteAdapter.framework"
+cp "$mra_src/bin/mediaremote-adapter.pl" "$app/Contents/Resources/mediaremote-adapter.pl"
+cp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/THIRD_PARTY_NOTICES.md"
+cp "$mra_src/LICENSE" "$app/Contents/Resources/mediaremote-adapter-LICENSE"
+
 [ -f resources/Ferrocast.icns ] || python3 scripts/make_icon.py
 cp resources/Ferrocast.icns "$app/Contents/Resources/Ferrocast.icns"
 cat > "$app/Contents/Info.plist" <<PLIST
@@ -99,6 +126,10 @@ if [ -x "$helper" ]; then
   [ "$identity" != "-" ] && helper_flags+=(--options runtime --timestamp)
   codesign "${helper_flags[@]}" "$helper"
 fi
+# the nested framework is signed before the app seals it (inside-out), hardened runtime when notarizing
+fw_flags=(--force --sign "$identity" -i com.vandenbe.MediaRemoteAdapter)
+[ "$identity" != "-" ] && fw_flags+=(--options runtime --timestamp)
+codesign "${fw_flags[@]}" "$app/Contents/Frameworks/MediaRemoteAdapter.framework"
 # Helpers first, with the app's flags but their own identifier, then the bundle.
 for h in ${helper_built[@]+"${helper_built[@]}"}; do
   codesign "${flags[@]/dev.ferrocast.launcher/dev.ferrocast.launcher.${h#ferrocast-}}" "$app/Contents/MacOS/$h"
