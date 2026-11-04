@@ -507,6 +507,8 @@ pub enum Act {
     NotePin(String),
     CreateNote,
     Trash(PathBuf),
+    /// Move an application bundle to the Trash (asks first; protected apps are refused).
+    TrashApp(PathBuf),
     EditScript(PathBuf),
     RunSystem(SystemCommand),
     RunScript {

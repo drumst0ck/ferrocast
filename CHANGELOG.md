@@ -8,6 +8,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ### Added
 - **Permission helper**: when Ferrocast opens the Accessibility, Screen Recording or Input Monitoring settings, a small panel with the Ferrocast icon appears next to System Settings; drag the icon into the list to add Ferrocast. It closes when the permission is granted, when System Settings closes or with its close button. Camera, microphone and speech settings open as before. (docs: /docs/getting-started/first-run/) #permissions
+- **Move an app to the Trash**: right-click an application in the launcher (or press ⌘K) and choose Move to Trash (⌘⌫). Ferrocast asks first, moves only the app itself so Finder's Put Back works, and refuses system apps, protected Apple apps, Ferrocast itself and apps that are running. (docs: /docs/launcher/actions-panel/) #launcher
 
 ### Changed
 - **Menu bar icon**: the Menu bar icon switch in Settings → General now shows or hides the icon at once, without a restart. (docs: /docs/launcher/settings/) #settings
