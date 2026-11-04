@@ -25,6 +25,21 @@ pub fn os_at_least(major: u32) -> bool {
 }
 
 /// Run AppleScript, returning trimmed stdout.
+/// An AppleScript string literal for `s`: backslash escaped first, then the quote, so no input
+/// can close the literal early. Every script built from user data must go through this.
+pub fn applescript_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The "quit all apps" script, keeping the (user-chosen) `excluded` names running.
+fn quit_all_script(excluded: &[String]) -> String {
+    let keep: Vec<String> = excluded.iter().map(|s| applescript_quote(s)).collect();
+    format!(
+        "set keep to {{{}}}\ntell application \"System Events\" to set names to name of every process whose background only is false\nrepeat with n in names\nif keep does not contain (n as text) and (n as text) is not \"Ferrocast\" then\ntry\ntell application (n as text) to quit\nend try\nend if\nend repeat",
+        keep.join(", ")
+    )
+}
+
 pub fn osascript(script: &str) -> anyhow::Result<String> {
     let out = Command::new("/usr/bin/osascript").arg("-e").arg(script).output()?;
     if !out.status.success() {
@@ -287,11 +302,7 @@ impl SystemCommand {
                 osascript("tell application \"System Events\" to set visible of every process to true")?;
             }
             QuitAllApps => {
-                let excluded: Vec<String> = quit_excluded.iter().map(|s| format!("\"{}\"", s.replace('"', ""))).collect();
-                let script = format!(
-                    "set keep to {{{}}}\ntell application \"System Events\" to set names to name of every process whose background only is false\nrepeat with n in names\nif keep does not contain (n as text) and (n as text) is not \"Ferrocast\" then\ntry\ntell application (n as text) to quit\nend try\nend if\nend repeat",
-                    excluded.join(", ")
-                );
+                let script = quit_all_script(quit_excluded);
                 osascript(&script)?;
                 return Ok("Quit all apps".into());
             }
@@ -351,6 +362,21 @@ fn awake_pid() -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn applescript_quote_escapes_backslash_before_quote() {
+        assert_eq!(applescript_quote("plain"), "\"plain\"");
+        assert_eq!(applescript_quote("a\"b"), "\"a\\\"b\"");
+        // the audit payload: a trailing `\"` must not close the literal early
+        assert_eq!(applescript_quote("x\\\" & (ASCII character 65) --"), "\"x\\\\\\\" & (ASCII character 65) --\"");
+        assert_eq!(applescript_quote("a\\b"), "\"a\\\\b\"");
+    }
+
+    #[test]
+    fn quit_all_script_quotes_every_excluded_name() {
+        let s = quit_all_script(&["Fo\"o\\".to_string(), "Bar".to_string()]);
+        assert!(s.starts_with("set keep to {\"Fo\\\"o\\\\\", \"Bar\"}\n"), "{s}");
+        assert!(quit_all_script(&[]).starts_with("set keep to {}\n"));
+    }
     #[test]
     fn finds_the_wifi_device() {
         let l = "\nHardware Port: Ethernet Adapter (en4)\nDevice: en4\nEthernet Address: a\n\nHardware Port: Wi-Fi\nDevice: en0\nEthernet Address: b\n";

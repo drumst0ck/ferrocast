@@ -408,16 +408,45 @@ pub fn trash_app(path: &Path) -> Result<(), TrashAppError> {
         .map_err(|e| TrashAppError::Failed(e.localizedDescription().to_string()))
 }
 
-/// Move a path to the Trash through Finder (recoverable).
-pub fn trash(path: &Path) -> anyhow::Result<()> {
-    let p = path.to_string_lossy().replace('"', "\\\"");
-    crate::system::osascript(&format!("tell application \"Finder\" to delete POSIX file \"{p}\""))?;
-    Ok(())
+/// The text shown for a failed trash: the system's description, never empty.
+fn trash_error_text(desc: &str) -> String {
+    if desc.is_empty() {
+        "unknown error".into()
+    } else {
+        desc.to_string()
+    }
+}
+
+/// Move a file or folder to the Trash with `NSFileManager trashItemAtURL` (recoverable with Put
+/// Back). No script is built, so no file name can be interpreted as code.
+pub fn trash(path: &Path) -> Result<(), String> {
+    use objc2_foundation::{NSFileManager, NSString, NSURL};
+    let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&path.to_string_lossy()), path.is_dir());
+    NSFileManager::defaultManager()
+        .trashItemAtURL_resultingItemURL_error(&url, None)
+        .map_err(|e| trash_error_text(&e.localizedDescription().to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn trash_error_text_is_the_system_description() {
+        assert_eq!(trash_error_text("no permission"), "no permission");
+        assert_eq!(trash_error_text(""), "unknown error");
+    }
+
+    #[test]
+    fn choose_folder_script_quotes_the_prompt() {
+        assert_eq!(choose_folder_script("Pick \"x\"\\"), "POSIX path of (choose folder with prompt \"Pick \\\"x\\\"\\\\\")");
+    }
+
+    #[test]
+    fn trash_of_a_missing_path_errors_without_touching_anything() {
+        let p = std::path::Path::new("/nonexistent-fc-trash-test/x\\\".txt");
+        assert!(trash(p).is_err());
+    }
+
     #[test]
     fn finder_selection_keeps_existing_absolute_paths_only() {
         let dir = std::env::temp_dir().join(format!("fc-fsel-{}", std::process::id()));
@@ -680,9 +709,13 @@ pub fn move_into(paths: &[PathBuf], dest: &Path) -> anyhow::Result<Vec<PathBuf>>
     Ok(out)
 }
 
+fn choose_folder_script(prompt: &str) -> String {
+    format!("POSIX path of (choose folder with prompt {})", crate::system::applescript_quote(prompt))
+}
+
 /// Native folder chooser (blocks).
 pub fn choose_folder(prompt: &str) -> Option<PathBuf> {
-    let out = crate::system::osascript(&format!("POSIX path of (choose folder with prompt \"{}\")", prompt.replace('"', ""))).ok()?;
+    let out = crate::system::osascript(&choose_folder_script(prompt)).ok()?;
     (!out.trim().is_empty()).then(|| PathBuf::from(out.trim()))
 }
 

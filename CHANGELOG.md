@@ -18,6 +18,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ### Fixed
 - **Language picker**: with an English or other Latin-script interface, Japanese and Simplified Chinese showed as empty boxes in Settings → General → Language; their names now display correctly. #settings
+- **Trash and scripts**: Move to Trash on a file now uses the system Trash API (Put Back still works) instead of a Finder script, so a file name with quotes or backslashes can no longer run script code; a failed move keeps the file in the results and shows the error. Quit All Apps and the folder chooser escape names the same way. #security
 
 ## [0.5.0] - 2026-10-29
 
