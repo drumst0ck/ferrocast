@@ -91,6 +91,15 @@ impl ExtState {
     pub(crate) fn test_set_base(&mut self, b: usize) {
         self.base = b;
     }
+    pub(crate) fn test_view_count(&self) -> usize {
+        self.views.len()
+    }
+    pub(crate) fn test_view_title(&self, depth: usize) -> Option<String> {
+        match self.views.get(depth.checked_sub(1)?)? {
+            ViewModel::List(l) => Some(l.title.clone()),
+            _ => None,
+        }
+    }
     pub(crate) fn test_has_session(&self) -> bool {
         self.sess.is_some()
     }
@@ -605,6 +614,7 @@ impl App {
             Event::Reply { call, result } => self.ext_answer(id, call, result),
             Event::Msg(m) => match m {
                 RuntimeMsg::Render { depth, tree } => self.ext_render(depth, &tree),
+                RuntimeMsg::Pop { depth } => self.ext_pop(depth),
                 RuntimeMsg::Toast { style, title, message } => {
                     let sep = if title.is_empty() || message.is_empty() { "" } else { ": " };
                     let text = format!("{title}{sep}{message}");
@@ -678,6 +688,23 @@ impl App {
         }
     }
 
+    /// The runtime popped a screen and `depth` remain: the only message that removes one.
+    fn ext_pop(&mut self, depth: usize) {
+        if depth == 0 || depth >= self.ext.views.len() {
+            return;
+        }
+        self.ext.views.truncate(depth);
+        self.stack.truncate(self.ext.base + depth);
+        self.query.clear();
+        self.selected = 0;
+        self.ext.sent_query.clear();
+        self.ext.sent_sel = None;
+        self.ext.form = FormState::default();
+        self.sec_dirty = true;
+    }
+
+    /// A screen's tree: the next depth pushes a screen, an existing depth is updated in place
+    /// (a lower screen may re-render while a screen above it is shown).
     fn ext_render(&mut self, depth: usize, tree: &ferrocast_core::extensions::protocol::Node) {
         if depth == 0 || depth > self.ext.views.len() + 1 {
             return;
@@ -685,15 +712,19 @@ impl App {
         let Some(s) = self.ext.sess.as_mut() else { return };
         s.got_render = true;
         let vm = view::build(tree);
+        if depth < self.ext.views.len() {
+            let kind = ext_view_for(Some(&vm));
+            self.ext.views[depth - 1] = vm;
+            if let Some(slot) = self.stack.get_mut(self.ext.base + depth - 1) {
+                *slot = kind;
+            }
+            self.sec_dirty = true;
+            return;
+        }
         let changed_depth = depth != self.ext.views.len();
         self.ext.views.truncate(depth - 1);
         self.ext.views.push(vm);
         let want = self.ext.base + depth;
-        if self.stack.len() > want {
-            self.stack.truncate(want);
-            self.query.clear();
-            self.selected = 0;
-        }
         while self.stack.len() < want {
             let v = ext_view_for(self.ext.views.get(self.stack.len() - self.ext.base));
             self.push(v);

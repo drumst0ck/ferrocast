@@ -151,6 +151,8 @@ thread_local! {
     static APPLE_AVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// What the fake `trash_app` answers in this test thread.
     static FX_TRASH_RESULT: std::cell::RefCell<Result<(), ferrocast_macos::apps::TrashAppError>> = const { std::cell::RefCell::new(Ok(())) };
+    /// What the fake `trash_file` answers in this test thread.
+    static FX_TRASH_FILE_RESULT: std::cell::RefCell<Result<(), String>> = const { std::cell::RefCell::new(Ok(())) };
     static FX_FRONT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
     /// Scripts the web effect asked a browser to run (replace and unmark), in order.
     static FX_TILING_RX: std::cell::RefCell<Option<std::sync::mpsc::Receiver<ferrocast_macos::tiling::Cmd>>> = const { std::cell::RefCell::new(None) };
@@ -231,6 +233,10 @@ impl Effects {
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
             color_sampler: |_bus| FX_LOG.with(|l| l.borrow_mut().push("color_sampler".into())),
+            trash_file: |p| {
+                FX_LOG.with(|l| l.borrow_mut().push(format!("trash_file {}", p.display())));
+                FX_TRASH_FILE_RESULT.with(|r| r.borrow().clone())
+            },
             trash_app: |p| {
                 FX_LOG.with(|l| l.borrow_mut().push(format!("trash_app {}", p.display())));
                 FX_TRASH_RESULT.with(|r| r.borrow().clone())
@@ -16638,6 +16644,59 @@ fn a_failed_launch_command_leaves_the_running_screens_and_session_alone() {
     assert!(app.ext.test_has_session(), "and so is the command");
 }
 
+fn ext_render_msg(app: &mut App, depth: usize, root_type: &str, title: &str) {
+    use ferrocast_core::extensions::protocol::{Node, RuntimeMsg};
+    let mut p = serde_json::Map::new();
+    p.insert("navigationTitle".into(), serde_json::json!(title));
+    let node = Node { t: "#root".into(), p: Default::default(), c: vec![Node { t: root_type.into(), p, c: vec![] }] };
+    app.ext_event(1, ferrocast_core::extensions::sidecar::Event::Msg(RuntimeMsg::Render { depth, tree: node }));
+}
+
+fn ext_pop_msg(app: &mut App, depth: usize) {
+    use ferrocast_core::extensions::protocol::RuntimeMsg;
+    app.ext_event(1, ferrocast_core::extensions::sidecar::Event::Msg(RuntimeMsg::Pop { depth }));
+}
+
+fn ext_two_screens() -> App {
+    let mut app = fixture();
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    app.stack = vec![View::Root];
+    app.ext.test_set_base(1);
+    ext_render_msg(&mut app, 1, "List", "one");
+    ext_render_msg(&mut app, 2, "Detail", "two");
+    app
+}
+
+#[test]
+fn s5_a_rerender_of_the_lower_screen_updates_it_in_place_and_keeps_the_pushed_screen() {
+    let mut app = ext_two_screens();
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (2, 3));
+    ext_render_msg(&mut app, 1, "List", "one again");
+    assert_eq!(app.ext.test_view_count(), 2, "the pushed screen is still there");
+    assert_eq!(app.stack.len(), 3, "and still on top");
+    assert!(matches!(app.stack.last(), Some(View::ExtDetail)));
+    assert_eq!(app.ext.test_view_title(1).as_deref(), Some("one again"), "the lower screen got the new tree");
+}
+
+#[test]
+fn s5_an_explicit_pop_still_truncates_and_the_following_render_shows_the_screen_below() {
+    let mut app = ext_two_screens();
+    ext_pop_msg(&mut app, 1);
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (1, 2));
+    ext_render_msg(&mut app, 1, "List", "one");
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (1, 2));
+    assert!(matches!(app.stack.last(), Some(View::ExtList)));
+}
+
+#[test]
+fn s5_a_render_one_deeper_than_the_stack_still_pushes_and_a_gap_is_ignored() {
+    let mut app = ext_two_screens();
+    ext_render_msg(&mut app, 3, "Detail", "three");
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (3, 4));
+    ext_render_msg(&mut app, 5, "Detail", "far");
+    assert_eq!(app.ext.test_view_count(), 3);
+}
+
 #[test]
 fn launch_command_is_refused_after_five_in_ten_seconds() {
     let mut app = fixture();
@@ -17858,6 +17917,21 @@ mod now_playing {
     }
 }
 
+#[test]
+fn trashing_a_file_removes_it_from_results_only_on_success() {
+    let a = std::path::PathBuf::from("/tmp/fc-a.txt");
+    let b = std::path::PathBuf::from("/tmp/fc-b.txt");
+    let mut app = fixture();
+    app.files = ("q".into(), vec![a.clone(), b.clone()]);
+    FX_TRASH_FILE_RESULT.with(|r| *r.borrow_mut() = Err("permission denied".into()));
+    app.perform(Act::Trash(a.clone()), true);
+    assert_eq!(fx_taken(), [format!("trash_file {}", a.display())]);
+    assert_eq!(app.files.1, vec![a.clone(), b.clone()], "a failed trash keeps the entry");
+    assert_eq!(toast_text(&app), ferrocast_core::i18n::trf("Trash failed: {e}", &[("e", "permission denied")]));
+    FX_TRASH_FILE_RESULT.with(|r| *r.borrow_mut() = Ok(()));
+    app.perform(Act::Trash(a.clone()), true);
+    assert_eq!(app.files.1, vec![b], "a successful trash removes only that entry");
+    assert_eq!(toast_text(&app), ferrocast_core::i18n::tr("Moved to Trash"));
 fn confirm_app() -> (App, std::path::PathBuf) {
     let root = trash_root();
     let foo = bundle(&root, "Foo.app");
