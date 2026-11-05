@@ -94,7 +94,7 @@ pub fn feed_result(curl_ok: bool, status: u16, body: &str) -> Result<Option<Rele
         200 => Ok(parse_latest(body)),
         404 => Ok(None),
         403 | 429 => Err("GitHub rate limit reached. Try again in an hour.".into()),
-        s => Err(format!("GitHub answered HTTP {s}. Try again later.")),
+        s => Err(crate::i18n::trf("GitHub answered HTTP {code}. Try again later.", &[("code", &s.to_string())])),
     }
 }
 

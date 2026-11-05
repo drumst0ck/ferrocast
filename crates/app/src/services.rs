@@ -562,6 +562,25 @@ impl Shared {
 // ---------------------------------------------------------------------------
 // Clipboard history
 
+/// Save a copied image under its content hash in `dir` and return the file name. The bytes go to a
+/// temp file that is renamed into place, and a file of a different size under the same name (a
+/// crash or a full disk left half of it) is replaced.
+pub(crate) fn store_clip_image(dir: &std::path::Path, png: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    png.hash(&mut h);
+    let name = format!("{:016x}.png", h.finish());
+    let p = dir.join(&name);
+    let complete = std::fs::metadata(&p).is_ok_and(|m| m.len() == png.len() as u64);
+    if !complete {
+        let tmp = dir.join(format!("{name}.tmp"));
+        if std::fs::write(&tmp, png).and_then(|_| std::fs::rename(&tmp, &p)).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    name
+}
+
 fn record(shared: &Shared, content: clipboard::ClipContent, source: Option<String>) {
     let now = now_secs();
     let (settings_retention,) = (shared.settings.read().unwrap().clipboard_retention,);
@@ -597,16 +616,9 @@ fn record(shared: &Shared, content: clipboard::ClipContent, source: Option<Strin
             height: 0,
         },
         clipboard::ClipContent::Image { png, width, height } => {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            png.hash(&mut h);
-            let name = format!("{:016x}.png", h.finish());
             let dir = shared.store.images_dir();
             let _ = std::fs::create_dir_all(&dir);
-            let p = dir.join(&name);
-            if !p.exists() {
-                let _ = std::fs::write(&p, &png);
-            }
+            let name = store_clip_image(&dir, &png);
             ClipEntry {
                 id: uuid::Uuid::new_v4().to_string(),
                 kind: ClipKind::Image,
@@ -1306,16 +1318,30 @@ pub fn ensure_scripts_dir(store: &Store) {
     }
 }
 
+/// Make a script runnable by its owner. Only the owner's execute bit is added, and only when it is
+/// missing: a script kept at 0600/0700 because it holds tokens must not become readable by others.
 pub fn set_exec(p: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Ok(m) = std::fs::metadata(p) {
         let mut perm = m.permissions();
-        perm.set_mode(0o755);
-        let _ = std::fs::set_permissions(p, perm);
+        let mode = perm.mode();
+        if mode & 0o100 == 0 {
+            perm.set_mode(mode | 0o100);
+            let _ = std::fs::set_permissions(p, perm);
+        }
     }
 }
 
+/// A script run is stopped after this long, and its output is cut at `SCRIPT_OUTPUT_CAP` per stream.
+const SCRIPT_TIMEOUT_SECS: u64 = 60;
+const SCRIPT_OUTPUT_CAP: usize = 1024 * 1024;
+
 pub fn run_script(cmd: &ScriptCommand, args: Vec<String>, run: u64, bus: Bus) {
+    run_script_within(cmd, args, run, bus, SCRIPT_TIMEOUT_SECS, SCRIPT_OUTPUT_CAP);
+}
+
+/// `run_script` with its deadline (seconds) and per-stream output cap (bytes) given.
+pub(crate) fn run_script_within(cmd: &ScriptCommand, args: Vec<String>, run: u64, bus: Bus, secs: u64, cap: usize) {
     let path = cmd.path.clone();
     let dir = cmd.working_dir();
     std::thread::spawn(move || {
@@ -1326,18 +1352,32 @@ pub fn run_script(cmd: &ScriptCommand, args: Vec<String>, run: u64, bus: Bus) {
                 path_env = format!("{path_env}:{extra}");
             }
         }
-        let out = std::process::Command::new(&path).args(&args).current_dir(&dir).env("PATH", path_env).output();
-        match out {
+        let mut c = std::process::Command::new(&path);
+        c.args(&args).current_dir(&dir).env("PATH", path_env);
+        match run_capture(c, secs, cap, None) {
             Ok(o) => {
-                let mut text = String::from_utf8_lossy(&o.stdout).to_string();
-                let err = String::from_utf8_lossy(&o.stderr);
+                let mut text = String::from_utf8_lossy(&o.out).to_string();
+                let err = String::from_utf8_lossy(&o.err);
                 if !err.trim().is_empty() {
                     if !text.is_empty() && !text.ends_with('\n') {
                         text.push('\n');
                     }
                     text.push_str(&err);
                 }
-                bus.send(Msg::Script { run, text, code: o.status.code().unwrap_or(-1) });
+                let note = |text: &mut String, line: String| {
+                    if !text.is_empty() && !text.ends_with('\n') {
+                        text.push('\n');
+                    }
+                    text.push_str(&line);
+                };
+                if o.truncated {
+                    note(&mut text, trf("[output truncated at {kb} KB]", &[("kb", &(cap / 1024).max(1).to_string())]));
+                }
+                if o.timed_out {
+                    note(&mut text, trf("Script timed out after {secs} s and was stopped", &[("secs", &secs.to_string())]));
+                }
+                let code = if o.timed_out { -1 } else { o.status.and_then(|s| s.code()).unwrap_or(-1) };
+                bus.send(Msg::Script { run, text, code });
             }
             Err(e) => bus.send(Msg::Script { run, text: format!("Failed to run: {e}"), code: -1 }),
         }
@@ -1423,40 +1463,105 @@ fn probe_parent_writable(exe: &std::path::Path) -> bool {
     ok
 }
 
-/// Run a command with a hard deadline; the error is the first stderr line.
-fn run_deadline(mut cmd: std::process::Command, secs: u64) -> Result<Vec<u8>, String> {
-    use std::io::Read;
+/// What a finished (or stopped) command left behind.
+pub(crate) struct Captured {
+    out: Vec<u8>,
+    err: Vec<u8>,
+    status: Option<std::process::ExitStatus>,
+    timed_out: bool,
+    truncated: bool,
+}
+
+/// How long to wait for the output readers once the command is gone: a descendant that outlives it
+/// and keeps the pipes open must not hold the caller.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
+
+fn kill_group(pid: u32) {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    // the child leads its own process group (see `run_capture`): -pid reaches every descendant
+    unsafe {
+        kill(-(pid as i32), 9);
+    }
+}
+
+/// Run a command in its own process group with a hard deadline and at most `cap` bytes kept per
+/// output stream (the rest is read and dropped). On timeout the whole group is killed. `input` is
+/// fed to its stdin.
+pub(crate) fn run_capture(mut cmd: std::process::Command, secs: u64, cap: usize, input: Option<Vec<u8>>) -> Result<Captured, String> {
+    use std::io::{Read, Write};
+    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     let name = cmd.get_program().to_string_lossy().rsplit('/').next().unwrap_or("command").to_string();
-    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("{name}: {e}"))?;
-    fn drain(r: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+    cmd.process_group(0).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("{name}: {e}"))?;
+    if let (Some(bytes), Some(mut stdin)) = (input, child.stdin.take()) {
         std::thread::spawn(move || {
-            let mut v = vec![];
-            if let Some(mut r) = r {
-                let _ = r.read_to_end(&mut v);
-            }
-            v
-        })
+            let _ = stdin.write_all(&bytes); // closed on drop; a dead reader just ends the write
+        });
     }
-    let (out, err) = (drain(child.stdout.take()), drain(child.stderr.take()));
+    type Drained = (Vec<u8>, bool);
+    fn drain(r: Option<impl Read + Send + 'static>, cap: usize) -> std::sync::mpsc::Receiver<Drained> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut v, mut cut) = (vec![], false);
+            if let Some(mut r) = r {
+                let mut buf = [0u8; 16 * 1024];
+                while let Ok(n) = r.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    let room = cap.saturating_sub(v.len());
+                    v.extend_from_slice(&buf[..n.min(room)]);
+                    cut |= n > room;
+                }
+            }
+            let _ = tx.send((v, cut));
+        });
+        rx
+    }
+    let (out, err) = (drain(child.stdout.take(), cap), drain(child.stderr.take(), cap));
     let deadline = std::time::Instant::now() + Duration::from_secs(secs);
-    let status = loop {
+    let (mut status, mut timed_out) = (None, false);
+    loop {
         match child.try_wait() {
-            Ok(Some(s)) => break s,
+            Ok(Some(s)) => {
+                status = Some(s);
+                break;
+            }
             Ok(None) if std::time::Instant::now() >= deadline => {
+                kill_group(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("{name}: timed out after {secs} s"));
+                timed_out = true;
+                break;
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(e) => return Err(format!("{name}: {e}")),
         }
-    };
-    let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    }
+    let (out, cut_out) = out.recv_timeout(DRAIN_GRACE).unwrap_or_default();
+    let (err, cut_err) = err.recv_timeout(DRAIN_GRACE).unwrap_or_default();
+    Ok(Captured { out, err, status, timed_out, truncated: cut_out || cut_err })
+}
+
+/// Run a command with a hard deadline; the error is the first stderr line.
+pub(crate) fn run_deadline(cmd: std::process::Command, secs: u64) -> Result<Vec<u8>, String> {
+    run_deadline_with(cmd, secs, None)
+}
+
+fn run_deadline_with(cmd: std::process::Command, secs: u64, input: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
+    let name = cmd.get_program().to_string_lossy().rsplit('/').next().unwrap_or("command").to_string();
+    let c = run_capture(cmd, secs, 64 * 1024 * 1024, input)?;
+    if c.timed_out {
+        return Err(format!("{name}: timed out after {secs} s"));
+    }
+    let status = c.status.expect("a command that did not time out has a status");
     if status.success() {
-        Ok(out)
+        Ok(c.out)
     } else {
-        let line = String::from_utf8_lossy(&err).lines().next().unwrap_or("").trim().to_string();
+        let line = String::from_utf8_lossy(&c.err).lines().next().unwrap_or("").trim().to_string();
         Err(if line.is_empty() { format!("{name}: {status}") } else { format!("{name}: {line}") })
     }
 }
@@ -1542,48 +1647,85 @@ fn install_blocking(release: &ferrocast_core::update::Release, store_root: &std:
     let zip_name = format!("Ferrocast-{ver}.zip");
     let dir = store_root.join("updates").join(ver);
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .map_err(|e| trf("Could not create {path}: {e}", &[("path", &dir.display().to_string()), ("e", &e.to_string())]))?;
+    }
     let (zip, sums) = (dir.join(&zip_name), dir.join("SHA256SUMS.txt"));
     curl_to_file(&release.zip_url, &zip)?;
     curl_to_file(&release.sums_url, &sums)?;
     // 1. integrity: nothing below touches the running bundle until this and codesign both pass
     let expected = sum_for(&std::fs::read_to_string(&sums).map_err(|e| e.to_string())?, &zip_name)
-        .ok_or_else(|| format!("No checksum for {zip_name} in SHA256SUMS.txt"))?;
-    if !verify_sha256(&std::fs::read(&zip).map_err(|e| e.to_string())?, &expected) {
+        .ok_or_else(|| trf("No checksum for {file} in SHA256SUMS.txt", &[("file", &zip_name)]))?;
+    let bytes = std::fs::read(&zip).map_err(|e| e.to_string())?;
+    if !verify_sha256(&bytes, &expected) {
         return Err("Checksum mismatch: the download was discarded".into());
     }
+    // extract the bytes that were hashed, not the file on disk (another process could swap it)
     let extract = dir.join("extract");
-    let mut d = std::process::Command::new("/usr/bin/ditto");
-    d.args(["-x", "-k"]).arg(&zip).arg(&extract);
-    run_deadline(d, 120)?;
+    extract_zip_bytes(bytes, &extract)?;
     let new_app = extract.join("Ferrocast.app");
     if !new_app.is_dir() {
         return Err("The update archive has no Ferrocast.app".into());
     }
     let mut cs = std::process::Command::new("/usr/bin/codesign");
     cs.args(["--verify", "--deep", "--strict"]).arg(&new_app);
-    run_deadline(cs, 60).map_err(|e| format!("Signature check failed ({e})"))?;
+    run_deadline(cs, 60).map_err(|e| trf("Signature check failed ({e})", &[("e", &e)]))?;
     // 2. swap: keep the old bundle as .previous (removed on the next launch)
     swap_bundle(&new_app, &bundle)?;
     Ok(bundle)
 }
 
-/// Move `bundle` aside as `<name>.previous` and put `new_app` in its place; any failure while
-/// placing restores the original bundle.
+/// Unzip `bytes` into `dest` (`ditto` reads the archive from stdin).
+pub(crate) fn extract_zip_bytes(bytes: Vec<u8>, dest: &std::path::Path) -> Result<(), String> {
+    let mut d = std::process::Command::new("/usr/bin/ditto");
+    d.args(["-x", "-k", "-"]).arg(dest);
+    run_deadline_with(d, 120, Some(bytes)).map(|_| ())
+}
+
+/// Put `new_app` in place of `bundle`, keeping the old one as `<name>.previous` (removed on the next
+/// launch). The new app is first staged next to the bundle (same volume), so the bundle only goes
+/// missing for two quick renames; any failure restores the original.
 pub(crate) fn swap_bundle(new_app: &std::path::Path, bundle: &std::path::Path) -> Result<(), String> {
-    let previous = bundle.with_file_name(format!("{}.previous", bundle.file_name().unwrap_or_default().to_string_lossy()));
-    let _ = std::fs::remove_dir_all(&previous); // stale leftover of an earlier update, never this run's
-    std::fs::rename(bundle, &previous).map_err(|e| format!("Could not move the current app aside: {e}"))?;
-    // rename fails across volumes (support folder vs /Applications): fall back to a copy
-    let placed = std::fs::rename(new_app, bundle).map_err(|e| e.to_string()).or_else(|_| {
-        let mut c = std::process::Command::new("/usr/bin/ditto");
-        c.arg(new_app).arg(bundle);
-        run_deadline(c, 120).map(|_| ())
-    });
-    if let Err(e) = placed {
-        let _ = std::fs::remove_dir_all(bundle); // our own partial copy
+    swap_bundle_via(new_app, bundle, |from, staged| {
+        // rename fails across volumes (support folder vs /Applications): fall back to a copy
+        std::fs::rename(from, staged).map_err(|e| e.to_string()).or_else(|_| {
+            let _ = std::fs::remove_dir_all(staged);
+            let mut c = std::process::Command::new("/usr/bin/ditto");
+            c.arg(from).arg(staged);
+            run_deadline(c, 120).map(|_| ())
+        })
+    })
+}
+
+/// `swap_bundle` with the staging step injected: `stage(new_app, staged)` must leave the full new app at `staged`.
+pub(crate) fn swap_bundle_via(
+    new_app: &std::path::Path,
+    bundle: &std::path::Path,
+    stage: impl FnOnce(&std::path::Path, &std::path::Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let name = bundle.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let previous = bundle.with_file_name(format!("{name}.previous"));
+    let staged = bundle.with_file_name(format!("{name}.new"));
+    let failed = |e: String| trf("Could not install the update, the old version was restored ({e})", &[("e", &e)]);
+    let _ = std::fs::remove_dir_all(&previous); // stale leftovers of an earlier update, never this run's
+    let _ = std::fs::remove_dir_all(&staged);
+    if let Err(e) = stage(new_app, &staged) {
+        let _ = std::fs::remove_dir_all(&staged); // our own partial copy; the bundle was never touched
+        return Err(failed(e));
+    }
+    if let Err(e) = std::fs::rename(bundle, &previous) {
+        let _ = std::fs::remove_dir_all(&staged);
+        return Err(trf("Could not move the current app aside: {e}", &[("e", &e.to_string())]));
+    }
+    if let Err(e) = std::fs::rename(&staged, bundle) {
         let _ = std::fs::rename(&previous, bundle);
-        return Err(format!("Could not install the update, the old version was restored ({e})"));
+        let _ = std::fs::remove_dir_all(&staged);
+        return Err(failed(e.to_string()));
     }
     Ok(())
 }
