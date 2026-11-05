@@ -2,7 +2,9 @@
 //! under `<data>/extensions/<extension>/`.
 
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// Folder of one extension's data. The name is reduced to `[A-Za-z0-9._-]` so it cannot escape.
 pub fn extension_dir(data_dir: &Path, extension: &str) -> PathBuf {
@@ -54,30 +56,145 @@ pub fn save_preferences(data_dir: &Path, extension: &str, values: &Map<String, V
     write_map_mode(&extension_dir(data_dir, extension).join("preferences.json"), values, Some(0o600))
 }
 
-/// Handle a `localStorage.*` call; returns the JSON the runtime gets back.
+/// Handle one `localStorage.*` call against the file, without any cache (reads and, for a change,
+/// writes the whole file). The app uses [`LocalStores`] instead; this is the simple, synchronous form.
 pub fn local_storage(data_dir: &Path, extension: &str, method: &str, params: &Value) -> Result<Value, String> {
-    let file = extension_dir(data_dir, extension).join("localstorage.json");
-    let mut m = read_map(&file);
-    let key = params.get("key").and_then(Value::as_str).unwrap_or("");
-    let out = match method {
-        "localStorage.getItem" => return Ok(m.get(key).cloned().unwrap_or(Value::Null)),
-        "localStorage.allItems" => return Ok(Value::Object(m)),
-        "localStorage.setItem" => {
-            m.insert(key.to_string(), params.get("value").cloned().unwrap_or(Value::Null));
-            Value::Null
-        }
-        "localStorage.removeItem" => {
-            m.remove(key);
-            Value::Null
-        }
-        "localStorage.clear" => {
-            m.clear();
-            Value::Null
-        }
-        other => return Err(format!("unknown call {other}")),
-    };
-    write_map(&file, &m).map_err(|e| e.to_string())?;
+    let (out, persist) = LocalStores::default().call(data_dir, extension, method, params)?;
+    if let Some(p) = persist {
+        p.run()?;
+    }
     Ok(out)
+}
+
+struct State {
+    map: Map<String, Value>,
+    /// The file exists but cannot be read as a JSON object: it is never overwritten.
+    unreadable: bool,
+    /// Bumped by every change; `persisted` is the version the file holds.
+    version: u64,
+    persisted: u64,
+    /// A thread is writing this file (it also covers the changes made while it runs).
+    flushing: bool,
+}
+
+struct Cell {
+    state: Mutex<State>,
+    /// Held while the file is written, so two writers cannot land out of order.
+    writer: Mutex<()>,
+}
+
+/// In-memory copy of each extension's LocalStorage. The file is read once per extension; a change is
+/// applied in memory (so reads and ordering are immediate) and written afterwards through a
+/// [`Persist`], which the caller runs off the UI thread. Writes made meanwhile are coalesced.
+#[derive(Clone, Default)]
+pub struct LocalStores(Arc<Mutex<HashMap<PathBuf, Arc<Cell>>>>);
+
+/// A pending write of one extension's LocalStorage file.
+pub struct Persist {
+    cell: Arc<Cell>,
+    file: PathBuf,
+    version: u64,
+}
+
+impl LocalStores {
+    fn cell(&self, file: &Path) -> Arc<Cell> {
+        let mut all = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        all.entry(file.to_path_buf())
+            .or_insert_with(|| {
+                let (map, unreadable) = match std::fs::read(file) {
+                    Ok(b) => match serde_json::from_slice::<Map<String, Value>>(&b) {
+                        Ok(m) => (m, false),
+                        Err(_) => (Map::new(), true),
+                    },
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Map::new(), false),
+                    Err(_) => (Map::new(), true),
+                };
+                Arc::new(Cell {
+                    state: Mutex::new(State { map, unreadable, version: 0, persisted: 0, flushing: false }),
+                    writer: Mutex::new(()),
+                })
+            })
+            .clone()
+    }
+
+    /// Apply a `localStorage.*` call in memory. Returns the JSON the runtime gets back and, for a
+    /// change, the write that makes it durable. A change to an unreadable file is refused.
+    pub fn call(&self, data_dir: &Path, extension: &str, method: &str, params: &Value) -> Result<(Value, Option<Persist>), String> {
+        let file = extension_dir(data_dir, extension).join("localstorage.json");
+        let cell = self.cell(&file);
+        let key = params.get("key").and_then(Value::as_str).unwrap_or("");
+        let mut st = cell.state.lock().unwrap_or_else(|e| e.into_inner());
+        match method {
+            "localStorage.getItem" => return Ok((st.map.get(key).cloned().unwrap_or(Value::Null), None)),
+            "localStorage.allItems" => return Ok((Value::Object(st.map.clone()), None)),
+            "localStorage.setItem" | "localStorage.removeItem" | "localStorage.clear" => {}
+            other => return Err(format!("unknown call {other}")),
+        }
+        if st.unreadable {
+            return Err(
+                "this extension's LocalStorage file is unreadable (not valid JSON); it was left as it is, so nothing was lost".into()
+            );
+        }
+        match method {
+            "localStorage.setItem" => {
+                st.map.insert(key.to_string(), params.get("value").cloned().unwrap_or(Value::Null));
+            }
+            "localStorage.removeItem" => {
+                st.map.remove(key);
+            }
+            _ => st.map.clear(),
+        }
+        st.version += 1;
+        let version = st.version;
+        drop(st);
+        Ok((Value::Null, Some(Persist { cell, file, version })))
+    }
+}
+
+impl Persist {
+    /// Write the file on a background thread, one thread per extension however many changes come
+    /// in; `on_error` gets the reason when the disk write fails (the changes stay in memory).
+    pub fn spawn(self, on_error: impl FnOnce(String) + Send + 'static) {
+        {
+            let mut st = self.cell.state.lock().unwrap_or_else(|e| e.into_inner());
+            if st.flushing {
+                return; // the running thread loops until it has written the newest version
+            }
+            st.flushing = true;
+        }
+        std::thread::spawn(move || loop {
+            let result = Persist { cell: self.cell.clone(), file: self.file.clone(), version: u64::MAX }.run();
+            let mut st = self.cell.state.lock().unwrap_or_else(|e| e.into_inner());
+            match result {
+                Err(e) => {
+                    st.flushing = false;
+                    drop(st);
+                    on_error(e);
+                    return;
+                }
+                Ok(()) if st.persisted >= st.version => {
+                    st.flushing = false;
+                    return;
+                }
+                Ok(()) => {}
+            }
+        });
+    }
+
+    /// Write the file (disk I/O: call it off the UI thread). A write that a newer one already covers is skipped.
+    pub fn run(self) -> Result<(), String> {
+        let _w = self.cell.writer.lock().unwrap_or_else(|e| e.into_inner());
+        let (snapshot, version) = {
+            let st = self.cell.state.lock().unwrap_or_else(|e| e.into_inner());
+            if st.persisted >= self.version {
+                return Ok(());
+            }
+            (st.map.clone(), st.version)
+        };
+        write_map(&self.file, &snapshot).map_err(|e| e.to_string())?;
+        self.cell.state.lock().unwrap_or_else(|e| e.into_inner()).persisted = version;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -130,6 +247,61 @@ mod tests {
         local_storage(&d, "a", "localStorage.removeItem", &json!({"key":"k"})).unwrap();
         assert_eq!(local_storage(&d, "a", "localStorage.allItems", &json!({})).unwrap(), json!({}));
         assert!(local_storage(&d, "a", "localStorage.nope", &json!({})).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_corrupt_local_storage_file_is_not_overwritten_by_a_write() {
+        let d = std::env::temp_dir().join(format!("fc-ls-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let f = extension_dir(&d, "a").join("localstorage.json");
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(&f, b"{\"keep\": \"me\", oops").unwrap();
+        for (m, p) in [
+            ("localStorage.setItem", json!({"key":"k","value":"v"})),
+            ("localStorage.removeItem", json!({"key":"keep"})),
+            ("localStorage.clear", json!({})),
+        ] {
+            let e = local_storage(&d, "a", m, &p).unwrap_err();
+            assert!(e.contains("unreadable"), "{m}: {e}");
+            assert_eq!(std::fs::read(&f).unwrap(), b"{\"keep\": \"me\", oops", "{m} left the file alone");
+        }
+        // reads see an empty store but never touch the file
+        assert_eq!(local_storage(&d, "a", "localStorage.allItems", &json!({})).unwrap(), json!({}));
+        assert_eq!(std::fs::read(&f).unwrap(), b"{\"keep\": \"me\", oops");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_file_is_read_once_and_a_burst_of_writes_is_coalesced() {
+        let d = std::env::temp_dir().join(format!("fc-ls-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let f = extension_dir(&d, "a").join("localstorage.json");
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(&f, br#"{"old":1}"#).unwrap();
+        let st = LocalStores::default();
+        let mut pending = vec![];
+        for i in 0..50 {
+            let (_, p) = st.call(&d, "a", "localStorage.setItem", &json!({"key":format!("k{i}"),"value":i})).unwrap();
+            pending.push(p.expect("a change has a write"));
+        }
+        // nothing written yet, yet reads already see every change and the pre-existing key
+        assert_eq!(std::fs::read(&f).unwrap(), br#"{"old":1}"#);
+        let (all, p) = st.call(&d, "a", "localStorage.allItems", &json!({})).unwrap();
+        assert!(p.is_none());
+        assert_eq!(all.as_object().unwrap().len(), 51);
+        // the last write covers the others; the older ones are skipped, and none can undo it
+        let last = pending.pop().unwrap();
+        last.run().unwrap();
+        let on_disk: Map<String, Value> = serde_json::from_slice(&std::fs::read(&f).unwrap()).unwrap();
+        assert_eq!(on_disk.len(), 51);
+        std::fs::write(&f, b"tampered").unwrap();
+        for p in pending {
+            p.run().unwrap();
+        }
+        assert_eq!(std::fs::read(&f).unwrap(), b"tampered", "an older write never rewrites a newer file");
+        // the file is not read again: the cache answers
+        assert_eq!(st.call(&d, "a", "localStorage.getItem", &json!({"key":"k7"})).unwrap().0, json!(7));
         let _ = std::fs::remove_dir_all(&d);
     }
 
