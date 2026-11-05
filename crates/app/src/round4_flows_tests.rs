@@ -169,11 +169,31 @@ fn a_timed_out_command_takes_its_descendants_with_it() {
 #[test]
 fn a_command_whose_descendant_keeps_the_pipes_open_does_not_block_the_reader() {
     let mut c = std::process::Command::new("/bin/sh");
-    c.arg("-c").arg("sleep 8 >/dev/null 2>&1 & echo done");
+    // the background sleep inherits stdout and stderr, so it really holds both pipes open
+    c.arg("-c").arg("echo hi; sleep 5 &");
     let started = Instant::now();
     let out = services::run_deadline(c, 20).unwrap();
-    assert_eq!(String::from_utf8_lossy(&out).trim(), "done");
-    assert!(started.elapsed() < Duration::from_secs(6), "waited for the lingering descendant: {:?}", started.elapsed());
+    assert!(String::from_utf8_lossy(&out).contains("hi"), "what was read is kept: {:?}", String::from_utf8_lossy(&out));
+    assert!(started.elapsed() < Duration::from_secs(3), "one shared drain budget: {:?}", started.elapsed());
+}
+
+#[test]
+fn update_cleanup_removes_the_staging_copy_too() {
+    let dir = tmp_dir("s54-new");
+    let app = dir.join("Ferrocast.app");
+    let exe = app.join("Contents/MacOS/ferrocast");
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    let (prev, new) = (dir.join("Ferrocast.app.previous"), dir.join("Ferrocast.app.new"));
+    std::fs::create_dir_all(new.join("Contents")).unwrap();
+    std::fs::create_dir_all(&prev).unwrap();
+    let store = dir.join("store");
+    std::fs::create_dir_all(store.join("updates")).unwrap();
+    crate::instance::cleanup_update_leftovers(&store, &exe);
+    assert!(!new.exists(), "half-copied .new bundle is gone");
+    assert!(!prev.exists());
+    assert!(!store.join("updates").exists());
+    assert!(app.exists(), "the running bundle stays");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

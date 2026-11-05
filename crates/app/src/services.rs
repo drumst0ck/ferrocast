@@ -1501,27 +1501,30 @@ pub(crate) fn run_capture(mut cmd: std::process::Command, secs: u64, cap: usize,
             let _ = stdin.write_all(&bytes); // closed on drop; a dead reader just ends the write
         });
     }
-    type Drained = (Vec<u8>, bool);
-    fn drain(r: Option<impl Read + Send + 'static>, cap: usize) -> std::sync::mpsc::Receiver<Drained> {
+    // Readers append into shared buffers, so what was read survives a reader that never finishes.
+    type Drained = std::sync::Arc<std::sync::Mutex<(Vec<u8>, bool)>>;
+    fn drain(r: Option<impl Read + Send + 'static>, cap: usize) -> (Drained, std::sync::mpsc::Receiver<()>) {
+        let shared: Drained = Default::default();
         let (tx, rx) = std::sync::mpsc::channel();
+        let sink = shared.clone();
         std::thread::spawn(move || {
-            let (mut v, mut cut) = (vec![], false);
             if let Some(mut r) = r {
                 let mut buf = [0u8; 16 * 1024];
                 while let Ok(n) = r.read(&mut buf) {
                     if n == 0 {
                         break;
                     }
-                    let room = cap.saturating_sub(v.len());
-                    v.extend_from_slice(&buf[..n.min(room)]);
-                    cut |= n > room;
+                    let mut g = sink.lock().unwrap_or_else(|e| e.into_inner());
+                    let room = cap.saturating_sub(g.0.len());
+                    g.0.extend_from_slice(&buf[..n.min(room)]);
+                    g.1 |= n > room;
                 }
             }
-            let _ = tx.send((v, cut));
+            let _ = tx.send(());
         });
-        rx
+        (shared, rx)
     }
-    let (out, err) = (drain(child.stdout.take(), cap), drain(child.stderr.take(), cap));
+    let ((out, out_done), (err, err_done)) = (drain(child.stdout.take(), cap), drain(child.stderr.take(), cap));
     let deadline = std::time::Instant::now() + Duration::from_secs(secs);
     let (mut status, mut timed_out) = (None, false);
     loop {
@@ -1541,8 +1544,13 @@ pub(crate) fn run_capture(mut cmd: std::process::Command, secs: u64, cap: usize,
             Err(e) => return Err(format!("{name}: {e}")),
         }
     }
-    let (out, cut_out) = out.recv_timeout(DRAIN_GRACE).unwrap_or_default();
-    let (err, cut_err) = err.recv_timeout(DRAIN_GRACE).unwrap_or_default();
+    // one shared budget for both streams
+    let drain_by = std::time::Instant::now() + DRAIN_GRACE;
+    for done in [&out_done, &err_done] {
+        let _ = done.recv_timeout(drain_by.saturating_duration_since(std::time::Instant::now()));
+    }
+    let take = |d: &Drained| std::mem::take(&mut *d.lock().unwrap_or_else(|e| e.into_inner()));
+    let ((out, cut_out), (err, cut_err)) = (take(&out), take(&err));
     Ok(Captured { out, err, status, timed_out, truncated: cut_out || cut_err })
 }
 
