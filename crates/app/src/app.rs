@@ -1015,6 +1015,8 @@ pub struct App {
     /// The notch player's state machine and its polling thread (only while the setting is on).
     now_playing: ferrocast_core::nowplaying::Ctl,
     np_poller: Option<ferrocast_macos::nowplaying::Poller>,
+    /// The idle-hide deadline a wake-up is already scheduled for ([`ferrocast_core::nowplaying::mono_secs`]).
+    np_tick_at: Option<f64>,
     /// The window the quick-action bar currently hangs above.
     quick_window: Option<u64>,
     /// Tiling shortcuts that could not be registered, shown in Settings.
@@ -1353,6 +1355,7 @@ impl App {
             tiling_paused: false,
             now_playing: ferrocast_core::nowplaying::Ctl::new(),
             np_poller: None,
+            np_tick_at: None,
             quick_window: None,
             tiling_hotkey_issues: vec![],
             tray_layout: 1,
@@ -1652,6 +1655,24 @@ impl App {
         if out.unavailable {
             self.toast(tr("Now playing is not available on this version of macOS"));
         }
+        self.schedule_now_playing_tick();
+    }
+
+    /// A paused player sends no more events, so wake the state machine up at its idle deadline
+    /// to hide the pill. One sleeper per deadline; a changed or cleared deadline replaces it.
+    fn schedule_now_playing_tick(&mut self) {
+        let due = self.now_playing.hide_deadline();
+        if due == self.np_tick_at {
+            return;
+        }
+        self.np_tick_at = due;
+        let Some(due) = due else { return };
+        let wait = (due - ferrocast_core::nowplaying::mono_secs()).max(0.0) + 0.05;
+        let bus = self.bus.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs_f64(wait));
+            bus.send(Msg::NowPlaying(ferrocast_core::nowplaying::Event::Tick));
+        });
     }
 
     /// Tell the tiling worker the current settings; the worker is only started once tiling or
