@@ -17,6 +17,11 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Updates**: a failed update check or install now shows its message in your language (no connection, GitHub rate limit, HTTP errors, read-only app folder), checking twice no longer stacks several Update screens, the new app is copied next to the old one before it replaces it so an interrupted update cannot leave you without an app, and the download that is installed is the one whose checksum was verified. #updates
+- **Scripts**: running a script (or an inline script refreshing in the background) no longer changes its file permissions beyond adding the owner's execute bit, so a script kept private stays private. A script that hangs is stopped after 60 s together with the processes it started, and very long output is cut at 1 MB. #scripts
+- **Clipboard history**: an image whose file was left half-written by a crash or a full disk is rewritten the next time you copy it. #clipboard
+- **Translate in browsers**: the "Allow JavaScript from Apple Events" hint is translated, and after a successful replace in the page the launcher keeps handling queued events. #translate
+- **Sync**: the "iCloud Drive folder not found" message is translated. #sync
 - **Extensions API**: `Clipboard.copy({ html })` copies the text of the HTML instead of an empty string, `showToast(null)` no longer throws, `LocalStorage.getItem` resolves `undefined` for a missing key as Raycast does, and `Keyboard.Shortcut.Common` matches Raycast (`CopyPath` is ⌘⇧,; `CopyDeeplink` and `ToggleQuickLook` exist). #extensions
 - **Intel Macs (Homebrew)**: the screen capture helper is built for the Mac's own architecture instead of always arm64, so capture and recording no longer fail with "Bad CPU type" after a source build on Intel. #recording
 - **Releases**: `SHA256SUMS.txt` also lists the versionless `Ferrocast.dmg`. #updates
