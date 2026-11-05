@@ -106,6 +106,10 @@ impl eframe::App for App {
         self.tick_inline();
         self.effect_tick(Instant::now());
         self.sweep_timers();
+        if self.pending_exit.is_some() {
+            self.exit_tick(Instant::now());
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
         if matches!(self.view(), View::Timers) && !self.timers.is_empty() {
             self.invalidate_sections();
             ctx.request_repaint_after(Duration::from_secs(1));

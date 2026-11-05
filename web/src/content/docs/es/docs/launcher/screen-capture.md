@@ -88,6 +88,8 @@ Tras elegir el objetivo, corre una cuenta atrás (3 s por defecto; Ajustes → C
 
 Mientras grabas, el icono de la barra de menús muestra `●  mm:ss` y el menú empieza con **Stop Recording**. Para parar usa el panel o ese elemento del menú. Mientras una grabación está en marcha no puedes empezar otra. Un aviso te dice que el archivo está guardado, con su nombre y duración.
 
+Salir durante una grabación la detiene y la guarda antes (espera como máximo 15 segundos). Una actualización automática nunca reinicia la app mientras hay una grabación o una exportación en marcha; espera y lo intenta en la siguiente comprobación.
+
 La frecuencia por defecto es 60 fps; Ajustes → Capture → **Recording frame rate** ofrece también 30 fps. La grabación dura lo mismo que el tiempo real entre el final de la cuenta atrás y Stop, aunque la pantalla no cambie.
 
 ### Qué se guarda

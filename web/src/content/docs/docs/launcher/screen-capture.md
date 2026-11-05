@@ -88,6 +88,8 @@ After you choose the target, a countdown runs (3 s by default; Settings → Capt
 
 While recording, the menu bar icon shows `●  mm:ss` and the tray menu starts with **Stop Recording**. Stop from the panel or from that menu item. While one recording runs, you cannot start another. A toast tells you the file is saved, with its name and length.
 
+Quit during a recording stops and saves it first (it waits at most 15 seconds). An automatic update never restarts the app while a recording or an export runs; it waits and tries again at the next check.
+
 The frame rate is 60 fps by default; Settings → Capture → **Recording frame rate** also offers 30 fps. The recording is as long as the wall-clock time between the end of the countdown and Stop, even if the screen does not change.
 
 ### What is saved
