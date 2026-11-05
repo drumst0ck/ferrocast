@@ -77,33 +77,39 @@ pub fn fuzzy_match(query: &str, candidate: &str, sensitivity: Sensitivity) -> Op
         return Some(Match { score, indices: (start..start + q.len()).collect() });
     }
 
-    // Greedy subsequence that prefers word starts: for each query char, look for
-    // the next word-start occurrence before falling back to the nearest one.
-    let mut indices = Vec::with_capacity(q.len());
-    let mut pos = 0usize;
-    for (qi, &qc) in q.iter().enumerate() {
-        let remaining = q.len() - qi - 1;
-        let limit = c.len().saturating_sub(remaining);
-        let mut chosen = None;
-        // continuing a run is best
-        if let Some(&last) = indices.last() {
-            if last + 1 < limit && c[last + 1] == qc {
-                chosen = Some(last + 1);
+    // Greedy subsequence that prefers word starts. If that jumps past the only
+    // remaining occurrence of a later char, retry with the plain leftmost match.
+    let pick = |prefer_word_starts: bool| -> Option<Vec<usize>> {
+        let mut indices: Vec<usize> = Vec::with_capacity(q.len());
+        let mut pos = 0usize;
+        for (qi, &qc) in q.iter().enumerate() {
+            let remaining = q.len() - qi - 1;
+            let limit = c.len().saturating_sub(remaining);
+            let mut chosen = None;
+            if prefer_word_starts {
+                // continuing a run is best
+                if let Some(&last) = indices.last() {
+                    if last + 1 < limit && c[last + 1] == qc {
+                        chosen = Some(last + 1);
+                    }
+                }
+                if chosen.is_none() {
+                    chosen = (pos..limit).find(|&i| c[i] == qc && is_word_start(&orig, i));
+                }
             }
-        }
-        if chosen.is_none() {
-            chosen = (pos..limit).find(|&i| c[i] == qc && is_word_start(&orig, i));
-        }
-        if chosen.is_none() {
-            if sensitivity == Sensitivity::High {
-                return None;
+            if chosen.is_none() {
+                if sensitivity == Sensitivity::High {
+                    return None;
+                }
+                chosen = (pos..limit).find(|&i| c[i] == qc);
             }
-            chosen = (pos..limit).find(|&i| c[i] == qc);
+            let i = chosen?;
+            indices.push(i);
+            pos = i + 1;
         }
-        let i = chosen?;
-        indices.push(i);
-        pos = i + 1;
-    }
+        Some(indices)
+    };
+    let indices = pick(true).or_else(|| pick(false))?;
 
     let mut score: i64 = 0;
     let mut gaps = 0i64;
@@ -185,5 +191,17 @@ mod tests {
     fn indices_are_reported() {
         let r = fuzzy_match("vsc", "Visual Studio Code", Sensitivity::Low).unwrap();
         assert_eq!(r.indices, vec![0, 7, 14]);
+    }
+
+    #[test]
+    fn word_start_pick_does_not_hide_a_valid_subsequence() {
+        let r = fuzzy_match("ac", "xabc a z", Sensitivity::Low).expect("a..c is a subsequence");
+        assert_eq!(r.indices.len(), 2);
+        assert_eq!(r.indices[0], 1);
+        assert_eq!(r.indices[1], 3);
+        assert!(fuzzy_match("ac", "xabc a z", Sensitivity::Medium).is_some());
+        // Still no match when the characters are not in order, and High stays strict.
+        assert!(fuzzy_match("ca", "xabc", Sensitivity::Low).is_none());
+        assert!(fuzzy_match("ac", "xabc a z", Sensitivity::High).is_none());
     }
 }
