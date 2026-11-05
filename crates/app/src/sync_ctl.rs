@@ -140,7 +140,7 @@ impl App {
             let _ = store.save("chats.json", &self.chats);
         }
         if missing("clipboard.json") {
-            let _ = store.save("clipboard.json", &*self.shared.clipboard.lock().unwrap());
+            self.shared.write_clipboard();
         }
         if missing("themes.json") {
             let _ = store.save("themes.json", &ferrocast_core::themes::ThemeFile { themes: self.custom_themes.clone() });
@@ -427,13 +427,16 @@ impl App {
                     return None;
                 }
                 *cur = list;
-                let _ = self.store.save("clipboard.json", &*cur);
                 ferrocast_core::storage::prune_images(&self.store.images_dir(), &cur);
+                drop(cur);
+                // saved through the shared serialisation (SAVE, then the list), never under the list lock
+                self.shared.write_clipboard();
             }
             _ => {}
         }
         self.sync.applying = false;
-        self.shared.clip_dirty.store(false, Ordering::Relaxed);
+        // (the clipboard dirty flag is not cleared here: a copy that landed after the last flush
+        // while another domain was applied must still be published)
         if again {
             self.sync.pending.insert(domain); // entries dropped by retention/dedupe become deletions
         }

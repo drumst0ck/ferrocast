@@ -5,7 +5,8 @@
 //! Each Mac writes only `devices/<device-id>/<domain>.json` (and its own `clipboard-images/`), so no
 //! file is ever written by two Macs and iCloud never needs to create conflict copies.
 
-use crate::models::{ClipEntry, ClipKind, Settings};
+use crate::capture::CaptureSettings;
+use crate::models::{ClipEntry, ClipKind, CommandConfig, Settings};
 use crate::sync::{self, DeviceDoc, Tracker};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -940,14 +941,21 @@ pub fn settings_from_items(merged: &[(String, Value)], local: &Settings) -> Opti
     let mut o = serde_json::to_value(local).ok()?.as_object()?.clone();
     let mut capture = o.get("capture").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut commands = serde_json::Map::new();
+    let local_commands = o.get("commands").and_then(Value::as_object).cloned().unwrap_or_default();
+    let one = |k: &str, v: &Value| Value::Object(std::iter::once((k.to_string(), v.clone())).collect());
     for (id, v) in merged {
+        // a value this build cannot read (written by a newer one) keeps this Mac's own value
         if let Some(k) = id.strip_prefix("capture.") {
-            if !LOCAL_ONLY_CAPTURE.contains(&k) {
+            if !LOCAL_ONLY_CAPTURE.contains(&k) && CaptureSettings::deserialize(one(k, v)).is_ok() {
                 capture.insert(k.to_string(), v.clone());
             }
         } else if let Some(k) = id.strip_prefix("commands.") {
-            commands.insert(k.to_string(), v.clone());
-        } else if id != SETTINGS_ID && !LOCAL_ONLY.contains(&id.as_str()) {
+            if serde_json::from_value::<CommandConfig>(v.clone()).is_ok() {
+                commands.insert(k.to_string(), v.clone());
+            } else if let Some(mine) = local_commands.get(k) {
+                commands.insert(k.to_string(), mine.clone());
+            }
+        } else if id != SETTINGS_ID && !LOCAL_ONLY.contains(&id.as_str()) && Settings::deserialize(one(id, v)).is_ok() {
             o.insert(id.clone(), v.clone());
         }
     }
@@ -995,6 +1003,15 @@ pub fn clipboard_normalize(mut list: Vec<ClipEntry>, now_secs: i64, retention_se
             e.pinned = true;
         }
     }
+    // newest first, so the cap below drops the oldest whichever Mac copied it; pinned entries keep their place
+    let mut unpinned: Vec<ClipEntry> = list.iter().filter(|e| !e.pinned).cloned().collect();
+    unpinned.sort_by_key(|e| std::cmp::Reverse(e.copied_at));
+    let mut sorted = unpinned.into_iter();
+    for slot in list.iter_mut().filter(|e| !e.pinned) {
+        if let Some(e) = sorted.next() {
+            *slot = e;
+        }
+    }
     let mut unpinned = 0;
     list.retain(|e| {
         if e.pinned {
@@ -1012,6 +1029,105 @@ mod tests {
     use crate::models::{Note, Quicklink, Snippet};
     use crate::storage::Store;
     use serde_json::json;
+
+    fn clip(id: &str, content: &str, copied_at: i64, pinned: bool) -> ClipEntry {
+        ClipEntry {
+            id: id.into(),
+            kind: ClipKind::Text,
+            content: content.into(),
+            title: None,
+            copied_at,
+            pinned,
+            source_app: None,
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    #[test]
+    fn normalize_orders_unpinned_entries_newest_first_and_the_cap_drops_the_oldest() {
+        let list =
+            vec![clip("new", "a", 100, false), clip("old", "b", 10, false), clip("r1", "c", 200, false), clip("r2", "d", 300, false)];
+        let ids: Vec<_> = clipboard_normalize(list, 400, None).into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, ["r2", "r1", "new", "old"]);
+        // 1002 unpinned entries, oldest listed first: the cap keeps the newest 1000 and a pin stays
+        let mut list: Vec<ClipEntry> = (0..1002).map(|i| clip(&format!("e{i:04}"), &format!("c{i}"), i, false)).collect();
+        list.push(clip("pin", "pinned", 0, true));
+        let out = clipboard_normalize(list, 5000, None);
+        assert_eq!(out.iter().filter(|e| !e.pinned).count(), 1000);
+        assert!(out.iter().any(|e| e.id == "pin"));
+        assert!(!out.iter().any(|e| e.id == "e0000" || e.id == "e0001"), "the two oldest are the ones dropped");
+        assert!(out.iter().any(|e| e.id == "e1001"));
+    }
+
+    #[test]
+    fn an_unknown_setting_value_from_another_mac_is_skipped_not_fatal() {
+        // a non-default local value tells "keep mine" from "reset to default"
+        let local = Settings { theme: crate::models::Theme::Dark, ..Default::default() };
+        let mut items = settings_items(&Settings { compact_mode: true, ..Default::default() });
+        items.retain(|(k, _)| k != "theme");
+        items.push(("theme".into(), json!("Sepia")));
+        let s = settings_from_items(&items, &local).expect("one unreadable value must not block the others");
+        assert!(s.compact_mode);
+        assert_eq!(s.theme, local.theme);
+    }
+
+    #[test]
+    fn an_unknown_capture_value_from_another_mac_keeps_local_folders_and_the_other_capture_fields() {
+        let mut local = Settings::default();
+        local.capture.folder = "/mine/shots".into();
+        local.capture.recordings_folder = "/mine/rec".into();
+        local.capture.camera_id = "cam-1".into();
+        local.capture.mic_id = "mic-1".into();
+        local.capture.fps = 30;
+        let mut remote = Settings::default();
+        remote.capture.fps = 60;
+        remote.capture.countdown = 5;
+        let mut items = settings_items(&remote);
+        items.retain(|(k, _)| k != "capture.screenshot_format");
+        items.push(("capture.screenshot_format".into(), json!("Webp")));
+        let s = settings_from_items(&items, &local).expect("applies");
+        assert_eq!((s.capture.folder.as_str(), s.capture.recordings_folder.as_str()), ("/mine/shots", "/mine/rec"));
+        assert_eq!((s.capture.camera_id.as_str(), s.capture.mic_id.as_str()), ("cam-1", "mic-1"));
+        assert_eq!((s.capture.fps, s.capture.countdown), (60, 5), "the readable capture values still apply");
+        assert_eq!(s.capture.screenshot_format, local.capture.screenshot_format);
+    }
+
+    #[test]
+    fn a_settings_file_with_an_unknown_capture_variant_keeps_the_rest_of_capture() {
+        let s: Settings = serde_json::from_str(
+            r#"{"capture":{"folder":"/f","recordings_folder":"/r","camera_id":"c","mic_id":"m","fps":30,"screenshot_format":"Webp"},"compact_mode":true}"#,
+        )
+        .unwrap();
+        assert!(s.compact_mode);
+        assert_eq!((s.capture.folder.as_str(), s.capture.recordings_folder.as_str()), ("/f", "/r"));
+        assert_eq!((s.capture.camera_id.as_str(), s.capture.mic_id.as_str(), s.capture.fps), ("c", "m", 30));
+        assert_eq!(s.capture.screenshot_format, crate::capture::ScreenshotFormat::Png);
+    }
+
+    #[test]
+    fn one_bad_command_or_display_layout_drops_only_that_entry() {
+        let s: Settings =
+            serde_json::from_str(r#"{"commands":{"ok":{"alias":"a"},"bad":{"alias":5}},"tiling_display_layouts":{"0":2,"1":"x"}}"#)
+                .unwrap();
+        assert_eq!(s.commands.len(), 1);
+        assert_eq!(s.commands["ok"].alias.as_deref(), Some("a"));
+        assert_eq!(s.tiling_display_layouts.len(), 1);
+        assert_eq!(s.tiling_display_layouts["0"], 2);
+    }
+
+    #[test]
+    fn a_settings_file_with_an_unknown_value_is_not_set_aside() {
+        let dir = tmp("unknown-enum");
+        let store = Store::new(dir.clone());
+        std::fs::write(store.path("settings.json"), r#"{"theme":"Sepia","compact_mode":true}"#).unwrap();
+        let s: Settings = store.load("settings.json");
+        assert!(s.compact_mode, "the other settings survive");
+        assert!(store.path("settings.json").exists(), "the file stays in place");
+        assert!(!store.path("settings.json").with_extension("json.corrupt").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     fn tmp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("ferrocast-sync-{tag}-{}", uuid::Uuid::new_v4()));

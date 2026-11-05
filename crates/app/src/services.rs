@@ -525,6 +525,10 @@ pub fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
+/// Serialises every clipboard.json write (record, sync apply, first-publish persist). Lock order is
+/// always this mutex first, then the list lock; never take it while holding the list.
+pub(crate) static CLIPBOARD_SAVE: Mutex<()> = Mutex::new(());
+
 impl Shared {
     /// Ignore exactly this self-authored pasteboard version, not a time window.
     pub fn ignore_clipboard_count(&self, count: isize) {
@@ -541,9 +545,17 @@ impl Shared {
     }
 
     pub fn save_clipboard(&self) {
-        let c = self.clipboard.lock().unwrap();
-        let _ = self.store.save("clipboard.json", &*c);
+        self.write_clipboard();
         self.clip_dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// Write the history to disk without holding the list lock during the (large) serialisation and
+    /// write, so the clipboard view and sync are never stuck behind it. Writes are serialised and each
+    /// one takes its snapshot after getting its turn, so the newest list is always the last written.
+    pub(crate) fn write_clipboard(&self) {
+        let _turn = CLIPBOARD_SAVE.lock().unwrap_or_else(|e| e.into_inner());
+        let snapshot = self.clipboard.lock().unwrap().clone();
+        let _ = self.store.save("clipboard.json", &snapshot);
     }
 }
 
@@ -629,8 +641,11 @@ fn record(shared: &Shared, content: clipboard::ClipContent, source: Option<Strin
         unpinned += 1;
         unpinned <= 1000
     });
+    // pruning stays under the lock (a cheap directory listing) so it cannot delete the image of a
+    // copy that is not in the list yet; the heavy serialisation and write happen without it
     storage::prune_images(&shared.store.images_dir(), &list);
-    let _ = shared.store.save("clipboard.json", &*list);
+    drop(list);
+    shared.write_clipboard();
     shared.clip_dirty.store(true, Ordering::Relaxed);
 }
 
@@ -5072,5 +5087,47 @@ mod coverage_tests {
             }
         }
         eprintln!("COVERAGE {have}/275; missing {}: {}", missing.len(), missing.join(" "));
+    }
+}
+
+#[cfg(test)]
+mod clipboard_save_tests {
+    use super::*;
+
+    fn shared() -> Shared {
+        let root = std::env::temp_dir().join(format!("ferrocast-clipsave-{}", uuid::Uuid::new_v4()));
+        Shared {
+            store: Store::new(root),
+            clipboard: Mutex::new(vec![]),
+            snippets: RwLock::new(vec![]),
+            settings: RwLock::new(Settings::default()),
+            ignored_clipboard_count: Default::default(),
+            visible: Default::default(),
+            keywords: Default::default(),
+            clip_dirty: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_copy_does_not_hold_the_clipboard_lock_while_writing_the_history() {
+        let shared = Arc::new(shared());
+        std::fs::create_dir_all(&shared.store.root).unwrap();
+        // the temp file of the save is a FIFO: the write blocks until someone reads it
+        let tmp = shared.store.path("clipboard.json.tmp");
+        assert!(std::process::Command::new("mkfifo").arg(&tmp).status().unwrap().success());
+        let s2 = shared.clone();
+        let writer = std::thread::spawn(move || record(&s2, clipboard::ClipContent::Text("hello".into()), None));
+        std::thread::sleep(Duration::from_millis(400));
+        let free = shared.clipboard.try_lock().is_ok();
+        // let the blocked write finish
+        let written = std::fs::read(&tmp).unwrap();
+        writer.join().unwrap();
+        assert!(free, "the list lock is held while the history is being written");
+        // (the save renamed the FIFO to clipboard.json: what it was given is what was read above)
+        let saved: Vec<ClipEntry> = serde_json::from_slice(&written).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].content, "hello");
+        assert!(shared.clip_dirty.load(Ordering::Relaxed));
+        let _ = std::fs::remove_dir_all(&shared.store.root);
     }
 }

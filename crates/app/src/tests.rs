@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "ext_host_tests.rs"]
 mod ext_host_tests;
+#[path = "sync_clip_tests.rs"]
+mod sync_clip_tests;
 
 /// Hooks that touch nothing: Accessibility is not granted, no tap can start, the selection is
 /// empty and nothing is re-posted. Tests that exercise Enter-on-Finder replace them.
