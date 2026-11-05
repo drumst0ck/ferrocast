@@ -489,23 +489,59 @@ pub fn apply(cmd: WindowCommand, pid: i32, gap: f64) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Raise a specific window (by title) of an app and activate the app.
-pub fn raise_window(pid: i32, title: &str) -> bool {
+/// Messaging timeout for AX calls made on the UI thread: a hung app must not freeze the launcher.
+const RAISE_AX_TIMEOUT: f32 = 0.25;
+
+extern "C" {
+    /// Private but long-stable HIServices call: the CGWindowID behind an AX window element.
+    fn _AXUIElementGetWindow(element: AXUIElementRef, id: *mut u32) -> i32;
+}
+
+fn ax_window_id(el: AXUIElementRef) -> Option<u32> {
+    let mut id = 0u32;
+    (unsafe { _AXUIElementGetWindow(el, &mut id) } == 0 && id != 0).then_some(id)
+}
+
+/// Which AX window to raise. `candidates` are each window's (CGWindowID if known, title). A known
+/// `id` wins (titles are empty without Screen Recording and can repeat); titles are only the
+/// fallback for windows whose id the AX API would not give.
+fn pick_window(candidates: &[(Option<u32>, String)], id: u32, title: &str) -> Option<usize> {
+    if id != 0 {
+        if let Some(i) = candidates.iter().position(|(c, _)| *c == Some(id)) {
+            return Some(i);
+        }
+    }
+    // never guess by an empty title: it matches any untitled window
+    if title.is_empty() {
+        return None;
+    }
+    candidates.iter().position(|(c, t)| c.is_none() && t == title)
+}
+
+/// Raise a specific window of an app (matched by window id, then by title) and activate the app.
+pub fn raise_window(pid: i32, title: &str, id: u32) -> bool {
     unsafe {
         let app = AxElement(AXUIElementCreateApplication(pid));
+        AXUIElementSetMessagingTimeout(app.0, RAISE_AX_TIMEOUT);
         let Some(list) = copy_attr(app.0, kAXWindowsAttribute) else { return false };
         let arr: core_foundation::array::CFArray<*const c_void> = core_foundation::array::CFArray::wrap_under_create_rule(list as _);
-        for w in arr.iter() {
-            let el = *w as AXUIElementRef;
-            let t = copy_attr(el, "AXTitle").map(|v| CFString::wrap_under_create_rule(v as _).to_string()).unwrap_or_default();
-            if t == title {
-                let action = CFString::new(kAXRaiseAction);
-                AXUIElementPerformAction(el, action.as_concrete_TypeRef());
-                set_bool(el, kAXMainAttribute, true);
-                return true;
-            }
+        let els: Vec<AXUIElementRef> = arr.iter().map(|w| *w as AXUIElementRef).collect();
+        for el in &els {
+            AXUIElementSetMessagingTimeout(*el, RAISE_AX_TIMEOUT);
         }
-        false
+        let candidates: Vec<(Option<u32>, String)> = els
+            .iter()
+            .map(|&el| {
+                let t = copy_attr(el, "AXTitle").map(|v| CFString::wrap_under_create_rule(v as _).to_string()).unwrap_or_default();
+                (ax_window_id(el), t)
+            })
+            .collect();
+        let Some(i) = pick_window(&candidates, id, title) else { return false };
+        let el = els[i];
+        let action = CFString::new(kAXRaiseAction);
+        AXUIElementPerformAction(el, action.as_concrete_TypeRef());
+        set_bool(el, kAXMainAttribute, true);
+        true
     }
 }
 
@@ -513,6 +549,24 @@ pub fn raise_window(pid: i32, title: &str) -> bool {
 mod tests {
     use super::*;
     const S: Rect = Rect { x: 0.0, y: 25.0, w: 1000.0, h: 800.0 };
+
+    #[test]
+    fn pick_window_prefers_the_window_id_over_duplicate_or_empty_titles() {
+        let c = vec![(Some(10), String::new()), (Some(11), String::new()), (Some(12), "Doc".into())];
+        assert_eq!(pick_window(&c, 11, ""), Some(1), "second untitled window, not the first");
+        assert_eq!(pick_window(&c, 12, "Other"), Some(2));
+    }
+
+    #[test]
+    fn pick_window_never_guesses_when_nothing_identifies_the_window() {
+        let c = vec![(Some(10), String::new()), (Some(11), "A".into())];
+        assert_eq!(pick_window(&c, 99, ""), None, "unknown id + empty title must not raise a random window");
+        assert_eq!(pick_window(&c, 99, "A"), None, "ids are known for every window: a gone id is not retitled");
+        // ids unavailable from AX: title fallback
+        let c = vec![(None, "A".into()), (None, "B".into())];
+        assert_eq!(pick_window(&c, 7, "B"), Some(1));
+        assert_eq!(pick_window(&[], 7, "B"), None);
+    }
 
     #[test]
     fn input_monitoring_preflight_is_silent_and_stable() {

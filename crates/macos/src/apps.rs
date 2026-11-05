@@ -396,16 +396,24 @@ pub fn trash_app(path: &Path) -> Result<(), TrashAppError> {
         return Err(TrashAppError::NotABundle);
     }
     let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let running = crate::running::running_apps().into_iter().any(|r| {
-        r.path.as_deref().is_some_and(|p| Path::new(p.trim_end_matches('/')) == real || Path::new(p.trim_end_matches('/')) == path)
-    });
-    if running {
+    // every process counts, including menu-bar (accessory) and background apps
+    if bundle_running(&crate::running::all_running_apps(), path, &real) {
         return Err(TrashAppError::Running);
     }
     let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&path.to_string_lossy()), true);
     NSFileManager::defaultManager()
         .trashItemAtURL_resultingItemURL_error(&url, None)
         .map_err(|e| TrashAppError::Failed(e.localizedDescription().to_string()))
+}
+
+/// Whether any app in `apps` runs from the bundle at `path` (or its resolved `real` path).
+fn bundle_running(apps: &[crate::running::RunningApp], path: &Path, real: &Path) -> bool {
+    apps.iter().any(|r| {
+        r.path.as_deref().is_some_and(|p| {
+            let p = Path::new(p.trim_end_matches('/'));
+            p == real || p == path
+        })
+    })
 }
 
 /// The text shown for a failed trash: the system's description, never empty.
@@ -439,6 +447,25 @@ mod tests {
     #[test]
     fn choose_folder_script_quotes_the_prompt() {
         assert_eq!(choose_folder_script("Pick \"x\"\\"), "POSIX path of (choose folder with prompt \"Pick \\\"x\\\"\\\\\")");
+    }
+
+    fn app_at(path: &str) -> crate::running::RunningApp {
+        crate::running::RunningApp { pid: 1, name: "X".into(), bundle_id: None, path: Some(path.into()) }
+    }
+
+    #[test]
+    fn bundle_running_matches_by_path_with_or_without_trailing_slash() {
+        let list = [app_at("/Applications/Menu.app/")];
+        assert!(bundle_running(&list, Path::new("/Applications/Menu.app"), Path::new("/Applications/Menu.app")));
+        assert!(!bundle_running(&list, Path::new("/Applications/Other.app"), Path::new("/Applications/Other.app")));
+    }
+
+    #[test]
+    fn agent_apps_count_as_running_for_trash() {
+        // Dock is an accessory app (never in the Dock): the list trash_app consults must include it.
+        let dock = Path::new("/System/Library/CoreServices/Dock.app");
+        let all = crate::running::all_running_apps();
+        assert!(bundle_running(&all, dock, dock), "an accessory app must block trashing");
     }
 
     #[test]

@@ -5744,7 +5744,7 @@ impl App {
                 self.hide();
                 self.reset_to_root();
                 running::activate(w.pid);
-                windows::raise_window(w.pid, &w.title);
+                windows::raise_window(w.pid, &w.title, w.id);
             }
             Kind::Process(pr) => {
                 let pid = pr.pid;
