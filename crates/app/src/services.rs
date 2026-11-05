@@ -1631,6 +1631,26 @@ pub fn brew_path() -> Option<&'static str> {
     ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].into_iter().find(|p| std::path::Path::new(p).exists())
 }
 
+/// What `brew outdated --verbose ferrocast` means. Homebrew exits 1 when the formula IS outdated, so
+/// stdout decides first and the exit status only matters when stdout names no update.
+pub(crate) fn brew_outdated_message(success: bool, stdout: &str, stderr: &str) -> String {
+    if let Some(l) = stdout.lines().find(|l| l.starts_with("ferrocast")) {
+        return trf("Update available: {v} · run brew upgrade ferrocast", &[("v", l.trim_start_matches("ferrocast").trim())]);
+    }
+    if success {
+        return trf("Ferrocast {version} is up to date", &[("version", env!("CARGO_PKG_VERSION"))]);
+    }
+    trf("brew: {e}", &[("e", stderr.lines().next().unwrap_or("unknown error"))])
+}
+
+/// Refresh the tap so `brew outdated` sees a formula published after the last auto-update (a
+/// failure is not fatal: the check then answers from the formulae it has).
+pub(crate) fn brew_refresh_tap(brew: &str) {
+    let mut c = std::process::Command::new(brew);
+    c.env("HOMEBREW_NO_AUTO_UPDATE", "1").arg("update");
+    let _ = run_deadline(c, 120);
+}
+
 /// `brew list --versions ferrocast` output, or `None` when the formula is not installed.
 fn brew_installed_version(brew: &str) -> Option<String> {
     let mut c = std::process::Command::new(brew);
@@ -4813,6 +4833,21 @@ mod hotkey_tests {
 #[cfg(test)]
 mod brew_upgrade_tests {
     use super::*;
+
+    #[test]
+    fn brew_outdated_exit_one_with_an_update_on_stdout_is_an_update() {
+        let line = "ferrocast (0.5.0) < 0.6.0\n";
+        let want = "Update available: (0.5.0) < 0.6.0 · run brew upgrade ferrocast";
+        assert_eq!(brew_outdated_message(false, line, ""), want, "exit 1 is how brew reports an outdated formula");
+        assert_eq!(brew_outdated_message(true, line, ""), want);
+        // nothing outdated: exit 0, empty stdout
+        assert_eq!(brew_outdated_message(true, "", ""), format!("Ferrocast {} is up to date", env!("CARGO_PKG_VERSION")));
+        // a real failure keeps the first stderr line, or says unknown
+        assert_eq!(brew_outdated_message(false, "", "Error: boom\nmore"), "brew: Error: boom");
+        assert_eq!(brew_outdated_message(false, "", ""), "brew: unknown error");
+        // another formula's line on a failing run is not ours
+        assert_eq!(brew_outdated_message(false, "other (1) < 2\n", ""), "brew: unknown error");
+    }
 
     #[test]
     fn an_unchanged_formula_version_is_not_an_update() {

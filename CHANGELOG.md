@@ -17,6 +17,10 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Studio editor**: when `project.json` cannot be written (read-only folder, full disk), Esc no longer drops your unsaved edits; the editor stays open with the error in a toast, and a second Esc discards them. #recording
+- **Translate**: a translation that finishes after you started a newer one no longer replaces your newer selection or pastes over it; it is shown in the launcher and copied instead. #translate
+- **Settings**: typing in a field, dragging a slider or the theme colour picker no longer rewrites `settings.json` and `themes.json`, rebuilds the command list or resends the tiling configuration on every frame; edits apply at once and are saved after a short pause, when the launcher hides or on quit. #settings
+- **Check for Updates (Homebrew)**: Ferrocast no longer shows "brew: unknown error" when an update exists; it refreshes the Homebrew formulae first and then shows the update. #updates
 - **Hotkeys**: Settings → Record… no longer accepts ⇧ plus a letter as a global hotkey (it fired while typing a capital letter); it needs ⌘, ⌥ or ⌃ unless the key is an F key. A shortcut already used by another command, or refused by macOS, now shows an error and keeps the previous one instead of the "Hotkey set" toast. (docs: /docs/launcher/settings/) #hotkeys
 - **Destructive confirmations**: Force Kill Process, Clear History (calculator) and Clear Shelf now ask first, and the Restart, Shut Down, Log Out, Empty Trash and Quit All Apps prompts are translated. #launcher #i18n
 - **Custom themes**: Delete now asks for a second press instead of removing the theme at once, and the theme editor (names, colour descriptions, contrast warnings, preview) is translated. #settings #i18n
