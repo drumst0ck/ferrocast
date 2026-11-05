@@ -17,6 +17,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Hotkeys**: Settings → Record… no longer accepts ⇧ plus a letter as a global hotkey (it fired while typing a capital letter); it needs ⌘, ⌥ or ⌃ unless the key is an F key. A shortcut already used by another command, or refused by macOS, now shows an error and keeps the previous one instead of the "Hotkey set" toast. (docs: /docs/launcher/settings/) #hotkeys
+- **Destructive confirmations**: Force Kill Process, Clear History (calculator) and Clear Shelf now ask first, and the Restart, Shut Down, Log Out, Empty Trash and Quit All Apps prompts are translated. #launcher #i18n
+- **Custom themes**: Delete now asks for a second press instead of removing the theme at once, and the theme editor (names, colour descriptions, contrast warnings, preview) is translated. #settings #i18n
 - **Export Data**: the backup now runs in the background instead of freezing the launcher, and leaves out the downloaded Node runtime, update downloads, `node_modules` and temp files, so it is far smaller. (docs: /docs/launcher/settings/) #backup
 - **Backups and secrets**: Export Data no longer includes extension preferences or LocalStorage, which can hold API keys and passwords. (docs: /docs/reference/data-and-privacy/) #privacy
 - **Search and calculator**: fuzzy search no longer drops an item whose letters match only when an earlier word-start pick is skipped (`ac` now finds `xabc a z`); `max(1,2,3)` and `min(5,1,2)` read commas between arguments as separators instead of thousands groups; `0 usd to eur` no longer panics. #launcher
