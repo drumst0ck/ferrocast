@@ -34,7 +34,7 @@ The site lives in `web/` (Astro, Starlight docs, PostgreSQL changelog) and deplo
 - `cd web && npm ci && npm run dev` starts it. `npm run build` also checks that the generated data still holds 275 conversion pairs over 46 inputs.
 - `docker compose up -d db` in `web/` starts PostgreSQL for the changelog (copy `.env.example` to `.env`). `npm test` runs the unit tests; set `TEST_DATABASE_URL=postgres://ferrocast:ferrocast@localhost:5432/ferrocast` to include the database tests.
 - After changing conversions or tools in Rust, regenerate the site data with `cargo run -p ferrocast-core --example site_data` and commit `web/src/data/*.json`.
-- Every user-visible change needs an entry in `CHANGELOG.md` under `[Unreleased]`: one bullet per change in a `###` category (`Added`, `Changed`, `Fixed`, `Removed`, `Security`, `Known limitations`), an optional `**Title**:` prefix, optional trailing `#tags` and `(docs: /docs/…)`. Check it with `cd web && npm run changelog:push -- --dry-run`. A push to `master` that touches `CHANGELOG.md` publishes it.
+- Every user-visible change needs an entry in `CHANGELOG.md` under `[Unreleased]`: one bullet per change in a `###` category (`Added`, `Changed`, `Fixed`, `Removed`, `Security`, `Known limitations`), an optional `**Title**:` prefix, optional trailing `#tags` and `(docs: /docs/…)`. Check it with `cd web && npm run changelog:push -- --dry-run`. A push to `master` that touches `CHANGELOG.md` publishes the root file (the job passes `--file ../CHANGELOG.md`; `web/CHANGELOG.md` is only a copy for `web/`-only Docker builds, refreshed by `npm run build` and by `scripts/release.sh`).
 - A new feature also needs its documentation page under `web/src/content/docs/`.
 
 ## Rules of thumb

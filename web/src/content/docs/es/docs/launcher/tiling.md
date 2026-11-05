@@ -33,10 +33,18 @@ Elígela en Ajustes, desde el lanzador (**Tiling Layout 1–4**) o con <kbd>⌃<
 - Con la pantalla llena, las ventanas sobrantes se apilan en el último hueco en cascada.
 - Con **Stage Manager** activo el mosaico se pausa y se reanuda al apagarlo.
 - **Pause Tiling** / **Resume Tiling** en el menú de la barra de menús (visible con el mosaico activo) lo detiene sin mover ventanas. El mismo menú tiene un submenú **Tiling Layout** con las cuatro disposiciones.
-- **Highlight border** dibuja un borde de 3 pt, del color de **Border color**, alrededor de la ventana enfocada que está en el mosaico. Se oculta con el mosaico en pausa o apagado, con Stage Manager, en ventanas flotantes y un instante al entrar o salir del modo foco.
-- **Quick actions above windows** (desactivado por defecto): mantén <kbd>⌥</kbd> con el puntero en la parte superior de una ventana del mosaico (sus 28 pt superiores) y aparece una barra pequeña con fondo propio; al soltar <kbd>⌥</kbd> desaparece, así que nunca estorba al usar la app. Solo funciona con <kbd>⌥</kbd> sola: con otro modificador pulsado no aparece. Sus botones son los mismos comandos del lanzador y los atajos: **modo foco**, **flotar o volver al mosaico**, **mover a la siguiente pantalla**, **intercambiar con el hueco principal** y **dejar de colocar esta app**. La barra va encima de la ventana si hay sitio; si no, es una pastilla compacta en la esquina superior derecha, bajo la barra de título, sin tapar pestañas ni barras de herramientas. Mantén <kbd>⌥</kbd> pulsada mientras mueves el puntero hasta ella. No aparece con un botón del ratón pulsado, y el borde resaltado también se oculta al arrastrar o redimensionar.
 - El modo foco no hace nada con Stage Manager activo. Los atajos del mosaico nunca sustituyen uno que ya tengas; si chocan, Ferrocast te avisa y deja ese comando sin atajo.
 
+## Otras opciones
+
+- **Activate windows on hover** sube la ventana bajo el puntero cuando se queda quieto sobre ella.
+- **Highlight border** dibuja un borde de 3 pt, del color de **Border color**, alrededor de la ventana enfocada que está en el mosaico. Se oculta con el mosaico en pausa o apagado, con Stage Manager, en ventanas flotantes y un instante al entrar o salir del modo foco.
+- **Quick actions above windows** (desactivado por defecto): mantén <kbd>⌥</kbd> con el puntero en la parte superior de una ventana del mosaico (sus 28 pt superiores) y aparece una barra pequeña con fondo propio; al soltar <kbd>⌥</kbd> desaparece, así que nunca estorba al usar la app. Solo funciona con <kbd>⌥</kbd> sola: con otro modificador pulsado no aparece. Sus botones son los mismos comandos del lanzador y los atajos: **modo foco**, **flotar o volver al mosaico**, **mover a la siguiente pantalla**, **intercambiar con el hueco principal** y **dejar de colocar esta app**. La barra va encima de la ventana si hay sitio; si no, es una pastilla compacta en la esquina superior derecha, bajo la barra de título, sin tapar pestañas ni barras de herramientas. Mantén <kbd>⌥</kbd> pulsada mientras mueves el puntero hasta ella. No aparece con un botón del ratón pulsado, y el borde resaltado también se oculta al arrastrar o redimensionar. Una ventana flotante queda fuera de la disposición y se queda donde la pongas hasta que vuelvas a colocarla en el mosaico.
+
 :::caution[Límites]
-Necesita el permiso de Accesibilidad.
+Necesita el permiso de Accesibilidad. Ferrocast revisa las ventanas cada medio segundo aproximadamente, así que una ventana nueva tarda un momento en encontrar su sitio.
 :::
+
+## Relacionado
+
+- [Comandos de gestión de ventanas](/es/docs/launcher/window-management/)

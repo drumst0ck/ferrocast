@@ -39,12 +39,32 @@ Cada atajo del lanzador tiene también un camino con clic, así que puedes usar 
 | Clic fuera del panel de acciones | Lo cierra. |
 | Pasar el ratón por una fila del portapapeles | **Pin** o **Unpin**, y **Delete** (<kbd>⌘</kbd> <kbd>.</kbd> y <kbd>⌃</kbd> <kbd>X</kbd>). |
 | Pasar el ratón por una fila de snippets o quicklinks | **Edit** y **Delete** (<kbd>⌘</kbd> <kbd>E</kbd> y <kbd>⌃</kbd> <kbd>X</kbd>). |
-| Pasar el ratón por una nota (Search Notes) | **Pin** o **Unpin**, y **Delete**. |
+| Pasar el ratón por una nota (Search Notes) | **Pin** o **Unpin**, y **Delete** (<kbd>⌘</kbd> <kbd>.</kbd> y <kbd>⌃</kbd> <kbd>X</kbd>). |
 | Clic en **Clear History…** en el portapapeles | Borra todas las entradas tras una confirmación. Las fijadas se quedan (<kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>X</kbd>). |
-| Clic en **+ New** en Snippets, Quicklinks o Search Notes | Crea uno (<kbd>⌘</kbd> <kbd>N</kbd>). |
+| Clic en **+ New** en Snippets o Quicklinks | Crea uno (<kbd>⌘</kbd> <kbd>N</kbd>). |
+| Clic en **+ New** en Search Notes | Crea una nota (<kbd>⌘</kbd> <kbd>N</kbd>). |
 | Clic en un chip del pie de una ventana de herramientas (**Rotate** `R`, **Undo** `⌘Z`, **Play** `space`…) | Pulsa esa tecla. Los chips con un rango de teclas (`←/→`, `⌘↑/↓`, `⌘1–0`) tienen sus propios botones. |
 
-En la ventana de Notes: **‹** y **›** (atrás y adelante), **×** (cerrar) y un menú con clic derecho en el editor, la barra de herramientas o el fondo, con New Note, Browse Notes, Pin, Back, Forward, el zoom, Actions y Close. En las ventanas de herramientas: flechas **‹** **›** en el tour, chips **Convert**, **Tools** y **Actions** bajo la rueda, botones de mover, rotar, duplicar y quitar en el organizador de PDF, y botones de fotograma, segundos y marcadores en el recorte de vídeo y audio.
+### En la ventana de Notes
+
+| Clic | Acción |
+|---|---|
+| **‹** y **›** a la izquierda de la barra de herramientas | Atrás o adelante por las notas que abriste (<kbd>⌘</kbd> <kbd>[</kbd> <kbd>⌘</kbd> <kbd>]</kbd>). |
+| **×** a la derecha de la barra de herramientas | Cierra la ventana (<kbd>⌘</kbd> <kbd>W</kbd> y <kbd>esc</kbd>). |
+| **Browse** y **+** en la barra de herramientas, **Actions**, **Pin**, **New** en el pie | Explorar notas, nota nueva, el panel de acciones, fijar o desfijar. |
+| Clic derecho en el editor, en la barra de herramientas o en las partes vacías de la ventana | Un menú con New Note, Browse Notes, Pin o Unpin, Back, Forward, Zoom In, Zoom Out, Actual Size, Actions y Close. En el editor sigue a las entradas habituales Cortar, Copiar y Pegar. |
+| Elige una nota fijada en **Browse Notes** | La abre (<kbd>⌘</kbd> <kbd>1</kbd> a <kbd>⌘</kbd> <kbd>9</kbd>). |
+
+### En las ventanas de herramientas
+
+| Ventana | Clic |
+|---|---|
+| Tour de bienvenida | **‹** y **›** junto a los puntos van a la diapositiva anterior o siguiente (<kbd>←</kbd> <kbd>→</kbd>); los puntos saltan a una diapositiva. |
+| Rueda al arrastrar | Haz clic en un segmento para ejecutarlo. Los chips **Convert**, **Tools** y **Actions** bajo el anillo cambian de rueda (al pulsar <kbd>⇧</kbd>, <kbd>⌘</kbd> o <kbd>⌃</kbd>). |
+| Organizador de PDF | **◀ Move**, **Move ▶**, **↺ Rotate**, **↻ Rotate**, **Duplicate** y **Remove** actúan sobre la página seleccionada (<kbd>⌘</kbd> <kbd>←</kbd> <kbd>→</kbd>, <kbd>⇧</kbd> <kbd>R</kbd>, <kbd>R</kbd>, <kbd>D</kbd>, <kbd>⌫</kbd>). |
+| Recorte de vídeo, división y fotogramas; recorte de audio | **◀ Frame**, **Frame ▶**, **−1 s**, **+1 s**, **Set start**, **Set end**, **To start**, **To end** (no los marcadores en fotogramas), más **Cut here** y **Remove last** en la división. |
+| Anotar | **Undo** y **Delete** junto a los colores (<kbd>⌘</kbd> <kbd>Z</kbd>, <kbd>⌫</kbd>). |
+| Editor de grabaciones | **−1 s**, **+1 s**, **Start** y **End** tras los botones de fotograma, cuando la franja de transporte es lo bastante ancha (<kbd>⇧</kbd> <kbd>←</kbd> <kbd>→</kbd>, <kbd>Home</kbd>, <kbd>End</kbd>). |
 
 ## Ventana de Notes
 
