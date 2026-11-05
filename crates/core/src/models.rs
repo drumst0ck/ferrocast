@@ -275,6 +275,7 @@ pub struct Settings {
     /// Layout 1-4 used on displays without their own (see `tiling_display_layouts`).
     pub tiling_layout: u8,
     /// Layout 1-4 per display, keyed by the display's index in the screen list.
+    #[serde(deserialize_with = "lenient_map")]
     pub tiling_display_layouts: HashMap<String, u8>,
     /// "Space": margin and gap between tiled windows, in points.
     pub tiling_gap: f64,
@@ -290,6 +291,7 @@ pub struct Settings {
     pub tiling_border_color: String,
     pub fallback_search_url: String,
     pub favorites: Vec<String>,
+    #[serde(deserialize_with = "lenient_map")]
     pub commands: HashMap<String, CommandConfig>,
     pub show_menu_bar_icon: bool,
     /// Show what any app plays (macOS Now Playing: browsers, Spotify, Music, Podcasts, VLC...) in a
@@ -379,22 +381,40 @@ impl Serialize for Settings {
 /// would set every setting aside (and, through sync, block settings sync for good).
 impl<'de> Deserialize<'de> for Settings {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let v = serde_json::Value::deserialize(d)?;
-        let serde_json::Value::Object(mut map) = v else {
-            return Err(serde::de::Error::custom("settings must be a JSON object"));
-        };
-        if let Ok(s) = Settings::deserialize(serde_json::Value::Object(map.clone())) {
-            return Ok(s);
-        }
-        let keys: Vec<String> = map.keys().cloned().collect();
-        for k in keys {
-            let one = serde_json::Value::Object(std::iter::once((k.clone(), map[&k].clone())).collect());
-            if Settings::deserialize(one).is_err() {
-                map.remove(&k);
-            }
-        }
-        Settings::deserialize(serde_json::Value::Object(map)).map_err(serde::de::Error::custom)
+        lenient_fields(d, Settings::deserialize)
     }
+}
+
+/// Reads a JSON object into `T` with `strict` (the derived, all-or-nothing reader): when that fails,
+/// each key that cannot be read on its own is dropped (so it takes its default) and the rest is kept.
+pub(crate) fn lenient_fields<'de, T, D: serde::Deserializer<'de>>(
+    d: D,
+    strict: impl Fn(serde_json::Value) -> Result<T, serde_json::Error>,
+) -> Result<T, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let serde_json::Value::Object(mut map) = v else {
+        return Err(serde::de::Error::custom("expected a JSON object"));
+    };
+    if let Ok(s) = strict(serde_json::Value::Object(map.clone())) {
+        return Ok(s);
+    }
+    let keys: Vec<String> = map.keys().cloned().collect();
+    for k in keys {
+        let one = serde_json::Value::Object(std::iter::once((k.clone(), map[&k].clone())).collect());
+        if strict(one).is_err() {
+            map.remove(&k);
+        }
+    }
+    strict(serde_json::Value::Object(map)).map_err(serde::de::Error::custom)
+}
+
+/// A map whose unreadable entries are dropped one by one instead of failing the whole map.
+fn lenient_map<'de, D: serde::Deserializer<'de>, V: serde::de::DeserializeOwned>(d: D) -> Result<HashMap<String, V>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let serde_json::Value::Object(map) = v else {
+        return Err(serde::de::Error::custom("expected a JSON object"));
+    };
+    Ok(map.into_iter().filter_map(|(k, v)| serde_json::from_value(v).ok().map(|v| (k, v))).collect())
 }
 
 /// What happens with a finished translation.

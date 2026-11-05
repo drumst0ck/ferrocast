@@ -525,6 +525,10 @@ pub fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
+/// Serialises every clipboard.json write (record, sync apply, first-publish persist). Lock order is
+/// always this mutex first, then the list lock; never take it while holding the list.
+pub(crate) static CLIPBOARD_SAVE: Mutex<()> = Mutex::new(());
+
 impl Shared {
     /// Ignore exactly this self-authored pasteboard version, not a time window.
     pub fn ignore_clipboard_count(&self, count: isize) {
@@ -548,9 +552,8 @@ impl Shared {
     /// Write the history to disk without holding the list lock during the (large) serialisation and
     /// write, so the clipboard view and sync are never stuck behind it. Writes are serialised and each
     /// one takes its snapshot after getting its turn, so the newest list is always the last written.
-    fn write_clipboard(&self) {
-        static SAVE: Mutex<()> = Mutex::new(());
-        let _turn = SAVE.lock().unwrap_or_else(|e| e.into_inner());
+    pub(crate) fn write_clipboard(&self) {
+        let _turn = CLIPBOARD_SAVE.lock().unwrap_or_else(|e| e.into_inner());
         let snapshot = self.clipboard.lock().unwrap().clone();
         let _ = self.store.save("clipboard.json", &snapshot);
     }

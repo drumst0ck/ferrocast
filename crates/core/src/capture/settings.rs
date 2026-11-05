@@ -24,7 +24,7 @@ pub enum AfterCapture {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct CaptureSettings {
     /// Screenshot folder; empty = `~/Pictures/Ferrocast Captures`.
     pub folder: String,
@@ -53,6 +53,20 @@ pub struct CaptureSettings {
     pub system_audio: bool,
     /// Seconds before recording starts: 0, 3 or 5.
     pub countdown: u32,
+}
+
+impl Serialize for CaptureSettings {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        CaptureSettings::serialize(self, s)
+    }
+}
+
+/// Field by field, like `Settings`: one unreadable value (a variant from a newer build) resets only
+/// that field, never the folders and device ids next to it.
+impl<'de> Deserialize<'de> for CaptureSettings {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        crate::models::lenient_fields(d, CaptureSettings::deserialize)
+    }
 }
 
 impl Default for CaptureSettings {

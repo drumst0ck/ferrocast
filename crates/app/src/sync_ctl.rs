@@ -140,7 +140,7 @@ impl App {
             let _ = store.save("chats.json", &self.chats);
         }
         if missing("clipboard.json") {
-            let _ = store.save("clipboard.json", &*self.shared.clipboard.lock().unwrap());
+            self.shared.write_clipboard();
         }
         if missing("themes.json") {
             let _ = store.save("themes.json", &ferrocast_core::themes::ThemeFile { themes: self.custom_themes.clone() });
@@ -427,8 +427,10 @@ impl App {
                     return None;
                 }
                 *cur = list;
-                let _ = self.store.save("clipboard.json", &*cur);
                 ferrocast_core::storage::prune_images(&self.store.images_dir(), &cur);
+                drop(cur);
+                // saved through the shared serialisation (SAVE, then the list), never under the list lock
+                self.shared.write_clipboard();
             }
             _ => {}
         }
