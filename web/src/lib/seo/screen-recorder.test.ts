@@ -4,8 +4,8 @@ import { en, es } from './screen-recorder';
 describe('screen recorder pages', () => {
   it('have descriptions of snippet length and the same structure in both languages', () => {
     for (const t of [en, es]) {
-      expect(t.description.length).toBeGreaterThanOrEqual(140);
-      expect(t.description.length).toBeLessThanOrEqual(160);
+      expect(t.description.length).toBeGreaterThanOrEqual(120);
+      expect(t.description.length).toBeLessThanOrEqual(155);
     }
     expect(es.limits.rows).toHaveLength(en.limits.rows.length);
     expect(es.steps.items).toHaveLength(en.steps.items.length);

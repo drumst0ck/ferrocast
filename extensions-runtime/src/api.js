@@ -81,7 +81,8 @@ const common = (key, modifiers = ['cmd']) => ({ modifiers, key });
 const Keyboard = {
   Shortcut: {
     Common: {
-      Copy: common('c', ['cmd', 'shift']), CopyName: common('.', ['cmd', 'shift']), CopyPath: common('c', ['cmd', 'opt']),
+      Copy: common('c', ['cmd', 'shift']), CopyName: common('.', ['cmd', 'shift']), CopyPath: common(',', ['cmd', 'shift']),
+      CopyDeeplink: common('c', ['cmd', 'shift']), ToggleQuickLook: common('y'),
       Save: common('s'), Duplicate: common('d'), Edit: common('e'), MoveDown: common('arrowDown', ['cmd', 'shift']),
       MoveUp: common('arrowUp', ['cmd', 'shift']), New: common('n'), Open: common('o'), OpenWith: common('o', ['cmd', 'shift']),
       Pin: common('p', ['cmd', 'shift']), Refresh: common('r'), Remove: common('x', ['ctrl']), RemoveAll: common('x', ['ctrl', 'shift']),
@@ -140,7 +141,7 @@ class Toast {
 Toast.Style = ToastStyle;
 Toast.ActionStyle = { Primary: 'primary', Destructive: 'destructive', Cancel: 'cancel' };
 async function showToast(a, b, c) {
-  const opts = typeof a === 'object' ? a : { style: a, title: b, message: c };
+  const opts = a && typeof a === 'object' ? a : { style: a, title: b, message: c };
   const t = new Toast(opts);
   await t.show();
   return t;
@@ -153,7 +154,12 @@ async function showHUD(title) {
 async function clearSearchBar() {}
 
 // ---- clipboard
-const asText = (c) => (c !== null && typeof c === 'object' ? c.text ?? c.file ?? '' : String(c));
+const htmlToText = (html) => String(html)
+  .replace(/<br\s*\/?>|<\/(p|div|li|h[1-6])>/gi, '\n')
+  .replace(/<[^>]*>/g, '')
+  .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+  .trim();
+const asText = (c) => (c !== null && typeof c === 'object' ? c.text ?? (c.html !== undefined ? htmlToText(c.html) : c.file ?? '') : String(c));
 const Clipboard = {
   copy: (content, options) => bridge.call('clipboard.copy', { text: asText(content), concealed: !!(options && options.concealed) }),
   paste: (content) => bridge.call('clipboard.paste', { text: asText(content) }),
@@ -164,7 +170,7 @@ const Clipboard = {
 
 // ---- storage
 const LocalStorage = {
-  getItem: (key) => bridge.call('localStorage.getItem', { key }),
+  getItem: async (key) => (await bridge.call('localStorage.getItem', { key })) ?? undefined,
   setItem: (key, value) => bridge.call('localStorage.setItem', { key, value }),
   removeItem: (key) => bridge.call('localStorage.removeItem', { key }),
   allItems: () => bridge.call('localStorage.allItems', {}),

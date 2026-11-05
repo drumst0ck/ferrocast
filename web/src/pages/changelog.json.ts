@@ -1,5 +1,6 @@
 import type { APIContext } from 'astro';
 import { loadReleases, unavailableFeed, versionLabel } from '../lib/changelog/load';
+import { jsonFeedHtml } from '../lib/changelog/feed-html';
 
 export const prerender = false;
 
@@ -20,7 +21,7 @@ export async function GET(context: APIContext) {
         url: `${site}/changelog/${r.version}/`,
         title: `Ferrocast ${versionLabel(r.version)}`,
         date_published: new Date(r.releasedOn as string).toISOString(),
-        content_html: r.entries.map((e) => `<p>${e.title ? `<strong>${e.title}</strong>: ` : ''}${e.bodyHtml}</p>`).join(''),
+        content_html: jsonFeedHtml(r),
         tags: [...new Set(r.entries.flatMap((e) => e.tags))],
       })),
   };

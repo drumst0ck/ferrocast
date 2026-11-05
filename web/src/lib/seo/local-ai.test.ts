@@ -4,8 +4,8 @@ import { page } from './local-ai';
 describe('local AI launcher copy', () => {
   it('uses its URL and a description of snippet length', () => {
     expect(page.path).toBe('/local-ai-launcher/');
-    expect(page.description.length).toBeGreaterThanOrEqual(140);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+    expect(page.description.length).toBeGreaterThanOrEqual(120);
+    expect(page.description.length).toBeLessThanOrEqual(155);
   });
 
   it('says for every provider whether text leaves the Mac, and only local servers keep it', () => {

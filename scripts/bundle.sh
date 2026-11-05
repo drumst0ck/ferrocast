@@ -31,7 +31,7 @@ else
 fi
 
 # build_swift_helper <name> <src_dir> [weak framework…]
-# Compiles every .swift file in <src_dir> to Contents/MacOS/<name> for arm64, macOS 13 minimum,
+# Compiles every .swift file in <src_dir> to Contents/MacOS/<name> for the host arch, macOS 13 minimum,
 # linking the listed frameworks weakly so the helper still launches on older systems. Skips with a
 # NOTE (never a failure) when swiftc is missing. Signing happens later, with the app's flags.
 # Records built helpers in helper_built so one signing loop covers every helper.
@@ -45,7 +45,7 @@ build_swift_helper() {
   [ -e "${files[0]}" ] || { echo "NOTE: no Swift sources in $src; $name is not built"; return 0; }
   local weak=() fw
   for fw in "$@"; do weak+=(-Xlinker -weak_framework -Xlinker "$fw"); done
-  swiftc -O -target arm64-apple-macos13.0 "${weak[@]}" "${files[@]}" -o "$app/Contents/MacOS/$name"
+  swiftc -O -target "$(uname -m)-apple-macos13.0" "${weak[@]}" "${files[@]}" -o "$app/Contents/MacOS/$name"
   chmod 755 "$app/Contents/MacOS/$name"
   helper_built+=("$name")
 }

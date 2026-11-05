@@ -6,8 +6,8 @@ const root = new URL('../../../../', import.meta.url);
 
 describe('clipboard history page (ES)', () => {
   it('has a description of snippet length and no voseo', () => {
-    expect(page.description.length).toBeGreaterThanOrEqual(140);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+    expect(page.description.length).toBeGreaterThanOrEqual(120);
+    expect(page.description.length).toBeLessThanOrEqual(155);
     expect(JSON.stringify(page)).not.toMatch(/\b(vos|tenés|podés|querés|pulsá|arrastrá|hacé|mirá|elegí)\b/i);
   });
 

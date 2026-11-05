@@ -124,7 +124,7 @@ export const es: GuideCopy = {
   path: '/es/comprimir-video-a-un-tamano/',
   title: 'Comprimir un vídeo a un tamaño concreto en Mac, sin subirlo | Ferrocast',
   description:
-    'Reduce un vídeo para que quepa en los 20 MiB de Discord o los 25 MB de Gmail, en tu Mac y sin subirlo. Ferrocast calcula el bitrate desde el tamaño. Gratis.',
+    'Reduce un vídeo para que quepa en los 20 MiB de Discord o los 25 MB de Gmail, en tu Mac y sin subirlo. Ferrocast calcula el bitrate del tamaño. Gratis.',
   crumbs: [['Inicio', '/es/'], ['Comprimir un vídeo a un tamaño', '/es/comprimir-video-a-un-tamano/']],
   h1: 'Comprimir un vídeo a un tamaño concreto en tu Mac',
   lead: [

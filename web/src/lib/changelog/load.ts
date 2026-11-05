@@ -1,5 +1,5 @@
 import { getDb } from '../../db/client';
-import { getRelease, listReleases, type ReleaseView } from './query';
+import { getRelease, listReleases, listReleasesPage, type ReleaseView } from './query';
 
 /** Never throws: pages render a fallback block when the database is unreachable. */
 export async function loadReleases(): Promise<ReleaseView[] | null> {
@@ -7,6 +7,18 @@ export async function loadReleases(): Promise<ReleaseView[] | null> {
   if (!db) return null;
   try {
     return await listReleases(db);
+  } catch (e) {
+    console.error('changelog query failed', e);
+    return null;
+  }
+}
+
+/** One page of the index. Never throws; null when the database is unreachable. */
+export async function loadReleasePage(page: number): Promise<{ releases: ReleaseView[]; hasMore: boolean } | null> {
+  const db = getDb();
+  if (!db) return null;
+  try {
+    return await listReleasesPage(db, page);
   } catch (e) {
     console.error('changelog query failed', e);
     return null;

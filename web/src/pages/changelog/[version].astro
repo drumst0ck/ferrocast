@@ -10,7 +10,7 @@ export const prerender = false;
 
 const { version = '' } = Astro.params;
 const view = await loadVersionView(version);
-if (view.kind === 'missing') return new Response(null, { status: 404, headers: { Location: '/changelog/' } });
+if (view.kind === 'missing') return Astro.rewrite('/404');
 if (view.kind === 'unavailable') Astro.response.status = 503;
 const repo = 'https://github.com/drumst0ck/ferrocast';
 const r = view.kind === 'ok' ? view.release : null;
