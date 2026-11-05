@@ -34,7 +34,7 @@ The site lives in `web/` (Astro, Starlight docs, PostgreSQL changelog) and deplo
 - `cd web && npm ci && npm run dev` starts it. `npm run build` also checks that the generated data still holds 275 conversion pairs over 46 inputs.
 - `docker compose up -d db` in `web/` starts PostgreSQL for the changelog (copy `.env.example` to `.env`). `npm test` runs the unit tests; set `TEST_DATABASE_URL=postgres://ferrocast:ferrocast@localhost:5432/ferrocast` to include the database tests.
 - After changing conversions or tools in Rust, regenerate the site data with `cargo run -p ferrocast-core --example site_data` and commit `web/src/data/*.json`.
-- Every user-visible change needs an entry in `CHANGELOG.md` under `[Unreleased]`: one bullet per change in a `###` category (`Added`, `Changed`, `Fixed`, `Removed`, `Security`, `Known limitations`), an optional `**Title**:` prefix, optional trailing `#tags` and `(docs: /docs/…)`. Check it with `cd web && npm run changelog:push -- --dry-run`. A push to `master` that touches `CHANGELOG.md` publishes the root file (the job passes `--file ../CHANGELOG.md`; `web/CHANGELOG.md` is only a copy for `web/`-only Docker builds, refreshed by `npm run build` and by `scripts/release.sh`).
+- Every user-visible change needs an entry in `CHANGELOG.md` under `[Unreleased]`: one bullet per change in a `###` category (`Added`, `Changed`, `Fixed`, `Removed`, `Security`, `Known limitations`), an optional `**Title**:` prefix, optional trailing `#tags`, `(docs: /docs/…)` and `{#slug}` (a stable permalink id that survives title edits). Check it with `cd web && npm run changelog:push -- --dry-run`. A push to `master` that touches `CHANGELOG.md` publishes the root file (the job passes `--file ../CHANGELOG.md`; `web/CHANGELOG.md` is only a copy for `web/`-only Docker builds, refreshed by `npm run build` and by `scripts/release.sh`).
 - A new feature also needs its documentation page under `web/src/content/docs/`.
 
 ## Rules of thumb
@@ -47,9 +47,9 @@ The site lives in `web/` (Astro, Starlight docs, PostgreSQL changelog) and deplo
 
 ## Releasing (Homebrew, no paid Apple account)
 
-1. Bump `version` in the root `Cargo.toml`, move `[Unreleased]` in `CHANGELOG.md` to a dated `## [X.Y.Z] - YYYY-MM-DD` section, make sure CI is green.
-2. `git tag vX.Y.Z && git push --tags`.
-3. `scripts/update_formula.sh drumst0ck/ferrocast` rewrites `Formula/ferrocast.rb` (url + sha256) from the pushed tag; commit and push it.
+1. Make sure CI is green on `master` and `[Unreleased]` in `CHANGELOG.md` lists the changes.
+2. `scripts/release.sh X.Y.Z` (add `--dry-run` to preview, `--no-push` to stop before pushing). It bumps `version` in `Cargo.toml` and `Cargo.lock`, closes `[Unreleased]` into a dated section, syncs `web/CHANGELOG.md`, commits, creates the annotated tag `vX.Y.Z` and pushes it. If anything fails before the commit, it restores the files.
+3. The tag triggers `.github/workflows/release.yml`, which builds and publishes the release and then commits the Homebrew formula bump (`Formula/ferrocast.rb`) to `master` itself. Do not run `scripts/update_formula.sh` by hand for a normal release: it would race that push. A version with a suffix (`X.Y.Z-rc.1`) is a prerelease and skips the formula.
 4. Users run `brew upgrade ferrocast`.
 
 The formula compiles from source on the user's machine, so the app has no quarantine flag and needs no

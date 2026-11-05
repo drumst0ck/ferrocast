@@ -15,7 +15,7 @@ export const en: GuideCopy = {
   path: '/screen-studio-alternative/',
   title: 'Free Screen Studio alternative with auto zoom for Mac | Ferrocast',
   description:
-    'Record your Mac screen with automatic zoom on clicks, a webcam overlay and an on-device transcript, then export MP4 or GIF. Free and open source, in a launcher.',
+    'Record your Mac screen with automatic zoom on clicks, a webcam overlay and an on-device transcript, then export MP4 or GIF. Free and open source launcher.',
   crumbs: [['Home', '/'], ['Screen Studio alternative', '/screen-studio-alternative/']],
   h1: 'A free screen recorder with auto zoom, built into a launcher',
   lead: [

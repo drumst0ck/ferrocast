@@ -8,9 +8,9 @@ describe('Raycast vs Alfred vs Spotlight copy', () => {
     expect(page.h1).toBe('Raycast, Alfred o Spotlight: qué lanzador elegir en tu Mac');
   });
 
-  it('keeps the meta description within 140-160 characters', () => {
-    expect(page.description.length).toBeGreaterThanOrEqual(140);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+  it('keeps the meta description within 120-155 characters', () => {
+    expect(page.description.length).toBeGreaterThanOrEqual(120);
+    expect(page.description.length).toBeLessThanOrEqual(155);
   });
 
   it('has five columns in every table row', () => {

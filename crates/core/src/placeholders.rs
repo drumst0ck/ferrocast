@@ -372,8 +372,15 @@ pub fn percent_encode(s: &str) -> String {
     out
 }
 
+/// How many `{snippet}` levels are expanded; deeper (or self-referencing) ones stay as written.
+const MAX_SNIPPET_DEPTH: usize = 4;
+
 /// Expand a template.
 pub fn expand(template: &str, target: Target, ctx: &Context) -> Expanded {
+    expand_at(template, target, ctx, 0)
+}
+
+fn expand_at(template: &str, target: Target, ctx: &Context, depth: usize) -> Expanded {
     let now = ctx.now.unwrap_or_else(Local::now);
     let mut text = String::new();
     let mut cursor = None;
@@ -400,7 +407,20 @@ pub fn expand(template: &str, target: Target, ctx: &Context) -> Expanded {
             }
             "selection" => ctx.selection.clone().unwrap_or_default(),
             "uuid" => uuid::Uuid::new_v4().to_string().to_uppercase(),
-            "snippet" => p.attr("name").and_then(|n| ctx.snippets.and_then(|f| f(n))).unwrap_or_default(),
+            "snippet" => {
+                let body = p.attr("name").and_then(|n| ctx.snippets.and_then(|f| f(n))).unwrap_or_default();
+                if depth < MAX_SNIPPET_DEPTH {
+                    // The included text is a template too; it is expanded as plain text, and the
+                    // modifiers / quicklink encoding below apply once to the whole result.
+                    let inner = expand_at(&body, Target::Snippet, ctx, depth + 1);
+                    if cursor.is_none() {
+                        cursor = inner.cursor.map(|c| text.chars().count() + c);
+                    }
+                    inner.text
+                } else {
+                    body
+                }
+            }
             "argument" => {
                 let key = arg_key(&p, &mut unnamed);
                 ctx.arguments
@@ -509,6 +529,31 @@ mod tests {
     fn unknown_braces_are_literal() {
         let c = ctx();
         assert_eq!(expand("fn x() { return {a}; }", Target::Snippet, &c).text, "fn x() { return {a}; }");
+    }
+
+    #[test]
+    fn nested_snippets_are_expanded() {
+        let f = |n: &str| match n {
+            "outer" => Some("Hi {snippet name=\"inner\"}!".to_string()),
+            "inner" => Some("on {date} {cursor}end".to_string()),
+            "loop" => Some("a{snippet name=\"loop\"}".to_string()),
+            _ => None,
+        };
+        let c = Context { snippets: Some(&f), ..ctx() };
+        let e = expand("{snippet name=\"outer\"}", Target::Snippet, &c);
+        assert_eq!(e.text, "Hi on 15 Jun 2022 end!");
+        assert_eq!(e.cursor, Some("Hi on 15 Jun 2022 ".chars().count()));
+        // a quicklink encodes once, not once per level
+        let e = expand("q={snippet name=\"inner\"}", Target::Quicklink, &c);
+        assert_eq!(e.text, "q=on%2015%20Jun%202022%20end");
+    }
+
+    #[test]
+    fn a_snippet_that_includes_itself_stops() {
+        let f = |n: &str| (n == "loop").then(|| "a{snippet name=\"loop\"}".to_string());
+        let c = Context { snippets: Some(&f), ..ctx() };
+        let e = expand("{snippet name=\"loop\"}", Target::Snippet, &c);
+        assert!(e.text.starts_with("aaa") && e.text.len() < 200, "{}", e.text);
     }
 
     #[test]

@@ -81,4 +81,36 @@ describe('parseChangelog continuation and stray text', () => {
     const [r] = parseChangelog(wrap('- **A**: first\n\n- **B**: second\n\n### Fixed\n- **C**: third'));
     expect(r.entries.map((e) => e.bodyMd)).toEqual(['first', 'second', 'third']);
   });
+
+  describe('explicit {#slug}', () => {
+    const one = (bullet: string) => parseChangelog(wrap(bullet))[0].entries[0];
+    it('uses the explicit slug and keeps it when the title or body is edited', () => {
+      const a = one('- **Typo titel**: body {#blur-video} #files');
+      const b = one('- **Typo title**: body, reworded {#blur-video} #files');
+      expect(a.slug).toBe('blur-video');
+      expect(b.slug).toBe('blur-video');
+      expect(a.tags).toEqual(['files']);
+      expect(a.bodyMd).toBe('body');
+    });
+    it('is found before or after the docs link and tags', () => {
+      expect(one('- **A**: body (docs: /docs/x/) {#s1} #t').slug).toBe('s1');
+      expect(one('- **A**: body {#s2} (docs: /docs/x/)').docsUrl).toBe('/docs/x/');
+      expect(one('- **A**: body #t {#s3}').slug).toBe('s3');
+    });
+    it('does not depend on entry order, unlike hashed slugs for duplicate titles', () => {
+      const [r] = parseChangelog(wrap('- **A**: one {#first}\n- **A**: two {#second}'));
+      expect(r.entries.map((e) => e.slug)).toEqual(['first', 'second']);
+    });
+    it('rejects a duplicate explicit slug in one release', () => {
+      expect(() => parseChangelog(wrap('- **A**: one {#same}\n- **B**: two {#same}'))).toThrow(/duplicate slug same/);
+    });
+    it('leaves a {#x} in the middle of the text alone', () => {
+      const e = one('- **A**: use {#anchor} syntax in the middle');
+      expect(e.bodyMd).toBe('use {#anchor} syntax in the middle');
+      expect(e.slug).toMatch(/^[0-9a-f]{12}$/);
+    });
+    it('keeps hashed slugs for entries without one', () => {
+      expect(one('- **A**: body').slug).toMatch(/^[0-9a-f]{12}$/);
+    });
+  });
 });

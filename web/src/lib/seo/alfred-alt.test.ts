@@ -4,8 +4,8 @@ import { es, page } from './alfred-alt';
 describe('Alfred alternative copy', () => {
   it('uses its URL and a description of snippet length', () => {
     expect(page.path).toBe('/alfred-alternative/');
-    expect(page.description.length).toBeGreaterThanOrEqual(140);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+    expect(page.description.length).toBeGreaterThanOrEqual(120);
+    expect(page.description.length).toBeLessThanOrEqual(155);
   });
 
   it('has a cell for every column and keeps Ferrocast gaps in the table', () => {

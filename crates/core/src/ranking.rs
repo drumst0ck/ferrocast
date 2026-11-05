@@ -24,6 +24,10 @@ pub struct Usage {
 }
 
 const MAX_RECENT: usize = 10;
+/// Longest query prefix that is learned.
+pub const MAX_PREFIX: usize = 16;
+/// Most learned query prefixes kept in `frecency.json`.
+pub const MAX_CHOICE_KEYS: usize = 2000;
 
 /// Persisted frecency data.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -46,11 +50,33 @@ impl Frecency {
         let q = query.trim().to_lowercase();
         if !q.is_empty() {
             // Learn every prefix so shorter queries benefit too (`c`, `ca`, `cal`).
-            let chars: Vec<char> = q.chars().collect();
+            // Only the first MAX_PREFIX characters: a pasted paragraph must not add a key per letter.
+            let chars: Vec<char> = q.chars().take(MAX_PREFIX).collect();
+            let mut touched = std::collections::HashSet::new();
             for end in 1..=chars.len() {
                 let p: String = chars[..end].iter().collect();
+                touched.insert(p.clone());
                 *self.choices.entry(p).or_default().entry(id.to_string()).or_default() += 1;
             }
+            self.prune_choices(&touched);
+        }
+    }
+
+    /// Keep at most MAX_CHOICE_KEYS queries: drop the least chosen ones first (never one just recorded).
+    fn prune_choices(&mut self, keep: &std::collections::HashSet<String>) {
+        if self.choices.len() <= MAX_CHOICE_KEYS {
+            return;
+        }
+        let mut order: Vec<(u32, &String)> = self
+            .choices
+            .iter()
+            .filter(|(k, _)| !keep.contains(*k))
+            .map(|(k, m)| (m.values().fold(0u32, |a, b| a.saturating_add(*b)), k))
+            .collect();
+        order.sort();
+        let drop: Vec<String> = order.into_iter().take(self.choices.len() - MAX_CHOICE_KEYS).map(|(_, k)| k.clone()).collect();
+        for k in drop {
+            self.choices.remove(&k);
         }
     }
 
@@ -182,6 +208,31 @@ mod tests {
         assert!(b > a);
         f.reset("calculator");
         assert_eq!(f.choice_count("ca", "calculator"), 0);
+    }
+
+    #[test]
+    fn a_long_query_learns_only_a_short_prefix() {
+        let mut f = Frecency::default();
+        f.record("a", &"x".repeat(500), 0);
+        assert!(f.choices.len() <= MAX_PREFIX, "{}", f.choices.len());
+        assert_eq!(f.choice_count("xxx", "a"), 1);
+        assert!(f.choices.keys().all(|k| k.chars().count() <= MAX_PREFIX));
+    }
+
+    #[test]
+    fn the_number_of_learned_queries_is_capped_and_keeps_the_useful_ones() {
+        let mut f = Frecency::default();
+        for _ in 0..5 {
+            f.record("fav", "favourite", 0);
+        }
+        for i in 0..(MAX_CHOICE_KEYS * 2) {
+            f.record(&format!("item{i}"), &format!("q{i}zz"), i as i64);
+        }
+        assert!(f.choices.len() <= MAX_CHOICE_KEYS, "{}", f.choices.len());
+        assert_eq!(f.choice_count("favourite", "fav"), 5);
+        // the most recent query is always kept
+        let last = MAX_CHOICE_KEYS * 2 - 1;
+        assert_eq!(f.choice_count(&format!("q{last}zz"), &format!("item{last}")), 1);
     }
 
     #[test]

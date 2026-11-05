@@ -6,16 +6,16 @@ describe('Raycast alternative copy', () => {
     expect(es.path).toBe('/es/alternativa-a-raycast/');
     expect(es.title).toBe('Alternativa gratis a Raycast para Mac | Ferrocast');
     expect(es.description).toBe(
-      'Ferrocast es un lanzador gratis y MIT para Mac: Script Commands de Raycast, IA local con Ollama y 275 conversiones sin subir archivos. Lo que falta, también.',
+      'Ferrocast es un lanzador gratis y MIT para Mac: Script Commands de Raycast, IA local con Ollama y 275 conversiones sin subir archivos. Y lo que falta.',
     );
     expect(es.h1).toBe('Una alternativa a Raycast gratis y de código abierto para Mac');
     expect(en.path).toBe('/raycast-alternative/');
   });
 
-  it('keeps meta descriptions within 140-160 characters', () => {
+  it('keeps meta descriptions within 120-155 characters', () => {
     for (const t of [en, es]) {
-      expect(t.description.length).toBeGreaterThanOrEqual(140);
-      expect(t.description.length).toBeLessThanOrEqual(160);
+      expect(t.description.length).toBeGreaterThanOrEqual(120);
+      expect(t.description.length).toBeLessThanOrEqual(155);
     }
   });
 

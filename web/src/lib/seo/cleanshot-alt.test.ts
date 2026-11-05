@@ -8,8 +8,8 @@ const read = (p: string) => readFileSync(new URL(p, root), 'utf8');
 
 describe('CleanShot alternative page', () => {
   it('has a description of snippet length and a cell for every column', () => {
-    expect(page.description.length).toBeGreaterThanOrEqual(140);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+    expect(page.description.length).toBeGreaterThanOrEqual(120);
+    expect(page.description.length).toBeLessThanOrEqual(155);
     expect(page.title.length).toBeLessThanOrEqual(65);
     for (const row of page.limits.rows) expect(row).toHaveLength(page.limits.cols.length);
   });

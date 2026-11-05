@@ -29,7 +29,7 @@ export function factsCopy(lang: 'en' | 'es'): FactsCopy {
       path: '/es/facts/',
       title: 'Ferrocast: datos clave y preguntas frecuentes',
       description:
-        'Datos claros sobre Ferrocast, el lanzador de código abierto para Mac con Apple Silicon: conversión local de archivos, instalación, privacidad y lo que falta.',
+        'Datos claros sobre Ferrocast, el lanzador libre para Mac con Apple Silicon: conversión local de archivos, instalación, privacidad y lo que falta.',
       crumbs: [['Inicio', '/es/'], ['Datos clave', '/es/facts/']],
       h1: 'Datos clave',
       lead: 'Datos breves y citables sobre Ferrocast, con la interfaz en español, para personas y asistentes. Fuentes: este repositorio, [la documentación](/es/docs/) y [GitHub](https://github.com/drumst0ck/ferrocast).',

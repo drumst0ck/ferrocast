@@ -10,6 +10,8 @@ mod np_tick_tests;
 mod record_recovery_tests;
 #[path = "round3_ui_tests.rs"]
 mod round3_ui_tests;
+#[path = "round4_flows_tests.rs"]
+mod round4_flows_tests;
 #[path = "sync_clip_tests.rs"]
 mod sync_clip_tests;
 

@@ -3,17 +3,21 @@ import Base from '../../layouts/Base.astro';
 import SiteHeader from '../../components/SiteHeader.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
 import ChangelogEntries from '../../components/ChangelogEntries.astro';
-import { loadReleases, versionLabel } from '../../lib/changelog/load';
+import { loadReleasePage, versionLabel } from '../../lib/changelog/load';
 import { changelogIndexMeta } from '../../lib/changelog/meta';
 
 export const prerender = false;
 
 const repo = 'https://github.com/drumst0ck/ferrocast';
-const releases = await loadReleases();
+const pageNo = Math.max(1, Math.floor(Number(Astro.url.searchParams.get('page'))) || 1);
+const pageData = await loadReleasePage(pageNo);
+const releases = pageData?.releases ?? null;
+const hasMore = pageData?.hasMore ?? false;
+const pageHref = (n: number) => (n > 1 ? `/changelog/?page=${n}` : '/changelog/');
 const meta = changelogIndexMeta();
 const tag = Astro.url.searchParams.get('tag')?.toLowerCase().replace(/[^a-z0-9-]/g, '') || null;
 const allTags = releases ? [...new Set(releases.flatMap((r) => r.entries.flatMap((e) => e.tags)))].sort() : [];
-const canonical = new URL('/changelog/', Astro.site).href;
+const canonical = new URL(pageHref(pageNo), Astro.site).href;
 if (!releases) Astro.response.status = 503;
 ---
 <Base title={meta.title} description={meta.description} canonical={canonical}>
@@ -37,6 +41,12 @@ if (!releases) Astro.response.status = 503;
         <ChangelogEntries entries={r.entries} tag={tag} />
       </section>
     ))}
+    {releases && (pageNo > 1 || hasMore) && (
+      <nav aria-label="Pagination" class="cl-tags">
+        {pageNo > 1 && <a href={pageHref(pageNo - 1)} rel="prev">← Newer releases</a>}
+        {hasMore && <a href={pageHref(pageNo + 1)} rel="next">Older releases →</a>}
+      </nav>
+    )}
   </main>
   <SiteFooter />
 </Base>
