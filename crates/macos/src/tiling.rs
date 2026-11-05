@@ -298,7 +298,7 @@ fn same(a: &AxElement, b: &AxElement) -> bool {
 }
 
 fn copy_string(el: AXUIElementRef, attr: &str) -> Option<String> {
-    copy_attr(el, attr).map(|v| unsafe { CFString::wrap_under_create_rule(v as _) }.to_string())
+    windows::copy_string_attr(el, attr)
 }
 
 fn settable(el: AXUIElementRef, attr: &str) -> bool {

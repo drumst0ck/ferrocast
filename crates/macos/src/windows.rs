@@ -219,8 +219,8 @@ pub fn layout(cmd: WindowCommand, win: Rect, s: Rect, gap: f64) -> Option<Rect> 
         MoveRight => Rect::new(s.x + s.w - win.w - gap, win.y, win.w, win.h),
         MakeLarger | MakeSmaller => {
             let d = if cmd == MakeLarger { 30.0 } else { -30.0 };
-            let w = (win.w + 2.0 * d).clamp(200.0, s.w);
-            let h = (win.h + 2.0 * d).clamp(150.0, s.h);
+            let w = (win.w + 2.0 * d).clamp(200f64.min(s.w), s.w);
+            let h = (win.h + 2.0 * d).clamp(150f64.min(s.h), s.h);
             let x = (win.x - (w - win.w) / 2.0).clamp(s.x, s.x + s.w - w);
             let y = (win.y - (h - win.h) / 2.0).clamp(s.y, s.y + s.h - h);
             Rect::new(x, y, w, h)
@@ -315,6 +315,18 @@ impl Drop for AxElement {
             unsafe { CFRelease(self.0 as CFTypeRef) }
         }
     }
+}
+
+/// Take ownership of a copied AX value and return it as a `String` only when it really is a
+/// CFString: an app returning another type for AXTitle/AXRole must not reach `CFStringGetLength`.
+pub(crate) fn owned_string(v: CFTypeRef) -> Option<String> {
+    let t = unsafe { core_foundation::base::CFType::wrap_under_create_rule(v) };
+    t.downcast_into::<CFString>().map(|s| s.to_string())
+}
+
+/// A string attribute of `el`, `None` when missing or not a CFString.
+pub(crate) fn copy_string_attr(el: AXUIElementRef, attr: &str) -> Option<String> {
+    copy_attr(el, attr).and_then(owned_string)
 }
 
 pub(crate) fn copy_attr(el: AXUIElementRef, attr: &str) -> Option<CFTypeRef> {
@@ -444,7 +456,7 @@ fn screen_index_for(win: Rect, screens: &[Rect]) -> usize {
 static PREVIOUS: Mutex<Option<HashMap<(i32, String), Rect>>> = Mutex::new(None);
 
 fn window_key(pid: i32, el: AXUIElementRef) -> (i32, String) {
-    let title = copy_attr(el, "AXTitle").map(|v| unsafe { CFString::wrap_under_create_rule(v as _) }.to_string()).unwrap_or_default();
+    let title = copy_string_attr(el, "AXTitle").unwrap_or_default();
     (pid, title)
 }
 
@@ -480,7 +492,7 @@ pub fn apply(cmd: WindowCommand, pid: i32, gap: f64) -> anyhow::Result<()> {
             let j = if cmd == WindowCommand::NextDisplay { (idx + 1) % n } else { (idx + n - 1) % n };
             translate_between(frame, screens[idx], screens[j])
         }
-        _ => layout(cmd, frame, screens[idx], gap).unwrap(),
+        _ => layout(cmd, frame, screens[idx], gap).ok_or_else(|| anyhow::anyhow!("Unsupported window command"))?,
     };
     if cmd != WindowCommand::Restore {
         prev.insert(key, frame);
@@ -532,7 +544,7 @@ pub fn raise_window(pid: i32, title: &str, id: u32) -> bool {
         let candidates: Vec<(Option<u32>, String)> = els
             .iter()
             .map(|&el| {
-                let t = copy_attr(el, "AXTitle").map(|v| CFString::wrap_under_create_rule(v as _).to_string()).unwrap_or_default();
+                let t = copy_string_attr(el, "AXTitle").unwrap_or_default();
                 (ax_window_id(el), t)
             })
             .collect();
@@ -549,6 +561,29 @@ pub fn raise_window(pid: i32, title: &str, id: u32) -> bool {
 mod tests {
     use super::*;
     const S: Rect = Rect { x: 0.0, y: 25.0, w: 1000.0, h: 800.0 };
+
+    #[test]
+    fn make_smaller_and_larger_do_not_panic_on_a_tiny_screen() {
+        let tiny = Rect::new(0.0, 0.0, 150.0, 100.0);
+        let win = Rect::new(10.0, 10.0, 100.0, 80.0);
+        for cmd in [WindowCommand::MakeSmaller, WindowCommand::MakeLarger] {
+            let r = layout(cmd, win, tiny, 0.0).unwrap();
+            assert!(r.w <= 150.0 && r.h <= 100.0 && r.x >= 0.0 && r.y >= 0.0, "{r:?}");
+        }
+    }
+
+    #[test]
+    fn owned_string_rejects_a_non_string_value() {
+        use core_foundation::base::TCFType;
+        let n = core_foundation::number::CFNumber::from(7);
+        let raw = n.as_CFTypeRef();
+        unsafe { core_foundation::base::CFRetain(raw) };
+        assert_eq!(owned_string(raw), None);
+        let s = CFString::new("Doc");
+        let raw = s.as_CFTypeRef();
+        unsafe { core_foundation::base::CFRetain(raw) };
+        assert_eq!(owned_string(raw).as_deref(), Some("Doc"));
+    }
 
     #[test]
     fn pick_window_prefers_the_window_id_over_duplicate_or_empty_titles() {
