@@ -68,6 +68,8 @@ pub fn timeout_for(cmd: &Command) -> Duration {
         Command::Transcribe { .. } => TRANSCRIBE_SILENCE.as_secs(),
         // Same: `Helper::analyze_face` watches for progress / heartbeats.
         Command::AnalyzeFace { .. } => ANALYZE_SILENCE.as_secs(),
+        // Reads the headers of at most four local files.
+        Command::Probe { .. } => 20,
     })
 }
 
@@ -550,6 +552,15 @@ impl Helper {
             protocol::parse_body::<RenderFrameDone>(&body).map_err(|e| RenderError::Other(format!("bad render.frame reply: {e}")))?;
         let stride = (done.format == Some(FrameFormat::Raw)).then_some(done.stride).flatten();
         Ok(RenderedFrame { path: PathBuf::from(done.path), size: done.size, ms: done.ms, cached: done.cached, stride, decode: done.decode })
+    }
+
+    /// Duration and tracks of the media `files` (plain names) inside `project_dir`, read-only.
+    /// Files that are missing or unreadable are absent from the result.
+    pub fn probe(&mut self, project_dir: &Path, files: &[String]) -> Result<protocol::ProbeDone> {
+        let command = Command::Probe { project: project_dir.to_string_lossy().into_owned(), files: files.to_vec() };
+        let timeout = timeout_for(&command);
+        let body = self.call(command, timeout)?;
+        protocol::parse_body(&body).map_err(|e| anyhow!(e))
     }
 
     /// Cameras and microphones (no permission prompt; names may be empty without a grant).
@@ -2298,5 +2309,97 @@ for i in 1 2 3 4; do sleep 0.2; echo '{"event":"heartbeat","id":1}'; done
 echo '{"id":1,"ok":true,"faces":0,"frames":0,"path":"/p/t.json"}'"#,
         );
         assert!(run(&p, &AtomicBool::new(false), Duration::from_millis(500)).0.is_ok());
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fc-probe-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn probe_sends_the_names_and_types_the_reply() {
+        let dir = scratch("fake");
+        let p = dir.join("helper.sh");
+        let script = r#"#!/bin/sh
+read l; echo "$l" > "$(dirname "$0")/req.json"
+echo '{"id":1,"ok":true,"files":[{"file":"screen.mov","duration":4.5,"video":true,"size":[640,360]}]}'
+"#;
+        std::fs::write(&p, script).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        let done = h.probe(&dir, &["screen.mov".into(), "mic.m4a".into()]).unwrap();
+        assert_eq!(done.get("screen.mov").unwrap().duration, 4.5);
+        assert!(done.get("mic.m4a").is_none());
+        let wire = std::fs::read_to_string(dir.join("req.json")).unwrap();
+        assert!(
+            wire.starts_with(r#"{"id":1,"cmd":"probe","project":""#) && wire.trim_end().ends_with(r#""files":["screen.mov","mic.m4a"]}"#),
+            "{wire}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probe_error_reply_is_an_error() {
+        let dir = scratch("err");
+        let p = dir.join("helper.sh");
+        std::fs::write(&p, "#!/bin/sh\nread l\necho '{\"id\":1,\"error\":\"not-found\",\"message\":\"gone\"}'\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut h = Helper::spawn(&p, |_| {}).unwrap();
+        assert!(h.probe(&dir, &["screen.mov".into()]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A 1 s AAC file made with `afconvert` from a generated WAV, probed by the real helper
+    /// (`FERROCAST_CAPTURE_HELPER`, or `target/capture-spike/ferrocast-capture`); skipped when absent.
+    #[test]
+    fn the_real_helper_reads_a_generated_movie_and_skips_what_is_not_media() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let helper = std::env::var_os("FERROCAST_CAPTURE_HELPER")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("target/capture-spike/ferrocast-capture"));
+        if !is_executable(&helper) || !Path::new("/usr/bin/afconvert").is_file() || !crate::system::os_at_least(14) {
+            eprintln!("SKIP: helper or afconvert not available");
+            return;
+        }
+        let dir = scratch("real");
+        let rate = 8000u32;
+        let samples: Vec<u8> = (0..rate).flat_map(|i| (((i as f32 / 20.0).sin() * 8000.0) as i16).to_le_bytes()).collect();
+        let mut wav = Vec::new();
+        wav.extend(b"RIFF");
+        wav.extend((36 + samples.len() as u32).to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16u32.to_le_bytes());
+        wav.extend([1, 0, 1, 0]);
+        wav.extend(rate.to_le_bytes());
+        wav.extend((rate * 2).to_le_bytes());
+        wav.extend([2, 0, 16, 0]);
+        wav.extend(b"data");
+        wav.extend((samples.len() as u32).to_le_bytes());
+        wav.extend(&samples);
+        std::fs::write(dir.join("in.wav"), wav).unwrap();
+        let ok = std::process::Command::new("/usr/bin/afconvert")
+            .args(["-f", "m4af", "-d", "aac"])
+            .arg(dir.join("in.wav"))
+            .arg(dir.join("mic.m4a"))
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(ok, "afconvert failed");
+        std::fs::write(dir.join("screen.mov"), b"not a movie").unwrap();
+        let mut h = Helper::spawn(&helper, |_| {}).unwrap();
+        let done = h.probe(&dir, &["mic.m4a".into(), "screen.mov".into(), "camera.mov".into()]).unwrap();
+        let mic = done.get("mic.m4a").expect("mic probed");
+        assert!(mic.audio && !mic.video && (mic.duration - 1.0).abs() < 0.2, "{mic:?}");
+        assert!(done.get("screen.mov").is_none(), "garbage is not a movie");
+        assert!(done.get("camera.mov").is_none(), "missing file is left out");
+        assert!(h.probe(&dir, &["../x".into()]).is_err(), "names must be plain");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

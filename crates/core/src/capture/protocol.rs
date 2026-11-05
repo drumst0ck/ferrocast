@@ -147,6 +147,42 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fps: Option<f64>,
     },
+    /// Read the duration and tracks of media files inside a project (recovery of a recording that
+    /// never got its metadata). Only `files` (plain names, no separator or `..`) are opened, read-only.
+    /// The `ok` ([`ProbeDone`]) lists the files that exist and can be read, with their tracks; a
+    /// missing, unreadable or invalid name is left out of the list.
+    #[serde(rename = "probe")]
+    Probe { project: String, files: Vec<String> },
+}
+
+/// One readable media file of a `probe` reply.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbedFile {
+    pub file: String,
+    /// Movie duration in seconds.
+    pub duration: f64,
+    /// Has a video track.
+    #[serde(default)]
+    pub video: bool,
+    /// Has an audio track.
+    #[serde(default)]
+    pub audio: bool,
+    /// Pixel size of the first video track; `[0, 0]` without one.
+    #[serde(default)]
+    pub size: [u32; 2],
+}
+
+/// Payload of the final `ok` of a `probe`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeDone {
+    #[serde(default)]
+    pub files: Vec<ProbedFile>,
+}
+
+impl ProbeDone {
+    pub fn get(&self, file: &str) -> Option<&ProbedFile> {
+        self.files.iter().find(|f| f.file == file)
+    }
 }
 
 /// Payload of the final `ok` of an `analyze.face`.
@@ -1300,6 +1336,32 @@ mod tests {
             parse_body::<AnalyzeFaceDone>(&body).unwrap(),
             AnalyzeFaceDone { faces: 90, frames: 100, path: "/p/camera_track.json".into() }
         );
+    }
+
+    #[test]
+    fn probe_request_and_reply_round_trip() {
+        let r = Request {
+            id: 3,
+            command: Command::Probe { project: "/p/Demo.ferrocast".into(), files: vec!["screen.mov".into(), "mic.m4a".into()] },
+        };
+        let s = encode_request(&r);
+        assert_eq!(s, r#"{"id":3,"cmd":"probe","project":"/p/Demo.ferrocast","files":["screen.mov","mic.m4a"]}"#);
+        assert_eq!(serde_json::from_str::<Request>(&s).unwrap(), r);
+        let Line::Ok { body, .. } = decode_line(
+            r#"{"id":3,"ok":true,"files":[{"file":"screen.mov","duration":12.5,"video":true,"audio":false,"size":[1280,720]},{"file":"mic.m4a","duration":12.4,"audio":true}]}"#,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let done = parse_body::<ProbeDone>(&body).unwrap();
+        assert_eq!(done.files.len(), 2);
+        assert_eq!(
+            done.get("screen.mov").unwrap(),
+            &ProbedFile { file: "screen.mov".into(), duration: 12.5, video: true, audio: false, size: [1280, 720] }
+        );
+        let mic = done.get("mic.m4a").unwrap();
+        assert!(mic.audio && !mic.video && mic.size == [0, 0]);
+        assert!(done.get("camera.mov").is_none());
     }
 
     #[test]

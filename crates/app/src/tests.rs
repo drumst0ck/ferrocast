@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "ext_host_tests.rs"]
 mod ext_host_tests;
+#[path = "record_recovery_tests.rs"]
+mod record_recovery_tests;
 #[path = "sync_clip_tests.rs"]
 mod sync_clip_tests;
 

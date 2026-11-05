@@ -600,9 +600,101 @@ pub fn discard_unfinished(project: &Path) -> bool {
     std::fs::remove_dir_all(project).is_ok()
 }
 
+/// A plain file name inside a project folder: no separator, no `..`, not hidden.
+fn plain_name(n: &str) -> bool {
+    !n.is_empty() && !n.starts_with('.') && !n.contains(['/', '\\', '\0']) && !n.contains("..")
+}
+
+/// S11: a project whose `screen.mov` exists but whose `project.json` has no duration (the app died
+/// before the recording was finalised). An unreadable `project.json` is not a candidate (disk).
+pub fn needs_recovery(dir: &Path) -> bool {
+    use ferrocast_core::capture::project::{Project, EXTENSION};
+    if dir.extension().and_then(|e| e.to_str()) != Some(EXTENSION) {
+        return false;
+    }
+    let Ok(p) = Project::load(dir) else { return false };
+    let unfinished = !(p.duration.is_finite() && p.duration > 0.0);
+    unfinished && plain_name(&p.sources.screen.file) && dir.join(&p.sources.screen.file).is_file()
+}
+
+/// S11: fill in the duration and sources of a [`needs_recovery`] project from `probe`, which reads
+/// the media (the capture helper's `probe`). Only `project.json` (and a missing thumbnail) is
+/// written, never a media file. A side source is kept only when the probe confirms its track; when
+/// the probe fails or cannot read the screen movie the project stays exactly as it was. Returns
+/// whether the project was repaired (disk).
+pub fn recover_project(
+    dir: &Path,
+    probe: impl FnOnce(&Path, &[String]) -> Result<ferrocast_core::capture::protocol::ProbeDone, String>,
+) -> bool {
+    use ferrocast_core::capture::project::Project;
+    use ferrocast_core::capture::protocol::{CameraSource, RecordSources, RecordStopped, SourceFile};
+    if !needs_recovery(dir) {
+        return false;
+    }
+    let Ok(p) = Project::load(dir) else { return false };
+    let screen = p.sources.screen.file.clone();
+    // the file each side source would have had: the one project.json names, else the recorder's default
+    let side = |known: &Option<ferrocast_core::capture::project::Source>, default: &str| {
+        let (file, offset) = known.as_ref().map(|s| (s.file.clone(), s.offset)).unwrap_or((default.to_string(), 0.0));
+        (plain_name(&file) && dir.join(&file).is_file()).then_some((file, offset))
+    };
+    let camera = side(&p.sources.camera, "camera.mov");
+    let mic = side(&p.sources.mic, "mic.m4a");
+    let system = side(&p.sources.system, "system.m4a");
+    let mut names = vec![screen.clone()];
+    names.extend([&camera, &mic, &system].into_iter().flatten().map(|(f, _)| f.clone()));
+    let Ok(probed) = probe(dir, &names) else { return false };
+    let Some(movie) = probed.get(&screen).filter(|f| f.video && f.duration.is_finite() && f.duration > 0.0) else { return false };
+    let confirmed = |c: &Option<(String, f64)>, want_video: bool| {
+        c.as_ref().filter(|(f, _)| probed.get(f).is_some_and(|m| if want_video { m.video } else { m.audio })).cloned()
+    };
+    let cam = confirmed(&camera, true).map(|(file, offset)| {
+        let m = probed.get(&file);
+        CameraSource { file, offset, size: m.map(|m| m.size).unwrap_or_default(), frames: 0 }
+    });
+    let mic = confirmed(&mic, false).map(|(file, offset)| SourceFile { file, offset });
+    let system = confirmed(&system, false).map(|(file, offset)| SourceFile { file, offset });
+    let any = cam.is_some() || mic.is_some() || system.is_some();
+    let done = RecordStopped {
+        project: dir.to_string_lossy().into_owned(),
+        duration: movie.duration,
+        screen: screen.clone(),
+        size: movie.size,
+        frames: 0,
+        dropped: 0,
+        interrupted: true,
+        message: None,
+        sources: any.then_some(RecordSources { screen: SourceFile { file: screen, offset: 0.0 }, camera: cam, mic, system }),
+    };
+    // no thumbnail here: this runs while the UI waits, and Quick Look can take seconds
+    write_metadata(dir, &done).is_ok()
+}
+
+/// S11: repair every unfinished project of the recordings folder `dir` with one helper, except
+/// `skip` (the recording in progress). No candidate, no helper, or a failed probe leaves the
+/// project alone. Returns how many were repaired. Blocking: it spawns the capture helper only when
+/// a candidate exists.
+pub fn recover_unfinished(dir: &Path, skip: Option<&Path>, exe: &Path, log: impl Fn(&str) + Send + 'static) -> usize {
+    let todo: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| Some(p.as_path()) != skip && needs_recovery(p)).collect())
+        .unwrap_or_default();
+    if todo.is_empty() || !ferrocast_macos::capture::available(exe) {
+        return 0;
+    }
+    let Ok(mut helper) = ferrocast_macos::capture::Helper::spawn(&ferrocast_macos::capture::helper_path(exe), log) else { return 0 };
+    todo.iter().filter(|d| recover_project(d, |dir, names| helper.probe(dir, names).map_err(|e| e.to_string()))).count()
+}
+
 /// After a clean stop: record the duration in `project.json` and make `thumb.png` (disk).
 /// The thumbnail is best effort: a missing one only costs the Recordings browser its picture.
 pub fn finalize_project(project: &Path, done: &RecordStopped) -> Result<(), String> {
+    write_metadata(project, done)?;
+    make_thumb(project, &done.screen);
+    Ok(())
+}
+
+/// The `project.json` half of [`finalize_project`] (no thumbnail, so no external process).
+fn write_metadata(project: &Path, done: &RecordStopped) -> Result<(), String> {
     use ferrocast_core::capture::project::Project;
     let mut p = Project::load(project).map_err(|e| e.to_string())?;
     p.duration = done.duration;
@@ -624,9 +716,7 @@ pub fn finalize_project(project: &Path, done: &RecordStopped) -> Result<(), Stri
             p.audio.system = Some(TrackMix::default());
         }
     }
-    p.save(project).map_err(|e| e.to_string())?;
-    make_thumb(project, &done.screen);
-    Ok(())
+    p.save(project).map_err(|e| e.to_string())
 }
 
 /// `thumb.png` (480 px) from the recording through Quick Look (`qlmanage`, no ffmpeg needed).
