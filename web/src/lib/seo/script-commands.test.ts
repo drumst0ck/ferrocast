@@ -4,8 +4,8 @@ import { page } from './script-commands';
 describe('Raycast Script Commands page copy', () => {
   it('uses the brief URL and a description of snippet length', () => {
     expect(page.path).toBe('/raycast-script-commands/');
-    expect(page.description.length).toBeGreaterThanOrEqual(140);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+    expect(page.description.length).toBeGreaterThanOrEqual(120);
+    expect(page.description.length).toBeLessThanOrEqual(155);
   });
 
   it('lists the three required metadata keys', () => {

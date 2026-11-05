@@ -18,7 +18,7 @@ export const page: GuideCopy = {
   path: '/clipboard-manager-mac/',
   title: 'Free Clipboard Manager for Mac That Skips Passwords | Ferrocast',
   description:
-    'A free, open-source clipboard history for Mac that skips copies from password managers. Pin entries, choose retention, optional iCloud sync. Vs Maccy and Paste.',
+    'A free, open-source clipboard history for Mac that skips copies from password managers. Pin entries, set retention, optional iCloud sync. Vs Maccy, Paste.',
   crumbs: [['Home', '/'], ['Clipboard manager', '/clipboard-manager-mac/']],
   h1: 'A free clipboard manager for Mac that skips your passwords',
   lead: [

@@ -5,8 +5,8 @@ import { page } from './file-converter';
 describe('free file converter copy', () => {
   it('has a title and description of snippet length', () => {
     expect(page.title.length).toBeLessThanOrEqual(65);
-    expect(page.description.length).toBeGreaterThanOrEqual(140);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+    expect(page.description.length).toBeGreaterThanOrEqual(120);
+    expect(page.description.length).toBeLessThanOrEqual(155);
   });
 
   it('links only to conversion pages that exist', () => {

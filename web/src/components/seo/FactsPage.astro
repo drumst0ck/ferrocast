@@ -20,7 +20,7 @@ const c = counts();
 const fill = (s: string, v: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (m, k) => (k in v ? String(v[k]) : m));
 const vars = { pairs: c.pairs, inputs: c.inputs, tools: c.tools, actions: c.actions };
 const faq = home.faq.items.map(([q, a]) => [q, fill(a, vars)] as [string, string]);
-if (t.description.length < 140 || t.description.length > 160) throw new Error(`facts (${lang}) description is ${t.description.length} characters`);
+if (t.description.length < 120 || t.description.length > 155) throw new Error(`facts (${lang}) description is ${t.description.length} characters`);
 
 const canonical = `${SITE}${t.path}`;
 const alternates = { en: `${SITE}/facts/`, es: `${SITE}/es/facts/`, 'x-default': `${SITE}/facts/` };

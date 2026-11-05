@@ -2,7 +2,7 @@
 
 All notable changes to Ferrocast. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Also published at <https://ferrocast.app/changelog/> (feed: <https://ferrocast.app/changelog/rss.xml>).
 
-Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `Removed`, `Security`, `Known limitations`). An optional `**Title**:` prefix becomes the entry title; optional trailing `#tags` and a `(docs: /docs/…)` link are read by `scripts/changelog/push.ts`.
+Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `Removed`, `Security`, `Known limitations`). An optional `**Title**:` prefix becomes the entry title; optional trailing `#tags`, a `(docs: /docs/…)` link and a `{#slug}` permalink (kept when the title is edited) are read by `scripts/changelog/push.ts`.
 
 ## [Unreleased]
 
@@ -58,6 +58,10 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Changelog publishing**: pushes to `master` publish the root `CHANGELOG.md` (not a stale copy under `web/`), and an indented continuation paragraph under an entry is kept; stray text outside an entry is reported instead of silently dropped.
 - **CSP report endpoint**: the rate limit uses the proxy-appended client address (a forged `X-Forwarded-For` prefix no longer gets a fresh bucket), its table is bounded, only reports for ferrocast.app are recorded, and the summary needs `CSP_REPORT_SUMMARY_TOKEN`.
 - **Spanish docs**: the drag wheel, Tiling, Notes and Keyboard shortcuts pages gain the mouse paths, Other options, Related and Limits sections that only the English pages had.
+- **Changelog site**: an unknown `/changelog/<version>/` shows the site's 404 page instead of a blank one, `/changelog/` pages through older releases (and the feeds list every release) instead of stopping at 50, feed entry titles are HTML-escaped, and an entry can keep its permalink through title edits with a trailing `{#slug}`.
+- **Website search results**: the page descriptions of 15 pages are shortened to 155 characters or fewer so search engines no longer truncate them, and the docs now declare `og:locale` as `en_US` / `es_ES`.
+- **Website hosting**: `www.ferrocast.app` redirects to `ferrocast.app` on every page (and only that host), social cards are cached for a week, the report-only CSP allows Pagefind and GA4, and sitemap dates for tool pages follow the docs page they show and prefer git history.
+- **Spanish docs**: the Settings page links to the Updates section of Install again, and `Check now` and `Check for Updates…` use the Spanish interface labels.
 
 ## [0.5.0] - 2026-10-29
 
