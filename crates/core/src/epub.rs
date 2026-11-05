@@ -129,8 +129,25 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// `unzip` treats entry names as wildcard patterns; escape them to read the literal name.
+fn escape_unzip_pattern(entry: &str) -> String {
+    let mut out = String::with_capacity(entry.len());
+    for ch in entry.chars() {
+        if matches!(ch, '[' | ']' | '*' | '?' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn unzip_entry(epub: &Path, entry: &str) -> Result<String, String> {
-    let out = Command::new("/usr/bin/unzip").arg("-p").arg(epub).arg(entry).output().map_err(|e| format!("unzip failed to start: {e}"))?;
+    let out = Command::new("/usr/bin/unzip")
+        .arg("-p")
+        .arg(epub)
+        .arg(escape_unzip_pattern(entry))
+        .output()
+        .map_err(|e| format!("unzip failed to start: {e}"))?;
     if !out.status.success() {
         return Err(format!("cannot read '{entry}' from EPUB (not a valid zip?)"));
     }
@@ -289,6 +306,48 @@ mod tests {
         let two = html.find("<h1>Two</h1>").unwrap();
         let one = html.find("<h1>One</h1>").unwrap();
         assert!(two < one, "spine order not respected: {html}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn entry_names_with_glob_characters_are_read_literally() {
+        if !Path::new("/usr/bin/zip").exists() || !Path::new("/usr/bin/unzip").exists() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("fc-epub-glob-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("META-INF")).unwrap();
+        std::fs::write(dir.join("mimetype"), "application/epub+zip").unwrap();
+        std::fs::write(
+            dir.join("META-INF/container.xml"),
+            r#"<container><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("content.opf"),
+            r#"<package><metadata><dc:title>Glob</dc:title></metadata>
+<manifest><item id="a" href="ch%5B1%5D.xhtml"/><item id="b" href="%2A"/><item id="c" href="q%3F.xhtml"/></manifest>
+<spine><itemref idref="a"/><itemref idref="b"/><itemref idref="c"/></spine></package>"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("ch[1].xhtml"), "<body>BRACKET</body>").unwrap();
+        std::fs::write(dir.join("ch1.xhtml"), "<body>DECOY</body>").unwrap();
+        std::fs::write(dir.join("*"), "<body>STAR</body>").unwrap();
+        std::fs::write(dir.join("q?.xhtml"), "<body>QUESTION</body>").unwrap();
+        std::fs::write(dir.join("qz.xhtml"), "<body>DECOYQ</body>").unwrap();
+        let ok = Command::new("/usr/bin/zip")
+            .current_dir(&dir)
+            .args(["-q", "-X", "-nw", "t.epub", "mimetype", "META-INF/container.xml", "content.opf"])
+            .args(["ch[1].xhtml", "ch1.xhtml", "*", "q?.xhtml", "qz.xhtml"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "zip failed to build the fixture");
+        let html = epub_to_html(&dir.join("t.epub")).unwrap();
+        assert_eq!(html.matches("BRACKET").count(), 1, "{html}");
+        assert_eq!(html.matches("STAR").count(), 1, "{html}");
+        assert_eq!(html.matches("QUESTION").count(), 1, "{html}");
+        assert!(!html.contains("DECOY"), "wildcard matched another entry: {html}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
