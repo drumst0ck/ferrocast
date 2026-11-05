@@ -28,7 +28,7 @@ Los temas System, Dark y Light vienen incluidos y no se pueden editar. **New fro
 
 ## Elegir, renombrar, eliminar
 
-Usa la lista desplegable de **Custom themes** para cambiar de tema. Elige **None** o pulsa System, Dark o Light en **Appearance** para volver a un aspecto incluido. **Rename** cambia el nombre (los nombres son únicos, sin distinguir mayúsculas). **Delete** elimina el tema seleccionado.
+Usa la lista desplegable de **Custom themes** para cambiar de tema. Elige **None** o pulsa System, Dark o Light en **Appearance** para volver a un aspecto incluido. **Rename** cambia el nombre (los nombres son únicos, sin distinguir mayúsculas). **Delete** elimina el tema seleccionado: púlsalo una vez y luego pulsa **Confirm delete** en cinco segundos.
 
 ## Avisos de contraste
 
