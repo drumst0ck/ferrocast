@@ -26,6 +26,7 @@ Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not 
 
 - **Download install**: Ferrocast checks GitHub once a day for a new stable release (prereleases are ignored). By default it shows the release notes and lets you install, postpone or skip that version; you can switch to automatic installs, turn the daily check off, or press “Check now” under Settings → General → Updates. The tray menu and About also have “Check for Updates…”.
 - **Homebrew install**: the app never replaces itself; updates run `brew upgrade ferrocast`.
+- An automatic update waits while a recording or an export is running and tries again at the next check; the app restarts only after it ends.
 - A self-update replaces the app with the new build. Because the signature is ad-hoc, macOS may ask for Accessibility again after it; grant it again.
 
 ## Why a formula and not a cask

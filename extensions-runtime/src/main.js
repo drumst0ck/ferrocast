@@ -82,6 +82,7 @@ function pop() {
   }
   const e = stack.pop();
   e.root.unmount();
+  bridge.send({ type: 'pop', depth: stack.length });
   const top = stack[stack.length - 1];
   top.last = null;
   flush(top);

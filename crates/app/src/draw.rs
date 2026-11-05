@@ -106,6 +106,10 @@ impl eframe::App for App {
         self.tick_inline();
         self.effect_tick(Instant::now());
         self.sweep_timers();
+        if self.pending_exit.is_some() {
+            self.exit_tick(Instant::now());
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
         if matches!(self.view(), View::Timers) && !self.timers.is_empty() {
             self.invalidate_sections();
             ctx.request_repaint_after(Duration::from_secs(1));
@@ -1379,7 +1383,9 @@ impl App {
                 }
                 true
             }
-            View::Update { release } if k.enter => {
+            // a held ↵ (auto-repeat) is swallowed, never run: Confirm and Update need a fresh press
+            View::Update { .. } | View::Confirm { .. } if k.enter && k.repeat => true,
+            View::Update { release } if k.enter && !k.repeat => {
                 self.pop();
                 let exe = instance::running_exe().unwrap_or_default();
                 self.start_update(release, ferrocast_core::update::channel_of(&exe), services::parent_writable_cached());
@@ -1416,7 +1422,7 @@ impl App {
                 self.copy_text(&script::strip_ansi(&text));
                 true
             }
-            View::Confirm { act, .. } if k.enter => {
+            View::Confirm { act, .. } if k.enter && !k.repeat => {
                 self.perform(act, true);
                 if matches!(self.view(), View::Confirm { .. }) {
                     self.pop();
@@ -1556,14 +1562,11 @@ impl App {
             self.toast("Enter a title");
             return;
         }
-        let slug: String = t.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-        let path = self.store.scripts_dir().join(format!("{}.sh", slug.trim_matches('-')));
         let mode = ["fullOutput", "compact", "silent"][mode.min(2)];
-        let _ = std::fs::create_dir_all(self.store.scripts_dir());
-        if std::fs::write(&path, script::template(t, mode, "Custom")).is_err() {
+        let Ok(path) = write_new_script(&self.store.scripts_dir(), t, mode) else {
             self.toast("Could not write script");
             return;
-        }
+        };
         services::set_exec(&path);
         self.reload_scripts();
         let _ = std::process::Command::new("/usr/bin/open").arg("-t").arg(&path).status();
@@ -10295,6 +10298,31 @@ impl App {
         self.ctx.data_mut(|d| d.remove::<String>(Id::new("translate_langs_buf")));
         self.toast("Previous settings restored");
         true
+    }
+}
+
+/// Writes the template for `title` into a new file of `dir` and returns its path. The name is the ASCII slug of the title
+/// (`script` when nothing is left of it), numbered when taken.
+pub(crate) fn write_new_script(dir: &std::path::Path, title: &str, mode: &str) -> std::io::Result<std::path::PathBuf> {
+    let slug: String = title.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let slug = slug.trim_matches('-');
+    let base = if slug.is_empty() { "script" } else { slug };
+    std::fs::create_dir_all(dir)?;
+    // never overwrite: a taken name (any case, as on APFS) gets a numbered suffix; create_new closes the race
+    let mut name = crate::notes_ctl::unique_file_name(&format!("{base}.sh"), &|n| dir.join(n).exists());
+    loop {
+        let path = dir.join(&name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => {
+                std::io::Write::write_all(&mut f, script::template(title, mode, "Custom").as_bytes())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let taken = name.clone();
+                name = crate::notes_ctl::unique_file_name(&format!("{base}.sh"), &|n| n == taken || dir.join(n).exists());
+            }
+            Err(e) => return Err(e),
+        }
     }
 }
 

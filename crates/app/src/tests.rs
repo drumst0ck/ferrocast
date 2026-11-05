@@ -46,6 +46,7 @@ fn fixture() -> App {
         notes_ctl: crate::notes_ctl::NotesCtl::new(Box::new(crate::notes_ctl::fake::FakeFx::new().0)),
         frecency: Frecency::default(),
         update_available: None,
+        pending_exit: None,
         apps: vec![],
         trashed: Default::default(),
         apps_at: Instant::now(),
@@ -151,6 +152,8 @@ thread_local! {
     static APPLE_AVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// What the fake `trash_app` answers in this test thread.
     static FX_TRASH_RESULT: std::cell::RefCell<Result<(), ferrocast_macos::apps::TrashAppError>> = const { std::cell::RefCell::new(Ok(())) };
+    /// What the fake `trash_file` answers in this test thread.
+    static FX_TRASH_FILE_RESULT: std::cell::RefCell<Result<(), String>> = const { std::cell::RefCell::new(Ok(())) };
     static FX_FRONT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
     /// Scripts the web effect asked a browser to run (replace and unmark), in order.
     static FX_TILING_RX: std::cell::RefCell<Option<std::sync::mpsc::Receiver<ferrocast_macos::tiling::Cmd>>> = const { std::cell::RefCell::new(None) };
@@ -231,6 +234,10 @@ impl Effects {
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
             color_sampler: |_bus| FX_LOG.with(|l| l.borrow_mut().push("color_sampler".into())),
+            trash_file: |p| {
+                FX_LOG.with(|l| l.borrow_mut().push(format!("trash_file {}", p.display())));
+                FX_TRASH_FILE_RESULT.with(|r| r.borrow().clone())
+            },
             trash_app: |p| {
                 FX_LOG.with(|l| l.borrow_mut().push(format!("trash_app {}", p.display())));
                 FX_TRASH_RESULT.with(|r| r.borrow().clone())
@@ -254,6 +261,8 @@ impl Effects {
             np_command: |c| FX_LOG.with(|l| l.borrow_mut().push(format!("np cmd {c:?}"))),
             np_seek: |s| FX_LOG.with(|l| l.borrow_mut().push(format!("np seek {s}"))),
             np_open: |id| FX_LOG.with(|l| l.borrow_mut().push(format!("np open {id}"))),
+            exit: |code| FX_LOG.with(|l| l.borrow_mut().push(format!("exit {code}"))),
+            relaunch: |p| FX_LOG.with(|l| l.borrow_mut().push(format!("relaunch {}", p.display()))),
         }
     }
 }
@@ -16656,6 +16665,59 @@ fn a_failed_launch_command_leaves_the_running_screens_and_session_alone() {
     assert!(app.ext.test_has_session(), "and so is the command");
 }
 
+fn ext_render_msg(app: &mut App, depth: usize, root_type: &str, title: &str) {
+    use ferrocast_core::extensions::protocol::{Node, RuntimeMsg};
+    let mut p = serde_json::Map::new();
+    p.insert("navigationTitle".into(), serde_json::json!(title));
+    let node = Node { t: "#root".into(), p: Default::default(), c: vec![Node { t: root_type.into(), p, c: vec![] }] };
+    app.ext_event(1, ferrocast_core::extensions::sidecar::Event::Msg(RuntimeMsg::Render { depth, tree: node }));
+}
+
+fn ext_pop_msg(app: &mut App, depth: usize) {
+    use ferrocast_core::extensions::protocol::RuntimeMsg;
+    app.ext_event(1, ferrocast_core::extensions::sidecar::Event::Msg(RuntimeMsg::Pop { depth }));
+}
+
+fn ext_two_screens() -> App {
+    let mut app = fixture();
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    app.stack = vec![View::Root];
+    app.ext.test_set_base(1);
+    ext_render_msg(&mut app, 1, "List", "one");
+    ext_render_msg(&mut app, 2, "Detail", "two");
+    app
+}
+
+#[test]
+fn s5_a_rerender_of_the_lower_screen_updates_it_in_place_and_keeps_the_pushed_screen() {
+    let mut app = ext_two_screens();
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (2, 3));
+    ext_render_msg(&mut app, 1, "List", "one again");
+    assert_eq!(app.ext.test_view_count(), 2, "the pushed screen is still there");
+    assert_eq!(app.stack.len(), 3, "and still on top");
+    assert!(matches!(app.stack.last(), Some(View::ExtDetail)));
+    assert_eq!(app.ext.test_view_title(1).as_deref(), Some("one again"), "the lower screen got the new tree");
+}
+
+#[test]
+fn s5_an_explicit_pop_still_truncates_and_the_following_render_shows_the_screen_below() {
+    let mut app = ext_two_screens();
+    ext_pop_msg(&mut app, 1);
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (1, 2));
+    ext_render_msg(&mut app, 1, "List", "one");
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (1, 2));
+    assert!(matches!(app.stack.last(), Some(View::ExtList)));
+}
+
+#[test]
+fn s5_a_render_one_deeper_than_the_stack_still_pushes_and_a_gap_is_ignored() {
+    let mut app = ext_two_screens();
+    ext_render_msg(&mut app, 3, "Detail", "three");
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (3, 4));
+    ext_render_msg(&mut app, 5, "Detail", "far");
+    assert_eq!(app.ext.test_view_count(), 3);
+}
+
 #[test]
 fn launch_command_is_refused_after_five_in_ten_seconds() {
     let mut app = fixture();
@@ -17874,4 +17936,233 @@ mod now_playing {
         assert!(app.np_poller.is_none());
         assert_eq!(fx_taken(), vec!["np stop".to_string(), "np render hidden".to_string()]);
     }
+}
+
+#[test]
+fn trashing_a_file_removes_it_from_results_only_on_success() {
+    let a = std::path::PathBuf::from("/tmp/fc-a.txt");
+    let b = std::path::PathBuf::from("/tmp/fc-b.txt");
+    let mut app = fixture();
+    app.files = ("q".into(), vec![a.clone(), b.clone()]);
+    FX_TRASH_FILE_RESULT.with(|r| *r.borrow_mut() = Err("permission denied".into()));
+    app.perform(Act::Trash(a.clone()), true);
+    assert_eq!(fx_taken(), [format!("trash_file {}", a.display())]);
+    assert_eq!(app.files.1, vec![a.clone(), b.clone()], "a failed trash keeps the entry");
+    assert_eq!(toast_text(&app), ferrocast_core::i18n::trf("Trash failed: {e}", &[("e", "permission denied")]));
+    FX_TRASH_FILE_RESULT.with(|r| *r.borrow_mut() = Ok(()));
+    app.perform(Act::Trash(a.clone()), true);
+    assert_eq!(app.files.1, vec![b], "a successful trash removes only that entry");
+    assert_eq!(toast_text(&app), ferrocast_core::i18n::tr("Moved to Trash"));
+}
+
+fn confirm_app() -> (App, std::path::PathBuf) {
+    let root = trash_root();
+    let foo = bundle(&root, "Foo.app");
+    let mut app = trash_fixture(&[("Foo", &foo, None)]);
+    choose_trash(&mut app, "Foo");
+    assert!(matches!(app.view(), View::Confirm { .. }));
+    (app, foo)
+}
+
+fn held_enter() -> Event {
+    Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: true, modifiers: Modifiers::NONE }
+}
+
+#[test]
+fn a_held_enter_does_not_confirm_a_confirmation() {
+    let (mut app, _) = confirm_app();
+    render(&mut app, vec![held_enter(), held_enter()]);
+    assert!(matches!(app.view(), View::Confirm { .. }), "auto-repeat must not confirm");
+    assert!(fx_taken().is_empty(), "nothing is performed by auto-repeat");
+}
+
+#[test]
+fn a_fresh_enter_press_still_confirms() {
+    let (mut app, foo) = confirm_app();
+    render(&mut app, vec![held_enter(), held_enter()]);
+    render(&mut app, vec![release(Key::Enter)]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert_eq!(fx_taken(), [format!("trash_app {}", foo.display())]);
+    assert!(!matches!(app.view(), View::Confirm { .. }));
+}
+
+#[test]
+fn escape_still_cancels_a_confirmation_after_held_enter() {
+    let (mut app, _) = confirm_app();
+    render(&mut app, vec![held_enter(), held_enter()]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(!matches!(app.view(), View::Confirm { .. }));
+    assert_eq!(fx_taken(), Vec::<String>::new());
+}
+
+#[test]
+fn a_held_enter_does_not_start_an_update() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::Update { release: fake_release("99.0.0") }];
+    render(&mut app, vec![held_enter(), held_enter()]);
+    assert!(matches!(app.view(), View::Update { .. }), "auto-repeat must not install the update");
+}
+
+fn scripts_tmp() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("ferrocast-script-test-{}", uuid::Uuid::new_v4()))
+}
+
+#[test]
+fn creating_a_script_twice_keeps_the_first_untouched() {
+    let dir = scripts_tmp();
+    let first = write_new_script(&dir, "Test", "compact").unwrap();
+    assert_eq!(first.file_name().unwrap(), "test.sh");
+    std::fs::write(&first, "my edits").unwrap();
+    let second = write_new_script(&dir, "Test", "compact").unwrap();
+    assert_ne!(first, second);
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), "my edits");
+    assert!(std::fs::read_to_string(&second).unwrap().contains("Test"));
+    let third = write_new_script(&dir, "test", "compact").unwrap();
+    assert!(third != first && third != second);
+}
+
+#[test]
+fn a_first_script_keeps_its_slug_name() {
+    let dir = scripts_tmp();
+    let p = write_new_script(&dir, "Back Up!", "silent").unwrap();
+    assert_eq!(p.file_name().unwrap(), "back-up.sh");
+    assert!(std::fs::read_to_string(&p).unwrap().contains("Back Up!"));
+}
+
+#[test]
+fn a_non_ascii_title_falls_back_to_script_sh() {
+    let dir = scripts_tmp();
+    let p = write_new_script(&dir, "日記", "compact").unwrap();
+    assert_eq!(p.file_name().unwrap(), "script.sh");
+    let q = write_new_script(&dir, "日記", "compact").unwrap();
+    assert_ne!(p, q);
+}
+
+// ---- Quit and auto-update while a recording is active or an export runs (S1) ----
+
+fn exits(log: &[String]) -> Vec<&String> {
+    log.iter().filter(|l| l.starts_with("exit") || l.starts_with("relaunch")).collect()
+}
+
+fn recording_app() -> (App, std::sync::mpsc::Receiver<crate::record_ctl::Cmd>) {
+    let mut app = fixture();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.rt.cmds = Some(tx);
+    app.rt.gen = 1;
+    app.record.begin(0);
+    (app, rx)
+}
+
+fn saved_msg() -> crate::record_ctl::RecordMsg {
+    let saved = crate::record_ctl::Saved { project: "/r/Recording 1.ferrocast".into(), duration: 5.0, interrupted: false, message: None };
+    crate::record_ctl::RecordMsg::Finished(1, Ok(saved))
+}
+
+#[test]
+fn quit_while_idle_exits_at_once() {
+    let mut app = fixture();
+    fx_taken();
+    app.bus.send(Msg::Tray("quit".into()));
+    app.drain();
+    assert_eq!(exits(&fx_taken()), vec!["exit 0"]);
+}
+
+#[test]
+fn quit_during_a_recording_stops_it_first_and_exits_after_the_project_is_finalized() {
+    use crate::record_ctl::{Cmd, Phase};
+    let (mut app, rx) = recording_app();
+    fx_taken();
+    app.bus.send(Msg::Tray("quit".into()));
+    app.drain();
+    assert_eq!(rx.try_recv().ok(), Some(Cmd::Stop), "the helper is asked to finish the file");
+    assert_eq!(app.record.phase(), Phase::Stopping);
+    assert!(exits(&fx_taken()).is_empty(), "no exit before the Finished event");
+    app.handle_record(saved_msg());
+    assert!(app.record.is_idle());
+    assert_eq!(exits(&fx_taken()), vec!["exit 0"], "exits once, after Finished");
+}
+
+#[test]
+fn quit_command_in_the_launcher_during_a_recording_also_waits_for_the_stop() {
+    let (mut app, rx) = recording_app();
+    fx_taken();
+    app.run_builtin(Builtin::Quit);
+    assert_eq!(rx.try_recv().ok(), Some(crate::record_ctl::Cmd::Stop));
+    assert!(exits(&fx_taken()).is_empty());
+}
+
+#[test]
+fn quit_during_the_countdown_cancels_it_and_exits() {
+    let mut app = fixture();
+    app.record.begin(3);
+    fx_taken();
+    app.bus.send(Msg::Tray("quit".into()));
+    app.drain();
+    assert_eq!(exits(&fx_taken()), vec!["exit 0"]);
+}
+
+#[test]
+fn quit_waits_a_bounded_time_for_a_helper_that_never_finishes() {
+    let (mut app, _rx) = recording_app();
+    fx_taken();
+    app.bus.send(Msg::Tray("quit".into()));
+    app.drain();
+    app.exit_tick(Instant::now() + Duration::from_secs(2));
+    assert!(exits(&fx_taken()).is_empty(), "still waiting");
+    app.exit_tick(Instant::now() + Duration::from_secs(60));
+    assert_eq!(exits(&fx_taken()), vec!["exit 0"], "gives up after the bound");
+}
+
+#[test]
+fn automatic_install_is_postponed_while_recording_and_resumes_when_idle() {
+    use ferrocast_core::update::Channel;
+    let (mut app, _rx) = recording_app();
+    app.settings.update_install = UpdateInstall::Automatic;
+    app.settings.update_last_check = Some(1);
+    app.handle_update_checked(false, Ok(Some(fake_release("99.0.0"))), Channel::Dev, true);
+    assert!(toast_text(&app).is_empty(), "nothing started: {}", toast_text(&app));
+    assert_eq!(app.settings.update_last_check, Some(1), "the next poll checks again");
+    assert!(app.update_available.is_some(), "the Update view stays available");
+    app.handle_record(saved_msg());
+    app.handle_update_checked(false, Ok(Some(fake_release("99.0.0"))), Channel::Dev, true);
+    assert!(toast_text(&app).contains("Development build"), "{}", toast_text(&app));
+    assert_ne!(app.settings.update_last_check, Some(1));
+}
+
+#[test]
+fn update_installed_during_a_recording_does_not_exit_until_it_ends() {
+    let (mut app, rx) = recording_app();
+    fx_taken();
+    app.bus.send(Msg::UpdateInstalled { path: "/Apps/Ferrocast.app".into() });
+    app.drain();
+    assert!(exits(&fx_taken()).is_empty(), "the recording keeps running");
+    assert!(rx.try_recv().is_err(), "an update never stops a recording by itself");
+    assert_eq!(app.record.phase(), crate::record_ctl::Phase::Recording);
+    app.handle_record(crate::record_ctl::RecordMsg::Stop);
+    app.handle_record(saved_msg());
+    assert_eq!(exits(&fx_taken()), vec!["relaunch /Apps/Ferrocast.app", "exit 0"]);
+}
+
+#[test]
+fn update_installed_while_idle_relaunches_then_exits() {
+    let mut app = fixture();
+    fx_taken();
+    app.bus.send(Msg::UpdateInstalled { path: "/Apps/Ferrocast.app".into() });
+    app.drain();
+    assert_eq!(exits(&fx_taken()), vec!["relaunch /Apps/Ferrocast.app", "exit 0"]);
+}
+
+#[test]
+fn update_installed_during_an_export_waits_for_it() {
+    use crate::editor_export::ExportRun;
+    let (mut app, _rx, _dir) = editor_app_in("update-vs-export");
+    app.editor.as_mut().unwrap().export.run =
+        Some(ExportRun { cancel: Default::default(), done: 0, total: 0, eta: None, cancelling: false });
+    fx_taken();
+    app.bus.send(Msg::UpdateInstalled { path: "/Apps/Ferrocast.app".into() });
+    app.drain();
+    assert!(exits(&fx_taken()).is_empty());
+    app.editor.as_mut().unwrap().export.run = None;
+    app.exit_tick(Instant::now());
+    assert_eq!(exits(&fx_taken()), vec!["relaunch /Apps/Ferrocast.app", "exit 0"]);
 }

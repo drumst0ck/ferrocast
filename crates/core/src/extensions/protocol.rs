@@ -75,6 +75,10 @@ pub enum RuntimeMsg {
         depth: usize,
         tree: Node,
     },
+    /// The runtime popped a screen: `depth` screens remain. A `Render` never removes a screen.
+    Pop {
+        depth: usize,
+    },
     Toast {
         #[serde(default)]
         style: String,
@@ -181,6 +185,7 @@ mod tests {
             RuntimeMsg::Call { id: 3, method: "clipboard.copy".into(), params: json!({"text":"hi"}) }
         );
         assert_eq!(parse_runtime(r#"{"type":"exit"}"#).unwrap(), RuntimeMsg::Exit);
+        assert_eq!(parse_runtime(r#"{"type":"pop","depth":1}"#).unwrap(), RuntimeMsg::Pop { depth: 1 });
     }
 
     #[test]
