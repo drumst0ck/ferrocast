@@ -30,6 +30,8 @@ fn tokenize(s: &str) -> Option<Vec<Tok>> {
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
     let mut out = Vec::new();
+    // One entry per open paren: true when it opens a function call's arguments.
+    let mut parens: Vec<bool> = Vec::new();
     while i < chars.len() {
         let c = chars[i];
         if c.is_whitespace() {
@@ -41,8 +43,11 @@ fn tokenize(s: &str) -> Option<Vec<Tok>> {
                     || chars[i] == '.'
                     || chars[i] == '_'
                     || (chars[i] == ','
+                        && !parens.iter().any(|f| *f)
                         && chars.get(i + 1).is_some_and(|d| d.is_ascii_digit())
-                        && chars.get(i + 3).is_some_and(|d| d.is_ascii_digit())))
+                        && chars.get(i + 2).is_some_and(|d| d.is_ascii_digit())
+                        && chars.get(i + 3).is_some_and(|d| d.is_ascii_digit())
+                        && !chars.get(i + 4).is_some_and(|d| d.is_ascii_digit())))
             {
                 i += 1;
             }
@@ -90,8 +95,14 @@ fn tokenize(s: &str) -> Option<Vec<Tok>> {
                 '×' | 'x' => out.push(Tok::Op('*')),
                 '÷' => out.push(Tok::Op('/')),
                 '−' => out.push(Tok::Op('-')),
-                '(' => out.push(Tok::LParen),
-                ')' => out.push(Tok::RParen),
+                '(' => {
+                    parens.push(matches!(out.last(), Some(Tok::Ident(_))));
+                    out.push(Tok::LParen);
+                }
+                ')' => {
+                    parens.pop();
+                    out.push(Tok::RParen);
+                }
                 ',' => out.push(Tok::Comma),
                 _ => return None,
             }
@@ -457,7 +468,10 @@ fn round_money(v: f64) -> f64 {
     if v.abs() >= 1.0 {
         (v * 100.0).round() / 100.0
     } else {
-        let digits = 10f64.powi((2 - v.abs().log10().floor() as i32).max(2));
+        if v == 0.0 || !v.is_finite() {
+            return v;
+        }
+        let digits = 10f64.powi(2i32.saturating_sub(v.abs().log10().floor() as i32).max(2));
         (v * digits).round() / digits
     }
 }
@@ -631,5 +645,36 @@ mod tests {
         assert_eq!(format_number(0.1 + 0.2, true), "0.3");
         assert_eq!(format_number(-1000.0, true), "-1,000");
         assert_eq!(format_number(2.0 / 3.0, false), "0.6666666667");
+    }
+
+    #[test]
+    fn commas_between_function_arguments_are_separators() {
+        assert!(close(ev("max(1,2,3)"), 3.0));
+        assert!(close(ev("min(5,1,2)"), 1.0));
+        // Even when a group of three digits follows the comma.
+        assert!(close(ev("max(1,234)"), 234.0));
+        assert!(close(ev("max(1,234,567)"), 567.0));
+    }
+
+    #[test]
+    fn thousands_separators_need_exactly_three_digits() {
+        assert!(close(ev("1,234 + 1"), 1235.0));
+        assert!(close(ev("1,234,567 + 1"), 1_234_568.0));
+        assert!(close(ev("2 * 1,000"), 2000.0));
+        // Four digits after the comma is not a thousands group.
+        assert!(evaluate("1,2345", 16.0).is_none());
+    }
+
+    #[test]
+    fn money_conversion_of_zero_does_not_panic() {
+        let rates = crate::currency::Rates::parse(r#"{"base":"EUR","date":"2026-10-14","rates":{"USD":1.25,"EUR":1.0}}"#, 100).unwrap();
+        let r = evaluate_with_rates("0 usd to eur", 16.0, Some(&rates)).expect("zero converts");
+        assert_eq!(r.value, 0.0);
+        assert_eq!(round_money(0.0), 0.0);
+        assert_eq!(round_money(-0.0), 0.0);
+        assert!(round_money(f64::NAN).is_nan());
+        assert_eq!(round_money(f64::INFINITY), f64::INFINITY);
+        assert_eq!(round_money(0.001234), 0.00123);
+        assert_eq!(round_money(12.345), 12.35);
     }
 }

@@ -1,11 +1,12 @@
 import type { APIContext } from 'astro';
-import { loadReleases, versionLabel } from '../lib/changelog/load';
+import { loadReleases, unavailableFeed, versionLabel } from '../lib/changelog/load';
 
 export const prerender = false;
 
 // JSON Feed 1.1: https://www.jsonfeed.org/version/1.1/
 export async function GET(context: APIContext) {
-  const releases = (await loadReleases()) ?? [];
+  const releases = await loadReleases();
+  if (!releases) return unavailableFeed();
   const site = context.site!.href.replace(/\/$/, '');
   const feed = {
     version: 'https://jsonfeed.org/version/1.1',

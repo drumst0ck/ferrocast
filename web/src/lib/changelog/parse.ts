@@ -73,6 +73,7 @@ export function parseChangelog(source: string): ParsedRelease[] {
   let category: Category | null = null;
   let buffer: string | null = null;
   let bufferLine = 0;
+  let blankSeen = false;
   let summary: string[] = [];
   let seen = new Map<string, number>();
 
@@ -81,6 +82,7 @@ export function parseChangelog(source: string): ParsedRelease[] {
       current.entries.push(finishEntry(buffer, category, current.version, current.entries.length, seen));
     }
     buffer = null;
+    blankSeen = false;
   };
   const flushSummary = () => {
     if (current && summary.length) current.summary = summary.join(' ').trim() || null;
@@ -123,10 +125,19 @@ export function parseChangelog(source: string): ParsedRelease[] {
       return;
     }
     if (buffer !== null) {
-      if (line.trim() === '') flushEntry();
-      else buffer += ' ' + line.trim();
+      if (line.trim() === '') {
+        blankSeen = true;
+      } else if (!blankSeen || /^\s/.test(line)) {
+        // Lazy continuation, or an indented paragraph after a blank line.
+        buffer += ' ' + line.trim();
+        blankSeen = false;
+      } else {
+        flushEntry();
+        if (category) fail(no, 'text outside an entry (start a bullet with "- " or indent a continuation)');
+      }
       return;
     }
+    if (category && line.trim()) return fail(no, 'text outside an entry (start a bullet with "- ")');
     if (!category && line.trim()) summary.push(line.trim());
   });
   flushEntry();

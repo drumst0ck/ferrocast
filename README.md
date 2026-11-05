@@ -119,7 +119,7 @@ Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it). The unnota
 
 ## Website
 
-The site in `web/` ships as a Docker image (see `web/Dockerfile`). CSP stays report-only. `GET /api/csp-report/summary/` is public when **`CSP_REPORT_SUMMARY_TOKEN`** is unset or empty (`Cache-Control: no-store`, `X-Robots-Tag: noindex`). When that variable is set, the same URL returns 404 unless the request sends `Authorization: Bearer <token>` or `?token=<token>`. `POST /api/csp-report/` is unchanged so browsers can submit reports.
+The site in `web/` ships as a Docker image (see `web/Dockerfile`). CSP stays report-only. `GET /api/csp-report/summary/` returns 404 unless **`CSP_REPORT_SUMMARY_TOKEN`** is set and the request sends `Authorization: Bearer <token>` or `?token=<token>` (`Cache-Control: no-store`, `X-Robots-Tag: noindex`); with the variable unset or empty nobody can read it. `POST /api/csp-report/` stays open so browsers can submit reports, but only reports for `ferrocast.app` pages are stored, and the per-IP rate limit uses the address the single front proxy appends to `X-Forwarded-For`.
 
 ## Documentation
 
