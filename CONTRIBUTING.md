@@ -47,9 +47,9 @@ The site lives in `web/` (Astro, Starlight docs, PostgreSQL changelog) and deplo
 
 ## Releasing (Homebrew, no paid Apple account)
 
-1. Bump `version` in the root `Cargo.toml`, move `[Unreleased]` in `CHANGELOG.md` to a dated `## [X.Y.Z] - YYYY-MM-DD` section, make sure CI is green.
-2. `git tag vX.Y.Z && git push --tags`.
-3. `scripts/update_formula.sh drumst0ck/ferrocast` rewrites `Formula/ferrocast.rb` (url + sha256) from the pushed tag; commit and push it.
+1. Make sure CI is green on `master` and `[Unreleased]` in `CHANGELOG.md` lists the changes.
+2. `scripts/release.sh X.Y.Z` (add `--dry-run` to preview, `--no-push` to stop before pushing). It bumps `version` in `Cargo.toml` and `Cargo.lock`, closes `[Unreleased]` into a dated section, syncs `web/CHANGELOG.md`, commits, creates the annotated tag `vX.Y.Z` and pushes it. If anything fails before the commit, it restores the files.
+3. The tag triggers `.github/workflows/release.yml`, which builds and publishes the release and then commits the Homebrew formula bump (`Formula/ferrocast.rb`) to `master` itself. Do not run `scripts/update_formula.sh` by hand for a normal release: it would race that push. A version with a suffix (`X.Y.Z-rc.1`) is a prerelease and skips the formula.
 4. Users run `brew upgrade ferrocast`.
 
 The formula compiles from source on the user's machine, so the app has no quarantine flag and needs no
