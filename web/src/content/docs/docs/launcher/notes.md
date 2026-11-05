@@ -97,7 +97,7 @@ With Sync with iCloud on, note images travel through iCloud Drive as separate fi
 
 ## Delete notes
 
-In the action panel, **Delete Note** and **Delete All Notes** move notes to **Recently Deleted**. Open Recently Deleted from the same panel and choose a note to restore it. Deleted notes are kept for 30 days and then removed for good.
+In the action panel, **Delete Note** and **Delete All Notes** move notes to **Recently Deleted**. Delete All Notes asks you to confirm first; choose **Cancel** to keep everything. Open Recently Deleted from the same panel and choose a note to restore it. Deleted notes are kept for 30 days and then removed for good.
 
 ## Zoom
 

@@ -68,6 +68,11 @@ struct Session {
 /// Why a launch did not happen (`NO_NODE` also sends the user to Settings).
 const NO_NODE: &str = "Node.js 22 or newer is needed: install it or download it in Settings → Integrations";
 
+/// The text of [`NO_NODE`] in the interface language (what `ext_launch_with` returns).
+fn no_node() -> String {
+    tr(NO_NODE).into_owned()
+}
+
 impl ExtState {
     /// A discovery scan finished.
     pub(crate) fn node_found(&mut self, n: Option<NodeInfo>) {
@@ -116,6 +121,9 @@ impl ExtState {
             origin: Instant::now() - age,
             cancel: Arc::new(AtomicBool::new(false)),
         });
+    }
+    pub(crate) fn test_set_node(&mut self, n: Option<NodeInfo>) {
+        self.node = n;
     }
     pub(crate) fn test_set_manifests(&mut self, m: Vec<Manifest>) {
         self.manifests = m;
@@ -443,12 +451,12 @@ impl App {
         let missing = self.ext_missing_required(ext, cmd);
         if !missing.is_empty() {
             let title = self.ext.manifests.iter().find(|m| m.name == ext).map(|m| m.title.clone()).unwrap_or_default();
-            self.ext_open_prefs(ext, &format!("{title} needs a value for: {}", missing.join(", ")));
+            self.ext_open_prefs(ext, &trf("{title} needs a value for: {names}", &[("title", &title), ("names", &missing.join(", "))]));
             self.notion_open_settings_tab();
             return;
         }
         if let Err(e) = self.ext_launch_with(ext, cmd, Default::default()) {
-            if e == NO_NODE {
+            if e == no_node() {
                 self.notion_open_settings_tab();
             }
             self.toast(e);
@@ -458,23 +466,32 @@ impl App {
     /// Start a command. Nothing of the running one (its screens, its process) is touched until every
     /// check has passed: a failed launch leaves it as it was and returns the reason.
     pub(crate) fn ext_launch_with(&mut self, ext: &str, cmd: &str, arguments: serde_json::Map<String, Value>) -> Result<(), String> {
-        let m = self.ext.manifests.iter().find(|m| m.name == ext).cloned().ok_or_else(|| format!("unknown extension {ext}"))?;
+        let m =
+            self.ext.manifests.iter().find(|m| m.name == ext).cloned().ok_or_else(|| trf("unknown extension {ext}", &[("ext", ext)]))?;
         if !self.ext_enabled(&m.name) {
-            return Err(format!("{} is turned off in Settings → Integrations", m.title));
+            return Err(trf("{title} is turned off in Settings → Integrations", &[("title", &m.title)]));
         }
-        let c = m.commands.iter().find(|c| c.name == cmd).cloned().ok_or_else(|| format!("{} has no command {cmd}", m.title))?;
-        let node = self.ext.node.clone().ok_or_else(|| NO_NODE.to_string())?;
+        let c = m
+            .commands
+            .iter()
+            .find(|c| c.name == cmd)
+            .cloned()
+            .ok_or_else(|| trf("{title} has no command {cmd}", &[("title", &m.title), ("cmd", cmd)]))?;
+        let node = self.ext.node.clone().ok_or_else(no_node)?;
         let entry = m.entry(&c).map_err(|e| format!("{}: {e}", m.title))?;
         if !entry.is_file() {
-            return Err(format!("{} is not built: {}.js is missing", m.title, c.name));
+            return Err(trf("{title} is not built: {cmd}.js is missing", &[("title", &m.title), ("cmd", &c.name)]));
         }
         let saved = storage::load_preferences(&self.store.root, &m.name);
         let missing = m.missing_required(&c, &saved);
         if !missing.is_empty() {
-            return Err(format!("Required preferences are not set ({}): fill them in at Settings → Integrations", missing.join(", ")));
+            return Err(trf(
+                "Required preferences are not set ({names}): fill them in at Settings → Integrations",
+                &[("names", &missing.join(", "))],
+            ));
         }
-        let runtime =
-            ferrocast_core::extensions::write_runtime(&self.store.root).map_err(|e| format!("Cannot write the extensions runtime: {e}"))?;
+        let runtime = ferrocast_core::extensions::write_runtime(&self.store.root)
+            .map_err(|e| trf("Cannot write the extensions runtime: {e}", &[("e", &e.to_string())]))?;
         let view_mode = c.mode == Mode::View;
         let prev = self.ext.sess.as_ref().map(|s| (s.mode == Mode::View, s.origin));
         let origin = hostcalls::carried_origin(prev, view_mode, Instant::now());
@@ -500,7 +517,7 @@ impl App {
         let sc = Sidecar::spawn(&node.path, &runtime, &support, move |e| bus.send(Msg::Ext(id, e)));
         let mut sc = match sc {
             Ok(sc) => sc,
-            Err(e) => return Err(format!("Cannot start Node.js: {e}")),
+            Err(e) => return Err(trf("Cannot start Node.js: {e}", &[("e", &e.to_string())])),
         };
         let launch = HostMsg::Launch {
             entry: entry.to_string_lossy().into_owned(),
@@ -521,7 +538,7 @@ impl App {
             },
         };
         if let Err(e) = sc.send(&launch) {
-            return Err(format!("Cannot talk to Node.js: {e}"));
+            return Err(trf("Cannot talk to Node.js: {e}", &[("e", &e.to_string())]));
         }
         self.ext_log(&format!("started {}/{} (session {id})", m.name, c.name));
         self.ext.sess = Some(Session {

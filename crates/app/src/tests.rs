@@ -12,6 +12,8 @@ mod record_recovery_tests;
 mod round3_ui_tests;
 #[path = "round4_flows_tests.rs"]
 mod round4_flows_tests;
+#[path = "round4_ui_tests.rs"]
+mod round4_ui_tests;
 #[path = "sync_clip_tests.rs"]
 mod sync_clip_tests;
 
@@ -8044,7 +8046,9 @@ fn sd4_the_languages_chip_follows_what_is_typed() {
     let chips = |typed: Option<String>| {
         let mut app = settings_app(TRANSLATE_TAB, egui::ThemePreference::Dark);
         if let Some(t) = typed {
-            app.ctx.data_mut(|d| d.insert_temp(Id::new("translate_langs_buf"), t));
+            // (the list the text was made from, the typed text)
+            let from = app.settings.translate_languages.clone();
+            app.ctx.data_mut(|d| d.insert_temp(Id::new("translate_langs_buf"), (from, t)));
         }
         sd4_render(&mut app);
         sd4_chips(&app)

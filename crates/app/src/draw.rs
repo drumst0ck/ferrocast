@@ -103,6 +103,12 @@ impl App {
         if self.settings_undo.as_ref().is_some_and(|(_, _, t)| t.elapsed() > Duration::from_secs(UNDO_SECS)) {
             self.settings_undo = None;
         }
+        // a message that arrived while Undo was on offer goes up once it is not
+        if self.toast.is_none() && self.settings_undo.is_none() {
+            if let Some(msg) = self.ctx.data_mut(|d| d.remove_temp::<String>(Id::new("toast-after-undo"))) {
+                self.toast(msg);
+            }
+        }
     }
 }
 
@@ -1564,7 +1570,7 @@ impl App {
         let spec = parts.join("+");
         if HotKey::from_str(&spec).is_err() {
             if let Some(View::Hotkey { err, .. }) = self.stack.last_mut() {
-                *err = format!("Unsupported combination {spec}");
+                *err = trf("Unsupported combination {spec}", &[("spec", &spec)]);
             }
             return true;
         }
@@ -1624,7 +1630,7 @@ impl App {
         };
         services::set_exec(&path);
         self.reload_scripts();
-        let _ = std::process::Command::new("/usr/bin/open").arg("-t").arg(&path).status();
+        open_detached(&["-t".as_ref(), path.as_ref()]);
         self.hide();
         self.reset_to_root();
     }
@@ -2296,6 +2302,15 @@ impl App {
         if let Some(k) = footer_click {
             ui.ctx().data_mut(|d| d.insert_temp(Id::new("footer-click"), k));
             ui.ctx().request_repaint();
+        }
+        // ⌘Z undoes the pending reset, unless a text field is editing (it keeps its own undo)
+        if !undo_clicked
+            && settings
+            && self.settings_undo.is_some()
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui.ctx().input_mut(|i| i.consume_key(CMD, Key::Z))
+        {
+            undo_clicked = true;
         }
         if undo_clicked {
             self.undo_settings_reset();
@@ -3031,8 +3046,8 @@ impl App {
         let ctx = ui.ctx().clone();
         let Some(original) = original else {
             let (msg, col) = match &error {
-                Some(e) => (format!("Could not read the metadata: {e}"), pal.danger),
-                None => ("Reading the metadata…".to_string(), pal.sub),
+                Some(e) => (trf("Could not read the metadata: {e}", &[("e", e)]), pal.danger),
+                None => (tr("Reading the metadata…").into_owned(), pal.sub),
             };
             ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, msg, FontId::proportional(15.0), col);
             return;
@@ -3049,8 +3064,7 @@ impl App {
             } else {
                 match edits.len() {
                     0 => "No changes yet.".to_string(),
-                    1 => "1 change.".to_string(),
-                    n => format!("{n} changes."),
+                    n => trn("{n} change.", "{n} changes.", n as u64),
                 }
             };
             card(ui, pal, |ui| {
@@ -3340,14 +3354,15 @@ impl App {
                 });
                 if st == VisStyle::Still {
                     form_row(ui, pal, "Image", "The picture shown while the audio plays.", |ui| {
-                        choose =
-                            ui.add_enabled(!picking, egui::Button::new(if picking { "Choosing…" } else { "Choose picture…" })).clicked();
+                        choose = ui
+                            .add_enabled(!picking, egui::Button::new(tr(if picking { "Choosing…" } else { "Choose picture…" })))
+                            .clicked();
                         let (text, color) = match &image {
                             Some(p) if p.is_file() => {
                                 (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), pal.text)
                             }
-                            Some(p) => (format!("{} (not found)", p.display()), pal.sub),
-                            None => ("none yet".to_string(), pal.sub),
+                            Some(p) => (trf("{path} (not found)", &[("path", &p.display().to_string())]), pal.sub),
+                            None => (tr("none yet").into_owned(), pal.sub),
                         };
                         let text = elide(ui.painter(), &text, FontId::proportional(12.5), 120.0);
                         ui.label(RichText::new(text).size(12.5).color(color));
@@ -3646,7 +3661,13 @@ impl App {
             pal.text,
         );
         let note = if audio.truncated {
-            format!("   ·   waveform covers the first {:.0} min", audio.samples.len() as f64 / audio.rate.max(1) as f64 / 60.0)
+            format!(
+                "   ·   {}",
+                trf(
+                    "waveform covers the first {min} min",
+                    &[("min", &format!("{:.0}", audio.samples.len() as f64 / audio.rate.max(1) as f64 / 60.0))]
+                )
+            )
         } else {
             String::new()
         };
@@ -3654,11 +3675,16 @@ impl App {
             Pos2::new(wave.min.x, wave.max.y + 14.0),
             egui::Align2::LEFT_CENTER,
             format!(
-                "at {}   ·   start {}   ·   end {}   ·   clip {:.2} s{note}",
-                t.label(t.cursor),
-                t.label(t.start),
-                t.label(t.end),
-                t.clip()
+                "{}{note}",
+                trf(
+                    "at {time}   ·   start {start}   ·   end {end}   ·   clip {clip} s",
+                    &[
+                        ("time", &t.label(t.cursor)),
+                        ("start", &t.label(t.start)),
+                        ("end", &t.label(t.end)),
+                        ("clip", &format!("{:.2}", t.clip())),
+                    ],
+                )
             ),
             FontId::proportional(12.5),
             pal.text,
@@ -6749,7 +6775,7 @@ impl App {
                     }
                 }
                 if let Some(u) = open_url {
-                    let _ = std::process::Command::new("/usr/bin/open").arg(&u).status();
+                    open_detached(&[u.as_ref()]);
                 }
                 if check_now {
                     self.check_updates();
@@ -7145,7 +7171,7 @@ impl App {
                         m.set_focus_lock_filter(id, egui::EventFilter { vertical_arrows: true, ..Default::default() });
                     });
                     let (r, _) = ui.allocate_exact_size(Vec2::new(side.width(), 34.0), Sense::hover());
-                    let resp = ui.interact(r, id, Sense::click()).on_hover_text(format!("{}  ⌘{}", tr(name), i + 1));
+                    let resp = ui.interact(r, id, Sense::click()).on_hover_text(settings_tab_tooltip(name, i));
                     record_ctl(&ctx, "sidebar", resp.id, r, true);
                     #[cfg(test)]
                     marks.0.push((name.to_string(), r));
@@ -7495,7 +7521,10 @@ impl App {
                                         if small_btn(ui, pal, "Save") {
                                             save_key = true;
                                         }
-                                        field(ui, pal, &mut key_scratch, 220.0, if has_key { "••••••••" } else { "sk-…" }, true);
+                                        let r = field(ui, pal, &mut key_scratch, 220.0, if has_key { "••••••••" } else { "sk-…" }, true);
+                                        if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                                            save_key = true;
+                                        }
                                     });
                                 });
                             }
@@ -7511,7 +7540,10 @@ impl App {
                                         if small_btn(ui, pal, "Save") {
                                             save_key = true;
                                         }
-                                        field(ui, pal, &mut key_scratch, 220.0, if has_key { "••••••••" } else { "sk-ant-…" }, true);
+                                        let r = field(ui, pal, &mut key_scratch, 220.0, if has_key { "••••••••" } else { "sk-ant-…" }, true);
+                                        if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                                            save_key = true;
+                                        }
                                     });
                                 });
                             }
@@ -7579,8 +7611,12 @@ impl App {
                                     segmented(ui, pal, &mut s.wheel_translate_key, &opts);
                                 });
                             });
-                            let id = Id::new("translate_langs_buf");
-                            let typed: String = ctx.data(|d| d.get_temp(id)).unwrap_or_else(|| s.translate_languages.join(", "));
+                            // (the list the text was made from, the text): a change made elsewhere (iCloud, import) resets it
+                            let id = Id::new(TRANSLATE_LANGS_BUF);
+                            let typed: String = match ctx.data(|d| d.get_temp::<(Vec<String>, String)>(id)) {
+                                Some((from, text)) if from == s.translate_languages => text,
+                                _ => s.translate_languages.join(", "),
+                            };
                             let lang_note = ferrocast_core::translate::language_note(&typed);
                             let lang_kind = if lang_note.warn { StatusKind::Warn } else { StatusKind::Neutral };
                             row_chip(ui, pal, "Languages", "Drag selected text and tap the translate key. Comma-separated, up to 12.", Some((lang_kind, &lang_note.text)), |ui| {
@@ -7588,7 +7624,8 @@ impl App {
                                 if field(ui, pal, &mut buf, 470.0, "English, Spanish, French…", false).changed() {
                                     s.translate_languages = ferrocast_core::translate::parse_list(&buf);
                                 }
-                                ui.ctx().data_mut(|d| d.insert_temp(id, buf));
+                                let from = s.translate_languages.clone();
+                                ui.ctx().data_mut(|d| d.insert_temp(id, (from, buf)));
                             });
                         });
                         ui.add_space(14.0);
@@ -8266,13 +8303,17 @@ impl App {
                         });
                         ui.add_space(10.0);
                         note(ui, pal, SYNC_NOTE);
-                        let disabled: Vec<String> = s.commands.iter().filter(|(_, c)| c.disabled).map(|(k, _)| k.clone()).collect();
+                        let mut disabled: Vec<String> = s.commands.iter().filter(|(_, c)| c.disabled).map(|(k, _)| k.clone()).collect();
+                        // show the command's name (as `rebuild` saw it), not its internal id; sorted by name
+                        let titles: HashMap<String, String> = ctx.data(|d| d.get_temp(Id::new(DISABLED_TITLES))).unwrap_or_default();
+                        let name_of = |id: &str| titles.get(id).cloned().unwrap_or_else(|| id.to_string());
+                        disabled.sort_by_cached_key(|id| (name_of(id).to_lowercase(), id.clone()));
                         if !disabled.is_empty() {
                             ui.add_space(14.0);
                             section(ui, pal, "Disabled commands");
                             group(ui, pal, |ui| {
                                 for d in disabled {
-                                    row(ui, pal, &d, "Hidden from Root Search.", |ui| {
+                                    row(ui, pal, &name_of(&d), "Hidden from Root Search.", |ui| {
                                         if small_btn(ui, pal, "Enable") {
                                             enable = Some(d.clone());
                                         }
@@ -8376,13 +8417,21 @@ impl App {
         }
         self.scratch = scratch;
         if save_key {
-            let ok = services::set_ai_key_for(s.ai_provider, &key_scratch);
+            let ok = self.write_ai_key(s.ai_provider, &key_scratch);
             let now_has = !key_scratch.trim().is_empty();
-            key_scratch.clear();
-            ctx.data_mut(|d| {
-                d.insert_temp(Id::new("ai_has_key"), now_has);
-                d.remove::<bool>(has_key_cache_id(s.ai_provider));
-            });
+            if ok {
+                key_scratch.clear();
+                ctx.data_mut(|d| {
+                    d.insert_temp(Id::new("ai_has_key"), now_has);
+                    d.remove::<bool>(has_key_cache_id(s.ai_provider));
+                });
+            } else {
+                // nothing was stored: keep what was typed for a retry and read the real state again
+                ctx.data_mut(|d| {
+                    d.remove::<bool>(Id::new("ai_has_key"));
+                    d.remove::<bool>(has_key_cache_id(s.ai_provider));
+                });
+            }
             self.toast(if !ok {
                 "Could not update Keychain"
             } else if now_has {
@@ -8507,7 +8556,7 @@ impl App {
             self.sync_all();
         }
         if open_data {
-            let _ = std::process::Command::new("/usr/bin/open").arg(&self.store.root).status();
+            open_detached(&[self.store.root.as_ref()]);
         }
         if check_now {
             self.check_updates();
@@ -8712,6 +8761,14 @@ const SETTINGS_TABS: [(&str, &str); 10] = [
 ];
 /// Indices of the first tab of the second, third and fourth group: a divider is drawn before each.
 const SETTINGS_GROUP_STARTS: [usize; 3] = [3, 5, 6];
+/// egui temp-data key of the Translate "Languages" field: (languages it was made from, typed text).
+const TRANSLATE_LANGS_BUF: &str = "translate_langs_buf";
+
+/// Hover text of Settings tab `i`: its name and its ⌘ shortcut.
+fn settings_tab_tooltip(name: &str, i: usize) -> String {
+    format!("{}  ⌘{}", tr(name), (i + 1) % 10)
+}
+
 /// ⌘1…⌘9 jump to the first nine tabs and ⌘0 to the tenth.
 const SETTINGS_NUM_KEYS: [Key; 10] =
     [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9, Key::Num0];
@@ -10174,7 +10231,7 @@ fn empty_state(ui: &mut Ui, pal: &Palette, tab: usize, title: &str, line: &str, 
 const NOW_PLAYING_NOTE: &str = "Shows any app that reports to macOS Now Playing. It uses an open-source helper that runs through macOS's own perl and needs no permission; it may stop working after a macOS update. The pill hides while nothing plays and when an app is full screen.";
 
 /// Toast shown after "Reset this tab"; the footer turns its "Undo" into a link.
-const RESET_TOAST: &str = "Tab reset · Undo";
+pub(crate) const RESET_TOAST: &str = "Tab reset · Undo";
 /// How long Undo stays available.
 const UNDO_SECS: u64 = 8;
 
@@ -10353,7 +10410,7 @@ impl App {
         self.settings_undo = Some((tab, self.settings.clone(), Instant::now()));
         self.commit_settings(new);
         // the Languages field keeps what was typed in egui temp data: show the restored value
-        self.ctx.data_mut(|d| d.remove::<String>(Id::new("translate_langs_buf")));
+        self.ctx.data_mut(|d| d.remove::<(Vec<String>, String)>(Id::new(TRANSLATE_LANGS_BUF)));
         self.toast(RESET_TOAST);
         self.ctx.request_repaint_after(Duration::from_secs(UNDO_SECS));
         true
@@ -10364,7 +10421,7 @@ impl App {
         let Some((tab, old, _)) = self.settings_undo.take() else { return false };
         let back = with_tab_fields_from(&self.settings, &old, tab);
         self.commit_settings(back);
-        self.ctx.data_mut(|d| d.remove::<String>(Id::new("translate_langs_buf")));
+        self.ctx.data_mut(|d| d.remove::<(Vec<String>, String)>(Id::new(TRANSLATE_LANGS_BUF)));
         self.toast("Previous settings restored");
         true
     }
@@ -10498,7 +10555,10 @@ fn theme_editor(ui: &mut Ui, pal: &Palette, e: &mut ferrocast_core::themes::Cust
             if small_btn(ui, pal, "Rename") {
                 act.push(ThemeAct::Rename(buf.clone()));
             }
-            field(ui, pal, &mut buf, 170.0, "Name", false);
+            let r = field(ui, pal, &mut buf, 170.0, "Name", false);
+            if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                act.push(ThemeAct::Rename(buf.clone()));
+            }
             ui.ctx().data_mut(|d| d.insert_temp(id, (e.name.clone(), buf)));
         });
         plain_row(ui, pal, "Base", "Light or dark. It sets the shape of the derived colours and the look of the Notes window.", |ui| {

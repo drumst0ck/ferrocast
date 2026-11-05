@@ -294,9 +294,49 @@ impl CutAction {
     }
 }
 
+/// Status line of a running face analysis.
+pub(crate) fn analyze_progress_text(cancelling: bool, total: f64, frac: f32) -> String {
+    if cancelling {
+        tr("Cancelling…").into_owned()
+    } else if total > 0.0 {
+        trf("Analyzing… {percent} %", &[("percent", &format!("{:.0}", frac * 100.0))])
+    } else {
+        tr("Starting…").into_owned()
+    }
+}
+
+/// Status line of a running transcription.
+pub(crate) fn transcribe_progress_text(cancelling: bool, total: f64, frac: f32) -> String {
+    if cancelling {
+        tr("Cancelling…").into_owned()
+    } else if total > 0.0 {
+        trf("Transcribing… {percent} %", &[("percent", &format!("{:.0}", frac * 100.0))])
+    } else {
+        tr("Starting…").into_owned()
+    }
+}
+
+/// The loupe's focus note: picking, a fixed point (x, y in 0..1) or following the cursor.
+pub(crate) fn focus_note(picking: bool, focus: Option<(f64, f64)>) -> String {
+    match (picking, focus) {
+        (true, _) => "Click the preview to set the focus.".to_string(),
+        (false, Some((x, y))) => trf("Focus at {x} %, {y} %.", &[("x", &format!("{:.0}", x * 100.0)), ("y", &format!("{:.0}", y * 100.0))]),
+        (false, None) => "Following the cursor.".to_string(),
+    }
+}
+
+/// `3 words selected · 0:01–0:04` under the transcript.
+pub(crate) fn words_selected(k: usize, from: &str, to: &str) -> String {
+    let n = k.to_string();
+    let args = [("n", n.as_str()), ("from", from), ("to", to)];
+    trf(if k == 1 { "{n} word selected · {from}–{to}" } else { "{n} words selected · {from}–{to}" }, &args)
+}
+
 /// `Removed 3 cuts · 1.4 s`.
 pub fn cut_report(cuts: usize, secs: f64) -> String {
-    format!("Removed {cuts} cut{} · {secs:.1} s", if cuts == 1 { "" } else { "s" })
+    let args = [("n", cuts.to_string()), ("secs", format!("{secs:.1}"))];
+    let args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    trf(if cuts == 1 { "Removed {n} cut · {secs} s" } else { "Removed {n} cuts · {secs} s" }, &args)
 }
 
 /// Progress and cancel flag of the transcription in flight. Dropping it (the editor session ends)
@@ -379,7 +419,9 @@ fn run_transcribe(
     use ferrocast_macos::capture::{Helper, TranscribeError};
     let mut helper = match Helper::spawn(helper, log) {
         Ok(h) => h,
-        Err(e) => return TranscribeMsg::Failed(TranscribeFailure::Message(format!("Could not start the transcriber: {e}"))),
+        Err(e) => {
+            return TranscribeMsg::Failed(TranscribeFailure::Message(trf("Could not start the transcriber: {e}", &[("e", &e.to_string())])))
+        }
     };
     match helper.transcribe(dir, Some(audio), locale, cancel, on_progress) {
         Ok(_) => match std::fs::read_to_string(dir.join("transcript.json")) {
@@ -387,7 +429,9 @@ fn run_transcribe(
                 Ok(t) => TranscribeMsg::Done(Box::new(t)),
                 Err(e) => TranscribeMsg::Failed(TranscribeFailure::Message(e)),
             },
-            Err(e) => TranscribeMsg::Failed(TranscribeFailure::Message(format!("The transcript could not be read: {e}"))),
+            Err(e) => {
+                TranscribeMsg::Failed(TranscribeFailure::Message(trf("The transcript could not be read: {e}", &[("e", &e.to_string())])))
+            }
         },
         Err(TranscribeError::Cancelled) => TranscribeMsg::Cancelled,
         Err(e) => TranscribeMsg::Failed(map_transcribe_error(&e)),
@@ -402,7 +446,7 @@ pub fn map_face_error(e: &ferrocast_macos::capture::AnalyzeFaceError) -> String 
     use ferrocast_macos::capture::AnalyzeFaceError as E;
     match e {
         E::NotFound(_) => "The camera recording was not found in the project folder.".into(),
-        E::Invalid(m) => format!("This camera recording cannot be analyzed: {m}"),
+        E::Invalid(m) => trf("This camera recording cannot be analyzed: {m}", &[("m", m)]),
         other => other.to_string(),
     }
 }
@@ -412,7 +456,7 @@ pub fn face_found(faces: u32, frames: u32) -> Result<String, String> {
     if faces == 0 {
         Err("No face was found in the camera. Check that the camera shows you and try again.".into())
     } else {
-        Ok(format!("Found a face in {faces} of {frames} samples."))
+        Ok(trf("Found a face in {faces} of {frames} samples.", &[("faces", &faces.to_string()), ("frames", &frames.to_string())]))
     }
 }
 
@@ -494,7 +538,7 @@ fn run_face(
     use ferrocast_macos::capture::{AnalyzeFaceError, Helper};
     let mut helper = match Helper::spawn(helper, log) {
         Ok(h) => h,
-        Err(e) => return FaceMsg::Failed(format!("Could not start the face analysis: {e}")),
+        Err(e) => return FaceMsg::Failed(trf("Could not start the face analysis: {e}", &[("e", &e.to_string())])),
     };
     match helper.analyze_face(dir, None, cancel, on_progress) {
         Ok(d) => FaceMsg::Done { faces: d.faces, frames: d.frames },
@@ -1495,7 +1539,7 @@ impl Editor {
                 self.st.leave_warned = false;
                 self.dirty = false;
             }
-            Err(e) => self.st.autosave.failed(now, format!("Could not save project.json: {e}")),
+            Err(e) => self.st.autosave.failed(now, trf("Could not save project.json: {e}", &[("e", &e.to_string())])),
         }
     }
 
@@ -2563,13 +2607,7 @@ fn face_rows(ui: &mut Ui, pal: &Palette, ed: &mut Editor, c: &CameraLayout, now:
     if let Some(r) = ed.st.face.run.as_ref() {
         let (done, total, cancelling) = (r.done, r.total, r.cancelling);
         let frac = if total > 0.0 { (done / total).clamp(0.0, 1.0) as f32 } else { 0.0 };
-        let text = if cancelling {
-            "Cancelling…".to_string()
-        } else if total > 0.0 {
-            format!("Analyzing… {:.0} %", frac * 100.0)
-        } else {
-            "Starting…".to_string()
-        };
+        let text = analyze_progress_text(cancelling, total, frac);
         if progress_card(ui, pal, &text, frac, !cancelling) {
             ed.cancel_face();
         }
@@ -2656,11 +2694,7 @@ fn loupe_fields(ui: &mut Ui, pal: &Palette, ed: &mut Editor, l: &Loupe, duration
         }
         None => {}
     }
-    let text = match (picking, l.x.zip(l.y)) {
-        (true, _) => "Click the preview to set the focus.".to_string(),
-        (false, Some((x, y))) => format!("Focus at {:.0} %, {:.0} %.", x * 100.0, y * 100.0),
-        (false, None) => "Following the cursor.".to_string(),
-    };
+    let text = focus_note(picking, l.x.zip(l.y));
     note(ui, pal, &text);
     if let Some(v) = row_slider(ui, pal, "Ease in", l.ease_in, 0.0..=LOUPE_EASE_MAX, 1.0, " s") {
         edit(ed, EditKind::Loupe, LoupeField::EaseIn(v));
@@ -2768,13 +2802,7 @@ fn transcript_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Projec
     if let Some(r) = ed.st.tr.run.as_ref() {
         let (done, total, cancelling) = (r.done, r.total, r.cancelling);
         let frac = if total > 0.0 { (done / total).clamp(0.0, 1.0) as f32 } else { 0.0 };
-        let text = if cancelling {
-            "Cancelling…".to_string()
-        } else if total > 0.0 {
-            format!("Transcribing… {:.0} %", frac * 100.0)
-        } else {
-            "Starting…".to_string()
-        };
+        let text = transcribe_progress_text(cancelling, total, frac);
         let mut cancel = false;
         card(ui, pal, |ui| {
             ui.label(egui::RichText::new(text).size(13.0).color(pal.text));
@@ -2846,10 +2874,7 @@ fn transcript_words(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project,
     }
     // both lines keep their height whatever the selection is, so the words never move under a drag
     let status = match sel {
-        Some((a, b)) => {
-            let k = b - a + 1;
-            format!("{k} word{} selected · {}–{}", if k == 1 { "" } else { "s" }, clock(tr.words[a].start), clock(tr.words[b].end))
-        }
+        Some((a, b)) => words_selected(b - a + 1, &clock(tr.words[a].start), &clock(tr.words[b].end)),
         None => "No selection".to_string(),
     };
     note(ui, pal, &status);

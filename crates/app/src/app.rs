@@ -251,6 +251,30 @@ pub fn compress_goal(
     Ok((goal, r))
 }
 
+/// egui temp-data key of the id -> title map of the commands `rebuild` left out because they are disabled.
+pub(crate) const DISABLED_TITLES: &str = "disabled-command-titles";
+
+/// Run `program` with `args` without waiting for it: `/usr/bin/open` can block on LaunchServices (a
+/// busy Finder, an editor that is starting) and the launcher must not freeze meanwhile. The child is
+/// reaped on a thread so it never lingers as a zombie. `false` when it could not be started.
+pub(crate) fn spawn_detached(program: &str, args: &[std::ffi::OsString]) -> bool {
+    match std::process::Command::new(program).args(args).stdin(std::process::Stdio::null()).spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// `/usr/bin/open <args>` without blocking the caller.
+pub(crate) fn open_detached(args: &[&std::ffi::OsStr]) -> bool {
+    let args: Vec<std::ffi::OsString> = args.iter().map(|a| a.to_os_string()).collect();
+    spawn_detached("/usr/bin/open", &args)
+}
+
 /// Thumbnails were decoded for `loaded` (the order the collage had when the job started); the
 /// pictures may have been dragged into another order since. Returns `items` rearranged to the
 /// `now` order, or `None` when the file sets differ or an item is missing (a stale result).
@@ -2087,6 +2111,10 @@ impl App {
         }
         self.ext_ensure_loaded();
         v.extend(self.ext_command_items());
+        // Settings → Advanced lists disabled commands by name: keep the titles of the ones dropped here
+        let disabled_titles: HashMap<String, String> =
+            v.iter().filter(|i| self.settings.is_disabled(&i.id)).map(|i| (i.id.clone(), i.title.clone())).collect();
+        self.ctx.data_mut(|d| d.insert_temp(Id::new(DISABLED_TITLES), disabled_titles));
         v.retain(|i| !self.settings.is_disabled(&i.id));
         self.base = v;
     }
@@ -2256,6 +2284,21 @@ impl App {
     }
 
     // ------------------------------------------------------------ Notion (Settings → Integrations)
+
+    /// Write (or, when empty, delete) the AI key of `p` in the Keychain.
+    #[cfg(not(test))]
+    pub(crate) fn write_ai_key(&self, p: ferrocast_core::models::AiProvider, key: &str) -> bool {
+        services::set_ai_key_for(p, key)
+    }
+
+    /// Tests never touch the real Keychain: they record the keys written and answer with
+    /// `test-keychain-ok` (default: success).
+    #[cfg(test)]
+    pub(crate) fn write_ai_key(&self, p: ferrocast_core::models::AiProvider, key: &str) -> bool {
+        let _ = (p, services::set_ai_key_for as fn(_, &str) -> bool);
+        self.ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<String>>(Id::new("test-keychain-writes")).push(key.trim().to_string()));
+        self.ctx.data(|d| d.get_temp::<bool>(Id::new("test-keychain-ok"))).unwrap_or(true)
+    }
 
     /// Save the token typed in Settings (trimmed; empty removes it). The token only ever goes to the Keychain.
     fn notion_save_token(&mut self, raw: &str) {
@@ -3012,8 +3055,15 @@ impl App {
     }
 
     fn toast(&mut self, s: impl Into<String>) {
+        let s = s.into();
+        // "Tab reset · Undo" stays while its Undo works: another message waits for it (shown by
+        // `expire_toasts` afterwards) instead of removing the link
+        if s != draw::RESET_TOAST && self.settings_undo.is_some() && self.toast.as_ref().is_some_and(|(t, _)| t == draw::RESET_TOAST) {
+            self.ctx.data_mut(|d| d.insert_temp(Id::new("toast-after-undo"), s));
+            return;
+        }
         self.toast_user = false;
-        self.toast = Some((s.into(), Instant::now()));
+        self.toast = Some((s, Instant::now()));
         self.ctx.request_repaint_after(Duration::from_millis(2600));
     }
 
@@ -7829,7 +7879,7 @@ impl App {
             },
             Act::TrashApp(p) => self.trash_app(&p),
             Act::EditScript(p) => {
-                let _ = std::process::Command::new("/usr/bin/open").arg("-t").arg(&p).status();
+                open_detached(&["-t".as_ref(), p.as_ref()]);
                 self.hide();
                 self.reset_to_root();
             }

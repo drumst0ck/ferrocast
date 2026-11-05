@@ -97,7 +97,7 @@ Con la sincronización con iCloud activada, las imágenes de las notas viajan po
 
 ## Eliminar notas
 
-En el panel de acciones, **Delete Note** y **Delete All Notes** mueven las notas a **Recently Deleted**. Abre Recently Deleted desde el mismo panel y elige una nota para restaurarla. Las notas eliminadas se conservan 30 días y después se borran definitivamente.
+En el panel de acciones, **Delete Note** y **Delete All Notes** mueven las notas a **Recently Deleted**. Delete All Notes pide confirmación antes; elige **Cancel** para conservarlo todo. Abre Recently Deleted desde el mismo panel y elige una nota para restaurarla. Las notas eliminadas se conservan 30 días y después se borran definitivamente.
 
 ## Zoom
 

@@ -91,6 +91,10 @@ pub struct AiRequest {
     pub settings: Settings,
 }
 
+/// Ids of the two rows of the "Delete All Notes?" confirmation.
+const DELETE_ALL_CONFIRM: &str = "delete-all:confirm";
+const DELETE_ALL_CANCEL: &str = "delete-all:cancel";
+
 /// What the palette is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -100,6 +104,8 @@ pub enum Mode {
     /// A submenu of the action panel (Format, Copy As, Export, AI Commands, Change Tone).
     Submenu(NoteAction),
     RecentlyDeleted,
+    /// The "Delete All Notes?" confirmation level.
+    ConfirmDeleteAll,
 }
 
 /// What the app must do after a call.
@@ -880,7 +886,7 @@ impl NotesCtl {
 
     /// The palette can pop a level by itself (Esc, ⌘[): trust its depth over the recorded mode.
     fn sync_mode(&mut self) {
-        if matches!(self.mode, Mode::Submenu(_) | Mode::RecentlyDeleted) && self.fx.palette_depth() <= 1 {
+        if matches!(self.mode, Mode::Submenu(_) | Mode::RecentlyDeleted | Mode::ConfirmDeleteAll) && self.fx.palette_depth() <= 1 {
             self.mode = Mode::Actions;
         }
     }
@@ -898,6 +904,8 @@ impl NotesCtl {
             Mode::Actions => action_items(&note_actions::search_all(&self.act_ctx(d), q)),
             Mode::Submenu(a) => action_items(&note_actions::filter(&note_actions::children(a, &self.act_ctx(d)), q)),
             Mode::RecentlyDeleted => deleted_items(&Self::deleted_rows(d, q)),
+            // two fixed rows: typing must not hide the way out
+            Mode::ConfirmDeleteAll => return,
         };
         self.fx.palette_set_items(items);
     }
@@ -916,9 +924,33 @@ impl NotesCtl {
                 self.close_palette();
                 self.open(d, id, true, out);
             }
+            Mode::ConfirmDeleteAll => {
+                self.close_palette();
+                if id == DELETE_ALL_CONFIRM {
+                    self.execute(NoteAction::DeleteAllNotes, d, out);
+                }
+            }
             Mode::Actions | Mode::Submenu(_) => {
                 let Some(action) = NoteAction::from_id(id) else { return };
                 let ctx = self.act_ctx(d);
+                if action == NoteAction::DeleteAllNotes {
+                    // one palette pick must not move every note to Recently Deleted: ask first
+                    let tr = ferrocast_core::i18n::tr;
+                    let item = |id: &str, title: &str, subtitle: Option<&str>, danger: bool| PaletteItem {
+                        id: id.into(),
+                        title: tr(title).into_owned(),
+                        subtitle: subtitle.map(|s| tr(s).into_owned()),
+                        danger,
+                        ..Default::default()
+                    };
+                    let items = vec![
+                        item(DELETE_ALL_CONFIRM, "Delete All Notes", Some("Moves every note to Recently Deleted."), true),
+                        item(DELETE_ALL_CANCEL, "Cancel", None, false),
+                    ];
+                    self.fx.palette_push(&tr("Delete all notes?"), items);
+                    self.mode = Mode::ConfirmDeleteAll;
+                    return;
+                }
                 if action == NoteAction::RecentlyDeleted {
                     let items = deleted_items(&Self::deleted_rows(d, ""));
                     self.fx.palette_push(&ferrocast_core::i18n::tr("Recently deleted…"), items);
@@ -2292,11 +2324,45 @@ mod tests {
         let mut w = W::new(vec![note("a", "A", 1), note("b", "B", 2)]);
         w.open("a");
         w.pick_action("delete-all");
+        w.pick("delete-all:confirm");
         assert!(w.by_id("a").deleted_at.is_some() && w.by_id("b").deleted_at.is_some());
         assert_eq!(w.live(), 1);
         let id = w.cur().unwrap().to_string();
         assert_eq!(w.by_id(&id).text, "");
         assert_eq!(w.ctl.history.clone().back(), None);
+    }
+
+    #[test]
+    fn delete_all_asks_first_and_changes_nothing_until_confirmed() {
+        let mut w = W::new(vec![note("a", "A", 1), note("b", "B", 2)]);
+        w.open("a");
+        w.ev(Event::Actions);
+        let out = w.pick("delete-all");
+        assert!(w.notes.iter().all(|n| n.deleted_at.is_none()), "picking the row alone deletes nothing");
+        assert!(!out.save_notes && out.toast.is_none(), "no save, no 'moved' toast yet: {out:?}");
+        assert!(w.st.borrow().palette_on, "the palette stays open on a confirm step");
+        assert_eq!(w.level_ids(), ["delete-all:confirm", "delete-all:cancel"]);
+        assert_eq!(w.cur(), Some("a"));
+        // confirming does it, once
+        let out = w.pick("delete-all:confirm");
+        assert!(w.notes.iter().filter(|n| n.id == "a" || n.id == "b").all(|n| n.deleted_at.is_some()));
+        assert!(out.save_notes);
+        assert_eq!(out.toast.as_deref(), Some("Moved all notes to Recently Deleted"));
+        assert!(!w.st.borrow().palette_on);
+    }
+
+    #[test]
+    fn cancelling_the_delete_all_confirmation_keeps_every_note() {
+        let mut w = W::new(vec![note("a", "A", 1), note("b", "B", 2)]);
+        w.open("a");
+        w.ev(Event::Actions);
+        w.pick("delete-all");
+        let out = w.pick("delete-all:cancel");
+        assert!(w.notes.iter().all(|n| n.deleted_at.is_none()));
+        assert!(!out.save_notes);
+        assert!(!w.st.borrow().palette_on, "the panel closes");
+        assert_eq!(w.ctl.mode, Mode::None);
+        assert_eq!(w.cur(), Some("a"));
     }
 
     #[test]
