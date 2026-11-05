@@ -58,6 +58,11 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Raycast extensions: LocalStorage**: LocalStorage is kept in memory and saved on a background thread (a loop of thousands of setItem no longer freezes the launcher), and an unreadable `localstorage.json` is left as it is and refuses writes instead of being silently reset to empty. #extensions
 - **Snippet expansion**: a snippet no longer deletes text in another app when you switch apps right after typing the keyword, and the paste shortcut follows the keyboard layout (Dvorak, Colemak) instead of sending ⌘K. #snippets
 - **Notch player**: the pill now hides on its own a while after you pause, even when nothing else changes, and decoding covers no longer leaks memory with every track change. #notch
+- **Calculator and time zones**: `1 in to cm` now converts inches (`in` is a unit again), and `5 pm london in tokyo` works while `13pm` is rejected. #launcher
+- **Snippets**: a snippet that includes another snippet now expands the included one too (`{date}`, `{cursor}` …, up to four levels) instead of pasting the placeholder as text. #snippets
+- **Clipboard**: `#123` and `#cafe` are no longer shown as colour swatches (a colour needs 6 or 8 hex digits); an image copied from another Mac through iCloud is written in one step, so an interrupted copy no longer leaves a broken image behind. #clipboard #sync
+- **Notes export**: HTML export keeps nested lists, and drops `javascript:` and other unsafe links (only http, https, mailto, file and relative links stay). #notes
+- **Data safety**: a second unreadable data file no longer overwrites the first `.corrupt` backup (the next ones get `.corrupt.2`, `.corrupt.3` …), and `frecency.json` stops growing without limit.
 
 - **Changelog outages**: `/changelog/<version>/` answers 503 with a fallback instead of a 500, and the RSS and JSON feeds answer 503 with `no-store` instead of a cached empty feed when the database is down.
 - **Changelog publishing**: pushes to `master` publish the root `CHANGELOG.md` (not a stale copy under `web/`), and an indented continuation paragraph under an entry is kept; stray text outside an entry is reported instead of silently dropped.
