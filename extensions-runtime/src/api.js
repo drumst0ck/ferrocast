@@ -118,13 +118,23 @@ class Toast {
   _send() {
     bridge.send({ type: 'toast', style: this._style, title: this._title, message: this._message });
   }
+  // Changes after show() are coalesced into one message per tick (the host may turn each into a
+  // notification); a toast that was never shown stays silent.
+  _changed() {
+    if (!this._shown || this._queued) return;
+    this._queued = true;
+    queueMicrotask(() => {
+      this._queued = false;
+      this._send();
+    });
+  }
   get style() { return this._style; }
-  set style(v) { this._style = v; this._send(); }
+  set style(v) { this._style = v; this._changed(); }
   get title() { return this._title; }
-  set title(v) { this._title = v; this._send(); }
+  set title(v) { this._title = v; this._changed(); }
   get message() { return this._message; }
-  set message(v) { this._message = v; this._send(); }
-  async show() { this._send(); }
+  set message(v) { this._message = v; this._changed(); }
+  async show() { this._shown = true; this._send(); }
   async hide() {}
 }
 Toast.Style = ToastStyle;

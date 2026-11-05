@@ -158,6 +158,20 @@ pub fn write_text(s: &str) {
     }
 }
 
+/// Replace the pasteboard with text marked as secret (nspasteboard.org `ConcealedType` and
+/// `TransientType`), so clipboard managers such as Maccy or Paste do not record it. `is_concealed`
+/// recognises these markers too.
+pub fn write_text_concealed(s: &str) {
+    let pb = pb();
+    pb.clearContents();
+    unsafe {
+        pb.setString_forType(&NSString::from_str(s), NSPasteboardTypeString);
+        for marker in ["org.nspasteboard.ConcealedType", "org.nspasteboard.TransientType"] {
+            pb.setData_forType(Some(&NSData::with_bytes(b"")), &NSString::from_str(marker));
+        }
+    }
+}
+
 /// Replace the pasteboard with file references.
 pub fn write_files(paths: &[PathBuf]) {
     let pb = pb();

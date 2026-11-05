@@ -19,6 +19,38 @@ use std::sync::Arc;
 const NO_VIEW_LIMIT: Duration = Duration::from_secs(60);
 const FIRST_RENDER_LIMIT: Duration = Duration::from_secs(30);
 
+// Test seams: what a build without a pasteboard or Notification Center would have shown.
+#[cfg(test)]
+thread_local! {
+    static CONCEALED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static NOTIFIED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Replace the clipboard with a secret that clipboard managers must not record.
+fn write_clipboard_concealed(text: &str) {
+    #[cfg(test)]
+    CONCEALED.with(|o| o.borrow_mut().push(text.to_string()));
+    #[cfg(not(test))]
+    clipboard::write_text_concealed(text);
+}
+
+/// A notification with an extension's own text (the launcher window is hidden).
+fn notify_ext(text: &str) {
+    #[cfg(test)]
+    NOTIFIED.with(|o| o.borrow_mut().push(text.to_string()));
+    services::notify_verbatim("Ferrocast", text);
+}
+
+#[cfg(test)]
+pub(crate) fn take_concealed() -> Vec<String> {
+    CONCEALED.with(|o| std::mem::take(&mut *o.borrow_mut()))
+}
+
+#[cfg(test)]
+pub(crate) fn take_notified() -> Vec<String> {
+    NOTIFIED.with(|o| std::mem::take(&mut *o.borrow_mut()))
+}
+
 struct Session {
     sc: Sidecar,
     id: u64,
@@ -172,6 +204,8 @@ pub struct ExtState {
     pending: hostcalls::Pending,
     /// `launchCommand` requests of the last few seconds.
     launches: hostcalls::LaunchLimiter,
+    /// In-memory LocalStorage of every extension that asked for it.
+    local: storage::LocalStores,
     /// The preferences form of one extension while Settings → Integrations shows it.
     prefs: Option<PrefsEdit>,
 }
@@ -621,12 +655,14 @@ impl App {
                     let text = if style == "failure" { format!("⚠ {text}") } else { text };
                     if self.visible {
                         self.toast_verbatim(text);
-                    } else {
-                        services::notify_verbatim("Ferrocast", &text);
+                    } else if style != "animated" {
+                        // a progress toast ("Loading") is not worth a banner of its own
+                        notify_ext(&text);
                     }
                 }
                 RuntimeMsg::Hud { title } => {
-                    self.toast_verbatim(title);
+                    // the window hides at once, so an in-window toast would never be seen
+                    notify_ext(&title);
                     self.hide();
                     self.reset_to_root();
                 }
@@ -791,6 +827,17 @@ impl App {
                     hostcalls::parse_selection(&out).map(Value::String)
                 }),
             },
+            m if m.starts_with("localStorage.") => match self.ext.local.call(&self.store.root, ext, m, params) {
+                Err(e) => Reply::Now(Err(e)),
+                Ok((v, persist)) => {
+                    // memory is updated at once; one thread per extension writes the file (bursts coalesce)
+                    if let Some(p) = persist {
+                        let (root, name) = (self.store.root.clone(), ext.to_string());
+                        p.spawn(move |e| instance::log(&root, &format!("extension: {name}: LocalStorage not saved: {e}")));
+                    }
+                    Reply::Now(Ok(v))
+                }
+            },
             "alert.confirm" => match hostcalls::confirm_script(params) {
                 Err(e) => Reply::Now(Err(e)),
                 Ok((script, primary)) => self.ext_later(session, call, move |cancel| {
@@ -823,15 +870,19 @@ impl App {
                     }
                 }
             }
-            _ => Reply::Now(self.ext_call_simple(ext, method, params)),
+            _ => Reply::Now(self.ext_call_simple(method, params)),
         }
     }
 
-    fn ext_call_simple(&mut self, ext: &str, method: &str, params: &Value) -> Result<Value, String> {
+    fn ext_call_simple(&mut self, method: &str, params: &Value) -> Result<Value, String> {
         let text = || params.get("text").and_then(Value::as_str).unwrap_or("").to_string();
         match method {
             "clipboard.copy" => {
-                notion_io::write_clipboard(&text());
+                if params.get("concealed").and_then(Value::as_bool) == Some(true) {
+                    write_clipboard_concealed(&text());
+                } else {
+                    notion_io::write_clipboard(&text());
+                }
                 self.shared.mark_clipboard_write();
                 Ok(Value::Null)
             }
@@ -865,7 +916,6 @@ impl App {
                 });
                 Ok(Value::Null)
             }
-            m if m.starts_with("localStorage.") => storage::local_storage(&self.store.root, ext, m, params),
             other => Err(format!("not supported in Ferrocast yet: {other}")),
         }
     }
