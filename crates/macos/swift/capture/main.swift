@@ -45,7 +45,7 @@ func handle(_ req: [String: Any]) {
     if cmd == "hello" {
         reply(id, ["protocol": protocolVersion, "os": osVersionString(), "version": helperVersion,
                    "sck": sckAvailable(), "metal": MTLCreateSystemDefaultDevice() != nil,
-                   "capabilities": sckAvailable() ? ["shareable", "screenshot", "record", "render.frame", "render", "devices", "record.sources", "transcribe", "analyze.face"] : []])
+                   "capabilities": sckAvailable() ? ["shareable", "screenshot", "record", "render.frame", "render", "devices", "record.sources", "transcribe", "analyze.face", "probe"] : []])
         return
     }
     guard #available(macOS 14, *) else {
@@ -65,6 +65,7 @@ func handle(_ req: [String: Any]) {
     case "cancel": if !handleTranscribeCancel(id, req) && !handleAnalyzeCancel(id, req) { handleCancel(id, req) }
     case "transcribe": handleTranscribe(id, req)
     case "analyze.face": handleAnalyzeFace(id, req)
+    case "probe": handleProbe(id, req)
     default: fail(id, "invalid", "unknown command: \(cmd)")
     }
 }

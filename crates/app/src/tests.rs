@@ -6,6 +6,8 @@ mod ext_host_tests;
 mod flows_tests;
 #[path = "np_tick_tests.rs"]
 mod np_tick_tests;
+#[path = "record_recovery_tests.rs"]
+mod record_recovery_tests;
 #[path = "round3_ui_tests.rs"]
 mod round3_ui_tests;
 #[path = "sync_clip_tests.rs"]

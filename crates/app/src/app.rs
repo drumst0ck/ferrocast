@@ -6321,7 +6321,21 @@ impl App {
         self.settings.capture.recordings_dir(&dirs::home_dir().unwrap_or_default())
     }
 
+    /// S11: repair projects a crash left without duration/sources before they are listed or opened.
+    /// Skips the recording in progress; does nothing (no helper) when there is nothing to repair.
+    fn recover_recordings(&mut self) {
+        let live = (self.rt.cmds.is_some() || self.rt.pending.is_some()).then(|| self.rt.project.clone()).flatten();
+        let root = self.store.root.clone();
+        let n = crate::record_ctl::recover_unfinished(&self.recordings_dir(), live.as_deref(), &self.capture.exe, move |m| {
+            instance::log(&root, m)
+        });
+        if n > 0 {
+            instance::log(&self.store.root, &format!("recovered {n} unfinished recording(s)"));
+        }
+    }
+
     fn reload_recordings(&mut self) {
+        self.recover_recordings();
         self.rt.recordings = crate::record_ctl::scan(&self.recordings_dir());
         self.invalidate_sections();
     }
@@ -6331,6 +6345,7 @@ impl App {
         if !self.capture_gate() {
             return;
         }
+        self.recover_recordings();
         match crate::record_ctl::newest(&self.recordings_dir()) {
             Some(p) => {
                 if !self.visible {
@@ -6347,6 +6362,9 @@ impl App {
     /// in memory when it has none and `capture.auto_zoom` is on) and renders the preview frames.
     pub(crate) fn open_editor(&mut self, dir: PathBuf) {
         self.editor_flush();
+        if crate::record_ctl::needs_recovery(&dir) {
+            self.recover_recordings();
+        }
         let exe = self.capture.exe.clone();
         let root = self.store.root.clone();
         let log = move |m: &str| instance::log(&root, m);
