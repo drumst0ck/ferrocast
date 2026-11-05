@@ -18018,6 +18018,8 @@ fn a_non_ascii_title_falls_back_to_script_sh() {
     assert_eq!(p.file_name().unwrap(), "script.sh");
     let q = write_new_script(&dir, "日記", "compact").unwrap();
     assert_ne!(p, q);
+}
+
 // ---- Quit and auto-update while a recording is active or an export runs (S1) ----
 
 fn exits(log: &[String]) -> Vec<&String> {
