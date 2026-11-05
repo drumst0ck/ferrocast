@@ -17,6 +17,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Extensions API**: `Clipboard.copy({ html })` copies the text of the HTML instead of an empty string, `showToast(null)` no longer throws, `LocalStorage.getItem` resolves `undefined` for a missing key as Raycast does, and `Keyboard.Shortcut.Common` matches Raycast (`CopyPath` is ⌘⇧,; `CopyDeeplink` and `ToggleQuickLook` exist). #extensions
+- **Intel Macs (Homebrew)**: the screen capture helper is built for the Mac's own architecture instead of always arm64, so capture and recording no longer fail with "Bad CPU type" after a source build on Intel. #recording
+- **Releases**: `SHA256SUMS.txt` also lists the versionless `Ferrocast.dmg`. #updates
 - **Recording recovery**: a recording that was left without a duration (Ferrocast crashed or was force-quit mid-recording, or an older build) is now repaired when the Recordings list or the editor opens: the capture helper reads the length and tracks of `screen.mov` and its camera and audio files, and only the missing project data is filled in. Media files are never changed, and a recording that cannot be read is left as it was. #recording
 - **Studio editor**: when `project.json` cannot be written (read-only folder, full disk), Esc no longer drops your unsaved edits; the editor stays open with the error in a toast, and a second Esc discards them. #recording
 - **Translate**: a translation that finishes after you started a newer one no longer replaces your newer selection or pastes over it; it is shown in the launcher and copied instead. #translate

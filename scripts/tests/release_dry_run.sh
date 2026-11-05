@@ -3,7 +3,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+trap 'rm -rf "$tmp" "${bindir:-}" "$tmp.err"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 cd "$tmp"
@@ -29,6 +29,15 @@ cat > CHANGELOG.md <<'T'
 - First release.
 T
 mkdir web && cp CHANGELOG.md web/CHANGELOG.md
+printf '# lock\nversion = "0.1.0"\n' > Cargo.lock
+# stub cargo: succeeds, or fails when FAKE_CARGO_FAIL is set (offline registry cache missing)
+bindir=$(mktemp -d)
+cat > "$bindir/cargo" <<'T'
+#!/bin/bash
+[ -z "${FAKE_CARGO_FAIL:-}" ] || { echo "error: no matching package in offline cache" >&2; exit 101; }
+T
+chmod +x "$bindir/cargo"
+export PATH="$bindir:$PATH"
 git add -A && git commit -qm init
 
 # refusals
@@ -39,6 +48,11 @@ rm dirty.txt
 git checkout -q -b topic
 scripts/release.sh 0.2.0 --no-push >/dev/null 2>&1 && fail "released from a non-master branch"
 git checkout -q master
+
+# a failing cargo update leaves the tree exactly as it was, and a rerun works
+FAKE_CARGO_FAIL=1 scripts/release.sh 0.2.0 --no-push >/dev/null 2>&1 && fail "release succeeded with a failing cargo update"
+[ -z "$(git status --porcelain)" ] || fail "failed release left a modified tree: $(git status --porcelain)"
+git rev-parse -q --verify refs/tags/v0.2.0 >/dev/null && fail "failed release created a tag"
 
 # dry run changes nothing
 scripts/release.sh 0.2.0 --dry-run | grep -q "dry run" || fail "dry run did not say so"
@@ -55,6 +69,11 @@ cmp -s CHANGELOG.md web/CHANGELOG.md || fail "web/CHANGELOG.md not synced with C
 git show --name-only --format= HEAD | grep -qx web/CHANGELOG.md || fail "web/CHANGELOG.md not in the release commit"
 git rev-parse -q --verify refs/tags/v0.2.0 >/dev/null || fail "tag missing"
 scripts/release.sh 0.2.0 --no-push >/dev/null 2>&1 && fail "released the same tag twice"
+
+# a push that fails after tagging says how to retry instead of leaving a silent half state
+scripts/release.sh 0.3.0 >/dev/null 2>"$tmp.err" && fail "push without a remote succeeded"
+grep -q "Retry: git push origin master && git push origin v0.3.0" "$tmp.err" || fail "no retry hint after a failed push"
+git rev-parse -q --verify refs/tags/v0.3.0 >/dev/null || fail "tag from the failed push is missing"
 
 # release notes: the 0.2.0 section holds the entry that was Unreleased; unknown version falls back
 scripts/release_notes.sh 0.2.0 | grep -q "A new thing." || fail "notes missing the entry"
