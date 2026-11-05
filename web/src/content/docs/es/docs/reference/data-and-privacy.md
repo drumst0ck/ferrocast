@@ -11,7 +11,7 @@ Ferrocast guarda sus datos en archivos JSON en `~/Library/Application Support/Fe
 - **Archivos JSON** en la carpeta de datos: ajustes, historial del portapapeles, snippets, quicklinks, notas y la lista de File Shelf. Las notas están en `notes.json`; una nota eliminada permanece ahí 30 días (Recently Deleted) antes de borrarse definitivamente.
 - **Keychain**: las claves de IA (una clave de Anthropic, la clave de un servidor compatible con OpenAI) y la sesión de Sign in with ChatGPT, que se renueva automáticamente.
 - **Log**: un registro de errores en la carpeta de datos; ábrelo con el comando **Reveal Log File**.
-- **Copias de seguridad**: la exportación deja fuera el historial del portapapeles.
+- **Copias de seguridad**: la exportación deja fuera el historial del portapapeles, las preferencias y el LocalStorage de las extensiones (pueden contener claves API y contraseñas), el runtime de Node descargado y las descargas de actualizaciones.
 
 ## Qué sale de tu Mac
 

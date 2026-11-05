@@ -6691,16 +6691,7 @@ impl App {
             Builtin::ExportData => {
                 let dest = dirs::download_dir().or_else(dirs::home_dir).unwrap_or_default();
                 let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-                match services::export_backup(&self.store.root, &dest, &stamp) {
-                    Ok(p) => {
-                        let _ = apps::reveal(&p);
-                        self.toast("Backup saved to Downloads (clipboard history excluded)");
-                    }
-                    Err(e) => {
-                        instance::log(&self.store.root, &format!("export failed: {e}"));
-                        self.toast(trf("Backup failed: {e}", &[("e", &e.to_string())]));
-                    }
-                }
+                services::export_backup_async(self.store.root.clone(), dest, stamp, true, self.bus.clone());
             }
             Builtin::ImportSnippets => {
                 let bus = self.bus.clone();

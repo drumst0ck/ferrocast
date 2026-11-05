@@ -26,7 +26,7 @@ Para elegirlo tú, abre Ajustes → General → **Idioma** y selecciona Sistema 
 - Ajustes → Capture tiene la carpeta de capturas (vacía usa `~/Pictures/Ferrocast Captures`), el formato (solo PNG), **After capture** (Show, Copy o Save), **Include cursor** la **Recording frame rate** (30 o 60 fps), la **Recording countdown** (Off, 3 s o 5 s) y una fila de atajo para Capture Area, Capture Window, Capture Screen, Capture Scrolling, Record Screen, Record Area y Record Window, todas vacías por defecto (consulta [Captura de pantalla](/es/docs/launcher/screen-capture/)).
 - Ajustes → Notes tiene tres opciones para la ventana flotante de notas: un botón en la barra de menús que la muestra u oculta, si Esc quita el foco en lugar de cerrarla, y el zoom (consulta [Notas](/es/docs/launcher/notes/)).
 - El proveedor de IA, el modelo y las claves (consulta [Ask AI](/es/docs/launcher/ask-ai/)).
-- Copia de seguridad: exporta tus datos (el historial del portapapeles no se incluye) e importa snippets desde una exportación JSON de Raycast.
+- Copia de seguridad: exporta tus datos (no se incluyen el historial del portapapeles, las preferencias de extensiones ni el runtime descargado; se ejecuta en segundo plano) e importa snippets desde una exportación JSON de Raycast.
 
 :::caution[Límites]
 Abrir al iniciar sesión se aplica en el siguiente inicio de sesión. Los guardados fallidos se notifican.

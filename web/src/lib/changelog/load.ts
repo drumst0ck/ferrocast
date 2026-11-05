@@ -24,6 +24,11 @@ export async function loadRelease(version: string): Promise<{ release: ReleaseVi
   }
 }
 
+/** An outage must not look like a valid empty feed: readers would treat every release as removed. */
+export function unavailableFeed(): Response {
+  return new Response('Changelog temporarily unavailable', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60', 'Content-Type': 'text/plain; charset=utf-8' } });
+}
+
 export const CATEGORY_LABEL: Record<string, string> = {
   added: 'Added',
   changed: 'Changed',

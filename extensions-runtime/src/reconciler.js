@@ -118,7 +118,11 @@ function clean(v, depth) {
 
 function serialize(inst, path, container) {
   if (inst.type === '#text') return { t: '#text', p: { text: String(inst.props.text) }, c: [] };
-  const p = { _id: path };
+  // An action id carries the render generation, so an id from a screen that has since changed no
+  // longer names whatever action now sits at the same position.
+  const isAction = inst.type === 'Action' || inst.type.startsWith('Action.');
+  const id = isAction ? `${container.gen}@${path}` : path;
+  const p = { _id: id };
   for (const [k, v] of Object.entries(inst.props)) {
     if (k === 'children' || k === 'key' || k === 'ref') continue;
     if (typeof v === 'function') p[k] = true;
@@ -133,12 +137,13 @@ function serialize(inst, path, container) {
     container.fields.set(path, inst);
     container.dropdowns.push(inst);
   }
-  if (inst.type === 'Action' || inst.type.startsWith('Action.')) container.actions.set(path, inst);
+  if (isAction) container.actions.set(id, inst);
   const c = inst.children.map((ch, i) => serialize(ch, `${path}.${i}`, container));
   return { t: inst.type, p, c };
 }
 
-function toTree(container) {
+function toTree(container, gen = 0) {
+  container.gen = gen;
   container.actions = new Map();
   container.fields = new Map();
   container.dropdowns = [];

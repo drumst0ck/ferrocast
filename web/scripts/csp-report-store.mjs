@@ -2,6 +2,16 @@
 
 const EXT_SCHEMES = /^(chrome-extension|moz-extension|safari-web-extension):/i;
 const MAX_KEYS = 500;
+/** Only violations on our own site are recorded; anyone can POST any document-uri. */
+const OWN_HOSTS = new Set(['ferrocast.app', 'www.ferrocast.app']);
+
+function ownDocument(raw) {
+  try {
+    return OWN_HOSTS.has(new URL(raw).hostname);
+  } catch {
+    return false;
+  }
+}
 
 /** @type {Map<string, { count: number, firstSeen: string, lastSeen: string, effectiveDirective: string, blockedOrigin: string, documentPath: string }>} */
 const aggregates = new Map();
@@ -33,6 +43,7 @@ export function shouldIgnoreReport(report) {
   if (EXT_SCHEMES.test(blocked) || EXT_SCHEMES.test(source)) return true;
   const doc = String(report['document-uri'] ?? report.documentURL ?? '');
   if (EXT_SCHEMES.test(doc)) return true;
+  if (!ownDocument(doc)) return true;
   if ((blocked === 'inline' || blocked === 'eval') && EXT_SCHEMES.test(source)) return true;
   return false;
 }

@@ -50,15 +50,18 @@ function flush(entry) {
   entry.queued = false;
   const depth = stack.indexOf(entry) + 1;
   if (depth === 0) return;
-  const json = JSON.stringify(toTree(entry.root.container));
+  let json = JSON.stringify(toTree(entry.root.container, entry.gen));
   initDropdowns(entry.root.container);
   if (json === entry.last) return;
+  // content changed: new generation, so ids the host still holds from the old screen are refused
+  entry.gen += 1;
+  json = JSON.stringify(toTree(entry.root.container, entry.gen));
   entry.last = json;
   bridge.send({ type: 'render', depth, tree: JSON.parse(json) });
 }
 
 function push(element) {
-  const entry = { last: null, queued: false };
+  const entry = { last: null, queued: false, gen: 0 };
   const nav = { push: pushTarget, pop };
   entry.root = createRoot(
     () => {
@@ -126,7 +129,11 @@ function runField(msg) {
 async function runAction(id, values) {
   const top = stack[stack.length - 1];
   const inst = top && top.root.container.actions.get(id);
-  if (!inst) return;
+  if (!inst) {
+    // the screen changed after the host showed this action: running whatever sits there now could be a different one
+    process.stderr.write(`ignored stale action ${id}\n`);
+    return;
+  }
   const p = inst.props;
   try {
     switch (inst.type) {

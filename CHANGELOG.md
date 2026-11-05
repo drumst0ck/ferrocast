@@ -17,6 +17,10 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Export Data**: the backup now runs in the background instead of freezing the launcher, and leaves out the downloaded Node runtime, update downloads, `node_modules` and temp files, so it is far smaller. (docs: /docs/launcher/settings/) #backup
+- **Backups and secrets**: Export Data no longer includes extension preferences or LocalStorage, which can hold API keys and passwords. (docs: /docs/reference/data-and-privacy/) #privacy
+- **Search and calculator**: fuzzy search no longer drops an item whose letters match only when an earlier word-start pick is skipped (`ac` now finds `xabc a z`); `max(1,2,3)` and `min(5,1,2)` read commas between arguments as separators instead of thousands groups; `0 usd to eur` no longer panics. #launcher
+- **EPUB reader**: a chapter whose file name contains `[`, `]`, `*` or `?` is read literally instead of matching another file in the book. #files
 - **Confirmations and updates**: holding ↵ no longer confirms a confirmation (Empty Trash, Shut Down, Restart, Log Out, Quit All Apps, Delete All, Move to Trash) or installs an update through key auto-repeat; they need a fresh press. #launcher
 - **Create Script Command**: a new script never replaces an existing one (a second "Test" becomes `test 2.sh`), and a title without ASCII letters or digits is saved as `script.sh` instead of a hidden `.sh` file. #scripts
 - **Recording survives Quit and updates**: Quit from the menu bar or the launcher during a recording now stops and saves it first, with a 15 second limit, so the recording keeps its length, camera and microphone. An automatic update waits for the recording (and for a running export) to end and tries again at the next check; an installed update restarts the app only after that. #recording
@@ -28,6 +32,15 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Keep Awake**: turning it off now stops only the caffeinate Ferrocast started (a caffeinate you ran in Terminal is left alone) and no longer leaves a defunct process behind.
 - **Extension screens**: when a Raycast extension updated the screen below the one you were looking at (a list refreshing its data after you opened a detail), Ferrocast closed the open screen and later actions did nothing or ran the wrong handler; the open screen now stays and only an extension's own back closes it. #extensions
 - **Extension cache**: two caches of one Raycast extension (for example from two data hooks) erased each other's saved keys and did not notify each other; they now share one cache per extension namespace, which is written in one step so a crash cannot leave a half-written file. #extensions
+- **Raycast extensions: secrets**: Clipboard.copy with `concealed: true` (password and OTP extensions) now marks the item as secret (ConcealedType / TransientType), so Maccy, Paste and other clipboard managers no longer record it. #extensions
+- **Raycast extensions: HUD and toasts**: the HUD an extension shows when it hides the launcher ("Copied to Clipboard", "Done") now appears as a notification instead of being drawn in the hidden window, and a toast that is changed after it is shown sends one notification, not one per property; progress ("Loading") toasts send none while the launcher is hidden. #extensions
+- **Raycast extensions: actions**: an action id now carries the screen's render generation, so pressing Enter after the list refreshed can no longer run whichever action took the old position (for example another item's Delete); the stale id is ignored. #extensions
+- **Raycast extensions: LocalStorage**: LocalStorage is kept in memory and saved on a background thread (a loop of thousands of setItem no longer freezes the launcher), and an unreadable `localstorage.json` is left as it is and refuses writes instead of being silently reset to empty. #extensions
+
+- **Changelog outages**: `/changelog/<version>/` answers 503 with a fallback instead of a 500, and the RSS and JSON feeds answer 503 with `no-store` instead of a cached empty feed when the database is down.
+- **Changelog publishing**: pushes to `master` publish the root `CHANGELOG.md` (not a stale copy under `web/`), and an indented continuation paragraph under an entry is kept; stray text outside an entry is reported instead of silently dropped.
+- **CSP report endpoint**: the rate limit uses the proxy-appended client address (a forged `X-Forwarded-For` prefix no longer gets a fresh bucket), its table is bounded, only reports for ferrocast.app are recorded, and the summary needs `CSP_REPORT_SUMMARY_TOKEN`.
+- **Spanish docs**: the drag wheel, Tiling, Notes and Keyboard shortcuts pages gain the mouse paths, Other options, Related and Limits sections that only the English pages had.
 
 ## [0.5.0] - 2026-10-29
 
