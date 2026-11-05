@@ -38,7 +38,14 @@ function hasGit(): boolean {
   if (gitUsable !== undefined) return gitUsable;
   try {
     execSync('git rev-parse --is-inside-work-tree', { cwd: webRoot, stdio: 'ignore' });
-    gitUsable = true;
+    // A shallow clone (CI checkouts) dates every file at the checkout commit: treat it like no .git.
+    const shallow = execSync('git rev-parse --is-shallow-repository', {
+      cwd: webRoot,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+    gitUsable = shallow !== 'true';
   } catch {
     gitUsable = false;
   }
@@ -65,7 +72,7 @@ function fileLastmod(...paths: string[]): Date {
   for (const rel of paths) {
     const abs = join(webRoot, rel);
     if (!existsSync(abs)) continue;
-    // Git is authoritative in a full checkout; the manifest only stands in where there is no .git (Docker builds).
+    // Git is authoritative in a full checkout; the manifest stands in where there is no full history (Docker builds, shallow CI clones).
     const d = gitLastCommit(abs) ?? manifestLastCommit(rel) ?? statSync(abs).mtime;
     if (best === null || d > best) best = d;
   }
