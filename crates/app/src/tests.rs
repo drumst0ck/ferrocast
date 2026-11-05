@@ -2,8 +2,14 @@ use super::*;
 
 #[path = "ext_host_tests.rs"]
 mod ext_host_tests;
+#[path = "flows_tests.rs"]
+mod flows_tests;
+#[path = "np_tick_tests.rs"]
+mod np_tick_tests;
 #[path = "record_recovery_tests.rs"]
 mod record_recovery_tests;
+#[path = "round3_ui_tests.rs"]
+mod round3_ui_tests;
 #[path = "sync_clip_tests.rs"]
 mod sync_clip_tests;
 
@@ -65,6 +71,7 @@ fn fixture() -> App {
         tiling_paused: false,
         now_playing: ferrocast_core::nowplaying::Ctl::new(),
         np_poller: None,
+        np_tick_at: None,
         quick_window: None,
         tiling_hotkey_issues: vec![],
         tray_layout: 1,
@@ -89,6 +96,7 @@ fn fixture() -> App {
         toast: None,
         toast_user: false,
         settings_undo: None,
+        pending_saves: Default::default(),
         prev_pid: None,
         visible: true,
         had_focus: false,
@@ -9168,6 +9176,7 @@ fn the_menu_bar_switch_updates_the_setting_and_the_menu_bar_item() {
     assert!(app.settings.notes_menu_bar_button);
     assert!(app.notes_tray.is_some());
     assert_eq!(fx_taken(), vec!["notes_tray on".to_string()]);
+    app.flush_saves_now(); // the UI writes after a pause
     let saved: Settings = app.store.load("settings.json");
     assert!(saved.notes_menu_bar_button, "saved with the other settings");
     let sw = notes_tab_hits(&mut app, "toggle")[0].center();
@@ -9183,6 +9192,7 @@ fn the_escape_switch_updates_the_setting_and_the_window() {
     click_at(&mut app, sw);
     assert!(app.settings.notes_escape_loses_focus);
     assert!(st.borrow().log.contains(&"esc:true".to_string()), "the controller hook ran: {:?}", st.borrow().log);
+    app.flush_saves_now(); // the UI writes after a pause
     let saved: Settings = app.store.load("settings.json");
     assert!(saved.notes_escape_loses_focus);
     let sw = notes_tab_hits(&mut app, "toggle")[1].center();
@@ -9232,6 +9242,7 @@ fn the_zoom_control_follows_the_window_and_changes_it() {
     click_at(&mut app, r.center());
     assert_eq!(app.settings.notes_zoom, 0.6);
     assert_eq!(st.borrow().zoom, 0.6, "the open window follows");
+    app.flush_saves_now(); // the UI writes after a pause
     let saved: Settings = app.store.load("settings.json");
     assert_eq!(saved.notes_zoom, 0.6);
     render(&mut app, vec![]);
@@ -11836,6 +11847,7 @@ fn capture_tab_controls_write_to_settings_capture() {
     click_at(&mut app, cd[0].center());
     render(&mut app, vec![]);
     assert_eq!(app.settings.capture.countdown, 0);
+    app.flush_saves_now(); // the UI writes after a pause
     let saved: Settings = app.store.load("settings.json");
     assert_eq!((saved.capture.after, saved.capture.fps, saved.capture.countdown), (AfterCapture::Save, 30, 0), "persisted");
 }

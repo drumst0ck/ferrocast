@@ -1131,6 +1131,8 @@ pub struct Studio {
     pub tr: TranscriptUi,
     /// The Follow face controls of the Camera tab (P6).
     pub face: FaceUi,
+    /// Leaving failed to save once and the view was kept: the next leave discards the edits.
+    pub leave_warned: bool,
     started: Instant,
 }
 
@@ -1151,6 +1153,7 @@ impl Studio {
             face: FaceUi::default(),
             speed: 2.0,
             tr: TranscriptUi::default(),
+            leave_warned: false,
             started: Instant::now(),
         }
     }
@@ -1489,6 +1492,7 @@ impl Editor {
         match p.save(&self.dir) {
             Ok(()) => {
                 self.st.autosave.written();
+                self.st.leave_warned = false;
                 self.dirty = false;
             }
             Err(e) => self.st.autosave.failed(now, format!("Could not save project.json: {e}")),

@@ -57,7 +57,10 @@ fn aspect_fill_rgba(bytes: &[u8], side: usize) -> Option<Vec<u8>> {
 
 /// Everything derived from the cover `bytes`; `None` when they cannot be decoded.
 pub fn prepare(bytes: &[u8]) -> Option<ArtLook> {
-    aspect_fill_rgba(bytes, DISC_PX).map(|px| look_from_square(&px))
+    // This runs on a plain worker thread with no run loop, so nothing would ever drain the
+    // objects AppKit autoreleases while decoding: a pool per cover keeps memory flat.
+    let px = objc2::rc::autoreleasepool(|_| aspect_fill_rgba(bytes, DISC_PX))?;
+    Some(look_from_square(&px))
 }
 
 /// The look of the last cover prepared, keyed by the cover's own `Arc` (the tracker hands out one
@@ -144,6 +147,30 @@ mod tests {
         assert!(at(29, 16)[0] > 200 && at(29, 16)[2] < 60, "right is red: {:?}", at(29, 16));
         let look = prepare(&wide_png()).expect("a look");
         assert_eq!(look.disc.len(), DISC_PX * DISC_PX * 4);
+    }
+
+    fn rss_kb() -> usize {
+        let out = std::process::Command::new("ps").args(["-o", "rss=", "-p", &std::process::id().to_string()]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+    }
+
+    #[test]
+    #[ignore = "measures process RSS; run alone: cargo test -p ferrocast-macos decoding_many_covers -- --ignored"]
+    fn decoding_many_covers_on_a_worker_thread_does_not_grow_memory() {
+        let png = wide_png();
+        std::thread::spawn(move || {
+            for _ in 0..20 {
+                prepare(&png); // warm up caches
+            }
+            let before = rss_kb();
+            for _ in 0..100 {
+                prepare(&png);
+            }
+            let grew = rss_kb().saturating_sub(before);
+            assert!(grew < 12_000, "RSS grew {grew} KB over 100 covers: autoreleased objects are piling up");
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
