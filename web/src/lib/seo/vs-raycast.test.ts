@@ -4,8 +4,8 @@ import { page } from './vs-raycast';
 describe('Ferrocast vs Raycast copy', () => {
   it('uses the brief URL and a description of snippet length', () => {
     expect(page.path).toBe('/ferrocast-vs-raycast/');
-    expect(page.description.length).toBeGreaterThanOrEqual(140);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+    expect(page.description.length).toBeGreaterThanOrEqual(120);
+    expect(page.description.length).toBeLessThanOrEqual(155);
   });
 
   it('has four cells in every table row and keeps Ferrocast gaps in the table', () => {

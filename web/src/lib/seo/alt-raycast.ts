@@ -52,7 +52,7 @@ export const es: AltCopy = {
   path: '/es/alternativa-a-raycast/',
   title: 'Alternativa gratis a Raycast para Mac | Ferrocast',
   description:
-    'Ferrocast es un lanzador gratis y MIT para Mac: Script Commands de Raycast, IA local con Ollama y 275 conversiones sin subir archivos. Lo que falta, también.',
+    'Ferrocast es un lanzador gratis y MIT para Mac: Script Commands de Raycast, IA local con Ollama y 275 conversiones sin subir archivos. Y lo que falta.',
   crumbs: [['Inicio', '/es/'], ['Alternativa a Raycast', '/es/alternativa-a-raycast/']],
   h1: 'Una alternativa a Raycast gratis y de código abierto para Mac',
   lead: [

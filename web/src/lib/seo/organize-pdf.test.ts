@@ -13,8 +13,8 @@ describe('organize PDF page', () => {
       'Reorder, rotate, duplicate and remove PDF pages on your Mac with thumbnails or one typed command. Free, open source, nothing uploaded, saves a copy.',
     );
     expect(page.h1).toBe('Organize PDF pages on your Mac, offline');
-    expect(page.description.length).toBeGreaterThanOrEqual(140);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+    expect(page.description.length).toBeGreaterThanOrEqual(120);
+    expect(page.description.length).toBeLessThanOrEqual(155);
   });
 
   it('says the mouse buttons shipped with the organizer', () => {

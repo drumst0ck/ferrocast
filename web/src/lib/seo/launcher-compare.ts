@@ -14,7 +14,7 @@ export const page = {
   path: '/es/raycast-vs-alfred-vs-spotlight/',
   title: 'Raycast vs Alfred vs Spotlight en macOS Tahoe: cuál elegir | Ferrocast',
   description:
-    'Comparativa en español de Spotlight (macOS Tahoe), Raycast, Alfred y Ferrocast: precio, portapapeles, snippets, ventanas, IA y archivos, con fuentes oficiales.',
+    'Comparativa de Spotlight (macOS Tahoe), Raycast, Alfred y Ferrocast: precio, portapapeles, snippets, ventanas, IA y archivos, con fuentes oficiales.',
   crumbs: [['Inicio', '/es/'], ['Raycast vs Alfred vs Spotlight', '/es/raycast-vs-alfred-vs-spotlight/']] as [string, string][],
   h1: 'Raycast, Alfred o Spotlight: qué lanzador elegir en tu Mac',
   lead: 'Desde macOS Tahoe, Spotlight tiene historial del portapapeles y acciones, así que para mucha gente ya basta. Raycast y Alfred siguen yendo más lejos en snippets, extensiones y automatización. Esta comparativa recoge solo lo que publican sus webs oficiales. Aviso: escribo Ferrocast, la cuarta columna, y lo incluyo con lo que tiene y lo que le falta. Puedes usarlo con la interfaz en español.',

@@ -23,7 +23,7 @@ export const en: GuideCopy = {
   path: '/text-expander-mac/',
   title: 'Free Text Expander for Mac, Open Source | Ferrocast',
   description:
-    'Snippets that expand as you type in any Mac app, with date, clipboard and cursor placeholders and nested snippets. Free, MIT, imports Raycast. No fill-in forms.',
+    'Snippets that expand as you type in any Mac app, with date, clipboard and cursor placeholders and nested snippets. Free, MIT, imports Raycast. No forms.',
   crumbs: [['Home', '/'], ['Text expander', '/text-expander-mac/']],
   h1: 'A free text expander for Mac',
   lead: [
@@ -133,7 +133,7 @@ export const es: GuideCopy = {
   path: '/es/expansor-de-texto-mac/',
   title: 'Expansor de texto gratis para Mac, de código abierto | Ferrocast',
   description:
-    'Snippets que se expanden al escribir en cualquier app de Mac, con fecha, portapapeles, cursor y snippets anidados. Gratis, MIT, importa Raycast. Sin formularios',
+    'Expande snippets al escribir en cualquier app de Mac, con fecha, portapapeles, cursor y snippets anidados. Gratis, MIT, importa Raycast. Sin formularios.',
   crumbs: [['Inicio', '/es/'], ['Expansor de texto', '/es/expansor-de-texto-mac/']],
   h1: 'Un expansor de texto gratis para Mac',
   lead: [

@@ -5,6 +5,8 @@ export interface HeadTag {
   attrs?: Record<string, string | boolean | undefined>;
 }
 
+const OG_LOCALE: Record<string, string> = { en: 'en_US', es: 'es_ES' };
+
 /**
  * Untranslated `/es/docs/` routes are Starlight fallbacks: the body stays the English source.
  * Point canonical, Open Graph URL, and hreflang at the English page, and keep `noindex`,
@@ -27,14 +29,24 @@ export function rewriteStarlightHead(
     })
     .map((item) => ({ ...item, attrs: item.attrs ? { ...item.attrs } : undefined }));
 
+  // Open Graph wants language_TERRITORY; Starlight emits the bare lang code.
+  for (const item of filtered) {
+    const attrs = item.attrs;
+    if (item.tag === 'meta' && attrs?.property === 'og:locale' && typeof attrs.content === 'string') {
+      attrs.content = OG_LOCALE[attrs.content] ?? attrs.content;
+    }
+  }
+
   if (isFallback) {
     if (enCanonical) {
+      for (const item of filtered) {
+        if (item.tag === 'meta' && item.attrs?.property === 'og:locale') item.attrs.content = OG_LOCALE.en;
+      }
       for (const item of filtered) {
         const attrs = item.attrs;
         if (!attrs) continue;
         if (item.tag === 'link' && attrs.rel === 'canonical') attrs.href = enCanonical;
         if (item.tag === 'meta' && attrs.property === 'og:url') attrs.content = enCanonical;
-        if (item.tag === 'meta' && attrs.property === 'og:locale') attrs.content = 'en';
       }
       filtered.push({ tag: 'link', attrs: { rel: 'alternate', hreflang: 'en', href: enCanonical } });
       filtered.push({ tag: 'link', attrs: { rel: 'alternate', hreflang: 'x-default', href: enCanonical } });

@@ -7,8 +7,8 @@ const ask = readFileSync(new URL('../../content/docs/docs/launcher/ask-ai.md', i
 
 describe('local AI page (ES)', () => {
   it('has a description of snippet length and mirrors the English structure', () => {
-    expect(page.description.length).toBeGreaterThanOrEqual(140);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+    expect(page.description.length).toBeGreaterThanOrEqual(120);
+    expect(page.description.length).toBeLessThanOrEqual(155);
     expect(page.limits.rows).toHaveLength(en.limits.rows.length);
     expect(page.steps.items).toHaveLength(en.steps.items.length);
     expect(page.faq.items).toHaveLength(en.faq.items.length);

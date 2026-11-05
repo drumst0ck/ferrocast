@@ -9,7 +9,7 @@ const read = (p: string) => readFileSync(new URL(p, root), 'utf8');
 describe('video editing page (ES)', () => {
   it('has a description of snippet length and a cell for every column', () => {
     expect(page.description.length).toBeGreaterThanOrEqual(120);
-    expect(page.description.length).toBeLessThanOrEqual(160);
+    expect(page.description.length).toBeLessThanOrEqual(155);
     for (const row of page.limits.rows) expect(row).toHaveLength(page.limits.cols.length);
   });
 

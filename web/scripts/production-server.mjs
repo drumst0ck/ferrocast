@@ -9,27 +9,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { handleCspApi } from './csp-report-handle.mjs';
+import { CSP_REPORT_ONLY, cacheControlFor, wwwRedirectLocation } from './http-policy.mjs';
 
 const PORT = Number(process.env.PORT ?? 4321);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const webRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const clientDir = join(webRoot, 'dist/client');
-
-/** Report-Only CSP: external origins the site actually loads (GTM / GA4). Fonts and media are self-hosted. */
-const CSP_REPORT_ONLY = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com",
-  "connect-src 'self' https://www.google-analytics.com https://region1.google-analytics.com https://www.googletagmanager.com https://api.frankfurter.dev",
-  "img-src 'self' data: https://www.googletagmanager.com https://www.google-analytics.com",
-  "style-src 'self' 'unsafe-inline'",
-  "font-src 'self'",
-  "media-src 'self'",
-  "frame-src https://www.googletagmanager.com",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "report-uri /api/csp-report/",
-  'report-to csp',
-].join('; ');
 
 const HOME_FILES = new Map([
   ['/', 'index.html'],
@@ -48,26 +33,8 @@ function applyHeaders(req, res) {
   res.setHeader('Content-Security-Policy-Report-Only', CSP_REPORT_ONLY);
   res.setHeader('Reporting-Endpoints', 'csp="/api/csp-report/"');
 
-  if (path.startsWith('/api/')) {
-    res.setHeader('Cache-Control', 'no-store');
-    return;
-  }
-
-  if (path.startsWith('/_astro/')) {
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-  } else if (
-    /^\/(?:og\.jpg|favicon\.ico|favicon\.png|icon\.png)$/.test(path)
-  ) {
-    res.setHeader('Cache-Control', 'public, max-age=604800');
-  } else if (path.startsWith('/img/') || path.startsWith('/video/')) {
-    res.setHeader('Cache-Control', 'public, max-age=604800');
-  } else if (
-    path.endsWith('/') ||
-    path.endsWith('.html') ||
-    !path.split('/').pop()?.includes('.')
-  ) {
-    res.setHeader('Cache-Control', 'no-cache');
-  }
+  const cache = cacheControlFor(path);
+  if (cache) res.setHeader('Cache-Control', cache);
 }
 
 function prerenderedHtmlFile(urlPath) {
@@ -111,6 +78,14 @@ const { handler } = await import('../dist/server/entry.mjs');
 
 const server = http.createServer((req, res) => {
   const path = (req.url ?? '/').split('?')[0];
+  const www = wwwRedirectLocation(req.headers.host, req.url);
+  if (www) {
+    res.statusCode = 301;
+    res.setHeader('Location', www);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.end();
+    return;
+  }
   applyHeaders(req, res);
   if (handleCspApi(req, res, path)) return;
   if (tryServePrerendered(req, res)) return;
