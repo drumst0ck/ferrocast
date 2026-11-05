@@ -520,7 +520,14 @@ pub fn sync_domain_recovering(
             });
         }
     }
-    let (merged, t2) = sync::merge_as(&io.device, snapshot, &docs, &t1);
+    let (mut merged, t2) = sync::merge_as(&io.device, snapshot, &docs, &t1);
+    // An item this Mac could not read and that has not changed since is not part of the local data
+    // on purpose: leaving it in `merged` would make every run look like a change to apply (a local
+    // save and a rewritten own document each time). A new version from the other Mac (another hash)
+    // stays in, so it is offered again and shows up once it can be read.
+    merged.retain(|(id, _)| {
+        !t1.items.get(id).zip(t2.items.get(id)).is_some_and(|(a, b)| a.unparsed && !a.deleted && b.unparsed && a.hash == b.hash)
+    });
     let mut t2 = t2;
     // Own deletions survive a recovery: published again as this Mac's own (not `remote`, so the
     // clipboard, which does not relay others' deletions, still carries them). Done after the merge,
@@ -541,6 +548,7 @@ pub fn sync_domain_recovering(
                         remote: false,
                         pristine: false,
                         adopted: false,
+                        unparsed: false,
                     },
                 );
             }
@@ -854,7 +862,21 @@ pub fn to_items<T: Serialize>(list: &[T]) -> Vec<(String, Value)> {
 
 /// The list back from items; values that do not deserialize are dropped.
 pub fn from_items<T: DeserializeOwned>(items: Vec<(String, Value)>) -> Vec<T> {
-    items.into_iter().filter_map(|(_, v)| serde_json::from_value(v).ok()).collect()
+    from_items_report(items).0
+}
+
+/// [`from_items`] that also returns the ids of the values that did not deserialize (a newer build
+/// wrote them). Pass those to `sync::mark_unparsed` so they are never published as deleted.
+pub fn from_items_report<T: DeserializeOwned>(items: Vec<(String, Value)>) -> (Vec<T>, Vec<String>) {
+    let mut list = Vec::new();
+    let mut dropped = Vec::new();
+    for (id, v) in items {
+        match serde_json::from_value(v) {
+            Ok(x) => list.push(x),
+            Err(_) => dropped.push(id),
+        }
+    }
+    (list, dropped)
 }
 
 /// Settings fields that stay on each Mac (S6): machine paths, login item, onboarding, update state,
@@ -1056,6 +1078,10 @@ mod tests {
             name
         }
 
+        fn dir_file(&self, domain: &str) -> PathBuf {
+            self.io.device_dir(&self.io.device).join(format!("{domain}.json"))
+        }
+
         fn uploaded(&self, shared: &Path, name: &str) -> bool {
             shared.join("devices").join(&self.io.device).join("attachments").join(name).is_file()
         }
@@ -1129,6 +1155,150 @@ mod tests {
 
     fn snip(id: &str, name: &str) -> Snippet {
         Snippet { id: id.into(), name: name.into(), text: format!("text of {name}"), keyword: String::new(), tags: vec![] }
+    }
+
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Thing {
+        id: String,
+        kind: ThingKind,
+    }
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    enum ThingKind {
+        Text,
+    }
+
+    /// One run of `domain` on `mac` applying the merge like the app (`sync_apply`): items that do not
+    /// deserialize are dropped from the list and flagged in the tracker.
+    fn run_things(mac: &Mac, list: &mut Vec<Thing>, now: i64) -> Outcome {
+        let d = &mac.store.root;
+        let o = sync_domain(&mac.io, "snippets", &to_items(list), &load_tracker(d, "snippets"), now).unwrap();
+        let mut t = o.tracker_merged.clone();
+        if let Some(m) = &o.merged {
+            let (l, dropped) = from_items_report::<Thing>(m.clone());
+            *list = l;
+            sync::mark_unparsed(&mut t, &dropped);
+            mac.io.write_doc("snippets", o.applied_doc.as_ref().unwrap()).unwrap();
+        }
+        save_tracker(d, "snippets", &t).unwrap();
+        o
+    }
+
+    fn publish_remote(b: &Mac, items: &[(&str, Value, i64)]) {
+        let doc = DeviceDoc {
+            device: b.io.device.clone(),
+            items: items
+                .iter()
+                .map(|(id, v, at)| {
+                    (
+                        id.to_string(),
+                        sync::Record { modified: *at, deleted: false, value: Some(v.clone()), pristine: false, adopted: false },
+                    )
+                })
+                .collect(),
+            first_sync_at: Some(1),
+        };
+        b.io.write_doc("snippets", &doc).unwrap();
+    }
+
+    #[test]
+    fn an_item_an_older_build_cannot_read_is_never_published_as_deleted() {
+        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+        let (a, b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        let remote = json!({"id": "x", "kind": "RichText"});
+        publish_remote(&b, &[("x", remote.clone(), 5000)]);
+        let mut list: Vec<Thing> = vec![];
+        run_things(&a, &mut list, 5100);
+        assert!(list.is_empty(), "A cannot read the new variant");
+        run_things(&a, &mut list, 9000);
+        let own = a.io.read_own_doc("snippets").unwrap();
+        assert!(own.items.get("x").is_none_or(|r| !r.deleted), "never a tombstone: {:?}", own.items.get("x"));
+        let docs = a.io.read_docs("snippets").docs;
+        let (_, win) = &sync::winners(&docs)["x"];
+        assert!(!win.deleted && win.value.as_ref() == Some(&remote) && win.modified == 5000, "the remote record stays the winner: {win:?}");
+        // B merges afterwards and still holds x live
+        let ob = sync_domain(&b.io, "snippets", &[("x".into(), remote.clone())], &load_tracker(&db, "snippets"), 9500).unwrap();
+        assert!(ob.merged.is_none(), "B has nothing to change");
+        assert!(!b.io.read_own_doc("snippets").unwrap().items["x"].deleted);
+        let mut docs = b.io.read_docs("snippets").docs;
+        docs.push(b.io.read_own_doc("snippets").unwrap());
+        let (_, win) = &sync::winners(&docs)["x"];
+        assert!(!win.deleted && win.value.as_ref() == Some(&remote), "x is live for B: {win:?}");
+        // and again later, the item is still intact
+        run_things(&a, &mut list, 12_000);
+        let docs = a.io.read_docs("snippets").docs;
+        assert_eq!(sync::winners(&docs)["x"].1.value.as_ref(), Some(&remote));
+    }
+
+    #[test]
+    fn repeated_runs_with_an_unreadable_item_and_no_edits_write_nothing() {
+        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+        let (a, b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        publish_remote(&b, &[("x", json!({"id": "x", "kind": "RichText"}), 5000)]);
+        let mut list: Vec<Thing> = vec![];
+        run_things(&a, &mut list, 5100);
+        run_things(&a, &mut list, 9000); // settles the own document
+        let doc = a.dir_file("snippets");
+        let before = (std::fs::read(&doc).unwrap(), std::fs::metadata(&doc).unwrap().modified().unwrap());
+        for now in [12_000, 15_000] {
+            let o = run_things(&a, &mut list, now);
+            assert!(o.merged.is_none(), "nothing to apply, so no local save");
+            assert!(o.applied_doc.is_none(), "and no document queued");
+            let after = (std::fs::read(&doc).unwrap(), std::fs::metadata(&doc).unwrap().modified().unwrap());
+            assert!(before == after, "the own document is not rewritten");
+            assert!(load_tracker(&da, "snippets").items["x"].unparsed, "still remembered");
+        }
+    }
+
+    #[test]
+    fn an_unreadable_item_that_the_other_mac_edits_is_offered_again_and_deleted_ones_are_forgotten() {
+        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+        let (a, b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        publish_remote(&b, &[("x", json!({"id": "x", "kind": "RichText"}), 5000)]);
+        let mut list: Vec<Thing> = vec![];
+        run_things(&a, &mut list, 5100);
+        run_things(&a, &mut list, 9000);
+        // B edits it into something A can read: it shows up
+        publish_remote(&b, &[("x", json!({"id": "x", "kind": "Text"}), 10_000)]);
+        run_things(&a, &mut list, 11_000);
+        assert_eq!(list.len(), 1, "a readable new version is applied");
+        assert!(!load_tracker(&da, "snippets").items["x"].unparsed);
+        // B writes unreadable again, then deletes it
+        publish_remote(&b, &[("x", json!({"id": "x", "kind": "RichText"}), 12_000)]);
+        run_things(&a, &mut list, 13_000);
+        run_things(&a, &mut list, 14_000);
+        assert!(load_tracker(&da, "snippets").items["x"].unparsed);
+        let gone = DeviceDoc {
+            device: b.io.device.clone(),
+            items: [("x".to_string(), sync::Record { modified: 15_000, deleted: true, value: None, pristine: false, adopted: false })]
+                .into(),
+            first_sync_at: Some(1),
+        };
+        b.io.write_doc("snippets", &gone).unwrap();
+        for now in [16_000, 17_000] {
+            run_things(&a, &mut list, now);
+            assert!(list.is_empty(), "no resurrection");
+            assert!(load_tracker(&da, "snippets").items.get("x").is_none_or(|t| t.deleted), "A's tracker forgets x");
+            assert!(a.io.read_own_doc("snippets").unwrap().items.get("x").is_none_or(|r| r.deleted), "A never publishes it live again");
+        }
+    }
+
+    #[test]
+    fn readable_items_still_propagate_edits_and_deletions() {
+        let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+        let (a, b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+        publish_remote(&b, &[("y", json!({"id": "y", "kind": "Text"}), 5000)]);
+        let mut list: Vec<Thing> = vec![];
+        run_things(&a, &mut list, 5100);
+        assert_eq!(list.len(), 1, "a readable remote item is adopted");
+        list.clear(); // the user deletes it
+        run_things(&a, &mut list, 9000);
+        let own = a.io.read_own_doc("snippets").unwrap();
+        assert!(own.items["y"].deleted && own.items["y"].modified == 9000, "a real deletion is still a tombstone");
+        // a normal update
+        let mut list = vec![Thing { id: "z".into(), kind: ThingKind::Text }];
+        run_things(&a, &mut list, 10_000);
+        assert_eq!(a.io.read_own_doc("snippets").unwrap().items["z"].modified, 10_000);
     }
 
     #[test]

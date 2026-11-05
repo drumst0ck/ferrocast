@@ -355,6 +355,8 @@ impl App {
         }
         self.sync.applying = true;
         let mut again = false;
+        // ids of merged items this build cannot read: flagged below so publish never deletes them
+        let mut unreadable: Vec<String> = Vec::new();
         match domain {
             "settings" => {
                 // safety net: the settings as they were before sync changed them (kept once)
@@ -366,11 +368,11 @@ impl App {
                 self.commit_settings(s);
             }
             "snippets" => {
-                self.snippets = sync_io::from_items(merged);
+                (self.snippets, unreadable) = sync_io::from_items_report(merged);
                 self.save_snippets();
             }
             "quicklinks" => {
-                self.quicklinks = sync_io::from_items(merged);
+                (self.quicklinks, unreadable) = sync_io::from_items_report(merged);
                 self.save_quicklinks();
             }
             "notes" => {
@@ -379,7 +381,7 @@ impl App {
                 // moves off a note that is gone.
                 let open_before =
                     self.notes_ctl.current.clone().and_then(|id| self.notes.iter().find(|n| n.id == id).map(|n| n.text.clone()));
-                self.notes = sync_io::from_items(merged);
+                (self.notes, unreadable) = sync_io::from_items_report(merged);
                 self.save_notes();
                 let previous = open_before.unwrap_or_default();
                 self.notes_do(|c, d| c.after_merge(d, &previous));
@@ -389,7 +391,7 @@ impl App {
                 // the selection is stored by name: when the selected theme was renamed elsewhere,
                 // find it again by id and follow the new name (a missing theme draws the default look)
                 let active_id = self.active_theme().map(|t| t.id.clone());
-                self.custom_themes = sync_io::from_items(merged);
+                (self.custom_themes, unreadable) = sync_io::from_items_report(merged);
                 self.save_themes();
                 if let (None, Some(id)) = (self.active_theme(), active_id) {
                     if let Some(name) = self.custom_themes.iter().find(|t| t.id == id).map(|t| t.name.clone()) {
@@ -403,7 +405,8 @@ impl App {
                 self.set_theme();
             }
             "chats" => {
-                let mut chats: Vec<Chat> = sync_io::from_items(merged);
+                let (mut chats, dropped): (Vec<Chat>, _) = sync_io::from_items_report(merged);
+                unreadable = dropped;
                 chats.sort_by_key(|c| std::cmp::Reverse(c.updated));
                 chats.truncate(ferrocast_core::models::MAX_CHATS);
                 self.chats = chats;
@@ -411,7 +414,8 @@ impl App {
                 self.persist("chats.json", &v);
             }
             "clipboard" => {
-                let incoming: Vec<ClipEntry> = sync_io::from_items(merged);
+                let (incoming, dropped): (Vec<ClipEntry>, _) = sync_io::from_items_report(merged);
+                unreadable = dropped;
                 let before = incoming.len();
                 let list = sync_io::clipboard_normalize(incoming, services::now_secs(), self.settings.clipboard_retention.secs());
                 again = list.len() != before;
@@ -433,6 +437,7 @@ impl App {
         if again {
             self.sync.pending.insert(domain); // entries dropped by retention/dedupe become deletions
         }
+        ferrocast_core::sync::mark_unparsed(&mut tracker, &unreadable);
         // the applied form of each item is what the next run will see
         for (id, v) in self.sync_snapshot(domain) {
             if let Some(t) = tracker.items.get_mut(&id) {
