@@ -163,6 +163,18 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Copy `src` to `dst` through a temp file in the same folder and rename it into place, so `dst` is
+/// never seen half written (an interrupted copy or a file iCloud is still writing).
+fn copy_atomic(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let name = dst.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp = dst.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
+    let done = std::fs::copy(src, &tmp).and_then(|_| std::fs::rename(&tmp, dst));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done
+}
+
 /// Where and as whom this Mac reads and writes.
 #[derive(Debug, Clone)]
 pub struct SyncIo {
@@ -662,7 +674,7 @@ fn export_images(io: &SyncIo, items: &[(String, Value)]) {
         let (src, dst) = (io.images_dir.join(n), dir.join(n));
         if io.on() && src.is_file() && !dst.exists() {
             let _ = std::fs::create_dir_all(&dir);
-            if let Err(e) = std::fs::copy(&src, &dst) {
+            if let Err(e) = copy_atomic(&src, &dst) {
                 eprintln!("ferrocast: sync: copying {n}: {e}");
             }
         }
@@ -693,7 +705,7 @@ fn import_images(io: &SyncIo, items: &[(String, Value)], docs: &[DeviceDoc]) -> 
                     return downloading;
                 }
                 let _ = std::fs::create_dir_all(&io.images_dir);
-                if std::fs::copy(&src, &dst).is_ok() {
+                if copy_atomic(&src, &dst).is_ok() {
                     pending = false;
                     break;
                 }
@@ -1026,6 +1038,29 @@ pub fn clipboard_normalize(mut list: Vec<ClipEntry>, now_secs: i64, retention_se
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_atomic_replaces_the_file_instead_of_writing_in_place() {
+        let dir = std::env::temp_dir().join(format!("ferrocast-copy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (src, dst, other) = (dir.join("src.png"), dir.join("dst.png"), dir.join("other.png"));
+        std::fs::write(&src, b"complete image").unwrap();
+        std::fs::write(&other, b"old").unwrap();
+        std::fs::hard_link(&other, &dst).unwrap();
+        copy_atomic(&src, &dst).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"complete image");
+        // an in-place write would have changed the other name of the old inode too
+        assert_eq!(std::fs::read(&other).unwrap(), b"old");
+        // nothing else is left in the folder
+        let mut names: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        names.sort();
+        assert_eq!(names, ["dst.png", "other.png", "src.png"]);
+        // a missing source fails and leaves the destination alone
+        assert!(copy_atomic(&dir.join("missing.png"), &dst).is_err());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"complete image");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     use crate::models::{Note, Quicklink, Snippet};
     use crate::storage::Store;
     use serde_json::json;

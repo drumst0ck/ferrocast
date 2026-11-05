@@ -54,6 +54,9 @@ fn parse_clock(t: &str) -> Option<NaiveTime> {
         Some((h, m)) => (h.parse::<u32>().ok()?, m.parse::<u32>().ok()?),
         None => (body.trim().parse::<u32>().ok()?, 0),
     };
+    if pm.is_some() && !(1..=12).contains(&h) {
+        return None;
+    }
     let h = match pm {
         Some(true) if h < 12 => h + 12,
         Some(false) if h == 12 => 0,
@@ -87,7 +90,12 @@ pub fn evaluate(input: &str, now: DateTime<Utc>) -> Option<(String, String)> {
     // <clock> <city> in <city>
     let (lhs, to_city) = s.rsplit_once(" in ")?;
     let (clock, from_city) = lhs.split_once(' ')?;
-    let clock = parse_clock(clock)?;
+    // "5 pm london": the am/pm suffix may be a word of its own.
+    let (clock, from_city) = match from_city.trim_start().split_once(' ') {
+        Some((suffix @ ("am" | "pm"), city)) => (format!("{clock}{suffix}"), city),
+        _ => (clock.to_string(), from_city),
+    };
+    let clock = parse_clock(&clock)?;
     let (from, to) = (lookup(from_city)?, lookup(to_city)?);
     let local_date = now.with_timezone(&from).date_naive();
     // A clock that falls in a DST gap or overlap still resolves (earliest valid instant).
@@ -152,6 +160,30 @@ mod tests {
         assert!(a.starts_with("9:00 AM"), "{a}");
         let (_, a) = evaluate("17:30 tokyo in utc", now()).unwrap();
         assert!(a.starts_with("8:30 AM"), "{a}");
+    }
+
+    #[test]
+    fn am_pm_needs_a_twelve_hour_clock() {
+        for q in ["13pm london in tokyo", "0am london in tokyo", "0pm london in tokyo", "13:30pm london in tokyo"] {
+            assert!(evaluate(q, now()).is_none(), "{q}");
+        }
+        // 24-hour clocks without a suffix still work
+        assert!(evaluate("13:00 london in tokyo", now()).is_some());
+        assert!(evaluate("12am london in utc", now()).is_some());
+    }
+
+    #[test]
+    fn a_space_before_am_pm_is_accepted() {
+        let (q, a) = evaluate("5 pm london in tokyo", now()).unwrap();
+        assert!(a.starts_with("2:00 AM"), "{a}");
+        assert_eq!(q, "5:00 PM london in tokyo");
+        let (_, a) = evaluate("5:30 PM ldn in sf", now()).unwrap();
+        assert!(a.starts_with("9:30 AM"), "{a}");
+        let (_, same) = evaluate("5pm ldn in sf", now()).unwrap();
+        let (_, spaced) = evaluate("5 pm ldn in sf", now()).unwrap();
+        assert_eq!(same, spaced);
+        // a city that merely starts with "am"/"pm" is not eaten
+        assert!(evaluate("5 amsterdam in tokyo", now()).is_some());
     }
 
     #[test]

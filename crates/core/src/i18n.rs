@@ -282,10 +282,25 @@ pub fn trc(context: &str, text: &str) -> String {
 
 /// Fill `{name}` placeholders of `text`. Unknown placeholders stay as written.
 pub fn fill(text: &str, args: &[(&str, &str)]) -> String {
-    let mut out = text.to_string();
-    for (name, value) in args {
-        out = out.replace(&format!("{{{name}}}"), value);
+    // One left-to-right pass: a value that contains `{other}` is never substituted again.
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        rest = &rest[open..];
+        let hit = rest.find('}').and_then(|close| args.iter().find(|(name, _)| *name == &rest[1..close]).map(|(_, v)| (close, *v)));
+        match hit {
+            Some((close, value)) => {
+                out.push_str(value);
+                rest = &rest[close + 1..];
+            }
+            None => {
+                out.push('{');
+                rest = &rest[1..];
+            }
+        }
     }
+    out.push_str(rest);
     out
 }
 
@@ -341,6 +356,14 @@ pub fn placeholders(s: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fill_does_not_rescan_substituted_values() {
+        assert_eq!(fill("Move {name} to {folder}", &[("name", "{folder}"), ("folder", "Archive")]), "Move {folder} to Archive");
+        assert_eq!(fill("Move {name} to {folder}", &[("folder", "Archive"), ("name", "{folder}")]), "Move {folder} to Archive");
+        assert_eq!(fill("{a}{a} {missing} {b", &[("a", "x")]), "xx {missing} {b");
+        assert_eq!(fill("{n} of {n}", &[("n", "{n}")]), "{n} of {n}");
+    }
+
     use super::*;
 
     fn tags(v: &[&str]) -> Vec<String> {
