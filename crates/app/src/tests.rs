@@ -17932,6 +17932,8 @@ fn trashing_a_file_removes_it_from_results_only_on_success() {
     app.perform(Act::Trash(a.clone()), true);
     assert_eq!(app.files.1, vec![b], "a successful trash removes only that entry");
     assert_eq!(toast_text(&app), ferrocast_core::i18n::tr("Moved to Trash"));
+}
+
 fn confirm_app() -> (App, std::path::PathBuf) {
     let root = trash_root();
     let foo = bundle(&root, "Foo.app");
