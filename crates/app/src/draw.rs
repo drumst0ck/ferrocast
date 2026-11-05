@@ -69,6 +69,25 @@ fn wheel_reduce_motion(ctx: &Context) -> bool {
     }
 }
 
+/// True when `spec`, given to `id`, would share a shortcut with another planned binding.
+pub(crate) fn hotkey_taken_by_other(s: &ferrocast_core::models::Settings, id: &str, spec: &str) -> bool {
+    use std::str::FromStr;
+    let mut next = s.clone();
+    if id == "__launcher" {
+        next.launcher_hotkey = spec.to_string();
+    } else {
+        next.command_mut(id).hotkey = Some(spec.to_string());
+    }
+    let Ok(want) = HotKey::from_str(spec).map(|h| h.id()) else { return false };
+    services::plan_hotkeys(&next).0.iter().any(|(other, target)| target != id && HotKey::from_str(other).is_ok_and(|h| h.id() == want))
+}
+
+/// The system's reason for refusing `spec`, from the errors `Hotkeys::apply` returned.
+pub(crate) fn hotkey_failure(errors: &[String], spec: &str) -> Option<String> {
+    let prefix = format!("{spec}: ");
+    errors.iter().find_map(|e| e.strip_prefix(&prefix).map(str::to_string))
+}
+
 impl App {
     /// Drop the toast after 2.5 s (the "Tab reset · Undo" toast lives as long as Undo works), and
     /// the undo state with it.
@@ -103,6 +122,7 @@ impl eframe::App for App {
         self.sync_window();
         self.drain();
         self.sync_flush();
+        self.flush_pending_saves(Instant::now());
         self.tick_inline();
         self.effect_tick(Instant::now());
         self.sweep_timers();
@@ -1520,7 +1540,11 @@ impl App {
         }
         let Some(code) = services::key_code_name(key) else { return false };
         let is_f = code.starts_with('F') && code.len() <= 3 && code[1..].chars().all(|c| c.is_ascii_digit());
-        if !(m.ctrl || m.alt || m.mac_cmd || m.shift || is_f) {
+        if !(m.ctrl || m.alt || m.mac_cmd || is_f) {
+            // Shift alone is typing (a capital letter): never a global hotkey
+            if m.shift {
+                self.set_hotkey_err(tr("Include ⌘, ⌥ or ⌃: ⇧ alone would fire while you type.").into_owned());
+            }
             return false;
         }
         let mut parts = vec![];
@@ -1544,16 +1568,47 @@ impl App {
             }
             return true;
         }
-        if id == "__launcher" {
-            self.settings.launcher_hotkey = spec.clone();
-        } else {
-            self.settings.command_mut(&id).hotkey = Some(spec.clone());
+        if hotkey_taken_by_other(&self.settings, &id, &spec) {
+            self.set_hotkey_err(tr("That shortcut is already in use by another command").into_owned());
+            return true;
         }
-        self.save_settings();
-        self.apply_hotkeys();
+        let old = if id == "__launcher" {
+            Some(self.settings.launcher_hotkey.clone())
+        } else {
+            self.settings.commands.get(&id).and_then(|c| c.hotkey.clone())
+        };
+        self.assign_hotkey(&id, Some(spec.clone()));
+        let errors = self.apply_hotkeys();
+        if let Some(e) = hotkey_failure(&errors, &spec) {
+            // the system refused it: put the old shortcut back and say why, instead of a success toast
+            self.assign_hotkey(&id, old);
+            self.apply_hotkeys();
+            let msg = trf("Could not register {hotkey}: {e}", &[("hotkey", &services::hotkey_label(&spec)), ("e", &e)]);
+            self.set_hotkey_err(msg.clone());
+            self.toast(msg);
+            return true;
+        }
         self.toast(trf("Hotkey set to {hotkey}", &[("hotkey", &services::hotkey_label(&spec))]));
         self.pop();
         true
+    }
+
+    /// Store `spec` as the hotkey of `id` (`__launcher` is the launcher itself) and save.
+    fn assign_hotkey(&mut self, id: &str, spec: Option<String>) {
+        if id == "__launcher" {
+            if let Some(s) = spec {
+                self.settings.launcher_hotkey = s;
+            }
+        } else {
+            self.settings.command_mut(id).hotkey = spec;
+        }
+        self.save_settings();
+    }
+
+    fn set_hotkey_err(&mut self, msg: String) {
+        if let Some(View::Hotkey { err, .. }) = self.stack.last_mut() {
+            *err = msg;
+        }
     }
 
     fn create_script(&mut self, title: &str, mode: usize) {
@@ -6631,7 +6686,7 @@ impl App {
                                 if id != "__launcher" && ui.button(tr("Clear hotkey")).clicked() {
                                     clear_hotkey = true;
                                 }
-                                lbl(ui, "esc to cancel · include ⌘ ⌥ ⌃ or ⇧");
+                                lbl(ui, "esc to cancel · include ⌘ ⌥ or ⌃");
                             });
                             set_hotkey = true;
                         }
@@ -8475,7 +8530,7 @@ impl App {
         if s.ai_provider != self.settings.ai_provider {
             ctx.data_mut(|d| d.remove::<bool>(Id::new("ai_has_key")));
         }
-        self.commit_settings(s);
+        self.commit_settings_debounced(s);
     }
 }
 
@@ -10209,7 +10264,17 @@ fn reset_tab(s: &Settings, tab: usize) -> Settings {
 impl App {
     /// Apply an edited copy of the settings: persist it and run what a changed value needs (login
     /// item, Finder tap, theme, hotkey, script folders).
-    pub(crate) fn commit_settings(&mut self, mut s: Settings) {
+    pub(crate) fn commit_settings(&mut self, s: Settings) {
+        self.commit_settings_with(s, false);
+    }
+
+    /// `commit_settings` for the Settings tabs, which send an edit every frame while a field is typed
+    /// in or a slider dragged: the disk write waits for a pause.
+    pub(crate) fn commit_settings_debounced(&mut self, s: Settings) {
+        self.commit_settings_with(s, true);
+    }
+
+    fn commit_settings_with(&mut self, mut s: Settings, later: bool) {
         if s == self.settings {
             return;
         }
@@ -10237,7 +10302,11 @@ impl App {
         let sync_turned_on = s.sync_enabled && !self.settings.sync_enabled;
         let language_changed = s.language != self.settings.language;
         self.settings = s;
-        self.save_settings();
+        if later {
+            self.save_settings_later();
+        } else {
+            self.save_settings();
+        }
         if language_changed {
             self.apply_language();
         }
@@ -10326,10 +10395,6 @@ pub(crate) fn write_new_script(dir: &std::path::Path, title: &str, mode: &str) -
     }
 }
 
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;
-
 // ---- custom themes (Settings → General)
 
 /// What the theme controls asked for during a frame; applied after the frame is drawn.
@@ -10349,7 +10414,9 @@ impl App {
             ThemeAct::Select(n) => self.select_theme(n),
             ThemeAct::Edit(t) => self.update_active_theme(t),
             ThemeAct::Duplicate => self.duplicate_theme(),
-            ThemeAct::Delete => self.delete_active_theme(),
+            ThemeAct::Delete => {
+                self.request_delete_theme();
+            }
             ThemeAct::Rename(n) => {
                 if let Err(e) = self.rename_active_theme(&n) {
                     self.toast(e);
@@ -10359,6 +10426,15 @@ impl App {
             ThemeAct::Import => self.import_theme_dialog(),
         }
     }
+}
+
+/// Seconds the first Delete press of a custom theme stays armed.
+pub(crate) const DELETE_ARM_SECS: u64 = 5;
+
+/// True while the theme `id` was asked to be deleted less than `DELETE_ARM_SECS` ago.
+pub(crate) fn delete_armed(ctx: &Context, id: &str) -> bool {
+    ctx.data(|d| d.get_temp::<(String, Instant)>(Id::new("theme-delete-armed")))
+        .is_some_and(|(armed, at)| armed == id && at.elapsed() < Duration::from_secs(DELETE_ARM_SECS))
 }
 
 /// A row of the Settings look that is not a searchable setting (no index entry).
@@ -10371,11 +10447,14 @@ fn plain_row(ui: &mut Ui, pal: &Palette, title: &str, desc: &str, control: impl 
 fn contrast_warning_text(w: &ferrocast_core::themes::ContrastWarning) -> String {
     use ferrocast_core::themes::{Pair, MIN_CONTRAST};
     let what = match w.pair {
-        Pair::TextOnBackground => "Text on the background",
-        Pair::TextOnSurface => "Text on the surface",
-        Pair::SecondaryOnBackground => "Secondary text on the background",
+        Pair::TextOnBackground => tr("Text on the background"),
+        Pair::TextOnSurface => tr("Text on the surface"),
+        Pair::SecondaryOnBackground => tr("Secondary text on the background"),
     };
-    format!("{what} has a contrast of {:.1}:1, below {MIN_CONTRAST}:1. It may be hard to read.", w.ratio)
+    trf(
+        "{what} has a contrast of {ratio}:1, below {min}:1. It may be hard to read.",
+        &[("what", &*what), ("ratio", &format!("{:.1}", w.ratio)), ("min", &MIN_CONTRAST.to_string())],
+    )
 }
 
 /// One colour of the editor: a picker button and a hex field that stay in step.
@@ -10432,7 +10511,8 @@ fn theme_editor(ui: &mut Ui, pal: &Palette, e: &mut ferrocast_core::themes::Cust
         theme_color_row(ui, pal, "Secondary text", "Descriptions and hints.", &mut e.secondary_text);
         theme_color_row(ui, pal, "Separator", "Lines between rows.", &mut e.separator);
         plain_row(ui, pal, "Theme file", "Share this theme as a .ferrocast-theme file, or remove it.", |ui| {
-            if small_btn(ui, pal, "Delete") {
+            let armed = delete_armed(ui.ctx(), &e.id);
+            if small_btn(ui, pal, if armed { "Confirm delete" } else { "Delete" }) {
                 act.push(ThemeAct::Delete);
             }
             if small_btn(ui, pal, "Export…") {
@@ -10470,8 +10550,8 @@ fn theme_preview(ui: &mut Ui, t: &ferrocast_core::themes::CustomTheme) {
         }
         let icon = Rect::from_center_size(Pos2::new(rr.min.x + 18.0, rr.center().y), Vec2::splat(18.0));
         p.rect_filled(icon, 5.0, if on { pal.accent } else { pal.lift(1.6) });
-        p.text(Pos2::new(rr.min.x + 36.0, rr.center().y), Align2::LEFT_CENTER, name, FontId::proportional(13.0), pal.text);
-        p.text(Pos2::new(rr.max.x - 10.0, rr.center().y), Align2::RIGHT_CENTER, kind, FontId::proportional(11.5), pal.sub);
+        p.text(Pos2::new(rr.min.x + 36.0, rr.center().y), Align2::LEFT_CENTER, tr(name), FontId::proportional(13.0), pal.text);
+        p.text(Pos2::new(rr.max.x - 10.0, rr.center().y), Align2::RIGHT_CENTER, tr(kind), FontId::proportional(11.5), pal.sub);
     }
     let fy = r.max.y - 30.0;
     p.hline(r.min.x..=r.max.x, fy, Stroke::new(1.0, pal.sep));
@@ -10480,3 +10560,7 @@ fn theme_preview(ui: &mut Ui, t: &ferrocast_core::themes::CustomTheme) {
     p.rect_filled(chip, 6.0, pal.accent);
     p.text(chip.center(), Align2::CENTER_CENTER, tr("Open"), FontId::proportional(11.5), pal.on_accent);
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

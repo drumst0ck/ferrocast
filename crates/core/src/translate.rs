@@ -313,6 +313,15 @@ pub fn focus_guard(outcome: Outcome, lang: &str, source_pid: Option<i32>, frontm
     }
 }
 
+/// An older translation that finishes after the user started a newer one must not touch the
+/// selection or the focused app: a paste becomes a copy.
+pub fn stale_guard(outcome: Outcome, lang: &str) -> Outcome {
+    match outcome {
+        Outcome::Paste(t) => Outcome::Copy(t, format!("Translated to {lang}, copied: a newer translation started, so it was not pasted")),
+        o => o,
+    }
+}
+
 /// Provider name as shown to the user.
 pub fn provider_name(p: AiProvider) -> &'static str {
     match p {
@@ -884,6 +893,18 @@ mod tests {
         let show = || Outcome::Show { text: "Hola".into(), lang: "Spanish".into() };
         assert_eq!(focus_guard(show(), "Spanish", Some(10), Some(20)), show());
         assert_eq!(focus_guard(show(), "Spanish", Some(10), Some(10)), show());
+    }
+
+    #[test]
+    fn a_stale_translation_is_never_pasted() {
+        assert_eq!(
+            stale_guard(Outcome::Paste("Hola".into()), "Spanish"),
+            Outcome::Copy("Hola".into(), "Translated to Spanish, copied: a newer translation started, so it was not pasted".into())
+        );
+        let show = Outcome::Show { text: "Hola".into(), lang: "Spanish".into() };
+        assert_eq!(stale_guard(show.clone(), "Spanish"), show);
+        let fail = Outcome::Fail("x".into());
+        assert_eq!(stale_guard(fail.clone(), "Spanish"), fail);
     }
 
     #[test]

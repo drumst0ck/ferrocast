@@ -28,7 +28,7 @@ System, Dark and Light themes are built in and cannot be edited. **New from curr
 
 ## Pick, rename, delete
 
-Use the drop-down in **Custom themes** to switch theme. Choose **None** or click System, Dark or Light in **Appearance** to go back to a built-in look. **Rename** changes the name (names are unique, ignoring case). **Delete** removes the selected theme.
+Use the drop-down in **Custom themes** to switch theme. Choose **None** or click System, Dark or Light in **Appearance** to go back to a built-in look. **Rename** changes the name (names are unique, ignoring case). **Delete** removes the selected theme: press it once, then press **Confirm delete** within five seconds.
 
 ## Contrast warnings
 

@@ -16,7 +16,7 @@ To choose one yourself, open Settings → General → **Language** and pick Syst
 
 ## What you can set
 
-- The launcher hotkey (default <kbd>⌥</kbd> <kbd>Space</kbd>) and per-command hotkeys.
+- The launcher hotkey (default <kbd>⌥</kbd> <kbd>Space</kbd>) and per-command hotkeys. A hotkey needs <kbd>⌘</kbd>, <kbd>⌥</kbd> or <kbd>⌃</kbd> (<kbd>⇧</kbd> alone is not enough, except on F keys), and one already used by another command is refused.
 - Appearance (Settings → General): System, Dark or Light, or your own colours with a live preview, contrast warnings and export/import as a file (see [Custom themes](/docs/launcher/themes/)).
 - Launch at login through a LaunchAgent; it applies at the next login.
 - The drag-wheel keys and on/off in Settings → General (see [Drag wheel](/docs/files/drag-wheel/)).
