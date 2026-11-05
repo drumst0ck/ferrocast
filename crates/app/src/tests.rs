@@ -152,6 +152,8 @@ thread_local! {
     static APPLE_AVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// What the fake `trash_app` answers in this test thread.
     static FX_TRASH_RESULT: std::cell::RefCell<Result<(), ferrocast_macos::apps::TrashAppError>> = const { std::cell::RefCell::new(Ok(())) };
+    /// What the fake `trash_file` answers in this test thread.
+    static FX_TRASH_FILE_RESULT: std::cell::RefCell<Result<(), String>> = const { std::cell::RefCell::new(Ok(())) };
     static FX_FRONT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
     /// Scripts the web effect asked a browser to run (replace and unmark), in order.
     static FX_TILING_RX: std::cell::RefCell<Option<std::sync::mpsc::Receiver<ferrocast_macos::tiling::Cmd>>> = const { std::cell::RefCell::new(None) };
@@ -232,6 +234,10 @@ impl Effects {
             translate_start: |_s, _text, _lang, _pid, _out, run, _bus| FX_LOG.with(|l| l.borrow_mut().push(format!("translate {run}"))),
             paste: |_app, _text| FX_LOG.with(|l| l.borrow_mut().push("paste".into())),
             color_sampler: |_bus| FX_LOG.with(|l| l.borrow_mut().push("color_sampler".into())),
+            trash_file: |p| {
+                FX_LOG.with(|l| l.borrow_mut().push(format!("trash_file {}", p.display())));
+                FX_TRASH_FILE_RESULT.with(|r| r.borrow().clone())
+            },
             trash_app: |p| {
                 FX_LOG.with(|l| l.borrow_mut().push(format!("trash_app {}", p.display())));
                 FX_TRASH_RESULT.with(|r| r.borrow().clone())
@@ -16641,6 +16647,59 @@ fn a_failed_launch_command_leaves_the_running_screens_and_session_alone() {
     assert!(app.ext.test_has_session(), "and so is the command");
 }
 
+fn ext_render_msg(app: &mut App, depth: usize, root_type: &str, title: &str) {
+    use ferrocast_core::extensions::protocol::{Node, RuntimeMsg};
+    let mut p = serde_json::Map::new();
+    p.insert("navigationTitle".into(), serde_json::json!(title));
+    let node = Node { t: "#root".into(), p: Default::default(), c: vec![Node { t: root_type.into(), p, c: vec![] }] };
+    app.ext_event(1, ferrocast_core::extensions::sidecar::Event::Msg(RuntimeMsg::Render { depth, tree: node }));
+}
+
+fn ext_pop_msg(app: &mut App, depth: usize) {
+    use ferrocast_core::extensions::protocol::RuntimeMsg;
+    app.ext_event(1, ferrocast_core::extensions::sidecar::Event::Msg(RuntimeMsg::Pop { depth }));
+}
+
+fn ext_two_screens() -> App {
+    let mut app = fixture();
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    app.stack = vec![View::Root];
+    app.ext.test_set_base(1);
+    ext_render_msg(&mut app, 1, "List", "one");
+    ext_render_msg(&mut app, 2, "Detail", "two");
+    app
+}
+
+#[test]
+fn s5_a_rerender_of_the_lower_screen_updates_it_in_place_and_keeps_the_pushed_screen() {
+    let mut app = ext_two_screens();
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (2, 3));
+    ext_render_msg(&mut app, 1, "List", "one again");
+    assert_eq!(app.ext.test_view_count(), 2, "the pushed screen is still there");
+    assert_eq!(app.stack.len(), 3, "and still on top");
+    assert!(matches!(app.stack.last(), Some(View::ExtDetail)));
+    assert_eq!(app.ext.test_view_title(1).as_deref(), Some("one again"), "the lower screen got the new tree");
+}
+
+#[test]
+fn s5_an_explicit_pop_still_truncates_and_the_following_render_shows_the_screen_below() {
+    let mut app = ext_two_screens();
+    ext_pop_msg(&mut app, 1);
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (1, 2));
+    ext_render_msg(&mut app, 1, "List", "one");
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (1, 2));
+    assert!(matches!(app.stack.last(), Some(View::ExtList)));
+}
+
+#[test]
+fn s5_a_render_one_deeper_than_the_stack_still_pushes_and_a_gap_is_ignored() {
+    let mut app = ext_two_screens();
+    ext_render_msg(&mut app, 3, "Detail", "three");
+    assert_eq!((app.ext.test_view_count(), app.stack.len()), (3, 4));
+    ext_render_msg(&mut app, 5, "Detail", "far");
+    assert_eq!(app.ext.test_view_count(), 3);
+}
+
 #[test]
 fn launch_command_is_refused_after_five_in_ten_seconds() {
     let mut app = fixture();
@@ -17861,6 +17920,104 @@ mod now_playing {
     }
 }
 
+#[test]
+fn trashing_a_file_removes_it_from_results_only_on_success() {
+    let a = std::path::PathBuf::from("/tmp/fc-a.txt");
+    let b = std::path::PathBuf::from("/tmp/fc-b.txt");
+    let mut app = fixture();
+    app.files = ("q".into(), vec![a.clone(), b.clone()]);
+    FX_TRASH_FILE_RESULT.with(|r| *r.borrow_mut() = Err("permission denied".into()));
+    app.perform(Act::Trash(a.clone()), true);
+    assert_eq!(fx_taken(), [format!("trash_file {}", a.display())]);
+    assert_eq!(app.files.1, vec![a.clone(), b.clone()], "a failed trash keeps the entry");
+    assert_eq!(toast_text(&app), ferrocast_core::i18n::trf("Trash failed: {e}", &[("e", "permission denied")]));
+    FX_TRASH_FILE_RESULT.with(|r| *r.borrow_mut() = Ok(()));
+    app.perform(Act::Trash(a.clone()), true);
+    assert_eq!(app.files.1, vec![b], "a successful trash removes only that entry");
+    assert_eq!(toast_text(&app), ferrocast_core::i18n::tr("Moved to Trash"));
+}
+
+fn confirm_app() -> (App, std::path::PathBuf) {
+    let root = trash_root();
+    let foo = bundle(&root, "Foo.app");
+    let mut app = trash_fixture(&[("Foo", &foo, None)]);
+    choose_trash(&mut app, "Foo");
+    assert!(matches!(app.view(), View::Confirm { .. }));
+    (app, foo)
+}
+
+fn held_enter() -> Event {
+    Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: true, modifiers: Modifiers::NONE }
+}
+
+#[test]
+fn a_held_enter_does_not_confirm_a_confirmation() {
+    let (mut app, _) = confirm_app();
+    render(&mut app, vec![held_enter(), held_enter()]);
+    assert!(matches!(app.view(), View::Confirm { .. }), "auto-repeat must not confirm");
+    assert!(fx_taken().is_empty(), "nothing is performed by auto-repeat");
+}
+
+#[test]
+fn a_fresh_enter_press_still_confirms() {
+    let (mut app, foo) = confirm_app();
+    render(&mut app, vec![held_enter(), held_enter()]);
+    render(&mut app, vec![release(Key::Enter)]);
+    render(&mut app, vec![key_event(Key::Enter)]);
+    assert_eq!(fx_taken(), [format!("trash_app {}", foo.display())]);
+    assert!(!matches!(app.view(), View::Confirm { .. }));
+}
+
+#[test]
+fn escape_still_cancels_a_confirmation_after_held_enter() {
+    let (mut app, _) = confirm_app();
+    render(&mut app, vec![held_enter(), held_enter()]);
+    render(&mut app, vec![key_event(Key::Escape)]);
+    assert!(!matches!(app.view(), View::Confirm { .. }));
+    assert_eq!(fx_taken(), Vec::<String>::new());
+}
+
+#[test]
+fn a_held_enter_does_not_start_an_update() {
+    let mut app = fixture();
+    app.stack = vec![View::Root, View::Update { release: fake_release("99.0.0") }];
+    render(&mut app, vec![held_enter(), held_enter()]);
+    assert!(matches!(app.view(), View::Update { .. }), "auto-repeat must not install the update");
+}
+
+fn scripts_tmp() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("ferrocast-script-test-{}", uuid::Uuid::new_v4()))
+}
+
+#[test]
+fn creating_a_script_twice_keeps_the_first_untouched() {
+    let dir = scripts_tmp();
+    let first = write_new_script(&dir, "Test", "compact").unwrap();
+    assert_eq!(first.file_name().unwrap(), "test.sh");
+    std::fs::write(&first, "my edits").unwrap();
+    let second = write_new_script(&dir, "Test", "compact").unwrap();
+    assert_ne!(first, second);
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), "my edits");
+    assert!(std::fs::read_to_string(&second).unwrap().contains("Test"));
+    let third = write_new_script(&dir, "test", "compact").unwrap();
+    assert!(third != first && third != second);
+}
+
+#[test]
+fn a_first_script_keeps_its_slug_name() {
+    let dir = scripts_tmp();
+    let p = write_new_script(&dir, "Back Up!", "silent").unwrap();
+    assert_eq!(p.file_name().unwrap(), "back-up.sh");
+    assert!(std::fs::read_to_string(&p).unwrap().contains("Back Up!"));
+}
+
+#[test]
+fn a_non_ascii_title_falls_back_to_script_sh() {
+    let dir = scripts_tmp();
+    let p = write_new_script(&dir, "日記", "compact").unwrap();
+    assert_eq!(p.file_name().unwrap(), "script.sh");
+    let q = write_new_script(&dir, "日記", "compact").unwrap();
+    assert_ne!(p, q);
 // ---- Quit and auto-update while a recording is active or an export runs (S1) ----
 
 fn exits(log: &[String]) -> Vec<&String> {

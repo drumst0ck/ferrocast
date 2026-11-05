@@ -7698,16 +7698,16 @@ impl App {
             Act::NoteDelete(id) => self.notes_do(|c, d| c.delete_id(d, &id)),
             Act::NotePin(id) => self.notes_do(|c, d| c.toggle_pin_id(d, &id)),
             Act::CreateNote => self.open_notes_window(|c, d| c.create_note(d)),
-            Act::Trash(p) => {
-                match apps::trash(&p) {
-                    Ok(()) => self.toast("Moved to Trash"),
-                    Err(e) => self.toast(trf("Trash failed: {e}", &[("e", &e.to_string())])),
+            Act::Trash(p) => match (self.fx.trash_file)(&p) {
+                Ok(()) => {
+                    self.toast("Moved to Trash");
+                    self.files.1.retain(|f| f != &p);
+                    if self.stack.iter().any(|v| matches!(v, View::Recordings)) {
+                        self.reload_recordings();
+                    }
                 }
-                self.files.1.retain(|f| f != &p);
-                if self.stack.iter().any(|v| matches!(v, View::Recordings)) {
-                    self.reload_recordings();
-                }
-            }
+                Err(e) => self.toast(trf("Trash failed: {e}", &[("e", &e)])),
+            },
             Act::TrashApp(p) => self.trash_app(&p),
             Act::EditScript(p) => {
                 let _ = std::process::Command::new("/usr/bin/open").arg("-t").arg(&p).status();
@@ -8041,6 +8041,8 @@ pub(crate) struct Effects {
     pub(crate) color_sampler: fn(&Bus),
     /// Move an application bundle to the Trash (the real one is recoverable with Put Back).
     pub(crate) trash_app: fn(&std::path::Path) -> Result<(), apps::TrashAppError>,
+    /// Move a file or folder to the Trash (the real one is recoverable with Put Back).
+    pub(crate) trash_file: fn(&std::path::Path) -> Result<(), String>,
     /// Start the now-playing feed and register the notch player's callbacks (main thread only).
     pub(crate) np_spawn: fn(&Bus) -> Option<ferrocast_macos::nowplaying::Poller>,
     /// Draw (or hide) the notch player (main thread only).
@@ -8095,6 +8097,7 @@ impl Effects {
             apple_available: ferrocast_macos::apple_translate::available,
             translate_start: |s, text, lang, pid, out, run, bus| services::translate_text(s, text, lang, pid, out, run, bus.clone()),
             trash_app: apps::trash_app,
+            trash_file: apps::trash,
             color_sampler: |bus| {
                 let bus = bus.clone();
                 ferrocast_macos::color_sampler::sample(move |c| {

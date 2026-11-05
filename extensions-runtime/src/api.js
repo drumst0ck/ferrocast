@@ -162,34 +162,46 @@ const LocalStorage = {
 };
 
 // Cache is synchronous in Raycast's API, so it lives in the runtime (a JSON file in supportPath).
+// One store per namespace, shared by every instance: @raycast/utils creates a Cache per hook, and each
+// instance writing its own snapshot would erase the keys of the others.
+const cacheStores = new Map(); // namespace -> {data, subs}
 class Cache {
   constructor(opts = {}) {
     this._ns = (opts.namespace || 'default').replace(/[^\w.-]/g, '_');
-    this._subs = new Set();
-    this._data = null;
     // @raycast/utils hands these around detached (`useSyncExternalStore(cache.subscribe, ...)`)
     for (const m of ['has', 'get', 'set', 'remove', 'clear', 'subscribe']) this[m] = this[m].bind(this);
   }
   _file() { return path.join(environment.supportPath, `cache-${this._ns}.json`); }
-  _load() {
-    if (this._data) return this._data;
-    try { this._data = JSON.parse(fs.readFileSync(this._file(), 'utf8')); } catch { this._data = {}; }
-    return this._data;
+  _store() {
+    let st = cacheStores.get(this._ns);
+    if (!st) {
+      st = { data: {}, subs: new Set() };
+      try { st.data = JSON.parse(fs.readFileSync(this._file(), 'utf8')); } catch { /* none yet */ }
+      cacheStores.set(this._ns, st);
+    }
+    return st;
   }
   _save(key, value) {
+    const st = this._store();
+    const file = this._file();
+    const tmp = `${file}.${process.pid}.tmp`;
     try {
       fs.mkdirSync(environment.supportPath, { recursive: true });
-      fs.writeFileSync(this._file(), JSON.stringify(this._data));
-    } catch (e) { bridge.log(`cache write failed: ${e.message}`); }
-    for (const f of this._subs) f(key, value);
+      fs.writeFileSync(tmp, JSON.stringify(st.data));
+      fs.renameSync(tmp, file);
+    } catch (e) {
+      try { fs.unlinkSync(tmp); } catch { /* not written */ }
+      bridge.log(`cache write failed: ${e.message}`);
+    }
+    for (const f of [...st.subs]) f(key, value);
   }
-  get isEmpty() { return Object.keys(this._load()).length === 0; }
-  has(key) { return key in this._load(); }
-  get(key) { return this._load()[key]; }
-  set(key, value) { this._load()[key] = value; this._save(key, value); }
-  remove(key) { const had = delete this._load()[key]; this._save(key, undefined); return had; }
-  clear() { this._data = {}; this._save(undefined, undefined); }
-  subscribe(f) { this._subs.add(f); return () => this._subs.delete(f); }
+  get isEmpty() { return Object.keys(this._store().data).length === 0; }
+  has(key) { return key in this._store().data; }
+  get(key) { return this._store().data[key]; }
+  set(key, value) { this._store().data[key] = value; this._save(key, value); }
+  remove(key) { const had = delete this._store().data[key]; this._save(key, undefined); return had; }
+  clear() { this._store().data = {}; this._save(undefined, undefined); }
+  subscribe(f) { const subs = this._store().subs; subs.add(f); return () => subs.delete(f); }
 }
 
 // ---- open / finder
