@@ -37,7 +37,7 @@ pub static UNITS: &[Unit] = &[
     u!("centimeter", "cm", Length, 0.01, ["cm", "centimeter", "centimeters", "centimetre", "centimetres"]),
     u!("meter", "m", Length, 1.0, ["m", "meter", "meters", "metre", "metres"]),
     u!("kilometer", "km", Length, 1000.0, ["km", "kilometer", "kilometers", "kilometre", "kilometres"]),
-    u!("inch", "in", Length, 0.0254, ["inch", "inches", "\""]),
+    u!("inch", "in", Length, 0.0254, ["in", "inch", "inches", "\""]),
     u!("foot", "ft", Length, 0.3048, ["ft", "foot", "feet", "'"]),
     u!("yard", "yd", Length, 0.9144, ["yd", "yard", "yards"]),
     u!("mile", "mi", Length, 1609.344, ["mi", "mile", "miles"]),

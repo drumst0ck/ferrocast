@@ -34,6 +34,13 @@ const fail = (line: number, msg: string): never => {
 
 function finishEntry(raw: string, category: Category, version: string, position: number, seen: Map<string, number>): ParsedEntry {
   let text = raw.trim();
+  // Optional explicit permalink `{#slug}`, only as trailing metadata (before/after `(docs: …)` and `#tags`).
+  let explicitSlug: string | null = null;
+  const sl = text.match(/(?:^|\s)\{#([a-z0-9][a-z0-9-]*)\}(?=(?:\s+(?:#[a-z0-9-]+|\(docs:\s*\/[^)\s]*\)))*\s*$)/i);
+  if (sl) {
+    explicitSlug = sl[1].toLowerCase();
+    text = text.replace(sl[0], ' ').trim();
+  }
   let docsUrl: string | null = null;
   const docs = text.match(/\s*\(docs:\s*(\/[^)\s]*)\)\s*(?=(?:#[a-z0-9-]+\s*)*$)/i);
   if (docs) {
@@ -59,6 +66,11 @@ function finishEntry(raw: string, category: Category, version: string, position:
   if (t) {
     title = t[1].trim();
     text = t[2].trim();
+  }
+  if (explicitSlug) {
+    if (seen.has(explicitSlug)) throw new Error(`duplicate slug ${explicitSlug} in ${version}`);
+    seen.set(explicitSlug, 1);
+    return { category, title, bodyMd: text, docsUrl, tags, position, slug: explicitSlug };
   }
   const base = createHash('sha1').update(`${version}|${category}|${title ?? text.slice(0, 80)}`).digest('hex').slice(0, 12);
   const n = seen.get(base) ?? 0;

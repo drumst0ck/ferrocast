@@ -142,7 +142,7 @@ export const es: BlurCopy = {
   path: '/es/difuminar-video-mac/',
   title: 'Difuminar parte de un vídeo en Mac, gratis y sin subirlo',
   description:
-    'Tapa hasta 64 zonas de un vídeo en tu Mac, cada una con su inicio y su fin, con desenfoque o un bloque de color. Gratis, local, necesita ffmpeg. Sin seguimiento de caras.',
+    'Tapa hasta 64 zonas de un vídeo en tu Mac, cada una con su inicio y su fin, con desenfoque o bloque de color. Gratis, local, con ffmpeg. Sin seguir caras.',
   crumbs: [['Inicio', '/es/'], ['Difuminar parte de un vídeo', '/es/difuminar-video-mac/']],
   h1: 'Difuminar parte de un vídeo en Mac sin subirlo a internet',
   lead: [

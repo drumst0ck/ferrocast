@@ -5,29 +5,40 @@ name: Release
 on:
   push:
     tags: ['v*']
+# Third-party actions are pinned to commit SHAs (the comment names the tag). The build job has a
+# read-only token and no persisted git credentials; only the publish job (no build, no tests) can write.
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: release-${{ github.ref_name }}
   cancel-in-progress: false
 jobs:
-  release:
+  build:
     runs-on: macos-26
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Tag matches Cargo.toml
+        id: meta
         run: |
           version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2; exit 1; }
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;; *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;; esac
           case "$version" in *-*) echo "PRERELEASE=true" >> "$GITHUB_ENV" ;; *) echo "PRERELEASE=false" >> "$GITHUB_ENV" ;; esac
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.95.0"
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
@@ -59,6 +70,16 @@ jobs:
 
       - name: Build bundle
         run: scripts/bundle.sh
+
+      # The signing keychain is only needed by bundle.sh: drop it right away, even if the build failed.
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          kc="$RUNNER_TEMP/release.keychain-db"
+          if [ -f "$kc" ]; then
+            security delete-keychain "$kc" || true
+            security list-keychains -d user -s login.keychain-db || true
+          fi
 
       # Optional notarization. Secrets: APPLE_NOTARY_KEY (base64 of the App Store Connect .p8),
       # APPLE_NOTARY_KEY_ID, APPLE_NOTARY_ISSUER. Only runs together with a Developer ID identity.
@@ -92,29 +113,67 @@ jobs:
           # Versionless copy so the website can link a stable "latest" download URL.
           cp "dist/Ferrocast-${VERSION}.dmg" dist/Ferrocast.dmg
           ditto -c -k --keepParent dist/Ferrocast.app "dist/Ferrocast-${VERSION}.zip"
-          (cd dist && shasum -a 256 "Ferrocast-${VERSION}.dmg" "Ferrocast-${VERSION}.zip" > SHA256SUMS.txt)
+          (cd dist && shasum -a 256 "Ferrocast-${VERSION}.dmg" Ferrocast.dmg "Ferrocast-${VERSION}.zip" > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
 
       - name: Release notes
-        run: scripts/release_notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
+        run: scripts/release_notes.sh "$VERSION" > dist/notes.md
 
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Ferrocast ${{ env.VERSION }}
-          body_path: ${{ runner.temp }}/notes.md
-          prerelease: ${{ env.PRERELEASE == 'true' }}
-          fail_on_unmatched_files: true
-          files: |
+          name: release-files
+          if-no-files-found: error
+          path: |
             dist/Ferrocast-${{ env.VERSION }}.dmg
             dist/Ferrocast.dmg
             dist/Ferrocast-${{ env.VERSION }}.zip
             dist/SHA256SUMS.txt
+            dist/notes.md
+
+  publish:
+    needs: build
+    runs-on: macos-26
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      PRERELEASE: ${{ needs.build.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-files
+          path: artifacts
+      - name: Locate the files
+        run: |
+          # upload-artifact keeps the common parent directory of the uploaded paths, so search
+          notes=$(find artifacts -name notes.md | head -1)
+          dist=$(dirname "$(find artifacts -name SHA256SUMS.txt | head -1)")
+          echo "NOTES=$PWD/$notes" >> "$GITHUB_ENV"
+          echo "DIST=$PWD/$dist" >> "$GITHUB_ENV"
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          name: Ferrocast ${{ env.VERSION }}
+          body_path: ${{ env.NOTES }}
+          prerelease: ${{ env.PRERELEASE == 'true' }}
+          fail_on_unmatched_files: true
+          files: |
+            ${{ env.DIST }}/Ferrocast-${{ env.VERSION }}.dmg
+            ${{ env.DIST }}/Ferrocast.dmg
+            ${{ env.DIST }}/Ferrocast-${{ env.VERSION }}.zip
+            ${{ env.DIST }}/SHA256SUMS.txt
 
       # The formula builds from the tag's source tarball, which exists now. Prereleases skip it.
       # Committed straight to master: GitHub Actions may not be allowed to open pull requests in this
       # repository (that setting is off), and the tap reads the formula from master.
       - name: Commit the Homebrew formula bump to master
         if: env.PRERELEASE == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -127,4 +186,4 @@ jobs:
           fi
           git add Formula/ferrocast.rb
           git commit -m "chore(brew): ferrocast $VERSION"
-          git push origin HEAD:master
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:master

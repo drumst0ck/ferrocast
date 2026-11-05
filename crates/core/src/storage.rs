@@ -5,6 +5,16 @@ use crate::ranking::Frecency;
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::{Path, PathBuf};
 
+/// `<file>.corrupt`, or `<file>.corrupt.2`, `.3` … when an earlier backup is already there: the
+/// first copy of the user's data is the one most likely to be recoverable.
+fn free_backup_name(p: &Path) -> PathBuf {
+    let first = p.with_extension("json.corrupt");
+    if !first.exists() {
+        return first;
+    }
+    (2u32..).map(|n| p.with_extension(format!("json.corrupt.{n}"))).find(|c| !c.exists()).unwrap_or(first)
+}
+
 #[derive(Debug, Clone)]
 pub struct Store {
     pub root: PathBuf,
@@ -40,7 +50,7 @@ impl Store {
         match std::fs::read(&p) {
             Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
                 eprintln!("ferrocast: failed to parse {}: {e}; backing up", p.display());
-                if let Err(e) = std::fs::rename(&p, p.with_extension("json.corrupt")) {
+                if let Err(e) = std::fs::rename(&p, free_backup_name(&p)) {
                     eprintln!("ferrocast: could not set {} aside: {e}", p.display());
                 }
                 // defaults are loaded instead of the user's data: sync must not read that as deletions
@@ -220,6 +230,33 @@ mod tests {
         let notes: Vec<Note> = store.load("notes.json");
         assert!(notes.is_empty());
         assert!(store.path("notes.json.corrupt").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_second_corrupt_file_keeps_the_first_backup() {
+        let dir = std::env::temp_dir().join(format!("ferrocast-store-{}", uuid::Uuid::new_v4()));
+        let store = Store::new(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(store.path("notes.json"), "{first").unwrap();
+        let _: Vec<Note> = store.load("notes.json");
+        std::fs::write(store.path("notes.json"), "{second").unwrap();
+        let _: Vec<Note> = store.load("notes.json");
+        std::fs::write(store.path("notes.json"), "{third").unwrap();
+        let _: Vec<Note> = store.load("notes.json");
+        let mut backups: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with("notes.json.corrupt"))
+            .collect();
+        backups.sort();
+        assert_eq!(backups.len(), 3, "{backups:?}");
+        assert_eq!(std::fs::read_to_string(store.path("notes.json.corrupt")).unwrap(), "{first");
+        let mut bodies: Vec<String> = backups.iter().map(|n| std::fs::read_to_string(dir.join(n)).unwrap()).collect();
+        bodies.sort();
+        assert_eq!(bodies, ["{first", "{second", "{third"]);
+        assert!(!store.path("notes.json").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

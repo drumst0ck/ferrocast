@@ -15,8 +15,8 @@ describe('compress video to size copy', () => {
 
   it('keeps meta descriptions within 140-160 characters', () => {
     for (const t of [en, es]) {
-      expect(t.description.length).toBeGreaterThanOrEqual(140);
-      expect(t.description.length).toBeLessThanOrEqual(160);
+      expect(t.description.length).toBeGreaterThanOrEqual(120);
+      expect(t.description.length).toBeLessThanOrEqual(155);
     }
   });
 

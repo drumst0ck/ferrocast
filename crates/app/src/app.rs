@@ -3592,7 +3592,8 @@ impl App {
                 Msg::UpdateInstalled { path } => self.update_installed(path),
                 Msg::UpdateFailed(e) => {
                     instance::log(&self.store.root, &format!("update failed: {e}"));
-                    self.toast(trf("Update failed: {e}", &[("e", &e.to_string())]));
+                    // installer errors are plain keys: translate them before they are wrapped
+                    self.toast(trf("Update failed: {e}", &[("e", &tr(&e))]));
                 }
                 Msg::NotionTested(r) => self.handle_notion_tested(r),
                 Msg::NotionSearched { request, result } => self.handle_notion_searched(request, result),
@@ -4107,7 +4108,7 @@ impl App {
                         WebResult::Replaced => {
                             instance::log(&self.store.root, &format!("translate deliver {lang} -> web-replace ok"));
                             self.toast("Replaced in the page");
-                            return;
+                            continue;
                         }
                         WebResult::NoSelection => ("The page selection was lost; translation shown instead".to_string(), "no-selection"),
                         WebResult::Failed(e) => {
@@ -6086,7 +6087,11 @@ impl App {
             Decision::Available(r) => r,
         };
         match self.settings.update_install {
-            UpdateInstall::AskFirst => self.push(View::Update { release }),
+            UpdateInstall::AskFirst => match self.stack.last_mut() {
+                // a repeated check refreshes the open screen instead of stacking another one
+                Some(top @ View::Update { .. }) => *top = View::Update { release },
+                _ => self.push(View::Update { release }),
+            },
             UpdateInstall::Automatic if self.exit_blocked() => {
                 // never restart under a recording or an export: the next poll asks again, and
                 // the Update view (update_available) stays reachable meanwhile

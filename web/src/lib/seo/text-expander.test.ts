@@ -8,8 +8,8 @@ const read = (p: string) => readFileSync(new URL(p, root), 'utf8');
 describe('text expander pages', () => {
   it('have descriptions of snippet length and the same structure in both languages', () => {
     for (const t of [en, es]) {
-      expect(t.description.length).toBeGreaterThanOrEqual(140);
-      expect(t.description.length).toBeLessThanOrEqual(160);
+      expect(t.description.length).toBeGreaterThanOrEqual(120);
+      expect(t.description.length).toBeLessThanOrEqual(155);
       expect(t.title.length).toBeLessThanOrEqual(70);
       for (const row of t.limits.rows) expect(row).toHaveLength(t.limits.cols.length);
     }

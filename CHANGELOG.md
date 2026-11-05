@@ -2,7 +2,7 @@
 
 All notable changes to Ferrocast. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Also published at <https://ferrocast.app/changelog/> (feed: <https://ferrocast.app/changelog/rss.xml>).
 
-Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `Removed`, `Security`, `Known limitations`). An optional `**Title**:` prefix becomes the entry title; optional trailing `#tags` and a `(docs: /docs/…)` link are read by `scripts/changelog/push.ts`.
+Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `Removed`, `Security`, `Known limitations`). An optional `**Title**:` prefix becomes the entry title; optional trailing `#tags`, a `(docs: /docs/…)` link and a `{#slug}` permalink (kept when the title is edited) are read by `scripts/changelog/push.ts`.
 
 ## [Unreleased]
 
@@ -22,6 +22,15 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Settings reset**: ⌘Z undoes Reset this tab while the Undo toast is showing, and another toast (sync, login item) no longer removes Undo before it expires; the other message appears afterwards. #settings
 - **Settings sync and keys**: the Translate Languages field shows a list changed by iCloud sync or an import instead of the old text, and a failed Keychain write no longer says the AI key is stored or discards the key you typed. #settings #translate
 - **Translations**: the metadata, audio-to-video, audio trim and studio editor texts, and the errors shown when an extension cannot start, now follow the interface language. #i18n
+- **Window management and Kill Process**: Make Larger/Smaller no longer crashes on a display smaller than 200 × 150 pt, a window whose title is not text no longer aborts Ferrocast, the recording HUD now sits above the Dock instead of over it, two exports of one project at once no longer overwrite each other's settings, and Kill Process lists only your own processes and keeps paths with double spaces intact. (docs: /docs/launcher/window-management/) #macos
+- **Updates**: a failed update check or install now shows its message in your language (no connection, GitHub rate limit, HTTP errors, read-only app folder), checking twice no longer stacks several Update screens, the new app is copied next to the old one before it replaces it so an interrupted update cannot leave you without an app, and the download that is installed is the one whose checksum was verified. #updates
+- **Scripts**: running a script (or an inline script refreshing in the background) no longer changes its file permissions beyond adding the owner's execute bit, so a script kept private stays private. A script that hangs is stopped after 60 s together with the processes it started, and very long output is cut at 1 MB. #scripts
+- **Clipboard history**: an image whose file was left half-written by a crash or a full disk is rewritten the next time you copy it. #clipboard
+- **Translate in browsers**: the "Allow JavaScript from Apple Events" hint is translated, and after a successful replace in the page the launcher keeps handling queued events. #translate
+- **Sync**: the "iCloud Drive folder not found" message is translated. #sync
+- **Extensions API**: `Clipboard.copy({ html })` copies the text of the HTML instead of an empty string, `showToast(null)` no longer throws, `LocalStorage.getItem` resolves `undefined` for a missing key as Raycast does, and `Keyboard.Shortcut.Common` matches Raycast (`CopyPath` is ⌘⇧,; `CopyDeeplink` and `ToggleQuickLook` exist). #extensions
+- **Intel Macs (Homebrew)**: the screen capture helper is built for the Mac's own architecture instead of always arm64, so capture and recording no longer fail with "Bad CPU type" after a source build on Intel. #recording
+- **Releases**: `SHA256SUMS.txt` also lists the versionless `Ferrocast.dmg`. #updates
 - **Recording recovery**: a recording that was left without a duration (Ferrocast crashed or was force-quit mid-recording, or an older build) is now repaired when the Recordings list or the editor opens: the capture helper reads the length and tracks of `screen.mov` and its camera and audio files, and only the missing project data is filled in. Media files are never changed, and a recording that cannot be read is left as it was. #recording
 - **Studio editor**: when `project.json` cannot be written (read-only folder, full disk), Esc no longer drops your unsaved edits; the editor stays open with the error in a toast, and a second Esc discards them. #recording
 - **Translate**: a translation that finishes after you started a newer one no longer replaces your newer selection or pastes over it; it is shown in the launcher and copied instead. #translate
@@ -55,11 +64,20 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Raycast extensions: LocalStorage**: LocalStorage is kept in memory and saved on a background thread (a loop of thousands of setItem no longer freezes the launcher), and an unreadable `localstorage.json` is left as it is and refuses writes instead of being silently reset to empty. #extensions
 - **Snippet expansion**: a snippet no longer deletes text in another app when you switch apps right after typing the keyword, and the paste shortcut follows the keyboard layout (Dvorak, Colemak) instead of sending ⌘K. #snippets
 - **Notch player**: the pill now hides on its own a while after you pause, even when nothing else changes, and decoding covers no longer leaks memory with every track change. #notch
+- **Calculator and time zones**: `1 in to cm` now converts inches (`in` is a unit again), and `5 pm london in tokyo` works while `13pm` is rejected. #launcher
+- **Snippets**: a snippet that includes another snippet now expands the included one too (`{date}`, `{cursor}` …, up to four levels) instead of pasting the placeholder as text. #snippets
+- **Clipboard**: `#123` and `#cafe` are no longer shown as colour swatches (a colour needs 6 or 8 hex digits); an image copied from another Mac through iCloud is written in one step, so an interrupted copy no longer leaves a broken image behind. #clipboard #sync
+- **Notes export**: HTML export keeps nested lists, and drops `javascript:` and other unsafe links (only http, https, mailto, file and relative links stay). #notes
+- **Data safety**: a second unreadable data file no longer overwrites the first `.corrupt` backup (the next ones get `.corrupt.2`, `.corrupt.3` …), and `frecency.json` stops growing without limit.
 
 - **Changelog outages**: `/changelog/<version>/` answers 503 with a fallback instead of a 500, and the RSS and JSON feeds answer 503 with `no-store` instead of a cached empty feed when the database is down.
 - **Changelog publishing**: pushes to `master` publish the root `CHANGELOG.md` (not a stale copy under `web/`), and an indented continuation paragraph under an entry is kept; stray text outside an entry is reported instead of silently dropped.
 - **CSP report endpoint**: the rate limit uses the proxy-appended client address (a forged `X-Forwarded-For` prefix no longer gets a fresh bucket), its table is bounded, only reports for ferrocast.app are recorded, and the summary needs `CSP_REPORT_SUMMARY_TOKEN`.
 - **Spanish docs**: the drag wheel, Tiling, Notes and Keyboard shortcuts pages gain the mouse paths, Other options, Related and Limits sections that only the English pages had.
+- **Changelog site**: an unknown `/changelog/<version>/` shows the site's 404 page instead of a blank one, `/changelog/` pages through older releases (and the feeds list every release) instead of stopping at 50, feed entry titles are HTML-escaped, and an entry can keep its permalink through title edits with a trailing `{#slug}`.
+- **Website search results**: the page descriptions of 15 pages are shortened to 155 characters or fewer so search engines no longer truncate them, and the docs now declare `og:locale` as `en_US` / `es_ES`.
+- **Website hosting**: `www.ferrocast.app` redirects to `ferrocast.app` on every page (and only that host), social cards are cached for a week, the report-only CSP allows Pagefind and GA4, and sitemap dates for tool pages follow the docs page they show and prefer git history.
+- **Spanish docs**: the Settings page links to the Updates section of Install again, and `Check now` and `Check for Updates…` use the Spanish interface labels.
 
 ## [0.5.0] - 2026-10-29
 

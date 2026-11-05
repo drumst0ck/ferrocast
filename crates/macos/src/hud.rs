@@ -175,6 +175,13 @@ pub fn hud_frame(display: [f64; 4], width: f64) -> [f64; 4] {
     [display[0] + (display[2] - width) / 2.0, display[1] + HUD_BOTTOM_GAP, width, HUD_H]
 }
 
+/// The usable area (`visibleFrame`, clear of the Dock and menu bar) of the screen whose full
+/// `frame` is `display`; `display` itself when no screen matches. `screens` are (frame, visible).
+pub fn visible_area(display: [f64; 4], screens: &[([f64; 4], [f64; 4])]) -> [f64; 4] {
+    let close = |a: &[f64; 4], b: &[f64; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1.0);
+    screens.iter().find(|(f, _)| close(f, &display)).map_or(display, |(_, v)| *v)
+}
+
 /// Window numbers worth excluding: only real (positive) ones.
 pub fn usable_window_ids(numbers: &[Option<i64>]) -> Vec<u32> {
     numbers.iter().flatten().filter(|n| **n > 0).filter_map(|n| u32::try_from(*n).ok()).collect()
@@ -276,6 +283,14 @@ fn display_frame(mtm: MainThreadMarker, display: Option<[f64; 4]>) -> [f64; 4] {
     }
 }
 
+/// `display_frame` shrunk to the screen's visible area, so the HUD clears the Dock.
+fn display_visible_frame(mtm: MainThreadMarker, display: Option<[f64; 4]>) -> [f64; 4] {
+    let full = display_frame(mtm, display);
+    let r = |f: NSRect| [f.origin.x, f.origin.y, f.size.width, f.size.height];
+    let screens: Vec<([f64; 4], [f64; 4])> = NSScreen::screens(mtm).iter().map(|s| (r(s.frame()), r(s.visibleFrame()))).collect();
+    visible_area(full, &screens)
+}
+
 fn new_panel(mtm: MainThreadMarker, frame: [f64; 4], ignores_mouse: bool) -> Retained<RecordingPanel> {
     let style = NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel;
     let p: Retained<RecordingPanel> = unsafe {
@@ -373,7 +388,7 @@ pub fn hud_show(mtm: MainThreadMarker, display: Option<[f64; 4]>, on_pause_toggl
     hud_hide(mtm);
     let (pause_w, stop_w) = hud_button_widths();
     let (hud_w, pause_x, stop_x) = hud_layout(pause_w, stop_w);
-    let frame = hud_frame(display_frame(mtm, display), hud_w);
+    let frame = hud_frame(display_visible_frame(mtm, display), hud_w);
     let panel = new_panel(mtm, frame, false);
     panel.setMovableByWindowBackground(true);
     let fx = frosted(mtm, [0.0, 0.0, hud_w, HUD_H], HUD_H / 2.0);
@@ -471,6 +486,16 @@ pub fn excluded_window_ids() -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hud_sits_in_the_visible_area_above_the_dock() {
+        let full = [0.0, 0.0, 1440.0, 900.0];
+        let visible = [0.0, 70.0, 1440.0, 800.0];
+        let area = visible_area(full, &[([1440.0, 0.0, 800.0, 600.0], [1440.0, 0.0, 800.0, 600.0]), (full, visible)]);
+        assert_eq!(area, visible);
+        assert!(hud_frame(area, 300.0)[1] >= 70.0 + HUD_BOTTOM_GAP);
+        assert_eq!(visible_area([5.0, 5.0, 10.0, 10.0], &[(full, visible)]), [5.0, 5.0, 10.0, 10.0]);
+    }
 
     #[test]
     fn elapsed_is_mm_ss() {

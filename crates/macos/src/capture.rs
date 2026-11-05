@@ -302,6 +302,14 @@ fn partial_path(out: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Per-export parameters file: the counter keeps two exports of one project (MP4 + GIF) from
+/// overwriting and deleting each other's file.
+fn export_params_path(cache: &Path) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    cache.join(format!("export-{}-{n}.ndjson", std::process::id()))
+}
+
 /// Export `project_dir` to `out` with a short-lived helper (the editor's Export sheet): plan and
 /// per-frame parameters are computed here (`capture::export`), the helper renders and encodes.
 /// `progress(done_frames, total_frames, eta_seconds)` is called as events arrive; setting `cancel`
@@ -326,7 +334,7 @@ pub fn export_project(
     }
     let cache = project_dir.join(".cache");
     std::fs::create_dir_all(&cache).map_err(|e| invalid(format!("could not create {}: {e}", cache.display())))?;
-    let params = cache.join(format!("export-{}.ndjson", std::process::id()));
+    let params = export_params_path(&cache);
     // P6: look table, split rectangles and face-following path are resolved once for the whole export
     let fx = ferrocast_core::capture::compose::CameraFx::prepare(&project, project_dir, &events, plan.size).map_err(invalid)?;
     let written = std::fs::File::create(&params).and_then(|f| {
@@ -838,6 +846,14 @@ pub fn with_helper<T>(exe: &Path, log: impl Fn(&str) + Send + 'static, f: impl F
 mod tests {
     use super::*;
     use ferrocast_core::capture::protocol::{MediaAccess, RecordState};
+
+    #[test]
+    fn concurrent_exports_of_one_project_get_distinct_params_files() {
+        let cache = Path::new("/p/.cache");
+        let (a, b) = (export_params_path(cache), export_params_path(cache));
+        assert_ne!(a, b);
+        assert_eq!(a.parent(), Some(cache));
+    }
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
 

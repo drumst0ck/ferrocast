@@ -27,11 +27,19 @@ impl ProcInfo {
 pub fn parse_ps(out: &str) -> Vec<ProcInfo> {
     out.lines()
         .filter_map(|l| {
-            let mut it = l.split_whitespace();
-            let pid: i32 = it.next()?.parse().ok()?;
-            let cpu: f32 = it.next()?.parse().ok()?;
-            let rss_kb: f32 = it.next()?.parse().ok()?;
-            let path = it.collect::<Vec<_>>().join(" ");
+            // pid, cpu and rss are single tokens; `comm` is the rest of the line verbatim
+            // (collapsing whitespace would corrupt paths holding double spaces).
+            let mut rest = l.trim_start();
+            let mut field = || {
+                let end = rest.find(char::is_whitespace)?;
+                let (tok, tail) = rest.split_at(end);
+                rest = tail.trim_start();
+                Some(tok)
+            };
+            let pid: i32 = field()?.parse().ok()?;
+            let cpu: f32 = field()?.parse().ok()?;
+            let rss_kb: f32 = field()?.parse().ok()?;
+            let path = rest.trim_end().to_string();
             if path.is_empty() {
                 return None;
             }
@@ -41,9 +49,21 @@ pub fn parse_ps(out: &str) -> Vec<ProcInfo> {
         .collect()
 }
 
+/// `ps` arguments listing only the processes of user `uid`.
+fn ps_args(uid: &str) -> Vec<String> {
+    ["-U", uid, "-o", "pid=,pcpu=,rss=,comm="].iter().map(|s| s.to_string()).collect()
+}
+
+fn current_uid() -> Option<String> {
+    let o = Command::new("/usr/bin/id").arg("-u").output().ok()?;
+    let uid = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    (o.status.success() && !uid.is_empty()).then_some(uid)
+}
+
 /// Processes of the current user, busiest first. Kernel tasks and this launcher are omitted.
 pub fn list() -> Vec<ProcInfo> {
-    let out = Command::new("/bin/ps").args(["-axo", "pid=,pcpu=,rss=,comm="]).output().ok();
+    let Some(uid) = current_uid() else { return Vec::new() };
+    let out = Command::new("/bin/ps").args(ps_args(&uid)).output().ok();
     let me = std::process::id() as i32;
     let mut v: Vec<ProcInfo> = out
         .map(|o| parse_ps(&String::from_utf8_lossy(&o.stdout)))
@@ -75,6 +95,20 @@ mod tests {
         assert_eq!(v[0].bundle().as_deref(), Some("/Applications/Google Chrome.app"));
         assert!((v[0].mem_mb - 200.0).abs() < 0.01);
         assert_eq!(v[1].bundle(), None);
+    }
+
+    #[test]
+    fn keeps_double_spaces_in_paths() {
+        let v = parse_ps("  7  0.0 2048 /Applications/My  App.app/Contents/MacOS/My  App\n");
+        assert_eq!(v[0].path, "/Applications/My  App.app/Contents/MacOS/My  App");
+        assert_eq!(v[0].name, "My  App");
+    }
+
+    #[test]
+    fn lists_only_the_given_user() {
+        let a = ps_args("501");
+        assert_eq!(&a[..2], ["-U", "501"]);
+        assert!(!a.iter().any(|x| x.contains('a') && x.starts_with('-') && x != "-U"), "no -a (all users): {a:?}");
     }
 
     #[test]

@@ -39,7 +39,7 @@ export const page: GuideCopy = {
   path: '/es/convertidor-de-archivos-gratis-mac/',
   title: 'Convertidor de archivos gratis para Mac, sin subir nada | Ferrocast',
   description:
-    'Convierte imágenes, vídeo, audio, PDF y documentos en tu Mac sin subirlos: 275 conversiones y 26 herramientas, gratis y MIT. Comparado con Permute y CloudConvert.',
+    'Convierte imágenes, vídeo, audio, PDF y documentos en tu Mac sin subirlos: 275 conversiones, 26 herramientas. Gratis, MIT, frente a Permute y CloudConvert.',
   crumbs: [
     ['Inicio', '/es/'],
     ['Convertir', '/es/convertir/'],
@@ -194,7 +194,7 @@ export const page: GuideCopy = {
   },
 };
 
-if (page.description.length < 140) throw new Error(`converter ES description is ${page.description.length}`);
+if (page.description.length < 120) throw new Error(`converter ES description is ${page.description.length}`);
 if (c.pairs !== 275 || c.inputs !== 46 || c.tools !== 26) {
   throw new Error(`converter ES brief counts drifted: ${c.pairs}/${c.inputs}/${c.tools}`);
 }

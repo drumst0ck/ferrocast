@@ -13,7 +13,7 @@ export const page: GuideCopy = {
   path: '/es/historial-portapapeles-mac/',
   title: 'Historial del portapapeles gratis en Mac | Ferrocast',
   description:
-    'Un historial del portapapeles gratis para Mac que no guarda lo que copias desde gestores de contraseñas como 1Password. Comparado con el de Spotlight en Tahoe.',
+    'Un historial del portapapeles gratis para Mac que no guarda lo que copias desde gestores de contraseñas como 1Password. Comparado con el de Tahoe.',
   crumbs: [['Inicio', '/es/'], ['Historial del portapapeles', '/es/historial-portapapeles-mac/']],
   h1: 'Un historial del portapapeles para Mac que se salta las contraseñas',
   lead: [
