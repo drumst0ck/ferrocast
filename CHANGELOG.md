@@ -17,6 +17,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Export Data**: the backup now runs in the background instead of freezing the launcher, and leaves out the downloaded Node runtime, update downloads, `node_modules` and temp files, so it is far smaller. (docs: /docs/launcher/settings/) #backup
+- **Backups and secrets**: Export Data no longer includes extension preferences or LocalStorage, which can hold API keys and passwords. (docs: /docs/reference/data-and-privacy/) #privacy
 - **Confirmations and updates**: holding ↵ no longer confirms a confirmation (Empty Trash, Shut Down, Restart, Log Out, Quit All Apps, Delete All, Move to Trash) or installs an update through key auto-repeat; they need a fresh press. #launcher
 - **Create Script Command**: a new script never replaces an existing one (a second "Test" becomes `test 2.sh`), and a title without ASCII letters or digits is saved as `script.sh` instead of a hidden `.sh` file. #scripts
 - **Recording survives Quit and updates**: Quit from the menu bar or the launcher during a recording now stops and saves it first, with a 15 second limit, so the recording keeps its length, camera and microphone. An automatic update waits for the recording (and for a running export) to end and tries again at the next check; an installed update restarts the app only after that. #recording
