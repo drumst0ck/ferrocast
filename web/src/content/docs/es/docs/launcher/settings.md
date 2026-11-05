@@ -16,7 +16,7 @@ Para elegirlo tú, abre Ajustes → General → **Idioma** y selecciona Sistema 
 
 ## Qué puedes configurar
 
-- El atajo del lanzador (por defecto <kbd>⌥</kbd> <kbd>Space</kbd>) y atajos por comando.
+- El atajo del lanzador (por defecto <kbd>⌥</kbd> <kbd>Space</kbd>) y atajos por comando. Un atajo necesita <kbd>⌘</kbd>, <kbd>⌥</kbd> o <kbd>⌃</kbd> (<kbd>⇧</kbd> solo no basta, salvo en las teclas F), y se rechaza el que ya usa otro comando.
 - Apariencia (Ajustes → General): System, Dark o Light, o tus propios colores con vista previa, avisos de contraste y exportación o importación como archivo (consulta [Temas personalizados](/es/docs/launcher/themes/)).
 - Abrir al iniciar sesión mediante un LaunchAgent; se aplica en el siguiente inicio de sesión.
 - Las teclas de la rueda de arrastre y su activación en Ajustes → General (consulta [Rueda de arrastre](/es/docs/files/drag-wheel/)).

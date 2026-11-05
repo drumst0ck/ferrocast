@@ -4,6 +4,9 @@
 use super::*;
 use ferrocast_core::themes::{self, CustomTheme, ThemeBase};
 
+/// A second Delete press sooner than this after the first is part of a double-click, not a confirmation.
+const DELETE_MIN_GAP: Duration = Duration::from_millis(400);
+
 /// Largest theme file Import reads (a real one is under 1 KB).
 const MAX_THEME_FILE: u64 = 64 * 1024;
 
@@ -51,6 +54,25 @@ impl App {
         self.custom_themes.retain(|t| t.id != id);
         self.save_themes();
         self.select_theme(None);
+    }
+
+    /// Delete asks for a second press (at least `DELETE_MIN_GAP` after the first, so a double-click does not count): the first arms it for a few seconds (the editor button turns into
+    /// "Confirm delete"), the second removes the theme. Returns true when the theme was removed.
+    pub(crate) fn request_delete_theme(&mut self) -> bool {
+        let Some((id, name)) = self.active_theme().map(|t| (t.id.clone(), t.name.clone())) else { return false };
+        let armed_at = self.ctx.data(|d| d.get_temp::<(String, Instant)>(Id::new("theme-delete-armed")));
+        if armed_at.is_some_and(|(armed, at)| armed == id && at.elapsed() < DELETE_MIN_GAP) {
+            return false; // a double-click is one press, not a confirmation
+        }
+        if crate::app::draw::delete_armed(&self.ctx, &id) {
+            self.ctx.data_mut(|d| d.remove::<(String, Instant)>(Id::new("theme-delete-armed")));
+            self.delete_active_theme();
+            return true;
+        }
+        self.ctx.data_mut(|d| d.insert_temp(Id::new("theme-delete-armed"), (id, Instant::now())));
+        self.toast(trf("Press Delete again to remove “{name}”", &[("name", &name)]));
+        self.ctx.request_repaint_after(Duration::from_secs(crate::app::draw::DELETE_ARM_SECS));
+        false
     }
 
     /// Rename the selected theme; the name must be 1-60 characters and not used by another theme.

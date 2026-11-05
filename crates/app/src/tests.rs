@@ -4,6 +4,8 @@ use super::*;
 mod ext_host_tests;
 #[path = "flows_tests.rs"]
 mod flows_tests;
+#[path = "round3_ui_tests.rs"]
+mod round3_ui_tests;
 #[path = "sync_clip_tests.rs"]
 mod sync_clip_tests;
 

@@ -1922,8 +1922,10 @@ impl App {
             instance::log(&self.store.root, &format!("saving frecency.json failed: {e:#}"));
         }
     }
-    fn apply_hotkeys(&mut self) {
+    /// Re-register every hotkey; returns the registration errors (`{spec}: {reason}`).
+    fn apply_hotkeys(&mut self) -> Vec<String> {
         let mut lines = vec![];
+        let mut all_errors = vec![];
         if let Some(h) = self.hotkeys.as_mut() {
             let errors = h.apply(&self.settings);
             if let Some(e) = errors.first() {
@@ -1937,11 +1939,13 @@ impl App {
             for e in &errors {
                 lines.push(format!("hotkey error: {e}"));
             }
+            all_errors = errors;
             self.tiling_hotkey_issues = failed;
         }
         for l in lines {
             instance::log(&self.store.root, &l);
         }
+        all_errors
     }
 
     /// Rebuild the cached list of root-searchable items.
@@ -5686,7 +5690,7 @@ impl App {
             Kind::App { path, .. } => self.open_target(&path.clone(), None),
             Kind::System(c) => {
                 if c.is_destructive() {
-                    self.push(View::Confirm { msg: format!("{}?", c.title()), act: Act::RunSystem(*c) });
+                    self.push(View::Confirm { msg: trf("{command}?", &[("command", &tr(&c.title()))]), act: Act::RunSystem(*c) });
                 } else {
                     self.run_system(*c);
                 }
@@ -7084,6 +7088,9 @@ impl App {
                 | Act::DeleteQuicklink(_)
                 | Act::DisableCommand
                 | Act::ForceQuitApp(_)
+                | Act::KillProcess(_, true)
+                | Act::ClearCalcHistory
+                | Act::ClearShelf
         );
         if let Act::TrashApp(p) = &act {
             // judge the real bundle: the same resolved path is confirmed, re-checked and moved
@@ -7109,6 +7116,9 @@ impl App {
                 Act::DeleteSnippet(_) => "Delete this snippet?",
                 Act::DeleteQuicklink(_) => "Delete this quicklink?",
                 Act::ForceQuitApp(_) => "Force quit this application? Unsaved changes may be lost.",
+                Act::KillProcess(..) => "Force kill this process? It cannot save its work.",
+                Act::ClearCalcHistory => "Clear the calculator history?",
+                Act::ClearShelf => "Clear everything on the Shelf?",
                 _ => "Disable this command? (re-enable in Settings)",
             };
             self.push(View::Confirm { msg: msg.into(), act });
