@@ -103,6 +103,7 @@ impl eframe::App for App {
         self.sync_window();
         self.drain();
         self.sync_flush();
+        self.flush_pending_saves(Instant::now());
         self.tick_inline();
         self.effect_tick(Instant::now());
         self.sweep_timers();
@@ -8475,7 +8476,7 @@ impl App {
         if s.ai_provider != self.settings.ai_provider {
             ctx.data_mut(|d| d.remove::<bool>(Id::new("ai_has_key")));
         }
-        self.commit_settings(s);
+        self.commit_settings_debounced(s);
     }
 }
 
@@ -10209,7 +10210,17 @@ fn reset_tab(s: &Settings, tab: usize) -> Settings {
 impl App {
     /// Apply an edited copy of the settings: persist it and run what a changed value needs (login
     /// item, Finder tap, theme, hotkey, script folders).
-    pub(crate) fn commit_settings(&mut self, mut s: Settings) {
+    pub(crate) fn commit_settings(&mut self, s: Settings) {
+        self.commit_settings_with(s, false);
+    }
+
+    /// `commit_settings` for the Settings tabs, which send an edit every frame while a field is typed
+    /// in or a slider dragged: the disk write waits for a pause.
+    pub(crate) fn commit_settings_debounced(&mut self, s: Settings) {
+        self.commit_settings_with(s, true);
+    }
+
+    fn commit_settings_with(&mut self, mut s: Settings, later: bool) {
         if s == self.settings {
             return;
         }
@@ -10237,7 +10248,11 @@ impl App {
         let sync_turned_on = s.sync_enabled && !self.settings.sync_enabled;
         let language_changed = s.language != self.settings.language;
         self.settings = s;
-        self.save_settings();
+        if later {
+            self.save_settings_later();
+        } else {
+            self.save_settings();
+        }
         if language_changed {
             self.apply_language();
         }

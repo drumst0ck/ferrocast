@@ -25,7 +25,7 @@ impl App {
             return;
         }
         *slot = edited;
-        self.save_themes();
+        self.save_themes_later();
         if base_changed {
             self.set_theme();
         }

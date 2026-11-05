@@ -1056,6 +1056,8 @@ pub struct App {
     toast_user: bool,
     /// The last "Reset this tab": (tab, the settings before it, when); Undo restores that tab's fields.
     settings_undo: Option<(usize, Settings, Instant)>,
+    /// Edits applied in memory whose `settings.json` / `themes.json` write waits for a pause.
+    pending_saves: PendingSaves,
     prev_pid: Option<i32>,
     /// Side effects of delivering a translation; replaced by a recorder in tests.
     fx: Effects,
@@ -1376,6 +1378,7 @@ impl App {
             toast,
             toast_user: false,
             settings_undo: None,
+            pending_saves: PendingSaves::default(),
             prev_pid: None,
             fx: Effects::real(),
             translate_run: 0,
@@ -1596,6 +1599,7 @@ impl App {
 
     /// Persist the custom themes (`themes.json`).
     pub(crate) fn save_themes(&mut self) {
+        self.pending_saves.themes = None;
         let v = ferrocast_core::themes::ThemeFile { themes: self.custom_themes.clone() };
         self.persist("themes.json", &v);
     }
@@ -1618,13 +1622,70 @@ impl App {
     }
 
     fn save_settings(&mut self) {
-        // a run in progress stops writing as soon as sync is turned off
-        self.sync.flag.store(self.settings.sync_enabled, Ordering::SeqCst);
+        self.pending_saves.settings = None;
         let v = self.settings.clone();
         self.persist("settings.json", &v);
-        *self.shared.settings.write().unwrap() = self.settings.clone();
-        self.rebuild();
-        self.sync_tiling();
+        self.apply_settings();
+    }
+
+    /// Like `save_settings`, for a stream of edits: applied now, written after a pause (or when the
+    /// window hides, the app quits, or the next frame finds the pause over).
+    pub(crate) fn save_settings_later(&mut self) {
+        self.pending_saves.settings = Some(Instant::now());
+        self.ctx.request_repaint_after(SAVE_DEBOUNCE + Duration::from_millis(50));
+        self.apply_settings();
+    }
+
+    /// `save_themes` for a stream of edits (the colour picker).
+    pub(crate) fn save_themes_later(&mut self) {
+        self.pending_saves.themes = Some(Instant::now());
+        self.ctx.request_repaint_after(SAVE_DEBOUNCE + Duration::from_millis(50));
+    }
+
+    /// Write what is owed: everything once its pause is over at `now`, or at once for `Instant`s far ahead.
+    pub(crate) fn flush_pending_saves(&mut self, now: Instant) {
+        let due = |t: Option<Instant>| t.is_some_and(|t| now.saturating_duration_since(t) >= SAVE_DEBOUNCE);
+        if due(self.pending_saves.settings) {
+            self.pending_saves.settings = None;
+            let v = self.settings.clone();
+            self.persist("settings.json", &v);
+        }
+        if due(self.pending_saves.themes) {
+            self.save_themes();
+        }
+    }
+
+    /// Write every owed edit now (hiding, going back, quitting).
+    pub(crate) fn flush_saves_now(&mut self) {
+        self.flush_pending_saves(Instant::now() + SAVE_DEBOUNCE);
+    }
+
+    /// What a settings change does besides the file: sync flag, the shared copy, the root index when
+    /// something it shows changed, the tiling worker when a tiling field changed, the notch player.
+    fn apply_settings(&mut self) {
+        // a run in progress stops writing as soon as sync is turned off
+        self.sync.flag.store(self.settings.sync_enabled, Ordering::SeqCst);
+        let prev = std::mem::replace(&mut *self.shared.settings.write().unwrap(), self.settings.clone());
+        let s = &self.settings;
+        let index_changed = s.commands != prev.commands
+            || s.language != prev.language
+            || s.run_raycast_extensions != prev.run_raycast_extensions
+            || s.raycast_extensions_disabled != prev.raycast_extensions_disabled;
+        let tiling_changed = s.tiling_enabled != prev.tiling_enabled
+            || s.tiling_hover_activate != prev.tiling_hover_activate
+            || s.tiling_layout != prev.tiling_layout
+            || s.tiling_display_layouts != prev.tiling_display_layouts
+            || s.tiling_gap != prev.tiling_gap
+            || s.tiling_excluded != prev.tiling_excluded
+            || s.tiling_border != prev.tiling_border
+            || s.tiling_border_color != prev.tiling_border_color
+            || s.tiling_quick_actions != prev.tiling_quick_actions;
+        if index_changed {
+            self.rebuild();
+        }
+        if tiling_changed {
+            self.sync_tiling();
+        }
         self.sync_now_playing();
     }
 
@@ -2116,6 +2177,7 @@ impl App {
 
     fn hide(&mut self) {
         self.editor_flush();
+        self.flush_saves_now();
         // a maximised editor goes back to the launcher's size before the window disappears
         self.leave_fullscreen();
         self.visible = false;
@@ -3066,6 +3128,7 @@ impl App {
     /// Writes pending notes and exits (after starting the relaunch of an updated copy, if any).
     fn exit_now(&mut self, relaunch: Option<PathBuf>) {
         self.editor_flush();
+        self.flush_saves_now();
         self.notes_do(|c, d| c.flush(d));
         if let Some(path) = relaunch {
             (self.fx.relaunch)(&path);
@@ -3161,6 +3224,7 @@ impl App {
     fn pop(&mut self) {
         self.ext_before_pop();
         self.editor_flush();
+        self.flush_saves_now();
         // Escape (or going back) also ends a running translating effect
         self.end_effect(false);
         self.sec_dirty = true;
@@ -3880,7 +3944,12 @@ impl App {
                             &format!("translate deliver {lang} -> {output:?} (the setting is not Auto, so nothing is replaced in place)"),
                         );
                     }
-                    match outcome(result, &lang, output) {
+                    // a newer translation was started meanwhile: this one must not touch the selection or paste
+                    let stale = run != self.translate_run;
+                    let out = outcome(result, &lang, output);
+                    let out = if stale { ferrocast_core::translate::stale_guard(out, &lang) } else { out };
+                    match out {
+                        Outcome::Show { text, lang } if output == TranslateOutput::Auto && stale => self.show_translation(lang, text),
                         Outcome::Show { text, lang } if output == TranslateOutput::Auto => {
                             let delivery = plan(output, target, front, source_pid);
                             instance::log(&self.store.root, &translate_deliver_line(&lang, delivery, ""));
@@ -5882,21 +5951,18 @@ impl App {
                 bus.send(Msg::Toast("Not installed with Homebrew; update from the repository".into()));
                 return;
             }
+            services::brew_refresh_tap(brew);
             let msg = match std::process::Command::new(brew)
                 .env("HOMEBREW_NO_AUTO_UPDATE", "1")
                 .args(["outdated", "--verbose", "ferrocast"])
                 .output()
             {
-                Ok(o) if o.status.success() => {
-                    let out = String::from_utf8_lossy(&o.stdout);
-                    match out.lines().find(|l| l.starts_with("ferrocast")) {
-                        Some(l) => {
-                            trf("Update available: {v} · run brew upgrade ferrocast", &[("v", l.trim_start_matches("ferrocast").trim())])
-                        }
-                        None => trf("Ferrocast {version} is up to date", &[("version", env!("CARGO_PKG_VERSION"))]),
-                    }
-                }
-                Ok(o) => trf("brew: {e}", &[("e", String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("unknown error"))]),
+                // exit 1 means "outdated": stdout decides, not the status
+                Ok(o) => services::brew_outdated_message(
+                    o.status.success(),
+                    &String::from_utf8_lossy(&o.stdout),
+                    &String::from_utf8_lossy(&o.stderr),
+                ),
                 Err(e) => trf("Could not run brew: {e}", &[("e", &e.to_string())]),
             };
             bus.send(Msg::Toast(msg));
@@ -6276,6 +6342,14 @@ impl App {
     fn editor_gc(&mut self) {
         if !self.stack.iter().any(|v| matches!(v, View::Editor { .. })) {
             self.editor_flush();
+            // the last save failed: keep the session on screen once (error in the toast), the next
+            // attempt to leave discards it
+            if let Some(ed) = self.editor.as_mut().filter(|e| e.st.autosave.pending() && !e.st.leave_warned) {
+                ed.st.leave_warned = true;
+                let (dir, error) = (ed.dir.clone(), ed.save_label());
+                self.stack.push(View::Editor { project: dir });
+                self.toast_verbatim(trf("{error} Press Esc again to discard your edits.", &[("error", &error)]));
+            }
         }
         if self.editor.is_some() && !self.stack.iter().any(|v| matches!(v, View::Editor { .. })) {
             self.editor = None;
@@ -8263,6 +8337,16 @@ fn launcher_origin() -> Option<Pos2> {
     let top = primary_h - (v.origin.y + v.size.height);
     let y = top + v.size.height * 0.22;
     Some(Pos2::new(x as f32, y as f32))
+}
+
+/// How long Settings edits (typing, sliders, the colour picker) wait before they are written.
+const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// When the last unwritten Settings / theme edit happened.
+#[derive(Default)]
+pub(crate) struct PendingSaves {
+    settings: Option<Instant>,
+    themes: Option<Instant>,
 }
 
 #[path = "draw.rs"]

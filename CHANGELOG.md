@@ -17,6 +17,10 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Studio editor**: when `project.json` cannot be written (read-only folder, full disk), Esc no longer drops your unsaved edits; the editor stays open with the error in a toast, and a second Esc discards them. #recording
+- **Translate**: a translation that finishes after you started a newer one no longer replaces your newer selection or pastes over it; it is shown in the launcher and copied instead. #translate
+- **Settings**: typing in a field, dragging a slider or the theme colour picker no longer rewrites `settings.json` and `themes.json`, rebuilds the command list or resends the tiling configuration on every frame; edits apply at once and are saved after a short pause, when the launcher hides or on quit. #settings
+- **Check for Updates (Homebrew)**: Ferrocast no longer shows "brew: unknown error" when an update exists; it refreshes the Homebrew formulae first and then shows the update. #updates
 - **Export Data**: the backup now runs in the background instead of freezing the launcher, and leaves out the downloaded Node runtime, update downloads, `node_modules` and temp files, so it is far smaller. (docs: /docs/launcher/settings/) #backup
 - **Backups and secrets**: Export Data no longer includes extension preferences or LocalStorage, which can hold API keys and passwords. (docs: /docs/reference/data-and-privacy/) #privacy
 - **Search and calculator**: fuzzy search no longer drops an item whose letters match only when an earlier word-start pick is skipped (`ac` now finds `xabc a z`); `max(1,2,3)` and `min(5,1,2)` read commas between arguments as separators instead of thousands groups; `0 usd to eur` no longer panics. #launcher
