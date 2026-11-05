@@ -1,11 +1,12 @@
 import rss from '@astrojs/rss';
 import type { APIContext } from 'astro';
-import { loadReleases, CATEGORY_LABEL, CATEGORY_ORDER, versionLabel } from '../../lib/changelog/load';
+import { loadReleases, unavailableFeed, CATEGORY_LABEL, CATEGORY_ORDER, versionLabel } from '../../lib/changelog/load';
 
 export const prerender = false;
 
 export async function GET(context: APIContext) {
-  const releases = (await loadReleases()) ?? [];
+  const releases = await loadReleases();
+  if (!releases) return unavailableFeed();
   const items = releases
     .filter((r) => r.releasedOn)
     .map((r) => ({

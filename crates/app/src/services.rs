@@ -2543,21 +2543,46 @@ pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
 
 /// Archive user data into `dest_dir` as a timestamped `.tar.gz`. Clipboard history, the lock and the
 /// log are excluded on purpose: backups are meant to be shared and must not leak copied secrets.
+/// So are extension preferences and LocalStorage (they hold API keys and passwords) and bulky
+/// regenerable data: the downloaded Node runtime, `updates/`, `node_modules` and `*.tmp` files.
 pub fn export_backup(data_root: &std::path::Path, dest_dir: &std::path::Path, stamp: &str) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
     let out = dest_dir.join(format!("Ferrocast-backup-{stamp}.tar.gz"));
     let parent = data_root.parent().ok_or("invalid data directory")?;
     let name = data_root.file_name().ok_or("invalid data directory")?;
+    let name_s = name.to_string_lossy();
     let st = std::process::Command::new("/usr/bin/tar")
         .arg("-czf")
         .arg(&out)
         .args(["--exclude", "clipboard.json", "--exclude", "clipboard-images", "--exclude", "ferrocast.lock", "--exclude", "ferrocast.log"])
+        .args(["--exclude", "preferences.json", "--exclude", "localstorage.json", "--exclude", "node_modules", "--exclude", "*.tmp"])
+        .args(["--exclude", &format!("{name_s}/runtime"), "--exclude", &format!("{name_s}/updates")])
         .arg("-C")
         .arg(parent)
         .arg(name)
         .status()
         .map_err(|e| e.to_string())?;
     st.success().then_some(out).ok_or_else(|| "tar failed".to_string())
+}
+
+/// Run [`export_backup`] on a worker thread so packing never freezes the launcher; the outcome
+/// comes back as a toast (and the archive is revealed in Finder when `reveal`).
+pub fn export_backup_async(data_root: PathBuf, dest_dir: PathBuf, stamp: String, reveal: bool, bus: Bus) {
+    std::thread::spawn(move || {
+        let msg = match export_backup(&data_root, &dest_dir, &stamp) {
+            Ok(p) => {
+                if reveal {
+                    let _ = ferrocast_macos::apps::reveal(&p);
+                }
+                "Backup saved to Downloads (clipboard history excluded)".to_string()
+            }
+            Err(e) => {
+                crate::instance::log(&data_root, &format!("export failed: {e}"));
+                trf("Backup failed: {e}", &[("e", &e)])
+            }
+        };
+        bus.send(Msg::Toast(msg));
+    });
 }
 
 /// Convert every file to `target` in a background thread; one toast at the end, first output
@@ -4816,6 +4841,66 @@ mod backup_tests {
         let list = String::from_utf8(std::process::Command::new("/usr/bin/tar").arg("-tzf").arg(&out).output().unwrap().stdout).unwrap();
         assert!(list.contains("snippets.json") && list.contains("settings.json"), "{list}");
         assert!(!list.contains("clipboard.json") && !list.contains("clipboard-images") && !list.contains("ferrocast.log"), "{list}");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn backup_skips_runtime_updates_node_modules_tmp_and_extension_secrets() {
+        let base = std::env::temp_dir().join(format!("ferrocast-bk-{}", uuid::Uuid::new_v4()));
+        let root = base.join("Ferrocast");
+        let ext = root.join("extensions/demo");
+        for d in ["runtime", "updates/0.2.0", "extensions/demo/node_modules/dep", "extensions/demo/support", "extensions/demo/runtime"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        for f in [
+            "snippets.json",
+            "extensions/demo/package.json",
+            "extensions/demo/support/notes.txt",
+            "extensions/demo/runtime/keep.txt",
+            "runtime/node",
+            "runtime/extensions-runtime.js",
+            "updates/0.2.0/Ferrocast.dmg",
+            "extensions/demo/node_modules/dep/index.js",
+            "snippets.json.tmp",
+            "extensions/demo/preferences.json",
+            "extensions/demo/localstorage.json",
+        ] {
+            std::fs::write(root.join(f), "x").unwrap();
+        }
+        std::fs::write(ext.join("preferences.json"), r#"{"apiKey":"hunter2"}"#).unwrap();
+        let out = export_backup(&root, &base.join("out"), "T2").unwrap();
+        let list = String::from_utf8(std::process::Command::new("/usr/bin/tar").arg("-tzf").arg(&out).output().unwrap().stdout).unwrap();
+        for kept in ["snippets.json", "demo/package.json", "support/notes.txt", "demo/runtime/keep.txt"] {
+            assert!(list.lines().any(|l| l.ends_with(kept)), "{kept} must be kept: {list}");
+        }
+        for gone in ["Ferrocast/runtime", "updates", "node_modules", ".tmp", "preferences.json", "localstorage.json"] {
+            assert!(!list.contains(gone), "{gone} must be excluded: {list}");
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn export_backup_async_returns_at_once_and_reports_through_the_bus() {
+        let base = std::env::temp_dir().join(format!("ferrocast-bk-{}", uuid::Uuid::new_v4()));
+        let root = base.join("Ferrocast");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("snippets.json"), "x").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let bus = Bus { tx, ctx: egui::Context::default() };
+        export_backup_async(root.clone(), base.join("out"), "T3".into(), false, bus);
+        match rx.recv_timeout(Duration::from_secs(30)).expect("a result message") {
+            Msg::Toast(t) => assert!(t.contains("Backup saved"), "{t}"),
+            _ => panic!("expected a Toast"),
+        }
+        assert!(base.join("out/Ferrocast-backup-T3.tar.gz").exists());
+        // failure path: destination is a file, not a folder
+        std::fs::write(base.join("blocked"), "x").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        export_backup_async(root, base.join("blocked/sub"), "T4".into(), false, Bus { tx, ctx: egui::Context::default() });
+        match rx.recv_timeout(Duration::from_secs(30)).expect("a result message") {
+            Msg::Toast(t) => assert!(t.starts_with("Backup failed"), "{t}"),
+            _ => panic!("expected a Toast"),
+        }
         let _ = std::fs::remove_dir_all(base);
     }
 }

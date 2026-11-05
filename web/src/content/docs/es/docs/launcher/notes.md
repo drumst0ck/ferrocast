@@ -103,6 +103,10 @@ En el panel de acciones, **Delete Note** y **Delete All Notes** mueven las notas
 
 <kbd>⌘</kbd> <kbd>+</kbd> acerca, <kbd>⌘</kbd> <kbd>-</kbd> aleja y <kbd>⌘</kbd> <kbd>0</kbd> vuelve al tamaño real. El zoom también está en Ajustes → Notes.
 
+## Con el ratón
+
+Cada atajo de la ventana tiene su camino con clic. La barra de herramientas tiene **‹** y **›** (atrás y adelante por las notas que abriste), **Browse**, **+** (nota nueva) y **×** (cerrar). El pie tiene **Actions**, **Browse**, **Pin** y **New**. Haz clic derecho en el editor, en la barra de herramientas o en una parte vacía de la ventana para ver un menú con New Note, Browse Notes, Pin o Unpin, Insert Image, Back, Forward, Zoom In, Zoom Out, Actual Size, Actions y Close; en el editor aparece después de las entradas habituales Cortar, Copiar y Pegar. Las notas fijadas salen primero en **Browse Notes**: haz clic en una para abrirla, igual que <kbd>⌘</kbd> <kbd>1</kbd> a <kbd>⌘</kbd> <kbd>9</kbd>. En **Search Notes**, pasa el puntero por una fila para ver **Pin** o **Unpin** y **Delete**, y haz clic en **+ New** para una nota nueva.
+
 ## El panel de acciones
 
 <kbd>⌘</kbd> <kbd>K</kbd> abre el panel de acciones de la nota abierta. Escribe para buscar, también dentro de sus submenús (por ejemplo Format › Bold o Export › Markdown). Contiene:

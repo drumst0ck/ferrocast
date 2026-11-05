@@ -11,7 +11,7 @@ Ferrocast keeps its data in JSON files in `~/Library/Application Support/Ferroca
 - **JSON files** in the data folder: settings, clipboard history, snippets, quicklinks, notes and the File Shelf list. Notes are in `notes.json`; a deleted note stays there for 30 days (Recently Deleted) before it is removed for good.
 - **Keychain**: AI keys (an Anthropic key, an OpenAI-compatible server key) and the ChatGPT sign-in session, which is refreshed automatically.
 - **Log**: an error log in the data folder; open it with the **Reveal Log File** command.
-- **Backups**: export leaves the clipboard history out.
+- **Backups**: export leaves out the clipboard history, extension preferences and LocalStorage (they can hold API keys and passwords), the downloaded Node runtime and update downloads.
 
 ## What leaves your Mac
 

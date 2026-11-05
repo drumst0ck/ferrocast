@@ -18,8 +18,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - run: npm run changelog:push -- --dry-run > /dev/null
-      - run: npm run changelog:push
+      - run: npm run changelog:push -- --file ../CHANGELOG.md --dry-run > /dev/null
+      - run: npm run changelog:push -- --file ../CHANGELOG.md
         env:
           CHANGELOG_ADMIN_TOKEN: ${{ secrets.CHANGELOG_ADMIN_TOKEN }}
           CHANGELOG_URL: ${{ vars.CHANGELOG_URL }}

@@ -26,7 +26,7 @@ To choose one yourself, open Settings → General → **Language** and pick Syst
 - Settings → Capture has the screenshot folder (empty uses `~/Pictures/Ferrocast Captures`), the format (PNG only), **After capture** (Show, Copy or Save), **Include cursor**, the **Recording frame rate** (30 or 60 fps) and **Recording countdown** (Off, 3 s or 5 s), and one shortcut row each for Capture Area, Capture Window, Capture Screen, Capture Scrolling, Record Screen, Record Area and Record Window, all empty by default (see [Screen capture](/docs/launcher/screen-capture/)).
 - Settings → Notes has three options for the floating Notes window: a menu bar button that shows or hides it, whether Esc moves focus away instead of closing it, and the zoom (see [Notes](/docs/launcher/notes/)).
 - The AI provider, model and keys (see [Ask AI](/docs/launcher/ask-ai/)).
-- Backup: export your data (clipboard history is not included) and import snippets from a Raycast JSON export.
+- Backup: export your data (clipboard history, extension preferences and the downloaded runtime are not included; it runs in the background) and import snippets from a Raycast JSON export.
 
 :::caution[Limits]
 Launch at login is applied at the next login. Failed saves are reported.
