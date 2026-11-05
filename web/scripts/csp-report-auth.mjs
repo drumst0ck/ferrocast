@@ -8,12 +8,12 @@ function tokenMatches(presented, expected) {
 }
 
 /**
- * GET /api/csp-report/summary/ is public when CSP_REPORT_SUMMARY_TOKEN is unset or empty.
- * When the variable is set, the request must present it via Authorization: Bearer or ?token=.
+ * GET /api/csp-report/summary/ needs CSP_REPORT_SUMMARY_TOKEN: when it is unset or empty nobody gets in.
+ * The request must present it via Authorization: Bearer or ?token=.
  */
 export function summaryAccessGranted(authorization, queryToken) {
   const expected = (process.env.CSP_REPORT_SUMMARY_TOKEN ?? '').trim();
-  if (!expected) return true;
+  if (!expected) return false;
   const bearer =
     typeof authorization === 'string' && authorization.startsWith('Bearer ')
       ? authorization.slice('Bearer '.length)

@@ -28,6 +28,11 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Extension screens**: when a Raycast extension updated the screen below the one you were looking at (a list refreshing its data after you opened a detail), Ferrocast closed the open screen and later actions did nothing or ran the wrong handler; the open screen now stays and only an extension's own back closes it. #extensions
 - **Extension cache**: two caches of one Raycast extension (for example from two data hooks) erased each other's saved keys and did not notify each other; they now share one cache per extension namespace, which is written in one step so a crash cannot leave a half-written file. #extensions
 
+- **Changelog outages**: `/changelog/<version>/` answers 503 with a fallback instead of a 500, and the RSS and JSON feeds answer 503 with `no-store` instead of a cached empty feed when the database is down.
+- **Changelog publishing**: pushes to `master` publish the root `CHANGELOG.md` (not a stale copy under `web/`), and an indented continuation paragraph under an entry is kept; stray text outside an entry is reported instead of silently dropped.
+- **CSP report endpoint**: the rate limit uses the proxy-appended client address (a forged `X-Forwarded-For` prefix no longer gets a fresh bucket), its table is bounded, only reports for ferrocast.app are recorded, and the summary needs `CSP_REPORT_SUMMARY_TOKEN`.
+- **Spanish docs**: the drag wheel, Tiling, Notes and Keyboard shortcuts pages gain the mouse paths, Other options, Related and Limits sections that only the English pages had.
+
 ## [0.5.0] - 2026-10-29
 
 ### Added
