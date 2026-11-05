@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** Paths checked in order (Docker build context is `web/` only). */
+/** Paths checked in order: the root file is the source of truth; the tracked web copy is only for builds with a `web/`-only context (Docker). */
 export function changelogSourceCandidates(cwd = process.cwd()): string[] {
-  return [join(cwd, 'CHANGELOG.md'), join(cwd, '../CHANGELOG.md')];
+  return [join(cwd, '../CHANGELOG.md'), join(cwd, 'CHANGELOG.md')];
 }
 
 export function resolveChangelogPath(cwd = process.cwd()): string | null {

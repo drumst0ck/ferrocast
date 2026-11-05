@@ -19,6 +19,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 ### Fixed
 - **Export Data**: the backup now runs in the background instead of freezing the launcher, and leaves out the downloaded Node runtime, update downloads, `node_modules` and temp files, so it is far smaller. (docs: /docs/launcher/settings/) #backup
 - **Backups and secrets**: Export Data no longer includes extension preferences or LocalStorage, which can hold API keys and passwords. (docs: /docs/reference/data-and-privacy/) #privacy
+- **Search and calculator**: fuzzy search no longer drops an item whose letters match only when an earlier word-start pick is skipped (`ac` now finds `xabc a z`); `max(1,2,3)` and `min(5,1,2)` read commas between arguments as separators instead of thousands groups; `0 usd to eur` no longer panics. #launcher
+- **EPUB reader**: a chapter whose file name contains `[`, `]`, `*` or `?` is read literally instead of matching another file in the book. #files
 - **Confirmations and updates**: holding ↵ no longer confirms a confirmation (Empty Trash, Shut Down, Restart, Log Out, Quit All Apps, Delete All, Move to Trash) or installs an update through key auto-repeat; they need a fresh press. #launcher
 - **Create Script Command**: a new script never replaces an existing one (a second "Test" becomes `test 2.sh`), and a title without ASCII letters or digits is saved as `script.sh` instead of a hidden `.sh` file. #scripts
 - **Recording survives Quit and updates**: Quit from the menu bar or the launcher during a recording now stops and saves it first, with a 15 second limit, so the recording keeps its length, camera and microphone. An automatic update waits for the recording (and for a running export) to end and tries again at the next check; an installed update restarts the app only after that. #recording
@@ -27,6 +29,11 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Trash and scripts**: Move to Trash on a file now uses the system Trash API (Put Back still works) instead of a Finder script, so a file name with quotes or backslashes can no longer run script code; a failed move keeps the file in the results and shows the error. Quit All Apps and the folder chooser escape names the same way. #security
 - **Extension screens**: when a Raycast extension updated the screen below the one you were looking at (a list refreshing its data after you opened a detail), Ferrocast closed the open screen and later actions did nothing or ran the wrong handler; the open screen now stays and only an extension's own back closes it. #extensions
 - **Extension cache**: two caches of one Raycast extension (for example from two data hooks) erased each other's saved keys and did not notify each other; they now share one cache per extension namespace, which is written in one step so a crash cannot leave a half-written file. #extensions
+
+- **Changelog outages**: `/changelog/<version>/` answers 503 with a fallback instead of a 500, and the RSS and JSON feeds answer 503 with `no-store` instead of a cached empty feed when the database is down.
+- **Changelog publishing**: pushes to `master` publish the root `CHANGELOG.md` (not a stale copy under `web/`), and an indented continuation paragraph under an entry is kept; stray text outside an entry is reported instead of silently dropped.
+- **CSP report endpoint**: the rate limit uses the proxy-appended client address (a forged `X-Forwarded-For` prefix no longer gets a fresh bucket), its table is bounded, only reports for ferrocast.app are recorded, and the summary needs `CSP_REPORT_SUMMARY_TOKEN`.
+- **Spanish docs**: the drag wheel, Tiling, Notes and Keyboard shortcuts pages gain the mouse paths, Other options, Related and Limits sections that only the English pages had.
 
 ## [0.5.0] - 2026-10-29
 

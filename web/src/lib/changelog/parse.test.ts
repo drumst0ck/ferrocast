@@ -65,3 +65,20 @@ describe('parseChangelog', () => {
     expect(() => parseChangelog('## 1.0.0 soon\n')).toThrow('line 1: malformed release header');
   });
 });
+
+describe('parseChangelog continuation and stray text', () => {
+  const wrap = (body: string) => `## [Unreleased]\n\n### Added\n${body}\n`;
+  it('appends an indented paragraph after a blank line to the entry', () => {
+    const [r] = parseChangelog(wrap('- **A**: first\n\n  continued here\n\n- **B**: second'));
+    expect(r.entries.map((e) => e.bodyMd)).toEqual(['first continued here', 'second']);
+    expect(r.entries[0].title).toBe('A');
+  });
+  it('rejects prose that is neither an entry nor a continuation', () => {
+    expect(() => parseChangelog(wrap('- **A**: first\n\nStray prose'))).toThrow(/line 6: text outside an entry/);
+    expect(() => parseChangelog(wrap('Stray prose\n- **A**: first'))).toThrow(/line 4: text outside an entry/);
+  });
+  it('still accepts blank lines between entries and before the next category', () => {
+    const [r] = parseChangelog(wrap('- **A**: first\n\n- **B**: second\n\n### Fixed\n- **C**: third'));
+    expect(r.entries.map((e) => e.bodyMd)).toEqual(['first', 'second', 'third']);
+  });
+});

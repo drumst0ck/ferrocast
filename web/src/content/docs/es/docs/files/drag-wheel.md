@@ -6,7 +6,7 @@ sidebar:
 ---
 La rueda al arrastrar es un anillo de opciones que aparece bajo el puntero mientras arrastras archivos. Hay tres ruedas, cada una con su acento: **Convert** (naranja), **Tools** (azul) y **Actions** (verde). Para abrirla no hace falta el permiso de Accesibilidad.
 
-Empieza a arrastrar archivos y pulsa <kbd>⇧</kbd> para conversiones, <kbd>⌘</kbd> para herramientas o <kbd>⌃</kbd> para acciones. Suelta sobre un segmento para ejecutarlo; la rueda sigue abierta hasta que sueltas o cancelas. Pulsar otra tecla cambia la rueda abierta. También puedes abrirla desde un resultado de archivo con <kbd>⌥</kbd> <kbd>↵</kbd>; las flechas eligen, <kbd>↵</kbd> aplica y <kbd>esc</kbd> cancela. Las teclas y el interruptor de activado están en Ajustes → General.
+Empieza a arrastrar archivos y pulsa <kbd>⇧</kbd> para conversiones, <kbd>⌘</kbd> para herramientas o <kbd>⌃</kbd> para acciones. Suelta sobre un segmento para ejecutarlo; la rueda sigue abierta hasta que sueltas o cancelas. Pulsar otra tecla cambia la rueda abierta. También puedes abrirla desde un resultado de archivo con <kbd>⌥</kbd> <kbd>↵</kbd>; las flechas eligen, <kbd>↵</kbd> aplica y <kbd>esc</kbd> cancela. Con el ratón, haz clic en un segmento para ejecutarlo, haz clic fuera del anillo para cancelar y haz clic en el chip **Convert**, **Tools** o **Actions** bajo el anillo para cambiar de rueda. Las teclas y el interruptor de activado están en Ajustes → General.
 
 ## Diseño
 
@@ -33,7 +33,7 @@ Un ajuste opcional en Ajustes > General, fila «Enter on Finder selection»: pul
 Los archivos arrastrados desde Finder llegan como URL de referencia de archivo (`file:///.file/id=…`); ahora se resuelven a la ruta real. Antes, un PNG arrastrado parecía un archivo sin extensión.
 
 :::caution[Límites]
-Todavía no hay animaciones. Intro sobre un resultado de archivo sigue abriéndolo.
+Todavía no hay animaciones. <kbd>↵</kbd> sobre un resultado de archivo sigue abriéndolo.
 :::
 
 ## Relacionado

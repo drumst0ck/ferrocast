@@ -3,38 +3,51 @@ import Base from '../../layouts/Base.astro';
 import SiteHeader from '../../components/SiteHeader.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
 import ChangelogEntries from '../../components/ChangelogEntries.astro';
-import { loadRelease, versionLabel } from '../../lib/changelog/load';
-import { releaseMeta } from '../../lib/changelog/meta';
+import { versionLabel } from '../../lib/changelog/load';
+import { loadVersionView } from '../../lib/changelog/version-view';
 
 export const prerender = false;
 
 const { version = '' } = Astro.params;
-const { release, ok } = await loadRelease(version.toLowerCase());
-if (!ok) Astro.response.status = 503;
-else if (!release) return new Response(null, { status: 404, headers: { Location: '/changelog/' } });
-const r = release!;
-const meta = releaseMeta(r);
-const canonical = new URL(`/changelog/${r.version}/`, Astro.site).href;
-const noindex = r.version === 'unreleased' && r.entries.length === 0;
-const jsonLd = {
-  '@context': 'https://schema.org',
-  '@type': 'SoftwareApplication',
-  name: 'Ferrocast',
-  operatingSystem: 'macOS',
-  applicationCategory: 'UtilitiesApplication',
-  softwareVersion: r.version,
-  releaseNotes: canonical,
-  ...(r.releasedOn ? { datePublished: r.releasedOn } : {}),
-};
+const view = await loadVersionView(version);
+if (view.kind === 'missing') return new Response(null, { status: 404, headers: { Location: '/changelog/' } });
+if (view.kind === 'unavailable') Astro.response.status = 503;
+const repo = 'https://github.com/drumst0ck/ferrocast';
+const r = view.kind === 'ok' ? view.release : null;
+const title = view.kind === 'ok' ? view.meta.title : 'Changelog';
+const description = view.kind === 'ok' ? view.meta.description : 'Every change to Ferrocast, newest first.';
+const canonical = new URL(r ? `/changelog/${r.version}/` : `/changelog/${version.toLowerCase().replace(/[^a-z0-9.-]/g, '')}/`, Astro.site).href;
+const noindex = !r || (r.version === 'unreleased' && r.entries.length === 0);
+const jsonLd = r
+  ? {
+      '@context': 'https://schema.org',
+      '@type': 'SoftwareApplication',
+      name: 'Ferrocast',
+      operatingSystem: 'macOS',
+      applicationCategory: 'UtilitiesApplication',
+      softwareVersion: r.version,
+      releaseNotes: canonical,
+      ...(r.releasedOn ? { datePublished: r.releasedOn } : {}),
+    }
+  : undefined;
 ---
-<Base title={meta.title} description={meta.description} canonical={canonical} jsonLd={jsonLd} robots={noindex ? 'noindex, follow' : undefined}>
+<Base title={title} description={description} canonical={canonical} jsonLd={jsonLd} robots={noindex ? 'noindex, follow' : undefined}>
   <SiteHeader />
   <main class="wrap prose" id="main">
     <p class="muted"><a class="tl" href="/changelog/">← All releases</a></p>
-    <h1>Ferrocast {versionLabel(r.version)}</h1>
-    {r.releasedOn && <p class="muted"><time datetime={r.releasedOn}>{r.releasedOn}</time></p>}
-    {r.summary && <p class="muted">{r.summary}</p>}
-    <ChangelogEntries entries={r.entries} />
+    {r ? (
+      <>
+        <h1>Ferrocast {versionLabel(r.version)}</h1>
+        {r.releasedOn && <p class="muted"><time datetime={r.releasedOn}>{r.releasedOn}</time></p>}
+        {r.summary && <p class="muted">{r.summary}</p>}
+        <ChangelogEntries entries={r.entries} />
+      </>
+    ) : (
+      <>
+        <h1>Changelog</h1>
+        <p class="muted">This release is temporarily unavailable. You can read it on <a class="tl" href={`${repo}/blob/master/CHANGELOG.md`}>GitHub</a>.</p>
+      </>
+    )}
   </main>
   <SiteFooter />
 </Base>

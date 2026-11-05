@@ -4,13 +4,21 @@ import { ingestReport, summaryJson } from './csp-report-store.mjs';
 const MAX_BODY = 16 * 1024;
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 120;
+const RATE_MAX_IPS = 10_000;
 
 /** @type {Map<string, { count: number, reset: number }>} */
 const rateByIp = new Map();
 
+/**
+ * The client IP comes from the socket, or from the LAST X-Forwarded-For hop: that hop is appended by
+ * our own reverse proxy, while everything before it is client-controlled and trivially forged.
+ */
 function clientIp(req) {
   const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length) return fwd.split(',')[0].trim();
+  if (typeof fwd === 'string' && fwd.length) {
+    const last = fwd.split(',').pop()?.trim();
+    if (last) return last;
+  }
   return req.socket?.remoteAddress ?? 'unknown';
 }
 
@@ -18,11 +26,23 @@ function rateLimited(ip) {
   const now = Date.now();
   let bucket = rateByIp.get(ip);
   if (!bucket || now > bucket.reset) {
+    if (!bucket && rateByIp.size >= RATE_MAX_IPS) {
+      for (const [k, b] of rateByIp) if (now > b.reset) rateByIp.delete(k);
+      if (rateByIp.size >= RATE_MAX_IPS) return true; // table full of live buckets: fail closed
+    }
     bucket = { count: 0, reset: now + RATE_WINDOW_MS };
     rateByIp.set(ip, bucket);
   }
   bucket.count += 1;
   return bucket.count > RATE_MAX;
+}
+
+export function resetRateLimitForTests() {
+  rateByIp.clear();
+}
+
+export function rateTableSize() {
+  return rateByIp.size;
 }
 
 /** @param {unknown} body */
