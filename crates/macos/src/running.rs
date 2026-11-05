@@ -38,6 +38,11 @@ pub fn running_apps() -> Vec<RunningApp> {
         .collect()
 }
 
+/// Every running application, whatever its activation policy (menu-bar and background apps too).
+pub fn all_running_apps() -> Vec<RunningApp> {
+    NSWorkspace::sharedWorkspace().runningApplications().iter().map(|a| to_info(&a)).collect()
+}
+
 fn by_pid(pid: i32) -> Option<objc2::rc::Retained<NSRunningApplication>> {
     NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
 }
