@@ -251,7 +251,7 @@ pub struct NotionTarget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Settings {
     /// Interface language: `"system"` (follow macOS) or a `crate::i18n::Lang` code. Local to this Mac.
     pub language: String,
@@ -366,6 +366,35 @@ pub struct Settings {
     /// Sync data with other Macs through the iCloud Drive folder (off until the user turns it on;
     /// stays on each Mac).
     pub sync_enabled: bool,
+}
+
+impl Serialize for Settings {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        Settings::serialize(self, s)
+    }
+}
+
+/// Reads settings field by field: a value this build cannot read (a variant added by a newer build,
+/// a wrong type) resets only that field to its default instead of failing the whole file, which
+/// would set every setting aside (and, through sync, block settings sync for good).
+impl<'de> Deserialize<'de> for Settings {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        let serde_json::Value::Object(mut map) = v else {
+            return Err(serde::de::Error::custom("settings must be a JSON object"));
+        };
+        if let Ok(s) = Settings::deserialize(serde_json::Value::Object(map.clone())) {
+            return Ok(s);
+        }
+        let keys: Vec<String> = map.keys().cloned().collect();
+        for k in keys {
+            let one = serde_json::Value::Object(std::iter::once((k.clone(), map[&k].clone())).collect());
+            if Settings::deserialize(one).is_err() {
+                map.remove(&k);
+            }
+        }
+        Settings::deserialize(serde_json::Value::Object(map)).map_err(serde::de::Error::custom)
+    }
 }
 
 /// What happens with a finished translation.
@@ -523,6 +552,29 @@ pub struct Data {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unknown_enum_value_resets_only_that_field() {
+        let json = r#"{"theme":"Sepia","compact_mode":true,"launcher_hotkey":"Ctrl+Space","sensitivity":"Nope","ai_provider":"Gemini","clipboard_retention":"Decade"}"#;
+        let s: Settings = serde_json::from_str(json).expect("an unknown variant must not fail the whole file");
+        let d = Settings::default();
+        assert_eq!(s.theme, d.theme, "the unknown field takes its default");
+        assert_eq!(s.sensitivity, d.sensitivity);
+        assert_eq!(s.ai_provider, d.ai_provider);
+        assert_eq!(s.clipboard_retention, d.clipboard_retention);
+        assert!(s.compact_mode, "readable fields are kept");
+        assert_eq!(s.launcher_hotkey, "Ctrl+Space");
+        // a wrongly typed field is also only reset
+        let s: Settings = serde_json::from_str(r#"{"rem_px":"big","compact_mode":true}"#).unwrap();
+        assert_eq!(s.rem_px, d.rem_px);
+        assert!(s.compact_mode);
+        // a file that is not an object is still an error
+        assert!(serde_json::from_str::<Settings>("[1]").is_err());
+        // valid values round-trip
+        let ok = Settings { theme: Theme::Light, ..Default::default() };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&ok).unwrap()).unwrap();
+        assert_eq!(back, ok);
+    }
 
     #[test]
     fn enter_on_finder_is_off_by_default_and_old_settings_files_still_load() {

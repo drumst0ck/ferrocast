@@ -25,6 +25,10 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Trash and scripts**: Move to Trash on a file now uses the system Trash API (Put Back still works) instead of a Finder script, so a file name with quotes or backslashes can no longer run script code; a failed move keeps the file in the results and shows the error. Quit All Apps and the folder chooser escape names the same way. #security
 - **Extension screens**: when a Raycast extension updated the screen below the one you were looking at (a list refreshing its data after you opened a detail), Ferrocast closed the open screen and later actions did nothing or ran the wrong handler; the open screen now stays and only an extension's own back closes it. #extensions
 - **Extension cache**: two caches of one Raycast extension (for example from two data hooks) erased each other's saved keys and did not notify each other; they now share one cache per extension namespace, which is written in one step so a crash cannot leave a half-written file. #extensions
+- **Settings survive a newer build**: a settings value this build cannot read (for example a theme added by a newer Ferrocast after a downgrade) now resets only that setting instead of setting the whole `settings.json` aside; settings sync no longer stops silently because of it. (docs: /docs/launcher/sync/) #sync #settings
+- **Sync and the clipboard**: a copy made while snippets, notes, settings or another item was being synced is no longer left unpublished until the next copy. #sync
+- **Clipboard from other Macs**: synced clipboard entries are ordered by copy time, so a recent copy from another Mac is no longer listed below older entries and the first one dropped when the history is full. (docs: /docs/launcher/sync/) #sync #clipboard
+- **Clipboard copy lag**: each copy no longer writes the whole history while holding the lock the clipboard view needs, which made the view stutter with a large history. #clipboard
 
 ## [0.5.0] - 2026-10-29
 

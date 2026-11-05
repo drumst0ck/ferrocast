@@ -433,7 +433,8 @@ impl App {
             _ => {}
         }
         self.sync.applying = false;
-        self.shared.clip_dirty.store(false, Ordering::Relaxed);
+        // (the clipboard dirty flag is not cleared here: a copy that landed after the last flush
+        // while another domain was applied must still be published)
         if again {
             self.sync.pending.insert(domain); // entries dropped by retention/dedupe become deletions
         }
