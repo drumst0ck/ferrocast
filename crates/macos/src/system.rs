@@ -314,17 +314,21 @@ impl SystemCommand {
                 return Ok(if on { "Wi-Fi off".into() } else { "Wi-Fi on".into() });
             }
             KeepAwake => {
-                if let Some(pid) = awake_pid() {
-                    sh("/bin/kill", &[&pid.to_string()])?;
+                let mut slot = AWAKE.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(mut child) = slot.take() {
+                    // only the process we spawned; wait() reaps it so no zombie is left
+                    let _ = child.kill();
+                    let _ = child.wait();
                     return Ok("Sleep allowed again".into());
                 }
-                // -d keeps the display awake, -i the system; detached so it outlives this call.
-                Command::new("/usr/bin/caffeinate")
+                // -d keeps the display awake, -i the system.
+                let child = Command::new("/usr/bin/caffeinate")
                     .args(["-di"])
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .spawn()?;
+                *slot = Some(child);
                 return Ok("Keeping the Mac awake".into());
             }
             DismissNotifications => {
@@ -353,15 +357,42 @@ fn parse_wifi_device(listing: &str) -> Option<String> {
     None
 }
 
-/// PID of a `caffeinate` we (or the user) started, if one is running.
-fn awake_pid() -> Option<i32> {
-    let out = Command::new("/usr/bin/pgrep").args(["-x", "caffeinate"]).output().ok()?;
-    String::from_utf8_lossy(&out.stdout).lines().next()?.trim().parse().ok()
-}
+/// The `caffeinate` we started (never one the user ran), kept so it can be killed and reaped.
+static AWAKE: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn caffeinate_pids() -> std::collections::BTreeSet<i32> {
+        let out = Command::new("/usr/bin/pgrep").args(["-x", "caffeinate"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect()
+    }
+
+    fn alive(pid: i32) -> bool {
+        // a zombie still has a ps entry (state Z)
+        Command::new("/bin/ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().is_ok_and(|o| !o.stdout.is_empty())
+    }
+
+    #[test]
+    fn keep_awake_toggle_only_touches_its_own_caffeinate_and_reaps_it() {
+        // a caffeinate the user started elsewhere
+        let mut theirs = Command::new("/usr/bin/caffeinate").args(["-i", "-t", "120"]).spawn().unwrap();
+        let theirs_pid = theirs.id() as i32;
+        let before = caffeinate_pids();
+
+        assert_eq!(SystemCommand::KeepAwake.run(&[]).unwrap(), "Keeping the Mac awake");
+        let ours: Vec<i32> = caffeinate_pids().difference(&before).copied().collect();
+        assert_eq!(ours.len(), 1, "exactly one new caffeinate");
+
+        assert_eq!(SystemCommand::KeepAwake.run(&[]).unwrap(), "Sleep allowed again");
+        assert!(theirs.try_wait().unwrap().is_none(), "the user's caffeinate must survive the toggle");
+        assert!(alive(theirs_pid));
+        assert!(!alive(ours[0]), "our caffeinate must be gone and reaped (no zombie)");
+
+        let _ = theirs.kill();
+        let _ = theirs.wait();
+    }
     #[test]
     fn applescript_quote_escapes_backslash_before_quote() {
         assert_eq!(applescript_quote("plain"), "\"plain\"");
