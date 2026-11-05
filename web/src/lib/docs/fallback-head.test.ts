@@ -25,7 +25,7 @@ describe('rewriteStarlightHead', () => {
     const robots = out.find((t) => t.attrs?.name === 'robots');
     expect(canonical?.attrs?.href).toBe(EN);
     expect(ogUrl?.attrs?.content).toBe(EN);
-    expect(ogLocale?.attrs?.content).toBe('en');
+    expect(ogLocale?.attrs?.content).toBe('en_US');
     expect(alternates.map((t) => [t.attrs?.hreflang, t.attrs?.href])).toEqual([
       ['en', EN],
       ['x-default', EN],
@@ -46,10 +46,18 @@ describe('rewriteStarlightHead', () => {
     ];
     const out = rewriteStarlightHead(head, { isFallback: false, esAvailable: true, enCanonical: en });
     expect(out.find((t) => t.attrs?.rel === 'canonical')?.attrs?.href).toBe(notes);
-    expect(out.find((t) => t.attrs?.property === 'og:locale')?.attrs?.content).toBe('es');
+    expect(out.find((t) => t.attrs?.property === 'og:locale')?.attrs?.content).toBe('es_ES');
     expect(out.find((t) => t.attrs?.name === 'robots')).toBeUndefined();
     const langs = out.filter((t) => t.attrs?.rel === 'alternate').map((t) => t.attrs?.hreflang);
     expect(langs).toEqual(['en', 'es', 'x-default']);
     expect(out.find((t) => t.attrs?.hreflang === 'x-default')?.attrs?.href).toBe(en);
+  });
+
+  it('writes og:locale as language_TERRITORY on English docs too', () => {
+    const out = rewriteStarlightHead(
+      [{ tag: 'meta', attrs: { property: 'og:locale', content: 'en' } }],
+      { isFallback: false, esAvailable: true, enCanonical: EN },
+    );
+    expect(out.find((t) => t.attrs?.property === 'og:locale')?.attrs?.content).toBe('en_US');
   });
 });

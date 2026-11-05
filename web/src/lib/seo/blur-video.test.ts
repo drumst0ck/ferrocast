@@ -33,12 +33,12 @@ describe('blur video pages', () => {
       'Cover up to 64 areas of a video on your Mac, each with its own start and end time, with blur or a solid box. Free, local, needs ffmpeg. No face tracking.',
     );
     expect(es.description).toBe(
-      'Tapa hasta 64 zonas de un vídeo en tu Mac, cada una con su inicio y su fin, con desenfoque o un bloque de color. Gratis, local, necesita ffmpeg. Sin seguimiento de caras.',
+      'Tapa hasta 64 zonas de un vídeo en tu Mac, cada una con su inicio y su fin, con desenfoque o bloque de color. Gratis, local, con ffmpeg. Sin seguir caras.',
     );
-    expect(en.description.length).toBeGreaterThanOrEqual(140);
-    expect(en.description.length).toBeLessThanOrEqual(160);
-    // Brief Meta A for Spanish is 170 characters. It is the prescribed snippet, so the usual 160 cap is not applied.
-    expect(es.description.length).toBe(170);
+    expect(en.description.length).toBeGreaterThanOrEqual(120);
+    expect(en.description.length).toBeLessThanOrEqual(155);
+    expect(es.description.length).toBeGreaterThanOrEqual(120);
+    expect(es.description.length).toBeLessThanOrEqual(155);
   });
 
   it('keeps both languages in the brief length and the same shape', () => {

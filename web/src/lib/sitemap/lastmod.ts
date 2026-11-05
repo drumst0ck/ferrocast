@@ -2,6 +2,7 @@ import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { translatedEsDocSlugs } from '../docs/es-translations';
+import { allTools } from '../seo/tools';
 
 const webRoot = process.cwd();
 
@@ -64,7 +65,8 @@ function fileLastmod(...paths: string[]): Date {
   for (const rel of paths) {
     const abs = join(webRoot, rel);
     if (!existsSync(abs)) continue;
-    const d = manifestLastCommit(rel) ?? gitLastCommit(abs) ?? statSync(abs).mtime;
+    // Git is authoritative in a full checkout; the manifest only stands in where there is no .git (Docker builds).
+    const d = gitLastCommit(abs) ?? manifestLastCommit(rel) ?? statSync(abs).mtime;
     if (best === null || d > best) best = d;
   }
   return best ?? BUILD_DATE;
@@ -173,7 +175,10 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/tools') return fileLastmod('src/pages/tools/index.astro', 'src/data/tools.json');
     if (path === '/es/tools') return fileLastmod('src/pages/es/tools/index.astro', 'src/i18n/tools-es.ts', 'src/data/tools.json');
     if (path.startsWith('/tools/')) {
-      return fileLastmod('src/pages/tools/[slug].astro', 'src/data/tools.json');
+      const tool = allTools().find((t) => t.slug === path.slice('/tools/'.length));
+      // The page body comes from the tool's docs MDX (ToolPage.astro / ToolGuidePage.astro).
+      const docs = tool ? [`src/content/docs/docs/files/tools/${tool.docSlug}.mdx`, `src/content/docs/docs/files/tools/${tool.docSlug}.md`] : [];
+      return fileLastmod('src/pages/tools/[slug].astro', 'src/data/tools.json', 'src/lib/seo/tools.ts', 'src/lib/seo/tool-guides.ts', ...docs);
     }
     if (path.startsWith('/convert/')) {
       return fileLastmod('src/pages/convert/[slug].astro', 'src/data/conversions.json');

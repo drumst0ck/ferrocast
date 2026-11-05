@@ -37,10 +37,21 @@ async function hydrate(db: Db, rels: { id: number; version: string; releasedOn: 
   }));
 }
 
-/** Unreleased first, then newest release date first. */
-export async function listReleases(db: Db, limit = 50): Promise<ReleaseView[]> {
-  const rels = await db.select().from(releases).orderBy(sql`${releases.releasedOn} desc nulls first`, desc(releases.id)).limit(limit);
+export const CHANGELOG_PAGE_SIZE = 50;
+
+const newestFirst = [sql`${releases.releasedOn} desc nulls first`, desc(releases.id)] as const;
+
+/** Every release, unreleased first, then newest release date first (feeds and the JSON API). */
+export async function listReleases(db: Db): Promise<ReleaseView[]> {
+  const rels = await db.select().from(releases).orderBy(...newestFirst);
   return hydrate(db, rels);
+}
+
+/** One page of the changelog index; `hasMore` is true when older releases exist. Pages start at 1. */
+export async function listReleasesPage(db: Db, page: number, size = CHANGELOG_PAGE_SIZE): Promise<{ releases: ReleaseView[]; hasMore: boolean }> {
+  const n = Number.isInteger(page) && page > 0 ? page : 1;
+  const rels = await db.select().from(releases).orderBy(...newestFirst).limit(size + 1).offset((n - 1) * size);
+  return { releases: await hydrate(db, rels.slice(0, size)), hasMore: rels.length > size };
 }
 
 export async function getRelease(db: Db, version: string): Promise<ReleaseView | null> {

@@ -12,7 +12,7 @@ describe('Spanish free file converter page', () => {
     expect(page.title).toBe('Convertidor de archivos gratis para Mac, sin subir nada | Ferrocast');
     expect(page.h1).toBe('Un convertidor de archivos gratis para Mac que no sube tus archivos');
     expect(page.description).toBe(
-      'Convierte imágenes, vídeo, audio, PDF y documentos en tu Mac sin subirlos: 275 conversiones y 26 herramientas, gratis y MIT. Comparado con Permute y CloudConvert.',
+      'Convierte imágenes, vídeo, audio, PDF y documentos en tu Mac sin subirlos: 275 conversiones, 26 herramientas. Gratis, MIT, frente a Permute y CloudConvert.',
     );
     expect(page.h1).not.toBe('Convertir archivos en tu Mac, sin subirlos');
     const c = counts();

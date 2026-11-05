@@ -13,7 +13,7 @@ export const page: GuideCopy = {
   path: '/raycast-script-commands/',
   title: 'Run Raycast Script Commands without Raycast on Mac | Ferrocast',
   description:
-    'Ferrocast runs Raycast Script Commands as they are: same @raycast metadata, full, compact, silent and inline modes, up to three arguments. Free and open source.',
+    'Ferrocast runs Raycast Script Commands as is: same @raycast metadata, full, compact, silent and inline modes, up to three arguments. Free, open source.',
   crumbs: [['Home', '/'], ['Raycast Script Commands', '/raycast-script-commands/']],
   h1: 'Run your Raycast Script Commands without Raycast',
   lead: [

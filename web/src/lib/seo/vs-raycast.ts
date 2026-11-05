@@ -15,7 +15,7 @@ export const page: GuideCopy = {
   path: '/ferrocast-vs-raycast/',
   title: 'Ferrocast vs Raycast: Free vs Pro, Compared | Ferrocast',
   description:
-    'Raycast Free vs Raycast Pro vs Ferrocast, feature by feature: AI, sync, translator, dictation, clipboard, notes and extensions, with Raycast prices and sources.',
+    'Raycast Free vs Raycast Pro vs Ferrocast by feature: AI, sync, translator, dictation, clipboard, notes and extensions, with Raycast prices, sources.',
   crumbs: [['Home', '/'], ['Ferrocast vs Raycast', '/ferrocast-vs-raycast/']],
   h1: 'Ferrocast vs Raycast: what is free, what is paid',
   lead: [

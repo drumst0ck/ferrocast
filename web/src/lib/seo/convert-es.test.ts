@@ -13,7 +13,7 @@ describe('Spanish conversion pages', () => {
     for (const t of [hub, ...esPairs]) {
       expect(t.title.length).toBeLessThanOrEqual(75);
       expect(t.description.length).toBeGreaterThanOrEqual(130);
-      expect(t.description.length).toBeLessThanOrEqual(160);
+      expect(t.description.length).toBeLessThanOrEqual(155);
     }
   });
 
