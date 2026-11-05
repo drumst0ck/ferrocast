@@ -233,3 +233,48 @@ fn the_setting_is_saved_with_the_others() {
     let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
     assert!(back.now_playing);
 }
+
+// ---------------------------------------------------------------- idle tick
+
+#[test]
+fn a_pause_hides_the_pill_on_the_idle_tick_with_no_further_event() {
+    let mut c = on();
+    media(&mut c, 1.0, spotify(PlayState::Playing, "a"));
+    let paused = spotify(PlayState::Paused, "a");
+    assert!(media(&mut c, 5.0, paused).render.unwrap().visible);
+    // the feed goes quiet: the app asks when to look again
+    let due = c.hide_deadline().expect("a paused pill has a deadline");
+    assert_eq!(due, 5.0 + IDLE_HIDE_SECS);
+    assert_eq!(c.tick(due - 1.0).render, None, "too early: still shown");
+    assert!(c.can_command());
+    let gone = c.tick(due + 0.01).render.expect("hidden by the tick alone");
+    assert!(!gone.visible && !gone.expanded && gone.snapshot.is_none());
+    assert!(!c.can_command());
+    assert_eq!(c.hide_deadline(), None, "nothing left to wait for");
+    assert_eq!(c.tick(due + 5.0).render, None, "a late tick is a no-op");
+}
+
+#[test]
+fn the_tick_never_hides_a_playing_or_hovered_player_or_one_that_is_off() {
+    let mut c = on();
+    media(&mut c, 1.0, spotify(PlayState::Playing, "a"));
+    assert_eq!(c.hide_deadline(), None, "playing never idles");
+    assert_eq!(c.tick(1.0 + IDLE_HIDE_SECS * 3.0).render, None);
+    assert!(c.can_command());
+    let mut c = on();
+    media(&mut c, 1.0, spotify(PlayState::Paused, "a"));
+    c.set_hover(true, 2.0);
+    assert_eq!(c.hide_deadline(), None, "the pointer keeps it open");
+    assert_eq!(c.tick(2.0 + IDLE_HIDE_SECS * 3.0).render, None);
+    let mut c = Ctl::new();
+    assert_eq!(c.hide_deadline(), None);
+    assert_eq!(c.tick(1000.0), Out::default());
+}
+
+#[test]
+fn the_tick_event_routes_to_the_idle_check() {
+    let mut c = on();
+    media(&mut c, 1.0, spotify(PlayState::Paused, "a"));
+    let out = c.on_event(1.0 + IDLE_HIDE_SECS + 1.0, Event::Tick);
+    assert!(!out.render.unwrap().visible);
+}

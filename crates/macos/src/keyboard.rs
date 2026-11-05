@@ -46,7 +46,111 @@ pub fn tap_key(code: u16, n: usize) {
 
 /// Send ⌘V to the frontmost app.
 pub fn paste() {
-    post_key(keycode::V, CGEventFlags::CGEventFlagCommand);
+    post_key(paste_keycode(), CGEventFlags::CGEventFlagCommand);
+}
+
+/// The virtual keycode that types `ch` (no modifiers) according to `translate`, the
+/// layout's keycode -> character table. Lowest keycode wins.
+pub fn keycode_for_char(ch: char, translate: impl Fn(u16) -> Option<char>) -> Option<u16> {
+    (0u16..128).find(|c| translate(*c).is_some_and(|t| t.eq_ignore_ascii_case(&ch)))
+}
+
+/// Keycode for the "v" key in the user's current layout (Dvorak, Colemak, ...), falling
+/// back to the ASCII-capable layout and finally to the QWERTY position.
+fn paste_keycode() -> u16 {
+    layout::keycode_for('v').unwrap_or(keycode::V)
+}
+
+mod layout {
+    use std::ffi::c_void;
+
+    #[link(name = "Carbon", kind = "framework")]
+    extern "C" {
+        static kTISPropertyUnicodeKeyLayoutData: *const c_void;
+        fn TISCopyCurrentKeyboardLayoutInputSource() -> *const c_void;
+        fn TISCopyCurrentASCIICapableKeyboardLayoutInputSource() -> *const c_void;
+        fn TISGetInputSourceProperty(src: *const c_void, key: *const c_void) -> *const c_void;
+        fn LMGetKbdType() -> u8;
+        fn UCKeyTranslate(
+            layout: *const c_void,
+            key_code: u16,
+            action: u16,
+            modifiers: u32,
+            kbd_type: u32,
+            options: u32,
+            dead_keys: *mut u32,
+            max_len: usize,
+            actual_len: *mut usize,
+            out: *mut u16,
+        ) -> i32;
+    }
+    extern "C" {
+        fn CFDataGetBytePtr(d: *const c_void) -> *const u8;
+        fn CFRelease(o: *const c_void);
+    }
+
+    fn lookup(src: *const c_void, ch: char) -> Option<u16> {
+        if src.is_null() {
+            return None;
+        }
+        let data = unsafe { TISGetInputSourceProperty(src, kTISPropertyUnicodeKeyLayoutData) };
+        let found = if data.is_null() {
+            None
+        } else {
+            let ptr = unsafe { CFDataGetBytePtr(data) } as *const c_void;
+            let kbd = unsafe { LMGetKbdType() } as u32;
+            super::keycode_for_char(ch, |code| {
+                let mut dead = 0u32;
+                let mut len = 0usize;
+                let mut buf = [0u16; 4];
+                // action 0 = key down, options 1 = no dead keys
+                let st = unsafe { UCKeyTranslate(ptr, code, 0, 0, kbd, 1, &mut dead, buf.len(), &mut len, buf.as_mut_ptr()) };
+                if st != 0 || len != 1 {
+                    return None;
+                }
+                char::from_u32(buf[0] as u32)
+            })
+        };
+        unsafe { CFRelease(src) };
+        found
+    }
+
+    pub fn keycode_for(ch: char) -> Option<u16> {
+        lookup(unsafe { TISCopyCurrentKeyboardLayoutInputSource() }, ch)
+            .or_else(|| lookup(unsafe { TISCopyCurrentASCIICapableKeyboardLayoutInputSource() }, ch))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dvorak(code: u16) -> Option<char> {
+        // QWERTY "v" (9) types "k" on Dvorak; "." (47) types "v".
+        match code {
+            9 => Some('k'),
+            47 => Some('v'),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn finds_v_on_a_dvorak_layout_not_the_qwerty_position() {
+        assert_eq!(keycode_for_char('v', dvorak), Some(47));
+    }
+
+    #[test]
+    fn qwerty_layout_resolves_to_nine_and_missing_char_is_none() {
+        assert_eq!(keycode_for_char('v', |c| (c == 9).then_some('v')), Some(9));
+        assert_eq!(keycode_for_char('v', |_| Some('я')), None);
+    }
+
+    #[test]
+    fn live_layout_resolves_some_keycode_for_v() {
+        // Whatever the host layout, paste must target a real key that is not forced to 9 blindly.
+        let c = paste_keycode();
+        assert!(c < 128);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

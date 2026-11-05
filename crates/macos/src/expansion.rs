@@ -52,6 +52,21 @@ impl Matcher {
     }
 }
 
+thread_local! {
+    /// pid of the app that was frontmost when the keyword was typed (set on the match worker thread).
+    static TYPED_INTO: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether it is still safe to delete the keyword and paste: the app that was frontmost when
+/// the keyword was typed (when known) must still be the frontmost app.
+pub fn target_unchanged(typed_into: Option<i32>, now: Option<i32>) -> bool {
+    match (typed_into, now) {
+        (_, None) => false,
+        (Some(a), Some(b)) => a == b,
+        (None, Some(_)) => true,
+    }
+}
+
 pub type Keywords = Arc<RwLock<Vec<String>>>;
 
 /// Start the listener thread. `enabled` is consulted per keystroke so the
@@ -93,7 +108,13 @@ pub fn start(
                                 let kws = keywords.read().unwrap();
                                 if let Some(k) = m.push(&s, &kws) {
                                     let cb = on_match.clone();
-                                    std::thread::spawn(move || cb(k));
+                                    // Capture the app the keyword was typed into; inject aborts if focus moved.
+                                    let typed_into = crate::running::frontmost().map(|a| a.pid);
+                                    std::thread::spawn(move || {
+                                        TYPED_INTO.with(|t| t.set(typed_into));
+                                        cb(k);
+                                        TYPED_INTO.with(|t| t.set(None));
+                                    });
                                 }
                             }
                         }
@@ -133,9 +154,9 @@ pub fn inject(keyword_len: usize, text: &str, cursor_from_end: Option<usize>, on
         return;
     }
     let saved = clipboard::snapshot();
-    let target = crate::running::frontmost().map(|a| a.pid);
+    let typed_into = TYPED_INTO.with(|t| t.get());
     // The worker may run after the user switches apps; don't type into a new app.
-    if target.is_none() {
+    if !target_unchanged(typed_into, crate::running::frontmost().map(|a| a.pid)) {
         return;
     }
     keyboard::tap_key(keyboard::keycode::DELETE, keyword_len);
@@ -172,6 +193,15 @@ mod tests {
         assert_eq!(m.push("g", &kws), Some("!sig".into()));
         // buffer cleared after match
         assert_eq!(m.push("g", &kws), None);
+    }
+
+    #[test]
+    fn aborts_when_focus_moved_to_another_app_or_is_unknown() {
+        assert!(target_unchanged(Some(10), Some(10)));
+        assert!(!target_unchanged(Some(10), Some(20)));
+        assert!(!target_unchanged(Some(10), None));
+        assert!(!target_unchanged(None, None));
+        assert!(target_unchanged(None, Some(5)));
     }
 
     #[test]

@@ -97,6 +97,8 @@ pub enum Event {
     Media(Option<Snapshot>),
     /// An app covers the whole main display.
     Fullscreen(bool),
+    /// The idle deadline from [`Ctl::hide_deadline`] passed: look again whether the pill still belongs.
+    Tick,
     /// The helper kept failing and was given up on.
     Unavailable,
 }
@@ -300,8 +302,28 @@ impl Ctl {
         match e {
             Event::Media(s) => self.on_media(now, s),
             Event::Fullscreen(f) => self.set_fullscreen(now, f),
+            Event::Tick => self.tick(now),
             Event::Unavailable => self.on_unavailable(now),
         }
+    }
+
+    /// Time passed with no event (a paused player's snapshot stops changing, so none comes): hide
+    /// the pill once it has been idle for [`IDLE_HIDE_SECS`]. A playing player is never idle.
+    pub fn tick(&mut self, now: f64) -> Out {
+        if !self.enabled {
+            return Out::default();
+        }
+        if self.snap.as_ref().is_some_and(|s| s.state == PlayState::Playing) {
+            self.last_active = now;
+        }
+        Out { render: self.refresh(now), unavailable: false }
+    }
+
+    /// When [`Ctl::tick`] next has something to do (a [`mono_secs`] time), `None` when no idle
+    /// hide is pending: nothing shown, playing, or the pointer is on the player.
+    pub fn hide_deadline(&self) -> Option<f64> {
+        let paused = self.snap.as_ref().is_some_and(|s| s.state != PlayState::Playing);
+        (self.enabled && self.shown.visible && !self.hover && paused).then_some(self.last_active + IDLE_HIDE_SECS)
     }
 
     /// The pointer entered or left the player. Ignored while nothing is shown.

@@ -4,6 +4,8 @@ use super::*;
 mod ext_host_tests;
 #[path = "flows_tests.rs"]
 mod flows_tests;
+#[path = "np_tick_tests.rs"]
+mod np_tick_tests;
 #[path = "round3_ui_tests.rs"]
 mod round3_ui_tests;
 #[path = "sync_clip_tests.rs"]
@@ -67,6 +69,7 @@ fn fixture() -> App {
         tiling_paused: false,
         now_playing: ferrocast_core::nowplaying::Ctl::new(),
         np_poller: None,
+        np_tick_at: None,
         quick_window: None,
         tiling_hotkey_issues: vec![],
         tray_layout: 1,
