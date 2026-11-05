@@ -774,6 +774,19 @@ fn find_close(s: &[char], i: usize, len: usize, c: char) -> Option<usize> {
     None
 }
 
+/// Links of an HTML export: http, https, mailto, file and relative ones (no scheme) only.
+fn safe_url(url: &str) -> bool {
+    // Browsers ignore tabs, newlines and other control characters inside a URL scheme.
+    let u: String = url.chars().filter(|c| !c.is_control()).collect();
+    let u = u.trim_start();
+    let end = u.find([':', '/', '?', '#']).unwrap_or(u.len());
+    if u[end..].starts_with(':') {
+        matches!(u[..end].to_ascii_lowercase().as_str(), "http" | "https" | "mailto" | "file")
+    } else {
+        true
+    }
+}
+
 fn inline(s: &[char], mode: Mode) -> String {
     let n = s.len();
     let mut out = String::new();
@@ -810,6 +823,9 @@ fn inline(s: &[char], mode: Mode) -> String {
                     Some(((a, b), url, next)) => {
                         let text = inline(&s[a..b], mode);
                         match (mode, bang) {
+                            // A link with an unsafe scheme (`javascript:`, `data:` …) keeps its text only.
+                            (Mode::Html, false) if !safe_url(&url) => out.push_str(&text),
+                            (Mode::Html, true) if !safe_url(&url) => out.push_str(&esc_html(&inline(&s[a..b], Mode::Plain))),
                             (Mode::Html, false) => out.push_str(&format!("<a href=\"{}\">{}</a>", esc_attr(&url), text)),
                             (Mode::Html, true) => {
                                 let alt = inline(&s[a..b], Mode::Plain);
@@ -943,6 +959,57 @@ fn starts_block(line: &str) -> bool {
         || list_marker(line).is_some_and(|m| !m.ordered || m.value == 1)
 }
 
+fn indent_width(indent: &str) -> usize {
+    indent.chars().map(|c| if c == '\t' { 4 } else { 1 }).sum()
+}
+
+fn open_list(out: &mut String, ordered: bool, start: u32) {
+    match (ordered, start) {
+        (true, s) if s != 1 => out.push_str(&format!("<ol start=\"{s}\">\n")),
+        (true, _) => out.push_str("<ol>\n"),
+        (false, _) => out.push_str("<ul>\n"),
+    }
+}
+
+fn close_list(out: &mut String, ordered: bool) {
+    out.push_str(if ordered { "</li>\n</ol>\n" } else { "</li>\n</ul>\n" });
+}
+
+/// Items with their indentation → nested `<ul>`/`<ol>`: a deeper item opens a list inside the
+/// open `<li>` of the previous one, a shallower one closes the lists it leaves.
+fn render_list(items: &[(usize, bool, u32, Vec<&str>)], out: &mut String) {
+    let mut stack: Vec<(usize, bool)> = Vec::new();
+    for (indent, ordered, start, body) in items {
+        let (indent, ordered) = (*indent, *ordered);
+        if stack.is_empty() {
+            open_list(out, ordered, *start);
+            stack.push((indent, ordered));
+        } else if indent > stack[stack.len() - 1].0 {
+            out.push('\n');
+            open_list(out, ordered, *start);
+            stack.push((indent, ordered));
+        } else {
+            while stack.len() > 1 && indent < stack[stack.len() - 1].0 {
+                let (_, o) = stack.pop().unwrap_or((0, false));
+                close_list(out, o);
+            }
+            let top = stack.len() - 1;
+            if stack[top].1 == ordered {
+                out.push_str("</li>\n");
+            } else {
+                close_list(out, stack[top].1);
+                open_list(out, ordered, *start);
+                stack[top].1 = ordered;
+            }
+        }
+        let body: Vec<String> = body.iter().map(|l| inline_str(l, Mode::Html)).collect();
+        out.push_str(&format!("<li>{}", body.join("<br>\n")));
+    }
+    while let Some((_, o)) = stack.pop() {
+        close_list(out, o);
+    }
+}
+
 fn render_blocks(lines: &[String], out: &mut String, title: &mut Option<String>) {
     let mut i = 0;
     while i < lines.len() {
@@ -985,39 +1052,31 @@ fn render_blocks(lines: &[String], out: &mut String, title: &mut Option<String>)
             out.push_str("</blockquote>\n");
         } else if let Some(first) = list_marker(line) {
             let ordered = first.ordered;
-            let start = first.value;
-            let mut items: Vec<Vec<&str>> = Vec::new();
+            let base = indent_width(first.indent);
+            // (indent, ordered, start, body lines): every item of the list, nested ones included.
+            let mut items: Vec<(usize, bool, u32, Vec<&str>)> = Vec::new();
+            let mine = |m: &ListItem| indent_width(m.indent) > base || m.ordered == ordered;
             while i < lines.len() {
                 let l = &lines[i];
-                if let Some(m) = list_marker(l).filter(|m| m.ordered == ordered && !is_hr(l.trim())) {
-                    items.push(vec![m.content]);
+                if let Some(m) = list_marker(l).filter(|m| mine(m) && !is_hr(l.trim())) {
+                    items.push((indent_width(m.indent).max(base), m.ordered, m.value, vec![m.content]));
                     i += 1;
                 } else if l.trim().is_empty() {
                     let next = lines[i + 1..].iter().find(|x| !x.trim().is_empty());
                     match next {
-                        Some(x) if list_marker(x).is_some_and(|m| m.ordered == ordered) => i += 1,
+                        Some(x) if list_marker(x).is_some_and(|m| mine(&m)) => i += 1,
                         _ => break,
                     }
                 } else if l.starts_with([' ', '\t']) && !items.is_empty() && !starts_block(l) {
                     if let Some(last) = items.last_mut() {
-                        last.push(l.trim());
+                        last.3.push(l.trim());
                     }
                     i += 1;
                 } else {
                     break;
                 }
             }
-            let tag = if ordered { "ol" } else { "ul" };
-            if ordered && start != 1 {
-                out.push_str(&format!("<ol start=\"{start}\">\n"));
-            } else {
-                out.push_str(&format!("<{tag}>\n"));
-            }
-            for item in items {
-                let body: Vec<String> = item.iter().map(|l| inline_str(l, Mode::Html)).collect();
-                out.push_str(&format!("<li>{}</li>\n", body.join("<br>\n")));
-            }
-            out.push_str(&format!("</{tag}>\n"));
+            render_list(&items, out);
         } else {
             let mut para = vec![t];
             i += 1;
@@ -1186,6 +1245,53 @@ span.Apple-converted-space {font: 12.0px Helvetica}
 </body>
 </html>
 "#;
+
+    #[test]
+    fn export_drops_script_links() {
+        for url in ["javascript:alert(1)", "JavaScript:alert(1)", " javascript:alert(1)", "data:text/html,x", "vbscript:x"] {
+            let html = markdown_to_html(&format!("[x]({url}) and ![i]({url})"));
+            assert!(!html.to_lowercase().contains("script:") && !html.contains("data:"), "{url}: {html}");
+            assert!(!html.contains("href=") && !html.contains("src="), "{url}: {html}");
+            assert!(html.contains("<p>x and i</p>"), "{url}: {html}");
+        }
+        for url in [
+            "https://a.b/c?d=1&e=2",
+            "http://a.b",
+            "mailto:me@a.b",
+            "file:///tmp/x.txt",
+            "notes/a.md",
+            "#top",
+            "/abs/path",
+            "../up.png",
+            "a:b/c",
+        ] {
+            let html = markdown_to_html(&format!("[x]({url})"));
+            let shown = url.replace('&', "&amp;");
+            if url == "a:b/c" {
+                assert!(!html.contains("href"), "{html}");
+            } else {
+                assert!(html.contains(&format!("<a href=\"{shown}\">x</a>")), "{url}: {html}");
+            }
+        }
+    }
+
+    #[test]
+    fn export_keeps_nested_lists() {
+        let html = markdown_to_html("- a\n  - nested\n- b\n");
+        assert!(html.contains("<ul>\n<li>a\n<ul>\n<li>nested</li>\n</ul>\n</li>\n<li>b</li>\n</ul>\n"), "{html}");
+        let html = markdown_to_html("1. one\n   - sub a\n   - sub b\n     1. deep\n2. two\n");
+        assert!(
+            html.contains(
+                "<ol>\n<li>one\n<ul>\n<li>sub a</li>\n<li>sub b\n<ol>\n<li>deep</li>\n</ol>\n</li>\n</ul>\n</li>\n<li>two</li>\n</ol>\n"
+            ),
+            "{html}"
+        );
+        // dedent by more than one level, then a paragraph
+        let html = markdown_to_html("- a\n  - b\n    - c\n- d\n\ntext");
+        assert!(html.contains("<li>c</li>\n</ul>\n</li>\n</ul>\n</li>\n<li>d</li>\n</ul>\n<p>text</p>"), "{html}");
+        // flat lists are unchanged
+        assert!(markdown_to_html("- a\n- b\n").contains("<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n"));
+    }
 
     #[test]
     fn round_trip_fixture() {

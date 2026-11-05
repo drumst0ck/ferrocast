@@ -66,8 +66,7 @@ pub struct Note {
 
 impl Note {
     pub fn title(&self) -> String {
-        let t = self.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("Untitled").trim();
-        t.trim_start_matches('#').trim().chars().take(80).collect()
+        crate::notes::display_title(self)
     }
 }
 
@@ -137,7 +136,10 @@ pub struct ClipEntry {
 impl ClipEntry {
     pub fn classify_text(s: &str) -> ClipKind {
         let t = s.trim();
-        if crate::color::Rgba::parse(t).is_some() {
+        // "#123" and "#cafe" are issue numbers and hashtags far more often than colours: a hex
+        // colour on the clipboard needs 6 or 8 digits.
+        let short_hex = t.strip_prefix('#').is_some_and(|h| !matches!(h.len(), 6 | 8));
+        if !short_hex && crate::color::Rgba::parse(t).is_some() {
             ClipKind::Color
         } else if (t.starts_with("http://") || t.starts_with("https://")) && !t.contains(char::is_whitespace) {
             ClipKind::Link
@@ -161,7 +163,28 @@ impl ClipEntry {
                     name
                 }
             }
-            _ => self.content.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect(),
+            _ => {
+                // Lazy: a clipboard entry can hold 200 KB and this runs for every row on every frame.
+                let mut out = String::new();
+                let mut n = 0;
+                'words: for (i, word) in self.content.split_whitespace().enumerate() {
+                    if i > 0 {
+                        out.push(' ');
+                        n += 1;
+                        if n >= 120 {
+                            break;
+                        }
+                    }
+                    for c in word.chars() {
+                        if n >= 120 {
+                            break 'words;
+                        }
+                        out.push(c);
+                        n += 1;
+                    }
+                }
+                out
+            }
         }
     }
 }
@@ -697,6 +720,49 @@ mod tests {
         assert!(!off.notes_format_bar);
         let back: Settings = serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
         assert!(!back.notes_format_bar);
+    }
+
+    #[test]
+    fn hashtags_and_issue_numbers_are_not_colors() {
+        for t in ["#123", "#cafe", "#fff", "#1234", " #beef "] {
+            assert_eq!(ClipEntry::classify_text(t), ClipKind::Text, "{t}");
+        }
+        assert_eq!(ClipEntry::classify_text("#ff0000"), ClipKind::Color);
+        assert_eq!(ClipEntry::classify_text("#FF000080"), ClipKind::Color);
+        assert_eq!(ClipEntry::classify_text("rgb(1, 2, 3)"), ClipKind::Color);
+    }
+
+    #[test]
+    fn note_title_matches_the_display_title() {
+        let mk = |text: &str| Note { id: "1".into(), text: text.into(), created: 0, modified: 0, pinned_at: None, deleted_at: None };
+        assert_eq!(mk("###").title(), "Untitled");
+        assert_eq!(mk("").title(), "Untitled");
+        for t in ["# Hi", "- [ ] todo", "> quote", "plain **bold**"] {
+            assert_eq!(mk(t).title(), crate::notes::display_title(&mk(t)), "{t}");
+        }
+    }
+
+    #[test]
+    fn clip_display_title_collapses_whitespace_and_caps_at_120_chars() {
+        let mk = |content: String| ClipEntry {
+            id: "1".into(),
+            kind: ClipKind::Text,
+            content,
+            title: None,
+            copied_at: 0,
+            pinned: false,
+            source_app: None,
+            times_copied: 1,
+            width: 0,
+            height: 0,
+        };
+        assert_eq!(mk("  a \n\t b   c  ".into()).display_title(), "a b c");
+        assert_eq!(mk("   \n ".into()).display_title(), "");
+        let big = mk("word ".repeat(40_000));
+        let t = big.display_title();
+        assert_eq!(t.chars().count(), 120);
+        assert!(t.starts_with("word word"));
+        assert_eq!(mk("é ".repeat(500)).display_title().chars().count(), 120);
     }
 
     #[test]

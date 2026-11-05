@@ -440,10 +440,12 @@ fn looks_like_math(s: &str) -> bool {
 /// Try to split `"<expr> <unit> in|to|as <unit>"`.
 fn try_conversion(s: &str, rem_px: f64) -> Option<CalcResult> {
     let lower = s.to_lowercase();
-    let (lhs, rhs) = [" in ", " to ", " as ", " → ", " -> "]
-        .iter()
-        .find_map(|sep| lower.rfind(sep).map(|i| (lower[..i].trim().to_string(), lower[i + sep.len()..].trim().to_string())))?;
-    let to = units::find(&rhs)?;
+    // "1 in to cm" has two separators: keep the first whose right side is a known unit.
+    let (lhs, to) = [" in ", " to ", " as ", " → ", " -> "].iter().find_map(|sep| {
+        let i = lower.rfind(sep)?;
+        let to = units::find(lower[i + sep.len()..].trim())?;
+        Some((lower[..i].trim().to_string(), to))
+    })?;
     // Find the longest unit alias at the end of lhs.
     let (num_part, from) = units::aliases_longest_first().into_iter().find_map(|(alias, unit)| {
         let stripped = lhs.strip_suffix(alias)?;
@@ -531,6 +533,15 @@ pub fn evaluate_with_rates(input: &str, rem_px: f64, rates: Option<&crate::curre
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_unit_named_in_survives_the_in_separator() {
+        let r = evaluate("1 in to cm", 16.0).expect("1 in to cm");
+        assert_eq!(r.raw, "2.54", "{r:?}");
+        assert!(evaluate("2 ft in in", 16.0).is_some());
+        assert_eq!(evaluate("10 cm in m", 16.0).unwrap().raw, "0.1");
+        assert!(evaluate("1 in to nothing", 16.0).is_none());
+    }
+
     use super::*;
 
     fn ev(s: &str) -> f64 {
