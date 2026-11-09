@@ -115,7 +115,7 @@ open dist/Ferrocast.app    # default hotkey: ⌥ Space
 cargo test --workspace
 ```
 
-Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it). The unnotarized DMG is blocked by Gatekeeper on other Macs; the supported route is Homebrew. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it). The DMG is not notarized: on another Mac macOS asks for **Open Anyway** once (see Install); Homebrew avoids that prompt because it builds on the Mac that runs it. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Website
 

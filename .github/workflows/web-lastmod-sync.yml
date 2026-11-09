@@ -11,6 +11,11 @@ on:
 permissions:
   contents: write
 
+# one sync at a time, never cancelled mid-run; a run that GitHub drops from the queue is covered by the next one, which syncs the whole manifest
+concurrency:
+  group: web-lastmod-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     # Path filters are skipped when GitHub cannot compute the diff. The actor
@@ -23,10 +28,10 @@ jobs:
         working-directory: web
     steps:
       # Full history: with the default shallow clone every file has the same last-commit date.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - run: npm run lastmod:sync
@@ -37,4 +42,6 @@ jobs:
           git add src/data/lastmod.json
           git diff --staged --quiet && exit 0
           git commit -m "chore(web): sync sitemap lastmod manifest"
-          git push
+          # another push to master may have landed while this job ran: rebase onto it, retry once
+          git pull --rebase origin master
+          git push || { git pull --rebase origin master && git push; }

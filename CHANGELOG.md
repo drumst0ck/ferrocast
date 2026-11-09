@@ -17,6 +17,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Extensions cache**: an extension's Cache no longer reports keys such as `constructor` as stored, ignores a cache file that is not a JSON object instead of failing on it, returns false from `remove` for a key that was not there, keeps namespaces such as `a/b` and `a_b` apart, and a subscriber that throws no longer stops the write or the other subscribers. #extensions
 - **Notes**: Delete All Notes now asks for confirmation in the action panel instead of moving every note to Recently Deleted at once. (docs: /docs/launcher/notes/) #notes
 - **Settings**: Advanced → Disabled commands lists each command by its name instead of its internal id; Enter in the AI key field saves the key and Enter in the theme name field renames the theme, like the buttons; the Advanced tab tooltip shows ⌘0; opening the data folder or a new script no longer makes the launcher wait for macOS. #settings
 - **Settings reset**: ⌘Z undoes Reset this tab while the Undo toast is showing, and another toast (sync, login item) no longer removes Undo before it expires; the other message appears afterwards. #settings
