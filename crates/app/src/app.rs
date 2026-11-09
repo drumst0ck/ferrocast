@@ -3098,11 +3098,11 @@ impl App {
 
     /// Show "Deleted · Undo" for `u`. A previous offer is final from now on.
     fn offer_entry_undo(&mut self, u: EntryUndo) {
-        self.finish_entry_undo();
-        if let EntryUndo::Clip(_, e) = &u {
-            if e.kind == ferrocast_core::models::ClipKind::Image {
-                *self.shared.clip_hold.lock().unwrap_or_else(|e| e.into_inner()) = vec![e.clone()];
-            }
+        // the previous offer is final; a clipboard delete already set the hold under the list lock
+        self.entry_undo = None;
+        if !matches!(u, EntryUndo::Clip(..)) {
+            self.shared.clip_hold.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            self.shared.prune_clip_images();
         }
         self.entry_undo = Some((u, Instant::now()));
         self.toast(draw::DELETED_TOAST);
@@ -3134,6 +3134,14 @@ impl App {
                 self.shared.save_clipboard_in_background();
             }
             EntryUndo::Note(n) => {
+                // only a note that is still in Recently Deleted comes back; one a sync revived or
+                // changed keeps its newer state
+                if !self.notes.iter().any(|x| x.id == n.id && x.deleted_at.is_some()) {
+                    if matches!(&self.toast, Some((t, _)) if t == draw::DELETED_TOAST) {
+                        self.toast = None;
+                    }
+                    return false;
+                }
                 self.notes_do(|_, d| {
                     if let Some(slot) = d.notes.iter_mut().find(|x| x.id == n.id) {
                         *slot = n;
@@ -7402,6 +7410,7 @@ impl App {
                 self.toast("Shelf cleared");
             }
             Act::ClearCalcHistory => {
+                self.finish_entry_undo();
                 self.calc_history.clear();
                 let v = self.calc_history.clone();
                 self.persist("calc-history.json", &v);
@@ -7972,9 +7981,15 @@ impl App {
             Act::ClipDelete(id) => {
                 let removed = {
                     let mut list = self.shared.clipboard.lock().unwrap();
-                    list.iter().position(|e| e.id == id).map(|i| (i, list.remove(i)))
+                    let removed = list.iter().position(|e| e.id == id).map(|i| (i, list.remove(i)));
+                    // the hold is set while the list lock is still held (order: list, then hold), so no
+                    // prune can see the entry as neither listed nor held; it replaces the previous offer's
+                    if let Some((_, e)) = &removed {
+                        let mut hold = self.shared.clip_hold.lock().unwrap_or_else(|e| e.into_inner());
+                        *hold = if e.kind == ferrocast_core::models::ClipKind::Image { vec![e.clone()] } else { vec![] };
+                    }
+                    removed
                 };
-                // the old offer closes first (its image may go); the new one holds its own image
                 if let Some((i, e)) = removed {
                     self.offer_entry_undo(EntryUndo::Clip(i, e));
                 }
@@ -7982,6 +7997,7 @@ impl App {
                 self.prune_clip_images();
             }
             Act::ClipDeleteAll => {
+                self.finish_entry_undo();
                 self.shared.clipboard.lock().unwrap().retain(|e| e.pinned);
                 self.shared.save_clipboard_in_background();
                 self.prune_clip_images();

@@ -393,3 +393,96 @@ fn leaving_ask_ai_cancels_the_request_in_flight() {
     assert!(cancel.is_stopped(), "closing Ask AI stops the request");
     assert!(app.ai_cancel.is_none());
 }
+
+#[test]
+fn deleting_two_images_in_a_row_keeps_the_second_one_for_undo_and_prunes_the_first() {
+    let mut app = fixture();
+    let dir = app.store.images_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in ["a.png", "b.png"] {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+    *app.shared.clipboard.lock().unwrap() = vec![r5_clip("a", ClipKind::Image, "a.png"), r5_clip("b", ClipKind::Image, "b.png")];
+    app.perform(Act::ClipDelete("a".into()), false);
+    app.perform(Act::ClipDelete("b".into()), false);
+    assert!(dir.join("b.png").exists(), "the image of the entry on offer survives");
+    assert!(!dir.join("a.png").exists(), "the first delete is final");
+    assert!(app.undo_entry_delete());
+    let list = app.shared.clipboard.lock().unwrap().clone();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].content, "b.png");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_text_delete_after_an_image_delete_releases_the_held_image() {
+    let mut app = fixture();
+    let dir = app.store.images_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.png"), b"x").unwrap();
+    *app.shared.clipboard.lock().unwrap() = vec![r5_clip("a", ClipKind::Image, "a.png"), r5_clip("t", ClipKind::Text, "t")];
+    app.perform(Act::ClipDelete("a".into()), false);
+    app.perform(Act::ClipDelete("t".into()), false);
+    assert!(!dir.join("a.png").exists());
+    assert!(app.shared.clip_hold.lock().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn delete_all_closes_a_pending_undo_so_it_cannot_bring_an_entry_back() {
+    let mut app = fixture();
+    let mut unpinned = r5_clip("a", ClipKind::Text, "one");
+    unpinned.pinned = false;
+    *app.shared.clipboard.lock().unwrap() = vec![unpinned, r5_clip("b", ClipKind::Text, "two")];
+    app.perform(Act::ClipDelete("a".into()), false);
+    app.perform(Act::ClipDeleteAll, true);
+    assert!(app.entry_undo.is_none());
+    assert!(!app.undo_entry_delete());
+    assert_eq!(app.shared.clipboard.lock().unwrap().len(), 1, "only the pinned entry remains");
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Clipboard history cleared"));
+
+    app.calc_history = vec![
+        ferrocast_core::models::CalcEntry {
+            question: "1+1".into(),
+            display: String::new(),
+            raw: String::new(),
+            value: 0.0,
+            unit: None,
+            at: 1,
+        },
+        ferrocast_core::models::CalcEntry {
+            question: "2+2".into(),
+            display: String::new(),
+            raw: String::new(),
+            value: 0.0,
+            unit: None,
+            at: 1,
+        },
+    ];
+    app.perform(Act::DeleteCalcEntry(0), false);
+    app.perform(Act::ClearCalcHistory, true);
+    assert!(app.entry_undo.is_none());
+    assert!(!app.undo_entry_delete());
+    assert!(app.calc_history.is_empty());
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("History cleared"));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn note_undo_does_not_revert_a_note_that_came_back_or_changed_meanwhile() {
+    let (mut app, _) = notes_app(vec![notes_note("a", "Alpha", 1)]);
+    app.perform(Act::NoteDelete("a".into()), false);
+    // a sync merge brought it back with newer text
+    app.notes[0].deleted_at = None;
+    app.notes[0].text = "Alpha edited".into();
+    assert!(!app.undo_entry_delete());
+    assert_eq!(app.notes[0].text, "Alpha edited", "the newer text stays");
+    assert_ne!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Entry restored"));
+    // and a note that is gone altogether is not recreated
+    let (mut app, _) = notes_app(vec![notes_note("a", "Alpha", 1)]);
+    app.perform(Act::NoteDelete("a".into()), false);
+    app.notes.clear();
+    assert!(!app.undo_entry_delete());
+    assert!(app.notes.is_empty());
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
