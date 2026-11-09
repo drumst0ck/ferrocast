@@ -3,7 +3,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp" "${bindir:-}" "$tmp.err"' EXIT
+trap 'rm -rf "$tmp" "${bindir:-}" "$tmp.err" "${remote:-}" "${other:-}"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 cd "$tmp"
@@ -70,10 +70,37 @@ git show --name-only --format= HEAD | grep -qx web/CHANGELOG.md || fail "web/CHA
 git rev-parse -q --verify refs/tags/v0.2.0 >/dev/null || fail "tag missing"
 scripts/release.sh 0.2.0 --no-push >/dev/null 2>&1 && fail "released the same tag twice"
 
+# an empty [Unreleased] and a version that is not newer are refused (0.2.0 is released, Unreleased is empty)
+scripts/release.sh 0.2.5 --dry-run >/dev/null 2>&1 && fail "released with an empty Unreleased section"
+awk '{ print } /^## \[Unreleased\]/ { print ""; print "### Fixed"; print "- A fix." }' CHANGELOG.md > CHANGELOG.new && mv CHANGELOG.new CHANGELOG.md
+cp CHANGELOG.md web/CHANGELOG.md; git add -A; git commit -qm "entry"
+scripts/release.sh 0.2.0 --dry-run >/dev/null 2>&1 && fail "accepted the current version"
+scripts/release.sh 0.1.5 --dry-run >/dev/null 2>&1 && fail "accepted an older version"
+scripts/release.sh 0.3.0-rc.1 --dry-run >/dev/null 2>&1 || fail "refused a newer prerelease"
+sed -i.bak 's/^version = "0.2.0"/version = "0.3.0-rc.1"/' Cargo.toml && rm -f Cargo.toml.bak; git commit -qam "rc1"
+scripts/release.sh 0.3.0-rc.2 --dry-run >/dev/null 2>&1 || fail "refused rc.1 -> rc.2"
+scripts/release.sh 0.3.0-rc.1 --dry-run >/dev/null 2>&1 && fail "accepted the same prerelease"
+scripts/release.sh 0.3.0-rc.0 --dry-run >/dev/null 2>&1 && fail "accepted an older prerelease"
+sed -i.bak 's/^version = "0.3.0-rc.1"/version = "0.2.0"/' Cargo.toml && rm -f Cargo.toml.bak; git commit -qam "back"
+
 # a push that fails after tagging says how to retry instead of leaving a silent half state
 scripts/release.sh 0.3.0 >/dev/null 2>"$tmp.err" && fail "push without a remote succeeded"
 grep -q "Retry: git push origin master && git push origin v0.3.0" "$tmp.err" || fail "no retry hint after a failed push"
 git rev-parse -q --verify refs/tags/v0.3.0 >/dev/null || fail "tag from the failed push is missing"
+
+# against an origin: a branch ahead of or behind origin/master is refused
+awk '{ print } /^## \[Unreleased\]/ { print ""; print "### Fixed"; print "- Another fix." }' CHANGELOG.md > CHANGELOG.new && mv CHANGELOG.new CHANGELOG.md
+cp CHANGELOG.md web/CHANGELOG.md; git add -A; git commit -qm "entry 2"
+remote=$(mktemp -d); git init -q --bare "$remote"; git remote add origin "$remote"; git push -q origin master
+scripts/release.sh 0.4.0 --dry-run >/dev/null 2>&1 || fail "refused a branch equal to origin/master"
+git commit -q --allow-empty -m "local only"
+scripts/release.sh 0.4.0 --dry-run >/dev/null 2>"$tmp.err" && fail "released with unpushed commits"
+grep -q "origin/master" "$tmp.err" || fail "no origin hint for an ahead branch"
+git reset -q --hard origin/master
+other=$(mktemp -d); git clone -q "$remote" "$other/c"
+(cd "$other/c" && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m remote-only && git push -q origin master)
+scripts/release.sh 0.4.0 --dry-run >/dev/null 2>&1 && fail "released while origin/master is ahead"
+git remote remove origin
 
 # release notes: the 0.2.0 section holds the entry that was Unreleased; unknown version falls back
 scripts/release_notes.sh 0.2.0 | grep -q "A new thing." || fail "notes missing the entry"
