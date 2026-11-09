@@ -7,6 +7,7 @@
 use super::curves::{clamp, critical_spring, lerp, smoothstep};
 use super::events::{CaptureSpace, Events};
 pub use super::project::Zoom;
+use crate::i18n::tr;
 
 /// Largest zoom scale the project format accepts (`Project::validate`).
 pub const MAX_SCALE: f64 = 6.0;
@@ -333,12 +334,12 @@ fn finite(v: f64) -> Result<f64, String> {
 pub fn add_loupe(p: &mut Project, at: f64) -> Result<String, String> {
     let at = finite(at)?.clamp(0.0, p.duration.max(0.0));
     if p.loupes.iter().any(|l| l.start <= at && at < l.end) {
-        return Err("There is already a loupe at the playhead.".into());
+        return Err(tr("There is already a loupe at the playhead.").into_owned());
     }
     let next = p.loupes.iter().filter(|l| l.start > at).map(|l| l.start).fold(f64::INFINITY, f64::min);
     let end = (at + NEW_LOUPE_LEN).min(p.duration).min(next);
     if end - at < MIN_LOUPE {
-        return Err("There is no room for a loupe at the playhead.".into());
+        return Err(tr("There is no room for a loupe at the playhead.").into_owned());
     }
     let id = (1..).map(|n| format!("l{n}")).find(|id| p.loupes.iter().all(|l| l.id != *id)).unwrap_or_default();
     p.loupes.push(Loupe {
@@ -389,7 +390,7 @@ pub fn delete_loupe(p: &mut Project, id: &str) -> Result<(), String> {
     let n = p.loupes.len();
     p.loupes.retain(|l| l.id != id);
     if p.loupes.len() == n {
-        return Err("That loupe no longer exists.".into());
+        return Err(tr("That loupe no longer exists.").into_owned());
     }
     Ok(())
 }

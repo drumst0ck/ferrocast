@@ -4371,7 +4371,10 @@ impl App {
                         for v in self.stack.iter_mut() {
                             if let View::Output { run: r, text: t, done, .. } = v {
                                 if *r == run {
-                                    *t = if code == 0 { text.clone() } else { format!("{text}\n[exit code {code}]") };
+                                    *t = match services::exit_code_note(code) {
+                                        Some(note) => format!("{text}\n{note}"),
+                                        None => text.clone(),
+                                    };
                                     *done = true;
                                 }
                             }

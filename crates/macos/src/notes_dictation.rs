@@ -239,19 +239,22 @@ fn update_from(result: *mut SFSpeechRecognitionResult, error: *mut NSError) -> U
 /// gets a failure that happens after start. Returns an error string (never panics) when access is
 /// not authorized, the recognizer is unavailable, there is no input device or the engine fails.
 pub fn start(on_partial: Box<dyn Fn(String)>, on_final: Box<dyn Fn(String)>, on_error: Box<dyn Fn(String)>) -> Result<(), String> {
-    MainThreadMarker::new().ok_or("dictation must be started on the main thread")?;
+    MainThreadMarker::new().ok_or_else(|| ferrocast_core::i18n::tr("dictation must be started on the main thread").into_owned())?;
     if is_active() {
-        return Err("dictation is already active".into());
+        return Err(ferrocast_core::i18n::tr("dictation is already active").into_owned());
     }
     match status() {
         Status::Authorized => {}
-        Status::Denied => return Err("microphone or speech recognition access was denied".into()),
-        Status::Restricted => return Err("microphone or speech recognition access is restricted".into()),
-        Status::NotDetermined => return Err("microphone and speech recognition access has not been granted yet".into()),
+        Status::Denied => return Err(ferrocast_core::i18n::tr("microphone or speech recognition access was denied").into_owned()),
+        Status::Restricted => return Err(ferrocast_core::i18n::tr("microphone or speech recognition access is restricted").into_owned()),
+        Status::NotDetermined => {
+            return Err(ferrocast_core::i18n::tr("microphone and speech recognition access has not been granted yet").into_owned())
+        }
     }
-    let recognizer = recognizer().ok_or("speech recognition is not supported for this language")?;
+    let recognizer =
+        recognizer().ok_or_else(|| ferrocast_core::i18n::tr("speech recognition is not supported for this language").into_owned())?;
     if !unsafe { recognizer.isAvailable() } {
-        return Err("speech recognizer is not available right now".into());
+        return Err(ferrocast_core::i18n::tr("speech recognizer is not available right now").into_owned());
     }
     let request = unsafe { SFSpeechAudioBufferRecognitionRequest::init(SFSpeechAudioBufferRecognitionRequest::alloc()) };
     unsafe {
@@ -266,7 +269,7 @@ pub fn start(on_partial: Box<dyn Fn(String)>, on_final: Box<dyn Fn(String)>, on_
     let format = unsafe { input.outputFormatForBus(0) };
     // Installing a tap with an empty format raises an Objective-C exception: reject it first.
     if unsafe { format.sampleRate() } <= 0.0 || unsafe { format.channelCount() } == 0 {
-        return Err("no audio input device is available".into());
+        return Err(ferrocast_core::i18n::tr("no audio input device is available").into_owned());
     }
     let tap_request = request.clone();
     let tap = RcBlock::new(move |buffer: NonNull<AVAudioPCMBuffer>, _when: NonNull<AVAudioTime>| {
@@ -277,7 +280,7 @@ pub fn start(on_partial: Box<dyn Fn(String)>, on_final: Box<dyn Fn(String)>, on_
     unsafe { engine.prepare() };
     if let Err(e) = unsafe { engine.startAndReturnError() } {
         unsafe { input.removeTapOnBus(0) };
-        return Err(format!("audio engine failed to start: {}", e.localizedDescription()));
+        return Err(ferrocast_core::i18n::trf("audio engine failed to start: {e}", &[("e", &e.localizedDescription().to_string())]));
     }
 
     let id = NEXT_ID.with(|n| {
@@ -325,11 +328,12 @@ pub fn is_active() -> bool {
 pub fn transcribe_file(path: &Path, timeout: Duration) -> Result<String, String> {
     MainThreadMarker::new().ok_or("transcribe_file must run on the main thread")?;
     if speech_status() != Status::Authorized {
-        return Err("speech recognition access is not authorized".into());
+        return Err(ferrocast_core::i18n::tr("speech recognition access is not authorized").into_owned());
     }
-    let recognizer = recognizer().ok_or("speech recognition is not supported for this language")?;
+    let recognizer =
+        recognizer().ok_or_else(|| ferrocast_core::i18n::tr("speech recognition is not supported for this language").into_owned())?;
     if !unsafe { recognizer.isAvailable() } {
-        return Err("speech recognizer is not available right now".into());
+        return Err(ferrocast_core::i18n::tr("speech recognizer is not available right now").into_owned());
     }
     let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
     let request = unsafe { SFSpeechURLRecognitionRequest::initWithURL(SFSpeechURLRecognitionRequest::alloc(), &url) };
@@ -363,7 +367,7 @@ pub fn transcribe_file(path: &Path, timeout: Duration) -> Result<String, String>
     }
     unsafe { task.cancel() };
     let result = outcome.borrow_mut().take();
-    result.unwrap_or_else(|| Err("timed out waiting for the transcription".into()))
+    result.unwrap_or_else(|| Err(ferrocast_core::i18n::tr("timed out waiting for the transcription").into_owned()))
 }
 
 /// The text the editor should show for the current partial transcript, i.e. what replaces the

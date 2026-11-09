@@ -78,6 +78,13 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website search results**: the page descriptions of 15 pages are shortened to 155 characters or fewer so search engines no longer truncate them, and the docs now declare `og:locale` as `en_US` / `es_ES`.
 - **Website hosting**: `www.ferrocast.app` redirects to `ferrocast.app` on every page (and only that host), social cards are cached for a week, the report-only CSP allows Pagefind and GA4, and sitemap dates for tool pages follow the docs page they show and prefer git history.
 - **Spanish docs**: the Settings page links to the Updates section of Install again, and `Check now` and `Check for Updates…` use the Spanish interface labels.
+- **Sync texts**: the status line in Settings (last sync, other Macs seen, files still downloading, restored files) and the "Sync failed" and "Cannot use the sync folder" messages follow the interface language. #sync #i18n
+- **Recording texts**: the saved, stopped early and low disk space messages, the camera, microphone and source warnings, "not connected" devices and the helper start errors follow the interface language. #i18n
+- **Notion and scripts**: Notion's relative times ("5m ago", "yesterday") and a script's "Failed to run" and "[exit code N]" lines follow the interface language, and a script stopped after its time limit no longer ends with "[exit code -1]". #i18n #scripts
+- **Studio editor and tools**: the Look, Split side, wallpaper, transcript language and Audio/Transcript tab names, the Export video heading, the trim buttons (Frame, Set start, To end…), the Audio to Video size line, the AI connection hints, Choose image…, Clear search and the Reset this tab tooltip are translated. #i18n
+- **Themes and imports**: renaming a theme to a name in use, importing a theme file that cannot be read or is not a theme, importing snippets from a bad file, and export size, frame rate and GIF length errors now show in your language. #i18n
+- **Dictation, AirDrop and Pin**: the reasons macOS features give when they fail (microphone or speech access denied, no input device, AirDrop unavailable, an unreadable image) are translated, and Pin failed no longer repeats "Pin:" twice. #i18n #macos
+- **Extensions**: titles that Ferrocast itself writes in extension toasts and HUDs (Copied to Clipboard, Extension error, Action failed) are translated, while an extension's own titles stay as written. #extensions #i18n
 
 ## [0.5.0] - 2026-10-29
 

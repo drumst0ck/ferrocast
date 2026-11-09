@@ -666,7 +666,9 @@ impl App {
             Event::Msg(m) => match m {
                 RuntimeMsg::Render { depth, tree } => self.ext_render(depth, &tree),
                 RuntimeMsg::Pop { depth } => self.ext_pop(depth),
-                RuntimeMsg::Toast { style, title, message } => {
+                RuntimeMsg::Toast { style, title, message, own_title } => {
+                    // a title the runtime wrote is ours to translate; the extension's own is shown as written
+                    let title = if own_title { tr(&title).into_owned() } else { title };
                     let sep = if title.is_empty() || message.is_empty() { "" } else { ": " };
                     let text = format!("{title}{sep}{message}");
                     let text = if style == "failure" { format!("⚠ {text}") } else { text };
@@ -677,9 +679,9 @@ impl App {
                         notify_ext(&text);
                     }
                 }
-                RuntimeMsg::Hud { title } => {
+                RuntimeMsg::Hud { title, own_title } => {
                     // the window hides at once, so an in-window toast would never be seen
-                    notify_ext(&title);
+                    notify_ext(&if own_title { tr(&title).into_owned() } else { title });
                     self.hide();
                     self.reset_to_root();
                 }

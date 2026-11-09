@@ -86,7 +86,7 @@ impl App {
         renamed.name = new.to_string();
         renamed.validate().map_err(|e| e.to_string())?;
         if self.custom_themes.iter().enumerate().any(|(j, t)| j != i && t.name.eq_ignore_ascii_case(new)) {
-            return Err(format!("A theme called \"{new}\" already exists"));
+            return Err(trf("A theme called \"{new}\" already exists", &[("new", new)]));
         }
         self.custom_themes[i] = renamed;
         self.save_themes();
@@ -133,11 +133,11 @@ impl App {
 
     /// Read a `.ferrocast-theme` file, save it under a free name and select it.
     pub(crate) fn import_theme_file(&mut self, path: &std::path::Path) -> Result<String, String> {
-        let meta = std::fs::metadata(path).map_err(|e| format!("Could not read the file: {e}"))?;
+        let meta = std::fs::metadata(path).map_err(|e| trf("Could not read the file: {e}", &[("e", &e.to_string())]))?;
         if meta.len() > MAX_THEME_FILE {
             return Err("That file is too large to be a theme".into());
         }
-        let text = std::fs::read_to_string(path).map_err(|e| format!("Could not read the file: {e}"))?;
+        let text = std::fs::read_to_string(path).map_err(|e| trf("Could not read the file: {e}", &[("e", &e.to_string())]))?;
         let mut t = themes::import_json(&text).map_err(|e| e.to_string())?;
         t.name = themes::unique_name(&self.custom_themes, &t.name);
         let name = t.name.clone();

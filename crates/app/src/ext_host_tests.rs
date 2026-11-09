@@ -45,16 +45,16 @@ fn s12_a_hud_is_shown_as_a_notification_because_the_window_hides_at_once() {
     let mut app = ext_app();
     ext_glue::take_notified();
     app.visible = true;
-    app.ext_event(1, Event::Msg(RuntimeMsg::Hud { title: "Copied to Clipboard".into() }));
+    app.ext_event(1, Event::Msg(RuntimeMsg::Hud { title: "Copied to Clipboard".into(), own_title: false }));
     assert_eq!(ext_glue::take_notified(), vec!["Copied to Clipboard".to_string()]);
     assert!(!app.visible, "the launcher still hides");
     // a no-view command: the window is already hidden, the HUD must still be seen
-    app.ext_event(1, Event::Msg(RuntimeMsg::Hud { title: "Done".into() }));
+    app.ext_event(1, Event::Msg(RuntimeMsg::Hud { title: "Done".into(), own_title: false }));
     assert_eq!(ext_glue::take_notified(), vec!["Done".to_string()]);
 }
 
 fn toast(app: &mut App, style: &str, title: &str, message: &str) {
-    app.ext_event(1, Event::Msg(RuntimeMsg::Toast { style: style.into(), title: title.into(), message: message.into() }));
+    app.ext_event(1, Event::Msg(RuntimeMsg::Toast { style: style.into(), title: title.into(), message: message.into(), own_title: false }));
 }
 
 #[test]

@@ -15,6 +15,7 @@ use super::compose::{CameraFx, Composer, FrameParams};
 use super::events::Events;
 use super::project::{AudioTrack, Project};
 use super::timeline::{self, Timeline};
+use crate::i18n::{tr, trf};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 
@@ -185,13 +186,21 @@ pub enum PlanError {
 impl std::fmt::Display for PlanError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NothingToExport => write!(f, "There is nothing to export: the edit keeps no video."),
-            Self::InvalidTimeline(m) => write!(f, "The edit is not valid: {m}"),
+            Self::NothingToExport => write!(f, "{}", tr("There is nothing to export: the edit keeps no video.")),
+            Self::InvalidTimeline(m) => write!(f, "{}", trf("The edit is not valid: {m}", &[("m", m)])),
+            // already built (and translated) where the size was checked
             Self::BadSize(m) => write!(f, "{m}"),
-            Self::BadFps(n) => write!(f, "{n} fps is not supported: use 1 to {MAX_FPS}."),
-            Self::GifTooLong { max_seconds, .. } => {
-                write!(f, "This edit is too long for a GIF: the limit is {max_seconds:.0} seconds. Trim it or export an MP4.")
+            Self::BadFps(n) => {
+                write!(f, "{}", trf("{n} fps is not supported: use 1 to {max}.", &[("n", &n.to_string()), ("max", &MAX_FPS.to_string())]))
             }
+            Self::GifTooLong { max_seconds, .. } => write!(
+                f,
+                "{}",
+                trf(
+                    "This edit is too long for a GIF: the limit is {secs} seconds. Trim it or export an MP4.",
+                    &[("secs", &format!("{max_seconds:.0}"))]
+                )
+            ),
         }
     }
 }
@@ -230,11 +239,17 @@ pub fn export_plan(project: &Project, source: [u32; 2], opts: &ExportOptions) ->
     let gif = opts.format == Format::Gif;
     let (fps, w) = if gif { (opts.fps.min(GIF_MAX_FPS), opts.width.min(GIF_MAX_WIDTH)) } else { (opts.fps, opts.width) };
     if w < MIN_WIDTH || !w.is_multiple_of(2) || w > MAX_LONG_EDGE {
-        return Err(PlanError::BadSize(format!("The width {w} is not valid: use an even number from {MIN_WIDTH} to {MAX_LONG_EDGE}.")));
+        return Err(PlanError::BadSize(trf(
+            "The width {w} is not valid: use an even number from {min} to {max}.",
+            &[("w", &w.to_string()), ("min", &MIN_WIDTH.to_string()), ("max", &MAX_LONG_EDGE.to_string())],
+        )));
     }
     let h = even_up((f64::from(w) / aspect_ratio(&project.style.aspect, source)).round().max(2.0));
     if h > MAX_LONG_EDGE || u64::from(w) * u64::from(h) > MAX_PIXELS {
-        return Err(PlanError::BadSize(format!("{w}×{h} is larger than 3840×2160: choose a smaller resolution.")));
+        return Err(PlanError::BadSize(trf(
+            "{w}×{h} is larger than 3840×2160: choose a smaller resolution.",
+            &[("w", &w.to_string()), ("h", &h.to_string())],
+        )));
     }
     let tl = Timeline::new(project);
     let duration = tl.output_duration();

@@ -463,7 +463,7 @@ pub fn draw_sheet(ui: &mut Ui, rect: Rect, pal: &Palette, ed: &mut Editor) -> Sh
     ui.scope_builder(egui::UiBuilder::new().max_rect(sheet.shrink(18.0)), |ui| {
         crate::editor_panels::panel_style(ui, pal, comfy);
         ui.spacing_mut().item_spacing.y = 8.0;
-        ui.label(RichText::new("Export video").size(16.0).strong().color(pal.text));
+        ui.label(RichText::new(tr("Export video")).size(16.0).strong().color(pal.text));
         if let Some((frac, text, cancelling)) = ed.export.run.as_ref().map(|run| {
             let frac = if run.total == 0 { 0.0 } else { run.done as f32 / run.total as f32 };
             let text = if run.cancelling { "Cancelling…".to_string() } else { progress_text(run.done, run.total, run.eta) };

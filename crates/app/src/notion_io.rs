@@ -1,6 +1,7 @@
 //! Notion HTTP and Keychain access. Every request is a `/usr/bin/curl -K -` subprocess whose config
 //! (token, URL, body) goes through stdin, so nothing secret reaches argv. Callers run it off the UI thread.
 
+use ferrocast_core::i18n::{tr, trf};
 use ferrocast_core::notion::{self, NotionError};
 
 /// Keychain service of the integration token.
@@ -344,10 +345,10 @@ pub fn relative_time(iso: &str, now: chrono::DateTime<chrono::Utc>) -> String {
     let Ok(t) = chrono::DateTime::parse_from_rfc3339(iso) else { return String::new() };
     let secs = (now - t.with_timezone(&chrono::Utc)).num_seconds();
     match secs {
-        s if s < 60 => "just now".into(),
-        s if s < 3600 => format!("{}m ago", s / 60),
-        s if s < 86_400 => format!("{}h ago", s / 3600),
-        s if s < 2 * 86_400 => "yesterday".into(),
+        s if s < 60 => tr("just now").into_owned(),
+        s if s < 3600 => trf("{n}m ago", &[("n", &(s / 60).to_string())]),
+        s if s < 86_400 => trf("{n}h ago", &[("n", &(s / 3600).to_string())]),
+        s if s < 2 * 86_400 => tr("yesterday").into_owned(),
         _ => {
             let (d, n) = (t.with_timezone(&Local), now.with_timezone(&Local));
             if d.year() == n.year() {
