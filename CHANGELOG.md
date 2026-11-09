@@ -17,6 +17,10 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Calculator and timers**: `timer 1.5h` now means 90 minutes, `timer 10 30` and absurdly large timers are no longer misread, `hsl(120 50 50)` is recognised as a colour, `ft in m`, `2x3` and tiny numbers such as `1/3000000000` work, very large and very small results show in scientific notation, and `round`/`log` with extra arguments are rejected. #calculator
+- **Time zones**: added san francisco, hong kong, hk, bangalore, ist, jst, bst and aest; the city in "time in …" is capitalised, and the timer description and "Time in" label follow the interface language. #calculator
+- **Snippets**: arguments of a `{snippet}` included in another snippet or quicklink are now asked for. #snippets
+- **Update check**: after a failed automatic check the retry no longer stalls when the system clock moves backwards.
 - **Notes**: Delete All Notes now asks for confirmation in the action panel instead of moving every note to Recently Deleted at once. (docs: /docs/launcher/notes/) #notes
 - **Settings**: Advanced → Disabled commands lists each command by its name instead of its internal id; Enter in the AI key field saves the key and Enter in the theme name field renames the theme, like the buttons; the Advanced tab tooltip shows ⌘0; opening the data folder or a new script no longer makes the launcher wait for macOS. #settings
 - **Settings reset**: ⌘Z undoes Reset this tab while the Undo toast is showing, and another toast (sync, login item) no longer removes Undo before it expires; the other message appears afterwards. #settings

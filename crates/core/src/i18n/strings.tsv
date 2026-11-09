@@ -1952,3 +1952,8 @@ No checksum for {file} in SHA256SUMS.txt	No hay suma de comprobación de {file} 
 Signature check failed ({e})	Falló la comprobación de la firma ({e})	Signaturprüfung fehlgeschlagen ({e})	Échec de la vérification de la signature ({e})	Falha na verificação da assinatura ({e})	署名の確認に失敗しました({e})	签名验证失败({e})
 Script timed out after {secs} s and was stopped	El script superó los {secs} s y se detuvo	Das Skript hat nach {secs} s das Zeitlimit überschritten und wurde gestoppt	Le script a dépassé {secs} s et a été arrêté	O script excedeu {secs} s e foi interrompido	スクリプトが{secs}秒でタイムアウトし、停止されました	脚本在 {secs} 秒后超时并已停止
 [output truncated at {kb} KB]	[salida recortada en {kb} KB]	[Ausgabe bei {kb} KB abgeschnitten]	[sortie tronquée à {kb} Ko]	[saída cortada em {kb} KB]	[出力は{kb} KBで切り詰められました]	[输出已在 {kb} KB 处截断]
+{n}h	{n} h	{n} Std.	{n} h	{n} h	{n}時間	{n} 小时
+{n} min	{n} min	{n} Min.	{n} min	{n} min	{n}分	{n} 分钟
+{n} sec	{n} s	{n} Sek.	{n} s	{n} s	{n}秒	{n} 秒
+Time in {city}	Hora en {city}	Uhrzeit in {city}	Heure à {city}	Hora em {city}	{city}の時刻	{city}的时间
+Pomodoro	Pomodoro	Pomodoro	Pomodoro	Pomodoro	ポモドーロ	番茄钟
