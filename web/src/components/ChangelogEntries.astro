@@ -1,6 +1,7 @@
 ---
 import { CATEGORY_LABEL, CATEGORY_ORDER } from '../lib/changelog/load';
 import type { EntryView } from '../lib/changelog/query';
+import { changelogHref, isSafeDocsPath } from '../lib/changelog/links';
 interface Props { entries: EntryView[]; tag?: string | null }
 const { entries, tag = null } = Astro.props;
 const shown = tag ? entries.filter((e) => e.tags.includes(tag)) : entries;
@@ -13,8 +14,8 @@ const groups = CATEGORY_ORDER.map((c) => [c, shown.filter((e) => e.category === 
       {es.map((e) => (
         <li id={e.slug}>
           {e.title && <strong>{e.title}</strong>}{e.title && ': '}<span set:html={e.bodyHtml} />
-          {e.docsUrl && <> <a class="tl" href={e.docsUrl}>Docs</a></>}
-          {e.tags.length > 0 && <span class="cl-tags">{e.tags.map((t) => <a href={`/changelog/?tag=${t}`}>#{t}</a>)}</span>}
+          {isSafeDocsPath(e.docsUrl) && <> <a class="tl" href={e.docsUrl}>Docs</a></>}
+          {e.tags.length > 0 && <span class="cl-tags">{e.tags.map((t) => <a href={changelogHref(1, t)}>#{t}</a>)}</span>}
         </li>
       ))}
     </ul>
