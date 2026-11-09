@@ -139,6 +139,9 @@ pub enum Msg {
     },
     /// Icon PNG bytes fetched in the background for the first screen.
     IconBytes(String, Vec<u8>),
+    /// Script commands read from disk in the background: the reload that asked (newest wins), the
+    /// commands and whether to report how many were loaded.
+    ScriptsLoaded(u64, Vec<ScriptCommand>, bool),
     /// Device-code sign-in: show this code to the user while we poll.
     ChatGptDeviceCode(String),
     /// Files picked for conversion.
@@ -544,9 +547,26 @@ impl Shared {
         *self.keywords.write().unwrap() = kws;
     }
 
+    #[cfg(test)]
     pub fn save_clipboard(&self) {
         self.write_clipboard();
         self.clip_dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// `save_clipboard` for the UI thread: the history file is written by a worker (it can be
+    /// large), the sync flag is set at once. Writes still go through the shared serialisation, so
+    /// the newest list is always the last one on disk.
+    pub fn save_clipboard_in_background(self: &Arc<Self>) {
+        self.clip_dirty.store(true, Ordering::Relaxed);
+        let shared = self.clone();
+        std::thread::spawn(move || shared.write_clipboard());
+    }
+
+    /// Delete the image files no entry refers to. The list lock is held for the directory listing,
+    /// like `record` does while it stores a new image, so a copy still being recorded keeps its file.
+    pub(crate) fn prune_clip_images(&self) {
+        let list = self.clipboard.lock().unwrap();
+        storage::prune_images(&self.store.images_dir(), &list);
     }
 
     /// Write the history to disk without holding the list lock during the (large) serialisation and
@@ -555,7 +575,9 @@ impl Shared {
     pub(crate) fn write_clipboard(&self) {
         let _turn = CLIPBOARD_SAVE.lock().unwrap_or_else(|e| e.into_inner());
         let snapshot = self.clipboard.lock().unwrap().clone();
-        let _ = self.store.save("clipboard.json", &snapshot);
+        if let Err(e) = self.store.save("clipboard.json", &snapshot) {
+            eprintln!("clipboard history not saved: {e}");
+        }
     }
 }
 
@@ -868,8 +890,8 @@ pub fn start_expansion(shared: Arc<Shared>) {
         let lookup = |n: &str| snaps.iter().find(|s| s.name == n).map(|s| s.text.clone());
         let ctx = placeholders::Context { clipboard: clipboard_texts(&s2), snippets: Some(&lookup), ..Default::default() };
         let ex = placeholders::expand(&sn.text, Target::Snippet, &ctx);
-        let back = ex.cursor.map(|c| ex.text.chars().count().saturating_sub(c));
-        expansion::inject(kw.chars().count(), &ex.text, back, |count| s2.ignore_clipboard_count(count));
+        let back = ex.cursor.map(|c| expansion::cursor_back_count(&ex.text, c));
+        expansion::inject(expansion::grapheme_count(&kw), &ex.text, back, |count| s2.ignore_clipboard_count(count));
     });
     if let Err(e) = expansion::start(shared.keywords.clone(), enabled, on_match) {
         eprintln!("snippet expansion unavailable: {e}");
@@ -1271,6 +1293,24 @@ fn notes_icon_rgba(n: usize) -> Vec<u8> {
 
 // ---------------------------------------------------------------------------
 // Scripts
+
+static SCRIPTS_RELOAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Read the script folders on a worker (a big or network folder must not freeze the launcher) and
+/// answer with `Msg::ScriptsLoaded`. Returns the reload number; an older answer is dropped by
+/// `scripts_reload_is_current`.
+pub fn load_scripts_in_background(dirs: Vec<PathBuf>, report: bool, bus: Bus) -> u64 {
+    let n = SCRIPTS_RELOAD.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        let list = load_scripts(&dirs);
+        bus.send(Msg::ScriptsLoaded(n, list, report));
+    });
+    n
+}
+
+pub fn scripts_reload_is_current(n: u64) -> bool {
+    SCRIPTS_RELOAD.load(std::sync::atomic::Ordering::SeqCst) == n
+}
 
 pub fn load_scripts(dirs: &[PathBuf]) -> Vec<ScriptCommand> {
     fn walk(dir: &std::path::Path, depth: usize, out: &mut Vec<ScriptCommand>) {
@@ -1873,6 +1913,11 @@ pub fn ai_key_for(p: AiProvider) -> Option<String> {
     crate::secrets::secret_get(keychain_service(p)).map(|k| k.trim().to_string()).filter(|k| !k.is_empty())
 }
 
+/// Is a key stored for `p`? Checks the Keychain item exists without reading the key.
+pub fn ai_key_exists_for(p: AiProvider) -> bool {
+    crate::secrets::secret_exists(keychain_service(p))
+}
+
 pub fn set_ai_key_for(p: AiProvider, key: &str) -> bool {
     crate::secrets::secret_set(keychain_service(p), key.trim())
 }
@@ -1881,6 +1926,11 @@ pub fn set_ai_key_for(p: AiProvider, key: &str) -> bool {
 
 pub fn chatgpt_credentials() -> Option<ferrocast_core::chatgpt::Credentials> {
     serde_json::from_str(crate::secrets::secret_get(KEYCHAIN_SERVICE_CHATGPT)?.trim()).ok()
+}
+
+/// Is there a ChatGPT session in the Keychain? Existence only, the credentials are not read.
+pub fn chatgpt_signed_in() -> bool {
+    crate::secrets::secret_exists(KEYCHAIN_SERVICE_CHATGPT)
 }
 
 fn save_chatgpt_credentials(c: Option<&ferrocast_core::chatgpt::Credentials>) -> bool {
@@ -1962,7 +2012,8 @@ pub fn chatgpt_sign_in_device(bus: Bus) {
                 return;
             }
         };
-        clipboard::write_text(&d.user_code);
+        // one-time code: marked concealed so the clipboard history (and other managers) skip it
+        clipboard::write_text_concealed(&d.user_code);
         bus.send(Msg::ChatGptDeviceCode(d.user_code.clone()));
         let _ = std::process::Command::new("/usr/bin/open").arg(chatgpt::DEVICE_VERIFICATION_URL).status();
         let deadline = std::time::Instant::now() + Duration::from_secs(15 * 60);
@@ -2000,14 +2051,43 @@ pub fn chatgpt_sign_in_device(bus: Bus) {
 /// Credentials with a valid access token, refreshing and re-saving when expired.
 pub fn chatgpt_fresh_credentials() -> Result<ferrocast_core::chatgpt::Credentials, String> {
     use ferrocast_core::chatgpt;
-    let c = chatgpt_credentials().ok_or("Not signed in with ChatGPT. Open Settings → AI → ChatGPT and sign in.")?;
-    if !c.is_expired(now_secs()) {
+    fresh_credentials_with(
+        chatgpt_credentials,
+        |c| {
+            let body = token_post(&chatgpt::refresh_body(&c.refresh))?;
+            chatgpt::parse_token_response(&body, now_secs())
+                .map_err(|e| format!("ChatGPT session expired and could not be refreshed ({e}). Sign in again in Settings → AI."))
+        },
+        |c| {
+            save_chatgpt_credentials(Some(c));
+        },
+        now_secs,
+    )
+}
+
+static CHATGPT_REFRESH: Mutex<()> = Mutex::new(());
+
+/// The refresh logic behind `chatgpt_fresh_credentials`, with its effects injected. Only one
+/// refresh runs at a time and the stored credentials are read again after waiting for it: the
+/// refresh token rotates, so a second refresh with the old one would sign the user out.
+pub(crate) fn fresh_credentials_with(
+    load: impl Fn() -> Option<ferrocast_core::chatgpt::Credentials>,
+    refresh: impl Fn(&ferrocast_core::chatgpt::Credentials) -> Result<ferrocast_core::chatgpt::Credentials, String>,
+    save: impl Fn(&ferrocast_core::chatgpt::Credentials),
+    now: impl Fn() -> i64,
+) -> Result<ferrocast_core::chatgpt::Credentials, String> {
+    let c = load().ok_or("Not signed in with ChatGPT. Open Settings → AI → ChatGPT and sign in.")?;
+    if !c.is_expired(now()) {
         return Ok(c);
     }
-    let body = token_post(&chatgpt::refresh_body(&c.refresh))?;
-    let fresh = chatgpt::parse_token_response(&body, now_secs())
-        .map_err(|e| format!("ChatGPT session expired and could not be refreshed ({e}). Sign in again in Settings → AI."))?;
-    save_chatgpt_credentials(Some(&fresh));
+    let _turn = CHATGPT_REFRESH.lock().unwrap_or_else(|e| e.into_inner());
+    // another request may have refreshed while this one waited for its turn
+    let c = load().ok_or("Not signed in with ChatGPT. Open Settings → AI → ChatGPT and sign in.")?;
+    if !c.is_expired(now()) {
+        return Ok(c);
+    }
+    let fresh = refresh(&c)?;
+    save(&fresh);
     Ok(fresh)
 }
 
@@ -2179,7 +2259,9 @@ impl ClaudeSession {
 
     pub fn kill(&self) {
         *self.stdin.lock().unwrap() = None; // closing stdin lets the CLI exit cleanly
-        let _ = self.child.lock().unwrap().kill();
+        let mut child = self.child.lock().unwrap();
+        let _ = child.kill();
+        let _ = child.wait(); // the kill is immediate: reap it so it is not left a zombie
     }
 }
 
@@ -2399,6 +2481,23 @@ pub fn test_ai_connection(settings: &Settings, bus: Bus) {
     });
 }
 
+/// The "cannot connect" message for a curl failure, naming the server that was really contacted:
+/// the configured address for an OpenAI-compatible server, the provider's own host otherwise (the
+/// Ollama hint only fits a server the user runs). `None` when `curl_err` is not a connection failure.
+pub(crate) fn unreachable_message(settings: &Settings, curl_err: &str) -> Option<String> {
+    if !(curl_err.contains("Failed to connect") || curl_err.contains("Connection refused")) {
+        return None;
+    }
+    Some(match settings.ai_provider {
+        AiProvider::OpenAiCompatible => {
+            trf("Cannot reach {url}. Is your AI server (e.g. Ollama) running? Change it in Settings.", &[("url", &settings.ai_base_url)])
+        }
+        AiProvider::Anthropic => trf("Cannot reach {host}. Check your internet connection.", &[("host", "api.anthropic.com")]),
+        AiProvider::ChatGpt => trf("Cannot reach {host}. Check your internet connection.", &[("host", "chatgpt.com")]),
+        AiProvider::ClaudeCode => trf("Cannot reach {host}. Check your internet connection.", &[("host", "claude.ai")]),
+    })
+}
+
 /// Streaming answer from the configured provider; `on_delta` receives text as it arrives.
 /// Requests (including keys) go to curl or Claude Code via stdin, never argv.
 pub fn ai_stream(settings: &Settings, history: &[(String, String)], question: &str, on_delta: impl FnMut(&str)) -> Result<(), String> {
@@ -2557,8 +2656,8 @@ fn ai_stream_with_key_system(
     if let Some(mut e) = child.stderr.take() {
         let _ = e.read_to_string(&mut err);
     }
-    Err(if err.contains("Failed to connect") || err.contains("Connection refused") {
-        trf("Cannot reach {url}. Is your AI server (e.g. Ollama) running? Change it in Settings.", &[("url", &settings.ai_base_url)])
+    Err(if let Some(m) = unreachable_message(settings, &err) {
+        m
     } else if err.trim().is_empty() {
         "The AI server returned an empty answer".to_string()
     } else {
@@ -2583,7 +2682,7 @@ pub fn apple_language_status(languages: Vec<String>, bus: Bus) {
 
 /// Open System Settings on Language & Region, where Apple's translation languages are downloaded.
 pub fn open_language_settings() {
-    let _ = std::process::Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.Localization-Settings.extension").status();
+    crate::app::open_detached(&["x-apple.systempreferences:com.apple.Localization-Settings.extension".as_ref()]);
 }
 
 /// Translate `text` into `lang` with the translation engine's provider, off the UI thread.
@@ -2853,11 +2952,8 @@ pub fn run_conversion(
             // soffice names its own output <stem>.<ext> in --outdir; next to the original that
             // could overwrite a different file. Work in a scratch folder, then move to `out`.
             let scratch = (target.engine == Engine::Soffice).then(|| {
-                let d = std::env::temp_dir().join(format!(
-                    "ferrocast-so-{}-{}",
-                    std::process::id(),
-                    out.file_name().map(|n| n.to_string_lossy().len()).unwrap_or(0)
-                ));
+                // its own folder per conversion: runs overlap, and equal-length names must not share one
+                let d = scratch_dir("ferrocast-so");
                 let _ = std::fs::remove_dir_all(&d);
                 let _ = std::fs::create_dir_all(&d);
                 if let Some(i) = cmd.iter().position(|a| a == "--outdir") {
@@ -2918,11 +3014,8 @@ fn special_convert(
     tools: &ferrocast_core::convert::Tools,
 ) -> Result<Vec<PathBuf>, String> {
     use ferrocast_core::convert::{output_path, subtitle_text, Engine};
-    let scratch = std::env::temp_dir().join(format!(
-        "ferrocast-sp-{}-{}",
-        std::process::id(),
-        f.file_name().map(|n| n.to_string_lossy().len()).unwrap_or(0)
-    ));
+    // its own folder per conversion: runs overlap, and equal-length names must not share one
+    let scratch = scratch_dir("ferrocast-sp");
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
     let res = (|| -> Result<Vec<PathBuf>, String> {

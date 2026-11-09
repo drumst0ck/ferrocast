@@ -453,27 +453,78 @@ fn screen_index_for(win: Rect, screens: &[Rect]) -> usize {
         .unwrap_or(0)
 }
 
-static PREVIOUS: Mutex<Option<HashMap<(i32, String), Rect>>> = Mutex::new(None);
+/// How a window is remembered for Restore: by its CGWindowID when the AX API gives one (a title
+/// changes with every browser tab and repeats between windows), by app and title otherwise.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum WindowKey {
+    Id(u32),
+    Title(i32, String),
+}
 
-fn window_key(pid: i32, el: AXUIElementRef) -> (i32, String) {
-    let title = copy_string_attr(el, "AXTitle").unwrap_or_default();
-    (pid, title)
+/// Frames to go back to, one per window, the least recently stored dropped past `CAP` so windows
+/// that were closed do not pile up for the whole session.
+#[derive(Default)]
+pub struct PreviousFrames {
+    map: HashMap<WindowKey, Rect>,
+    order: std::collections::VecDeque<WindowKey>,
+}
+
+impl PreviousFrames {
+    pub const CAP: usize = 64;
+
+    pub fn remember(&mut self, key: WindowKey, frame: Rect) {
+        self.order.retain(|k| *k != key);
+        self.order.push_back(key.clone());
+        self.map.insert(key, frame);
+        while self.order.len() > Self::CAP {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+    }
+
+    pub fn recall(&self, key: &WindowKey) -> Option<Rect> {
+        self.map.get(key).copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+static PREVIOUS: Mutex<Option<PreviousFrames>> = Mutex::new(None);
+
+fn window_key(pid: i32, el: AXUIElementRef) -> WindowKey {
+    match ax_window_id(el) {
+        Some(id) => WindowKey::Id(id),
+        None => WindowKey::Title(pid, copy_string_attr(el, "AXTitle").unwrap_or_default()),
+    }
 }
 
 /// Apply a window command to the focused window of `pid` (the app that was
 /// frontmost before the launcher opened).
 pub fn apply(cmd: WindowCommand, pid: i32, gap: f64) -> anyhow::Result<()> {
+    apply_on(cmd, pid, gap, screens())
+}
+
+/// `apply` with the screens already measured: `screens()` needs the main thread to know the menu
+/// bar and Dock insets, so a caller that runs this on a worker (the AX calls can take seconds for
+/// a hung app) passes the list it read on the main thread.
+pub fn apply_on(cmd: WindowCommand, pid: i32, gap: f64, screens: Vec<Rect>) -> anyhow::Result<()> {
     if !accessibility_trusted(true) {
         anyhow::bail!("Grant Accessibility permission in System Settings → Privacy & Security → Accessibility");
     }
     let win = focused_window(pid).ok_or_else(|| anyhow::anyhow!("No focused window"))?;
     let frame = frame_of(win.0).ok_or_else(|| anyhow::anyhow!("Window has no frame"))?;
-    let screens = screens();
     anyhow::ensure!(!screens.is_empty(), "No screens");
     let idx = screen_index_for(frame, &screens);
     let key = window_key(pid, win.0);
     let mut prev = PREVIOUS.lock().unwrap();
-    let prev = prev.get_or_insert_with(HashMap::new);
+    let prev = prev.get_or_insert_with(PreviousFrames::default);
 
     let target = match cmd {
         WindowCommand::ToggleFullscreen => {
@@ -485,7 +536,7 @@ pub fn apply(cmd: WindowCommand, pid: i32, gap: f64) -> anyhow::Result<()> {
             set_bool(win.0, kAXMinimizedAttribute, true);
             return Ok(());
         }
-        WindowCommand::Restore => prev.get(&key).copied().ok_or_else(|| anyhow::anyhow!("Nothing to restore"))?,
+        WindowCommand::Restore => prev.recall(&key).ok_or_else(|| anyhow::anyhow!("Nothing to restore"))?,
         WindowCommand::NextDisplay | WindowCommand::PreviousDisplay => {
             anyhow::ensure!(screens.len() > 1, "Only one display");
             let n = screens.len();
@@ -495,7 +546,7 @@ pub fn apply(cmd: WindowCommand, pid: i32, gap: f64) -> anyhow::Result<()> {
         _ => layout(cmd, frame, screens[idx], gap).ok_or_else(|| anyhow::anyhow!("Unsupported window command"))?,
     };
     if cmd != WindowCommand::Restore {
-        prev.insert(key, frame);
+        prev.remember(key, frame);
     }
     set_frame(win.0, target);
     Ok(())
@@ -559,6 +610,33 @@ pub fn raise_window(pid: i32, title: &str, id: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn restore_frames_are_kept_per_window_and_stay_bounded() {
+        use super::*;
+        let f = |x: f64| Rect::new(x, 0.0, 10.0, 10.0);
+        let mut p = PreviousFrames::default();
+        // two windows of one app with the same title keep their own frames
+        p.remember(WindowKey::Id(1), f(1.0));
+        p.remember(WindowKey::Id(2), f(2.0));
+        assert_eq!(p.recall(&WindowKey::Id(1)), Some(f(1.0)));
+        assert_eq!(p.recall(&WindowKey::Id(2)), Some(f(2.0)));
+        // a window without an id is found by app + title, and a changed title is another key
+        p.remember(WindowKey::Title(7, "a".into()), f(3.0));
+        assert_eq!(p.recall(&WindowKey::Title(7, "a".into())), Some(f(3.0)));
+        assert_eq!(p.recall(&WindowKey::Title(7, "b".into())), None);
+        // storing again replaces and refreshes
+        p.remember(WindowKey::Id(1), f(9.0));
+        assert_eq!(p.recall(&WindowKey::Id(1)), Some(f(9.0)));
+        // closed windows do not accumulate; the most recent ones survive
+        for i in 100..(100 + PreviousFrames::CAP as u32 + 10) {
+            p.remember(WindowKey::Id(i), f(i as f64));
+        }
+        assert_eq!(p.len(), PreviousFrames::CAP);
+        assert!(p.recall(&WindowKey::Id(2)).is_none(), "the oldest was dropped");
+        assert!(p.recall(&WindowKey::Id(100 + PreviousFrames::CAP as u32 + 9)).is_some());
+        assert!(!p.is_empty());
+    }
+
     use super::*;
     const S: Rect = Rect { x: 0.0, y: 25.0, w: 1000.0, h: 800.0 };
 

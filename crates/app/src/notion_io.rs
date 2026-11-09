@@ -68,7 +68,7 @@ pub fn open_url(url: &str) {
     OPENED.with(|o| o.borrow_mut().push(url.to_string()));
     #[cfg(not(test))]
     {
-        let _ = std::process::Command::new("/usr/bin/open").arg(url).spawn();
+        crate::app::open_detached(&[url.as_ref()]);
     }
 }
 

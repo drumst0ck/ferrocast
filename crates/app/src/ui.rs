@@ -140,12 +140,18 @@ pub struct IconCache {
     bus: Option<crate::services::Bus>,
     /// Clipboard image keys, least recently used first.
     clip_lru: std::collections::VecDeque<String>,
+    /// App, emoji and glyph icon keys, least recently used first.
+    other_lru: std::collections::VecDeque<String>,
 }
 
 /// Longest side, in pixels, of a clipboard image texture (the detail pane shows it at most this big).
 pub const CLIP_IMAGE_PX: u32 = 720;
 /// Clipboard image textures kept at once; the least recently used one is dropped.
 pub const CLIP_TEXTURES: usize = 32;
+/// App, emoji and glyph textures kept at once (a long session over many files must not grow without bound).
+pub const ICON_TEXTURES: usize = 600;
+/// Fetched icon bytes waiting for a texture; the surplus is dropped and fetched again on demand.
+pub const PREFETCHED_MAX: usize = 200;
 
 impl IconCache {
     /// Load clipboard images on worker threads that answer through `bus`.
@@ -160,15 +166,31 @@ impl IconCache {
         self.inflight.remove(&key);
         let is_clip = key.starts_with("clip:");
         self.map.insert(key.clone(), tex);
-        if is_clip {
-            self.clip_lru.retain(|k| *k != key);
-            self.clip_lru.push_back(key);
-            while self.clip_lru.len() > CLIP_TEXTURES {
-                if let Some(old) = self.clip_lru.pop_front() {
-                    self.map.remove(&old);
-                }
+        let (lru, cap) = if is_clip { (&mut self.clip_lru, CLIP_TEXTURES) } else { (&mut self.other_lru, ICON_TEXTURES) };
+        lru.retain(|k| *k != key);
+        lru.push_back(key);
+        while lru.len() > cap {
+            if let Some(old) = lru.pop_front() {
+                self.map.remove(&old);
             }
         }
+    }
+
+    /// Keep PNG bytes a worker fetched until the next paint turns them into a texture. Only
+    /// `PREFETCHED_MAX` wait at once: the surplus (icons scrolled past meanwhile) is forgotten and
+    /// asked for again if it is shown.
+    pub fn accept_prefetched(&mut self, key: String, bytes: Vec<u8>) {
+        if self.map.contains_key(&key) {
+            return;
+        }
+        if self.prefetched.len() >= PREFETCHED_MAX && !self.prefetched.contains_key(&key) {
+            let drop: Vec<String> = self.prefetched.keys().take(self.prefetched.len() + 1 - PREFETCHED_MAX).cloned().collect();
+            for k in drop {
+                self.prefetched.remove(&k);
+                self.inflight.remove(&k);
+            }
+        }
+        self.prefetched.insert(key, bytes);
     }
 
     pub fn new(images_dir: PathBuf) -> Self {
@@ -180,6 +202,7 @@ impl IconCache {
             inflight: Default::default(),
             bus: None,
             clip_lru: Default::default(),
+            other_lru: Default::default(),
         }
     }
 
@@ -201,11 +224,10 @@ impl IconCache {
         };
         if let Some(t) = self.map.get(&key) {
             let t = t.clone();
-            if key.starts_with("clip:") {
-                if let Some(i) = self.clip_lru.iter().position(|k| *k == key) {
-                    let k = self.clip_lru.remove(i).unwrap_or_default();
-                    self.clip_lru.push_back(k);
-                }
+            let lru = if key.starts_with("clip:") { &mut self.clip_lru } else { &mut self.other_lru };
+            if let Some(i) = lru.iter().position(|k| *k == key) {
+                let k = lru.remove(i).unwrap_or_default();
+                lru.push_back(k);
             }
             return t;
         }

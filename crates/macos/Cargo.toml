@@ -8,6 +8,7 @@ license.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 plist = "1"
+unicode-segmentation = "1"
 dirs.workspace = true
 objc2 = "0.6"
 objc2-foundation = "0.3"
