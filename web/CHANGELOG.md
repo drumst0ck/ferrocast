@@ -6,6 +6,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-09
+
 ### Added
 - **Permission helper**: when Ferrocast opens the Accessibility, Screen Recording or Input Monitoring settings, a small panel with the Ferrocast icon appears next to System Settings; drag the icon into the list to add Ferrocast. It closes when the permission is granted, when System Settings closes or with its close button. Camera, microphone and speech settings open as before. (docs: /docs/getting-started/first-run/) #permissions
 - **Move an app to the Trash**: right-click an application in the launcher (or press ⌘K) and choose Move to Trash (⌘⌫). Ferrocast asks first, moves only the app itself so Finder's Put Back works, and refuses system apps, protected Apple apps, Ferrocast itself and apps that are running. (docs: /docs/launcher/actions-panel/) #launcher
@@ -15,8 +17,21 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Menu bar icon**: the Menu bar icon switch in Settings → General now shows or hides the icon at once, without a restart. (docs: /docs/launcher/settings/) #settings
 - **Website conversion indexability**: 152 generic English conversion pages remain accessible with self canonicals but use noindex,follow and leave the sitemap; an explicit manifest restores both together.
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
+- **Undo a delete**: deleting a single entry in Clipboard History, Notes or the Calculator history now shows "Deleted · Undo" for 8 seconds; click Undo or press ⌘Z to bring the entry back where it was, with its content, pin and image. #launcher
+- **Process icons**: Search Processes shows the icon of the innermost app (Xcode's Simulator shows the Simulator icon); helper apps inside another app's frameworks keep the main app's icon. #launcher
+- **Pin to screen**: a pin opens on the display under the pointer instead of the main display. #capture
 
 ### Fixed
+- **Calculator and timers**: `timer 1.5h` now means 90 minutes, `timer 10 30` and absurdly large timers are no longer misread, `hsl(120 50 50)` is recognised as a colour, `ft in m`, `2x3` and tiny numbers such as `1/3000000000` work, very large and very small results show in scientific notation, and `round`/`log` with extra arguments are rejected. #calculator
+- **Time zones**: added san francisco, hong kong, hk, bangalore, ist, jst, bst and aest; the city in "time in …" is capitalised, and the timer description and "Time in" label follow the interface language. #calculator
+- **Snippets**: arguments of a `{snippet}` included in another snippet or quicklink are now asked for. #snippets
+- **Update check**: after a failed automatic check the retry no longer stalls when the system clock moves backwards.
+- **Website demo**: the calculator in the home page demo no longer runs dynamic code, so it keeps working under a strict content security policy. The Spanish home demo now shows Spanish labels, times and number formats, and a currency conversion no longer fires repeated rate requests while you type.
+- **Website docs header**: on the Spanish docs, the logo and Home link go to the Spanish home, and the navigation and menu labels are read in Spanish.
+- **Website changelog page**: tag filters and pagination now work together, `?page=` values that are not plain page numbers fall back to page 1, a page past the last one returns 404, and docs links that point to another site are ignored.
+- **Website 404 page**: it now has the site header and footer, is not indexed, and has a Spanish version under `/es/`.
+- **Website server**: prerendered pages are served without blocking other requests, with ETag and 304 support and a correct Content-Length for HEAD; database queries time out after 10 seconds; the footer year follows the current year.
+- **Extensions cache**: an extension's Cache no longer reports keys such as `constructor` as stored, ignores a cache file that is not a JSON object instead of failing on it, returns false from `remove` for a key that was not there, keeps namespaces such as `a/b` and `a_b` apart, and a subscriber that throws no longer stops the write or the other subscribers. #extensions
 - **Notes**: Delete All Notes now asks for confirmation in the action panel instead of moving every note to Recently Deleted at once. (docs: /docs/launcher/notes/) #notes
 - **Settings**: Advanced → Disabled commands lists each command by its name instead of its internal id; Enter in the AI key field saves the key and Enter in the theme name field renames the theme, like the buttons; the Advanced tab tooltip shows ⌘0; opening the data folder or a new script no longer makes the launcher wait for macOS. #settings
 - **Settings reset**: ⌘Z undoes Reset this tab while the Undo toast is showing, and another toast (sync, login item) no longer removes Undo before it expires; the other message appears afterwards. #settings
@@ -78,6 +93,20 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website search results**: the page descriptions of 15 pages are shortened to 155 characters or fewer so search engines no longer truncate them, and the docs now declare `og:locale` as `en_US` / `es_ES`.
 - **Website hosting**: `www.ferrocast.app` redirects to `ferrocast.app` on every page (and only that host), social cards are cached for a week, the report-only CSP allows Pagefind and GA4, and sitemap dates for tool pages follow the docs page they show and prefer git history.
 - **Spanish docs**: the Settings page links to the Updates section of Install again, and `Check now` and `Check for Updates…` use the Spanish interface labels.
+- **Sync texts**: the status line in Settings (last sync, other Macs seen, files still downloading, restored files) and the "Sync failed" and "Cannot use the sync folder" messages follow the interface language. #sync #i18n
+- **Recording texts**: the saved, stopped early and low disk space messages, the camera, microphone and source warnings, "not connected" devices and the helper start errors follow the interface language. #i18n
+- **Notion and scripts**: Notion's relative times ("5m ago", "yesterday") and a script's "Failed to run" and "[exit code N]" lines follow the interface language, and a script stopped after its time limit no longer ends with "[exit code -1]". #i18n #scripts
+- **Studio editor and tools**: the Look, Split side, wallpaper, transcript language and Audio/Transcript tab names, the Export video heading, the trim buttons (Frame, Set start, To end…), the Audio to Video size line, the AI connection hints, Choose image…, Clear search and the Reset this tab tooltip are translated. #i18n
+- **Themes and imports**: renaming a theme to a name in use, importing a theme file that cannot be read or is not a theme, importing snippets from a bad file, and export size, frame rate and GIF length errors now show in your language. #i18n
+- **Dictation, AirDrop and Pin**: the reasons macOS features give when they fail (microphone or speech access denied, no input device, AirDrop unavailable, an unreadable image) are translated, and Pin failed no longer repeats "Pin:" twice. #i18n #macos
+- **Extensions**: titles that Ferrocast itself writes in extension toasts and HUDs (Copied to Clipboard, Extension error, Action failed) are translated, while an extension's own titles stay as written. #extensions #i18n
+- **Delete shortcuts**: holding ⌃X on a clipboard entry, note, snippet, quicklink or calculator entry deletes one item instead of one per key repeat; deleting a clipboard entry no longer waits for the disk, and the picture of a copy that is still being saved is no longer deleted by a clean-up. #clipboard
+- **Window management**: Restore remembers each window by its own identity, so tabs and windows with the same title no longer mix up their frames, and a hung app no longer freezes the launcher while a window command runs. (docs: /docs/launcher/window-management/) #macos
+- **Snippets**: a keyword or a cursor position next to an emoji or an accented letter is counted by what you see, so expansion deletes and moves the caret by the right amount. #snippets
+- **AI and ChatGPT**: the ChatGPT sign-in code stays out of the clipboard history, a refresh of the ChatGPT session no longer runs twice at once and signs you out, the "Cannot reach" message names the server that was really contacted (not your Ollama address for Anthropic or ChatGPT), and checking whether a key is stored no longer reads it from the Keychain. #ai
+- **Extensions and scripts**: a command that cannot start (Node.js missing or broken) leaves the running command and its screens alone, and Reload Script Commands and changing the script folders no longer make the launcher wait for the disk. #extensions #scripts
+- **Launcher polish**: the file subtitle shows `~` only at the start of a path under your home folder, icons no longer accumulate in memory over a long session, opening Language & Region settings, a web link or Quick Look no longer freezes the launcher or leaves a stray process, the permission helper's close button closes it safely, and file conversions with equal-length names no longer share a scratch folder. #launcher
+- **Ask AI**: closing Ask AI, or asking again, now stops the request that is still running instead of leaving it to finish in the background. #ai
 
 ## [0.5.0] - 2026-10-29
 
