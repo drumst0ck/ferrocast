@@ -4,6 +4,7 @@
 //! The editor exposes seven values (accent, background, surface, text, secondary text, separator
 //! and the light/dark base); everything else (hover, selected, borders, readable accent text, text
 //! on the accent button) is computed here so a theme cannot be half-defined.
+use crate::i18n::{tr, trf};
 use serde::{Deserialize, Serialize};
 
 pub const FORMAT: &str = "ferrocast-theme";
@@ -82,11 +83,15 @@ pub struct ThemeFile {
 impl std::fmt::Display for ThemeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ThemeError::Name => write!(f, "The theme needs a name of 1 to 60 characters"),
-            ThemeError::Color { field, value } => write!(f, "\"{value}\" is not a colour for {field} (use #RRGGBB)"),
-            ThemeError::Format => write!(f, "This is not a Ferrocast theme file"),
-            ThemeError::Version(v) => write!(f, "Theme file version {v} is newer than this Ferrocast understands"),
-            ThemeError::Parse(e) => write!(f, "Could not read the theme file: {e}"),
+            ThemeError::Name => write!(f, "{}", tr("The theme needs a name of 1 to 60 characters")),
+            ThemeError::Color { field, value } => {
+                write!(f, "{}", trf("\"{value}\" is not a colour for {field} (use #RRGGBB)", &[("value", value), ("field", field)]))
+            }
+            ThemeError::Format => write!(f, "{}", tr("This is not a Ferrocast theme file")),
+            ThemeError::Version(v) => {
+                write!(f, "{}", trf("Theme file version {v} is newer than this Ferrocast understands", &[("v", &v.to_string())]))
+            }
+            ThemeError::Parse(e) => write!(f, "{}", trf("Could not read the theme file: {e}", &[("e", e)])),
         }
     }
 }

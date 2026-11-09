@@ -67,3 +67,6 @@ pub mod videoplan;
 pub mod waveform;
 pub mod wheel;
 pub mod xlsx;
+
+#[cfg(test)]
+mod round5_i18n_tests;

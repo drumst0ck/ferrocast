@@ -3566,11 +3566,11 @@ impl App {
                     ui.label(RichText::new(tr("·  Equal parts")).size(12.5).color(pal.sub));
                     ui.add(egui::DragValue::new(&mut parts).range(2..=50));
                     ui.label(
-                        RichText::new(if points.is_empty() { "(used while there are no cuts)" } else { "(ignored: cuts are set)" })
+                        RichText::new(tr(if points.is_empty() { "(used while there are no cuts)" } else { "(ignored: cuts are set)" }))
                             .size(11.5)
                             .color(pal.sub),
                     );
-                    if ui.add_enabled(!points.is_empty(), egui::Button::new("Clear")).clicked() {
+                    if ui.add_enabled(!points.is_empty(), egui::Button::new(tr("Clear"))).clicked() {
                         points.clear();
                     }
                 });
@@ -4207,7 +4207,7 @@ impl App {
                             None => "no picture chosen yet".to_string(),
                         };
                         form_row_stacked(ui, pal, "Picture", "Shown behind the photo.", |ui| {
-                            if ui.add_enabled(!picking, egui::Button::new("Choose image…")).clicked() {
+                            if ui.add_enabled(!picking, egui::Button::new(tr("Choose image…"))).clicked() {
                                 choose = true;
                             }
                             let text = elide(ui.painter(), &text, FontId::proportional(12.5), 120.0);
@@ -7158,7 +7158,7 @@ impl App {
             }
             if !query.is_empty() {
                 let xr = Rect::from_center_size(Pos2::new(sr.rect.max.x - 14.0, sr.rect.center().y), Vec2::splat(28.0));
-                let xe = ui.interact(xr, Id::new("settings-search-clear"), Sense::click()).on_hover_text("Clear search");
+                let xe = ui.interact(xr, Id::new("settings-search-clear"), Sense::click()).on_hover_text(tr("Clear search"));
                 record_ctl(&ctx, "search-clear", xe.id, xr, true);
                 record_text(&ctx, pal, "search-clear", pal.sub_strong, &[pal.lift(1.6)], 1.0);
                 focus_ring(ui, pal, &xe, xr.shrink(2.0));
@@ -7616,7 +7616,7 @@ impl App {
                                 test_ai = true;
                             }
                             ui.add_space(10.0);
-                            ui.label(RichText::new(match prov { P::ClaudeCode => "Checks that the tool runs.", P::ChatGpt => "Checks the session and refreshes it if needed.", _ => "Asks the server for its model list." }).size(12.0).color(pal.sub));
+                            ui.label(RichText::new(tr(match prov { P::ClaudeCode => "Checks that the tool runs.", P::ChatGpt => "Checks the session and refreshes it if needed.", _ => "Asks the server for its model list." })).size(12.0).color(pal.sub));
                         });
                         ui.add_space(10.0);
                         note(ui, pal, "Ask AI streams answers and keeps the conversation while the window is open. With Ollama or Claude Code nothing goes through Ferrocast's servers: there are none.");
@@ -8350,7 +8350,7 @@ impl App {
                     // right-aligned at the end of the tab content
                     let r = ui
                         .allocate_ui_with_layout(Vec2::new(ui.available_width(), FIELD_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            text_btn(ui, pal, "Reset this tab", icon).on_hover_text("Restore this tab's settings to their defaults")
+                            text_btn(ui, pal, "Reset this tab", icon).on_hover_text(tr("Restore this tab's settings to their defaults"))
                         })
                         .inner;
                     #[cfg(test)]

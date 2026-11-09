@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(params["text"], json!("alpha-value"));
         sc.send(&HostMsg::Result { id, value: json!(null), error: None }).unwrap();
         loop {
-            if let RuntimeMsg::Hud { title } = next_msg(&rx) {
+            if let RuntimeMsg::Hud { title, .. } = next_msg(&rx) {
                 assert_eq!(title, "Copied to Clipboard");
                 break;
             }

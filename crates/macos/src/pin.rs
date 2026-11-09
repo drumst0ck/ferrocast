@@ -271,14 +271,14 @@ fn update(id: u64, change: impl FnOnce(&mut PinState, Frame, (f64, f64)) -> Fram
 /// (shown at pixel size / scale points, centred on the main screen). Main thread only.
 pub fn open(mtm: MainThreadMarker, png_path: &Path, pixel_size: (u32, u32), scale: f64) -> Result<PinId, String> {
     if pixel_size.0 == 0 || pixel_size.1 == 0 {
-        return Err("Pin: the image has no pixels".to_string());
+        return Err(ferrocast_core::i18n::tr("the image has no pixels").into_owned());
     }
     if !png_path.is_file() {
-        return Err(format!("Pin: {} is not a file", png_path.display()));
+        return Err(ferrocast_core::i18n::trf("{path} is not a file", &[("path", &png_path.display().to_string())]));
     }
-    let path = png_path.to_str().ok_or("Pin: the path is not valid UTF-8")?;
-    let image =
-        NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(path)).ok_or("Pin: the file is not a readable image")?;
+    let path = png_path.to_str().ok_or_else(|| ferrocast_core::i18n::tr("the path is not valid UTF-8").into_owned())?;
+    let image = NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(path))
+        .ok_or_else(|| ferrocast_core::i18n::tr("the file is not a readable image").into_owned())?;
     let base = points_size(pixel_size, scale);
     image.setSize(NSSize::new(base.0, base.1));
 

@@ -351,3 +351,289 @@ fn every_english_sentence_in_the_code_has_a_translation() {
     }
     assert!(count == 0, "{count} English sentences without a row in strings.tsv:\n{missing}");
 }
+
+// ---- round 5: translation happens at the call, not only in the table ---------------------------
+
+/// Every production `.rs` file under `dir` (recursively), skipping test files and example binaries.
+fn rs_files_under(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let mut entries: Vec<_> = read.flatten().collect();
+    entries.sort_by_key(|e| e.path());
+    for e in entries {
+        let p = e.path();
+        let name = p.file_name().unwrap().to_string_lossy().to_string();
+        if p.is_dir() {
+            if name != "examples" {
+                rs_files_under(&p, out);
+            }
+        } else if name.ends_with(".rs") && !name.contains("test") && name != "main.rs" {
+            out.push((name, std::fs::read_to_string(&p).unwrap()));
+        }
+    }
+}
+
+/// The text of the string literal that opens at `at` (a `"`), up to its closing quote, escapes decoded.
+fn literal_at(text: &str, at: usize) -> Option<String> {
+    let mut chars = text[at + 1..].chars();
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                'u' => {
+                    let hex: String = chars.by_ref().skip(1).take_while(|c| *c != '}').collect();
+                    out.push(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)?);
+                }
+                c => out.push(c),
+            },
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+/// Lines of production code that are not diagnostics (logs, asserts, panics).
+fn user_lines(code: &str) -> impl Iterator<Item = (usize, &str)> {
+    let skipped = ["//", "#[", "assert", "log(", "eprintln", "println", "panic!", ".expect("];
+    code.split('\n').enumerate().filter(move |(_, l)| {
+        let t = l.trim_start();
+        !skipped.iter().any(|p| t.starts_with(p) || l.contains("log(")) && !l.contains("cfg!")
+    })
+}
+
+/// English prose that a user can read: an upper-case start, at least two words, not a name or a unit.
+fn is_prose(lit: &str) -> bool {
+    /// Text that is protocol, a prompt for a model, a file name or a debug label, never read as the interface.
+    const NOT_THE_INTERFACE: &[&str] = &[
+        "Authorization:",
+        "Notion-Version:",
+        "User-Agent:",
+        "Instruction:",
+        "Target language:",
+        "POSIX path",
+        "Node.js",
+        "LUT_3D_SIZE",
+        "DOMAIN_MIN",
+        "TITLE ",
+        "Capture {:04}",
+        "Recording {}",
+        "PID {}",
+        "Settings / ",
+    ];
+    lit.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        && lit.split(' ').count() >= 2
+        && !same_everywhere(lit)
+        && !NOT_THE_INTERFACE.iter().any(|p| lit.starts_with(p))
+}
+
+/// Every control that draws a string it is given: the literal must go through `tr`/`trf`/`trn`
+/// (or be text that reads the same everywhere), not only exist in the table. Returns the literals
+/// handed straight to `RichText::new`, `Button::new`, `Label::new` and `on_hover_text`, also inside
+/// `match`/`if` arms, that no translator call encloses.
+fn untranslated_control_literals(args: &str) -> Vec<String> {
+    const TRANSLATORS: &[&str] = &["tr", "trf", "trn", "trc", "tr_in", "format!", "with_verbatim"];
+    let b: Vec<char> = args.chars().collect();
+    let mut stack: Vec<bool> = vec![false]; // for each open paren: inside a translator call
+    let (mut i, mut out) = (0, vec![]);
+    while i < b.len() && !stack.is_empty() {
+        match b[i] {
+            '\'' if i + 2 < b.len() && b[i + 2] == '\'' => i += 2,
+            '"' => {
+                let mut lit = String::new();
+                i += 1;
+                while i < b.len() && b[i] != '"' {
+                    if b[i] == '\\' && i + 1 < b.len() {
+                        i += 1;
+                    }
+                    lit.push(b[i]);
+                    i += 1;
+                }
+                if !stack.iter().any(|t| *t) && !same_everywhere(&lit) {
+                    out.push(lit);
+                }
+            }
+            '(' => {
+                let ident: String = b[..i]
+                    .iter()
+                    .rev()
+                    .take_while(|c| c.is_alphanumeric() || **c == '_' || **c == '!')
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                stack.push(TRANSLATORS.contains(&ident.as_str()));
+            }
+            ')' => {
+                stack.pop();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
+#[test]
+fn egui_text_literals_go_through_tr_not_only_the_table() {
+    const SINKS_THAT_DO_NOT_TRANSLATE: &[&str] = &["RichText::new(", "Button::new(", "Label::new(", "on_hover_text("];
+    let mut found = std::collections::BTreeSet::new();
+    for (name, text) in sources() {
+        let code = production_part(&text);
+        for sink in SINKS_THAT_DO_NOT_TRANSLATE {
+            let mut from = 0;
+            while let Some(i) = code[from..].find(sink) {
+                let at = from + i;
+                from = at + sink.len();
+                if code[..at].chars().last().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let line_start = code[..at].rfind('\n').map_or(0, |n| n + 1);
+                if code[line_start..at].contains("fn ") {
+                    continue;
+                }
+                for lit in untranslated_control_literals(&code[from..]) {
+                    found.insert(format!("{name}:{} {sink}{lit:?}", code[..at].matches('\n').count() + 1));
+                }
+            }
+        }
+    }
+    assert!(found.is_empty(), "{} literals shown without tr()/trf():\n{}", found.len(), found.into_iter().collect::<Vec<_>>().join("\n"));
+}
+
+/// English sentences that reach the user as they are and are known not to be translated yet (outside
+/// the round-5 i18n group). The test below fails when a new one appears and when one of these is fixed,
+/// so the list only shrinks: translate the text (`tr`/`trf` at the place it is built, a row in
+/// `strings.tsv`) and delete its line.
+const KNOWN_ENGLISH_ONLY: &[&str] = &[
+    "ai.rs: Unexpected response from the AI server: {snippet",
+    "app.rs: Compress: {e}",
+    "app.rs: Redact: {m}",
+    "capture_ctl.rs: Capture failed: {e}",
+    "capture_ctl.rs: Screen capture needs macOS 14. This Mac runs mac",
+    "capture_ctl.rs: Scrolling capture stopped at {MAX_STEPS} screens",
+    "chatgpt.rs: Unexpected device-code response: {}",
+    "chatgpt.rs: Unexpected token response: {}",
+    "draw.rs: Default ({default_label})",
+    "editor_ctl.rs: The camera effects could not be applied: {e}",
+    "editor_ctl.rs: The capture helper did not start: {e}",
+    "editor_ctl.rs: The recording's video ({}) is missing.",
+    "editor_ctl.rs: This recording cannot be opened: project.json is",
+    "editor_ctl.rs: This recording cannot be opened: {e}",
+    "editor_export.rs: Audio: {}",
+    "editor_export.rs: Could not save project.json before exporting: {e",
+    "editor_export.rs: The file name must end in .{ext}.",
+    "editor_panels.rs: Speed must be between {}× and {}×.",
+    "editor_panels.rs: This recording has no {}.",
+    "epub.rs: EPUB container.xml has no rootfile",
+    "epub.rs: EPUB spine has no readable chapters",
+    "epub.rs: EPUB spine is empty",
+    "finder_enter.rs: Enter on Finder could not read the Finder select",
+    "media.rs: Bleep: add at least one range",
+    "media.rs: Bleep: range {n} is not a number",
+    "media.rs: Bleep: range {n} is outside the clip (0 to {dura",
+    "media.rs: Bleep: range {n} must end after it starts",
+    "media.rs: Bleep: the clip length is unknown",
+    "media.rs: Bleep: too many ranges (at most {MAX_BLEEPS})",
+    "media_tools.rs: Channels: the {name} volume must be between -30 ",
+    "models.rs: Image ({}×{})",
+    "notion.rs: Notion did not accept that: {}",
+    "notion.rs: Notion had a problem (HTTP {n}). Try again.",
+    "notion_io.rs: Added {done} of {total} parts to {}; the rest we",
+    "ocr.rs: Copied {n} characters",
+    "pdf.rs: PDF metadata has no field named {k}",
+    "pdf.rs: PDFKit produced an empty file",
+    "route.rs: Extract does not support .{other} archives",
+    "route.rs: PDF to {other} is not available",
+    "services.rs: ChatGPT session expired and could not be refresh",
+    "services.rs: Claude Code is not installed. Install it from cl",
+    "system.rs: Set Volume to {v}%",
+    "tiling.rs: Move Window {}",
+    "tiling.rs: Tiling Layout {n}: {}",
+    "translate.rs: Apple Translation does not support {lang}. Pick ",
+    "translate.rs: Translated to {lang}, copied",
+    "translate.rs: Translated to {lang}, copied: a newer translatio",
+    "translate.rs: Translated to {lang}, copied: the app changed, s",
+    "translate.rs: Translation failed: {e}",
+    "translate.rs: Using the first {MAX_LANGUAGES}",
+    "view.rs: Not supported in Ferrocast yet: {component}  The",
+    "vision.rs: No image path was given",
+    "vision.rs: Vision: {}",
+];
+
+/// Texts built as sentences in code: `format!("Sentence with {values}")` (a `trf` row is needed, or
+/// the English text and its values are shown in every language) and `Err("Sentence")` /
+/// `bail!` / `anyhow!` / `ok_or` messages that have no row in the table. Core, macOS and app files.
+fn english_only_texts() -> std::collections::BTreeSet<String> {
+    let table: HashSet<&str> = i18n::rows().map(|(k, _)| k).collect();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut files = vec![];
+    for krate in ["core", "macos", "app"] {
+        rs_files_under(&root.join(krate).join("src"), &mut files);
+    }
+    let errs = ["Err(", "bail!(", "anyhow!(", "anyhow::anyhow!(", "ok_or(", "ok_or_else(|| "];
+    let mut out = std::collections::BTreeSet::new();
+    for (name, text) in &files {
+        let code = production_part(text);
+        let mut offset = 0;
+        let starts: Vec<usize> = code
+            .split('\n')
+            .map(|l| {
+                let s = offset;
+                offset += l.len() + 1;
+                s
+            })
+            .collect();
+        for (n, line) in user_lines(code) {
+            let base = starts[n];
+            let mut note = |lit: String, formatted: bool| {
+                if is_prose(&lit) && (formatted || !table.contains(lit.as_str())) {
+                    out.insert(format!("{name}: {}", lit.chars().take(48).collect::<String>().replace('\n', " ")));
+                }
+            };
+            let mut from = 0;
+            while let Some(i) = line[from..].find("format!(\"") {
+                let q = base + from + i + "format!(".len();
+                from += i + 1;
+                if let Some(l) = literal_at(code, q) {
+                    note(l, true);
+                }
+            }
+            for e in errs {
+                let mut from = 0;
+                while let Some(i) = line[from..].find(e) {
+                    let mut at = base + from + i + e.len();
+                    from += i + 1;
+                    let formatted = code[at..].starts_with("format!(");
+                    if formatted {
+                        at += "format!(".len();
+                    }
+                    if code[at..].starts_with('"') {
+                        if let Some(l) = literal_at(code, at) {
+                            // a format! behind Err is reported once, with the format! scan above
+                            if !formatted {
+                                note(l, false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn sentences_built_in_code_are_translated_where_they_are_built() {
+    let found = english_only_texts();
+    let known: std::collections::BTreeSet<String> = KNOWN_ENGLISH_ONLY.iter().map(|s| s.to_string()).collect();
+    let new: Vec<_> = found.difference(&known).cloned().collect();
+    let fixed: Vec<_> = known.difference(&found).cloned().collect();
+    assert!(
+        new.is_empty(),
+        "{} English sentences are built with format! (use trf) or returned as errors without a row in strings.tsv:\n{}",
+        new.len(),
+        new.join("\n")
+    );
+    assert!(fixed.is_empty(), "these are translated now: delete them from KNOWN_ENGLISH_ONLY:\n{}", fixed.join("\n"));
+}

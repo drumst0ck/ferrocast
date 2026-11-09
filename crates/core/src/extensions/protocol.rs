@@ -86,9 +86,15 @@ pub enum RuntimeMsg {
         title: String,
         #[serde(default)]
         message: String,
+        /// The runtime wrote the title itself (not the extension): the host translates it.
+        #[serde(default, rename = "ownTitle")]
+        own_title: bool,
     },
     Hud {
         title: String,
+        /// The runtime wrote the title itself (not the extension): the host translates it.
+        #[serde(default, rename = "ownTitle")]
+        own_title: bool,
     },
     /// A request the runtime waits on: answer with `HostMsg::Result` carrying the same id.
     Call {
@@ -178,11 +184,20 @@ mod tests {
         }
         assert_eq!(
             parse_runtime(r#"{"type":"toast","style":"failure","title":"Oops"}"#).unwrap(),
-            RuntimeMsg::Toast { style: "failure".into(), title: "Oops".into(), message: String::new() }
+            RuntimeMsg::Toast { style: "failure".into(), title: "Oops".into(), message: String::new(), own_title: false }
         );
         assert_eq!(
             parse_runtime(r#"{"type":"call","id":3,"method":"clipboard.copy","params":{"text":"hi"}}"#).unwrap(),
             RuntimeMsg::Call { id: 3, method: "clipboard.copy".into(), params: json!({"text":"hi"}) }
+        );
+        assert_eq!(
+            parse_runtime(r#"{"type":"hud","title":"Copied to Clipboard","ownTitle":true}"#).unwrap(),
+            RuntimeMsg::Hud { title: "Copied to Clipboard".into(), own_title: true }
+        );
+        assert_eq!(
+            parse_runtime(r#"{"type":"hud","title":"Done"}"#).unwrap(),
+            RuntimeMsg::Hud { title: "Done".into(), own_title: false },
+            "an extension's HUD carries no flag"
         );
         assert_eq!(parse_runtime(r#"{"type":"exit"}"#).unwrap(), RuntimeMsg::Exit);
         assert_eq!(parse_runtime(r#"{"type":"pop","depth":1}"#).unwrap(), RuntimeMsg::Pop { depth: 1 });

@@ -686,15 +686,15 @@ pub fn airdrop(paths: &[PathBuf]) -> anyhow::Result<()> {
     use objc2_app_kit::{NSSharingService, NSSharingServiceNameSendViaAirDrop};
     use objc2_foundation::NSArray;
     let service = NSSharingService::sharingServiceNamed(unsafe { NSSharingServiceNameSendViaAirDrop })
-        .ok_or_else(|| anyhow::anyhow!("AirDrop is not available on this Mac"))?;
+        .ok_or_else(|| anyhow::anyhow!(ferrocast_core::i18n::tr("AirDrop is not available on this Mac").into_owned()))?;
     let urls: Vec<Retained<AnyObject>> =
         paths.iter().filter_map(|p| crate::clipboard::ns_file_url(p)).map(|u| Retained::into_super(Retained::into_super(u))).collect();
     if urls.is_empty() {
-        anyhow::bail!("There is nothing to share");
+        anyhow::bail!(ferrocast_core::i18n::tr("There is nothing to share").into_owned());
     }
     let items = NSArray::from_retained_slice(&urls);
     if !unsafe { service.canPerformWithItems(Some(&items)) } {
-        anyhow::bail!("AirDrop cannot share these items");
+        anyhow::bail!(ferrocast_core::i18n::tr("AirDrop cannot share these items").into_owned());
     }
     unsafe { service.performWithItems(&items) };
     Ok(())

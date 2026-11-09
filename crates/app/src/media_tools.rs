@@ -322,7 +322,10 @@ pub(crate) fn visualize_job(orient: media::Canvas, style: VisStyle, image: Optio
                 return Err("Audio to Video: choose a picture first".into());
             };
             if !picture_ok(p) {
-                return Err(format!("Audio to Video: {} is not a readable picture (png, jpg, webp, bmp or tiff)", p.display()));
+                return Err(ferrocast_core::i18n::trf(
+                    "Audio to Video: {path} is not a readable picture (png, jpg, webp, bmp or tiff)",
+                    &[("path", &p.display().to_string())],
+                ));
             }
             Ok(FileTool::VisualizeImage(orient, p.to_string_lossy().into_owned()))
         }
@@ -332,10 +335,11 @@ pub(crate) fn visualize_job(orient: media::Canvas, style: VisStyle, image: Optio
 /// One line under the controls: the real canvas size from the builder.
 pub(crate) fn visualize_line(orient: media::Canvas, style: VisStyle) -> String {
     let (w, h) = orient.size();
-    match style {
-        VisStyle::Waveform => format!("{w}×{h} MP4 with the waveform"),
-        VisStyle::Still => format!("{w}×{h} MP4 with your picture"),
-    }
+    let key = match style {
+        VisStyle::Waveform => "{w}×{h} MP4 with the waveform",
+        VisStyle::Still => "{w}×{h} MP4 with your picture",
+    };
+    ferrocast_core::i18n::trf(key, &[("w", &w.to_string()), ("h", &h.to_string())])
 }
 
 /// Normalize window ranges: target -30..=-5 LUFS, range 1..=20 LU, true peak -9..=0 dBTP.

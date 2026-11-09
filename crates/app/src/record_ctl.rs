@@ -9,6 +9,7 @@
 
 use chrono::NaiveDateTime;
 use ferrocast_core::capture::protocol::{RecordEvent, RecordState, RecordStopped, Shareable, Target};
+use ferrocast_core::i18n::{tr, trf};
 use ferrocast_macos::capture::RecordError;
 use ferrocast_macos::hud::{self, Countdown, CountdownStep, DiskLevel};
 use std::path::{Path, PathBuf};
@@ -351,8 +352,8 @@ pub fn start_failure(e: &RecordError) -> StartFailure {
         RecordError::PermissionDenied => StartFailure::Permission,
         RecordError::PermissionCamera => StartFailure::PermissionCamera,
         RecordError::PermissionMicrophone => StartFailure::PermissionMicrophone,
-        RecordError::Busy => StartFailure::Message("A recording is already running".into()),
-        other => StartFailure::Message(format!("Recording failed: {other}")),
+        RecordError::Busy => StartFailure::Message(tr("A recording is already running").into_owned()),
+        other => StartFailure::Message(trf("Recording failed: {e}", &[("e", &other.to_string())])),
     }
 }
 
@@ -364,13 +365,13 @@ pub fn warn_toast(code: &str) -> Option<&'static str> {
 /// [`warn_toast`] plus the P4 source warnings (`camera-lost`, `mic-lost`, `source-failed`).
 pub fn warn_message(code: &str, message: Option<&str>) -> Option<String> {
     match code {
-        "camera-lost" => Some("The camera stopped. The recording continues without it.".into()),
-        "mic-lost" => Some("The microphone stopped. The recording continues without it.".into()),
+        "camera-lost" => Some(tr("The camera stopped. The recording continues without it.").into_owned()),
+        "mic-lost" => Some(tr("The microphone stopped. The recording continues without it.").into_owned()),
         "source-failed" => Some(match message.map(str::trim).filter(|m| !m.is_empty()) {
-            Some(m) => format!("A source could not be recorded: {m}"),
-            None => "A source could not be recorded.".into(),
+            Some(m) => trf("A source could not be recorded: {m}", &[("m", m)]),
+            None => tr("A source could not be recorded.").into_owned(),
         }),
-        other => warn_toast(other).map(String::from),
+        other => warn_toast(other).map(|m| tr(m).into_owned()),
     }
 }
 
@@ -445,11 +446,11 @@ pub fn mic_items(d: &ferrocast_core::capture::protocol::Devices) -> Vec<(String,
 /// What a device picker shows for the stored `id`: `Default` when empty; `known` says the list was loaded.
 pub fn device_shown(items: &[(String, String)], id: &str, known: bool) -> String {
     if id.trim().is_empty() {
-        return "Default".into();
+        return tr("Default").into_owned();
     }
     match items.iter().find(|(i, _)| i == id) {
         Some((_, name)) => name.clone(),
-        None if known => format!("{id} (not connected)"),
+        None if known => trf("{id} (not connected)", &[("id", id)]),
         None => id.into(),
     }
 }
@@ -475,9 +476,9 @@ pub fn load_devices(exe: PathBuf, bus: crate::services::Bus, log: impl Fn(&str) 
             if !ferrocast_macos::capture::available(&exe) {
                 return Err(crate::capture_ctl::NO_HELPER_MESSAGE.to_string());
             }
-            let mut h =
-                ferrocast_macos::capture::Helper::spawn(&helper, log).map_err(|e| format!("The capture helper did not start: {e}"))?;
-            h.devices().map_err(|e| format!("Could not list the devices: {e}"))
+            let mut h = ferrocast_macos::capture::Helper::spawn(&helper, log)
+                .map_err(|e| trf("The capture helper did not start: {e}", &[("e", &e.to_string())]))?;
+            h.devices().map_err(|e| trf("Could not list the devices: {e}", &[("e", &e.to_string())]))
         })();
         bus.send(Msg::Record(RecordMsg::Devices(result)));
     });
@@ -487,14 +488,16 @@ pub fn load_devices(exe: PathBuf, bus: crate::services::Bus, log: impl Fn(&str) 
 pub fn saved_toast(name: &str, duration: f64, interrupted: bool, message: Option<&str>, low_disk: bool) -> String {
     let len = format_duration(duration);
     if low_disk {
-        format!("Recording stopped: low disk space. {name} ({len}) was kept")
+        trf("Recording stopped: low disk space. {name} ({len}) was kept", &[("name", name), ("len", &len)])
     } else if interrupted {
         match message {
-            Some(m) if !m.is_empty() => format!("Recording stopped early: {m}. {name} ({len}) was kept"),
-            _ => format!("Recording stopped early. {name} ({len}) was kept"),
+            Some(m) if !m.is_empty() => {
+                trf("Recording stopped early: {m}. {name} ({len}) was kept", &[("m", m), ("name", name), ("len", &len)])
+            }
+            _ => trf("Recording stopped early. {name} ({len}) was kept", &[("name", name), ("len", &len)]),
         }
     } else {
-        format!("Recording saved: {name} ({len})")
+        trf("Recording saved: {name} ({len})", &[("name", name), ("len", &len)])
     }
 }
 
@@ -814,7 +817,7 @@ pub fn run_session(s: Session, cmds: std::sync::mpsc::Receiver<Cmd>, bus: crate:
     let say = |m: RecordMsg| bus.send(Msg::Record(m));
     let mut helper = match ferrocast_macos::capture::Helper::spawn(&ferrocast_macos::capture::helper_path(&s.exe), log) {
         Ok(h) => h,
-        Err(e) => return say(RecordMsg::Started(gen, Err(StartFailure::Message(format!("Recording failed: {e}"))))),
+        Err(e) => return say(RecordMsg::Started(gen, Err(StartFailure::Message(trf("Recording failed: {e}", &[("e", &e.to_string())]))))),
     };
     if let Err(e) = ensure_media(&mut helper, &s.options) {
         return say(RecordMsg::Started(gen, Err(start_failure(&e))));
