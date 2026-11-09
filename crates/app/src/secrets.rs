@@ -81,6 +81,16 @@ pub fn secret_set(service: &str, value: &str) -> bool {
     secret_set_with(real_runner, service, value)
 }
 
+/// Is an item stored for `service`? Asks for its attributes only (no `-w`), so the secret is not
+/// read and Keychain never shows its access prompt for a mere "is a key set" check.
+pub fn secret_exists(service: &str) -> bool {
+    secret_exists_with(real_runner, service)
+}
+
+pub fn secret_exists_with(run: Runner, service: &str) -> bool {
+    run(&["find-generic-password", "-s", service], None).is_some_and(|r| r.ok)
+}
+
 pub fn secret_get_with(run: Runner, service: &str) -> Option<String> {
     let out = run(&["find-generic-password", "-s", service, "-w"], None)?;
     if !out.ok {
@@ -234,6 +244,18 @@ mod tests {
         assert_eq!(secret_get_with(fake, "svc-x"), None);
         reset(Some((true, b"\n".to_vec())));
         assert_eq!(secret_get_with(fake, "svc-x"), None);
+    }
+
+    #[test]
+    fn exists_never_asks_for_the_secret() {
+        reset(Some((true, b"attributes".to_vec())));
+        assert!(secret_exists_with(fake, "svc-x"));
+        let c = calls();
+        assert_eq!(c[0].0, vec!["find-generic-password", "-s", "svc-x"], "no -w: the value is not read");
+        reset(Some((false, vec![])));
+        assert!(!secret_exists_with(fake, "svc-x"));
+        reset(None);
+        assert!(!secret_exists_with(fake, "svc-x"));
     }
 
     #[test]

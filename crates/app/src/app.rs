@@ -269,6 +269,13 @@ pub(crate) fn spawn_detached(program: &str, args: &[std::ffi::OsString]) -> bool
     }
 }
 
+/// Wait for `child` on a thread so a process nobody joins does not stay a zombie.
+pub(crate) fn reap_in_background(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
 /// `/usr/bin/open <args>` without blocking the caller.
 pub(crate) fn open_detached(args: &[&std::ffi::OsStr]) -> bool {
     let args: Vec<std::ffi::OsString> = args.iter().map(|a| a.to_os_string()).collect();
@@ -1646,6 +1653,11 @@ impl App {
     fn reload_scripts(&mut self) {
         self.scripts = services::load_scripts(&self.script_dirs());
         self.rebuild();
+    }
+
+    /// Reload the scripts without waiting for the disk: the list is replaced when the worker answers.
+    fn reload_scripts_in_background(&mut self, report: bool) {
+        services::load_scripts_in_background(self.script_dirs(), report, self.bus.clone());
     }
 
     fn save_settings(&mut self) {
@@ -4159,6 +4171,16 @@ impl App {
                 Msg::AppleLanguage(lang, state) => {
                     self.apple_langs.insert(lang, state);
                 }
+                Msg::ScriptsLoaded(n, list, report) => {
+                    // a newer reload is on its way: this list is already out of date
+                    if services::scripts_reload_is_current(n) {
+                        self.scripts = list;
+                        self.rebuild();
+                        if report {
+                            self.toast(trn("{n} script command loaded", "{n} script commands loaded", self.scripts.len() as u64));
+                        }
+                    }
+                }
                 Msg::ChatGptDeviceCode(code) => {
                     self.show();
                     self.push(View::Output {
@@ -4173,9 +4195,7 @@ impl App {
                 }
                 Msg::ThemePath { export, path } => self.theme_file_picked(export, path),
                 Msg::IconBytes(k, b) => {
-                    if !self.icons.map.contains_key(&k) {
-                        self.icons.prefetched.insert(k, b);
-                    }
+                    self.icons.accept_prefetched(k, b);
                 }
                 Msg::AiChunk { run, text } => {
                     for v in self.stack.iter_mut() {
@@ -5773,9 +5793,14 @@ impl App {
                 self.reset_to_root();
                 match pid {
                     Some(pid) => {
-                        if let Err(e) = windows::apply(c, pid, gap) {
-                            services::notify("Window Management", &e.to_string());
-                        }
+                        // measured here (it needs the main thread); the Accessibility calls can
+                        // take seconds when the target app hangs, so they run on a worker
+                        let screens = windows::screens();
+                        std::thread::spawn(move || {
+                            if let Err(e) = windows::apply_on(c, pid, gap, screens) {
+                                services::notify("Window Management", &e.to_string());
+                            }
+                        });
                     }
                     None => services::notify("Window Management", "No target window"),
                 }
@@ -6142,7 +6167,9 @@ impl App {
                 return;
             }
             services::notify("Timer done", &what);
-            let _ = std::process::Command::new("/usr/bin/afplay").arg("/System/Library/Sounds/Glass.aiff").spawn();
+            if let Ok(child) = std::process::Command::new("/usr/bin/afplay").arg("/System/Library/Sounds/Glass.aiff").spawn() {
+                reap_in_background(child);
+            }
             bus.send(Msg::Wake);
         });
         self.timers.push(RunningTimer { ends_at: Instant::now() + Duration::from_secs(secs), secs, label, cancelled });
@@ -6962,10 +6989,7 @@ impl App {
                 let d = self.store.scripts_dir();
                 self.open_target(&d.to_string_lossy(), None);
             }
-            Builtin::ReloadScripts => {
-                self.reload_scripts();
-                self.toast(trn("{n} script command loaded", "{n} script commands loaded", self.scripts.len() as u64));
-            }
+            Builtin::ReloadScripts => self.reload_scripts_in_background(true),
             Builtin::Settings => self.push(View::Settings),
             Builtin::Quit => self.quit(),
             Builtin::CaptureArea => self.run_capture(crate::capture_ctl::CaptureKind::Area),
@@ -7085,7 +7109,7 @@ impl App {
         let ex = placeholders::expand(&s.text, Target::Snippet, &ctx);
         clipboard::write_text(&ex.text);
         self.shared.mark_clipboard_write();
-        let back = ex.cursor.map(|c| ex.text.chars().count().saturating_sub(c));
+        let back = ex.cursor.map(|c| ferrocast_macos::expansion::cursor_back_count(&ex.text, c));
         self.hide();
         self.reset_to_root();
         let pid = self.prev_pid;
@@ -7116,8 +7140,7 @@ impl App {
     }
 
     fn prune_clip_images(&self) {
-        let list = self.shared.clipboard.lock().unwrap().clone();
-        ferrocast_core::storage::prune_images(&self.store.images_dir(), &list);
+        self.shared.prune_clip_images();
     }
 
     fn execute_script_cmd(&mut self, idx: usize, args: Vec<String>) {
@@ -7723,12 +7746,15 @@ impl App {
             }
             Act::QuickLook(p) => {
                 // qlmanage shows the system Quick Look panel; it exits when the panel closes.
-                let _ = std::process::Command::new("/usr/bin/qlmanage")
+                if let Ok(child) = std::process::Command::new("/usr/bin/qlmanage")
                     .arg("-p")
                     .arg(&p)
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                {
+                    reap_in_background(child);
+                }
                 self.hide();
             }
             Act::HideApp(pid) => {
@@ -7845,16 +7871,16 @@ impl App {
                 if let Some(e) = self.shared.clipboard.lock().unwrap().iter_mut().find(|e| e.id == id) {
                     e.pinned = !e.pinned;
                 }
-                self.shared.save_clipboard();
+                self.shared.save_clipboard_in_background();
             }
             Act::ClipDelete(id) => {
                 self.shared.clipboard.lock().unwrap().retain(|e| e.id != id);
-                self.shared.save_clipboard();
+                self.shared.save_clipboard_in_background();
                 self.prune_clip_images();
             }
             Act::ClipDeleteAll => {
                 self.shared.clipboard.lock().unwrap().retain(|e| e.pinned);
-                self.shared.save_clipboard();
+                self.shared.save_clipboard_in_background();
                 self.prune_clip_images();
                 self.toast("Clipboard history cleared");
             }
@@ -7955,14 +7981,21 @@ impl App {
     }
 }
 
+/// `dir` with the home directory at its start written as `~`; a path that only contains the
+/// home path somewhere inside (or shares its prefix, `/Users/ann2` vs `/Users/ann`) is untouched.
+pub(crate) fn tilde_home(dir: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    match home.filter(|h| !h.as_os_str().is_empty()).and_then(|h| dir.strip_prefix(h).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => dir.to_string_lossy().to_string(),
+    }
+}
+
 fn file_item(p: &std::path::Path) -> Item {
     Item {
         id: format!("file:{}", p.display()),
         title: p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-        subtitle: p
-            .parent()
-            .map(|d| d.to_string_lossy().replace(&dirs::home_dir().unwrap_or_default().to_string_lossy().to_string(), "~"))
-            .unwrap_or_default(),
+        subtitle: p.parent().map(|d| tilde_home(d, dirs::home_dir().as_deref())).unwrap_or_default(),
         icon: Icon::App(p.to_string_lossy().to_string()),
         accessory: tr("File").into_owned(),
         keywords: vec![],

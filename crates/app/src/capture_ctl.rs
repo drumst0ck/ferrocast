@@ -224,7 +224,7 @@ pub fn open_pane(url: &str) {
         // spawns `open` without waiting: this runs on the main thread inside a winit callback
         Some(perm) => open_pane_with_helper(perm),
         None => {
-            let _ = std::process::Command::new("/usr/bin/open").arg(url).spawn();
+            crate::app::open_detached(&[url.as_ref()]);
         }
     }
 }

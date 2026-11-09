@@ -406,12 +406,14 @@ pub fn trash_app(path: &Path) -> Result<(), TrashAppError> {
         .map_err(|e| TrashAppError::Failed(e.localizedDescription().to_string()))
 }
 
-/// Whether any app in `apps` runs from the bundle at `path` (or its resolved `real` path).
+/// Whether any app in `apps` runs from the bundle at `path` (or its resolved `real` path), the
+/// bundle itself or a helper app inside it (`Foo.app/Contents/Library/LoginItems/Helper.app`):
+/// trashing the bundle would pull the files out from under the helper.
 fn bundle_running(apps: &[crate::running::RunningApp], path: &Path, real: &Path) -> bool {
     apps.iter().any(|r| {
         r.path.as_deref().is_some_and(|p| {
             let p = Path::new(p.trim_end_matches('/'));
-            p == real || p == path
+            p.starts_with(real) || p.starts_with(path)
         })
     })
 }
@@ -458,6 +460,16 @@ mod tests {
         let list = [app_at("/Applications/Menu.app/")];
         assert!(bundle_running(&list, Path::new("/Applications/Menu.app"), Path::new("/Applications/Menu.app")));
         assert!(!bundle_running(&list, Path::new("/Applications/Other.app"), Path::new("/Applications/Other.app")));
+    }
+
+    #[test]
+    fn a_helper_app_inside_the_bundle_counts_as_the_bundle_running() {
+        let helper = [app_at("/Applications/Menu.app/Contents/Library/LoginItems/Helper.app")];
+        let menu = Path::new("/Applications/Menu.app");
+        assert!(bundle_running(&helper, menu, menu));
+        // a sibling that merely shares the name prefix does not
+        let sibling = [app_at("/Applications/Menu.app2")];
+        assert!(!bundle_running(&sibling, menu, menu));
     }
 
     #[test]

@@ -1401,8 +1401,8 @@ impl NotesFx for MacFx {
         }
         let ok = ai_usable(
             p,
-            matches!(p, P::OpenAiCompatible | P::Anthropic) && crate::services::ai_key_for(p).is_some(),
-            p == P::ChatGpt && crate::services::chatgpt_credentials().is_some(),
+            matches!(p, P::OpenAiCompatible | P::Anthropic) && crate::services::ai_key_exists_for(p),
+            p == P::ChatGpt && crate::services::chatgpt_signed_in(),
             p == P::ClaudeCode && crate::services::claude_code_path().is_some(),
         );
         *self.ai_cache.borrow_mut() = Some((std::time::Instant::now(), p, ok));
@@ -1444,7 +1444,7 @@ impl NotesFx for MacFx {
         ferrocast_macos::notes_dictation::stop();
     }
     fn open_url(&mut self, url: &str) {
-        let _ = std::process::Command::new("/usr/bin/open").arg(url).spawn();
+        crate::app::open_detached(&[url.as_ref()]);
     }
     fn attachments_dir(&self) -> Option<PathBuf> {
         Some(self.shared.store.root.clone())

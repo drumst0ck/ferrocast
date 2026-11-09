@@ -78,6 +78,12 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website search results**: the page descriptions of 15 pages are shortened to 155 characters or fewer so search engines no longer truncate them, and the docs now declare `og:locale` as `en_US` / `es_ES`.
 - **Website hosting**: `www.ferrocast.app` redirects to `ferrocast.app` on every page (and only that host), social cards are cached for a week, the report-only CSP allows Pagefind and GA4, and sitemap dates for tool pages follow the docs page they show and prefer git history.
 - **Spanish docs**: the Settings page links to the Updates section of Install again, and `Check now` and `Check for Updates…` use the Spanish interface labels.
+- **Delete shortcuts**: holding ⌃X on a clipboard entry, note, snippet, quicklink or calculator entry deletes one item instead of one per key repeat; deleting a clipboard entry no longer waits for the disk, and the picture of a copy that is still being saved is no longer deleted by a clean-up. #clipboard
+- **Window management**: Restore remembers each window by its own identity, so tabs and windows with the same title no longer mix up their frames, and a hung app no longer freezes the launcher while a window command runs. (docs: /docs/launcher/window-management/) #macos
+- **Snippets**: a keyword or a cursor position next to an emoji or an accented letter is counted by what you see, so expansion deletes and moves the caret by the right amount. #snippets
+- **AI and ChatGPT**: the ChatGPT sign-in code stays out of the clipboard history, a refresh of the ChatGPT session no longer runs twice at once and signs you out, the "Cannot reach" message names the server that was really contacted (not your Ollama address for Anthropic or ChatGPT), and checking whether a key is stored no longer reads it from the Keychain. #ai
+- **Extensions and scripts**: a command that cannot start (Node.js missing or broken) leaves the running command and its screens alone, and Reload Script Commands and changing the script folders no longer make the launcher wait for the disk. #extensions #scripts
+- **Launcher polish**: the file subtitle shows `~` only at the start of a path under your home folder, icons no longer accumulate in memory over a long session, opening Language & Region settings, a web link or Quick Look no longer freezes the launcher or leaves a stray process, the permission helper's close button closes it safely, and file conversions with equal-length names no longer share a scratch folder. #launcher
 
 ## [0.5.0] - 2026-10-29
 
