@@ -553,9 +553,6 @@ impl Shared {
         self.clip_dirty.store(true, Ordering::Relaxed);
     }
 
-    /// Write the history to disk without holding the list lock during the (large) serialisation and
-    /// write, so the clipboard view and sync are never stuck behind it. Writes are serialised and each
-    /// one takes its snapshot after getting its turn, so the newest list is always the last written.
     /// `save_clipboard` for the UI thread: the history file is written by a worker (it can be
     /// large), the sync flag is set at once. Writes still go through the shared serialisation, so
     /// the newest list is always the last one on disk.
@@ -572,10 +569,15 @@ impl Shared {
         storage::prune_images(&self.store.images_dir(), &list);
     }
 
+    /// Write the history to disk without holding the list lock during the (large) serialisation and
+    /// write, so the clipboard view and sync are never stuck behind it. Writes are serialised and each
+    /// one takes its snapshot after getting its turn, so the newest list is always the last written.
     pub(crate) fn write_clipboard(&self) {
         let _turn = CLIPBOARD_SAVE.lock().unwrap_or_else(|e| e.into_inner());
         let snapshot = self.clipboard.lock().unwrap().clone();
-        let _ = self.store.save("clipboard.json", &snapshot);
+        if let Err(e) = self.store.save("clipboard.json", &snapshot) {
+            eprintln!("clipboard history not saved: {e}");
+        }
     }
 }
 
@@ -3012,11 +3014,8 @@ fn special_convert(
     tools: &ferrocast_core::convert::Tools,
 ) -> Result<Vec<PathBuf>, String> {
     use ferrocast_core::convert::{output_path, subtitle_text, Engine};
-    let scratch = std::env::temp_dir().join(format!(
-        "ferrocast-sp-{}-{}",
-        std::process::id(),
-        f.file_name().map(|n| n.to_string_lossy().len()).unwrap_or(0)
-    ));
+    // its own folder per conversion: runs overlap, and equal-length names must not share one
+    let scratch = scratch_dir("ferrocast-sp");
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
     let res = (|| -> Result<Vec<PathBuf>, String> {

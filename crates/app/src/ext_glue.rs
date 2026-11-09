@@ -500,7 +500,10 @@ impl App {
         let assets = m.dir.join("assets");
         // the new process starts before the running command is touched: when it cannot start, the
         // current command, its screens and its process stay exactly as they were
-        let id = self.ext.next_id + 1;
+        // the id is used up even when the start fails, so a late Closed from a dropped sidecar can
+        // never be mistaken for the next session's
+        self.ext.next_id += 1;
+        let id = self.ext.next_id;
         let bus = self.bus.clone();
         let sc = Sidecar::spawn(&node.path, &runtime, &support, move |e| bus.send(Msg::Ext(id, e)));
         let mut sc = match sc {
@@ -529,7 +532,6 @@ impl App {
             return Err(trf("Cannot talk to Node.js: {e}", &[("e", &e.to_string())]));
         }
         // every check passed: now the old command goes away and the new one takes over
-        self.ext.next_id = id;
         if self.ext.sess.is_some() {
             // a command started from inside another one replaces its screens
             self.stack.truncate(self.ext.base.max(1));
