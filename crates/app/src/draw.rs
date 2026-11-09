@@ -69,6 +69,27 @@ fn wheel_reduce_motion(ctx: &Context) -> bool {
     }
 }
 
+/// The action whose shortcut was pressed. A held key auto-repeats, so a destructive action only
+/// runs on a fresh press: its repeats are swallowed instead of deleting one entry per repeat.
+pub(crate) fn pick_shortcut_action(i: &mut egui::InputState, acts: &[Action]) -> Option<Action> {
+    for a in acts {
+        let Some((m, key)) = a.shortcut else { continue };
+        if a.destructive {
+            let fresh = i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key));
+            let hit = i.consume_key(m, key);
+            if hit && fresh {
+                return Some(a.clone());
+            }
+            if hit {
+                return None;
+            }
+        } else if i.consume_key(m, key) {
+            return Some(a.clone());
+        }
+    }
+    None
+}
+
 /// True when `spec`, given to `id`, would share a shortcut with another planned binding.
 pub(crate) fn hotkey_taken_by_other(s: &ferrocast_core::models::Settings, id: &str, spec: &str) -> bool {
     use std::str::FromStr;
@@ -1091,7 +1112,7 @@ impl App {
             }
             if ctx.input(|i| i.modifiers.command || i.modifiers.ctrl) {
                 let acts = self.actions_for(&item);
-                let hit = ctx.input_mut(|i| acts.iter().find(|a| a.shortcut.is_some_and(|(m, key)| i.consume_key(m, key))).cloned());
+                let hit = ctx.input_mut(|i| pick_shortcut_action(i, &acts));
                 if let Some(a) = hit {
                     self.do_action(item, a.kind);
                     return true;
@@ -1629,7 +1650,7 @@ impl App {
             return;
         };
         services::set_exec(&path);
-        self.reload_scripts();
+        self.reload_scripts_in_background(false);
         open_detached(&["-t".as_ref(), path.as_ref()]);
         self.hide();
         self.reset_to_root();
@@ -6123,8 +6144,8 @@ impl App {
                         _ => {
                             let f = vec![
                                 1u8,
-                                services::chatgpt_credentials().is_some() as u8,
-                                services::ai_key_for(P::Anthropic).is_some() as u8,
+                                services::chatgpt_signed_in() as u8,
+                                services::ai_key_exists_for(P::Anthropic) as u8,
                                 services::claude_code_path().is_some() as u8,
                             ];
                             ui.ctx().data_mut(|d| d.insert_temp(id, (now, f.clone())));
@@ -7018,7 +7039,7 @@ impl App {
         let has_key = match has_key {
             Some(v) => v,
             None => {
-                let v = services::ai_key_for(self.settings.ai_provider).is_some();
+                let v = services::ai_key_exists_for(self.settings.ai_provider);
                 ctx.data_mut(|d| d.insert_temp(Id::new("ai_has_key"), v));
                 v
             }
@@ -8454,7 +8475,7 @@ impl App {
             self.notion_search();
         }
         if notion_open {
-            let _ = std::process::Command::new("/usr/bin/open").arg("https://www.notion.so/my-integrations").spawn();
+            open_detached(&["https://www.notion.so/my-integrations".as_ref()]);
         }
         self.ext.put_prefs(ext_edit);
         if ext_close {
@@ -10096,7 +10117,7 @@ fn cached_chatgpt_signed(ctx: &Context) -> bool {
     match ctx.data(|d| d.get_temp::<bool>(id)) {
         Some(v) => v,
         None => {
-            let v = services::chatgpt_credentials().is_some();
+            let v = services::chatgpt_signed_in();
             ctx.data_mut(|d| d.insert_temp(id, v));
             v
         }
@@ -10114,7 +10135,7 @@ fn cached_has_key(ctx: &Context, p: ferrocast_core::models::AiProvider) -> bool 
     match ctx.data(|d| d.get_temp::<bool>(id)) {
         Some(v) => v,
         None => {
-            let v = services::ai_key_for(p).is_some();
+            let v = services::ai_key_exists_for(p);
             ctx.data_mut(|d| d.insert_temp(id, v));
             v
         }
@@ -10395,7 +10416,7 @@ impl App {
             self.apply_hotkeys();
         }
         if dirs_changed {
-            self.reload_scripts();
+            self.reload_scripts_in_background(false);
         }
     }
 

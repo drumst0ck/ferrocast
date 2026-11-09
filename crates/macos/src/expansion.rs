@@ -22,6 +22,19 @@ fn event_chars(ev: &CGEvent) -> String {
     String::from_utf16_lossy(&buf[..len.min(buf.len())])
 }
 
+/// How many keystrokes it takes to cross `s`: one Delete or arrow key moves over a whole grapheme
+/// cluster, not over a `char`.
+pub fn grapheme_count(s: &str) -> usize {
+    use unicode_segmentation::UnicodeSegmentation;
+    s.graphemes(true).count()
+}
+
+/// Arrow-key presses that bring the caret from the end of `text` back to `cursor` (a char offset).
+pub fn cursor_back_count(text: &str, cursor: usize) -> usize {
+    let tail: String = text.chars().skip(cursor).collect();
+    grapheme_count(&tail)
+}
+
 /// Pure matching logic, testable without the OS.
 #[derive(Default)]
 pub struct Matcher {
@@ -33,8 +46,13 @@ impl Matcher {
         self.buffer.clear();
     }
 
+    /// One Backspace removes one user-perceived character (an emoji with a skin tone or a
+    /// letter with a combining accent is several `char`s but a single key press).
     pub fn backspace(&mut self) {
-        self.buffer.pop();
+        use unicode_segmentation::UnicodeSegmentation;
+        if let Some((i, _)) = self.buffer.grapheme_indices(true).next_back() {
+            self.buffer.truncate(i);
+        }
     }
 
     /// Feed typed text; returns the matched keyword, if any.
@@ -202,6 +220,21 @@ mod tests {
         assert!(!target_unchanged(Some(10), None));
         assert!(!target_unchanged(None, None));
         assert!(target_unchanged(None, Some(5)));
+    }
+
+    #[test]
+    fn keystrokes_count_graphemes_not_chars() {
+        assert_eq!(grapheme_count(";;👍🏽"), 3, "an emoji with a skin tone is one key press");
+        assert_eq!(grapheme_count("e\u{301}x"), 2, "a combining accent belongs to its letter");
+        assert_eq!(grapheme_count("🇪🇸"), 1);
+        // text "ab👨‍👩‍👧" with the caret after "ab": one arrow press crosses the family emoji
+        assert_eq!(cursor_back_count("ab👨‍👩‍👧", 2), 1);
+        assert_eq!(cursor_back_count("abc", 3), 0);
+        assert_eq!(cursor_back_count("abc", 1), 2);
+        let mut m = Matcher::default();
+        m.push("x👍🏽", &[]);
+        m.backspace();
+        assert_eq!(m.push("!", &["x!".to_string()]).as_deref(), Some("x!"), "one Backspace removed the whole emoji");
     }
 
     #[test]

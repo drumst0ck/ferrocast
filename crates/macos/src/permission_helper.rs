@@ -179,7 +179,12 @@ pub fn is_granted(perm: Permission) -> bool {
 /// runs from a `.app`, shows the helper next to it. Never blocks; the helper only appears when
 /// called on the main thread.
 pub fn open_pane_with_helper(perm: Permission) {
-    let _ = std::process::Command::new("/usr/bin/open").arg(perm.pane_url()).spawn();
+    if let Ok(mut child) = std::process::Command::new("/usr/bin/open").arg(perm.pane_url()).spawn() {
+        // reaped on a thread: `open` can take a while and must never become a zombie
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
     let Some(mtm) = MainThreadMarker::new() else { return };
     let bundle = running_bundle();
     let shown = HELPER.with(|h| h.borrow().as_ref().map(|p| p.perm));
@@ -193,6 +198,22 @@ pub fn open_pane_with_helper(perm: Permission) {
 /// Is the helper on screen?
 pub fn helper_visible() -> bool {
     HELPER.with(|h| h.borrow().is_some())
+}
+
+extern "C" {
+    static _dispatch_main_q: std::ffi::c_void;
+    fn dispatch_async_f(queue: *const std::ffi::c_void, context: *mut std::ffi::c_void, work: extern "C" fn(*mut std::ffi::c_void));
+}
+
+extern "C" fn close_on_main(_context: *mut std::ffi::c_void) {
+    close_helper();
+}
+
+/// Close the helper on the next turn of the main queue, after the event that asked for it has
+/// finished (a click handler must not destroy the view it is running in).
+pub fn close_helper_later() {
+    // SAFETY: the main queue lives for the whole process and the work function ignores its context.
+    unsafe { dispatch_async_f(&raw const _dispatch_main_q, std::ptr::null_mut(), close_on_main) };
 }
 
 /// Closes the helper, if any.
@@ -250,7 +271,9 @@ define_class!(
     impl CloseTarget {
         #[unsafe(method(closeClicked:))]
         fn close_clicked(&self, _sender: &AnyObject) {
-            close_helper();
+            // not `close_helper()` here: it drops this very target (and the button that is calling
+            // it) while the click is still being handled; the next main-queue turn is safe
+            close_helper_later();
         }
     }
 

@@ -550,7 +550,6 @@ const KNOWN_ENGLISH_ONLY: &[&str] = &[
     "system.rs: Set Volume to {v}%",
     "tiling.rs: Move Window {}",
     "tiling.rs: Tiling Layout {n}: {}",
-    "timezones.rs: Time in {}",
     "translate.rs: Apple Translation does not support {lang}. Pick ",
     "translate.rs: Translated to {lang}, copied",
     "translate.rs: Translated to {lang}, copied: a newer translatio",
