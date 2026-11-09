@@ -16,6 +16,8 @@ mod round4_flows_tests;
 mod round4_ui_tests;
 #[path = "round5_flows_tests.rs"]
 mod round5_flows_tests;
+#[path = "round5_i18n_tests.rs"]
+mod round5_i18n_tests;
 #[path = "sync_clip_tests.rs"]
 mod sync_clip_tests;
 

@@ -1433,9 +1433,20 @@ pub(crate) fn run_script_within(cmd: &ScriptCommand, args: Vec<String>, run: u64
                 let code = if o.timed_out { -1 } else { o.status.and_then(|s| s.code()).unwrap_or(-1) };
                 bus.send(Msg::Script { run, text, code });
             }
-            Err(e) => bus.send(Msg::Script { run, text: format!("Failed to run: {e}"), code: -1 }),
+            Err(e) => bus.send(Msg::Script { run, text: run_failed_text(&e.to_string()), code: -1 }),
         }
     });
+}
+
+/// What a script's output says when the process could not even start.
+pub(crate) fn run_failed_text(e: &str) -> String {
+    trf("Failed to run: {e}", &[("e", e)])
+}
+
+/// The note under a script's output when it ended with `code` (`None`: nothing to add). A code of
+/// -1 is a run that never started or was stopped after its deadline, which the output already says.
+pub(crate) fn exit_code_note(code: i32) -> Option<String> {
+    (code != 0 && code != -1).then(|| trf("[exit code {code}]", &[("code", &code.to_string())]))
 }
 
 /// A language of the translate list ("English", "Chinese") as the interface language writes it,

@@ -4,6 +4,7 @@
 use super::project::Project;
 use super::timeline::{remove_range, EditKind, History, Timeline};
 use super::MIN_SEGMENT;
+use crate::i18n::tr;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -348,7 +349,7 @@ pub fn apply_cuts(p: &Project, cuts: &[(f64, f64)]) -> Result<Project, String> {
     for (a, b) in ranges {
         let touches = Timeline::new(&q).pieces().iter().any(|c| c.src_start.max(a) < c.src_end.min(b));
         if touches && !remove_range(&mut q, a, b) {
-            return Err("Removing these ranges would delete everything; nothing was changed.".into());
+            return Err(tr("Removing these ranges would delete everything; nothing was changed.").into_owned());
         }
     }
     Ok(q)

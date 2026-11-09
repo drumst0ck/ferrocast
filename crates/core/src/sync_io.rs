@@ -49,8 +49,10 @@ pub enum Unavailable {
 impl Unavailable {
     pub fn message(&self) -> String {
         match self {
-            Unavailable::ICloudMissing => "iCloud Drive folder not found: turn on iCloud Drive in System Settings".into(),
-            Unavailable::Folder(e) => format!("Cannot use the sync folder: {e}"),
+            Unavailable::ICloudMissing => {
+                crate::i18n::tr("iCloud Drive folder not found: turn on iCloud Drive in System Settings").into_owned()
+            }
+            Unavailable::Folder(e) => crate::i18n::trf("Cannot use the sync folder: {e}", &[("e", e)]),
         }
     }
 }

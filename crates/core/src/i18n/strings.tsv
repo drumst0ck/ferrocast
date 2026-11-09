@@ -1956,6 +1956,102 @@ No checksum for {file} in SHA256SUMS.txt	No hay suma de comprobación de {file} 
 Signature check failed ({e})	Falló la comprobación de la firma ({e})	Signaturprüfung fehlgeschlagen ({e})	Échec de la vérification de la signature ({e})	Falha na verificação da assinatura ({e})	署名の確認に失敗しました({e})	签名验证失败({e})
 Script timed out after {secs} s and was stopped	El script superó los {secs} s y se detuvo	Das Skript hat nach {secs} s das Zeitlimit überschritten und wurde gestoppt	Le script a dépassé {secs} s et a été arrêté	O script excedeu {secs} s e foi interrompido	スクリプトが{secs}秒でタイムアウトし、停止されました	脚本在 {secs} 秒后超时并已停止
 [output truncated at {kb} KB]	[salida recortada en {kb} KB]	[Ausgabe bei {kb} KB abgeschnitten]	[sortie tronquée à {kb} Ko]	[saída cortada em {kb} KB]	[出力は{kb} KBで切り詰められました]	[输出已在 {kb} KB 处截断]
+{n}m ago	hace {n} min	vor {n} Min.	il y a {n} min	há {n} min	{n}分前	{n} 分钟前
+{n}h ago	hace {n} h	vor {n} Std.	il y a {n} h	há {n} h	{n}時間前	{n} 小时前
+yesterday	ayer	gestern	hier	ontem	昨日	昨天
+◀ Frame	◀ Fotograma	◀ Bild	◀ Image	◀ Quadro	◀ フレーム	◀ 帧
+Frame ▶	Fotograma ▶	Bild ▶	Image ▶	Quadro ▶	フレーム ▶	帧 ▶
+Set start	Fijar inicio	Anfang setzen	Définir le début	Definir início	開始点を設定	设置起点
+Set end	Fijar fin	Ende setzen	Définir la fin	Definir fim	終了点を設定	设置终点
+To start	Al inicio	Zum Anfang	Au début	Para o início	先頭へ	跳到开头
+To end	Al final	Zum Ende	À la fin	Para o fim	末尾へ	跳到结尾
+{w}×{h} MP4 with the waveform	MP4 de {w}×{h} con la forma de onda	MP4 mit {w}×{h} und der Wellenform	MP4 de {w}×{h} avec la forme d’onde	MP4 de {w}×{h} com a forma de onda	{w}×{h} の MP4(波形つき)	{w}×{h} 的 MP4(含波形)
+{w}×{h} MP4 with your picture	MP4 de {w}×{h} con tu imagen	MP4 mit {w}×{h} und deinem Bild	MP4 de {w}×{h} avec votre image	MP4 de {w}×{h} com a sua imagem	{w}×{h} の MP4(選んだ画像つき)	{w}×{h} 的 MP4(含你的图片)
+Audio to Video: {path} is not a readable picture (png, jpg, webp, bmp or tiff)	Audio a vídeo: {path} no es una imagen legible (png, jpg, webp, bmp o tiff)	Audio zu Video: {path} ist kein lesbares Bild (png, jpg, webp, bmp oder tiff)	Audio en vidéo : {path} n’est pas une image lisible (png, jpg, webp, bmp ou tiff)	Áudio para vídeo: {path} não é uma imagem legível (png, jpg, webp, bmp ou tiff)	オーディオからビデオへ:{path} は読み込める画像ではありません(png、jpg、webp、bmp、tiff)	音频转视频:{path} 不是可读取的图片(png、jpg、webp、bmp 或 tiff)
+Sync failed: {e}	Falló la sincronización: {e}	Synchronisierung fehlgeschlagen: {e}	Échec de la synchronisation : {e}	Falha na sincronização: {e}	同期に失敗しました:{e}	同步失败:{e}
+Cannot use the sync folder: {e}	No se puede usar la carpeta de sincronización: {e}	Der Synchronisierungsordner kann nicht verwendet werden: {e}	Impossible d’utiliser le dossier de synchronisation : {e}	Não foi possível usar a pasta de sincronização: {e}	同期フォルダを使用できません:{e}	无法使用同步文件夹:{e}
+Last sync {ago} · {macs}{wait}{note}	Última sincronización {ago} · {macs}{wait}{note}	Zuletzt synchronisiert {ago} · {macs}{wait}{note}	Dernière synchronisation {ago} · {macs}{wait}{note}	Última sincronização {ago} · {macs}{wait}{note}	最終同期 {ago} · {macs}{wait}{note}	上次同步 {ago} · {macs}{wait}{note}
+no other Mac seen yet	aún no se ha visto otro Mac	noch kein anderer Mac gesehen	aucun autre Mac détecté pour l’instant	nenhum outro Mac visto ainda	他のMacはまだ見つかっていません	尚未发现其他 Mac
+{n} other Mac seen	{n} otro Mac visto	{n} anderer Mac gesehen	{n} autre Mac détecté	{n} outro Mac visto	他のMacを{n}台確認	已发现 {n} 台其他 Mac
+{n} other Macs seen	{n} otros Mac vistos	{n} andere Macs gesehen	{n} autres Mac détectés	{n} outros Macs vistos	他のMacを{n}台確認	已发现 {n} 台其他 Mac
+{n} file still downloading from iCloud	{n} archivo aún se descarga de iCloud	{n} Datei wird noch aus iCloud geladen	{n} fichier encore en cours de téléchargement depuis iCloud	{n} arquivo ainda sendo baixado do iCloud	{n}個のファイルをiCloudからダウンロード中	仍有 {n} 个文件正在从 iCloud 下载
+{n} files still downloading from iCloud	{n} archivos aún se descargan de iCloud	{n} Dateien werden noch aus iCloud geladen	{n} fichiers encore en cours de téléchargement depuis iCloud	{n} arquivos ainda sendo baixados do iCloud	{n}個のファイルをiCloudからダウンロード中	仍有 {n} 个文件正在从 iCloud 下载
+restored {names} from your other Macs after an unreadable file	se restauró {names} desde tus otros Mac tras un archivo ilegible	{names} nach einer unlesbaren Datei von deinen anderen Macs wiederhergestellt	{names} restauré depuis vos autres Mac après un fichier illisible	{names} restaurado dos seus outros Macs após um arquivo ilegível	読み込めないファイルがあったため、他のMacから{names}を復元しました	因文件无法读取,已从你的其他 Mac 恢复 {names}
+Waiting for iCloud to download {n} file(s)…	Esperando a que iCloud descargue {n} archivo(s)…	Warten, bis iCloud {n} Datei(en) geladen hat …	En attente du téléchargement de {n} fichier(s) par iCloud…	Aguardando o iCloud baixar {n} arquivo(s)…	iCloudが{n}個のファイルをダウンロードするのを待っています…	正在等待 iCloud 下载 {n} 个文件…
+Recording saved: {name} ({len})	Grabación guardada: {name} ({len})	Aufnahme gespeichert: {name} ({len})	Enregistrement sauvegardé : {name} ({len})	Gravação salva: {name} ({len})	録画を保存しました:{name}({len})	录制已保存:{name}({len})
+Recording stopped: low disk space. {name} ({len}) was kept	Grabación detenida: poco espacio en disco. Se conservó {name} ({len})	Aufnahme gestoppt: zu wenig Speicherplatz. {name} ({len}) wurde behalten	Enregistrement arrêté : espace disque insuffisant. {name} ({len}) a été conservé	Gravação interrompida: pouco espaço em disco. {name} ({len}) foi mantido	録画を停止しました:ディスクの空き容量が不足しています。{name}({len})は保存されています	录制已停止:磁盘空间不足。已保留 {name}({len})
+Recording stopped early: {m}. {name} ({len}) was kept	Grabación detenida antes de tiempo: {m}. Se conservó {name} ({len})	Aufnahme vorzeitig gestoppt: {m}. {name} ({len}) wurde behalten	Enregistrement arrêté prématurément : {m}. {name} ({len}) a été conservé	Gravação interrompida antes do fim: {m}. {name} ({len}) foi mantido	録画が途中で停止しました:{m}。{name}({len})は保存されています	录制提前停止:{m}。已保留 {name}({len})
+Recording stopped early. {name} ({len}) was kept	Grabación detenida antes de tiempo. Se conservó {name} ({len})	Aufnahme vorzeitig gestoppt. {name} ({len}) wurde behalten	Enregistrement arrêté prématurément. {name} ({len}) a été conservé	Gravação interrompida antes do fim. {name} ({len}) foi mantido	録画が途中で停止しました。{name}({len})は保存されています	录制提前停止。已保留 {name}({len})
+A source could not be recorded: {m}	No se pudo grabar una fuente: {m}	Eine Quelle konnte nicht aufgenommen werden: {m}	Une source n’a pas pu être enregistrée : {m}	Não foi possível gravar uma fonte: {m}	ソースを録画できませんでした:{m}	无法录制某个来源:{m}
+{id} (not connected)	{id} (no conectado)	{id} (nicht verbunden)	{id} (non connecté)	{id} (não conectado)	{id}(未接続)	{id}(未连接)
+The capture helper did not start: {e}	El ayudante de captura no arrancó: {e}	Der Aufnahmehelfer wurde nicht gestartet: {e}	L’assistant de capture n’a pas démarré : {e}	O auxiliar de captura não iniciou: {e}	キャプチャヘルパーを起動できませんでした:{e}	捕获助手未能启动:{e}
+Could not list the devices: {e}	No se pudieron listar los dispositivos: {e}	Die Geräte konnten nicht aufgelistet werden: {e}	Impossible de lister les appareils : {e}	Não foi possível listar os dispositivos: {e}	デバイスを一覧表示できませんでした:{e}	无法列出设备:{e}
+Failed to run: {e}	No se pudo ejecutar: {e}	Ausführung fehlgeschlagen: {e}	Échec de l’exécution : {e}	Falha ao executar: {e}	実行できませんでした:{e}	运行失败:{e}
+[exit code {code}]	[código de salida {code}]	[Exit-Code {code}]	[code de sortie {code}]	[código de saída {code}]	[終了コード {code}]	[退出码 {code}]
+Warm	Cálido	Warm	Chaud	Quente	暖色	暖色
+Cool	Frío	Kühl	Froid	Frio	寒色	冷色
+Cinematic	Cinematográfico	Filmisch	Cinématographique	Cinematográfico	シネマ風	电影感
+Faded	Desvanecido	Verblasst	Délavé	Desbotado	フェード	褪色
+Left	Izquierda	Links	Gauche	Esquerda	左	左
+Right	Derecha	Rechts	Droite	Direita	右	右
+Top	Arriba	Oben	Haut	Superior	上	上
+Bottom	Abajo	Unten	Bas	Inferior	下	下
+Aurora	Aurora	Aurora	Aurore	Aurora	オーロラ	极光
+Dusk	Anochecer	Dämmerung	Crépuscule	Entardecer	夕暮れ	黄昏
+Ocean	Océano	Ozean	Océan	Oceano	海	海洋
+Graphite	Grafito	Graphit	Graphite	Grafite	グラファイト	石墨
+Sand	Arena	Sand	Sable	Areia	砂	沙色
+Lilac	Lila	Flieder	Lilas	Lilás	ライラック	丁香紫
+Forest	Bosque	Wald	Forêt	Floresta	森	森林
+Rose	Rosa	Rosé	Rose	Rosa	ローズ	玫瑰
+French	Francés	Französisch	Français	Francês	フランス語	法语
+German	Alemán	Deutsch	Allemand	Alemão	ドイツ語	德语
+Italian	Italiano	Italienisch	Italien	Italiano	イタリア語	意大利语
+Japanese	Japonés	Japanisch	Japonais	Japonês	日本語	日语
+Audio	Audio	Audio	Audio	Áudio	オーディオ	音频
+Transcript	Transcripción	Transkript	Transcription	Transcrição	文字起こし	转录
+A theme called "{new}" already exists	Ya existe un tema llamado "{new}"	Es gibt bereits ein Design namens "{new}"	Un thème nommé "{new}" existe déjà	Já existe um tema chamado "{new}"	「{new}」という名前のテーマはすでにあります	已存在名为“{new}”的主题
+The theme needs a name of 1 to 60 characters	El tema necesita un nombre de 1 a 60 caracteres	Das Design braucht einen Namen mit 1 bis 60 Zeichen	Le thème doit avoir un nom de 1 à 60 caractères	O tema precisa de um nome de 1 a 60 caracteres	テーマ名は1〜60文字で入力してください	主题名称需为 1 到 60 个字符
+"{value}" is not a colour for {field} (use #RRGGBB)	"{value}" no es un color para {field} (usa #RRGGBB)	"{value}" ist keine Farbe für {field} (verwende #RRGGBB)	"{value}" n’est pas une couleur pour {field} (utilisez #RRGGBB)	"{value}" não é uma cor para {field} (use #RRGGBB)	「{value}」は {field} の色として正しくありません(#RRGGBB の形式で入力)	“{value}”不是 {field} 的有效颜色(请使用 #RRGGBB)
+This is not a Ferrocast theme file	Este no es un archivo de tema de Ferrocast	Das ist keine Ferrocast-Designdatei	Ce n’est pas un fichier de thème Ferrocast	Este não é um arquivo de tema do Ferrocast	Ferrocastのテーマファイルではありません	这不是 Ferrocast 主题文件
+Theme file version {v} is newer than this Ferrocast understands	La versión {v} del archivo de tema es más nueva de lo que este Ferrocast entiende	Die Designdatei hat Version {v}, neuer als dieses Ferrocast versteht	La version {v} du fichier de thème est plus récente que ce que ce Ferrocast comprend	A versão {v} do arquivo de tema é mais nova do que este Ferrocast entende	テーマファイルのバージョン {v} は、このFerrocastが対応するものより新しいです	主题文件版本 {v} 比此 Ferrocast 所能识别的更新
+Could not read the theme file: {e}	No se pudo leer el archivo de tema: {e}	Die Designdatei konnte nicht gelesen werden: {e}	Impossible de lire le fichier de thème : {e}	Não foi possível ler o arquivo de tema: {e}	テーマファイルを読み込めませんでした:{e}	无法读取主题文件:{e}
+Not valid JSON: {e}	JSON no válido: {e}	Kein gültiges JSON: {e}	JSON non valide : {e}	JSON inválido: {e}	JSONとして正しくありません:{e}	不是有效的 JSON:{e}
+Expected a JSON array of snippets	Se esperaba una lista JSON de snippets	Eine JSON-Liste von Snippets wurde erwartet	Une liste JSON de snippets était attendue	Era esperada uma lista JSON de snippets	スニペットのJSON配列が必要です	需要 JSON 格式的片段数组
+No snippets found in that file	No se encontraron snippets en ese archivo	In dieser Datei wurden keine Snippets gefunden	Aucun snippet trouvé dans ce fichier	Nenhum snippet encontrado nesse arquivo	このファイルにスニペットは見つかりませんでした	该文件中没有找到片段
+There is nothing to export: the edit keeps no video.	No hay nada que exportar: la edición no conserva vídeo.	Es gibt nichts zu exportieren: Die Bearbeitung behält kein Video.	Il n’y a rien à exporter : le montage ne garde aucune vidéo.	Não há nada para exportar: a edição não mantém nenhum vídeo.	書き出す内容がありません。編集後に残るビデオがありません。	没有可导出的内容:编辑后不保留任何视频。
+The edit is not valid: {m}	La edición no es válida: {m}	Die Bearbeitung ist ungültig: {m}	Le montage n’est pas valide : {m}	A edição não é válida: {m}	編集内容が正しくありません:{m}	编辑无效:{m}
+{n} fps is not supported: use 1 to {max}.	{n} fps no es compatible: usa de 1 a {max}.	{n} fps werden nicht unterstützt: Verwende 1 bis {max}.	{n} i/s n’est pas pris en charge : utilisez de 1 à {max}.	{n} fps não é compatível: use de 1 a {max}.	{n} fps には対応していません。1〜{max} を指定してください。	不支持 {n} fps:请使用 1 到 {max}。
+This edit is too long for a GIF: the limit is {secs} seconds. Trim it or export an MP4.	Esta edición es demasiado larga para un GIF: el límite es de {secs} segundos. Recórtala o exporta un MP4.	Diese Bearbeitung ist für ein GIF zu lang: Das Limit liegt bei {secs} Sekunden. Kürze sie oder exportiere ein MP4.	Ce montage est trop long pour un GIF : la limite est de {secs} secondes. Raccourcissez-le ou exportez un MP4.	Esta edição é longa demais para um GIF: o limite é de {secs} segundos. Corte-a ou exporte um MP4.	この編集はGIFには長すぎます(上限は{secs}秒)。短くするか、MP4で書き出してください。	此编辑对 GIF 来说太长:上限为 {secs} 秒。请裁剪或导出为 MP4。
+The width {w} is not valid: use an even number from {min} to {max}.	El ancho {w} no es válido: usa un número par de {min} a {max}.	Die Breite {w} ist ungültig: Verwende eine gerade Zahl von {min} bis {max}.	La largeur {w} n’est pas valide : utilisez un nombre pair de {min} à {max}.	A largura {w} não é válida: use um número par de {min} a {max}.	幅 {w} は正しくありません。{min}〜{max} の偶数を指定してください。	宽度 {w} 无效:请使用 {min} 到 {max} 之间的偶数。
+{w}×{h} is larger than 3840×2160: choose a smaller resolution.	{w}×{h} supera 3840×2160: elige una resolución menor.	{w}×{h} ist größer als 3840×2160: Wähle eine kleinere Auflösung.	{w}×{h} dépasse 3840×2160 : choisissez une résolution plus petite.	{w}×{h} é maior que 3840×2160: escolha uma resolução menor.	{w}×{h} は 3840×2160 を超えています。より小さい解像度を選んでください。	{w}×{h} 超过 3840×2160:请选择更小的分辨率。
+There is already a loupe at the playhead.	Ya hay una lupa en el cabezal.	An der Abspielposition gibt es bereits eine Lupe.	Il y a déjà une loupe à la tête de lecture.	Já há uma lupa na posição de reprodução.	再生ヘッドの位置にはすでに拡大鏡があります。	播放头处已有放大镜。
+There is no room for a loupe at the playhead.	No hay espacio para una lupa en el cabezal.	An der Abspielposition ist kein Platz für eine Lupe.	Il n’y a pas de place pour une loupe à la tête de lecture.	Não há espaço para uma lupa na posição de reprodução.	再生ヘッドの位置には拡大鏡を置く余地がありません。	播放头处没有放置放大镜的空间。
+That loupe no longer exists.	Esa lupa ya no existe.	Diese Lupe existiert nicht mehr.	Cette loupe n’existe plus.	Essa lupa não existe mais.	その拡大鏡はもうありません。	该放大镜已不存在。
+Removing these ranges would delete everything; nothing was changed.	Quitar estos rangos eliminaría todo; no se cambió nada.	Das Entfernen dieser Bereiche würde alles löschen; es wurde nichts geändert.	Supprimer ces plages effacerait tout ; rien n’a été modifié.	Remover esses intervalos apagaria tudo; nada foi alterado.	これらの範囲を削除するとすべて消えてしまうため、何も変更していません。	删除这些范围会清空全部内容;未做任何更改。
+Extension error	Error de la extensión	Fehler der Erweiterung	Erreur de l’extension	Erro da extensão	拡張機能のエラー	扩展出错
+Action failed	La acción falló	Aktion fehlgeschlagen	L’action a échoué	A ação falhou	アクションに失敗しました	操作失败
+Cannot load extension	No se puede cargar la extensión	Die Erweiterung kann nicht geladen werden	Impossible de charger l’extension	Não foi possível carregar a extensão	拡張機能を読み込めません	无法加载扩展
+Cannot start extension	No se puede iniciar la extensión	Die Erweiterung kann nicht gestartet werden	Impossible de démarrer l’extension	Não foi possível iniciar a extensão	拡張機能を起動できません	无法启动扩展
+Runtime error	Error del entorno de ejecución	Laufzeitfehler	Erreur d’exécution	Erro de execução	ランタイムエラー	运行时错误
+dictation must be started on the main thread	el dictado debe iniciarse en el hilo principal	das Diktat muss im Hauptthread gestartet werden	la dictée doit être lancée sur le thread principal	o ditado deve ser iniciado na thread principal	音声入力はメインスレッドで開始する必要があります	听写必须在主线程上启动
+dictation is already active	el dictado ya está activo	das Diktat ist bereits aktiv	la dictée est déjà active	o ditado já está ativo	音声入力はすでに有効です	听写已在进行
+microphone or speech recognition access was denied	se denegó el acceso al micrófono o al reconocimiento de voz	der Zugriff auf Mikrofon oder Spracherkennung wurde verweigert	l’accès au micro ou à la reconnaissance vocale a été refusé	o acesso ao microfone ou ao reconhecimento de fala foi negado	マイクまたは音声認識へのアクセスが拒否されました	麦克风或语音识别的访问被拒绝
+microphone or speech recognition access is restricted	el acceso al micrófono o al reconocimiento de voz está restringido	der Zugriff auf Mikrofon oder Spracherkennung ist eingeschränkt	l’accès au micro ou à la reconnaissance vocale est restreint	o acesso ao microfone ou ao reconhecimento de fala está restrito	マイクまたは音声認識へのアクセスが制限されています	麦克风或语音识别的访问受到限制
+microphone and speech recognition access has not been granted yet	aún no se ha concedido el acceso al micrófono y al reconocimiento de voz	der Zugriff auf Mikrofon und Spracherkennung wurde noch nicht erteilt	l’accès au micro et à la reconnaissance vocale n’a pas encore été accordé	o acesso ao microfone e ao reconhecimento de fala ainda não foi concedido	マイクと音声認識へのアクセスがまだ許可されていません	尚未授予麦克风和语音识别的访问权限
+speech recognition is not supported for this language	el reconocimiento de voz no admite este idioma	die Spracherkennung unterstützt diese Sprache nicht	la reconnaissance vocale ne prend pas en charge cette langue	o reconhecimento de fala não é compatível com este idioma	この言語は音声認識に対応していません	此语言不支持语音识别
+speech recognizer is not available right now	el reconocedor de voz no está disponible ahora mismo	die Spracherkennung ist gerade nicht verfügbar	le moteur de reconnaissance vocale n’est pas disponible pour le moment	o reconhecedor de fala não está disponível no momento	音声認識は現在利用できません	语音识别器当前不可用
+no audio input device is available	no hay ningún dispositivo de entrada de audio disponible	es ist kein Audioeingabegerät verfügbar	aucun périphérique d’entrée audio n’est disponible	nenhum dispositivo de entrada de áudio está disponível	利用できるオーディオ入力デバイスがありません	没有可用的音频输入设备
+audio engine failed to start: {e}	el motor de audio no pudo iniciarse: {e}	die Audio-Engine konnte nicht gestartet werden: {e}	le moteur audio n’a pas pu démarrer : {e}	o mecanismo de áudio não pôde iniciar: {e}	オーディオエンジンを起動できませんでした:{e}	音频引擎无法启动:{e}
+speech recognition access is not authorized	el acceso al reconocimiento de voz no está autorizado	der Zugriff auf die Spracherkennung ist nicht autorisiert	l’accès à la reconnaissance vocale n’est pas autorisé	o acesso ao reconhecimento de fala não está autorizado	音声認識へのアクセスが許可されていません	未授权访问语音识别
+timed out waiting for the transcription	se agotó el tiempo de espera de la transcripción	Zeitüberschreitung beim Warten auf die Transkription	délai dépassé en attendant la transcription	tempo esgotado aguardando a transcrição	文字起こしの待機中にタイムアウトしました	等待转录超时
+the image has no pixels	la imagen no tiene píxeles	das Bild hat keine Pixel	l’image n’a aucun pixel	a imagem não tem pixels	画像にピクセルがありません	图像没有像素
+{path} is not a file	{path} no es un archivo	{path} ist keine Datei	{path} n’est pas un fichier	{path} não é um arquivo	{path} はファイルではありません	{path} 不是文件
+the path is not valid UTF-8	la ruta no es UTF-8 válido	der Pfad ist kein gültiges UTF-8	le chemin n’est pas de l’UTF-8 valide	o caminho não é UTF-8 válido	パスが有効なUTF-8ではありません	路径不是有效的 UTF-8
+the file is not a readable image	el archivo no es una imagen legible	die Datei ist kein lesbares Bild	le fichier n’est pas une image lisible	o arquivo não é uma imagem legível	ファイルは読み込める画像ではありません	该文件不是可读取的图像
+AirDrop is not available on this Mac	AirDrop no está disponible en este Mac	AirDrop ist auf diesem Mac nicht verfügbar	AirDrop n’est pas disponible sur ce Mac	O AirDrop não está disponível neste Mac	このMacではAirDropを利用できません	此 Mac 上无法使用隔空投送
+There is nothing to share	No hay nada que compartir	Es gibt nichts zu teilen	Il n’y a rien à partager	Não há nada para compartilhar	共有するものがありません	没有可共享的内容
+AirDrop cannot share these items	AirDrop no puede compartir estos elementos	AirDrop kann diese Objekte nicht teilen	AirDrop ne peut pas partager ces éléments	O AirDrop não pode compartilhar esses itens	AirDropではこれらの項目を共有できません	隔空投送无法共享这些项目
 {n}h	{n} h	{n} Std.	{n} h	{n} h	{n}時間	{n} 小时
 {n} min	{n} min	{n} Min.	{n} min	{n} min	{n}分	{n} 分钟
 {n} sec	{n} s	{n} Sek.	{n} s	{n} s	{n}秒	{n} 秒

@@ -161,6 +161,11 @@ pub const LOCALES: &[(&str, &str)] = &[
     ("zh-CN", "Chinese (Mandarin)"),
 ];
 
+/// The name of picker entry `i` in the interface language.
+pub fn locale_label(i: usize) -> String {
+    tr(LOCALES[i.min(LOCALES.len() - 1)].1).into_owned()
+}
+
 /// The locale to send to the helper for picker entry `i` (`None` = the system language).
 pub fn locale_arg(i: usize) -> Option<&'static str> {
     LOCALES.get(i).map(|l| l.0).filter(|l| !l.is_empty())
@@ -1971,7 +1976,7 @@ fn zoom_fields(ui: &mut Ui, pal: &Palette, ed: &mut Editor, z: &Zoom, duration: 
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(SLIDER_LABEL_W, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(SLIDER_LABEL_W);
-            ui.label(egui::RichText::new("Focus").size(12.5).color(pal.sub_strong));
+            ui.label(egui::RichText::new(tr("Focus")).size(12.5).color(pal.sub_strong));
         });
         let (mut x, mut y) = (fx * 100.0, fy * 100.0);
         let a = ui.add(egui::DragValue::new(&mut x).range(0.0..=100.0).suffix(" %").speed(0.5)).changed();
@@ -2763,7 +2768,7 @@ fn audio_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Project, no
     }
     ui.add_space(4.0);
     card(ui, pal, |ui| {
-        ui.label(egui::RichText::new("Master").size(13.0).strong().color(pal.text));
+        ui.label(egui::RichText::new(tr("Master")).size(13.0).strong().color(pal.text));
         if let Some(v) = row_slider(ui, pal, "Gain", proj.audio.master_db, GAIN_DB_MIN..=GAIN_DB_MAX, 1.0, " dB") {
             ed.apply(EditKind::Audio, now, |p| set_audio(p, AudioField::Master(v)));
         }
@@ -2829,9 +2834,9 @@ fn transcript_section(ui: &mut Ui, pal: &Palette, ed: &mut Editor, proj: &Projec
     ui.add_space(4.0);
     caption(ui, pal, "Language");
     let mut loc = ed.st.tr.locale.min(LOCALES.len() - 1);
-    egui::ComboBox::from_id_salt("transcript-locale").width(ui.available_width()).selected_text(LOCALES[loc].1).show_ui(ui, |ui| {
-        for (i, (_, name)) in LOCALES.iter().enumerate() {
-            ui.selectable_value(&mut loc, i, *name);
+    egui::ComboBox::from_id_salt("transcript-locale").width(ui.available_width()).selected_text(locale_label(loc)).show_ui(ui, |ui| {
+        for i in 0..LOCALES.len() {
+            ui.selectable_value(&mut loc, i, locale_label(i));
         }
     });
     ed.st.tr.locale = loc;

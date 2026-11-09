@@ -4,8 +4,8 @@ use crate::models::Snippet;
 
 /// Parse a snippet export. Entries without a name or text are skipped.
 pub fn parse_snippets(json: &str) -> Result<Vec<Snippet>, String> {
-    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("Not valid JSON: {e}"))?;
-    let arr = v.as_array().ok_or("Expected a JSON array of snippets")?;
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| crate::i18n::trf("Not valid JSON: {e}", &[("e", &e.to_string())]))?;
+    let arr = v.as_array().ok_or_else(|| crate::i18n::tr("Expected a JSON array of snippets").into_owned())?;
     let text_of = |o: &serde_json::Value, keys: &[&str]| keys.iter().find_map(|k| o.get(*k).and_then(|x| x.as_str())).map(str::to_string);
     let out: Vec<Snippet> = arr
         .iter()
@@ -16,7 +16,7 @@ pub fn parse_snippets(json: &str) -> Result<Vec<Snippet>, String> {
         })
         .collect();
     if out.is_empty() {
-        return Err("No snippets found in that file".into());
+        return Err(crate::i18n::tr("No snippets found in that file").into_owned());
     }
     Ok(out)
 }

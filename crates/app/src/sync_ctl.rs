@@ -24,9 +24,9 @@ pub struct SyncCtl {
     pub(crate) in_flight: bool,
     pub(crate) pending: BTreeSet<&'static str>,
     /// Unix seconds of the last finished run.
-    last_sync: Option<i64>,
-    peers: usize,
-    error: Option<String>,
+    pub(crate) last_sync: Option<i64>,
+    pub(crate) peers: usize,
+    pub(crate) error: Option<String>,
     /// Set while a merge is applied so its saves are not queued as local edits.
     applying: bool,
     last_start: Option<Instant>,
@@ -39,7 +39,7 @@ pub struct SyncCtl {
     pub(crate) pending_docs: std::collections::BTreeMap<&'static str, ferrocast_core::sync::DeviceDoc>,
     /// Domains whose last run started over because their data file was unreadable (cleared by the
     /// next run of the domain that is not).
-    restored: BTreeSet<&'static str>,
+    pub(crate) restored: BTreeSet<&'static str>,
     /// When a notes merge that waited for typing to stop may run again.
     notes_retry: Option<Instant>,
     /// Last time unlinked note images were looked for.
@@ -69,23 +69,29 @@ impl App {
             Some(t) => {
                 let n = self.sync.peers;
                 let macs = match n {
-                    0 => "no other Mac seen yet".to_string(),
-                    1 => "1 other Mac seen".to_string(),
-                    n => format!("{n} other Macs seen"),
+                    0 => tr("no other Mac seen yet").into_owned(),
+                    n => trn("{n} other Mac seen", "{n} other Macs seen", n as u64),
                 };
                 let wait = match self.sync.downloading {
                     0 => String::new(),
-                    n => format!(" · {n} file{} still downloading from iCloud", if n == 1 { "" } else { "s" }),
+                    n => {
+                        format!(" · {}", trn("{n} file still downloading from iCloud", "{n} files still downloading from iCloud", n as u64))
+                    }
                 };
                 let note = if self.sync.restored.is_empty() {
                     String::new()
                 } else {
                     let names: Vec<&str> = self.sync.restored.iter().copied().collect();
-                    format!(" · restored {} from your other Macs after an unreadable file", names.join(", "))
+                    format!(" · {}", trf("restored {names} from your other Macs after an unreadable file", &[("names", &names.join(", "))]))
                 };
-                format!("Last sync {} · {macs}{wait}{note}", services::ago((services::now_secs() - t).max(0)))
+                trf(
+                    "Last sync {ago} · {macs}{wait}{note}",
+                    &[("ago", &services::ago((services::now_secs() - t).max(0))), ("macs", &macs), ("wait", &wait), ("note", &note)],
+                )
             }
-            None if self.sync.downloading > 0 => format!("Waiting for iCloud to download {} file(s)…", self.sync.downloading),
+            None if self.sync.downloading > 0 => {
+                trf("Waiting for iCloud to download {n} file(s)…", &[("n", &self.sync.downloading.to_string())])
+            }
             None => "Waiting for the first sync…".into(),
         }
     }
@@ -280,7 +286,7 @@ impl App {
             let out = match result {
                 Ok(o) => o,
                 Err(e) => {
-                    self.sync.error = Some(format!("Sync failed: {e}"));
+                    self.sync.error = Some(trf("Sync failed: {e}", &[("e", &e)]));
                     instance::log(&root, &format!("sync {domain}: {e}"));
                     continue;
                 }

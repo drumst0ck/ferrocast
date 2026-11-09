@@ -12,17 +12,18 @@ const { createRoot, toTree } = require('./reconciler');
 const stack = []; // {root, last, pendingSend}
 let mode = 'view';
 
-function toast(style, title, message) {
-  bridge.send({ type: 'toast', style, title, message: message || '' });
+// `ownTitle` marks a title this runtime wrote (not the extension): the host translates those.
+function toast(style, title, message, ownTitle) {
+  bridge.send({ type: 'toast', style, title, message: message || '', ownTitle: !!ownTitle });
 }
 let failures = 0;
-function fail(e, title = 'Extension error') {
+function fail(e, title = 'Extension error', ownTitle = true) {
   if (e && (e.code === 'EPIPE' || e.code === 'ERR_STREAM_DESTROYED')) bridge.die();
   const msg = e && e.message ? e.message : String(e);
   failures++;
   // a failing loop must not flood the host: report the first few, log a few more, then go quiet
   if (failures <= 20) bridge.log(`${title}: ${(e && e.stack) || msg}`);
-  if (failures <= 5) toast('failure', title, msg);
+  if (failures <= 5) toast('failure', title, msg, ownTitle);
   if (failures > 1000) bridge.die();
 }
 
@@ -143,7 +144,7 @@ async function runAction(id, values) {
       case 'Action.CopyToClipboard':
         await api.Clipboard.copy(p.content, { concealed: p.concealed });
         if (p.onCopy) p.onCopy(p.content);
-        await api.showHUD('Copied to Clipboard');
+        bridge.send({ type: 'hud', title: 'Copied to Clipboard', ownTitle: true });
         break;
       case 'Action.OpenInBrowser':
         await api.open(p.url);
@@ -173,7 +174,7 @@ async function runAction(id, values) {
         throw new Error(`not supported in Ferrocast yet: ${inst.type}`);
     }
   } catch (e) {
-    fail(e, p.title || 'Action failed');
+    fail(e, p.title || 'Action failed', !p.title);
   }
 }
 
