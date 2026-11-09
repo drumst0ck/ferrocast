@@ -25,6 +25,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Tag is on master
+        run: |
+          # a tag pushed from a topic branch must not publish a release
+          git fetch --no-tags origin master
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master || { echo "tag $GITHUB_REF_NAME ($GITHUB_SHA) is not on master" >&2; exit 1; }
       - name: Tag matches Cargo.toml
         id: meta
         run: |

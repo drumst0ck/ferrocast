@@ -5,10 +5,10 @@
 process.env.ASTRO_NODE_AUTOSTART = 'disabled';
 
 import http from 'node:http';
-import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { handleCspApi } from './csp-report-handle.mjs';
+import { serveHtmlFile } from './static-serve.mjs';
 import { CSP_REPORT_ONLY, cacheControlFor, wwwRedirectLocation } from './http-policy.mjs';
 
 const PORT = Number(process.env.PORT ?? 4321);
@@ -58,25 +58,17 @@ function prerenderedHtmlFile(urlPath) {
   return abs;
 }
 
-function tryServePrerendered(req, res) {
+async function tryServePrerendered(req, res) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
   const path = (req.url ?? '/').split('?')[0];
   const file = prerenderedHtmlFile(path);
-  if (!file || !existsSync(file)) return false;
-  const body = readFileSync(file);
-  res.statusCode = 200;
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  if (req.method === 'HEAD') {
-    res.end();
-    return true;
-  }
-  res.end(body);
-  return true;
+  if (!file) return false;
+  return serveHtmlFile(req, res, file);
 }
 
 const { handler } = await import('../dist/server/entry.mjs');
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const path = (req.url ?? '/').split('?')[0];
   const www = wwwRedirectLocation(req.headers.host, req.url);
   if (www) {
@@ -88,7 +80,16 @@ const server = http.createServer((req, res) => {
   }
   applyHeaders(req, res);
   if (handleCspApi(req, res, path)) return;
-  if (tryServePrerendered(req, res)) return;
+  try {
+    if (await tryServePrerendered(req, res)) return;
+  } catch (err) {
+    console.error('[production-server] static serve failed', err);
+    if (!res.headersSent) {
+      res.statusCode = 500;
+      res.end();
+    }
+    return;
+  }
   handler(req, res);
 });
 

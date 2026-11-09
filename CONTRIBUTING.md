@@ -3,8 +3,11 @@
 ## Setup
 
 - macOS on Apple Silicon. Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it).
-- `cargo test --workspace` must pass. CI also runs `cargo fmt --all --check` and
-  `cargo clippy --workspace --all-targets -- -D warnings`.
+- `cargo test --workspace --locked` must pass. CI also runs `cargo fmt --all --check` and
+  `cargo clippy --workspace --all-targets --locked -- -D warnings`.
+- Extensions runtime (`extensions-runtime/`, Node 22): `npm ci && npm run build && npm test`. The app embeds
+  the built `extensions-runtime/dist/runtime.js`, so commit it together with any change under `src/`; CI
+  rebuilds it and fails when it differs from the committed file.
 
 ## Layout
 
@@ -47,7 +50,7 @@ The site lives in `web/` (Astro, Starlight docs, PostgreSQL changelog) and deplo
 
 ## Releasing (Homebrew, no paid Apple account)
 
-1. Make sure CI is green on `master` and `[Unreleased]` in `CHANGELOG.md` lists the changes.
+1. Make sure CI is green on `master`, your checkout is at `origin/master` (the script fetches and refuses otherwise) and `[Unreleased]` in `CHANGELOG.md` lists the changes.
 2. `scripts/release.sh X.Y.Z` (add `--dry-run` to preview, `--no-push` to stop before pushing). It bumps `version` in `Cargo.toml` and `Cargo.lock`, closes `[Unreleased]` into a dated section, syncs `web/CHANGELOG.md`, commits, creates the annotated tag `vX.Y.Z` and pushes it. If anything fails before the commit, it restores the files.
 3. The tag triggers `.github/workflows/release.yml`, which builds and publishes the release and then commits the Homebrew formula bump (`Formula/ferrocast.rb`) to `master` itself. Do not run `scripts/update_formula.sh` by hand for a normal release: it would race that push. A version with a suffix (`X.Y.Z-rc.1`) is a prerelease and skips the formula.
 4. Users run `brew upgrade ferrocast`.

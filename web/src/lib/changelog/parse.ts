@@ -42,7 +42,7 @@ function finishEntry(raw: string, category: Category, version: string, position:
     text = text.replace(sl[0], ' ').trim();
   }
   let docsUrl: string | null = null;
-  const docs = text.match(/\s*\(docs:\s*(\/[^)\s]*)\)\s*(?=(?:#[a-z0-9-]+\s*)*$)/i);
+  const docs = text.match(/\s*\(docs:\s*(\/(?![\/\\])[^)\s]*)\)\s*(?=(?:#[a-z0-9-]+\s*)*$)/i);
   if (docs) {
     docsUrl = docs[1];
     text = text.replace(docs[0], ' ').trim();
@@ -55,7 +55,7 @@ function finishEntry(raw: string, category: Category, version: string, position:
   }
   // Tags may also precede the docs link; try the docs link again once tags are gone.
   if (!docsUrl) {
-    const d2 = text.match(/\s*\(docs:\s*(\/[^)\s]*)\)\s*$/i);
+    const d2 = text.match(/\s*\(docs:\s*(\/(?![\/\\])[^)\s]*)\)\s*$/i);
     if (d2) {
       docsUrl = d2[1];
       text = text.replace(d2[0], '').trim();

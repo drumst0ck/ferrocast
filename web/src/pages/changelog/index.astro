@@ -5,22 +5,24 @@ import SiteFooter from '../../components/SiteFooter.astro';
 import ChangelogEntries from '../../components/ChangelogEntries.astro';
 import { loadReleasePage, versionLabel } from '../../lib/changelog/load';
 import { changelogIndexMeta } from '../../lib/changelog/meta';
+import { changelogHref, parsePageParam } from '../../lib/changelog/links';
 
 export const prerender = false;
 
 const repo = 'https://github.com/drumst0ck/ferrocast';
-const pageNo = Math.max(1, Math.floor(Number(Astro.url.searchParams.get('page'))) || 1);
+const pageNo = parsePageParam(Astro.url.searchParams.get('page'));
+const tag = Astro.url.searchParams.get('tag')?.toLowerCase().replace(/[^a-z0-9-]/g, '') || null;
 const pageData = await loadReleasePage(pageNo);
 const releases = pageData?.releases ?? null;
 const hasMore = pageData?.hasMore ?? false;
-const pageHref = (n: number) => (n > 1 ? `/changelog/?page=${n}` : '/changelog/');
+const pageHref = (n: number) => changelogHref(n, tag);
 const meta = changelogIndexMeta();
-const tag = Astro.url.searchParams.get('tag')?.toLowerCase().replace(/[^a-z0-9-]/g, '') || null;
 const allTags = releases ? [...new Set(releases.flatMap((r) => r.entries.flatMap((e) => e.tags)))].sort() : [];
-const canonical = new URL(pageHref(pageNo), Astro.site).href;
+const canonical = new URL(changelogHref(pageNo, null), Astro.site).href;
 if (!releases) Astro.response.status = 503;
+else if (pageNo > 1 && releases.length === 0) Astro.response.status = 404;
 ---
-<Base title={meta.title} description={meta.description} canonical={canonical}>
+<Base title={meta.title} description={meta.description} canonical={canonical} robots={Astro.response.status === 404 ? 'noindex' : undefined}>
   <SiteHeader />
   <main class="wrap prose" id="main">
     <h1>Changelog</h1>
@@ -30,8 +32,8 @@ if (!releases) Astro.response.status = 503;
     )}
     {releases && allTags.length > 0 && (
       <nav aria-label="Filter by tag" class="cl-tags">
-        <a href="/changelog/" aria-current={tag ? undefined : 'true'}>all</a>
-        {allTags.map((t) => <a href={`/changelog/?tag=${t}`} aria-current={tag === t ? 'true' : undefined}>#{t}</a>)}
+        <a href={changelogHref(1, null)} aria-current={tag ? undefined : 'true'}>all</a>
+        {allTags.map((t) => <a href={changelogHref(1, t)} aria-current={tag === t ? 'true' : undefined}>#{t}</a>)}
       </nav>
     )}
     {releases?.map((r) => (
