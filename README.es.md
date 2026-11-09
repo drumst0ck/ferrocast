@@ -115,7 +115,7 @@ open dist/Ferrocast.app    # atajo por defecto: ⌥ Space
 cargo test --workspace
 ```
 
-Rust 1.95 está fijado en `rust-toolchain.toml` (lo exige egui 0.36). El DMG sin notarizar lo bloquea Gatekeeper en otros Macs; la vía soportada es Homebrew. Consulta [CONTRIBUTING.md](CONTRIBUTING.md).
+Rust 1.95 está fijado en `rust-toolchain.toml` (lo exige egui 0.36). El DMG no está notarizado: en otro Mac, macOS pide **Abrir igualmente** una vez (ver Instalación); Homebrew evita ese aviso porque compila en el Mac que lo usa. Consulta [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Documentación
 
