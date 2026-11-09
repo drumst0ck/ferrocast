@@ -433,7 +433,7 @@ impl App {
                     return None;
                 }
                 *cur = list;
-                ferrocast_core::storage::prune_images(&self.store.images_dir(), &cur);
+                self.shared.prune_images_keeping_held(&cur);
                 drop(cur);
                 // saved through the shared serialisation (SAVE, then the list), never under the list lock
                 self.shared.write_clipboard();

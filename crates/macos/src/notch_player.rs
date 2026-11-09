@@ -75,6 +75,8 @@ struct Draw {
     /// Icon of the app that plays, and its name (fitted to the strip).
     source_icon: Option<Retained<NSImage>>,
     source_id: String,
+    /// `app_name(source_id)`, looked up once per source, not on every redraw.
+    source_name: String,
     chip_text: String,
     /// The title wrapped to at most two lines, and the artist fitted to one.
     title_lines: Vec<String>,
@@ -886,6 +888,14 @@ fn app_name(bundle_id: &str) -> Option<String> {
     Some(NSFileManager::defaultManager().displayNameAtPath(&NSString::from_str(&path)).to_string())
 }
 
+/// The source's name: the one kept from the last draw when the source is the same, else `lookup()`.
+fn cached_source_name(old: Option<(&str, &str)>, want_id: &str, lookup: impl FnOnce() -> String) -> String {
+    match old {
+        Some((id, name)) if id == want_id => name.to_string(),
+        _ => lookup(),
+    }
+}
+
 /// Icon of the app that plays.
 fn app_icon(bundle_id: &str) -> Option<Retained<NSImage>> {
     let path = app_path(bundle_id)?;
@@ -1039,6 +1049,9 @@ pub fn render(mtm: MainThreadMarker, model: &Model, reduce_motion: bool) {
             Some(o) if o.source_id == want_id => (o.source_icon.clone(), o.source_id.clone()),
             _ => (app_icon(&want_id), want_id.clone()),
         };
+        let source_name = cached_source_name(old.as_ref().map(|o| (o.source_id.as_str(), o.source_name.as_str())), &want_id, || {
+            app_name(&want_id).unwrap_or_default()
+        });
 
         // text: the title wrapped to two lines, the artist and the source name fitted
         let (title_lines, artist_text, chip_text) = match &snap {
@@ -1054,7 +1067,7 @@ pub fn render(mtm: MainThreadMarker, model: &Model, reduce_motion: bool) {
                 let artist = view::truncate_to_width(&line, view::TITLE_W, &|t| text_width(t, &aattrs));
                 let cattrs = chip_attrs();
                 let free = ((CARD_W - notch.map_or(200.0, |n| n.width)) / 2.0 - 38.0 - 8.0).max(30.0);
-                let chip = view::truncate_to_width(&app_name(&s.bundle_id).unwrap_or_default(), free, &|t| text_width(t, &cattrs));
+                let chip = view::truncate_to_width(&source_name, free, &|t| text_width(t, &cattrs));
                 (lines, artist, chip)
             }
             None => (vec![], String::new(), String::new()),
@@ -1077,6 +1090,7 @@ pub fn render(mtm: MainThreadMarker, model: &Model, reduce_motion: bool) {
             art_key: want,
             source_icon,
             source_id,
+            source_name,
             chip_text,
             title_lines,
             artist_text,
@@ -1161,4 +1175,29 @@ pub fn draw_cost_ms(frames: usize) -> Option<f64> {
         }
         Some(t.elapsed().as_secs_f64() * 1000.0 / frames.max(1) as f64)
     })
+}
+
+#[cfg(test)]
+mod name_cache_tests {
+    use super::cached_source_name;
+    use std::cell::Cell;
+
+    #[test]
+    fn the_source_name_is_looked_up_only_when_the_source_changes() {
+        let calls = Cell::new(0);
+        let look = |n: &str| {
+            let n = n.to_string();
+            let calls = &calls;
+            move || {
+                calls.set(calls.get() + 1);
+                n
+            }
+        };
+        let first = cached_source_name(None, "com.a", look("A"));
+        assert_eq!((first.as_str(), calls.get()), ("A", 1));
+        let again = cached_source_name(Some(("com.a", "A")), "com.a", look("A"));
+        assert_eq!((again.as_str(), calls.get()), ("A", 1), "a redraw of the same source does no lookup");
+        let other = cached_source_name(Some(("com.a", "A")), "com.b", look("B"));
+        assert_eq!((other.as_str(), calls.get()), ("B", 2));
+    }
 }

@@ -497,6 +497,9 @@ pub struct Shared {
     pub keywords: expansion::Keywords,
     /// The clipboard list changed since the sync last looked (set by the recorder thread).
     pub clip_dirty: AtomicBool,
+    /// A clipboard entry just deleted, still on offer through Undo: its image file must survive
+    /// pruning until the undo window closes.
+    pub clip_hold: Mutex<Vec<ClipEntry>>,
 }
 
 /// `just now`, `5 min ago`, `3 h ago`, `2 d ago`.
@@ -566,7 +569,18 @@ impl Shared {
     /// like `record` does while it stores a new image, so a copy still being recorded keeps its file.
     pub(crate) fn prune_clip_images(&self) {
         let list = self.clipboard.lock().unwrap();
-        storage::prune_images(&self.store.images_dir(), &list);
+        self.prune_images_keeping_held(&list);
+    }
+
+    /// Prune the image folder against `list` plus the entry held for Undo.
+    pub(crate) fn prune_images_keeping_held(&self, list: &[ClipEntry]) {
+        let held = self.clip_hold.lock().unwrap_or_else(|e| e.into_inner());
+        if held.is_empty() {
+            storage::prune_images(&self.store.images_dir(), list);
+        } else {
+            let all: Vec<ClipEntry> = list.iter().chain(held.iter()).cloned().collect();
+            storage::prune_images(&self.store.images_dir(), &all);
+        }
     }
 
     /// Write the history to disk without holding the list lock during the (large) serialisation and
@@ -677,7 +691,7 @@ fn record(shared: &Shared, content: clipboard::ClipContent, source: Option<Strin
     });
     // pruning stays under the lock (a cheap directory listing) so it cannot delete the image of a
     // copy that is not in the list yet; the heavy serialisation and write happen without it
-    storage::prune_images(&shared.store.images_dir(), &list);
+    shared.prune_images_keeping_held(&list);
     drop(list);
     shared.write_clipboard();
     shared.clip_dirty.store(true, Ordering::Relaxed);
@@ -2509,13 +2523,59 @@ pub(crate) fn unreachable_message(settings: &Settings, curl_err: &str) -> Option
     })
 }
 
-/// Streaming answer from the configured provider; `on_delta` receives text as it arrives.
-/// Requests (including keys) go to curl or Claude Code via stdin, never argv.
-pub fn ai_stream(settings: &Settings, history: &[(String, String)], question: &str, on_delta: impl FnMut(&str)) -> Result<(), String> {
-    ai_stream_system(settings, ferrocast_core::ai::SYSTEM_PROMPT, history, question, on_delta)
+/// Lets the owner of an AI request stop it: the curl / claude child is killed, the stream ends
+/// quietly and nothing more reaches the bus.
+#[derive(Default)]
+pub struct AiCancel {
+    stopped: std::sync::atomic::AtomicBool,
+    child: Mutex<Option<std::process::Child>>,
 }
 
-/// `ai_stream` with its own system prompt (translations use a translator prompt, not the chat one).
+impl AiCancel {
+    /// Stop the request: kill and reap its child. Safe to call before the child exists, after it
+    /// ended and more than once.
+    pub fn cancel(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        self.kill_child();
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::SeqCst)
+    }
+
+    /// Take the child over; false (child killed) when the request was cancelled before it started.
+    fn attach(&self, child: std::process::Child) -> bool {
+        let mut slot = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        if self.is_stopped() {
+            let mut c = child;
+            let _ = c.kill();
+            let _ = c.wait();
+            return false;
+        }
+        *slot = Some(child);
+        true
+    }
+
+    fn kill_child(&self) {
+        let taken = self.child.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(mut c) = taken {
+            let _ = c.kill();
+            let _ = c.wait(); // reap it so it is not left a zombie
+        }
+    }
+
+    /// The stream ended by itself: reap the child.
+    fn reap(&self) {
+        let taken = self.child.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(mut c) = taken {
+            let _ = c.wait();
+        }
+    }
+}
+
+/// Streaming answer from the configured provider; `on_delta` receives text as it arrives.
+/// Requests (including keys) go to curl or Claude Code via stdin, never argv. Translations pass
+/// their own system prompt (a translator prompt, not the chat one).
 pub fn ai_stream_system(
     settings: &Settings,
     system: &str,
@@ -2523,11 +2583,23 @@ pub fn ai_stream_system(
     question: &str,
     on_delta: impl FnMut(&str),
 ) -> Result<(), String> {
+    ai_stream_cancellable(settings, system, history, question, &AiCancel::default(), on_delta)
+}
+
+/// `ai_stream_system` that `cancel` can stop from another thread (it then returns `Ok(())`).
+pub fn ai_stream_cancellable(
+    settings: &Settings,
+    system: &str,
+    history: &[(String, String)],
+    question: &str,
+    cancel: &AiCancel,
+    on_delta: impl FnMut(&str),
+) -> Result<(), String> {
     let key = match settings.ai_provider {
         AiProvider::ClaudeCode | AiProvider::ChatGpt => None,
         p => ai_key_for(p),
     };
-    ai_stream_with_key_system(settings, key, system, history, question, on_delta)
+    ai_stream_with_key_system(settings, key, system, history, question, cancel, on_delta)
 }
 
 /// `ai_stream` with the API key supplied by the caller (tests use a mock server and a fixed key).
@@ -2539,7 +2611,7 @@ pub fn ai_stream_with_key(
     question: &str,
     on_delta: impl FnMut(&str),
 ) -> Result<(), String> {
-    ai_stream_with_key_system(settings, key, ferrocast_core::ai::SYSTEM_PROMPT, history, question, on_delta)
+    ai_stream_with_key_system(settings, key, ferrocast_core::ai::SYSTEM_PROMPT, history, question, &AiCancel::default(), on_delta)
 }
 
 fn ai_stream_with_key_system(
@@ -2548,6 +2620,7 @@ fn ai_stream_with_key_system(
     system: &str,
     history: &[(String, String)],
     question: &str,
+    cancel: &AiCancel,
     mut on_delta: impl FnMut(&str),
 ) -> Result<(), String> {
     use ferrocast_core::ai::{self, Sse};
@@ -2625,10 +2698,18 @@ fn ai_stream_with_key_system(
             (child, cfg, ai::parse_sse_line)
         }
     };
-    child.stdin.take().ok_or("no stdin")?.write_all(stdin_payload.as_bytes()).map_err(|e| e.to_string())?;
+    let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    if !cancel.attach(child) {
+        return Ok(());
+    }
+    let written = stdin.ok_or("no stdin")?.write_all(stdin_payload.as_bytes());
+    if cancel.is_stopped() {
+        return Ok(());
+    }
+    written.map_err(|e| e.to_string())?;
     let mut got = false;
     let mut raw = String::new();
-    for line in BufReader::new(child.stdout.take().ok_or("no stdout")?).lines().map_while(Result::ok) {
+    for line in BufReader::new(stdout.ok_or("no stdout")?).lines().map_while(Result::ok) {
         match parse(&line) {
             Sse::Delta(t) => {
                 got = true;
@@ -2636,7 +2717,7 @@ fn ai_stream_with_key_system(
             }
             Sse::Done => break,
             Sse::Error(e) => {
-                let _ = child.kill();
+                cancel.kill_child();
                 return Err(e);
             }
             Sse::Ignore => {
@@ -2648,8 +2729,8 @@ fn ai_stream_with_key_system(
             }
         }
     }
-    let _ = child.wait();
-    if got {
+    cancel.reap();
+    if cancel.is_stopped() || got {
         return Ok(());
     }
     // No stream deltas: a plain JSON answer or error body, or a connection failure.
@@ -2664,7 +2745,7 @@ fn ai_stream_with_key_system(
         }
     }
     let mut err = String::new();
-    if let Some(mut e) = child.stderr.take() {
+    if let Some(mut e) = stderr {
         let _ = e.read_to_string(&mut err);
     }
     Err(if let Some(m) = unreachable_message(settings, &err) {
@@ -2807,13 +2888,24 @@ pub fn ax_replace(pid: i32, lang: String, text: String, bus: Bus) {
     });
 }
 
-pub fn ask_ai(settings: &Settings, history: Vec<(String, String)>, question: String, run: u64, bus: Bus) {
+/// Ask the configured provider off the UI thread. The returned handle stops the request (new
+/// question, Ask AI closed): its child is killed and the run reports nothing more.
+pub fn ask_ai(settings: &Settings, history: Vec<(String, String)>, question: String, run: u64, bus: Bus) -> Arc<AiCancel> {
     let settings = settings.clone();
+    let cancel = Arc::new(AiCancel::default());
+    let c = cancel.clone();
     std::thread::spawn(move || {
         let b = bus.clone();
-        let result = ai_stream(&settings, &history, &question, |t| b.send(Msg::AiChunk { run, text: t.to_string() }));
-        bus.send(Msg::AiDone { run, error: result.err() });
+        let result = ai_stream_cancellable(&settings, ferrocast_core::ai::SYSTEM_PROMPT, &history, &question, &c, |t| {
+            if !c.is_stopped() {
+                b.send(Msg::AiChunk { run, text: t.to_string() })
+            }
+        });
+        if !c.is_stopped() {
+            bus.send(Msg::AiDone { run, error: result.err() });
+        }
     });
+    cancel
 }
 
 /// Enable/disable launching at login (per-user LaunchAgent; takes effect at next login).
@@ -5394,6 +5486,7 @@ mod clipboard_save_tests {
             visible: Default::default(),
             keywords: Default::default(),
             clip_dirty: Default::default(),
+            clip_hold: Default::default(),
         }
     }
 

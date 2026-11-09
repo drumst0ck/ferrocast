@@ -267,8 +267,22 @@ fn update(id: u64, change: impl FnOnce(&mut PinState, Frame, (f64, f64)) -> Fram
     });
 }
 
+/// Index of the first frame containing the point (Cocoa coordinates: the max edges are outside).
+fn frame_containing(frames: &[Frame], p: (f64, f64)) -> Option<usize> {
+    frames.iter().position(|f| p.0 >= f.x && p.0 < f.x + f.w && p.1 >= f.y && p.1 < f.y + f.h)
+}
+
+/// The visible area of the screen under the pointer, so a pin opens where the user is working.
+fn pointer_screen_area(mtm: MainThreadMarker) -> Option<NSRect> {
+    let m = NSEvent::mouseLocation();
+    let screens = NSScreen::screens(mtm);
+    let frames: Vec<Frame> = screens.iter().map(|s| to_frame(s.frame())).collect();
+    let i = frame_containing(&frames, (m.x, m.y))?;
+    screens.iter().nth(i).map(|s| s.visibleFrame())
+}
+
 /// Open a pin of the PNG at `png_path`, `pixel_size` pixels captured on a display of `scale`
-/// (shown at pixel size / scale points, centred on the main screen). Main thread only.
+/// (shown at pixel size / scale points, centred on the screen under the pointer). Main thread only.
 pub fn open(mtm: MainThreadMarker, png_path: &Path, pixel_size: (u32, u32), scale: f64) -> Result<PinId, String> {
     if pixel_size.0 == 0 || pixel_size.1 == 0 {
         return Err(ferrocast_core::i18n::tr("the image has no pixels").into_owned());
@@ -282,8 +296,9 @@ pub fn open(mtm: MainThreadMarker, png_path: &Path, pixel_size: (u32, u32), scal
     let base = points_size(pixel_size, scale);
     image.setSize(NSSize::new(base.0, base.1));
 
-    let area =
-        NSScreen::mainScreen(mtm).map(|s| s.visibleFrame()).unwrap_or(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0)));
+    let area = pointer_screen_area(mtm)
+        .or_else(|| NSScreen::mainScreen(mtm).map(|s| s.visibleFrame()))
+        .unwrap_or(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0)));
     let frame =
         Frame::new(area.origin.x + (area.size.width - base.0) / 2.0, area.origin.y + (area.size.height - base.1) / 2.0, base.0, base.1);
 
@@ -346,6 +361,17 @@ pub fn count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pin_opens_on_the_screen_under_the_pointer() {
+        let main = Frame::new(0.0, 0.0, 1440.0, 900.0);
+        let right = Frame::new(1440.0, -200.0, 1920.0, 1080.0);
+        let frames = [main, right];
+        assert_eq!(frame_containing(&frames, (100.0, 100.0)), Some(0));
+        assert_eq!(frame_containing(&frames, (2000.0, 500.0)), Some(1));
+        assert_eq!(frame_containing(&frames, (1440.0, 500.0)), Some(1), "the shared edge belongs to the right screen");
+        assert_eq!(frame_containing(&frames, (-5.0, 5.0)), None);
+    }
 
     #[test]
     fn zoom_is_clamped_to_25_and_400_percent() {

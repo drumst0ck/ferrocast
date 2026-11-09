@@ -122,6 +122,26 @@ impl ExtState {
             cancel: Arc::new(AtomicBool::new(false)),
         });
     }
+    pub(crate) fn test_set_list(&mut self, filtering: bool, items: &[(&str, &str)]) {
+        let items = items
+            .iter()
+            .map(|(id, title)| view::ListItem {
+                id: (*id).into(),
+                title: (*title).into(),
+                subtitle: String::new(),
+                icon: IconSpec::Builtin("star".into()),
+                accessories: vec![],
+                keywords: vec![],
+                actions: vec![],
+                detail: None,
+            })
+            .collect();
+        self.views = vec![ViewModel::List(ListView {
+            filtering,
+            sections: vec![view::ListSection { title: String::new(), items }],
+            ..Default::default()
+        })];
+    }
     pub(crate) fn test_set_node(&mut self, n: Option<NodeInfo>) {
         self.node = n;
     }
@@ -638,10 +658,7 @@ impl App {
                 let _ = s.sc.send(&HostMsg::Search { text: q.clone() });
             }
         }
-        let sel = self.ext_sections(q.trim()).into_iter().flat_map(|s| s.items).nth(self.selected).and_then(|i| match i.kind {
-            Kind::ExtItem(id) if !id.is_empty() => Some(id),
-            _ => None,
-        });
+        let sel = self.ext_selected_id(q.trim());
         if sel != self.ext.sent_sel {
             self.ext.sent_sel = sel.clone();
             if let Some(s) = self.ext.sess.as_mut() {
@@ -979,6 +996,20 @@ impl App {
             keywords: vec![],
             kind: Kind::ExtItem(String::new()),
         }
+    }
+
+    /// The extension's id of the selected row: the same row `ext_sections(q)` puts at `selected`,
+    /// found without building any `Item` (icons, strings). Note rows (loading, empty, unsupported)
+    /// have no id.
+    pub(crate) fn ext_selected_id(&self, q: &str) -> Option<String> {
+        let Some(ViewModel::List(l)) = self.ext_current() else { return None };
+        l.sections
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .filter(|i| !l.filtering || self.matches(q, &i.title, &format!("{} {}", i.subtitle, i.keywords.join(" "))).is_some())
+            .nth(self.selected)
+            .map(|i| i.id.clone())
+            .filter(|id| !id.is_empty())
     }
 
     /// Rows of the running command's current list.
