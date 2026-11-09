@@ -79,8 +79,13 @@ fn tokenize(s: &str) -> Option<Vec<Tok>> {
                 }
             }
             out.push(Tok::Num(v));
-        } else if c == 'x' && !chars.get(i + 1).is_some_and(|n| n.is_alphanumeric()) && i > 0 && !chars[i - 1].is_alphanumeric() {
-            // a lone `x` between operands means multiply: `2 x 3`
+        } else if c == 'x'
+            && i > 0
+            && ((!chars.get(i + 1).is_some_and(|n| n.is_alphanumeric()) && !chars[i - 1].is_alphanumeric())
+                // `2x3`: a digit on both sides
+                || (chars[i - 1].is_ascii_digit() && chars.get(i + 1).is_some_and(|n| n.is_ascii_digit() || *n == '.')))
+        {
+            // an `x` between operands means multiply: `2 x 3`, `2x3`
             out.push(Tok::Op('*'));
             i += 1;
         } else if c.is_alphabetic() || c == '°' || c == '²' {
@@ -339,7 +344,7 @@ fn apply(f: &str, a: &[f64]) -> Option<f64> {
         "floor" if one => x.floor(),
         "ceil" if one => x.ceil(),
         "round" if one => x.round(),
-        "round" => {
+        "round" if a.len() == 2 => {
             let p = 10f64.powi(a[1] as i32);
             (x * p).round() / p
         }
@@ -347,7 +352,7 @@ fn apply(f: &str, a: &[f64]) -> Option<f64> {
         "exp" if one => x.exp(),
         "ln" if one => x.ln(),
         "log" | "log10" if one => x.log10(),
-        "log" => x.ln() / a[1].ln(),
+        "log" if a.len() == 2 => x.ln() / a[1].ln(),
         "log2" if one => x.log2(),
         "sin" if one => x.sin(),
         "cos" if one => x.cos(),
@@ -397,9 +402,10 @@ pub fn format_number(v: f64, group: bool) -> String {
     let abs = v.abs();
     if !(1e-9..1e15).contains(&abs) {
         let s = format!("{v:e}");
-        return s;
+        return if group { scientific_display(&s) } else { s };
     }
-    let decimals = if abs >= 1.0 { (10 - abs.log10().floor() as i32).clamp(0, 10) } else { 10 };
+    // Tiny numbers get more decimals so they keep at least 7 significant digits.
+    let decimals = if abs >= 1.0 { (10 - abs.log10().floor() as i32).clamp(0, 10) } else { (7 - abs.log10().floor() as i32).max(10) };
     let mut s = format!("{:.*}", decimals as usize, v);
     if s.contains('.') {
         s = s.trim_end_matches('0').trim_end_matches('.').to_string();
@@ -425,10 +431,35 @@ pub fn format_number(v: f64, group: bool) -> String {
     }
 }
 
+/// `1.5e20` → `1.5 × 10²⁰` (display only; the raw answer stays `1.5e20`).
+fn scientific_display(s: &str) -> String {
+    let Some((mantissa, exp)) = s.split_once('e') else { return s.to_string() };
+    let sup: String = exp
+        .chars()
+        .map(|c| match c {
+            '-' => '⁻',
+            '0' => '⁰',
+            '1' => '¹',
+            '2' => '²',
+            '3' => '³',
+            '4' => '⁴',
+            '5' => '⁵',
+            '6' => '⁶',
+            '7' => '⁷',
+            '8' => '⁸',
+            '9' => '⁹',
+            o => o,
+        })
+        .collect();
+    format!("{mantissa} × 10{sup}")
+}
+
 /// Does the input look like something the user wants calculated?
 fn looks_like_math(s: &str) -> bool {
     let has_digit = s.chars().any(|c| c.is_ascii_digit());
-    let has_op = s.chars().any(|c| "+-*/^%!×÷()".contains(c));
+    let cs: Vec<char> = s.chars().collect();
+    let digit_x_digit = cs.windows(3).any(|w| w[0].is_ascii_digit() && w[1] == 'x' && (w[2].is_ascii_digit() || w[2] == '.'));
+    let has_op = digit_x_digit || s.chars().any(|c| "+-*/^%!×÷()".contains(c));
     let lower = s.to_lowercase();
     let words = [
         "sqrt", "root", "sin", "cos", "tan", "log", "ln", "pi", " of ", " off ", "power", "squared", "cubed", "abs", "mod", "min", "max",
@@ -450,7 +481,8 @@ fn try_conversion(s: &str, rem_px: f64) -> Option<CalcResult> {
     let (num_part, from) = units::aliases_longest_first().into_iter().find_map(|(alias, unit)| {
         let stripped = lhs.strip_suffix(alias)?;
         // Must be separated from a digit/space/paren, not part of a word
-        let ok = stripped.chars().last().is_some_and(|c| c.is_ascii_digit() || c == ' ' || c == ')' || c == '.');
+        // (a bare unit, `ft in m`, converts one of it)
+        let ok = stripped.chars().last().is_none_or(|c| c.is_ascii_digit() || c == ' ' || c == ')' || c == '.');
         ok.then(|| (stripped.trim().to_string(), unit))
     })?;
     let value = if num_part.is_empty() { 1.0 } else { eval_math(&num_part)? };
@@ -540,6 +572,45 @@ mod tests {
         assert!(evaluate("2 ft in in", 16.0).is_some());
         assert_eq!(evaluate("10 cm in m", 16.0).unwrap().raw, "0.1");
         assert!(evaluate("1 in to nothing", 16.0).is_none());
+    }
+
+    #[test]
+    fn two_x_three_and_extra_function_arguments() {
+        assert!(close(ev("2x3"), 6.0));
+        assert!(close(ev("2x3x4"), 24.0));
+        assert!(close(ev("2.5x4"), 10.0));
+        assert!(evaluate("0x", 16.0).is_none());
+        assert!(evaluate("round(1.234, 1, 5)", 16.0).is_none());
+        assert!(evaluate("log(8, 2, 3)", 16.0).is_none());
+        assert!(close(ev("round(1.26, 1)"), 1.3));
+        assert!(close(ev("log(8, 2)"), 3.0));
+    }
+
+    #[test]
+    fn a_bare_unit_converts_one() {
+        assert!(close(ev("ft in m"), 0.3048));
+        assert!(close(ev("km to m"), 1000.0));
+        assert_eq!(evaluate("1 in to cm", 16.0).unwrap().raw, "2.54");
+    }
+
+    #[test]
+    fn tiny_numbers_keep_significant_digits_and_extremes_are_scientific() {
+        assert_eq!(format_number(1.234567891e-8, false), "0.000000012345679");
+        assert_eq!(format_number(0.00012345678912, false), "0.00012345679");
+        assert_eq!(format_number(5e-10, false), "5e-10");
+        assert_eq!(format_number(1.5e20, false), "1.5e20");
+        assert_eq!(format_number(1.5e20, true), "1.5 × 10²⁰");
+        assert_eq!(format_number(-2e-12, true), "-2 × 10⁻¹²");
+        let r = evaluate("1/3000000000", 16.0).unwrap();
+        assert!(r.raw.parse::<f64>().is_ok());
+        let r = evaluate("10^20", 16.0).unwrap();
+        assert_eq!(r.raw, "1e20");
+        assert_eq!(r.display, "1 × 10²⁰");
+    }
+
+    #[test]
+    fn pints_do_not_claim_the_point_symbol() {
+        assert_eq!(evaluate("2 pints in cups", 16.0).unwrap().question, "2 pint → cup");
     }
 
     use super::*;

@@ -131,10 +131,15 @@ thread_local! {
 /// Run `f` showing every text as written: for text that is not Ferrocast's own (the user's
 /// names, an extension's titles), which must never be mistaken for a catalog key.
 pub fn with_verbatim<R>(f: impl FnOnce() -> R) -> R {
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            VERBATIM.with(|v| v.set(v.get() - 1));
+        }
+    }
     VERBATIM.with(|v| v.set(v.get() + 1));
-    let r = f();
-    VERBATIM.with(|v| v.set(v.get() - 1));
-    r
+    let _guard = Guard;
+    f()
 }
 
 thread_local! {
@@ -149,10 +154,14 @@ pub fn language() -> Lang {
 /// Run `f` with `l` as this thread's language, whatever the global one is: tests run in parallel.
 /// Misses are only recorded (see [`take_misses`]) while this is active.
 pub fn with_language<R>(l: Lang, f: impl FnOnce() -> R) -> R {
-    let prev = OVERRIDE.with(|o| o.replace(Some(l)));
-    let r = f();
-    OVERRIDE.with(|o| o.set(prev));
-    r
+    struct Restore(Option<Lang>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OVERRIDE.with(|o| o.set(self.0));
+        }
+    }
+    let _restore = Restore(OVERRIDE.with(|o| o.replace(Some(l))));
+    f()
 }
 
 const TABLE: &str = include_str!("i18n/strings.tsv");
@@ -228,7 +237,14 @@ pub fn tr(key: &str) -> Cow<'_, str> {
 thread_local! {
     /// The latest texts built by `trf`/`trn` (already in the interface language), so that a control
     /// handed one of them does not look it up again.
-    static BUILT: std::cell::RefCell<std::collections::VecDeque<String>> = const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+    static BUILT: std::cell::RefCell<Built> = std::cell::RefCell::new(Built::default());
+}
+
+/// The remembered texts in arrival order, plus a count per text for constant-time lookups.
+#[derive(Default)]
+struct Built {
+    order: std::collections::VecDeque<String>,
+    counts: HashMap<String, u32>,
 }
 
 /// How many built texts are remembered per thread.
@@ -237,15 +253,23 @@ const BUILT_KEPT: usize = 256;
 fn remember_built(s: &str) {
     BUILT.with(|b| {
         let mut b = b.borrow_mut();
-        if b.len() == BUILT_KEPT {
-            b.pop_front();
+        if b.order.len() == BUILT_KEPT {
+            if let Some(old) = b.order.pop_front() {
+                if let Some(n) = b.counts.get_mut(&old) {
+                    *n -= 1;
+                    if *n == 0 {
+                        b.counts.remove(&old);
+                    }
+                }
+            }
         }
-        b.push_back(s.to_string());
+        b.order.push_back(s.to_string());
+        *b.counts.entry(s.to_string()).or_insert(0) += 1;
     });
 }
 
 fn is_built(s: &str) -> bool {
-    BUILT.with(|b| b.borrow().iter().any(|x| x == s))
+    BUILT.with(|b| b.borrow().counts.contains_key(s))
 }
 
 /// Translate `key` into `lang`; English text when it has no translation.
@@ -356,6 +380,31 @@ pub fn placeholders(s: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_panic_inside_with_verbatim_or_with_language_restores_the_thread_state() {
+        let r = std::panic::catch_unwind(|| with_verbatim(|| panic!("boom")));
+        assert!(r.is_err());
+        assert_eq!(tr_in("Calculator", Lang::Es), "Calculadora", "verbatim scope leaked after a panic");
+        let r = std::panic::catch_unwind(|| with_language(Lang::Es, || panic!("boom")));
+        assert!(r.is_err());
+        let _ = take_misses();
+        let _ = tr_in("Never translated 8841", Lang::Es);
+        assert!(take_misses().is_empty(), "language override leaked after a panic");
+    }
+
+    #[test]
+    fn built_texts_stay_recognised_and_old_ones_are_forgotten() {
+        with_language(Lang::Es, || {
+            let first = trf("Delete {name}?", &[("name", "uniq-first-1")]);
+            assert!(is_built(&first));
+            for i in 0..BUILT_KEPT {
+                remember_built(&format!("filler {i}"));
+            }
+            assert!(!is_built(&first));
+            assert!(is_built("filler 5"));
+        });
+    }
+
     #[test]
     fn fill_does_not_rescan_substituted_values() {
         assert_eq!(fill("Move {name} to {folder}", &[("name", "{folder}"), ("folder", "Archive")]), "Move {folder} to Archive");

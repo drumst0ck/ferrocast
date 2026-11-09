@@ -17,6 +17,10 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Calculator and timers**: `timer 1.5h` now means 90 minutes, `timer 10 30` and absurdly large timers are no longer misread, `hsl(120 50 50)` is recognised as a colour, `ft in m`, `2x3` and tiny numbers such as `1/3000000000` work, very large and very small results show in scientific notation, and `round`/`log` with extra arguments are rejected. #calculator
+- **Time zones**: added san francisco, hong kong, hk, bangalore, ist, jst, bst and aest; the city in "time in …" is capitalised, and the timer description and "Time in" label follow the interface language. #calculator
+- **Snippets**: arguments of a `{snippet}` included in another snippet or quicklink are now asked for. #snippets
+- **Update check**: after a failed automatic check the retry no longer stalls when the system clock moves backwards.
 - **Website demo**: the calculator in the home page demo no longer runs dynamic code, so it keeps working under a strict content security policy. The Spanish home demo now shows Spanish labels, times and number formats, and a currency conversion no longer fires repeated rate requests while you type.
 - **Website docs header**: on the Spanish docs, the logo and Home link go to the Spanish home, and the navigation and menu labels are read in Spanish.
 - **Website changelog page**: tag filters and pagination now work together, `?page=` values that are not plain page numbers fall back to page 1, a page past the last one returns 404, and docs links that point to another site are ignored.

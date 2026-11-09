@@ -113,8 +113,16 @@ impl Rgba {
             }
             "hsl" | "hsla" => {
                 let h = parts[0].trim_end_matches("deg").parse::<f32>().ok()?;
-                let sat = parse_component(&parts[1], 1.0)?;
-                let l = parse_component(&parts[2], 1.0)?;
+                // CSS Color 4: a bare saturation/lightness is a percentage number (`hsl(120 50 50)`).
+                let pct = |p: &str| {
+                    if p.trim().ends_with('%') {
+                        parse_component(p, 1.0)
+                    } else {
+                        p.trim().parse::<f32>().ok().map(|v| v / 100.0)
+                    }
+                };
+                let sat = pct(&parts[1])?;
+                let l = pct(&parts[2])?;
                 let (r, g, b) = hsl_to_rgb(h, sat.clamp(0.0, 1.0), l.clamp(0.0, 1.0));
                 Some(Rgba { r, g, b, a })
             }
@@ -211,6 +219,15 @@ mod tests {
         let c = Rgba::parse("hsl(0 100% 50%)").unwrap();
         assert_eq!((c.r, c.g, c.b), (255, 0, 0));
         assert!(Rgba::parse("red").is_none());
+    }
+
+    #[test]
+    fn hsl_accepts_bare_percentages() {
+        let want = Rgba::parse("hsl(120 50% 50%)").unwrap();
+        assert_eq!((want.r, want.g, want.b), (64, 191, 64));
+        assert_eq!(Rgba::parse("hsl(120 50 50)"), Some(want));
+        assert_eq!(Rgba::parse("hsl(120, 50, 50)"), Some(want));
+        assert_eq!(Rgba::parse("hsla(120, 50, 50, 0.5)").map(|c| (c.r, c.g, c.b)), Some((64, 191, 64)));
     }
 
     #[test]
