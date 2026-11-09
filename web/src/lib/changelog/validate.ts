@@ -1,4 +1,5 @@
 import type { Category, ParsedRelease } from './parse';
+import { isSafeDocsPath } from './links';
 
 export interface ImportPayload {
   sourceSha: string;
@@ -32,7 +33,7 @@ export function validatePayload(input: unknown): ImportPayload {
       slugs.add(e.slug);
       if (!isStr(e.bodyMd) || !e.bodyMd) throw new Error(`${ea}.bodyMd must be a non-empty string`);
       if (e.title !== null && !isStr(e.title)) throw new Error(`${ea}.title must be a string or null`);
-      if (e.docsUrl !== null && !(isStr(e.docsUrl) && e.docsUrl.startsWith('/'))) throw new Error(`${ea}.docsUrl must be a path starting with / or null`);
+      if (e.docsUrl !== null && !(isStr(e.docsUrl) && isSafeDocsPath(e.docsUrl))) throw new Error(`${ea}.docsUrl must be a same-site path starting with a single / or null`);
       if (!Array.isArray(e.tags) || !e.tags.every((t: unknown) => isStr(t) && /^[a-z0-9-]+$/.test(t))) throw new Error(`${ea}.tags must be lowercase words`);
       if (!Number.isInteger(e.position)) throw new Error(`${ea}.position must be an integer`);
     });
