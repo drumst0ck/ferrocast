@@ -267,3 +267,129 @@ fn concurrent_chatgpt_requests_refresh_the_session_once() {
     }
     assert_eq!(refreshes.load(Ordering::SeqCst), 1, "one refresh served every waiting request");
 }
+
+fn r5_clip(id: &str, kind: ClipKind, content: &str) -> ClipEntry {
+    ClipEntry {
+        id: id.into(),
+        kind,
+        content: content.into(),
+        title: Some("t".into()),
+        copied_at: 7,
+        pinned: true,
+        source_app: Some("Safari".into()),
+        times_copied: 3,
+        width: 4,
+        height: 5,
+    }
+}
+
+#[test]
+fn deleting_a_clipboard_entry_offers_undo_that_restores_it_in_place_and_keeps_the_image() {
+    let mut app = fixture();
+    let dir = app.store.images_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pic.png"), b"x").unwrap();
+    let pic = r5_clip("b", ClipKind::Image, "pic.png");
+    *app.shared.clipboard.lock().unwrap() = vec![r5_clip("a", ClipKind::Text, "one"), pic.clone(), r5_clip("c", ClipKind::Text, "three")];
+    app.perform(Act::ClipDelete("b".into()), false);
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(draw::DELETED_TOAST));
+    assert_eq!(app.shared.clipboard.lock().unwrap().len(), 2);
+    assert!(dir.join("pic.png").exists(), "the image survives while Undo is on offer");
+    assert!(app.undo_entry_delete());
+    let list = app.shared.clipboard.lock().unwrap().clone();
+    assert_eq!(list.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
+    assert_eq!(list[1], pic, "same content and metadata");
+    drop(list);
+    assert!(!app.undo_entry_delete(), "one Undo per delete");
+    // once the window closes the image goes
+    app.perform(Act::ClipDelete("b".into()), false);
+    app.toast = app.toast.take().map(|(t, _)| (t, Instant::now() - Duration::from_secs(9)));
+    app.expire_toasts();
+    assert!(app.entry_undo.is_none());
+    assert!(!dir.join("pic.png").exists(), "pruned once Undo expired");
+    assert!(!app.undo_entry_delete());
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn deleting_a_note_or_a_calculator_entry_offers_undo() {
+    let (mut app, _) = notes_app(vec![notes_note("a", "Alpha", 1), notes_note("b", "Beta", 2)]);
+    app.notes[1].pinned_at = Some(5);
+    app.perform(Act::NoteDelete("b".into()), false);
+    assert!(app.notes[1].deleted_at.is_some());
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(draw::DELETED_TOAST));
+    assert!(app.undo_entry_delete());
+    assert!(app.notes[1].deleted_at.is_none() && app.notes[1].pinned_at == Some(5), "back, pin included");
+    let saved: Vec<Note> = app.store.load("notes.json");
+    assert!(saved[1].deleted_at.is_none());
+
+    let e =
+        |q: &str| ferrocast_core::models::CalcEntry { question: q.into(), display: q.into(), raw: q.into(), value: 1.0, unit: None, at: 1 };
+    app.calc_history = vec![e("1+1"), e("2+2"), e("3+3")];
+    app.perform(Act::DeleteCalcEntry(1), false);
+    assert_eq!(app.calc_history.len(), 2);
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(draw::DELETED_TOAST));
+    assert!(app.undo_entry_delete());
+    assert_eq!(app.calc_history.iter().map(|c| c.question.as_str()).collect::<Vec<_>>(), ["1+1", "2+2", "3+3"]);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn undo_after_a_delete_works_from_the_footer_link_and_cmd_z() {
+    let mut app = fixture();
+    app.calc_history = (0..3)
+        .map(|i| ferrocast_core::models::CalcEntry {
+            question: format!("{i}+0"),
+            display: String::new(),
+            raw: String::new(),
+            value: 0.0,
+            unit: None,
+            at: 1,
+        })
+        .collect();
+    app.perform(Act::DeleteCalcEntry(0), false);
+    sd4_render(&mut app);
+    let u = sd4_rect(&app, "settings-undo-rect").expect("the footer offers Undo");
+    click_at(&mut app, u.center());
+    assert_eq!(app.calc_history.len(), 3, "the link restored it");
+    app.perform(Act::DeleteCalcEntry(0), false);
+    sd4_render(&mut app);
+    let z = Event::Key { key: Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND };
+    render_mods(&mut app, vec![z], Modifiers::COMMAND);
+    assert_eq!(app.calc_history.len(), 3, "⌘Z restored it");
+    assert!(app.entry_undo.is_none());
+}
+
+#[test]
+fn another_message_waits_for_the_delete_undo_instead_of_removing_it() {
+    let mut app = fixture();
+    app.calc_history = vec![ferrocast_core::models::CalcEntry {
+        question: "1+1".into(),
+        display: String::new(),
+        raw: String::new(),
+        value: 0.0,
+        unit: None,
+        at: 1,
+    }];
+    app.perform(Act::DeleteCalcEntry(0), false);
+    app.toast("Something else");
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(draw::DELETED_TOAST));
+    assert!(app.undo_entry_delete());
+}
+
+#[test]
+fn leaving_ask_ai_cancels_the_request_in_flight() {
+    let mut app = fixture();
+    let cancel = Arc::new(services::AiCancel::default());
+    app.ai_cancel = Some(cancel.clone());
+    app.stack = vec![
+        View::Root,
+        View::Ai { prompt: String::new(), asked: String::new(), answer: String::new(), history: vec![], busy: true, run: 1 },
+    ];
+    app.cool_claude();
+    assert!(!cancel.is_stopped(), "Ask AI is still open");
+    app.stack.pop();
+    app.cool_claude();
+    assert!(cancel.is_stopped(), "closing Ask AI stops the request");
+    assert!(app.ai_cancel.is_none());
+}

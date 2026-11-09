@@ -47,6 +47,7 @@ fn fixture() -> App {
         visible: Default::default(),
         keywords: Default::default(),
         clip_dirty: Default::default(),
+        clip_hold: Default::default(),
     });
     let mut app = App {
         sync: SyncCtl::default(),
@@ -102,6 +103,7 @@ fn fixture() -> App {
         toast: None,
         toast_user: false,
         settings_undo: None,
+        entry_undo: None,
         pending_saves: Default::default(),
         prev_pid: None,
         visible: true,
@@ -125,6 +127,7 @@ fn fixture() -> App {
         show_t: None,
         nav_at: Instant::now(),
         claude: None,
+        ai_cancel: None,
         wheel_text: None,
         ai_models: Default::default(),
         tools: Default::default(),
@@ -16827,6 +16830,30 @@ fn a_view_hidden_past_the_restore_window_is_stopped_and_a_visible_one_is_not() {
     app.hidden_at = Instant::now() - Duration::from_secs(1000);
     app.ext_tick();
     assert!(app.ext.test_has_session(), "a visible launcher keeps its view");
+}
+
+#[test]
+fn the_selected_extension_row_is_found_like_the_drawn_list_does_without_building_it() {
+    let mut app = fixture();
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    app.stack = vec![View::Root, View::ExtList];
+    app.ext.test_set_base(1);
+    app.ext.test_set_list(true, &[("a", "Apple"), ("b", "Banana"), ("c", "Apricot")]);
+    for q in ["", "ap", "zzz"] {
+        for sel in 0..5 {
+            app.selected = sel;
+            let drawn = app.ext_sections(q).into_iter().flat_map(|s| s.items).nth(sel).and_then(|i| match i.kind {
+                Kind::ExtItem(id) if !id.is_empty() => Some(id),
+                _ => None,
+            });
+            assert_eq!(app.ext_selected_id(q), drawn, "query {q:?}, row {sel}");
+        }
+    }
+    app.selected = 1;
+    assert_eq!(app.ext_selected_id(""), Some("b".into()));
+    assert_eq!(app.ext_selected_id("ap"), Some("c".into()), "the filter moves the rows");
+    app.ext.test_set_list(false, &[("a", "Apple"), ("b", "Banana")]);
+    assert_eq!(app.ext_selected_id("ap"), Some("b".into()), "an extension that filters itself shows every row");
 }
 
 #[test]

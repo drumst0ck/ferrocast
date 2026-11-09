@@ -114,18 +114,26 @@ impl App {
     /// the undo state with it.
     fn expire_toasts(&mut self) {
         // the "Tab reset · Undo" toast stays as long as Undo works
-        let life = if self.toast.as_ref().is_some_and(|(t, _)| t == RESET_TOAST) { UNDO_SECS * 1000 } else { 2500 };
+        let reset = self.toast.as_ref().is_some_and(|(t, _)| t == RESET_TOAST);
+        let deleted = self.toast.as_ref().is_some_and(|(t, _)| t == DELETED_TOAST);
+        let life = if reset || deleted { UNDO_SECS * 1000 } else { 2500 };
         if self.toast.as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_millis(life)) {
-            if life > 2500 {
+            if reset {
                 self.settings_undo = None;
             }
+            if deleted {
+                self.finish_entry_undo();
+            }
             self.toast = None;
+        }
+        if self.entry_undo.as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_secs(UNDO_SECS)) {
+            self.finish_entry_undo();
         }
         if self.settings_undo.as_ref().is_some_and(|(_, _, t)| t.elapsed() > Duration::from_secs(UNDO_SECS)) {
             self.settings_undo = None;
         }
         // a message that arrived while Undo was on offer goes up once it is not
-        if self.toast.is_none() && self.settings_undo.is_none() {
+        if self.toast.is_none() && self.settings_undo.is_none() && self.entry_undo.is_none() {
             if let Some(msg) = self.ctx.data_mut(|d| d.remove_temp::<String>(Id::new("toast-after-undo"))) {
                 self.toast(msg);
             }
@@ -1000,11 +1008,15 @@ impl App {
             // a number box (crop W/H, slider value) being edited owns Enter and Escape too
             || (matches!(view, View::Editor { .. }) && self.editor.as_ref().is_some_and(|e| e.export.open))
             || (matches!(view, View::CropImage { .. } | View::CompressImage { .. } | View::EditPhoto { .. } | View::FrameImage { .. } | View::RedactImage { .. } | View::CollageImage { .. } | View::VideoCrop { .. } | View::VideoSpeed { .. } | View::VideoRedact { .. } | View::VideoSplit { .. } | View::EditMetadata { .. } | View::AudioTrim { .. } | View::BleepAudio { .. } | View::NormalizeAudio { .. } | View::ChannelsAudio { .. }) && kbd_edit);
-        ctx.input_mut(|i| {
+        // ⌘Z while "Deleted · Undo" shows: taken before the search field can use it for its own undo
+        let undo_offered = self.toast.as_ref().is_some_and(|(t, _)| t == DELETED_TOAST) && self.entry_undo.is_some();
+        let mut undo_delete = false;
+        let k = ctx.input_mut(|i| {
             let mut k = Keys::default();
             if hotkey {
                 return k;
             }
+            undo_delete = undo_offered && i.consume_key(CMD, Key::Z);
             // a click on a chip with its own key (Rotate R, Undo ⌘Z…) presses that key: the same code runs
             if let Some((modifiers, key)) = footer_key.as_deref().filter(|c| !matches!(*c, "⌘K" | "↵" | "esc")).and_then(chip_key) {
                 i.events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers });
@@ -1041,7 +1053,11 @@ impl App {
                 && !i.modifiers.any()
                 && i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Backspace, pressed: true, repeat: false, .. }));
             k
-        })
+        });
+        if undo_delete {
+            self.undo_entry_delete();
+        }
+        k
     }
 
     /// Returns true if state changed in a way that requires a fresh frame.
@@ -2197,9 +2213,10 @@ impl App {
         ui.ctx().data_mut(|d| d.remove::<Rect>(Id::new("settings-undo-rect")));
         let mut undo_clicked = false;
         match &self.toast {
-            Some((t, _)) if t == RESET_TOAST && self.settings_undo.is_some() => {
-                // "Tab reset ·" then a clickable "Undo"
-                let head = p.layout_no_wrap(format!("{} ", tr("Tab reset ·")), FontId::proportional(12.5), facc);
+            Some((t, _)) if (t == RESET_TOAST && self.settings_undo.is_some()) || (t == DELETED_TOAST && self.entry_undo.is_some()) => {
+                // "Tab reset ·" / "Deleted ·" then a clickable "Undo"
+                let lead = if t == DELETED_TOAST { "Deleted ·" } else { "Tab reset ·" };
+                let head = p.layout_no_wrap(format!("{} ", tr(lead)), FontId::proportional(12.5), facc);
                 let hw = head.size().x;
                 p.galley(Pos2::new(tx, cy - head.size().y / 2.0), head, facc);
                 record_text(ui.ctx(), pal, "footer-toast", facc, &[], 1.0);
@@ -2333,7 +2350,11 @@ impl App {
         {
             undo_clicked = true;
         }
-        if undo_clicked {
+        // the Undo link of "Deleted · Undo" (its ⌘Z is taken in `read_keys`)
+        let deleted_toast = self.toast.as_ref().is_some_and(|(t, _)| t == DELETED_TOAST) && self.entry_undo.is_some();
+        if deleted_toast && undo_clicked {
+            self.undo_entry_delete();
+        } else if undo_clicked {
             self.undo_settings_reset();
         }
     }
@@ -10254,7 +10275,9 @@ const NOW_PLAYING_NOTE: &str = "Shows any app that reports to macOS Now Playing.
 /// Toast shown after "Reset this tab"; the footer turns its "Undo" into a link.
 pub(crate) const RESET_TOAST: &str = "Tab reset · Undo";
 /// How long Undo stays available.
-const UNDO_SECS: u64 = 8;
+pub(crate) const UNDO_SECS: u64 = 8;
+/// Toast shown after deleting one entry; the footer turns its "Undo" into a link.
+pub(crate) const DELETED_TOAST: &str = "Deleted · Undo";
 
 /// The settings each tab's "Reset this tab" restores, by their stored (serde) names. Only tabs
 /// that hold no user data have an entry; commands, hotkeys per command, scripts and snippets stay.

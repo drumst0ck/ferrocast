@@ -15,10 +15,19 @@ pub struct ProcInfo {
 }
 
 impl ProcInfo {
-    /// The `.app` bundle this executable lives in, if any, for the icon.
+    /// The `.app` bundle this executable lives in, if any, for the icon: the innermost one (Xcode's
+    /// Simulator.app shows the Simulator icon, not Xcode's). Helper apps inside a framework or an
+    /// XPC service (browser renderers) have no icon of their own and keep the outer app's.
     pub fn bundle(&self) -> Option<String> {
-        let i = self.path.find(".app/")?;
-        Some(self.path[..i + 4].to_string())
+        let mut best = None;
+        for (i, _) in self.path.match_indices(".app/") {
+            let before = &self.path[..i];
+            if before.contains(".app/Contents/Frameworks/") || before.contains(".app/Contents/XPCServices/") {
+                continue;
+            }
+            best = Some(i);
+        }
+        best.map(|i| self.path[..i + 4].to_string())
     }
 }
 
@@ -95,6 +104,22 @@ mod tests {
         assert_eq!(v[0].bundle().as_deref(), Some("/Applications/Google Chrome.app"));
         assert!((v[0].mem_mb - 200.0).abs() < 0.01);
         assert_eq!(v[1].bundle(), None);
+    }
+
+    #[test]
+    fn nested_apps_use_the_innermost_bundle_unless_it_is_a_framework_helper() {
+        let p = |path: &str| ProcInfo { pid: 1, cpu: 0.0, mem_mb: 0.0, name: String::new(), path: path.into() };
+        assert_eq!(
+            p("/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator").bundle().as_deref(),
+            Some("/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app")
+        );
+        assert_eq!(
+            p("/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/1/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper")
+                .bundle()
+                .as_deref(),
+            Some("/Applications/Google Chrome.app")
+        );
+        assert_eq!(p("/Applications/Safari.app/Contents/MacOS/Safari").bundle().as_deref(), Some("/Applications/Safari.app"));
     }
 
     #[test]

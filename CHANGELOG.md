@@ -15,6 +15,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Menu bar icon**: the Menu bar icon switch in Settings → General now shows or hides the icon at once, without a restart. (docs: /docs/launcher/settings/) #settings
 - **Website conversion indexability**: 152 generic English conversion pages remain accessible with self canonicals but use noindex,follow and leave the sitemap; an explicit manifest restores both together.
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
+- **Undo a delete**: deleting a single entry in Clipboard History, Notes or the Calculator history now shows "Deleted · Undo" for 8 seconds; click Undo or press ⌘Z to bring the entry back where it was, with its content, pin and image. #launcher
+- **Process icons**: Search Processes shows the icon of the innermost app (Xcode's Simulator shows the Simulator icon); helper apps inside another app's frameworks keep the main app's icon. #launcher
+- **Pin to screen**: a pin opens on the display under the pointer instead of the main display. #capture
 
 ### Fixed
 - **Calculator and timers**: `timer 1.5h` now means 90 minutes, `timer 10 30` and absurdly large timers are no longer misread, `hsl(120 50 50)` is recognised as a colour, `ft in m`, `2x3` and tiny numbers such as `1/3000000000` work, very large and very small results show in scientific notation, and `round`/`log` with extra arguments are rejected. #calculator
@@ -94,6 +97,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **AI and ChatGPT**: the ChatGPT sign-in code stays out of the clipboard history, a refresh of the ChatGPT session no longer runs twice at once and signs you out, the "Cannot reach" message names the server that was really contacted (not your Ollama address for Anthropic or ChatGPT), and checking whether a key is stored no longer reads it from the Keychain. #ai
 - **Extensions and scripts**: a command that cannot start (Node.js missing or broken) leaves the running command and its screens alone, and Reload Script Commands and changing the script folders no longer make the launcher wait for the disk. #extensions #scripts
 - **Launcher polish**: the file subtitle shows `~` only at the start of a path under your home folder, icons no longer accumulate in memory over a long session, opening Language & Region settings, a web link or Quick Look no longer freezes the launcher or leaves a stray process, the permission helper's close button closes it safely, and file conversions with equal-length names no longer share a scratch folder. #launcher
+- **Ask AI**: closing Ask AI, or asking again, now stops the request that is still running instead of leaving it to finish in the background. #ai
 
 ## [0.5.0] - 2026-10-29
 

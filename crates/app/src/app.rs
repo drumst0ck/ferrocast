@@ -1007,6 +1007,13 @@ fn other_panel_visible(mtm: objc2::MainThreadMarker) -> bool {
         .any(|w| w.isVisible() && w.isKindOfClass(objc2_app_kit::NSPanel::class()))
 }
 
+/// What "Deleted · Undo" puts back: the entry and, where order matters, its position.
+pub(crate) enum EntryUndo {
+    Clip(usize, ferrocast_core::models::ClipEntry),
+    Note(ferrocast_core::models::Note),
+    Calc(usize, ferrocast_core::models::CalcEntry),
+}
+
 pub struct App {
     /// iCloud sync state (see `sync_ctl`).
     sync: SyncCtl,
@@ -1089,6 +1096,9 @@ pub struct App {
     toast_user: bool,
     /// The last "Reset this tab": (tab, the settings before it, when); Undo restores that tab's fields.
     settings_undo: Option<(usize, Settings, Instant)>,
+    /// The last single delete in Clipboard History, Notes or Calculator History, while its
+    /// "Deleted · Undo" toast is on offer.
+    entry_undo: Option<(EntryUndo, Instant)>,
     /// Edits applied in memory whose `settings.json` / `themes.json` write waits for a pause.
     pending_saves: PendingSaves,
     prev_pid: Option<i32>,
@@ -1138,6 +1148,8 @@ pub struct App {
     pub(crate) nav_at: Instant,
     /// Warm Claude Code process while Ask AI is open (ClaudeCode provider only).
     claude: Option<std::sync::Arc<services::ClaudeSession>>,
+    /// Stops the in-flight Ask AI request (a curl child) when a new question is asked or Ask AI closes.
+    ai_cancel: Option<std::sync::Arc<services::AiCancel>>,
     /// The text a Translate wheel is about; never logged.
     wheel_text: Option<String>,
     /// Model lists for the Settings picker, by `services::models_key`; `None` while loading.
@@ -1298,6 +1310,7 @@ impl App {
             visible: Default::default(),
             keywords: Default::default(),
             clip_dirty: Default::default(),
+            clip_hold: Default::default(),
         });
         services::start_clipboard(shared.clone(), bus.clone());
         services::start_wheel(shared.clone(), bus.clone());
@@ -1412,6 +1425,7 @@ impl App {
             toast,
             toast_user: false,
             settings_undo: None,
+            entry_undo: None,
             pending_saves: PendingSaves::default(),
             prev_pid: None,
             fx: Effects::real(),
@@ -1443,6 +1457,7 @@ impl App {
             show_t: None,
             nav_at: Instant::now(),
             claude: None,
+            ai_cancel: None,
             wheel_text: None,
             ai_models: Default::default(),
             tools: ferrocast_core::convert::Tools::detect(),
@@ -1948,7 +1963,15 @@ impl App {
             }
             return;
         }
-        services::ask_ai(&self.settings, history, question, run, self.bus.clone());
+        self.cancel_ai_request();
+        self.ai_cancel = Some(services::ask_ai(&self.settings, history, question, run, self.bus.clone()));
+    }
+
+    /// Stop the in-flight Ask AI request, if any.
+    pub(crate) fn cancel_ai_request(&mut self) {
+        if let Some(c) = self.ai_cancel.take() {
+            c.cancel();
+        }
     }
 
     /// Start Claude Code in the background so the first answer does not pay its boot time.
@@ -1964,6 +1987,7 @@ impl App {
     /// Drop the warm session once Ask AI is no longer on the stack.
     fn cool_claude(&mut self) {
         if !self.stack.iter().any(|v| matches!(v, View::Ai { .. })) {
+            self.cancel_ai_request();
             if let Some(c) = self.claude.take() {
                 c.kill();
             }
@@ -3066,11 +3090,75 @@ impl App {
         self.toast_user = true;
     }
 
+    /// A "Tab reset · Undo" or "Deleted · Undo" toast whose Undo still works.
+    fn undo_toast_live(&self) -> bool {
+        let shown = |t: &str| self.toast.as_ref().is_some_and(|(x, _)| x == t);
+        (shown(draw::RESET_TOAST) && self.settings_undo.is_some()) || (shown(draw::DELETED_TOAST) && self.entry_undo.is_some())
+    }
+
+    /// Show "Deleted · Undo" for `u`. A previous offer is final from now on.
+    fn offer_entry_undo(&mut self, u: EntryUndo) {
+        self.finish_entry_undo();
+        if let EntryUndo::Clip(_, e) = &u {
+            if e.kind == ferrocast_core::models::ClipKind::Image {
+                *self.shared.clip_hold.lock().unwrap_or_else(|e| e.into_inner()) = vec![e.clone()];
+            }
+        }
+        self.entry_undo = Some((u, Instant::now()));
+        self.toast(draw::DELETED_TOAST);
+        self.ctx.request_repaint_after(Duration::from_secs(draw::UNDO_SECS));
+    }
+
+    /// The undo window of a delete closed: the delete is final (a held image file may go now).
+    pub(crate) fn finish_entry_undo(&mut self) {
+        let Some((u, _)) = self.entry_undo.take() else { return };
+        if let EntryUndo::Clip(..) = u {
+            self.shared.clip_hold.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            self.shared.prune_clip_images();
+        }
+    }
+
+    /// Undo the last single delete: the entry returns at its position with its content and metadata.
+    pub(crate) fn undo_entry_delete(&mut self) -> bool {
+        let Some((u, _)) = self.entry_undo.take() else { return false };
+        match u {
+            EntryUndo::Clip(i, e) => {
+                {
+                    let mut list = self.shared.clipboard.lock().unwrap();
+                    if !list.iter().any(|x| x.id == e.id) {
+                        let at = i.min(list.len());
+                        list.insert(at, e);
+                    }
+                }
+                self.shared.clip_hold.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                self.shared.save_clipboard_in_background();
+            }
+            EntryUndo::Note(n) => {
+                self.notes_do(|_, d| {
+                    if let Some(slot) = d.notes.iter_mut().find(|x| x.id == n.id) {
+                        *slot = n;
+                    }
+                    crate::notes_ctl::Out { save_notes: true, ..Default::default() }
+                });
+            }
+            EntryUndo::Calc(i, e) => {
+                self.calc_history.insert(i.min(self.calc_history.len()), e);
+                let v = self.calc_history.clone();
+                self.persist("calc-history.json", &v);
+            }
+        }
+        if matches!(&self.toast, Some((t, _)) if t == draw::DELETED_TOAST) {
+            self.toast = None;
+        }
+        self.toast("Entry restored");
+        true
+    }
+
     fn toast(&mut self, s: impl Into<String>) {
         let s = s.into();
         // "Tab reset · Undo" stays while its Undo works: another message waits for it (shown by
         // `expire_toasts` afterwards) instead of removing the link
-        if s != draw::RESET_TOAST && self.settings_undo.is_some() && self.toast.as_ref().is_some_and(|(t, _)| t == draw::RESET_TOAST) {
+        if s != draw::RESET_TOAST && s != draw::DELETED_TOAST && self.undo_toast_live() {
             self.ctx.data_mut(|d| d.insert_temp(Id::new("toast-after-undo"), s));
             return;
         }
@@ -7321,9 +7409,10 @@ impl App {
             }
             Act::DeleteCalcEntry(i) => {
                 if i < self.calc_history.len() {
-                    self.calc_history.remove(i);
+                    let e = self.calc_history.remove(i);
                     let v = self.calc_history.clone();
                     self.persist("calc-history.json", &v);
+                    self.offer_entry_undo(EntryUndo::Calc(i, e));
                 }
             }
             Act::CopyFiles(files) => {
@@ -7881,7 +7970,14 @@ impl App {
                 self.shared.save_clipboard_in_background();
             }
             Act::ClipDelete(id) => {
-                self.shared.clipboard.lock().unwrap().retain(|e| e.id != id);
+                let removed = {
+                    let mut list = self.shared.clipboard.lock().unwrap();
+                    list.iter().position(|e| e.id == id).map(|i| (i, list.remove(i)))
+                };
+                // the old offer closes first (its image may go); the new one holds its own image
+                if let Some((i, e)) = removed {
+                    self.offer_entry_undo(EntryUndo::Clip(i, e));
+                }
                 self.shared.save_clipboard_in_background();
                 self.prune_clip_images();
             }
@@ -7897,7 +7993,13 @@ impl App {
                     self.new_snippet(t);
                 }
             }
-            Act::NoteDelete(id) => self.notes_do(|c, d| c.delete_id(d, &id)),
+            Act::NoteDelete(id) => {
+                let snapshot = self.notes.iter().find(|n| n.id == id && n.deleted_at.is_none()).cloned();
+                self.notes_do(|c, d| c.delete_id(d, &id));
+                if let Some(n) = snapshot {
+                    self.offer_entry_undo(EntryUndo::Note(n));
+                }
+            }
             Act::NotePin(id) => self.notes_do(|c, d| c.toggle_pin_id(d, &id)),
             Act::CreateNote => self.open_notes_window(|c, d| c.create_note(d)),
             Act::Trash(p) => match (self.fx.trash_file)(&p) {
