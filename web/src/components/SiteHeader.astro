@@ -1,15 +1,16 @@
 ---
+import { siteLabels } from '../lib/site-labels';
 interface Props { current?: string; switchHref?: string; switchLabel?: string; switchAria?: string; lang?: 'en' | 'es' }
 const { current = '', switchHref, switchLabel = 'ES', switchAria, lang = 'en' } = Astro.props;
 const home = lang === 'es' ? `${import.meta.env.BASE_URL.replace(/\/$/, '')}/es/` : `${import.meta.env.BASE_URL.replace(/\/$/, '')}/`;
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const repo = 'https://github.com/drumst0ck/ferrocast';
-const menuLabel = lang === 'es' ? 'Menú' : 'Menu';
+const menuLabel = siteLabels[lang].menu;
 ---
 <header class="top">
   <a class="mark" href={home}><img src={`${base}/icon.png`} alt="Ferrocast" width="30" height="30" />Ferrocast</a>
   <div class="menu" id="site-menu">
-    <nav class="nav" aria-label="Main">
+    <nav class="nav" aria-label={siteLabels[lang].mainNav}>
       <slot name="nav">
       <a href={`${base}/#features`}>Features</a>
       <a href={`${base}/files/`} class:list={{ on: current === 'files' }} aria-current={current === 'files' ? 'page' : undefined}>Files</a>

@@ -19,6 +19,7 @@ import conversions from '../../data/conversions.json';
 import { counts } from '../../data/status';
 import { repo, dmgUrl } from '../../data/install';
 import type { HomeCopy } from '../../i18n/home.en';
+import calcSrc from '../../lib/home-calc.js?raw';
 
 interface Props { t: HomeCopy; lang: 'en' | 'es' }
 const { t, lang } = Astro.props;
@@ -89,7 +90,11 @@ const jsonLd = [
 ];
 const steps = t.tour.steps;
 const shotSize = (f: string) => (f === 'record-editor' ? [1500, 954] : f === 'notes' || f.startsWith('files-') ? [1500, 950] : [1300, 823]);
-const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.demo.open, fileHeading: t.demo.fileHeading, fileKind: t.demo.fileKind, fileNeeds: t.demo.fileNeeds, fileAction: t.demo.fileAction, fileNote: t.demo.fileNote };
+const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.demo.open, fileHeading: t.demo.fileHeading, fileKind: t.demo.fileKind, fileNeeds: t.demo.fileNeeds, fileAction: t.demo.fileAction, fileNote: t.demo.fileNote, lang, result: t.demo.result, calculator: t.demo.calculator, answer: t.demo.answer, commands: t.demo.commands, results: t.demo.results, useWith: t.demo.useWith, searchWeb: t.demo.searchWeb, askAi: t.demo.askAi, kindCommand: t.demo.kindCommand, kindFallback: t.demo.kindFallback, timeIn: t.demo.timeIn };
+const cmdColors = ['#a45cf0', '#f0535f', '#f5a524', '#f5c524', '#46c98b', '#46c98b', '#46c98b', '#6c6c78', '#6c6c78'];
+const cmdIcons = ['AI', 'Ferrocast', '{ }', ':)', '▣', '▣', '▣', '⌘', 'S'];
+const cmdRows = t.demo.cmds.map(([n, sub], i) => [n, sub, cmdIcons[i], cmdColors[i]]);
+const calcInline = calcSrc.replace(/^export /gm, '') + '\nwindow.fcCalc = { evalExpr: evalExpr, fmtNum: fmtNum };';
 ---
 <Base title={title} description={description} canonical={canonical} jsonLd={jsonLd} lang={lang} alternates={alternates} preloadFonts="headline" jsonLdInBody>
   <a class="skip" href="#main">{t.skip}</a>
@@ -324,7 +329,8 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
     <span class="r">{t.footer.copyright}</span>
   </footer>
 
-  <script is:inline define:vars={{ faq: faq.map((f) => f[1]), T: clientT, fileOuts }}>
+  <script is:inline set:html={calcInline}></script>
+  <script is:inline define:vars={{ faq: faq.map((f) => f[1]), T: clientT, fileOuts, cmds: cmdRows }}>
     (function () {
       var $ = function (s, r) { return (r || document).querySelector(s); }, $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
       /* copy helper (used by the launcher demo) */
@@ -399,25 +405,26 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
       $$('.bento li').forEach(function (li) { li.addEventListener('pointermove', function (e) { var r = li.getBoundingClientRect(); li.style.setProperty('--mx', (e.clientX - r.left) + 'px'); li.style.setProperty('--my', (e.clientY - r.top) + 'px'); }); });
 
       /* launcher */
-      var q = $('#lzq'), body = $('#lzb'), act = $('#lzact'), sel = 0, items = [], timer, touched = false, cur = {};
-      var cmds = [['Ask AI', 'AI', 'AI', '#a45cf0'], ['Clipboard History', 'Ferrocast', '⎘', '#f0535f'], ['Search Snippets', 'Snippets', '{ }', '#f5a524'], ['Search Emoji & Symbols', 'Emoji', ':)', '#f5c524'], ['Left Half', 'Window Management', '▣', '#46c98b'], ['Right Half', 'Window Management', '▣', '#46c98b'], ['Maximize', 'Window Management', '▣', '#46c98b'], ['Keyboard Shortcuts', 'Ferrocast', '⌘', '#6c6c78'], ['Settings', 'Ferrocast', 'S', '#6c6c78']];
+      var q = $('#lzq'), body = $('#lzb'), act = $('#lzact'), sel = 0, items = [], timer, touched = false, rates = {}, pending = {}, calcLib = window.fcCalc;
       var zones = { ldn: ['Europe/London', 'London'], london: ['Europe/London', 'London'], sf: ['America/Los_Angeles', 'San Francisco'], nyc: ['America/New_York', 'New York'], ny: ['America/New_York', 'New York'], tokyo: ['Asia/Tokyo', 'Tokyo'], madrid: ['Europe/Madrid', 'Madrid'], paris: ['Europe/Paris', 'Paris'], berlin: ['Europe/Berlin', 'Berlin'] };
       var dist = { km: 1000, m: 1, mi: 1609.344, ft: 0.3048, in: 0.0254, cm: 0.01 };
-      function fmt(n) { return (Math.round(n * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); }
+      function fmt(n) { return calcLib.fmtNum(n, T.lang); }
+      function fill(tpl, k, v) { return tpl.replace('{' + k + '}', v); }
+      var loc = T.lang === 'es' ? 'es-ES' : 'en-US';
       function esc(s) { return s.replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
       function offset(tz, d) { var o = {}; new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(d).forEach(function (x) { o[x.type] = +x.value; }); return Date.UTC(o.year, o.month - 1, o.day, o.hour % 24, o.minute, o.second) - d.getTime(); }
-      function inZone(tz, d) { return new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d); }
+      function inZone(tz, d) { return new Intl.DateTimeFormat(loc, { timeZone: tz, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d); }
       function calc(v) {
         var s = v.trim().toLowerCase(), m;
         if ((m = s.match(/^(\d+(?:\.\d+)?)\s*([a-z]{3})\s+(?:in|to)\s+([a-z]{3})$/)) && !dist[m[2]]) return { cur: [+m[1], m[2].toUpperCase(), m[3].toUpperCase()] };
         if ((m = s.match(/^(\d+(?:\.\d+)?)\s*(km|mi|m|ft|in|cm)\s+(?:in|to)\s+(km|mi|m|ft|in|cm)$/))) return { q: m[1] + ' ' + m[2] + ' → ' + m[3], a: fmt(m[1] * dist[m[2]] / dist[m[3]]) + ' ' + m[3] };
-        if ((m = s.match(/^time in (\w+)$/)) && zones[m[1]]) return { q: 'Time in ' + zones[m[1]][1], a: inZone(zones[m[1]][0], new Date()) };
+        if ((m = s.match(/^time in (\w+)$/)) && zones[m[1]]) return { q: fill(T.timeIn, 'city', zones[m[1]][1]), a: inZone(zones[m[1]][0], new Date()) };
         if ((m = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(\w+)\s+in\s+(\w+)$/)) && zones[m[4]] && zones[m[5]]) {
           var h = m[3] ? +m[1] % 12 + (m[3] === 'pm' ? 12 : 0) : +m[1], now = new Date(), base = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, +(m[2] || 0)), t = new Date(base - offset(zones[m[4]][0], new Date(base)));
           return { q: m[1] + (m[2] ? ':' + m[2] : '') + (m[3] ? ' ' + m[3].toUpperCase() : '') + ' ' + zones[m[4]][1], a: inZone(zones[m[5]][0], t) };
         }
         if ((m = s.match(/^(\d+(?:\.\d+)?)\s*%\s*of\s*(\d+(?:\.\d+)?)$/))) return { q: m[1] + '% of ' + m[2], a: fmt(m[1] * m[2] / 100) };
-        if (/^[\d\s+\-*/().,%^]*\d[\d\s+\-*/().,%^]*$/.test(s) && /[+\-*/^%]/.test(s)) { try { var r = Function('"use strict";return (' + s.replace(/,/g, '.').replace(/\^/g, '**') + ')')(); if (isFinite(r)) return { q: v.trim(), a: fmt(r) }; } catch (e) {} }
+        if (/^[\d\s+\-*/().,%^]*\d[\d\s+\-*/().,%^]*$/.test(s) && /[+\-*/^%]/.test(s)) { var r = calcLib.evalExpr(s); if (r !== null) return { q: v.trim(), a: fmt(r) }; }
         return null;
       }
       function row(i, title, sub, ic, bg, key, extra) { return '<div class="lz-r' + (i === sel ? ' sel' : '') + '" data-i="' + i + '"><span class="ic" style="background:' + bg + '">' + ic + '</span><span class="t">' + title + (sub ? '<i>' + sub + '</i>' : '') + '</span><span class="k">' + key + '</span></div>'; }
@@ -430,20 +437,20 @@ const clientT = { copied: t.demo.copied, copyAnswer: t.demo.copyAnswer, open: t.
         var v = q.value, isFile = /^heic\s+(to|in)\b/i.test(v.trim());
         if (isFile) { sel = 0; items = [{}]; body.innerHTML = fileHtml(); act.textContent = T.fileAction; return; }
         var r = v.trim() ? calc(v) : null, html = '', i = 0; items = [];
-        if (r && r.cur) { var k = r.cur[1] + r.cur[2]; if (cur[k] === undefined) { html += '<div class="lz-h">Result</div><div class="lz-res"><div><div class="q">' + r.cur[0] + ' ' + r.cur[1] + ' → ' + r.cur[2] + '</div><small>Calculator</small></div><span class="ar">→</span><div><div class="a">…</div><small>Answer</small></div></div>'; fetchRate(r.cur); } else if (cur[k]) { r = { q: r.cur[0] + ' ' + r.cur[1] + ' → ' + r.cur[2], a: fmt(r.cur[0] * cur[k]) + ' ' + r.cur[2] }; } else { r = null; } }
-        if (r && r.a) { html += '<div class="lz-h">Result</div><div class="lz-res"><div><div class="q">' + esc(r.q) + '</div><small>Calculator</small></div><span class="ar">→</span><div><div class="a">' + esc(r.a) + '</div><small>Answer</small></div></div>'; items.push({ copy: r.a }); i = 1; }
+        if (r && r.cur) { var k = r.cur[1] + r.cur[2]; if (rates[k] === undefined) { html += '<div class="lz-h">' + esc(T.result) + '</div><div class="lz-res"><div><div class="q">' + r.cur[0] + ' ' + r.cur[1] + ' → ' + r.cur[2] + '</div><small>' + esc(T.calculator) + '</small></div><span class="ar">→</span><div><div class="a">…</div><small>' + esc(T.answer) + '</small></div></div>'; fetchRate(r.cur); } else if (rates[k]) { r = { q: r.cur[0] + ' ' + r.cur[1] + ' → ' + r.cur[2], a: fmt(r.cur[0] * rates[k]) + ' ' + r.cur[2] }; } else { r = null; } }
+        if (r && r.a) { html += '<div class="lz-h">' + esc(T.result) + '</div><div class="lz-res"><div><div class="q">' + esc(r.q) + '</div><small>' + esc(T.calculator) + '</small></div><span class="ar">→</span><div><div class="a">' + esc(r.a) + '</div><small>' + esc(T.answer) + '</small></div></div>'; items.push({ copy: r.a }); i = 1; }
         var f = cmds.filter(function (c) { return !v.trim() || (c[0] + ' ' + c[1]).toLowerCase().indexOf(v.trim().toLowerCase()) > -1; });
         if (!(r && r.a)) {
-          if (f.length) { html += '<div class="lz-h">' + (v.trim() ? 'Results' : 'Commands') + '</div>'; f.slice(0, 6).forEach(function (c) { html += row(i, esc(c[0]), esc(c[1]), c[2], c[3], 'Command'); items.push({}); i++; }); }
+          if (f.length) { html += '<div class="lz-h">' + esc(v.trim() ? T.results : T.commands) + '</div>'; f.slice(0, 6).forEach(function (c) { html += row(i, esc(c[0]), esc(c[1]), c[2], c[3], esc(T.kindCommand)); items.push({}); i++; }); }
         }
-        if (v.trim()) { html += '<div class="lz-h">Use with…</div>'; [['Search the web for “' + esc(v.trim()) + '”', '⌕', '#6c6c78'], ['Ask AI: “' + esc(v.trim()) + '”', 'AI', '#a45cf0']].forEach(function (c) { html += row(i, c[0], '', c[1], c[2], 'Fallback'); items.push({}); i++; }); }
+        if (v.trim()) { html += '<div class="lz-h">' + esc(T.useWith) + '</div>'; [[fill(T.searchWeb, 'q', esc(v.trim())), '⌕', '#6c6c78'], [fill(T.askAi, 'q', esc(v.trim())), 'AI', '#a45cf0']].forEach(function (c) { html += row(i, c[0], '', c[1], c[2], esc(T.kindFallback)); items.push({}); i++; }); }
         if (sel >= items.length) sel = 0;
         body.innerHTML = html;
         $$('.lz-r', body).forEach(function (el) { el.classList.toggle('sel', +el.dataset.i === sel); });
         var s = $('.lz-res'); if (s && items[0] && items[0].copy) { s.classList.toggle('sel', sel === 0); }
         act.textContent = items[sel] && items[sel].copy ? T.copyAnswer : T.open;
       }
-      function fetchRate(c) { var k = c[1] + c[2]; fetch('https://api.frankfurter.dev/v1/latest?base=' + c[1] + '&symbols=' + c[2]).then(function (r) { return r.json(); }).then(function (j) { cur[k] = (j.rates && j.rates[c[2]]) || 0; render(); }).catch(function () { cur[k] = 0; render(); }); }
+      function fetchRate(c) { var k = c[1] + c[2]; if (pending[k]) return; pending[k] = true; fetch('https://api.frankfurter.dev/v1/latest?base=' + c[1] + '&symbols=' + c[2]).then(function (r) { return r.json(); }).then(function (j) { rates[k] = (j.rates && j.rates[c[2]]) || 0; }).catch(function () { rates[k] = 0; }).then(function () { pending[k] = false; render(); }); }
       function set(v) { q.value = v; sel = 0; render(); }
       q.addEventListener('input', function () { touched = true; sel = 0; render(); });
       q.addEventListener('keydown', function (e) {
