@@ -2048,3 +2048,8 @@ the file is not a readable image	el archivo no es una imagen legible	die Datei i
 AirDrop is not available on this Mac	AirDrop no está disponible en este Mac	AirDrop ist auf diesem Mac nicht verfügbar	AirDrop n’est pas disponible sur ce Mac	O AirDrop não está disponível neste Mac	このMacではAirDropを利用できません	此 Mac 上无法使用隔空投送
 There is nothing to share	No hay nada que compartir	Es gibt nichts zu teilen	Il n’y a rien à partager	Não há nada para compartilhar	共有するものがありません	没有可共享的内容
 AirDrop cannot share these items	AirDrop no puede compartir estos elementos	AirDrop kann diese Objekte nicht teilen	AirDrop ne peut pas partager ces éléments	O AirDrop não pode compartilhar esses itens	AirDropではこれらの項目を共有できません	隔空投送无法共享这些项目
+{n}h	{n} h	{n} Std.	{n} h	{n} h	{n}時間	{n} 小时
+{n} min	{n} min	{n} Min.	{n} min	{n} min	{n}分	{n} 分钟
+{n} sec	{n} s	{n} Sek.	{n} s	{n} s	{n}秒	{n} 秒
+Time in {city}	Hora en {city}	Uhrzeit in {city}	Heure à {city}	Hora em {city}	{city}の時刻	{city}的时间
+Pomodoro	Pomodoro	Pomodoro	Pomodoro	Pomodoro	ポモドーロ	番茄钟

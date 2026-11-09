@@ -197,11 +197,26 @@ fn arg_key(p: &Placeholder, unnamed_idx: &mut usize) -> String {
 
 /// List the distinct arguments (max 3) a template asks for, in order.
 pub fn arguments(template: &str) -> Vec<ArgumentDef> {
+    arguments_with(template, None)
+}
+
+/// Like [`arguments`], also listing the arguments of `{snippet name="…"}` templates that
+/// `snippets` resolves (the same nesting [`expand`] follows).
+pub fn arguments_with(template: &str, snippets: Option<SnippetLookup>) -> Vec<ArgumentDef> {
     let mut out: Vec<ArgumentDef> = vec![];
+    collect_arguments(template, snippets, 0, &mut out);
+    out
+}
+
+fn collect_arguments(template: &str, snippets: Option<SnippetLookup>, depth: usize, out: &mut Vec<ArgumentDef>) {
     let mut idx = 0;
     for piece in tokenize(template) {
-        if let Piece::Ph(p) = piece {
-            if p.name == "argument" {
+        if out.len() == 3 {
+            return;
+        }
+        let Piece::Ph(p) = piece else { continue };
+        match p.name.as_str() {
+            "argument" => {
                 let name = arg_key(&p, &mut idx);
                 if out.iter().any(|a| a.name == name) {
                     continue;
@@ -214,13 +229,15 @@ pub fn arguments(template: &str) -> Vec<ArgumentDef> {
                         .map(|o| o.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
                         .unwrap_or_default(),
                 });
-                if out.len() == 3 {
-                    break;
+            }
+            "snippet" if depth < MAX_SNIPPET_DEPTH => {
+                if let Some(body) = p.attr("name").and_then(|n| snippets.and_then(|f| f(n))) {
+                    collect_arguments(&body, snippets, depth + 1, out);
                 }
             }
+            _ => {}
         }
     }
-    out
 }
 
 /// Parse `+2y +5M -3d +1h +30m`.
@@ -505,6 +522,23 @@ mod tests {
         let e = expand("console.log({cursor})", Target::Snippet, &ctx());
         assert_eq!(e.text, "console.log()");
         assert_eq!(e.cursor, Some(12));
+    }
+
+    #[test]
+    fn arguments_of_included_snippets_are_collected() {
+        let lookup = |n: &str| match n {
+            "inner" => Some("Hi {argument name=\"who\"} {snippet name=\"deep\"}".to_string()),
+            "deep" => Some("{argument name=\"city\" default=\"Rome\"}".to_string()),
+            "loop" => Some("{snippet name=\"loop\"}{argument name=\"x\"}".to_string()),
+            _ => None,
+        };
+        let t = "{snippet name=\"inner\"} {argument name=\"q\"} {argument name=\"who\"}";
+        let names: Vec<_> = arguments_with(t, Some(&lookup)).into_iter().map(|a| a.name).collect();
+        assert_eq!(names, ["who", "city", "q"]);
+        assert_eq!(arguments_with("{snippet name=\"inner\"}", None).len(), 0);
+        // A snippet that includes itself terminates.
+        assert_eq!(arguments_with("{snippet name=\"loop\"}", Some(&lookup)).len(), 1);
+        assert_eq!(arguments(t).len(), 2);
     }
 
     #[test]

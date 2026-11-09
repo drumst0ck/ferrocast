@@ -2,6 +2,8 @@
 
 use chrono::{DateTime, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 const ALIASES: &[(&str, &str)] = &[
     ("ldn", "Europe/London"),
@@ -27,6 +29,17 @@ const ALIASES: &[(&str, &str)] = &[
     ("são paulo", "America/Sao_Paulo"),
     ("dubai", "Asia/Dubai"),
     ("beijing", "Asia/Shanghai"),
+    ("san francisco", "America/Los_Angeles"),
+    ("hk", "Asia/Hong_Kong"),
+    ("hong kong", "Asia/Hong_Kong"),
+    ("mexico city", "America/Mexico_City"),
+    ("bangalore", "Asia/Kolkata"),
+    ("bengaluru", "Asia/Kolkata"),
+    // India has no daylight saving, so "ist" and "jst" are the same all year too.
+    ("ist", "Asia/Kolkata"),
+    ("jst", "Asia/Tokyo"),
+    ("bst", "Etc/GMT-1"),
+    ("aest", "Australia/Brisbane"),
 ];
 
 /// City or alias → time zone. Matches the last segment of IANA names.
@@ -38,7 +51,32 @@ pub fn lookup(name: &str) -> Option<Tz> {
     if let Some((_, id)) = ALIASES.iter().find(|(a, _)| *a == n) {
         return id.parse().ok();
     }
-    chrono_tz::TZ_VARIANTS.iter().find(|tz| tz.name().rsplit('/').next().is_some_and(|c| c.replace('_', " ").to_lowercase() == n)).copied()
+    cities().get(n.as_str()).copied()
+}
+
+/// Lower-case city name (last segment of the IANA name) → zone; the first zone listed wins.
+fn cities() -> &'static HashMap<String, Tz> {
+    static C: OnceLock<HashMap<String, Tz>> = OnceLock::new();
+    C.get_or_init(|| {
+        let mut m = HashMap::new();
+        for tz in chrono_tz::TZ_VARIANTS {
+            if let Some(c) = tz.name().rsplit('/').next() {
+                m.entry(c.replace('_', " ").to_lowercase()).or_insert(tz);
+            }
+        }
+        m
+    })
+}
+
+/// `new york` → `New York`.
+fn title_case(s: &str) -> String {
+    s.split_whitespace()
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn parse_clock(t: &str) -> Option<NaiveTime> {
@@ -85,7 +123,10 @@ pub fn evaluate(input: &str, now: DateTime<Utc>) -> Option<(String, String)> {
         let tz = lookup(city)?;
         let t = now.with_timezone(&tz);
         let day_differs = t.date_naive() != now.with_timezone(&chrono::Local).date_naive();
-        return Some((format!("Time in {}", city.trim()), format!("{} {}", show(&t, day_differs), t.format("%Z"))));
+        return Some((
+            crate::i18n::trf("Time in {city}", &[("city", &title_case(city))]),
+            format!("{} {}", show(&t, day_differs), t.format("%Z")),
+        ));
     }
     // <clock> <city> in <city>
     let (lhs, to_city) = s.rsplit_once(" in ")?;
@@ -145,6 +186,31 @@ mod tests {
         assert_eq!(lookup("new york"), Some(chrono_tz::America::New_York));
         assert_eq!(lookup("ldn"), Some(chrono_tz::Europe::London));
         assert!(lookup("notacity").is_none());
+    }
+
+    #[test]
+    fn more_aliases() {
+        assert_eq!(lookup("san francisco"), Some(chrono_tz::America::Los_Angeles));
+        assert_eq!(lookup("hk"), Some(chrono_tz::Asia::Hong_Kong));
+        assert_eq!(lookup("hong kong"), Some(chrono_tz::Asia::Hong_Kong));
+        assert_eq!(lookup("ist"), Some(chrono_tz::Asia::Kolkata));
+        assert_eq!(lookup("bangalore"), Some(chrono_tz::Asia::Kolkata));
+        assert_eq!(lookup("jst"), Some(chrono_tz::Asia::Tokyo));
+        assert_eq!(lookup("mexico city"), Some(chrono_tz::America::Mexico_City));
+        assert!(lookup("aest").is_some());
+        let summer = Utc.with_ymd_and_hms(2026, 7, 15, 12, 0, 0).unwrap();
+        let (_, a) = evaluate("12pm bst in utc", summer).unwrap();
+        assert!(a.starts_with("11:00 AM"), "{a}");
+    }
+
+    #[test]
+    fn time_in_shows_a_capitalised_city_and_translates() {
+        let (q, _) = evaluate("time in new york", now()).unwrap();
+        assert_eq!(q, "Time in New York");
+        crate::i18n::with_language(crate::i18n::Lang::Es, || {
+            let (q, _) = evaluate("time in tokyo", now()).unwrap();
+            assert_eq!(q, "Hora en Tokyo");
+        });
     }
 
     #[test]

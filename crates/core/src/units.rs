@@ -74,7 +74,7 @@ pub static UNITS: &[Unit] = &[
     u!("liter", "l", Volume, 1.0, ["l", "liter", "liters", "litre", "litres"]),
     u!("gallon", "gal", Volume, 3.785411784, ["gal", "gallon", "gallons"]),
     u!("quart", "qt", Volume, 0.946352946, ["qt", "quart", "quarts"]),
-    u!("pint", "pt", Volume, 0.473176473, ["pint", "pints"]),
+    u!("pint", "pint", Volume, 0.473176473, ["pint", "pints"]),
     u!("cup", "cup", Volume, 0.2365882365, ["cup", "cups"]),
     u!("fluid ounce", "fl oz", Volume, 0.0295735295625, ["fl oz", "floz"]),
     u!("tablespoon", "tbsp", Volume, 0.01478676478125, ["tbsp", "tablespoon", "tablespoons"]),
@@ -161,6 +161,11 @@ mod tests {
     #[test]
     fn css() {
         assert!((conv(2.0, "rem", "px") - 32.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pint_and_point_have_different_symbols() {
+        assert_ne!(find("pint").unwrap().symbol, find("pt").unwrap().symbol);
     }
 
     #[test]

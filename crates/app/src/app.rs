@@ -4523,7 +4523,10 @@ impl App {
                 kind: Kind::Url(u),
             });
         }
-        if let Some(t) = ferrocast_core::timer::parse(q) {
+        if let Some(mut t) = ferrocast_core::timer::parse(q) {
+            if !t.label.is_empty() {
+                t.label = tr(&t.label).into_owned();
+            }
             let what = if t.label.is_empty() {
                 ferrocast_core::timer::describe(t.secs)
             } else {
@@ -5804,7 +5807,9 @@ impl App {
             }
             Kind::Quicklink { id, arg } => {
                 let Some(ql) = self.quicklinks.iter().find(|q| &q.id == id).cloned() else { return };
-                let defs = placeholders::arguments(&ql.link);
+                let snaps = self.snippets.clone();
+                let lookup = |n: &str| snaps.iter().find(|s| s.name == n).map(|s| s.text.clone());
+                let defs = placeholders::arguments_with(&ql.link, Some(&lookup));
                 match (defs.len(), arg) {
                     (0, _) => self.open_quicklink(&ql, HashMap::new()),
                     (1, Some(a)) if !a.is_empty() => {
@@ -5817,7 +5822,9 @@ impl App {
             }
             Kind::Snippet(id) => {
                 let Some(s) = self.snippets.iter().find(|s| &s.id == id).cloned() else { return };
-                let defs = placeholders::arguments(&s.text);
+                let snaps = self.snippets.clone();
+                let lookup = |n: &str| snaps.iter().find(|s| s.name == n).map(|s| s.text.clone());
+                let defs = placeholders::arguments_with(&s.text, Some(&lookup));
                 if defs.is_empty() {
                     self.paste_snippet(&s, HashMap::new());
                 } else {

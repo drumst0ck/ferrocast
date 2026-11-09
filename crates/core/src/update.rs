@@ -110,7 +110,7 @@ pub fn split_status(out: &str) -> (&str, u16) {
 
 /// After a failed automatic check, wait an hour before trying again (never every few minutes).
 pub fn retry_due(last_failure: Option<i64>, now: i64) -> bool {
-    last_failure.is_none_or(|f| now - f >= 3_600)
+    last_failure.is_none_or(|f| now < f || now - f >= 3_600)
 }
 
 pub fn parse_latest(json: &str) -> Option<Release> {
@@ -240,6 +240,8 @@ mod tests {
         assert!(retry_due(None, 1_000));
         assert!(!retry_due(Some(1_000), 1_000 + 3_599));
         assert!(retry_due(Some(1_000), 1_000 + 3_600));
+        // The clock went backwards: never wait for a future failure time.
+        assert!(retry_due(Some(10_000), 5_000));
     }
     use super::*;
     use std::path::Path;
