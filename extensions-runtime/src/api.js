@@ -2,6 +2,7 @@
 // Our implementation of the `@raycast/api` surface that Ferrocast supports. Everything it cannot do
 // fails with "not supported in Ferrocast yet: <name>" instead of silently doing nothing.
 const React = require('react');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const bridge = require('./bridge');
@@ -183,7 +184,10 @@ const LocalStorage = {
 const cacheStores = new Map(); // namespace -> {data, subs}
 class Cache {
   constructor(opts = {}) {
-    this._ns = (opts.namespace || 'default').replace(/[^\w.-]/g, '_');
+    const raw = String(opts.namespace || 'default');
+    this._ns = raw.replace(/[^\w.-]/g, '_');
+    // "a/b" and "a_b" must not share a file: a namespace the file name had to rewrite gets a hash of the original
+    if (this._ns !== raw) this._ns += `-${crypto.createHash('sha1').update(raw).digest('hex').slice(0, 8)}`;
     // @raycast/utils hands these around detached (`useSyncExternalStore(cache.subscribe, ...)`)
     for (const m of ['has', 'get', 'set', 'remove', 'clear', 'subscribe']) this[m] = this[m].bind(this);
   }
@@ -191,8 +195,14 @@ class Cache {
   _store() {
     let st = cacheStores.get(this._ns);
     if (!st) {
-      st = { data: {}, subs: new Set() };
-      try { st.data = JSON.parse(fs.readFileSync(this._file(), 'utf8')); } catch { /* none yet */ }
+      // null prototype: keys like "constructor" or "__proto__" are ordinary entries, not Object.prototype members
+      st = { data: Object.create(null), subs: new Set() };
+      try {
+        const parsed = JSON.parse(fs.readFileSync(this._file(), 'utf8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          for (const k of Object.keys(parsed)) Object.defineProperty(st.data, k, { value: parsed[k], writable: true, enumerable: true, configurable: true });
+        }
+      } catch { /* none yet, or unreadable: start empty */ }
       cacheStores.set(this._ns, st);
     }
     return st;
@@ -209,14 +219,24 @@ class Cache {
       try { fs.unlinkSync(tmp); } catch { /* not written */ }
       bridge.log(`cache write failed: ${e.message}`);
     }
-    for (const f of [...st.subs]) f(key, value);
+    // a subscriber that throws must neither break the write nor starve the other subscribers
+    for (const f of [...st.subs]) {
+      try { f(key, value); } catch (e) { bridge.log(`cache subscriber failed: ${e && e.message}`); }
+    }
   }
   get isEmpty() { return Object.keys(this._store().data).length === 0; }
   has(key) { return key in this._store().data; }
   get(key) { return this._store().data[key]; }
-  set(key, value) { this._store().data[key] = value; this._save(key, value); }
-  remove(key) { const had = delete this._store().data[key]; this._save(key, undefined); return had; }
-  clear() { this._store().data = {}; this._save(undefined, undefined); }
+  set(key, value) { this._set(this._store(), key, value); this._save(key, value); }
+  _set(st, key, value) { Object.defineProperty(st.data, key, { value, writable: true, enumerable: true, configurable: true }); }
+  remove(key) {
+    const st = this._store();
+    if (!(key in st.data)) return false;
+    delete st.data[key];
+    this._save(key, undefined);
+    return true;
+  }
+  clear() { this._store().data = Object.create(null); this._save(undefined, undefined); }
   subscribe(f) { const subs = this._store().subs; subs.add(f); return () => subs.delete(f); }
 }
 

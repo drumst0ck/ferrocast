@@ -4,13 +4,21 @@ import * as schema from './schema';
 
 export type Db = PostgresJsDatabase<typeof schema>;
 
+/** Shared pool options. `statement_timeout` keeps a stuck query from holding a connection (and the page) forever. */
+export const poolOptions = {
+  max: 5,
+  idle_timeout: 20,
+  connect_timeout: 5,
+  connection: { statement_timeout: 10000 },
+};
+
 let cached: Db | null = null;
 
 /** Lazily connects with DATABASE_URL (read at runtime, never at build). Returns null when unset. */
 export function getDb(): Db | null {
   const url = process.env.DATABASE_URL;
   if (!url) return null;
-  cached ??= drizzle(postgres(url, { max: 5, idle_timeout: 20, connect_timeout: 5 }), { schema });
+  cached ??= drizzle(postgres(url, poolOptions), { schema });
   return cached;
 }
 

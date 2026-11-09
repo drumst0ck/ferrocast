@@ -35,4 +35,13 @@ describe('home copy', () => {
     const text = JSON.stringify(es);
     expect(text).not.toMatch(/\b(vos|tenés|podés|querés|pulsá|arrastrá|hacé|mirá|elegí)\b/i);
   });
+  it('translates every launcher-demo label in Spanish', () => {
+    const keys = ['result', 'calculator', 'answer', 'commands', 'results', 'useWith', 'searchWeb', 'askAi', 'kindCommand', 'kindFallback', 'timeIn'] as const;
+    for (const k of keys) {
+      expect(typeof en.demo[k], k).toBe('string');
+      expect(es.demo[k], k).not.toBe(en.demo[k]);
+    }
+    expect(es.demo.cmds.map((c) => c[0])).not.toEqual(en.demo.cmds.map((c) => c[0]));
+    expect(en.demo.cmds).toHaveLength(9);
+  });
 });

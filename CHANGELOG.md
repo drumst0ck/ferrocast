@@ -17,6 +17,12 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 - **Website tool pages**: each file tool now has one indexable page, `/tools/<tool>/`. Its 26 documentation twins under `/docs/files/tools/` stay reachable, link both ways with the tool page, point their canonical at it and leave the sitemap; a manifest restores them.
 
 ### Fixed
+- **Website demo**: the calculator in the home page demo no longer runs dynamic code, so it keeps working under a strict content security policy. The Spanish home demo now shows Spanish labels, times and number formats, and a currency conversion no longer fires repeated rate requests while you type.
+- **Website docs header**: on the Spanish docs, the logo and Home link go to the Spanish home, and the navigation and menu labels are read in Spanish.
+- **Website changelog page**: tag filters and pagination now work together, `?page=` values that are not plain page numbers fall back to page 1, a page past the last one returns 404, and docs links that point to another site are ignored.
+- **Website 404 page**: it now has the site header and footer, is not indexed, and has a Spanish version under `/es/`.
+- **Website server**: prerendered pages are served without blocking other requests, with ETag and 304 support and a correct Content-Length for HEAD; database queries time out after 10 seconds; the footer year follows the current year.
+- **Extensions cache**: an extension's Cache no longer reports keys such as `constructor` as stored, ignores a cache file that is not a JSON object instead of failing on it, returns false from `remove` for a key that was not there, keeps namespaces such as `a/b` and `a_b` apart, and a subscriber that throws no longer stops the write or the other subscribers. #extensions
 - **Notes**: Delete All Notes now asks for confirmation in the action panel instead of moving every note to Recently Deleted at once. (docs: /docs/launcher/notes/) #notes
 - **Settings**: Advanced → Disabled commands lists each command by its name instead of its internal id; Enter in the AI key field saves the key and Enter in the theme name field renames the theme, like the buttons; the Advanced tab tooltip shows ⌘0; opening the data folder or a new script no longer makes the launcher wait for macOS. #settings
 - **Settings reset**: ⌘Z undoes Reset this tab while the Undo toast is showing, and another toast (sync, login item) no longer removes Undo before it expires; the other message appears afterwards. #settings

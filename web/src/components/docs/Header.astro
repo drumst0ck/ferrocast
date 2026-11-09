@@ -3,19 +3,21 @@ import DeferredGtm from '../analytics/DeferredGtm.astro';
 import Search from 'virtual:starlight/components/Search';
 import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
 import SocialIcons from 'virtual:starlight/components/SocialIcons';
+import { homeHref, siteLabels } from '../../lib/site-labels';
 const { locale } = Astro.locals.starlightRoute;
 const es = locale === 'es';
 const prefix = es ? '/es' : '';
+const L = siteLabels[es ? 'es' : 'en'];
 const links = [
-  ['/', es ? 'Inicio' : 'Home'],
-  [es ? '/es/files/' : '/files/', es ? 'Archivos' : 'Files'],
+  [homeHref(es ? 'es' : 'en'), L.home],
+  [es ? '/es/files/' : '/files/', L.files],
   [`${prefix}/docs/`, 'Docs'],
-  ['/changelog/', es ? 'Cambios' : 'Changelog'],
+  ['/changelog/', L.changelog],
 ];
 ---
 <div class="fc-header">
-  <a class="fc-mark" href="/"><img src="/icon.png" alt="" width="28" height="28" />Ferrocast</a>
-  <nav class="fc-nav" aria-label="Main">
+  <a class="fc-mark" href={homeHref(es ? 'es' : 'en')}><img src="/icon.png" alt="" width="28" height="28" />Ferrocast</a>
+  <nav class="fc-nav" aria-label={L.mainNav}>
     {links.map(([href, label]) => <a href={href} aria-current={href === `${prefix}/docs/` ? 'true' : undefined}>{label}</a>)}
   </nav>
   <div class="fc-tools">

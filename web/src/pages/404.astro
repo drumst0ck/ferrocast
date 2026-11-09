@@ -1,17 +1,25 @@
 ---
 import Base from '../layouts/Base.astro';
+import SiteHeader from '../components/SiteHeader.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import { notFoundCopy, notFoundLang } from '../lib/not-found';
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const lang = notFoundLang(Astro.url.pathname);
+const c = notFoundCopy[lang];
+const home = `${base}${lang === 'es' ? '/es/' : '/'}`;
 ---
-<Base title="Page not found · Ferrocast" description="That page does not exist.">
-  <main class="nf">
+<Base title={c.title} description={c.description} lang={lang} robots="noindex">
+  <SiteHeader lang={lang} />
+  <main class="nf" id="main">
     <img src={`${base}/icon.png`} alt="" width="72" height="72" />
-    <h1>No results</h1>
-    <p>That page does not exist. Try the home page instead.</p>
-    <a class="btn" href={`${base}/`}>Back to Ferrocast</a>
+    <h1>{c.heading}</h1>
+    <p>{c.body}</p>
+    <a class="btn" href={home}>{c.cta}</a>
   </main>
+  <SiteFooter lang={lang} />
 </Base>
 <style>
-  .nf { min-height: 100svh; display: grid; place-content: center; justify-items: center; gap: 18px; text-align: center; padding: 24px; }
+  .nf { min-height: 60svh; display: grid; place-content: center; justify-items: center; gap: 18px; text-align: center; padding: 24px; }
   .nf img { border-radius: 18px; }
   .nf h1 { font-size: var(--step-head); line-height: 1; }
   .nf p { color: var(--muted); font-size: var(--step-lead); }
