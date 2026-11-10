@@ -3,7 +3,8 @@
 //!
 //! Nothing here runs unless the user turned sync on: callers never build a `SyncIo` while it is off.
 //! Each Mac writes only `devices/<device-id>/<domain>.json` (and its own `clipboard-images/`), so no
-//! file is ever written by two Macs and iCloud never needs to create conflict copies.
+//! file is ever written by two Macs and iCloud never needs to create conflict copies. The one
+//! exception is Forget this Mac (`SyncIo::forget_device`), which removes another Mac's folder.
 
 use crate::capture::CaptureSettings;
 use crate::models::{ClipEntry, ClipKind, CommandConfig, Settings};
@@ -323,6 +324,19 @@ pub fn expand_legacy_settings(doc: &mut DeviceDoc) {
     }
 }
 
+/// A Mac that has published sync data (see `SyncIo::devices`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Device {
+    /// Folder name under `devices/`.
+    pub id: String,
+    /// The name the Mac published, if any.
+    pub name: Option<String>,
+    /// Unix ms of its newest document's run time (an older build: the file's time).
+    pub last_seen: Option<i64>,
+    /// This Mac.
+    pub current: bool,
+}
+
 /// What reading the other Macs' documents found.
 pub struct ReadDocs {
     pub docs: Vec<DeviceDoc>,
@@ -453,6 +467,65 @@ impl SyncIo {
         ReadDocs { docs, corrupt: bad, downloading }
     }
 
+    /// Newest modification time (unix ms) of the documents in a Mac's folder (stands in for the run
+    /// time of an older build).
+    fn newest_file_time(&self, device: &str) -> Option<i64> {
+        let rd = std::fs::read_dir(self.device_dir(device)).ok()?;
+        rd.flatten()
+            // a document that is only a placeholder right now is still activity of that Mac
+            .filter(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                n.ends_with(".json") || n.ends_with(".json.icloud")
+            })
+            .filter_map(|e| e.metadata().ok()?.modified().ok())
+            .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .max()
+    }
+
+    /// The Macs that have published sync data (this one included), most recently seen first after
+    /// this Mac. Reads only a few header fields of each document.
+    pub fn devices(&self) -> Vec<Device> {
+        #[derive(serde::Deserialize)]
+        struct Meta {
+            name: Option<String>,
+            run_at: Option<i64>,
+        }
+        let Ok(rd) = std::fs::read_dir(self.dir.join("devices")) else { return vec![] };
+        let mut out = Vec::new();
+        for e in rd.flatten().filter(|e| e.path().is_dir()) {
+            let id = e.file_name().to_string_lossy().to_string();
+            let (mut name, mut run_at) = (None, None);
+            for domain in DOMAINS {
+                let p = self.device_dir(&id).join(format!("{domain}.json"));
+                if !p.is_file() || (self.dataless)(&p) {
+                    continue;
+                }
+                if let Some(m) = std::fs::read(&p).ok().and_then(|b| serde_json::from_slice::<Meta>(&b).ok()) {
+                    name = name.or(m.name.filter(|n| !n.trim().is_empty()));
+                    run_at = run_at.max(m.run_at);
+                }
+            }
+            let last_seen = run_at.or_else(|| self.newest_file_time(&id));
+            out.push(Device { current: id == self.device, id, name, last_seen });
+        }
+        out.sort_by(|a, b| b.current.cmp(&a.current).then(b.last_seen.cmp(&a.last_seen)).then(a.id.cmp(&b.id)));
+        out
+    }
+
+    /// Remove another Mac's folder (its documents and images) from the sync folder. Never this Mac's
+    /// own folder, never anything but a real folder directly under `devices/`. A Mac that is still
+    /// running comes back by publishing again.
+    pub fn forget_device(&self, id: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(self.on(), "sync turned off");
+        anyhow::ensure!(safe_name(id) && id != "." && !id.starts_with('.'), "not a Mac folder: {id}");
+        anyhow::ensure!(!id.eq_ignore_ascii_case(&self.device), "this Mac cannot be forgotten"); // APFS ignores case
+        let p = self.device_dir(id);
+        anyhow::ensure!(std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()), "no such Mac: {id}");
+        std::fs::remove_dir_all(&p)?;
+        Ok(())
+    }
+
     /// This Mac's own published document of a domain, if it exists and can be read.
     pub fn read_own_doc(&self, domain: &str) -> Option<DeviceDoc> {
         let p = self.device_dir(&self.device).join(format!("{domain}.json"));
@@ -464,22 +537,41 @@ impl SyncIo {
     }
 
     /// Write this Mac's document; an identical one is left alone (no needless iCloud uploads).
+    /// `run_at`: `None` keeps the one already in the file; a time replaces it only when the one in
+    /// the file is older than [`RUN_AT_REFRESH_MS`].
     pub fn write_doc(&self, domain: &str, doc: &DeviceDoc) -> anyhow::Result<()> {
         anyhow::ensure!(self.on(), "sync turned off");
         let p = self.device_dir(&self.device).join(format!("{domain}.json"));
-        // compact: the documents are read by machines, and the clipboard one is large
-        let bytes = if self.name.is_some() && doc.name != self.name {
-            serde_json::to_vec(&DeviceDoc { name: self.name.clone(), ..doc.clone() })?
-        } else {
-            serde_json::to_vec(doc)?
-        };
         // a file that is only in the cloud is replaced without reading it (reading would wait for it)
-        if !(self.dataless)(&p) && std::fs::read(&p).is_ok_and(|old| old == bytes) {
+        let old = if (self.dataless)(&p) { None } else { std::fs::read(&p).ok() };
+        #[derive(serde::Deserialize)]
+        struct Stamp {
+            run_at: Option<i64>,
+        }
+        let old_stamp = old.as_deref().and_then(|b| serde_json::from_slice::<Stamp>(b).ok());
+        let old_run = old_stamp.as_ref().and_then(|s| s.run_at);
+        let run_at = match (doc.run_at, old_run) {
+            (Some(new), Some(o)) if new.saturating_sub(o) < RUN_AT_REFRESH_MS && new >= o => Some(o),
+            (Some(new), _) => Some(new),
+            (None, o) => o,
+        };
+        let mut out = doc.clone();
+        out.run_at = run_at;
+        if self.name.is_some() && out.name != self.name {
+            out.name = self.name.clone();
+        }
+        // compact: the documents are read by machines, and the clipboard one is large
+        let bytes = serde_json::to_vec(&out)?;
+        if old.is_some_and(|o| o == bytes) {
             return Ok(());
         }
         write_atomic(&p, &bytes)
     }
 }
+
+/// A document's `run_at` is refreshed at most this often, so an idle Mac does not rewrite its
+/// documents (and re-upload them) on every run.
+const RUN_AT_REFRESH_MS: i64 = 6 * 3600 * 1000;
 
 /// The clipboard keeps its deletions for 400 days, longer than the longest retention (a year);
 /// everything else keeps them for ever (see `sync::publish_ttl`).
@@ -658,9 +750,11 @@ pub fn sync_domain_recovering(
     }
     let fresh = Tracker::default();
     let tracker = if recover { &fresh } else { tracker };
-    if domain == "clipboard" {
-        export_images(io, snapshot);
-    }
+    let clipboard = domain == "clipboard";
+    // The other Macs' documents are read before this Mac publishes: what they carry decides what this
+    // Mac's clipboard document leaves out, and how far they have all read decides which tombstones
+    // can go.
+    let pre = io.read_docs(domain);
     // First-sync rule (see `sync::restamp_baseline`):
     //  1. On this Mac's first sync of a domain (also after a missing or corrupt tracker) its items,
     //     and deletions of built-in defaults it lacks, are published at modified 0, whether or not
@@ -677,11 +771,19 @@ pub fn sync_domain_recovering(
     let tracker = if !recover && (!tracker.seeded || (domain == "settings" && tracker.items.contains_key(SETTINGS_ID))) {
         match io.read_own_doc(domain) {
             Some(own) => {
-                rebuilt = sync::tracker_from_own_doc(&own);
+                let mut r = sync::tracker_from_own_doc(&own);
+                if clipboard {
+                    track_unlisted(&mut r, snapshot, &pre.docs);
+                }
+                rebuilt = r;
                 &rebuilt
             }
             None if tracker.seeded => {
-                rebuilt = Tracker::default();
+                let mut r = Tracker::default();
+                if clipboard {
+                    track_unlisted(&mut r, snapshot, &pre.docs);
+                }
+                rebuilt = r;
                 &rebuilt
             }
             None => tracker,
@@ -690,7 +792,6 @@ pub fn sync_domain_recovering(
         tracker
     };
     let first = !tracker.seeded;
-    let clipboard = domain == "clipboard";
     let opts = sync::PublishOpts {
         first_stamp: 0,
         ttl: tombstone_ttl(domain),
@@ -698,6 +799,7 @@ pub fn sync_domain_recovering(
         relay_tombstones: !clipboard,
         max_tombstones: clipboard.then_some(MAX_CLIPBOARD_TOMBSTONES),
         pristine: pristine_check(domain),
+        carried: clipboard.then(|| sync::carried_elsewhere(&io.device, &pre.docs)),
     };
     // A recovering run reads this Mac's own document before anything is written: it is the intact
     // copy of what this Mac had published (items only it had, edits not pulled yet), and it takes
@@ -705,10 +807,15 @@ pub fn sync_domain_recovering(
     // the merged document is written once the merge is applied (`Outcome::applied_doc`).
     let own_copy = if recover { io.read_own_doc(domain) } else { None };
     let (doc, t1) = sync::publish_opts(&io.device, snapshot, tracker, now, &opts);
+    if clipboard {
+        // only the images of the entries this Mac publishes travel in its folder
+        let published: Vec<(String, Value)> = doc.items.iter().filter_map(|(id, r)| Some((id.clone(), r.value.clone()?))).collect();
+        export_images(io, &published);
+    }
     if !recover {
         io.write_doc(domain, &doc)?;
     }
-    let ReadDocs { mut docs, corrupt, mut downloading } = io.read_docs(domain);
+    let ReadDocs { mut docs, corrupt, mut downloading } = pre;
     // deletions recorded in the own copy (the merge skips a tombstone for an id this Mac no longer
     // has, and a tombstone that wins over a loaded item is recorded as someone else's)
     let own_tombstones: Vec<(String, i64)> =
@@ -784,12 +891,17 @@ pub fn sync_domain_recovering(
         attachments_added = added;
     }
     // what this Mac publishes now: the merged state with the re-stamped baseline
-    let (doc2, t3) = sync::publish_opts(&io.device, &merged, &t2, now, &opts);
+    let (mut doc2, t3) = sync::publish_opts(&io.device, &merged, &t2, now, &opts);
+    // every other Mac's document has been merged in this run (the caller writes this document once
+    // the merge is applied): it vouches for the deletions it has read up to now
+    // (not when a peer's document could not be read or is still downloading, nor when this run started
+    // over from reloaded data: it has not seen everything it would be vouching for)
+    doc2.run_at = (corrupt.is_empty() && downloading == 0 && !recover).then_some(now);
     // Own document = the merged state (unchanged bytes are not rewritten), but only once it matches
     // the local data, which is what a tracker rebuilt from it needs: with nothing to apply it is
     // written now; otherwise it goes out as `applied_doc` and the caller writes it after applying.
-    // (The clipboard keeps its document to what was copied here: entries taken over from other Macs
-    // are in their documents, and republishing them would double its size.)
+    // (The clipboard document keeps to what was copied or edited here: entries taken over from other
+    // Macs stay out of it while another document carries them, see `PublishOpts::carried`.)
     if merged == snapshot {
         io.write_doc(domain, &doc2)?;
         return Ok(Outcome {
@@ -826,6 +938,40 @@ pub fn sync_domain_recovering(
         attachments_added,
         conflicts,
     })
+}
+
+/// Rebuilding a clipboard tracker from the own document, which does not list the entries this Mac
+/// only adopted: every local entry missing from it is tracked as taken over from a peer whose
+/// document has the identical record (with that peer's stamp), else as a baseline at 0, so it
+/// neither beats a newer deletion or edit of a peer nor counts as a new edit.
+fn track_unlisted(t: &mut Tracker, snapshot: &[(String, Value)], docs: &[DeviceDoc]) {
+    for (id, v) in snapshot {
+        if t.items.contains_key(id) {
+            continue;
+        }
+        let h = sync::hash(v);
+        let peer = docs
+            .iter()
+            .filter_map(|d| d.items.get(id))
+            .filter(|r| !r.deleted && r.value.as_ref().is_some_and(|x| sync::hash(x) == h))
+            .map(|r| r.modified)
+            .max();
+        let (modified, adopted) = peer.map_or((0, false), |m| (m, true));
+        t.items.insert(
+            id.clone(),
+            sync::Tracked {
+                hash: h,
+                modified,
+                deleted: false,
+                remote: false,
+                pristine: false,
+                adopted,
+                unparsed: false,
+                seen: None,
+                base: Some(modified),
+            },
+        );
+    }
 }
 
 /// A conflict copy to add to the merged notes.
@@ -1643,6 +1789,8 @@ mod tests {
                 .collect(),
             first_sync_at: Some(1),
             name: None,
+            run_at: None,
+            gc_at: None,
         };
         b.io.write_doc("snippets", &doc).unwrap();
     }
@@ -1720,6 +1868,8 @@ mod tests {
                 .into(),
             first_sync_at: Some(1),
             name: None,
+            run_at: None,
+            gc_at: None,
         };
         b.io.write_doc("snippets", &gone).unwrap();
         for now in [16_000, 17_000] {
@@ -3924,3 +4074,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sync_own_tests.rs"]
+mod own_tests;

@@ -8,6 +8,12 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ### Changed
 - **Universal download**: the DMG/zip now runs natively on Apple Silicon and Intel Macs. The app and its helpers (screen capture, Apple translation, the notch player adapter) are built for both architectures, and the release fails if any of them lacks one. Intel is not tested on real hardware. Homebrew still builds for your Mac's own architecture. (docs: /docs/getting-started/install/) #install
+### Added
+- **Sync, Forget this Mac**: Settings → Advanced → Sync lists the Macs that published sync data (name, last seen) and offers **Forget this Mac**, behind a confirmation, for every Mac but the one you are using. It removes that Mac's folder from the sync folder and this Mac stops reading it; if that Mac syncs again it reappears. (docs: /docs/launcher/sync/) #sync
+
+### Changed
+- **Sync, smaller clipboard documents**: each Mac's clipboard document holds only the entries copied on that Mac, so the size in iCloud Drive no longer grows with the number of Macs. Every Mac still gets the whole history, deleting an entry copied elsewhere still reaches every Mac, a Mac that loses its history recovers it, and v0.7.0 and older Macs keep working with the new documents. (docs: /docs/launcher/sync/) #sync
+- **Sync, deletions are kept**: Forget this Mac removes a Mac's sync data, and deletions stay in the documents (as before) so a Mac that returns after weeks or months still learns about them. A Mac that could not read every document in a run no longer refreshes its run time. (docs: /docs/launcher/sync/) #sync
 
 ## [0.7.0] - 2026-11-10
 
