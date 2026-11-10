@@ -6,6 +6,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-10
+
 ### Added
 - **Sync, Forget this Mac**: Settings → Advanced → Sync lists the Macs that published sync data (name, last seen) and offers **Forget this Mac**, behind a confirmation, for every Mac but the one you are using. It removes that Mac's folder from the sync folder and this Mac stops reading it; if that Mac syncs again it reappears. (docs: /docs/launcher/sync/) #sync
 
