@@ -1,6 +1,6 @@
 ---
 title: "Build from source"
-description: "Build the Ferrocast app bundle and a DMG from source with the repository scripts. Requires Rust 1.95 and a Mac with Apple Silicon."
+description: "Build the Ferrocast app bundle and a DMG from source with the repository scripts. Requires Rust 1.95 and a Mac with Apple Silicon (Intel is untested)."
 sidebar:
   order: 3
 ---
@@ -15,14 +15,14 @@ scripts/shot.sh out.png FERROCAST_QUERY="100 usd in eur"   # render the UI to a 
 scripts/perf.sh            # performance baseline table (startup, idle, views); FERROCAST_PROFILE=1 prints slow frames
 ```
 
-It requires Rust 1.95 (pinned in `rust-toolchain.toml`; egui 0.36 requires it) and macOS on Apple Silicon. Data lives in `~/Library/Application Support/Ferrocast`; `FERROCAST_DATA_DIR` changes the path. See [Environment variables](/docs/reference/environment-variables/).
+It requires Rust 1.95 (pinned in `rust-toolchain.toml`; egui 0.36 requires it) and macOS (Apple Silicon; Intel is not tested). Data lives in `~/Library/Application Support/Ferrocast`; `FERROCAST_DATA_DIR` changes the path. See [Environment variables](/docs/reference/environment-variables/).
 
 ## Distribution
 
 The supported route is Homebrew compiling from source. The unnotarized DMG from `scripts/dmg.sh` will be blocked by Gatekeeper on other Macs that download it, so it is only for your own use. Notarization (`scripts/notarize.sh`) is optional and requires a paid developer account.
 
 :::caution[Limits]
-The notarization script is optional. Intel Macs are not supported.
+The notarization script is optional. The DMG/zip runs on Apple Silicon; on Intel Macs, build from source or use Homebrew (not tested on Intel).
 :::
 
 ## Related

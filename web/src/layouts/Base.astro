@@ -3,7 +3,7 @@ import '../styles/fonts.css';
 import '../styles/base.css';
 import '../styles/site.css';
 import { hasOwnOgImage, ogAlt, ogImagePath, OG_HEIGHT, OG_WIDTH } from '../lib/og/paths';
-import DeferredGtm from '../components/analytics/DeferredGtm.astro';
+import ConsentBanner from '../components/analytics/ConsentBanner.astro';
 import headlineLatin from '../assets/fonts/stack-sans-headline-latin.woff2?url';
 import textLatin from '../assets/fonts/stack-sans-text-latin.woff2?url';
 const {
@@ -57,10 +57,9 @@ const ogUrl = ogImage ?? (ownOg ? new URL(`${base}${ogImagePath(canonical)}`, As
     <script is:inline>document.documentElement.classList.add('js')</script>
   </head>
   <body>
-    <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-KC23GXFQ" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+    <ConsentBanner lang={lang === 'es' ? 'es' : 'en'} />
     <slot />
     {jsonLdInBody && jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
-    <DeferredGtm />
     <script>import '../scripts/reveal.js'; import '../scripts/foot-mark.js';</script>
   </body>
 </html>
