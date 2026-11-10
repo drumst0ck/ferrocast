@@ -36,7 +36,7 @@ Las imágenes de las notas viajan como archivos aparte, junto a los registros de
 
 ## Conflictos
 
-Ferrocast fusiona elemento por elemento y gana la edición más reciente.
+Ferrocast fusiona elemento por elemento y gana la edición más reciente. Si dos Mac editan la misma nota, el texto más antiguo no se descarta: se guarda como una nota nueva que termina en "(copia en conflicto de <nombre del Mac>)" y Ferrocast muestra un aviso. Una edición hecha después de recibir la versión de otro Mac gana aunque el reloj de este Mac vaya atrasado.
 
 - Cada snippet, quicklink, tema propio, nota, entrada del portapapeles y chat es un elemento propio.
 - **Cada ajuste es un elemento propio** (y cada ajuste anidado, como una opción de captura o las opciones de un comando). Si un Mac cambia el tema y otro cambia el atajo, se conservan ambos cambios.

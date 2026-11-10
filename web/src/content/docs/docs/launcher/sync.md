@@ -36,7 +36,7 @@ Images in notes travel as separate files, next to the note records, in the same 
 
 ## Conflicts
 
-Ferrocast merges item by item, and the newest edit wins.
+Ferrocast merges item by item, and the newest edit wins. If two Macs edit the same note, the older text is not dropped: it is kept as a new note ending in "(conflict copy from <Mac name>)", and Ferrocast shows a toast. Edits made after receiving another Mac's version win even if this Mac's clock is behind.
 
 - Every snippet, quicklink, custom theme, note, clipboard entry and chat is its own item.
 - **Every setting is its own item** (and every nested setting, such as one capture option or one command's options). If one Mac changes the theme and another changes the hotkey, both changes are kept.

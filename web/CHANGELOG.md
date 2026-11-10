@@ -6,6 +6,16 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Fixed
+- **Sync, clock differences**: an edit or deletion made after receiving another Mac's version is no longer lost when this Mac's clock runs behind. #sync
+- **Sync, notes edited on two Macs**: when both Macs edit the same note, the older text is kept as a new note marked "(conflict copy from <Mac>)" and Ferrocast shows a toast, instead of silently dropping it. (docs: /docs/launcher/sync/) #sync
+- **Sync, a stuck iCloud file**: a file iCloud Drive has not downloaded is requested and skipped, and a run that does not answer in two minutes is given up and retried, so sync no longer stops for good. #sync
+- **Sync, safer saving**: data files are flushed to disk and written through a unique temporary file, and a crash between saving data and the sync state makes the next run recover instead of publishing wrong edits. #sync
+- **Sync, other fixes**: chats removed here only by the 200-chat limit are not deleted on your other Macs; this Mac's own documents wait for the next run when iCloud Drive is unavailable; the status line shows every failing part and "last sync" only moves when something synced. #sync
+
+### Changed
+- **Sync speed**: the clipboard history is no longer serialised on the interface thread or while its lock is held, sync documents are written compact, and other Macs' documents that did not change are not read again. #sync
+
 ## [0.6.0] - 2026-11-09
 
 ### Added

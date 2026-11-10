@@ -50,6 +50,10 @@ pub struct DeviceDoc {
     /// document if the tracker is lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_sync_at: Option<i64>,
+    /// Name of the publishing Mac, for a conflict copy to say whose text it holds. Older builds do
+    /// not write it and ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Local memory of the last published state, per item id: (content hash, modified, deleted).
@@ -108,6 +112,15 @@ pub fn hash(value: &Value) -> String {
     Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The time of a new edit or deletion of an item whose last known record is stamped `last`: the wall
+/// clock, but never at or before `last`. A Mac whose clock runs behind (or that saw a record from a
+/// Mac running ahead, even one stamped years in the future) still orders what it does after seeing
+/// that record after it, so an edit made after receiving a version is never lost to it. Nothing is
+/// ignored or clamped: a record stamped far ahead keeps its place, later edits just follow it.
+fn logical_now(now: i64, last: i64) -> i64 {
+    now.max(last.saturating_add(1))
+}
+
 /// Record the current local items: changed or new items get `now`, missing ones become tombstones at
 /// `now`, unchanged ones keep their time. Returns this device's document and the new tracker.
 pub fn publish(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64) -> (DeviceDoc, Tracker) {
@@ -163,7 +176,7 @@ pub struct PublishOpts {
 pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64, opts: &PublishOpts) -> (DeviceDoc, Tracker) {
     let unseen = if prev.seeded { now } else { opts.first_stamp };
     let first_sync_at = if prev.seeded { prev.first_sync_at } else { Some(now) };
-    let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new(), first_sync_at };
+    let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new(), first_sync_at, name: None };
     let mut next = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at };
     let mut seen = HashSet::new();
     for (id, value) in items {
@@ -174,7 +187,7 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
         // an edit (a changed hash, even back to the default) is a real change: not pristine, now
         let (modified, pristine, adopted) = match prev.items.get(id) {
             Some(t) if !t.deleted && t.hash == h => (t.modified, t.pristine, t.adopted),
-            Some(_) => (now, false, false),
+            Some(t) => (logical_now(now, t.modified), false, false),
             None => (unseen, !prev.seeded && opts.pristine.is_some_and(|f| f(id, value)), false),
         };
         doc.items.insert(id.clone(), Record { modified, deleted: false, value: Some(value.clone()), pristine, adopted });
@@ -193,7 +206,7 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
         if t.deleted && t.remote && !opts.relay_tombstones {
             continue; // someone else's deletion: their document carries it
         }
-        let modified = if t.deleted { t.modified } else { now };
+        let modified = if t.deleted { t.modified } else { logical_now(now, t.modified) };
         if opts.ttl.is_some_and(|ttl| now - modified > ttl) {
             continue;
         }
@@ -692,6 +705,7 @@ mod tests {
             device: "b".into(),
             items: BTreeMap::from([("x".to_string(), rec(5000, json!({"kind": "RichText"})))]),
             first_sync_at: None,
+            name: None,
         };
         let (_, mut t) = merge_as("a", &[], &[remote], &Tracker { seeded: true, ..Default::default() });
         assert!(t.items.contains_key("x"));
@@ -703,7 +717,12 @@ mod tests {
 
     #[test]
     fn an_item_that_is_parsed_later_publishes_normally_and_a_remote_deletion_forgets_it() {
-        let remote = DeviceDoc { device: "b".into(), items: BTreeMap::from([("x".to_string(), rec(5000, json!(1)))]), first_sync_at: None };
+        let remote = DeviceDoc {
+            device: "b".into(),
+            items: BTreeMap::from([("x".to_string(), rec(5000, json!(1)))]),
+            first_sync_at: None,
+            name: None,
+        };
         let (_, mut t) = merge_as("a", &[], std::slice::from_ref(&remote), &Tracker { seeded: true, ..Default::default() });
         mark_unparsed(&mut t, &["x".to_string()]);
         // a newer build reads it: it is in the local items, flag gone, the unchanged value keeps its time
@@ -718,6 +737,7 @@ mod tests {
                 Record { modified: 7000, deleted: true, value: None, pristine: false, adopted: false },
             )]),
             first_sync_at: None,
+            name: None,
         };
         let (_, t3) = merge_as("a", &[], &[gone], &t);
         let (doc, _) = publish("a", &[], &t3, 9000);

@@ -16,6 +16,13 @@ use std::sync::atomic::AtomicBool;
 
 type Items = Vec<(String, Value)>;
 
+/// Converts a copy of a domain's data taken on the main thread into sync items (worker thread).
+type Capture = Box<dyn FnOnce() -> Items + Send>;
+
+/// A run that has not answered after this long is given up: sync is not stuck behind a file iCloud
+/// Drive never delivers.
+pub const RUN_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// How often the timer pulls and merges.
 pub const SYNC_EVERY: Duration = Duration::from_secs(30);
 
@@ -26,10 +33,24 @@ pub struct SyncCtl {
     /// Unix seconds of the last finished run.
     pub(crate) last_sync: Option<i64>,
     pub(crate) peers: usize,
+    /// The sync folder cannot be used (iCloud Drive off, folder not creatable).
     pub(crate) error: Option<String>,
+    /// Domains whose last run failed, with the reason; a domain's entry goes when it syncs again.
+    pub(crate) errors: std::collections::BTreeMap<&'static str, String>,
+    /// Bumped by every save of a domain's data file (the clipboard has `Shared::clip_rev`): a run
+    /// applies its merge only when the revision it started from is still the current one.
+    rev: std::collections::BTreeMap<&'static str, u64>,
+    /// Number of the run in flight; a result of an earlier, abandoned run is ignored.
+    pub(crate) run: u64,
+    /// The own documents handed to the run in flight, put back when it never answers.
+    pub(crate) sent_docs: std::collections::BTreeMap<&'static str, ferrocast_core::sync::DeviceDoc>,
+    /// Chats a cap removed from this Mac only (not deleted by the user): never published as deleted.
+    pub(crate) capped_chats: BTreeSet<String>,
+    /// Replaces `sync_io::resolve_dir` (tests).
+    pub(crate) resolve: Option<fn() -> Result<std::path::PathBuf, sync_io::Unavailable>>,
     /// Set while a merge is applied so its saves are not queued as local edits.
     applying: bool,
-    last_start: Option<Instant>,
+    pub(crate) last_start: Option<Instant>,
     /// Shared with the worker: cleared when sync is turned off so a run in progress stops writing.
     pub(crate) flag: Arc<AtomicBool>,
     /// Files of other Macs still being downloaded by iCloud Drive in the last run.
@@ -47,9 +68,16 @@ pub struct SyncCtl {
 }
 
 /// Result of one background run.
+#[derive(Default)]
 pub struct SyncDone {
     pub(crate) results: Vec<(&'static str, Items, Result<Outcome, String>)>,
     pub(crate) unavailable: Option<String>,
+    /// Revision of each domain's data when the run took its copy (see `SyncCtl::rev`).
+    pub(crate) revs: std::collections::BTreeMap<&'static str, u64>,
+    /// Which run this answers.
+    pub(crate) run: u64,
+    /// Own documents the run could not write: kept for the next run.
+    pub(crate) docs: std::collections::BTreeMap<&'static str, ferrocast_core::sync::DeviceDoc>,
 }
 
 impl App {
@@ -64,6 +92,14 @@ impl App {
         }
         if let Some(e) = &self.sync.error {
             return e.clone();
+        }
+        if !self.sync.errors.is_empty() {
+            let shown: Vec<String> = if self.sync.errors.len() == 1 {
+                self.sync.errors.values().cloned().collect()
+            } else {
+                self.sync.errors.iter().map(|(d, e)| format!("{d}: {e}")).collect()
+            };
+            return trf("Sync failed: {e}", &[("e", &shown.join("; "))]);
         }
         match self.sync.last_sync {
             Some(t) => {
@@ -103,11 +139,15 @@ impl App {
         }
         if let Some(d) = sync_io::domain_of_file(file) {
             self.sync.pending.insert(d);
+            *self.sync.rev.entry(d).or_default() += 1;
         }
     }
 
     /// Start a run for everything queued (and the clipboard when the recorder changed it).
     pub(crate) fn sync_flush(&mut self) {
+        if self.sync.in_flight && self.sync.last_start.is_some_and(|t| t.elapsed() > RUN_TIMEOUT) {
+            self.sync_abandon_run();
+        }
         if self.sync.notes_retry.is_some_and(|t| t <= Instant::now()) {
             self.sync.notes_retry = None;
             self.sync.pending.insert("notes");
@@ -126,6 +166,21 @@ impl App {
         }
         let domains: Vec<&'static str> = std::mem::take(&mut self.sync.pending).into_iter().collect();
         self.sync_start(domains);
+    }
+
+    /// The run in flight did not answer in time (a file stuck in iCloud Drive): stop waiting for it.
+    /// It is told to stop writing, its own documents go back to the queue and its late answer, if
+    /// it ever comes, is ignored.
+    fn sync_abandon_run(&mut self) {
+        self.sync.flag.store(false, Ordering::SeqCst);
+        self.sync.flag = Arc::new(AtomicBool::new(true));
+        self.sync.run += 1;
+        self.sync.in_flight = false;
+        for (d, doc) in std::mem::take(&mut self.sync.sent_docs) {
+            self.sync.pending_docs.entry(d).or_insert(doc);
+        }
+        self.sync.error = Some(tr("Sync timed out: iCloud Drive did not answer. It tries again.").into_owned());
+        instance::log(&self.store.root, "sync: a run did not finish in time and was given up");
     }
 
     /// Before the first publish: every domain file exists with the ids the app holds (a fresh install
@@ -215,16 +270,59 @@ impl App {
     }
 
     pub(crate) fn sync_snapshot(&self, domain: &str) -> Items {
-        match domain {
-            "settings" => sync_io::settings_items(&self.settings),
-            "snippets" => sync_io::to_items(&self.snippets),
-            "quicklinks" => sync_io::to_items(&self.quicklinks),
-            "notes" => sync_io::to_items(&self.notes),
-            "clipboard" => sync_io::to_items(&self.shared.clipboard.lock().unwrap()),
-            "chats" => sync_io::to_items(&self.chats),
-            "themes" => sync_io::to_items(&self.custom_themes),
-            _ => vec![],
+        self.sync_capture(domain).1()
+    }
+
+    /// Revision of a domain's data (see `SyncCtl::rev`).
+    pub(crate) fn sync_rev(&self, domain: &str) -> u64 {
+        if domain == "clipboard" {
+            self.shared.clip_rev.load(Ordering::SeqCst)
+        } else {
+            self.sync.rev.get(domain).copied().unwrap_or(0)
         }
+    }
+
+    /// The revision of a domain together with a copy of its data; turning the copy into items (the
+    /// slow part: every entry is serialised) is left to whoever calls the closure, so the main thread
+    /// only clones. The clipboard list lock is held for the clone and nothing else.
+    fn sync_capture(&self, domain: &str) -> (u64, Capture) {
+        let rev = self.sync_rev(domain);
+        let cap: Capture = match domain {
+            "settings" => {
+                let v = self.settings.clone();
+                Box::new(move || sync_io::settings_items(&v))
+            }
+            "snippets" => {
+                let v = self.snippets.clone();
+                Box::new(move || sync_io::to_items(&v))
+            }
+            "quicklinks" => {
+                let v = self.quicklinks.clone();
+                Box::new(move || sync_io::to_items(&v))
+            }
+            "notes" => {
+                let v = self.notes.clone();
+                Box::new(move || sync_io::to_items(&v))
+            }
+            "clipboard" => {
+                // the revision is read under the lock, so it names exactly the list that is cloned
+                let guard = self.shared.clipboard.lock().unwrap();
+                let rev = self.shared.clip_rev.load(Ordering::SeqCst);
+                let v = guard.clone();
+                drop(guard);
+                return (rev, Box::new(move || sync_io::to_items(&v)));
+            }
+            "chats" => {
+                let v = self.chats.clone();
+                Box::new(move || sync_io::to_items(&v))
+            }
+            "themes" => {
+                let v = self.custom_themes.clone();
+                Box::new(move || sync_io::to_items(&v))
+            }
+            _ => Box::new(Vec::new),
+        };
+        (rev, cap)
     }
 
     fn sync_start(&mut self, domains: Vec<&'static str>) {
@@ -238,20 +336,35 @@ impl App {
         // (`adopt_setting` patches the settings tracker the settings result has already saved)
         debug_assert!(domains.windows(2).all(|w| w[0] < w[1]), "domains run in alphabetical order");
         let docs = std::mem::take(&mut self.sync.pending_docs);
-        let jobs: Vec<(&'static str, Items)> = domains.into_iter().map(|d| (d, self.sync_snapshot(d))).collect();
+        self.sync.sent_docs = docs.clone();
+        self.sync.run += 1;
+        let run = self.sync.run;
+        let mut revs = std::collections::BTreeMap::new();
+        let jobs: Vec<(&'static str, Capture)> = domains
+            .into_iter()
+            .map(|d| {
+                let (rev, cap) = self.sync_capture(d);
+                revs.insert(d, rev);
+                (d, cap)
+            })
+            .collect();
         let (root, bus) = (self.store.root.clone(), self.bus.clone());
+        let resolve = self.sync.resolve.unwrap_or(sync_io::resolve_dir);
         std::thread::spawn(move || {
-            let done = match sync_io::resolve_dir() {
-                Err(e) => SyncDone { results: vec![], unavailable: Some(e.message()) },
+            let done = match resolve() {
+                // the own documents wait for a folder that works
+                Err(e) => SyncDone { unavailable: Some(e.message()), revs, run, docs, ..Default::default() },
                 Ok(dir) => {
                     let mut io = SyncIo::new(dir, sync_io::device_id(&root), Store::new(&root).images_dir())
-                        .with_attachments(root.join(ferrocast_core::attachments::DIR));
+                        .with_attachments(root.join(ferrocast_core::attachments::DIR))
+                        .with_name(sync_io::computer_name());
                     io.enabled = flag;
-                    flush_docs(&io, docs, &root);
+                    let failed = flush_docs(&io, docs, &root);
                     let now = now_ms();
                     let results = jobs
                         .into_iter()
-                        .map(|(d, snap)| {
+                        .map(|(d, cap)| {
+                            let snap = cap();
                             let tracker: Tracker = sync_io::load_tracker(&root, d);
                             // an unreadable data file was set aside since the last sync: start over from
                             // what is loaded now instead of publishing every missing item as deleted
@@ -260,7 +373,7 @@ impl App {
                             (d, snap, out)
                         })
                         .collect();
-                    SyncDone { results, unavailable: None }
+                    SyncDone { results, unavailable: None, revs, run, docs: failed }
                 }
             };
             bus.send(Msg::SyncDone(Box::new(done)));
@@ -269,10 +382,19 @@ impl App {
 
     /// Main thread: a run finished. Apply what is still safe to apply and persist the trackers.
     pub(crate) fn sync_done(&mut self, done: SyncDone) {
+        if done.run != self.sync.run {
+            return; // the answer of a run that was given up
+        }
         self.sync.in_flight = false;
+        self.sync.sent_docs.clear();
         if !self.sync_on() {
             self.sync.pending_docs.clear();
             return; // switched off while the run was away: apply nothing
+        }
+        // own documents that could not be written (no folder, a write error) are tried again; a newer
+        // one queued meanwhile (a merge applied since) stays
+        for (d, doc) in done.docs {
+            self.sync.pending_docs.entry(d).or_insert(doc);
         }
         if let Some(e) = done.unavailable {
             self.sync.error = Some(e);
@@ -282,15 +404,19 @@ impl App {
         self.attachments_gc();
         let root = self.store.root.clone();
         let mut downloading = 0;
-        for (domain, snapshot, result) in done.results {
+        let mut conflicts = 0;
+        let mut succeeded = false;
+        for (domain, _, result) in done.results {
             let out = match result {
                 Ok(o) => o,
                 Err(e) => {
-                    self.sync.error = Some(trf("Sync failed: {e}", &[("e", &e)]));
+                    self.sync.errors.insert(domain, e.clone());
                     instance::log(&root, &format!("sync {domain}: {e}"));
                     continue;
                 }
             };
+            succeeded = true;
+            self.sync.errors.remove(domain);
             for bad in &out.corrupt {
                 instance::log(&root, &format!("sync: ignored unreadable document {bad}"));
             }
@@ -301,10 +427,15 @@ impl App {
                 self.notes_do(|c, d| c.refresh_images(d));
             }
             let had_merge = out.merged.is_some();
+            let had_marker = sync_io::needs_recovery(&root, domain);
+            let rev = done.revs.get(domain).copied().unwrap_or(0);
             let applied = match out.merged {
-                Some(merged) => self.sync_apply(domain, merged, out.tracker_merged.clone(), &snapshot),
+                Some(merged) => self.sync_apply(domain, merged, out.tracker_merged.clone(), rev),
                 None => None,
             };
+            if applied.is_some() {
+                conflicts += out.conflicts;
+            }
             // The own document holds the merged state only once it is what this Mac has (a tracker
             // rebuilt from it must not take an older local value for a new edit). The next
             // background run writes it: reading and writing iCloud Drive can block.
@@ -326,32 +457,71 @@ impl App {
             } else {
                 self.sync.restored.remove(domain);
             }
-            let tracker = applied.unwrap_or(out.tracker_published);
+            let mut tracker = applied.unwrap_or(out.tracker_published);
+            if domain == "chats" {
+                // chats a cap removed here only: this Mac keeps their records instead of deleting them
+                let capped: Vec<String> = std::mem::take(&mut self.sync.capped_chats).into_iter().collect();
+                ferrocast_core::sync::mark_unparsed(&mut tracker, &capped);
+            }
             match sync_io::save_tracker(&root, domain, &tracker) {
                 Err(e) => instance::log(&root, &format!("sync: saving tracker {domain}: {e:#}")),
-                // the recovered state is saved (or there was nothing to apply): the marker has done
-                // its job. A merge that could not be applied keeps it, so the next run recovers again.
-                Ok(()) if out.recovered && (was_applied || !had_merge) => sync_io::clear_recovery(&root, domain),
+                // The merge is on disk and so is the tracker that knows it: the marker `sync_apply`
+                // set (or the recovery marker) has done its job. A merge that could not be applied
+                // keeps a recovery marker, so the next run recovers again; so does a failed tracker
+                // write, because data and tracker then disagree.
+                Ok(()) if was_applied && (!had_marker || out.recovered) => sync_io::clear_recovery(&root, domain),
+                Ok(()) if out.recovered && !had_merge => sync_io::clear_recovery(&root, domain),
                 Ok(()) => {}
             }
         }
         self.sync.downloading = downloading;
-        self.sync.last_sync = Some(services::now_secs());
+        // "last sync" means something was synced: a run in which every domain failed is not one
+        if succeeded {
+            self.sync.last_sync = Some(services::now_secs());
+        }
+        if conflicts > 0 {
+            self.toast(trn(
+                "Note edited on two Macs: the other text was kept as a copy",
+                "{n} notes edited on two Macs: the other texts were kept as copies",
+                conflicts as u64,
+            ));
+        }
         self.sync_flush();
     }
 
-    /// Local data still equals what the run saw (and no Notes text is waiting to be saved).
-    fn sync_can_apply(&self, domain: &str, snapshot: &Items) -> bool {
-        (domain != "notes" || !self.notes_ctl.typing_recently(now_ms() as u64)) && self.sync_snapshot(domain) == *snapshot
+    /// Local data is still what the run saw: nothing was saved since (`rev`), no settings or theme
+    /// edit is waiting for its delayed save, and no Notes text is waiting to be saved.
+    fn sync_can_apply(&self, domain: &str, rev: u64) -> bool {
+        let waiting = match domain {
+            "notes" => self.notes_ctl.typing_recently(now_ms() as u64),
+            "settings" => self.pending_saves.settings.is_some(),
+            "themes" => self.pending_saves.themes.is_some(),
+            _ => false,
+        };
+        !waiting && self.sync_rev(domain) == rev
     }
 
     /// Replace local data with the merge and save it. Returns the tracker to persist, with hashes
     /// taken from the re-exported items so a value that does not round-trip byte for byte is not
     /// mistaken for a local edit (and ping-ponged between Macs).
-    pub(crate) fn sync_apply(&mut self, domain: &'static str, merged: Items, mut tracker: Tracker, snapshot: &Items) -> Option<Tracker> {
+    pub(crate) fn sync_apply(&mut self, domain: &'static str, merged: Items, tracker: Tracker, rev: u64) -> Option<Tracker> {
+        // Data and tracker are two files: a crash between the two writes would leave a tracker that
+        // does not know what was applied, and the next run would take the merged items for edits made
+        // here. The recovery marker makes that next run start over from the Macs' documents instead;
+        // `sync_done` removes it once the tracker is saved.
+        let had_marker = sync_io::needs_recovery(&self.store.root, domain);
+        sync_io::mark_recovery(&self.store.root, domain);
+        let applied = self.sync_apply_marked(domain, merged, tracker, rev);
+        if applied.is_none() && !had_marker {
+            sync_io::clear_recovery(&self.store.root, domain);
+        }
+        applied
+    }
+
+    fn sync_apply_marked(&mut self, domain: &'static str, merged: Items, mut tracker: Tracker, rev: u64) -> Option<Tracker> {
         // Local data must still be what the run saw. The clipboard (written by the recorder thread
-        // too) is compared and replaced under one lock below.
-        if domain != "clipboard" && !self.sync_can_apply(domain, snapshot) {
+        // too) is checked and replaced under one lock below.
+        if domain != "clipboard" && !self.sync_can_apply(domain, rev) {
             if domain == "notes" && self.notes_ctl.typing_recently(now_ms() as u64) {
                 // try again once the typing has stopped
                 self.sync.notes_retry = Some(Instant::now() + Duration::from_millis(crate::notes_ctl::TYPING_IDLE_MS + 200));
@@ -414,7 +584,12 @@ impl App {
                 let (mut chats, dropped): (Vec<Chat>, _) = sync_io::from_items_report(merged);
                 unreadable = dropped;
                 chats.sort_by_key(|c| std::cmp::Reverse(c.updated));
-                chats.truncate(ferrocast_core::models::MAX_CHATS);
+                // the cap keeps the newest chats here; the others stay on the other Macs and are
+                // not published as deleted (see `capped_chats`)
+                if chats.len() > ferrocast_core::models::MAX_CHATS {
+                    let cut = chats.split_off(ferrocast_core::models::MAX_CHATS);
+                    self.sync.capped_chats.extend(cut.into_iter().map(|c| c.id));
+                }
                 self.chats = chats;
                 let v = self.chats.clone();
                 self.persist("chats.json", &v);
@@ -426,16 +601,17 @@ impl App {
                 let list = sync_io::clipboard_normalize(incoming, services::now_secs(), self.settings.clipboard_retention.secs());
                 again = list.len() != before;
                 let mut cur = self.shared.clipboard.lock().unwrap();
-                if sync_io::to_items(&cur) != *snapshot {
+                if self.shared.clip_rev.load(Ordering::SeqCst) != rev {
                     // something was recorded while the run was away: merge again next time
                     drop(cur);
                     self.sync.applying = false;
                     return None;
                 }
-                *cur = list;
+                let old = std::mem::replace(&mut *cur, list);
                 self.shared.prune_images_keeping_held(&cur);
                 drop(cur);
-                // saved through the shared serialisation (SAVE, then the list), never under the list lock
+                drop(old); // freed outside the lock
+                           // saved through the shared serialisation (SAVE, then the list), never under the list lock
                 self.shared.write_clipboard();
             }
             _ => {}
@@ -468,23 +644,30 @@ impl App {
         let mut turns = history.clone();
         turns.push((asked.clone(), answer.clone()));
         let id = self.ai_chat.get_or_insert_with(|| uuid::Uuid::new_v4().to_string()).clone();
+        let before: Vec<String> = self.chats.iter().map(|c| c.id.clone()).collect();
         ferrocast_core::models::upsert_chat(&mut self.chats, Chat::new(id, turns, services::now_secs()));
+        // chats the cap pushed out of this Mac's list are not deleted anywhere else
+        self.sync.capped_chats.extend(before.into_iter().filter(|b| !self.chats.iter().any(|c| &c.id == b)));
         let v = self.chats.clone();
         self.persist("chats.json", &v);
     }
 }
 
 /// Write the own documents of merges the app applied (background thread, before the run's own work).
+/// Returns the documents that could not be written, to be tried again by the next run.
 pub(crate) fn flush_docs(
     io: &SyncIo,
     docs: std::collections::BTreeMap<&'static str, ferrocast_core::sync::DeviceDoc>,
     root: &std::path::Path,
-) {
+) -> std::collections::BTreeMap<&'static str, ferrocast_core::sync::DeviceDoc> {
+    let mut failed = std::collections::BTreeMap::new();
     for (domain, doc) in docs {
         if let Err(e) = io.write_doc(domain, &doc) {
             instance::log(root, &format!("sync: writing own document {domain}: {e:#}"));
+            failed.insert(domain, doc);
         }
     }
+    failed
 }
 
 fn now_ms() -> i64 {

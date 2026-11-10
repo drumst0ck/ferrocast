@@ -3,10 +3,10 @@ use super::*;
 use std::sync::atomic::Ordering;
 
 fn applied(app: &mut App, domain: &'static str) {
-    let snap = app.sync_snapshot(domain);
+    let snap = app.sync_rev(domain);
     let merged = ferrocast_core::sync_io::to_items::<ferrocast_core::models::Snippet>(&[]);
     let merged = if domain == "settings" { ferrocast_core::sync_io::settings_items(&app.settings) } else { merged };
-    assert!(app.sync_apply(domain, merged, ferrocast_core::sync::Tracker::default(), &snap).is_some(), "{domain} applied");
+    assert!(app.sync_apply(domain, merged, ferrocast_core::sync::Tracker::default(), snap).is_some(), "{domain} applied");
 }
 
 #[test]
@@ -27,9 +27,10 @@ fn a_domain_that_is_not_applied_leaves_the_dirty_flag_alone() {
     let mut app = fixture();
     app.settings.sync_enabled = true;
     app.shared.clip_dirty.store(true, Ordering::Relaxed);
-    let snap = app.sync_snapshot("snippets");
+    let snap = app.sync_rev("snippets");
     app.snippets.push(ferrocast_core::models::Snippet::new("a", "b", "c")); // local edit after the snapshot
-    assert!(app.sync_apply("snippets", vec![], ferrocast_core::sync::Tracker::default(), &snap).is_none());
+    app.sync_mark("snippets.json"); // saved
+    assert!(app.sync_apply("snippets", vec![], ferrocast_core::sync::Tracker::default(), snap).is_none());
     assert!(app.shared.clip_dirty.load(Ordering::Relaxed));
     std::fs::remove_dir_all(&app.store.root).ok();
 }
@@ -65,11 +66,11 @@ fn clip(content: &str, at: i64) -> ferrocast_core::models::ClipEntry {
 fn a_sync_apply_clipboard_save_waits_for_the_save_turn_and_the_newest_list_wins() {
     let mut app = fixture();
     app.settings.sync_enabled = true;
-    let snap = app.sync_snapshot("clipboard");
+    let snap = app.sync_rev("clipboard");
     let merged = ferrocast_core::sync_io::to_items(&[clip("synced", crate::services::now_secs())]);
     let holder = hold_save_turn(300);
     let t = Instant::now();
-    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), snap).is_some());
     assert!(t.elapsed() >= Duration::from_millis(250), "the save took its turn behind the other writer");
     holder.join().unwrap();
     let on_disk: Vec<ferrocast_core::models::ClipEntry> = app.store.load("clipboard.json");

@@ -1310,6 +1310,7 @@ impl App {
             visible: Default::default(),
             keywords: Default::default(),
             clip_dirty: Default::default(),
+            clip_rev: Default::default(),
             clip_hold: Default::default(),
         });
         services::start_clipboard(shared.clone(), bus.clone());
@@ -3129,6 +3130,7 @@ impl App {
                         let at = i.min(list.len());
                         list.insert(at, e);
                     }
+                    self.shared.clip_rev.fetch_add(1, Ordering::SeqCst);
                 }
                 self.shared.clip_hold.lock().unwrap_or_else(|e| e.into_inner()).clear();
                 self.shared.save_clipboard_in_background();
@@ -7976,8 +7978,12 @@ impl App {
                 }
             }
             Act::ClipPin(id) => {
-                if let Some(e) = self.shared.clipboard.lock().unwrap().iter_mut().find(|e| e.id == id) {
-                    e.pinned = !e.pinned;
+                {
+                    let mut list = self.shared.clipboard.lock().unwrap();
+                    if let Some(e) = list.iter_mut().find(|e| e.id == id) {
+                        e.pinned = !e.pinned;
+                    }
+                    self.shared.clip_rev.fetch_add(1, Ordering::SeqCst);
                 }
                 self.shared.save_clipboard_in_background();
             }
@@ -7985,6 +7991,7 @@ impl App {
                 let removed = {
                     let mut list = self.shared.clipboard.lock().unwrap();
                     let removed = list.iter().position(|e| e.id == id).map(|i| (i, list.remove(i)));
+                    self.shared.clip_rev.fetch_add(1, Ordering::SeqCst);
                     // the hold is set while the list lock is still held (order: list, then hold), so no
                     // prune can see the entry as neither listed nor held; it replaces the previous offer's
                     if let Some((_, e)) = &removed {
@@ -8001,7 +8008,11 @@ impl App {
             }
             Act::ClipDeleteAll => {
                 self.finish_entry_undo();
-                self.shared.clipboard.lock().unwrap().retain(|e| e.pinned);
+                {
+                    let mut list = self.shared.clipboard.lock().unwrap();
+                    list.retain(|e| e.pinned);
+                    self.shared.clip_rev.fetch_add(1, Ordering::SeqCst);
+                }
                 self.shared.save_clipboard_in_background();
                 self.prune_clip_images();
                 self.toast("Clipboard history cleared");
