@@ -13,7 +13,7 @@ Pulsa <kbd>⌥</kbd> <kbd>Space</kbd> desde cualquier app. Puedes cambiar el ata
 Sí. Licencia MIT, sin cuenta y sin nivel Pro.
 
 ### ¿Funcionará en mi Mac?
-Funciona en Macs con Apple Silicon. Los Mac Intel no son compatibles.
+El DMG/zip funciona en Apple Silicon. Los Mac Intel pueden instalar con Homebrew, que compila desde el código fuente para ese Mac; Intel no está probado.
 
 ### ¿Necesito ser desarrollador para instalarlo?
 No, pero tienes que abrir Terminal una vez y pegar cuatro líneas. Homebrew hace el resto y compila durante unos minutos. Consulta [Instalar](/es/docs/getting-started/install/).

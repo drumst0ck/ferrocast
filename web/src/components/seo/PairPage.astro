@@ -70,7 +70,7 @@ if (guide) jsonLd.push({ '@context': 'https://schema.org', '@type': 'FAQPage', m
     ))}
     <h2>Install Ferrocast</h2>
     <pre><code>{brewBlock}</code></pre>
-    <p>Free, open source (MIT), Apple Silicon only. <a class="tl" href="/docs/getting-started/install/">Install guide</a> · <a class="tl" href="/docs/files/conversions/">All conversions in the docs</a></p>
+    <p>Free, open source (MIT), DMG/zip for Apple Silicon; Intel via Homebrew (not tested). <a class="tl" href="/docs/getting-started/install/">Install guide</a> · <a class="tl" href="/docs/files/conversions/">All conversions in the docs</a></p>
     <h2>Related conversions</h2>
     <ul class="chips">
       {rel.reverse && <li><a href={`/convert/${rel.reverse.slug}/`}>{rel.reverse.inLabel} to {rel.reverse.outLabel}</a></li>}

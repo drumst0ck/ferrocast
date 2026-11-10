@@ -17438,9 +17438,9 @@ mod i18n_ui {
         }
         for l in [Lang::Ja, Lang::ZhHans] {
             assert!(l.needs_wide_font());
-            // every translated string of these languages needs it, and the font check agrees
-            let rows: Vec<&str> = ferrocast_core::i18n::rows().map(|(k, _)| k).collect();
-            let sample = rows.iter().find_map(|k| ferrocast_core::i18n::lookup(k, l)).unwrap();
+            // their translations need it, and the font check agrees (a fixed row: the table is a
+            // HashMap, and some rows keep a brand name such as "AI" or "GitHub" in Latin letters)
+            let sample = ferrocast_core::i18n::lookup("Settings", l).unwrap();
             assert!(needs_wide_font(sample), "{sample}");
         }
         assert!(!Lang::Es.needs_wide_font() && !Lang::De.needs_wide_font());

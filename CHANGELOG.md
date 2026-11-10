@@ -8,6 +8,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ### Fixed
 - **Extensions launching commands**: `launchCommand` now passes `type`, `context`, `arguments` and `fallbackText` to the launched command (`environment.launchType`, `props.launchType`, `props.launchContext`, `props.fallbackText`). `LaunchType.Background` runs it in a separate background process (the launcher and your current screen stay as they are; its HUD and errors are still shown, it is stopped after 60 s and when you quit; it cannot show views or dialogs), and a wrong type or context is rejected with an error. (docs: /docs/launcher/raycast-extensions/) #extensions
+### Changed
+- **Intel Macs**: the docs now say the DMG/zip runs on Apple Silicon, and that Intel Macs can install with Homebrew, which builds from source for that Mac (not tested on Intel). #install
 
 ## [0.6.0] - 2026-11-09
 
