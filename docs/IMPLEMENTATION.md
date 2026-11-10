@@ -17,7 +17,7 @@ propia. No es una réplica completa ni ejecuta las extensiones React de Raycast.
 - Nombre provisional: Ferrocast, para no reutilizar la marca ni assets de Raycast.
 - UI Rust con egui, no AppKit nativo: los iconos de apps sí vienen de Finder;
   los emoji son monocromos. Prioridad: versión funcional y testeable.
-- Primero macOS/Apple Silicon. AI, sincronización, marketplace React y paridad
+- Primero macOS (DMG/zip en Apple Silicon; Intel solo con Homebrew, sin probar). AI, sincronización, marketplace React y paridad
   completa se dejan para iteraciones posteriores.
 - Datos locales en JSON. No se debe afirmar que el historial está cifrado.
 - Pruebas del arranque no ejercitan apagado, reinicio, borrado ni scripts ajenos.
