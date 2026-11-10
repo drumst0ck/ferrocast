@@ -40,6 +40,7 @@ Extensions are drawn with Ferrocast's own interface, not a web view. These parts
 - **Forms** with text, password, text area, checkbox, dropdown, date (typed as `YYYY-MM-DD`) and tags. ⌘↵ submits.
 - **Actions** and their shortcuts, pushing and popping screens, toasts, copying and pasting, opening URLs and files, showing a file in Finder.
 - **Storage and data**: LocalStorage, Cache, the preferences, the list of your apps, the frontmost app, the selected text and confirmation dialogs.
+- **Launching another command** of the same extension with `launchCommand`: `type` (`LaunchType.UserInitiated` opens it, `LaunchType.Background` runs it in a separate background process, without showing the launcher or touching the screen you are on; its HUD and toasts still appear, its errors are reported, and it is stopped when it finishes or after 60 s. A background command can only start other background commands, never a user-initiated one. It cannot show a view or a confirm dialog (a command with a view cannot be launched in the background), its `Clipboard.paste` types into the frontmost app only while the launcher is hidden (otherwise it only copies), and it shares the extension's `Cache` with the command you are using, so the last writer wins), `arguments`, `context` (received as `props.launchContext`) and `fallbackText`. The launched command sees its type in `environment.launchType` and `props.launchType`.
 - **Grids** are shown as lists, with the cell content as the icon.
 
 To measure this, we ran 20 popular extensions from Raycast's public repository (github.com/raycast/extensions, MIT licence) that need no account, API key or AI. We took the 20 with the highest install counts shown on their Store pages, out of about 60 candidates that need no account, key or AI. They are not the whole Store. They have 40 commands that open a view, and we drove each one without the interface: launch it, search, open the first action, push a screen and go back, submit a form with its default values. 34 of the 40 worked, 4 only waited for input we did not give (for example an empty clipboard), 1 failed because Homebrew itself refused to load a cask from an untrusted tap, and 1 showed an empty history. The test does not prove that every command of every extension works, and it did not use the app's window. Your extensions may behave differently.
@@ -50,7 +51,7 @@ To measure this, we ran 20 popular extensions from Raycast's public repository (
 - **File picker fields** in forms and the link accessory.
 - **Sign-in with OAuth** and the Raycast AI features.
 - **Some actions**: move to Trash, open with, create a snippet or quicklink, and pick a date.
-- **Launching a command of another extension**, and anything that needs Raycast's own account, sync or Store.
+- **Launching a command of another extension** (`launchCommand` refuses it), and anything that needs Raycast's own account, sync or Store.
 - **Detail pane Markdown in lists** is shown as plain text.
 
 When an extension uses something Ferrocast cannot draw, the screen says "Not supported in Ferrocast yet: ", the name of the part, the extension and a link to this page. The rest of the extension keeps working where it can.

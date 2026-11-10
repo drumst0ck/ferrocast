@@ -6,6 +6,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Fixed
+- **Extensions launching commands**: `launchCommand` now passes `type`, `context`, `arguments` and `fallbackText` to the launched command (`environment.launchType`, `props.launchType`, `props.launchContext`, `props.fallbackText`). `LaunchType.Background` runs it in a separate background process (the launcher and your current screen stay as they are; its HUD and errors are still shown, it is stopped after 60 s and when you quit; it cannot show views or dialogs), and a wrong type or context is rejected with an error. (docs: /docs/launcher/raycast-extensions/) #extensions
 ### Changed
 - **Switch Windows**: the list now includes windows on other Spaces and minimized windows, marked "Other Space", "Minimized" or "Hidden" (apps hidden with ⌘H) next to the app name. Choosing one unminimizes it and brings it forward, switching Space when needed. (docs: /docs/launcher/window-management/) #windows
 - **Bringing apps to the front**: on macOS 14 and later Ferrocast uses the current activation API instead of the deprecated one for the launcher, Notes, the selector, pasting after hiding and app switching; macOS 13 keeps the previous behaviour. #launcher
