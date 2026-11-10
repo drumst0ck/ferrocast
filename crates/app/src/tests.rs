@@ -18306,3 +18306,136 @@ fn chats_cut_by_the_cap_are_remembered_so_they_are_not_published_as_deleted() {
     assert!(app.sync.capped_chats.contains("c0") && app.sync.capped_chats.contains("c1"), "the oldest are the ones cut");
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
+
+#[test]
+fn chats_cut_by_the_cap_are_saved_in_the_tracker_at_once_so_a_restart_cannot_delete_them() {
+    use ferrocast_core::sync::{publish, Tracker};
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let n = ferrocast_core::models::MAX_CHATS + 2;
+    let chats: Vec<Chat> = (0..n).map(|i| Chat::new(format!("c{i}"), vec![("q".into(), "a".into())], i as i64)).collect();
+    let items = ferrocast_core::sync_io::to_items(&chats);
+    let (_, t) = publish("a", &items, &Tracker::default(), 5000);
+    ferrocast_core::sync_io::save_tracker(&app.store.root, "chats", &t).unwrap();
+    let rev = app.sync_rev("chats");
+    assert!(app.sync_apply("chats", items, t, rev).is_some());
+    // a restart before the next chats run: nothing is left in memory
+    app.sync.capped_chats.clear();
+    let saved = ferrocast_core::sync_io::load_tracker(&app.store.root, "chats");
+    assert!(saved.items["c0"].unparsed && saved.items["c1"].unparsed, "remembered on disk");
+    let (doc, _) = publish("a", &ferrocast_core::sync_io::to_items(&app.chats), &saved, 9000);
+    assert!(!doc.items.get("c0").is_some_and(|r| r.deleted), "not published as deleted");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_chat_pushed_out_by_a_new_answer_is_saved_in_the_tracker_even_with_sync_off() {
+    use ferrocast_core::sync::{publish, Tracker};
+    let mut app = fixture();
+    assert!(!app.settings.sync_enabled);
+    let chats: Vec<Chat> =
+        (0..ferrocast_core::models::MAX_CHATS).map(|i| Chat::new(format!("c{i}"), vec![("q".into(), "a".into())], i as i64)).collect();
+    let (_, t) = publish("a", &ferrocast_core::sync_io::to_items(&chats), &Tracker::default(), 5000);
+    ferrocast_core::sync_io::save_tracker(&app.store.root, "chats", &t).unwrap();
+    app.chats = chats;
+    app.stack.push(View::Ai {
+        prompt: String::new(),
+        asked: "new question".into(),
+        answer: "new answer".into(),
+        history: vec![],
+        busy: false,
+        run: 1,
+    });
+    app.save_ai_chat();
+    assert_eq!(app.chats.len(), ferrocast_core::models::MAX_CHATS);
+    app.sync.capped_chats.clear(); // restart
+    let saved = ferrocast_core::sync_io::load_tracker(&app.store.root, "chats");
+    assert!(saved.items["c0"].unparsed, "the cut chat is remembered on disk");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_failed_data_save_keeps_the_merge_unapplied_and_the_recovery_marker() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    std::fs::create_dir_all(app.store.root.join("snippets.json")).unwrap(); // the file cannot be written
+    let merged = ferrocast_core::sync_io::to_items(&[Snippet::new("remote", "text", "!r")]);
+    let rev = app.sync_rev("snippets");
+    let t = ferrocast_core::sync::Tracker::default();
+    assert!(app.sync_apply("snippets", merged, t, rev).is_none(), "the stale file must not count as applied");
+    assert!(ferrocast_core::sync_io::needs_recovery(&app.store.root, "snippets"), "the marker stays");
+    // the clipboard too
+    std::fs::create_dir_all(app.store.root.join("clipboard.json")).unwrap();
+    let rev = app.sync_rev("clipboard");
+    let merged =
+        vec![("e1".to_string(), serde_json::json!({"id": "e1", "kind": "Text", "content": "x", "copied_at": services::now_secs()}))];
+    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), rev).is_none());
+    assert!(ferrocast_core::sync_io::needs_recovery(&app.store.root, "clipboard"));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn applying_a_clipboard_merge_does_not_hash_every_entry_on_the_ui_thread() {
+    use ferrocast_core::sync::{Tracked, Tracker};
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let now = services::now_secs();
+    let entry = |id: &str, content: &str, at: i64, pinned: bool| serde_json::json!({"id": id, "kind": "Text", "content": content, "copied_at": at, "pinned": pinned});
+    // "a" and "b" are the same text: normalising keeps "a" and takes over the pin of "b"
+    let merged = vec![
+        ("a".to_string(), entry("a", "same", now, false)),
+        ("b".to_string(), entry("b", "same", now - 10, true)),
+        ("z".to_string(), entry("z", "other", now - 5, false)),
+    ];
+    let mut t = Tracker { seeded: true, ..Default::default() };
+    for id in ["a", "z"] {
+        t.items.insert(
+            id.into(),
+            Tracked {
+                hash: "worker".into(),
+                modified: 1,
+                deleted: false,
+                remote: false,
+                pristine: false,
+                adopted: true,
+                unparsed: false,
+                seen: None,
+            },
+        );
+    }
+    let rev = app.sync_rev("clipboard");
+    let t = app.sync_apply("clipboard", merged, t, rev).expect("applied");
+    assert_eq!(t.items["z"].hash, "worker", "an entry that is unchanged keeps the hash the worker computed");
+    let applied = app.shared.clipboard.lock().unwrap().iter().find(|e| e.id == "a").cloned().unwrap();
+    assert!(applied.pinned, "the pin was taken over");
+    let want = ferrocast_core::sync::hash(&ferrocast_core::sync_io::to_items(&[applied])[0].1);
+    assert_eq!(t.items["a"].hash, want, "an entry normalising changed is hashed as applied");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn the_worker_hashes_clipboard_entries_as_they_will_be_applied() {
+    use ferrocast_core::sync::{publish, Tracker};
+    // a value written by another build without the optional fields: it does not round-trip byte for byte
+    let merged = vec![("e1".to_string(), serde_json::json!({"id": "e1", "kind": "Text", "content": "x", "copied_at": 5}))];
+    let (_, mut t) = publish("a", &merged, &Tracker::default(), 10);
+    crate::app::sync_ctl::rehash_clipboard(&merged, &mut t);
+    let round: Vec<ClipEntry> = ferrocast_core::sync_io::from_items(merged.clone());
+    let want = ferrocast_core::sync::hash(&ferrocast_core::sync_io::to_items(&round)[0].1);
+    assert_eq!(t.items["e1"].hash, want);
+    assert_ne!(want, ferrocast_core::sync::hash(&merged[0].1), "the case is not vacuous");
+}
+
+#[test]
+fn turning_sync_off_clears_the_remembered_errors() {
+    let mut app = fixture();
+    let mut s = app.settings.clone();
+    s.sync_enabled = true;
+    app.commit_settings(s.clone());
+    app.sync.errors.insert("notes", "disk full".into());
+    app.sync.error = Some("iCloud Drive is off".into());
+    s.sync_enabled = false;
+    app.commit_settings(s);
+    assert!(app.sync.errors.is_empty() && app.sync.error.is_none(), "nothing stale when it is turned on again");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}

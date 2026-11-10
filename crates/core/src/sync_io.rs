@@ -263,10 +263,34 @@ fn is_dataless(_path: &Path) -> bool {
     false
 }
 
+/// What identifies one version of a file on disk: modification time, size, inode and change time
+/// (the change time and inode move on a same-size rewrite that restores the modification time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    mtime: std::time::SystemTime,
+    len: u64,
+    ino: u64,
+    ctime: (i64, i64),
+}
+
+impl FileStamp {
+    fn of(path: &Path) -> Option<FileStamp> {
+        let m = std::fs::metadata(path).ok()?;
+        #[cfg(unix)]
+        let (ino, ctime) = {
+            use std::os::unix::fs::MetadataExt;
+            (m.ino(), (m.ctime(), m.ctime_nsec()))
+        };
+        #[cfg(not(unix))]
+        let (ino, ctime) = (0, (0, 0));
+        Some(FileStamp { mtime: m.modified().ok()?, len: m.len(), ino, ctime })
+    }
+}
+
 /// Parsed peer documents by path, valid while the file's modification time and size are the same:
 /// every run would otherwise read and parse every other Mac's documents again (the clipboard one
 /// can be large), although they change rarely.
-type DocCache = std::sync::Mutex<std::collections::HashMap<PathBuf, (std::time::SystemTime, u64, DeviceDoc)>>;
+type DocCache = std::sync::Mutex<std::collections::HashMap<PathBuf, (FileStamp, DeviceDoc)>>;
 
 fn doc_cache() -> &'static DocCache {
     static C: std::sync::OnceLock<DocCache> = std::sync::OnceLock::new();
@@ -384,10 +408,9 @@ impl SyncIo {
                 continue;
             }
             let p = self.device_dir(&dev).join(format!("{domain}.json"));
-            let stamp = std::fs::metadata(&p).ok().and_then(|m| m.modified().ok().map(|t| (t, m.len())));
-            if let Some((t, len)) = stamp {
-                let hit =
-                    doc_cache().lock().ok().and_then(|c| c.get(&p).filter(|(ct, cl, _)| *ct == t && *cl == len).map(|(_, _, d)| d.clone()));
+            let stamp = FileStamp::of(&p);
+            if let Some(st) = stamp {
+                let hit = doc_cache().lock().ok().and_then(|c| c.get(&p).filter(|(cs, _)| *cs == st).map(|(_, d)| d.clone()));
                 if let Some(mut doc) = hit {
                     doc.device = dev;
                     docs.push(doc);
@@ -415,8 +438,8 @@ impl SyncIo {
             };
             match parse_doc(domain, &bytes) {
                 Ok(mut doc) => {
-                    if let (Some((t, len)), Ok(mut c)) = (stamp, doc_cache().lock()) {
-                        c.insert(p.clone(), (t, len, doc.clone()));
+                    if let (Some(st), Ok(mut c)) = (stamp, doc_cache().lock()) {
+                        c.insert(p.clone(), (st, doc.clone()));
                     }
                     doc.device = dev; // the folder name is the authority
                     docs.push(doc);
@@ -517,8 +540,61 @@ pub fn mark_recovery(data_dir: &Path, domain: &str) {
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Err(e) = std::fs::write(&p, b"") {
+    // flushed to disk before the data file is saved, so a crash cannot leave the data without it
+    if let Err(e) = crate::storage::write_durable(&p, b"") {
         eprintln!("ferrocast: could not write {}: {e}", p.display());
+    }
+}
+
+/// True for `.<name>.<32 hex digits>.tmp`, the name `write_durable` and `copy_atomic` give a temp file.
+fn is_own_temp_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix('.').and_then(|n| n.strip_suffix(".tmp")) else { return false };
+    match rest.rsplit_once('.') {
+        Some((base, id)) => !base.is_empty() && id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()),
+        None => false,
+    }
+}
+
+/// Remove the temp files an interrupted `write_durable`/`copy_atomic` left in `dirs` (not their
+/// subfolders): only files with that temp naming pattern that were last written more than
+/// `older_than` ago, so a write in progress is never touched.
+pub fn cleanup_stale_temp_files(dirs: &[&Path], older_than: std::time::Duration) {
+    let now = std::time::SystemTime::now();
+    for dir in dirs {
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        for e in rd.flatten() {
+            if !is_own_temp_name(&e.file_name().to_string_lossy()) {
+                continue;
+            }
+            let old = e
+                .metadata()
+                .ok()
+                .filter(|m| m.is_file())
+                .and_then(|m| m.modified().ok())
+                .is_some_and(|t| now.duration_since(t).is_ok_and(|age| age > older_than));
+            if old {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+}
+
+/// How old a leftover temp file must be before a run removes it.
+pub const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(600);
+
+impl SyncIo {
+    /// Remove stale temp files of this build in the local data folder and in this Mac's folder of
+    /// the sync folder (the other Macs clean up their own).
+    pub fn cleanup_temp_files(&self, data_dir: &Path) {
+        let own = self.device_dir(&self.device);
+        let mut dirs: Vec<PathBuf> =
+            vec![data_dir.to_path_buf(), data_dir.join("sync-state"), own.clone(), own.join("clipboard-images"), own.join("attachments")];
+        dirs.push(self.images_dir.clone());
+        if let Some(a) = &self.attachments_dir {
+            dirs.push(a.clone());
+        }
+        let refs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+        cleanup_stale_temp_files(&refs, STALE_TEMP_AGE);
     }
 }
 
@@ -563,6 +639,23 @@ pub fn sync_domain_recovering(
     recover: bool,
 ) -> anyhow::Result<Outcome> {
     anyhow::ensure!(io.on(), "sync turned off");
+    // This Mac's own document is only in iCloud: ask for it and do nothing else. Rebuilding the
+    // tracker or recovering without it would take what is local for everything this Mac published.
+    let own_path = io.device_dir(&io.device).join(format!("{domain}.json"));
+    if io.needs_download(&own_path) {
+        return Ok(Outcome {
+            merged: None,
+            tracker_published: tracker.clone(),
+            tracker_merged: tracker.clone(),
+            peers: io.peers(),
+            corrupt: vec![],
+            downloading: 1,
+            applied_doc: None,
+            recovered: false,
+            attachments_added: 0,
+            conflicts: 0,
+        });
+    }
     let fresh = Tracker::default();
     let tracker = if recover { &fresh } else { tracker };
     if domain == "clipboard" {
@@ -669,6 +762,7 @@ pub fn sync_domain_recovering(
                         pristine: false,
                         adopted: false,
                         unparsed: false,
+                        seen: None,
                     },
                 );
             }
@@ -745,8 +839,10 @@ struct ConflictCopy {
 /// Notes that this Mac edited since the version it last published or received and that another Mac
 /// also changed (to something else): the merge keeps the text of the newer record, and the text that
 /// lost is added as a new note whose first line ends with "(conflict copy from <Mac>)". Every Mac
-/// that meets the conflict derives the same copy id, so it exists once. A deletion on the other side
-/// is not a conflict (the edit wins, as before).
+/// that meets the conflict derives the same copy id, so it exists once. Only a record the other Mac
+/// wrote after the shared version counts: a peer document that is merely older (that Mac was asleep
+/// while this one edited twice) is not a conflict. A deletion on the other side makes no copy
+/// either: it is not text, and the merge keeps whichever record is newest.
 fn conflict_copies(
     io: &SyncIo,
     prev: &Tracker,
@@ -764,6 +860,9 @@ fn conflict_copies(
         }
         let Some((dev, rec)) = win.get(id) else { continue };
         let Some(theirs) = rec.value.as_ref().filter(|_| !rec.deleted) else { continue };
+        if rec.modified <= t.modified {
+            continue; // not written after the shared version: an older document, not a concurrent edit
+        }
         let their_hash = sync::hash(theirs);
         if their_hash == t.hash || their_hash == local_hash {
             continue; // the other Mac did not change it, or both made the same edit
@@ -796,8 +895,7 @@ fn conflict_copies(
         if let Some(obj) = value.as_object_mut() {
             obj.insert("id".into(), Value::String(copy_id.clone()));
             obj.insert("text".into(), Value::String(lines.join("\n")));
-            obj.remove("pinned_at");
-            obj.remove("deleted_at");
+            obj.remove("pinned_at"); // `deleted_at` stays: a trashed text does not come back as a live note
         }
         out.push(ConflictCopy { note_id: id.clone(), id: copy_id, value });
     }
@@ -3549,6 +3647,111 @@ mod tests {
             let kept: Vec<_> = o.merged.unwrap().into_iter().filter(|(id, _)| id != "n1").collect();
             assert_eq!(kept.len(), 1);
             cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn editing_twice_while_the_other_mac_sleeps_is_not_a_conflict() {
+            let (da, db, shared, mut a, b) = two_notes_macs();
+            a.notes[0].text = "Plan\nfirst edit".into();
+            a.sync_notes(2_000);
+            a.notes[0].text = "Plan\nsecond edit".into();
+            let o = a.sync_notes(3_000); // B's document still holds the base text
+            assert_eq!(o.conflicts, 0, "no toast");
+            a.sync_notes(4_000);
+            assert_eq!(a.notes.len(), 1, "no conflict copy: {:?}", a.notes);
+            assert_eq!(a.notes[0].text, "Plan\nsecond edit");
+            let _ = b;
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn a_conflict_copy_of_trashed_text_stays_in_the_trash() {
+            let (da, db, shared, mut a, mut b) = two_notes_macs();
+            a.notes[0].text = "Plan\nA's trashed edit".into();
+            a.notes[0].deleted_at = Some(1_900);
+            a.sync_notes(2_000);
+            b.notes[0].text = "Plan\nB's edit".into();
+            b.sync_notes(3_000);
+            assert_eq!(copies(&b).len(), 1, "{:?}", b.notes);
+            assert!(copies(&b)[0].deleted_at.is_some(), "not a live note: {:?}", copies(&b)[0]);
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn a_document_that_is_only_in_the_cloud_is_requested_and_this_mac_writes_nothing() {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.snippets = vec![snip("s1", "one")];
+            a.sync(1_000);
+            b.snippets = vec![snip("s1", "one")];
+            b.sync(1_500);
+            let own = b.dir_file("snippets");
+            let before = std::fs::read(&own).unwrap();
+            DATALESS.lock().unwrap().push(own.clone());
+            b.io.dataless = in_cloud_only;
+            b.io.download = request;
+            // the tracker was lost and the data holds nothing: running now would rebuild without the document
+            std::fs::remove_file(b.store.root.join("sync-state").join("snippets.json")).unwrap();
+            let o = sync_domain(&b.io, "snippets", &[], &load_tracker(&b.store.root, "snippets"), 2_000).unwrap();
+            assert_eq!(o.downloading, 1);
+            assert!(o.merged.is_none() && o.applied_doc.is_none());
+            assert!(REQUESTED.lock().unwrap().contains(&own), "iCloud was asked for it");
+            assert_eq!(std::fs::read(&own).unwrap(), before, "nothing written");
+            DATALESS.lock().unwrap().retain(|p| p != &own);
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn a_same_size_rewrite_with_the_same_modification_time_is_read_again() {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.snippets = vec![snip("s1", "one")];
+            a.sync(1_000);
+            let first = b.io.read_docs("snippets");
+            assert_eq!(first.docs[0].items["s1"].value.as_ref().unwrap()["text"], "text of one");
+            let p = a.dir_file("snippets");
+            let mtime = std::fs::metadata(&p).unwrap().modified().unwrap();
+            let bytes = std::fs::read(&p).unwrap();
+            let changed = String::from_utf8(bytes).unwrap().replace("text of one", "text of two");
+            std::fs::write(&p, changed).unwrap();
+            std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_modified(mtime).unwrap();
+            let again = b.io.read_docs("snippets");
+            assert_eq!(again.docs[0].items["s1"].value.as_ref().unwrap()["text"], "text of two", "the rewrite was missed");
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn only_our_own_old_temp_files_are_removed() {
+            let dir = tmp("temps");
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+            let mk = |name: &str, age: Option<std::time::SystemTime>| {
+                let p = dir.join(name);
+                std::fs::write(&p, b"x").unwrap();
+                if let Some(t) = age {
+                    std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_modified(t).unwrap();
+                }
+                p
+            };
+            let hex = "0123456789abcdef0123456789abcdef";
+            let stale = mk(&format!(".notes.json.{hex}.tmp"), Some(old));
+            let fresh = mk(&format!(".snippets.json.{hex}.tmp"), None);
+            let foreign = mk("keep.tmp", Some(old));
+            let dotted = mk(".something.tmp", Some(old));
+            let data = mk("notes.json", Some(old));
+            cleanup_stale_temp_files(&[dir.as_path()], std::time::Duration::from_secs(600));
+            assert!(!stale.exists(), "old temp of ours removed");
+            assert!(fresh.exists() && foreign.exists() && dotted.exists() && data.exists());
+            cleanup(&[&dir]);
+        }
+
+        #[test]
+        fn marking_a_recovery_is_durable_and_leaves_no_temp_file() {
+            let dir = tmp("marker");
+            mark_recovery(&dir, "notes");
+            assert!(needs_recovery(&dir, "notes"));
+            let junk: Vec<_> = std::fs::read_dir(dir.join("sync-state")).unwrap().flatten().map(|e| e.file_name()).collect();
+            assert_eq!(junk.len(), 1, "{junk:?}");
+            cleanup(&[&dir]);
         }
 
         static DATALESS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());

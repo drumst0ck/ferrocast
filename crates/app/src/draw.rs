@@ -10401,6 +10401,11 @@ impl App {
             || s.notes_menu_bar_button != self.settings.notes_menu_bar_button;
         let menu_bar_icon_changed = s.show_menu_bar_icon != self.settings.show_menu_bar_icon;
         let sync_turned_on = s.sync_enabled && !self.settings.sync_enabled;
+        if !s.sync_enabled && self.settings.sync_enabled {
+            // a failure from before it was turned off is not shown (or counted) when it is turned on again
+            self.sync.errors.clear();
+            self.sync.error = None;
+        }
         let language_changed = s.language != self.settings.language;
         self.settings = s;
         if later {

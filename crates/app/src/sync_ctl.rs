@@ -46,6 +46,9 @@ pub struct SyncCtl {
     pub(crate) sent_docs: std::collections::BTreeMap<&'static str, ferrocast_core::sync::DeviceDoc>,
     /// Chats a cap removed from this Mac only (not deleted by the user): never published as deleted.
     pub(crate) capped_chats: BTreeSet<String>,
+    /// Data files `persist` could not write so far; a merge that raised it while being applied was
+    /// not saved (see `sync_apply`).
+    pub(crate) save_failures: u32,
     /// Replaces `sync_io::resolve_dir` (tests).
     pub(crate) resolve: Option<fn() -> Result<std::path::PathBuf, sync_io::Unavailable>>,
     /// Set while a merge is applied so its saves are not queued as local edits.
@@ -359,6 +362,7 @@ impl App {
                         .with_attachments(root.join(ferrocast_core::attachments::DIR))
                         .with_name(sync_io::computer_name());
                     io.enabled = flag;
+                    io.cleanup_temp_files(&root); // temp files an interrupted write left behind
                     let failed = flush_docs(&io, docs, &root);
                     let now = now_ms();
                     let results = jobs
@@ -369,7 +373,13 @@ impl App {
                             // an unreadable data file was set aside since the last sync: start over from
                             // what is loaded now instead of publishing every missing item as deleted
                             let recover = sync_io::needs_recovery(&root, d);
-                            let out = sync_io::sync_domain_recovering(&io, d, &snap, &tracker, now, recover).map_err(|e| format!("{e:#}"));
+                            let mut out =
+                                sync_io::sync_domain_recovering(&io, d, &snap, &tracker, now, recover).map_err(|e| format!("{e:#}"));
+                            if let (true, Ok(o)) = (d == "clipboard", out.as_mut()) {
+                                if let Some(m) = &o.merged {
+                                    rehash_clipboard(m, &mut o.tracker_merged);
+                                }
+                            }
                             (d, snap, out)
                         })
                         .collect();
@@ -510,8 +520,14 @@ impl App {
         // here. The recovery marker makes that next run start over from the Macs' documents instead;
         // `sync_done` removes it once the tracker is saved.
         let had_marker = sync_io::needs_recovery(&self.store.root, domain);
-        sync_io::mark_recovery(&self.store.root, domain);
+        sync_io::mark_recovery(&self.store.root, domain); // flushed to disk before the data is saved
+        let failures = self.sync.save_failures;
         let applied = self.sync_apply_marked(domain, merged, tracker, rev);
+        // A data file that could not be written is stale: it must not later be published as this
+        // Mac's edits. The marker stays, so the next run starts over from the Macs' documents.
+        if self.sync.save_failures != failures {
+            return None;
+        }
         if applied.is_none() && !had_marker {
             sync_io::clear_recovery(&self.store.root, domain);
         }
@@ -533,6 +549,7 @@ impl App {
         let mut again = false;
         // ids of merged items this build cannot read: flagged below so publish never deletes them
         let mut unreadable: Vec<String> = Vec::new();
+        let mut changed_clip_items: Items = Vec::new();
         match domain {
             "settings" => {
                 // safety net: the settings as they were before sync changed them (kept once)
@@ -587,8 +604,12 @@ impl App {
                 // the cap keeps the newest chats here; the others stay on the other Macs and are
                 // not published as deleted (see `capped_chats`)
                 if chats.len() > ferrocast_core::models::MAX_CHATS {
-                    let cut = chats.split_off(ferrocast_core::models::MAX_CHATS);
-                    self.sync.capped_chats.extend(cut.into_iter().map(|c| c.id));
+                    let cut: Vec<String> = chats.split_off(ferrocast_core::models::MAX_CHATS).into_iter().map(|c| c.id).collect();
+                    // saved at once: a quit before the next chats run (or sync turned off) must not
+                    // publish them as deleted
+                    self.remember_capped_chats(&cut);
+                    unreadable.extend(cut.iter().cloned());
+                    self.sync.capped_chats.extend(cut);
                 }
                 self.chats = chats;
                 let v = self.chats.clone();
@@ -598,8 +619,11 @@ impl App {
                 let (incoming, dropped): (Vec<ClipEntry>, _) = sync_io::from_items_report(merged);
                 unreadable = dropped;
                 let before = incoming.len();
+                let by_id: std::collections::HashMap<String, ClipEntry> = incoming.iter().map(|e| (e.id.clone(), e.clone())).collect();
                 let list = sync_io::clipboard_normalize(incoming, services::now_secs(), self.settings.clipboard_retention.secs());
                 again = list.len() != before;
+                let changed: Vec<ClipEntry> = list.iter().filter(|e| by_id.get(&e.id) != Some(*e)).cloned().collect();
+                changed_clip_items = sync_io::to_items(&changed);
                 let mut cur = self.shared.clipboard.lock().unwrap();
                 if self.shared.clip_rev.load(Ordering::SeqCst) != rev {
                     // something was recorded while the run was away: merge again next time
@@ -612,7 +636,9 @@ impl App {
                 drop(cur);
                 drop(old); // freed outside the lock
                            // saved through the shared serialisation (SAVE, then the list), never under the list lock
-                self.shared.write_clipboard();
+                if !self.shared.write_clipboard() {
+                    self.sync.save_failures += 1;
+                }
             }
             _ => {}
         }
@@ -623,8 +649,11 @@ impl App {
             self.sync.pending.insert(domain); // entries dropped by retention/dedupe become deletions
         }
         ferrocast_core::sync::mark_unparsed(&mut tracker, &unreadable);
-        // the applied form of each item is what the next run will see
-        for (id, v) in self.sync_snapshot(domain) {
+        // the applied form of each item is what the next run will see. The clipboard history is
+        // large: its entries were hashed by the worker (`rehash_clipboard`), so only the ones
+        // normalising changed are serialised here.
+        let applied_items = if domain == "clipboard" { changed_clip_items } else { self.sync_snapshot(domain) };
+        for (id, v) in applied_items {
             if let Some(t) = tracker.items.get_mut(&id) {
                 if !t.deleted {
                     t.hash = ferrocast_core::sync::hash(&v);
@@ -633,6 +662,23 @@ impl App {
         }
         self.sec_dirty = true;
         Some(tracker)
+    }
+
+    /// Flag chats a cap removed from this Mac in the saved tracker (see `Tracked::unparsed`), so
+    /// they are never published as deleted, whatever happens before the next chats run. Does nothing
+    /// for a Mac that never synced chats (no tracker).
+    fn remember_capped_chats(&self, ids: &[String]) {
+        if ids.is_empty() {
+            return;
+        }
+        let mut tracker = sync_io::load_tracker(&self.store.root, "chats");
+        if !tracker.seeded {
+            return;
+        }
+        ferrocast_core::sync::mark_unparsed(&mut tracker, ids);
+        if let Err(e) = sync_io::save_tracker(&self.store.root, "chats", &tracker) {
+            instance::log(&self.store.root, &format!("sync: saving tracker chats: {e:#}"));
+        }
     }
 
     /// Ask AI: a finished answer becomes (part of) a persisted chat that can sync.
@@ -647,7 +693,9 @@ impl App {
         let before: Vec<String> = self.chats.iter().map(|c| c.id.clone()).collect();
         ferrocast_core::models::upsert_chat(&mut self.chats, Chat::new(id, turns, services::now_secs()));
         // chats the cap pushed out of this Mac's list are not deleted anywhere else
-        self.sync.capped_chats.extend(before.into_iter().filter(|b| !self.chats.iter().any(|c| &c.id == b)));
+        let cut: Vec<String> = before.into_iter().filter(|b| !self.chats.iter().any(|c| &c.id == b)).collect();
+        self.remember_capped_chats(&cut);
+        self.sync.capped_chats.extend(cut);
         let v = self.chats.clone();
         self.persist("chats.json", &v);
     }
@@ -668,6 +716,18 @@ pub(crate) fn flush_docs(
         }
     }
     failed
+}
+
+/// Worker thread: set the hashes of the merged clipboard entries to those of the entries as they
+/// will be applied (parsed and serialised again), so a value that does not round-trip byte for byte
+/// is not mistaken for a local edit. Done here so the main thread does not serialise the history.
+pub(crate) fn rehash_clipboard(merged: &[(String, Value)], tracker: &mut Tracker) {
+    let (entries, _): (Vec<ClipEntry>, _) = sync_io::from_items_report(merged.to_vec());
+    for (id, v) in sync_io::to_items(&entries) {
+        if let Some(t) = tracker.items.get_mut(&id).filter(|t| !t.deleted) {
+            t.hash = ferrocast_core::sync::hash(&v);
+        }
+    }
 }
 
 fn now_ms() -> i64 {

@@ -1903,7 +1903,9 @@ impl App {
                 let name = ferrocast_core::tiling::Layout::from_number(layout).map_or("", |l| l.name());
                 self.toast(trf("Layout {layout}: {name}", &[("layout", &layout.to_string()), ("name", &tr(name))]));
             }
-            Event::MinSizes(m) => self.persist("tiling-min-sizes.json", &m),
+            Event::MinSizes(m) => {
+                self.persist("tiling-min-sizes.json", &m);
+            }
             Event::Overlay(o) => self.apply_overlay(o),
             Event::Log(l) => instance::log(&self.store.root, &l),
             Event::Exclude(app) => {
@@ -2312,12 +2314,20 @@ impl App {
     }
 
     /// Persist a data file; a failed write is surfaced instead of dropped on the floor.
-    fn persist<T: serde::Serialize>(&mut self, name: &str, value: &T) {
-        if let Err(e) = self.store.save(name, value) {
-            instance::log(&self.store.root, &format!("saving {name} failed: {e:#}"));
-            self.toast(trf("Could not save {name}: {e}", &[("name", name), ("e", &e.to_string())]));
-        }
+    /// Returns false when the write failed (counted in `sync.save_failures`, which a sync merge
+    /// checks: data that did not reach the disk is not an applied merge).
+    fn persist<T: serde::Serialize>(&mut self, name: &str, value: &T) -> bool {
+        let ok = match self.store.save(name, value) {
+            Ok(()) => true,
+            Err(e) => {
+                instance::log(&self.store.root, &format!("saving {name} failed: {e:#}"));
+                self.toast(trf("Could not save {name}: {e}", &[("name", name), ("e", &e.to_string())]));
+                self.sync.save_failures += 1;
+                false
+            }
+        };
         self.sync_mark(name);
+        ok
     }
 
     // ------------------------------------------------------------ Notion (Settings → Integrations)

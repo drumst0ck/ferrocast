@@ -589,11 +589,16 @@ impl Shared {
     /// Write the history to disk without holding the list lock during the (large) serialisation and
     /// write, so the clipboard view and sync are never stuck behind it. Writes are serialised and each
     /// one takes its snapshot after getting its turn, so the newest list is always the last written.
-    pub(crate) fn write_clipboard(&self) {
+    /// False when the file could not be written.
+    pub(crate) fn write_clipboard(&self) -> bool {
         let _turn = CLIPBOARD_SAVE.lock().unwrap_or_else(|e| e.into_inner());
         let snapshot = self.clipboard.lock().unwrap().clone();
-        if let Err(e) = self.store.save("clipboard.json", &snapshot) {
-            eprintln!("clipboard history not saved: {e}");
+        match self.store.save("clipboard.json", &snapshot) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("clipboard history not saved: {e}");
+                false
+            }
         }
     }
 }
