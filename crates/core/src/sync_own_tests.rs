@@ -601,3 +601,164 @@ fn documents_of_macs_offline_too_long_are_read_only_when_no_other_mac_is_live() 
     }
     let _ = std::fs::remove_dir_all(&shared);
 }
+
+// ----------------------------------------------------------------------------- verifier round
+
+#[test]
+fn a_lost_clipboard_tracker_does_not_turn_adopted_entries_into_new_edits() {
+    let shared = tmp("shared");
+    let (mut a, mut b, mut c) = (Mac::new("aa", &shared), Mac::new("bb", &shared), Mac::new("cc", &shared));
+    let s = NOW / 1000;
+    a.list = vec![clip("x", s - 30), clip("y", s - 20)];
+    let t = settle(&mut [&mut a, &mut b, &mut c], NOW);
+    assert!(c.live_in_doc().is_empty(), "C adopted both, publishes neither");
+    // B deletes x (newer deletion); A pins y (newer edit of its own entry); C has not run since
+    b.list.retain(|e| e.id != "x");
+    b.sync(t + 10 * H);
+    a.list.iter_mut().find(|e| e.id == "y").unwrap().pinned = true;
+    a.sync(t + 11 * H);
+    // C loses its tracker
+    std::fs::remove_file(tracker_path(&c.data, "clipboard")).unwrap();
+    c.sync(t + 12 * H);
+    c.sync(t + 13 * H);
+    assert_eq!(c.ids(), set(&["y"]), "the deletion of x holds on C");
+    assert!(c.list[0].pinned, "the newer pin is adopted, not overwritten");
+    assert!(c.live_in_doc().is_empty(), "C does not republish what it only adopted: {:?}", c.live_in_doc());
+    b.sync(t + 14 * H);
+    a.sync(t + 15 * H);
+    assert_eq!(a.ids(), set(&["y"]));
+    assert_eq!(b.ids(), set(&["y"]));
+    assert!(a.list[0].pinned && b.list[0].pinned);
+    cleanup(&[&a, &b, &c], &shared);
+}
+
+#[test]
+fn a_run_that_could_not_read_every_document_does_not_vouch_for_the_deletions_it_has_not_seen() {
+    let shared = tmp("shared");
+    let (mut a, mut b) = (Mac::new("aa", &shared), Mac::new("bb", &shared));
+    a.snips = vec![snip("s1")];
+    let mut t = NOW;
+    for _ in 0..3 {
+        for m in [&mut a, &mut b] {
+            t += 1_000;
+            m.sync_snips(t);
+        }
+    }
+    let t0 = t + 10 * H;
+    a.snips.clear();
+    a.sync_snips(t0);
+    // B runs while A's document is still in the cloud: it has not seen the deletion
+    fn cloud_only(p: &Path) -> bool {
+        p.ends_with("aa/snippets.json")
+    }
+    b.io.dataless = cloud_only;
+    b.sync_snips(t0 + 8 * H);
+    a.sync_snips(t0 + 16 * H);
+    assert!(tombstoned(&a, "s1"), "B never read the deletion: it stays");
+    // a recovering run does not vouch either
+    b.io.dataless = |_| false;
+    let o = sync_domain_recovering(&b.io, "snippets", &to_items(&b.snips), &Tracker::default(), t0 + 17 * H, true).unwrap();
+    if let Some(d) = &o.applied_doc {
+        b.io.write_doc("snippets", d).unwrap();
+    }
+    a.sync_snips(t0 + 24 * H);
+    assert!(tombstoned(&a, "s1") || !b.snip_ids().contains("s1"), "kept, or B has taken the deletion in");
+    // once B has read everything cleanly, the clean-up goes on
+    for k in 0..3 {
+        b.sync_snips(t0 + (30 + 8 * k) * H);
+        a.sync_snips(t0 + (34 + 8 * k) * H);
+    }
+    assert!(!a.snip_doc().items.contains_key("s1"));
+    assert!(!b.snip_ids().contains("s1"));
+}
+
+fn away_scenario(shared: &Path) -> (Mac, Mac, Mac, i64) {
+    let (mut a, mut b, c, t) = three_with_s1(shared);
+    // C goes away; A and B keep running
+    a.sync_snips(t + 15 * D);
+    b.sync_snips(t + 15 * D + H);
+    a.sync_snips(t + 30 * D);
+    b.sync_snips(t + 30 * D + H);
+    let t0 = t + 31 * D;
+    a.snips.clear();
+    a.sync_snips(t0);
+    b.sync_snips(t0 + 7 * H);
+    a.sync_snips(t0 + 14 * H);
+    b.sync_snips(t0 + 21 * H);
+    assert!(!a.snip_doc().items.contains_key("s1") && !b.snip_doc().items.contains_key("s1"), "A and B collected the deletion");
+    (a, b, c, t0 + 22 * H)
+}
+
+#[test]
+fn a_mac_that_returns_after_the_deletion_was_collected_drops_the_item_instead_of_bringing_it_back() {
+    let shared = tmp("shared");
+    let (mut a, mut b, mut c, back) = away_scenario(&shared);
+    assert!(c.snip_ids().contains("s1"), "C still has it");
+    c.sync_snips(back);
+    assert!(!c.snip_ids().contains("s1"), "removed on C");
+    assert!(!c.snip_doc().items.contains_key("s1"), "and not republished");
+    c.sync_snips(back + 7 * H);
+    a.sync_snips(back + 8 * H);
+    b.sync_snips(back + 9 * H);
+    for m in [&a, &b, &c] {
+        assert!(!m.snip_ids().contains("s1"), "{}", m.io.device);
+    }
+    let mut d = Mac::new("dd", &shared);
+    d.sync_snips(back + 20 * H);
+    assert!(!d.snip_ids().contains("s1"), "a new Mac does not get it");
+    cleanup(&[&a, &b, &c, &d], &shared);
+}
+
+#[test]
+fn an_item_edited_while_away_survives_the_return_and_propagates() {
+    let shared = tmp("shared");
+    let (mut a, mut b, mut c, back) = away_scenario(&shared);
+    c.snips[0].text = "edited while away".into();
+    c.sync_snips(back);
+    assert_eq!(c.snips.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["edited while away"]);
+    a.sync_snips(back + 7 * H);
+    b.sync_snips(back + 8 * H);
+    for m in [&a, &b] {
+        assert_eq!(m.snips.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["edited while away"], "{}", m.io.device);
+    }
+    cleanup(&[&a, &b, &c], &shared);
+}
+
+#[test]
+fn a_returning_mac_keeps_everything_while_a_live_peers_document_is_not_readable() {
+    let shared = tmp("shared");
+    let (a, b, mut c, back) = away_scenario(&shared);
+    std::fs::write(shared.join("devices/aa/snippets.json"), b"{garbage").unwrap();
+    c.sync_snips(back);
+    assert!(c.snip_ids().contains("s1"), "nothing is removed on partial knowledge");
+    cleanup(&[&a, &b, &c], &shared);
+}
+
+#[test]
+fn icloud_placeholders_count_as_a_live_macs_activity() {
+    let shared = tmp("shared");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    let mut a = Mac::new("aa", &shared);
+    a.snips = vec![snip("s1")];
+    a.sync_snips(now - 2 * H);
+    let mut b = Mac::new("bb", &shared);
+    b.sync_snips(now - H);
+    // a third Mac whose documents are only placeholders right now
+    std::fs::create_dir_all(shared.join("devices/cc")).unwrap();
+    std::fs::write(shared.join("devices/cc/.snippets.json.icloud"), b"x").unwrap();
+    let docs = a.io.read_docs("snippets").docs;
+    assert!(a.io.tombstone_horizon("snippets", &docs, now).is_none(), "C is live (its documents are being downloaded): it holds back");
+    cleanup(&[&a, &b], &shared);
+}
+
+#[test]
+fn forgetting_compares_the_device_id_without_regard_to_case() {
+    let shared = tmp("shared");
+    let mut a = Mac::new("aabb", &shared);
+    a.snips = vec![snip("s1")];
+    a.sync_snips(NOW);
+    assert!(a.io.forget_device("AABB").is_err());
+    assert!(a.io.forget_device("Aabb").is_err());
+    assert!(shared.join("devices/aabb/snippets.json").is_file());
+    cleanup(&[&a], &shared);
+}

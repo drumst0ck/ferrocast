@@ -11,7 +11,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ### Changed
 - **Sync, smaller clipboard documents**: each Mac's clipboard document holds only the entries copied on that Mac, so the size in iCloud Drive no longer grows with the number of Macs. Every Mac still gets the whole history, deleting an entry copied elsewhere still reaches every Mac, a Mac that loses its history recovers it, and v0.7.0 and older Macs keep working with the new documents. (docs: /docs/launcher/sync/) #sync
-- **Sync, deletions are cleaned up**: a deletion is dropped from the documents once every Mac that is still live (published in the last 30 days, not forgotten) has published after it, instead of being kept for ever; never earlier, and the clipboard keeps its own 400-day rule. A Mac offline for more than 30 days no longer holds the clean-up back, so an item deleted meanwhile can return when it comes back. (docs: /docs/launcher/sync/) #sync
+- **Sync, deletions are cleaned up**: a deletion is dropped from the documents once every Mac that is still live (published in the last 30 days, not forgotten) has published after it, instead of being kept for ever; never earlier, and the clipboard keeps its own 400-day rule. A Mac offline for more than 30 days no longer holds the clean-up back; when it comes back it drops the notes, snippets and quicklinks the others deleted and cleaned up (what it edited meanwhile is kept). A Mac that could not read every document in a run no longer vouches for deletions it did not see. (docs: /docs/launcher/sync/) #sync
 
 ## [0.7.0] - 2026-11-10
 

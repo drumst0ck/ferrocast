@@ -60,6 +60,11 @@ pub struct DeviceDoc {
     /// do not write it and ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_at: Option<i64>,
+    /// The largest tombstone horizon this Mac has used to drop deletions from its document (see
+    /// `PublishOpts::gc_before`). A Mac whose own `run_at` is older than a live peer's `gc_at` may
+    /// hold items whose deletion was collected before it saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gc_at: Option<i64>,
 }
 
 /// Local memory of the last published state, per item id: (content hash, modified, deleted).
@@ -209,7 +214,7 @@ pub struct PublishOpts {
 pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64, opts: &PublishOpts) -> (DeviceDoc, Tracker) {
     let unseen = if prev.seeded { now } else { opts.first_stamp };
     let first_sync_at = if prev.seeded { prev.first_sync_at } else { Some(now) };
-    let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new(), first_sync_at, name: None, run_at: None };
+    let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new(), first_sync_at, name: None, run_at: None, gc_at: None };
     let mut next = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at, gone: prev.gone.clone() };
     let mut seen = HashSet::new();
     for (id, value) in items {
@@ -828,6 +833,7 @@ mod tests {
             first_sync_at: None,
             name: None,
             run_at: None,
+            gc_at: None,
         };
         let (_, mut t) = merge_as("a", &[], &[remote], &Tracker { seeded: true, ..Default::default() });
         assert!(t.items.contains_key("x"));
@@ -845,6 +851,7 @@ mod tests {
             first_sync_at: None,
             name: None,
             run_at: None,
+            gc_at: None,
         };
         let (_, mut t) = merge_as("a", &[], std::slice::from_ref(&remote), &Tracker { seeded: true, ..Default::default() });
         mark_unparsed(&mut t, &["x".to_string()]);
@@ -862,6 +869,7 @@ mod tests {
             first_sync_at: None,
             name: None,
             run_at: None,
+            gc_at: None,
         };
         let (_, t3) = merge_as("a", &[], &[gone], &t);
         let (doc, _) = publish("a", &[], &t3, 9000);
