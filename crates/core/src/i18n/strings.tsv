@@ -1628,6 +1628,7 @@ translate	traducir	übersetzen	traduire	traduzir	翻訳	翻译
 update	actualización	Update	mise à jour	atualização	アップデート	更新
 window	ventana	Fenster	fenêtre	janela	ウインドウ	窗口
 {app} is no longer tiled	{app} ya no se organiza en mosaico	{app} wird nicht mehr gekachelt	{app} n’est plus en mosaïque	{app} não é mais organizado em mosaico	{app}はタイル表示されなくなりました	{app} 不再被平铺
+{app} · Hidden	{app} · Oculta	{app} · Ausgeblendet	{app} · Masquée	{app} · Oculta	{app} · 非表示	{app} · 已隐藏
 {app} · Minimized	{app} · Minimizada	{app} · Minimiert	{app} · Réduite	{app} · Minimizada	{app} · 最小化済み	{app} · 已最小化
 {app} · Other Space	{app} · Otro Space	{app} · Anderer Space	{app} · Autre Space	{app} · Outro Space	{app} · 別のSpace	{app} · 其他Space
 {file} is missing from the project folder. It is left out of the preview and the export.	Falta {file} en la carpeta del proyecto. Se omite de la vista previa y de la exportación.	{file} fehlt im Projektordner. Es wird in Vorschau und Export ausgelassen.	{file} est absent du dossier du projet. Il est exclu de l’aperçu et de l’export.	{file} não está na pasta do projeto. Ele fica de fora da pré-visualização e da exportação.	{file}がプロジェクトフォルダにありません。プレビューと書き出しから除外されます。	项目文件夹中缺少 {file}。它将不会出现在预览和导出中。

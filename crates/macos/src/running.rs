@@ -108,6 +108,29 @@ pub fn activate(pid: i32) -> bool {
     }
 }
 
+/// `activate`, run on the main thread: a background thread cannot yield Ferrocast's activation,
+/// which the cooperative API (macOS 14+) needs.
+pub fn activate_on_main(pid: i32) {
+    if objc2::MainThreadMarker::new().is_some() {
+        activate(pid);
+        return;
+    }
+    extern "C" {
+        static _dispatch_main_q: std::ffi::c_void;
+        fn dispatch_async_f(queue: *const std::ffi::c_void, context: *mut std::ffi::c_void, work: extern "C" fn(*mut std::ffi::c_void));
+    }
+    extern "C" fn run(ctx: *mut std::ffi::c_void) {
+        let pid = unsafe { *Box::from_raw(ctx as *mut i32) };
+        activate(pid);
+    }
+    unsafe { dispatch_async_f(&_dispatch_main_q, Box::into_raw(Box::new(pid)) as *mut _, run) };
+}
+
+/// Show a hidden (⌘H) app again.
+pub fn unhide(pid: i32) -> bool {
+    by_pid(pid).is_some_and(|a| a.unhide())
+}
+
 pub fn quit(pid: i32) -> bool {
     by_pid(pid).is_some_and(|a| a.terminate())
 }
@@ -129,6 +152,8 @@ pub enum WindowState {
     Minimized,
     /// Open, but on another Space.
     OtherSpace,
+    /// The app is hidden (⌘H).
+    Hidden,
 }
 
 /// A window from CGWindowList.
@@ -162,7 +187,11 @@ const MIN_WINDOW_H: f64 = 50.0;
 /// Keep real app windows, drop system/utility/tiny ones and duplicates. Off-screen windows (other
 /// Spaces, minimized) need a title: untitled off-screen windows are almost always invisible helpers.
 /// `minimized` holds the window ids Accessibility reports as minimized.
-pub fn filter_windows(raw: &[RawWindow], minimized: &std::collections::HashSet<u32>) -> Vec<WindowInfo> {
+pub fn filter_windows(
+    raw: &[RawWindow],
+    minimized: &std::collections::HashSet<u32>,
+    hidden: &std::collections::HashSet<i32>,
+) -> Vec<WindowInfo> {
     let mut seen = std::collections::HashSet::new();
     let mut out = vec![];
     for w in raw {
@@ -186,12 +215,39 @@ pub fn filter_windows(raw: &[RawWindow], minimized: &std::collections::HashSet<u
             WindowState::Minimized
         } else if w.on_screen {
             WindowState::OnScreen
+        } else if hidden.contains(&w.pid) {
+            WindowState::Hidden
         } else {
             WindowState::OtherSpace
         };
         out.push(WindowInfo { pid: w.pid, app: w.app.clone(), title: w.title.clone(), id: w.id, state });
     }
     out
+}
+
+/// Apps worth an Accessibility query for minimized windows: only those with an off-screen window
+/// that would be listed anyway (real size, titled, visible), and not hidden (their windows are
+/// "Hidden" whatever AX says). Each AX query can cost up to its timeout on the UI thread.
+pub fn pids_to_probe(raw: &[RawWindow], hidden: &std::collections::HashSet<i32>) -> Vec<i32> {
+    let mut pids: Vec<i32> = raw
+        .iter()
+        .filter(|w| {
+            !w.on_screen
+                && w.layer == 0
+                && !w.app.is_empty()
+                && w.app != "Ferrocast"
+                && w.app != "Window Server"
+                && w.width >= MIN_WINDOW_W
+                && w.height >= MIN_WINDOW_H
+                && !w.title.is_empty()
+                && w.alpha > 0.0
+                && !hidden.contains(&w.pid)
+        })
+        .map(|w| w.pid)
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    pids
 }
 
 /// List normal (layer 0) windows across apps, on every Space and minimized ones too, front to back.
@@ -227,11 +283,15 @@ pub fn list_windows() -> Vec<WindowInfo> {
                 .is_some_and(bool::from),
         });
     }
-    let mut pids: Vec<i32> = raw.iter().filter(|w| !w.on_screen && w.layer == 0).map(|w| w.pid).collect();
-    pids.sort_unstable();
-    pids.dedup();
-    let minimized = pids.into_iter().flat_map(crate::windows::minimized_window_ids).collect();
-    filter_windows(&raw, &minimized)
+    let hidden: std::collections::HashSet<i32> = raw
+        .iter()
+        .map(|w| w.pid)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .filter(|p| by_pid(*p).is_some_and(|a| a.isHidden()))
+        .collect();
+    let minimized = pids_to_probe(&raw, &hidden).into_iter().flat_map(crate::windows::minimized_window_ids).collect();
+    filter_windows(&raw, &minimized, &hidden)
 }
 
 #[cfg(test)]
@@ -255,7 +315,7 @@ mod tests {
     #[test]
     fn windows_on_other_spaces_and_minimized_are_listed_with_their_state() {
         let all = [raw(1, "Notes", "Todo", true), raw(2, "Safari", "Docs", false), raw(3, "Mail", "Inbox", false)];
-        let out = filter_windows(&all, &HashSet::from([3]));
+        let out = filter_windows(&all, &HashSet::from([3]), &HashSet::new());
         let st: Vec<_> = out.iter().map(|w| (w.id, w.state)).collect();
         assert_eq!(st, vec![(1, WindowState::OnScreen), (2, WindowState::OtherSpace), (3, WindowState::Minimized)]);
     }
@@ -278,19 +338,51 @@ mod tests {
             raw(7, "Foo", "", false), // untitled off-screen: helper
             raw(8, "Foo", "", true),  // untitled on-screen stays (no Screen Recording permission)
         ];
-        let out = filter_windows(&all, &HashSet::new());
+        let out = filter_windows(&all, &HashSet::new(), &HashSet::new());
         assert_eq!(out.iter().map(|w| w.id).collect::<Vec<_>>(), vec![8]);
     }
 
     #[test]
     fn duplicate_window_ids_are_listed_once() {
         let all = [raw(1, "Notes", "A", true), raw(1, "Notes", "A", true), raw(2, "Notes", "A", true)];
-        assert_eq!(filter_windows(&all, &HashSet::new()).len(), 2);
+        assert_eq!(filter_windows(&all, &HashSet::new(), &HashSet::new()).len(), 2);
+    }
+
+    #[test]
+    fn windows_of_hidden_apps_are_marked_hidden_but_minimized_wins() {
+        let mut other = raw(2, "Mail", "Inbox", false);
+        other.pid = 20;
+        let all = [raw(1, "Notes", "A", false), other, raw(3, "Notes", "B", false)];
+        let out = filter_windows(&all, &HashSet::from([3]), &HashSet::from([10]));
+        let st: Vec<_> = out.iter().map(|w| (w.id, w.state)).collect();
+        assert_eq!(st, vec![(1, WindowState::Hidden), (2, WindowState::OtherSpace), (3, WindowState::Minimized)]);
+    }
+
+    #[test]
+    fn only_apps_with_a_listable_off_screen_window_are_probed_for_minimized_state() {
+        let mk = |pid: i32, f: &dyn Fn(&mut RawWindow)| {
+            let mut w = raw(pid as u32, "App", "T", false);
+            w.pid = pid;
+            f(&mut w);
+            w
+        };
+        let all = [
+            mk(1, &|_| {}),                 // listable: probe
+            mk(1, &|w| w.id = 11),          // same pid again: once
+            mk(2, &|w| w.title.clear()),    // untitled helper
+            mk(3, &|w| w.width = 10.0),     // tiny
+            mk(4, &|w| w.alpha = 0.0),      // invisible
+            mk(5, &|w| w.layer = 25),       // not a normal window
+            mk(6, &|w| w.on_screen = true), // visible: AX not needed
+            mk(7, &|w| w.app = "Ferrocast".into()),
+            mk(8, &|_| {}), // hidden app
+        ];
+        assert_eq!(pids_to_probe(&all, &HashSet::from([8])), vec![1]);
     }
 
     #[test]
     fn a_minimized_window_is_marked_even_if_cg_says_on_screen() {
-        let out = filter_windows(&[raw(1, "Notes", "A", true)], &HashSet::from([1]));
+        let out = filter_windows(&[raw(1, "Notes", "A", true)], &HashSet::from([1]), &HashSet::new());
         assert_eq!(out[0].state, WindowState::Minimized);
     }
 }

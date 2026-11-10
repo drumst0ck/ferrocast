@@ -7,7 +7,7 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 ## [Unreleased]
 
 ### Changed
-- **Switch Windows**: the list now includes windows on other Spaces and minimized windows, marked "Other Space" or "Minimized" next to the app name. Choosing one unminimizes it and brings it forward, switching Space when needed. (docs: /docs/launcher/window-management/) #windows
+- **Switch Windows**: the list now includes windows on other Spaces and minimized windows, marked "Other Space", "Minimized" or "Hidden" (apps hidden with ⌘H) next to the app name. Choosing one unminimizes it and brings it forward, switching Space when needed. (docs: /docs/launcher/window-management/) #windows
 - **Bringing apps to the front**: on macOS 14 and later Ferrocast uses the current activation API instead of the deprecated one for the launcher, Notes, the selector, pasting after hiding and app switching; macOS 13 keeps the previous behaviour. #launcher
 
 ## [0.6.0] - 2026-11-09

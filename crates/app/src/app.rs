@@ -2264,6 +2264,13 @@ impl App {
     }
 
     fn hide(&mut self) {
+        self.hide_restoring(true);
+    }
+
+    /// Hide the launcher and hand focus back to the app it came from. Hand it over first, while
+    /// Ferrocast is still active: the cooperative activation of macOS 14+ needs that. `restore`
+    /// is false when the caller is about to activate another app itself.
+    fn hide_restoring(&mut self, restore: bool) {
         self.editor_flush();
         self.flush_saves_now();
         // a maximised editor goes back to the launcher's size before the window disappears
@@ -2272,15 +2279,17 @@ impl App {
         self.hidden_at = Instant::now();
         self.shared.visible.store(false, Ordering::Relaxed);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        if restore {
+            if let Some(pid) = self.prev_pid {
+                running::activate(pid);
+            }
+        }
         // hiding the whole app would also hide the floating shelf and Notes panels
         // (the same goes for every other floating panel: a pinned capture, the recording HUD)
         if let Some(mtm) = objc2::MainThreadMarker::new()
             .filter(|m| !ferrocast_macos::shelf::is_visible() && !ferrocast_macos::notes::is_visible() && !other_panel_visible(*m))
         {
             objc2_app_kit::NSApplication::sharedApplication(mtm).hide(None);
-        }
-        if let Some(pid) = self.prev_pid {
-            running::activate(pid);
         }
     }
 
@@ -5854,7 +5863,7 @@ impl App {
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(160));
             if let Some(p) = pid {
-                running::activate(p);
+                running::activate_on_main(p);
             }
             std::thread::sleep(Duration::from_millis(90));
             keyboard::paste();
@@ -6015,8 +6024,11 @@ impl App {
             }
             Kind::OpenWindow(w) => {
                 let w = w.clone();
-                self.hide();
+                self.hide_restoring(false);
                 self.reset_to_root();
+                if w.state == running::WindowState::Hidden {
+                    running::unhide(w.pid);
+                }
                 running::activate(w.pid);
                 windows::raise_window(w.pid, &w.title, w.id);
             }
@@ -7220,7 +7232,7 @@ impl App {
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(160));
             if let Some(p) = pid {
-                running::activate(p);
+                running::activate_on_main(p);
             }
             std::thread::sleep(Duration::from_millis(90));
             keyboard::paste();

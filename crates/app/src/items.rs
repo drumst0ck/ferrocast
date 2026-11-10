@@ -615,6 +615,7 @@ pub fn window_subtitle(app: &str, state: WindowState) -> String {
     match state {
         WindowState::OnScreen => app.to_string(),
         WindowState::Minimized => trf("{app} · Minimized", &[("app", app)]),
+        WindowState::Hidden => trf("{app} · Hidden", &[("app", app)]),
         WindowState::OtherSpace => trf("{app} · Other Space", &[("app", app)]),
     }
 }
@@ -630,10 +631,12 @@ mod window_subtitle_tests {
         with_language(Lang::En, || {
             assert_eq!(window_subtitle("Safari", WindowState::Minimized), "Safari · Minimized");
             assert_eq!(window_subtitle("Safari", WindowState::OtherSpace), "Safari · Other Space");
+            assert_eq!(window_subtitle("Safari", WindowState::Hidden), "Safari · Hidden");
         });
         with_language(Lang::Es, || {
             assert_eq!(window_subtitle("Safari", WindowState::Minimized), "Safari · Minimizada");
             assert_eq!(window_subtitle("Safari", WindowState::OtherSpace), "Safari · Otro Space");
+            assert_eq!(window_subtitle("Safari", WindowState::Hidden), "Safari · Oculta");
         });
     }
 }

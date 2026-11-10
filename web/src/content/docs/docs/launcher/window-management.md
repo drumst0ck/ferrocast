@@ -6,7 +6,7 @@ sidebar:
 ---
 Window management moves and resizes the frontmost window with about 40 commands: halves, thirds, corners, center, and moving between displays.
 
-Run a command from the launcher by name, or give it its own hotkey with <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>,</kbd> on the selected command. The Switch Windows command jumps between open windows, including windows on other Spaces and minimized ones. Those rows say "Other Space" or "Minimized" next to the app name; choosing one unminimizes it and brings it forward, and macOS switches to its Space. Window titles of other Spaces need the Screen Recording permission; without it only windows on the current Space are listed.
+Run a command from the launcher by name, or give it its own hotkey with <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>,</kbd> on the selected command. The Switch Windows command jumps between open windows, including windows on other Spaces and minimized ones. Those rows say "Other Space", "Minimized" or "Hidden" (apps hidden with ⌘H) next to the app name; choosing one unminimizes it or shows the hidden app and brings it forward, and macOS switches to its Space. Window titles of other Spaces need the Screen Recording permission; without it only windows on the current Space are listed.
 
 :::caution[Limits]
 Needs the Accessibility permission. A window on another Space comes forward through its app: macOS switches to a Space where the app has a window, which is not always that exact window.
