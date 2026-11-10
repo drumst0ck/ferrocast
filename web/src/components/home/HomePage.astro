@@ -37,7 +37,7 @@ const vars = { pairs: c.pairs, inputs: c.inputs, tools: c.tools, actions: c.acti
 // Measured on the maintainer's Mac; see the method note in the Measured section. Update together.
 const bench = {
   date: '2026-10-17', mac: 'MacBook with Apple M3, macOS 27',
-  ferro: { disk: es ? '8,5 MB' : '8.5 MB', mem: '145 MB', procs: '1' },
+  ferro: { mem: '145 MB', procs: '1' },
 };
 const benchDate = es ? '17 de octubre de 2026' : '2026-10-17';
 
@@ -222,7 +222,7 @@ const calcInline = calcSrc.replace(/^export /gm, '') + '\nwindow.fcCalc = { eval
       <div class="cmp" role="table" aria-label={t.bench.tableAria}>
         <div class="cmp-row cmp-head" role="row"><span role="columnheader"></span><span role="columnheader">Ferrocast</span></div>
         {[
-          bench.ferro.disk, bench.ferro.mem, bench.ferro.procs, t.bench.hotkey, t.bench.keystroke, t.bench.startFerro,
+          bench.ferro.mem, bench.ferro.procs, t.bench.hotkey, t.bench.keystroke, t.bench.startFerro,
         ].map((a, i) => <div class="cmp-row" role="row" data-reveal style={`transition-delay:${i * 40}ms`}><span role="rowheader">{t.bench.rows[i]}</span><span role="cell"><b>{a}</b></span></div>)}
       </div>
       <p class="fine" data-reveal>{fill(t.bench.method, { mac: bench.mac, date: benchDate })}</p>

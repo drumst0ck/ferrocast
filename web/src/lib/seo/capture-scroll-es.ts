@@ -26,14 +26,14 @@ export const page: GuideCopy = {
     'Con Ferrocast eliges el área que se desplaza, la app la desplaza por ti, toma una tira tras cada paso y las une en una sola imagen alta. Se detiene cuando el contenido deja de moverse o tras 60 pantallas. Después puedes copiar el texto de la imagen sin que salga de tu Mac. Puedes usarlo con la interfaz en español.',
     'La guía de Apple sobre capturas de pantalla ([Apple](' + APPLE + ')) describe ⇧⌘3, ⇧⌘4, ⇧⌘5 y ⇧⌘6, y no menciona la captura con desplazamiento. Ferrocast es gratis y de código abierto (MIT); escribo Ferrocast y no está afiliado a Apple.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · macOS 14 o posterior' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · macOS 14 o posterior' },
   limits: {
     h: 'Qué necesitas y qué obtienes',
     caption: 'Requisitos y resultado de la captura con scroll de Ferrocast',
     cols: ['', 'Captura con scroll de Ferrocast'],
     rows: [
       ['Comando', 'Capture Scrolling, desde el lanzador (⌥ Espacio)'],
-      ['Sistema', 'macOS 14 o posterior y un Mac con Apple Silicon'],
+      ['Sistema', 'macOS 14 o posterior (Apple Silicon o Intel)'],
       ['Permisos', 'Grabación de pantalla, y Accesibilidad porque Ferrocast envía los eventos de scroll'],
       ['Atajo', 'Ninguno por defecto: lo eliges en Ajustes → Capture → Shortcuts'],
       ['Cuándo se detiene', 'Cuando dos tiras seguidas son idénticas o tras 60 pantallas'],
@@ -74,7 +74,7 @@ export const page: GuideCopy = {
       list: [
         'Solo PNG. La captura con scroll guarda todas las tiras en memoria hasta terminar.',
         'Necesita macOS 14 o posterior; en macOS 13 los comandos de captura están ocultos.',
-        'Solo Mac con Apple Silicon.',
+        'Mac con Apple Silicon o Intel.',
       ],
     },
   ],
@@ -86,7 +86,7 @@ export const page: GuideCopy = {
       ['¿Qué permisos necesita?', 'Grabación de pantalla, y Accesibilidad para la captura con scroll, porque Ferrocast envía los eventos de scroll.'],
       ['¿Puedo copiar el texto de una captura?', 'Sí. En la ventana de captura pulsa ⌘T: Ferrocast lee el texto con Vision en tu Mac y lo copia al portapapeles. La imagen no se sube a ningún sitio.'],
       ['¿Hay un atajo de teclado?', 'No por defecto. Puedes asignar uno a cada comando de captura en Ajustes → Capture → Shortcuts.'],
-      ['¿Funciona en un Mac con macOS 13 o con Intel?', 'No. La captura necesita macOS 14 o posterior y un Mac con Apple Silicon.'],
+      ['¿Funciona en un Mac con macOS 13 o con Intel?', 'Con Intel sí, si tiene macOS 14 o posterior. Con macOS 13 no: la captura necesita macOS 14 o posterior.'],
     
       languageFaqEs,
     ],

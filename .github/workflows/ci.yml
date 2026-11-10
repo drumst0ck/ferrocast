@@ -18,10 +18,14 @@ jobs:
         with:
           toolchain: "1.95.0"
           components: rustfmt, clippy
+          targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # The release ships an x86_64 slice cross-compiled on this arm64 runner: keep it compiling.
+      - name: Intel (x86_64) slice compiles
+        run: cargo check --workspace --locked --target x86_64-apple-darwin
       - name: Bundle builds and signs
         run: scripts/bundle.sh
       - name: Apple Translation helper is in the bundle and signed
@@ -43,7 +47,7 @@ jobs:
           REQUIRE_DESIGNED_DMG: "1"
         run: scripts/dmg.sh
       - name: Release scripts
-        run: bash scripts/tests/release_dry_run.sh && bash scripts/tests/bundle_arch.sh
+        run: bash scripts/tests/release_dry_run.sh && bash scripts/tests/bundle_arch.sh && bash scripts/tests/check_universal.sh
   extensions-runtime:
     runs-on: ubuntu-latest
     defaults:

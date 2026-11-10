@@ -22,10 +22,10 @@ export const page: GuideCopy = {
   crumbs: [['Home', '/'], ['Clipboard manager', '/clipboard-manager-mac/']],
   h1: 'A free clipboard manager for Mac that skips your passwords',
   lead: [
-    'Ferrocast keeps a local history of the text, links, colours, files and images you copy, so you can paste them later from the launcher. Anything copied from a password manager such as 1Password is skipped. It is free, MIT-licensed and runs on Apple Silicon.',
+    'Ferrocast keeps a local history of the text, links, colours, files and images you copy, so you can paste them later from the launcher. Anything copied from a password manager such as 1Password is skipped. It is free, MIT-licensed and runs on Apple Silicon and Intel Macs.',
     'I build Ferrocast, so read the table with that in mind: every claim about another app comes from its own website or from Apple, and what a source does not state is marked as such. Ferrocast is independent and not affiliated with Apple, Maccy or Paste.',
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · no account' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · no account' },
   limits: {
     h: 'Ferrocast vs Spotlight (macOS Tahoe) vs Maccy vs Paste',
     caption: 'Clipboard history in Ferrocast, Spotlight, Maccy and Paste compared',
@@ -36,7 +36,7 @@ export const page: GuideCopy = {
       ['Pinning', 'Yes (⌘.)', 'Not stated in Apple’s guide', 'Not stated on its website', 'Pinboards'],
       ['Clear all', 'Clear History… (pinned entries stay)', 'Clear History', 'Not stated on its website', 'Not stated on its pricing page'],
       ['Sync', 'Optional, through iCloud Drive, from 0.4.0', 'Not stated in Apple’s guide', 'Everything is stored on your computer, per its site', 'Across Mac, iPhone and iPad'],
-      ['Platforms', 'Mac, Apple Silicon', 'Mac', 'Mac, macOS 14 or later', 'Mac, iPhone and iPad'],
+      ['Platforms', 'Mac, Apple Silicon and Intel', 'Mac', 'Mac, macOS 14 or later', 'Mac, iPhone and iPad'],
     ],
     note: `Ferrocast: [clipboard docs](/docs/launcher/clipboard/) and the app’s source code. Spotlight: [Apple Support](${APPLE}). Maccy: [maccy.app](https://maccy.app/) and its [App Store listing](https://apps.apple.com/us/app/maccy/id1527619437). Paste: [pasteapp.io/pricing](https://pasteapp.io/pricing). All checked on 28 October 2026.`,
   },
@@ -82,7 +82,7 @@ export const page: GuideCopy = {
       list: [
         'Maccy does one job: it keeps your copy history and nothing else, with a keyboard-first design. It is also open source (MIT) and free from its website.',
         'Paste runs on iPhone and iPad as well as the Mac, with pinboards and sync across your devices. It is a subscription or a one-time Lifetime plan.',
-        'Ferrocast is for people who also want snippets, a launcher and local file conversion in the same free app. It has no iPhone or iPad app and runs only on Apple Silicon Macs.',
+        'Ferrocast is for people who also want snippets, a launcher and local file conversion in the same free app. It has no iPhone or iPad app and runs on Apple Silicon and Intel Macs.',
       ],
     },
   ],
@@ -96,7 +96,7 @@ export const page: GuideCopy = {
       ['How long does Ferrocast keep the history, and can I pin items?', 'You choose in Settings: 1 day, 7 days, 1 month, 3 months, 1 year or unlimited. Press ⌘. to pin an entry; pinned entries stay.'],
       ['Can I clear the whole clipboard history at once?', 'Yes. Clear History… in the Clipboard view deletes every entry after a confirmation; pinned entries stay.'],
       ['Does the clipboard history sync between Macs?', 'Optionally. Sync with iCloud is off by default and available from version 0.4.0; when on, the history travels through iCloud Drive without extra encryption.'],
-      ['Does it run on Intel Macs?', 'No. Ferrocast needs an Apple Silicon Mac.'],
+      ['Does it run on Intel Macs?', 'Yes. The download runs on Apple Silicon and Intel Macs; Intel is not tested on real hardware.'],
     ],
   },
   more: {

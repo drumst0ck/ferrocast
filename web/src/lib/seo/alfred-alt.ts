@@ -22,7 +22,7 @@ export const page: GuideCopy = {
     'In Alfred, clipboard history, snippets with auto-expansion and Workflows are part of the Powerpack, a one-off purchase (£34 for a single Alfred 5 licence, which the shop says includes a free upgrade to Alfred 6). Ferrocast includes clipboard history and expanding snippets for free, as an open-source (MIT) launcher for Apple Silicon Macs.',
     'Alfred has a decade of Workflows behind it and runs on older Macs; Ferrocast does not try to replace that. If what you want from the Powerpack is the clipboard and snippets, read on. I make Ferrocast, so check the sources.',
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · no account' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · no account' },
   limits: {
     h: 'Alfred Powerpack features and their Ferrocast counterpart',
     caption: 'Alfred Powerpack features compared with what Ferrocast includes for free',
@@ -37,7 +37,7 @@ export const page: GuideCopy = {
       ['AI', 'No built-in AI stated on its website', 'Ask AI with your provider; Ollama on your Mac by default'],
       ['File conversion', 'File actions, and custom ones through Workflows', '275 local conversions and 26 file tools'],
       ['Window management', 'Not stated on its website', 'About 40 commands'],
-      ['Requirements', 'Alfred 5: macOS 10.14 or later', 'Apple Silicon, macOS 13 or later'],
+      ['Requirements', 'Alfred 5: macOS 10.14 or later', 'Apple Silicon and Intel, macOS 13 or later'],
       ['Interface language', 'Not compared here', 'English plus six more: Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese. Per Mac, not synced'],
       ['Source code', 'No open licence stated', 'MIT'],
     ],
@@ -59,7 +59,7 @@ export const page: GuideCopy = {
       paras: [],
       list: [
         'rely on Workflows, your own or from the community;',
-        'use an Intel Mac or a macOS version older than 13;',
+        'use a macOS version older than 13;',
         'want Alfred 6, which the shop says is a free upgrade for new Alfred 5 Powerpack buyers;',
         'want settings sync through Dropbox rather than iCloud Drive.',
       ],
@@ -81,7 +81,7 @@ export const page: GuideCopy = {
       ['Is there a free alternative to the Alfred Powerpack?', 'For clipboard history and snippets, yes. Ferrocast is a free, open-source Mac launcher that includes both. It does not run Alfred Workflows.'],
       ['Can Ferrocast import my Alfred snippets?', 'Not directly. Ferrocast imports snippets from a Raycast JSON export; Alfred snippets have to be recreated.'],
       ['Does Ferrocast run Alfred Workflows?', 'No. Ferrocast runs Raycast-compatible Script Commands, which are plain scripts with metadata comments.'],
-      ['Does Ferrocast work on Intel Macs?', 'No. Ferrocast needs an Apple Silicon Mac and macOS 13 or later. Alfred 5 runs from macOS 10.14.'],
+      ['Does Ferrocast work on Intel Macs?', 'Yes. The download runs on Apple Silicon and Intel Macs with macOS 13 or later; Intel is not tested on real hardware. Alfred 5 runs from macOS 10.14.'],
       ['Is Ferrocast affiliated with Alfred?', 'No. Ferrocast is independent and not affiliated with Alfred or Raycast.'],
     
       languageFaqEn,
@@ -114,7 +114,7 @@ export const es: GuideCopy = {
     'En Alfred, el historial del portapapeles, los snippets con autoexpansión y los Workflows forman parte del Powerpack, una compra única (34 £ por una licencia individual de Alfred 5, que según su tienda incluye la actualización gratis a Alfred 6). Ferrocast incluye gratis el historial del portapapeles y los snippets que se expanden, como lanzador de código abierto (MIT) para Mac con Apple Silicon. Puedes usarlo con la interfaz en español.',
     'Alfred tiene detrás una década de Workflows y funciona en Macs más antiguos; Ferrocast no intenta sustituir eso. Si lo que quieres del Powerpack es el portapapeles y los snippets, sigue leyendo. Escribo Ferrocast, así que comprueba las fuentes.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · sin cuenta' },
   limits: {
     h: 'Funciones del Powerpack de Alfred y su equivalente en Ferrocast',
     caption: 'Funciones del Powerpack de Alfred frente a lo que Ferrocast incluye gratis',
@@ -129,7 +129,7 @@ export const es: GuideCopy = {
       ['IA', 'No consta una IA integrada en su web', 'Ask AI con tu proveedor; Ollama en tu Mac por defecto'],
       ['Conversión de archivos', 'Acciones de archivo y, a medida, con Workflows', '275 conversiones locales y 26 herramientas de archivo'],
       ['Gestión de ventanas', 'No consta en su web', 'Unos 40 comandos'],
-      ['Requisitos', 'Alfred 5: macOS 10.14 o posterior', 'Apple Silicon, macOS 13 o posterior'],
+      ['Requisitos', 'Alfred 5: macOS 10.14 o posterior', 'Apple Silicon e Intel, macOS 13 o posterior'],
       ['Idioma de la interfaz', 'No se compara aquí', 'Inglés y seis más: español, alemán, francés, portugués de Brasil, japonés y chino simplificado. Por Mac, no se sincroniza'],
       ['Código fuente', 'No consta una licencia abierta', 'MIT'],
     ],
@@ -151,7 +151,7 @@ export const es: GuideCopy = {
       paras: [],
       list: [
         'dependes de los Workflows, propios o de la comunidad;',
-        'usas un Mac con Intel o una versión de macOS anterior a la 13;',
+        'usas una versión de macOS anterior a la 13;',
         'quieres Alfred 6, que según la tienda es una actualización gratis para quien compre ahora el Powerpack de Alfred 5;',
         'prefieres sincronizar los ajustes con Dropbox en vez de iCloud Drive.',
       ],
@@ -179,7 +179,7 @@ export const es: GuideCopy = {
       ['¿Hay una alternativa gratis al Powerpack de Alfred?', 'Para el historial del portapapeles y los snippets, sí. Ferrocast es un lanzador gratis y de código abierto para Mac que incluye ambos. No ejecuta los Workflows de Alfred.'],
       ['¿Puede Ferrocast importar mis snippets de Alfred?', 'No directamente. Ferrocast importa snippets desde un export JSON de Raycast; los de Alfred hay que recrearlos.'],
       ['¿Ferrocast ejecuta Workflows de Alfred?', 'No. Ferrocast ejecuta Script Commands compatibles con Raycast, que son scripts normales con comentarios de metadatos.'],
-      ['¿Funciona Ferrocast en Mac con Intel?', 'No. Ferrocast necesita un Mac con Apple Silicon y macOS 13 o posterior. Alfred 5 funciona desde macOS 10.14.'],
+      ['¿Funciona Ferrocast en Mac con Intel?', 'Sí. La descarga funciona en Macs con Apple Silicon e Intel con macOS 13 o posterior; Intel no está probado en hardware real. Alfred 5 funciona desde macOS 10.14.'],
       ['¿Ferrocast está afiliado a Alfred?', 'No. Ferrocast es independiente y no está afiliado a Alfred ni a Raycast.'],
     
       languageFaqEs,

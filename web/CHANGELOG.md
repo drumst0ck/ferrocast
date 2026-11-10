@@ -6,6 +6,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Changed
+- **Universal download**: the DMG/zip now runs natively on Apple Silicon and Intel Macs. The app and its helpers (screen capture, Apple translation, the notch player adapter) are built for both architectures, and the release fails if any of them lacks one. Intel is not tested on real hardware. Homebrew still builds for your Mac's own architecture. (docs: /docs/getting-started/install/) #install
 ### Added
 - **Sync, Forget this Mac**: Settings → Advanced → Sync lists the Macs that published sync data (name, last seen) and offers **Forget this Mac**, behind a confirmation, for every Mac but the one you are using. It removes that Mac's folder from the sync folder and this Mac stops reading it; if that Mac syncs again it reappears. (docs: /docs/launcher/sync/) #sync
 

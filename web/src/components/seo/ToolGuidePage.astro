@@ -47,7 +47,7 @@ const jsonLd = [
     <Crumbs items={crumbs} />
     <h1>{t.h1}</h1>
     <p class="lead">{t.lead}</p>
-    <p class="g-cta"><a class="btn" href={dmgUrl}>Download Ferrocast</a><span class="fine">Free · MIT · DMG for Apple Silicon · no upload</span></p>
+    <p class="g-cta"><a class="btn" href={dmgUrl}>Download Ferrocast</a><span class="fine">Free · MIT · DMG for Apple Silicon and Intel · no upload</span></p>
     <dl>
       <dt>Shortcut</dt><dd>{tool.shortcut ? <kbd>{tool.shortcut}</kbd> : 'None; open it from the Tools wheel or the Convert view'}</dd>
       <dt>Input formats</dt><dd>{tool.formats.map((f, i) => <><code>{f}</code>{i < tool.formats.length - 1 ? ' ' : ''}</>)}</dd>

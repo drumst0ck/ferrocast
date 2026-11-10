@@ -22,7 +22,7 @@ export const en: GuideCopy = {
     'Ferrocast records your screen, an area or a window, then opens the recording in an editor that zooms toward your clicks automatically. You can add your camera, clean up the cursor, transcribe the speech on your Mac and export an MP4 or a GIF. It is free and open source (MIT), and it lives in the same launcher you use for apps, clipboard and files.',
     'Screen Studio is a paid app: its website lists $9 a month billed yearly or $29 monthly (checked 27 October 2026), with features such as shareable links and a cloud transcript that Ferrocast does not have. If you need those, it is the better pick.',
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · macOS 14 or later' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · macOS 14 or later' },
   limits: {
     h: 'What the recorder and editor do',
     caption: 'Ferrocast screen recorder features',
@@ -35,7 +35,7 @@ export const en: GuideCopy = {
       ['Transcript', 'Made on your Mac. Cut words from the text, remove fillers (English and Spanish) and tighten pauses.'],
       ['Style', 'Aspect 16:9, 4:3, 1:1 or 9:16; colour, gradient or blurred background; padding, corners and shadow.'],
       ['Export', 'MP4 (H.264 or HEVC, up to 4K, 30 or 60 fps) or GIF (480, 720 or 960 px wide, 10 or 15 fps).'],
-      ['Requirements', 'macOS 14 or later, the Screen Recording permission, an Apple Silicon Mac.'],
+      ['Requirements', 'macOS 14 or later, the Screen Recording permission, a Mac (Apple Silicon or Intel).'],
     ],
     note: 'From the [screen capture docs](/docs/launcher/screen-capture/). Screen Studio prices from [screen.studio](https://screen.studio/), checked 27 October 2026.',
   },
@@ -56,7 +56,7 @@ export const en: GuideCopy = {
       list: [
         'No shareable links or cloud upload: exports stay on your Mac.',
         'GIF exports are limited in length (about 20 seconds at 960 px and 15 fps, about 80 seconds at 480 px).',
-        'No Intel Macs and nothing before macOS 14 for recording.',
+        'Nothing before macOS 14 for recording.',
       ],
     },
   ],
@@ -66,7 +66,7 @@ export const en: GuideCopy = {
       ['Is there a free Screen Studio alternative for Mac?', 'Yes. Ferrocast is a free, open-source Mac launcher with a screen recorder that zooms toward your clicks automatically and exports MP4 or GIF.'],
       ['Does Ferrocast upload my recordings?', 'No. Recordings, edits, transcripts and exports stay on your Mac. There are no shareable links.'],
       ['Can I add my webcam?', 'Yes. Turn on Camera in Settings → Capture → Sources; in the editor it can be an overlay or a split layout.'],
-      ['Which macOS do I need?', 'macOS 14 or later on an Apple Silicon Mac, with the Screen Recording permission.'],
+      ['Which macOS do I need?', 'macOS 14 or later on an Apple Silicon or Intel Mac, with the Screen Recording permission.'],
       ['Can I export a GIF?', 'Yes, at 480, 720 or 960 px wide and 10 or 15 fps, for clips up to about 20 seconds at 960 px.'],
     
       languageFaqEn,
@@ -97,7 +97,7 @@ export const es: GuideCopy = {
     'Ferrocast graba la pantalla, un área o una ventana y abre la grabación en un editor que hace zoom hacia tus clics automáticamente. Puedes añadir tu cámara, ajustar el cursor, transcribir lo que dices en tu propio Mac y exportar a MP4 o GIF. Es gratis y de código abierto (MIT), y vive en el mismo lanzador que usas para apps, portapapeles y archivos. Puedes usarlo con la interfaz en español.',
     'Screen Studio es una app de pago: su web indica 9 $ al mes con pago anual o 29 $ al mes (comprobado el 27 de octubre de 2026), con funciones como enlaces para compartir y transcripción en la nube que Ferrocast no tiene. Si las necesitas, es mejor opción.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · macOS 14 o posterior' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · macOS 14 o posterior' },
   limits: {
     h: 'Qué hacen la grabadora y el editor',
     caption: 'Funciones de la grabadora de pantalla de Ferrocast',
@@ -110,7 +110,7 @@ export const es: GuideCopy = {
       ['Transcripción', 'Hecha en tu Mac. Corta palabras desde el texto, quita muletillas (inglés y español) y acorta pausas.'],
       ['Estilo', 'Formato 16:9, 4:3, 1:1 o 9:16; fondo de color, degradado o desenfocado; márgenes, esquinas y sombra.'],
       ['Exportar', 'MP4 (H.264 o HEVC, hasta 4K, 30 o 60 fps) o GIF (480, 720 o 960 px de ancho, 10 o 15 fps).'],
-      ['Requisitos', 'macOS 14 o posterior, permiso de Grabación de pantalla y un Mac con Apple Silicon.'],
+      ['Requisitos', 'macOS 14 o posterior, permiso de Grabación de pantalla y un Mac con Apple Silicon o Intel.'],
     ],
     note: 'Según la [documentación de captura de pantalla](/docs/launcher/screen-capture/) (en inglés). Precios de Screen Studio en [screen.studio](https://screen.studio/), comprobados el 27 de octubre de 2026.',
   },
@@ -131,7 +131,7 @@ export const es: GuideCopy = {
       list: [
         'No hay enlaces para compartir ni subida a la nube: lo exportado se queda en tu Mac.',
         'Los GIF tienen una duración limitada (unos 20 segundos a 960 px y 15 fps, unos 80 segundos a 480 px).',
-        'No funciona en Mac con Intel y la grabación necesita macOS 14 o posterior.',
+        'La grabación necesita macOS 14 o posterior.',
       ],
     },
   ],
@@ -141,7 +141,7 @@ export const es: GuideCopy = {
       ['¿Hay una forma gratis de grabar la pantalla del Mac con zoom automático?', 'Sí. Ferrocast es un lanzador gratis y de código abierto para Mac con una grabadora de pantalla que hace zoom hacia tus clics automáticamente y exporta a MP4 o GIF.'],
       ['¿Se suben mis grabaciones?', 'No. Las grabaciones, la edición, la transcripción y lo exportado se quedan en tu Mac. No hay enlaces para compartir.'],
       ['¿Puedo añadir mi cámara?', 'Sí. Activa Camera en Ajustes → Capture → Sources; en el editor puede ir superpuesta o en vista dividida.'],
-      ['¿Qué versión de macOS necesito?', 'macOS 14 o posterior en un Mac con Apple Silicon, con el permiso de Grabación de pantalla.'],
+      ['¿Qué versión de macOS necesito?', 'macOS 14 o posterior en un Mac con Apple Silicon o Intel, con el permiso de Grabación de pantalla.'],
       ['¿Puedo exportar un GIF?', 'Sí, de 480, 720 o 960 px de ancho y a 10 o 15 fps, con clips de hasta unos 20 segundos a 960 px.'],
     
       languageFaqEs,

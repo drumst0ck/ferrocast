@@ -30,7 +30,7 @@ export const en: GuideCopy = {
     'Ferrocast expands snippets while you type, in any app on your Mac. They support `{date}`, `{clipboard}`, `{cursor}` and `{snippet name="…"}` to insert one snippet inside another, and Ferrocast imports a snippet export from Raycast. It is free and MIT-licensed, and I found no cap on the number of snippets in the code. **It has no fill-in forms.**',
     'If you depend on fill-in forms (fields, menus, conditional parts), team-shared snippets or scripts inside snippets, read the table first: TextExpander and Espanso cover those and Ferrocast does not. I build Ferrocast; Ferrocast is independent and not affiliated with TextExpander, Raycast or Espanso.',
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · no account' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · no account' },
   limits: {
     h: 'Ferrocast vs TextExpander, Espanso, Raycast and macOS Text Replacement',
     caption: 'Text expansion in Ferrocast, TextExpander, Espanso, Raycast and macOS compared',
@@ -42,7 +42,7 @@ export const en: GuideCopy = {
       ['Fill-in forms', '**No**', 'Yes; basic fill-ins are listed on every plan, conditional sections on paid plans', 'Yes (form support)', 'Not stated on its snippets page', 'Not stated in Apple’s guide'],
       ['Scripts in snippets', 'No', 'JavaScript, AppleScript and shell on paid plans', 'Not stated on its homepage', 'Not stated on its snippets page', 'Not stated in Apple’s guide'],
       ['Import', 'Raycast snippet JSON', 'Not stated on its pricing page', 'Not stated on its homepage', 'TextExpander, aText, Espanso and PhraseExpress exports, or JSON', 'Not stated in Apple’s guide'],
-      ['Platforms', 'Mac (Apple Silicon)', 'Mac, Windows, iPhone, iPad and Chrome', 'Windows, Linux and macOS', 'Mac', 'Apple devices; Apple says it is not available in every app'],
+      ['Platforms', 'Mac (Apple Silicon and Intel)', 'Mac, Windows, iPhone, iPad and Chrome', 'Windows, Linux and macOS', 'Mac', 'Apple devices; Apple says it is not available in every app'],
     ],
     note: `Ferrocast: [snippets docs](/docs/launcher/snippets/) and the app’s source code. TextExpander: [${TE.replace('https://', '')}](${TE}). Espanso: [espanso.org](${ESP}). Raycast: [manual.raycast.com/snippets](${RAY}) and [raycast.com/pricing](https://www.raycast.com/pricing). macOS: [Apple Support](${APPLE}). Checked on 28 October 2026.`,
   },
@@ -110,7 +110,7 @@ export const en: GuideCopy = {
       ['Why does it need Accessibility?', 'Automatic expansion watches the keys you type and types the replacement. macOS only allows that with Accessibility, and may also ask for Input Monitoring.'],
       ['Can I import my Raycast snippets?', 'Yes. Export them from Raycast as JSON and run Import Snippets in the Ferrocast launcher. There is no documented import from TextExpander, Espanso or aText.'],
       ['Do snippets sync between Macs?', 'Optionally. Sync with iCloud is off by default and available from version 0.4.0; snippets go through your iCloud Drive folder.'],
-      ['Does it run on Intel Macs?', 'No. Ferrocast needs an Apple Silicon Mac.'],
+      ['Does it run on Intel Macs?', 'Yes. The download runs on Apple Silicon and Intel Macs; Intel is not tested on real hardware.'],
     
       languageFaqEn,
     ],
@@ -140,7 +140,7 @@ export const es: GuideCopy = {
     'Ferrocast expande snippets mientras escribes, en cualquier app del Mac. Admiten `{date}`, `{clipboard}`, `{cursor}` y `{snippet name="…"}` para meter un snippet dentro de otro, e importa un export de snippets de Raycast. Es gratis y MIT, y en el código no he encontrado ningún límite de snippets. **No tiene formularios de relleno.** Puedes usarlo con la interfaz en español.',
     'Si dependes de formularios (campos, menús, partes condicionales), de snippets compartidos en equipo o de scripts dentro de los snippets, mira antes la tabla: TextExpander y Espanso cubren eso y Ferrocast no. Escribo Ferrocast; es independiente y no está afiliado a TextExpander, Raycast ni Espanso.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · sin cuenta' },
   limits: {
     h: 'Ferrocast frente a TextExpander, Espanso, Raycast y la Sustitución de texto de macOS',
     caption: 'Expansión de texto en Ferrocast, TextExpander, Espanso, Raycast y macOS',
@@ -152,7 +152,7 @@ export const es: GuideCopy = {
       ['Formularios de relleno', '**No**', 'Sí; los básicos aparecen en todos los planes y las secciones condicionales en los de pago', 'Sí (formularios)', 'No consta en su página de snippets', 'No consta en la guía de Apple'],
       ['Scripts en los snippets', 'No', 'JavaScript, AppleScript y shell en los planes de pago', 'No consta en su portada', 'No consta en su página de snippets', 'No consta en la guía de Apple'],
       ['Importar', 'JSON de Raycast', 'No consta en su página de precios', 'No consta en su portada', 'Exportaciones de TextExpander, aText, Espanso y PhraseExpress, o JSON', 'No consta en la guía de Apple'],
-      ['Plataformas', 'Mac (Apple Silicon)', 'Mac, Windows, iPhone, iPad y Chrome', 'Windows, Linux y macOS', 'Mac', 'Dispositivos Apple; Apple avisa de que no está disponible en todas las apps'],
+      ['Plataformas', 'Mac (Apple Silicon and Intel)', 'Mac, Windows, iPhone, iPad y Chrome', 'Windows, Linux y macOS', 'Mac', 'Dispositivos Apple; Apple avisa de que no está disponible en todas las apps'],
     ],
     note: `Ferrocast: [documentación de snippets](/docs/launcher/snippets/) (en inglés) y el código de la app. TextExpander: [${TE.replace('https://', '')}](${TE}). Espanso: [espanso.org](${ESP}). Raycast: [manual.raycast.com/snippets](${RAY}) y [raycast.com/pricing](https://www.raycast.com/pricing). macOS: [guía de Apple](${APPLE}). Comprobado el 28 de octubre de 2026.`,
   },
@@ -220,7 +220,7 @@ export const es: GuideCopy = {
       ['¿Por qué necesita Accesibilidad?', 'La expansión automática vigila las teclas que pulsas y teclea la sustitución. macOS solo lo permite con Accesibilidad y puede pedir también Monitorización de entrada.'],
       ['¿Puedo importar mis snippets de Raycast?', 'Sí. Expórtalos desde Raycast como JSON y ejecuta Import Snippets en el lanzador de Ferrocast. No hay importación documentada desde TextExpander, Espanso ni aText.'],
       ['¿Se sincronizan los snippets entre Macs?', 'De forma opcional. Sync with iCloud viene desactivada y está disponible desde la versión 0.4.0; los snippets pasan por tu carpeta de iCloud Drive.'],
-      ['¿Funciona en Mac con Intel?', 'No. Ferrocast necesita un Mac con Apple Silicon.'],
+      ['¿Funciona en Mac con Intel?', 'Sí. La descarga funciona en Macs con Apple Silicon e Intel; Intel no está probado en hardware real.'],
     
       languageFaqEs,
     ],

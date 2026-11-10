@@ -17,8 +17,8 @@ Lanzador de código abierto para macOS, escrito en Rust. Busca, calcula, pega y 
 | | |
 | --- | --- |
 | **Licencia** | [MIT](LICENSE) |
-| **Plataforma** | DMG/zip: Apple Silicon. Intel: compilación con Homebrew (no probado) |
-| **Tamaño** | Unos 8,5 MB en disco, un proceso ([método de medición](https://ferrocast.app/es/#bench)) |
+| **Plataforma** | DMG/zip: Apple Silicon e Intel (Intel no probado en hardware real) |
+| **Huella** | Un proceso en reposo ([método de medición](https://ferrocast.app/es/#bench)) |
 | **Cuenta** | Ninguna; sin plan de pago |
 | **Archivos** | 275 pares entre 46 formatos de entrada, 26 herramientas y 7 acciones — todo en local |
 | **Lanzador** | Búsqueda, calculadora, portapapeles, snippets, quicklinks, ~40 comandos de ventanas, Script Commands compatibles con Raycast |
@@ -43,7 +43,7 @@ brew upgrade ferrocast                      # para actualizar
 
 **Por qué una fórmula y no un cask.** El cask oficial de Homebrew exige apps firmadas y notarizadas (cuenta de Apple Developer de pago). Al compilar desde el código fuente en tu propia máquina, la app no lleva marca de cuarentena y Gatekeeper no interviene. No hace falta cuenta de pago y no se salta ninguna protección. La primera instalación tarda unos minutos porque compila, y la firma es ad-hoc, de uso local.
 
-Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no has añadido. La fórmula vive en [drumst0ck/homebrew-ferrocast](https://github.com/drumst0ck/homebrew-ferrocast) y sigue cada versión estable de forma automática. El DMG/zip funciona en Apple Silicon. Los Mac Intel pueden instalar con Homebrew, que compila desde el código fuente para ese Mac; Intel no está probado. Más en la [guía de instalación](https://ferrocast.app/es/docs/getting-started/install/).
+Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no has añadido. La fórmula vive en [drumst0ck/homebrew-ferrocast](https://github.com/drumst0ck/homebrew-ferrocast) y sigue cada versión estable de forma automática. El DMG/zip funciona en Macs Apple Silicon e Intel (una única descarga universal; Intel no está probado en hardware real). Homebrew compila desde el código fuente para la arquitectura de tu Mac. Más en la [guía de instalación](https://ferrocast.app/es/docs/getting-started/install/).
 
 ## Qué hace
 

@@ -20,7 +20,7 @@ export const page: GuideCopy = {
     'Ferrocast guarda lo que copias (texto, enlaces, colores, archivos e imágenes) para que puedas pegarlo después desde el lanzador. Lo que copias desde un gestor de contraseñas no se guarda: las apps como 1Password marcan esas copias como ocultas o temporales, y Ferrocast las ignora. Puedes usarlo con la interfaz en español.',
     'Spotlight tiene historial del portapapeles desde macOS Tahoe, y la propia guía de Apple avisa de que «puede aparecer información sensible» en él. Esta página compara los dos con lo que dice cada documentación. Aviso: escribo Ferrocast.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · sin cuenta' },
   limits: {
     h: 'Ferrocast y Spotlight, lado a lado',
     caption: 'Historial del portapapeles de Ferrocast y de Spotlight en macOS Tahoe',
@@ -58,7 +58,7 @@ export const page: GuideCopy = {
       h: 'Límites',
       list: [
         'El historial se guarda en un archivo JSON sin cifrar dentro de la carpeta de datos de Ferrocast, en tu Mac. No sale del Mac salvo que actives la sincronización con iCloud (desde la versión 0.4.0, desactivada por defecto): entonces pasa por tu carpeta de iCloud Drive sin más cifrado que el del propio iCloud. Lo copiado desde gestores de contraseñas nunca se guarda, así que tampoco se sincroniza.',
-        'Solo Mac con Apple Silicon.',
+        'Mac con Apple Silicon o Intel.',
         'Pegar directamente en otra app necesita el permiso de Accesibilidad.',
       ],
     },

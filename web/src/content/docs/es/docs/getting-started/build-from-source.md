@@ -1,6 +1,6 @@
 ---
 title: "Compilar desde el código"
-description: "Compila la app Ferrocast y un DMG desde el código fuente con los scripts del repositorio. Requiere Rust 1.95 y un Mac con Apple Silicon (Intel sin probar)."
+description: "Compila la app Ferrocast y un DMG desde el código fuente con los scripts del repositorio. Requiere Rust 1.95 y un Mac con Apple Silicon o Intel."
 sidebar:
   order: 3
 ---
@@ -15,14 +15,14 @@ scripts/shot.sh out.png FERROCAST_QUERY="100 usd in eur"   # renderiza la UI a u
 scripts/perf.sh            # tabla de rendimiento base (arranque, reposo, vistas); FERROCAST_PROFILE=1 imprime frames lentos
 ```
 
-Requiere Rust 1.95 (fijado en `rust-toolchain.toml`; lo exige egui 0.36) y macOS (Apple Silicon; Intel no está probado). Los datos viven en `~/Library/Application Support/Ferrocast`; `FERROCAST_DATA_DIR` cambia la ruta. Consulta [Variables de entorno](/es/docs/reference/environment-variables/).
+Requiere Rust 1.95 (fijado en `rust-toolchain.toml`; lo exige egui 0.36) y macOS (Apple Silicon o Intel; Intel no está probado en hardware real). Una compilación normal usa la arquitectura de tu Mac; `UNIVERSAL=1 scripts/bundle.sh` genera el paquete universal que publica la release (necesita ambos targets de Rust, que lista `rust-toolchain.toml`). Los datos viven en `~/Library/Application Support/Ferrocast`; `FERROCAST_DATA_DIR` cambia la ruta. Consulta [Variables de entorno](/es/docs/reference/environment-variables/).
 
 ## Distribución
 
 La vía soportada es Homebrew compilando desde fuente. El DMG de `scripts/dmg.sh` **sin notarizar** lo bloqueará Gatekeeper en otros Macs que lo descarguen; solo sirve para uso propio. La notarización (`scripts/notarize.sh`) es opcional y requiere cuenta de desarrollador de pago.
 
 :::caution[Límites]
-El script de notarización es opcional. El DMG/zip funciona en Apple Silicon; en Mac Intel, compila desde el código fuente o usa Homebrew (no probado en Intel).
+El script de notarización es opcional. El DMG/zip funciona en Macs Apple Silicon e Intel (no probado en hardware Intel real).
 :::
 
 ## Relacionado

@@ -42,7 +42,7 @@ export const page = {
       ['Sync entre Macs', 'No consta para el portapapeles en la guía de Apple', 'Cloud Sync en planes de pago', 'Con Dropbox u otro servicio de archivos (Powerpack)', 'Opcional, por iCloud Drive (desactivada por defecto). No es la Cloud Sync de Raycast'],
       ['Código abierto', 'No, es parte de macOS', 'No consta una licencia abierta en su web', 'No consta una licencia abierta en su web', 'Sí, MIT'],
       ['Idioma de la interfaz', 'No se compara aquí', 'No se compara aquí', 'No se compara aquí', 'Inglés y seis más: español, alemán, francés, portugués de Brasil, japonés y chino simplificado. Por Mac, no se sincroniza'],
-      ['Requisitos', 'macOS Tahoe para portapapeles y acciones', 'Raycast 2: macOS Tahoe y Apple Silicon', 'Alfred 5: macOS 10.14 o posterior', 'Apple Silicon'],
+      ['Requisitos', 'macOS Tahoe para portapapeles y acciones', 'Raycast 2: macOS Tahoe y Apple Silicon', 'Alfred 5: macOS 10.14 o posterior', 'Apple Silicon e Intel, macOS 13 o posterior'],
     ] as [string, string, string, string, string][],
     checked: 'Comprobado el 27 de octubre de 2026 en las webs oficiales de Apple, Raycast y Alfred. «No consta» significa que no lo encontramos en esas páginas, no que no exista.',
   },
@@ -51,8 +51,8 @@ export const page = {
     items: [
       ['Spotlight en macOS Tahoe', 'Se abre con ⌘ Espacio. Además de apps y archivos, tiene una sección de acciones (⌘3) en la que puedes asignar quick keys, por ejemplo «ft» para iniciar una llamada de FaceTime, y el historial del portapapeles (⌘4), que se borra con Clear History. Lo que la guía de Apple no recoge en Spotlight: snippets (para eso están las Sustituciones de texto de macOS), comandos de ventanas desde el buscador y extensiones de terceros más allá de las acciones de las apps y la app Atajos.'],
       ['Raycast', 'El plan Free incluye portapapeles, snippets y ventanas. La IA, el historial ilimitado del portapapeles y Cloud Sync son de pago (Pro desde 10 $ al mes). Su punto fuerte es la Store de extensiones. Raycast 2 pide macOS Tahoe y Apple Silicon y también funciona en Windows (beta pública) e iOS.'],
-      ['Alfred', 'La app es gratis; el portapapeles, los snippets y los Workflows forman parte del Powerpack, un pago único de 34 £. El portapapeles ignora por defecto las apps de contraseñas. Alfred 5 funciona desde macOS 10.14, así que es la opción para Macs con Intel o sistemas antiguos.'],
-      ['Ferrocast', 'Gratis y de código abierto (MIT), escrito en Rust, solo para Apple Silicon, con la interfaz en español. Trae portapapeles que salta los gestores de contraseñas, snippets, unos 40 comandos de ventanas, Script Commands de Raycast, notas flotantes en Markdown con imágenes, IA con Ollama en tu Mac por defecto, [275 conversiones de archivos sin subirlos](/es/files/) y grabación de pantalla con zoom automático. La sincronización con iCloud es opcional y está desactivada por defecto. No tiene tienda de extensiones propia; las extensiones que ya instalaste con Raycast pueden ejecutarse, en parte. Más detalle en [Alternativa a Raycast](/es/alternativa-a-raycast/).'],
+      ['Alfred', 'La app es gratis; el portapapeles, los snippets y los Workflows forman parte del Powerpack, un pago único de 34 £. El portapapeles ignora por defecto las apps de contraseñas. Alfred 5 funciona desde macOS 10.14, así que es la opción para sistemas anteriores a macOS 13.'],
+      ['Ferrocast', 'Gratis y de código abierto (MIT), escrito en Rust, para Apple Silicon e Intel, con la interfaz en español. Trae portapapeles que salta los gestores de contraseñas, snippets, unos 40 comandos de ventanas, Script Commands de Raycast, notas flotantes en Markdown con imágenes, IA con Ollama en tu Mac por defecto, [275 conversiones de archivos sin subirlos](/es/files/) y grabación de pantalla con zoom automático. La sincronización con iCloud es opcional y está desactivada por defecto. No tiene tienda de extensiones propia; las extensiones que ya instalaste con Raycast pueden ejecutarse, en parte. Más detalle en [Alternativa a Raycast](/es/alternativa-a-raycast/).'],
     ] as [string, string][],
   },
   enough: {
@@ -68,8 +68,8 @@ export const page = {
       ['¿Qué es mejor, Raycast o Alfred?', 'Depende de cómo pagues y de lo que uses. Raycast ofrece más en su plan gratis (portapapeles, snippets y ventanas) y una Store de extensiones, pero la IA y la sincronización son de suscripción. Alfred cobra un pago único por el Powerpack y destaca en automatización con Workflows.'],
       ['¿Spotlight de macOS Tahoe sustituye a Raycast?', 'Para un uso básico, a menudo sí: Spotlight ya tiene historial del portapapeles y acciones con quick keys. La guía de Apple no recoge snippets, comandos de ventanas en el buscador ni una tienda de extensiones como la de Raycast.'],
       ['¿Spotlight guarda el historial del portapapeles?', 'Sí, desde macOS Tahoe. Se abre con ⌘4 dentro de Spotlight y se puede borrar con Clear History. Apple avisa de que puede aparecer información sensible.'],
-      ['¿Hay un lanzador gratis y de código abierto para Mac?', 'Sí. Ferrocast es un lanzador gratis con licencia MIT para Mac con Apple Silicon, con portapapeles, snippets, comandos de ventanas, Script Commands de Raycast y conversión de archivos en local.'],
-      ['¿Qué lanzador funciona en un Mac con Intel?', 'Alfred 5 funciona desde macOS 10.14. Raycast 2 y Ferrocast necesitan Apple Silicon.'],
+      ['¿Hay un lanzador gratis y de código abierto para Mac?', 'Sí. Ferrocast es un lanzador gratis con licencia MIT para Mac (Apple Silicon e Intel), con portapapeles, snippets, comandos de ventanas, Script Commands de Raycast y conversión de archivos en local.'],
+      ['¿Qué lanzador funciona en un Mac con Intel?', 'Alfred 5 funciona desde macOS 10.14 y Ferrocast desde macOS 13, en Apple Silicon e Intel (Intel no está probado en hardware real). Raycast 2 necesita Apple Silicon.'],
       ['¿Alfred tiene suscripción?', 'No. Alfred es gratis y el Powerpack es un pago único (34 £ por la licencia v5 individual).'],
     
       languageFaqEs,

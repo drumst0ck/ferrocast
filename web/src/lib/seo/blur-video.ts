@@ -50,7 +50,7 @@ export const en: BlurCopy = {
   lead: [
     'Ferrocast covers up to 64 areas of a video, each with its own start and end, with blur or a solid black box. It runs on your Mac and uploads nothing. It needs ffmpeg (`brew install ffmpeg`). It does not follow a face or an object that moves: each area stays where you place it.',
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · macOS 13 or later · needs ffmpeg' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · macOS 13 or later · needs ffmpeg' },
   before: {
     h: 'Before you start: what it does and what it does not',
     yesLabel: 'It does',
@@ -148,7 +148,7 @@ export const es: BlurCopy = {
   lead: [
     'Ferrocast tapa hasta 64 zonas de un vídeo, cada una con su inicio y su fin, con desenfoque o un bloque negro sólido. Lo hace en tu Mac y no sube el archivo. Necesita ffmpeg (`brew install ffmpeg`). No sigue una cara ni un objeto que se mueve: la zona se queda donde la pones. Puedes usarlo con la interfaz en español.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · macOS 13 o posterior · necesita ffmpeg' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · macOS 13 o posterior · necesita ffmpeg' },
   before: {
     h: 'Antes de empezar: lo que hace y lo que no',
     yesLabel: 'Sí',

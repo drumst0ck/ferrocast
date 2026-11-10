@@ -31,7 +31,7 @@ export const page: GuideCopy = {
     `Ferrocast has ${COMMANDS.length} commands that move and resize the frontmost window: halves, thirds, fourths, quarters, sixths, maximize, center, nudge, and moving to another display. Run one by typing its name in the launcher, or give it a hotkey with ⇧⌘, on the command. It is free and open source (MIT).`,
     `You may not need another app at all: macOS has built-in tiling with the green button, the Window menu and Fn-Control-arrow shortcuts ([Apple](${TILING})). And Rectangle is a dedicated window manager that is free to download, with a paid Pro version. Ferrocast is for people who would rather have it in the launcher.`,
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · no account' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · no account' },
   limits: {
     h: 'Three ways to manage windows on a Mac',
     caption: 'macOS tiling, Rectangle and Ferrocast compared',
@@ -65,7 +65,7 @@ export const page: GuideCopy = {
         'Needs the Accessibility permission.',
         'No snap areas: dragging a window to an edge does not tile it (macOS does that on its own).',
         'Automatic window tiling is included and off by default (Settings → Advanced → Window tiling). A new window is placed on its display in one of four layouts. It pauses while Stage Manager is on. The on/off switch and each display’s layout stay on that Mac. See the [tiling reference](/docs/launcher/tiling/).',
-        'Apple Silicon Macs only.',
+        'Apple Silicon and Intel Macs.',
       ],
     },
   ],

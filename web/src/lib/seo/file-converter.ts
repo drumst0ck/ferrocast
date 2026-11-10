@@ -23,7 +23,7 @@ export const page: GuideCopy = {
     `Ferrocast converts files on your own Mac: drag a file, tap ⇧ and drop it on a format. It covers ${c.pairs} conversions across ${c.inputs} input formats and ${c.tools} file tools such as compress, trim and crop, and writes each result next to the original. It is free and open source (MIT), and it is also a keyboard launcher.`,
     'Permute is a paid Mac converter with more media features; CloudConvert is an online service with a free daily allowance. The table shows what each one’s website says, so you can pick.',
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · no account' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · no account' },
   limits: {
     h: 'Ferrocast, Permute and CloudConvert',
     caption: 'Ferrocast, Permute 4 and CloudConvert compared with facts from their websites',
@@ -34,7 +34,7 @@ export const page: GuideCopy = {
       ['Formats', `${c.pairs} conversions across ${c.inputs} input formats: images, video, audio, PDF, documents, slides, spreadsheets, subtitles and archives`, '“100+ formats” across video, audio, images, PDF and text', 'Not compared here'],
       ['Extra tools', `${c.tools} file tools: compress, trim, crop, redact, merge PDF and more`, 'Text to audio narration, OCR, PDF pages to images, transcription to text or SRT', 'Not compared here'],
       ['Limits', 'Some pairs need optional ffmpeg, LibreOffice, cwebp, Ghostscript or unrar', 'The App Store version omits some capabilities, per its website', 'Free plan: 1 GB per file, 5 minutes of processing'],
-      ['Requirements', 'Apple Silicon, macOS 13 or later', 'Permute 4: macOS 26 and Apple Silicon; Permute 3 for macOS 11 to 15 and Intel', 'A browser'],
+      ['Requirements', 'Apple Silicon and Intel, macOS 13 or later', 'Permute 4: macOS 26 and Apple Silicon; Permute 3 for macOS 11 to 15 and Intel', 'A browser'],
       ['Source code', 'MIT', 'No open licence stated', 'No open licence stated'],
     ],
     note: 'Permute from [its website](https://software.charliemonroe.net/permute/) and CloudConvert from [its pricing page](https://cloudconvert.com/pricing), checked 27 October 2026. Ferrocast from the [conversion reference](/docs/files/conversions/).',
