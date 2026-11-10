@@ -6,6 +6,12 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Cookie consent on the website**: ferrocast.app no longer loads Google Tag Manager or sets Google Analytics cookies until you click Accept. The banner (English or Spanish, also on the docs) has Reject and Accept side by side, remembers your choice in this browser with the policy version, and a Cookie settings link in every footer reopens it. Rejecting stops Google from loading on the next page and removes the `_ga` cookies. New cookie policy pages: `/cookies/` and `/es/cookies/`. #website
+
+### Security
+- **Enforced Content-Security-Policy**: the website now sends its Content-Security-Policy as an enforced header instead of report-only, with every inline script allowed by hash, Google hosts allowed for analytics only after consent, and violation reports still sent to `/api/csp-report/`. No server setting is needed. #website
+
 ## [0.6.0] - 2026-11-09
 
 ### Added

@@ -53,6 +53,7 @@ export default defineConfig({
       components: {
         Header: './src/components/docs/Header.astro',
         SkipLink: './src/components/docs/SkipLink.astro',
+        Footer: './src/components/docs/Footer.astro',
         PageTitle: './src/components/docs/PageTitle.astro',
         ThemeProvider: './src/components/docs/ThemeProvider.astro',
         ThemeSelect: './src/components/docs/ThemeSelect.astro',
