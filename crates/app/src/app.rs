@@ -2238,8 +2238,7 @@ impl App {
         if let Some(mtm) = objc2::MainThreadMarker::new() {
             let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
             app.unhide(None);
-            #[allow(deprecated)]
-            app.activateIgnoringOtherApps(true);
+            running::activate_self(&app);
         }
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -2299,8 +2298,7 @@ impl App {
         if self.onboarding && self.visible {
             // the tour never hides: the hotkey just brings it back in front of System Settings
             if let Some(mtm) = objc2::MainThreadMarker::new() {
-                #[allow(deprecated)]
-                objc2_app_kit::NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+                running::activate_self(&objc2_app_kit::NSApplication::sharedApplication(mtm));
             }
             self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         } else if self.visible {
@@ -4964,7 +4962,7 @@ impl App {
                                 Item {
                                     id: format!("win:{}", w.id),
                                     title: t,
-                                    subtitle: w.app.clone(),
+                                    subtitle: crate::items::window_subtitle(&w.app, w.state),
                                     icon: Icon::Glyph("sf:macwindow.on.rectangle", [89, 212, 153]),
                                     accessory: String::new(),
                                     keywords: vec![],
