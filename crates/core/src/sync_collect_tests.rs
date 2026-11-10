@@ -337,3 +337,20 @@ fn v0_8_0_documents_stay_compatible_and_a_stale_copy_from_a_v0_8_0_mac_is_ignore
     assert!(m[0].tomb("keep"));
     cleanup(&shared, &[&m[0], &m[1]]);
 }
+
+#[test]
+fn a_value_recreated_after_collection_survives_a_crash_between_the_document_write_and_the_tracker_save() {
+    let shared = tmp("shared");
+    let mut m = collected_everywhere(&shared, &["aa", "bb", "cc"], T0 + 20 * D);
+    let t = T0 + 40 * D;
+    m[1].put("x", json!({"v": 7}));
+    m[1].sync_lost(t); // the document carries x, the tracker was never saved
+    assert!(m[1].doc().items.get("x").is_some_and(|r| !r.deleted));
+    m[1].sync(t + H);
+    assert_eq!(m[1].value("x"), Some(json!({"v": 7})), "kept: the own document already carries it above the collected stamp");
+    run(&mut m, &[0, 2, 1], t + 2 * H);
+    for x in &m {
+        assert_eq!(x.value("x"), Some(json!({"v": 7})), "{} has it", x.id);
+    }
+    cleanup(&shared, &[&m[0], &m[1], &m[2]]);
+}

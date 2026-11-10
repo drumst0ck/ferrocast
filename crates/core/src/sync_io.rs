@@ -884,7 +884,9 @@ pub fn sync_domain_recovering(
             work.collected.get(id).is_some_and(|c| match work.items.get(id) {
                 Some(t) if !t.deleted && t.hash == sync::hash(v) => t.modified <= *c,
                 Some(_) => false,
-                None => blind,
+                // no history of it: a stale copy, unless the own document already carries it live
+                // above the collected stamp (a run that published it and crashed before the save)
+                None => blind && !own_prev.as_ref().and_then(|d| d.items.get(id)).is_some_and(|r| !r.deleted && r.modified > *c),
             })
         })
         .map(|(id, _)| id.clone())
