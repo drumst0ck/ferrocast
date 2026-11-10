@@ -60,9 +60,8 @@ pub struct DeviceDoc {
     /// do not write it and ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_at: Option<i64>,
-    /// The largest tombstone horizon this Mac has used to drop deletions from its document (see
-    /// `PublishOpts::gc_before`). A Mac whose own `run_at` is older than a live peer's `gc_at` may
-    /// hold items whose deletion was collected before it saw it.
+    /// Read for compatibility, never written: deletions are not collected (a Mac that returns later
+    /// must still learn about them). Reserved for an acknowledgement-based clean-up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gc_at: Option<i64>,
 }
@@ -79,12 +78,6 @@ pub struct Tracker {
     /// that first sync) are re-stamped once to this time by `restamp_baseline`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_sync_at: Option<i64>,
-    /// Deletions this Mac dropped from its document because every live Mac had seen them (see
-    /// `PublishOpts::gc_before`): id → stamp of the deletion. A record of that id stamped at or
-    /// before it, still sitting in the document of a Mac that was offline too long to count, is
-    /// ignored instead of bringing the item back. Local only, never published.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub gone: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,7 +124,7 @@ pub fn mark_unparsed(tracker: &mut Tracker, ids: &[String]) {
 }
 
 /// Default tombstone lifetime of `publish`/`publish_with` (90 days). The app keeps tombstones until
-/// every live Mac has seen them (`PublishOpts::gc_before`); the clipboard ages them, see `sync_io`.
+/// never (they are kept so a Mac that returns later still learns of them); the clipboard ages them, see `sync_io`.
 pub const TOMBSTONE_TTL_MS: i64 = 90 * 24 * 3600 * 1000;
 
 pub fn hash(value: &Value) -> String {
@@ -202,12 +195,6 @@ pub struct PublishOpts {
     /// in the tracker but not written into this Mac's document while its id is in the set. `None`
     /// publishes everything (every domain but the clipboard).
     pub carried: Option<HashSet<String>>,
-    /// Drop tombstones stamped before this time (every Mac that is still live has published past
-    /// it, see `SyncIo::tombstone_horizon`). `None` keeps them.
-    pub gc_before: Option<i64>,
-    /// Ids whose tombstones are never dropped by `gc_before` (built-in defaults: a fresh Mac still
-    /// has them, so forgetting their deletion would bring them back).
-    pub gc_keep: HashSet<String>,
 }
 
 /// The general form of `publish`: see `PublishOpts`.
@@ -215,7 +202,7 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
     let unseen = if prev.seeded { now } else { opts.first_stamp };
     let first_sync_at = if prev.seeded { prev.first_sync_at } else { Some(now) };
     let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new(), first_sync_at, name: None, run_at: None, gc_at: None };
-    let mut next = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at, gone: prev.gone.clone() };
+    let mut next = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at };
     let mut seen = HashSet::new();
     for (id, value) in items {
         if !seen.insert(id.clone()) {
@@ -258,12 +245,6 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
         // a tombstone stamped ahead of this Mac's clock ages from when this Mac first saw it
         let seen = (modified > now).then(|| t.seen.unwrap_or(now));
         if opts.ttl.is_some_and(|ttl| now - seen.map_or(modified, |s| s.min(now)) > ttl) {
-            continue;
-        }
-        // every live Mac has published past the deletion: nobody can bring the item back
-        if t.deleted && opts.gc_before.is_some_and(|g| modified < g) && !opts.gc_keep.contains(id) {
-            let stamp = next.gone.entry(id.clone()).or_insert(modified);
-            *stamp = (*stamp).max(modified);
             continue;
         }
         doc.items.insert(id.clone(), Record { modified, deleted: true, value: None, pristine: false, adopted: false });
@@ -318,17 +299,6 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
     (doc, next)
 }
 
-/// Drop from `docs` the records of items this Mac has garbage-collected the deletion of (see
-/// `Tracker::gone`) that are not newer than that deletion.
-pub fn ignore_forgotten(docs: &mut [DeviceDoc], tracker: &Tracker) {
-    if tracker.gone.is_empty() {
-        return;
-    }
-    for d in docs.iter_mut() {
-        d.items.retain(|id, r| tracker.gone.get(id).is_none_or(|g| r.modified > *g));
-    }
-}
-
 /// Ids that a Mac other than `own` already publishes as live in its document, for the clipboard's
 /// own-entries rule. A record counts when its publisher originated it (not `adopted`) or, when
 /// the publisher only took it over (documents of v0.7.0 and older Macs, or a Mac that republished it
@@ -351,7 +321,7 @@ pub fn carried_elsewhere(own: &str, docs: &[DeviceDoc]) -> HashSet<String> {
 /// what was published stays the baseline, so edits and deletions made since still count as local
 /// changes instead of being lost to a restart as a newcomer.
 pub fn tracker_from_own_doc(doc: &DeviceDoc) -> Tracker {
-    let mut t = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at: doc.first_sync_at, gone: BTreeMap::new() };
+    let mut t = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at: doc.first_sync_at };
     for (id, r) in &doc.items {
         let hash = r.value.as_ref().map(hash).unwrap_or_default();
         t.items.insert(
@@ -717,7 +687,6 @@ mod tests {
                 .collect(),
             seeded: true,
             first_sync_at: None,
-            ..Default::default()
         }
     }
 

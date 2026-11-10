@@ -42,7 +42,7 @@ Ferrocast merges item by item, and the newest edit wins. If two Macs edit the sa
 - **Every setting is its own item** (and every nested setting, such as one capture option or one command's options). If one Mac changes the theme and another changes the hotkey, both changes are kept.
 - An item added on one Mac is never lost because another Mac did not have it.
 - A deletion reaches your other Macs. If another Mac edits the item after the deletion, the item comes back.
-- A deletion is remembered until every Mac that is still in use has seen it (see Macs and clean-up below), so an old Mac or a leftover folder in iCloud Drive cannot bring a deleted item back in the meantime.
+- A deletion is remembered for good, so an old Mac, a Mac that comes back after months or a leftover folder in iCloud Drive cannot bring a deleted item back.
 - Clipboard deletions are remembered for 400 days (the 3,000 newest), longer than the longest history setting. A pinned clipboard entry older than 400 days is not synced, so edits to it stay on the Mac where you made them.
 - Each Mac writes only its own files in the `Ferrocast` folder of iCloud Drive (`devices/<id>/`), so iCloud has no conflicting copies to create. A file Ferrocast cannot read is skipped.
 - An item written by a newer Ferrocast that this Mac's version cannot read is left alone: this Mac does not show it and never publishes it as deleted, so your other Macs keep it as the Mac that wrote it published it. It appears once this Mac is updated.
@@ -57,17 +57,13 @@ Each Mac's clipboard document holds only the entries copied on that Mac, so the 
 - If a Mac loses its clipboard history, it gets it back from its own document and the other Macs' documents.
 - A Mac only uploads the images of the entries it publishes.
 
-## Macs and clean-up
+## Macs and deletions
 
 Settings → Advanced → Sync lists the Macs that have published sync data: the name each one published and when it was last seen. **Forget this Mac**, behind a confirmation, removes that Mac's folder (`devices/<id>/`: its documents and images) from the sync folder, and this Mac stops reading it. It is not offered for the Mac you are using, and Ferrocast never removes this Mac's folder or another Mac's. If the forgotten Mac syncs again, it publishes again and appears again in the list. Use it for a Mac you retired or reinstalled, so it stops taking space.
 
-Deletions (tombstones) are cleaned up too. A deletion is dropped once every Mac that is still live has published a document made after it, which means all of them have seen it. A Mac is live when it published within the last 30 days and has not been forgotten. A deletion is never dropped earlier, and built-in snippets and quicklinks you deleted keep their deletion. Details:
+Deletions are kept: Ferrocast does not clean them up, so a Mac that comes back after weeks or months still learns about everything you deleted meanwhile and removes those items. **Forget this Mac** removes that Mac's own sync data; the deletions published by your other Macs stay.
 
-- A live Mac that runs an older Ferrocast (it publishes no run time), or whose document cannot be read or is still downloading, holds the clean-up back until it updates, is forgotten or has been offline for 30 days. With no other live Mac nothing is dropped.
-- A Mac that was offline for more than 30 days no longer holds the clean-up back, and while another Mac is live its old documents are not read. When it comes back, a note, snippet or quicklink it still has unchanged that the other Macs deleted and cleaned up is removed on it too, instead of coming back; anything you edited on it while it was away is kept and shared again. This only happens when every other live Mac's document was read without problems in that run.
-- Clipboard entries are not cleaned up that way: a clipboard deletion made by a Mac that was then forgotten, or that has been offline for a long time, stops protecting against a third Mac that was also away. That Mac may bring the entry back for itself when it returns.
-- Ferrocast refreshes the run time in a document every few hours, not on every run, so a deletion can wait a few hours longer than strictly needed.
-- Clipboard deletions keep their own rule (400 days, the 3,000 newest).
+If a forgotten Mac, or one that has been away for a long time, had published a clipboard deletion, that deletion goes with its folder. Clipboard deletions also expire on their own after 400 days, so a third Mac that was also away may bring such an entry back for itself.
 
 ## Turning sync on for the first time
 
