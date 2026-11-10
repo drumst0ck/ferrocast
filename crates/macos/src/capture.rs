@@ -2093,10 +2093,12 @@ echo '{"id":1,"error":"cancelled","message":"Transcription cancelled"}'"#,
         let p = fake(
             "beat",
             r#"read l
-for i in 1 2 3 4; do sleep 0.2; echo '{"event":"heartbeat","id":1}'; done
+for i in 1 2 3 4 5 6 7 8; do sleep 0.3; echo '{"event":"heartbeat","id":1}'; done
 echo '{"id":1,"ok":true,"language":"en-US","words":0,"path":"/p/t.json"}'"#,
         );
-        assert!(run(&p, &AtomicBool::new(false), Duration::from_millis(500)).0.is_ok());
+        // the run (~2.4 s) outlasts the 1.5 s silence limit only thanks to the heartbeats; the limit
+        // leaves room for a slow shell start on a busy CI runner
+        assert!(run(&p, &AtomicBool::new(false), Duration::from_millis(1500)).0.is_ok());
     }
 }
 

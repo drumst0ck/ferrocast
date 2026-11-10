@@ -1,0 +1,28 @@
+---
+import { consentCopy } from '../../lib/consent/copy';
+import type { Lang } from '../../lib/site-labels';
+interface Props { lang?: Lang }
+const { lang = 'en' } = Astro.props;
+const t = consentCopy[lang];
+---
+<div id="fc-consent" class="fc-consent" role="region" aria-labelledby="fc-consent-title" tabindex="-1" hidden>
+  <p id="fc-consent-title" class="fc-consent-title">{t.title}</p>
+  <p class="fc-consent-text">{t.text} <a href={t.policyHref}>{t.more}</a></p>
+  <div class="fc-consent-actions">
+    <button type="button" data-consent="denied">{t.reject}</button>
+    <button type="button" data-consent="granted">{t.accept}</button>
+  </div>
+</div>
+<script>import '../../scripts/consent';</script>
+<style is:global>
+  .fc-consent { position: fixed; z-index: 2147483000; left: 1rem; right: 1rem; bottom: 1rem; max-width: 36rem; margin-inline: auto; padding: 1rem 1.1rem; border-radius: 0.75rem; background: #17171a; color: #f2f2f5; border: 1px solid #3a3a42; box-shadow: 0 8px 32px rgba(0,0,0,.4); font: 400 0.9rem/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  .fc-consent[hidden] { display: none; }
+  .fc-consent:focus { outline: 2px solid #8ab4ff; outline-offset: 2px; }
+  .fc-consent p { margin: 0 0 0.5rem; }
+  .fc-consent .fc-consent-title { font-weight: 600; }
+  .fc-consent a { color: #8ab4ff; text-decoration: underline; }
+  .fc-consent-actions { display: flex; gap: 0.6rem; margin-top: 0.75rem; }
+  .fc-consent-actions button { flex: 1; min-height: 2.5rem; padding: 0.5rem 1rem; border-radius: 0.5rem; border: 1px solid #f2f2f5; background: #f2f2f5; color: #101012; font: inherit; font-weight: 600; cursor: pointer; }
+  .fc-consent-actions button:hover { background: #fff; }
+  .fc-consent-actions button:focus-visible, .fc-consent a:focus-visible { outline: 2px solid #8ab4ff; outline-offset: 2px; }
+</style>
