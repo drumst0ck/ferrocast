@@ -1,12 +1,12 @@
 ---
 title: "Install Ferrocast"
-description: "Download the Ferrocast DMG for Apple Silicon and drag it to Applications, or install it with Homebrew as an alternative that builds on your Mac."
+description: "Download the Ferrocast DMG for Apple Silicon or Intel and drag it to Applications, or install it with Homebrew as an alternative that builds on your Mac."
 sidebar:
   order: 1
 ---
 ## Download the DMG
 
-[Download the latest DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg), open it, drag Ferrocast to Applications and open it. The app is signed ad-hoc, not notarized, so macOS blocks the first launch of a browser download: open System Settings → Privacy & Security and choose “Open Anyway”. Every release, with a `SHA256SUMS.txt`, is on the [GitHub Releases page](https://github.com/drumst0ck/ferrocast/releases). Apple Silicon only.
+[Download the latest DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg), open it, drag Ferrocast to Applications and open it. The app is signed ad-hoc, not notarized, so macOS blocks the first launch of a browser download: open System Settings → Privacy & Security and choose “Open Anyway”. Every release, with a `SHA256SUMS.txt`, is on the [GitHub Releases page](https://github.com/drumst0ck/ferrocast/releases). Apple Silicon and Intel (universal; Intel not tested on real hardware).
 
 ## Alternative: install with Homebrew
 
@@ -42,7 +42,7 @@ The official Homebrew cask requires signed and notarized apps (a paid Apple Deve
 `brew uninstall ferrocast` removes the formula; delete the `/Applications/Ferrocast.app` symlink created above. Your data lives in `~/Library/Application Support/Ferrocast` (see [Data and privacy](/docs/reference/data-and-privacy/)); delete that folder yourself if you want it gone.
 
 :::caution[Limits]
-The DMG/zip runs on Apple Silicon. Intel Macs can install with Homebrew, which builds from source for that Mac; Intel is not tested. The DMG is not notarized.
+The DMG/zip runs on Apple Silicon and Intel Macs (one universal download; Intel is not tested on real hardware). Homebrew builds from source for your Mac's own architecture. The DMG is not notarized.
 :::
 
 ## Related

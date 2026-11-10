@@ -85,7 +85,7 @@ export const toolGuides: Record<string, ToolGuide> = {
       ['Does splitting a PDF upload it anywhere?', 'No. The split runs on your Mac and the pages are written to the folder the PDF is in.'],
       ['Does Split PDF need ffmpeg or Ghostscript?', 'No. Ghostscript is only used to compress PDFs and ffmpeg is for audio and video, so splitting a PDF needs neither.'],
       ['Can I choose which pages to extract?', 'Not with this tool, which writes every page. Use Organize PDF pages to save only the pages you list, in the order you list them.'],
-      ['Does it work on an Intel Mac?', 'No. Ferrocast runs on Apple Silicon Macs only.'],
+      ['Does it work on an Intel Mac?', 'Yes. The download runs on Apple Silicon and Intel Macs; Intel is not tested on real hardware.'],
     ],
     related: [
       ['Merge PDFs', '/tools/merge-pdf/'],
@@ -149,7 +149,7 @@ export const toolGuides: Record<string, ToolGuide> = {
       ['Are my images uploaded when I make the PDF?', 'No. Ferrocast builds the PDF on your Mac and writes it to the folder of the originals.'],
       ['Does it change or replace the original images?', 'No. The PDF is a new file next to the images, and Ferrocast never overwrites an existing file.'],
       ['Can I change the page order after the PDF is made?', 'Yes. Open the PDF in Organize PDF pages, move, rotate, duplicate or remove pages and save a new copy.'],
-      ['Is making a PDF from images free?', 'Yes. Ferrocast is free and open source (MIT) and runs on Apple Silicon Macs only.'],
+      ['Is making a PDF from images free?', 'Yes. Ferrocast is free and open source (MIT) and runs on Apple Silicon and Intel Macs.'],
     ],
     related: [
       ['Merge PDFs', '/tools/merge-pdf/'],
@@ -220,7 +220,7 @@ export const toolGuides: Record<string, ToolGuide> = {
       ['Is my image uploaded when I crop it?', 'No. The crop happens on your Mac and the copy is written to the original’s folder.'],
       ['Can I crop to a fixed aspect ratio?', 'Yes. Choose 1:1, 4:3, 3:2, 16:9 or 9:16, or use the width and height boxes for an exact size.'],
       ['Does cropping replace my original photo?', 'No. Press ↵ and Ferrocast writes a cropped copy; it never overwrites the original.'],
-      ['Will it run on an Intel Mac?', 'No. Ferrocast is for Apple Silicon Macs only.'],
+      ['Will it run on an Intel Mac?', 'Yes. The download runs on Apple Silicon and Intel Macs; Intel is not tested on real hardware.'],
     ],
     related: [
       ['Crop video', '/tools/crop-video/'],
@@ -555,7 +555,7 @@ export const toolGuides: Record<string, ToolGuide> = {
       ['Does Remove all metadata erase everything?', 'Not always. Remove all leaves some container tags, so look at the copy before you send it.'],
       ['Can I change the GPS location of a photo?', 'For JPEG, yes: type `gps 40.4,-3.7` in the Convert view. PNG tags are not supported.'],
       ['Does editing metadata overwrite my file?', 'No. Ferrocast writes a copy next to the original and never overwrites it.'],
-      ['Is my file uploaded?', 'No. Everything happens on your Mac, and Ferrocast runs on Apple Silicon only.'],
+      ['Is my file uploaded?', 'No. Everything happens on your Mac, and Ferrocast runs on Apple Silicon and Intel Macs.'],
     ],
     related: [
       ['Remove location and metadata on a Mac', '/remove-metadata-mac/'],
@@ -631,7 +631,7 @@ export const toolGuides: Record<string, ToolGuide> = {
       ['Is the saved photo full size?', 'Yes. The preview uses a reduced copy, but pressing ↵ writes the full-size copy.'],
       ['Will editing overwrite the original photo?', 'No. Ferrocast saves a copy next to the original and never overwrites it.'],
       ['Can I edit a photo without opening a window?', 'Yes. Use the typed `edit` command, or one of the four presets: black & white, brighter, darker, more contrast.'],
-      ['Are my photos uploaded?', 'No. Everything runs on your Mac, which must be an Apple Silicon Mac.'],
+      ['Are my photos uploaded?', 'No. Everything runs on your Mac, which can be an Apple Silicon or Intel Mac.'],
     ],
     related: [
       ['Crop image', '/tools/crop-image/'],
@@ -710,7 +710,7 @@ export const toolGuides: Record<string, ToolGuide> = {
       ['Can I use my own picture as the background?', 'Yes. Choose Image and press Choose image…, or type `frame image /path/bg.jpg` in the Convert view.'],
       ['Can I get a blurred background from the same photo?', 'Yes. Choose Blur in the editor, or type `frame blur 40` with the values you like.'],
       ['Does it overwrite the original image?', 'No. Ferrocast saves a full-size copy next to the original.'],
-      ['Is my image uploaded?', 'No. The background is composed on your Mac, and Ferrocast needs an Apple Silicon Mac.'],
+      ['Is my image uploaded?', 'No. The background is composed on your Mac, and Ferrocast runs on Apple Silicon and Intel Macs.'],
     ],
     related: [
       ['Crop image', '/tools/crop-image/'],

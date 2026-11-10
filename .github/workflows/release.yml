@@ -43,11 +43,12 @@ jobs:
         with:
           toolchain: "1.95.0"
           components: rustfmt, clippy
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
-      - run: bash scripts/tests/release_dry_run.sh
+      - run: bash scripts/tests/release_dry_run.sh && bash scripts/tests/bundle_arch.sh && bash scripts/tests/check_universal.sh
 
       # Optional signing. Secrets: APPLE_CERT_P12 (base64 of the Developer ID Application .p12),
       # APPLE_CERT_PASSWORD, APPLE_SIGN_IDENTITY ("Developer ID Application: Name (TEAMID)").
@@ -73,8 +74,13 @@ jobs:
           rm -f "$RUNNER_TEMP/cert.p12"
           echo "FERROCAST_SIGN_IDENTITY=$APPLE_SIGN_IDENTITY" >> "$GITHUB_ENV"
 
+      # One download for Apple Silicon and Intel: every Mach-O is cross-compiled for both, then lipo-merged.
       - name: Build bundle
+        env:
+          UNIVERSAL: "1"
         run: scripts/bundle.sh
+      - name: Every Mach-O in the bundle is arm64 + x86_64
+        run: scripts/check-universal.sh dist/Ferrocast.app
 
       # The signing keychain is only needed by bundle.sh: drop it right away, even if the build failed.
       - name: Remove the signing keychain

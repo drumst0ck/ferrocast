@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Changed
+- **Universal download**: the DMG/zip now runs natively on Apple Silicon and Intel Macs. The app and its helpers (screen capture, Apple translation, the notch player adapter) are built for both architectures, and the release fails if any of them lacks one. Intel is not tested on real hardware. Homebrew still builds for your Mac's own architecture. (docs: /docs/getting-started/install/) #install
+
 ## [0.7.0] - 2026-11-10
 
 ### Added

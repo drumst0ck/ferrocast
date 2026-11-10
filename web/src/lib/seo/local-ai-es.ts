@@ -20,7 +20,7 @@ export const page: GuideCopy = {
     'Ask AI en Ferrocast es un chat con respuestas en streaming y historial de conversaciones. De serie habla con **Ollama en tu propio Mac**, así que nada sale de él. Desde un menú del chat puedes cambiar a LM Studio, a cualquier servidor compatible con OpenAI, a la API de Anthropic con tu clave o a Claude Code con tu suscripción de Claude. Puedes usarlo con la interfaz en español.',
     'Ferrocast es gratis y de código abierto (MIT) y no hay un plan de IA que comprar. En Raycast la IA forma parte de los planes de pago y no está disponible en el plan Free ([raycast.com/pricing](https://www.raycast.com/pricing), comprobado el 28 de octubre de 2026). Escribo Ferrocast; no está afiliado a Raycast, Ollama ni LM Studio.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · sin cuenta' },
   limits: {
     h: 'Proveedores y adónde va tu texto',
     caption: 'Proveedores de IA que admite Ferrocast y si el texto sale del Mac',
@@ -61,7 +61,7 @@ export const page: GuideCopy = {
         'Iniciar sesión con ChatGPT es una zona gris de los términos de OpenAI; una clave de API es la vía reglamentaria.',
         'Las suscripciones de ChatGPT y de Claude no incluyen acceso a la API, por eso se ofrecen mediante el inicio de sesión y Claude Code.',
         'Los modelos locales necesitan la memoria y el espacio en disco que pidan Ollama o LM Studio.',
-        'Solo Mac con Apple Silicon.',
+        'Mac con Apple Silicon o Intel.',
       ],
     },
   ],

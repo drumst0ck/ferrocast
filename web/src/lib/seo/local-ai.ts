@@ -20,7 +20,7 @@ export const page: GuideCopy = {
     'Ask AI in Ferrocast is a streaming chat with conversation history. Out of the box it talks to **Ollama on your own Mac**, so nothing leaves it. You can switch to LM Studio, any OpenAI-compatible server, the Anthropic API with your key, or Claude Code with your Claude subscription, from a menu in the chat.',
     'Ferrocast is free and open source (MIT); there is no AI plan to buy. In Raycast, AI and bringing your own key are part of the paid plans ([raycast.com/pricing](https://www.raycast.com/pricing), checked 27 October 2026).',
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · no account' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · no account' },
   limits: {
     h: 'Providers, and where your text goes',
     caption: 'AI providers supported by Ferrocast and whether the text leaves the Mac',

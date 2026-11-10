@@ -30,7 +30,7 @@ export const page: GuideCopy = {
     `Ferrocast tiene ${COMMANDS.length} comandos que mueven y redimensionan la ventana de delante: mitades, tercios, cuartos, sextos, maximizar, centrar, desplazar y pasar a otra pantalla. Escribes su nombre en el lanzador o le asignas un atajo propio con ⇧⌘, sobre el comando. Es gratis y de código abierto (MIT). Puedes usarlo con la interfaz en español.`,
     `Puede que no necesites otra app: macOS ya tiene mosaico de ventanas con el botón verde, el menú Ventana y atajos con Fn-Control ([Apple](${TILING})). Rectangle y Magnet son gestores de ventanas dedicados. Ferrocast es para quien prefiere tenerlo dentro del lanzador. Escribo Ferrocast y no está afiliado a Apple, Rectangle ni Magnet.`,
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · sin cuenta' },
   limits: {
     h: 'Cuatro formas de organizar ventanas en un Mac',
     caption: 'Mosaico de macOS, Rectangle, Magnet y Ferrocast',
@@ -39,7 +39,7 @@ export const page: GuideCopy = {
       ['Cómo se usa', 'Botón verde, menú Ventana, atajos con Fn-Control', 'Atajos de teclado o zonas de anclaje al arrastrar', 'Arrastrar a los bordes, atajos personalizables o menú de la barra', 'Escribes el comando en el lanzador o le das un atajo'],
       ['Disposiciones', 'Mitades, cuartos, rellenar, centrar, volver al tamaño anterior y colocaciones de varias ventanas; los tercios y sextos no aparecen en su lista', 'No comparado aquí', 'Pantalla completa, mitades, cuartos y tercios; hasta seis pantallas externas', 'Mitades, tercios, cuartos, sextos, maximizar, centrar, desplazar y pantallas'],
       ['Precio', 'Incluido en macOS', 'Descarga gratis; Rectangle Pro es de pago, con 10 días de prueba', 'No consta en su web (se ofrece en la Mac App Store)', 'Gratis (MIT)'],
-      ['Requisitos', 'macOS', 'macOS 14 o posterior según su web', 'No consta en su web', 'Mac con Apple Silicon'],
+      ['Requisitos', 'macOS', 'macOS 14 o posterior según su web', 'No consta en su web', 'Mac con Apple Silicon o Intel'],
       ['Además', '—', 'Gestión de ventanas', 'Gestión de ventanas', 'Lanzador, portapapeles, snippets, conversión de archivos, grabación de pantalla, chat con IA'],
     ],
     note: `macOS: [guía de Apple](${TILING}). Rectangle: [rectangleapp.com](${RECT}). Magnet: [magnet.crowdcafe.com](${MAGNET}). Comprobado el 28 de octubre de 2026.`,
@@ -72,7 +72,7 @@ export const page: GuideCopy = {
       list: [
         'Necesita el permiso de Accesibilidad.',
         'Las ventanas se mueven con comandos, sin zonas de anclaje al arrastrarlas a un borde (macOS lo hace por su cuenta).',
-        'Solo Mac con Apple Silicon.',
+        'Mac con Apple Silicon o Intel.',
       ],
     },
   ],

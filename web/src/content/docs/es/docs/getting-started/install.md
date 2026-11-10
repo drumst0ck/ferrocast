@@ -1,12 +1,12 @@
 ---
 title: "Instalar Ferrocast"
-description: "Descarga el DMG de Ferrocast para Apple Silicon y arrástralo a Aplicaciones, o instálalo con Homebrew como alternativa que compila en tu Mac."
+description: "Descarga el DMG de Ferrocast para Apple Silicon o Intel y arrástralo a Aplicaciones, o instálalo con Homebrew como alternativa que compila en tu Mac."
 sidebar:
   order: 1
 ---
 ## Descargar el DMG
 
-[Descarga el último DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg), ábrelo, arrastra Ferrocast a Aplicaciones y ábrela. La app lleva firma ad-hoc y no está notarizada, así que macOS bloquea el primer arranque de una descarga del navegador: abre Ajustes del Sistema → Privacidad y seguridad y elige «Abrir igualmente». Todas las versiones, con un `SHA256SUMS.txt`, están en la [página de Releases de GitHub](https://github.com/drumst0ck/ferrocast/releases). Solo Apple Silicon.
+[Descarga el último DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg), ábrelo, arrastra Ferrocast a Aplicaciones y ábrela. La app lleva firma ad-hoc y no está notarizada, así que macOS bloquea el primer arranque de una descarga del navegador: abre Ajustes del Sistema → Privacidad y seguridad y elige «Abrir igualmente». Todas las versiones, con un `SHA256SUMS.txt`, están en la [página de Releases de GitHub](https://github.com/drumst0ck/ferrocast/releases). Apple Silicon e Intel (universal; Intel no probado en hardware real).
 
 ## Alternativa: instalar con Homebrew
 
@@ -41,7 +41,7 @@ El cask oficial de Homebrew exige apps firmadas y notarizadas (Apple Developer, 
 `brew uninstall ferrocast` elimina la fórmula; borra el enlace `/Applications/Ferrocast.app` creado arriba. Tus datos están en `~/Library/Application Support/Ferrocast`; bórralos tú si quieres eliminarlos.
 
 :::caution[Límites]
-El DMG/zip funciona en Apple Silicon. Los Mac Intel pueden instalar con Homebrew, que compila desde el código fuente para ese Mac; Intel no está probado. El DMG no está notarizado.
+El DMG/zip funciona en Macs Apple Silicon e Intel (una única descarga universal; Intel no está probado en hardware real). Homebrew compila desde el código fuente para la arquitectura de tu Mac. El DMG no está notarizado.
 :::
 
 ## Relacionado

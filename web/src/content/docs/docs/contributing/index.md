@@ -8,7 +8,7 @@ Ferrocast is an open Rust project. This page summarises `CONTRIBUTING.md`.
 
 ## Setup
 
-- macOS. The DMG/zip runs on Apple Silicon; Intel Macs can build from source (not tested). Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it).
+- macOS. The DMG/zip runs on Apple Silicon and Intel (universal; Intel not tested on real hardware), and source builds target your Mac's own architecture (`UNIVERSAL=1 scripts/bundle.sh` builds both). Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it).
 - `cargo test --workspace` must pass (about 70 tests). CI also runs `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings`.
 
 ## Layout

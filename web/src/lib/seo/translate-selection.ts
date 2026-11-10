@@ -34,7 +34,7 @@ export const en: GuideCopy = {
     'Select some text in any app, start dragging it, tap ⌘ and drop it on a language. Ferrocast sends the text to the AI provider you chose and puts the translation back where the text was: in text fields and in Safari and Chromium pages. Where it cannot replace the text, it shows the translation in a window and copies it. With Ollama or Apple’s on-device translation the text never leaves your Mac. Free and open source (MIT).',
     'macOS already translates text on its own: Control-click the selection, choose Translate, then Replace with Translation. Ferrocast is for when you want a different route: one drag gesture, your own model or provider, and replacement inside web pages. I make Ferrocast, so the table links Apple’s page.',
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · no account' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · no account' },
   limits: {
     h: 'Ferrocast and macOS Translate, side by side',
     caption: 'Translating selected text and replacing it on a Mac with Ferrocast and with Translate in macOS',
@@ -128,7 +128,7 @@ export const es: GuideCopy = {
     'Selecciona texto en cualquier app, empieza a arrastrarlo, toca ⌘ y suéltalo sobre un idioma. Ferrocast envía el texto al proveedor de IA que hayas elegido y deja la traducción donde estaba el texto: en campos de texto y en páginas de Safari y de navegadores Chromium. Si no puede reemplazarlo, muestra la traducción en una ventana y la copia. Con Ollama o con la traducción de Apple en el propio Mac, el texto no sale de él. Gratis y de código abierto (MIT). Puedes usarlo con la interfaz en español.',
     'macOS ya traduce texto por sí solo: haz clic con la tecla Control pulsada en la selección, elige Traducir y luego «Reemplazar por la traducción». Ferrocast sirve cuando quieres otro recorrido: un único gesto de arrastre, tu propio modelo o proveedor y el reemplazo dentro de páginas web. Escribo Ferrocast, así que la tabla enlaza la página de Apple.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · sin cuenta' },
   limits: {
     h: 'Ferrocast y Traducir de macOS, frente a frente',
     caption: 'Traducir el texto seleccionado y reemplazarlo en Mac con Ferrocast y con Traducir de macOS',

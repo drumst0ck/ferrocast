@@ -4,34 +4,69 @@
 #                            With a "Developer ID Application: …" identity the hardened runtime
 #                            and a secure timestamp are enabled, as notarization requires.
 #   FERROCAST_DIST           output directory; default dist/ in the repository.
+#   UNIVERSAL=1              build every Mach-O for arm64 and x86_64 (cross-compiled, lipo-merged) so one
+#                            bundle runs on Apple Silicon and Intel. Default off: host architecture only
+#                            (Homebrew source builds). Needs both rustup targets; release.yml sets it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 identity=${FERROCAST_SIGN_IDENTITY:--}
-cargo build --release --locked -p ferrocast
+# archs: the machine architectures every Mach-O is built for (host only unless UNIVERSAL=1)
+if [ "${UNIVERSAL:-0}" = "1" ]; then
+  archs=(arm64 x86_64)
+else
+  archs=("$(uname -m)")
+fi
+rust_triple() { case $1 in arm64 | aarch64) echo aarch64-apple-darwin ;; x86_64) echo x86_64-apple-darwin ;; *) echo "unsupported arch $1" >&2; return 1 ;; esac; }
+tmp_arch=$(mktemp -d)
+trap 'rm -rf "$tmp_arch"' EXIT
+# merge_arch <output> <per-arch file…>: copy a single file, lipo several into one fat file
+merge_arch() { local out=$1; shift; if [ $# -eq 1 ]; then cp "$1" "$out"; else lipo -create "$@" -output "$out"; fi; }
+if [ "${UNIVERSAL:-0}" = "1" ]; then
+  bins=()
+  for a in "${archs[@]}"; do
+    triple=$(rust_triple "$a")
+    cargo build --release --locked -p ferrocast --target "$triple"
+    bins+=("${CARGO_TARGET_DIR:-$PWD/target}/$triple/release/ferrocast")
+  done
+  bin_src="$tmp_arch/ferrocast"
+  merge_arch "$bin_src" "${bins[@]}"
+else
+  cargo build --release --locked -p ferrocast
+  bin_src="${CARGO_TARGET_DIR:-$PWD/target}/release/ferrocast"
+fi
 dist=${FERROCAST_DIST:-$PWD/dist}
 app="$dist/Ferrocast.app"
-bin_src="${CARGO_TARGET_DIR:-$PWD/target}/release/ferrocast"
 helper_built=()
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_src" "$app/Contents/MacOS/ferrocast"
 chmod 755 "$app/Contents/MacOS/ferrocast"
+# swiftc_archs <output> <swiftc args…>: swiftc for each arch in archs (macOS 13 minimum), lipo-merged.
+swiftc_archs() {
+  local out=$1 a parts=(); shift
+  for a in "${archs[@]}"; do
+    xcrun swiftc -target "$a-apple-macos13.0" "$@" -o "$tmp_arch/$(basename "$out").$a"
+    parts+=("$tmp_arch/$(basename "$out").$a")
+  done
+  merge_arch "$out" "${parts[@]}"
+}
+
 # Apple Translation helper (Swift; the Translation framework needs the macOS 26 SDK). With an older
 # SDK it is skipped and the app hides the Apple engine, so every build still works.
 helper="$app/Contents/MacOS/ferrocast-translate"
 sdk_major=$(xcrun --show-sdk-version 2>/dev/null | cut -d. -f1 || true)
 if [ "${sdk_major:-0}" -ge 26 ] 2>/dev/null; then
-  xcrun swiftc -O -target "$(uname -m)-apple-macos13.0" -parse-as-library \
+  swiftc_archs "$helper" -O -parse-as-library \
     -Xlinker -weak_framework -Xlinker Translation \
-    crates/macos/swift/translate/main.swift -o "$helper"
+    crates/macos/swift/translate/main.swift
   chmod 755 "$helper"
 else
   echo "NOTE: macOS SDK ${sdk_major:-unknown} has no Translation framework; the Apple translation engine will be hidden."
 fi
 
 # build_swift_helper <name> <src_dir> [weak framework…]
-# Compiles every .swift file in <src_dir> to Contents/MacOS/<name> for the host arch, macOS 13 minimum,
+# Compiles every .swift file in <src_dir> to Contents/MacOS/<name> for every arch in archs, macOS 13 minimum,
 # linking the listed frameworks weakly so the helper still launches on older systems. Skips with a
 # NOTE (never a failure) when swiftc is missing. Signing happens later, with the app's flags.
 # Records built helpers in helper_built so one signing loop covers every helper.
@@ -45,7 +80,7 @@ build_swift_helper() {
   [ -e "${files[0]}" ] || { echo "NOTE: no Swift sources in $src; $name is not built"; return 0; }
   local weak=() fw
   for fw in "$@"; do weak+=(-Xlinker -weak_framework -Xlinker "$fw"); done
-  swiftc -O -target "$(uname -m)-apple-macos13.0" "${weak[@]}" "${files[@]}" -o "$app/Contents/MacOS/$name"
+  swiftc_archs "$app/Contents/MacOS/$name" -O ${weak[@]+"${weak[@]}"} "${files[@]}"
   chmod 755 "$app/Contents/MacOS/$name"
   helper_built+=("$name")
 }
@@ -53,7 +88,7 @@ build_swift_helper() {
 build_swift_helper ferrocast-capture crates/macos/swift/capture ScreenCaptureKit
 
 # MediaRemoteAdapter.framework (third_party/mediaremote-adapter, BSD-3) for the notch player: compiled
-# with clang for the arch of the Ferrocast binary (cargo builds the host arch), no cmake. It is
+# with clang for the archs of the Ferrocast binary (one -arch flag per entry in archs), no cmake. It is
 # bundled but never linked: Ferrocast runs /usr/bin/perl, which loads it. A copy is left in
 # target/mediaremote-adapter for `cargo run` (the app looks there when it is not in a bundle).
 mra_src=third_party/mediaremote-adapter
@@ -62,7 +97,9 @@ mra_fw="$mra_out/MediaRemoteAdapter.framework"
 mkdir -p "$mra_out"
 find "$mra_fw" -mindepth 1 -delete 2>/dev/null || true
 mkdir -p "$mra_fw/Versions/A/Resources"
-xcrun clang -dynamiclib -arch "$(uname -m)" -mmacosx-version-min=13.0 -fobjc-arc -fvisibility=default -O2 \
+clang_arch=()
+for a in "${archs[@]}"; do clang_arch+=(-arch "$a"); done
+xcrun clang -dynamiclib "${clang_arch[@]}" -mmacosx-version-min=13.0 -fobjc-arc -fvisibility=default -O2 \
   -I "$mra_src/include" -I "$mra_src/src" \
   -install_name @rpath/MediaRemoteAdapter.framework/Versions/A/MediaRemoteAdapter \
   -framework Foundation -framework AppKit -weak_framework UniformTypeIdentifiers \
@@ -120,6 +157,7 @@ else
   # instead so builds of this app share one requirement.
   flags+=(--requirements '=designated => identifier "dev.ferrocast.launcher"')
 fi
+# Signing happens after every lipo above: signing a thin slice and merging afterwards would void it.
 # the helper is signed first: the app's seal covers it, and notarization wants every binary signed
 if [ -x "$helper" ]; then
   helper_flags=(--force --sign "$identity" -i dev.ferrocast.launcher.translate)

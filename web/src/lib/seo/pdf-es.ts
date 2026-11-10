@@ -32,7 +32,7 @@ export const page: GuideCopy = {
     'Vista Previa, que ya viene con el Mac, une, reordena y borra páginas de un PDF. Ferrocast hace lo mismo en local con otro recorrido. Arrastras los PDF, tocas ⌘ y los sueltas sobre Merge PDF. Una ventana te deja elegir el orden y un organizador con miniaturas (⇧⌘O) reordena las páginas. Siempre se guarda una copia nueva junto al original. No se sube nada. Es gratis y de código abierto (MIT). Puedes usarlo con la interfaz en español.',
     'Dos límites desde el principio: Ferrocast separa un PDF solo en una página por archivo (no por intervalos) y comprimir necesita Ghostscript, que no viene con el Mac. Escribo Ferrocast; no está afiliado a Apple.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · sin cuenta' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · sin cuenta' },
   limits: {
     h: 'Ferrocast y Vista Previa, tarea por tarea',
     caption: 'Unir, separar, reordenar y comprimir PDF en Mac con Ferrocast y con Vista Previa',

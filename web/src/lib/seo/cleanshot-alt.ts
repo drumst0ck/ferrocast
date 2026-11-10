@@ -25,7 +25,7 @@ export const page: GuideCopy = {
     'Ferrocast is a free, open-source Mac launcher that also takes screenshots, including scrolling captures, copies the text in a capture on your Mac, pins captures above your windows, annotates them and records your screen with automatic zoom. It has no cloud upload, no share links and no capture history, and screen capture needs macOS 14.',
     'CleanShot X is a polished paid app and this page does not claim to replace everything it does. According to its site (28 October 2026) CleanShot Basic is $35 once, with one year of updates, and Pro is $10 per user per month billed annually. I build Ferrocast; it is independent and not affiliated with CleanShot X.',
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · capture needs macOS 14' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · capture needs macOS 14' },
   limits: {
     h: 'What you get, feature by feature',
     caption: 'Ferrocast and CleanShot X compared feature by feature',
@@ -41,7 +41,7 @@ export const page: GuideCopy = {
       ['Screen recording', 'MP4 or GIF, auto zoom on clicks, camera, microphone and system audio, on-device transcript', 'MP4 or GIF, clicks, keystrokes, camera; editor with smart zooms'],
       ['Cloud and share links', 'No', 'Yes (1 GB on Basic, unlimited on Pro)'],
       ['Capture history', 'Not documented; captures are PNG files in a folder', 'Up to 1 month'],
-      ['macOS', 'Capture needs macOS 14; Apple Silicon only', 'macOS 13 or newer'],
+      ['macOS', 'Capture needs macOS 14', 'macOS 13 or newer'],
     ],
     note: `Ferrocast: [screen capture docs](/docs/launcher/screen-capture/) and [Annotate docs](/docs/files/tools/annotate/). CleanShot X: [${PRICING.replace('https://', '')}](${PRICING}) and [${FEATURES.replace('https://', '')}](${FEATURES}). Checked on 28 October 2026.`,
   },
@@ -103,7 +103,7 @@ export const page: GuideCopy = {
       ['Can I take a scrolling screenshot for free?', 'Yes. Capture Scrolling in Ferrocast scrolls the area you choose and joins the strips into one image, stopping when the content stops moving or after 60 screens. It is vertical only and needs the Accessibility permission.'],
       ['Can I pin a screenshot above other windows?', 'Yes. Pin (⌘P) opens the capture in a borderless always-on-top window that you can zoom from 25 % to 400 %; you can have several at once and Esc closes one.'],
       ['Can I record the screen with automatic zoom?', 'Yes. Ferrocast zooms toward your clicks, starting 0.4 seconds before the first click of a group, and exports MP4 or GIF. It is free.'],
-      ['Which macOS and Macs does it need?', 'Screen capture needs macOS 14 or later and an Apple Silicon Mac; Intel Macs are not supported. CleanShot X lists macOS 13 or newer on its pricing page.'],
+      ['Which macOS and Macs does it need?', 'Screen capture needs macOS 14 or later; it runs on Apple Silicon and Intel Macs. CleanShot X lists macOS 13 or newer on its pricing page.'],
     ],
   },
   more: {

@@ -50,7 +50,7 @@ export const page: GuideCopy = {
     `Ferrocast convierte archivos en tu Mac: arrastras, pulsas ⇧ y sueltas sobre un formato. Son ${c.pairs} conversiones entre ${c.inputs} formatos de entrada, y ${c.tools} herramientas (comprimir, recortar, tapar zonas, unir PDF). El resultado se guarda junto al original. Es gratis, de código abierto (MIT) y no pide cuenta. Puedes usarlo con la interfaz en español.`,
     'Permute es un convertidor de pago para Mac, con narración, OCR y transcripción. CloudConvert es una web, con un plan gratis diario. La tabla dice lo que publica cada web, con la fecha en que lo leí.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · macOS 13 o posterior · sin cuenta' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · macOS 13 o posterior · sin cuenta' },
   limits: {
     h: 'Ferrocast, Permute y CloudConvert: qué dice cada web',
     caption: 'Ferrocast, Permute 4 y CloudConvert, con datos de sus webs el 28 de octubre de 2026',
@@ -83,7 +83,7 @@ export const page: GuideCopy = {
       ],
       [
         'Requisitos',
-        'Apple Silicon, macOS 13 o posterior',
+        'Apple Silicon e Intel, macOS 13 o posterior',
         'Permute 4: macOS 26 y Apple Silicon. Permute 3: macOS 11–15 o un Mac Intel, licencia permanente, con paso gratis a Permute 4',
         'Un navegador',
       ],
@@ -141,14 +141,14 @@ export const page: GuideCopy = {
     {
       h: 'En qué es mejor Permute (y cuándo usar CloudConvert)',
       paras: [
-        'Permute, según su web, añade narración de texto a voz, OCR de una imagen a texto y transcripción de audio a texto o a SRT, hechas en el Mac. También exporta páginas de PDF como imágenes. Permute 3 funciona en un Mac Intel o en macOS 11 a 15. Ferrocast no hace narración, ni OCR, ni transcripción, y solo funciona en Apple Silicon. Si necesitas alguna de esas tres, yo usaría Permute.',
+        'Permute, según su web, añade narración de texto a voz, OCR de una imagen a texto y transcripción de audio a texto o a SRT, hechas en el Mac. También exporta páginas de PDF como imágenes. Permute 3 funciona en un Mac Intel o en macOS 11 a 15. Ferrocast no hace narración, ni OCR, ni transcripción, y funciona en Apple Silicon e Intel. Si necesitas alguna de esas tres, yo usaría Permute.',
         'CloudConvert no se instala y sirve en cualquier ordenador. El plan gratis son 10 conversiones al día, con archivos de hasta 1 GB y 5 minutos de proceso. Si el archivo no puede salir de tu Mac, no te sirve: el archivo se sube a su servicio. Si solo quieres convertir una vez y el archivo no es privado, puede bastar.',
       ],
     },
     {
       h: 'Requisitos y seguridad',
       paras: [
-        'Apple Silicon y macOS 13 o posterior. No funciona en un Mac Intel. Unos 8,5 MB en disco, medidos en el Mac del autor; el método está en [Datos clave](/es/facts/). Licencia MIT, sin cuenta.',
+        'Apple Silicon o Intel y macOS 13 o posterior (Intel no está probado en hardware real). Licencia MIT, sin cuenta.',
         'La instalación, con DMG o Homebrew, está en la [guía de instalación](/es/docs/getting-started/install/).',
       ],
     },
@@ -166,7 +166,7 @@ export const page: GuideCopy = {
       ],
       [
         '¿En qué es mejor Permute?',
-        'Según su web, Permute añade narración de texto a voz, OCR y transcripción a SRT, y Permute 3 funciona en Mac con Intel. Ferrocast solo funciona en Apple Silicon.',
+        'Según su web, Permute añade narración de texto a voz, OCR y transcripción a SRT, y Permute 3 funciona en Mac con Intel. Ferrocast funciona en Apple Silicon e Intel.',
       ],
       ['¿Puedo convertir varios archivos a la vez?', 'Sí. Arrastra o selecciona varios y suéltalos sobre un formato. Cada archivo se convierte junto a su original.'],
       ['¿Sobrescribe el original?', 'No. El resultado se guarda junto al original y nunca lo sobrescribe.'],

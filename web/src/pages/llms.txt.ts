@@ -16,7 +16,7 @@ export async function GET() {
   const lines = [
     '# Ferrocast',
     '',
-    '> Fast, open-source launcher for macOS (Rust, MIT). Search, calculate, clipboard, snippets, Ask AI (Ollama by default), Raycast-compatible Script Commands, partial support for Raycast extensions you already installed (off by default, no store of its own), opt-in iCloud Drive sync (off by default), ~40 window commands, optional window tiling, screen recording with auto zoom, floating Markdown notes with images, custom themes, and an interface in English, Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese (follows macOS, or Settings → General → Language; per Mac, not synced). Local file work: {pairs} conversions across {inputs} input formats and {tools} file tools. Apple Silicon only; no Ferrocast account.'.replace(
+    '> Fast, open-source launcher for macOS (Rust, MIT). Search, calculate, clipboard, snippets, Ask AI (Ollama by default), Raycast-compatible Script Commands, partial support for Raycast extensions you already installed (off by default, no store of its own), opt-in iCloud Drive sync (off by default), ~40 window commands, optional window tiling, screen recording with auto zoom, floating Markdown notes with images, custom themes, and an interface in English, Spanish, German, French, Brazilian Portuguese, Japanese and Simplified Chinese (follows macOS, or Settings → General → Language; per Mac, not synced). Local file work: {pairs} conversions across {inputs} input formats and {tools} file tools. Apple Silicon and Intel (universal download; Intel not tested on real hardware); no Ferrocast account.'.replace(
       '{pairs}',
       String(pairs),
     ).replace('{inputs}', String(inputs)).replace('{tools}', String(tools)),

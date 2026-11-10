@@ -17,8 +17,8 @@ Fast, open-source launcher for macOS, written in Rust. Search, calculate, paste 
 | | |
 | --- | --- |
 | **Licence** | [MIT](LICENSE) |
-| **Platform** | DMG/zip: Apple Silicon. Intel: Homebrew source build (not tested) |
-| **Size** | About 8.5 MB on disk, one process ([measured method](https://ferrocast.app/#bench)) |
+| **Platform** | DMG/zip: Apple Silicon and Intel (Intel not tested on real hardware) |
+| **Footprint** | One process at idle ([measured method](https://ferrocast.app/#bench)) |
 | **Account** | None; no subscription tier |
 | **File conversion** | 275 pairs across 46 input formats, 26 tools, 7 actions — all local |
 | **Launcher** | Search, calculator, clipboard, snippets, quicklinks, ~40 window commands, Raycast-compatible Script Commands |
@@ -43,7 +43,7 @@ brew upgrade ferrocast                      # to update
 
 **Why a formula and not a cask.** Homebrew's official cask requires signed, notarized apps (a paid Apple Developer account). Building from source on your own Mac means the app carries no quarantine flag and Gatekeeper does not step in. It needs no paid account and bypasses no protection. The first install takes a few minutes because it compiles, and the signature is ad-hoc, for local use.
 
-Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not added. The formula lives in [drumst0ck/homebrew-ferrocast](https://github.com/drumst0ck/homebrew-ferrocast) and follows each stable release automatically. The DMG/zip runs on Apple Silicon. Intel Macs can install with Homebrew, which builds from source for that Mac; Intel is not tested. More in the [install guide](https://ferrocast.app/docs/getting-started/install/).
+Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not added. The formula lives in [drumst0ck/homebrew-ferrocast](https://github.com/drumst0ck/homebrew-ferrocast) and follows each stable release automatically. The DMG/zip runs on Apple Silicon and Intel Macs (one universal download; Intel is not tested on real hardware). Homebrew builds from source for your Mac's own architecture. More in the [install guide](https://ferrocast.app/docs/getting-started/install/).
 
 ## What it does
 

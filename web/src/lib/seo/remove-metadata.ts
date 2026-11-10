@@ -37,7 +37,7 @@ export const en: GuideCopy = {
     'Ferrocast strips metadata on your Mac and saves a copy next to the original. In a JPEG it drops the EXIF block (where GPS and camera tags live), XMP, IPTC and comments and copies the image data unchanged, so there is no recompression. In a PNG it drops the text and EXIF chunks. With ffmpeg installed it removes tags and chapters from video, audio and GIF without re-encoding, and it clears the document properties of a PDF. Nothing is uploaded.',
     'It is not a forensic scrubber. HEIC, WebP and TIFF photos are not handled directly, and “Remove all” leaves some container tags; the table and the limits below say what. Ferrocast is free and open source (MIT). I make it, so every Apple row links to Apple’s own page.',
   ],
-  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon · ffmpeg only for video, audio and GIF' },
+  cta: { dmg: 'Download Ferrocast', note: 'Free · MIT · Apple Silicon and Intel · ffmpeg only for video, audio and GIF' },
   limits: {
     h: 'Ferrocast, Photos and Preview for removing metadata',
     caption: 'Removing location and metadata on a Mac with Ferrocast, Photos and Preview compared',
@@ -130,7 +130,7 @@ export const es: GuideCopy = {
     'Ferrocast quita los metadatos en tu Mac y guarda una copia junto al original. En un JPEG elimina el bloque EXIF (donde viven el GPS y los datos de la cámara), XMP, IPTC y los comentarios, y copia los datos de la imagen sin tocarlos, así que no hay recompresión. En un PNG elimina los fragmentos de texto y EXIF. Con ffmpeg instalado quita etiquetas y capítulos de vídeo, audio y GIF sin recodificar, y vacía las propiedades de un PDF. No se sube nada. Puedes usarlo con la interfaz en español.',
     'No es un limpiador forense. Las fotos HEIC, WebP y TIFF no se tratan directamente y «Remove all» deja algunas etiquetas del contenedor; la tabla y los límites de abajo dicen cuáles. Ferrocast es gratis y de código abierto (MIT). Lo escribo yo, por eso cada fila de Apple enlaza a la página de Apple.',
   ],
-  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon · ffmpeg solo para vídeo, audio y GIF' },
+  cta: { dmg: 'Descargar Ferrocast', note: 'Gratis · MIT · Apple Silicon e Intel · ffmpeg solo para vídeo, audio y GIF' },
   limits: {
     h: 'Ferrocast, Fotos y Vista Previa para quitar metadatos',
     caption: 'Quitar ubicación y metadatos en Mac con Ferrocast, Fotos y Vista Previa',
