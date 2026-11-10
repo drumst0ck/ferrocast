@@ -287,6 +287,7 @@ impl Effects {
             np_command: |c| FX_LOG.with(|l| l.borrow_mut().push(format!("np cmd {c:?}"))),
             np_seek: |s| FX_LOG.with(|l| l.borrow_mut().push(format!("np seek {s}"))),
             np_open: |id| FX_LOG.with(|l| l.borrow_mut().push(format!("np open {id}"))),
+            paste_background: |_app, text, type_it| FX_LOG.with(|l| l.borrow_mut().push(format!("bg paste {text} typed={type_it}"))),
             exit: |code| FX_LOG.with(|l| l.borrow_mut().push(format!("exit {code}"))),
             relaunch: |p| FX_LOG.with(|l| l.borrow_mut().push(format!("relaunch {}", p.display()))),
         }
@@ -16858,9 +16859,65 @@ fn a_background_command_cannot_start_a_command_that_takes_the_screen() {
 }
 
 #[test]
+fn quitting_and_turning_extensions_off_stop_the_background_commands_too() {
+    let mut app = app_with_view_and_background();
+    app.ext.test_install_bg_session(12, Duration::ZERO);
+    app.exit_now(None);
+    assert!(!app.ext.test_has_bg(9) && !app.ext.test_has_bg(12), "process::exit skips destructors: quit stops them by hand");
+    let mut app = app_with_view_and_background();
+    app.ext_settings_changed();
+    assert!(!app.ext.test_has_bg(9), "turning extensions off stops the background commands");
+}
+
+#[test]
+fn a_view_command_cannot_run_in_the_background_and_the_cap_is_checked_before_anything_starts() {
+    let mut app = fixture();
+    app.ext.test_set_manifests(vec![ext_manifest(
+        r#"{"name":"e","title":"Ext","commands":[{"name":"v","mode":"view"},{"name":"n","mode":"no-view"}]}"#,
+    )]);
+    let bg = || ext_glue::LaunchExtras { background: true, ..Default::default() };
+    let e = app.ext_launch_as("e", "v", Default::default(), bg()).unwrap_err();
+    assert!(e.contains("has a view and cannot run in the background"), "{e}");
+    for id in 20..24 {
+        app.ext.test_install_bg_session(id, Duration::ZERO);
+    }
+    let e = app.ext_launch_as("e", "n", Default::default(), bg()).unwrap_err();
+    assert!(e.contains("too many background commands"), "the cap comes before Node is even looked for: {e}");
+}
+
+#[test]
+fn a_background_command_that_dies_tells_the_user_and_cannot_ask_for_a_dialog() {
+    let mut app = app_with_view_and_background();
+    app.ext_event(9, ferrocast_core::extensions::sidecar::Event::Closed);
+    assert!(!app.ext.test_has_bg(9));
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("stopped")), "a crash is reported");
+    app.ext.test_install_bg_session(13, Duration::ZERO);
+    let r = app.ext_call("e", 13, 1, "alert.confirm", &serde_json::json!({"title":"t","primary":"OK"}));
+    assert!(is_err_containing(&r, "background"), "no dialog from the background");
+    let r = app.ext_call("e", 1, 2, "alert.confirm", &serde_json::json!({"title":"t","primary":"OK"}));
+    assert!(!is_err_containing(&r, "background"), "the user's own command still can");
+}
+
+#[test]
+fn a_background_paste_never_hides_the_launcher_or_resets_the_users_screen() {
+    let mut app = app_with_view_and_background();
+    fx_taken();
+    let r = app.ext_call("e", 9, 1, "clipboard.paste", &serde_json::json!({"text":"hi"}));
+    assert!(is_err_containing(&r, "not pasted"), "the launcher is open: copied only");
+    assert_eq!(fx_taken(), vec!["bg paste hi typed=false".to_string()]);
+    assert!(app.visible && app.stack.len() == 2 && app.ext.test_has_session());
+    app.visible = false;
+    let r = app.ext_call("e", 9, 2, "clipboard.paste", &serde_json::json!({"text":"yo"}));
+    assert!(matches!(r, ext_glue::Reply::Now(Ok(_))));
+    assert_eq!(fx_taken(), vec!["bg paste yo typed=true".to_string()]);
+    assert_eq!(app.stack.len(), 2, "no reset_to_root: the user's open command stays");
+    assert!(app.ext.test_has_session());
+}
+
+#[test]
 fn launch_command_validates_type_and_context_before_starting_anything() {
     let mut app = fixture();
-    app.ext.test_set_manifests(vec![ext_manifest(r#"{"name":"e","commands":[{"name":"x","mode":"view"}]}"#)]);
+    app.ext.test_set_manifests(vec![ext_manifest(r#"{"name":"e","commands":[{"name":"x","mode":"view"},{"name":"n","mode":"no-view"}]}"#)]);
     app.ext.test_install_session(1, true, Duration::ZERO);
     let r = app.ext_call("e", 1, 1, "launchCommand", &serde_json::json!({"name":"x","type":"later"}));
     assert!(is_err_containing(&r, "invalid type"));
@@ -16868,7 +16925,7 @@ fn launch_command_validates_type_and_context_before_starting_anything() {
     assert!(is_err_containing(&r, "context must be an object"));
     let r = app.ext_call("e", 1, 3, "launchCommand", &serde_json::json!({"name":"nope"}));
     assert!(is_err_containing(&r, "has no command nope"), "an unknown command is rejected");
-    let r = app.ext_call("e", 1, 4, "launchCommand", &serde_json::json!({"name":"x","type":"background","context":{"a":1}}));
+    let r = app.ext_call("e", 1, 4, "launchCommand", &serde_json::json!({"name":"n","type":"background","context":{"a":1}}));
     assert!(is_err_containing(&r, "Node.js"), "a valid background launch reaches the start checks");
     assert!(app.ext.test_has_session(), "a refused launch leaves the running command");
 }

@@ -2057,3 +2057,5 @@ AirDrop cannot share these items	AirDrop no puede compartir estos elementos	AirD
 {n} sec	{n} s	{n} Sek.	{n} s	{n} s	{n}秒	{n} 秒
 Time in {city}	Hora en {city}	Uhrzeit in {city}	Heure à {city}	Hora em {city}	{city}の時刻	{city}的时间
 Pomodoro	Pomodoro	Pomodoro	Pomodoro	Pomodoro	ポモドーロ	番茄钟
+{title} has a view and cannot run in the background	{title} tiene una vista y no puede ejecutarse en segundo plano	{title} hat eine Ansicht und kann nicht im Hintergrund laufen	{title} a une vue et ne peut pas s’exécuter en arrière-plan	{title} tem uma vista e não pode ser executado em segundo plano	{title}にはビューがあるため、バックグラウンドでは実行できません	{title} 有界面,无法在后台运行
+too many background commands are running, try again in a moment	demasiados comandos en segundo plano en ejecución, inténtalo de nuevo en un momento	Zu viele Hintergrundbefehle laufen, versuche es gleich noch einmal	trop de commandes en arrière-plan en cours, réessayez dans un instant	muitos comandos em segundo plano em execução, tente novamente em instantes	バックグラウンドで実行中のコマンドが多すぎます。しばらくしてからもう一度お試しください	正在运行的后台命令过多,请稍后再试

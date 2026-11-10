@@ -70,6 +70,9 @@ struct Session {
 /// Why a launch did not happen (`NO_NODE` also sends the user to Settings).
 const NO_NODE: &str = "Node.js 22 or newer is needed: install it or download it in Settings → Integrations";
 
+// The `launchCommand:` errors the runtime and host return to the extension stay English on
+// purpose: like Raycast's, they are for the extension's developer, not shown to the user.
+
 /// What a `launchCommand` request adds to a plain launch.
 #[derive(Debug, Default)]
 pub(crate) struct LaunchExtras {
@@ -295,6 +298,13 @@ pub(crate) struct PrefsEdit {
 }
 
 impl ExtState {
+    /// Stop every background command (dropping a session stops its process group and reaps it).
+    pub(crate) fn stop_background(&mut self) {
+        for s in self.bg.drain(..) {
+            s.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
     /// The running command with this session id, whether it is the user's or a background one.
     fn session_mut(&mut self, id: u64) -> Option<&mut Session> {
         self.sess.as_mut().filter(|s| s.id == id).or_else(|| self.bg.iter_mut().find(|s| s.id == id))
@@ -423,6 +433,7 @@ impl App {
     /// The toggle changed.
     pub(crate) fn ext_settings_changed(&mut self) {
         self.ext_kill();
+        self.ext.stop_background();
         self.ext.loaded = false;
         self.ext.manifests.clear();
         self.rebuild();
@@ -560,6 +571,12 @@ impl App {
             .find(|c| c.name == cmd)
             .cloned()
             .ok_or_else(|| trf("{title} has no command {cmd}", &[("title", &m.title), ("cmd", cmd)]))?;
+        if background && c.mode == Mode::View {
+            return Err(trf("{title} has a view and cannot run in the background", &[("title", &c.title)]));
+        }
+        if background && self.ext.bg.len() >= MAX_BACKGROUND {
+            return Err(tr("too many background commands are running, try again in a moment").into_owned());
+        }
         let node = self.ext.node.clone().ok_or_else(no_node)?;
         let entry = m.entry(&c).map_err(|e| format!("{}: {e}", m.title))?;
         if !entry.is_file() {
@@ -671,9 +688,6 @@ impl App {
     /// it never hides the launcher or replaces the running command, and `ext_tick` stops it after
     /// [`NO_VIEW_LIMIT`]. Its HUD / toasts are still shown and its failures reported.
     fn ext_launch_background(&mut self, s: Session) -> Result<(), String> {
-        if self.ext.bg.len() >= MAX_BACKGROUND {
-            return Err("too many background commands are running, try again in a moment".into());
-        }
         self.ext_log(&format!("started {} in the background (session {})", s.ext, s.id));
         self.ext.bg.push(s);
         Ok(())
@@ -699,8 +713,16 @@ impl App {
                 self.toast(trf("{name} sent a message that was too large and was stopped", &[("name", &name)]));
             }
             Event::Closed => {
+                // a finished command sent `Exit` first and is already gone: this one died
                 self.ext_log(&format!("{name}: background process ended"));
-                self.ext_bg_end(id);
+                if let Some(s) = self.ext_bg_end(id) {
+                    let text = trf("{title} stopped", &[("title", &s.title)]);
+                    if self.visible {
+                        self.toast(text);
+                    } else {
+                        notify_ext(&text);
+                    }
+                }
             }
             Event::Reply { call, result } => self.ext_answer(id, call, result),
             Event::Msg(m) => match m {
@@ -1028,6 +1050,9 @@ impl App {
                     Reply::Now(Ok(v))
                 }
             },
+            "alert.confirm" if self.ext.bg.iter().any(|s| s.id == session) => {
+                Reply::Now(Err("not available from a background command: it has no window to ask in".into()))
+            }
             "alert.confirm" => match hostcalls::confirm_script(params) {
                 Err(e) => Reply::Now(Err(e)),
                 Ok((script, primary)) => self.ext_later(session, call, move |cancel| {
@@ -1035,6 +1060,7 @@ impl App {
                     Ok(Value::Bool(hostcalls::parse_confirm(r, &primary)))
                 }),
             },
+            "clipboard.paste" if self.ext.bg.iter().any(|s| s.id == session) => Reply::Now(self.ext_bg_paste(params)),
             "launchCommand" => {
                 let owners: Vec<String> = self
                     .ext
@@ -1072,6 +1098,20 @@ impl App {
                 }
             }
             _ => Reply::Now(self.ext_call_simple(method, params)),
+        }
+    }
+
+    /// `Clipboard.paste` from a background command: the user's screen is not touched (no hide, no
+    /// reset to the root). With the launcher hidden the text goes to the frontmost app with ⌘V; with
+    /// it visible the text is only copied, and the command is told it was not pasted.
+    fn ext_bg_paste(&mut self, params: &Value) -> Result<Value, String> {
+        let text = params.get("text").and_then(Value::as_str).unwrap_or("");
+        let type_it = !self.visible;
+        (self.fx.paste_background)(self, text, type_it);
+        if type_it {
+            Ok(Value::Null)
+        } else {
+            Err("not pasted: the launcher is open, the text was copied to the clipboard".into())
         }
     }
 

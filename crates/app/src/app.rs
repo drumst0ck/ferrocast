@@ -3318,6 +3318,7 @@ impl App {
         }
         // process::exit skips destructors: stop the extension sidecar (and its children) by hand
         self.ext_kill();
+        self.ext.stop_background();
         // the now-playing helper too: dropping the poller kills it
         self.np_poller = None;
         (self.fx.exit)(0)
@@ -8385,6 +8386,9 @@ pub(crate) struct Effects {
     pub(crate) np_seek: fn(f64),
     /// Bring the app with this bundle id forward, without blocking the UI thread.
     pub(crate) np_open: fn(String),
+    /// `Clipboard.paste` of a background command: copy `text`, and type ⌘V into the frontmost app when
+    /// asked (real); never hides the launcher.
+    pub(crate) paste_background: fn(&mut App, &str, bool),
     /// End the process (real: `process::exit`, which skips destructors).
     pub(crate) exit: fn(i32),
     /// Start the relaunch of the updated bundle at this path (it waits for this process to exit).
@@ -8464,6 +8468,16 @@ impl Effects {
                 std::thread::spawn(move || {
                     ferrocast_macos::nowplaying::open_app(&id);
                 });
+            },
+            paste_background: |app, text, type_it| {
+                clipboard::write_text(text);
+                app.shared.mark_clipboard_write();
+                if type_it {
+                    std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_millis(60));
+                        keyboard::paste();
+                    });
+                }
             },
             exit: |code| std::process::exit(code),
             relaunch: |path| {
