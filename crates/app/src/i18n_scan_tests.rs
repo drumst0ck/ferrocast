@@ -501,65 +501,11 @@ fn egui_text_literals_go_through_tr_not_only_the_table() {
     assert!(found.is_empty(), "{} literals shown without tr()/trf():\n{}", found.len(), found.into_iter().collect::<Vec<_>>().join("\n"));
 }
 
-/// English sentences that reach the user as they are and are known not to be translated yet (outside
-/// the round-5 i18n group). The test below fails when a new one appears and when one of these is fixed,
-/// so the list only shrinks: translate the text (`tr`/`trf` at the place it is built, a row in
+/// English sentences that reach the user as they are and are known not to be translated yet. Empty
+/// since owner-decisions-1 S13. The test below fails when a new one appears and when one of these is
+/// fixed, so the list only shrinks: translate the text (`tr`/`trf` at the place it is built, a row in
 /// `strings.tsv`) and delete its line.
-const KNOWN_ENGLISH_ONLY: &[&str] = &[
-    "ai.rs: Unexpected response from the AI server: {snippet",
-    "app.rs: Compress: {e}",
-    "app.rs: Redact: {m}",
-    "capture_ctl.rs: Capture failed: {e}",
-    "capture_ctl.rs: Screen capture needs macOS 14. This Mac runs mac",
-    "capture_ctl.rs: Scrolling capture stopped at {MAX_STEPS} screens",
-    "chatgpt.rs: Unexpected device-code response: {}",
-    "chatgpt.rs: Unexpected token response: {}",
-    "draw.rs: Default ({default_label})",
-    "editor_ctl.rs: The camera effects could not be applied: {e}",
-    "editor_ctl.rs: The capture helper did not start: {e}",
-    "editor_ctl.rs: The recording's video ({}) is missing.",
-    "editor_ctl.rs: This recording cannot be opened: project.json is",
-    "editor_ctl.rs: This recording cannot be opened: {e}",
-    "editor_export.rs: Audio: {}",
-    "editor_export.rs: Could not save project.json before exporting: {e",
-    "editor_export.rs: The file name must end in .{ext}.",
-    "editor_panels.rs: Speed must be between {}× and {}×.",
-    "editor_panels.rs: This recording has no {}.",
-    "epub.rs: EPUB container.xml has no rootfile",
-    "epub.rs: EPUB spine has no readable chapters",
-    "epub.rs: EPUB spine is empty",
-    "finder_enter.rs: Enter on Finder could not read the Finder select",
-    "media.rs: Bleep: add at least one range",
-    "media.rs: Bleep: range {n} is not a number",
-    "media.rs: Bleep: range {n} is outside the clip (0 to {dura",
-    "media.rs: Bleep: range {n} must end after it starts",
-    "media.rs: Bleep: the clip length is unknown",
-    "media.rs: Bleep: too many ranges (at most {MAX_BLEEPS})",
-    "media_tools.rs: Channels: the {name} volume must be between -30 ",
-    "models.rs: Image ({}×{})",
-    "notion.rs: Notion did not accept that: {}",
-    "notion.rs: Notion had a problem (HTTP {n}). Try again.",
-    "notion_io.rs: Added {done} of {total} parts to {}; the rest we",
-    "ocr.rs: Copied {n} characters",
-    "pdf.rs: PDF metadata has no field named {k}",
-    "pdf.rs: PDFKit produced an empty file",
-    "route.rs: Extract does not support .{other} archives",
-    "route.rs: PDF to {other} is not available",
-    "services.rs: ChatGPT session expired and could not be refresh",
-    "services.rs: Claude Code is not installed. Install it from cl",
-    "system.rs: Set Volume to {v}%",
-    "tiling.rs: Move Window {}",
-    "tiling.rs: Tiling Layout {n}: {}",
-    "translate.rs: Apple Translation does not support {lang}. Pick ",
-    "translate.rs: Translated to {lang}, copied",
-    "translate.rs: Translated to {lang}, copied: a newer translatio",
-    "translate.rs: Translated to {lang}, copied: the app changed, s",
-    "translate.rs: Translation failed: {e}",
-    "translate.rs: Using the first {MAX_LANGUAGES}",
-    "view.rs: Not supported in Ferrocast yet: {component}  The",
-    "vision.rs: No image path was given",
-    "vision.rs: Vision: {}",
-];
+const KNOWN_ENGLISH_ONLY: &[&str] = &[];
 
 /// Texts built as sentences in code: `format!("Sentence with {values}")` (a `trf` row is needed, or
 /// the English text and its values are shown in every language) and `Err("Sentence")` /

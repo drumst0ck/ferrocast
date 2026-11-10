@@ -2,6 +2,7 @@
 //! folder, GIF to video, and PDF to Pages. Every external process runs under a hard deadline.
 
 use ferrocast_core::convert::{ext, output_path, Target, Tools};
+use ferrocast_core::i18n::trf;
 use ferrocast_core::{clipping, epub, epub_write, markdown, pages, subs, xlsx};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -276,7 +277,7 @@ fn pdf_to(f: &Path, out_ext: &str, _sc: &Path) -> Result<Vec<PathBuf>, String> {
             std::fs::write(&out, epub_write::epub_package(&title, &epub_write::xhtmlize(&body_of(&body)))).map_err(|e| e.to_string())?;
             Ok(vec![out])
         }
-        other => Err(format!("PDF to {other} is not available")),
+        other => Err(trf("PDF to {format} is not available", &[("format", other)])),
     }
 }
 
@@ -411,7 +412,7 @@ fn archive_kind(f: &Path) -> Result<Kind, String> {
         "tar" => Ok(Kind::Tar),
         "gz" => Ok(Kind::Gz),
         "rar" => Ok(Kind::Rar),
-        other => Err(format!("Extract does not support .{other} archives")),
+        other => Err(trf("Extract does not support .{ext} archives", &[("ext", other)])),
     }
 }
 

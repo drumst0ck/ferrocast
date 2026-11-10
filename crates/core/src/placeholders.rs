@@ -272,12 +272,95 @@ fn apply_offset(mut t: DateTime<Local>, off: &str) -> DateTime<Local> {
     t
 }
 
-const MONTHS: [&str; 12] =
-    ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const DAYS: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+/// Month / weekday names and the word joining date and time for one interface language.
+struct Names {
+    months: [&'static str; 12],
+    months_abbr: [&'static str; 12],
+    days: [&'static str; 7],
+    days_abbr: [&'static str; 7],
+    /// Joins date and time in `{datetime}` (includes the surrounding spaces).
+    at: &'static str,
+    /// Default `{date}` pattern.
+    date: &'static str,
+}
+
+const EN: Names = Names {
+    months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+    months_abbr: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+    days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+    days_abbr: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    at: " at ",
+    date: "d MMM yyyy",
+};
+const ES: Names = Names {
+    months: ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"],
+    months_abbr: ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"],
+    days: ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"],
+    days_abbr: ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"],
+    at: " a las ",
+    date: "d MMM yyyy",
+};
+const DE: Names = Names {
+    months: ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"],
+    months_abbr: ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"],
+    days: ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"],
+    days_abbr: ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"],
+    at: " um ",
+    date: "d MMM yyyy",
+};
+const FR: Names = Names {
+    months: ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"],
+    months_abbr: ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."],
+    days: ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"],
+    days_abbr: ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."],
+    at: " à ",
+    date: "d MMM yyyy",
+};
+const PT: Names = Names {
+    months: ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"],
+    months_abbr: ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"],
+    days: ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"],
+    days_abbr: ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"],
+    at: " às ",
+    date: "d MMM yyyy",
+};
+const JA: Names = Names {
+    months: ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"],
+    months_abbr: ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"],
+    days: ["月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "日曜日"],
+    days_abbr: ["月", "火", "水", "木", "金", "土", "日"],
+    at: " ",
+    date: "yyyy年M月d日",
+};
+const ZH: Names = Names {
+    months: ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"],
+    months_abbr: ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"],
+    days: ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"],
+    days_abbr: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
+    at: " ",
+    date: "yyyy年M月d日",
+};
+
+fn names() -> &'static Names {
+    use crate::i18n::Lang;
+    match crate::i18n::language() {
+        Lang::En => &EN,
+        Lang::Es => &ES,
+        Lang::De => &DE,
+        Lang::Fr => &FR,
+        Lang::PtBr => &PT,
+        Lang::Ja => &JA,
+        Lang::ZhHans => &ZH,
+    }
+}
+
+fn first_char(s: &str) -> String {
+    s.chars().next().map(String::from).unwrap_or_default()
+}
 
 /// Format with a Unicode (ICU) date pattern like `EEEE, MMM d, yyyy`.
 pub fn format_unicode(t: &DateTime<Local>, pattern: &str) -> String {
+    let nm = names();
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::new();
     let mut i = 0;
@@ -328,17 +411,17 @@ pub fn format_unicode(t: &DateTime<Local>, pattern: &str) -> String {
             ('Q', _) => format!("{} quarter", ["1st", "2nd", "3rd", "4th"][month / 3]),
             ('M', 1) | ('L', 1) => (month + 1).to_string(),
             ('M', 2) | ('L', 2) => format!("{:02}", month + 1),
-            ('M', 3) | ('L', 3) => MONTHS[month][..3].to_string(),
-            ('M', 4) | ('L', 4) => MONTHS[month].to_string(),
-            ('M', _) | ('L', _) => MONTHS[month][..1].to_string(),
+            ('M', 3) | ('L', 3) => nm.months_abbr[month].to_string(),
+            ('M', 4) | ('L', 4) => nm.months[month].to_string(),
+            ('M', _) | ('L', _) => first_char(nm.months[month]),
             ('d', 1) => t.day().to_string(),
             ('d', _) => format!("{:02}", t.day()),
             ('D', _) => t.ordinal().to_string(),
             ('F', _) => (((t.day() - 1) / 7) + 1).to_string(),
-            ('E', 1..=3) => DAYS[wd][..3].to_string(),
-            ('E', 4) => DAYS[wd].to_string(),
-            ('E', 5) => DAYS[wd][..1].to_string(),
-            ('E', _) => DAYS[wd][..2].to_string(),
+            ('E', 1..=3) => nm.days_abbr[wd].to_string(),
+            ('E', 4) => nm.days[wd].to_string(),
+            ('E', 5) => first_char(nm.days[wd]),
+            ('E', _) => nm.days_abbr[wd].chars().take(2).collect(),
             ('h', 1) => h12.to_string(),
             ('h', _) => format!("{:02}", h12),
             ('H', 1) => t.hour().to_string(),
@@ -449,7 +532,7 @@ fn expand_at(template: &str, target: Target, ctx: &Context, depth: usize) -> Exp
             }
             "date" => match p.attr("format") {
                 Some(f) => format_unicode(&time, f),
-                None => format_unicode(&time, "d MMM yyyy"),
+                None => format_unicode(&time, names().date),
             },
             "time" => match p.attr("format") {
                 Some(f) => format_unicode(&time, f),
@@ -457,7 +540,7 @@ fn expand_at(template: &str, target: Target, ctx: &Context, depth: usize) -> Exp
             },
             "datetime" => match p.attr("format") {
                 Some(f) => format_unicode(&time, f),
-                None => format!("{} at {}", format_unicode(&time, "d MMM yyyy"), format_unicode(&time, "h:mm a")),
+                None => format!("{}{}{}", format_unicode(&time, names().date), names().at, format_unicode(&time, "h:mm a")),
             },
             "day" => format_unicode(&time, "EEEE"),
             _ => unreachable!(),
@@ -515,6 +598,31 @@ mod tests {
         // Out-of-range offsets are ignored instead of panicking.
         assert_eq!(expand("{date format=\"yyyy\" offset=\"+99999999999d +99999999999999y\"}", Target::Snippet, &c).text, "2022");
         assert_eq!(expand("{date format=\"h:mm 'on the eve of' MMMM d\"}", Target::Snippet, &c).text, "1:44 on the eve of June 15");
+    }
+
+    #[test]
+    fn dates_follow_the_interface_language() {
+        use crate::i18n::{with_language, Lang};
+        let c = ctx();
+        let cases = [
+            (Lang::En, "15 Jun 2022", "Wednesday", "15 Jun 2022 at 1:44 PM", "Wed, June"),
+            (Lang::Es, "15 jun 2022", "miércoles", "15 jun 2022 a las 1:44 PM", "mié, junio"),
+            (Lang::De, "15 Jun 2022", "Mittwoch", "15 Jun 2022 um 1:44 PM", "Mi, Juni"),
+            (Lang::Fr, "15 juin 2022", "mercredi", "15 juin 2022 à 1:44 PM", "mer., juin"),
+            (Lang::PtBr, "15 jun 2022", "quarta-feira", "15 jun 2022 às 1:44 PM", "qua, junho"),
+            (Lang::Ja, "2022年6月15日", "水曜日", "2022年6月15日 1:44 PM", "水, 6月"),
+            (Lang::ZhHans, "2022年6月15日", "星期三", "2022年6月15日 1:44 PM", "周三, 六月"),
+        ];
+        for (lang, date, day, datetime, names) in cases {
+            with_language(lang, || {
+                assert_eq!(expand("{date}", Target::Snippet, &c).text, date, "{lang:?} date");
+                assert_eq!(expand("{day}", Target::Snippet, &c).text, day, "{lang:?} day");
+                assert_eq!(expand("{datetime}", Target::Snippet, &c).text, datetime, "{lang:?} datetime");
+                assert_eq!(expand("{date format=\"E, MMMM\"}", Target::Snippet, &c).text, names, "{lang:?} names");
+                // numeric / ISO formats never change
+                assert_eq!(expand("{date format=\"yyyy-MM-dd HH:mm\"}", Target::Snippet, &c).text, "2022-06-15 13:44");
+            });
+        }
     }
 
     #[test]

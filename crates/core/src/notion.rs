@@ -246,9 +246,11 @@ impl NotionError {
             Self::NotFound => "Notion cannot see that page. Share it with your integration (••• → Connections).".into(),
             Self::RateLimited { .. } => "Notion is rate limiting requests. Try again in a few seconds.".into(),
             Self::Network => "Could not reach Notion. Check your connection.".into(),
-            Self::Server(n) => format!("Notion had a problem (HTTP {n}). Try again."),
+            Self::Server(n) => crate::i18n::trf("Notion had a problem (HTTP {n}). Try again.", &[("n", &n.to_string())]),
             Self::Malformed => "Notion sent a response Ferrocast could not read.".into(),
-            Self::Validation(m) => format!("Notion did not accept that: {}", m.chars().take(160).collect::<String>()),
+            Self::Validation(m) => {
+                crate::i18n::trf("Notion did not accept that: {detail}", &[("detail", &m.chars().take(160).collect::<String>())])
+            }
         }
     }
 }

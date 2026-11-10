@@ -146,6 +146,13 @@ mod tests {
     }
 
     #[test]
+    fn one_ton_in_kg() {
+        for alias in ["ton", "tons", "t", "tonne", "tonnes"] {
+            assert_eq!(conv(1.0, alias, "kg"), 1000.0, "{alias}");
+        }
+    }
+
+    #[test]
     fn length() {
         assert!((conv(10.0, "ft", "m") - 3.048).abs() < 1e-9);
         assert!((conv(1.0, "mile", "km") - 1.609344).abs() < 1e-9);

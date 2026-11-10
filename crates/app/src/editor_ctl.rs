@@ -13,6 +13,7 @@ use ferrocast_core::capture::events::Events;
 use ferrocast_core::capture::project::{Project, EVENTS_FILE};
 use ferrocast_core::capture::timeline::Timeline;
 use ferrocast_core::capture::zoom::{self, ZoomOpts};
+use ferrocast_core::i18n::trf;
 use ferrocast_macos::capture::RenderedFrame;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -788,9 +789,9 @@ pub fn spawn_worker(
 type Loaded = (Project, Option<Events>, Opened);
 
 fn load(dir: &Path, auto_zoom: Option<&ZoomOpts>) -> Result<Loaded, String> {
-    let mut project = Project::load(dir).map_err(|e| format!("This recording cannot be opened: {e}"))?;
+    let mut project = Project::load(dir).map_err(|e| trf("This recording cannot be opened: {e}", &[("e", &e.to_string())]))?;
     if !dir.join(&project.sources.screen.file).is_file() {
-        return Err(format!("The recording's video ({}) is missing.", project.sources.screen.file));
+        return Err(trf("The recording's video ({file}) is missing.", &[("file", &project.sources.screen.file)]));
     }
     if !(project.duration.is_finite() && project.duration > 0.0) {
         return Err("This recording has no duration.".into());
@@ -800,7 +801,7 @@ fn load(dir: &Path, auto_zoom: Option<&ZoomOpts>) -> Result<Loaded, String> {
     let mut problems = project.validate(|f| dir.join(f).is_file());
     problems.extend(ferrocast_core::capture::timeline::validate(&project));
     if let Some(first) = problems.first() {
-        return Err(format!("This recording cannot be opened: project.json is not valid: {first}"));
+        return Err(trf("This recording cannot be opened: project.json is not valid: {first}", &[("first", first)]));
     }
     let mut note = None;
     let events = match std::fs::read_to_string(dir.join(EVENTS_FILE)) {
@@ -952,7 +953,7 @@ fn frame_params_fx(
             Ok(fx) => composer.set_camera_fx(fx),
             Err(e) => {
                 *at = None;
-                return Err(format!("The camera effects could not be applied: {e}"));
+                return Err(trf("The camera effects could not be applied: {e}", &[("e", &e.to_string())]));
             }
         }
         *at = Some(now);
@@ -1188,8 +1189,10 @@ pub fn helper_renderer(exe: PathBuf, log: impl Fn(&str) + Send + Clone + 'static
                 if !available(&exe) {
                     return Err("Screen capture is not available in this build.".into());
                 }
-                helper =
-                    Some(Helper::spawn(&helper_path(&exe), log.clone()).map_err(|e| format!("The capture helper did not start: {e}"))?);
+                helper = Some(
+                    Helper::spawn(&helper_path(&exe), log.clone())
+                        .map_err(|e| trf("The capture helper did not start: {e}", &[("e", &e.to_string())]))?,
+                );
             }
             let Some(h) = helper.as_mut() else { continue };
             // FERROCAST_PREVIEW_PNG=1 keeps the PNG hand-off, to measure the raw one against it
