@@ -16,7 +16,7 @@ use ferrocast_core::capture::events::Events;
 use ferrocast_core::capture::export::{self, Codec, ExportOptions, Format, Quality};
 use ferrocast_core::capture::project::Project;
 use ferrocast_core::capture::protocol::ExportDone;
-use ferrocast_core::i18n::tr;
+use ferrocast_core::i18n::{tr, trf};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -284,7 +284,7 @@ pub fn audio_label(project: &Project) -> Option<String> {
             .into_iter()
             .filter_map(|(on, name)| on.then_some(name))
             .collect();
-    Some(if parts.is_empty() { "no audio".into() } else { format!("Audio: {}", parts.join(" + ")) })
+    Some(if parts.is_empty() { "no audio".into() } else { trf("Audio: {parts}", &[("parts", &parts.join(" + "))]) })
 }
 
 /// `1920×1080 · 2:31 · 4530 frames` (+ ` · Audio: mic + system` / ` · no audio` with extra sources) or the reason the options cannot be exported.
@@ -326,7 +326,7 @@ impl Editor {
     pub fn save_for_export(&mut self) -> Result<(), String> {
         let Some(p) = self.project.as_ref() else { return Err("The project is not loaded yet.".into()) };
         if self.dirty || self.st.autosave.pending() {
-            p.save(&self.dir).map_err(|e| format!("Could not save project.json before exporting: {e}"))?;
+            p.save(&self.dir).map_err(|e| trf("Could not save project.json before exporting: {e}", &[("e", &e.to_string())]))?;
             self.st.autosave.written();
             self.dirty = false;
         }
@@ -353,7 +353,7 @@ impl Editor {
         let dest = self.export.dest.clone().ok_or("Choose where to save the video.")?;
         let ext = ext_of(self.export.format);
         if dest.extension().is_none_or(|e| !e.eq_ignore_ascii_case(ext)) {
-            return Err(format!("The file name must end in .{ext}."));
+            return Err(trf("The file name must end in .{ext}.", &[("ext", ext)]));
         }
         let opts = self.export.options(&project, self.source_pixels());
         summary(&project, self.source_pixels(), &opts)?;

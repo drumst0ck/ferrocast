@@ -176,7 +176,7 @@ fn publish(src: &str, json: &str, scratch_dir: &Path, dest: &Path) -> Result<(),
     run_jxa(ORGANIZE_JS, &[src, path_str(&scratch)?, json])?;
     let bytes = std::fs::read(&scratch).map_err(|e| format!("cannot read scratch output: {e}"))?;
     if bytes.is_empty() {
-        return Err("PDFKit produced an empty file".into());
+        return Err(ferrocast_core::i18n::tr("PDFKit produced an empty file").into_owned());
     }
     let mut f =
         std::fs::OpenOptions::new().write(true).create_new(true).open(dest).map_err(|e| format!("cannot create destination: {e}"))?;
@@ -277,7 +277,7 @@ fn pct_decode(s: &str) -> Result<String, String> {
 pub fn set_metadata(src: &Path, edits: &[(String, Option<String>)], remove_all: bool) -> Result<PathBuf, String> {
     let src_s = path_str(src)?;
     if let Some((k, _)) = edits.iter().find(|(k, _)| !META_KEYS.contains(&k.as_str())) {
-        return Err(format!("PDF metadata has no field named {k}"));
+        return Err(ferrocast_core::i18n::trf("PDF metadata has no field named {k}", &[("k", k)]));
     }
     let args: Vec<String> = edits.iter().map(|(k, v)| v.as_ref().map_or(k.clone(), |v| format!("{k}={}", pct_encode(v)))).collect();
     let scratch_dir: PathBuf =
@@ -290,7 +290,7 @@ pub fn set_metadata(src: &Path, edits: &[(String, Option<String>)], remove_all: 
         run_jxa(SET_META_JS, &argv)?;
         let bytes = std::fs::read(&scratch).map_err(|e| format!("cannot read scratch output: {e}"))?;
         if bytes.is_empty() {
-            return Err("PDFKit produced an empty file".to_string());
+            return Err(ferrocast_core::i18n::tr("PDFKit produced an empty file").into_owned());
         }
         let dir = src.parent().map(Path::to_path_buf).unwrap_or_default();
         let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("document");

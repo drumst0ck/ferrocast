@@ -6,6 +6,12 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Changed
+- **Snippet dates follow the interface language**: `{date}`, `{day}`, `{datetime}` and date formats with month or weekday names (`MMMM`, `EEEE`) now use the names and the connecting word of the language set in Settings → General (Spanish, German, French, Portuguese, Japanese and Chinese included); numeric and ISO formats are unchanged. (docs: /docs/launcher/snippets/) #snippets
+- **Translated messages**: about fifty error and status messages that appeared in English in every language (Compress, Redact, Bleep, Notion, translation results, tiling and volume titles, ChatGPT and Claude Code sign-in, unsupported extension screens and more) are now translated. #i18n
+
+### Fixed
+- **Stray AI process**: when an AI or translation request failed right after starting, its curl or Claude Code process could be left running; it is now always stopped and cleaned up. #ai
 ### Added
 - **Cookie consent on the website**: ferrocast.app no longer loads Google Tag Manager or sets Google Analytics cookies until you click Accept. The banner (English or Spanish, also on the docs) has Reject and Accept side by side, remembers your choice in this browser with the policy version, and a Cookie settings link in every footer reopens it. Rejecting stops Google from loading on the next page and removes the `_ga` cookies. New cookie policy pages: `/cookies/` and `/es/cookies/`. #website
 

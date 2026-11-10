@@ -331,24 +331,27 @@ pub const MAX_BLEEPS: usize = 32;
 /// range by its 1-based position in the input.
 pub fn validate_bleeps(ranges: &[(f64, f64)], duration: f64) -> Result<Vec<(f64, f64)>, String> {
     if ranges.is_empty() {
-        return Err("Bleep: add at least one range".into());
+        return Err(crate::i18n::tr("Bleep: add at least one range").into_owned());
     }
     if ranges.len() > MAX_BLEEPS {
-        return Err(format!("Bleep: too many ranges (at most {MAX_BLEEPS})"));
+        return Err(crate::i18n::trf("Bleep: too many ranges (at most {max})", &[("max", &MAX_BLEEPS.to_string())]));
     }
     if !duration.is_finite() || duration <= 0.0 {
-        return Err("Bleep: the clip length is unknown".into());
+        return Err(crate::i18n::tr("Bleep: the clip length is unknown").into_owned());
     }
     for (i, &(a, b)) in ranges.iter().enumerate() {
         let n = i + 1;
         if !a.is_finite() || !b.is_finite() {
-            return Err(format!("Bleep: range {n} is not a number"));
+            return Err(crate::i18n::trf("Bleep: range {n} is not a number", &[("n", &n.to_string())]));
         }
         if a < 0.0 || b > duration {
-            return Err(format!("Bleep: range {n} is outside the clip (0 to {duration:.2} s)"));
+            return Err(crate::i18n::trf(
+                "Bleep: range {n} is outside the clip (0 to {duration} s)",
+                &[("n", &n.to_string()), ("duration", &format!("{duration:.2}"))],
+            ));
         }
         if b <= a {
-            return Err(format!("Bleep: range {n} must end after it starts"));
+            return Err(crate::i18n::trf("Bleep: range {n} must end after it starts", &[("n", &n.to_string())]));
         }
     }
     let mut sorted = ranges.to_vec();

@@ -12,6 +12,8 @@ Open Snippets from the launcher; <kbd>⌘</kbd> <kbd>N</kbd> creates one and <kb
 
 `{date}`, `{clipboard}`, `{cursor}` and `{snippet name=…}` (which inserts another snippet). `{date offset=…}` no longer panics on absurd values, and `{snippet name=…}` also resolves in pastes and quicklinks.
 
+Month and weekday names and the word that joins date and time in `{date}`, `{day}` and `{datetime}` follow the interface language (Settings → General → Language): in Spanish `{day}` gives "miércoles" and `{datetime}` gives "15 jun 2022 a las 1:44 PM". Numeric and ISO formats such as `{date format="yyyy-MM-dd"}` never change.
+
 ## Keyword rules
 
 Snippet keywords that prefix another keyword are rejected. A held <kbd>⌫</kbd> no longer closes the launcher.

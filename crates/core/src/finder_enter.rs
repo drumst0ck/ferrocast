@@ -130,7 +130,7 @@ pub fn finder_read_failure_message(err: &str) -> String {
     }
     let first = err.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("unknown error");
     let short: String = first.chars().take(100).collect();
-    format!("Enter on Finder could not read the Finder selection: {short}")
+    crate::i18n::trf("Enter on Finder could not read the Finder selection: {reason}", &[("reason", &short)])
 }
 
 #[cfg(test)]

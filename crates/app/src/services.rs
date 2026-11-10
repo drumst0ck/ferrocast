@@ -2080,8 +2080,9 @@ pub fn chatgpt_fresh_credentials() -> Result<ferrocast_core::chatgpt::Credential
         chatgpt_credentials,
         |c| {
             let body = token_post(&chatgpt::refresh_body(&c.refresh))?;
-            chatgpt::parse_token_response(&body, now_secs())
-                .map_err(|e| format!("ChatGPT session expired and could not be refreshed ({e}). Sign in again in Settings → AI."))
+            chatgpt::parse_token_response(&body, now_secs()).map_err(|e| {
+                trf("ChatGPT session expired and could not be refreshed ({e}). Sign in again in Settings → AI.", &[("e", &e.to_string())])
+            })
         },
         |c| {
             save_chatgpt_credentials(Some(c));
@@ -2206,8 +2207,9 @@ impl ClaudeSession {
         use ferrocast_core::ai::{self, Sse};
         use std::io::{BufRead, BufReader};
         use std::process::{Command, Stdio};
-        let exe =
-            claude_code_path().ok_or("Claude Code is not installed. Install it from claude.ai/code and run `claude` once to sign in.")?;
+        let exe = claude_code_path().ok_or_else(|| {
+            tr("Claude Code is not installed. Install it from claude.ai/code and run `claude` once to sign in.").into_owned()
+        })?;
         let mut cmd = Command::new(exe);
         cmd.args([
             "-p",
@@ -2621,16 +2623,16 @@ fn ai_stream_with_key_system(
     history: &[(String, String)],
     question: &str,
     cancel: &AiCancel,
-    mut on_delta: impl FnMut(&str),
+    on_delta: impl FnMut(&str),
 ) -> Result<(), String> {
     use ferrocast_core::ai::{self, Sse};
-    use std::io::{BufRead, BufReader, Read, Write};
     use std::process::{Command, Stdio};
     let provider = settings.ai_provider;
-    let (mut child, stdin_payload, parse): (std::process::Child, String, fn(&str) -> Sse) = match provider {
+    let (child, stdin_payload, parse): (std::process::Child, String, fn(&str) -> Sse) = match provider {
         AiProvider::ClaudeCode => {
-            let exe = claude_code_path()
-                .ok_or("Claude Code is not installed. Install it from claude.ai/code and run `claude` once to sign in.")?;
+            let exe = claude_code_path().ok_or_else(|| {
+                tr("Claude Code is not installed. Install it from claude.ai/code and run `claude` once to sign in.").into_owned()
+            })?;
             let mut cmd = Command::new(exe);
             cmd.args([
                 "-p",
@@ -2698,10 +2700,37 @@ fn ai_stream_with_key_system(
             (child, cfg, ai::parse_sse_line)
         }
     };
+    drive_ai_child(settings, cancel, child, &stdin_payload, parse, on_delta)
+}
+
+/// Kills and reaps the attached child when the stream ends on any path that did not reap it
+/// (an early `?`, a failed stdin write, a panic in the delta callback). A no-op after `reap`.
+struct ReapOnDrop<'a>(&'a AiCancel);
+
+impl Drop for ReapOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.kill_child();
+    }
+}
+
+/// Feed `stdin_payload` to `child` and stream its stdout through `parse`; `cancel` owns the child
+/// from here on and it is always killed or reaped before this returns.
+fn drive_ai_child(
+    settings: &Settings,
+    cancel: &AiCancel,
+    mut child: std::process::Child,
+    stdin_payload: &str,
+    parse: fn(&str) -> ferrocast_core::ai::Sse,
+    mut on_delta: impl FnMut(&str),
+) -> Result<(), String> {
+    use ferrocast_core::ai::{self, Sse};
+    use std::io::{BufRead, BufReader, Read, Write};
+    let provider = settings.ai_provider;
     let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
     if !cancel.attach(child) {
         return Ok(());
     }
+    let _reap = ReapOnDrop(cancel);
     let written = stdin.ok_or("no stdin")?.write_all(stdin_payload.as_bytes());
     if cancel.is_stopped() {
         return Ok(());
@@ -5438,6 +5467,46 @@ mod ai_tests {
         let (url, h) = serve("application/json", r#"{"error":{"message":"model 'x' not found"}}"#);
         assert_eq!(collect(&url, None, &[], "hi").1, Err("model 'x' not found".to_string()));
         let _ = h.join();
+    }
+
+    fn sleeper(stdin: std::process::Stdio, stdout: std::process::Stdio) -> std::process::Child {
+        std::process::Command::new("sleep").arg("30").stdin(stdin).stdout(stdout).stderr(std::process::Stdio::null()).spawn().unwrap()
+    }
+
+    /// `kill -0` also succeeds for an unreaped zombie, so "gone" means killed and waited for.
+    fn process_exists(pid: u32) -> bool {
+        std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().unwrap().success()
+    }
+
+    #[test]
+    fn a_stream_that_cannot_start_leaves_no_child_behind() {
+        use std::process::Stdio;
+        let settings = Settings::default();
+        // no stdin pipe: the early `?` right after the child is attached
+        let child = sleeper(Stdio::null(), Stdio::piped());
+        let pid = child.id();
+        let cancel = AiCancel::default();
+        let r = drive_ai_child(&settings, &cancel, child, "x", ferrocast_core::ai::parse_sse_line, |_| {});
+        assert!(r.is_err());
+        assert!(!process_exists(pid), "the child of a failed stream is killed and reaped");
+        // no stdout pipe: the second early return
+        let child = sleeper(Stdio::piped(), Stdio::null());
+        let pid = child.id();
+        let r = drive_ai_child(&settings, &cancel, child, "x", ferrocast_core::ai::parse_sse_line, |_| {});
+        assert!(r.is_err());
+        assert!(!process_exists(pid), "a missing stdout does not leave the child running");
+    }
+
+    #[test]
+    fn a_stream_cancelled_before_it_starts_kills_its_child() {
+        use std::process::Stdio;
+        let cancel = AiCancel::default();
+        cancel.cancel();
+        let child = sleeper(Stdio::piped(), Stdio::piped());
+        let pid = child.id();
+        let r = drive_ai_child(&Settings::default(), &cancel, child, "x", ferrocast_core::ai::parse_sse_line, |_| {});
+        assert_eq!(r, Ok(()));
+        assert!(!process_exists(pid));
     }
 
     #[test]
