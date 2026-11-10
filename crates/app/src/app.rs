@@ -1312,6 +1312,7 @@ impl App {
             visible: Default::default(),
             keywords: Default::default(),
             clip_dirty: Default::default(),
+            clip_rev: Default::default(),
             clip_hold: Default::default(),
         });
         services::start_clipboard(shared.clone(), bus.clone());
@@ -1904,7 +1905,9 @@ impl App {
                 let name = ferrocast_core::tiling::Layout::from_number(layout).map_or("", |l| l.name());
                 self.toast(trf("Layout {layout}: {name}", &[("layout", &layout.to_string()), ("name", &tr(name))]));
             }
-            Event::MinSizes(m) => self.persist("tiling-min-sizes.json", &m),
+            Event::MinSizes(m) => {
+                self.persist("tiling-min-sizes.json", &m);
+            }
             Event::Overlay(o) => self.apply_overlay(o),
             Event::Log(l) => instance::log(&self.store.root, &l),
             Event::Exclude(app) => {
@@ -2320,12 +2323,20 @@ impl App {
     }
 
     /// Persist a data file; a failed write is surfaced instead of dropped on the floor.
-    fn persist<T: serde::Serialize>(&mut self, name: &str, value: &T) {
-        if let Err(e) = self.store.save(name, value) {
-            instance::log(&self.store.root, &format!("saving {name} failed: {e:#}"));
-            self.toast(trf("Could not save {name}: {e}", &[("name", name), ("e", &e.to_string())]));
-        }
+    /// Returns false when the write failed (counted in `sync.save_failures`, which a sync merge
+    /// checks: data that did not reach the disk is not an applied merge).
+    fn persist<T: serde::Serialize>(&mut self, name: &str, value: &T) -> bool {
+        let ok = match self.store.save(name, value) {
+            Ok(()) => true,
+            Err(e) => {
+                instance::log(&self.store.root, &format!("saving {name} failed: {e:#}"));
+                self.toast(trf("Could not save {name}: {e}", &[("name", name), ("e", &e.to_string())]));
+                self.sync.save_failures += 1;
+                false
+            }
+        };
         self.sync_mark(name);
+        ok
     }
 
     // ------------------------------------------------------------ Notion (Settings → Integrations)
@@ -3138,6 +3149,7 @@ impl App {
                         let at = i.min(list.len());
                         list.insert(at, e);
                     }
+                    self.shared.clip_rev.fetch_add(1, Ordering::SeqCst);
                 }
                 self.shared.clip_hold.lock().unwrap_or_else(|e| e.into_inner()).clear();
                 self.shared.save_clipboard_in_background();
@@ -7989,8 +8001,12 @@ impl App {
                 }
             }
             Act::ClipPin(id) => {
-                if let Some(e) = self.shared.clipboard.lock().unwrap().iter_mut().find(|e| e.id == id) {
-                    e.pinned = !e.pinned;
+                {
+                    let mut list = self.shared.clipboard.lock().unwrap();
+                    if let Some(e) = list.iter_mut().find(|e| e.id == id) {
+                        e.pinned = !e.pinned;
+                    }
+                    self.shared.clip_rev.fetch_add(1, Ordering::SeqCst);
                 }
                 self.shared.save_clipboard_in_background();
             }
@@ -7998,6 +8014,7 @@ impl App {
                 let removed = {
                     let mut list = self.shared.clipboard.lock().unwrap();
                     let removed = list.iter().position(|e| e.id == id).map(|i| (i, list.remove(i)));
+                    self.shared.clip_rev.fetch_add(1, Ordering::SeqCst);
                     // the hold is set while the list lock is still held (order: list, then hold), so no
                     // prune can see the entry as neither listed nor held; it replaces the previous offer's
                     if let Some((_, e)) = &removed {
@@ -8014,7 +8031,11 @@ impl App {
             }
             Act::ClipDeleteAll => {
                 self.finish_entry_undo();
-                self.shared.clipboard.lock().unwrap().retain(|e| e.pinned);
+                {
+                    let mut list = self.shared.clipboard.lock().unwrap();
+                    list.retain(|e| e.pinned);
+                    self.shared.clip_rev.fetch_add(1, Ordering::SeqCst);
+                }
                 self.shared.save_clipboard_in_background();
                 self.prune_clip_images();
                 self.toast("Clipboard history cleared");

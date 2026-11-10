@@ -497,6 +497,9 @@ pub struct Shared {
     pub keywords: expansion::Keywords,
     /// The clipboard list changed since the sync last looked (set by the recorder thread).
     pub clip_dirty: AtomicBool,
+    /// Bumped, with the list lock held, by every change of the clipboard list: a sync run applies
+    /// its merge only when the revision it copied the list at is still the current one.
+    pub clip_rev: std::sync::atomic::AtomicU64,
     /// A clipboard entry just deleted, still on offer through Undo: its image file must survive
     /// pruning until the undo window closes.
     pub clip_hold: Mutex<Vec<ClipEntry>>,
@@ -586,11 +589,16 @@ impl Shared {
     /// Write the history to disk without holding the list lock during the (large) serialisation and
     /// write, so the clipboard view and sync are never stuck behind it. Writes are serialised and each
     /// one takes its snapshot after getting its turn, so the newest list is always the last written.
-    pub(crate) fn write_clipboard(&self) {
+    /// False when the file could not be written.
+    pub(crate) fn write_clipboard(&self) -> bool {
         let _turn = CLIPBOARD_SAVE.lock().unwrap_or_else(|e| e.into_inner());
         let snapshot = self.clipboard.lock().unwrap().clone();
-        if let Err(e) = self.store.save("clipboard.json", &snapshot) {
-            eprintln!("clipboard history not saved: {e}");
+        match self.store.save("clipboard.json", &snapshot) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("clipboard history not saved: {e}");
+                false
+            }
         }
     }
 }
@@ -692,6 +700,7 @@ fn record(shared: &Shared, content: clipboard::ClipContent, source: Option<Strin
     // pruning stays under the lock (a cheap directory listing) so it cannot delete the image of a
     // copy that is not in the list yet; the heavy serialisation and write happen without it
     shared.prune_images_keeping_held(&list);
+    shared.clip_rev.fetch_add(1, Ordering::SeqCst);
     drop(list);
     shared.write_clipboard();
     shared.clip_dirty.store(true, Ordering::Relaxed);
@@ -5555,6 +5564,7 @@ mod clipboard_save_tests {
             visible: Default::default(),
             keywords: Default::default(),
             clip_dirty: Default::default(),
+            clip_rev: Default::default(),
             clip_hold: Default::default(),
         }
     }
@@ -5563,19 +5573,23 @@ mod clipboard_save_tests {
     fn a_copy_does_not_hold_the_clipboard_lock_while_writing_the_history() {
         let shared = Arc::new(shared());
         std::fs::create_dir_all(&shared.store.root).unwrap();
-        // the temp file of the save is a FIFO: the write blocks until someone reads it
-        let tmp = shared.store.path("clipboard.json.tmp");
-        assert!(std::process::Command::new("mkfifo").arg(&tmp).status().unwrap().success());
+        // hold the save turn: the recorder's write waits for it, and while it waits (or writes) the
+        // list lock must be free
+        let turn = CLIPBOARD_SAVE.lock().unwrap_or_else(|e| e.into_inner());
         let s2 = shared.clone();
         let writer = std::thread::spawn(move || record(&s2, clipboard::ClipContent::Text("hello".into()), None));
-        std::thread::sleep(Duration::from_millis(400));
-        let free = shared.clipboard.try_lock().is_ok();
-        // let the blocked write finish
-        let written = std::fs::read(&tmp).unwrap();
+        let mut free = false;
+        for _ in 0..200 {
+            std::thread::sleep(Duration::from_millis(10));
+            if shared.clip_dirty.load(Ordering::Relaxed) || shared.clipboard.lock().unwrap().len() == 1 {
+                free = shared.clipboard.try_lock().is_ok();
+                break;
+            }
+        }
+        drop(turn);
         writer.join().unwrap();
         assert!(free, "the list lock is held while the history is being written");
-        // (the save renamed the FIFO to clipboard.json: what it was given is what was read above)
-        let saved: Vec<ClipEntry> = serde_json::from_slice(&written).unwrap();
+        let saved: Vec<ClipEntry> = serde_json::from_slice(&std::fs::read(shared.store.path("clipboard.json")).unwrap()).unwrap();
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].content, "hello");
         assert!(shared.clip_dirty.load(Ordering::Relaxed));

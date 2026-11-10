@@ -7,6 +7,15 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 ## [Unreleased]
 
 ### Fixed
+- **Sync, clock differences**: an edit or deletion made after receiving another Mac's version is no longer lost when this Mac's clock runs behind. #sync
+- **Sync, notes edited on two Macs**: when both Macs edit the same note, the older text is kept as a new note marked "(conflict copy from <Mac>)" and Ferrocast shows a toast, instead of silently dropping it. (docs: /docs/launcher/sync/) #sync
+- **Sync, a stuck iCloud file**: a file iCloud Drive has not downloaded is requested and skipped, and a run that does not answer in two minutes is given up and retried, so sync no longer stops for good. #sync
+- **Sync, safer saving**: data files are flushed to disk and written through a unique temporary file, and a crash between saving data and the sync state makes the next run recover instead of publishing wrong edits. #sync
+- **Sync, other fixes**: chats removed here only by the 200-chat limit are not deleted on your other Macs; this Mac's own documents wait for the next run when iCloud Drive is unavailable; the status line shows every failing part and "last sync" only moves when something synced. #sync
+- **Sync, review follow-ups**: editing a note twice while another Mac sleeps no longer makes a false conflict copy, and a copy of trashed text stays in the trash; chats cut by the limit are remembered on disk at once; a Mac whose own document is still in iCloud waits for it instead of rebuilding without it; a data file that could not be saved is no longer later published as an edit; leftover temporary files are cleaned up; a same-size rewrite of another Mac's document is noticed; turning sync off clears old errors. #sync
+
+### Changed
+- **Sync speed**: the clipboard history is no longer serialised on the interface thread or while its lock is held, sync documents are written compact, and other Macs' documents that did not change are not read again. #sync
 - **Extensions launching commands**: `launchCommand` now passes `type`, `context`, `arguments` and `fallbackText` to the launched command (`environment.launchType`, `props.launchType`, `props.launchContext`, `props.fallbackText`). `LaunchType.Background` runs it in a separate background process (the launcher and your current screen stay as they are; its HUD and errors are still shown, it is stopped after 60 s and when you quit; it cannot show views or dialogs), and a wrong type or context is rejected with an error. (docs: /docs/launcher/raycast-extensions/) #extensions
 ### Changed
 - **Switch Windows**: the list now includes windows on other Spaces and minimized windows, marked "Other Space", "Minimized" or "Hidden" (apps hidden with ⌘H) next to the app name. Choosing one unminimizes it and brings it forward, switching Space when needed. (docs: /docs/launcher/window-management/) #windows

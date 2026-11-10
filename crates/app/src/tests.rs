@@ -49,6 +49,7 @@ fn fixture() -> App {
         visible: Default::default(),
         keywords: Default::default(),
         clip_dirty: Default::default(),
+        clip_rev: Default::default(),
         clip_hold: Default::default(),
     });
     let mut app = App {
@@ -15546,8 +15547,8 @@ fn a_merged_item_this_build_cannot_read_is_flagged_in_the_tracker_and_readable_o
     let mut merged = ferrocast_core::sync_io::to_items(std::slice::from_ref(&good));
     merged.push(("bad".into(), serde_json::json!({"id": "bad", "name": 5})));
     let (_, t) = ferrocast_core::sync::publish("a", &merged, &ferrocast_core::sync::Tracker::default(), 5000);
-    let snap = app.sync_snapshot("snippets");
-    let t = app.sync_apply("snippets", merged, t, &snap).expect("applied");
+    let snap = app.sync_rev("snippets");
+    let t = app.sync_apply("snippets", merged, t, snap).expect("applied");
     assert_eq!(app.snippets.len(), 1, "only the readable snippet is local");
     assert!(t.items["bad"].unparsed, "never to be published as deleted");
     assert!(!t.items[&good.id].unparsed);
@@ -15562,8 +15563,8 @@ fn a_merge_is_applied_without_queueing_a_new_run() {
     app.settings.sync_enabled = true;
     let merged = ferrocast_core::sync_io::to_items(&[Snippet::new("remote", "text", "!r")]);
     let t = ferrocast_core::sync::Tracker::default();
-    let snap = app.sync_snapshot("snippets");
-    assert!(app.sync_apply("snippets", merged, t, &snap).is_some());
+    let snap = app.sync_rev("snippets");
+    assert!(app.sync_apply("snippets", merged, t, snap).is_some());
     assert_eq!(app.snippets.len(), 1);
     assert_eq!(app.store.load::<Vec<Snippet>>("snippets.json").len(), 1);
     assert!(app.sync.pending.is_empty(), "saving a merge is not a local edit");
@@ -15587,12 +15588,18 @@ fn snippets_run_with_remote(
     sync_domain(&other, "snippets", &ferrocast_core::sync_io::to_items(&[remote]), &Tracker::default(), 5_000).unwrap();
     let io = SyncIo::new(shared.to_path_buf(), "aa".into(), app.store.images_dir());
     let snap = app.sync_snapshot("snippets");
+    let rev0 = app.sync_rev("snippets");
     let out = ferrocast_core::sync_io::sync_domain_recovering(&io, "snippets", &snap, &Tracker::default(), 6_000, recover).unwrap();
     assert!(out.merged.is_some());
     if edit_meanwhile {
         app.snippets.push(Snippet::new("typed", "t", "!t"));
+        app.sync_mark("snippets.json"); // the edit was saved while the run was away
     }
-    let done = crate::app::sync_ctl::SyncDone { results: vec![("snippets", snap, Ok(out))], unavailable: None };
+    let done = crate::app::sync_ctl::SyncDone {
+        results: vec![("snippets", snap, Ok(out))],
+        revs: [("snippets", rev0)].into(),
+        ..Default::default()
+    };
     app.sync.in_flight = true;
     app.sync_done(done);
     io
@@ -15646,10 +15653,10 @@ fn synced_themes_are_applied_saved_and_the_active_one_follows_a_remote_rename() 
     let mut other = ocean();
     other.id = "t-other".into();
     other.name = "Other".into();
-    let snap = app.sync_snapshot("themes");
-    assert_eq!(snap.len(), 1);
+    assert_eq!(app.sync_snapshot("themes").len(), 1);
+    let snap = app.sync_rev("themes");
     let merged = ferrocast_core::sync_io::to_items(&[renamed, other]);
-    assert!(app.sync_apply("themes", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert!(app.sync_apply("themes", merged, ferrocast_core::sync::Tracker::default(), snap).is_some());
     assert_eq!(app.custom_themes.len(), 2);
     assert_eq!(app.settings.custom_theme.as_deref(), Some("Sea"), "the selection follows the theme by id");
     assert_eq!(app.active_theme().map(|t| t.id.as_str()), Some("t-ocean"));
@@ -15664,8 +15671,8 @@ fn synced_themes_are_applied_saved_and_the_active_one_follows_a_remote_rename() 
 #[test]
 fn a_theme_deleted_elsewhere_while_selected_falls_back_to_the_default_look() {
     let mut app = themes_app();
-    let snap = app.sync_snapshot("themes");
-    assert!(app.sync_apply("themes", vec![], ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    let snap = app.sync_rev("themes");
+    assert!(app.sync_apply("themes", vec![], ferrocast_core::sync::Tracker::default(), snap).is_some());
     assert!(app.custom_themes.is_empty());
     assert!(app.active_theme().is_none(), "a missing theme draws the default look");
     let _ = std::fs::remove_dir_all(&app.store.root);
@@ -15677,9 +15684,9 @@ fn a_settings_merge_that_names_a_theme_before_the_themes_arrive_resolves_once_th
     app.settings.sync_enabled = true;
     app.settings.custom_theme = Some("Ocean".into());
     assert!(app.active_theme().is_none());
-    let snap = app.sync_snapshot("themes");
+    let snap = app.sync_rev("themes");
     let merged = ferrocast_core::sync_io::to_items(&[ocean()]);
-    assert!(app.sync_apply("themes", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert!(app.sync_apply("themes", merged, ferrocast_core::sync::Tracker::default(), snap).is_some());
     assert_eq!(app.active_theme().map(|t| t.name.as_str()), Some("Ocean"));
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
@@ -15729,9 +15736,9 @@ fn following_a_remote_rename_is_not_a_local_settings_edit_so_a_newer_selection_e
     // this Mac receives the rename of its selected theme
     let mut renamed = ocean();
     renamed.name = "Sea".into();
-    let snap = app.sync_snapshot("themes");
+    let snap = app.sync_rev("themes");
     let merged = ferrocast_core::sync_io::to_items(&[renamed]);
-    assert!(app.sync_apply("themes", merged, Tracker::default(), &snap).is_some());
+    assert!(app.sync_apply("themes", merged, Tracker::default(), snap).is_some());
     assert_eq!(app.settings.custom_theme.as_deref(), Some("Sea"));
     let o = sync_domain(&io, "settings", &settings_items(&app.settings), &load_tracker(&app.store.root, "settings"), 5_000).unwrap();
     let merged = o.merged.expect("the other Mac's newer selection is offered");
@@ -15750,9 +15757,14 @@ fn a_run_that_started_over_from_an_unreadable_file_is_named_in_the_sync_status()
     app.settings.sync_enabled = true;
     let io = SyncIo::new(shared.clone(), "aa".into(), app.store.images_dir());
     let snap = app.sync_snapshot("snippets");
+    let rev0 = app.sync_rev("snippets");
     let out = sync_domain_recovering(&io, "snippets", &snap, &Tracker::default(), 6_000, true).unwrap();
     assert!(out.recovered);
-    let done = crate::app::sync_ctl::SyncDone { results: vec![("snippets", snap, Ok(out))], unavailable: None };
+    let done = crate::app::sync_ctl::SyncDone {
+        results: vec![("snippets", snap, Ok(out))],
+        revs: [("snippets", rev0)].into(),
+        ..Default::default()
+    };
     app.sync.in_flight = true;
     app.sync_done(done);
     assert!(app.sync_status().contains("unreadable"), "{}", app.sync_status());
@@ -15789,8 +15801,13 @@ fn the_recovery_note_names_every_recovered_domain_and_clears_after_a_later_succe
         use ferrocast_core::sync::Tracker;
         let io = ferrocast_core::sync_io::SyncIo::new(shared.clone(), "aa".into(), app.store.images_dir());
         let snap = app.sync_snapshot("notes");
+        let rev0 = app.sync_rev("notes");
         let out = ferrocast_core::sync_io::sync_domain_recovering(&io, "notes", &snap, &Tracker::default(), 7_000, recover).unwrap();
-        let done = crate::app::sync_ctl::SyncDone { results: vec![("notes", snap, Ok(out))], unavailable: None };
+        let done = crate::app::sync_ctl::SyncDone {
+            results: vec![("notes", snap, Ok(out))],
+            revs: [("notes", rev0)].into(),
+            ..Default::default()
+        };
         app.sync.in_flight = true;
         app.sync_done(done);
     };
@@ -15830,8 +15847,8 @@ fn a_merged_edit_of_the_open_note_reaches_the_editor_and_typing_continues_from_i
     app.settings.sync_enabled = true;
     let mut remote = app.notes.clone();
     remote.iter_mut().find(|n| n.id == open).unwrap().text = "Remote edit".into();
-    let snap = app.sync_snapshot("notes");
-    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    let snap = app.sync_rev("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), snap).is_some());
     assert_eq!(st.borrow().markdown, "Remote edit", "the editor shows the merged text");
     app.notes_do(|c, d| c.handle(NMsg::Changed("Remote edit, plus mine".into()), d));
     assert_eq!(app.notes.iter().find(|n| n.id == open).unwrap().text, "Remote edit, plus mine");
@@ -15846,8 +15863,8 @@ fn a_note_deleted_elsewhere_is_deleted_here_too_when_the_notes_window_is_closed(
     app.notes_do(|c, d| c.toggle(d)); // closed again: `current` is kept by the controller
     app.settings.sync_enabled = true;
     let remote: Vec<Note> = app.notes.iter().filter(|n| n.id != open).cloned().collect();
-    let snap = app.sync_snapshot("notes");
-    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    let snap = app.sync_rev("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), snap).is_some());
     assert!(!app.notes.iter().any(|n| n.id == open), "the remote deletion is applied");
     assert_ne!(app.notes_ctl.current.as_deref(), Some(open.as_str()));
     // moved to Recently Deleted elsewhere: same
@@ -15856,8 +15873,8 @@ fn a_note_deleted_elsewhere_is_deleted_here_too_when_the_notes_window_is_closed(
     app.notes_do(|c, d| c.toggle(d));
     let mut trashed = app.notes.clone();
     trashed.iter_mut().find(|n| n.id == other).unwrap().deleted_at = Some(99);
-    let snap = app.sync_snapshot("notes");
-    assert!(app.sync_apply("notes", merged_notes(&trashed), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    let snap = app.sync_rev("notes");
+    assert!(app.sync_apply("notes", merged_notes(&trashed), ferrocast_core::sync::Tracker::default(), snap).is_some());
     assert!(app.notes.iter().find(|n| n.id == other).is_none_or(|n| n.deleted_at.is_some()));
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
@@ -15878,18 +15895,19 @@ fn a_clipboard_entry_recorded_while_the_run_was_away_is_not_overwritten_by_the_m
         width: 0,
         height: 0,
     };
-    let snap = app.sync_snapshot("clipboard");
+    let snap = app.sync_rev("clipboard");
     // the recorder thread adds an entry after the snapshot was taken
     app.shared.clipboard.lock().unwrap().push(entry("mine", "just copied"));
+    app.shared.clip_rev.fetch_add(1, Ordering::SeqCst);
     let merged = ferrocast_core::sync_io::to_items(&[entry("theirs", "from another Mac")]);
-    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), &snap).is_none(), "not applied");
+    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), snap).is_none(), "not applied");
     let list = app.shared.clipboard.lock().unwrap().clone();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id, "mine", "the new entry is still there");
     // with nothing recorded in between the merge is applied
-    let snap = app.sync_snapshot("clipboard");
+    let snap = app.sync_rev("clipboard");
     let merged = ferrocast_core::sync_io::to_items(&[entry("mine", "just copied"), entry("theirs", "from another Mac")]);
-    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), snap).is_some());
     assert_eq!(app.shared.clipboard.lock().unwrap().len(), 2);
     std::fs::remove_dir_all(&app.store.root).ok();
 }
@@ -15921,8 +15939,8 @@ fn a_note_deleted_elsewhere_while_the_window_is_open_and_idle_moves_the_editor_t
     let open = app.notes_ctl.current.clone().unwrap();
     app.settings.sync_enabled = true;
     let remote: Vec<Note> = app.notes.iter().filter(|n| n.id != open).cloned().collect();
-    let snap = app.sync_snapshot("notes");
-    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    let snap = app.sync_rev("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), snap).is_some());
     let now = app.notes_ctl.current.clone().unwrap();
     assert_ne!(now, open, "the editor moved on");
     assert_eq!(st.borrow().markdown, app.notes.iter().find(|n| n.id == now).unwrap().text);
@@ -15940,9 +15958,9 @@ fn notes_are_not_merged_into_the_editor_while_typing_and_are_after_a_short_idle(
     let shown = st.borrow().markdown.clone();
     let mut remote = app.notes.clone();
     remote.iter_mut().find(|n| n.id != open).unwrap().text = "Remote edit of another note".into();
-    let snap = app.sync_snapshot("notes");
+    let snap = app.sync_rev("notes");
     assert!(
-        app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_none(),
+        app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), snap).is_none(),
         "deferred while typing"
     );
     assert_eq!(st.borrow().markdown, shown, "the editor is not touched (no caret jump)");
@@ -15950,8 +15968,8 @@ fn notes_are_not_merged_into_the_editor_while_typing_and_are_after_a_short_idle(
     assert!(app.notes_ctl.typing_recently(now_millis()));
     assert!(!app.notes_ctl.typing_recently(now_millis() + 3_000), "idle after 2 s");
     std::thread::sleep(Duration::from_millis(2_100));
-    let snap = app.sync_snapshot("notes");
-    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    let snap = app.sync_rev("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), snap).is_some());
     assert_eq!(app.notes.iter().find(|n| n.id != open).unwrap().text, "Remote edit of another note");
     // a closed window never defers
     app.notes_do(|c, d| c.handle(NMsg::Changed("Alpha typed again".into()), d));
@@ -15971,8 +15989,8 @@ fn a_keystroke_the_editor_made_but_the_controller_has_not_processed_yet_still_de
     assert!(app.notes_ctl.typing_recently(now_millis()), "no Changed message was processed, yet typing is seen");
     let mut remote = app.notes.clone();
     remote.iter_mut().find(|n| n.id == open).unwrap().text = "Remote edit".into();
-    let snap = app.sync_snapshot("notes");
-    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), &snap).is_none());
+    let snap = app.sync_rev("notes");
+    assert!(app.sync_apply("notes", merged_notes(&remote), ferrocast_core::sync::Tracker::default(), snap).is_none());
     assert!(!app.notes_ctl.typing_recently(now_millis() + 3_000));
     st.borrow_mut().keystroke_ms = now_millis().saturating_sub(5_000);
     assert!(!app.notes_ctl.typing_recently(now_millis()), "five seconds ago is idle");
@@ -16002,8 +16020,8 @@ fn a_copy_of_settings_json_is_kept_before_the_first_settings_merge_is_applied() 
     let mut theirs = app.settings.clone();
     theirs.launcher_hotkey = "Ctrl+Space".into();
     let merged = ferrocast_core::sync_io::settings_items(&theirs);
-    let snap = app.sync_snapshot("settings");
-    assert!(app.sync_apply("settings", merged, ferrocast_core::sync::Tracker::default(), &snap).is_some());
+    let snap = app.sync_rev("settings");
+    assert!(app.sync_apply("settings", merged, ferrocast_core::sync::Tracker::default(), snap).is_some());
     assert_eq!(app.settings.launcher_hotkey, "Ctrl+Space");
     assert_eq!(
         std::fs::read_to_string(app.store.path("settings.before-sync.json")).unwrap(),
@@ -16013,9 +16031,9 @@ fn a_copy_of_settings_json_is_kept_before_the_first_settings_merge_is_applied() 
     // not overwritten by a later merge
     let mut more = app.settings.clone();
     more.theme = ferrocast_core::models::Theme::Light;
-    let snap = app.sync_snapshot("settings");
+    let snap = app.sync_rev("settings");
     assert!(app
-        .sync_apply("settings", ferrocast_core::sync_io::settings_items(&more), ferrocast_core::sync::Tracker::default(), &snap)
+        .sync_apply("settings", ferrocast_core::sync_io::settings_items(&more), ferrocast_core::sync::Tracker::default(), snap)
         .is_some());
     assert_eq!(std::fs::read_to_string(app.store.path("settings.before-sync.json")).unwrap(), before);
     std::fs::remove_dir_all(&app.store.root).ok();
@@ -18388,4 +18406,219 @@ fn update_installed_during_an_export_waits_for_it() {
     app.editor.as_mut().unwrap().export.run = None;
     app.exit_tick(Instant::now());
     assert_eq!(exits(&fx_taken()), vec!["relaunch /Apps/Ferrocast.app", "exit 0"]);
+}
+
+#[test]
+fn a_run_that_never_answers_is_given_up_its_documents_requeued_and_its_late_answer_ignored() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    app.sync.in_flight = true;
+    app.sync.run = 7;
+    app.sync.last_start = std::time::Instant::now().checked_sub(crate::app::sync_ctl::RUN_TIMEOUT + Duration::from_secs(1));
+    app.sync.sent_docs.insert("snippets", ferrocast_core::sync::DeviceDoc::default());
+    app.sync_flush();
+    assert!(app.sync.run > 7, "the abandoned run is numbered out");
+    assert!(app.sync.pending_docs.contains_key("snippets"), "its document is queued again");
+    assert!(app.sync.error.is_some(), "the timeout is reported");
+    // its answer, arriving much later, changes nothing
+    let late = crate::app::sync_ctl::SyncDone { run: 7, results: vec![("snippets", vec![], Err("late".into()))], ..Default::default() };
+    app.sync.in_flight = true;
+    app.sync_done(late);
+    assert!(app.sync.errors.is_empty(), "nothing of it is used");
+    assert!(app.sync.in_flight, "a stale answer does not end the run in flight");
+    assert!(app.sync.last_sync.is_none());
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn own_documents_survive_a_run_that_found_no_folder_and_a_failed_domain_does_not_look_synced() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let doc = ferrocast_core::sync::DeviceDoc::default();
+    app.sync.in_flight = true;
+    let done = crate::app::sync_ctl::SyncDone {
+        unavailable: Some("no folder".into()),
+        docs: [("notes", doc)].into(),
+        run: app.sync.run,
+        ..Default::default()
+    };
+    app.sync_done(done);
+    assert!(app.sync.pending_docs.contains_key("notes"), "kept for the next run");
+    // every domain failed: each reason is shown and there is no "last sync"
+    app.sync.error = None;
+    app.sync.in_flight = true;
+    let fail = |d: &'static str, e: &str| (d, vec![], Err::<ferrocast_core::sync_io::Outcome, String>(e.into()));
+    let done = crate::app::sync_ctl::SyncDone {
+        results: vec![fail("notes", "disk full"), fail("snippets", "locked")],
+        run: app.sync.run,
+        ..Default::default()
+    };
+    app.sync_done(done);
+    let status = app.sync_status();
+    assert!(status.contains("notes: disk full") && status.contains("snippets: locked"), "{status}");
+    assert!(app.sync.last_sync.is_none());
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn chats_cut_by_the_cap_are_remembered_so_they_are_not_published_as_deleted() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let n = ferrocast_core::models::MAX_CHATS + 2;
+    let chats: Vec<Chat> = (0..n).map(|i| Chat::new(format!("c{i}"), vec![("q".into(), "a".into())], i as i64)).collect();
+    let rev = app.sync_rev("chats");
+    assert!(app.sync_apply("chats", ferrocast_core::sync_io::to_items(&chats), ferrocast_core::sync::Tracker::default(), rev).is_some());
+    assert_eq!(app.chats.len(), ferrocast_core::models::MAX_CHATS);
+    assert_eq!(app.sync.capped_chats.len(), 2);
+    assert!(app.sync.capped_chats.contains("c0") && app.sync.capped_chats.contains("c1"), "the oldest are the ones cut");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn chats_cut_by_the_cap_are_saved_in_the_tracker_at_once_so_a_restart_cannot_delete_them() {
+    use ferrocast_core::sync::{publish, Tracker};
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let n = ferrocast_core::models::MAX_CHATS + 2;
+    let chats: Vec<Chat> = (0..n).map(|i| Chat::new(format!("c{i}"), vec![("q".into(), "a".into())], i as i64)).collect();
+    let items = ferrocast_core::sync_io::to_items(&chats);
+    let (_, t) = publish("a", &items, &Tracker::default(), 5000);
+    ferrocast_core::sync_io::save_tracker(&app.store.root, "chats", &t).unwrap();
+    let rev = app.sync_rev("chats");
+    assert!(app.sync_apply("chats", items, t, rev).is_some());
+    // a restart before the next chats run: nothing is left in memory
+    app.sync.capped_chats.clear();
+    let saved = ferrocast_core::sync_io::load_tracker(&app.store.root, "chats");
+    assert!(saved.items["c0"].unparsed && saved.items["c1"].unparsed, "remembered on disk");
+    let (doc, _) = publish("a", &ferrocast_core::sync_io::to_items(&app.chats), &saved, 9000);
+    assert!(!doc.items.get("c0").is_some_and(|r| r.deleted), "not published as deleted");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_chat_pushed_out_by_a_new_answer_is_saved_in_the_tracker_even_with_sync_off() {
+    use ferrocast_core::sync::{publish, Tracker};
+    let mut app = fixture();
+    assert!(!app.settings.sync_enabled);
+    let chats: Vec<Chat> =
+        (0..ferrocast_core::models::MAX_CHATS).map(|i| Chat::new(format!("c{i}"), vec![("q".into(), "a".into())], i as i64)).collect();
+    let (_, t) = publish("a", &ferrocast_core::sync_io::to_items(&chats), &Tracker::default(), 5000);
+    ferrocast_core::sync_io::save_tracker(&app.store.root, "chats", &t).unwrap();
+    app.chats = chats;
+    app.stack.push(View::Ai {
+        prompt: String::new(),
+        asked: "new question".into(),
+        answer: "new answer".into(),
+        history: vec![],
+        busy: false,
+        run: 1,
+    });
+    app.save_ai_chat();
+    assert_eq!(app.chats.len(), ferrocast_core::models::MAX_CHATS);
+    app.sync.capped_chats.clear(); // restart
+    let saved = ferrocast_core::sync_io::load_tracker(&app.store.root, "chats");
+    assert!(saved.items["c0"].unparsed, "the cut chat is remembered on disk");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_failed_data_save_keeps_the_merge_unapplied_and_the_recovery_marker() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    std::fs::create_dir_all(app.store.root.join("snippets.json")).unwrap(); // the file cannot be written
+    let merged = ferrocast_core::sync_io::to_items(&[Snippet::new("remote", "text", "!r")]);
+    let rev = app.sync_rev("snippets");
+    let t = ferrocast_core::sync::Tracker::default();
+    assert!(app.sync_apply("snippets", merged, t, rev).is_none(), "the stale file must not count as applied");
+    assert!(ferrocast_core::sync_io::needs_recovery(&app.store.root, "snippets"), "the marker stays");
+    // the clipboard too
+    std::fs::create_dir_all(app.store.root.join("clipboard.json")).unwrap();
+    let rev = app.sync_rev("clipboard");
+    let merged =
+        vec![("e1".to_string(), serde_json::json!({"id": "e1", "kind": "Text", "content": "x", "copied_at": services::now_secs()}))];
+    assert!(app.sync_apply("clipboard", merged, ferrocast_core::sync::Tracker::default(), rev).is_none());
+    assert!(ferrocast_core::sync_io::needs_recovery(&app.store.root, "clipboard"));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn applying_a_clipboard_merge_does_not_hash_every_entry_on_the_ui_thread() {
+    use ferrocast_core::sync::{Tracked, Tracker};
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    let now = services::now_secs();
+    let entry = |id: &str, content: &str, at: i64, pinned: bool| serde_json::json!({"id": id, "kind": "Text", "content": content, "copied_at": at, "pinned": pinned});
+    // "a" and "b" are the same text: normalising keeps "a" and takes over the pin of "b"
+    let merged = vec![
+        ("a".to_string(), entry("a", "same", now, false)),
+        ("b".to_string(), entry("b", "same", now - 10, true)),
+        ("z".to_string(), entry("z", "other", now - 5, false)),
+    ];
+    let mut t = Tracker { seeded: true, ..Default::default() };
+    for id in ["a", "z"] {
+        t.items.insert(
+            id.into(),
+            Tracked {
+                hash: "worker".into(),
+                modified: 1,
+                deleted: false,
+                remote: false,
+                pristine: false,
+                adopted: true,
+                unparsed: false,
+                seen: None,
+                base: None,
+            },
+        );
+    }
+    let rev = app.sync_rev("clipboard");
+    let t = app.sync_apply("clipboard", merged, t, rev).expect("applied");
+    assert_eq!(t.items["z"].hash, "worker", "an entry that is unchanged keeps the hash the worker computed");
+    let applied = app.shared.clipboard.lock().unwrap().iter().find(|e| e.id == "a").cloned().unwrap();
+    assert!(applied.pinned, "the pin was taken over");
+    let want = ferrocast_core::sync::hash(&ferrocast_core::sync_io::to_items(&[applied])[0].1);
+    assert_eq!(t.items["a"].hash, want, "an entry normalising changed is hashed as applied");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn the_worker_hashes_clipboard_entries_as_they_will_be_applied() {
+    use ferrocast_core::sync::{publish, Tracker};
+    // a value written by another build without the optional fields: it does not round-trip byte for byte
+    let merged = vec![("e1".to_string(), serde_json::json!({"id": "e1", "kind": "Text", "content": "x", "copied_at": 5}))];
+    let (_, mut t) = publish("a", &merged, &Tracker::default(), 10);
+    crate::app::sync_ctl::rehash_clipboard(&merged, &mut t);
+    let round: Vec<ClipEntry> = ferrocast_core::sync_io::from_items(merged.clone());
+    let want = ferrocast_core::sync::hash(&ferrocast_core::sync_io::to_items(&round)[0].1);
+    assert_eq!(t.items["e1"].hash, want);
+    assert_ne!(want, ferrocast_core::sync::hash(&merged[0].1), "the case is not vacuous");
+}
+
+#[test]
+fn turning_sync_off_clears_the_remembered_errors() {
+    let mut app = fixture();
+    let mut s = app.settings.clone();
+    s.sync_enabled = true;
+    app.commit_settings(s.clone());
+    app.sync.errors.insert("notes", "disk full".into());
+    app.sync.error = Some("iCloud Drive is off".into());
+    s.sync_enabled = false;
+    app.commit_settings(s);
+    assert!(app.sync.errors.is_empty() && app.sync.error.is_none(), "nothing stale when it is turned on again");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_failed_clipboard_save_does_not_requeue_the_clipboard_in_a_loop() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    std::fs::create_dir_all(app.store.root.join("clipboard.json")).unwrap(); // cannot be written
+    let now = services::now_secs();
+    // the same text twice: normalising drops one, which would normally queue another run
+    let e = |id: &str, at: i64| (id.to_string(), serde_json::json!({"id": id, "kind": "Text", "content": "same", "copied_at": at}));
+    let rev = app.sync_rev("clipboard");
+    let applied = app.sync_apply("clipboard", vec![e("a", now), e("b", now - 5)], ferrocast_core::sync::Tracker::default(), rev);
+    assert!(applied.is_none());
+    assert!(!app.sync.pending.contains("clipboard"), "retrying at once would loop until the disk recovers");
+    let _ = std::fs::remove_dir_all(&app.store.root);
 }

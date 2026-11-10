@@ -90,6 +90,16 @@ pub fn hardware_id() -> Option<String> {
     .clone()
 }
 
+/// The name of this Mac in System Settings (`scutil --get ComputerName`), `None` when it cannot be read.
+pub fn computer_name() -> Option<String> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let out = run_with_timeout(std::process::Command::new("/usr/sbin/scutil").args(["--get", "ComputerName"]), TOOL_TIMEOUT)?;
+        Some(out.trim().to_string()).filter(|n| !n.is_empty())
+    })
+    .clone()
+}
+
 /// Stable id of this Mac's data folder, bound to this Mac's hardware.
 pub fn device_id(data_dir: &Path) -> String {
     device_id_with(data_dir, hardware_id().as_deref())
@@ -154,15 +164,11 @@ pub fn save_tracker(data_dir: &Path, domain: &str, t: &Tracker) -> anyhow::Resul
     write_atomic(&tracker_path(data_dir, domain), &serde_json::to_vec(t)?)
 }
 
-/// Temp file + rename in the same folder.
+/// Temp file + rename in the same folder. The temp name is unique (two writers of one file never
+/// share it) and the bytes are flushed to disk before the rename, so a crash leaves the old file or
+/// the whole new one.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    crate::storage::write_durable(path, bytes)
 }
 
 /// Copy `src` to `dst` through a temp file in the same folder and rename it into place, so `dst` is
@@ -190,6 +196,13 @@ pub struct SyncIo {
     pub download: fn(&Path),
     /// Local `attachments/` of the notes (None: attachments are not synced).
     pub attachments_dir: Option<PathBuf>,
+    /// Tells whether iCloud keeps a file only in the cloud (reading it would block until it is
+    /// downloaded). Replaced in tests.
+    pub dataless: fn(&Path) -> bool,
+    /// Name of this Mac, written into its documents so other Macs can name it in a conflict copy.
+    pub name: Option<String>,
+    /// Peer documents read from disk by this value (not served from the cache).
+    pub doc_reads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// How long `ioreg` and `brctl` may run before they are killed.
@@ -236,6 +249,54 @@ fn is_placeholder(path: &Path) -> bool {
     }
 }
 
+/// macOS marks a file whose content is only in iCloud with the `SF_DATALESS` flag: reading it makes
+/// the kernel wait for the download, for as long as that takes.
+#[cfg(target_os = "macos")]
+fn is_dataless(path: &Path) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    const SF_DATALESS: u32 = 0x4000_0000;
+    std::fs::metadata(path).is_ok_and(|m| m.st_flags() & SF_DATALESS != 0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_dataless(_path: &Path) -> bool {
+    false
+}
+
+/// What identifies one version of a file on disk: modification time, size, inode and change time
+/// (the change time and inode move on a same-size rewrite that restores the modification time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    mtime: std::time::SystemTime,
+    len: u64,
+    ino: u64,
+    ctime: (i64, i64),
+}
+
+impl FileStamp {
+    fn of(path: &Path) -> Option<FileStamp> {
+        let m = std::fs::metadata(path).ok()?;
+        #[cfg(unix)]
+        let (ino, ctime) = {
+            use std::os::unix::fs::MetadataExt;
+            (m.ino(), (m.ctime(), m.ctime_nsec()))
+        };
+        #[cfg(not(unix))]
+        let (ino, ctime) = (0, (0, 0));
+        Some(FileStamp { mtime: m.modified().ok()?, len: m.len(), ino, ctime })
+    }
+}
+
+/// Parsed peer documents by path, valid while the file's modification time and size are the same:
+/// every run would otherwise read and parse every other Mac's documents again (the clipboard one
+/// can be large), although they change rarely.
+type DocCache = std::sync::Mutex<std::collections::HashMap<PathBuf, (FileStamp, DeviceDoc)>>;
+
+fn doc_cache() -> &'static DocCache {
+    static C: std::sync::OnceLock<DocCache> = std::sync::OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
 /// Parse a device document; the old settings document (all settings as the one item `settings`)
 /// is read as one record per field.
 fn parse_doc(domain: &str, bytes: &[u8]) -> serde_json::Result<DeviceDoc> {
@@ -273,7 +334,39 @@ pub struct ReadDocs {
 
 impl SyncIo {
     pub fn new(dir: PathBuf, device: String, images_dir: PathBuf) -> SyncIo {
-        SyncIo { dir, device, images_dir, enabled: Arc::new(AtomicBool::new(true)), download: brctl_download, attachments_dir: None }
+        SyncIo {
+            dir,
+            device,
+            images_dir,
+            enabled: Arc::new(AtomicBool::new(true)),
+            download: brctl_download,
+            attachments_dir: None,
+            dataless: is_dataless,
+            name: None,
+            doc_reads: Arc::default(),
+        }
+    }
+
+    /// Publish this Mac's name with its documents.
+    pub fn with_name(mut self, name: Option<String>) -> SyncIo {
+        self.name = name.filter(|n| !n.trim().is_empty());
+        self
+    }
+
+    /// Number of peer documents read from disk so far through this value.
+    pub fn doc_reads(&self) -> usize {
+        self.doc_reads.load(Ordering::Relaxed)
+    }
+
+    /// `path` is only in the cloud: ask iCloud for it and report true, so the caller skips it
+    /// instead of blocking on a read.
+    fn needs_download(&self, path: &Path) -> bool {
+        if (self.dataless)(path) {
+            (self.download)(path);
+            true
+        } else {
+            false
+        }
     }
 
     /// Also sync the images of notes, kept locally in `dir`.
@@ -315,6 +408,20 @@ impl SyncIo {
                 continue;
             }
             let p = self.device_dir(&dev).join(format!("{domain}.json"));
+            let stamp = FileStamp::of(&p);
+            if let Some(st) = stamp {
+                let hit = doc_cache().lock().ok().and_then(|c| c.get(&p).filter(|(cs, _)| *cs == st).map(|(_, d)| d.clone()));
+                if let Some(mut doc) = hit {
+                    doc.device = dev;
+                    docs.push(doc);
+                    continue;
+                }
+                if self.needs_download(&p) {
+                    downloading += 1;
+                    continue;
+                }
+            }
+            self.doc_reads.fetch_add(1, Ordering::Relaxed);
             let bytes = match std::fs::read(&p) {
                 Ok(b) => b,
                 Err(e) => {
@@ -331,6 +438,9 @@ impl SyncIo {
             };
             match parse_doc(domain, &bytes) {
                 Ok(mut doc) => {
+                    if let (Some(st), Ok(mut c)) = (stamp, doc_cache().lock()) {
+                        c.insert(p.clone(), (st, doc.clone()));
+                    }
                     doc.device = dev; // the folder name is the authority
                     docs.push(doc);
                 }
@@ -345,7 +455,11 @@ impl SyncIo {
 
     /// This Mac's own published document of a domain, if it exists and can be read.
     pub fn read_own_doc(&self, domain: &str) -> Option<DeviceDoc> {
-        let bytes = std::fs::read(self.device_dir(&self.device).join(format!("{domain}.json"))).ok()?;
+        let p = self.device_dir(&self.device).join(format!("{domain}.json"));
+        if self.needs_download(&p) {
+            return None;
+        }
+        let bytes = std::fs::read(p).ok()?;
         parse_doc(domain, &bytes).ok()
     }
 
@@ -353,8 +467,14 @@ impl SyncIo {
     pub fn write_doc(&self, domain: &str, doc: &DeviceDoc) -> anyhow::Result<()> {
         anyhow::ensure!(self.on(), "sync turned off");
         let p = self.device_dir(&self.device).join(format!("{domain}.json"));
-        let bytes = serde_json::to_vec_pretty(doc)?;
-        if std::fs::read(&p).is_ok_and(|old| old == bytes) {
+        // compact: the documents are read by machines, and the clipboard one is large
+        let bytes = if self.name.is_some() && doc.name != self.name {
+            serde_json::to_vec(&DeviceDoc { name: self.name.clone(), ..doc.clone() })?
+        } else {
+            serde_json::to_vec(doc)?
+        };
+        // a file that is only in the cloud is replaced without reading it (reading would wait for it)
+        if !(self.dataless)(&p) && std::fs::read(&p).is_ok_and(|old| old == bytes) {
             return Ok(());
         }
         write_atomic(&p, &bytes)
@@ -394,6 +514,9 @@ pub struct Outcome {
     pub recovered: bool,
     /// Note images copied from other Macs into the local `attachments/` in this run.
     pub attachments_added: usize,
+    /// Notes edited on two Macs since their shared version: the text that lost was kept as a
+    /// conflict copy note in `merged` (only the notes domain reports any).
+    pub conflicts: usize,
 }
 
 /// Publish the snapshot of local items, read the other Macs' documents and merge. Writes only this
@@ -417,8 +540,61 @@ pub fn mark_recovery(data_dir: &Path, domain: &str) {
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Err(e) = std::fs::write(&p, b"") {
+    // flushed to disk before the data file is saved, so a crash cannot leave the data without it
+    if let Err(e) = crate::storage::write_durable(&p, b"") {
         eprintln!("ferrocast: could not write {}: {e}", p.display());
+    }
+}
+
+/// True for `.<name>.<32 hex digits>.tmp`, the name `write_durable` and `copy_atomic` give a temp file.
+fn is_own_temp_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix('.').and_then(|n| n.strip_suffix(".tmp")) else { return false };
+    match rest.rsplit_once('.') {
+        Some((base, id)) => !base.is_empty() && id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()),
+        None => false,
+    }
+}
+
+/// Remove the temp files an interrupted `write_durable`/`copy_atomic` left in `dirs` (not their
+/// subfolders): only files with that temp naming pattern that were last written more than
+/// `older_than` ago, so a write in progress is never touched.
+pub fn cleanup_stale_temp_files(dirs: &[&Path], older_than: std::time::Duration) {
+    let now = std::time::SystemTime::now();
+    for dir in dirs {
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        for e in rd.flatten() {
+            if !is_own_temp_name(&e.file_name().to_string_lossy()) {
+                continue;
+            }
+            let old = e
+                .metadata()
+                .ok()
+                .filter(|m| m.is_file())
+                .and_then(|m| m.modified().ok())
+                .is_some_and(|t| now.duration_since(t).is_ok_and(|age| age > older_than));
+            if old {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+}
+
+/// How old a leftover temp file must be before a run removes it.
+pub const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(600);
+
+impl SyncIo {
+    /// Remove stale temp files of this build in the local data folder and in this Mac's folder of
+    /// the sync folder (the other Macs clean up their own).
+    pub fn cleanup_temp_files(&self, data_dir: &Path) {
+        let own = self.device_dir(&self.device);
+        let mut dirs: Vec<PathBuf> =
+            vec![data_dir.to_path_buf(), data_dir.join("sync-state"), own.clone(), own.join("clipboard-images"), own.join("attachments")];
+        dirs.push(self.images_dir.clone());
+        if let Some(a) = &self.attachments_dir {
+            dirs.push(a.clone());
+        }
+        let refs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+        cleanup_stale_temp_files(&refs, STALE_TEMP_AGE);
     }
 }
 
@@ -463,6 +639,23 @@ pub fn sync_domain_recovering(
     recover: bool,
 ) -> anyhow::Result<Outcome> {
     anyhow::ensure!(io.on(), "sync turned off");
+    // This Mac's own document is only in iCloud: ask for it and do nothing else. Rebuilding the
+    // tracker or recovering without it would take what is local for everything this Mac published.
+    let own_path = io.device_dir(&io.device).join(format!("{domain}.json"));
+    if io.needs_download(&own_path) {
+        return Ok(Outcome {
+            merged: None,
+            tracker_published: tracker.clone(),
+            tracker_merged: tracker.clone(),
+            peers: io.peers(),
+            corrupt: vec![],
+            downloading: 1,
+            applied_doc: None,
+            recovered: false,
+            attachments_added: 0,
+            conflicts: 0,
+        });
+    }
     let fresh = Tracker::default();
     let tracker = if recover { &fresh } else { tracker };
     if domain == "clipboard" {
@@ -544,6 +737,11 @@ pub fn sync_domain_recovering(
         !t1.items.get(id).zip(t2.items.get(id)).is_some_and(|(a, b)| a.unparsed && !a.deleted && b.unparsed && a.hash == b.hash)
     });
     let mut t2 = t2;
+    // Notes edited on two Macs: the text that lost is kept as a copy (see `conflict_copies`).
+    let copies = if domain == "notes" && !recover { conflict_copies(io, tracker, snapshot, &docs, &merged) } else { vec![] };
+    let conflicted: Vec<String> = copies.iter().map(|c| c.note_id.clone()).collect();
+    let conflicts = copies.len();
+    merged.extend(copies.into_iter().map(|c| (c.id, c.value)));
     // Own deletions survive a recovery: published again as this Mac's own (not `remote`, so the
     // clipboard, which does not relay others' deletions, still carries them). Done after the merge,
     // never before: a tombstone in the tracker for an id the reloaded defaults contain would look
@@ -564,6 +762,8 @@ pub fn sync_domain_recovering(
                         pristine: false,
                         adopted: false,
                         unparsed: false,
+                        seen: None,
+                        base: None,
                     },
                 );
             }
@@ -602,7 +802,16 @@ pub fn sync_domain_recovering(
             applied_doc: None,
             recovered: recover,
             attachments_added,
+            conflicts: 0,
         });
+    }
+    // A merge that is not applied (typing in the note) leaves the conflict to be found again: the
+    // saved tracker keeps the version both edits started from, not this Mac's published edit.
+    let mut t1 = t1;
+    for id in &conflicted {
+        if let Some(before) = tracker.items.get(id) {
+            t1.items.insert(id.clone(), before.clone());
+        }
     }
     let applied_doc = (!clipboard || recover).then_some(doc2);
     Ok(Outcome {
@@ -615,7 +824,86 @@ pub fn sync_domain_recovering(
         applied_doc,
         recovered: recover,
         attachments_added,
+        conflicts,
     })
+}
+
+/// A conflict copy to add to the merged notes.
+struct ConflictCopy {
+    /// The note that was edited on two Macs.
+    note_id: String,
+    /// Id of the copy: the same on every Mac that finds this conflict, so the copy is made once.
+    id: String,
+    value: Value,
+}
+
+/// Notes that this Mac edited since the version it last published or received and that another Mac
+/// also changed (to something else): the merge keeps the text of the newer record, and the text that
+/// lost is added as a new note whose first line ends with "(conflict copy from <Mac>)". Every Mac
+/// that meets the conflict derives the same copy id, so it exists once. Only a record the other Mac
+/// wrote after the shared version counts: a peer document that is merely older (that Mac was asleep
+/// while this one edited twice) is not a conflict. A deletion on the other side makes no copy
+/// either: it is not text, and the merge keeps whichever record is newest.
+fn conflict_copies(
+    io: &SyncIo,
+    prev: &Tracker,
+    snapshot: &[(String, Value)],
+    docs: &[DeviceDoc],
+    merged: &[(String, Value)],
+) -> Vec<ConflictCopy> {
+    let win = sync::winners(docs);
+    let mut out = Vec::new();
+    for (id, local) in snapshot {
+        let Some(t) = prev.items.get(id).filter(|t| !t.deleted && !t.unparsed) else { continue };
+        let local_hash = sync::hash(local);
+        if t.hash == local_hash {
+            continue; // not edited here since the shared version
+        }
+        let Some((dev, rec)) = win.get(id) else { continue };
+        let Some(theirs) = rec.value.as_ref().filter(|_| !rec.deleted) else { continue };
+        // The shared version is the last one both Macs had (`Tracked::base`), not this Mac's own
+        // last publish: a record the other Mac wrote after it is a concurrent edit even when this
+        // Mac published again since. One written at or before it is just an older document.
+        if rec.modified <= t.base.unwrap_or(t.modified) {
+            continue;
+        }
+        let their_hash = sync::hash(theirs);
+        if their_hash == t.hash || their_hash == local_hash {
+            continue; // the other Mac did not change it, or both made the same edit
+        }
+        let Some((_, kept)) = merged.iter().find(|(i, _)| i == id) else { continue };
+        let kept_hash = sync::hash(kept);
+        let short = |d: &str| d.chars().take(8).collect::<String>();
+        let (lost, lost_hash, from) = if kept_hash == local_hash {
+            let name = docs.iter().find(|d| d.device == *dev).and_then(|d| d.name.clone()).unwrap_or_else(|| short(dev));
+            (theirs, their_hash, name)
+        } else if kept_hash == their_hash {
+            (local, local_hash, io.name.clone().unwrap_or_else(|| short(&io.device)))
+        } else {
+            continue;
+        };
+        let Some(text) = lost.get("text").and_then(Value::as_str).filter(|t| !t.trim().is_empty()) else { continue };
+        let copy_id = format!("conflict-{}", sync::hash(&Value::String(format!("{id}:{lost_hash}"))).chars().take(24).collect::<String>());
+        let exists = snapshot.iter().any(|(i, _)| *i == copy_id)
+            || merged.iter().any(|(i, _)| *i == copy_id)
+            || prev.items.contains_key(&copy_id)
+            || win.contains_key(&copy_id);
+        if exists {
+            continue;
+        }
+        let suffix = crate::i18n::trf("(conflict copy from {mac})", &[("mac", &from)]);
+        let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+        let at = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
+        lines[at] = format!("{} {suffix}", lines[at].trim_end());
+        let mut value = lost.clone();
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("id".into(), Value::String(copy_id.clone()));
+            obj.insert("text".into(), Value::String(lines.join("\n")));
+            obj.remove("pinned_at"); // `deleted_at` stays: a trashed text does not come back as a live note
+        }
+        out.push(ConflictCopy { note_id: id.clone(), id: copy_id, value });
+    }
+    out
 }
 
 /// Pristine = the value is the built-in default of its item (see `sync::Record::pristine`): the
@@ -702,7 +990,9 @@ fn import_images(io: &SyncIo, items: &[(String, Value)], docs: &[DeviceDoc]) -> 
         let mut pending = false;
         for d in docs {
             let src = io.device_dir(&d.device).join("clipboard-images").join(&n);
-            if src.is_file() {
+            if src.is_file() && io.needs_download(&src) {
+                pending = true;
+            } else if src.is_file() {
                 if !io.on() {
                     return downloading;
                 }
@@ -797,7 +1087,9 @@ fn sync_attachments(
         let mut waiting = false;
         for dev in others.iter().map(|d| d.as_str()).chain(std::iter::once(io.device.as_str())) {
             let src = remote(dev);
-            if src.is_file() {
+            if src.is_file() && io.needs_download(&src) {
+                waiting = true;
+            } else if src.is_file() {
                 let ok = std::fs::metadata(&src).is_ok_and(|m| m.len() <= crate::attachments::MAX_BYTES)
                     && std::fs::read(&src).is_ok_and(|b| {
                         if !crate::attachments::content_matches(name, &b) || !io.on() {
@@ -1350,6 +1642,7 @@ mod tests {
                 })
                 .collect(),
             first_sync_at: Some(1),
+            name: None,
         };
         b.io.write_doc("snippets", &doc).unwrap();
     }
@@ -1426,6 +1719,7 @@ mod tests {
             items: [("x".to_string(), sync::Record { modified: 15_000, deleted: true, value: None, pristine: false, adopted: false })]
                 .into(),
             first_sync_at: Some(1),
+            name: None,
         };
         b.io.write_doc("snippets", &gone).unwrap();
         for now in [16_000, 17_000] {
@@ -3189,5 +3483,444 @@ mod tests {
         }
         assert_eq!(domain_file("themes"), "themes.json");
         assert_eq!(domain_of_file("frecency.json"), None);
+    }
+
+    /// Owner decisions round 1 (sync review): logical clock, conflict copies, compact documents.
+    mod owner_decisions {
+        use super::*;
+
+        fn note(id: &str, text: &str, modified: i64) -> Note {
+            Note { id: id.into(), text: text.into(), created: modified, modified, pinned_at: None, deleted_at: None }
+        }
+
+        fn names(m: &Mac) -> Vec<String> {
+            m.snippets.iter().map(|s| s.name.clone()).collect()
+        }
+
+        fn rename(m: &mut Mac, id: &str, name: &str) {
+            m.snippets.iter_mut().find(|s| s.id == id).unwrap().name = name.into();
+        }
+
+        fn cleanup(dirs: &[&PathBuf]) {
+            for d in dirs {
+                let _ = std::fs::remove_dir_all(d);
+            }
+        }
+
+        /// Both Macs hold s1 "one" (B's clock is `ahead` ms in front of A's).
+        fn skewed(ahead: i64) -> (PathBuf, PathBuf, PathBuf, Mac, Mac) {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.snippets = vec![snip("s1", "one")];
+            a.sync(1_000);
+            b.sync(1_500);
+            rename(&mut b, "s1", "B edit");
+            b.sync(1_600 + ahead); // stamped with B's fast clock
+            a.sync(2_000);
+            assert_eq!(names(&a), ["B edit"], "A adopted B's edit");
+            (da, db, shared, a, b)
+        }
+
+        #[test]
+        fn an_edit_made_after_seeing_a_newer_stamp_still_wins_when_this_macs_clock_is_behind() {
+            for ahead in [3_600_000, 4_102_444_800_000] {
+                // one hour of skew, and an absurd stamp from the year 2100
+                let (da, db, shared, mut a, mut b) = skewed(ahead);
+                rename(&mut a, "s1", "A edit");
+                a.sync(3_000); // A's clock says 3 s, B's edit is stamped far ahead
+                b.sync(2_000 + ahead);
+                a.sync(4_000);
+                assert_eq!(names(&b), ["A edit"], "B receives A's later edit (ahead={ahead})");
+                assert_eq!(names(&a), ["A edit"], "A keeps its edit (ahead={ahead})");
+                cleanup(&[&da, &db, &shared]);
+            }
+        }
+
+        #[test]
+        fn a_deletion_made_after_seeing_a_newer_stamp_still_wins_when_this_macs_clock_is_behind() {
+            let (da, db, shared, mut a, mut b) = skewed(3_600_000);
+            a.snippets.clear();
+            a.sync(3_000);
+            b.sync(3_600_000 + 2_000);
+            a.sync(4_000);
+            assert!(b.snippets.is_empty(), "the deletion reaches B: {:?}", names(&b));
+            assert!(a.snippets.is_empty(), "and the item does not come back on A: {:?}", names(&a));
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        fn two_notes_macs() -> (PathBuf, PathBuf, PathBuf, Mac, Mac) {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.notes = vec![note("n1", "Plan\nbase", 100)];
+            a.sync_notes(1_000);
+            b.sync_notes(1_500);
+            assert_eq!(b.notes.len(), 1);
+            (da, db, shared, a, b)
+        }
+
+        fn copies(m: &Mac) -> Vec<&Note> {
+            m.notes.iter().filter(|n| n.id != "n1").collect()
+        }
+
+        #[test]
+        fn two_edits_of_one_note_keep_the_older_text_as_a_conflict_copy_on_both_macs() {
+            // the Mac that edited later (B) wins; A's text survives as a copy, once, on both Macs
+            let (da, db, shared, mut a, mut b) = two_notes_macs();
+            a.notes[0].text = "Plan\nA's edit".into();
+            a.sync_notes(2_000);
+            b.notes[0].text = "Plan\nB's edit".into();
+            let o = b.sync_notes(3_000);
+            assert_eq!(o.conflicts, 1, "one conflict reported for the toast");
+            assert_eq!(b.notes.iter().find(|n| n.id == "n1").unwrap().text, "Plan\nB's edit");
+            assert_eq!(copies(&b).len(), 1, "B keeps A's text as a copy: {:?}", b.notes);
+            assert!(copies(&b)[0].text.starts_with("Plan (conflict copy from "), "{}", copies(&b)[0].text);
+            assert!(copies(&b)[0].text.ends_with("\nA's edit"));
+            let o = a.sync_notes(4_000);
+            assert_eq!(o.conflicts, 0, "A is not told again");
+            b.sync_notes(5_000);
+            a.sync_notes(6_000);
+            for m in [&a, &b] {
+                assert_eq!(m.notes.len(), 2, "exactly one copy, no duplicates: {:?}", m.notes);
+                assert_eq!(m.notes.iter().find(|n| n.id == "n1").unwrap().text, "Plan\nB's edit");
+                assert_eq!(copies(m)[0].text, copies(&b)[0].text);
+            }
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn the_losing_local_text_is_kept_as_a_copy_when_the_other_macs_edit_is_newer() {
+            let (da, db, shared, mut a, mut b) = two_notes_macs();
+            a.notes[0].text = "Plan\nA's edit".into();
+            a.sync_notes(2_000);
+            b.notes[0].text = "Plan\nB's edit".into();
+            b.sync_notes(1_800); // B's clock is behind A's
+            assert_eq!(b.notes.iter().find(|n| n.id == "n1").unwrap().text, "Plan\nA's edit");
+            assert_eq!(copies(&b).len(), 1, "B's own text is kept: {:?}", b.notes);
+            assert!(copies(&b)[0].text.ends_with("\nB's edit"));
+            a.sync_notes(4_000);
+            assert_eq!(a.notes.len(), 2);
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn an_edit_made_after_receiving_the_other_edit_is_not_a_conflict() {
+            let (da, db, shared, mut a, mut b) = two_notes_macs();
+            a.notes[0].text = "Plan\nA's edit".into();
+            a.sync_notes(2_000);
+            let o = b.sync_notes(2_500);
+            assert_eq!(o.conflicts, 0);
+            b.notes[0].text = "Plan\nB after A".into();
+            let o = b.sync_notes(3_000);
+            assert_eq!(o.conflicts, 0);
+            a.sync_notes(4_000);
+            assert_eq!((a.notes.len(), b.notes.len()), (1, 1), "no copy: {:?}", a.notes);
+            assert_eq!(a.notes[0].text, "Plan\nB after A");
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn the_copy_names_the_mac_that_wrote_the_lost_text() {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.io.name = Some("Studio Mac".into());
+            b.io.name = Some("Laptop".into());
+            a.notes = vec![note("n1", "Plan\nbase", 100)];
+            a.sync_notes(1_000);
+            b.sync_notes(1_500);
+            a.notes[0].text = "Plan\nA's edit".into();
+            a.sync_notes(2_000);
+            b.notes[0].text = "Plan\nB's edit".into();
+            b.sync_notes(3_000);
+            assert_eq!(copies(&b)[0].text, "Plan (conflict copy from Studio Mac)\nA's edit");
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn a_conflict_is_found_again_when_the_merge_could_not_be_applied() {
+            // typing in the note keeps the app from applying the merge: the next run still sees it
+            let (da, db, shared, mut a, mut b) = two_notes_macs();
+            a.notes[0].text = "Plan\nA's edit".into();
+            a.sync_notes(2_000);
+            b.notes[0].text = "Plan\nB's edit".into();
+            let d = &b.store.root;
+            let o = sync_domain(&b.io, "notes", &to_items(&b.notes), &load_tracker(d, "notes"), 3_000).unwrap();
+            assert_eq!(o.conflicts, 1);
+            save_tracker(d, "notes", &o.tracker_published).unwrap(); // not applied
+            let o = sync_domain(&b.io, "notes", &to_items(&b.notes), &load_tracker(d, "notes"), 4_000).unwrap();
+            assert_eq!(o.conflicts, 1, "found again");
+            let kept: Vec<_> = o.merged.unwrap().into_iter().filter(|(id, _)| id != "n1").collect();
+            assert_eq!(kept.len(), 1);
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn editing_twice_while_the_other_mac_sleeps_is_not_a_conflict() {
+            let (da, db, shared, mut a, b) = two_notes_macs();
+            a.notes[0].text = "Plan\nfirst edit".into();
+            a.sync_notes(2_000);
+            a.notes[0].text = "Plan\nsecond edit".into();
+            let o = a.sync_notes(3_000); // B's document still holds the base text
+            assert_eq!(o.conflicts, 0, "no toast");
+            a.sync_notes(4_000);
+            assert_eq!(a.notes.len(), 1, "no conflict copy: {:?}", a.notes);
+            assert_eq!(a.notes[0].text, "Plan\nsecond edit");
+            let _ = b;
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn an_edit_that_icloud_delivers_late_is_still_a_conflict_when_the_other_mac_edited_twice() {
+            let (da, db, shared, mut a, mut b) = two_notes_macs();
+            a.notes[0].text = "Plan\nA's edit".into();
+            a.sync_notes(1_500);
+            // iCloud has not delivered A's document to B yet
+            let doc = a.dir_file("notes");
+            let held = doc.with_extension("held");
+            std::fs::rename(&doc, &held).unwrap();
+            b.notes[0].text = "Plan\nB edit 1".into();
+            b.sync_notes(2_000);
+            b.notes[0].text = "Plan\nB edit 2".into();
+            std::fs::rename(&held, &doc).unwrap();
+            let o = b.sync_notes(3_000);
+            assert_eq!(o.conflicts, 1, "A's text must not be lost");
+            assert_eq!(copies(&b).len(), 1, "{:?}", b.notes);
+            assert!(copies(&b)[0].text.ends_with("\nA's edit"));
+            assert_eq!(b.notes.iter().find(|n| n.id == "n1").unwrap().text, "Plan\nB edit 2");
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn trackers_without_a_base_compare_with_their_own_time_as_before() {
+            let (da, db, shared, mut a, b) = two_notes_macs();
+            let strip = |m: &Mac| {
+                let mut t = load_tracker(&m.store.root, "notes");
+                for i in t.items.values_mut() {
+                    i.base = None;
+                }
+                save_tracker(&m.store.root, "notes", &t).unwrap();
+            };
+            strip(&a);
+            a.notes[0].text = "Plan\nfirst edit".into();
+            a.sync_notes(2_000);
+            a.notes[0].text = "Plan\nsecond edit".into();
+            let o = a.sync_notes(3_000);
+            assert_eq!(o.conflicts, 0);
+            assert_eq!(a.notes.len(), 1);
+            let _ = b;
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn a_conflict_copy_of_trashed_text_stays_in_the_trash() {
+            let (da, db, shared, mut a, mut b) = two_notes_macs();
+            a.notes[0].text = "Plan\nA's trashed edit".into();
+            a.notes[0].deleted_at = Some(1_900);
+            a.sync_notes(2_000);
+            b.notes[0].text = "Plan\nB's edit".into();
+            b.sync_notes(3_000);
+            assert_eq!(copies(&b).len(), 1, "{:?}", b.notes);
+            assert!(copies(&b)[0].deleted_at.is_some(), "not a live note: {:?}", copies(&b)[0]);
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn a_document_that_is_only_in_the_cloud_is_requested_and_this_mac_writes_nothing() {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.snippets = vec![snip("s1", "one")];
+            a.sync(1_000);
+            b.snippets = vec![snip("s1", "one")];
+            b.sync(1_500);
+            let own = b.dir_file("snippets");
+            let before = std::fs::read(&own).unwrap();
+            DATALESS.lock().unwrap().push(own.clone());
+            b.io.dataless = in_cloud_only;
+            b.io.download = request;
+            // the tracker was lost and the data holds nothing: running now would rebuild without the document
+            std::fs::remove_file(b.store.root.join("sync-state").join("snippets.json")).unwrap();
+            let o = sync_domain(&b.io, "snippets", &[], &load_tracker(&b.store.root, "snippets"), 2_000).unwrap();
+            assert_eq!(o.downloading, 1);
+            assert!(o.merged.is_none() && o.applied_doc.is_none());
+            assert!(REQUESTED.lock().unwrap().contains(&own), "iCloud was asked for it");
+            assert_eq!(std::fs::read(&own).unwrap(), before, "nothing written");
+            DATALESS.lock().unwrap().retain(|p| p != &own);
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn a_same_size_rewrite_with_the_same_modification_time_is_read_again() {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.snippets = vec![snip("s1", "one")];
+            a.sync(1_000);
+            let first = b.io.read_docs("snippets");
+            assert_eq!(first.docs[0].items["s1"].value.as_ref().unwrap()["text"], "text of one");
+            let p = a.dir_file("snippets");
+            let mtime = std::fs::metadata(&p).unwrap().modified().unwrap();
+            let bytes = std::fs::read(&p).unwrap();
+            let changed = String::from_utf8(bytes).unwrap().replace("text of one", "text of two");
+            std::fs::write(&p, changed).unwrap();
+            std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_modified(mtime).unwrap();
+            let again = b.io.read_docs("snippets");
+            assert_eq!(again.docs[0].items["s1"].value.as_ref().unwrap()["text"], "text of two", "the rewrite was missed");
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn only_our_own_old_temp_files_are_removed() {
+            let dir = tmp("temps");
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+            let mk = |name: &str, age: Option<std::time::SystemTime>| {
+                let p = dir.join(name);
+                std::fs::write(&p, b"x").unwrap();
+                if let Some(t) = age {
+                    std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_modified(t).unwrap();
+                }
+                p
+            };
+            let hex = "0123456789abcdef0123456789abcdef";
+            let stale = mk(&format!(".notes.json.{hex}.tmp"), Some(old));
+            let fresh = mk(&format!(".snippets.json.{hex}.tmp"), None);
+            let foreign = mk("keep.tmp", Some(old));
+            let dotted = mk(".something.tmp", Some(old));
+            let data = mk("notes.json", Some(old));
+            cleanup_stale_temp_files(&[dir.as_path()], std::time::Duration::from_secs(600));
+            assert!(!stale.exists(), "old temp of ours removed");
+            assert!(fresh.exists() && foreign.exists() && dotted.exists() && data.exists());
+            cleanup(&[&dir]);
+        }
+
+        #[test]
+        fn marking_a_recovery_is_durable_and_leaves_no_temp_file() {
+            let dir = tmp("marker");
+            mark_recovery(&dir, "notes");
+            assert!(needs_recovery(&dir, "notes"));
+            let junk: Vec<_> = std::fs::read_dir(dir.join("sync-state")).unwrap().flatten().map(|e| e.file_name()).collect();
+            assert_eq!(junk.len(), 1, "{junk:?}");
+            cleanup(&[&dir]);
+        }
+
+        static DATALESS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+        static REQUESTED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+        fn in_cloud_only(p: &Path) -> bool {
+            DATALESS.lock().unwrap().iter().any(|d| d == p)
+        }
+
+        fn request(p: &Path) {
+            REQUESTED.lock().unwrap().push(p.to_path_buf());
+        }
+
+        #[test]
+        fn a_document_that_is_only_in_the_cloud_is_requested_and_not_read() {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.snippets = vec![snip("s1", "one")];
+            a.sync(1_000);
+            let doc = a.dir_file("snippets");
+            DATALESS.lock().unwrap().push(doc.clone());
+            b.io.dataless = in_cloud_only;
+            b.io.download = request;
+            let d = &b.store.root;
+            let o = sync_domain(&b.io, "snippets", &[], &load_tracker(d, "snippets"), 2_000).unwrap();
+            assert_eq!(o.downloading, 1, "counted as downloading");
+            assert!(REQUESTED.lock().unwrap().contains(&doc), "iCloud was asked for it");
+            assert_eq!(b.io.doc_reads(), 0, "and the file was not read (a read would block until it arrives)");
+            assert!(o.merged.as_ref().is_none_or(|m| m.iter().all(|(id, _)| id != "s1")));
+            // once it is downloaded the next run merges it
+            DATALESS.lock().unwrap().retain(|p| p != &doc);
+            let o = sync_domain(&b.io, "snippets", &[], &o.tracker_published, 3_000).unwrap();
+            assert_eq!(o.downloading, 0);
+            assert!(o.merged.unwrap().iter().any(|(id, _)| id == "s1"));
+            b.sync(4_000);
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn documents_are_written_compact_and_a_v060_document_still_merges() {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.snippets = vec![snip("s1", "one")];
+            a.sync(1_000);
+            let bytes = std::fs::read(a.dir_file("snippets")).unwrap();
+            assert!(!bytes.contains(&b'\n'), "compact JSON: {}", String::from_utf8_lossy(&bytes));
+            // a document as a v0.6.0 build wrote it (pretty printed, no newer fields)
+            let old = r#"{
+  "device": "zz",
+  "items": {
+    "s9": {"modified": 5000, "value": {"id": "s9", "name": "from 0.6.0", "text": "t", "keyword": "", "tags": []}},
+    "s1": {"modified": 6000, "deleted": true}
+  },
+  "first_sync_at": 1
+}"#;
+            std::fs::create_dir_all(shared.join("devices").join("zz")).unwrap();
+            std::fs::write(shared.join("devices").join("zz").join("snippets.json"), old).unwrap();
+            a.sync(7_000);
+            assert_eq!(names(&a), ["from 0.6.0"], "the old document is merged: s9 added, s1 deleted");
+            // and an older build reads what this build writes: the v0.6.0 document type
+            #[derive(serde::Deserialize)]
+            #[allow(dead_code)]
+            struct OldRecord {
+                modified: i64,
+                #[serde(default)]
+                deleted: bool,
+                #[serde(default)]
+                value: Option<Value>,
+                #[serde(default)]
+                pristine: bool,
+                #[serde(default)]
+                adopted: bool,
+            }
+            #[derive(serde::Deserialize)]
+            #[allow(dead_code)]
+            struct OldDoc {
+                device: String,
+                items: std::collections::BTreeMap<String, OldRecord>,
+                #[serde(default)]
+                first_sync_at: Option<i64>,
+            }
+            let doc: OldDoc = serde_json::from_slice(&std::fs::read(a.dir_file("snippets")).unwrap()).unwrap();
+            assert!(doc.items.contains_key("s9"));
+            let _ = b;
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn an_unchanged_peer_document_is_not_read_again_and_a_changed_one_is() {
+            let (da, db, shared) = (tmp("a"), tmp("b"), tmp("shared"));
+            let (mut a, mut b) = (Mac::new(&da, &shared), Mac::new(&db, &shared));
+            a.snippets = vec![snip("s1", "one")];
+            a.sync(1_000);
+            b.sync(2_000);
+            let before = b.io.doc_reads();
+            b.sync(3_000);
+            b.sync(4_000);
+            assert_eq!(b.io.doc_reads(), before, "the peer documents were not touched, so they are not read");
+            rename(&mut a, "s1", "edited with a longer name");
+            a.sync(5_000);
+            b.sync(6_000);
+            assert!(b.io.doc_reads() > before, "a changed document is read");
+            assert_eq!(names(&b), ["edited with a longer name"]);
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn saving_survives_a_leftover_fixed_name_temp_and_leaves_no_temp_files() {
+            let dir = tmp("atomic");
+            let store = Store::new(&dir);
+            // the old fixed temp names (`x.json.tmp`, `x.tmp`) are taken by something else
+            std::fs::create_dir_all(dir.join("snippets.json.tmp")).unwrap();
+            store.save("snippets.json", &vec![snip("s1", "one")]).expect("a unique temp name is used");
+            std::fs::create_dir_all(dir.join("sync-state").join("notes.tmp")).unwrap();
+            save_tracker(&dir, "notes", &Tracker::default()).expect("a unique temp name is used");
+            let junk: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| n.ends_with(".tmp") && n != "snippets.json.tmp")
+                .collect();
+            assert!(junk.is_empty(), "{junk:?}");
+            cleanup(&[&dir]);
+        }
     }
 }

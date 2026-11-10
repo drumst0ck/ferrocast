@@ -50,6 +50,10 @@ pub struct DeviceDoc {
     /// document if the tracker is lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_sync_at: Option<i64>,
+    /// Name of the publishing Mac, for a conflict copy to say whose text it holds. Older builds do
+    /// not write it and ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Local memory of the last published state, per item id: (content hash, modified, deleted).
@@ -87,6 +91,16 @@ pub struct Tracked {
     /// nor writes it, and the record the other Mac published stays the one that counts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unparsed: bool,
+    /// For a tombstone stamped in the future (a Mac with a fast clock): when this Mac first saw it,
+    /// so it still ages out. Kept only in the local tracker; the published stamp is never touched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen: Option<i64>,
+    /// Time of the last version this Mac shared with another Mac (adopted from it, or the first
+    /// stamp of a seeded item). Own publishes leave it alone: a record another Mac wrote after it is
+    /// a concurrent edit of this Mac's, whatever this Mac published since. Local only, never
+    /// published; trackers without it compare with `modified` as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<i64>,
 }
 
 /// Flag the items of `ids` that this Mac could not read into its local data (see `Tracked::unparsed`).
@@ -106,6 +120,15 @@ pub const TOMBSTONE_TTL_MS: i64 = 90 * 24 * 3600 * 1000;
 pub fn hash(value: &Value) -> String {
     let bytes = serde_json::to_vec(value).unwrap_or_default();
     Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The time of a new edit or deletion of an item whose last known record is stamped `last`: the wall
+/// clock, but never at or before `last`. A Mac whose clock runs behind (or that saw a record from a
+/// Mac running ahead, even one stamped years in the future) still orders what it does after seeing
+/// that record after it, so an edit made after receiving a version is never lost to it. Nothing is
+/// ignored or clamped: a record stamped far ahead keeps its place, later edits just follow it.
+fn logical_now(now: i64, last: i64) -> i64 {
+    now.max(last.saturating_add(1))
 }
 
 /// Record the current local items: changed or new items get `now`, missing ones become tombstones at
@@ -163,7 +186,7 @@ pub struct PublishOpts {
 pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64, opts: &PublishOpts) -> (DeviceDoc, Tracker) {
     let unseen = if prev.seeded { now } else { opts.first_stamp };
     let first_sync_at = if prev.seeded { prev.first_sync_at } else { Some(now) };
-    let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new(), first_sync_at };
+    let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new(), first_sync_at, name: None };
     let mut next = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at };
     let mut seen = HashSet::new();
     for (id, value) in items {
@@ -172,13 +195,18 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
         }
         let h = hash(value);
         // an edit (a changed hash, even back to the default) is a real change: not pristine, now
-        let (modified, pristine, adopted) = match prev.items.get(id) {
-            Some(t) if !t.deleted && t.hash == h => (t.modified, t.pristine, t.adopted),
-            Some(_) => (now, false, false),
-            None => (unseen, !prev.seeded && opts.pristine.is_some_and(|f| f(id, value)), false),
+        let (modified, pristine, adopted, base) = match prev.items.get(id) {
+            Some(t) if !t.deleted && t.hash == h => (t.modified, t.pristine, t.adopted, t.base),
+            // the shared version stays the one before the first own edit
+            Some(t) if !t.deleted => (logical_now(now, t.modified), false, false, t.base.or(Some(t.modified))),
+            Some(t) => (logical_now(now, t.modified), false, false, None),
+            None => (unseen, !prev.seeded && opts.pristine.is_some_and(|f| f(id, value)), false, Some(unseen)),
         };
         doc.items.insert(id.clone(), Record { modified, deleted: false, value: Some(value.clone()), pristine, adopted });
-        next.items.insert(id.clone(), Tracked { hash: h, modified, deleted: false, remote: false, pristine, adopted, unparsed: false });
+        next.items.insert(
+            id.clone(),
+            Tracked { hash: h, modified, deleted: false, remote: false, pristine, adopted, unparsed: false, seen: None, base },
+        );
     }
     for (id, t) in &prev.items {
         if seen.contains(id) {
@@ -193,14 +221,26 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
         if t.deleted && t.remote && !opts.relay_tombstones {
             continue; // someone else's deletion: their document carries it
         }
-        let modified = if t.deleted { t.modified } else { now };
-        if opts.ttl.is_some_and(|ttl| now - modified > ttl) {
+        let modified = if t.deleted { t.modified } else { logical_now(now, t.modified) };
+        // a tombstone stamped ahead of this Mac's clock ages from when this Mac first saw it
+        let seen = (modified > now).then(|| t.seen.unwrap_or(now));
+        if opts.ttl.is_some_and(|ttl| now - seen.map_or(modified, |s| s.min(now)) > ttl) {
             continue;
         }
         doc.items.insert(id.clone(), Record { modified, deleted: true, value: None, pristine: false, adopted: false });
         next.items.insert(
             id.clone(),
-            Tracked { hash: t.hash.clone(), modified, deleted: true, remote: t.remote, pristine: false, adopted: false, unparsed: false },
+            Tracked {
+                hash: t.hash.clone(),
+                modified,
+                deleted: true,
+                remote: t.remote,
+                pristine: false,
+                adopted: false,
+                unparsed: false,
+                seen,
+                base: None,
+            },
         );
     }
     if !prev.seeded {
@@ -220,6 +260,8 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
                     pristine: false,
                     adopted: false,
                     unparsed: false,
+                    seen: None,
+                    base: None,
                 },
             );
         }
@@ -254,6 +296,8 @@ pub fn tracker_from_own_doc(doc: &DeviceDoc) -> Tracker {
                 pristine: r.pristine,
                 adopted: r.adopted,
                 unparsed: false,
+                seen: None,
+                base: None,
             },
         );
     }
@@ -271,6 +315,9 @@ pub fn restamp_baseline(tracker: &mut Tracker) -> bool {
     for t in tracker.items.values_mut() {
         if t.modified == 0 && !t.adopted {
             t.modified = first;
+            if t.base == Some(0) {
+                t.base = Some(first); // the shared version moves with its stamp
+            }
             changed = true;
         }
     }
@@ -329,6 +376,8 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
                             pristine: false,
                             adopted: false,
                             unparsed: false,
+                            seen: None,
+                            base: None,
                         },
                     );
                 }
@@ -348,6 +397,8 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
                             pristine: rec.pristine,
                             adopted: true,
                             unparsed: false,
+                            seen: None,
+                            base: Some(rec.modified),
                         },
                     );
                     out.push((id.clone(), theirs));
@@ -379,6 +430,8 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
                 pristine: rec.pristine,
                 adopted: true,
                 unparsed,
+                seen: None,
+                base: Some(rec.modified),
             },
         );
         out.push((id.clone(), v));
@@ -435,6 +488,19 @@ mod tests {
         let (doc, t3) = publish("a", &[], &t2, 10 + TOMBSTONE_TTL_MS + 1);
         assert!(doc.items.is_empty());
         assert!(t3.items.is_empty());
+    }
+
+    #[test]
+    fn a_far_future_tombstone_still_ages_out_from_when_it_was_first_seen_without_changing_its_stamp() {
+        let future = 10_000_000_000_000;
+        let (_, t1) = publish("a", &items(&[("1", json!("x"))]), &Tracker::default(), future);
+        let (doc, t2) = publish("a", &[], &t1, 1_000);
+        let stamp = doc.items["1"].modified;
+        assert!(stamp > future, "the stamp keeps its place in the merge order");
+        let (doc, t3) = publish("a", &[], &t2, 1_000 + TOMBSTONE_TTL_MS / 2);
+        assert_eq!(doc.items["1"].modified, stamp, "stamp unchanged while it is kept");
+        let (doc, t4) = publish("a", &[], &t3, 1_000 + TOMBSTONE_TTL_MS + 1);
+        assert!(doc.items.is_empty() && t4.items.is_empty(), "aged out by the time this Mac first saw it");
     }
 
     #[test]
@@ -573,6 +639,8 @@ mod tests {
                             pristine: false,
                             adopted: false,
                             unparsed: false,
+                            seen: None,
+                            base: None,
                         },
                     )
                 })
@@ -692,6 +760,7 @@ mod tests {
             device: "b".into(),
             items: BTreeMap::from([("x".to_string(), rec(5000, json!({"kind": "RichText"})))]),
             first_sync_at: None,
+            name: None,
         };
         let (_, mut t) = merge_as("a", &[], &[remote], &Tracker { seeded: true, ..Default::default() });
         assert!(t.items.contains_key("x"));
@@ -703,7 +772,12 @@ mod tests {
 
     #[test]
     fn an_item_that_is_parsed_later_publishes_normally_and_a_remote_deletion_forgets_it() {
-        let remote = DeviceDoc { device: "b".into(), items: BTreeMap::from([("x".to_string(), rec(5000, json!(1)))]), first_sync_at: None };
+        let remote = DeviceDoc {
+            device: "b".into(),
+            items: BTreeMap::from([("x".to_string(), rec(5000, json!(1)))]),
+            first_sync_at: None,
+            name: None,
+        };
         let (_, mut t) = merge_as("a", &[], std::slice::from_ref(&remote), &Tracker { seeded: true, ..Default::default() });
         mark_unparsed(&mut t, &["x".to_string()]);
         // a newer build reads it: it is in the local items, flag gone, the unchanged value keeps its time
@@ -718,6 +792,7 @@ mod tests {
                 Record { modified: 7000, deleted: true, value: None, pristine: false, adopted: false },
             )]),
             first_sync_at: None,
+            name: None,
         };
         let (_, t3) = merge_as("a", &[], &[gone], &t);
         let (doc, _) = publish("a", &[], &t3, 9000);
@@ -727,8 +802,17 @@ mod tests {
 
     #[test]
     fn tracked_unparsed_round_trips_and_false_is_not_written() {
-        let mut t =
-            Tracked { hash: "h".into(), modified: 1, deleted: false, remote: false, pristine: false, adopted: false, unparsed: true };
+        let mut t = Tracked {
+            hash: "h".into(),
+            modified: 1,
+            deleted: false,
+            remote: false,
+            pristine: false,
+            adopted: false,
+            unparsed: true,
+            seen: None,
+            base: None,
+        };
         let json = serde_json::to_string(&t).unwrap();
         assert!(json.contains("\"unparsed\":true"), "{json}");
         assert!(serde_json::from_str::<Tracked>(&json).unwrap().unparsed);

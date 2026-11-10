@@ -54,7 +54,7 @@ fn the_sync_status_line_follows_the_language() {
 fn a_failed_sync_run_is_reported_in_the_language() {
     let mut app = fixture();
     app.settings.sync_enabled = true;
-    let done = || crate::app::SyncDone { results: vec![("notes", vec![], Err("disk full".into()))], unavailable: None };
+    let done = || crate::app::SyncDone { results: vec![("notes", vec![], Err("disk full".into()))], ..Default::default() };
     let shown = shown_in_german("Sync failed", || {
         app.sync.in_flight = true;
         app.sync_done(done());

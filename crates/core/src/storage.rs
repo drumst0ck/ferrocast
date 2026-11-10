@@ -116,11 +116,7 @@ impl Store {
     /// Atomic write (temp file + rename).
     pub fn save<T: Serialize>(&self, name: &str, value: &T) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.root)?;
-        let p = self.path(name);
-        let tmp = p.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(value)?)?;
-        std::fs::rename(&tmp, &p)?;
-        Ok(())
+        write_durable(&self.path(name), &serde_json::to_vec_pretty(value)?)
     }
 
     pub fn load_all(&self) -> Data {
@@ -210,6 +206,31 @@ pub fn prune_images(dir: &Path, entries: &[ClipEntry]) {
             let _ = std::fs::remove_file(e.path());
         }
     }
+}
+
+/// Write `bytes` to `path` through a uniquely named temp file in the same folder: the bytes are
+/// flushed to disk before the rename and the folder entry after it, so a crash leaves the old file
+/// or the whole new one, and two writers never share a temp file.
+pub fn write_durable(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp = dir.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
+    let written = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
