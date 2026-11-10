@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Changed
+- **Intel Macs**: the docs now say the DMG/zip runs on Apple Silicon, and that Intel Macs can install with Homebrew, which builds from source for that Mac (not tested on Intel). #install
+
 ## [0.6.0] - 2026-11-09
 
 ### Added
