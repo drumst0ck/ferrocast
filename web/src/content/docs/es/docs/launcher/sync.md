@@ -42,9 +42,27 @@ Ferrocast fusiona elemento por elemento y gana la edición más reciente. Si dos
 - **Cada ajuste es un elemento propio** (y cada ajuste anidado, como una opción de captura o las opciones de un comando). Si un Mac cambia el tema y otro cambia el atajo, se conservan ambos cambios.
 - Un elemento nuevo en un Mac nunca se pierde porque otro Mac no lo tenga.
 - Un borrado llega a tus otros Mac. Si otro Mac edita el elemento después del borrado, el elemento vuelve.
-- Un borrado se recuerda para siempre, así que un Mac antiguo o una carpeta sobrante en iCloud Drive no puede devolver un elemento borrado.
+- Un borrado se recuerda para siempre, así que un Mac antiguo, un Mac que vuelve tras meses o una carpeta sobrante en iCloud Drive no puede devolver un elemento borrado.
 - Los borrados del portapapeles se recuerdan 400 días (los 3000 más recientes), más que el ajuste de historial más largo. Una entrada fijada del portapapeles de más de 400 días no se sincroniza, así que las ediciones sobre ella se quedan en el Mac donde las hiciste.
 - Cada Mac escribe solo sus propios archivos en la carpeta `Ferrocast` de iCloud Drive (`devices/<id>/`), así que iCloud no tiene copias en conflicto que crear. Un archivo que Ferrocast no pueda leer se omite.
+
+## Documentos del portapapeles
+
+El documento del portapapeles de cada Mac contiene solo las entradas copiadas en ese Mac, así que su tamaño en iCloud Drive no crece con el número de Mac. Cada Mac sigue teniendo todo el historial, porque lee el documento de todos los demás.
+
+- Una entrada que copiaste en un Mac la publica ese Mac. Un Mac que solo la adoptó no la vuelve a publicar, salvo que ningún otro Mac la tenga (por ejemplo, porque el Mac que la copió se olvidó): entonces la sigue publicando el Mac con el id más bajo.
+- Si editas una entrada desde otro Mac (por ejemplo, la fijas), la publica el Mac que la editó. Si la borras, ese Mac publica el borrado, que llega a todos los Mac.
+- Ferrocast v0.7.0 y anteriores combinan todos los documentos, así que siguen funcionando con los nuevos. Sus documentos aún contienen las entradas que adoptaron; con esta versión se reducen a las entradas propias del Mac en la primera sincronización.
+- Si un Mac pierde su historial del portapapeles, lo recupera desde su propio documento y desde los de los demás Mac.
+- Un Mac solo sube las imágenes de las entradas que publica.
+
+## Macs y borrados
+
+Ajustes → Advanced → Sync muestra los Mac que han publicado datos de sincronización: el nombre que publicó cada uno y cuándo se vio por última vez. **Forget this Mac** (Olvidar este Mac), tras una confirmación, elimina de la carpeta de sincronización la carpeta de ese Mac (`devices/<id>/`: sus documentos e imágenes) y este Mac deja de leerla. No se ofrece para el Mac que estás usando, y Ferrocast nunca elimina la carpeta de este Mac ni la de otro. Si el Mac olvidado vuelve a sincronizar, publica de nuevo y reaparece en la lista. Úsalo para un Mac que retiraste o reinstalaste, para que deje de ocupar espacio.
+
+Los borrados se conservan: Ferrocast no los limpia, así que un Mac que vuelve tras semanas o meses se entera de todo lo que borraste mientras tanto y elimina esos elementos. **Forget this Mac** elimina los datos de sincronización propios de ese Mac; los borrados publicados por tus otros Mac se conservan.
+
+Si un Mac olvidado, o uno que lleva mucho tiempo fuera, había publicado un borrado del portapapeles, ese borrado desaparece con su carpeta. Los borrados del portapapeles también caducan solos a los 400 días, así que un tercer Mac que también estuvo fuera puede recuperar esa entrada para sí.
 
 ## Activar la sincronización por primera vez
 

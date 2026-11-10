@@ -54,6 +54,16 @@ pub struct DeviceDoc {
     /// not write it and ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// When the publisher last ran a sync of this domain that had merged every other Mac's document
+    /// (unix ms, refreshed at most every few hours so the document is not rewritten each run). A
+    /// tombstone stamped before every live Mac's `run_at` has been seen by all of them. Older builds
+    /// do not write it and ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_at: Option<i64>,
+    /// Read for compatibility, never written: deletions are not collected (a Mac that returns later
+    /// must still learn about them). Reserved for an acknowledgement-based clean-up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gc_at: Option<i64>,
 }
 
 /// Local memory of the last published state, per item id: (content hash, modified, deleted).
@@ -113,8 +123,8 @@ pub fn mark_unparsed(tracker: &mut Tracker, ids: &[String]) {
     }
 }
 
-/// Default tombstone lifetime of `publish`/`publish_with` (90 days). The app keeps tombstones for
-/// ever (`publish_ttl` with `None`), except in the clipboard, see `sync_io`.
+/// Default tombstone lifetime of `publish`/`publish_with` (90 days). The app keeps tombstones until
+/// never (they are kept so a Mac that returns later still learns of them); the clipboard ages them, see `sync_io`.
 pub const TOMBSTONE_TTL_MS: i64 = 90 * 24 * 3600 * 1000;
 
 pub fn hash(value: &Value) -> String {
@@ -156,12 +166,12 @@ pub fn publish_ttl(
     first_stamp: i64,
     ttl: Option<i64>,
 ) -> (DeviceDoc, Tracker) {
-    let opts = PublishOpts { first_stamp, ttl, baseline_deleted: vec![], relay_tombstones: true, max_tombstones: None, pristine: None };
+    let opts = PublishOpts { first_stamp, ttl, relay_tombstones: true, ..Default::default() };
     publish_opts(device, items, prev, now, &opts)
 }
 
 /// How `publish_opts` treats the first sync and tombstones.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PublishOpts {
     /// Time given to local items on this Mac's first sync of the domain (0 = baseline: any real time
     /// beats it).
@@ -180,13 +190,18 @@ pub struct PublishOpts {
     /// Tells whether a value is the built-in default of its item. Called for items this Mac publishes
     /// for the first time on its first sync; `None` = nothing is pristine.
     pub pristine: Option<fn(&str, &Value) -> bool>,
+    /// Ids that another Mac's document already carries (see `carried_elsewhere`). `Some` turns on
+    /// the own-entries rule: an item this Mac took over from another Mac and has not changed is kept
+    /// in the tracker but not written into this Mac's document while its id is in the set. `None`
+    /// publishes everything (every domain but the clipboard).
+    pub carried: Option<HashSet<String>>,
 }
 
 /// The general form of `publish`: see `PublishOpts`.
 pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64, opts: &PublishOpts) -> (DeviceDoc, Tracker) {
     let unseen = if prev.seeded { now } else { opts.first_stamp };
     let first_sync_at = if prev.seeded { prev.first_sync_at } else { Some(now) };
-    let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new(), first_sync_at, name: None };
+    let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new(), first_sync_at, name: None, run_at: None, gc_at: None };
     let mut next = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at };
     let mut seen = HashSet::new();
     for (id, value) in items {
@@ -202,7 +217,12 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
             Some(t) => (logical_now(now, t.modified), false, false, None),
             None => (unseen, !prev.seeded && opts.pristine.is_some_and(|f| f(id, value)), false, Some(unseen)),
         };
-        doc.items.insert(id.clone(), Record { modified, deleted: false, value: Some(value.clone()), pristine, adopted });
+        // own-entries rule: an unchanged item taken over from another Mac stays out of this document
+        // while another document carries it (the tracker still knows it, so it is not a new edit)
+        let held_elsewhere = adopted && opts.carried.as_ref().is_some_and(|c| c.contains(id));
+        if !held_elsewhere {
+            doc.items.insert(id.clone(), Record { modified, deleted: false, value: Some(value.clone()), pristine, adopted });
+        }
         next.items.insert(
             id.clone(),
             Tracked { hash: h, modified, deleted: false, remote: false, pristine, adopted, unparsed: false, seen: None, base },
@@ -277,6 +297,24 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
         }
     }
     (doc, next)
+}
+
+/// Ids that a Mac other than `own` already publishes as live in its document, for the clipboard's
+/// own-entries rule. A record counts when its publisher originated it (not `adopted`) or, when
+/// the publisher only took it over (documents of v0.7.0 and older Macs, or a Mac that republished it
+/// because its origin left), when the publisher's id is lower than `own`: of several Macs that all
+/// hold a copy and none is the origin, only the one with the lowest id keeps publishing, so the
+/// entry never disappears from every document and is never published by all of them.
+pub fn carried_elsewhere(own: &str, docs: &[DeviceDoc]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for d in docs.iter().filter(|d| d.device != own) {
+        for (id, r) in &d.items {
+            if !r.deleted && (!r.adopted || d.device.as_str() < own) {
+                out.insert(id.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Rebuild a tracker from this Mac's own published document, for a lost or corrupt tracker file:
@@ -556,6 +594,7 @@ mod tests {
             relay_tombstones: relay,
             max_tombstones: None,
             pristine: None,
+            ..Default::default()
         };
         let (_, mut t) = publish_opts("a", &items(&[("1", json!("x")), ("2", json!("y"))]), &Tracker::default(), 500, &opts(true));
         assert_eq!((t.items["1"].modified, t.first_sync_at), (0, Some(500)));
@@ -602,6 +641,7 @@ mod tests {
             relay_tombstones: true,
             max_tombstones: None,
             pristine: Some(|_, v| v == &json!("default")),
+            ..Default::default()
         };
         let (doc, t1) = publish_opts("a", &items(&[("1", json!("default"))]), &Tracker::default(), 10, &opts);
         assert!(doc.items["1"].pristine && t1.items["1"].pristine);
@@ -761,6 +801,8 @@ mod tests {
             items: BTreeMap::from([("x".to_string(), rec(5000, json!({"kind": "RichText"})))]),
             first_sync_at: None,
             name: None,
+            run_at: None,
+            gc_at: None,
         };
         let (_, mut t) = merge_as("a", &[], &[remote], &Tracker { seeded: true, ..Default::default() });
         assert!(t.items.contains_key("x"));
@@ -777,6 +819,8 @@ mod tests {
             items: BTreeMap::from([("x".to_string(), rec(5000, json!(1)))]),
             first_sync_at: None,
             name: None,
+            run_at: None,
+            gc_at: None,
         };
         let (_, mut t) = merge_as("a", &[], std::slice::from_ref(&remote), &Tracker { seeded: true, ..Default::default() });
         mark_unparsed(&mut t, &["x".to_string()]);
@@ -793,6 +837,8 @@ mod tests {
             )]),
             first_sync_at: None,
             name: None,
+            run_at: None,
+            gc_at: None,
         };
         let (_, t3) = merge_as("a", &[], &[gone], &t);
         let (doc, _) = publish("a", &[], &t3, 9000);

@@ -513,6 +513,8 @@ pub enum Act {
     Trash(PathBuf),
     /// Move an application bundle to the Trash (asks first; protected apps are refused).
     TrashApp(PathBuf),
+    /// Settings → Sync: remove another Mac's folder from the sync folder.
+    ForgetMac(String),
     EditScript(PathBuf),
     RunSystem(SystemCommand),
     RunScript {

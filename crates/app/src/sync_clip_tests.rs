@@ -92,3 +92,51 @@ fn first_publish_persist_of_the_clipboard_waits_for_the_save_turn() {
     assert_eq!(on_disk.len(), 1);
     std::fs::remove_dir_all(&app.store.root).ok();
 }
+
+static FOLDER: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+fn finish_run(app: &mut App) {
+    match app.rx.recv_timeout(Duration::from_secs(60)).expect("the sync run answers") {
+        crate::services::Msg::SyncDone(done) => app.sync_done(*done),
+        _ => panic!("another message"),
+    }
+}
+
+#[test]
+fn forgetting_a_mac_in_settings_removes_only_its_folder_and_never_offers_this_mac() {
+    let mut app = fixture();
+    let folder = std::env::temp_dir().join(format!("ferrocast-forget-{}", uuid::Uuid::new_v4()));
+    *FOLDER.lock().unwrap() = Some(folder.clone());
+    app.sync.resolve = Some(|| Ok(FOLDER.lock().unwrap().clone().unwrap()));
+    app.settings.sync_enabled = true;
+    let other = folder.join("devices").join("other-mac");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("snippets.json"), br#"{"device":"other-mac","items":{},"name":"Old iMac","run_at":5000}"#).unwrap();
+    let third = folder.join("devices").join("third-mac");
+    std::fs::create_dir_all(&third).unwrap();
+    std::fs::write(third.join("snippets.json"), br#"{"device":"third-mac","items":{},"name":"Mini"}"#).unwrap();
+    app.sync_all();
+    finish_run(&mut app);
+    let own_id = ferrocast_core::sync_io::device_id(&app.store.root);
+    let names: Vec<(String, Option<String>, bool)> = app.sync.devices.iter().map(|d| (d.id.clone(), d.name.clone(), d.current)).collect();
+    assert!(names.contains(&("other-mac".into(), Some("Old iMac".into()), false)), "{names:?}");
+    assert!(names.iter().any(|(id, _, cur)| *id == own_id && *cur), "this Mac is listed and marked: {names:?}");
+    assert_eq!(app.sync.devices[0].id, own_id, "this Mac first");
+    // this Mac is never forgotten, even if asked to
+    app.sync_forget(&own_id);
+    assert!(app.sync.forget_queue.is_empty());
+    // the confirmed action queues it and the next run removes that folder and nothing else
+    app.perform(Act::ForgetMac("other-mac".into()), true);
+    assert!(app.sync.devices.iter().all(|d| d.id != "other-mac"), "gone from the list at once");
+    finish_run(&mut app);
+    assert!(!other.exists(), "its folder is removed");
+    assert!(third.join("snippets.json").is_file(), "another Mac's folder is untouched");
+    assert!(folder.join("devices").join(&own_id).join("snippets.json").is_file(), "this Mac's folder is untouched");
+    assert!(app.sync.devices.iter().all(|d| d.id != "other-mac") && app.sync.devices.iter().any(|d| d.id == "third-mac"));
+    // with sync off nothing is queued
+    app.settings.sync_enabled = false;
+    app.sync_forget("third-mac");
+    assert!(app.sync.forget_queue.is_empty());
+    std::fs::remove_dir_all(&folder).ok();
+    std::fs::remove_dir_all(&app.store.root).ok();
+}

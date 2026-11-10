@@ -33,6 +33,10 @@ pub struct SyncCtl {
     /// Unix seconds of the last finished run.
     pub(crate) last_sync: Option<i64>,
     pub(crate) peers: usize,
+    /// The Macs that have published sync data, as the last run found them (Settings → Sync).
+    pub(crate) devices: Vec<sync_io::Device>,
+    /// Macs to remove from the sync folder in the next run (Settings → Sync → Forget this Mac).
+    pub(crate) forget_queue: Vec<String>,
     /// The sync folder cannot be used (iCloud Drive off, folder not creatable).
     pub(crate) error: Option<String>,
     /// Domains whose last run failed, with the reason; a domain's entry goes when it syncs again.
@@ -81,6 +85,8 @@ pub struct SyncDone {
     pub(crate) run: u64,
     /// Own documents the run could not write: kept for the next run.
     pub(crate) docs: std::collections::BTreeMap<&'static str, ferrocast_core::sync::DeviceDoc>,
+    /// The Macs found in the sync folder at the end of the run (`None` when the folder was unusable).
+    pub(crate) devices: Option<Vec<sync_io::Device>>,
 }
 
 impl App {
@@ -133,6 +139,19 @@ impl App {
             }
             None => "Waiting for the first sync…".into(),
         }
+    }
+
+    /// Settings → Sync → Forget this Mac (after the confirmation): the next run removes that Mac's
+    /// folder from the sync folder. Never offered, and refused by the library, for this Mac.
+    pub(crate) fn sync_forget(&mut self, id: &str) {
+        if !self.sync_on() || self.sync.devices.iter().any(|d| d.current && d.id == id) {
+            return;
+        }
+        if !self.sync.forget_queue.iter().any(|q| q == id) {
+            self.sync.forget_queue.push(id.to_string());
+        }
+        self.sync.devices.retain(|d| d.id != id);
+        self.sync_all();
     }
 
     /// A data file was saved locally: queue its domain.
@@ -339,6 +358,7 @@ impl App {
         // (`adopt_setting` patches the settings tracker the settings result has already saved)
         debug_assert!(domains.windows(2).all(|w| w[0] < w[1]), "domains run in alphabetical order");
         let docs = std::mem::take(&mut self.sync.pending_docs);
+        let forget = std::mem::take(&mut self.sync.forget_queue);
         self.sync.sent_docs = docs.clone();
         self.sync.run += 1;
         let run = self.sync.run;
@@ -364,6 +384,13 @@ impl App {
                     io.enabled = flag;
                     io.cleanup_temp_files(&root); // temp files an interrupted write left behind
                     let failed = flush_docs(&io, docs, &root);
+                    for id in &forget {
+                        // another Mac's folder only; the library refuses this Mac's own
+                        match io.forget_device(id) {
+                            Ok(()) => instance::log(&root, &format!("sync: forgot Mac {id}")),
+                            Err(e) => instance::log(&root, &format!("sync: cannot forget Mac {id}: {e:#}")),
+                        }
+                    }
                     let now = now_ms();
                     let results = jobs
                         .into_iter()
@@ -383,7 +410,8 @@ impl App {
                             (d, snap, out)
                         })
                         .collect();
-                    SyncDone { results, unavailable: None, revs, run, docs: failed }
+                    let devices = Some(io.devices());
+                    SyncDone { results, unavailable: None, revs, run, docs: failed, devices }
                 }
             };
             bus.send(Msg::SyncDone(Box::new(done)));
@@ -411,6 +439,9 @@ impl App {
             return;
         }
         self.sync.error = None;
+        if let Some(devices) = done.devices {
+            self.sync.devices = devices;
+        }
         self.attachments_gc();
         let root = self.store.root.clone();
         let mut downloading = 0;

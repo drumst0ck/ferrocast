@@ -6978,6 +6978,8 @@ impl App {
         // the language list shows each language in its own script (日本語, 简体中文)
         let mut lang_names_shown = false;
         let sync_status = self.sync_status();
+        let sync_devices = if self.settings.sync_enabled { self.sync.devices.clone() } else { vec![] };
+        let mut forget_req: Option<(String, String)> = None;
         let (mut check_now, mut install_now) = (false, false);
         let (mut new_snippet, mut create_script) = (false, false);
         let mut reset_req: Option<usize> = None;
@@ -8343,6 +8345,26 @@ impl App {
                                 });
                             });
                         });
+                        if !sync_devices.is_empty() {
+                            ui.add_space(10.0);
+                            note(ui, pal, "Macs that have published sync data");
+                            group(ui, pal, |ui| {
+                                for d in &sync_devices {
+                                    let name = sync_device_name(d);
+                                    let seen = match d.last_seen {
+                                        Some(ms) => trf("Last seen {ago}", &[("ago", &services::ago((services::now_secs() - ms / 1000).max(0)))]),
+                                        None => tr("Last seen unknown").into_owned(),
+                                    };
+                                    let desc = if d.current { format!("{} · {seen}", tr("This Mac")) } else { seen };
+                                    row(ui, pal, &name, &desc, |ui| {
+                                        // the current Mac is never offered: only another Mac can be forgotten
+                                        if !d.current && small_btn(ui, pal, "Forget this Mac") {
+                                            forget_req = Some((d.id.clone(), name.clone()));
+                                        }
+                                    });
+                                }
+                            });
+                        }
                         ui.add_space(10.0);
                         note(ui, pal, SYNC_NOTE);
                         let mut disabled: Vec<String> = s.commands.iter().filter(|(_, c)| c.disabled).map(|(k, _)| k.clone()).collect();
@@ -8597,6 +8619,17 @@ impl App {
         if sync_now {
             self.sync_all();
         }
+        if let Some((id, name)) = forget_req {
+            self.commit_settings(s);
+            self.push(View::Confirm {
+                msg: trf(
+                    "Forget “{name}”? Its sync data is removed from the sync folder. If that Mac syncs again it appears again.",
+                    &[("name", &name)],
+                ),
+                act: Act::ForgetMac(id),
+            });
+            return;
+        }
         if open_data {
             open_detached(&[self.store.root.as_ref()]);
         }
@@ -8776,6 +8809,11 @@ fn settings_row_jump(ui: &Ui, pal: &Palette, title: &str, rect: Rect) {
 }
 
 /// Note under the Sync rows in Settings.
+/// What Settings → Sync calls a Mac: the name it published, else the start of its folder name.
+pub(crate) fn sync_device_name(d: &ferrocast_core::sync_io::Device) -> String {
+    d.name.clone().unwrap_or_else(|| d.id.chars().take(8).collect())
+}
+
 pub(crate) const SYNC_NOTE: &str = "Off by default. Hotkeys sync; script folders, the Obsidian vault, the screenshot and recordings folders, login item, camera and microphone choice, update preferences, the window tiling switch and its per-display layouts, and macOS permissions stay on each Mac. API keys in the Keychain do not sync.";
 
 /// The names of the four modifier keys the wheel settings offer, in the interface language.

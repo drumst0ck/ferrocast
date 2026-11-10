@@ -8066,6 +8066,7 @@ impl App {
                 Err(e) => self.toast(trf("Trash failed: {e}", &[("e", &e)])),
             },
             Act::TrashApp(p) => self.trash_app(&p),
+            Act::ForgetMac(id) => self.sync_forget(&id),
             Act::EditScript(p) => {
                 open_detached(&["-t".as_ref(), p.as_ref()]);
                 self.hide();
