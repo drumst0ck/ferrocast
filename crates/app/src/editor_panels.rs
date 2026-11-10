@@ -697,7 +697,7 @@ pub fn set_audio(p: &mut Project, field: AudioField) -> Result<(), String> {
         if has_track(p, t) {
             Ok(())
         } else {
-            Err(format!("This recording has no {}.", track_name(t)))
+            Err(trf("This recording has no {track}.", &[("track", track_name(t))]))
         }
     };
     match field {
@@ -1089,7 +1089,10 @@ pub fn delete_segment(p: &mut Project, t: f64) -> Result<(), String> {
 pub fn set_segment_speed(p: &mut Project, t: f64, factor: f64) -> Result<(), String> {
     let factor = finite(factor)?;
     if !(ferrocast_core::videoplan::SPEED_MIN..=timeline::SPEED_MAX).contains(&factor) {
-        return Err(format!("Speed must be between {}× and {}×.", ferrocast_core::videoplan::SPEED_MIN, timeline::SPEED_MAX));
+        return Err(trf(
+            "Speed must be between {min}× and {max}×.",
+            &[("min", &ferrocast_core::videoplan::SPEED_MIN.to_string()), ("max", &timeline::SPEED_MAX.to_string())],
+        ));
     }
     let (s, e) = segment_at(p, finite(t)?).ok_or("The playhead is not inside a segment.")?;
     timeline::set_speed(p, s, e, factor);

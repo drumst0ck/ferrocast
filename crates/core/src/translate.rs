@@ -48,7 +48,7 @@ pub fn language_note(typed: &str) -> ListNote {
     let note = |warn: bool, text: &str| ListNote { warn, text: text.to_string() };
     match unique.len() {
         0 => note(false, "Default languages"),
-        n if n > MAX_LANGUAGES => note(true, &format!("Using the first {MAX_LANGUAGES}")),
+        n if n > MAX_LANGUAGES => note(true, &crate::i18n::trf("Using the first {n}", &[("n", &MAX_LANGUAGES.to_string())])),
         _ if typed_n > unique.len() => note(true, "Duplicates removed"),
         n if n == MAX_LANGUAGES => note(false, &format!("{n} languages (maximum)")),
         1 => note(false, "1 language"),
@@ -287,16 +287,16 @@ pub enum Outcome {
 /// Decide what to do with the result of translating into `lang`.
 pub fn outcome(result: Result<String, String>, lang: &str, output: TranslateOutput) -> Outcome {
     match result {
-        Err(e) => Outcome::Fail(format!("Translation failed: {e}")),
+        Err(e) => Outcome::Fail(crate::i18n::trf("Translation failed: {e}", &[("e", &e)])),
         Ok(raw) => {
             let text = parse_reply(&raw);
             if text.is_empty() {
-                return Outcome::Fail("Translation failed: empty reply".into());
+                return Outcome::Fail(crate::i18n::tr("Translation failed: empty reply").into_owned());
             }
             match output {
                 TranslateOutput::Auto | TranslateOutput::Show => Outcome::Show { text, lang: lang.to_string() },
                 TranslateOutput::Replace => Outcome::Paste(text),
-                TranslateOutput::Copy => Outcome::Copy(text, format!("Translated to {lang}, copied")),
+                TranslateOutput::Copy => Outcome::Copy(text, crate::i18n::trf("Translated to {lang}, copied", &[("lang", lang)])),
             }
         }
     }
@@ -307,7 +307,7 @@ pub fn outcome(result: Result<String, String>, lang: &str, output: TranslateOutp
 pub fn focus_guard(outcome: Outcome, lang: &str, source_pid: Option<i32>, frontmost_pid: Option<i32>) -> Outcome {
     match (outcome, source_pid, frontmost_pid) {
         (Outcome::Paste(t), Some(src), Some(front)) if src != front => {
-            Outcome::Copy(t, format!("Translated to {lang}, copied: the app changed, so it was not pasted"))
+            Outcome::Copy(t, crate::i18n::trf("Translated to {lang}, copied: the app changed, so it was not pasted", &[("lang", lang)]))
         }
         (o, _, _) => o,
     }
@@ -317,7 +317,10 @@ pub fn focus_guard(outcome: Outcome, lang: &str, source_pid: Option<i32>, frontm
 /// selection or the focused app: a paste becomes a copy.
 pub fn stale_guard(outcome: Outcome, lang: &str) -> Outcome {
     match outcome {
-        Outcome::Paste(t) => Outcome::Copy(t, format!("Translated to {lang}, copied: a newer translation started, so it was not pasted")),
+        Outcome::Paste(t) => Outcome::Copy(
+            t,
+            crate::i18n::trf("Translated to {lang}, copied: a newer translation started, so it was not pasted", &[("lang", lang)]),
+        ),
         o => o,
     }
 }
@@ -340,7 +343,7 @@ pub fn apple_error_text(e: &crate::apple_translate::TranslateError, lang: &str) 
         E::NeedsDownload(_) => format!(
             "{lang} is not downloaded for Apple Translation. Download it in System Settings → General → Language & Region → Translation Languages."
         ),
-        E::Unsupported(_) => format!("Apple Translation does not support {lang}. Pick another language or an AI engine."),
+        E::Unsupported(_) => crate::i18n::trf("Apple Translation does not support {lang}. Pick another language or an AI engine.", &[("lang", lang)]),
         E::UnsupportedOs => "Apple Translation needs macOS 26.".to_string(),
         E::Other(m) => m.clone(),
     }

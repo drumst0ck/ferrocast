@@ -17,7 +17,7 @@ Fast, open-source launcher for macOS, written in Rust. Search, calculate, paste 
 | | |
 | --- | --- |
 | **Licence** | [MIT](LICENSE) |
-| **Platform** | Apple Silicon Macs only |
+| **Platform** | DMG/zip: Apple Silicon. Intel: Homebrew source build (not tested) |
 | **Size** | About 8.5 MB on disk, one process ([measured method](https://ferrocast.app/#bench)) |
 | **Account** | None; no subscription tier |
 | **File conversion** | 275 pairs across 46 input formats, 26 tools, 7 actions — all local |
@@ -43,7 +43,7 @@ brew upgrade ferrocast                      # to update
 
 **Why a formula and not a cask.** Homebrew's official cask requires signed, notarized apps (a paid Apple Developer account). Building from source on your own Mac means the app carries no quarantine flag and Gatekeeper does not step in. It needs no paid account and bypasses no protection. The first install takes a few minutes because it compiles, and the signature is ad-hoc, for local use.
 
-Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not added. The formula lives in [drumst0ck/homebrew-ferrocast](https://github.com/drumst0ck/homebrew-ferrocast) and follows each stable release automatically. Apple Silicon only. More in the [install guide](https://ferrocast.app/docs/getting-started/install/).
+Run `brew tap` first: Homebrew refuses to load formulae from a tap you have not added. The formula lives in [drumst0ck/homebrew-ferrocast](https://github.com/drumst0ck/homebrew-ferrocast) and follows each stable release automatically. The DMG/zip runs on Apple Silicon. Intel Macs can install with Homebrew, which builds from source for that Mac; Intel is not tested. More in the [install guide](https://ferrocast.app/docs/getting-started/install/).
 
 ## What it does
 
@@ -119,7 +119,7 @@ Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it). The DMG is
 
 ## Website
 
-The site in `web/` ships as a Docker image (see `web/Dockerfile`). CSP stays report-only. `GET /api/csp-report/summary/` returns 404 unless **`CSP_REPORT_SUMMARY_TOKEN`** is set and the request sends `Authorization: Bearer <token>` or `?token=<token>` (`Cache-Control: no-store`, `X-Robots-Tag: noindex`); with the variable unset or empty nobody can read it. `POST /api/csp-report/` stays open so browsers can submit reports, but only reports for `ferrocast.app` pages are stored, and the per-IP rate limit uses the address the single front proxy appends to `X-Forwarded-For`.
+The site in `web/` ships as a Docker image (see `web/Dockerfile`). The Content-Security-Policy is enforced (inline scripts allowed by hashes computed at server start) and violations are still reported to `/api/csp-report/`. `GET /api/csp-report/summary/` returns 404 unless **`CSP_REPORT_SUMMARY_TOKEN`** is set and the request sends `Authorization: Bearer <token>` or `?token=<token>` (`Cache-Control: no-store`, `X-Robots-Tag: noindex`); with the variable unset or empty nobody can read it. `POST /api/csp-report/` stays open so browsers can submit reports, but only reports for `ferrocast.app` pages are stored, and the per-IP rate limit uses the address the single front proxy appends to `X-Forwarded-For`.
 
 ## Documentation
 

@@ -307,7 +307,13 @@ pub const DOCS_URL: &str = "https://ferrocast.app/docs/launcher/raycast-extensio
 
 /// The message of a screen Ferrocast cannot draw: the component, the extension and the docs page.
 pub fn unsupported_message(component: &str, extension: &str) -> String {
-    format!("Not supported in Ferrocast yet: {component}\n\nThe extension \"{extension}\" uses a part of the Raycast API that Ferrocast does not draw yet. What works and what does not: {DOCS_URL}")
+    use crate::i18n::trf;
+    let head = trf("Not supported in Ferrocast yet: {component}", &[("component", component)]);
+    let body = trf(
+        "The extension \"{extension}\" uses a part of the Raycast API that Ferrocast does not draw yet. What works and what does not: {url}",
+        &[("extension", extension), ("url", DOCS_URL)],
+    );
+    format!("{head}\n\n{body}")
 }
 
 /// The line shown in place of a component Ferrocast cannot draw.

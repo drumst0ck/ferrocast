@@ -109,6 +109,7 @@ export function lastmodForPageUrl(url: string): Date {
     if (path === '/es') return fileLastmod('src/pages/es/index.astro', 'src/components/home/HomePage.astro');
     if (path === '/files') return fileLastmod('src/pages/files.astro');
     if (path === '/es/files') return fileLastmod('src/pages/es/files/index.astro', 'src/i18n/files-es.ts', 'src/i18n/gallery-es.ts', 'src/i18n/tool-cards-es.ts');
+    if (path === '/cookies' || path === '/es/cookies') return fileLastmod('src/lib/consent/policy.ts', 'src/components/seo/CookiePage.astro');
     if (path === '/facts' || path === '/es/facts') return fileLastmod('src/lib/seo/facts.ts', 'src/components/seo/FactsPage.astro');
     if (path === '/es/convertir' || path.startsWith('/es/convertir/')) {
       return fileLastmod('src/lib/seo/convert-es.ts', 'src/pages/es/convertir/[slug].astro', 'src/pages/es/convertir/index.astro');

@@ -186,7 +186,7 @@ impl SystemCommand {
             SystemCommand::ToggleMute => "Toggle Mute".into(),
             SystemCommand::VolumeUp => "Turn Volume Up".into(),
             SystemCommand::VolumeDown => "Turn Volume Down".into(),
-            SystemCommand::Volume(v) => format!("Set Volume to {v}%"),
+            SystemCommand::Volume(v) => ferrocast_core::i18n::trf("Set Volume to {v}%", &[("v", &v.to_string())]),
             SystemCommand::ShowDesktop => "Show Desktop".into(),
             SystemCommand::ToggleAppearance => "Toggle System Appearance".into(),
             SystemCommand::OpenTrash => "Open Trash".into(),
