@@ -75,6 +75,17 @@ pub struct DeviceDoc {
     /// not write it and ignore it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub acks: BTreeMap<String, i64>,
+    /// Deletions that were cleaned up (see `PublishOpts::collect_upto`): item id -> stamp of the
+    /// deletion, compact. Every Mac merges the others' sets into its own and publishes the union; a
+    /// record of that item stamped at or below the stamp is a stale copy and is ignored. Older
+    /// builds do not write it and ignore it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub collected: BTreeMap<String, i64>,
+    /// Macs this Mac's user forgot: folder name -> `written_at` of that Mac's last document of the
+    /// domain at that time. A Mac that finds itself here with a value at or above its own last
+    /// `written_at` has been cut off and starts over as a newcomer. Older builds ignore it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub forgotten: BTreeMap<String, i64>,
 }
 
 /// Local memory of the last published state, per item id: (content hash, modified, deleted).
@@ -99,6 +110,15 @@ pub struct Tracker {
     /// ignored, so a stale copy cannot bring the item back. Local only, never published.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub collected: BTreeMap<String, i64>,
+    /// `written_at` of the newest own document this Mac wrote (never goes back, so a lost or
+    /// restored own document cannot make the clock regress). Local only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_written: Option<i64>,
+    /// Per peer: the `written_at` of its document this Mac merged, applied and saved. Saved together
+    /// with the data it describes, so a restore of older data restores older acknowledgements too;
+    /// these, not those in the published document, are what this Mac publishes. Local only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub acks: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -227,6 +247,8 @@ pub struct PublishOpts {
     pub collect_upto: Option<i64>,
     /// Ids whose deletions are never collected (built-in defaults).
     pub keep: HashSet<String>,
+    /// `forgotten` of the document to publish.
+    pub forgotten: BTreeMap<String, i64>,
 }
 
 /// The general form of `publish`: see `PublishOpts`.
@@ -242,8 +264,18 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
         gc_at: None,
         written_at: opts.written_at,
         acks: opts.acks.clone(),
+        collected: BTreeMap::new(),
+        forgotten: opts.forgotten.clone(),
     };
-    let mut next = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at, collected: prev.collected.clone(), ..Default::default() };
+    let mut next = Tracker {
+        items: BTreeMap::new(),
+        seeded: true,
+        first_sync_at,
+        collected: prev.collected.clone(),
+        last_written: prev.last_written.max(opts.written_at),
+        acks: opts.acks.clone(),
+        ..Default::default()
+    };
     let mut seen = HashSet::new();
     for (id, value) in items {
         if !seen.insert(id.clone()) {
@@ -344,6 +376,7 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
             }
         }
     }
+    doc.collected = next.collected.clone();
     next.first_pub =
         prev.first_pub.iter().filter(|(id, _)| next.items.get(*id).is_some_and(|t| t.deleted)).map(|(k, v)| (k.clone(), *v)).collect();
     (doc, next)
@@ -374,6 +407,19 @@ pub fn carried_elsewhere(own: &str, docs: &[DeviceDoc]) -> HashSet<String> {
     out
 }
 
+/// What has been cleaned up anywhere: this Mac's own memory, its own document and every other
+/// document, per id the greatest stamp.
+pub fn collected_union(own: &BTreeMap<String, i64>, own_doc: Option<&DeviceDoc>, docs: &[DeviceDoc]) -> BTreeMap<String, i64> {
+    let mut out = own.clone();
+    for c in own_doc.into_iter().chain(docs.iter()).map(|d| &d.collected) {
+        for (k, v) in c {
+            let e = out.entry(k.clone()).or_insert(*v);
+            *e = (*e).max(*v);
+        }
+    }
+    out
+}
+
 /// Drop from `docs` the live records of an item this Mac collected whose stamp is at or below the
 /// collected tombstone's: a stale copy (a Mac that came back, a document restored from a backup)
 /// must not bring a deleted item back. A record stamped after the tombstone is an edit and stays.
@@ -390,7 +436,16 @@ pub fn ignore_collected(docs: &mut [DeviceDoc], collected: &BTreeMap<String, i64
 /// what was published stays the baseline, so edits and deletions made since still count as local
 /// changes instead of being lost to a restart as a newcomer.
 pub fn tracker_from_own_doc(doc: &DeviceDoc) -> Tracker {
-    let mut t = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at: doc.first_sync_at, ..Default::default() };
+    // the acknowledgements of the document are not taken over: they may describe newer data than
+    // this Mac has (only the clock and what was collected are)
+    let mut t = Tracker {
+        items: BTreeMap::new(),
+        seeded: true,
+        first_sync_at: doc.first_sync_at,
+        collected: doc.collected.clone(),
+        last_written: doc.written_at,
+        ..Default::default()
+    };
     for (id, r) in &doc.items {
         if let (true, Some(w)) = (r.deleted, doc.written_at) {
             t.first_pub.insert(id.clone(), w); // the document contains it, so this is never too early
@@ -876,6 +931,8 @@ mod tests {
             name: None,
             run_at: None,
             gc_at: None,
+            collected: Default::default(),
+            forgotten: Default::default(),
             written_at: None,
             acks: Default::default(),
         };
@@ -896,6 +953,8 @@ mod tests {
             name: None,
             run_at: None,
             gc_at: None,
+            collected: Default::default(),
+            forgotten: Default::default(),
             written_at: None,
             acks: Default::default(),
         };
@@ -916,6 +975,8 @@ mod tests {
             name: None,
             run_at: None,
             gc_at: None,
+            collected: Default::default(),
+            forgotten: Default::default(),
             written_at: None,
             acks: Default::default(),
         };
