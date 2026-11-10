@@ -550,17 +550,18 @@ fn away_scenario(shared: &Path) -> (Mac, Mac, Mac, i64) {
 }
 
 #[test]
-fn a_deletion_stays_in_the_document_however_long_and_however_many_macs_have_seen_it() {
+fn a_deletion_stays_in_the_document_however_long_while_one_mac_has_not_acknowledged_it() {
     let shared = tmp("shared");
-    let (mut a, mut b, mut c, t) = three_with_s1(&shared);
+    let (mut a, mut b, c, t) = three_with_s1(&shared);
     let t0 = t + 10 * H;
     a.snips.clear();
     a.sync_snips(t0);
     for day in 1..=120 {
-        for m in [&mut b, &mut c, &mut a] {
+        // C is away: it never acknowledges, so nobody may collect
+        for m in [&mut b, &mut a] {
             m.sync_snips(t0 + day * D);
         }
-        for m in [&a, &b, &c] {
+        for m in [&a, &b] {
             assert!(tombstoned(m, "s1"), "{} keeps the deletion on day {day}", m.io.device);
             assert_eq!(m.snip_doc().gc_at, None, "no clean-up is announced");
         }

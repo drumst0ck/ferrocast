@@ -64,6 +64,17 @@ pub struct DeviceDoc {
     /// must still learn about them). Reserved for an acknowledgement-based clean-up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gc_at: Option<i64>,
+    /// This Mac's own clock when it wrote this document; strictly increasing across its documents of
+    /// a domain. Only ever compared with other values of the same Mac's clock. Older builds do not
+    /// write it and ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written_at: Option<i64>,
+    /// Per peer Mac: the `written_at` of the peer document this Mac had read cleanly, merged,
+    /// applied and saved before it wrote this document. A peer that sees `acks[peer] >= W` knows this
+    /// Mac holds every deletion the peer published in documents written up to `W`. Older builds do
+    /// not write it and ignore it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub acks: BTreeMap<String, i64>,
 }
 
 /// Local memory of the last published state, per item id: (content hash, modified, deleted).
@@ -78,6 +89,16 @@ pub struct Tracker {
     /// that first sync) are re-stamped once to this time by `restamp_baseline`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_sync_at: Option<i64>,
+    /// Per tombstone this Mac publishes: the `written_at` of an own document that contained it when
+    /// it was recorded (never earlier than the first document that did), the `W` of the
+    /// acknowledgement rule. Local only, never published.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub first_pub: BTreeMap<String, i64>,
+    /// Deletions this Mac collected (see `PublishOpts::collect_upto`): item id -> stamp of the
+    /// tombstone. A record of the item that another Mac publishes with a stamp at or below it is
+    /// ignored, so a stale copy cannot bring the item back. Local only, never published.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub collected: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -195,14 +216,34 @@ pub struct PublishOpts {
     /// in the tracker but not written into this Mac's document while its id is in the set. `None`
     /// publishes everything (every domain but the clipboard).
     pub carried: Option<HashSet<String>>,
+    /// `written_at` of the document to publish (`None`: the clipboard, which has no acknowledgements).
+    pub written_at: Option<i64>,
+    /// `acks` of the document to publish.
+    pub acks: BTreeMap<String, i64>,
+    /// Acknowledgement-based collection: `Some(m)` when every Mac that is not forgotten has a clean
+    /// document whose `acks` for this Mac are at least `m` (the smallest of them). A tombstone whose
+    /// recorded `first_pub` is at or below `m` has been merged by every such Mac and is dropped, its
+    /// stamp remembered in `Tracker::collected`. `None` collects nothing.
+    pub collect_upto: Option<i64>,
+    /// Ids whose deletions are never collected (built-in defaults).
+    pub keep: HashSet<String>,
 }
 
 /// The general form of `publish`: see `PublishOpts`.
 pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now: i64, opts: &PublishOpts) -> (DeviceDoc, Tracker) {
     let unseen = if prev.seeded { now } else { opts.first_stamp };
     let first_sync_at = if prev.seeded { prev.first_sync_at } else { Some(now) };
-    let mut doc = DeviceDoc { device: device.to_string(), items: BTreeMap::new(), first_sync_at, name: None, run_at: None, gc_at: None };
-    let mut next = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at };
+    let mut doc = DeviceDoc {
+        device: device.to_string(),
+        items: BTreeMap::new(),
+        first_sync_at,
+        name: None,
+        run_at: None,
+        gc_at: None,
+        written_at: opts.written_at,
+        acks: opts.acks.clone(),
+    };
+    let mut next = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at, collected: prev.collected.clone(), ..Default::default() };
     let mut seen = HashSet::new();
     for (id, value) in items {
         if !seen.insert(id.clone()) {
@@ -215,6 +256,8 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
             // the shared version stays the one before the first own edit
             Some(t) if !t.deleted => (logical_now(now, t.modified), false, false, t.base.or(Some(t.modified))),
             Some(t) => (logical_now(now, t.modified), false, false, None),
+            // an id this Mac collected must not be re-stamped at or below the collected tombstone
+            None if prev.seeded && prev.collected.contains_key(id) => (logical_now(unseen, prev.collected[id]), false, false, Some(unseen)),
             None => (unseen, !prev.seeded && opts.pristine.is_some_and(|f| f(id, value)), false, Some(unseen)),
         };
         // own-entries rule: an unchanged item taken over from another Mac stays out of this document
@@ -242,6 +285,11 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
             continue; // someone else's deletion: their document carries it
         }
         let modified = if t.deleted { t.modified } else { logical_now(now, t.modified) };
+        if t.deleted && collectable(prev, opts, id) {
+            let c = next.collected.entry(id.clone()).or_insert(modified);
+            *c = (*c).max(modified);
+            continue; // every Mac has merged it: this Mac stops publishing and tracking it
+        }
         // a tombstone stamped ahead of this Mac's clock ages from when this Mac first saw it
         let seen = (modified > now).then(|| t.seen.unwrap_or(now));
         if opts.ttl.is_some_and(|ttl| now - seen.map_or(modified, |s| s.min(now)) > ttl) {
@@ -296,7 +344,16 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
             }
         }
     }
+    next.first_pub =
+        prev.first_pub.iter().filter(|(id, _)| next.items.get(*id).is_some_and(|t| t.deleted)).map(|(k, v)| (k.clone(), *v)).collect();
     (doc, next)
+}
+
+/// True when the tombstone of `id` in `prev` may be dropped: acknowledged by every Mac up to its
+/// recorded `first_pub`, and not a built-in default's deletion.
+fn collectable(prev: &Tracker, opts: &PublishOpts, id: &str) -> bool {
+    let Some(upto) = opts.collect_upto else { return false };
+    !opts.keep.contains(id) && prev.first_pub.get(id).is_some_and(|w| *w <= upto)
 }
 
 /// Ids that a Mac other than `own` already publishes as live in its document, for the clipboard's
@@ -317,12 +374,27 @@ pub fn carried_elsewhere(own: &str, docs: &[DeviceDoc]) -> HashSet<String> {
     out
 }
 
+/// Drop from `docs` the live records of an item this Mac collected whose stamp is at or below the
+/// collected tombstone's: a stale copy (a Mac that came back, a document restored from a backup)
+/// must not bring a deleted item back. A record stamped after the tombstone is an edit and stays.
+pub fn ignore_collected(docs: &mut [DeviceDoc], collected: &BTreeMap<String, i64>) {
+    if collected.is_empty() {
+        return;
+    }
+    for d in docs.iter_mut() {
+        d.items.retain(|id, r| r.deleted || collected.get(id).is_none_or(|stamp| r.modified > *stamp));
+    }
+}
+
 /// Rebuild a tracker from this Mac's own published document, for a lost or corrupt tracker file:
 /// what was published stays the baseline, so edits and deletions made since still count as local
 /// changes instead of being lost to a restart as a newcomer.
 pub fn tracker_from_own_doc(doc: &DeviceDoc) -> Tracker {
-    let mut t = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at: doc.first_sync_at };
+    let mut t = Tracker { items: BTreeMap::new(), seeded: true, first_sync_at: doc.first_sync_at, ..Default::default() };
     for (id, r) in &doc.items {
+        if let (true, Some(w)) = (r.deleted, doc.written_at) {
+            t.first_pub.insert(id.clone(), w); // the document contains it, so this is never too early
+        }
         let hash = r.value.as_ref().map(hash).unwrap_or_default();
         t.items.insert(
             id.clone(),
@@ -687,6 +759,7 @@ mod tests {
                 .collect(),
             seeded: true,
             first_sync_at: None,
+            ..Default::default()
         }
     }
 
@@ -803,6 +876,8 @@ mod tests {
             name: None,
             run_at: None,
             gc_at: None,
+            written_at: None,
+            acks: Default::default(),
         };
         let (_, mut t) = merge_as("a", &[], &[remote], &Tracker { seeded: true, ..Default::default() });
         assert!(t.items.contains_key("x"));
@@ -821,6 +896,8 @@ mod tests {
             name: None,
             run_at: None,
             gc_at: None,
+            written_at: None,
+            acks: Default::default(),
         };
         let (_, mut t) = merge_as("a", &[], std::slice::from_ref(&remote), &Tracker { seeded: true, ..Default::default() });
         mark_unparsed(&mut t, &["x".to_string()]);
@@ -839,6 +916,8 @@ mod tests {
             name: None,
             run_at: None,
             gc_at: None,
+            written_at: None,
+            acks: Default::default(),
         };
         let (_, t3) = merge_as("a", &[], &[gone], &t);
         let (doc, _) = publish("a", &[], &t3, 9000);
