@@ -1,0 +1,54 @@
+---
+import Base from '../../layouts/Base.astro';
+import SiteHeader from '../SiteHeader.astro';
+import SiteFooter from '../SiteFooter.astro';
+import Crumbs from './Crumbs.astro';
+import { SITE } from '../../lib/seo/jsonld';
+import { policyCopy } from '../../lib/consent/policy';
+import '../../styles/seo.css';
+
+interface Props { lang: 'en' | 'es' }
+const { lang } = Astro.props;
+const t = policyCopy[lang];
+const isEs = lang === 'es';
+const canonical = `${SITE}${t.path}`;
+const alternates = { en: `${SITE}/cookies/`, es: `${SITE}/es/cookies/`, 'x-default': `${SITE}/cookies/` };
+---
+<Base title={t.title} description={t.description} canonical={canonical} lang={lang} alternates={alternates}>
+  <SiteHeader lang={lang} switchHref={isEs ? '/cookies/' : '/es/cookies/'} switchLabel={isEs ? 'EN' : 'ES'} switchAria={isEs ? 'Read this page in English' : 'Leer esta página en español'}>
+    <span slot="cta">{isEs ? 'Instalar' : 'Install'}</span>
+  </SiteHeader>
+  <main class="seo cookies" id="main">
+    <Crumbs items={t.crumbs} />
+    <h1>{t.h1}</h1>
+    <p class="lead">{t.lead}</p>
+    <section aria-labelledby="h-stored">
+      <h2 id="h-stored">{t.storedH}</h2>
+      <div class="ck-scroll" role="region" tabindex="0" aria-label={t.storedH}>
+        <table>
+          <thead><tr>{t.cols.map((c) => <th scope="col">{c}</th>)}</tr></thead>
+          <tbody>{t.rows.map((r) => <tr>{r.map((c, i) => (i === 0 ? <th scope="row"><code>{c}</code></th> : <td>{c}</td>))}</tr>)}</tbody>
+        </table>
+      </div>
+      <p>{t.rowsNote}</p>
+    </section>
+    <section aria-labelledby="h-withdraw">
+      <h2 id="h-withdraw">{t.withdrawH}</h2>
+      <p>{t.withdraw}</p>
+      <p><button type="button" class="ck-btn" data-cookie-settings>{t.changeButton}</button></p>
+    </section>
+    <section aria-labelledby="h-more">
+      <h2 id="h-more">{t.moreH}</h2>
+      <p>{t.more} <a href="https://support.google.com/analytics/answer/6004245">support.google.com/analytics/answer/6004245</a></p>
+    </section>
+  </main>
+  <SiteFooter lang={lang} />
+</Base>
+
+<style>
+  .cookies .ck-scroll { overflow-x: auto; max-width: 100%; }
+  .cookies table { border-collapse: collapse; min-width: 44rem; font-size: 0.95em; }
+  .cookies th, .cookies td { text-align: left; vertical-align: top; padding: 0.6rem 0.8rem; border-bottom: 1px solid rgba(255,255,255,.12); }
+  .cookies p { max-width: 70ch; }
+  .cookies .ck-btn { min-height: 2.5rem; padding: 0.5rem 1.1rem; border-radius: 0.5rem; border: 1px solid currentColor; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+</style>

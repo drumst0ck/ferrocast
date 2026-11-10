@@ -1,0 +1,12 @@
+---
+import Default from '@astrojs/starlight/components/Footer.astro';
+import { consentCopy } from '../../lib/consent/copy';
+const es = Astro.locals.starlightRoute.locale === 'es';
+const t = consentCopy[es ? 'es' : 'en'];
+---
+<Default {...Astro.props}><slot /></Default>
+<p class="fc-cookie-link"><a href={t.policyHref} data-cookie-settings>{t.settings}</a></p>
+<style>
+  .fc-cookie-link { margin: 1rem 0 0; font-size: var(--sl-text-sm); }
+  .fc-cookie-link a { color: var(--sl-color-gray-2); }
+</style>
