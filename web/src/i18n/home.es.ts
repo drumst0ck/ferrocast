@@ -264,7 +264,7 @@ export const es: HomeCopy = {
     step1: 'Descarga el DMG y arrastra Ferrocast a Aplicaciones.',
     copy: 'Copiar',
     copied: 'Copiado',
-    note: 'Funciona en Macs Apple Silicon e Intel. ¿Prefieres Homebrew? Está en la guía de instalación.',
+    note: 'Funciona en Macs con Apple Silicon e Intel (Intel aún sin probar en hardware real). ¿Prefieres Homebrew? Está en la guía de instalación.',
     step2: 'Ábrelo una vez y concede el permiso de Accesibilidad.',
     step2Alt: 'Ferrocast recién abierto, mostrando la lista de comandos',
     step3: 'Después, empieza a escribir.',

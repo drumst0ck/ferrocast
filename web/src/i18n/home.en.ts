@@ -265,7 +265,7 @@ export const en = {
     step1: 'Download the DMG and drag Ferrocast to Applications.',
     copy: 'Copy',
     copied: 'Copied',
-    note: 'Runs on Apple Silicon and Intel Macs. Prefer Homebrew? It is in the installation guide.',
+    note: 'Runs on Apple Silicon and Intel Macs (Intel not tested on real hardware yet). Prefer Homebrew? It is in the installation guide.',
     step2: 'Open it once and say yes to Accessibility.',
     step2Alt: 'Ferrocast just opened, showing the command list',
     step3: 'Then just start typing.',
