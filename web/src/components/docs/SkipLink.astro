@@ -1,5 +1,8 @@
 ---
 import Default from '@astrojs/starlight/components/SkipLink.astro';
+import ConsentBanner from '../analytics/ConsentBanner.astro';
+const es = Astro.locals.starlightRoute.locale === 'es';
 ---
 
 <Default {...Astro.props}><slot /></Default>
+<ConsentBanner lang={es ? 'es' : 'en'} />

@@ -57,9 +57,9 @@ const ogUrl = ogImage ?? (ownOg ? new URL(`${base}${ogImagePath(canonical)}`, As
     <script is:inline>document.documentElement.classList.add('js')</script>
   </head>
   <body>
+    <ConsentBanner lang={lang === 'es' ? 'es' : 'en'} />
     <slot />
     {jsonLdInBody && jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
-    <ConsentBanner lang={lang === 'es' ? 'es' : 'en'} />
     <script>import '../scripts/reveal.js'; import '../scripts/foot-mark.js';</script>
   </body>
 </html>

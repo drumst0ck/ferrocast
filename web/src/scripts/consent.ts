@@ -28,7 +28,7 @@ let opener: HTMLElement | null = null;
 function show(focus: boolean) {
   if (!banner) return;
   banner.hidden = false;
-  if (focus) banner.focus();
+  if (focus) banner.focus({ preventScroll: true });
 }
 
 function hide() {
@@ -40,7 +40,7 @@ function hide() {
   }
 }
 
-if (initConsent(env) === null) show(false);
+if (initConsent(env) === null) show(true);
 
 banner?.addEventListener('click', (e) => {
   const btn = (e.target as Element).closest<HTMLElement>('[data-consent]');

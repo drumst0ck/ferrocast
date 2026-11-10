@@ -22,6 +22,7 @@ COPY scripts/migrations-folder.mjs ./scripts/migrations-folder.mjs
 COPY scripts/csp-report-auth.mjs ./scripts/csp-report-auth.mjs
 COPY scripts/csp-report-handle.mjs ./scripts/csp-report-handle.mjs
 COPY scripts/csp-report-store.mjs ./scripts/csp-report-store.mjs
+COPY scripts/static-serve.mjs ./scripts/static-serve.mjs
 COPY scripts/csp-inline.mjs ./scripts/csp-inline.mjs
 COPY scripts/http-policy.mjs ./scripts/http-policy.mjs
 COPY scripts/production-server.mjs ./scripts/production-server.mjs

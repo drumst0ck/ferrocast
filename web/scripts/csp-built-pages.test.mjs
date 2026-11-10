@@ -109,4 +109,21 @@ describe.skipIf(!existsSync(join(clientDir, 'index.html')))('built pages under t
       expect(html, file).toMatch(/data-consent="denied"[^>]*>[^<]+<\/button>\s*<button[^>]*data-consent="granted"/);
     }
   });
+
+  it('puts the consent banner before any focusable element except skip links, so keyboard users reach it first', async () => {
+    for (const file of ['index.html', 'es/index.html', 'docs/index.html', 'es/docs/index.html', 'cookies/index.html', 'es/cookies/index.html']) {
+      const html = await readFile(join(clientDir, file), 'utf8');
+      const before = html.slice(html.indexOf('<body'), html.indexOf('id="fc-consent"'));
+      const focusable = [...before.matchAll(/<(?:a|button|input|select|textarea|summary)\b[^>]*>/gi)]
+        .map(([tag]) => tag)
+        .filter((tag) => !/\bhref="#/.test(tag));
+      expect(focusable, file).toEqual([]);
+    }
+  });
+
+  it('focuses the banner without scrolling when it first appears', async () => {
+    const src = await readFile(join(dirname(fileURLToPath(import.meta.url)), '../src/scripts/consent.ts'), 'utf8');
+    expect(src).toMatch(/if \(initConsent\(env\) === null\) show\(true\)/);
+    expect(src).toContain('banner.focus({ preventScroll: true })');
+  });
 });

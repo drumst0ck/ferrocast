@@ -22,4 +22,13 @@ describe('consent texts', () => {
     }
     expect(policyCopy.es.path).toBe('/es/cookies/');
   });
+  it('lists the docs sidebar state and does not overstate the GA cookie duration', () => {
+    for (const lang of ['en', 'es'] as const) {
+      const rows = policyCopy[lang].rows;
+      const sidebar = rows.find((r) => r[0].includes('sl-sidebar-state'));
+      expect(sidebar, lang).toBeDefined();
+      expect(sidebar![0]).toMatch(/session storage|almacenamiento de sesión/);
+      for (const r of rows.filter((x) => x[0].startsWith('_ga'))) expect(r[2]).toMatch(/13/);
+    }
+  });
 });
