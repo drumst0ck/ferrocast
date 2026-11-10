@@ -176,12 +176,12 @@ fn resolve(base_dir: &str, href: &str) -> String {
 pub fn epub_to_html(path: &Path) -> Result<String, String> {
     let container = unzip_entry(path, "META-INF/container.xml")
         .map_err(|_| "not an EPUB: META-INF/container.xml missing or file is not a zip".to_string())?;
-    let opf_path = parse_container(&container).ok_or_else(|| "EPUB container.xml has no rootfile".to_string())?;
+    let opf_path = parse_container(&container).ok_or_else(|| crate::i18n::tr("EPUB container.xml has no rootfile").into_owned())?;
     let opf_path = percent_decode(&opf_path);
     let opf = unzip_entry(path, &opf_path)?;
     let (title, hrefs) = parse_opf(&opf);
     if hrefs.is_empty() {
-        return Err("EPUB spine is empty".to_string());
+        return Err(crate::i18n::tr("EPUB spine is empty").into_owned());
     }
     let base = match opf_path.rfind('/') {
         Some(i) => &opf_path[..=i],
@@ -198,7 +198,7 @@ pub fn epub_to_html(path: &Path) -> Result<String, String> {
         }
     }
     if bodies.is_empty() {
-        return Err("EPUB spine has no readable chapters".to_string());
+        return Err(crate::i18n::tr("EPUB spine has no readable chapters").into_owned());
     }
     Ok(format!(
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>{}</title></head><body>{}</body></html>",

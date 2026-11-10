@@ -76,7 +76,7 @@ pub fn join(boxes: &[TextBox]) -> String {
 pub fn toast(text: &str) -> String {
     match text.chars().count() {
         0 => "No text found".into(),
-        n => format!("Copied {n} characters"),
+        n => crate::i18n::trf("Copied {n} characters", &[("n", &n.to_string())]),
     }
 }
 

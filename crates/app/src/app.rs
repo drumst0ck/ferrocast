@@ -93,7 +93,8 @@ pub fn redact_job(areas: &[Area], duration: f64, size: (u32, u32)) -> Result<fer
             ferrocast_core::redactplan::Redaction { x, y, w, h, start: a.start, end: a.end, blur: a.blur }
         })
         .collect();
-    ferrocast_core::redactplan::validate(&list, duration, size.0, size.1).map_err(|m| format!("Redact: {m}"))?;
+    ferrocast_core::redactplan::validate(&list, duration, size.0, size.1)
+        .map_err(|m| ferrocast_core::i18n::trf("Redact: {m}", &[("m", &m.to_string())]))?;
     Ok(ferrocast_core::convert::FileTool::RedactVideoMany(list))
 }
 
@@ -212,7 +213,8 @@ pub fn compress_media_job(
     let (goal, r) = compress_goal(mode, if big { 100_000 } else { kb }, percent, preset, max_edge, resize && video)?;
     let goal = if big { Goal::TargetBytes(kb as u64 * 1024) } else { goal };
     let info = info.ok_or("Compress: still reading the file")?;
-    ferrocast_core::compress::plan(video, orig_bytes, info, goal, &r).map_err(|e| format!("Compress: {e}"))?;
+    ferrocast_core::compress::plan(video, orig_bytes, info, goal, &r)
+        .map_err(|e| ferrocast_core::i18n::trf("Compress: {e}", &[("e", &e.to_string())]))?;
     Ok(ferrocast_core::convert::FileTool::Compress(goal, r))
 }
 

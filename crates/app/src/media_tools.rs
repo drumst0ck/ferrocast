@@ -1,6 +1,7 @@
 //! Multimedia tool execution. Work is staged privately and published without replacing files.
 use ferrocast_core::compress::{self, Goal, Plan, Resize};
 use ferrocast_core::convert::{family_of, output_with_suffix, Family, FileTool};
+use ferrocast_core::i18n::trf;
 use ferrocast_core::media;
 use ferrocast_core::redactplan::{self, Redaction};
 use ferrocast_core::videoplan::MIN_PIECE;
@@ -361,7 +362,7 @@ pub(crate) fn normalize_params(target: f64, range: f64, peak: f64) -> Result<Fil
 pub(crate) fn channels_params(stereo: bool, left_db: f64, right_db: f64) -> Result<FileTool, String> {
     for (name, db) in [("left", left_db), ("right", right_db)] {
         if !(db.is_finite() && (-30.0..=12.0).contains(&db)) {
-            return Err(format!("Channels: the {name} volume must be between -30 and +12 dB"));
+            return Err(trf("Channels: the {name} volume must be between -30 and +12 dB", &[("name", name)]));
         }
     }
     Ok(FileTool::Channels(stereo, db_to_gain(left_db), db_to_gain(right_db)))

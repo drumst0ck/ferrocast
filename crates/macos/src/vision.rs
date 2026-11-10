@@ -20,7 +20,7 @@ pub struct Region {
 
 /// Faces and/or text boxes in an image. Runs locally; nothing leaves the Mac.
 pub fn detect(path: &Path, faces: bool, text: bool) -> anyhow::Result<Vec<Region>> {
-    let Some(url) = crate::clipboard::ns_file_url(path) else { anyhow::bail!("No image path was given") };
+    let Some(url) = crate::clipboard::ns_file_url(path) else { anyhow::bail!("{}", ferrocast_core::i18n::tr("No image path was given")) };
     let handler = unsafe { VNImageRequestHandler::initWithURL_options(VNImageRequestHandler::alloc(), &url, &NSDictionary::new()) };
     let face_req = unsafe { VNDetectFaceRectanglesRequest::new() };
     let text_req = unsafe { VNDetectTextRectanglesRequest::new() };
@@ -31,9 +31,9 @@ pub fn detect(path: &Path, faces: bool, text: bool) -> anyhow::Result<Vec<Region
     if text {
         reqs.push(Retained::into_super(Retained::into_super(text_req.clone())));
     }
-    handler
-        .performRequests_error(&NSArray::from_retained_slice(&reqs))
-        .map_err(|e| anyhow::anyhow!("Vision: {}", e.localizedDescription()))?;
+    handler.performRequests_error(&NSArray::from_retained_slice(&reqs)).map_err(|e| {
+        anyhow::anyhow!("{}", ferrocast_core::i18n::trf("Vision: {detail}", &[("detail", &e.localizedDescription().to_string())]))
+    })?;
     let mut out = vec![];
     let mut push = |r: objc2_foundation::NSRect| {
         // Vision uses a bottom-left origin
@@ -72,7 +72,9 @@ fn with_fallback<T, E>(first: impl FnOnce() -> Result<T, E>, second: impl FnOnce
 }
 
 fn recognize_at(path: &Path, level: VNRequestTextRecognitionLevel) -> Result<Vec<ferrocast_core::capture::ocr::TextBox>, String> {
-    let Some(url) = crate::clipboard::ns_file_url(path) else { return Err("No image path was given".into()) };
+    let Some(url) = crate::clipboard::ns_file_url(path) else {
+        return Err(ferrocast_core::i18n::tr("No image path was given").into_owned());
+    };
     let handler = unsafe { VNImageRequestHandler::initWithURL_options(VNImageRequestHandler::alloc(), &url, &NSDictionary::new()) };
     let req = VNRecognizeTextRequest::new();
     req.setRecognitionLevel(level);
@@ -82,7 +84,9 @@ fn recognize_at(path: &Path, level: VNRequestTextRecognitionLevel) -> Result<Vec
         req.setAutomaticallyDetectsLanguage(true);
     }
     let reqs: Vec<Retained<VNRequest>> = vec![Retained::into_super(Retained::into_super(req.clone()))];
-    handler.performRequests_error(&NSArray::from_retained_slice(&reqs)).map_err(|e| format!("Vision: {}", e.localizedDescription()))?;
+    handler
+        .performRequests_error(&NSArray::from_retained_slice(&reqs))
+        .map_err(|e| ferrocast_core::i18n::trf("Vision: {detail}", &[("detail", &e.localizedDescription().to_string())]))?;
     let mut out = vec![];
     for o in req.results().map(|a| a.to_vec()).unwrap_or_default() {
         let Some(best) = o.topCandidates(1).to_vec().into_iter().next() else { continue };

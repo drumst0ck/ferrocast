@@ -157,7 +157,7 @@ pub fn parse_sse_line(line: &str) -> Sse {
 pub fn parse_response(body: &str) -> Result<String, String> {
     let v: serde_json::Value = serde_json::from_str(body).map_err(|_| {
         let snippet: String = body.chars().take(160).collect();
-        format!("Unexpected response from the AI server: {snippet}")
+        crate::i18n::trf("Unexpected response from the AI server: {snippet}", &[("snippet", &snippet)])
     })?;
     if let Some(err) = v.get("error") {
         let msg = err.get("message").and_then(|m| m.as_str()).or_else(|| err.as_str()).unwrap_or("unknown error");

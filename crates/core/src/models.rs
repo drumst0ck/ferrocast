@@ -152,7 +152,7 @@ impl ClipEntry {
             return t.clone();
         }
         match self.kind {
-            ClipKind::Image => format!("Image ({}×{})", self.width, self.height),
+            ClipKind::Image => crate::i18n::trf("Image ({w}×{h})", &[("w", &self.width.to_string()), ("h", &self.height.to_string())]),
             ClipKind::File => {
                 let first = self.content.lines().next().unwrap_or("");
                 let name = std::path::Path::new(first).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
