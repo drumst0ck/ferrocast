@@ -34,14 +34,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-      - run: npm run lastmod:sync
-      - name: Commit manifest if changed
+      - name: Sync manifest and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/data/lastmod.json
-          git diff --staged --quiet && exit 0
-          git commit -m "chore(web): sync sitemap lastmod manifest"
-          # another push to master may have landed while this job ran: rebase onto it, retry once
-          git pull --rebase origin master
-          git push || { git pull --rebase origin master && git push; }
+          # The manifest is rebuilt from git history, so on a race the newest master is simply synced
+          # again instead of rebasing a stale manifest commit (two runs both rewrite this one file).
+          for attempt in 1 2 3; do
+            git fetch -q origin master
+            git reset -q --hard origin/master
+            npm run lastmod:sync
+            git add src/data/lastmod.json
+            git diff --staged --quiet && exit 0
+            git commit -q -m "chore(web): sync sitemap lastmod manifest"
+            git push origin HEAD:master && exit 0
+            echo "master moved during attempt $attempt; syncing again"
+          done
+          exit 1
