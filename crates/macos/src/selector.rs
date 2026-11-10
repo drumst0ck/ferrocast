@@ -493,8 +493,7 @@ pub fn start(mtm: MainThreadMarker, windows: Vec<Window>, mode: Mode, on_done: O
     STATE.with(|s| *s.borrow_mut() = Some(state));
 
     let app = NSApplication::sharedApplication(mtm);
-    #[allow(deprecated)]
-    app.activateIgnoringOtherApps(true);
+    crate::running::activate_self(&app);
 
     let mut panels = Vec::new();
     for (i, frame) in cocoa.iter().enumerate() {

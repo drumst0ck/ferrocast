@@ -439,8 +439,7 @@ fn main() {
 
     window.makeKeyAndOrderFront(None);
     app.activate();
-    #[allow(deprecated)]
-    app.activateIgnoringOtherApps(true);
+    ferrocast_macos::running::activate_self(&app);
     let _ = window.makeFirstResponder(Some(&text_view));
     let mut keyed = false;
     for _ in 0..30 {

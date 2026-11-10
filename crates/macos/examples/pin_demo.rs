@@ -16,8 +16,7 @@ fn main() {
     let mtm = MainThreadMarker::new().expect("main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-    #[allow(deprecated)]
-    app.activateIgnoringOtherApps(true);
+    ferrocast_macos::running::activate_self(&app);
     println!("{:?}", pin::open(mtm, &path, size, scale));
     while pin::count() > 0 {
         let until = NSDate::distantFuture();
