@@ -408,6 +408,22 @@ impl SyncIo {
             .unwrap_or(0)
     }
 
+    /// Folders of the other Macs under `devices/`: every Mac that has published and was not
+    /// forgotten, whatever its documents look like.
+    pub fn device_folders(&self) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(self.dir.join("devices"))
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().is_dir())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .filter(|n| !n.starts_with('.') && !n.eq_ignore_ascii_case(&self.device))
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    }
+
     /// Documents of the other Macs for a domain; unreadable or corrupt ones are skipped and named in
     /// the second value.
     pub fn read_docs(&self, domain: &str) -> ReadDocs {
@@ -522,6 +538,27 @@ impl SyncIo {
         anyhow::ensure!(!id.eq_ignore_ascii_case(&self.device), "this Mac cannot be forgotten"); // APFS ignores case
         let p = self.device_dir(id);
         anyhow::ensure!(std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()), "no such Mac: {id}");
+        // Say so in this Mac's documents first: the forgotten Mac, if it is still running, finds its
+        // name there with the last document of it this Mac saw, and starts over as a newcomer
+        // instead of publishing its old copies again. (A failure to write does not stop the removal.)
+        #[derive(serde::Deserialize)]
+        struct Stamp {
+            written_at: Option<i64>,
+        }
+        for domain in DOMAINS.iter().filter(|d| **d != "clipboard") {
+            let theirs = p.join(format!("{domain}.json"));
+            let last = (!(self.dataless)(&theirs))
+                .then(|| std::fs::read(&theirs).ok())
+                .flatten()
+                .and_then(|b| serde_json::from_slice::<Stamp>(&b).ok())
+                .and_then(|s| s.written_at);
+            if let (Some(w), Some(mut own)) = (last, self.read_own_doc(domain)) {
+                own.forgotten.insert(id.to_string(), w);
+                if let Err(e) = self.write_doc(domain, &own) {
+                    eprintln!("ferrocast: sync: cannot record that {id} was forgotten in {domain}: {e:#}");
+                }
+            }
+        }
         std::fs::remove_dir_all(&p)?;
         Ok(())
     }
@@ -539,7 +576,10 @@ impl SyncIo {
     /// Write this Mac's document; an identical one is left alone (no needless iCloud uploads).
     /// `run_at`: `None` keeps the one already in the file; a time replaces it only when the one in
     /// the file is older than [`RUN_AT_REFRESH_MS`].
-    pub fn write_doc(&self, domain: &str, doc: &DeviceDoc) -> anyhow::Result<()> {
+    /// `written_at` keeps the file's value while nothing else changed, and otherwise is at least one
+    /// more than the file's, so it never goes back and equal values mean equal content. Returns the
+    /// `written_at` the file has afterwards (`None` for a document that carries none).
+    pub fn write_doc(&self, domain: &str, doc: &DeviceDoc) -> anyhow::Result<Option<i64>> {
         anyhow::ensure!(self.on(), "sync turned off");
         let p = self.device_dir(&self.device).join(format!("{domain}.json"));
         // a file that is only in the cloud is replaced without reading it (reading would wait for it)
@@ -560,12 +600,24 @@ impl SyncIo {
         if self.name.is_some() && out.name != self.name {
             out.name = self.name.clone();
         }
+        let old_doc = old.as_deref().and_then(|b| serde_json::from_slice::<DeviceDoc>(b).ok());
+        if let (Some(new), Some(o)) = (out.written_at, old_doc.as_ref().and_then(|d| d.written_at)) {
+            let same = old_doc.as_ref().is_some_and(|d| {
+                d.items == out.items
+                    && d.acks == out.acks
+                    && d.collected == out.collected
+                    && d.first_sync_at == out.first_sync_at
+                    && d.name == out.name
+            });
+            out.written_at = Some(if same { o } else { new.max(o.saturating_add(1)) });
+        }
         // compact: the documents are read by machines, and the clipboard one is large
         let bytes = serde_json::to_vec(&out)?;
         if old.is_some_and(|o| o == bytes) {
-            return Ok(());
+            return Ok(out.written_at);
         }
-        write_atomic(&p, &bytes)
+        write_atomic(&p, &bytes)?;
+        Ok(out.written_at)
     }
 }
 
@@ -749,12 +801,29 @@ pub fn sync_domain_recovering(
         });
     }
     let fresh = Tracker::default();
+    let original = tracker;
     let tracker = if recover { &fresh } else { tracker };
     let clipboard = domain == "clipboard";
+    // Acknowledgement-based clean-up of deletions (not for the clipboard, which ages its own).
+    let acking = !clipboard;
+    let own_prev = if acking { io.read_own_doc(domain) } else { None };
+    let folders = if acking { io.device_folders() } else { vec![] };
     // The other Macs' documents are read before this Mac publishes: what they carry decides what this
     // Mac's clipboard document leaves out, and how far they have all read decides which tombstones
     // can go.
     let pre = io.read_docs(domain);
+    // What has been cleaned up anywhere, as far as this Mac can tell: its own memory, its own
+    // document and every other Mac's document. A Mac that starts over (a new one, a lost tracker, a
+    // restored backup, a forgotten Mac that comes back) learns what was cleaned up from this.
+    let remembered = if acking { sync::collected_union(&original.collected, own_prev.as_ref(), &pre.docs) } else { Default::default() };
+    // This Mac starts over when its own document in the folder is newer than what its tracker has
+    // seen (a restore of older local data, or a lost tracker) or another Mac says it was forgotten
+    // after the tracker's last document. Its old acknowledgements are not trusted then.
+    let last = original.last_written;
+    let restarted = acking
+        && !recover
+        && (own_prev.as_ref().and_then(|d| d.written_at).is_some_and(|w| last.is_none_or(|l| w > l))
+            || pre.docs.iter().filter_map(|d| d.forgotten.get(&io.device)).any(|f| last.is_none_or(|l| *f >= l)));
     // First-sync rule (see `sync::restamp_baseline`):
     //  1. On this Mac's first sync of a domain (also after a missing or corrupt tracker) its items,
     //     and deletions of built-in defaults it lacks, are published at modified 0, whether or not
@@ -791,8 +860,78 @@ pub fn sync_domain_recovering(
     } else {
         tracker
     };
+    // What was cleaned up anywhere is remembered here even when the tracker was rebuilt or the run
+    // starts over; the acknowledgements published are the tracker's (saved with the data), never the
+    // ones of the document in the folder, which a restore of older data leaves ahead of the data.
+    let mut work = tracker.clone();
+    for (k, v) in &remembered {
+        let c = work.collected.entry(k.clone()).or_insert(*v);
+        *c = (*c).max(*v);
+    }
+    work.last_written = work.last_written.max(last);
+    if restarted {
+        work.acks.clear();
+    }
+    work.acks.retain(|k, _| folders.contains(k));
+    // An item this Mac holds whose deletion was cleaned up anywhere is a stale copy: it is removed
+    // here and never published. Edits made after the deletion carry a later stamp and stay. A Mac
+    // that has no history of the item (a newcomer, a lost tracker) cannot tell, so it takes the
+    // item as the copy it is.
+    let blind = !original.seeded || restarted;
+    let covered: Vec<String> = snapshot
+        .iter()
+        .filter(|(id, v)| {
+            work.collected.get(id).is_some_and(|c| match work.items.get(id) {
+                Some(t) if !t.deleted && t.hash == sync::hash(v) => t.modified <= *c,
+                Some(_) => false,
+                // no history of it: a stale copy, unless the own document already carries it live
+                // above the collected stamp (a run that published it and crashed before the save)
+                None => blind && !own_prev.as_ref().and_then(|d| d.items.get(id)).is_some_and(|r| !r.deleted && r.modified > *c),
+            })
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    let snap_owned: Vec<(String, Value)>;
+    let snap: &[(String, Value)] = if covered.is_empty() {
+        snapshot
+    } else {
+        snap_owned = snapshot.iter().filter(|(id, _)| !covered.contains(id)).cloned().collect();
+        for id in &covered {
+            work.items.remove(id);
+        }
+        &snap_owned
+    };
+    let tracker = &work;
+    // This Mac's clock for the document: never at or below the one it last wrote (the file, the
+    // tracker), nor at or below a value a peer acknowledged or the forgotten list names, so a lost
+    // or restored own document and a clock set back cannot make old acknowledgements count.
+    let floor = [
+        own_prev.as_ref().and_then(|d| d.written_at),
+        tracker.last_written,
+        pre.docs.iter().filter_map(|d| d.acks.get(&io.device).copied()).max(),
+        pre.docs.iter().filter_map(|d| d.forgotten.get(&io.device).copied()).max(),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
+    let written_at = acking.then(|| now.max(floor.unwrap_or(i64::MIN).saturating_add(1)));
+    let mut acks: std::collections::BTreeMap<String, i64> = tracker.acks.clone();
+    // Macs this one forgot, and what the others forgot (until that Mac publishes again)
+    let forgotten: std::collections::BTreeMap<String, i64> = if acking {
+        let mut f = own_prev.as_ref().map(|d| d.forgotten.clone()).unwrap_or_default();
+        for d in &pre.docs {
+            for (k, v) in &d.forgotten {
+                let e = f.entry(k.clone()).or_insert(*v);
+                *e = (*e).max(*v);
+            }
+        }
+        f.retain(|k, v| *k != io.device && !pre.docs.iter().any(|d| &d.device == k && d.written_at.is_some_and(|w| w > *v)));
+        f
+    } else {
+        Default::default()
+    };
     let first = !tracker.seeded;
-    let opts = sync::PublishOpts {
+    let mut opts = sync::PublishOpts {
         first_stamp: 0,
         ttl: tombstone_ttl(domain),
         baseline_deleted: if first { default_ids(domain) } else { vec![] },
@@ -800,20 +939,46 @@ pub fn sync_domain_recovering(
         max_tombstones: clipboard.then_some(MAX_CLIPBOARD_TOMBSTONES),
         pristine: pristine_check(domain),
         carried: clipboard.then(|| sync::carried_elsewhere(&io.device, &pre.docs)),
+        written_at,
+        acks: acks.clone(),
+        collect_upto: None,
+        keep: default_ids(domain).into_iter().collect(),
+        forgotten,
     };
+    // What the other Macs' documents say about this Mac's, read before this run publishes: the
+    // newest of this Mac's documents each has merged, and the oldest of those over every Mac that
+    // has not been forgotten (a Mac without a clean document, or whose document has no
+    // acknowledgement for this Mac, blocks: `None`).
+    let ack_floor: Option<i64> = (acking && !recover && !folders.is_empty())
+        .then(|| {
+            folders
+                .iter()
+                .map(|f| pre.docs.iter().find(|d| &d.device == f).and_then(|d| d.acks.get(&io.device).copied()))
+                .try_fold(i64::MAX, |m, a| a.map(|a| m.min(a)))
+        })
+        .flatten();
+    let heard: std::collections::BTreeMap<String, i64> =
+        pre.docs.iter().filter(|d| folders.contains(&d.device)).filter_map(|d| Some((d.device.clone(), d.written_at?))).collect();
     // A recovering run reads this Mac's own document before anything is written: it is the intact
     // copy of what this Mac had published (items only it had, edits not pulled yet), and it takes
     // part in the merge like another Mac's document. It is not overwritten with the loaded data;
     // the merged document is written once the merge is applied (`Outcome::applied_doc`).
     let own_copy = if recover { io.read_own_doc(domain) } else { None };
-    let (doc, t1) = sync::publish_opts(&io.device, snapshot, tracker, now, &opts);
+    let (doc, mut t1) = sync::publish_opts(&io.device, snap, tracker, now, &opts);
     if clipboard {
         // only the images of the entries this Mac publishes travel in its folder
         let published: Vec<(String, Value)> = doc.items.iter().filter_map(|(id, r)| Some((id.clone(), r.value.clone()?))).collect();
         export_images(io, &published);
     }
     if !recover {
-        io.write_doc(domain, &doc)?;
+        let on_disk = io.write_doc(domain, &doc)?;
+        // every tombstone is in the document just written: its time is the `W` of the ack rule
+        if let Some(w) = on_disk {
+            t1.last_written = t1.last_written.max(Some(w));
+            for id in t1.items.iter().filter(|(_, t)| t.deleted).map(|(id, _)| id.clone()).collect::<Vec<_>>() {
+                t1.first_pub.entry(id).or_insert(w);
+            }
+        }
     }
     let ReadDocs { mut docs, corrupt, mut downloading } = pre;
     // deletions recorded in the own copy (the merge skips a tombstone for an id this Mac no longer
@@ -823,6 +988,9 @@ pub fn sync_domain_recovering(
     if let Some(mut own) = own_copy {
         own.device = io.device.clone();
         docs.push(own);
+    }
+    if acking {
+        sync::ignore_collected(&mut docs, &tracker.collected);
     }
     if clipboard {
         // Clipboard tombstones expire (after the longest retention), so entries from before that
@@ -835,7 +1003,7 @@ pub fn sync_domain_recovering(
             });
         }
     }
-    let (mut merged, t2) = sync::merge_as(&io.device, snapshot, &docs, &t1);
+    let (mut merged, t2) = sync::merge_as(&io.device, snap, &docs, &t1);
     // An item this Mac could not read and that has not changed since is not part of the local data
     // on purpose: leaving it in `merged` would make every run look like a change to apply (a local
     // save and a rewritten own document each time). A new version from the other Mac (another hash)
@@ -845,7 +1013,7 @@ pub fn sync_domain_recovering(
     });
     let mut t2 = t2;
     // Notes edited on two Macs: the text that lost is kept as a copy (see `conflict_copies`).
-    let copies = if domain == "notes" && !recover { conflict_copies(io, tracker, snapshot, &docs, &merged) } else { vec![] };
+    let copies = if domain == "notes" && !recover { conflict_copies(io, tracker, snap, &docs, &merged) } else { vec![] };
     let conflicted: Vec<String> = copies.iter().map(|c| c.note_id.clone()).collect();
     let conflicts = copies.len();
     merged.extend(copies.into_iter().map(|c| (c.id, c.value)));
@@ -886,11 +1054,27 @@ pub fn sync_domain_recovering(
     if domain == "notes" && io.attachments_dir.is_some() {
         // Images of notes (see `sync_attachments`). Pruning needs every Mac's notes to be known.
         let docs_complete = corrupt.is_empty() && downloading == 0 && !recover;
-        let (pending, added) = sync_attachments(io, snapshot, &merged, &docs, docs_complete, now / 1000);
+        let (pending, added) = sync_attachments(io, snap, &merged, &docs, docs_complete, now / 1000);
         downloading += pending;
         attachments_added = added;
     }
     // what this Mac publishes now: the merged state with the re-stamped baseline
+    if acking && !recover {
+        // Macs read cleanly in this run are acknowledged once the caller has applied the merge and
+        // writes this document (`applied_doc`), or right below when there is nothing to apply
+        acks.extend(heard.iter().map(|(k, v)| (k.clone(), *v)));
+        acks.retain(|k, _| folders.contains(k));
+        for f in &folders {
+            if !heard.contains_key(f) && pre_clean_without_stamp(&docs, f) {
+                acks.remove(f); // a document without `written_at` (older build) is not acknowledged
+            }
+        }
+        opts.acks = acks;
+        opts.collect_upto = ack_floor;
+    }
+    // the merged document replaces the one written above: one step later, which is what the file will
+    // carry (and what the tracker then records as the last one written)
+    opts.written_at = opts.written_at.map(|w| t2.last_written.map_or(w, |l| w.max(l.saturating_add(1))));
     let (mut doc2, t3) = sync::publish_opts(&io.device, &merged, &t2, now, &opts);
     // every other Mac's document has been merged in this run (the caller writes this document once
     // the merge is applied): it vouches for the deletions it has read up to now
@@ -919,7 +1103,6 @@ pub fn sync_domain_recovering(
     }
     // A merge that is not applied (typing in the note) leaves the conflict to be found again: the
     // saved tracker keeps the version both edits started from, not this Mac's published edit.
-    let mut t1 = t1;
     for id in &conflicted {
         if let Some(before) = tracker.items.get(id) {
             t1.items.insert(id.clone(), before.clone());
@@ -938,6 +1121,11 @@ pub fn sync_domain_recovering(
         attachments_added,
         conflicts,
     })
+}
+
+/// True when `docs` has a document of `device` (read cleanly) that carries no `written_at`.
+fn pre_clean_without_stamp(docs: &[DeviceDoc], device: &str) -> bool {
+    docs.iter().any(|d| d.device == device && d.written_at.is_none())
 }
 
 /// Rebuilding a clipboard tracker from the own document, which does not list the entries this Mac
@@ -1791,6 +1979,10 @@ mod tests {
             name: None,
             run_at: None,
             gc_at: None,
+            collected: Default::default(),
+            forgotten: Default::default(),
+            written_at: None,
+            acks: Default::default(),
         };
         b.io.write_doc("snippets", &doc).unwrap();
     }
@@ -1870,6 +2062,10 @@ mod tests {
             name: None,
             run_at: None,
             gc_at: None,
+            collected: Default::default(),
+            forgotten: Default::default(),
+            written_at: None,
+            acks: Default::default(),
         };
         b.io.write_doc("snippets", &gone).unwrap();
         for now in [16_000, 17_000] {
@@ -4078,3 +4274,11 @@ mod tests {
 #[cfg(test)]
 #[path = "sync_own_tests.rs"]
 mod own_tests;
+
+#[cfg(test)]
+#[path = "sync_ack_tests.rs"]
+mod ack_tests;
+
+#[cfg(test)]
+#[path = "sync_collect_tests.rs"]
+mod collect_tests;

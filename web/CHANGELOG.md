@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Changed
+- **Sync, deletions are cleaned up safely**: a deletion is now removed from the sync documents only after every Mac that has not been forgotten has confirmed that it received it. Each Mac's sync document records when it was written and, per other Mac, which of that Mac's documents it has read and applied; only each Mac's own clock is compared, so a clock that runs fast or slow cannot trigger an early cleanup. A Mac that is offline, runs an older version or has never confirmed keeps the deletions in place, so it still learns about them when it returns, however long it was away. To let cleanup proceed, use Forget this Mac for a Mac you no longer use. Clipboard deletions keep their own 400-day expiry, and deletions of built-in snippets and quicklinks are kept. Cleaned-up deletions are remembered as a compact list of ids and times that every Mac passes on, so a Mac that comes back after being forgotten, one restored from an older backup and one that lost its sync state drop old copies of those items instead of bringing them back; an edit made after the deletion still wins, and items a Mac never uploaded are kept. A Mac on 0.8.0 or older blocks cleanup until it is updated or forgotten. Documents stay compatible with 0.8.0 and older. (docs: /docs/launcher/sync/) #sync
+
 ## [0.8.0] - 2026-11-10
 
 ### Added
