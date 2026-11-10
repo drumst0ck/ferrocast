@@ -18,7 +18,7 @@ pub struct Node {
 
 /// App -> runtime.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum HostMsg {
     /// Start a command: load `entry` (the extension's compiled bundle) and render it.
@@ -33,6 +33,12 @@ pub enum HostMsg {
         arguments: Map<String, Value>,
         preferences: Map<String, Value>,
         environment: Environment,
+        /// `launchContext` of a `launchCommand` call (`props.launchContext`). Absent when there is none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        launch_context: Option<Value>,
+        /// `fallbackText` of a `launchCommand` call (`props.fallbackText`). Absent when there is none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback_text: Option<String>,
     },
     /// The search bar text changed.
     Search { text: String },
@@ -54,7 +60,7 @@ pub enum HostMsg {
     Result { id: u64, value: Value, error: Option<String> },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Environment {
     pub extension_name: String,
@@ -164,11 +170,67 @@ mod tests {
             arguments: Map::new(),
             preferences: Map::new(),
             environment: env,
+            launch_context: None,
+            fallback_text: None,
         });
         let v: Value = serde_json::from_str(&l).unwrap();
         assert_eq!(v["type"], "launch");
         assert_eq!(v["environment"]["supportPath"], "/s");
         assert_eq!(v["environment"]["isDevelopment"], false);
+        assert!(v.get("launchContext").is_none() && v.get("fallbackText").is_none(), "absent fields are not sent");
+    }
+
+    fn launch_with(ctx: Option<Value>, fb: Option<&str>, ty: &str) -> HostMsg {
+        HostMsg::Launch {
+            entry: "/x/c.js".into(),
+            extension: "e".into(),
+            command: "c".into(),
+            title: "C".into(),
+            mode: "no-view".into(),
+            arguments: Map::new(),
+            preferences: Map::new(),
+            environment: Environment {
+                extension_name: "e".into(),
+                command_name: "c".into(),
+                support_path: "/s".into(),
+                assets_path: "/a".into(),
+                is_development: false,
+                raycast_version: "1.0.0".into(),
+                launch_type: ty.into(),
+            },
+            launch_context: ctx,
+            fallback_text: fb.map(String::from),
+        }
+    }
+
+    #[test]
+    fn launch_context_and_fallback_text_round_trip() {
+        for m in [
+            launch_with(Some(json!({"a":[1,{"b":null}]})), Some("fb"), "background"),
+            launch_with(Some(json!({})), None, "userInitiated"),
+            launch_with(None, Some(""), "userInitiated"),
+            launch_with(None, None, "userInitiated"),
+        ] {
+            let back: HostMsg = serde_json::from_str(&encode_host(&m)).unwrap();
+            assert_eq!(back, m);
+        }
+        let v: Value = serde_json::from_str(&encode_host(&launch_with(Some(json!({"k":1})), Some("t"), "background"))).unwrap();
+        assert_eq!(v["launchContext"], json!({"k":1}));
+        assert_eq!(v["fallbackText"], "t");
+        assert_eq!(v["environment"]["launchType"], "background");
+    }
+
+    #[test]
+    fn launch_without_the_new_fields_still_parses() {
+        let old = r#"{"type":"launch","entry":"/x/c.js","extension":"e","command":"c","title":"C","mode":"view","arguments":{},"preferences":{},
+            "environment":{"extensionName":"e","commandName":"c","supportPath":"/s","assetsPath":"/a","isDevelopment":false,"raycastVersion":"1.0.0","launchType":"userInitiated"}}"#;
+        assert_eq!(serde_json::from_str::<HostMsg>(old).unwrap(), {
+            let mut m = launch_with(None, None, "userInitiated");
+            if let HostMsg::Launch { mode, .. } = &mut m {
+                *mode = "view".into();
+            }
+            m
+        });
     }
 
     #[test]

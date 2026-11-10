@@ -299,6 +299,8 @@ mod tests {
                 raycast_version: "1.0.0".into(),
                 launch_type: "userInitiated".into(),
             },
+            launch_context: None,
+            fallback_text: None,
         })
         .unwrap();
         Some((sc, rx, tmp))
@@ -539,6 +541,8 @@ mod tests {
                 raycast_version: "1".into(),
                 launch_type: "userInitiated".into(),
             },
+            launch_context: None,
+            fallback_text: None,
         });
         let mut stdin = child.stdin.take().unwrap();
         writeln!(stdin, "{launch}").unwrap();
@@ -659,6 +663,8 @@ mod tests {
                 raycast_version: "1".into(),
                 launch_type: "userInitiated".into(),
             },
+            launch_context: None,
+            fallback_text: None,
         })
         .unwrap();
         let line = collect(&rx, 5000, 50).into_iter().find_map(|e| match e {

@@ -40,6 +40,7 @@ Las extensiones se dibujan con la interfaz propia de Ferrocast, no con una vista
 - **Formularios** con texto, contraseña, área de texto, casilla, desplegable, fecha (escrita como `AAAA-MM-DD`) y etiquetas. ⌘↵ envía.
 - **Acciones** y sus atajos, apilar y volver entre pantallas, avisos, copiar y pegar, abrir URL y archivos, mostrar un archivo en Finder.
 - **Almacenamiento y datos**: LocalStorage, Cache, las preferencias, la lista de tus apps, la app activa, el texto seleccionado y los diálogos de confirmación.
+- **Lanzar otro comando** de la misma extensión con `launchCommand`: `type` (`LaunchType.UserInitiated` lo abre, `LaunchType.Background` lo ejecuta en un proceso aparte, sin mostrar el lanzador ni tocar la pantalla en la que estás; su HUD y sus avisos se muestran, sus errores se notifican, y se detiene al terminar o a los 60 s. Un comando en segundo plano solo puede lanzar otros comandos en segundo plano), `arguments`, `context` (se recibe como `props.launchContext`) y `fallbackText`. El comando lanzado ve su tipo en `environment.launchType` y `props.launchType`.
 - Las **cuadrículas** se muestran como listas, con el contenido de la celda como icono.
 
 Para medirlo, ejecutamos 20 extensiones populares del repositorio público de Raycast (github.com/raycast/extensions, licencia MIT) que no necesitan cuenta, clave de API ni IA. Tomamos las 20 con más instalaciones según sus páginas de la Store, de entre unas 60 candidatas que no necesitan cuenta, clave ni IA. No son toda la Store. Tienen 40 comandos que abren una vista y manejamos cada uno sin la interfaz: lanzarlo, buscar, abrir la primera acción, apilar una pantalla y volver, enviar un formulario con sus valores por defecto. 34 de los 40 funcionaron, 4 solo esperaron datos que no les dimos (por ejemplo un portapapeles vacío), 1 falló porque Homebrew rechazó cargar un cask de un tap no confiable y 1 mostró un historial vacío. La prueba no demuestra que todos los comandos de todas las extensiones funcionen y no usó la ventana de la app. Tus extensiones pueden comportarse distinto.
@@ -50,7 +51,7 @@ Para medirlo, ejecutamos 20 extensiones populares del repositorio público de Ra
 - **Campos de selector de archivos** en formularios y el accesorio de enlace.
 - **Inicio de sesión con OAuth** y las funciones de IA de Raycast.
 - **Algunas acciones**: mover a la Papelera, abrir con, crear un snippet o un quicklink y elegir una fecha.
-- **Lanzar un comando de otra extensión**, y todo lo que dependa de la cuenta, la sincronización o la Store de Raycast.
+- **Lanzar un comando de otra extensión** (`launchCommand` lo rechaza), y todo lo que dependa de la cuenta, la sincronización o la Store de Raycast.
 - El **Markdown del panel de detalle en listas** se muestra como texto plano.
 
 Cuando una extensión usa algo que Ferrocast no puede dibujar, la pantalla dice "Not supported in Ferrocast yet: ", el nombre de la parte, la extensión y un enlace a esta página. El resto de la extensión sigue funcionando donde puede.

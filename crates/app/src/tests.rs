@@ -16764,6 +16764,116 @@ fn launch_command_is_refused_after_five_in_ten_seconds() {
 }
 
 #[test]
+fn launch_extras_carry_background_context_and_fallback_text() {
+    use serde_json::json;
+    let x = ext_glue::launch_extras(&json!({"name":"x"})).unwrap();
+    assert!(!x.background && x.context.is_none() && x.fallback_text.is_none(), "no type is a user-initiated launch");
+    let x = ext_glue::launch_extras(&json!({"name":"x","type":"background","context":{"k":[1]},"fallbackText":"fb"})).unwrap();
+    assert!(x.background);
+    assert_eq!(x.context, Some(json!({"k":[1]})));
+    assert_eq!(x.fallback_text.as_deref(), Some("fb"));
+    assert!(!ext_glue::launch_extras(&json!({"type":"userInitiated"})).unwrap().background);
+    for bad in [json!({"type":"sometimes"}), json!({"type":3}), json!({"context":"s"}), json!({"context":[1]}), json!({"fallbackText":4})] {
+        let e = ext_glue::launch_extras(&bad).expect_err("refused");
+        assert!(e.starts_with("launchCommand: "), "{e}");
+    }
+}
+
+fn hud(app: &mut App, session: u64, title: &str) {
+    app.ext_event(
+        session,
+        ferrocast_core::extensions::sidecar::Event::Msg(ferrocast_core::extensions::protocol::RuntimeMsg::Hud {
+            title: title.into(),
+            own_title: false,
+        }),
+    );
+}
+
+/// A launcher showing the view command's screen (session 1) with a background command (session 9)
+/// running next to it.
+fn app_with_view_and_background() -> App {
+    let mut app = fixture();
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    app.stack = vec![View::Root, View::ExtList];
+    app.ext.test_set_base(1);
+    app.visible = true;
+    app.ext.test_install_bg_session(9, Duration::ZERO);
+    ext_glue::take_notified();
+    app
+}
+
+#[test]
+fn a_background_commands_hud_is_shown_without_touching_the_launcher() {
+    let mut app = app_with_view_and_background();
+    hud(&mut app, 9, "Synced");
+    assert_eq!(ext_glue::take_notified(), vec!["Synced".to_string()], "its HUD is still shown");
+    assert!(app.visible, "the launcher stays");
+    assert_eq!(app.stack.len(), 2, "the user's screen stays");
+    assert!(app.ext.test_has_session(), "the calling session stays");
+    app.ext_event(9, ferrocast_core::extensions::sidecar::Event::Msg(ferrocast_core::extensions::protocol::RuntimeMsg::PopToRoot));
+    app.ext_event(9, ferrocast_core::extensions::sidecar::Event::Msg(ferrocast_core::extensions::protocol::RuntimeMsg::CloseMainWindow));
+    assert!(app.visible && app.stack.len() == 2, "a background command cannot close the window or pop to root");
+}
+
+#[test]
+fn a_background_commands_toast_and_end_are_handled_on_their_own() {
+    let mut app = app_with_view_and_background();
+    app.ext_event(
+        9,
+        ferrocast_core::extensions::sidecar::Event::Msg(ferrocast_core::extensions::protocol::RuntimeMsg::Toast {
+            style: "failure".into(),
+            title: "Sync failed".into(),
+            message: "offline".into(),
+            own_title: false,
+        }),
+    );
+    assert_eq!(app.toast.as_ref().map(|t| t.0.clone()), Some("⚠ Sync failed: offline".to_string()), "its errors are reported");
+    app.ext_event(9, ferrocast_core::extensions::sidecar::Event::Msg(ferrocast_core::extensions::protocol::RuntimeMsg::Exit));
+    assert!(!app.ext.test_has_bg(9), "finished: gone");
+    assert!(app.ext.test_has_session() && app.visible && app.stack.len() == 2, "the user's command is untouched");
+    app.ext.test_install_bg_session(10, Duration::ZERO);
+    app.ext_event(10, ferrocast_core::extensions::sidecar::Event::Closed);
+    assert!(!app.ext.test_has_bg(10), "a dead process is forgotten");
+    assert!(app.ext.test_has_session());
+}
+
+#[test]
+fn a_background_command_is_stopped_after_the_time_limit_and_the_user_is_told() {
+    let mut app = app_with_view_and_background();
+    app.ext.test_install_bg_session(11, Duration::from_secs(61));
+    app.ext_tick();
+    assert!(!app.ext.test_has_bg(11), "over 60 s: stopped");
+    assert!(app.ext.test_has_bg(9), "a young one keeps going");
+    assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("did not finish in time")));
+    assert!(app.ext.test_has_session() && app.visible && app.stack.len() == 2);
+}
+
+#[test]
+fn a_background_command_cannot_start_a_command_that_takes_the_screen() {
+    let mut app = app_with_view_and_background();
+    app.ext.test_set_manifests(vec![ext_manifest(r#"{"name":"e","commands":[{"name":"x","mode":"view"}]}"#)]);
+    let r = app.ext_call("e", 9, 1, "launchCommand", &serde_json::json!({"name":"x"}));
+    assert!(is_err_containing(&r, "background"), "refused before anything starts");
+    assert!(app.ext.test_has_session() && app.ext.test_has_bg(9));
+}
+
+#[test]
+fn launch_command_validates_type_and_context_before_starting_anything() {
+    let mut app = fixture();
+    app.ext.test_set_manifests(vec![ext_manifest(r#"{"name":"e","commands":[{"name":"x","mode":"view"}]}"#)]);
+    app.ext.test_install_session(1, true, Duration::ZERO);
+    let r = app.ext_call("e", 1, 1, "launchCommand", &serde_json::json!({"name":"x","type":"later"}));
+    assert!(is_err_containing(&r, "invalid type"));
+    let r = app.ext_call("e", 1, 2, "launchCommand", &serde_json::json!({"name":"x","context":"s"}));
+    assert!(is_err_containing(&r, "context must be an object"));
+    let r = app.ext_call("e", 1, 3, "launchCommand", &serde_json::json!({"name":"nope"}));
+    assert!(is_err_containing(&r, "has no command nope"), "an unknown command is rejected");
+    let r = app.ext_call("e", 1, 4, "launchCommand", &serde_json::json!({"name":"x","type":"background","context":{"a":1}}));
+    assert!(is_err_containing(&r, "Node.js"), "a valid background launch reaches the start checks");
+    assert!(app.ext.test_has_session(), "a refused launch leaves the running command");
+}
+
+#[test]
 fn launch_command_with_a_foreign_owner_is_refused() {
     let mut app = fixture();
     app.ext.test_set_manifests(vec![ext_manifest(r#"{"name":"e","author":"ann","commands":[{"name":"x","mode":"view"}]}"#)]);

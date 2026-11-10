@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 /// A command that runs without a view is killed after this long; a view that never draws, after
 /// `FIRST_RENDER_LIMIT`.
+/// Background commands running at once.
+const MAX_BACKGROUND: usize = 4;
 const NO_VIEW_LIMIT: Duration = Duration::from_secs(60);
 const FIRST_RENDER_LIMIT: Duration = Duration::from_secs(30);
 
@@ -67,6 +69,38 @@ struct Session {
 
 /// Why a launch did not happen (`NO_NODE` also sends the user to Settings).
 const NO_NODE: &str = "Node.js 22 or newer is needed: install it or download it in Settings → Integrations";
+
+/// What a `launchCommand` request adds to a plain launch.
+#[derive(Debug, Default)]
+pub(crate) struct LaunchExtras {
+    /// `LaunchType.Background`: the command runs on its own, without a screen.
+    pub background: bool,
+    /// `launchContext` (always an object).
+    pub context: Option<Value>,
+    pub fallback_text: Option<String>,
+}
+
+/// The `type`, `context` and `fallbackText` of a `launchCommand` request. Anything but the two
+/// Raycast launch types, or a context that is not an object, is refused.
+pub(crate) fn launch_extras(params: &Value) -> Result<LaunchExtras, String> {
+    let background = match params.get("type") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(t)) if t == "userInitiated" => false,
+        Some(Value::String(t)) if t == "background" => true,
+        Some(t) => return Err(format!("launchCommand: invalid type {t}, use LaunchType.UserInitiated or LaunchType.Background")),
+    };
+    let context = match params.get("context") {
+        None | Some(Value::Null) => None,
+        Some(c @ Value::Object(_)) => Some(c.clone()),
+        Some(_) => return Err("launchCommand: context must be an object".into()),
+    };
+    let fallback_text = match params.get("fallbackText") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(t)) => Some(t.clone()),
+        Some(_) => return Err("launchCommand: fallbackText must be a string".into()),
+    };
+    Ok(LaunchExtras { background, context, fallback_text })
+}
 
 /// The text of [`NO_NODE`] in the interface language (what `ext_launch_with` returns).
 fn no_node() -> String {
@@ -160,6 +194,16 @@ impl ExtState {
             _ => None,
         }
     }
+    pub(crate) fn test_install_bg_session(&mut self, id: u64, age: Duration) {
+        let main = self.sess.take();
+        self.test_install_session(id, false, age);
+        let s = self.sess.take().expect("installed");
+        self.bg.push(s);
+        self.sess = main;
+    }
+    pub(crate) fn test_has_bg(&self, id: u64) -> bool {
+        self.bg.iter().any(|s| s.id == id)
+    }
     pub(crate) fn test_has_session(&self) -> bool {
         self.sess.is_some()
     }
@@ -217,6 +261,8 @@ pub struct ExtState {
     last_scan: Option<Instant>,
     pub(crate) downloading: bool,
     sess: Option<Session>,
+    /// `LaunchType.Background` commands, each in a process of its own (never on the screen stack).
+    bg: Vec<Session>,
     next_id: u64,
     /// One view model per navigation depth of the running command.
     views: Vec<ViewModel>,
@@ -249,6 +295,10 @@ pub(crate) struct PrefsEdit {
 }
 
 impl ExtState {
+    /// The running command with this session id, whether it is the user's or a background one.
+    fn session_mut(&mut self, id: u64) -> Option<&mut Session> {
+        self.sess.as_mut().filter(|s| s.id == id).or_else(|| self.bg.iter_mut().find(|s| s.id == id))
+    }
     #[cfg(test)]
     pub(crate) fn prefs_edit(&self) -> Option<&PrefsEdit> {
         self.prefs.as_ref()
@@ -486,6 +536,19 @@ impl App {
     /// Start a command. Nothing of the running one (its screens, its process) is touched until every
     /// check has passed: a failed launch leaves it as it was and returns the reason.
     pub(crate) fn ext_launch_with(&mut self, ext: &str, cmd: &str, arguments: serde_json::Map<String, Value>) -> Result<(), String> {
+        self.ext_launch_as(ext, cmd, arguments, LaunchExtras::default())
+    }
+
+    /// [`Self::ext_launch_with`] with what `launchCommand` adds. A `background` launch gets its own
+    /// process next to the running command (see [`Self::ext_launch_background`]).
+    pub(crate) fn ext_launch_as(
+        &mut self,
+        ext: &str,
+        cmd: &str,
+        arguments: serde_json::Map<String, Value>,
+        extras: LaunchExtras,
+    ) -> Result<(), String> {
+        let background = extras.background;
         let m =
             self.ext.manifests.iter().find(|m| m.name == ext).cloned().ok_or_else(|| trf("unknown extension {ext}", &[("ext", ext)]))?;
         if !self.ext_enabled(&m.name) {
@@ -512,9 +575,9 @@ impl App {
         }
         let runtime = ferrocast_core::extensions::write_runtime(&self.store.root)
             .map_err(|e| trf("Cannot write the extensions runtime: {e}", &[("e", &e.to_string())]))?;
-        let view_mode = c.mode == Mode::View;
+        let view_mode = c.mode == Mode::View && !background;
         let prev = self.ext.sess.as_ref().map(|s| (s.mode == Mode::View, s.origin));
-        let origin = hostcalls::carried_origin(prev, view_mode, Instant::now());
+        let origin = if background { Instant::now() } else { hostcalls::carried_origin(prev, view_mode, Instant::now()) };
         let support = storage::support_dir(&self.store.root, &m.name);
         let _ = std::fs::create_dir_all(&support);
         let assets = m.dir.join("assets");
@@ -545,11 +608,26 @@ impl App {
                 assets_path: assets.to_string_lossy().into_owned(),
                 is_development: false,
                 raycast_version: "1.100.0".into(),
-                launch_type: "userInitiated".into(),
+                launch_type: if background { "background" } else { "userInitiated" }.into(),
             },
+            launch_context: extras.context,
+            fallback_text: extras.fallback_text,
         };
         if let Err(e) = sc.send(&launch) {
             return Err(trf("Cannot talk to Node.js: {e}", &[("e", &e.to_string())]));
+        }
+        if background {
+            return self.ext_launch_background(Session {
+                sc,
+                id,
+                ext: m.name.clone(),
+                title: c.title.clone(),
+                mode: Mode::NoView,
+                assets,
+                got_render: false,
+                origin,
+                cancel: Arc::new(AtomicBool::new(false)),
+            });
         }
         // every check passed: now the old command goes away and the new one takes over
         if self.ext.sess.is_some() {
@@ -571,7 +649,7 @@ impl App {
             id,
             ext: m.name.clone(),
             title: c.title.clone(),
-            mode: c.mode,
+            mode: if view_mode { Mode::View } else { Mode::NoView },
             assets,
             got_render: false,
             origin,
@@ -587,6 +665,68 @@ impl App {
             self.push(View::ExtList);
         }
         Ok(())
+    }
+
+    /// A `LaunchType.Background` command runs in a process of its own: it is not on the screen stack,
+    /// it never hides the launcher or replaces the running command, and `ext_tick` stops it after
+    /// [`NO_VIEW_LIMIT`]. Its HUD / toasts are still shown and its failures reported.
+    fn ext_launch_background(&mut self, s: Session) -> Result<(), String> {
+        if self.ext.bg.len() >= MAX_BACKGROUND {
+            return Err("too many background commands are running, try again in a moment".into());
+        }
+        self.ext_log(&format!("started {} in the background (session {})", s.ext, s.id));
+        self.ext.bg.push(s);
+        Ok(())
+    }
+
+    /// Forget a finished background command (its process dies with it, its host calls are cancelled).
+    fn ext_bg_end(&mut self, id: u64) -> Option<Session> {
+        let i = self.ext.bg.iter().position(|s| s.id == id)?;
+        let s = self.ext.bg.remove(i);
+        s.cancel.store(true, Ordering::SeqCst);
+        Some(s)
+    }
+
+    /// What a background command says. It may show a HUD or toast and use host calls, but never
+    /// touches the launcher: no window hiding, no screens.
+    fn ext_bg_event(&mut self, id: u64, ev: Event) {
+        let Some(name) = self.ext.bg.iter().find(|s| s.id == id).map(|s| s.ext.clone()) else { return };
+        match ev {
+            Event::Stderr(l) => self.ext_log(&format!("{name}: {l}")),
+            Event::BadLine(l) => self.ext_log(&format!("{name}: unexpected output: {l}")),
+            Event::TooLong => {
+                self.ext_bg_end(id);
+                self.toast(trf("{name} sent a message that was too large and was stopped", &[("name", &name)]));
+            }
+            Event::Closed => {
+                self.ext_log(&format!("{name}: background process ended"));
+                self.ext_bg_end(id);
+            }
+            Event::Reply { call, result } => self.ext_answer(id, call, result),
+            Event::Msg(m) => match m {
+                RuntimeMsg::Toast { style, title, message, own_title } => {
+                    let title = if own_title { tr(&title).into_owned() } else { title };
+                    let sep = if title.is_empty() || message.is_empty() { "" } else { ": " };
+                    let text = format!("{title}{sep}{message}");
+                    let text = if style == "failure" { format!("⚠ {text}") } else { text };
+                    if self.visible {
+                        self.toast_verbatim(text);
+                    } else if style != "animated" {
+                        notify_ext(&text);
+                    }
+                }
+                RuntimeMsg::Hud { title, own_title } => notify_ext(&if own_title { tr(&title).into_owned() } else { title }),
+                RuntimeMsg::Call { id: call, method, params } => match self.ext_call(&name, id, call, &method, &params) {
+                    Reply::Now(r) => self.ext_answer(id, call, r),
+                    Reply::Later | Reply::Replaced => {}
+                },
+                RuntimeMsg::Exit => {
+                    self.ext_bg_end(id);
+                }
+                // a screen, the window or the navigation belong to the user's command
+                RuntimeMsg::Render { .. } | RuntimeMsg::Pop { .. } | RuntimeMsg::PopToRoot | RuntimeMsg::CloseMainWindow => {}
+            },
+        }
     }
 
     /// Stop the running command's process and forget its screens.
@@ -627,6 +767,12 @@ impl App {
 
     /// Per-frame housekeeping: timeouts, and forwarding search text / selection to the runtime.
     pub(crate) fn ext_tick(&mut self) {
+        let late: Vec<(u64, String)> =
+            self.ext.bg.iter().filter(|s| s.origin.elapsed() > NO_VIEW_LIMIT).map(|s| (s.id, s.title.clone())).collect();
+        for (id, title) in late {
+            self.ext_bg_end(id);
+            self.toast(trf("{title} did not finish in time and was stopped", &[("title", &title)]));
+        }
         let Some(s) = self.ext.sess.as_mut() else { return };
         let age = s.origin.elapsed();
         let (view_mode, got) = (s.mode == Mode::View, s.got_render);
@@ -670,6 +816,9 @@ impl App {
     // ------------------------------------------------------------ runtime -> app
 
     pub(crate) fn ext_event(&mut self, id: u64, ev: Event) {
+        if self.ext.bg.iter().any(|s| s.id == id) {
+            return self.ext_bg_event(id, ev);
+        }
         let Some(s) = self.ext.sess.as_ref().filter(|s| s.id == id) else { return };
         let name = s.ext.clone();
         match ev {
@@ -721,7 +870,7 @@ impl App {
     }
 
     fn ext_answer(&mut self, session: u64, call: u64, r: Result<Value, String>) {
-        if let Some(s) = self.ext.sess.as_mut().filter(|s| s.id == session) {
+        if let Some(s) = self.ext.session_mut(session) {
             let (value, error) = match r {
                 Ok(v) => (v, None),
                 Err(e) => (Value::Null, Some(e)),
@@ -733,7 +882,7 @@ impl App {
     /// Run `f` off the UI thread and deliver its result as the answer to runtime call `call`.
     /// `f` gets the session's cancel flag (set when the session ends) to stop what it runs.
     fn ext_later(&mut self, session: u64, call: u64, f: impl FnOnce(&AtomicBool) -> Result<Value, String> + Send + 'static) -> Reply {
-        let Some(cancel) = self.ext.sess.as_ref().filter(|s| s.id == session).map(|s| s.cancel.clone()) else {
+        let Some(cancel) = self.ext.session_mut(session).map(|s| s.cancel.clone()) else {
             return Reply::Now(Err("the command is not running".into()));
         };
         let Some(slot) = self.ext.pending.acquire() else {
@@ -823,7 +972,7 @@ impl App {
     }
 
     pub(crate) fn ext_call(&mut self, ext: &str, session: u64, call: u64, method: &str, params: &Value) -> Reply {
-        let is_view = self.ext.sess.as_ref().is_some_and(|s| s.mode == Mode::View);
+        let is_view = self.ext.sess.as_ref().is_some_and(|s| s.id == session && s.mode == Mode::View);
         if let Err(e) = hostcalls::call_allowed(method, is_view, self.visible) {
             return Reply::Now(Err(e));
         }
@@ -898,13 +1047,24 @@ impl App {
                 match hostcalls::parse_launch(params, ext, &owners) {
                     Err(e) => Reply::Now(Err(e)),
                     Ok((cmd, args)) => {
+                        let extras = match launch_extras(params) {
+                            Ok(x) => x,
+                            Err(e) => return Reply::Now(Err(e)),
+                        };
+                        if !extras.background && self.ext.bg.iter().any(|s| s.id == session) {
+                            return Reply::Now(Err(
+                                "launchCommand: a background command can only start background commands (LaunchType.Background)".into(),
+                            ));
+                        }
+                        let background = extras.background;
                         if !self.ext.manifests.iter().any(|m| m.name == ext && m.commands.iter().any(|c| c.name == cmd)) {
                             return Reply::Now(Err(format!("launchCommand: {ext} has no command {cmd}")));
                         }
                         if !self.ext.launches.allow(Instant::now()) {
                             return Reply::Now(Err("launchCommand: too many launches, try again in a few seconds".into()));
                         }
-                        match self.ext_launch_with(ext, &cmd, args) {
+                        match self.ext_launch_as(ext, &cmd, args, extras) {
+                            Ok(()) if background => Reply::Now(Ok(Value::Null)),
                             Ok(()) => Reply::Replaced,
                             Err(e) => Reply::Now(Err(format!("launchCommand: {e}"))),
                         }

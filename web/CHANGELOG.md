@@ -6,6 +6,9 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Fixed
+- **Extensions launching commands**: `launchCommand` now passes `type`, `context`, `arguments` and `fallbackText` to the launched command (`environment.launchType`, `props.launchType`, `props.launchContext`, `props.fallbackText`). `LaunchType.Background` runs it in a separate background process (the launcher and your current screen stay as they are; its HUD and errors are still shown, it is stopped after 60 s), and a wrong type or context is rejected with an error. (docs: /docs/launcher/raycast-extensions/) #extensions
+
 ## [0.6.0] - 2026-11-09
 
 ### Added
