@@ -886,9 +886,7 @@ pub fn show() {
     }
     layout_bar();
     panel.makeKeyAndOrderFront(None);
-    app.activate();
-    #[allow(deprecated)]
-    app.activateIgnoringOtherApps(true);
+    crate::running::activate_self(&app);
     focus_editor();
     sync_visibility();
 }

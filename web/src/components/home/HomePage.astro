@@ -19,6 +19,7 @@ import conversions from '../../data/conversions.json';
 import { counts } from '../../data/status';
 import { repo, dmgUrl } from '../../data/install';
 import type { HomeCopy } from '../../i18n/home.en';
+import { consentCopy } from '../../lib/consent/copy';
 import calcSrc from '../../lib/home-calc.js?raw';
 
 interface Props { t: HomeCopy; lang: 'en' | 'es' }
@@ -325,7 +326,7 @@ const calcInline = calcSrc.replace(/^export /gm, '') + '\nwindow.fcCalc = { eval
   <footer class="foot">
     <GuidesNav lang={lang} />
     <span data-reveal>{t.footer.tagline}</span>
-    <nav aria-label={t.footer.linksAria}><a href="#install">{t.nav.install}</a><a href={docs('/')}>{t.nav.docs}</a><a href={`${base}/changelog/`}>{t.nav.changelog}</a><a href={`${base}${es ? '/es/alternativa-a-raycast/' : '/raycast-alternative/'}`}>{t.footer.alternative}</a><a href={repo}>{t.nav.github}</a><a href={`${repo}/blob/master/LICENSE`}>{t.footer.license}</a></nav>
+    <nav aria-label={t.footer.linksAria}><a href="#install">{t.nav.install}</a><a href={docs('/')}>{t.nav.docs}</a><a href={`${base}/changelog/`}>{t.nav.changelog}</a><a href={`${base}${es ? '/es/alternativa-a-raycast/' : '/raycast-alternative/'}`}>{t.footer.alternative}</a><a href={repo}>{t.nav.github}</a><a href={`${repo}/blob/master/LICENSE`}>{t.footer.license}</a><a href={`${base}${consentCopy[lang].policyHref}`} data-cookie-settings>{consentCopy[lang].settings}</a></nav>
     <span class="r">{t.footer.copyright}</span>
   </footer>
 

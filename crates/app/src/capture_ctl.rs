@@ -8,6 +8,7 @@ use ferrocast_core::capture::protocol::{Display as HelperDisplay, Shareable, Tar
 use ferrocast_core::capture::region::{capture_file_name, Point, Rect, Window};
 use ferrocast_core::capture::settings::AfterCapture;
 use ferrocast_core::capture::stitch::{StopReason, Strip, MAX_STEPS};
+use ferrocast_core::i18n::trf;
 use ferrocast_macos::selector::Selection;
 use std::path::{Path, PathBuf};
 
@@ -68,7 +69,7 @@ impl Availability {
     pub fn message(self) -> Option<String> {
         match self {
             Availability::Available => None,
-            Availability::NeedsMacOs14(v) => Some(format!("Screen capture needs macOS 14. This Mac runs macOS {v}.")),
+            Availability::NeedsMacOs14(v) => Some(trf("Screen capture needs macOS 14. This Mac runs macOS {v}.", &[("v", &v.to_string())])),
             Availability::NoHelper => Some(NO_HELPER_MESSAGE.into()),
         }
     }
@@ -199,7 +200,7 @@ pub enum Outcome {
 pub fn outcome_toast(o: &Outcome) -> Option<String> {
     match o {
         Outcome::PermissionDenied => Some(PERMISSION_TOAST.into()),
-        Outcome::Failed(e) => Some(format!("Capture failed: {e}")),
+        Outcome::Failed(e) => Some(trf("Capture failed: {e}", &[("e", e)])),
         Outcome::Saved(_) | Outcome::Cancelled => None,
     }
 }
@@ -420,7 +421,7 @@ pub fn next_step(captured: usize, identical: bool, cancelled: bool) -> Step {
 /// Toast for how the stitcher stopped (`None`: nothing to say).
 pub fn scroll_toast(stop: StopReason, used: usize) -> Option<String> {
     match stop {
-        StopReason::StoppedAtCap => Some(format!("Scrolling capture stopped at {MAX_STEPS} screens")),
+        StopReason::StoppedAtCap => Some(trf("Scrolling capture stopped at {n} screens", &[("n", &MAX_STEPS.to_string())])),
         StopReason::LowConfidence { at } => Some(format!(
             "Scrolling capture lost track at screen {}; saved the {used} screen{} captured before it",
             at + 1,

@@ -300,7 +300,10 @@ pub fn send_capture(
         if done == 0 {
             e.user_message()
         } else {
-            format!("Added {done} of {total} parts to {}; the rest were not sent. {}", c.target.title, e.user_message())
+            trf(
+                "Added {done} of {total} parts to {target}; the rest were not sent. {detail}",
+                &[("done", &done.to_string()), ("total", &total.to_string()), ("target", &c.target.title), ("detail", &e.user_message())],
+            )
         }
     };
     let mut done = 0;

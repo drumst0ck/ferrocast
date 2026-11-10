@@ -249,11 +249,24 @@ const getSelectedFinderItems = unsupportedFn('getSelectedFinderItems');
 const getFrontmostApplication = () => bridge.call('apps.frontmost', {});
 const getApplications = (p) => bridge.call('apps.list', p ? { path: String(p.path || p) } : {});
 const getDefaultApplication = (p) => bridge.call('apps.default', { path: String(p) });
-const launchCommand = (o) =>
-  bridge.call('launchCommand', {
-    name: o && o.name, extensionName: o && o.extensionName, ownerOrAuthorName: o && o.ownerOrAuthorName,
-    arguments: (o && o.arguments) || {}, type: (o && o.type) || 'userInitiated',
-  });
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+// launchCommand({ name, type, extensionName?, ownerOrAuthorName?, arguments?, context?, fallbackText? }):
+// the host starts the command with props.launchContext / props.arguments / props.fallbackText and
+// environment.launchType (`background` runs it without showing the launcher).
+const launchCommand = async (o) => {
+  const bad = (m) => Promise.reject(new Error(`launchCommand: ${m}`));
+  if (!isPlainObject(o)) return bad('options must be an object with the command name');
+  if (typeof o.name !== 'string' || !o.name) return bad('name is required');
+  const type = o.type === undefined || o.type === null ? LaunchType.UserInitiated : o.type;
+  if (type !== LaunchType.UserInitiated && type !== LaunchType.Background) return bad(`invalid type ${JSON.stringify(type)}, use LaunchType.UserInitiated or LaunchType.Background`);
+  if (o.context !== undefined && o.context !== null && !isPlainObject(o.context)) return bad('context must be an object');
+  if (o.arguments !== undefined && o.arguments !== null && !isPlainObject(o.arguments)) return bad('arguments must be an object');
+  if (o.fallbackText !== undefined && o.fallbackText !== null && typeof o.fallbackText !== 'string') return bad('fallbackText must be a string');
+  const params = { name: o.name, extensionName: o.extensionName, ownerOrAuthorName: o.ownerOrAuthorName, arguments: o.arguments || {}, type };
+  if (o.context) params.context = o.context;
+  if (typeof o.fallbackText === 'string') params.fallbackText = o.fallbackText;
+  return bridge.call('launchCommand', params);
+};
 const captureException = (e) => bridge.log(`captureException: ${e && e.message ? e.message : e}`);
 const PopToRootType = { Default: 'default', Immediate: 'immediate', Suspended: 'suspended' };
 const BrowserExtension = { getContent: unsupportedFn('BrowserExtension.getContent'), getTabs: unsupportedFn('BrowserExtension.getTabs') };

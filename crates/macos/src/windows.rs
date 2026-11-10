@@ -581,6 +581,23 @@ fn pick_window(candidates: &[(Option<u32>, String)], id: u32, title: &str) -> Op
     candidates.iter().position(|(c, t)| c.is_none() && t == title)
 }
 
+/// CGWindowIDs of an app's minimized windows (Accessibility `AXMinimized`).
+pub fn minimized_window_ids(pid: i32) -> Vec<u32> {
+    unsafe {
+        let app = AxElement(AXUIElementCreateApplication(pid));
+        AXUIElementSetMessagingTimeout(app.0, RAISE_AX_TIMEOUT);
+        let Some(list) = copy_attr(app.0, kAXWindowsAttribute) else { return vec![] };
+        let arr: core_foundation::array::CFArray<*const c_void> = core_foundation::array::CFArray::wrap_under_create_rule(list as _);
+        arr.iter()
+            .filter_map(|w| {
+                let el = *w as AXUIElementRef;
+                AXUIElementSetMessagingTimeout(el, RAISE_AX_TIMEOUT);
+                (get_bool(el, kAXMinimizedAttribute) == Some(true)).then(|| ax_window_id(el)).flatten()
+            })
+            .collect()
+    }
+}
+
 /// Raise a specific window of an app (matched by window id, then by title) and activate the app.
 pub fn raise_window(pid: i32, title: &str, id: u32) -> bool {
     unsafe {
@@ -601,6 +618,9 @@ pub fn raise_window(pid: i32, title: &str, id: u32) -> bool {
             .collect();
         let Some(i) = pick_window(&candidates, id, title) else { return false };
         let el = els[i];
+        if get_bool(el, kAXMinimizedAttribute) == Some(true) {
+            set_bool(el, kAXMinimizedAttribute, false);
+        }
         let action = CFString::new(kAXRaiseAction);
         AXUIElementPerformAction(el, action.as_concrete_TypeRef());
         set_bool(el, kAXMainAttribute, true);

@@ -2,7 +2,11 @@
 
 use egui::{Key, Modifiers};
 use ferrocast_core::{calc::CalcResult, color::Rgba};
-use ferrocast_macos::{running::WindowInfo, system::SystemCommand, windows::WindowCommand};
+use ferrocast_macos::{
+    running::{WindowInfo, WindowState},
+    system::SystemCommand,
+    windows::WindowCommand,
+};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -603,4 +607,36 @@ pub fn shortcut_label(m: Modifiers, k: Key) -> String {
         other => other.name(),
     });
     s
+}
+
+/// Subtitle of a Switch Windows row: the app, plus where the window is when it is not in view.
+pub fn window_subtitle(app: &str, state: WindowState) -> String {
+    use ferrocast_core::i18n::trf;
+    match state {
+        WindowState::OnScreen => app.to_string(),
+        WindowState::Minimized => trf("{app} · Minimized", &[("app", app)]),
+        WindowState::Hidden => trf("{app} · Hidden", &[("app", app)]),
+        WindowState::OtherSpace => trf("{app} · Other Space", &[("app", app)]),
+    }
+}
+
+#[cfg(test)]
+mod window_subtitle_tests {
+    use super::*;
+    use ferrocast_core::i18n::{with_language, Lang};
+
+    #[test]
+    fn subtitle_marks_minimized_and_other_space_windows_in_the_interface_language() {
+        assert_eq!(window_subtitle("Safari", WindowState::OnScreen), "Safari");
+        with_language(Lang::En, || {
+            assert_eq!(window_subtitle("Safari", WindowState::Minimized), "Safari · Minimized");
+            assert_eq!(window_subtitle("Safari", WindowState::OtherSpace), "Safari · Other Space");
+            assert_eq!(window_subtitle("Safari", WindowState::Hidden), "Safari · Hidden");
+        });
+        with_language(Lang::Es, || {
+            assert_eq!(window_subtitle("Safari", WindowState::Minimized), "Safari · Minimizada");
+            assert_eq!(window_subtitle("Safari", WindowState::OtherSpace), "Safari · Otro Space");
+            assert_eq!(window_subtitle("Safari", WindowState::Hidden), "Safari · Oculta");
+        });
+    }
 }

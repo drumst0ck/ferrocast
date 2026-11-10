@@ -9204,7 +9204,7 @@ fn model_picker(
     default_label: &str,
     state: Option<&Option<Result<Vec<String>, String>>>,
 ) -> bool {
-    model_picker_with(ui, pal, id, value, default_label, &format!("Default ({default_label})"), state)
+    model_picker_with(ui, pal, id, value, default_label, &trf("Default ({default_label})", &[("default_label", default_label)]), state)
 }
 
 /// `model_picker` with its own text for the "empty value" entry (`default_text`); `default_label`

@@ -9,7 +9,8 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { handleCspApi } from './csp-report-handle.mjs';
 import { serveHtmlFile } from './static-serve.mjs';
-import { CSP_REPORT_ONLY, cacheControlFor, wwwRedirectLocation } from './http-policy.mjs';
+import { buildCsp, cacheControlFor, securityHeaders, wwwRedirectLocation } from './http-policy.mjs';
+import { collectDistHandlerHashes, collectDistHashes } from './csp-inline.mjs';
 
 const PORT = Number(process.env.PORT ?? 4321);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -23,15 +24,12 @@ const HOME_FILES = new Map([
   ['/es/index.html', 'es/index.html'],
 ]);
 
+let csp = buildCsp();
+
 function applyHeaders(req, res) {
   const path = (req.url ?? '/').split('?')[0];
 
-  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
-  res.setHeader('Content-Security-Policy-Report-Only', CSP_REPORT_ONLY);
-  res.setHeader('Reporting-Endpoints', 'csp="/api/csp-report/"');
+  for (const [k, v] of Object.entries(securityHeaders(csp))) res.setHeader(k, v);
 
   const cache = cacheControlFor(path);
   if (cache) res.setHeader('Cache-Control', cache);
@@ -64,6 +62,14 @@ async function tryServePrerendered(req, res) {
   const file = prerenderedHtmlFile(path);
   if (!file) return false;
   return serveHtmlFile(req, res, file);
+}
+
+try {
+  const hashes = await collectDistHashes(clientDir);
+  csp = buildCsp(hashes, await collectDistHandlerHashes(clientDir));
+  if (!hashes.length) console.warn('[production-server] no inline scripts found in dist/client; CSP allows unsafe-inline');
+} catch (err) {
+  console.error('[production-server] could not hash inline scripts; CSP allows unsafe-inline', err);
 }
 
 const { handler } = await import('../dist/server/entry.mjs');

@@ -93,7 +93,8 @@ pub fn redact_job(areas: &[Area], duration: f64, size: (u32, u32)) -> Result<fer
             ferrocast_core::redactplan::Redaction { x, y, w, h, start: a.start, end: a.end, blur: a.blur }
         })
         .collect();
-    ferrocast_core::redactplan::validate(&list, duration, size.0, size.1).map_err(|m| format!("Redact: {m}"))?;
+    ferrocast_core::redactplan::validate(&list, duration, size.0, size.1)
+        .map_err(|m| ferrocast_core::i18n::trf("Redact: {m}", &[("m", &m.to_string())]))?;
     Ok(ferrocast_core::convert::FileTool::RedactVideoMany(list))
 }
 
@@ -212,7 +213,8 @@ pub fn compress_media_job(
     let (goal, r) = compress_goal(mode, if big { 100_000 } else { kb }, percent, preset, max_edge, resize && video)?;
     let goal = if big { Goal::TargetBytes(kb as u64 * 1024) } else { goal };
     let info = info.ok_or("Compress: still reading the file")?;
-    ferrocast_core::compress::plan(video, orig_bytes, info, goal, &r).map_err(|e| format!("Compress: {e}"))?;
+    ferrocast_core::compress::plan(video, orig_bytes, info, goal, &r)
+        .map_err(|e| ferrocast_core::i18n::trf("Compress: {e}", &[("e", &e.to_string())]))?;
     Ok(ferrocast_core::convert::FileTool::Compress(goal, r))
 }
 
@@ -2241,8 +2243,7 @@ impl App {
         if let Some(mtm) = objc2::MainThreadMarker::new() {
             let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
             app.unhide(None);
-            #[allow(deprecated)]
-            app.activateIgnoringOtherApps(true);
+            running::activate_self(&app);
         }
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -2268,6 +2269,13 @@ impl App {
     }
 
     fn hide(&mut self) {
+        self.hide_restoring(true);
+    }
+
+    /// Hide the launcher and hand focus back to the app it came from. Hand it over first, while
+    /// Ferrocast is still active: the cooperative activation of macOS 14+ needs that. `restore`
+    /// is false when the caller is about to activate another app itself.
+    fn hide_restoring(&mut self, restore: bool) {
         self.editor_flush();
         self.flush_saves_now();
         // a maximised editor goes back to the launcher's size before the window disappears
@@ -2276,15 +2284,17 @@ impl App {
         self.hidden_at = Instant::now();
         self.shared.visible.store(false, Ordering::Relaxed);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        if restore {
+            if let Some(pid) = self.prev_pid {
+                running::activate(pid);
+            }
+        }
         // hiding the whole app would also hide the floating shelf and Notes panels
         // (the same goes for every other floating panel: a pinned capture, the recording HUD)
         if let Some(mtm) = objc2::MainThreadMarker::new()
             .filter(|m| !ferrocast_macos::shelf::is_visible() && !ferrocast_macos::notes::is_visible() && !other_panel_visible(*m))
         {
             objc2_app_kit::NSApplication::sharedApplication(mtm).hide(None);
-        }
-        if let Some(pid) = self.prev_pid {
-            running::activate(pid);
         }
     }
 
@@ -2302,8 +2312,7 @@ impl App {
         if self.onboarding && self.visible {
             // the tour never hides: the hotkey just brings it back in front of System Settings
             if let Some(mtm) = objc2::MainThreadMarker::new() {
-                #[allow(deprecated)]
-                objc2_app_kit::NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+                running::activate_self(&objc2_app_kit::NSApplication::sharedApplication(mtm));
             }
             self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         } else if self.visible {
@@ -3330,6 +3339,7 @@ impl App {
         }
         // process::exit skips destructors: stop the extension sidecar (and its children) by hand
         self.ext_kill();
+        self.ext.stop_background();
         // the now-playing helper too: dropping the poller kills it
         self.np_poller = None;
         (self.fx.exit)(0)
@@ -4976,7 +4986,7 @@ impl App {
                                 Item {
                                     id: format!("win:{}", w.id),
                                     title: t,
-                                    subtitle: w.app.clone(),
+                                    subtitle: crate::items::window_subtitle(&w.app, w.state),
                                     icon: Icon::Glyph("sf:macwindow.on.rectangle", [89, 212, 153]),
                                     accessory: String::new(),
                                     keywords: vec![],
@@ -5868,7 +5878,7 @@ impl App {
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(160));
             if let Some(p) = pid {
-                running::activate(p);
+                running::activate_on_main(p);
             }
             std::thread::sleep(Duration::from_millis(90));
             keyboard::paste();
@@ -6029,8 +6039,11 @@ impl App {
             }
             Kind::OpenWindow(w) => {
                 let w = w.clone();
-                self.hide();
+                self.hide_restoring(false);
                 self.reset_to_root();
+                if w.state == running::WindowState::Hidden {
+                    running::unhide(w.pid);
+                }
                 running::activate(w.pid);
                 windows::raise_window(w.pid, &w.title, w.id);
             }
@@ -7234,7 +7247,7 @@ impl App {
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(160));
             if let Some(p) = pid {
-                running::activate(p);
+                running::activate_on_main(p);
             }
             std::thread::sleep(Duration::from_millis(90));
             keyboard::paste();
@@ -8406,6 +8419,9 @@ pub(crate) struct Effects {
     pub(crate) np_seek: fn(f64),
     /// Bring the app with this bundle id forward, without blocking the UI thread.
     pub(crate) np_open: fn(String),
+    /// `Clipboard.paste` of a background command: copy `text`, and type ⌘V into the frontmost app when
+    /// asked (real); never hides the launcher.
+    pub(crate) paste_background: fn(&mut App, &str, bool),
     /// End the process (real: `process::exit`, which skips destructors).
     pub(crate) exit: fn(i32),
     /// Start the relaunch of the updated bundle at this path (it waits for this process to exit).
@@ -8485,6 +8501,16 @@ impl Effects {
                 std::thread::spawn(move || {
                     ferrocast_macos::nowplaying::open_app(&id);
                 });
+            },
+            paste_background: |app, text, type_it| {
+                clipboard::write_text(text);
+                app.shared.mark_clipboard_write();
+                if type_it {
+                    std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_millis(60));
+                        keyboard::paste();
+                    });
+                }
             },
             exit: |code| std::process::exit(code),
             relaunch: |path| {

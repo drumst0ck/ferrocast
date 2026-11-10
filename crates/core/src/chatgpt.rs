@@ -119,8 +119,9 @@ pub fn device_start_body() -> String {
 }
 
 pub fn parse_device_start(body: &str) -> Result<DeviceStart, String> {
-    let v: serde_json::Value = serde_json::from_str(body)
-        .map_err(|_| format!("Unexpected device-code response: {}", body.chars().take(160).collect::<String>()))?;
+    let v: serde_json::Value = serde_json::from_str(body).map_err(|_| {
+        crate::i18n::trf("Unexpected device-code response: {body}", &[("body", &body.chars().take(160).collect::<String>())])
+    })?;
     let interval = match &v["interval"] {
         serde_json::Value::String(s) => s.trim().parse::<u64>().ok(),
         other => other.as_u64(),
@@ -202,8 +203,8 @@ impl Credentials {
 
 /// Parse a token endpoint response into credentials (needs the account id inside the JWT).
 pub fn parse_token_response(body: &str, now: i64) -> Result<Credentials, String> {
-    let v: serde_json::Value =
-        serde_json::from_str(body).map_err(|_| format!("Unexpected token response: {}", body.chars().take(160).collect::<String>()))?;
+    let v: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| crate::i18n::trf("Unexpected token response: {body}", &[("body", &body.chars().take(160).collect::<String>())]))?;
     if let Some(e) = v.get("error") {
         let msg = v.get("error_description").and_then(|d| d.as_str()).or_else(|| e.as_str()).unwrap_or("unknown error");
         return Err(msg.to_string());

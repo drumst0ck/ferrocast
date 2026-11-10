@@ -627,9 +627,12 @@ impl Action {
         match self {
             Action::Toggle => "Tile Windows On/Off".into(),
             Action::Pause => "Pause Tiling".into(),
-            Action::Layout(n) => format!("Tiling Layout {n}: {}", Layout::from_number(n).map_or("", Layout::name)),
+            Action::Layout(n) => crate::i18n::trf(
+                "Tiling Layout {n}: {name}",
+                &[("n", &n.to_string()), ("name", &crate::i18n::tr(Layout::from_number(n).map_or("", Layout::name)))],
+            ),
             Action::FocusMode => "Tiling Focus Mode".into(),
-            Action::Move(d) => format!("Move Window {}", d.name()),
+            Action::Move(d) => crate::i18n::trf("Move Window {dir}", &[("dir", &crate::i18n::tr(d.name()))]),
             Action::FloatToggle => "Float or Tile This Window".into(),
             Action::NextDisplay => "Move Window to Next Display (Tiling)".into(),
             Action::SwapMain => "Swap Window with Main Slot".into(),

@@ -202,7 +202,9 @@ function launch(msg) {
     bridge.send({ type: 'exit' });
     return;
   }
-  const props = { arguments: msg.arguments || {}, launchType: 'userInitiated' };
+  const props = { arguments: msg.arguments || {}, launchType: (msg.environment && msg.environment.launchType) || 'userInitiated' };
+  if (msg.launchContext && typeof msg.launchContext === 'object') props.launchContext = msg.launchContext;
+  if (typeof msg.fallbackText === 'string') props.fallbackText = msg.fallbackText;
   if (mode === 'no-view') {
     Promise.resolve()
       .then(() => Command(props))
