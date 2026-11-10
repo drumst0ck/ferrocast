@@ -23,6 +23,7 @@ COPY scripts/csp-report-auth.mjs ./scripts/csp-report-auth.mjs
 COPY scripts/csp-report-handle.mjs ./scripts/csp-report-handle.mjs
 COPY scripts/csp-report-store.mjs ./scripts/csp-report-store.mjs
 COPY scripts/http-policy.mjs ./scripts/http-policy.mjs
+COPY scripts/static-serve.mjs ./scripts/static-serve.mjs
 COPY scripts/production-server.mjs ./scripts/production-server.mjs
 COPY package.json ./
 USER node
