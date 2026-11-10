@@ -763,6 +763,7 @@ pub fn sync_domain_recovering(
                         adopted: false,
                         unparsed: false,
                         seen: None,
+                        base: None,
                     },
                 );
             }
@@ -860,8 +861,11 @@ fn conflict_copies(
         }
         let Some((dev, rec)) = win.get(id) else { continue };
         let Some(theirs) = rec.value.as_ref().filter(|_| !rec.deleted) else { continue };
-        if rec.modified <= t.modified {
-            continue; // not written after the shared version: an older document, not a concurrent edit
+        // The shared version is the last one both Macs had (`Tracked::base`), not this Mac's own
+        // last publish: a record the other Mac wrote after it is a concurrent edit even when this
+        // Mac published again since. One written at or before it is just an older document.
+        if rec.modified <= t.base.unwrap_or(t.modified) {
+            continue;
         }
         let their_hash = sync::hash(theirs);
         if their_hash == t.hash || their_hash == local_hash {
@@ -3660,6 +3664,48 @@ mod tests {
             a.sync_notes(4_000);
             assert_eq!(a.notes.len(), 1, "no conflict copy: {:?}", a.notes);
             assert_eq!(a.notes[0].text, "Plan\nsecond edit");
+            let _ = b;
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn an_edit_that_icloud_delivers_late_is_still_a_conflict_when_the_other_mac_edited_twice() {
+            let (da, db, shared, mut a, mut b) = two_notes_macs();
+            a.notes[0].text = "Plan\nA's edit".into();
+            a.sync_notes(1_500);
+            // iCloud has not delivered A's document to B yet
+            let doc = a.dir_file("notes");
+            let held = doc.with_extension("held");
+            std::fs::rename(&doc, &held).unwrap();
+            b.notes[0].text = "Plan\nB edit 1".into();
+            b.sync_notes(2_000);
+            b.notes[0].text = "Plan\nB edit 2".into();
+            std::fs::rename(&held, &doc).unwrap();
+            let o = b.sync_notes(3_000);
+            assert_eq!(o.conflicts, 1, "A's text must not be lost");
+            assert_eq!(copies(&b).len(), 1, "{:?}", b.notes);
+            assert!(copies(&b)[0].text.ends_with("\nA's edit"));
+            assert_eq!(b.notes.iter().find(|n| n.id == "n1").unwrap().text, "Plan\nB edit 2");
+            cleanup(&[&da, &db, &shared]);
+        }
+
+        #[test]
+        fn trackers_without_a_base_compare_with_their_own_time_as_before() {
+            let (da, db, shared, mut a, b) = two_notes_macs();
+            let strip = |m: &Mac| {
+                let mut t = load_tracker(&m.store.root, "notes");
+                for i in t.items.values_mut() {
+                    i.base = None;
+                }
+                save_tracker(&m.store.root, "notes", &t).unwrap();
+            };
+            strip(&a);
+            a.notes[0].text = "Plan\nfirst edit".into();
+            a.sync_notes(2_000);
+            a.notes[0].text = "Plan\nsecond edit".into();
+            let o = a.sync_notes(3_000);
+            assert_eq!(o.conflicts, 0);
+            assert_eq!(a.notes.len(), 1);
             let _ = b;
             cleanup(&[&da, &db, &shared]);
         }

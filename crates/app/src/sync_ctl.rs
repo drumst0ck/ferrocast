@@ -545,6 +545,7 @@ impl App {
             }
             return None;
         }
+        let failures_before = self.sync.save_failures;
         self.sync.applying = true;
         let mut again = false;
         // ids of merged items this build cannot read: flagged below so publish never deletes them
@@ -645,7 +646,9 @@ impl App {
         self.sync.applying = false;
         // (the clipboard dirty flag is not cleared here: a copy that landed after the last flush
         // while another domain was applied must still be published)
-        if again {
+        // (not after a failed save: the retry would fail the same way at once, over and over; the
+        // next ordinary run applies the merge again)
+        if again && self.sync.save_failures == failures_before {
             self.sync.pending.insert(domain); // entries dropped by retention/dedupe become deletions
         }
         ferrocast_core::sync::mark_unparsed(&mut tracker, &unreadable);

@@ -95,6 +95,12 @@ pub struct Tracked {
     /// so it still ages out. Kept only in the local tracker; the published stamp is never touched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen: Option<i64>,
+    /// Time of the last version this Mac shared with another Mac (adopted from it, or the first
+    /// stamp of a seeded item). Own publishes leave it alone: a record another Mac wrote after it is
+    /// a concurrent edit of this Mac's, whatever this Mac published since. Local only, never
+    /// published; trackers without it compare with `modified` as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<i64>,
 }
 
 /// Flag the items of `ids` that this Mac could not read into its local data (see `Tracked::unparsed`).
@@ -189,15 +195,17 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
         }
         let h = hash(value);
         // an edit (a changed hash, even back to the default) is a real change: not pristine, now
-        let (modified, pristine, adopted) = match prev.items.get(id) {
-            Some(t) if !t.deleted && t.hash == h => (t.modified, t.pristine, t.adopted),
-            Some(t) => (logical_now(now, t.modified), false, false),
-            None => (unseen, !prev.seeded && opts.pristine.is_some_and(|f| f(id, value)), false),
+        let (modified, pristine, adopted, base) = match prev.items.get(id) {
+            Some(t) if !t.deleted && t.hash == h => (t.modified, t.pristine, t.adopted, t.base),
+            // the shared version stays the one before the first own edit
+            Some(t) if !t.deleted => (logical_now(now, t.modified), false, false, t.base.or(Some(t.modified))),
+            Some(t) => (logical_now(now, t.modified), false, false, None),
+            None => (unseen, !prev.seeded && opts.pristine.is_some_and(|f| f(id, value)), false, Some(unseen)),
         };
         doc.items.insert(id.clone(), Record { modified, deleted: false, value: Some(value.clone()), pristine, adopted });
         next.items.insert(
             id.clone(),
-            Tracked { hash: h, modified, deleted: false, remote: false, pristine, adopted, unparsed: false, seen: None },
+            Tracked { hash: h, modified, deleted: false, remote: false, pristine, adopted, unparsed: false, seen: None, base },
         );
     }
     for (id, t) in &prev.items {
@@ -231,6 +239,7 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
                 adopted: false,
                 unparsed: false,
                 seen,
+                base: None,
             },
         );
     }
@@ -252,6 +261,7 @@ pub fn publish_opts(device: &str, items: &[(String, Value)], prev: &Tracker, now
                     adopted: false,
                     unparsed: false,
                     seen: None,
+                    base: None,
                 },
             );
         }
@@ -287,6 +297,7 @@ pub fn tracker_from_own_doc(doc: &DeviceDoc) -> Tracker {
                 adopted: r.adopted,
                 unparsed: false,
                 seen: None,
+                base: None,
             },
         );
     }
@@ -304,6 +315,9 @@ pub fn restamp_baseline(tracker: &mut Tracker) -> bool {
     for t in tracker.items.values_mut() {
         if t.modified == 0 && !t.adopted {
             t.modified = first;
+            if t.base == Some(0) {
+                t.base = Some(first); // the shared version moves with its stamp
+            }
             changed = true;
         }
     }
@@ -363,6 +377,7 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
                             adopted: false,
                             unparsed: false,
                             seen: None,
+                            base: None,
                         },
                     );
                 }
@@ -383,6 +398,7 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
                             adopted: true,
                             unparsed: false,
                             seen: None,
+                            base: Some(rec.modified),
                         },
                     );
                     out.push((id.clone(), theirs));
@@ -415,6 +431,7 @@ pub fn merge_as(own: &str, local: &[(String, Value)], docs: &[DeviceDoc], tracke
                 adopted: true,
                 unparsed,
                 seen: None,
+                base: Some(rec.modified),
             },
         );
         out.push((id.clone(), v));
@@ -623,6 +640,7 @@ mod tests {
                             adopted: false,
                             unparsed: false,
                             seen: None,
+                            base: None,
                         },
                     )
                 })
@@ -793,6 +811,7 @@ mod tests {
             adopted: false,
             unparsed: true,
             seen: None,
+            base: None,
         };
         let json = serde_json::to_string(&t).unwrap();
         assert!(json.contains("\"unparsed\":true"), "{json}");

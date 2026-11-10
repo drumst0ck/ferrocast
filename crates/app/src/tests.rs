@@ -18400,6 +18400,7 @@ fn applying_a_clipboard_merge_does_not_hash_every_entry_on_the_ui_thread() {
                 adopted: true,
                 unparsed: false,
                 seen: None,
+                base: None,
             },
         );
     }
@@ -18437,5 +18438,20 @@ fn turning_sync_off_clears_the_remembered_errors() {
     s.sync_enabled = false;
     app.commit_settings(s);
     assert!(app.sync.errors.is_empty() && app.sync.error.is_none(), "nothing stale when it is turned on again");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn a_failed_clipboard_save_does_not_requeue_the_clipboard_in_a_loop() {
+    let mut app = fixture();
+    app.settings.sync_enabled = true;
+    std::fs::create_dir_all(app.store.root.join("clipboard.json")).unwrap(); // cannot be written
+    let now = services::now_secs();
+    // the same text twice: normalising drops one, which would normally queue another run
+    let e = |id: &str, at: i64| (id.to_string(), serde_json::json!({"id": id, "kind": "Text", "content": "same", "copied_at": at}));
+    let rev = app.sync_rev("clipboard");
+    let applied = app.sync_apply("clipboard", vec![e("a", now), e("b", now - 5)], ferrocast_core::sync::Tracker::default(), rev);
+    assert!(applied.is_none());
+    assert!(!app.sync.pending.contains("clipboard"), "retrying at once would loop until the disk recovers");
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
