@@ -1,8 +1,8 @@
 class Ferrocast < Formula
   desc "Fast, open-source launcher for macOS with local file conversion"
   homepage "https://github.com/drumst0ck/ferrocast"
-  url "https://github.com/drumst0ck/ferrocast/archive/refs/tags/v0.7.0.tar.gz"
-  sha256 "f01f1283ac031895b00d96ac7bfd4e5c1bc13519b80ba351012b059acbbe8e55"
+  url "https://github.com/drumst0ck/ferrocast/archive/refs/tags/v0.8.0.tar.gz"
+  sha256 "af9c38098fe68e450a7cd6461db620066ade22b9b98742c103edea62e65935fe"
   license "MIT"
   head "https://github.com/drumst0ck/ferrocast.git", branch: "master"
 
