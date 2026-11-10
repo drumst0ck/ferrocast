@@ -2,7 +2,7 @@
 
 ## Setup
 
-- macOS on Apple Silicon. Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it).
+- macOS. The DMG/zip runs on Apple Silicon; Intel Macs can build from source (not tested). Rust 1.95 is pinned in `rust-toolchain.toml` (egui 0.36 requires it).
 - `cargo test --workspace --locked` must pass. CI also runs `cargo fmt --all --check` and
   `cargo clippy --workspace --all-targets --locked -- -D warnings`.
 - Extensions runtime (`extensions-runtime/`, Node 22): `npm ci && npm run build && npm test`. The app embeds

@@ -41,7 +41,7 @@ El cask oficial de Homebrew exige apps firmadas y notarizadas (Apple Developer, 
 `brew uninstall ferrocast` elimina la fórmula; borra el enlace `/Applications/Ferrocast.app` creado arriba. Tus datos están en `~/Library/Application Support/Ferrocast`; bórralos tú si quieres eliminarlos.
 
 :::caution[Límites]
-Hace falta Apple Silicon; los Mac Intel no son compatibles. El DMG no está notarizado.
+El DMG/zip funciona en Apple Silicon. Los Mac Intel pueden instalar con Homebrew, que compila desde el código fuente para ese Mac; Intel no está probado. El DMG no está notarizado.
 :::
 
 ## Relacionado

@@ -13,7 +13,7 @@ Press <kbd>⌥</kbd> <kbd>Space</kbd> from any app. You can change the shortcut 
 Yes. MIT licence, no account, no Pro tier.
 
 ### Will it run on my Mac?
-It runs on Apple Silicon Macs. Intel Macs are not supported.
+The DMG/zip runs on Apple Silicon. Intel Macs can install with Homebrew, which builds from source for that Mac; Intel is not tested.
 
 ### Do I need to be a developer to install it?
 No, but you do need to open Terminal once and paste four lines. Homebrew does the rest, and it compiles for a few minutes. See [Install](/docs/getting-started/install/).
