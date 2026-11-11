@@ -7493,7 +7493,7 @@ impl App {
                                 ui,
                                 pal,
                                 "Check for updates automatically",
-                                "Checks GitHub once a day. Off means Ferrocast never contacts GitHub by itself.",
+                                "Checks GitHub about once an hour and when you open the launcher. Off means Ferrocast never contacts GitHub by itself.",
                                 |ui| toggle(ui, pal, &mut s.update_check),
                             );
                             let updates_off = !s.update_check;
