@@ -29,7 +29,7 @@ Fast, open-source launcher for macOS, written in Rust. Search, calculate, paste 
 
 ## Install
 
-**[Download the latest DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg)**, drag Ferrocast to Applications and open it. It is ad-hoc signed, so macOS asks for “Open Anyway” the first time. Downloaded copies update themselves: Settings → General → Updates. All releases are on the [Releases page](https://github.com/drumst0ck/ferrocast/releases).
+**[Download the latest DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg)**, drag Ferrocast to Applications and open it. It is ad-hoc signed, so macOS asks for “Open Anyway” the first time. Downloaded copies check for updates about hourly and show the Ferrocast logo in the search bar when one is ready: click it to update (settings: General → Updates). All releases are on the [Releases page](https://github.com/drumst0ck/ferrocast/releases).
 
 **Alternative: Homebrew.**
 

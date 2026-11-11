@@ -1973,8 +1973,25 @@ impl App {
         let placeholder = self.view().placeholder();
         let nested = self.stack.len() > 1;
         let mut back = false;
+        // an update is waiting: the bar gets an accent outline and the logo as a one-click install button
+        let badge = if !own_bar && shape == Shape::List { self.update_badge() } else { None };
+        let badge_geo = badge.as_ref().map(|b| {
+            let label = if b.installing { tr("Updating…").into_owned() } else { trf("Update to {version}", &[("version", &b.version)]) };
+            let text_w = ui.painter().layout_no_wrap(label.clone(), FontId::proportional(12.0), Color32::WHITE).size().x;
+            let w = 8.0 + 18.0 + 6.0 + text_w + 10.0;
+            let r = Rect::from_min_size(Pos2::new(search_rect.max.x - 14.0 - w, search_rect.center().y + 3.0 - 14.0), Vec2::new(w, 28.0));
+            (label, r)
+        });
+        if badge_geo.is_some() {
+            let p = ui.painter();
+            p.rect_filled(search_rect.shrink(2.0), 8.0, pal.accent.gamma_multiply(0.07));
+            p.rect_stroke(search_rect.shrink(2.0), 8.0, Stroke::new(1.5, pal.accent.gamma_multiply(0.55)), StrokeKind::Inside);
+        }
+        let bar_right_pad = badge_geo.as_ref().map_or(0.0, |(_, r)| search_rect.max.x - r.min.x);
         if !own_bar {
-            ui.scope_builder(UiBuilder::new().max_rect(search_rect.shrink2(Vec2::new(18.0, 0.0)).translate(Vec2::new(0.0, 3.0))), |ui| {
+            let bar = search_rect.shrink2(Vec2::new(18.0, 0.0)).translate(Vec2::new(0.0, 3.0));
+            let bar = Rect::from_min_max(bar.min, Pos2::new((bar.max.x - bar_right_pad).max(bar.min.x + 100.0), bar.max.y));
+            ui.scope_builder(UiBuilder::new().max_rect(bar), |ui| {
                 ui.horizontal_centered(|ui| {
                     if nested && matches!(self.view(), View::Settings) {
                         // a 28 pt hit target for the back arrow
@@ -2021,6 +2038,48 @@ impl App {
                     }
                 });
             });
+        }
+        let mut install_update = false;
+        if let (Some(b), Some((label, r))) = (&badge, &badge_geo) {
+            let icon = self.app_icon.get_or_insert_with(|| {
+                let img = services::decode_png(include_bytes!("../../../resources/icon-1024.png"))
+                    .unwrap_or_else(|| egui::ColorImage::filled([1, 1], Color32::TRANSPARENT));
+                ctx.load_texture("app-icon", img, TextureOptions::LINEAR)
+            });
+            let sense = if b.installing { Sense::hover() } else { Sense::click() };
+            let resp = ui.interact(*r, Id::new("update-badge"), sense);
+            let resp = if b.installing {
+                resp
+            } else {
+                resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("{label} · ⌘U"))
+            };
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, !b.installing, label.as_str()));
+            record_ctl(&ctx, "update-badge", resp.id, *r, !b.installing);
+            let p = ui.painter();
+            let strength = if b.installing {
+                0.10
+            } else if resp.is_pointer_button_down_on() {
+                0.32
+            } else if resp.hovered() {
+                0.24
+            } else {
+                0.16
+            };
+            p.rect_filled(*r, 14.0, pal.accent.gamma_multiply(strength));
+            p.rect_stroke(*r, 14.0, Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), StrokeKind::Inside);
+            let ir = Rect::from_center_size(Pos2::new(r.min.x + 8.0 + 9.0, r.center().y), Vec2::splat(18.0));
+            p.image(
+                icon.id(),
+                ir,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                if b.installing { Color32::from_white_alpha(150) } else { Color32::WHITE },
+            );
+            p.text(Pos2::new(ir.max.x + 6.0, r.center().y), Align2::LEFT_CENTER, label, FontId::proportional(12.0), pal.accent_text);
+            install_update = resp.clicked() || (!b.installing && ctx.input_mut(|i| i.consume_key(CMD, Key::U)));
+        }
+        if install_update {
+            self.install_update_now();
+            ctx.request_repaint();
         }
         if back {
             self.pop();

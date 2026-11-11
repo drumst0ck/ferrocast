@@ -1039,6 +1039,10 @@ pub struct App {
     frecency: Frecency,
     /// Newest release found by a check that is newer than the running version (drives Settings).
     update_available: Option<ferrocast_core::update::Release>,
+    /// An install (DMG swap or `brew upgrade`) started from the search-bar badge or the Update view is running.
+    update_installing: bool,
+    /// When this run last started a background check on opening the launcher (a failure leaves no trace in the settings).
+    update_attempt_at: Option<i64>,
     /// An exit waiting for the recording to be saved (Quit) or for it and any export to end (update).
     pending_exit: Option<PendingExit>,
     apps: Vec<apps::AppInfo>,
@@ -1392,6 +1396,8 @@ impl App {
             notes_ctl,
             frecency: data.frecency,
             update_available: None,
+            update_installing: false,
+            update_attempt_at: None,
             pending_exit: None,
             apps: vec![],
             trashed: Default::default(),
@@ -2224,6 +2230,8 @@ impl App {
     // ------------------------------------------------------------- show/hide
 
     fn show(&mut self) {
+        let exe = instance::running_exe().unwrap_or_default();
+        self.check_updates_on_open_via(now_secs(), exe, services::update_check_background);
         self.sec_dirty = true;
         self.sync_on_show();
         if self.hidden_at.elapsed() > Duration::from_secs(90) {
@@ -3722,6 +3730,10 @@ impl App {
                 Msg::UpdateInstalled { path } => self.update_installed(path),
                 Msg::UpdateFailed(e) => {
                     instance::log(&self.store.root, &format!("update failed: {e}"));
+                    // a refused second install leaves the running one (and its progress state) alone
+                    if e != services::ALREADY_INSTALLING {
+                        self.update_installing = false;
+                    }
                     // installer errors are plain keys: translate them before they are wrapped
                     self.toast(trf("Update failed: {e}", &[("e", &tr(&e))]));
                 }
@@ -6243,6 +6255,9 @@ impl App {
             Decision::Available(r) => r,
         };
         match self.settings.update_install {
+            // an automatic find is only signalled by the search-bar indicator (update_available); a
+            // manual "Check for Updates" opens the Update screen
+            UpdateInstall::AskFirst if !manual => {}
             UpdateInstall::AskFirst => match self.stack.last_mut() {
                 // a repeated check refreshes the open screen instead of stacking another one
                 Some(top @ View::Update { .. }) => *top = View::Update { release },
@@ -6270,14 +6285,63 @@ impl App {
         match ferrocast_core::update::plan_for(channel, writable) {
             Plan::Refuse(reason) => self.toast(reason),
             Plan::Download => {
+                self.update_installing = true;
                 self.toast(trf("Updating to {version}…", &[("version", &ver)]));
                 services::update_install(release, self.store.root.clone(), self.bus.clone());
             }
             Plan::BrewUpgrade => {
+                self.update_installing = true;
                 self.toast(trf("Updating to {version} with Homebrew…", &[("version", &ver)]));
                 services::brew_upgrade(self.bus.clone());
             }
         }
+    }
+
+    /// What the search-bar update indicator shows; `None` hides it.
+    pub(crate) fn update_badge(&self) -> Option<UpdateBadge> {
+        use ferrocast_core::update::{plan_for, Plan};
+        let release = self.update_available.as_ref()?;
+        let version = release.tag.trim_start_matches('v').to_string();
+        if self.settings.update_skipped.as_deref() == Some(version.as_str()) || !matches!(self.view(), View::Root) || self.stack.len() != 1
+        {
+            return None;
+        }
+        if self.update_installing {
+            return Some(UpdateBadge { version, installing: true });
+        }
+        let (channel, writable) = self.update_env();
+        (!matches!(plan_for(channel, writable), Plan::Refuse(_))).then_some(UpdateBadge { version, installing: false })
+    }
+
+    /// The install channel and whether the bundle's folder is writable (tests inject both).
+    pub(crate) fn update_env(&self) -> (ferrocast_core::update::Channel, bool) {
+        #[cfg(test)]
+        if let Some(v) = self.ctx.data(|d| d.get_temp::<(ferrocast_core::update::Channel, bool)>(Id::new("update-env"))) {
+            return v;
+        }
+        let exe = instance::running_exe().unwrap_or_default();
+        (ferrocast_core::update::channel_of(&exe), services::parent_writable_cached())
+    }
+
+    /// Click (or ⌘U) on the indicator: the same one-click install as the Update screen's button.
+    pub(crate) fn install_update_now(&mut self) {
+        if self.update_installing {
+            return;
+        }
+        let Some(release) = self.update_available.clone() else { return };
+        let (channel, writable) = self.update_env();
+        self.start_update(release, channel, writable);
+    }
+
+    /// Opening the launcher re-checks for a release when the last check and the last attempt are 15
+    /// minutes old. Returns whether a check was requested; `feed` starts it (never more than one at a time).
+    pub(crate) fn check_updates_on_open_via(&mut self, now: i64, exe: PathBuf, feed: impl FnOnce(Bus, PathBuf)) -> bool {
+        if !self.settings.update_check || !ferrocast_core::update::open_due(self.settings.update_last_check, self.update_attempt_at, now) {
+            return false;
+        }
+        self.update_attempt_at = Some(now);
+        feed(self.bus.clone(), exe);
+        true
     }
 
     pub(crate) fn skip_update(&mut self, release: &ferrocast_core::update::Release) {
@@ -8365,6 +8429,13 @@ pub(crate) fn notes_appearance(theme: Theme) -> ferrocast_macos::notes_theme::Ap
 
 /// Side effects of delivering a translation, behind function pointers so tests never spawn a
 /// process or touch Accessibility.
+/// The search-bar update indicator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UpdateBadge {
+    pub version: String,
+    pub installing: bool,
+}
+
 /// An exit that waits for the recording to be saved or an export to end.
 pub(crate) struct PendingExit {
     /// The updated bundle to open once this process is gone.
