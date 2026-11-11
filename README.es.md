@@ -29,7 +29,7 @@ Lanzador de código abierto para macOS, escrito en Rust. Busca, calcula, pega y 
 
 ## Instalar
 
-**[Descarga el último DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg)**, arrastra Ferrocast a Aplicaciones y ábrela. Lleva firma ad-hoc, así que macOS pide «Abrir igualmente» la primera vez. Las copias descargadas se actualizan solas: Ajustes → General → Updates. Todas las versiones están en la [página de Releases](https://github.com/drumst0ck/ferrocast/releases).
+**[Descarga el último DMG](https://github.com/drumst0ck/ferrocast/releases/latest/download/Ferrocast.dmg)**, arrastra Ferrocast a Aplicaciones y ábrela. Lleva firma ad-hoc, así que macOS pide «Abrir igualmente» la primera vez. Las copias descargadas buscan actualizaciones cada hora más o menos y muestran el logotipo de Ferrocast en la barra de búsqueda cuando hay una: púlsalo para actualizar (ajustes: General → Updates). Todas las versiones están en la [página de Releases](https://github.com/drumst0ck/ferrocast/releases).
 
 **Alternativa: Homebrew.**
 

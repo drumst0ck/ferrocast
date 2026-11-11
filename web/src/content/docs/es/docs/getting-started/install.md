@@ -24,8 +24,8 @@ Ejecuta antes `brew tap`: Homebrew se niega a cargar fórmulas de un tap que no 
 
 ## Actualizaciones
 
-- **Instalación por descarga**: Ferrocast consulta GitHub una vez al día por una versión estable nueva (las prereleases se ignoran). Por defecto muestra las notas de la versión y te deja instalar, aplazar u omitir esa versión; puedes pasar a instalación automática, desactivar la comprobación diaria o pulsar «Buscar ahora» en Ajustes → General → Actualizaciones. El menú de la barra y Acerca de también tienen «Buscar actualizaciones…».
-- **Instalación con Homebrew**: la app nunca se reemplaza a sí misma; las actualizaciones ejecutan `brew upgrade ferrocast`.
+- **Instalación por descarga**: Ferrocast consulta GitHub cada hora más o menos por una versión estable nueva (las prereleases se ignoran), poco después de arrancar y otra vez al abrir el launcher si la última comprobación tiene más de 15 minutos. Si una comprobación falla, se reintenta a los 15 minutos. Cuando hay una versión más nueva, la barra de búsqueda raíz recibe un contorno de acento y, en su extremo derecho, el logotipo de Ferrocast con «Actualizar a {version}»; púlsalo (o pulsa ⌘U) para instalar al momento. Nada aparece por sí solo. Puedes pasar a instalación automática, desactivar la comprobación automática o pulsar «Buscar ahora» en Ajustes → General → Actualizaciones; el menú de la barra y Acerca de también tienen «Buscar actualizaciones…», que abre las notas de la versión para instalar, aplazar u omitir. El indicador no aparece para una versión omitida, en builds de desarrollo ni cuando la carpeta de la app no es escribible.
+- **Instalación con Homebrew**: la app nunca se reemplaza a sí misma; el aviso de la barra de búsqueda e Instalar ejecutan `brew upgrade ferrocast`.
 - Una autoactualización reemplaza la app por la nueva. Como la firma es ad-hoc, macOS puede pedir Accesibilidad otra vez; concédela de nuevo.
 
 ## Por qué una fórmula y no un cask

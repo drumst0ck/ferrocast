@@ -6,6 +6,12 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+### Added
+- **Update indicator in the search bar**: when a newer version is available, the launcher's search bar gets an accent outline and the Ferrocast logo with "Update to {version}" at its right end. Click it, or press ⌘U, to update at once (download, verify and relaunch, or `brew upgrade` on Homebrew installs); it shows "Updating…" while it runs and comes back with the usual failure message if the update fails. It is not shown for skipped versions, development builds or a read-only app folder. (docs: /docs/getting-started/install/) #install
+
+### Changed
+- **Updates, checked every hour and no pop-up**: Ferrocast checks for a new version about once an hour (it was once a day), 10 seconds after launch, and again when you open the launcher if the last check is over 15 minutes old; a failed check is retried after 15 minutes. With "ask first", a version found automatically no longer opens the Update screen or shows the launcher: the search-bar indicator is the signal. "Check for Updates…" still opens the release notes. (docs: /docs/getting-started/install/) #install
+
 ## [0.9.0] - 2026-11-11
 
 ### Changed

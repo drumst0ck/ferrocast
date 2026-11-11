@@ -108,9 +108,10 @@ pub fn split_status(out: &str) -> (&str, u16) {
     }
 }
 
-/// After a failed automatic check, wait an hour before trying again (never every few minutes).
+/// After a failed automatic check, wait 15 minutes before trying again (GitHub allows 60 anonymous
+/// requests an hour per IP, so never every few seconds).
 pub fn retry_due(last_failure: Option<i64>, now: i64) -> bool {
-    last_failure.is_none_or(|f| now < f || now - f >= 3_600)
+    last_failure.is_none_or(|f| now < f || now - f >= 900)
 }
 
 pub fn parse_latest(json: &str) -> Option<Release> {
@@ -197,10 +198,20 @@ pub fn plan_for(channel: Channel, parent_writable: bool) -> Plan {
     }
 }
 
-/// True when a 24 h check is due (also when the clock went backwards).
+/// True when the hourly check is due (also when the clock went backwards).
 pub fn due(last_check: Option<i64>, now: i64) -> bool {
-    last_check.is_none_or(|l| now < l || now - l >= 86_400)
+    last_check.is_none_or(|l| now < l || now - l >= 3_600)
 }
+
+/// Opening the launcher re-checks when neither the last successful check nor the last attempt of this
+/// run (a failure writes no check time) is 15 minutes old.
+pub fn open_due(last_check: Option<i64>, last_attempt: Option<i64>, now: i64) -> bool {
+    let stale = |t: Option<i64>| t.is_none_or(|t| now < t || now - t >= OPEN_CHECK_AFTER);
+    stale(last_check) && stale(last_attempt)
+}
+
+/// Seconds between the checks triggered by opening the launcher.
+pub const OPEN_CHECK_AFTER: i64 = 900;
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
@@ -236,10 +247,10 @@ mod tests {
     }
 
     #[test]
-    fn retry_waits_an_hour_after_a_failed_check() {
+    fn retry_waits_15_minutes_after_a_failed_check() {
         assert!(retry_due(None, 1_000));
-        assert!(!retry_due(Some(1_000), 1_000 + 3_599));
-        assert!(retry_due(Some(1_000), 1_000 + 3_600));
+        assert!(!retry_due(Some(1_000), 1_000 + 899));
+        assert!(retry_due(Some(1_000), 1_000 + 900));
         // The clock went backwards: never wait for a future failure time.
         assert!(retry_due(Some(10_000), 5_000));
     }
@@ -344,8 +355,15 @@ mod tests {
     #[test]
     fn cadence() {
         assert!(due(None, 5));
-        assert!(!due(Some(1000), 1000 + 86_399));
-        assert!(due(Some(1000), 1000 + 86_400));
+        assert!(!due(Some(1000), 1000 + 3_599));
+        assert!(due(Some(1000), 1000 + 3_600));
+        // opening the launcher re-checks once the last attempt is 15 minutes old
+        assert!(open_due(None, None, 5));
+        assert!(!open_due(Some(1000), None, 1000 + 899));
+        assert!(open_due(Some(1000), None, 1000 + 900));
+        assert!(!open_due(Some(1000), Some(1000 + 500), 1000 + 1_000), "a recent failed attempt waits too");
+        assert!(open_due(Some(1000), Some(1000 + 500), 1000 + 1_400));
+        assert!(open_due(Some(2000), None, 1000), "clock went backwards");
         assert!(due(Some(2000), 1000));
     }
 

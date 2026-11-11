@@ -69,6 +69,8 @@ fn fixture() -> App {
         notes_ctl: crate::notes_ctl::NotesCtl::new(Box::new(crate::notes_ctl::fake::FakeFx::new().0)),
         frecency: Frecency::default(),
         update_available: None,
+        update_installing: false,
+        update_attempt_at: None,
         pending_exit: None,
         apps: vec![],
         trashed: Default::default(),
@@ -6559,11 +6561,13 @@ fn manual_check_without_release_toasts_up_to_date() {
 }
 
 #[test]
-fn available_in_ask_first_opens_the_update_view() {
+fn available_in_ask_first_opens_the_update_view_only_for_a_manual_check() {
     use ferrocast_core::update::Channel;
     let mut app = fixture();
     app.settings.update_install = UpdateInstall::AskFirst;
     app.handle_update_checked(false, Ok(Some(fake_release("99.0.0"))), Channel::Direct, true);
+    assert!(matches!(app.view(), View::Root), "an automatic find only lights the indicator");
+    app.handle_update_checked(true, Ok(Some(fake_release("99.0.0"))), Channel::Direct, true);
     match app.view() {
         View::Update { release } => assert_eq!(release.tag, "v99.0.0"),
         _ => panic!("expected the update view"),
@@ -18621,4 +18625,165 @@ fn a_failed_clipboard_save_does_not_requeue_the_clipboard_in_a_loop() {
     assert!(applied.is_none());
     assert!(!app.sync.pending.contains("clipboard"), "retrying at once would loop until the disk recovers");
     let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+// ---- search-bar update indicator and cadence
+
+fn set_update_env(app: &App, channel: ferrocast_core::update::Channel, writable: bool) {
+    app.ctx.data_mut(|d| d.insert_temp(Id::new("update-env"), (channel, writable)));
+}
+
+fn badge_app(channel: ferrocast_core::update::Channel) -> App {
+    let mut app = fixture();
+    set_update_env(&app, channel, true);
+    app.update_available = Some(fake_release("99.0.0"));
+    render(&mut app, vec![]);
+    app
+}
+
+fn badge_rect(app: &App) -> Option<Rect> {
+    let hits: Vec<(String, Id, Rect, bool)> = app.ctx.data(|d| d.get_temp(Id::new("ctl-hits"))).unwrap_or_default();
+    hits.into_iter().find(|h| h.0 == "update-badge").map(|h| h.2)
+}
+
+fn rerender(app: &mut App) {
+    app.ctx.data_mut(|d| d.remove::<Vec<(String, Id, Rect, bool)>>(Id::new("ctl-hits")));
+    render(app, vec![]);
+}
+
+/// Wait for the install thread's answer (the test build never reaches the network or brew).
+fn drain_until_update_failed(app: &mut App) {
+    let msg = app.rx.recv_timeout(Duration::from_secs(10)).expect("the install thread answers");
+    app.bus.send(msg);
+    app.drain();
+}
+
+#[test]
+fn ask_first_found_update_neither_opens_the_update_view_nor_shows_the_launcher() {
+    use ferrocast_core::update::Channel;
+    let mut app = fixture();
+    assert_eq!(app.settings.update_install, UpdateInstall::AskFirst);
+    app.visible = false;
+    app.bus.send(Msg::UpdateChecked { manual: false, result: Ok(Some(fake_release("99.0.0"))) });
+    app.drain();
+    assert!(app.update_available.is_some());
+    assert!(matches!(app.view(), View::Root) && app.stack.len() == 1, "no Update screen pushed");
+    assert!(!app.visible, "the launcher stays hidden");
+    // a manual check still opens the Update screen
+    app.handle_update_checked(true, Ok(Some(fake_release("99.0.0"))), Channel::Direct, true);
+    assert!(matches!(app.view(), View::Update { .. }));
+}
+
+#[test]
+fn badge_is_visible_only_when_an_install_is_possible() {
+    use ferrocast_core::update::Channel;
+    let mut app = fixture();
+    set_update_env(&app, Channel::Direct, true);
+    assert_eq!(app.update_badge(), None, "nothing available");
+    app.update_available = Some(fake_release("99.0.0"));
+    assert_eq!(app.update_badge(), Some(UpdateBadge { version: "99.0.0".into(), installing: false }));
+    app.settings.update_skipped = Some("99.0.0".into());
+    assert_eq!(app.update_badge(), None, "skipped version");
+    app.settings.update_skipped = None;
+    set_update_env(&app, Channel::Dev, true);
+    assert_eq!(app.update_badge(), None, "development build: Refuse");
+    set_update_env(&app, Channel::Direct, false);
+    assert_eq!(app.update_badge(), None, "read-only folder: Refuse");
+    set_update_env(&app, Channel::Brew, false);
+    assert!(app.update_badge().is_some(), "brew does not need a writable folder");
+    app.push(View::Clipboard);
+    assert_eq!(app.update_badge(), None, "only the root launcher");
+    app.pop();
+    app.update_installing = true;
+    assert_eq!(app.update_badge(), Some(UpdateBadge { version: "99.0.0".into(), installing: true }));
+}
+
+#[test]
+fn badge_is_drawn_in_the_search_bar_only_when_visible() {
+    use ferrocast_core::update::Channel;
+    let mut app = fixture();
+    set_update_env(&app, Channel::Direct, true);
+    render(&mut app, vec![]);
+    assert!(badge_rect(&app).is_none());
+    app.update_available = Some(fake_release("99.0.0"));
+    rerender(&mut app);
+    let r = badge_rect(&app).expect("badge drawn");
+    assert!(r.max.x > ui::WIDTH - 40.0 && r.max.y < ui::SEARCH_H + 4.0, "at the right end of the search bar: {r:?}");
+}
+
+#[test]
+fn clicking_the_badge_starts_the_dmg_install_and_a_failure_brings_the_button_back() {
+    use ferrocast_core::update::Channel;
+    let _l = INSTALL_GUARD_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = badge_app(Channel::Direct);
+    let r = badge_rect(&app).expect("badge");
+    click_at(&mut app, r.center());
+    assert!(app.update_installing, "install started");
+    assert_eq!(toast_text(&app), "Updating to 99.0.0…");
+    rerender(&mut app);
+    assert_eq!(app.update_badge().map(|b| b.installing), Some(true));
+    // a second click while installing does nothing
+    app.toast = None;
+    let r = badge_rect(&app).expect("badge stays while installing");
+    click_at(&mut app, r.center());
+    assert!(toast_text(&app).is_empty(), "disabled while installing: {}", toast_text(&app));
+    drain_until_update_failed(&mut app);
+    assert!(!app.update_installing, "failure releases the button");
+    assert!(toast_text(&app).starts_with("Update failed"), "{}", toast_text(&app));
+    rerender(&mut app);
+    assert_eq!(app.update_badge().map(|b| b.installing), Some(false));
+    assert!(badge_rect(&app).is_some());
+}
+
+#[test]
+fn clicking_the_badge_on_a_brew_install_runs_brew_upgrade() {
+    use ferrocast_core::update::Channel;
+    let _l = INSTALL_GUARD_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = badge_app(Channel::Brew);
+    let r = badge_rect(&app).expect("badge");
+    click_at(&mut app, r.center());
+    assert!(app.update_installing);
+    assert_eq!(toast_text(&app), "Updating to 99.0.0 with Homebrew…");
+    drain_until_update_failed(&mut app);
+    assert!(!app.update_installing);
+}
+
+#[test]
+fn cmd_u_starts_the_install_like_the_click() {
+    use ferrocast_core::update::Channel;
+    let _l = INSTALL_GUARD_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = badge_app(Channel::Brew);
+    render(
+        &mut app,
+        vec![Event::Key { key: Key::U, physical_key: Some(Key::U), pressed: true, repeat: false, modifiers: Modifiers::COMMAND }],
+    );
+    assert!(app.update_installing);
+    drain_until_update_failed(&mut app);
+}
+
+#[test]
+fn opening_the_launcher_checks_when_the_last_check_is_stale_and_never_twice() {
+    let mut app = fixture();
+    let exe = PathBuf::from("/Applications/Ferrocast.app/Contents/MacOS/ferrocast");
+    let calls = std::cell::Cell::new(0);
+    let feed = || |_: Bus, _: PathBuf| calls.set(calls.get() + 1);
+    let now = 1_000_000;
+    app.settings.update_check = false;
+    assert!(!app.check_updates_on_open_via(now, exe.clone(), feed()), "automatic checks are off");
+    app.settings.update_check = true;
+    app.settings.update_last_check = Some(now - 600);
+    assert!(!app.check_updates_on_open_via(now, exe.clone(), feed()), "checked 10 minutes ago");
+    app.settings.update_last_check = Some(now - 1_000);
+    assert!(app.check_updates_on_open_via(now, exe.clone(), feed()));
+    assert!(!app.check_updates_on_open_via(now + 5, exe.clone(), feed()), "the attempt counts even if it fails");
+    assert!(app.check_updates_on_open_via(now + 901, exe, feed()));
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
+fn show_asks_for_a_background_check() {
+    let mut app = fixture();
+    assert!(app.update_attempt_at.is_none());
+    app.show();
+    assert!(app.update_attempt_at.is_some());
 }

@@ -1688,8 +1688,23 @@ pub fn update_check(bus: Bus, manual: bool, current_exe: PathBuf) {
     });
 }
 
-/// Background poller: first check 30 s after launch, then whenever the 24 h cadence is due,
-/// re-evaluated every 10 minutes. `None` (no thread at all) when automatic checks are off at startup;
+static CHECK_FLAG: AtomicBool = AtomicBool::new(false);
+
+/// A background check on its own thread, unless one is already in flight (the poller and opening the
+/// launcher share the flag, so there is never more than one request at a time).
+pub fn update_check_background(bus: Bus, exe: PathBuf) {
+    if cfg!(test) {
+        return; // tests never reach the network
+    }
+    let Some(guard) = InstallGuard::take(&CHECK_FLAG) else { return };
+    std::thread::spawn(move || {
+        let _guard = guard;
+        check_blocking(&bus, false, &exe);
+    });
+}
+
+/// Background poller: first check 10 s after launch, then whenever the hourly cadence is due,
+/// re-evaluated every 5 minutes. `None` (no thread at all) when automatic checks are off at startup;
 /// turning the toggle off later is honoured by re-reading the shared settings on every loop.
 pub fn start_update_poller(shared: Arc<Shared>, bus: Bus) -> Option<std::thread::JoinHandle<()>> {
     if !shared.settings.read().unwrap().update_check {
@@ -1701,8 +1716,8 @@ pub fn start_update_poller(shared: Arc<Shared>, bus: Bus) -> Option<std::thread:
             if cfg!(test) {
                 return; // tests only assert that the poller starts; they never reach the network
             }
-            std::thread::sleep(Duration::from_secs(30));
-            // a failed check (offline, rate limit) waits an hour, instead of retrying every 10 minutes
+            std::thread::sleep(Duration::from_secs(10));
+            // a failed check (offline, rate limit) waits 15 minutes, instead of retrying every tick
             let mut last_failure: Option<i64> = None;
             loop {
                 let (on, last) = {
@@ -1711,11 +1726,11 @@ pub fn start_update_poller(shared: Arc<Shared>, bus: Bus) -> Option<std::thread:
                 };
                 let now = now_secs();
                 if on && ferrocast_core::update::due(last, now) && ferrocast_core::update::retry_due(last_failure, now) {
-                    if let Some(exe) = crate::instance::running_exe() {
+                    if let (Some(exe), Some(_guard)) = (crate::instance::running_exe(), InstallGuard::take(&CHECK_FLAG)) {
                         last_failure = if check_blocking(&bus, false, &exe) { None } else { Some(now) };
                     }
                 }
-                std::thread::sleep(Duration::from_secs(600));
+                std::thread::sleep(Duration::from_secs(300));
             }
         })
         .ok()
@@ -1834,7 +1849,7 @@ impl Drop for InstallGuard<'_> {
     }
 }
 
-const ALREADY_INSTALLING: &str = "An update is already being installed";
+pub(crate) const ALREADY_INSTALLING: &str = "An update is already being installed";
 
 /// Download, verify and swap the bundle; ends with `UpdateInstalled` or `UpdateFailed`.
 pub fn update_install(release: ferrocast_core::update::Release, store_root: PathBuf, bus: Bus) {
@@ -1899,6 +1914,10 @@ pub fn brew_upgrade(bus: Bus) {
     };
     std::thread::spawn(move || {
         let _guard = guard;
+        if cfg!(test) {
+            bus.send(Msg::UpdateFailed("Homebrew not found".into())); // tests never run brew
+            return;
+        }
         let Some(brew) = brew_path() else {
             bus.send(Msg::UpdateFailed("Homebrew not found".into()));
             return;
