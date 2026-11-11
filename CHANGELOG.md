@@ -6,6 +6,8 @@ Each entry is one bullet under a `###` category (`Added`, `Changed`, `Fixed`, `R
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-11
+
 ### Fixed
 - **Pasting no longer closes Ferrocast**: on recent macOS versions, pasting from the clipboard history, a snippet, a text expansion or any other command quit Ferrocast without pasting. Ferrocast now reads your keyboard layout where macOS allows it, so ⌘V is sent with the right key on QWERTY, Dvorak, Colemak and other layouts. #clipboard
 
