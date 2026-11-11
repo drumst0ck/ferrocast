@@ -55,10 +55,47 @@ pub fn keycode_for_char(ch: char, translate: impl Fn(u16) -> Option<char>) -> Op
     (0u16..128).find(|c| translate(*c).is_some_and(|t| t.eq_ignore_ascii_case(&ch)))
 }
 
+/// Last "v" keycode resolved on the main thread; 0 means not resolved yet.
+static PASTE_KEYCODE: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// Pick the paste keycode. The layout (`query`) may only be read on the main thread: Text
+/// Input Sources asserts the main queue and aborts the process otherwise (macOS 26+). Off
+/// the main thread, use the `cached` main-thread result, or the QWERTY position.
+fn resolve_paste_keycode(on_main: bool, cached: u16, query: impl FnOnce() -> Option<u16>) -> u16 {
+    if on_main {
+        query().unwrap_or(keycode::V)
+    } else if cached != 0 {
+        cached
+    } else {
+        keycode::V
+    }
+}
+
+fn on_main_thread() -> bool {
+    extern "C" {
+        fn pthread_main_np() -> i32;
+    }
+    unsafe { pthread_main_np() != 0 }
+}
+
+/// Re-read the "v" keycode from the current layout. Call on the main thread before handing a
+/// paste to a worker thread, so a layout switch since launch is honoured; a no-op elsewhere.
+pub fn refresh_paste_keycode() {
+    if on_main_thread() {
+        paste_keycode();
+    }
+}
+
 /// Keycode for the "v" key in the user's current layout (Dvorak, Colemak, ...), falling
 /// back to the ASCII-capable layout and finally to the QWERTY position.
 fn paste_keycode() -> u16 {
-    layout::keycode_for('v').unwrap_or(keycode::V)
+    use std::sync::atomic::Ordering;
+    let on_main = on_main_thread();
+    let code = resolve_paste_keycode(on_main, PASTE_KEYCODE.load(Ordering::Relaxed), || layout::keycode_for('v'));
+    if on_main {
+        PASTE_KEYCODE.store(code, Ordering::Relaxed);
+    }
+    code
 }
 
 mod layout {
@@ -143,6 +180,21 @@ mod tests {
     fn qwerty_layout_resolves_to_nine_and_missing_char_is_none() {
         assert_eq!(keycode_for_char('v', |c| (c == 9).then_some('v')), Some(9));
         assert_eq!(keycode_for_char('v', |_| Some('я')), None);
+    }
+
+    #[test]
+    fn off_main_thread_never_queries_the_layout_and_uses_the_cache_or_qwerty() {
+        // TIS* aborts the process when called off the main queue (macOS 26+), so a paste from
+        // a worker thread must not touch it.
+        let panics = || -> Option<u16> { panic!("layout queried off the main thread") };
+        assert_eq!(resolve_paste_keycode(false, 47, panics), 47);
+        assert_eq!(resolve_paste_keycode(false, 0, panics), keycode::V);
+    }
+
+    #[test]
+    fn main_thread_queries_the_layout_and_falls_back_to_qwerty() {
+        assert_eq!(resolve_paste_keycode(true, 0, || Some(47)), 47);
+        assert_eq!(resolve_paste_keycode(true, 47, || None), keycode::V);
     }
 
     #[test]

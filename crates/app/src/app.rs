@@ -5887,6 +5887,7 @@ impl App {
         self.hide();
         self.reset_to_root();
         let pid = self.prev_pid;
+        keyboard::refresh_paste_keycode();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(160));
             if let Some(p) = pid {
@@ -7308,6 +7309,7 @@ impl App {
         self.hide();
         self.reset_to_root();
         let pid = self.prev_pid;
+        keyboard::refresh_paste_keycode();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(160));
             if let Some(p) = pid {
@@ -8578,6 +8580,7 @@ impl Effects {
                 clipboard::write_text(text);
                 app.shared.mark_clipboard_write();
                 if type_it {
+                    keyboard::refresh_paste_keycode();
                     std::thread::spawn(|| {
                         std::thread::sleep(Duration::from_millis(60));
                         keyboard::paste();
